@@ -88,7 +88,7 @@ Drei Kandidaten für die Kopplung von Lua-Mod und Außenwelt, bewertet:
 
 ## Roadmap
 
-1. **Spike** — Mod-Skeleton + Wave-Spawn-Experimente + Custom-UI *(läuft parallel)*
+1. **Spike** — Mod-Skeleton + Wave-Spawn-Experimente + Custom-UI *(gebaut; In-Game-Test offen, Branch `feature/spike-mod-skeleton`)*
 2. **Trainer-PoC „read“** — Score/Ressourcen aus dem Prozess auslesen
 3. **Trainer „write“** — Wave-Trigger ins Spiel schreiben
 4. **Loop schließen** — Event-Pfad Partie A → Relay → Partie B (und zurück)
