@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# ============================================================================
+# package_bausteine.sh — zippt JEDEN Baustein einzeln nach dist/.
+#
+#   Bausteine 00-03: der Mod-Ordner (bausteine/<nr>-*/<modordner>) als
+#   Content-Root -> rbb-00-mod-skeleton.zip, rbb-01-wave-spawn.zip,
+#   rbb-02-custom-ui.zip, rbb-03-log-bridge.zip (lua/... an der Zip-Wurzel,
+#   genau wie nach <game>/mods/<ModName>/ gehoert).
+#
+#   Baustein 04 (trainer-io):
+#     - ist x86_64-w64-mingw32-gcc auf dem PATH: kompiliert rbbridge.dll +
+#       injector.exe (Windows x64) -> rbb-04-trainer-io.zip
+#     - sonst: Quellen + pipe_client.py + README -> rbb-04-trainer-io-src.zip
+#
+# Ausgabe: je Zip eine Zeile "NAME=<dateiname> ZIP=<absoluter-pfad>"
+# (maschinenlesbar fuer Release-Upload).
+#
+# Abhaengigkeit: zip ODER python3 (Fallback, nur Standardbibliothek);
+# optional x86_64-w64-mingw32-gcc (fuer den 04-Binary-Build).
+# ============================================================================
+set -euo pipefail
+cd "$(dirname "$0")/.."
+ROOT="$PWD"
+OUT_DIR="$ROOT/dist"
+mkdir -p "$OUT_DIR"
+
+# zip_content_root <srcdir> <outzip>: packt den INHALT von <srcdir> mit
+# <srcdir> als Content-Root (der Ordner selbst kommt NICHT ins Zip),
+# .DS_Store wird rausgefiltert.
+zip_content_root() {
+    local src="$1" out="$2" tmp="$2.tmp"
+    rm -f "$tmp"
+    if command -v zip >/dev/null 2>&1; then
+        (cd "$src" && zip -r "$tmp" . -x '*.DS_Store' >/dev/null)
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 - "$src" "$tmp" <<'PYEOF'
+import os, sys, zipfile
+src, out = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+    for root, _dirs, files in os.walk(src):
+        for f in files:
+            if f == ".DS_Store":
+                continue
+            full = os.path.join(root, f)
+            z.write(full, os.path.relpath(full, src))
+PYEOF
+    else
+        echo "FEHLER: weder 'zip' noch 'python3' verfuegbar." >&2
+        exit 1
+    fi
+    mv "$tmp" "$out"
+    echo "[package_bausteine] OK: $out"
+}
+
+# Bausteine 00-03: "<zipname>|<modordner-relativ>"
+BAUSTEINE=(
+    "rbb-00-mod-skeleton|bausteine/00-mod-skeleton/rbbattle_00_skeleton"
+    "rbb-01-wave-spawn|bausteine/01-wave-spawn/rbbattle_01_wavespawn"
+    "rbb-02-custom-ui|bausteine/02-custom-ui/rbbattle_02_customui"
+    "rbb-03-log-bridge|bausteine/03-log-bridge/rbbattle_03_logbridge"
+)
+
+for entry in "${BAUSTEINE[@]}"; do
+    name="${entry%%|*}"
+    srcdir="${entry#*|}"
+    if [ ! -d "$ROOT/$srcdir" ]; then
+        echo "FEHLER: Mod-Ordner '$ROOT/$srcdir' nicht gefunden." >&2
+        exit 1
+    fi
+    out="$OUT_DIR/$name.zip"
+    zip_content_root "$ROOT/$srcdir" "$out"
+    echo "NAME=$name.zip ZIP=$out"
+done
+
+# Baustein 04: trainer-io (Compile, falls MinGW da; sonst Quell-Zip)
+SRC04="$ROOT/bausteine/04-trainer-io"
+if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
+    BUILD_DIR="$OUT_DIR/.build-04"
+    rm -rf "$BUILD_DIR"
+    mkdir -p "$BUILD_DIR"
+    echo "[package_bausteine] 04: x86_64-w64-mingw32-gcc gefunden -> Build (Windows x64)"
+    (cd "$BUILD_DIR" \
+        && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -shared -o rbbridge.dll "$SRC04/rbbridge/rbbridge.c" \
+        && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe "$SRC04/injector/injector.c")
+    out04="$OUT_DIR/rbb-04-trainer-io.zip"
+    zip_content_root "$BUILD_DIR" "$out04"
+    rm -rf "$BUILD_DIR"
+    echo "NAME=rbb-04-trainer-io.zip ZIP=$out04"
+else
+    echo "[package_bausteine] 04: kein x86_64-w64-mingw32-gcc -> Quell-Zip"
+    out04="$OUT_DIR/rbb-04-trainer-io-src.zip"
+    zip_content_root "$SRC04" "$out04"
+    echo "NAME=rbb-04-trainer-io-src.zip ZIP=$out04"
+fi
+
+echo "[package_bausteine] fertig: $(ls "$OUT_DIR"/rbb-*.zip | wc -l) Zip(s) in $OUT_DIR"
