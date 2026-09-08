@@ -81,6 +81,8 @@
   .note { font-size: .78rem; color: #6b7a85; margin: 1.1em 0 0; line-height: 1.65; }
   .note + .note { margin-top: .6em; }
 
+  .zw { margin: 0 0 .45em 1.5rem; color: #6b7a85; font-size: .85rem; }
+
   footer { margin-top: 3.4rem; font-size: .78rem; color: #5f6f7a; }
   footer a { color: #7d93a0; text-decoration: none; }
   footer a:hover { text-decoration: underline; }
@@ -96,7 +98,9 @@
 
   <section class="panel"><div class="inner">
     <h2>ZWECK</h2>
-    <p>Custom-UI zur Laufzeit über die offizielle Service-API <code>GuiService:OpenPopup(entity, "gui/popup/popup_template_1button", text)</code> + globales <code>GuiPopupResultEvent</code>. Registriert genau einen Konsolen-Command (<code>rb_ui</code>), der ein Popup mit OK-Button am Spieler-Mech öffnet; Schließen nur per Button (kein API-Close dokumentiert). Kein Wave-Spawn, keine Bindings.</p>
+    <p class="zw">&gt; Custom-UI zur Laufzeit über die offizielle Service-API <code>GuiService:OpenPopup(entity, "gui/popup/popup_template_1button", text)</code> + globales <code>GuiPopupResultEvent</code>.</p>
+    <p class="zw">&gt; Registriert genau einen Konsolen-Command (<code>rb_ui</code>), der ein Popup mit OK-Button am Spieler-Mech öffnet; Schließen nur per Button (kein API-Close dokumentiert).</p>
+    <p class="zw">&gt; Kein Wave-Spawn, keine Bindings.</p>
   </div></section>
 
   <section class="panel"><div class="inner">

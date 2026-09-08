@@ -81,6 +81,8 @@
   .note { font-size: .78rem; color: #6b7a85; margin: 1.1em 0 0; line-height: 1.65; }
   .note + .note { margin-top: .6em; }
 
+  .zw { margin: 0 0 .45em 1.5rem; color: #6b7a85; font-size: .85rem; }
+
   footer { margin-top: 3.4rem; font-size: .78rem; color: #5f6f7a; }
   footer a { color: #7d93a0; text-decoration: none; }
   footer a:hover { text-decoration: underline; }
@@ -96,7 +98,10 @@
 
   <section class="panel"><div class="inner">
     <h2>ZWECK</h2>
-    <p>Geschlossener Economy-Kreis: Punkte <b>verdienen</b> (Kills eigener Kampfwellen via <code>EntityKilledEvent</code>; Fallback: <code>HourEvent</code>-Zeittick), <b>ausgeben</b> (<code>rb_buy_wave &lt;1..3&gt;</code>, Kosten 10/25/50, Spawn gegen die eigene Basis — Spawn-Logik aus Baustein 01, in-game verifiziert) und <b>anzeigen</b> (<code>rb_points</code>/<code>rb_status</code>). Eigenes Punkte-Konto des Mods (kein Spiel-Ressourcen-Zugriff — Recherche: <code>docs/research/api-deep-dive.md</code>), gespiegelt in Global-Database <code>rbbattle_05_economy</code> (<code>PlayerService:GetOrCreateGlobalDatabase</code>).</p>
+    <p class="zw">&gt; Geschlossener Economy-Kreis: Punkte <b>verdienen</b> (Kills eigener Kampfwellen via <code>EntityKilledEvent</code>; Fallback: <code>HourEvent</code>-Zeittick),</p>
+    <p class="zw">&gt; <b>ausgeben</b> (<code>rb_buy_wave &lt;1..3&gt;</code>, Kosten 10/25/50, Spawn gegen die eigene Basis — Spawn-Logik aus Baustein 01, in-game verifiziert) und</p>
+    <p class="zw">&gt; <b>anzeigen</b> (<code>rb_points</code>/<code>rb_status</code>).</p>
+    <p class="zw">&gt; Eigenes Punkte-Konto des Mods (kein Spiel-Ressourcen-Zugriff — Recherche: <code>docs/research/api-deep-dive.md</code>), gespiegelt in Global-Database <code>rbbattle_05_economy</code> (<code>PlayerService:GetOrCreateGlobalDatabase</code>).</p>
   </div></section>
 
   <section class="panel"><div class="inner">

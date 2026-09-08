@@ -81,6 +81,8 @@
   .note { font-size: .78rem; color: #6b7a85; margin: 1.1em 0 0; line-height: 1.65; }
   .note + .note { margin-top: .6em; }
 
+  .zw { margin: 0 0 .45em 1.5rem; color: #6b7a85; font-size: .85rem; }
+
   footer { margin-top: 3.4rem; font-size: .78rem; color: #5f6f7a; }
   footer a { color: #7d93a0; text-decoration: none; }
   footer a:hover { text-decoration: underline; }
@@ -96,8 +98,10 @@
 
   <section class="panel"><div class="inner">
     <h2>ZWECK</h2>
-    <p>Kompletter Trainer-I/O-Kanal (Trainer-only) — <b>ohne das Spiel</b>: <code>injector.exe</code> lädt <code>rbbridge.dll</code> in einen beliebigen x64-Prozess (Test: <code>notepad.exe</code>), die DLL startet den Named-Pipe-Server <code>\\.\pipe\rbbattle</code>, <code>pipe_client.py</code> sendet <code>ping</code>/<code>exec</code> und druckt die JSON-Antworten. <code>exec</code> ist im Harness ein bewusster no-op (<code>ok:false</code>, TODO(RE)) — getestet wird der Kanal, nicht die Spielsteuerung.</p>
-    <p>Seit dem Dual-Mode-Umbau (eine Quelle, zwei Builds) geht der Kanal-Test auch <b>ohne jede Injection</b>: <code>rbbridge_standalone.exe</code> (<code>-DRBBRIDGE_STANDALONE</code>) startet dieselbe Pipe-Server-Logik als normales Konsolen-Programm — Test 0 unten. Der Injection-Test ist Test 1.</p>
+    <p class="zw">&gt; Kompletter Trainer-I/O-Kanal (Trainer-only) — <b>ohne das Spiel</b>: <code>injector.exe</code> lädt <code>rbbridge.dll</code> in einen beliebigen x64-Prozess (Test: <code>notepad.exe</code>), die DLL startet den Named-Pipe-Server <code>\\.\pipe\rbbattle</code>, <code>pipe_client.py</code> sendet <code>ping</code>/<code>exec</code> und druckt die JSON-Antworten.</p>
+    <p class="zw">&gt; <code>exec</code> ist im Harness ein bewusster no-op (<code>ok:false</code>, TODO(RE)) — getestet wird der Kanal, nicht die Spielsteuerung.</p>
+    <p class="zw">&gt; Seit dem Dual-Mode-Umbau (eine Quelle, zwei Builds) geht der Kanal-Test auch <b>ohne jede Injection</b>: <code>rbbridge_standalone.exe</code> (<code>-DRBBRIDGE_STANDALONE</code>) startet dieselbe Pipe-Server-Logik als normales Konsolen-Programm — Test 0 unten.</p>
+    <p class="zw">&gt; Der Injection-Test ist Test 1.</p>
   </div></section>
 
   <section class="panel"><div class="inner">

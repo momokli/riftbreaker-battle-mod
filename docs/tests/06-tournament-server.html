@@ -81,6 +81,8 @@
   .note { font-size: .78rem; color: #6b7a85; margin: 1.1em 0 0; line-height: 1.65; }
   .note + .note { margin-top: .6em; }
 
+  .zw { margin: 0 0 .45em 1.5rem; color: #6b7a85; font-size: .85rem; }
+
   footer { margin-top: 3.4rem; font-size: .78rem; color: #5f6f7a; }
   footer a { color: #7d93a0; text-decoration: none; }
   footer a:hover { text-decoration: underline; }
@@ -96,7 +98,14 @@
 
   <section class="panel"><div class="inner">
     <h2>ZWECK</h2>
-    <p>Server-Seite der Turnier-Architektur (<code>docs/concept.md</code>): N Spielinstanzen koppeln über einen Relay-Client an <b>einen zentralen Tournament-Server</b> — Spieler-Registrierung, Match-Anlage, Event-Zustellung per <b>Polling/Outbox</b> (Pull-Modell), Event-Routing (<code>wave_sent</code> → <code>incoming_wave</code> in die Outbox des Gegners), Runden-Lifecycle (Timer → <code>round_end</code>, Settle-Fenster → <code>match_end</code> mit Sieger), Scoreboard (<code>score_update</code> kumuliert). Reine Node-Standardbibliothek (<code>node:http</code>), keine npm-Dependencies, keine Persistenz/Auth. Event-Vertrag: <code>trainer/protocol.md</code> (Mapping im Baustein-README). Läuft auf Linux/Mac/Windows ohne Riftbreaker — vollständig testbar.</p>
+    <p class="zw">&gt; Server-Seite der Turnier-Architektur (<code>docs/concept.md</code>): N Spielinstanzen koppeln über einen Relay-Client an <b>einen zentralen Tournament-Server</b> —</p>
+    <p class="zw">&gt; Spieler-Registrierung, Match-Anlage, Event-Zustellung per <b>Polling/Outbox</b> (Pull-Modell),</p>
+    <p class="zw">&gt; Event-Routing (<code>wave_sent</code> → <code>incoming_wave</code> in die Outbox des Gegners),</p>
+    <p class="zw">&gt; Runden-Lifecycle (Timer → <code>round_end</code>, Settle-Fenster → <code>match_end</code> mit Sieger),</p>
+    <p class="zw">&gt; Scoreboard (<code>score_update</code> kumuliert).</p>
+    <p class="zw">&gt; Reine Node-Standardbibliothek (<code>node:http</code>), keine npm-Dependencies, keine Persistenz/Auth.</p>
+    <p class="zw">&gt; Event-Vertrag: <code>trainer/protocol.md</code> (Mapping im Baustein-README).</p>
+    <p class="zw">&gt; Läuft auf Linux/Mac/Windows ohne Riftbreaker — vollständig testbar.</p>
   </div></section>
 
   <section class="panel"><div class="inner">
