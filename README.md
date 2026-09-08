@@ -18,21 +18,40 @@ Runden-Duell 1v1: Beide Spieler spielen eine eigene Rift-Breaker-Partie. Pro Run
 |---|---|---|
 | **Lua-Mod** | `mod/` (Spike) | gesamte Spiellogik im Spiel (Wellen, Punkte, Defense, HUD) — Spike-Skeleton mit Experimenten A/B/C |
 | **Trainer / Harness** | `trainer/` (Harness v0) | I/O-Gateway zwischen Spiel und Netz: DLL-Injection + Named Pipe + RE-Scan-Tools (Windows-first) |
+| **Bausteine** | `bausteine/` | eigenständig testbare Komponenten aus Mod + Trainer (Index: [bausteine/README.md](bausteine/README.md)) |
 | **Relay-Server** | `server/` (geplant) | Matchmaking + Event-Routing (Node) |
 
 Architektur & Design: [docs/concept.md](docs/concept.md) · Install & Spike-Test: [mod/README.md](mod/README.md)
 
+## Bausteine & Verteilung
+
+- **[bausteine/](bausteine/README.md)** — jede Fähigkeit als eigenständig testbarer
+  Baustein: 00 Mod-Skeleton, 01 Wave-Spawn (`rb_wave`), 02 Custom-UI (`rb_ui`),
+  03 Log-Bridge (`[RBBATTLE]` + `tail_events.py`), 04 Trainer-I/O (Injector +
+  rbbridge-DLL + `pipe_client.py`, ohne Spiel testbar via notepad.exe).
+- **[scripts/package_mod.sh](scripts/package_mod.sh)** — packt den Mod-Ordner
+  (`mod/`) als ZIP nach `dist/` für manuelle Verteilung/Tests.
+- **[docs/index.html](docs/index.html)** — schlichte Download-Seite
+  (GitHub Pages: <https://momokli.github.io/riftbreaker-battle-mod/>, Quelle
+  Branch `main` Pfad `/docs`).
+- **[docs/workshop.md](docs/workshop.md)** — Steam-Workshop-Anleitung
+  (AppID 780310, SteamCMD, friends-only). **Nur der Lua-Mod, nie der Trainer.**
+
 ## Für uns
 
-Dieses Projekt enthält einen **Trainer-Anteil** (Prozess-I/O am Spiel) — deshalb bewusst **kein Workshop-Release**, das Projekt bleibt privat.
+Dieses Projekt enthält einen **Trainer-Anteil** (Prozess-I/O am Spiel) — der
+Trainer bleibt bewusst **private Distribution** (kein Workshop-Release). Der
+Lua-Mod selbst ist Workshop-tauglich (siehe [docs/workshop.md](docs/workshop.md)).
 
 ## Repo-Struktur
 
 ```
 riftbreaker-battle-mod/
+├── bausteine/ # eigenständig testbare Komponenten (00–04, Index: bausteine/README.md)
 ├── mod/       # Lua-Mod (Spike: Skeleton + Experimente A/B/C, Install siehe mod/README.md)
 ├── trainer/   # Sidecar/Trainer (Harness v0: Injector + DLL + RE-Scan-Tools)
 ├── server/    # Relay-Server (geplant, Node)
-├── docs/      # Konzept & Findings
+├── scripts/   # Tooling (package_mod.sh: Mod-ZIP bauen)
+├── docs/      # Konzept, Findings, Download-Seite (index.html), Workshop-Anleitung
 └── README.md
 ```

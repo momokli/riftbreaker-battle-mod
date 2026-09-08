@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rift Breaker Battle Mod — Download</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #10141a; color: #e6e9ee; line-height: 1.55;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+  h1 { font-size: 1.9rem; margin: 0 0 .25rem; }
+  .tagline { color: #9fb0c3; margin: 0 0 1.5rem; }
+  .card {
+    background: #1a212b; border: 1px solid #2c3745; border-radius: 10px;
+    padding: 1.25rem 1.4rem; margin: 1.1rem 0;
+  }
+  h2 { font-size: 1.15rem; margin: 0 0 .6rem; }
+  .badge {
+    display: inline-block; padding: .15rem .6rem; border-radius: 999px;
+    font-size: .8rem; font-weight: 600; background: #2b3d55; color: #9ec9ff;
+  }
+  .badge.dev { background: #55392b; color: #ffcf9e; }
+  a.btn {
+    display: inline-block; background: #2f81f7; color: #fff; text-decoration: none;
+    font-weight: 600; padding: .7rem 1.4rem; border-radius: 8px; margin-top: .4rem;
+  }
+  a.btn:hover { background: #4c94ff; }
+  .muted { color: #9fb0c3; font-size: .9rem; }
+  ol, ul { margin: .4rem 0 .4rem 1.2rem; padding: 0; }
+  li { margin: .3rem 0; }
+  code { background: #10151c; border: 1px solid #2c3745; border-radius: 4px;
+         padding: .1rem .35rem; font-size: .88em; }
+  a { color: #7cb3ff; }
+  footer { margin-top: 2.5rem; color: #6b7a8c; font-size: .85rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Rift Breaker Battle Mod</h1>
+  <p class="tagline">Runden-Duell-Modus („Biter Battles“-artig) für <em>The Rift Breaker</em> (EXOR Studios)</p>
+
+  <div class="card">
+    <h2>Status</h2>
+    <p>
+      <span class="badge dev">Private Entwicklung</span>
+      <span class="badge">Feasibility verifiziert</span>
+      <span class="badge">Bausteine-Tests offen</span>
+    </p>
+    <p class="muted">Aktueller Stand &amp; Details: <a href="https://github.com/momokli/riftbreaker-battle-mod">Repository auf GitHub</a> (README, Findings, Konzept).</p>
+  </div>
+
+  <div class="card">
+    <h2>Download</h2>
+    <p>Das neueste Mod-Paket (Lua-Mod als ZIP — enthält nur den Mod, keine
+       Trainer-/Server-Teile):</p>
+    <a class="btn" href="https://github.com/momokli/riftbreaker-battle-mod/releases/latest">Neuestes Release herunterladen</a>
+    <p class="muted">Falls noch kein Release existiert: das ZIP manuell bauen mit
+       <code>scripts/package_mod.sh</code> aus dem Repo.</p>
+  </div>
+
+  <div class="card">
+    <h2>Installation (Kurzfassung)</h2>
+    <ol>
+      <li>Steam-Bibliothek öffnen → <em>The Rift Breaker</em> → Rechtsklick →
+          Verwalten → Lokale Dateien anzeigen (z.&nbsp;B.
+          <code>D:\SteamLibrary\steamapps\common\Riftbreaker</code>).</li>
+      <li>ZIP entpacken und den Inhalt (Ordner <code>lua/</code>) nach
+          <code>&lt;Spielordner&gt;\mods\riftbreaker_battle_mod\</code> kopieren
+          (Ordner ggf. neu anlegen).</li>
+      <li>Spiel starten und eine Karte laden — der Mod läuft automatisch
+          (Log: <code>&lt;Dokumente&gt;\The Riftbreaker\exor_logs.txt</code>,
+          Präfix <code>[RBBATTLE]</code>).</li>
+    </ol>
+    <p class="muted">Ausführliche Anleitung inkl. In-Game-Konsole: README im Repo
+       (<code>mod/README.md</code>).</p>
+  </div>
+
+  <div class="card">
+    <h2>Hinweis</h2>
+    <p class="muted">Dieses Projekt enthält einen privaten Trainer-Anteil
+       (Prozess-I/O am Spiel). Der Trainer wird <strong>nicht</strong>
+       veröffentlicht — Downloads hier enthalten ausschließlich den Lua-Mod.
+       Steam-Workshop-Upload ist nur für den Mod vorgesehen
+       (<code>docs/workshop.md</code>).</p>
+  </div>
+
+  <footer>
+    Rift Breaker Battle Mod · <a href="https://github.com/momokli/riftbreaker-battle-mod">github.com/momokli/riftbreaker-battle-mod</a> ·
+    inoffizielles Fan-Projekt, nicht mit EXOR Studios verbunden
+  </footer>
+</main>
+</body>
+</html>
