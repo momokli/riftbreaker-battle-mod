@@ -9,14 +9,15 @@ Runden-Duell 1v1: Beide Spieler spielen eine eigene Rift-Breaker-Partie. Pro Run
 ## Status
 
 - **Feasibility verifiziert** — Mod-API vorhanden, Grenzen bekannt (Details: [docs/findings.md](docs/findings.md))
-- **Spike läuft** — Mod-Skeleton + Wave-Spawn-Experimente + Custom-UI
+- **Spike läuft** — Mod-Skeleton + Wave-Spawn-Experimente + Custom-UI (`feature/spike-mod-skeleton`)
+- **Trainer-Harness v0 (Grundgerüst)** — Injektor + In-Game-Bridge-DLL + RE-Scan-Tools, siehe [trainer/README.md](trainer/README.md)
 
 ## Komponenten
 
 | Komponente | Ort | Aufgabe |
 |---|---|---|
 | **Lua-Mod** | `mod/` (geplant) | gesamte Spiellogik im Spiel (Wellen, Punkte, Defense, HUD) |
-| **Trainer / Sidecar** | `trainer/` (geplant) | I/O-Schicht zwischen Spiel und Netz (Windows-first) |
+| **Trainer / Harness** | `trainer/` (Harness v0) | I/O-Gateway zwischen Spiel und Netz: DLL-Injection + Named-Pipe + RE-Scan-Tools (Windows-first) |
 | **Relay-Server** | `server/` (geplant) | Matchmaking + Event-Routing (Node) |
 
 Architektur & Design: [docs/concept.md](docs/concept.md)
