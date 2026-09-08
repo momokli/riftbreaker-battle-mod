@@ -15,7 +15,7 @@ jede Komponente einzeln validieren, bevor sie in den finalen Mod einfließt.
 | [00-mod-skeleton](00-mod-skeleton/) | Mod-Load: Ordner-Layout + `*_autoexec.lua` läuft bei Kartenerstellung, `LogService:Log` erreichbar | Code fertig — In-Game-Test offen | Installieren, Karte laden, exor_logs.txt prüfen |
 | [01-wave-spawn](01-wave-spawn/) | `EntityService:SpawnEntity` zur Laufzeit via Konsolen-Command `rb_wave <level>` | Code fertig — In-Game-Test offen | Installieren, Karte laden, `rb_wave 1..3`, Wellen + Log prüfen |
 | [02-custom-ui](02-custom-ui/) | `GuiService:OpenPopup` + `GuiPopupResultEvent` (Custom-UI-Popup) | Code fertig — In-Game-Test offen | Installieren, Karte laden, `rb_ui`, Popup + Button prüfen |
-| [03-log-bridge](03-log-bridge/) | Outbound-Pfad Lua → `LogService:Log` → `exor_logs.txt`; Live-Parser `tail_events.py` | Code fertig — In-Game-Test offen | Installieren, Karte laden, `rb_bridge_test`, `tail_events.py` beobachten |
+| [03-log-bridge](03-log-bridge/) | **Diagnose-only, kein Architekturpfad.** Outbound-Pfad Lua → `LogService:Log` → `exor_logs.txt`; Live-Parser `tail_events.py` | Code fertig — In-Game-Test offen | Installieren, Karte laden, `rb_bridge_test`, `tail_events.py` beobachten |
 | [04-trainer-io](04-trainer-io/) | Injector + rbbridge-DLL: Named Pipe `\\.\pipe\rbbattle`, `ping`/`exec` | Code fertig — **ohne Spiel testbar** (notepad.exe) | DLL bauen, in notepad.exe injizieren, `pipe_client.py` starten |
 
 ## Spieltest-Status (muss Momo in-game bestätigen)

@@ -1,5 +1,7 @@
 # Baustein 03 — Log-Bridge (`[RBBATTLE]` → exor_logs.txt → JSON)
 
+> **Rolle: DIAGNOSE-ONLY — kein Architektur-Baustein.** Die Kommunikation läuft ausschließlich über die Trainer-DLL (04-trainer-io). Dieser Baustein dient nur dazu, beim In-Game-Test ohne Trainer live zu sehen, was der Mod macht.
+
 **Was es testet:** Den Outbound-Pfad der Mod ohne Spiel-UI-Abhängigkeiten —
 `LogService:Log` schreibt `[RBBATTLE]`-Zeilen in
 `<Documents>\The Riftbreaker\exor_logs.txt`, und `tail_events.py` liest die
