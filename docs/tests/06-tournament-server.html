@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>06 — tournament-server · test guide</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: #05070a;
+    color: #9fb4c0;
+    font-family: "JetBrains Mono", Consolas, "Courier New", monospace;
+    font-size: 14px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .shell { max-width: 880px; margin: 0 auto; padding: 2.2rem 1.25rem 2.5rem; }
+
+  header { margin-bottom: 1.6rem; }
+  h1 { margin: 0 0 .35rem; font-size: 1.05rem; font-weight: 600; letter-spacing: .06em; color: #c7d5dd; }
+  h1 .idx { color: #3fd0d4; }
+  .prompt { margin: 0; color: #6b7a85; font-size: .85rem; }
+  .prompt .lbl { color: #3fd0d4; }
+  .prompt b { color: #c7d5dd; font-weight: 600; }
+
+  .back { display: inline-block; margin-bottom: 1rem; color: #3fd0d4; text-decoration: none; font-size: .82rem; }
+  .back:hover { text-decoration: underline; }
+  .back .arrow { color: #6b7a85; }
+
+  .panel {
+    clip-path: polygon(0 10px, 10px 0, 100% 0, 100% calc(100% - 10px),
+                       calc(100% - 10px) 100%, 0 100%);
+    background: #1c2a33;
+    padding: 1px;
+    margin-bottom: 14px;
+  }
+  .panel > .inner {
+    clip-path: polygon(0 10px, 10px 0, 100% 0, 100% calc(100% - 10px),
+                       calc(100% - 10px) 100%, 0 100%);
+    background: #0c1218;
+    padding: 1rem 1.2rem;
+  }
+  section h2 { margin: 0 0 .5rem; font-size: .8rem; font-weight: 600; letter-spacing: .14em; color: #3fd0d4; }
+  p { margin: 0 0 .6rem; font-size: .85rem; }
+  ol { margin: 0 0 .4rem; padding-left: 1.25rem; font-size: .85rem; }
+  li { margin-bottom: .3rem; }
+  p code, li code { color: #c7d5dd; background: #16222b; padding: 0 .3em; border-radius: 2px; font-size: .82em; }
+  pre { background: #081016; border: 1px solid #1c2a33; padding: .6rem .8rem; overflow-x: auto; font-size: .78rem; color: #52d273; margin: .3rem 0 .7rem; }
+  pre .dim { color: #5f6f7a; }
+
+  .chk { display: flex; gap: .6rem; align-items: flex-start; margin: 0; padding: .4rem 0;
+         border-bottom: 1px dashed #16222b; font-size: .83rem; cursor: pointer; }
+  .chk:last-child { border-bottom: 0; }
+  .chk input { margin-top: .28em; accent-color: #3fd0d4; flex: none; cursor: pointer; }
+  .chk code { color: #c7d5dd; background: #16222b; padding: 0 .3em; border-radius: 2px; font-size: .84em; white-space: nowrap; }
+  .note { font-size: .78rem; color: #6b7a85; margin: .5rem 0 0; }
+
+  footer { margin-top: 1.2rem; font-size: .78rem; color: #5f6f7a; }
+  footer a { color: #7d93a0; text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <a class="back" href="../index.html"><span class="arrow">&gt;</span> cd ..</a>
+  <header>
+    <h1><span class="idx">06</span> — tournament-server</h1>
+    <p class="prompt"><span class="lbl">test guide</span> · tests <b><span id="ct">0/0</span></b> · validated <b><span id="cv">0/0</span></b></p>
+  </header>
+
+  <section class="panel"><div class="inner">
+    <h2>ZWECK</h2>
+    <p>Server-Seite der Turnier-Architektur (<code>docs/concept.md</code>): N Spielinstanzen koppeln über einen Relay-Client an <b>einen zentralen Tournament-Server</b> — Spieler-Registrierung, Match-Anlage, Event-Zustellung per <b>Polling/Outbox</b> (Pull-Modell), Event-Routing (<code>wave_sent</code> → <code>incoming_wave</code> in die Outbox des Gegners), Runden-Lifecycle (Timer → <code>round_end</code>, Settle-Fenster → <code>match_end</code> mit Sieger), Scoreboard (<code>score_update</code> kumuliert). Reine Node-Standardbibliothek (<code>node:http</code>), keine npm-Dependencies, keine Persistenz/Auth. Event-Vertrag: <code>trainer/protocol.md</code> (Mapping im Baustein-README). Läuft auf Linux/Mac/Windows ohne Riftbreaker — vollständig testbar.</p>
+  </div></section>
+
+  <section class="panel"><div class="inner">
+    <h2>INSTALL</h2>
+    <ol>
+      <li>Voraussetzung: <b>Node.js</b> (<code>node --version</code>; keine npm-Installation, keine Dependencies).</li>
+      <li><code>rbb-06-tournament-server.zip</code> entpacken → <code>server.js</code>, <code>mock_client.js</code>, <code>test_e2e.sh</code>, <code>README.md</code>.</li>
+      <li>Server starten: <code>node server.js</code> — Port via env <code>PORT</code> (Default 8080); Log-Zeile „<code>[server] tournament-server listening on port 8080 (settle_ms=3000)</code>“.</li>
+      <li>Selbsttest: <code>bash test_e2e.sh</code> → Exit 0 (Server + 2 Mock-Clients, 2 Runden à 4 s).</li>
+    </ol>
+  </div></section>
+
+  <section class="panel"><div class="inner">
+    <h2>TESTS</h2>
+    <label class="chk"><input type="checkbox" data-g="t"><span><code>node --version</code> liefert eine lauffähige Node-Version — kein <code>npm install</code> nötig (nur <code>node:http</code>)</span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span>Server startet auf Port: <code>PORT=9000 node server.js</code> → Log „<code>[server] tournament-server listening on port 9000 (settle_ms=3000)</code>“; <code>curl http://127.0.0.1:9000/health</code> → HTTP 200 <code>{"ok":true,"service":"tournament-server",...}</code></span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span>E2E-Script grün: <code>bash test_e2e.sh</code> → endet mit „<code>== E2E OK (Exit 0) ==</code>“ (2 Runden, Routing, Scoreboard, Match-State <code>finished</code>, <code>winner=player_b</code>)</span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span><code>POST /event</code> mit unbekanntem Typ → HTTP 400 <code>{"error":"invalid event type","type":"&lt;wert&gt;"}</code> (kein Crash, Server läuft weiter)</span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span>Poll-Loop liefert <code>incoming_wave</code>: A+B registrieren → <code>/match/create</code> → <code>/round/start</code> → A liefert <code>wave_sent level 3</code> → <code>GET /poll/player_b</code> enthält <code>{"event":"incoming_wave","level":3,"from":"player_a","delay_s":5,...}</code>; zweiter Poll ist leer (Outbox geleert)</span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span>Fehler-/Lifecycle-Kontrakt (in E2E abgedeckt): 404 unbekannte match/player, 409 <code>round/start</code> nach <code>match_end</code>, <code>match_end</code> nach letzter Runde in <b>beiden</b> Outboxen mit <code>winner</code>/<code>reason</code></span></label>
+    <p class="note">Ablauf-Referenz:
+<pre>node server.js
+[server] tournament-server listening on port 8080 (settle_ms=3000)
+[server] match create id=m1-xxxxx players=player_a,player_b rounds=2
+[server] wave_sent player_a -&gt; player_b level=1 match=m1-xxxxx
+...
+== E2E OK (Exit 0) ==</pre>
+Agenten-Vorlauf 08.09.2026 (Linux): <code>test_e2e.sh</code> grün (Exit 0) und API-Probe bestätigt (health 200, <code>incoming_wave</code>-Routing via Poll, unbekannter Typ → 400). Offen bleibt der Gegen-Test mit echten Spiel-Clients bzw. durch Momo — Card auf der Startseite daher <b>untested</b>.</p>
+  </div></section>
+
+  <section class="panel"><div class="inner">
+    <h2>VALIDATED</h2>
+    <p class="note">Gilt erst als validiert, wenn ALLE folgenden Kriterien grün sind:</p>
+    <label class="chk"><input type="checkbox" data-g="v"><span>Server startet sauber aus dem Zip (Log-Zeile + <code>/health</code> 200) — alle 4 Zip-Dateien vorhanden, keine Laufzeit-Dependency</span></label>
+    <label class="chk"><input type="checkbox" data-g="v"><span><code>test_e2e.sh</code> grün (Exit 0): Routing <code>wave_sent</code> → <code>incoming_wave</code> beim Gegner, Scoreboard-Kumulation (<code>score_update</code>), Siegerermittlung aus dem Scoreboard, Match-State <code>finished</code></span></label>
+    <label class="chk"><input type="checkbox" data-g="v"><span>Poll-Loop liefert zugestellte Events genau einmal (Outbox wird geleert, keine Doppel-Zustellung); <code>incoming_wave.delay_s</code>-Feld vorhanden</span></label>
+    <label class="chk"><input type="checkbox" data-g="v"><span>Runden-Lifecycle: Timer <code>round_end</code> mit Scoreboard-<code>summary</code>, <code>match_end</code> nach letzter Runde mit <code>winner</code>/<code>reason</code> (score bzw. draw) in beiden Outboxen; Error-Kontrakt 400/404/409 stabil</span></label>
+  </div></section>
+
+  <footer>repo: <a href="https://github.com/momokli/riftbreaker-battle-mod">github.com/momokli/riftbreaker-battle-mod</a> · vertrag: <a href="../../trainer/protocol.md">trainer/protocol.md</a> · <a href="../index.html">cd ..</a></footer>
+</div>
+<script>
+(function () {
+  var K = "rbb-t-06", s = {};
+  try { s = JSON.parse(localStorage.getItem(K) || "{}"); } catch (e) {}
+  var b = [].slice.call(document.querySelectorAll("input[type=checkbox]"));
+  function upd() {
+    ["ct","cv"].forEach(function (id) {
+      var g = id == "ct" ? "t" : "v", a = b.filter(function (x) { return x.dataset.g == g; }),
+          on = a.filter(function (x) { return x.checked; }).length;
+      document.getElementById(id).textContent = on + "/" + a.length;
+    });
+  }
+  b.forEach(function (x, i) {
+    x.checked = !!s[i];
+    x.onchange = function () { s[i] = x.checked; localStorage.setItem(K, JSON.stringify(s)); upd(); };
+  });
+  upd();
+})();
+</script>
+</body>
+</html>
