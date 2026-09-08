@@ -1,11 +1,21 @@
 /*
- * rbbridge.c - In-Game-Bridge-DLL fuer den Rift-Breaker-Trainer (Harness).
+ * rbbridge.c - In-Game-Bridge fuer den Rift-Breaker-Trainer (Harness),
+ *              dual: Trainer-DLL ODER Standalone-EXE.
  *
  * Rolle (Architektur, siehe trainer/README.md):
  *   Die Trainer-DLL ist das EINZIGE I/O-Gateway zwischen Spielprozess und
  *   Aussenwelt (Tournament-Server). Der Lua-Mod bleibt reine Spiellogik.
  *   Diese DLL wird per Injector zur Laufzeit geladen (keine Datei-Engine-
  *   Eingriffe, Steam-kompatibel) und stellt einen Named-Pipe-Server bereit.
+ *
+ * Dual-Mode: Derselbe Quelltext baut zwei Varianten - die Pipe-Server-
+ *   Logik liegt in rbbridge_start() und wird von beiden gerufen:
+ *     - rbbridge.dll (Default, per Injector in den Spielprozess laden)
+ *     - rbbridge_standalone.exe (#define RBBRIDGE_STANDALONE): dieselbe
+ *       Server-Logik als normales Programm, damit ist die Trainer-IO auf
+ *       jedem Windows-Rechner OHNE Injection testbar (Baustein 04, Test 0).
+ *   Protokollverhalten ist in beiden Varianten IDENTISCH; die Standalone-
+ *   Variante druckt nur eine Hinweiszeile beim Start.
  *
  * Was der Harness schon kann:
  *   - Named-Pipe-Server "\\.\pipe\rbbattle" (ein Client zur Zeit, v0)
@@ -34,8 +44,13 @@
  *     unterstuetzter Fall: Ueblich ist Inject-once / unload beim Prozessende.
  *
  * Build (x64):
- *   MinGW-w64 : x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -shared -o rbbridge.dll rbbridge.c
- *   MSVC      : cl /nologo /O2 /W3 /LD rbbridge.c /Fe:rbbridge.dll
+ *   1) Trainer-DLL (Injection):
+ *      MinGW-w64 : x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -shared -o rbbridge.dll rbbridge.c
+ *      MSVC      : cl /nologo /O2 /W3 /LD rbbridge.c /Fe:rbbridge.dll
+ *   2) Standalone-EXE (kein Injection noetig, Testmodus):
+ *      MinGW-w64 : x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe rbbridge.c
+ *      MSVC      : cl /nologo /O2 /W3 /DRBBRIDGE_STANDALONE rbbridge.c /Fe:rbbridge_standalone.exe
+ *      (-lws2_32 ist nicht noetig: die Named Pipe nutzt nur Win32-API.)
  */
 
 #ifndef _WIN32_WINNT
@@ -460,7 +475,83 @@ static DWORD WINAPI pipe_server_main(LPVOID unused)
 }
 
 /* ------------------------------------------------------------------ */
-/* DllMain                                                             */
+/* Gemeinsame Start-/Stopp-API (DLL-Attach UND Standalone-main)        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Startet den Pipe-Server-Dienst (Pipe-Server-Thread + Init).
+ * Wird gerufen von DllMain (DLL_PROCESS_ATTACH) und - im Standalone-
+ * Modus - von main(). Doppelte Aufrufe sind dank g_thread_started ein
+ * No-op (Rueckgabe 0 = ok/laeuft bereits, -1 = Fehler).
+ */
+int rbbridge_start(void)
+{
+    if (InterlockedCompareExchange(&g_thread_started, 1, 0) != 0)
+        return 0; /* laeuft bereits (z.B. zweiter Attach) */
+
+    /* Umgebungsvariable RBBRIDGE_LOG=0 schaltet das Datei-Log ab */
+    char env[4] = "";
+    if (GetEnvironmentVariableA("RBBRIDGE_LOG", env, sizeof(env)) > 0 &&
+        strcmp(env, "0") == 0) {
+        g_file_log = 0;
+    }
+
+    InitializeCriticalSection(&g_log_cs);
+    g_stop = 0;
+
+    /* WICHTIG (DLL-Fall): Hier laeuft das ggf. im DllMain-Kontext
+     * (Loader-Lock) - nie blockieren/kein LoadLibrary, wir starten nur
+     * einen unabhaengigen Thread. */
+    g_thread = CreateThread(NULL, 0, pipe_server_main, NULL, 0, NULL);
+    if (g_thread) {
+        dbg("rbbridge_start: Pipe-Server-Thread laeuft");
+        return 0;
+    }
+    dbg("rbbridge_start: CreateThread fehlgeschlagen (GLE=%lu)",
+        GetLastError());
+    InterlockedExchange(&g_thread_started, 0);
+    DeleteCriticalSection(&g_log_cs);
+    return -1;
+}
+
+/*
+ * Stoppt den Pipe-Dienst (Wake-up + Join + Aufraeumen).
+ * Wird gerufen von DllMain (DLL_PROCESS_DETACH) und von main() beim
+ * Beenden (Ctrl+C im Standalone-Modus).
+ */
+void rbbridge_stop(void)
+{
+    if (!g_thread_started)
+        return;
+
+    g_stop = 1;
+
+    /* Wake-up: Ein kurzer Eigen-Connect bringt den Thread aus einem
+     * blockierenden ConnectNamedPipe (und danach sofort wieder raus,
+     * weil g_stop gesetzt ist). Mehrmals versuchen, um die kleine
+     * Race zwischen CreateNamedPipe/ConnectNamedPipe abzudecken. */
+    for (int i = 0; i < 40 && g_thread; i++) {
+        if (WaitForSingleObject(g_thread, 50) == WAIT_OBJECT_0)
+            break;
+        HANDLE w = CreateFileA(PIPE_NAME_A,
+                               GENERIC_READ | GENERIC_WRITE,
+                               0, NULL, OPEN_EXISTING, 0, NULL);
+        if (w != INVALID_HANDLE_VALUE) {
+            FlushFileBuffers(w);
+            CloseHandle(w);
+        }
+    }
+    if (g_thread) {
+        WaitForSingleObject(g_thread, 500);
+        CloseHandle(g_thread);
+        g_thread = NULL;
+    }
+    DeleteCriticalSection(&g_log_cs);
+    InterlockedExchange(&g_thread_started, 0);
+}
+
+/* ------------------------------------------------------------------ */
+/* DllMain (nur im DLL-Build aktiv; im Standalone-Build ungenutzt)     */
 /* ------------------------------------------------------------------ */
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
@@ -469,29 +560,9 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 
     switch (reason) {
     case DLL_PROCESS_ATTACH: {
-        /* Nur der allererste Attach startet den Thread */
-        if (InterlockedCompareExchange(&g_thread_started, 1, 0) != 0)
-            break;
-
-        /* Umgebungsvariable RBBRIDGE_LOG=0 schaltet das Datei-Log ab */
-        char env[4] = "";
-        if (GetEnvironmentVariableA("RBBRIDGE_LOG", env, sizeof(env)) > 0 &&
-            strcmp(env, "0") == 0) {
-            g_file_log = 0;
-        }
-
-        InitializeCriticalSection(&g_log_cs);
-        g_stop = 0;
-
-        /* WICHTIG: In DllMain nie blockieren/kein LoadLibrary - wir
-         * starten nur einen unabhaengigen Thread. */
-        g_thread = CreateThread(NULL, 0, pipe_server_main, NULL, 0, NULL);
-        if (g_thread) {
-            dbg("DllMain: Attach ok, Pipe-Server-Thread laeuft");
-        } else {
-            dbg("DllMain: CreateThread fehlgeschlagen (GLE=%lu)", GetLastError());
-            InterlockedExchange(&g_thread_started, 0);
-        }
+        /* Nur der allererste Attach startet den Thread (Guard liegt in
+         * rbbridge_start; Doppel-Attach ist dort ein No-op). */
+        rbbridge_start();
 
         /* Handle erst im Detach schliessen (brauchen es zum Join).
          * "DisableThreadLibraryCalls" spart die Load/Unload-Benach-
@@ -501,32 +572,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
     }
 
     case DLL_PROCESS_DETACH: {
-        if (!g_thread_started)
-            break;
-
-        g_stop = 1;
-
-        /* Wake-up: Ein kurzer Eigen-Connect bringt den Thread aus einem
-         * blockierenden ConnectNamedPipe (und danach sofort wieder raus,
-         * weil g_stop gesetzt ist). Mehrmals versuchen, um die kleine
-         * Race zwischen CreateNamedPipe/ConnectNamedPipe abzudecken. */
-        for (int i = 0; i < 40 && g_thread; i++) {
-            if (WaitForSingleObject(g_thread, 50) == WAIT_OBJECT_0)
-                break;
-            HANDLE w = CreateFileA(PIPE_NAME_A,
-                                   GENERIC_READ | GENERIC_WRITE,
-                                   0, NULL, OPEN_EXISTING, 0, NULL);
-            if (w != INVALID_HANDLE_VALUE) {
-                FlushFileBuffers(w);
-                CloseHandle(w);
-            }
-        }
-        if (g_thread) {
-            WaitForSingleObject(g_thread, 500);
-            CloseHandle(g_thread);
-            g_thread = NULL;
-        }
-        DeleteCriticalSection(&g_log_cs);
+        rbbridge_stop();
         break;
     }
 
@@ -535,3 +581,56 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
     }
     return TRUE;
 }
+
+/* ------------------------------------------------------------------ */
+/* Standalone-Modus: main() statt DllMain                              */
+/*                                                                    */
+/* Aktiv nur bei #define RBBRIDGE_STANDALONE - dann ist dieser         */
+/* Quelltext ein normales Konsolen-Programm (rbbridge_standalone.exe)  */
+/* mit IDENTISCHEM Pipe-Protokoll, aber ohne Injection/Spielprozess.   */
+/* ------------------------------------------------------------------ */
+
+#ifdef RBBRIDGE_STANDALONE
+
+static volatile LONG g_running = 1; /* 0 = main() soll den Dienst stoppen */
+
+static BOOL WINAPI ctrl_handler(DWORD ctrl_type)
+{
+    (void)ctrl_type;
+    if (g_running) {
+        dbg("rbbridge_standalone: Ctrl+C/Ctrl+Break - beende Dienst");
+        InterlockedExchange((volatile LONG *)&g_running, 0);
+        g_stop = 1;
+    }
+    return TRUE; /* Ereignis behandelt -> kein Standard-Exit */
+}
+
+int main(void)
+{
+    /* Ctrl+C soll den Dienst sauber stoppen statt den Prozess sofort zu
+     * beenden (sonst bliebe der Pipe-Server-Thread haengen). */
+    SetConsoleCtrlHandler(ctrl_handler, TRUE);
+
+    if (rbbridge_start() != 0) {
+        fprintf(stderr, "rbbridge_standalone: Start fehlgeschlagen (GLE=%lu)\n",
+                (unsigned long)GetLastError());
+        return 1;
+    }
+
+    /* Hinweiszeile (einziger sichtbarer Unterschied zur DLL-Variante): */
+    printf("rbbridge_standalone: Pipe-Server aktiv auf %s - Standalone-\n"
+           "Modus ohne Injection. Test: python pipe_client.py "
+           "(ping/pong). Ctrl+C beendet.\n",
+           PIPE_NAME_A);
+    fflush(stdout);
+
+    /* Hauptschleife: warten, bis Ctrl+C g_stop/g_running setzt */
+    while (g_running)
+        Sleep(200);
+
+    rbbridge_stop();
+    printf("rbbridge_standalone: beendet\n");
+    return 0;
+}
+
+#endif /* RBBRIDGE_STANDALONE */
