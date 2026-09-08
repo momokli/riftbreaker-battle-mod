@@ -14,14 +14,33 @@
  *                   round_end, match_end   (eingeliefert per POST /event)
  *   server -> game: round_start, incoming_wave, round_end, match_end
  *                   (Zustellung per GET /poll/:player_id, Outbox leert sich)
+ *   control -> game: exec_command (Kommando von Web-UI/Operator via POST /event,
+ *                   wird in die Outbox des Ziel-Spielers gelegt, Relay dispt)
  *
- * Start: node server.js   (PORT via env, Default 8080)
+ * Zusaetzlich (Prototyp-Strecke Spiel -> Trainer -> Relay -> Server -> Web-UI):
+ *   - GET /stream   SSE-Stream (text/event-stream): alle Events (Registrierungen,
+ *                   Match-Änderungen, /event-Eingaenge, Outbox-Zustellungen) als
+ *                   `data: <json>` + initiales snapshot
+ *   - GET  /*       statische Dateien aus web/ (.html/.js/.css, sonst 404)
+ *
+ * Start: node server.js   (PORT via env, Default 8080, HOST 0.0.0.0)
  */
 'use strict';
 
 const http = require('http');
+const fs = require('fs');
+const pathMod = require('path');
 
 const PORT = Number(process.env.PORT || 8080);
+const HOST = '0.0.0.0';
+
+// Statische Web-UI-Dateien (Baustein 08) — nur .html/.js/.css werden serviert.
+const WEB_DIR = pathMod.join(__dirname, 'web');
+const STATIC_TYPES = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+};
 
 // Nach der letzten Runde wartet der Server kurz (Settle-Fenster), damit die
 // Clients ihre finalen score_update/round_end-Meldungen einliefern können,
@@ -39,6 +58,14 @@ const GAME_EVENT_TYPES = new Set([
   'round_end',
   'match_end',
 ]);
+
+/** Control->game Kommandos: kommen von Operator/Web-UI, gehen in die Outbox. */
+const CONTROL_COMMAND_TYPES = new Set(['exec_command']);
+
+/** SSE-Zuschauer (GET /stream). */
+const sseClients = new Set();
+let streamSeq = 0;
+let cmdCounter = 0;
 
 /** Globaler In-Memory-State. */
 const players = new Map();  // player_id -> { player_id, registered_at }
@@ -85,6 +112,11 @@ function createMatch(playersArr, roundsTotal) {
 /** Event in die Outbox eines Spielers legen. */
 function deliver(match, playerId, event) {
   match.outbox[playerId].push(event);
+  pushEvent('delivery', {
+    match_id: match.match_id,
+    player_id: playerId,
+    event,
+  });
 }
 
 /** Event in BEIDE Outboxen legen (Rundenevents, match_end). */
@@ -220,11 +252,21 @@ function handleRegister(req, res) {
       return;
     }
     if (players.has(pid)) {
+      pushEvent('player', {
+        player_id: pid,
+        existed: true,
+        registered_at: players.get(pid).registered_at,
+      });
       sendJson(res, 200, { player_id: pid, existed: true });
       return;
     }
     players.set(pid, { player_id: pid, registered_at: now() });
     log(`[server] register player=${pid}`);
+    pushEvent('player', {
+      player_id: pid,
+      existed: false,
+      registered_at: players.get(pid).registered_at,
+    });
     sendJson(res, 200, { player_id: pid, existed: false });
   }).catch((e) => sendError(res, 400, e.message));
 }
@@ -255,6 +297,12 @@ function handleMatchCreate(req, res) {
     const match = createMatch(p, roundsTotal);
     matches.set(match.match_id, match);
     log(`[server] match create id=${match.match_id} players=${p.join(',')} rounds=${roundsTotal}`);
+    pushEvent('match', {
+      match_id: match.match_id,
+      players: match.players,
+      rounds_total: match.rounds_total,
+      status: match.status,
+    });
     sendJson(res, 200, {
       match_id: match.match_id,
       players: match.players,
@@ -310,7 +358,7 @@ function handleEvent(req, res) {
       return;
     }
     const type = ev.type;
-    if (!GAME_EVENT_TYPES.has(type)) {
+    if (!GAME_EVENT_TYPES.has(type) && !CONTROL_COMMAND_TYPES.has(type)) {
       sendError(res, 400, 'invalid event type', type);
       return;
     }
@@ -382,10 +430,33 @@ function handleEvent(req, res) {
         log(`[server] match_end (game) match=${match.match_id} winner=${ev.winner} reason=${match.reason}`);
         break;
       }
+      case 'exec_command': {
+        // Control-Kanal (Web-UI/Operator): Kommando in die Outbox des
+        // Ziel-Spielers legen; der Relay dispt es dort ins Spiel (v0: TODO).
+        if (typeof ev.command !== 'string' || ev.command.length === 0 || ev.command.length > 512) {
+          sendError(res, 400, 'invalid event payload: command (string 1..512) required', type);
+          return;
+        }
+        cmdCounter += 1;
+        deliver(match, pid, {
+          event: 'exec_command',
+          command: ev.command,
+          cmd_id: cmdCounter,
+          from: 'control',
+          t: now(),
+        });
+        log(`[server] exec_command control -> ${pid} command="${ev.command}" cmd_id=${cmdCounter} match=${match.match_id}`);
+        break;
+      }
       default:
         sendError(res, 400, 'invalid event type', type);
         return;
     }
+    pushEvent('input', {
+      match_id: match.match_id,
+      player_id: pid,
+      event: ev,
+    });
     sendJson(res, 200, { ok: true, event: type });
   }).catch((e) => sendError(res, 400, e.message));
 }
@@ -458,15 +529,139 @@ function route(req, res) {
   if (req.method === 'POST' && parts.length === 2 && parts[0] === 'round' && parts[1] === 'start') {
     return handleRoundStart(req, res);
   }
-
-  if (req.method === 'GET' && (parts.length === 0 || parts[0] === 'health')) {
-    return sendJson(res, 200, { ok: true, service: 'tournament-server', players: players.size, matches: matches.size });
+  // GET /stream — SSE-Live-Feed (alle Events als data: <json>)
+  if (req.method === 'GET' && parts.length === 1 && parts[0] === 'stream') {
+    return handleStream(req, res);
+  }
+  // GET / — Web-UI (web/index.html), Fallback Health-JSON (legacy-Verhalten)
+  if (req.method === 'GET' && parts.length === 0) {
+    const f = resolveStatic('/');
+    if (f) return serveStatic(res, f);
+    return healthJson(res);
+  }
+  // GET /health
+  if (req.method === 'GET' && parts.length === 1 && parts[0] === 'health') {
+    return healthJson(res);
+  }
+  // Statische Dateien aus web/ (GET, nur .html/.js/.css, sonst 404)
+  if (req.method === 'GET') {
+    const f = resolveStatic(url.pathname);
+    if (f) return serveStatic(res, f);
   }
   sendError(res, 404, 'not found');
 }
 
 function log(msg) {
   process.stdout.write(msg + '\n');
+}
+
+// ---------------------------------------------------------------------------
+// SSE /stream (Prototyp-Strecke: Live-Feed fuer Web-UI / Beobachter)
+// ---------------------------------------------------------------------------
+
+function sseEnvelope(kind, fields) {
+  streamSeq += 1;
+  return Object.assign({ seq: streamSeq, t: now(), kind }, fields);
+}
+
+function sseSend(res, obj) {
+  if (res.writableEnded) return false;
+  try {
+    res.write('data: ' + JSON.stringify(obj) + '\n\n');
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Ein Event an alle SSE-Zuschauer verteilen (tote Clients rauswerfen). */
+function sseBroadcast(obj) {
+  for (const res of sseClients) {
+    if (!sseSend(res, obj)) {
+      sseClients.delete(res);
+      try { res.destroy(); } catch (e) { /* egal */ }
+    }
+  }
+}
+
+/** Event als `data: <json>` an alle Zuschauer pushen. */
+function pushEvent(kind, fields) {
+  sseBroadcast(sseEnvelope(kind, fields));
+}
+
+function handleStream(req, res) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+  });
+  res.write(': connected\n\n');
+  sseClients.add(res);
+  res.on('close', () => sseClients.delete(res));
+  res.on('error', () => sseClients.delete(res));
+  // Initiales snapshot (Players/Matches), danach laufen Live-Events rein.
+  sseSend(res, sseEnvelope('snapshot', {
+    players: [...players.values()]
+      .map((p) => ({ player_id: p.player_id, registered_at: p.registered_at })),
+    matches: [...matches.values()].map(publicState),
+  }));
+  log(`[server] stream client connected (total=${sseClients.size})`);
+}
+
+// Heartbeat-Kommentar, damit Proxies die SSE-Verbindung nicht einschlafen lassen.
+const sseHeartbeat = setInterval(() => {
+  for (const res of sseClients) {
+    if (res.writableEnded) {
+      sseClients.delete(res);
+      continue;
+    }
+    try {
+      res.write(': hb\n\n');
+    } catch (e) {
+      sseClients.delete(res);
+      try { res.destroy(); } catch (e2) { /* egal */ }
+    }
+  }
+}, 15000);
+if (sseHeartbeat.unref) sseHeartbeat.unref();
+
+// ---------------------------------------------------------------------------
+// Statische Dateien aus web/ (nur .html/.js/.css, sonst 404)
+// ---------------------------------------------------------------------------
+
+function resolveStatic(urlPath) {
+  const rel = urlPath === '/' ? '/index.html' : urlPath;
+  const ext = pathMod.extname(rel).toLowerCase();
+  if (!STATIC_TYPES[ext]) return null;
+  const abs = pathMod.normalize(pathMod.join(WEB_DIR, rel));
+  // Path-Traversal abweisen (../ darf nicht aus web/ herausfuehren).
+  if (abs !== WEB_DIR && !abs.startsWith(WEB_DIR + pathMod.sep)) return null;
+  if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) return null;
+  return { abs, type: STATIC_TYPES[ext] };
+}
+
+function serveStatic(res, file) {
+  let body;
+  try {
+    body = fs.readFileSync(file.abs);
+  } catch (e) {
+    sendError(res, 404, 'not found');
+    return;
+  }
+  res.writeHead(200, {
+    'Content-Type': file.type,
+    'Content-Length': body.length,
+  });
+  res.end(body);
+}
+
+function healthJson(res) {
+  sendJson(res, 200, {
+    ok: true,
+    service: 'tournament-server',
+    players: players.size,
+    matches: matches.size,
+  });
 }
 
 const server = http.createServer((req, res) => {
@@ -477,6 +672,6 @@ const server = http.createServer((req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  log(`[server] tournament-server listening on port ${PORT} (settle_ms=${SETTLE_MS})`);
+server.listen(PORT, HOST, () => {
+  log(`[server] tournament-server listening on http://${HOST}:${PORT} (settle_ms=${SETTLE_MS})`);
 });
