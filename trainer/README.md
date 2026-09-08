@@ -48,7 +48,7 @@ Außenwelt.** Der Lua-Mod bleibt reine Spiellogik — er darf (Findings:
 | Komponente | Inhalt | Aufgabe |
 |---|---|---|
 | `injector/injector.c` | `injector.exe` (x64, Windows) | DLL zur Laufzeit in den Spielprozess laden (Remote-`LoadLibraryW`); Ziel per PID oder Prozessname |
-| `rbbridge/rbbridge.c` | `rbbridge.dll` (x64, Windows) | In-Game-Gateway: Named-Pipe-Server `\\.\pipe\rbbattle`, line-delimited JSON v0; `exec`-Dispatch mit `TODO(RE)`; State-Heartbeat-Platzhalter |
+| `rbbridge/rbbridge.c` | `rbbridge.dll` + `rbbridge_standalone.exe` (x64, Windows) | In-Game-Gateway: Named-Pipe-Server `\\.\pipe\rbbattle`, line-delimited JSON v0; `exec`-Dispatch mit `TODO(RE)`; State-Heartbeat-Platzhalter. **Dual-Mode:** eine Quelle baut per `-DRBBRIDGE_STANDALONE` zusätzlich eine Standalone-EXE mit identischem Protokoll (Test ohne Injection, Baustein 04 Test 0) |
 | `scan/` | Python + pymem | RE-Phase: Prozess-/Modul-Info (`scan_find.py`), interaktiver Wert-Scan (`scan_values.py`) → `offsets.json` |
 | `protocol.md` | Spezifikation | Event-Schema v0 (Spiel ⇄ Server) |
 
@@ -60,8 +60,11 @@ müssen x64 sein**.
 ### Option A — MinGW-w64
 
 ```bat
-:: rbbridge.dll
+:: rbbridge.dll (Injection)
 x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -shared -o rbbridge.dll rbbridge.c
+
+:: rbbridge_standalone.exe (gleiche Quelle, kein Injection noetig)
+x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe rbbridge.c
 
 :: injector.exe
 x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe injector.c
@@ -73,11 +76,27 @@ x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe injector.c
 :: rbbridge.dll
 cl /nologo /O2 /W3 /LD rbbridge.c /Fe:rbbridge.dll
 
+:: rbbridge_standalone.exe
+cl /nologo /O2 /W3 /DRBBRIDGE_STANDALONE rbbridge.c /Fe:rbbridge_standalone.exe
+
 :: injector.exe  (shell32.lib nur wegen CommandLineToArgvW)
 cl /nologo /O2 /W3 injector.c shell32.lib /Fe:injector.exe
 ```
 
 ## Nutzung
+
+### 0. Ohne Spiel testen — Standalone-EXE (kein Injection nötig)
+
+`rbbridge_standalone.exe` (Build s. oben, `-DRBBRIDGE_STANDALONE`) startet
+denselben Pipe-Server als normales Konsolen-Programm — Protokollverhalten
+identisch zur injizierten DLL. Damit ist die Trainer-IO auf jedem
+Windows-Rechner ohne Spiel/Injection testbar (ausführlich: Baustein 04,
+Test 0):
+
+```bat
+rbbridge_standalone.exe        :: Terminal 1, laeuft bis Ctrl+C
+python pipe_client.py          :: Terminal 2 -> ping/pong (s. Baustein 04)
+```
 
 ### 1. Spiel starten
 

@@ -9,16 +9,20 @@ die JSON-Antworten. Nur Standardbibliothek (Windows-Python, x64); die Pipe
 wird mit plain os.open() geoeffnet (blockierend, byte mode).
 
 Testablauf OHNE Spiel (siehe README.md):
-  1) rbbridge.dll in notepad.exe injizieren:
+  0) Standalone (keine Injection): rbbridge_standalone.exe starten
+     (Build: rbbridge.c mit -DRBBRIDGE_STANDALONE) - Pipe-Server-Logik
+     identisch zur DLL, kein notepad/injector noetig.
+  1) (Test 1) rbbridge.dll in notepad.exe injizieren:
        injector.exe <pid> C:\\pfad\\rbbridge.dll
   2) diesen Client starten:
        python pipe_client.py                -> ping, erwartet pong
        python pipe_client.py exec rb_wave 3 -> zusaetzlich exec (v0: ok:false)
        python pipe_client.py --watch        -> danach weiterlesen (Heartbeats)
 
-Hinweis: Ist die DLL noch nicht injiziert, blockiert os.open() bis der
-Pipe-Server bereit ist (Windows-Semantik fuer Named Pipes) - also entweder
-zuerst injizieren oder das Skript einfach laufen lassen und dann injizieren.
+Hinweis: Laeuft kein Pipe-Server (EXE nicht gestartet bzw. DLL nicht
+injiziert), blockiert os.open() bis der Server bereit ist (Windows-Semantik
+fuer Named Pipes) - also Server zuerst starten oder das Skript einfach
+laufen lassen und dann starten/injizieren.
 
 Protokoll v0: eine JSON-Nachricht pro Zeile, UTF-8, '\n' abgeschlossen
 (siehe trainer/protocol.md bzw. README.md in diesem Ordner).
