@@ -147,12 +147,13 @@ Kleine JSON-Events (Typ, Payload, Runde). Der Modus ist **rundenbasiert** — ke
 
 ## Roadmap
 
-1. **Trainer-Harness** — Injector + DLL-Grundgerüst + Named Pipe *(läuft)*
-2. **RE-Phase** — Live-Session (Windows + Spiel): Scan-Skripte; Offsets/Signaturen für Game-State & Command-Aufrufe sammeln
-3. **Read-PoC** — Score/State per DLL über die Pipe auslesen (Egress)
-4. **Write-PoC** — Command-Ausführung über die DLL (Ingress, z. B. Wave-Trigger)
-5. **Relay-Client + Server-Skeleton** — Event-Pfad Partie A → Server → Partie B schließen
-6. **Alpha 1v1** — erster spielbarer Duell-Lauf
+1. **Spike** — Mod-Skeleton + Wave-Spawn-Experimente + Custom-UI *(gebaut; In-Game-Test offen)*
+2. **Trainer-Harness** — Injector + DLL-Grundgerüst + Named Pipe *(läuft)*
+3. **RE-Phase** — Live-Session (Windows + Spiel): Scan-Skripte; Offsets/Signaturen für Game-State & Command-Aufrufe sammeln
+4. **Read-PoC** — Score/State per DLL über die Pipe auslesen (Egress)
+5. **Write-PoC** — Command-Ausführung über die DLL (Ingress, z. B. Wave-Trigger)
+6. **Relay-Client + Server-Skeleton** — Event-Pfad Partie A → Server → Partie B schließen
+7. **Alpha 1v1** — erster spielbarer Duell-Lauf
 
 ## Risiken
 

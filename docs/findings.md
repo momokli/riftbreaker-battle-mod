@@ -1,38 +1,69 @@
-# Findings — verifiziert (Stand 07.09.2026)
+# Findings — verifiziert (Stand 08.09.2026, Spike-Research)
 
-Machbarkeits-Findings für den Runden-Duell-Modus, aus Doku-Crawl und Recherche verifiziert. Die Punkte 6–11 stammen aus Matheos Prototyp-Repo (<https://github.com/BestToasty/riftbreaker_mod>, Stand 07.09.2026).
+Machbarkeits-Findings für den Runden-Duell-Modus. Basis: exorstudios-Wiki
+(github.com/exorstudios/riftbreaker-wiki), fandom-Wiki (riftbreaker.fandom.com,
+„Mod service:*“-Signatur-Dumps, „Console commands“), echte Workshop-Mods
+(github.com/lilly1987/Riftbreaker-mods), **extrahierte Original-Spieldaten**
+(github.com/PonomarevDmitry/RiftbreakersMods → `OriginalPacksData/`) sowie
+Matheos Prototyp-Repo (<https://github.com/BestToasty/riftbreaker_mod>, Stand 07.09.2026).
 
 ## Verifiziert
 
-1. **Mod-API offiziell seit 2022** — Lua-basierte Mods, Distribution über Steam Workshop und mod.io.
-   - Doku: <https://github.com/exorstudios/riftbreaker-wiki>
-   - Tools: <https://github.com/exorstudios/riftbreaker-tools>
+1. **Mod-API offiziell seit 2022** — Lua-basierte Mods, Distribution über Steam
+   Workshop und mod.io (Doku: exorstudios-Wiki; Tools: exorstudios/riftbreaker-tools).
+2. **Kein File-I/O in der Lua-API** — 0 Treffer für `io.open`, `WriteFile`,
+   `ReadFile`, `serialize`, `http`, `socket`, `os.getenv` in der offiziellen Doku.
+3. **Mod-Layout & Einstiegspunkt** — Mod = Ordner, der die Content-Struktur des
+   Spiels spiegelt: `<game>/mods/<ModName>/` mit `lua/*_autoexec.lua` als
+   „Master-Skript“. Autoexec läuft bei Kartenerstellung, Zugriff auf alle
+   Services + Reflection + `RegisterGlobalEventHandler`.
+4. **Custom Console Commands gehen** — `ConsoleService:RegisterCommand(name, cb)`,
+   `ExecuteCommand(...)`, `Write(...)`, `GetConfig(...)`. EXOR nutzt das selbst
+   (`lua/commands/cheat.lua` → `debug_spawn_entity`). Hotkeys via
+   `ExecuteCommand('bind f7 "cmd"')`.
+5. **Wave-Spawn zur Laufzeit geht** — `EntityService:SpawnEntity(blueprint, x, y, z, team)`
+   (mehrere Overloads, u.a. an Entity/Position). EXORs `debug_spawn_entity`
+   spawnt exakt darüber am Spieler (Team `""`). Kreaturen-Blueprints
+   `units/ground/<name>` gegen `.ent`-Dateien der Spieldaten verifiziert.
+6. **Custom-UI geht, mit Einschränkung** — `GuiService:OpenPopup(entity, template, text)`
+   + `GuiPopupResultEvent` (Wiki-Beispiel, Template in Spieldaten vorhanden).
+   `GuiService:ShowHudText(id, content)` existiert, aber gültige HUD-`id`s sind
+   undokumentiert → Popup-Ansatz fürs UI-Experiment.
+7. **Outbound-Logging** — `LogService:Log(...)` → `<Documents>\The Riftbreaker\exor_logs.txt`
+   (6 rotierende Dateien); `ConsoleService:Write(...)` → In-Game-Konsole.
+8. **In-Game-Konsole existiert** — Tasten ´/ö/'/ñ/ù/`~`/` (Layout-abhängig);
+   GamePass: `enable_developer_console 1` in `Conf/initial_config_win`.
+9. **Kein PvP im Spiel** — Co-op ist eine gemeinsame Welt. Duell = eigene
+   Kopplung zweier Partien (Relay/Trainer, siehe concept.md).
+10. **`mp_deathmatch` nicht nutzbar** — interner EXOR-Netcodetest, kein Zugang.
 
-2. **Kein File-I/O in der Lua-API** — 0 Treffer für `io.open`, `WriteFile`, `ReadFile`, `serialize`, `http`, `socket`, `os.getenv` in der offiziellen Doku (komplett gegreppt). Ein Lua-Mod kann also **nicht direkt** von außen Daten lesen oder schreiben.
+## Offene Punkte (klärt der In-Game-Test, nicht mehr die Doku)
 
-3. **Outbound via `LogService:Log` ins Spiel-Log möglich** — als Notnagel nutzbar, wird durch den Trainer-Ansatz aber obsolet (der Trainer liest den State direkt aus dem Prozess).
+- macOS-Mod-Support (offiziell „Steam/GamePass PC“; Ordner-Pfad analog anlegen).
+- Exakte Feind-Team-Zuordnung bei `SpawnEntity(..., "")` (Blueprint-Standard erwartet).
+- Popup-/HUD-Verhalten in realistischen Spielsituationen (Fokus, Mehrfach-Popups).
+- Bind-Persistenz der Konsole über Sessions hinweg (unschädlich, s. mod/README).
 
-4. **Kein PvP im Spiel** — Co-op ist eine gemeinsame Welt/Simulation. Zwei parallele Spieler = zwei getrennte Partien, die nicht gegeneinander laufen können. Ein Duell braucht daher immer unsere eigene Kopplung (Relay).
+## Spike-Ergebnisse
 
-5. **`mp_deathmatch` nicht nutzbar** — interner EXOR-Netcodetest (versteckte, Key-geschützte Beta 2023), kein offizieller Modus und nicht zugänglich.
+`mod/` enthält Skeleton + Experimente A (Wave-Spawn), B (Custom-UI-Popup) und
+C (Log-Bridge `[RBBATTLE] event=...` + Konsolen-Command `rb_wave <level>`).
+Installation & FINDINGS-Tabelle: [`mod/README.md`](../mod/README.md).
+In-Game-Test: ausstehend (Momo).
 
-6. **Mod-Struktur läuft** — `Mods/`-Ordner plus `lua/*_autoexec.lua` wird von der Engine fehlerfrei geladen.
+Zusätzlich aus Matheos Prototyp (In-Game-Test 07.09.2026, Fortsetzung der Nummerierung):
 
-7. **Custom Console Commands funktionieren** — `ConsoleService:RegisterCommand("name", fn)` registriert eigene Kommandos in der In-Game-Konsole.
+11. **Mod-Struktur läuft** — `Mods/`-Ordner plus `lua/*_autoexec.lua` wird von der Engine fehlerfrei geladen.
 
-8. **Spawn zur Laufzeit funktioniert** — `ConsoleService:ExecuteCommand("debug_spawn_entity units/ground/spawner_canoptrix")` spawnt das Boss-Nest an der Spielerposition.
+12. **Custom Console Commands funktionieren** — `ConsoleService:RegisterCommand("name", fn)` registriert eigene Kommandos in der In-Game-Konsole.
 
-9. **Global-Events funktionieren** — `RegisterGlobalEventHandler("PlayerCreatedEvent", fn)` wird zuverlässig ausgelöst.
+13. **Spawn zur Laufzeit funktioniert** — `ConsoleService:ExecuteCommand("debug_spawn_entity units/ground/spawner_canoptrix")` spawnt das Boss-Nest an der Spielerposition.
 
-10. **Konsolen-Ausgabe funktioniert** — `ConsoleService:Write(text)` gibt Text in der In-Game-Konsole aus.
+14. **Global-Events funktionieren** — `RegisterGlobalEventHandler("PlayerCreatedEvent", fn)` wird zuverlässig ausgelöst.
 
-11. **`io.open` CRASHT das Spiel** — Datei-I/O ist im Lua-Sandbox blockiert und beendet das Spiel hart (nicht nur ein Fehler!). `io.*` im Mod niemals anfassen.
+15. **Konsolen-Ausgabe funktioniert** — `ConsoleService:Write(text)` gibt Text in der In-Game-Konsole aus.
 
-## Offene Fragen (klärt Spike / Reverse Engineering)
-
-- **Custom-UI (HUD) umsetzbar?** — bleibt offen; einziger ungeklärter Punkt.
-
-Der Prototyp hat alles Weitere geklärt: Mod-Load ✓, Wave-Spawn ✓, Console-Commands ✓.
+16. **`io.open` CRASHT das Spiel** — Datei-I/O ist im Lua-Sandbox blockiert und beendet das Spiel hart (nicht nur ein Fehler!). `io.*` im Mod niemals anfassen.
 
 ## Entscheidung (08.09.2026): Trainer-only-Architektur
 
