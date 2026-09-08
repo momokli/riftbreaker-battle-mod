@@ -33,3 +33,16 @@ Machbarkeits-Findings für den Runden-Duell-Modus, aus Doku-Crawl und Recherche 
 - **Custom-UI (HUD) umsetzbar?** — bleibt offen; einziger ungeklärter Punkt.
 
 Der Prototyp hat alles Weitere geklärt: Mod-Load ✓, Wave-Spawn ✓, Console-Commands ✓.
+
+## Entscheidung (08.09.2026): Trainer-only-Architektur
+
+**Der Mod hat keinen eigenen I/O-Kanal** — Ingress und Egress laufen
+ausschließlich über die **Trainer-DLL** (die Lua-Sandbox blockiert File-I/O
+ohnehin hart, s. o.). Pfad: Server → Relay-Client → Named Pipe
+(`\\.\pipe\rbbattle`) → DLL → Mod-Command (Ingress); DLL liest Game-State /
+fängt Events ab → Pipe → Relay-Client → Server (Egress). **Konsole-Route
+verworfen** — Konsole-Buffer-Injektion ist fragil, UI-Automation/SendInput kein
+echtes Ingress (Fokus-Probleme); Log-File-Tailing nur noch Notnagel. Konsequenz:
+Mod = reine Spiellogik (Steam-Workshop-tauglich), Trainer-DLL = externes
+„für uns“-Tool (runtime-only Injection, keine Game-Datei-Änderung).
+Details: `docs/concept.md` → „Tournament-Architektur (Trainer-only)“.
