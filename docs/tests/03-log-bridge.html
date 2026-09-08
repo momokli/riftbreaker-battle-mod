@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>03 — log-bridge · test guide</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: #05070a;
+    color: #9fb4c0;
+    font-family: "JetBrains Mono", Consolas, "Courier New", monospace;
+    font-size: 14px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .shell { max-width: 880px; margin: 0 auto; padding: 2.2rem 1.25rem 2.5rem; }
+
+  header { margin-bottom: 1.6rem; }
+  h1 { margin: 0 0 .35rem; font-size: 1.05rem; font-weight: 600; letter-spacing: .06em; color: #c7d5dd; }
+  h1 .idx { color: #3fd0d4; }
+  .prompt { margin: 0; color: #6b7a85; font-size: .85rem; }
+  .prompt .lbl { color: #3fd0d4; }
+  .prompt b { color: #c7d5dd; font-weight: 600; }
+
+  .back { display: inline-block; margin-bottom: 1rem; color: #3fd0d4; text-decoration: none; font-size: .82rem; }
+  .back:hover { text-decoration: underline; }
+  .back .arrow { color: #6b7a85; }
+
+  .panel {
+    clip-path: polygon(0 10px, 10px 0, 100% 0, 100% calc(100% - 10px),
+                       calc(100% - 10px) 100%, 0 100%);
+    background: #1c2a33;
+    padding: 1px;
+    margin-bottom: 14px;
+  }
+  .panel > .inner {
+    clip-path: polygon(0 10px, 10px 0, 100% 0, 100% calc(100% - 10px),
+                       calc(100% - 10px) 100%, 0 100%);
+    background: #0c1218;
+    padding: 1rem 1.2rem;
+  }
+  section h2 { margin: 0 0 .5rem; font-size: .8rem; font-weight: 600; letter-spacing: .14em; color: #3fd0d4; }
+  p { margin: 0 0 .6rem; font-size: .85rem; }
+  ol { margin: 0 0 .4rem; padding-left: 1.25rem; font-size: .85rem; }
+  li { margin-bottom: .3rem; }
+  p code, li code { color: #c7d5dd; background: #16222b; padding: 0 .3em; border-radius: 2px; font-size: .82em; }
+  pre { background: #081016; border: 1px solid #1c2a33; padding: .6rem .8rem; overflow-x: auto; font-size: .78rem; color: #52d273; margin: .3rem 0 .7rem; }
+  pre .dim { color: #5f6f7a; }
+
+  .chk { display: flex; gap: .6rem; align-items: flex-start; margin: 0; padding: .4rem 0;
+         border-bottom: 1px dashed #16222b; font-size: .83rem; cursor: pointer; }
+  .chk:last-child { border-bottom: 0; }
+  .chk input { margin-top: .28em; accent-color: #3fd0d4; flex: none; cursor: pointer; }
+  .chk code { color: #c7d5dd; background: #16222b; padding: 0 .3em; border-radius: 2px; font-size: .84em; white-space: nowrap; }
+  .chk .opt { color: #6b7a85; }
+  .note { font-size: .78rem; color: #6b7a85; margin: .5rem 0 0; }
+
+  footer { margin-top: 1.2rem; font-size: .78rem; color: #5f6f7a; }
+  footer a { color: #7d93a0; text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <a class="back" href="../index.html"><span class="arrow">&gt;</span> cd ..</a>
+  <header>
+    <h1><span class="idx">03</span> — log-bridge</h1>
+    <p class="prompt"><span class="lbl">test guide</span> · tests <b><span id="ct">0/0</span></b> · validated <b><span id="cv">0/0</span></b></p>
+  </header>
+
+  <section class="panel"><div class="inner">
+    <h2>ZWECK</h2>
+    <p><b>Diagnose-only, kein Architektur-Baustein</b> — die echte Kommunikation läuft über die Trainer-DLL (04). Testet den Outbound-Pfad ohne Spiel-UI: <code>LogService:Log</code> schreibt <code>[RBBATTLE]</code>-Zeilen nach <code>exor_logs.txt</code>, und <code>tail_events.py</code> zeigt sie <b>live als JSON</b>. Eigener Test-Command: <code>rb_bridge_test [n]</code>.</p>
+  </div></section>
+
+  <section class="panel"><div class="inner">
+    <h2>INSTALL</h2>
+    <ol>
+      <li>Mod: Ordner <code>rbbattle_03_logbridge/</code> nach <code>&lt;SteamLibrary&gt;\steamapps\common\Riftbreaker\mods\</code> kopieren → <code>mods\rbbattle_03_logbridge\lua\rbbattle_03_logbridge_autoexec.lua</code>, Spiel starten, Karte laden.</li>
+      <li>Skript: Python 3.7+ („Add python.exe to PATH“), <b>keine</b> Zusatzpakete. Log-Pfad wird automatisch aus <code>%USERPROFILE%</code> abgeleitet; abweichender Pfad: <code>python tail_events.py --log "D:\pfad\exor_logs.txt"</code>.</li>
+    </ol>
+  </div></section>
+
+  <section class="panel"><div class="inner">
+    <h2>TESTS</h2>
+    <label class="chk"><input type="checkbox" data-g="t"><span>Karte laden → Log enthält <code>event=mod_load version=0.1.0-baustein03 status=ok</code></span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span>Terminal öffnen, starten: <code>python bausteine\03-log-bridge\tail_events.py</code> → Skript läuft, zeigt <code>[tail_events] beobachte: ...</code> und die <code>mod_load</code>-Zeile als JSON</span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span>In-Game-Konsole öffnen (deutsche Tastatur: <code>ö</code>), <code>rb_bridge_test</code> eingeben → im Terminal erscheinen live 2 JSON-Zeilen:
+<pre>{"event": "bridge_test", "run": "1", "status": "start"}
+{"event": "bridge_test", "run": "1", "status": "done"}</pre></span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span><code>rb_bridge_test 3</code> eingeben → 3 Durchläufe (run 2, 3, 4), also 6 JSON-Zeilen live im Terminal</span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span><span class="opt">[rotation]</span> Log-Rotation: rotiert das Spiel die Log-Datei (6 Dateien, Größen-Sprung), bricht das Tail <b>nicht</b> ab, sondern liest die neue Datei ab Anfang weiter</span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span><span class="opt">[offline]</span> Ohne Spiel prüfbar: Textdatei mit Zeile <code>[RBBATTLE] skeleton ok</code> anlegen, <code>python tail_events.py --log &lt;datei&gt;</code> → Ausgabe <code>{"raw": "skeleton ok"}</code> (Fallback für Zeilen ohne key=value)</span></label>
+    <p class="note">Zeilen ohne key=value-Paare erscheinen generell als <code>{"raw": ...}</code> — damit ist der Baustein auch zum Prüfen anderer Mods (z.&nbsp;B. Baustein 00) nutzbar.</p>
+  </div></section>
+
+  <section class="panel"><div class="inner">
+    <h2>VALIDATED</h2>
+    <p class="note">Gilt erst als validiert, wenn ALLE folgenden Kriterien grün sind:</p>
+    <label class="chk"><input type="checkbox" data-g="v"><span><code>rb_bridge_test</code> und <code>rb_bridge_test 3</code> erzeugen die <code>event=bridge_test</code>-Zeilen in <code>exor_logs.txt</code></span></label>
+    <label class="chk"><input type="checkbox" data-g="v"><span><code>tail_events.py</code> zeigt <code>[RBBATTLE]</code>-Zeilen live als JSON (start + done je run, run-Nummern korrekt)</span></label>
+    <label class="chk"><input type="checkbox" data-g="v"><span>Zeilen ohne key=value erscheinen als <code>{"raw": ...}</code> (kein Datenverlust)</span></label>
+    <label class="chk"><input type="checkbox" data-g="v"><span>Log-Rotation bricht das Tail nicht ab</span></label>
+  </div></section>
+
+  <footer>repo: <a href="https://github.com/momokli/riftbreaker-battle-mod">github.com/momokli/riftbreaker-battle-mod</a> · <a href="../index.html">cd ..</a></footer>
+</div>
+<script>
+(function () {
+  var K = "rbb-t-03", s = {};
+  try { s = JSON.parse(localStorage.getItem(K) || "{}"); } catch (e) {}
+  var b = [].slice.call(document.querySelectorAll("input[type=checkbox]"));
+  function upd() {
+    ["ct","cv"].forEach(function (id) {
+      var g = id == "ct" ? "t" : "v", a = b.filter(function (x) { return x.dataset.g == g; }),
+          on = a.filter(function (x) { return x.checked; }).length;
+      document.getElementById(id).textContent = on + "/" + a.length;
+    });
+  }
+  b.forEach(function (x, i) {
+    x.checked = !!s[i];
+    x.onchange = function () { s[i] = x.checked; localStorage.setItem(K, JSON.stringify(s)); upd(); };
+  });
+  upd();
+})();
+</script>
+</body>
+</html>

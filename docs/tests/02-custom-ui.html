@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>02 — custom-ui · test guide</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: #05070a;
+    color: #9fb4c0;
+    font-family: "JetBrains Mono", Consolas, "Courier New", monospace;
+    font-size: 14px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .shell { max-width: 880px; margin: 0 auto; padding: 2.2rem 1.25rem 2.5rem; }
+
+  header { margin-bottom: 1.6rem; }
+  h1 { margin: 0 0 .35rem; font-size: 1.05rem; font-weight: 600; letter-spacing: .06em; color: #c7d5dd; }
+  h1 .idx { color: #3fd0d4; }
+  .prompt { margin: 0; color: #6b7a85; font-size: .85rem; }
+  .prompt .lbl { color: #3fd0d4; }
+  .prompt b { color: #c7d5dd; font-weight: 600; }
+
+  .back { display: inline-block; margin-bottom: 1rem; color: #3fd0d4; text-decoration: none; font-size: .82rem; }
+  .back:hover { text-decoration: underline; }
+  .back .arrow { color: #6b7a85; }
+
+  .panel {
+    clip-path: polygon(0 10px, 10px 0, 100% 0, 100% calc(100% - 10px),
+                       calc(100% - 10px) 100%, 0 100%);
+    background: #1c2a33;
+    padding: 1px;
+    margin-bottom: 14px;
+  }
+  .panel > .inner {
+    clip-path: polygon(0 10px, 10px 0, 100% 0, 100% calc(100% - 10px),
+                       calc(100% - 10px) 100%, 0 100%);
+    background: #0c1218;
+    padding: 1rem 1.2rem;
+  }
+  section h2 { margin: 0 0 .5rem; font-size: .8rem; font-weight: 600; letter-spacing: .14em; color: #3fd0d4; }
+  p { margin: 0 0 .6rem; font-size: .85rem; }
+  ol { margin: 0 0 .4rem; padding-left: 1.25rem; font-size: .85rem; }
+  li { margin-bottom: .3rem; }
+  p code, li code { color: #c7d5dd; background: #16222b; padding: 0 .3em; border-radius: 2px; font-size: .82em; }
+  pre { background: #081016; border: 1px solid #1c2a33; padding: .6rem .8rem; overflow-x: auto; font-size: .78rem; color: #52d273; margin: .3rem 0 .7rem; }
+  pre .dim { color: #5f6f7a; }
+
+  .chk { display: flex; gap: .6rem; align-items: flex-start; margin: 0; padding: .4rem 0;
+         border-bottom: 1px dashed #16222b; font-size: .83rem; cursor: pointer; }
+  .chk:last-child { border-bottom: 0; }
+  .chk input { margin-top: .28em; accent-color: #3fd0d4; flex: none; cursor: pointer; }
+  .chk code { color: #c7d5dd; background: #16222b; padding: 0 .3em; border-radius: 2px; font-size: .84em; white-space: nowrap; }
+  .note { font-size: .78rem; color: #6b7a85; margin: .5rem 0 0; }
+
+  footer { margin-top: 1.2rem; font-size: .78rem; color: #5f6f7a; }
+  footer a { color: #7d93a0; text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <a class="back" href="../index.html"><span class="arrow">&gt;</span> cd ..</a>
+  <header>
+    <h1><span class="idx">02</span> — custom-ui</h1>
+    <p class="prompt"><span class="lbl">test guide</span> · tests <b><span id="ct">0/0</span></b> · validated <b><span id="cv">0/0</span></b></p>
+  </header>
+
+  <section class="panel"><div class="inner">
+    <h2>ZWECK</h2>
+    <p>Custom-UI zur Laufzeit über die offizielle Service-API <code>GuiService:OpenPopup(entity, "gui/popup/popup_template_1button", text)</code> + globales <code>GuiPopupResultEvent</code>. Registriert genau einen Konsolen-Command (<code>rb_ui</code>), der ein Popup mit OK-Button am Spieler-Mech öffnet; Schließen nur per Button (kein API-Close dokumentiert). Kein Wave-Spawn, keine Bindings.</p>
+  </div></section>
+
+  <section class="panel"><div class="inner">
+    <h2>INSTALL</h2>
+    <ol>
+      <li>Ordner <code>rbbattle_02_customui/</code> nach <code>&lt;SteamLibrary&gt;\steamapps\common\Riftbreaker\mods\</code> kopieren (<code>mods\</code> ggf. anlegen).</li>
+      <li>Ergebnis: <code>mods\rbbattle_02_customui\lua\rbbattle_02_customui_autoexec.lua</code>.</li>
+      <li>Spiel starten, Karte laden — Mod und Command (<code>rb_ui</code>) laden automatisch.</li>
+    </ol>
+  </div></section>
+
+  <section class="panel"><div class="inner">
+    <h2>TESTS</h2>
+    <label class="chk"><input type="checkbox" data-g="t"><span>Karte laden → Log enthält <code>event=mod_load version=0.1.0-baustein02 status=ok</code></span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span>In-Game-Konsole öffnen (deutsche Tastatur: <code>ö</code>), <code>rb_ui</code> eingeben → Popup-Panel <b>am Spieler-Mech</b> mit Text „RBBATTLE — Baustein 02 (Custom-UI)“ und OK-Button; Konsole: <code>rb_ui: Popup geoeffnet (Button 'OK' schliesst)</code>; Log: <code>event=ui_popup status=opened</code></span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span><code>rb_ui</code> erneut bei offenem Popup → Konsole: <code>rb_ui: Popup ist bereits offen (bitte per Button schliessen)</code>; Log: <code>event=ui_popup status=already_open</code>; kein zweites Popup, kein Crash</span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span><b>OK-Button klicken</b> → Popup schließt; Log: <code>event=ui_popup status=closed result=button_ok</code> (<code>GuiPopupResultEvent</code> feuert); Konsole: <code>UI-Popup geschlossen (result=button_ok)</code></span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span><code>rb_ui</code> danach erneut → Popup öffnet wieder (<code>status=opened</code> erneut im Log — Zustands-Reset nach Button-Klick funktioniert)</span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span>Log-Gesamtprüfung in <code>&lt;Documents&gt;\The Riftbreaker\exor_logs.txt</code>, erwartetes Muster:
+<pre>[RBBATTLE] event=mod_load version=0.1.0-baustein02 status=ok
+[RBBATTLE] event=ui_popup status=opened
+[RBBATTLE] event=ui_popup status=closed result=button_ok</pre></span></label>
+    <p class="note">Ohne Spieler-Mech (Karte nicht geladen) → <code>event=ui_popup status=no_player</code> (graceful no-op).</p>
+  </div></section>
+
+  <section class="panel"><div class="inner">
+    <h2>VALIDATED</h2>
+    <p class="note">Gilt erst als validiert, wenn ALLE folgenden Kriterien grün sind:</p>
+    <label class="chk"><input type="checkbox" data-g="v"><span><code>rb_ui</code> öffnet das Popup-Panel am Spieler-Mech mit OK-Button (Konsole bestätigt <code>geoeffnet</code>, Log <code>status=opened</code>)</span></label>
+    <label class="chk"><input type="checkbox" data-g="v"><span>Doppel-<code>rb_ui</code> → Meldung „Popup ist bereits offen“ (<code>status=already_open</code>), kein zweites Popup, kein Crash</span></label>
+    <label class="chk"><input type="checkbox" data-g="v"><span>OK-Button schließt das Popup; Log <code>status=closed result=button_ok</code> (GuiPopupResultEvent)</span></label>
+    <label class="chk"><input type="checkbox" data-g="v"><span>Beim Laden: <code>event=mod_load version=0.1.0-baustein02 status=ok</code></span></label>
+  </div></section>
+
+  <footer>repo: <a href="https://github.com/momokli/riftbreaker-battle-mod">github.com/momokli/riftbreaker-battle-mod</a> · <a href="../index.html">cd ..</a></footer>
+</div>
+<script>
+(function () {
+  var K = "rbb-t-02", s = {};
+  try { s = JSON.parse(localStorage.getItem(K) || "{}"); } catch (e) {}
+  var b = [].slice.call(document.querySelectorAll("input[type=checkbox]"));
+  function upd() {
+    ["ct","cv"].forEach(function (id) {
+      var g = id == "ct" ? "t" : "v", a = b.filter(function (x) { return x.dataset.g == g; }),
+          on = a.filter(function (x) { return x.checked; }).length;
+      document.getElementById(id).textContent = on + "/" + a.length;
+    });
+  }
+  b.forEach(function (x, i) {
+    x.checked = !!s[i];
+    x.onchange = function () { s[i] = x.checked; localStorage.setItem(K, JSON.stringify(s)); upd(); };
+  });
+  upd();
+})();
+</script>
+</body>
+</html>
