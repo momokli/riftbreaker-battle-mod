@@ -13,19 +13,19 @@
     color: #9fb4c0;
     font-family: "JetBrains Mono", Consolas, "Courier New", monospace;
     font-size: 14px;
-    line-height: 1.6;
+    line-height: 1.7;
     -webkit-font-smoothing: antialiased;
   }
-  .shell { max-width: 880px; margin: 0 auto; padding: 2.2rem 1.25rem 2.5rem; }
+  .shell { max-width: 900px; margin: 0 auto; padding: 2.4rem 1.25rem 3rem; }
 
-  header { margin-bottom: 1.6rem; }
-  h1 { margin: 0 0 .35rem; font-size: 1.05rem; font-weight: 600; letter-spacing: .06em; color: #c7d5dd; }
+  header { margin-bottom: 2.6em; }
+  h1 { margin: 0 0 .4rem; font-size: 1.05rem; font-weight: 600; letter-spacing: .06em; color: #c7d5dd; }
   h1 .idx { color: #3fd0d4; }
   .prompt { margin: 0; color: #6b7a85; font-size: .85rem; }
   .prompt .lbl { color: #3fd0d4; }
   .prompt b { color: #c7d5dd; font-weight: 600; }
 
-  .back { display: inline-block; margin-bottom: 1rem; color: #3fd0d4; text-decoration: none; font-size: .82rem; }
+  .back { display: inline-block; margin-bottom: 1.5rem; color: #3fd0d4; text-decoration: none; font-size: .82rem; }
   .back:hover { text-decoration: underline; }
   .back .arrow { color: #6b7a85; }
 
@@ -34,31 +34,54 @@
                        calc(100% - 10px) 100%, 0 100%);
     background: #1c2a33;
     padding: 1px;
-    margin-bottom: 14px;
+    margin-bottom: 2.6em;
   }
   .panel > .inner {
     clip-path: polygon(0 10px, 10px 0, 100% 0, 100% calc(100% - 10px),
                        calc(100% - 10px) 100%, 0 100%);
     background: #0c1218;
-    padding: 1rem 1.2rem;
+    padding: 1.5rem 1.5rem 1.6rem;
   }
-  section h2 { margin: 0 0 .5rem; font-size: .8rem; font-weight: 600; letter-spacing: .14em; color: #3fd0d4; }
-  p { margin: 0 0 .6rem; font-size: .85rem; }
-  ol { margin: 0 0 .4rem; padding-left: 1.25rem; font-size: .85rem; }
-  li { margin-bottom: .3rem; }
-  p code, li code { color: #c7d5dd; background: #16222b; padding: 0 .3em; border-radius: 2px; font-size: .82em; }
-  pre { background: #081016; border: 1px solid #1c2a33; padding: .6rem .8rem; overflow-x: auto; font-size: .78rem; color: #52d273; margin: .3rem 0 .7rem; }
+  section h2 { margin: 0 0 1rem; font-size: .8rem; font-weight: 600; letter-spacing: .14em; color: #3fd0d4; }
+  p { margin: 0 0 .9em; font-size: .85rem; }
+  p.grp { margin: 1.3em 0 .7em; color: #c7d5dd; font-size: .83rem; font-weight: 600; }
+  p.grp:first-child { margin-top: 0; }
+  p.grp .dim { color: #6b7a85; font-weight: 400; }
+  ol { margin: .2em 0 .4em; padding-left: 1.4rem; font-size: .85rem; }
+  li { margin-bottom: .6em; }
+  p code, li code, .grp code { color: #c7d5dd; background: #16222b; padding: 0 .3em; border-radius: 2px; font-size: .82em; }
+  pre { background: #081016; border: 1px solid #1c2a33; padding: .75rem .9rem; overflow-x: auto; font-size: .78rem; color: #52d273; margin: .6rem 0 1rem; line-height: 1.6; }
   pre .dim { color: #5f6f7a; }
 
-  .chk { display: flex; gap: .6rem; align-items: flex-start; margin: 0; padding: .4rem 0;
-         border-bottom: 1px dashed #16222b; font-size: .83rem; cursor: pointer; }
-  .chk:last-child { border-bottom: 0; }
-  .chk input { margin-top: .28em; accent-color: #3fd0d4; flex: none; cursor: pointer; }
-  .chk code { color: #c7d5dd; background: #16222b; padding: 0 .3em; border-radius: 2px; font-size: .84em; white-space: nowrap; }
-  .chk .opt { color: #6b7a85; }
-  .note { font-size: .78rem; color: #6b7a85; margin: .5rem 0 0; }
+  details.install summary {
+    list-style: none; cursor: pointer; user-select: none;
+    display: flex; align-items: center; gap: .55em;
+    font-size: .8rem; font-weight: 600; letter-spacing: .14em; color: #3fd0d4;
+  }
+  details.install summary::-webkit-details-marker { display: none; }
+  details.install summary .icn { display: inline-block; transition: transform .18s ease; }
+  details.install summary:hover { color: #7fe3e6; }
+  details.install[open] summary { margin-bottom: .8rem; }
+  details.install[open] summary .icn { transform: rotate(90deg); }
 
-  footer { margin-top: 1.2rem; font-size: .78rem; color: #5f6f7a; }
+  .chk { display: flex; gap: .7rem; align-items: flex-start; margin: 0; padding: .75rem .15rem;
+         border-bottom: 1px dashed #16222b; cursor: pointer; }
+  .chk:last-child { border-bottom: 0; }
+  .chk input { margin-top: .3em; accent-color: #3fd0d4; flex: none; cursor: pointer; }
+  .chk .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .3rem; }
+  .chk .t { color: #c7d5dd; font-weight: 600; font-size: .86rem; line-height: 1.55; }
+  .chk .w { font-size: .8rem; color: #6b7a85; }
+  .chk .e { font-size: .8rem; color: #9fb4c0; }
+  .chk .n { font-size: .78rem; color: #5f6f7a; }
+  .chk .opt { color: #6b7a85; font-weight: 400; }
+  .chk code { color: #c7d5dd; background: #16222b; padding: 0 .3em; border-radius: 2px; font-size: .9em; }
+  .chk .t code { white-space: nowrap; }
+  .chk pre { margin: .15rem 0 0; }
+
+  .note { font-size: .78rem; color: #6b7a85; margin: 1.1em 0 0; line-height: 1.65; }
+  .note + .note { margin-top: .6em; }
+
+  footer { margin-top: 3.4rem; font-size: .78rem; color: #5f6f7a; }
   footer a { color: #7d93a0; text-decoration: none; }
   footer a:hover { text-decoration: underline; }
 </style>
@@ -77,34 +100,77 @@
   </div></section>
 
   <section class="panel"><div class="inner">
-    <h2>INSTALL</h2>
-    <ol>
-      <li>Mod: Ordner <code>rbbattle_03_logbridge/</code> nach <code>&lt;SteamLibrary&gt;\steamapps\common\Riftbreaker\mods\</code> kopieren → <code>mods\rbbattle_03_logbridge\lua\rbbattle_03_logbridge_autoexec.lua</code>, Spiel starten, Karte laden.</li>
-      <li>Skript: Python 3.7+ („Add python.exe to PATH“), <b>keine</b> Zusatzpakete. Log-Pfad wird automatisch aus <code>%USERPROFILE%</code> abgeleitet; abweichender Pfad: <code>python tail_events.py --log "D:\pfad\exor_logs.txt"</code>.</li>
-    </ol>
+    <details class="install">
+      <summary><span class="icn">▸</span> INSTALL</summary>
+      <ol>
+        <li>Mod: Ordner <code>rbbattle_03_logbridge/</code> nach <code>&lt;SteamLibrary&gt;\steamapps\common\Riftbreaker\mods\</code> kopieren → <code>mods\rbbattle_03_logbridge\lua\rbbattle_03_logbridge_autoexec.lua</code>, Spiel starten, Karte laden.</li>
+        <li>Skript: Python 3.7+ („Add python.exe to PATH“), <b>keine</b> Zusatzpakete. Log-Pfad wird automatisch aus <code>%USERPROFILE%</code> abgeleitet; abweichender Pfad: <code>python tail_events.py --log "D:\pfad\exor_logs.txt"</code>.</li>
+      </ol>
+    </details>
   </div></section>
 
   <section class="panel"><div class="inner">
     <h2>TESTS</h2>
-    <label class="chk"><input type="checkbox" data-g="t" checked><span>Karte laden → Log enthält <code>event=mod_load version=0.1.0-baustein03 status=ok</code></span></label>
-    <label class="chk"><input type="checkbox" data-g="t" checked><span>Terminal öffnen, starten: <code>python bausteine\03-log-bridge\tail_events.py</code> → Skript läuft, zeigt <code>[tail_events] beobachte: ...</code> und die <code>mod_load</code>-Zeile als JSON</span></label>
-    <label class="chk"><input type="checkbox" data-g="t" checked><span>In-Game-Konsole öffnen (deutsche Tastatur: <code>ö</code>), <code>rb_bridge_test</code> eingeben → im Terminal erscheinen live 2 JSON-Zeilen:
-<pre>{"event": "bridge_test", "run": "1", "status": "start"}
-{"event": "bridge_test", "run": "1", "status": "done"}</pre></span></label>
-    <label class="chk"><input type="checkbox" data-g="t" checked><span><code>rb_bridge_test 3</code> eingeben → 3 Durchläufe (run 2, 3, 4), also 6 JSON-Zeilen live im Terminal</span></label>
-    <label class="chk"><input type="checkbox" data-g="t"><span><span class="opt">[cap]</span> <code>rb_bridge_test 100</code> → Cap auf 10 Runs greift weiterhin, ABER seit v0.1.2 sichtbar: Konsole warnt + Log <code>event=bridge_test count=100 warn=cap_10 max=10</code>, danach 10 Runs. <span class="opt">(noch offen — Retest des Fix v0.1.2)</span></span></label>
-    <label class="chk"><input type="checkbox" data-g="t"><span><span class="opt">[rotation] — NOCH OFFEN</span> Log-Rotation: rotiert das Spiel die Log-Datei (6 Dateien, Größen-Sprung), bricht das Tail <b>nicht</b> ab, sondern liest die neue Datei ab Anfang weiter</span></label>
-    <label class="chk"><input type="checkbox" data-g="t"><span><span class="opt">[offline] — NOCH OFFEN</span> Ohne Spiel prüfbar: Textdatei mit Zeile <code>[RBBATTLE] skeleton ok</code> anlegen, <code>python tail_events.py --log &lt;datei&gt;</code> → Ausgabe <code>{"raw": "skeleton ok"}</code> (Fallback für Zeilen ohne key=value)</span></label>
-    <p class="note">Getestet 08.09.2026 (Momo/Matheo): <code>mod_load</code>, <code>rb_bridge_test</code>, <code>rb_bridge_test 3</code> und Live-JSON ✓. <span class="opt">[rotation]</span> und <span class="opt">[offline]</span> noch offen. <code>rb_bridge_test 100</code> lief intern auf 10 Runs — stiller Cap (Bug, Fix in v0.1.2: Konsole-Warnung + <code>warn=cap_10</code>), Retest offen. Zeilen ohne key=value-Paare erscheinen generell als <code>{"raw": ...}</code> — damit ist der Baustein auch zum Prüfen anderer Mods (z.&nbsp;B. Baustein 00) nutzbar.</p>
+    <label class="chk"><input type="checkbox" data-g="t" checked><span class="body">
+      <span class="t">test 01 — karte laden (mod_load)</span>
+      <span class="w">> was: Karte laden.</span>
+      <span class="e">→ erwartet: Log enthält <code>event=mod_load version=0.1.0-baustein03 status=ok</code>.</span>
+    </span></label>
+    <label class="chk"><input type="checkbox" data-g="t" checked><span class="body">
+      <span class="t">test 02 — tail_events.py starten</span>
+      <span class="w">> was: Terminal öffnen, starten: <code>python bausteine\03-log-bridge\tail_events.py</code>.</span>
+      <span class="e">→ erwartet: Skript läuft, zeigt <code>[tail_events] beobachte: ...</code> und die <code>mod_load</code>-Zeile als JSON.</span>
+    </span></label>
+    <label class="chk"><input type="checkbox" data-g="t" checked><span class="body">
+      <span class="t">test 03 — rb_bridge_test</span>
+      <span class="w">> was: In-Game-Konsole öffnen (deutsche Tastatur: <code>ö</code>), <code>rb_bridge_test</code> eingeben.</span>
+      <span class="e">→ erwartet: Im Terminal erscheinen live 2 JSON-Zeilen:</span>
+      <pre>{"event": "bridge_test", "run": "1", "status": "start"}
+{"event": "bridge_test", "run": "1", "status": "done"}</pre>
+    </span></label>
+    <label class="chk"><input type="checkbox" data-g="t" checked><span class="body">
+      <span class="t">test 04 — rb_bridge_test 3</span>
+      <span class="w">> was: <code>rb_bridge_test 3</code> eingeben.</span>
+      <span class="e">→ erwartet: 3 Durchläufe (run 2, 3, 4), also 6 JSON-Zeilen live im Terminal.</span>
+    </span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span class="body">
+      <span class="t"><span class="opt">[cap]</span> test 05 — rb_bridge_test 100</span>
+      <span class="w">> was: <code>rb_bridge_test 100</code> eingeben.</span>
+      <span class="e">→ erwartet: Cap auf 10 Runs greift weiterhin, ABER seit v0.1.2 sichtbar: Konsole warnt + Log <code>event=bridge_test count=100 warn=cap_10 max=10</code>, danach 10 Runs.</span>
+      <span class="n">hinweis: noch offen — Retest des Fix v0.1.2.</span>
+    </span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span class="body">
+      <span class="t"><span class="opt">[rotation] — NOCH OFFEN</span> test 06 — log-rotation</span>
+      <span class="w">> was: Log-Rotation des Spiels beobachten (6 Dateien, Größen-Sprung).</span>
+      <span class="e">→ erwartet: Das Tail bricht <b>nicht</b> ab, sondern liest die neue Datei ab Anfang weiter.</span>
+    </span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span class="body">
+      <span class="t"><span class="opt">[offline] — NOCH OFFEN</span> test 07 — ohne spiel prüfen (--log)</span>
+      <span class="w">> was: Ohne Spiel: Textdatei mit Zeile <code>[RBBATTLE] skeleton ok</code> anlegen, <code>python tail_events.py --log &lt;datei&gt;</code> ausführen.</span>
+      <span class="e">→ erwartet: Ausgabe <code>{"raw": "skeleton ok"}</code> (Fallback für Zeilen ohne key=value).</span>
+    </span></label>
+    <p class="note">Getestet 08.09.2026 (Momo/Matheo): <code>mod_load</code>, <code>rb_bridge_test</code>, <code>rb_bridge_test 3</code> und Live-JSON ✓. [rotation] und [offline] noch offen. <code>rb_bridge_test 100</code> lief intern auf 10 Runs — stiller Cap (Bug, Fix in v0.1.2: Konsole-Warnung + <code>warn=cap_10</code>), Retest offen. Zeilen ohne key=value-Paare erscheinen generell als <code>{"raw": ...}</code> — damit ist der Baustein auch zum Prüfen anderer Mods (z.&nbsp;B. Baustein 00) nutzbar.</p>
   </div></section>
 
   <section class="panel"><div class="inner">
     <h2>VALIDATED</h2>
     <p class="note">Gilt erst als validiert, wenn ALLE folgenden Kriterien grün sind:</p>
-    <label class="chk"><input type="checkbox" data-g="v" checked><span><code>rb_bridge_test</code> und <code>rb_bridge_test 3</code> erzeugen die <code>event=bridge_test</code>-Zeilen in <code>exor_logs.txt</code></span></label>
-    <label class="chk"><input type="checkbox" data-g="v" checked><span><code>tail_events.py</code> zeigt <code>[RBBATTLE]</code>-Zeilen live als JSON (start + done je run, run-Nummern korrekt)</span></label>
-    <label class="chk"><input type="checkbox" data-g="v"><span>Zeilen ohne key=value erscheinen als <code>{"raw": ...}</code> (kein Datenverlust)</span></label>
-    <label class="chk"><input type="checkbox" data-g="v"><span>Log-Rotation bricht das Tail nicht ab</span></label>
+    <label class="chk"><input type="checkbox" data-g="v" checked><span class="body">
+      <span class="t">kriterium 01 — bridge_test-zeilen</span>
+      <span class="e">→ erwartet: <code>rb_bridge_test</code> und <code>rb_bridge_test 3</code> erzeugen die <code>event=bridge_test</code>-Zeilen in <code>exor_logs.txt</code>.</span>
+    </span></label>
+    <label class="chk"><input type="checkbox" data-g="v" checked><span class="body">
+      <span class="t">kriterium 02 — live-json im terminal</span>
+      <span class="e">→ erwartet: <code>tail_events.py</code> zeigt <code>[RBBATTLE]</code>-Zeilen live als JSON (start + done je run, run-Nummern korrekt).</span>
+    </span></label>
+    <label class="chk"><input type="checkbox" data-g="v"><span class="body">
+      <span class="t">kriterium 03 — raw-fallback</span>
+      <span class="e">→ erwartet: Zeilen ohne key=value erscheinen als <code>{"raw": ...}</code> (kein Datenverlust).</span>
+    </span></label>
+    <label class="chk"><input type="checkbox" data-g="v"><span class="body">
+      <span class="t">kriterium 04 — log-rotation</span>
+      <span class="e">→ erwartet: Log-Rotation bricht das Tail nicht ab.</span>
+    </span></label>
   </div></section>
 
   <footer>repo: <a href="https://github.com/momokli/riftbreaker-battle-mod">github.com/momokli/riftbreaker-battle-mod</a> · <a href="../index.html">cd ..</a></footer>

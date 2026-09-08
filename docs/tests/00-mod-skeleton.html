@@ -13,19 +13,19 @@
     color: #9fb4c0;
     font-family: "JetBrains Mono", Consolas, "Courier New", monospace;
     font-size: 14px;
-    line-height: 1.6;
+    line-height: 1.7;
     -webkit-font-smoothing: antialiased;
   }
-  .shell { max-width: 880px; margin: 0 auto; padding: 2.2rem 1.25rem 2.5rem; }
+  .shell { max-width: 900px; margin: 0 auto; padding: 2.4rem 1.25rem 3rem; }
 
-  header { margin-bottom: 1.6rem; }
-  h1 { margin: 0 0 .35rem; font-size: 1.05rem; font-weight: 600; letter-spacing: .06em; color: #c7d5dd; }
+  header { margin-bottom: 2.6em; }
+  h1 { margin: 0 0 .4rem; font-size: 1.05rem; font-weight: 600; letter-spacing: .06em; color: #c7d5dd; }
   h1 .idx { color: #3fd0d4; }
   .prompt { margin: 0; color: #6b7a85; font-size: .85rem; }
   .prompt .lbl { color: #3fd0d4; }
   .prompt b { color: #c7d5dd; font-weight: 600; }
 
-  .back { display: inline-block; margin-bottom: 1rem; color: #3fd0d4; text-decoration: none; font-size: .82rem; }
+  .back { display: inline-block; margin-bottom: 1.5rem; color: #3fd0d4; text-decoration: none; font-size: .82rem; }
   .back:hover { text-decoration: underline; }
   .back .arrow { color: #6b7a85; }
 
@@ -34,31 +34,54 @@
                        calc(100% - 10px) 100%, 0 100%);
     background: #1c2a33;
     padding: 1px;
-    margin-bottom: 14px;
+    margin-bottom: 2.6em;
   }
   .panel > .inner {
     clip-path: polygon(0 10px, 10px 0, 100% 0, 100% calc(100% - 10px),
                        calc(100% - 10px) 100%, 0 100%);
     background: #0c1218;
-    padding: 1rem 1.2rem;
+    padding: 1.5rem 1.5rem 1.6rem;
   }
-  section h2 { margin: 0 0 .5rem; font-size: .8rem; font-weight: 600; letter-spacing: .14em; color: #3fd0d4; }
-  p { margin: 0 0 .6rem; font-size: .85rem; }
-  ol { margin: 0 0 .4rem; padding-left: 1.25rem; font-size: .85rem; }
-  li { margin-bottom: .3rem; }
-  p code, li code { color: #c7d5dd; background: #16222b; padding: 0 .3em; border-radius: 2px; font-size: .82em; }
-  pre { background: #081016; border: 1px solid #1c2a33; padding: .6rem .8rem; overflow-x: auto; font-size: .78rem; color: #52d273; margin: .3rem 0 .7rem; }
+  section h2 { margin: 0 0 1rem; font-size: .8rem; font-weight: 600; letter-spacing: .14em; color: #3fd0d4; }
+  p { margin: 0 0 .9em; font-size: .85rem; }
+  p.grp { margin: 1.3em 0 .7em; color: #c7d5dd; font-size: .83rem; font-weight: 600; }
+  p.grp:first-child { margin-top: 0; }
+  p.grp .dim { color: #6b7a85; font-weight: 400; }
+  ol { margin: .2em 0 .4em; padding-left: 1.4rem; font-size: .85rem; }
+  li { margin-bottom: .6em; }
+  p code, li code, .grp code { color: #c7d5dd; background: #16222b; padding: 0 .3em; border-radius: 2px; font-size: .82em; }
+  pre { background: #081016; border: 1px solid #1c2a33; padding: .75rem .9rem; overflow-x: auto; font-size: .78rem; color: #52d273; margin: .6rem 0 1rem; line-height: 1.6; }
   pre .dim { color: #5f6f7a; }
 
-  .chk { display: flex; gap: .6rem; align-items: flex-start; margin: 0; padding: .4rem 0;
-         border-bottom: 1px dashed #16222b; font-size: .83rem; cursor: pointer; }
-  .chk:last-child { border-bottom: 0; }
-  .chk input { margin-top: .28em; accent-color: #3fd0d4; flex: none; cursor: pointer; }
-  .chk code { color: #c7d5dd; background: #16222b; padding: 0 .3em; border-radius: 2px; font-size: .84em; white-space: nowrap; }
-  .chk .opt { color: #6b7a85; }
-  .note { font-size: .78rem; color: #6b7a85; margin: .5rem 0 0; }
+  details.install summary {
+    list-style: none; cursor: pointer; user-select: none;
+    display: flex; align-items: center; gap: .55em;
+    font-size: .8rem; font-weight: 600; letter-spacing: .14em; color: #3fd0d4;
+  }
+  details.install summary::-webkit-details-marker { display: none; }
+  details.install summary .icn { display: inline-block; transition: transform .18s ease; }
+  details.install summary:hover { color: #7fe3e6; }
+  details.install[open] summary { margin-bottom: .8rem; }
+  details.install[open] summary .icn { transform: rotate(90deg); }
 
-  footer { margin-top: 1.2rem; font-size: .78rem; color: #5f6f7a; }
+  .chk { display: flex; gap: .7rem; align-items: flex-start; margin: 0; padding: .75rem .15rem;
+         border-bottom: 1px dashed #16222b; cursor: pointer; }
+  .chk:last-child { border-bottom: 0; }
+  .chk input { margin-top: .3em; accent-color: #3fd0d4; flex: none; cursor: pointer; }
+  .chk .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .3rem; }
+  .chk .t { color: #c7d5dd; font-weight: 600; font-size: .86rem; line-height: 1.55; }
+  .chk .w { font-size: .8rem; color: #6b7a85; }
+  .chk .e { font-size: .8rem; color: #9fb4c0; }
+  .chk .n { font-size: .78rem; color: #5f6f7a; }
+  .chk .opt { color: #6b7a85; font-weight: 400; }
+  .chk code { color: #c7d5dd; background: #16222b; padding: 0 .3em; border-radius: 2px; font-size: .9em; }
+  .chk .t code { white-space: nowrap; }
+  .chk pre { margin: .15rem 0 0; }
+
+  .note { font-size: .78rem; color: #6b7a85; margin: 1.1em 0 0; line-height: 1.65; }
+  .note + .note { margin-top: .6em; }
+
+  footer { margin-top: 3.4rem; font-size: .78rem; color: #5f6f7a; }
   footer a { color: #7d93a0; text-decoration: none; }
   footer a:hover { text-decoration: underline; }
 </style>
@@ -77,31 +100,62 @@
   </div></section>
 
   <section class="panel"><div class="inner">
-    <h2>INSTALL</h2>
-    <ol>
-      <li>Ordner <code>rbbattle_00_skeleton/</code> nach <code>&lt;SteamLibrary&gt;\steamapps\common\Riftbreaker\mods\</code> kopieren (Steam-Bibliothek z.&nbsp;B. <code>D:\SteamLibrary</code>; <code>mods\</code> ggf. anlegen).</li>
-      <li>Ergebnis: <code>mods\rbbattle_00_skeleton\lua\rbbattle_00_skeleton_autoexec.lua</code>.</li>
-      <li>Spiel starten, beliebige Karte laden (Kampagne/Survival) — die Autoexec läuft automatisch, kein Aktivierungsschritt.</li>
-    </ol>
+    <details class="install">
+      <summary><span class="icn">▸</span> INSTALL</summary>
+      <ol>
+        <li>Ordner <code>rbbattle_00_skeleton/</code> nach <code>&lt;SteamLibrary&gt;\steamapps\common\Riftbreaker\mods\</code> kopieren (Steam-Bibliothek z.&nbsp;B. <code>D:\SteamLibrary</code>; <code>mods\</code> ggf. anlegen).</li>
+        <li>Ergebnis: <code>mods\rbbattle_00_skeleton\lua\rbbattle_00_skeleton_autoexec.lua</code>.</li>
+        <li>Spiel starten, beliebige Karte laden (Kampagne/Survival) — die Autoexec läuft automatisch, kein Aktivierungsschritt.</li>
+      </ol>
+    </details>
   </div></section>
 
   <section class="panel"><div class="inner">
     <h2>TESTS</h2>
-    <label class="chk"><input type="checkbox" data-g="t"><span>Karte laden → in <code>&lt;Documents&gt;\The Riftbreaker\exor_logs.txt</code> erscheint <b>genau einmal</b> die Zeile <code>[RBBATTLE] skeleton ok</code></span></label>
-    <label class="chk"><input type="checkbox" data-g="t"><span>In-Game-Konsole öffnen (deutsche Tastatur: <code>ö</code>) → die Zeile <code>[RBBATTLE] skeleton ok</code> steht auch in der Konsole (<code>ConsoleService:Write</code>)</span></label>
-    <label class="chk"><input type="checkbox" data-g="t"><span>Log-Datei prüfen: <code>&lt;Documents&gt;\The Riftbreaker\exor_logs.txt</code> (Ende der Datei), erwarteter Inhalt:
-<pre>[RBBATTLE] skeleton ok</pre></span></label>
-    <label class="chk"><input type="checkbox" data-g="t"><span>Erneute Kartenerstellung → die Zeile kommt nochmal <b>genau einmal</b> dazu (kein Doppel-Log, keine weiteren <code>[RBBATTLE]</code>-Zeilen)</span></label>
-    <label class="chk"><input type="checkbox" data-g="t"><span><span class="opt">[live]</span> Alternativ live beobachten: <code>python bausteine\03-log-bridge\tail_events.py</code> → beim Kartenladen erscheint <code>{"raw": "skeleton ok"}</code></span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span class="body">
+      <span class="t">test 01 — karte laden</span>
+      <span class="w">> was: Karte laden.</span>
+      <span class="e">→ erwartet: In <code>&lt;Documents&gt;\The Riftbreaker\exor_logs.txt</code> erscheint <b>genau einmal</b> die Zeile <code>[RBBATTLE] skeleton ok</code>.</span>
+    </span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span class="body">
+      <span class="t">test 02 — in-game-konsole</span>
+      <span class="w">> was: In-Game-Konsole öffnen (deutsche Tastatur: <code>ö</code>).</span>
+      <span class="e">→ erwartet: Die Zeile <code>[RBBATTLE] skeleton ok</code> steht auch in der Konsole (<code>ConsoleService:Write</code>).</span>
+    </span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span class="body">
+      <span class="t">test 03 — log-datei prüfen</span>
+      <span class="w">> was: Log-Datei prüfen: <code>&lt;Documents&gt;\The Riftbreaker\exor_logs.txt</code> (Ende der Datei).</span>
+      <span class="e">→ erwartet: Genau dieser Inhalt:</span>
+      <pre>[RBBATTLE] skeleton ok</pre>
+    </span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span class="body">
+      <span class="t">test 04 — erneute kartenerstellung</span>
+      <span class="w">> was: Karte erneut erstellen.</span>
+      <span class="e">→ erwartet: Die Zeile kommt nochmal <b>genau einmal</b> dazu (kein Doppel-Log, keine weiteren <code>[RBBATTLE]</code>-Zeilen).</span>
+    </span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span class="body">
+      <span class="t"><span class="opt">[live]</span> test 05 — live beobachten</span>
+      <span class="w">> was: Alternativ live beobachten: <code>python bausteine\03-log-bridge\tail_events.py</code>.</span>
+      <span class="e">→ erwartet: Beim Kartenladen erscheint <code>{"raw": "skeleton ok"}</code>.</span>
+    </span></label>
     <p class="note">Fehlt die Zeile → Mod-Ordner liegt falsch (Pfad prüfen) oder Engine-Layout <code>mods/&lt;ModName&gt;/lua/*_autoexec.lua</code> stimmt nicht.</p>
   </div></section>
 
   <section class="panel"><div class="inner">
     <h2>VALIDATED</h2>
     <p class="note">Gilt erst als validiert, wenn ALLE folgenden Kriterien grün sind:</p>
-    <label class="chk"><input type="checkbox" data-g="v"><span><code>[RBBATTLE] skeleton ok</code> erscheint in <code>exor_logs.txt</code> genau 1× je Kartenerstellung</span></label>
-    <label class="chk"><input type="checkbox" data-g="v"><span>Meldung erscheint zusätzlich in der In-Game-Konsole</span></label>
-    <label class="chk"><input type="checkbox" data-g="v"><span>Kein Crash, keine weiteren <code>[RBBATTLE]</code>-Zeilen (Baustein loggt nur diese eine)</span></label>
+    <label class="chk"><input type="checkbox" data-g="v"><span class="body">
+      <span class="t">kriterium 01 — skeleton ok im log</span>
+      <span class="e">→ erwartet: <code>[RBBATTLE] skeleton ok</code> erscheint in <code>exor_logs.txt</code> genau 1× je Kartenerstellung.</span>
+    </span></label>
+    <label class="chk"><input type="checkbox" data-g="v"><span class="body">
+      <span class="t">kriterium 02 — in-game-konsole</span>
+      <span class="e">→ erwartet: Meldung erscheint zusätzlich in der In-Game-Konsole.</span>
+    </span></label>
+    <label class="chk"><input type="checkbox" data-g="v"><span class="body">
+      <span class="t">kriterium 03 — kein crash, keine fremdzeilen</span>
+      <span class="e">→ erwartet: Kein Crash, keine weiteren <code>[RBBATTLE]</code>-Zeilen (Baustein loggt nur diese eine).</span>
+    </span></label>
   </div></section>
 
   <footer>repo: <a href="https://github.com/momokli/riftbreaker-battle-mod">github.com/momokli/riftbreaker-battle-mod</a> · <a href="../index.html">cd ..</a></footer>
