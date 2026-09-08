@@ -17,3 +17,7 @@ dist/
 bin/
 out/
 *.log
+
+# Python
+__pycache__/
+*.pyc
