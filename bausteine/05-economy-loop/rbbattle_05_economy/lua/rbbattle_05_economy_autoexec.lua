@@ -385,7 +385,8 @@ local function BuyWave(rawLevel)
     local level = math.floor(tonumber(rawLevel) or 0)
     local maxLevel = #RBB.cfg.waves
     if level < 1 or level > maxLevel then
-        WriteConsole("rb_buy_wave: level %s ungueltig (1..%d)", tostring(rawLevel), maxLevel)
+        WriteConsole("rb_buy_wave: level %s ungueltig (1..%d) — Aufruf: rb_buy_wave <1..3>, Kosten 10/25/50",
+                     tostring(rawLevel), maxLevel)
         Log("event=buy_wave level=%s status=invalid_level", tostring(rawLevel))
         return
     end
@@ -463,8 +464,9 @@ end
 pcall(function()
     ConsoleService:RegisterCommand("rb_points", CmdPoints)
     ConsoleService:RegisterCommand("rb_buy_wave", function(args)
-        local level = 1
-        if args ~= nil and #args >= 1 then
+        -- Ohne Argument KEIN Default-Kauf (Geld!): Usage-Warnung statt Welle 1.
+        local level = nil
+        if args ~= nil and #args >= 1 and args[1] ~= nil then
             level = tostring(args[1])
         end
         BuyWave(level)
