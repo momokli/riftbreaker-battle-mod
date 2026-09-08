@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>05 — economy-loop · test guide</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: #05070a;
+    color: #9fb4c0;
+    font-family: "JetBrains Mono", Consolas, "Courier New", monospace;
+    font-size: 14px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .shell { max-width: 880px; margin: 0 auto; padding: 2.2rem 1.25rem 2.5rem; }
+
+  header { margin-bottom: 1.6rem; }
+  h1 { margin: 0 0 .35rem; font-size: 1.05rem; font-weight: 600; letter-spacing: .06em; color: #c7d5dd; }
+  h1 .idx { color: #3fd0d4; }
+  .prompt { margin: 0; color: #6b7a85; font-size: .85rem; }
+  .prompt .lbl { color: #3fd0d4; }
+  .prompt b { color: #c7d5dd; font-weight: 600; }
+
+  .back { display: inline-block; margin-bottom: 1rem; color: #3fd0d4; text-decoration: none; font-size: .82rem; }
+  .back:hover { text-decoration: underline; }
+  .back .arrow { color: #6b7a85; }
+
+  .panel {
+    clip-path: polygon(0 10px, 10px 0, 100% 0, 100% calc(100% - 10px),
+                       calc(100% - 10px) 100%, 0 100%);
+    background: #1c2a33;
+    padding: 1px;
+    margin-bottom: 14px;
+  }
+  .panel > .inner {
+    clip-path: polygon(0 10px, 10px 0, 100% 0, 100% calc(100% - 10px),
+                       calc(100% - 10px) 100%, 0 100%);
+    background: #0c1218;
+    padding: 1rem 1.2rem;
+  }
+  section h2 { margin: 0 0 .5rem; font-size: .8rem; font-weight: 600; letter-spacing: .14em; color: #3fd0d4; }
+  p { margin: 0 0 .6rem; font-size: .85rem; }
+  ol { margin: 0 0 .4rem; padding-left: 1.25rem; font-size: .85rem; }
+  li { margin-bottom: .3rem; }
+  p code, li code { color: #c7d5dd; background: #16222b; padding: 0 .3em; border-radius: 2px; font-size: .82em; }
+  pre { background: #081016; border: 1px solid #1c2a33; padding: .6rem .8rem; overflow-x: auto; font-size: .78rem; color: #52d273; margin: .3rem 0 .7rem; }
+  pre .dim { color: #5f6f7a; }
+
+  .chk { display: flex; gap: .6rem; align-items: flex-start; margin: 0; padding: .4rem 0;
+         border-bottom: 1px dashed #16222b; font-size: .83rem; cursor: pointer; }
+  .chk:last-child { border-bottom: 0; }
+  .chk input { margin-top: .28em; accent-color: #3fd0d4; flex: none; cursor: pointer; }
+  .chk code { color: #c7d5dd; background: #16222b; padding: 0 .3em; border-radius: 2px; font-size: .84em; white-space: nowrap; }
+  .note { font-size: .78rem; color: #6b7a85; margin: .5rem 0 0; }
+
+  footer { margin-top: 1.2rem; font-size: .78rem; color: #5f6f7a; }
+  footer a { color: #7d93a0; text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <a class="back" href="../index.html"><span class="arrow">&gt;</span> cd ..</a>
+  <header>
+    <h1><span class="idx">05</span> — economy-loop</h1>
+    <p class="prompt"><span class="lbl">test guide</span> · tests <b><span id="ct">0/0</span></b> · validated <b><span id="cv">0/0</span></b></p>
+  </header>
+
+  <section class="panel"><div class="inner">
+    <h2>ZWECK</h2>
+    <p>Geschlossener Economy-Kreis: Punkte <b>verdienen</b> (Kills eigener Kampfwellen via <code>EntityKilledEvent</code>; Fallback: <code>HourEvent</code>-Zeittick), <b>ausgeben</b> (<code>rb_buy_wave &lt;1..3&gt;</code>, Kosten 10/25/50, Spawn gegen die eigene Basis — Spawn-Logik aus Baustein 01, in-game verifiziert) und <b>anzeigen</b> (<code>rb_points</code>/<code>rb_status</code>). Eigenes Punkte-Konto des Mods (kein Spiel-Ressourcen-Zugriff — Recherche: <code>docs/research/api-deep-dive.md</code>), gespiegelt in Global-Database <code>rbbattle_05_economy</code> (<code>PlayerService:GetOrCreateGlobalDatabase</code>).</p>
+  </div></section>
+
+  <section class="panel"><div class="inner">
+    <h2>INSTALL</h2>
+    <ol>
+      <li>Ordner <code>rbbattle_05_economy/</code> nach <code>&lt;SteamLibrary&gt;\steamapps\common\Riftbreaker\mods\</code> kopieren (<code>mods\</code> ggf. anlegen).</li>
+      <li>Ergebnis: <code>mods\rbbattle_05_economy\lua\rbbattle_05_economy_autoexec.lua</code>.</li>
+      <li>Spiel starten, <b>Survival-Karte</b> laden — Mod, Commands und Event-Handler laden automatisch.</li>
+    </ol>
+  </div></section>
+
+  <section class="panel"><div class="inner">
+    <h2>TESTS</h2>
+    <label class="chk"><input type="checkbox" data-g="t"><span>Karte laden → Log enthält <code>event=mod_load version=0.1.0-baustein05 mode=auto points=0 status=ok</code>; beim ersten Lauf zusätzlich <code>event=db_load status=new db=rbbattle_05_economy</code> (danach <code>status=resume</code>)</span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span><code>rb_status</code> → zeigt <code>mode=auto</code>, Punkte-Zähler, <code>wave_costs=1:10 2:25 3:50</code>, <code>db_ok=true</code></span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span><code>rb_buy_wave 1</code> → Konsole „Welle 1 gekauft (-10 Punkte), 5 Kreaturen unterwegs. Punkte: 0“; Log <code>event=buy_wave level=1 cost=10 spawned=5 skipped=0 points=0 status=done</code>; 5 Brabits spawnen sichtbar im Ring 8–20 m um den Spieler (an der <b>eigenen Basis</b> aufhalten!)</span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span>Basis/Mech tötet die Brabits → Log je Kill <code>event=points_add source=kill blueprint=units/ground/brabit pts=1 points=&lt;n&gt;</code>; beim <b>ersten</b> Kill zusätzlich <code>event=points mode=kill status=kill_event_verified</code> (Umschaltung auto → kill); <code>rb_points</code> zeigt das Guthaben</span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span><code>rb_buy_wave 3</code> mit zu wenig Guthaben → Konsole warnt „nur X Punkte, Welle 3 kostet 50“, Log <code>status=insufficient_points</code> — kein Spawn, kein Abzug</span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span><code>rb_buy_wave 99</code> → Konsole „level 99 ungueltig (1..3)“, Log <code>status=invalid_level</code></span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span>Fallback-Tick: Solange <code>mode=auto</code>, erscheint mit der Spielzeit <code>event=points_add source=hour_tick pts=1 points=&lt;n&gt;</code> — <b>Frequenz notieren</b> (Feld <code>Hour</code> je Event prüfbar, Getter unbestätigt)</span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span>Fehlertoleranz: ohne geladene Karte <code>rb_buy_wave 1</code> → Erstattung (Log <code>status=refunded reason=no_spawn</code>, Konsole „konnte nicht gespawnt werden → X Punkte erstattet“); Kill-Handler-Fehler → Log <code>mode=fallback_tick reason=kill_handler_error</code> + <code>rb_status</code> zeigt <code>mode=tick</code> (nur beobachtbar, falls Getter fehlen)</span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span>Persistenz: Punkte sammeln → Map verlassen &amp; neu laden → <code>rb_points</code>: überleben die Punkte den Neustart? (unverifiziert — Ergebnis in api-deep-dive.md §3 eintragen)</span></label>
+    <p class="note">Log-Muster je Kauf:
+<pre>[RBBATTLE] event=buy_wave level=1 cost=10 points=0 status=payed
+[RBBATTLE] event=spawn ok blueprint=units/ground/brabit entity=&lt;id&gt;
+[RBBATTLE] event=buy_wave level=1 cost=10 spawned=5 skipped=0 points=0 status=done
+[RBBATTLE] event=points mode=kill status=kill_event_verified        <span class="dim">-- nur 1. Kill</span>
+[RBBATTLE] event=points_add source=kill blueprint=units/ground/brabit pts=1 points=1</pre>
+Kein In-Game-Lauf durch den Agenten möglich (Lua-Syntax nur per Parser geprüft) — alle Checkboxen sind Erst-Test-Erwartungen.</p>
+  </div></section>
+
+  <section class="panel"><div class="inner">
+    <h2>VALIDATED</h2>
+    <p class="note">Gilt erst als validiert, wenn ALLE folgenden Kriterien grün sind:</p>
+    <label class="chk"><input type="checkbox" data-g="v"><span><code>rb_buy_wave 1/2/3</code> ziehen 10/25/50 Punkte ab und spawnen die Wellen (5 brabit / 5 brabit + 3 baxmoth / 5 baxmoth + 2 artigian + 1 canceroth) im Ring um den Spieler</span></label>
+    <label class="chk"><input type="checkbox" data-g="v"><span>Kills der gekauften Kreaturen geben Punkte (brabit 1, baxmoth 2, artigian 3, canceroth 5), Modus wechselt nach erstem Kill auf <code>kill</code>; <b>oder</b> Kill-API versagt sauber und <code>mode=tick</code> liefert <code>hour_tick</code>-Einkommen</span></label>
+    <label class="chk"><input type="checkbox" data-g="v"><span>Insuffizienz/ungültiges Level/Refund-Pfade loggen wie spezifiziert, kein Crash, kein Doppel-Einkommen (kill-Modus → keine hour_tick-Punkte)</span></label>
+    <label class="chk"><input type="checkbox" data-g="v"><span>Persistenz-Verhalten über Map-Neustart dokumentiert (überlebt ja/nein) und <code>rb_points reset</code> setzt Konto + DB auf 0</span></label>
+  </div></section>
+
+  <footer>repo: <a href="https://github.com/momokli/riftbreaker-battle-mod">github.com/momokli/riftbreaker-battle-mod</a> · research: <a href="../research/api-deep-dive.md">api-deep-dive.md</a> · <a href="../index.html">cd ..</a></footer>
+</div>
+<script>
+(function () {
+  var K = "rbb-t-05", s = {};
+  try { s = JSON.parse(localStorage.getItem(K) || "{}"); } catch (e) {}
+  var b = [].slice.call(document.querySelectorAll("input[type=checkbox]"));
+  function upd() {
+    ["ct","cv"].forEach(function (id) {
+      var g = id == "ct" ? "t" : "v", a = b.filter(function (x) { return x.dataset.g == g; }),
+          on = a.filter(function (x) { return x.checked; }).length;
+      document.getElementById(id).textContent = on + "/" + a.length;
+    });
+  }
+  b.forEach(function (x, i) {
+    x.checked = !!s[i];
+    x.onchange = function () { s[i] = x.checked; localStorage.setItem(K, JSON.stringify(s)); upd(); };
+  });
+  upd();
+})();
+</script>
+</body>
+</html>
