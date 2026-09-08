@@ -48,6 +48,8 @@ tail_events.py                        <- Live-Tail + JSON-Ausgabe (Python 3, kei
 3. In-Game-Konsole öffnen (deutsche Tastatur: `ö`) und eingeben:
    - `rb_bridge_test` → 1 Test-Durchlauf (2 Zeilen)
    - `rb_bridge_test 3` → 3 Durchläufe (6 Zeilen)
+   - `rb_bridge_test 100` → Edge-Case: Cap auf 10 Runs greift, Konsole warnt,
+     Log `warn=cap_10` (s. Edge-Cases)
 4. Im Terminal erscheinen die `[RBBATTLE]`-Zeilen live als JSON.
 
 ## Erwartetes Ergebnis
@@ -71,9 +73,29 @@ Baustein zum Prüfen anderer Mods nutzbar.
 Rotation: rotiert das Spiel die Log-Datei (6 Dateien), erkennt das Skript
 das am Größen-Sprung und liest die neue Datei ab Anfang.
 
+## Edge-Cases (v0.1.2)
+
+- **Cap bei `rb_bridge_test N` mit N > 10:** Internes Maximum ist 10 Runs
+  (Schutz vor Endlos-Args) — seit v0.1.2 wird der Cap **sichtbar** gemacht:
+  Konsole-Warnung + Log-Zeile, z. B. für `rb_bridge_test 100`:
+
+```
+[RBBATTLE] event=bridge_test count=100 warn=cap_10 max=10
+```
+
+  Danach laufen wie bisher 10 Runs (run 1–10 bzw. fortlaufend).
+  (In-Game-Test 08.09.2026: Cap griff still, ohne Warnung — Fix in v0.1.2,
+  Retest der Warnung steht aus.)
+
 ## Status
 
 - [x] Code abgeleitet aus Spike Experiment C (PR #1)
-- [ ] In-Game-Test: `rb_bridge_test` erzeugt `event=bridge_test`-Zeilen (Momo)
-- [ ] Tail-Test: `tail_events.py` zeigt die Zeilen live als JSON (Momo/Matheo)
-- [ ] Rotationstest: Log-Rotation bricht das Tail nicht (Momo)
+- [x] In-Game-Test: `rb_bridge_test` erzeugt `event=bridge_test`-Zeilen
+      (Momo, 08.09.2026)
+- [x] Tail-Test: `tail_events.py` zeigt die Zeilen live als JSON
+      (Momo/Matheo, 08.09.2026)
+- [ ] Rotationstest: Log-Rotation bricht das Tail nicht (Momo) — offen
+- [ ] Offline-Test: `tail_events.py --log <datei>` mit `[RBBATTLE]`-Zeile ohne
+      key=value → `{"raw": ...}` — offen
+- [ ] Edge-Case-Retest: `rb_bridge_test 100` → Konsole-Warnung + `warn=cap_10`
+      (Fix v0.1.2)
