@@ -32,7 +32,8 @@ Architektur & Design: [docs/concept.md](docs/concept.md) · Install & Spike-Test
 - **[scripts/package_mod.sh](scripts/package_mod.sh)** — packt den Mod-Ordner
   (`mod/`) als ZIP nach `dist/` für manuelle Verteilung/Tests.
 - **[docs/index.html](docs/index.html)** — schlichte Download-Seite
-  (GitHub Pages, Quelle Branch `main` Pfad `/docs`).
+  (GitHub Pages: <https://momokli.github.io/riftbreaker-battle-mod/>, Quelle
+  Branch `main` Pfad `/docs`).
 - **[docs/workshop.md](docs/workshop.md)** — Steam-Workshop-Anleitung
   (AppID 780310, SteamCMD, friends-only). **Nur der Lua-Mod, nie der Trainer.**
 
