@@ -74,6 +74,7 @@
   <section class="panel"><div class="inner">
     <h2>ZWECK</h2>
     <p>Kompletter Trainer-I/O-Kanal (Trainer-only) — <b>ohne das Spiel</b>: <code>injector.exe</code> lädt <code>rbbridge.dll</code> in einen beliebigen x64-Prozess (Test: <code>notepad.exe</code>), die DLL startet den Named-Pipe-Server <code>\\.\pipe\rbbattle</code>, <code>pipe_client.py</code> sendet <code>ping</code>/<code>exec</code> und druckt die JSON-Antworten. <code>exec</code> ist im Harness ein bewusster no-op (<code>ok:false</code>, TODO(RE)) — getestet wird der Kanal, nicht die Spielsteuerung.</p>
+    <p>Seit dem Dual-Mode-Umbau (eine Quelle, zwei Builds) geht der Kanal-Test auch <b>ohne jede Injection</b>: <code>rbbridge_standalone.exe</code> (<code>-DRBBRIDGE_STANDALONE</code>) startet dieselbe Pipe-Server-Logik als normales Konsolen-Programm — Test 0 unten. Der Injection-Test ist Test 1.</p>
   </div></section>
 
   <section class="panel"><div class="inner">
@@ -81,14 +82,23 @@
     <ol>
       <li>64-bit-Toolchain nötig — <b>Injector UND DLL müssen x64 sein</b> (notepad.exe unter Windows 10/11 x64 ist 64-bit). MinGW-w64:
 <pre>x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -shared -o rbbridge.dll rbbridge\rbbridge.c
+x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe rbbridge\rbbridge.c
 x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe injector\injector.c</pre>
-        (MSVC-Alt: <code>cl /nologo /O2 /W3 /LD rbbridge.c /Fe:rbbridge.dll</code> und <code>cl /nologo /O2 /W3 injector.c shell32.lib /Fe:injector.exe</code>)</li>
+        (MSVC-Alt: <code>cl /nologo /O2 /W3 /LD rbbridge.c /Fe:rbbridge.dll</code>, <code>cl /nologo /O2 /W3 /DRBBRIDGE_STANDALONE rbbridge.c /Fe:rbbridge_standalone.exe</code> und <code>cl /nologo /O2 /W3 injector.c shell32.lib /Fe:injector.exe</code>)</li>
       <li><code>pipe_client.py</code> braucht keinen Build (Python 3.7+, „Add python.exe to PATH“).</li>
     </ol>
   </div></section>
 
   <section class="panel"><div class="inner">
     <h2>TESTS — KEIN Spiel nötig</h2>
+    <p><b>Test 0 — Standalone</b> (keine Injection; <code>rbbridge_standalone.exe</code> bauen, s. INSTALL):</p>
+    <label class="chk"><input type="checkbox" data-g="t"><span>Terminal 1: <code>rbbridge_standalone.exe</code> starten → Hinweiszeile <code>rbbridge_standalone: Pipe-Server aktiv auf \\.\pipe\rbbattle ...</code> (läuft bis Ctrl+C)</span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span>Terminal 2: <code>python pipe_client.py</code> → verbindet ohne notepad/injector, sendet <code>{"cmd":"ping"}</code>, Antwort:
+<pre>-> {"cmd": "ping"}
+&lt;- {"event":"pong","t":&lt;uptime-ms&gt;}</pre></span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span><span class="opt">[optional]</span> exec no-op prüfen: <code>python pipe_client.py exec rb_wave 3</code> → Antwort <code>exec_result ... ok:false</code> ohne Crash</span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span>Beenden: Ctrl+C in Terminal 1 → <code>rbbridge_standalone: beendet</code> (sauberer Stopp, kein hängender Prozess)</span></label>
+    <p><b>Test 1 — Injection</b> (wie bisher):</p>
     <label class="chk"><input type="checkbox" data-g="t"><span>Build (x64): beide gcc-/cl-Kommandos laufen ohne Fehler durch → <code>rbbridge.dll</code> + <code>injector.exe</code> existieren</span></label>
     <label class="chk"><input type="checkbox" data-g="t"><span><code>notepad.exe</code> starten, PID ermitteln: <code>tasklist | findstr /i notepad</code> → PID notieren</span></label>
     <label class="chk"><input type="checkbox" data-g="t"><span>DLL injizieren: <code>injector.exe &lt;pid&gt; C:\pfad\zu\bausteine\04-trainer-io\rbbridge\rbbridge.dll</code> → Meldung <code>[+] rbbridge.dll geladen: HMODULE=0x...</code> (Alternativ Prozessname: <code>injector.exe notepad.exe &lt;dll&gt;</code>)</span></label>
@@ -100,13 +110,14 @@ x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe injector\injector.c</pr
     <label class="chk"><input type="checkbox" data-g="t"><span><span class="opt">[optional]</span> Client weiterlaufen lassen: <code>python pipe_client.py --watch</code> → alle ~5 s Heartbeats <code>{"event":"state","state":{...}}</code></span></label>
     <label class="chk"><input type="checkbox" data-g="t"><span>DLL-Logs prüfen: Datei <code>%TEMP%\rbbridge.log</code> enthält Einträge (abschaltbar: <code>RBBRIDGE_LOG=0</code>), bzw. <code>OutputDebugString</code> → DebugView (Sysinternals) mit Filter <code>rbbridge</code></span></label>
     <label class="chk"><input type="checkbox" data-g="t"><span>Aufräumen: <code>notepad.exe</code> schließen (DLL lebt nur im Prozess)</span></label>
-    <p class="note">Fehlerbilder: „Zielprozess nicht gefunden“ → PID/Name prüfen; Injection-Fehler (ERROR_ACCESS_DENIED) → 64-bit-Build prüfen, notepad als gleicher Benutzer starten; hängt <code>pipe_client.py</code> beim Verbinden → DLL wurde noch nicht injiziert (<code>os.open</code> blockiert, bis der Pipe-Server existiert — einfach laufen lassen und dann injizieren).</p>
+    <p class="note">Fehlerbilder: „Zielprozess nicht gefunden“ → PID/Name prüfen; Injection-Fehler (ERROR_ACCESS_DENIED) → 64-bit-Build prüfen, notepad als gleicher Benutzer starten; hängt <code>pipe_client.py</code> beim Verbinden → Server läuft nicht: bei Test 0 <code>rbbridge_standalone.exe</code> starten, bei Test 1 die DLL injizieren (<code>os.open</code> blockiert, bis der Pipe-Server existiert — einfach laufen lassen und dann starten/injizieren).</p>
   </div></section>
 
   <section class="panel"><div class="inner">
     <h2>VALIDATED</h2>
     <p class="note">Gilt erst als validiert, wenn ALLE folgenden Kriterien grün sind:</p>
-    <label class="chk"><input type="checkbox" data-g="v"><span>DLL + Injector kompilieren unter Windows x64 ohne Fehler</span></label>
+    <label class="chk"><input type="checkbox" data-g="v"><span>DLL + Standalone-EXE + Injector kompilieren unter Windows x64 ohne Fehler</span></label>
+    <label class="chk"><input type="checkbox" data-g="v"><span>Standalone-EXE (Test 0): <code>ping</code> → <code>pong</code> ohne Injection — Pipe-Server-Logik identisch zur DLL</span></label>
     <label class="chk"><input type="checkbox" data-g="v"><span>Injection in <code>notepad.exe</code> erfolgreich: <code>[+] rbbridge.dll geladen: HMODULE=0x...</code></span></label>
     <label class="chk"><input type="checkbox" data-g="v"><span><code>ping</code> → Antwort <code>pong</code> mit <code>t</code> (Pipe-Kanal funktioniert)</span></label>
     <label class="chk"><input type="checkbox" data-g="v"><span><code>exec</code> antwortet <code>ok:false</code> ohne Crash (Harness-no-op wie spezifiziert)</span></label>
