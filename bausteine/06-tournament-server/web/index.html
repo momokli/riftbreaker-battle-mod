@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RBBATTLE CONTROL</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: #05070a;
+    color: #9fb4c0;
+    font-family: "JetBrains Mono", Consolas, "Courier New", monospace;
+    font-size: 13px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .shell { max-width: 1060px; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+
+  /* ---------- header ---------- */
+  header { display: flex; align-items: baseline; justify-content: space-between;
+           gap: 1rem; flex-wrap: wrap; margin-bottom: 1.4rem; }
+  h1 { margin: 0; font-size: 1.15rem; font-weight: 600; letter-spacing: .08em; color: #c7d5dd; }
+  h1 .accent { color: #3fd0d4; }
+  .sub { margin: .15rem 0 0; font-size: .75rem; color: #5f6f7a; }
+  .conn { display: flex; align-items: center; gap: .5rem; font-size: .75rem;
+          color: #6b7a85; letter-spacing: .05em; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #e5484d; }
+  .dot.live { background: #3fd0d4; box-shadow: 0 0 6px #3fd0d4; }
+  .dot.retry { background: #ff9f43; }
+
+  /* ---------- panel ---------- */
+  .panel { border: 1px solid #1c2a33; background: #0c1218; margin-bottom: 14px; }
+  .panel > h2 {
+    margin: 0; padding: .45rem .9rem; font-size: .8rem; font-weight: 600;
+    letter-spacing: .14em; color: #3fd0d4; background: #0a0f14;
+    border-bottom: 1px solid #1c2a33;
+  }
+  .panel > .body { padding: .8rem .9rem; }
+
+  /* ---------- inputs ---------- */
+  .inputs { display: flex; gap: .8rem; flex-wrap: wrap; align-items: center; }
+  .inputs label { font-size: .72rem; color: #6b7a85; letter-spacing: .08em; }
+  .inputs input {
+    background: #05070a; border: 1px solid #2a3b46; color: #c7d5dd;
+    font-family: inherit; font-size: .8rem; padding: .28rem .5rem; width: 200px;
+  }
+  .inputs input:focus { outline: none; border-color: #3fd0d4; }
+  .inputs .hint { font-size: .7rem; color: #5f6f7a; }
+
+  /* ---------- players ---------- */
+  table.players { width: 100%; border-collapse: collapse; }
+  table.players td, table.players th {
+    text-align: left; padding: .22rem .5rem; font-size: .8rem;
+    border-bottom: 1px solid #111a21; white-space: nowrap;
+  }
+  table.players th { color: #5f6f7a; font-weight: 600; letter-spacing: .08em;
+                     font-size: .68rem; text-transform: uppercase; }
+  table.players td.id { color: #c7d5dd; cursor: pointer; }
+  table.players td.id:hover { color: #3fd0d4; }
+  table.players tr:last-child td { border-bottom: none; }
+  .empty { color: #5f6f7a; font-size: .78rem; font-style: italic; }
+  .st { color: #52d273; }
+  .st.match { color: #ff9f43; }
+
+  /* ---------- buttons ---------- */
+  .cmdgroup { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+              padding: .45rem 0; border-bottom: 1px solid #111a21; }
+  .cmdgroup:last-child { border-bottom: none; }
+  .cmdgroup .glabel { font-size: .68rem; letter-spacing: .1em; color: #5f6f7a;
+                      text-transform: uppercase; width: 76px; flex: none; }
+  button.cmd {
+    background: transparent; color: #9fb4c0; border: 1px solid #2a3b46;
+    font-family: inherit; font-size: .78rem; padding: .3rem .7rem;
+    cursor: pointer; letter-spacing: .03em;
+  }
+  button.cmd:hover { color: #3fd0d4; border-color: #3fd0d4; }
+  button.cmd:active { background: #12222b; }
+  button.cmd:disabled { opacity: .35; cursor: not-allowed; }
+  button.cmd .w { color: #6b7a85; }
+
+  /* ---------- feed ---------- */
+  .feed { font-size: .76rem; line-height: 1.5; overflow-y: auto; max-height: 46vh; }
+  .feed .row { display: flex; gap: .55rem; padding: .1rem 0;
+               border-bottom: 1px dotted #101920; }
+  .feed .row:first-child { border-top: none; }
+  .feed .t { color: #4d5c66; flex: none; }
+  .feed .tag { flex: none; width: 44px; letter-spacing: .06em; }
+  .feed .tag.in  { color: #c7d5dd; }
+  .feed .tag.out { color: #3fd0d4; }
+  .feed .tag.pl  { color: #52d273; }
+  .feed .tag.m   { color: #ff9f43; }
+  .feed .tag.sys { color: #6b7a85; }
+  .feed .msg { color: #8ba0ac; word-break: break-all; }
+  .feed .msg b { color: #c7d5dd; font-weight: 600; }
+  .feed .cmd { color: #3fd0d4; }
+  .feed .sc { color: #52d273; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header>
+    <div>
+      <h1>RBBATTLE<span class="accent">_</span>CONTROL</h1>
+      <p class="sub">prototype console &mdash; tournament-server web-ui &mdash; SSE live &middot; exec_command control</p>
+    </div>
+    <div class="conn"><span class="dot" id="connDot"></span><span id="connText">offline</span></div>
+  </header>
+
+  <section class="panel">
+    <div class="body inputs">
+      <label>match_id</label>
+      <input id="matchId" spellcheck="false" placeholder="m1-…">
+      <label>player_id</label>
+      <input id="playerId" spellcheck="false" placeholder="player_a">
+      <span class="hint">wird im browser gespeichert (localStorage) &middot; player in der liste klicken &uuml;bernimmt die id</span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>PLAYERS</h2>
+    <div class="body">
+      <table class="players">
+        <thead><tr><th>player</th><th>status</th><th>registered</th></tr></thead>
+        <tbody id="playerRows"></tbody>
+      </table>
+      <div class="empty" id="playerEmpty">keine spieler registriert — warte auf SSE-snapshot …</div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>CONTROLS</h2>
+    <div class="body">
+      <div class="cmdgroup">
+        <span class="glabel">rb_wave</span>
+        <button class="cmd" data-cmd="rb_wave 1">rb_wave <span class="w">1</span></button>
+        <button class="cmd" data-cmd="rb_wave 2">rb_wave <span class="w">2</span></button>
+        <button class="cmd" data-cmd="rb_wave 3">rb_wave <span class="w">3</span></button>
+        <span class="hint" style="margin-left:auto">spawnt eine welle im ziel-spiel (level 1..3)</span>
+      </div>
+      <div class="cmdgroup">
+        <span class="glabel">rb_buy_wave</span>
+        <button class="cmd" data-cmd="rb_buy_wave 1">rb_buy_wave <span class="w">1</span></button>
+        <button class="cmd" data-cmd="rb_buy_wave 2">rb_buy_wave <span class="w">2</span></button>
+        <button class="cmd" data-cmd="rb_buy_wave 3">rb_buy_wave <span class="w">3</span></button>
+        <span class="hint" style="margin-left:auto">kaufen gegen punkte (10/25/50)</span>
+      </div>
+      <div class="cmdgroup">
+        <span class="glabel">status</span>
+        <button class="cmd" data-cmd="rb_points">rb_points</button>
+        <button class="cmd" data-cmd="rb_status">rb_status</button>
+        <span class="hint" style="margin-left:auto">kontostand / mod-status im spiel ausgeben</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>EVENT FEED <span style="color:#5f6f7a;letter-spacing:.05em" id="feedMeta"></span></h2>
+    <div class="body">
+      <div class="feed" id="feed"></div>
+    </div>
+  </section>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
