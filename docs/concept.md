@@ -86,6 +86,56 @@ Drei Kandidaten für die Kopplung von Lua-Mod und Außenwelt, bewertet:
 - **Eigener Relay statt P2P/Direktverbindung:** trivial umsetzbar, reicht für 1v1, später leicht erweiterbar (Ladder, Spectate).
 - **Spiellogik komplett im Lua-Mod:** Der Trainer bleibt ein „dummer“ Kanal. Logik-Änderungen sind damit reine Mod-Änderungen ohne Neukompilieren des Trainers.
 
+## Tournament-Architektur
+
+Das 1v1-Modell aus den vorherigen Abschnitten (Relay-Server) skaliert direkt auf **Turniere mit N Spielern**: Jeder Teilnehmer spielt eine eigene, unabhängige Partie; ein zentraler **Tournament-Server** übernimmt Lobby/Matchmaking, Runden-Timer, Event-Routing und Scoreboard. Der bisherige Relay-Server wächst damit zum Tournament-Server — 1v1 ist nur der Spezialfall *N = 2*.
+
+```
+┌───────────────────────────┐     ┌───────────────────────────┐     ┌───────────────────────────┐
+│ Rift Breaker + Lua-Mod (A)│  …  │ Rift Breaker + Lua-Mod (B)│  …  │ Rift Breaker + Lua-Mod (N)│
+└─────────────┬─────────────┘     └─────────────┬─────────────┘     └─────────────┬─────────────┘
+              │                                 │                                 │
+┌─────────────┴─────────────┐     ┌─────────────┴─────────────┐     ┌─────────────┴─────────────┐
+│    Bridge / Trainer (A)   │  …  │    Bridge / Trainer (B)   │  …  │    Bridge / Trainer (N)   │
+└─────────────┬─────────────┘     └─────────────┬─────────────┘     └─────────────┬─────────────┘
+              │                                 │                                 │
+              │                                 │                                 │
+              └─────────────────────────────────┼─────────────────────────────────┘
+                                                │
+                                                │
+                           ┌────────────────────┴────────────────────┐
+                           │            Tournament-Server            │
+                           │           Lobby / Matchmaking           │
+                           │               Runden-Timer              │
+                           │              Event-Routing              │
+                           │                Scoreboard               │
+                           └─────────────────────────────────────────┘
+```
+
+`…` = weitere Instanzen bis N · Spiel ↔ Bridge: Prozess-I/O (Log-Parse / Memory-Read/-Write) · Bridge ↔ Server: HTTP/WebSocket (JSON).
+
+### Bausteine
+
+- **Tournament-Server (zentral):** Lobby/Matchmaking (Spieler zusammenführen), Runden-Timer (globaler Takt für alle Partien), Event-Routing zwischen den Instanzen, Scoreboard (Punkte, Siege, Rangliste).
+- **N Game-Instanzen** — je Spieler eine eigene Partie. Jede Instanz besteht aus:
+  - **Lua-Mod:** Spiellogik (Wellen, Punkte, Defense, HUD) auf der verifizierten Mod-/Console-API,
+  - **lokaler Bridge/Trainer:** Prozess-I/O zwischen Spiel und Netz (Windows-first).
+
+### Datenfluss
+
+- **Outbound (Spiel → Server):** Der Mod schreibt Events via `ConsoleService:Write` (im Prototyp verifiziert) auf die Konsole; die Bridge parst das Log oder liest den State direkt per Memory-Read aus dem Prozess und schickt ihn als JSON-POST an den Server.
+- **Inbound (Server → Spiel):** Der Server liefert Events an die Bridge; sie schreibt sie per Memory-Write/Trigger — ggf. Konsolen-Injektion — ins Spiel. Läuft automatisiert und smooth, ohne dass der Spieler tippt.
+
+### Protokoll
+
+Kleine JSON-Events (Typ, Payload, Runde). Der Modus ist **rundenbasiert** — keine Echtzeit-Anforderungen: Retries, gelegentliche Latenz oder einzelne verpasste Events sind unkritisch. HTTP/WebSocket reicht völlig.
+
+### Nächste Schritte
+
+1. **Event-Schema definieren** — Wellen-Trigger, Score-Updates, Runden-Start/-Ende, Match-Ende.
+2. **RE am Prozess** — Spawn-Trigger und Lua-State im Spielprozess lokalisieren (AOB-Signaturen statt fester Adressen) für den Memory-Pfad der Bridge.
+3. **Server-Skeleton** — Lobby/Matchmaking, Event-Routing und Scoreboard aufziehen; zuerst den 1v1-Pfad aus der Roadmap durchschalten.
+
 ## Roadmap
 
 1. **Spike** — Mod-Skeleton + Wave-Spawn-Experimente + Custom-UI *(läuft parallel)*

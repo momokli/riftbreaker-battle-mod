@@ -1,6 +1,6 @@
 # Findings — verifiziert (Stand 07.09.2026)
 
-Machbarkeits-Findings für den Runden-Duell-Modus, aus Doku-Crawl und Recherche verifiziert.
+Machbarkeits-Findings für den Runden-Duell-Modus, aus Doku-Crawl und Recherche verifiziert. Die Punkte 6–11 stammen aus Matheos Prototyp-Repo (<https://github.com/BestToasty/riftbreaker_mod>, Stand 07.09.2026).
 
 ## Verifiziert
 
@@ -16,9 +16,20 @@ Machbarkeits-Findings für den Runden-Duell-Modus, aus Doku-Crawl und Recherche 
 
 5. **`mp_deathmatch` nicht nutzbar** — interner EXOR-Netcodetest (versteckte, Key-geschützte Beta 2023), kein offizieller Modus und nicht zugänglich.
 
+6. **Mod-Struktur läuft** — `Mods/`-Ordner plus `lua/*_autoexec.lua` wird von der Engine fehlerfrei geladen.
+
+7. **Custom Console Commands funktionieren** — `ConsoleService:RegisterCommand("name", fn)` registriert eigene Kommandos in der In-Game-Konsole.
+
+8. **Spawn zur Laufzeit funktioniert** — `ConsoleService:ExecuteCommand("debug_spawn_entity units/ground/spawner_canoptrix")` spawnt das Boss-Nest an der Spielerposition.
+
+9. **Global-Events funktionieren** — `RegisterGlobalEventHandler("PlayerCreatedEvent", fn)` wird zuverlässig ausgelöst.
+
+10. **Konsolen-Ausgabe funktioniert** — `ConsoleService:Write(text)` gibt Text in der In-Game-Konsole aus.
+
+11. **`io.open` CRASHT das Spiel** — Datei-I/O ist im Lua-Sandbox blockiert und beendet das Spiel hart (nicht nur ein Fehler!). `io.*` im Mod niemals anfassen.
+
 ## Offene Fragen (klärt Spike / Reverse Engineering)
 
-- Existiert eine nutzbare In-Game-Konsole?
-- Lassen sich Custom Console Commands registrieren?
-- Ist Wave-Spawn zur Laufzeit aus Lua möglich?
-- Ist Custom-UI (HUD) umsetzbar?
+- **Custom-UI (HUD) umsetzbar?** — bleibt offen; einziger ungeklärter Punkt.
+
+Der Prototyp hat alles Weitere geklärt: Mod-Load ✓, Wave-Spawn ✓, Console-Commands ✓.
