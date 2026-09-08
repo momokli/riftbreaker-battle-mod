@@ -114,10 +114,13 @@ end
 -- Welle der Stufe <level> spawnen (Kernfunktion Experiment A).
 local function SpawnWave(level)
     level = math.floor(tonumber(level) or 1)
+    local requested = level          -- original angefragtes Level (fuer Warnung)
+    local isFallback = false         -- true, wenn level auf Welle 1 zurueckfiel
     if level < 1 then level = 1 end
     if level > RBB.maxWaveLevel then
         WriteConsole("rb_wave: level %d ungueltig (1..%d), nutze 1", level, RBB.maxWaveLevel)
         Log("event=wave level=%d status=invalid_level", level)
+        isFallback = true
         level = 1
     end
 
@@ -133,6 +136,13 @@ local function SpawnWave(level)
     if not playerOk or mech == nil or mech == INVALID_ID then
         Log("event=wave level=%d status=no_player", level)
         WriteConsole("rb_wave: kein Spieler-Mech gefunden (Karte geladen?)")
+        -- Fallback-Pfad (z. B. rb_wave 99 -> Welle 1): Skip NICHT still lassen,
+        -- sondern explizit warnen, dass der Fallback ohne aktiven Mech
+        -- uebersprungen wurde. Verhalten (Skip) bleibt unveraendert.
+        if isFallback then
+            Log("event=wave level=%d requested=%d warn=no_player_skip_fallback msg=fallback_uebersprungen_kein_aktiver_mech", level, requested)
+            WriteConsole("rb_wave: Fallback auf Welle %d (angefragt: %d) wegen fehlendem aktivem Mech uebersprungen", level, requested)
+        end
         return false
     end
 

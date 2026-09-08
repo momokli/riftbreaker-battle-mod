@@ -30,13 +30,28 @@ local function Log(fmt, ...)
     end
 end
 
+-- Konsole-Helfer: NUR fuer die Cap-Warnung des Test-Commands. Die eigentliche
+-- Bridge-Pruefung (run-Zeilen) bleibt bewusst reiner LogService:Log-Pfad -
+-- nur das Eingabe-Cap muss auch in der Konsole sichtbar sein.
+local function WriteConsole(fmt, ...)
+    local okMsg, msg = pcall(string.format, fmt, ...)
+    if not okMsg then msg = fmt end
+    local service = ConsoleService
+    if service then
+        pcall(service.Write, service, LOG_TAG .. " " .. msg)
+    end
+end
+
 -- Test-Command: schreibt <count> Durchlaeufe a zwei key=value-Zeilen.
--- (Bewusst ohne ConsoleService:Write - dieser Baustein testet NUR den
--- LogService:Log-Pfad nach exor_logs.txt.)
+-- (run-Zeilen nur via LogService:Log nach exor_logs.txt.)
 local function BridgeTest(count)
     count = math.floor(tonumber(count) or 1)
     if count < 1 then count = 1 end
-    if count > 10 then count = 10 end -- Schutz vor Endlos-Args
+    if count > 10 then -- Schutz vor Endlos-Args: Cap BEIBEHALTEN, aber sichtbar machen
+        WriteConsole("rb_bridge_test: %d Runs angefragt - Maximum 10, wird auf 10 gedeckelt", count)
+        Log("event=bridge_test count=%d warn=cap_10 max=10", count)
+        count = 10
+    end
     for _ = 1, count do
         RBB.run = RBB.run + 1
         local run = RBB.run
