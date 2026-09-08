@@ -86,22 +86,23 @@
 
   <section class="panel"><div class="inner">
     <h2>TESTS</h2>
-    <label class="chk"><input type="checkbox" data-g="t"><span>Karte laden → Log enthält <code>event=mod_load version=0.1.0-baustein03 status=ok</code></span></label>
-    <label class="chk"><input type="checkbox" data-g="t"><span>Terminal öffnen, starten: <code>python bausteine\03-log-bridge\tail_events.py</code> → Skript läuft, zeigt <code>[tail_events] beobachte: ...</code> und die <code>mod_load</code>-Zeile als JSON</span></label>
-    <label class="chk"><input type="checkbox" data-g="t"><span>In-Game-Konsole öffnen (deutsche Tastatur: <code>ö</code>), <code>rb_bridge_test</code> eingeben → im Terminal erscheinen live 2 JSON-Zeilen:
+    <label class="chk"><input type="checkbox" data-g="t" checked><span>Karte laden → Log enthält <code>event=mod_load version=0.1.0-baustein03 status=ok</code></span></label>
+    <label class="chk"><input type="checkbox" data-g="t" checked><span>Terminal öffnen, starten: <code>python bausteine\03-log-bridge\tail_events.py</code> → Skript läuft, zeigt <code>[tail_events] beobachte: ...</code> und die <code>mod_load</code>-Zeile als JSON</span></label>
+    <label class="chk"><input type="checkbox" data-g="t" checked><span>In-Game-Konsole öffnen (deutsche Tastatur: <code>ö</code>), <code>rb_bridge_test</code> eingeben → im Terminal erscheinen live 2 JSON-Zeilen:
 <pre>{"event": "bridge_test", "run": "1", "status": "start"}
 {"event": "bridge_test", "run": "1", "status": "done"}</pre></span></label>
-    <label class="chk"><input type="checkbox" data-g="t"><span><code>rb_bridge_test 3</code> eingeben → 3 Durchläufe (run 2, 3, 4), also 6 JSON-Zeilen live im Terminal</span></label>
-    <label class="chk"><input type="checkbox" data-g="t"><span><span class="opt">[rotation]</span> Log-Rotation: rotiert das Spiel die Log-Datei (6 Dateien, Größen-Sprung), bricht das Tail <b>nicht</b> ab, sondern liest die neue Datei ab Anfang weiter</span></label>
-    <label class="chk"><input type="checkbox" data-g="t"><span><span class="opt">[offline]</span> Ohne Spiel prüfbar: Textdatei mit Zeile <code>[RBBATTLE] skeleton ok</code> anlegen, <code>python tail_events.py --log &lt;datei&gt;</code> → Ausgabe <code>{"raw": "skeleton ok"}</code> (Fallback für Zeilen ohne key=value)</span></label>
-    <p class="note">Zeilen ohne key=value-Paare erscheinen generell als <code>{"raw": ...}</code> — damit ist der Baustein auch zum Prüfen anderer Mods (z.&nbsp;B. Baustein 00) nutzbar.</p>
+    <label class="chk"><input type="checkbox" data-g="t" checked><span><code>rb_bridge_test 3</code> eingeben → 3 Durchläufe (run 2, 3, 4), also 6 JSON-Zeilen live im Terminal</span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span><span class="opt">[cap]</span> <code>rb_bridge_test 100</code> → Cap auf 10 Runs greift weiterhin, ABER seit v0.1.2 sichtbar: Konsole warnt + Log <code>event=bridge_test count=100 warn=cap_10 max=10</code>, danach 10 Runs. <span class="opt">(noch offen — Retest des Fix v0.1.2)</span></span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span><span class="opt">[rotation] — NOCH OFFEN</span> Log-Rotation: rotiert das Spiel die Log-Datei (6 Dateien, Größen-Sprung), bricht das Tail <b>nicht</b> ab, sondern liest die neue Datei ab Anfang weiter</span></label>
+    <label class="chk"><input type="checkbox" data-g="t"><span><span class="opt">[offline] — NOCH OFFEN</span> Ohne Spiel prüfbar: Textdatei mit Zeile <code>[RBBATTLE] skeleton ok</code> anlegen, <code>python tail_events.py --log &lt;datei&gt;</code> → Ausgabe <code>{"raw": "skeleton ok"}</code> (Fallback für Zeilen ohne key=value)</span></label>
+    <p class="note">Getestet 08.09.2026 (Momo/Matheo): <code>mod_load</code>, <code>rb_bridge_test</code>, <code>rb_bridge_test 3</code> und Live-JSON ✓. <span class="opt">[rotation]</span> und <span class="opt">[offline]</span> noch offen. <code>rb_bridge_test 100</code> lief intern auf 10 Runs — stiller Cap (Bug, Fix in v0.1.2: Konsole-Warnung + <code>warn=cap_10</code>), Retest offen. Zeilen ohne key=value-Paare erscheinen generell als <code>{"raw": ...}</code> — damit ist der Baustein auch zum Prüfen anderer Mods (z.&nbsp;B. Baustein 00) nutzbar.</p>
   </div></section>
 
   <section class="panel"><div class="inner">
     <h2>VALIDATED</h2>
     <p class="note">Gilt erst als validiert, wenn ALLE folgenden Kriterien grün sind:</p>
-    <label class="chk"><input type="checkbox" data-g="v"><span><code>rb_bridge_test</code> und <code>rb_bridge_test 3</code> erzeugen die <code>event=bridge_test</code>-Zeilen in <code>exor_logs.txt</code></span></label>
-    <label class="chk"><input type="checkbox" data-g="v"><span><code>tail_events.py</code> zeigt <code>[RBBATTLE]</code>-Zeilen live als JSON (start + done je run, run-Nummern korrekt)</span></label>
+    <label class="chk"><input type="checkbox" data-g="v" checked><span><code>rb_bridge_test</code> und <code>rb_bridge_test 3</code> erzeugen die <code>event=bridge_test</code>-Zeilen in <code>exor_logs.txt</code></span></label>
+    <label class="chk"><input type="checkbox" data-g="v" checked><span><code>tail_events.py</code> zeigt <code>[RBBATTLE]</code>-Zeilen live als JSON (start + done je run, run-Nummern korrekt)</span></label>
     <label class="chk"><input type="checkbox" data-g="v"><span>Zeilen ohne key=value erscheinen als <code>{"raw": ...}</code> (kein Datenverlust)</span></label>
     <label class="chk"><input type="checkbox" data-g="v"><span>Log-Rotation bricht das Tail nicht ab</span></label>
   </div></section>

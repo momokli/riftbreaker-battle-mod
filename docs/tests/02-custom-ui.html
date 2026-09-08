@@ -86,25 +86,25 @@
 
   <section class="panel"><div class="inner">
     <h2>TESTS</h2>
-    <label class="chk"><input type="checkbox" data-g="t"><span>Karte laden → Log enthält <code>event=mod_load version=0.1.0-baustein02 status=ok</code></span></label>
-    <label class="chk"><input type="checkbox" data-g="t"><span>In-Game-Konsole öffnen (deutsche Tastatur: <code>ö</code>), <code>rb_ui</code> eingeben → Popup-Panel <b>am Spieler-Mech</b> mit Text „RBBATTLE — Baustein 02 (Custom-UI)“ und OK-Button; Konsole: <code>rb_ui: Popup geoeffnet (Button 'OK' schliesst)</code>; Log: <code>event=ui_popup status=opened</code></span></label>
-    <label class="chk"><input type="checkbox" data-g="t"><span><code>rb_ui</code> erneut bei offenem Popup → Konsole: <code>rb_ui: Popup ist bereits offen (bitte per Button schliessen)</code>; Log: <code>event=ui_popup status=already_open</code>; kein zweites Popup, kein Crash</span></label>
-    <label class="chk"><input type="checkbox" data-g="t"><span><b>OK-Button klicken</b> → Popup schließt; Log: <code>event=ui_popup status=closed result=button_ok</code> (<code>GuiPopupResultEvent</code> feuert); Konsole: <code>UI-Popup geschlossen (result=button_ok)</code></span></label>
-    <label class="chk"><input type="checkbox" data-g="t"><span><code>rb_ui</code> danach erneut → Popup öffnet wieder (<code>status=opened</code> erneut im Log — Zustands-Reset nach Button-Klick funktioniert)</span></label>
-    <label class="chk"><input type="checkbox" data-g="t"><span>Log-Gesamtprüfung in <code>&lt;Documents&gt;\The Riftbreaker\exor_logs.txt</code>, erwartetes Muster:
+    <label class="chk"><input type="checkbox" data-g="t" checked><span>Karte laden → Log enthält <code>event=mod_load version=0.1.0-baustein02 status=ok</code></span></label>
+    <label class="chk"><input type="checkbox" data-g="t" checked><span>In-Game-Konsole öffnen (deutsche Tastatur: <code>ö</code>), <code>rb_ui</code> eingeben → Popup-Panel <b>am Spieler-Mech</b> mit Text „RBBATTLE — Baustein 02 (Custom-UI)“ und OK-Button; Konsole: <code>rb_ui: Popup geoeffnet (Button 'OK' schliesst)</code>; Log: <code>event=ui_popup status=opened</code></span></label>
+    <label class="chk"><input type="checkbox" data-g="t" checked><span><code>rb_ui</code> erneut bei offenem Popup → Konsole: <code>rb_ui: Popup ist bereits offen (bitte per Button schliessen)</code>; Log: <code>event=ui_popup status=already_open</code>; kein zweites Popup, kein Crash</span></label>
+    <label class="chk"><input type="checkbox" data-g="t" checked><span><b>OK-Button klicken</b> → Popup schließt; Log: <code>event=ui_popup status=closed result=button_ok</code> (<code>GuiPopupResultEvent</code> feuert); Konsole: <code>UI-Popup geschlossen (result=button_ok)</code></span></label>
+    <label class="chk"><input type="checkbox" data-g="t" checked><span><code>rb_ui</code> danach erneut → Popup öffnet wieder (<code>status=opened</code> erneut im Log — Zustands-Reset nach Button-Klick funktioniert)</span></label>
+    <label class="chk"><input type="checkbox" data-g="t" checked><span>Log-Gesamtprüfung in <code>&lt;Documents&gt;\The Riftbreaker\exor_logs.txt</code>, erwartetes Muster:
 <pre>[RBBATTLE] event=mod_load version=0.1.0-baustein02 status=ok
 [RBBATTLE] event=ui_popup status=opened
 [RBBATTLE] event=ui_popup status=closed result=button_ok</pre></span></label>
-    <p class="note">Ohne Spieler-Mech (Karte nicht geladen) → <code>event=ui_popup status=no_player</code> (graceful no-op).</p>
+    <p class="note">In-Game-Test 08.09.2026 (Momo): <b>komplett sauber — alle Tests bestanden ✓</b>. Ohne Spieler-Mech (Karte nicht geladen) → <code>event=ui_popup status=no_player</code> (graceful no-op).</p>
   </div></section>
 
   <section class="panel"><div class="inner">
     <h2>VALIDATED</h2>
     <p class="note">Gilt erst als validiert, wenn ALLE folgenden Kriterien grün sind:</p>
-    <label class="chk"><input type="checkbox" data-g="v"><span><code>rb_ui</code> öffnet das Popup-Panel am Spieler-Mech mit OK-Button (Konsole bestätigt <code>geoeffnet</code>, Log <code>status=opened</code>)</span></label>
-    <label class="chk"><input type="checkbox" data-g="v"><span>Doppel-<code>rb_ui</code> → Meldung „Popup ist bereits offen“ (<code>status=already_open</code>), kein zweites Popup, kein Crash</span></label>
-    <label class="chk"><input type="checkbox" data-g="v"><span>OK-Button schließt das Popup; Log <code>status=closed result=button_ok</code> (GuiPopupResultEvent)</span></label>
-    <label class="chk"><input type="checkbox" data-g="v"><span>Beim Laden: <code>event=mod_load version=0.1.0-baustein02 status=ok</code></span></label>
+    <label class="chk"><input type="checkbox" data-g="v" checked><span><code>rb_ui</code> öffnet das Popup-Panel am Spieler-Mech mit OK-Button (Konsole bestätigt <code>geoeffnet</code>, Log <code>status=opened</code>)</span></label>
+    <label class="chk"><input type="checkbox" data-g="v" checked><span>Doppel-<code>rb_ui</code> → Meldung „Popup ist bereits offen“ (<code>status=already_open</code>), kein zweites Popup, kein Crash</span></label>
+    <label class="chk"><input type="checkbox" data-g="v" checked><span>OK-Button schließt das Popup; Log <code>status=closed result=button_ok</code> (GuiPopupResultEvent)</span></label>
+    <label class="chk"><input type="checkbox" data-g="v" checked><span>Beim Laden: <code>event=mod_load version=0.1.0-baustein02 status=ok</code></span></label>
   </div></section>
 
   <footer>repo: <a href="https://github.com/momokli/riftbreaker-battle-mod">github.com/momokli/riftbreaker-battle-mod</a> · <a href="../index.html">cd ..</a></footer>
