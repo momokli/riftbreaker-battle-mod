@@ -1,15 +1,27 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.2.0-single für den Runden-Duell-Modus („Biter
-Battles“-artig) in *The Riftbreaker*. **Fusion** der Bausteine 00 (Mod-Skeleton)
-und 01 (Wave-Spawn) zu **einem** Mod-Paket — ersetzt die zwei Einzel-Mods
-`rbbattle_00_skeleton` + `rbbattle_01_wavespawn` (Client-Download und
-Server-Mod-Liste: nur noch `rbbattle`). Kein Workshop-Release, keine Garantie.
+Einzel-Mod **rbbattle** v0.3.0 für den Runden-Duell-Modus („Biter
+Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
+v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 
-Inhalt: Skeleton-Lebenszeichen-Log beim Laden (`[RBBATTLE] skeleton ok`) +
-Console-Command `rb_wave <level>` (Wellen-Spawning). Kein UI, keine Bindings,
-kein Bridge-Zusatz (Experimente B/C siehe `bausteine/02-custom-ui` bzw.
-`03-log-bridge`).
+**v0.3.0 — Mod-Core (Foundation):**
+- **Issue #26:** Send-Spawns spawnen an den **16 natürlichen Kartenrand-Spawnern**
+  (DOM-Gruppen `spawn_enemy_border_{south,north,east,west}`, zufällige Auswahl je
+  Kreatur) statt am Spieler-Mech — **kein Spieler nötig** (Server-only-tauglich).
+  DOM-Naturwellen bleiben unangetastet (Basis-Druck). Fallback auf den alten
+  Mech-Ring nur, wenn eine Welt keine Rand-Spawner hat.
+- **Issue #23:** DOM-Wellen-Vorbereitung auf **300 s** gedeckelt
+  (prepareSpawnTime 420→300, 5-Min-Wellen) + Setup-Log (`difficulty`,
+  `creatures_difficulty`). Difficulty/Map-Größe/Seed werden beim Server-Start
+  gesetzt (C++, kein Lua-Weg) — Ablauf: `docs/DUEL_SETUP.md`.
+- Neuer Command-Alias **`rb_send`** (gleiche Logik wie `rb_wave`).
+- Konzept-Doku: `docs/SEND_HOOK.md` (Wellen-Hook-Strategie), `docs/SYNC_START.md`
+  (Pause/Unpause-Befund #22).
+
+Inhalt des Mod-Ordners: Skeleton-Lebenszeichen-Log beim Laden +
+Console-Commands `rb_wave <level>` / `rb_send <level>` (Send-Wellen-Spawning an
+Kartenrand-Spawnern) + DOM-Timer-Deckel. Kein UI, keine Bindings, kein
+Bridge-Zusatz, **kein io/socket/http**.
 
 ## Installation (lokaler Mods-Ordner)
 
@@ -53,51 +65,65 @@ und Workshop-Mods tun (Quelle: fandom „Basic Modding Guide“, Ordner
 - **Log-Datei**: `<Documents>\The Riftbreaker\exor_logs.txt` — dort schreibt
   `LogService:Log`; alle Mod-Zeilen tragen den Präfix `[RBBATTLE]`.
 
-## Command
+## Commands
 
 | Eingabe | Wirkung |
 |---|---|
-| `rb_wave 1` … `rb_wave 3` (Konsole) | Spawnt Kreaturen-Welle um den Spieler (5 Brabits / +3 Baxmoth / +2 Artigian +1 Canceroth); ungültige Stufe (`rb_wave 99`) fällt mit Warnung auf Welle 1 zurück |
-| Konsole: `ConsoleService:Write` | Bestätigung jeder Aktion direkt in der In-Game-Konsole |
+| `rb_wave 1` … `rb_wave 3` (Konsole/Bridge) | Spawnt Send-Welle an **zufälligen natürlichen Kartenrand-Spawnern** (5 Brabits / +3 Baxmoth / +2 Artigian +1 Canceroth, je Kreatur zufälliger Spawner aus den 4 Gruppen `spawn_enemy_border_*`); ungültige Stufe (`rb_wave 99`) fällt mit Warnung auf Welle 1 zurück. Kein Spieler-Mech nötig (Server-only). Ohne Rand-Spawner: Fallback-Ring um den Mech |
+| `rb_send <level>` | Alias für `rb_wave` (Send-Semantik für Shop-/Queue-Integration #25) |
+| `rb_wave`-Log-Anker | `anchor=border spawners=N` (bzw. `anchor=fallback_mech`), je Kreatur `anchor=<gruppe>/<id>` im `event=spawn ok`-Log |
 
 Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.2.0-single status=ok
+[RBBATTLE] event=mod_load version=0.3.0 status=ok anchor=border_spawner_groups timer_cap=300
+[RBBATTLE] event=dom_timer patch status=ok cap=300        ← nach PlayerInitializedEvent
+[RBBATTLE] event=setup difficulty=hard creatures_difficulty=5 timer_cap=300
 [RBBATTLE] event=wave level=3 status=start
-[RBBATTLE] event=spawn ok blueprint=units/ground/baxmoth entity=12345
-[RBBATTLE] event=wave level=3 status=done spawned=8 skipped=0
+[RBBATTLE] event=wave_spawners count=16 groups=4          ← Pool der Rand-Spawner
+[RBBATTLE] event=spawn ok blueprint=units/ground/baxmoth entity=12345 anchor=spawn_enemy_border_west/...
+[RBBATTLE] event=wave level=3 status=done spawned=8 skipped=0 anchor=border spawners=16
 ```
 
-## FINDINGS-Tabelle (Stand Recherche — In-Game-Test offen)
+(Die genaue Zahl `count=` hängt von der Karte/Map-Size ab — Issue-Erwartung 16.)
+
+## FINDINGS-Tabelle (Stand Recherche — In-Game-Test des Umbaus offen)
 
 | # | Frage | Ergebnis laut Doku + Original-Spieldaten | Quelle |
 |---|---|---|---|
 | 1 | Mod-Layout / Einstiegspunkt | Ordner `<game>/mods/<name>/` spiegelt Content-Root; `lua/*_autoexec.lua` läuft bei Map-Erstellung, Zugriff auf alle Services + `RegisterGlobalEventHandler` | exorstudios-Wiki (autoexec.md); lilly1987/Riftbreaker-mods; fandom Basic Modding Guide |
 | 2 | Wave-Spawn zur Laufzeit | ✅ `EntityService:SpawnEntity(blueprint, x, y, z, team)` — exakt die Implementierung von EXORs eigenem `debug_spawn_entity` (`lua/commands/cheat.lua`); Blueprints `units/ground/*` gegen `entities/units/ground/*.ent` der Spieldaten verifiziert | OriginalPacksData (PonomarevDmitry/RiftbreakersMods); fandom Console commands |
-| 3 | Custom Console Commands | ✅ `ConsoleService:RegisterCommand(name, cb)` — offiziell dokumentiert **und** von EXOR selbst so genutzt (cheat.lua: `debug_spawn_entity` …) | exorstudios-Wiki accessing-keyboard-hotkeys.md; fandom Mod service: ConsoleService; OriginalPacksData lua/commands/cheat.lua |
-| 4 | Logging | ✅ `LogService:Log(...)` → `exor_logs.txt`; `ConsoleService:Write(...)` → In-Game-Konsole | exorstudios-Wiki debugging-using-lua-services.md |
-| 5 | Team-Semantik | Team-String `""` = „Blueprint-Standard“ (EXOR-Cheat nutzt `""`; Spieler-Buildings wie Feinde spawnen korrekt). Team-Ids: Player=1 (Log `GetTeamId` → 1). `"no_team"` existiert für Marker (`effects/messages_and_markers/wave_marker`). Für echte Duell-Teams später verifizieren | OriginalPacksData (cheat.lua, wave_ground.lua) |
-| 6 | In-Game-Konsole | ✅ Vorhanden; Tasten ´/ö/'/ñ/ù/`~`/`; GamePass: `enable_developer_console 1` in Conf/initial_config_win | fandom Console commands |
-| 7 | Fehlende/unklare Doku | Offizielle exorstudios-Wiki-Serviceseiten sind weitgehend leere Stubs; vollständige Signaturen nur über Fandom „Mod service:*“-Dumps + extrahierte Spieldaten | — |
+| 3 | Rand-Spawner finden | ✅ `FindService:FindEntitiesByGroup(group)` — dieselbe API, mit der `dom_manager` (`RandomizeSpawnPoint`) Naturwellen-Anker wählt; Gruppen `spawn_enemy_border_{west,east,north,south}`, Entities werden von `mission_base:SelectWaveSpawnPoints` aus `logic/spawn_enemy`-Entities gruppiert | lua-src 2.0.58485 (`dom_manager.lua`, `mission_base.lua`, `find_utils.lua`) |
+| 4 | 5-Min-Timer (#23) | ✅ `dom_mananger:GetPrepareSpawnTime()` liefert rules-Wert (Survival hard/normal: 420); Mod wrappt die Klassen-Methode auf max. 300 s (idempotent, pcall) | lua-src (`dom_survival_*_rules_hard.lua`, `dom_manager.lua:1135`) |
+| 5 | Custom Console Commands | ✅ `ConsoleService:RegisterCommand(name, cb)` — offiziell dokumentiert **und** von EXOR selbst so genutzt (cheat.lua: `debug_spawn_entity` …) | exorstudios-Wiki accessing-keyboard-hotkeys.md; fandom Mod service: ConsoleService; OriginalPacksData lua/commands/cheat.lua |
+| 6 | Logging | ✅ `LogService:Log(...)` → `exor_logs.txt`; `ConsoleService:Write(...)` → In-Game-Konsole | exorstudios-Wiki debugging-using-lua-services.md |
+| 7 | Team-Semantik | Team-String `""` = „Blueprint-Standard“ (EXOR-Cheat nutzt `""`; Spieler-Buildings wie Feinde spawnen korrekt). Team-Ids: Player=1 (Log `GetTeamId` → 1). `"no_team"` existiert für Marker. Für echte Duell-Teams später verifizieren | OriginalPacksData (cheat.lua, wave_ground.lua) |
+| 8 | Pause/Unpause | ✅ `debug_dom_pause` **und** `debug_dom_resume` existieren (Lua, debug.lua:73/77); Server-Pause (`debug_pause_server`, `cfg_server_pause_game_when_empty`) ist nativ (C++) | lua-src 2.0.58485; `lan:/home/momo/rb-game/LOBBY_RESEARCH.md` |
 
-**Bekannte offene Punkte für den In-Game-Test:** (1) macOS-Mod-Support
-ungeklärt; (2) exakte Feind-Team-Zuordnung bei `SpawnEntity` mit `""`
-(Blueprint-Standard erwartet, s. #5).
+**Bekannte offene Punkte für den In-Game-Test:** (1) exakte Spawner-Zahl der
+Duell-Karte (Log `event=wave_spawners count=`); (2) Wirksamkeit des
+Klassen-Monkey-Patch im echten Autoexec-Environment (Log `event=dom_timer
+patch status=ok` = Indiz; Bestätigung über Wellenabstand/`debug_dom_manager 1`);
+(3) exakte Feind-Team-Zuordnung bei `SpawnEntity` mit `""` (Blueprint-Standard
+erwartet, s. #7); (4) macOS-Mod-Support ungeklärt.
 
 ## Technische Notizen
 
-- **Statische Verifikation:** `luaparse` (Lua-5.1-kompatibler Parser) über
-  `mod/lua/rbbattle_autoexec.lua` — Syntax OK. Ein echter `luac -p` stand im
-  Container nicht zur Verfügung; In-Game-Test steht aus.
+- **Statische Verifikation (2026-09-09, Pipeline):** `luaparse` (Lua-5.1-Syntax)
+  OK; Ausführung in fengari-Lua-VM mit Stub-Services (4 Szenarien: 16
+  Rand-Spawner → 8 Spawns mit `anchor=spawn_enemy_border_*` ohne Spieler;
+  Timer-Wrap 420→300 bei Load-Patch und Event-Patch, Werte <300 bleiben;
+  Fallback Mech-Ring; kein Anker → sauberer Abbruch). In-Game-Test steht aus
+  (Operator, Prod).
 - Alle fremden API-Aufrufe sind `pcall`-gesichert: fehlt eine Funktion, kommt
   ein Log statt eines Crashes.
 - Blueprint-/Wellen-Definitionen stehen als Konstanten am Dateikopf
   (`RBB.waves`) — dort tunen, wenn der Test läuft.
-- Herkunft: fusioniert aus `bausteine/00-mod-skeleton/` + `bausteine/01-wave-spawn/`
-  (beide dort als Test-Komponenten erhalten, README-Hinweis „ersetzt durch
-  `rbbattle`“).
-
-Architektur & Gesamtkonzept: [`../docs/concept.md`](../docs/concept.md) ·
-Findings-Überblick: [`../docs/findings.md`](../docs/findings.md)
+- Herkunft: v0.2.0-single (feature/single-mod, PR #15); Bausteine 00/01 bleiben
+  als Test-Komponenten erhalten.
+- Weitere Doku: [`../docs/concept.md`](../docs/concept.md) ·
+  [`../docs/findings.md`](../docs/findings.md) ·
+  [`../docs/SEND_HOOK.md`](../docs/SEND_HOOK.md) ·
+  [`../docs/DUEL_SETUP.md`](../docs/DUEL_SETUP.md) ·
+  [`../docs/SYNC_START.md`](../docs/SYNC_START.md)
