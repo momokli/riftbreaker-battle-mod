@@ -16,21 +16,24 @@ Kommando `dump_map_layout`).
 Mech-Anker), die vorhandenen Spawner-Entities sind der dafür vorgesehene Anker. Zufällige
 Ränder machen jede Welle unvorhersehbar und zwingen zum Verteidigen in alle Richtungen.
 
-### 2. Wellen kommen ausschließlich durch gegnerische Sends
+### 2. Natürliche Wellen (Base Pressure) + Sends von außen
 
-Das Spiel erzeugt keine eigenen Wellen: Ambiente Survival-/DOM-Wellen sind abgeschaltet.
-Jede Welle in der eigenen Partie ist ein Send des Gegners.
+Natürliche Wellen (DOM/Survival) bleiben als Base Pressure aktiv — Sends kommen von außen
+ZUSÄTZLICH dazu.
 
-*Begründung:* Der Gegner bestimmt — nicht das Spiel —, wann welche Welle kommt. Das ist die
-Voraussetzung für ein echtes Duell aus Senden und Verteidigen.
+*Begründung:* Die natürlichen Wellen halten die Partie ohne Zutun in Bewegung und geben
+dem Verteidiger eine planbare Grundlast; gegnerische Sends entscheiden das Duell, weil
+sie zusätzlich zur Naturwelle kommen.
 
-### 3. Send-Timing: INSTANT + passive Punkte
+### 3. Send-Timing: Send-Boost auf die nächste Welle
 
-Punkte sammeln sich passiv an (Biter-Battles-Stil). Ein Send schlägt sofort ein — es gibt
-keine Ankunfts- oder Reisezeit der Welle.
+Punkte sammeln sich passiv an (Biter-Battles-Stil). Sends boosten die NÄCHSTE natürliche
+Welle (Mod hält Send-Queue, angehängt am Wellenstart — Legion-TD-Style) → dadurch immer
+eine Build-Phase.
 
-*Begründung:* Sofortige Wirkung hält beide Parteien permanent unter Druck und vermeidet
-tote Wartezeit zwischen Send-Entscheidung und Wellenbeginn.
+*Begründung:* Angehängte Sends statt Instant-Wirkung geben dem Verteidiger zwischen den
+Wellen eine feste Build-Phase und machen Send-Timing zur Entscheidung (jetzt senden oder
+für die nächste Welle sparen) — ohne tote Wartezeit durch Reisezeiten.
 
 ### 4. Send-Inhalt: VALUE-SHOP
 
@@ -76,8 +79,18 @@ Verifizierte Gesamtstruktur (Vollkette am 2026-09-09 auf Prod bewiesen):
   Server-Tests genügt der Fake-Client (`debug_spawn_fake_client`); die Headless-Client-
   Umgebung ist damit für Server-Tests nicht mehr erforderlich.
 
+## Runden-Struktur
+
+1. **Build-Phase** — Verteidigung bauen/upgraden, Sends entscheiden.
+2. **Naturwelle + Send-Boost** — die natürliche Welle startet, die in der Send-Queue
+gesammelten gegnerischen Sends hängen an.
+3. **Aufräumen** — Leaks abrechnen (HQ-Schaden), Economy gutschreiben.
+4. **Nächste Runde** — zurück zu Schritt 1.
+
 ## Offene Fragen
 
+- Runden synchron (Tournament-Timer) oder freilaufend?
+- Build-Phase-Länge: DOM-Kadenz oder eigener Timer?
 - Level-/Tuning-Werte: HQ-Leben, Schaden pro Leak, Wellen-Größen und Schwierigkeitsstufen
 - Preistabelle je Unit: Kosten in Credits, Freischaltung, Angebotsumfang
 - Runden-Länge und Phasen-Taktung (Planung vs. Angriff)
@@ -90,5 +103,5 @@ Verifizierte Gesamtstruktur (Vollkette am 2026-09-09 auf Prod bewiesen):
 - **Verifiziert:** Vollkette auf Prod bewiesen — Bridge → Konsole → Lua-Mod → Spawn
   (`event=wave level=3 status=done spawned=8`), Fake-Client statt echtem Client,
   Auto-Weltstart des Dedicated Servers, Mod-Gleichstand erzwungen.
-- **Umsetzung folgt** als Issues: Rand-Spawner-Umbau, DOM abschalten, Value-Shop
+- **Umsetzung folgt** als Issues: Rand-Spawner-Umbau, Send-Queue + Send-Boost statt DOM-Abschaltung, Value-Shop
   (05-Economy), HQ-Leak-Research, Tournament-Kopplung.
