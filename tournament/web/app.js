@@ -88,11 +88,14 @@ function render(state) {
     // Buttons an lokale Identität koppeln
     for (const w of ["A", "B"]) {
       const mine = me && me.world === w;
-      const regBtn = $(`register${w}Btn`);
-      const readyBtn = $(`ready${w}Btn`);
-      if (regBtn) regBtn.disabled = !!mine && state.teams[w] && state.teams[w].player === me.player;
-      readyBtn.disabled = !mine || !(state.teams[w] && state.teams[w].player === me.player) || state.teams[w].ready;
-      readyBtn.classList.toggle("primary", mine && !state.teams[w].ready);
+      const regBtn = document.querySelector(`button[data-act="register${w}"]`);
+      const readyBtn = document.querySelector(`button[data-act="ready${w}"]`);
+      const registered = state.teams[w] && state.teams[w].player;
+      if (regBtn) regBtn.disabled = !!(registered && mine && state.teams[w].player === me.player);
+      if (readyBtn) {
+        readyBtn.disabled = !mine || !registered || state.teams[w].ready;
+        readyBtn.classList.toggle("primary", mine && registered && !state.teams[w].ready);
+      }
     }
     // GO-Bar (wenn beide ready / Phase ready)
     const bothReady = state.phase === "ready" || (A && B && A.ready && B.ready && A.player && B.player);
