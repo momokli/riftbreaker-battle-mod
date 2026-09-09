@@ -1,5 +1,9 @@
 # Baustein 01 — Wave-Spawn (`rb_wave <level>`)
 
+> **Hinweis: ersetzt durch `rbbattle`** — Baustein 00 + 01 sind zum Einzel-Mod
+> `rbbattle` fusioniert (siehe `mod/`, v0.2.0-single). Dieser Baustein bleibt
+> nur als isolierte Test-Komponente erhalten, wird nicht mehr ausgeliefert.
+
 **Was es testet:** Laufzeit-Spawning über die offizielle Service-API
 `EntityService:SpawnEntity(blueprint, x, y, z, team)` — exakt der Weg, den
 EXORs eigener Cheat-Command `debug_spawn_entity` nutzt (Team `""`). Der

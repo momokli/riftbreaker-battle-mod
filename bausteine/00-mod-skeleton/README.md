@@ -1,5 +1,9 @@
 # Baustein 00 — Mod-Skeleton
 
+> **Hinweis: ersetzt durch `rbbattle`** — Baustein 00 + 01 sind zum Einzel-Mod
+> `rbbattle` fusioniert (siehe `mod/`, v0.2.0-single). Dieser Baustein bleibt
+> nur als isolierte Test-Komponente erhalten, wird nicht mehr ausgeliefert.
+
 **Was es testet:** Der minimale, offizielle Mod-Load-Pfad — Ordner-Layout
 `<game>/mods/<ModName>/lua/*_autoexec.lua` wird von der Engine bei
 Kartenerstellung ausgeführt, und `LogService:Log` schreibt ins Spiel-Log.
