@@ -1,36 +1,47 @@
 -- ============================================================================
--- rbbattle_autoexec.lua
--- The Rift Breaker Battle Mod - Spike (feature/spike-mod-skeleton)
+-- rbbattle_autoexec.lua  (Einzel-Mod rbbattle, v0.2.0-single)
 --
--- WAS: Autoexec-Dateien ("*_autoexec.lua" unter lua/) werden von EXOR bei
---      jeder Kartenerstellung ausgefuehrt und haben Zugriff auf alle Services,
---      Reflection und RegisterGlobalEventHandler (Quelle: exorstudios/riftbreaker-wiki,
---      docs/modding-files/lua-files/autoexec.md).
+-- Fusion von Baustein 00 (Mod-Skeleton) + Baustein 01 (Wave-Spawn) zu EINEM
+-- Mod-Paket "rbbattle" - ersetzt die zwei Einzel-Mods rbbattle_00_skeleton
+-- und rbbattle_01_wavespawn (Client-Download + Server-Mod-Liste).
+-- Quellen: bausteine/00-mod-skeleton/ + bausteine/01-wave-spawn/ (Repo
+-- momokli/riftbreaker-battle-mod), Inhalt 1:1 kombiniert, nichts Neues.
 --
--- INHALT (3 Experimente, bewusst klein, kein Feature-Creep):
---   Skeleton    : Registriert zwei Custom Console Commands (rb_wave, rb_ui)
---                 und Bindings (F7/F8/F9) - laedt ohne Seiteneffekte.
---   Experiment A: WAVE-SPAWN  -> rb_wave <level> spawnt eine kleine
---                 Kreaturen-Welle um den Spieler.
---   Experiment B: CUSTOM-UI   -> rb_ui togglet ein Popup-Panel mit Button
---                 (GuiService:OpenPopup + GuiPopupResultEvent).
---   Experiment C: BRUECKE     -> LogService:Log mit "[RBBATTLE] event=..." -
---                 Praefix (Log-Datei: Documents/The Riftbreaker/exor_logs.txt)
---                 + Konsolen-Command rb_wave als Bridge-Test.
+-- Zweck: validiert den Mod-Load-Pfad (Skeleton-Lebenszeichen) UND registriert
+-- den Console-Command rb_wave <level> (Wellen-Spawning). Kein UI, keine
+-- Bindings, kein Bridge-Zusatz.
 --
--- Alle API-Aufrufe sind pcall-gesichert: Fehlt eine Funktion (anderer
--- Game-Stand), loggen wir "API MISSING" und tun sonst nichts (graceful no-op).
+-- Erwartung: GENAU diese zwei Zeilen im Spiel-Log (Documents/The Riftbreaker/
+-- exor_logs.txt) bei jeder Kartenerstellung:
+--   [RBBATTLE] skeleton ok
+--   [RBBATTLE] event=mod_load version=0.2.0-single status=ok
+--
+-- Genutzte API (wie im Baustein 01 kommentiert):
+--   EntityService:SpawnEntity( blueprint, x, y, z, team )
+--     -> offizielle Service-API (exorstudios/riftbreaker-wiki, lua-services);
+--        identisch implementiert im Spiel-eigenen Cheat-Command
+--        "debug_spawn_entity" (OriginalPacksData/lua/commands/cheat.lua):
+--        EntityService:SpawnEntity( args[1], position.x, position.y,
+--                                    position.z, "" )
+--   EnvironmentService:GetTerrainHeight( pos ) -> y auf Gelaendehoehe
+--   PlayerService:GetPlayerControlledEnt(0)     -> Spieler-Mech als Anker
+--   ResourceManager:GetBlueprint(...)           -> Existenz-Check vor Spawn
+--   ConsoleService:RegisterCommand(...)         -> rb_wave registrieren
+--
+-- Blueprint-Namen: echte Entity-Pfade aus den Original-Spieldaten
+-- (Packs/00_win_data.zip -> entities/units/ground/*.ent, verifiziert).
+-- Team "": wie EXORs debug_spawn_entity - Einheiten behalten ihr
+-- Blueprint-Standard-Team (Feinde = hostil).
+--
+-- Alle API-Aufrufe sind pcall-gesichert (graceful no-op, Muster Spike).
 -- ============================================================================
 
 local RBB = {}
-RBB.version = "0.1.0-spike"
+RBB.version = "0.2.0-single"
 
--- Log-Praefix laut Experiment C (1): einzeilige Events zum externen Parsen.
--- Beispiel: [RBBATTLE] event=wave level=3 count=14
+-- Log-/Konsole-Helfer (Muster Spike): Praefix [RBBATTLE] fuer externes Parsen.
 local LOG_TAG = "[RBBATTLE]"
 local function Log(fmt, ...)
-    -- fmt + varargs oben formatieren (5.1: '...' nur in vararg-Funktion direkt
-    -- nutzbar, nicht in verschachtelten non-vararg-Funktionen).
     local okMsg, msg = pcall(string.format, fmt, ...)
     if not okMsg then msg = fmt end
     local service = LogService
@@ -49,26 +60,18 @@ local function WriteConsole(fmt, ...)
 end
 
 -- ---------------------------------------------------------------------------
--- Experiment A: WAVE-SPAWN
+-- Baustein 00 (Mod-Skeleton): Lebenszeichen beim Laden. Zusaetzlich in die
+-- In-Game-Konsole schreiben (falls offen), damit der Erfolg auch ohne
+-- Log-Datei sichtbar ist.
 -- ---------------------------------------------------------------------------
--- Genutzte API (im Code kommentiert, wie beauftragt):
---   EntityService:SpawnEntity( blueprint, x, y, z, team )
---     -> offizielle Service-API (exorstudios/riftbreaker-wiki, lua-services)
---     -> Identisch implementiert im Spiel-eigenen Cheat-Command
---        "debug_spawn_entity" (OriginalPacksData/lua/commands/cheat.lua):
---        EntityService:SpawnEntity( args[1], position.x, position.y,
---                                    position.z, "" )
---   EnvironmentService:GetTerrainHeight( pos ) -> y auf Geländehöhe legen
---     (Muster aus echten Workshop-Mods, z.B. lilly1987/Riftbreaker-mods)
---   PlayerService:GetPlayerControlledEnt(0) -> Spieler-Mech als Spawn-Anker
---
--- Blueprint-Namen sind echte Entity-Pfade aus den Original-Spieldaten
--- (Packs/00_win_data.zip -> entities/units/ground/*.ent; verifiziert ueber
--- PonomarevDmitry/RiftbreakersMods OriginalPacksData):
---   brabit (klein, frueh), baxmoth (mittel), artigian, canceroth (groesser)
---
--- Team-Parameter "": exakt das, was EXORs eigener debug_spawn_entity nutzt;
--- Einheiten behalten ihr Blueprint-Standard-Team (Feinde = hostil).
+Log("skeleton ok")
+WriteConsole("skeleton ok")
+
+-- ---------------------------------------------------------------------------
+-- Baustein 01 (Wave-Spawn): rb_wave <level>
+-- ---------------------------------------------------------------------------
+
+-- Wellendefinitionen (unveraendert aus Baustein 01 / Spike Experiment A).
 RBB.waves = {
     { -- level 1: kleine Welle
         { blueprint = "units/ground/brabit",  count = 5 },
@@ -89,9 +92,6 @@ RBB.spawnRingMax = 20.0
 RBB.spawnMaxPerUnit = 10 -- Schutz vor Tippfehlern / Endlos-Args
 
 local function BlueprintExists(blueprint)
-    -- Existenz-Check vor dem Spawn: ResourceManager:GetBlueprint (Muster aus
-    -- lilly1987/Riftbreaker-mods). Unbekannte Blueprints -> skip + Log, statt
-    -- riskantem Spawn-Versuch.
     local ok, bp = pcall(function()
         return ResourceManager:GetBlueprint(blueprint)
     end)
@@ -108,8 +108,8 @@ local function GetTerrainHeight(x, z)
     return y
 end
 
--- Spawnt eine Einheit eines Blueprints an zufaelliger Position im Ring um den
--- Spieler. Liefert true/false (+ Log) - nie einen Fehler nach aussen.
+-- Spawnt eine Einheit eines Blueprints an zufaelliger Position im Ring um
+-- den Spieler. Liefert true/false (+ Log) - nie einen Fehler nach aussen.
 local function SpawnCreatureAtRandomOffset(mech, blueprint, playerPos)
     local angle = math.random() * 2.0 * math.pi
     local radius = RBB.spawnRingMin + math.random() * (RBB.spawnRingMax - RBB.spawnRingMin)
@@ -118,12 +118,9 @@ local function SpawnCreatureAtRandomOffset(mech, blueprint, playerPos)
 
     local y = GetTerrainHeight(x, z)
     if y == nil then
-        -- GetTerrainHeight nicht verfuegbar: Spieler-Hoehe als Fallback.
-        y = playerPos.y
+        y = playerPos.y -- Fallback: Spieler-Hoehe
     end
 
-    -- >>> Experiment A - eigentlicher API-Aufruf <<<
-    -- EntityService:SpawnEntity( blueprint, x, y, z, team )
     local ok, ent = pcall(function()
         return EntityService:SpawnEntity(blueprint, x, y, z, "")
     end)
@@ -139,18 +136,19 @@ local function SpawnCreatureAtRandomOffset(mech, blueprint, playerPos)
     return true
 end
 
--- Hauptfunktion Experiment A + C (2): Welle der Stufe <level> spawnen.
+-- Welle der Stufe <level> spawnen (Kernfunktion Baustein 01).
 local function SpawnWave(level)
     level = math.floor(tonumber(level) or 1)
+    local requested = level          -- original angefragtes Level (fuer Warnung)
+    local isFallback = false         -- true, wenn level auf Welle 1 zurueckfiel
     if level < 1 then level = 1 end
     if level > RBB.maxWaveLevel then
         WriteConsole("rb_wave: level %d ungueltig (1..%d), nutze 1", level, RBB.maxWaveLevel)
         Log("event=wave level=%d status=invalid_level", level)
+        isFallback = true
         level = 1
     end
 
-    -- >>> Experiment C (1): Bridge-Logzeile <<<
-    -- Format: [RBBATTLE] event=wave level=<n> ... (extern parsebar)
     Log("event=wave level=%d status=start", level)
 
     local waveDef = RBB.waves[level]
@@ -161,9 +159,15 @@ local function SpawnWave(level)
         return PlayerService:GetPlayerControlledEnt(0)
     end)
     if not playerOk or mech == nil or mech == INVALID_ID then
-        -- Spieler existiert (noch) nicht -> graceful no-op + Log.
         Log("event=wave level=%d status=no_player", level)
         WriteConsole("rb_wave: kein Spieler-Mech gefunden (Karte geladen?)")
+        -- Fallback-Pfad (z. B. rb_wave 99 -> Welle 1): Skip NICHT still lassen,
+        -- sondern explizit warnen, dass der Fallback ohne aktiven Mech
+        -- uebersprungen wurde. Verhalten (Skip) bleibt unveraendert.
+        if isFallback then
+            Log("event=wave level=%d requested=%d warn=no_player_skip_fallback msg=fallback_uebersprungen_kein_aktiver_mech", level, requested)
+            WriteConsole("rb_wave: Fallback auf Welle %d (angefragt: %d) wegen fehlendem aktivem Mech uebersprungen", level, requested)
+        end
         return false
     end
 
@@ -195,133 +199,17 @@ local function SpawnWave(level)
     return spawned > 0
 end
 
--- ---------------------------------------------------------------------------
--- Experiment B: CUSTOM-UI (minimales HUD/Panel, per Hotkey/Command togglen)
--- ---------------------------------------------------------------------------
--- Genutzte API:
---   GuiService:OpenPopup( entity, "gui/popup/popup_template_1button", text )
---     -> offizielles Wiki-Beispiel (day_cycle_machine:ShowEventPopup in
---        exorstudios/riftbreaker-wiki, docs/modding-files/lua-files/gui-popup.md)
---     -> Template gui/popup/popup_template_1button.gui in Spieldaten
---        verifiziert (OriginalPacksData/gui/popup/)
---   GuiPopupResultEvent global empfangen -> Button-Ergebnis ("button_ok")
---   ConsoleService:Write -> In-Game-Konsole (als zusaetzliches UI-Feedback)
-RBB.uiOpen = false
-
-local function OnPopupResult(evt)
-    -- Wird von RegisterGlobalEventHandler("GuiPopupResultEvent", ...) gerufen.
-    local ok, result = pcall(function()
-        return evt:GetResult()
-    end)
-    if ok then
-        RBB.uiOpen = false
-        Log("event=ui_popup status=closed result=%s", tostring(result))
-        WriteConsole("UI-Popup geschlossen (result=%s)", tostring(result))
-    end
-end
-
-local function ToggleUi()
-    -- >>> Experiment B - eigentlicher API-Aufruf <<<
-    if not (GuiService and GuiService.OpenPopup) then
-        Log("event=ui_popup status=api_missing")
-        WriteConsole("rb_ui: GuiService:OpenPopup nicht verfuegbar (API MISSING)")
-        return
-    end
-
-    if RBB.uiOpen then
-        -- Kein API-Close fuer Popups dokumentiert; Hinweis + no-op.
-        Log("event=ui_popup status=already_open")
-        WriteConsole("rb_ui: Popup ist bereits offen (bitte per Button schliessen)")
-        return
-    end
-
-    local ok, mech = pcall(function()
-        return PlayerService:GetPlayerControlledEnt(0)
-    end)
-    if not ok or mech == nil or mech == INVALID_ID then
-        Log("event=ui_popup status=no_player")
-        WriteConsole("rb_ui: kein Spieler-Mech gefunden")
-        return
-    end
-
-    local text = '<style="header_35">RBBATTLE - Battle Mod (Spike)</style>\r\n'
-        .. 'Mod geladen. Experiment B (Custom-UI) laeuft.\r\n'
-        .. '<style="big_red">Welle spawnen:</style> rb_wave 1..3 oder F7/F8\r\n'
-        .. 'Version: ' .. RBB.version
-    local ok2, err = pcall(function()
-        return GuiService:OpenPopup(mech, "gui/popup/popup_template_1button", text)
-    end)
-    if not ok2 then
-        Log("event=ui_popup status=error err=%s", tostring(err))
-        WriteConsole("rb_ui: OpenPopup Fehler (siehe exor_logs.txt)")
-        return
-    end
-    RBB.uiOpen = true
-    Log("event=ui_popup status=opened")
-    WriteConsole("rb_ui: Popup geoeffnet (Button 'OK' schliesst)")
-end
-
--- ---------------------------------------------------------------------------
--- Skeleton: Registrierung (Custom Console Commands + Hotkeys)
--- ---------------------------------------------------------------------------
--- Genutzte API:
---   ConsoleService:RegisterCommand( name, function(args) )  -> Custom Command
---   ConsoleService:ExecuteCommand('bind f7 "rb_wave 1"')    -> Hotkey-Bindung
---   Beides offiziell dokumentiert:
---     - exorstudios/riftbreaker-wiki, accessing-keyboard-hotkeys.md
---     - exorstudios/riftbreaker-wiki, console-service (Signatur-Dump Fandom)
---     - Von EXOR selbst genutzt: OriginalPacksData/lua/commands/cheat.lua
---       registriert debug_spawn_entity etc. exakt so.
-local function RegisterRbCommands()
-    if not (ConsoleService and ConsoleService.RegisterCommand) then
-        Log("event=init status=api_missing service=ConsoleService")
-        return
-    end
-
-    -- Experiment A + C (2): rb_wave <level>
-    pcall(function()
-        ConsoleService:RegisterCommand("rb_wave", function(args)
-            local level = 1
-            if args and #args >= 1 then
-                level = tonumber(args[1]) or 1
-            end
-            SpawnWave(level)
-        end)
-    end)
-
-    -- Experiment B: rb_ui (Panel togglen)
-    pcall(function()
-        ConsoleService:RegisterCommand("rb_ui", function()
-            ToggleUi()
-        end)
-    end)
-
-    Log("event=init status=commands_registered")
-
-    -- Hotkeys: F7 = Welle 1, F8 = Welle 3, F9 = UI-Panel.
-    -- (Bind-Syntax aus exorstudios/riftbreaker-wiki, accessing-keyboard-hotkeys.md)
-    pcall(function()
-        ConsoleService:ExecuteCommand('bind f7 "rb_wave 1"')
-        ConsoleService:ExecuteCommand('bind f8 "rb_wave 3"')
-        ConsoleService:ExecuteCommand('bind f9 "rb_ui"')
-    end)
-    Log("event=init status=binds_registered")
-end
-
--- Popup-Ergebnisse global empfangen (Autoexec hat kein self.entity; der
--- globale Weg ist hier der dokumentierte Ausweg neben RegisterHandler).
+-- Command-Registrierung (Spike-Muster; EXOR nutzt dasselbe in
+-- OriginalPacksData/lua/commands/cheat.lua).
 pcall(function()
-    RegisterGlobalEventHandler("GuiPopupResultEvent", function(evt)
-        OnPopupResult(evt)
+    ConsoleService:RegisterCommand("rb_wave", function(args)
+        local level = 1
+        if args and #args >= 1 then
+            level = tonumber(args[1]) or 1
+        end
+        SpawnWave(level)
     end)
 end)
 
--- Sichtbarer Lebenszeichen-Log beim Laden des Mods (Experiment C (1) Bridge):
+-- Lebenszeichen-Log beim Laden (analog Baustein 01 / Spike).
 Log("event=mod_load version=%s status=ok", RBB.version)
-
--- Commands registrieren (Autoexec laeuft bei Map-Erstellung; Registrierung
--- ist zu diesem Zeitpunkt unkritisch und folgt dem Spiel-eigenen Muster).
-RegisterRbCommands()
-
--- Kein return: Autoexec-Dateien sind keine Modul-Requires (Muster der
--- Spiel-eigenen lua/commands/*.lua und der Workshop-Mods von lilly1987).
