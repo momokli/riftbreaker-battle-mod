@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RIFT BATTLE — Tournament</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="cursor">█</span> RIFT BATTLE <span class="dim">// tournament-referee v1</span>
+  </div>
+  <div id="conn" class="conn ok">— verbinde …</div>
+</header>
+
+<section id="lobby" class="panel hidden">
+  <h2>▚ LOBBY — SPIELER REGISTRIEREN</h2>
+  <div class="lobby-row">
+    <div class="team-card" data-world="A">
+      <h3>WELT A</h3>
+      <div class="slot" id="slotA">— offen —</div>
+      <label>Pilot <input id="nameA" maxlength="32" placeholder="Name"></label>
+      <button data-act="registerA">REGISTRIEREN</button>
+      <button data-act="readyA" disabled>READY</button>
+    </div>
+    <div class="vs">VS</div>
+    <div class="team-card" data-world="B">
+      <h3>WELT B</h3>
+      <div class="slot" id="slotB">— offen —</div>
+      <label>Pilot <input id="nameB" maxlength="32" placeholder="Name"></label>
+      <button data-act="registerB">REGISTRIEREN</button>
+      <button data-act="readyB" disabled>READY</button>
+    </div>
+  </div>
+  <div id="goBar" class="go-bar hidden">
+    <span id="goMsg">Ready-Check komplett.</span>
+    <button data-act="go" id="goBtn">▶ GO — MATCH STARTEN</button>
+  </div>
+  <p class="hint">Beide Welten booten pausiert (gleicher Seed). Erst wenn beide READY sind, feuert der Referee GO an beide rbbridge-Endpoints.</p>
+</section>
+
+<section id="dashboard" class="panel hidden">
+  <div class="dash-head">
+    <div class="phase"><span id="phaseTag">—</span></div>
+    <div class="round">RUNDE <span id="roundNo">0</span> <span class="dim" id="roundsDone"></span></div>
+    <div class="match"><span class="dim">match</span> <span id="matchId">—</span> <span class="dim">rematch</span> #<span id="rematchNo">0</span></div>
+  </div>
+
+  <div class="hq-row">
+    <div class="team-block" data-world="A">
+      <div class="team-head"><span class="team-name" id="pA">WELT A</span><span class="player dim" id="pA2"></span></div>
+      <div class="hq-bar"><div class="hq-fill" id="hqFillA"></div><span class="hq-label" id="hqLabelA">HQ —</span></div>
+      <div class="pending dim" id="pendingA"></div>
+    </div>
+    <div class="team-block" data-world="B">
+      <div class="team-head"><span class="team-name" id="pB">WELT B</span><span class="player dim" id="pB2"></span></div>
+      <div class="hq-bar"><div class="hq-fill" id="hqFillB"></div><span class="hq-label" id="hqLabelB">HQ —</span></div>
+      <div class="pending dim" id="pendingB"></div>
+    </div>
+  </div>
+
+  <div id="goStatus" class="go-status hidden"></div>
+
+  <div id="revealBox" class="hidden">
+    <h3>▚ REVEAL <span class="dim" id="revealRound"></span></h3>
+    <div class="reveal-row">
+      <div class="built" data-world="A"><span class="dim">BUILT A</span><span class="built-value" id="builtA">?</span></div>
+      <div class="built" data-world="B"><span class="dim">BUILT B</span><span class="built-value" id="builtB">?</span></div>
+    </div>
+    <div class="incoming-row">
+      <div class="incoming" data-world="A"><span class="dim">EINGEHEND A</span><div class="comp" id="incomingA">—</div></div>
+      <div class="incoming" data-world="B"><span class="dim">EINGEHEND B</span><div class="comp" id="incomingB">—</div></div>
+    </div>
+  </div>
+
+  <div id="winnerBox" class="winner hidden">
+    <div class="winner-line">🏆 HQ ZERSTÖRT — SIEGER: <span id="winnerName">—</span></div>
+    <button data-act="rematch">↻ REMATCH</button>
+    <p class="hint">Rematch setzt beide Welten zurück in die Lobby — Spieler bleiben registriert.</p>
+  </div>
+</section>
+
+<section class="panel feed-panel">
+  <h2>▚ REFEREE-FEED</h2>
+  <pre id="feed" class="feed">&gt; warte auf Match-Ereignisse …</pre>
+</section>
+
+<footer class="dim">riftbreaker-battle-mod · tournament/ · axum · rbbridge-Poll via <code>GET /state</code></footer>
+<script src="/app.js"></script>
+</body>
+</html>

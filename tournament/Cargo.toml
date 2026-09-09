@@ -1,0 +1,22 @@
+[package]
+name = "tournament-server"
+version = "0.1.0"
+edition = "2021"
+description = "RIFT BATTLE Tournament-Server: zentraler Referee zwischen zwei Riftbreaker-Dedi-Welten (Lobby, Ready-Check, GO, Wave-Routing, Score/Match-State) + Spectator-Web-UI"
+license = "MIT"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "io-util", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+http = "1"
+tower-http = { version = "0.6", features = ["fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+lto = true
