@@ -1,8 +1,23 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.3.0 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.4.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
+
+**v0.4.0 — Economy (Duell-Ökonomie, Issue #24):**
+- **Issue #24:** Alle **gefarmten Ressourcen** (Carbonium, Cobalt, …) werden als
+  **Value** getrackt — Quelle: `ResourceObtainedEvent`/`ResourceChangeEvent`
+  (Getter-Ladder, erste lesbare Quelle sperrt; kein Doppel-Zählen).
+  **Convert ist bewusst & IRREVERSIBEL**: `rb_convert carbonium 100` wandelt
+  gefarmten Wert in **Send-Währung** (Spar-Pool) — kein Rücktausch-Pfad.
+- **Spar-Pool persistiert über Runden** (Global-Database `rbbattle_economy`,
+  profilgebunden; überlebt Welt-/Mod-Neustart).
+- **Built-Value** (= nicht konvertierter Farmwert, GDD: „was gebaut wurde =
+  was NICHT gesendet wurde“) wird getrennt geführt — Reveal-Basis für #27.
+- **Dokumentierter Fallback:** Fehlt die Ressourcen-Event-API (Getter nicht
+  lesbar), schaltet der Mod nach 3 Fehlern dauerhaft auf HourEvent-Tick-
+  Einkommen um (Muster Baustein 05; Befund: kein verifizierter Konto-Zugriff,
+  `docs/research/api-deep-dive.md` §1).
 
 **v0.3.0 — Mod-Core (Foundation):**
 - **Issue #26:** Send-Spawns spawnen an den **16 natürlichen Kartenrand-Spawnern**
@@ -20,8 +35,8 @@ v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 
 Inhalt des Mod-Ordners: Skeleton-Lebenszeichen-Log beim Laden +
 Console-Commands `rb_wave <level>` / `rb_send <level>` (Send-Wellen-Spawning an
-Kartenrand-Spawnern) + DOM-Timer-Deckel. Kein UI, keine Bindings, kein
-Bridge-Zusatz, **kein io/socket/http**.
+Kartenrand-Spawnern) + DOM-Timer-Deckel + Economy (`rb_convert`, `rb_economy`).
+Kein UI, keine Bindings, kein Bridge-Zusatz, **kein io/socket/http**.
 
 ## Installation (lokaler Mods-Ordner)
 
@@ -72,12 +87,18 @@ und Workshop-Mods tun (Quelle: fandom „Basic Modding Guide“, Ordner
 | `rb_wave 1` … `rb_wave 3` (Konsole/Bridge) | Spawnt Send-Welle an **zufälligen natürlichen Kartenrand-Spawnern** (5 Brabits / +3 Baxmoth / +2 Artigian +1 Canceroth, je Kreatur zufälliger Spawner aus den 4 Gruppen `spawn_enemy_border_*`); ungültige Stufe (`rb_wave 99`) fällt mit Warnung auf Welle 1 zurück. Kein Spieler-Mech nötig (Server-only). Ohne Rand-Spawner: Fallback-Ring um den Mech |
 | `rb_send <level>` | Alias für `rb_wave` (Send-Semantik für Shop-/Queue-Integration #25) |
 | `rb_wave`-Log-Anker | `anchor=border spawners=N` (bzw. `anchor=fallback_mech`), je Kreatur `anchor=<gruppe>/<id>` im `event=spawn ok`-Log |
+| `rb_convert <resource> <amount>` | Wandelt gefarmte Ressource **irreversibel** in Send-Währung (Spar-Pool): `rb_convert carbonium 100` → 100 Value → Pool (Faktor-Tabelle `resourceFactors`, z.B. palladium 2×, uranium_ore 3×; unbekannte Ressourcen 1×). Ablehnung bei zu wenig Farm-Menge (`status=insufficient`); kein Rücktausch. Balance = Platzhalter (Tuning #33) |
+| `rb_economy` / `rb_economy reset` | Status: Quelle, Pool, farmed/converted/built, Ressourcen-Konten, DB-Status. `reset` = Entwickler-Werkzeug (alles auf 0, inkl. Ressourcen-Keys der DB) |
 
 Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.3.0 status=ok anchor=border_spawner_groups timer_cap=300
+[RBBATTLE] event=mod_load version=0.4.0 status=ok anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
+[RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
+[RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
+[RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100
+[RBBATTLE] event=convert resource=carbonium amount=100 value=100 pool=100 status=ok irreversible=1
 [RBBATTLE] event=dom_timer patch status=ok cap=300        ← nach PlayerInitializedEvent
 [RBBATTLE] event=setup difficulty=hard creatures_difficulty=5 timer_cap=300
 [RBBATTLE] event=wave level=3 status=start
@@ -111,11 +132,20 @@ erwartet, s. #7); (4) macOS-Mod-Support ungeklärt.
 ## Technische Notizen
 
 - **Statische Verifikation (2026-09-09, Pipeline):** `luaparse` (Lua-5.1-Syntax)
-  OK; Ausführung in fengari-Lua-VM mit Stub-Services (4 Szenarien: 16
-  Rand-Spawner → 8 Spawns mit `anchor=spawn_enemy_border_*` ohne Spieler;
-  Timer-Wrap 420→300 bei Load-Patch und Event-Patch, Werte <300 bleiben;
-  Fallback Mech-Ring; kein Anker → sauberer Abbruch). In-Game-Test steht aus
+  OK; Ausführung in fengari-Lua-VM mit Stub-Services. v0.3.0: 4 Szenarien (16
+  Rand-Spawner → 8 Spawns `anchor=spawn_enemy_border_*` ohne Spieler;
+  Timer-Wrap 420→300 / Werte <300 bleiben; Fallback Mech-Ring; kein Anker).
+  v0.4.0: 3 Szenarien / 30 Checks (Farm-Event-Ladder + Source-Lock;
+  Convert irreversibel + Faktoren + Guards; Persistenz-Resume nach Neustart;
+  Reset; Fallback tick nach 3 Handler-Fehlern). In-Game-Test steht aus
   (Operator, Prod).
+- **Economy-Fallback dokumentiert:** Der Mod hat keinen verifizierten Zugriff
+  aufs Spieler-Ressourcen-Konto (api-deep-dive.md §1); Value kommt aus
+  Ernte-Events (Getter-Ladder). Sind die Events nicht lesbar, schaltet die
+  Quelle nach 3 Fehlern dauerhaft auf HourEvent-Tick um (Log
+  `event=economy_source source=tick status=fallback reason=handler_errors`).
+- Balance-Zahlen (Faktoren, Tick-Wert) sind Platzhalter — zentrale Tabelle
+  `RBB.economyCfg` am Economy-Block (Tuning: Issue #33).
 - Alle fremden API-Aufrufe sind `pcall`-gesichert: fehlt eine Funktion, kommt
   ein Log statt eines Crashes.
 - Blueprint-/Wellen-Definitionen stehen als Konstanten am Dateikopf

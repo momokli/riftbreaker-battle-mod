@@ -1,5 +1,5 @@
 -- ============================================================================
--- rbbattle_autoexec.lua  (Einzel-Mod rbbattle, v0.3.0)
+-- rbbattle_autoexec.lua  (Einzel-Mod rbbattle, v0.4.0)
 --
 -- RIFT BATTLE Mod-Core (Foundation):
 --   #26 Send-Spawn an den 16 natuerlichen Kartenrand-Spawnern
@@ -10,6 +10,13 @@
 --       (prepareSpawnTime 420 -> 300, 5-Min-Wellen) + Setup-Log
 --       (difficulty/map size/seed werden beim Server-Start gesetzt, s.
 --       docs/DUEL_SETUP.md — der Mod loggt die aktiv wirksame Difficulty).
+--   #24 Economy (Duell-Oekonomie): Alle gefarmten Ressourcen (Carbonium &
+--       Co.) werden als Value getrackt (Ressourcen-Events, Getter-Ladder);
+--       bewusste, IRREVERSIBLE Konvertierung in Send-Waehrung per
+--       `rb_convert <resource> <amount>`; Spar-Pool persistiert ueber Runden
+--       (Global-Database). Built-Value (= nicht konvertierter Farmwert) wird
+--       getrennt gefuehrt (Reveal-Basis fuer #27). Fallback: HourEvent-Tick,
+--       falls die Ressourcen-Event-API fehlt (docs/research/api-deep-dive.md §1).
 --
 -- Basis: rbbattle v0.2.0-single (feature/single-mod, PR #15) + Baustein 00/01.
 -- Kein io/socket/http, keine Bindings, kein UI-Zusatz. Alle API-Aufrufe sind
@@ -26,18 +33,27 @@
 --   DifficultyService:GetCurrentDifficultyName() / CampaignService:
 --   GetCreaturesBaseDifficulty()                                  (dom_manager v2)
 --   ConsoleService:RegisterCommand(...)                           (wie v0.2.0)
+--   RegisterGlobalEventHandler("ResourceObtainedEvent"/"ResourceChangeEvent",
+--     "HourEvent") -> Farm-Value-Quellen + Tick-Fallback       (Issue #24)
+--   PlayerService:GetOrCreateGlobalDatabase("rbbattle_economy")
+--     -> Persistenz (HasInt/GetIntOrDefault/SetInt/RemoveKey)  (Issue #24)
 --
 -- Log-Zeilen (externes Parsing, Praefix [RBBATTLE]):
---   event=mod_load version=0.3.0 status=ok ...
+--   event=mod_load version=0.4.0 status=ok econ_source=.. econ_pool=.. ...
 --   event=wave level=N status=start|done spawned=.. skipped=.. anchor=border|fallback_mech
 --   event=spawn ok|failed|skip ... anchor=<gruppe>/<id>            (je Kreatur)
 --   event=wave_spawners count=N                                    (Pool-Groesse)
 --   event=dom_timer patch status=ok|skip|no_class cap=300          (#23)
 --   event=setup difficulty=<name> creatures_difficulty=<n>         (bei Map-Ready)
+--   event=economy_db status=new|resume|unavailable pool=.. farmed=..      (#24)
+--   event=economy_source source=resource_obtained|resource_change|tick    (#24)
+--   event=economy_farm source=.. resource=.. amount=.. value=.. farmed=.. (#24)
+--   event=convert resource=.. amount=.. value=.. pool=.. irreversible=1   (#24)
+--   event=economy_show / economy_reset                                    (#24)
 -- ============================================================================
 
 local RBB = {}
-RBB.version = "0.3.0"
+RBB.version = "0.4.0"
 
 -- Log-/Konsole-Helfer (Muster Spike): Praefix [RBBATTLE] fuer externes Parsen.
 local LOG_TAG = "[RBBATTLE]"
@@ -457,6 +473,432 @@ if not evtApiOk then
     LogMapSetupInfo()
 end
 
+-- ============================================================================
+-- #24 Economy: Farm-Value, irreversibles Convert in Send-Waehrung, Spar-Pool
+--
+-- Konzept (GDD "Economy" / "Poker-Kern"): Value entsteht durchs Farmen
+-- (abgebaute Ressourcen), gesendet wird nur durch bewusste Konvertierung:
+--   rb_convert <resource> <amount>   (IRREVERSIBEL — kein Ruecktausch)
+-- Der Spar-Pool (Send-Waehrung) persistiert ueber Runden hinweg in einer
+-- Global-Database (profilgebunden, docs/misc/database-class.md) und wird
+-- spaeter vom Shop ausgegeben (Issue #25). Built-Value (= nicht konvertierter
+-- Farmwert, GDD "was gebaut wurde = was NICHT gesendet wurde") wird getrennt
+-- gefuehrt und bei Wellenstart aufgedeckt (Issue #27).
+--
+-- Wertquellen (Dual-Mode, Muster Baustein 05):
+--   resource_obtained : RegisterGlobalEventHandler("ResourceObtainedEvent")
+--   resource_change   : RegisterGlobalEventHandler("ResourceChangeEvent")
+--     Die Getter-Details beider Event-Klassen sind NICHT dokumentiert
+--     (docs/research/api-deep-dive.md §1: Felder Entity/Resource bzw.
+--     ResourceBasket, Getter unbekannt) -> Getter-Ladder versucht mehrere
+--     Konventionen; das ERSTE fehlerfrei lesbare Event sperrt die aktive
+--     Quelle (kein Doppel-Zaehlen derselben Ernte ueber beide Events).
+--   tick (Fallback)   : Schlaegt die Event-Quelle dauerhaft fehl (pcall-
+--     Fehler), zahlt HourEvent pauschal Value (cfg.valuePerHourTick) —
+--     dokumentierter Fallback, Mod laeuft dann ohne Erz-Events weiter.
+--
+-- KEIN io/os/http; alle Service-Zugriffe pcall-gesichert (graceful no-op).
+-- ============================================================================
+
+-- Konfiguration: zentrale Wert-Tabelle (Balance-Platzhalter, Tuning in
+-- Issue #33 — dort auch echte Boss-/Unit-Listen aus den Spieldaten).
+RBB.economyCfg = {
+    -- Value-Faktor je Ressource (1 abgebaute Einheit = Faktor Value).
+    -- Bekannte Spiel-Ressourcen (api-deep-dive.md §1); unbekannte -> defaultFactor.
+    resourceFactors = {
+        carbonium = 1,
+        steel = 1,
+        cobalt = 1,
+        palladium = 2,
+        titanium = 2,
+        uranium_ore = 3,
+        morphium = 3,
+        flammable_gas = 1,
+        geothermal = 1,
+        mud = 1,
+        magma = 1,
+        sludge = 1,
+        water = 1,
+    },
+    defaultFactor = 1,      -- Faktor fuer Ressourcen ohne Eintrag
+
+    -- Fallback-Einkommen pro HourEvent (nur Modus tick/auto).
+    valuePerHourTick = 5,
+
+    -- Fehler-Obergrenze der Event-Quelle, bevor dauerhaft auf tick gewechselt
+    -- wird (Handler-Fehler = API dieser Event-Klasse unbrauchbar).
+    maxSourceErrors = 3,
+
+    -- Obergrenze je Convert-Aufruf (Schutz vor Tippfehlern / Endlos-Args).
+    maxConvertAmount = 100000,
+}
+
+-- Laufzeit-Zustand + Persistenz-Spiegel (Global-Database "rbbattle_economy").
+RBB.economy = {
+    source  = "none",        -- none | resource_obtained | resource_change | tick
+    pool    = 0,             -- Send-Waehrung (persistiert, Spar-Pool)
+    farmed  = 0,             -- Value aus Farmen, kumuliert (persistiert)
+    converted = 0,           -- Value in Send-Waehrung gewandelt (persistiert)
+    converts = 0,            -- Anzahl Convert-Vorgaenge (persistiert)
+    resources = {},          -- Ressource -> gefarmte Menge (int, persistiert)
+    sourceErrors = 0,        -- Fehler der aktiven/geprueften Event-Quelle
+    eventLocked = false,     -- true: eine Event-Quelle ist aktiv gesperrt
+    sourceTried = {},        -- Quelle -> true (bereits gescheitert)
+    db = nil,                -- Global-Database (nil = nicht verfuegbar)
+    dbOk = false,
+}
+
+-- Built-Value (getrennt gefuehrt): farmed - converted = behaltener
+-- (nicht gesendeter) Wert. Bewusst abgeleitet statt separat gespeichert
+-- (keine doppelte Buchfuehrung).
+local function EconomyBuiltValue()
+    return math.max(0, RBB.economy.farmed - RBB.economy.converted)
+end
+
+local function EconomyDbName() return "rbbattle_economy" end
+
+local function EconomyDbKeyResource(name)
+    return "res_" .. tostring(name)
+end
+
+local function EconomyLoad()
+    local okDb, db = pcall(function()
+        return PlayerService:GetOrCreateGlobalDatabase(EconomyDbName())
+    end)
+    if not okDb or db == nil then
+        Log("event=economy_db status=unavailable reason=no_global_database")
+        return
+    end
+    local e = RBB.economy
+    e.db = db
+    e.dbOk = true
+    local okH, has = pcall(function() return db:HasInt("pool") end)
+    if okH and has then
+        pcall(function()
+            e.pool = db:GetIntOrDefault("pool", 0)
+            e.farmed = db:GetIntOrDefault("farmed", 0)
+            e.converted = db:GetIntOrDefault("converted", 0)
+            e.converts = db:GetIntOrDefault("converts", 0)
+        end)
+        Log("event=economy_db status=resume pool=%d farmed=%d converted=%d",
+            e.pool, e.farmed, e.converted)
+    else
+        Log("event=economy_db status=new db=%s", EconomyDbName())
+    end
+end
+
+local function EconomySave()
+    local db = RBB.economy.db
+    if db == nil then return end
+    pcall(function()
+        db:SetInt("pool", RBB.economy.pool)
+        db:SetInt("farmed", RBB.economy.farmed)
+        db:SetInt("converted", RBB.economy.converted)
+        db:SetInt("converts", RBB.economy.converts)
+    end)
+end
+
+local function EconomySaveResource(name)
+    local db = RBB.economy.db
+    if db == nil then return end
+    pcall(function()
+        db:SetInt(EconomyDbKeyResource(name), RBB.economy.resources[name] or 0)
+    end)
+end
+
+local function EconomyLoadResources()
+    -- Persistierte Ressourcen-Konten zuruecklesen. Ressourcen-Namen sind
+    -- feste Spiel-Strings (lowercase, _), kein Injection-Vektor via DB.
+    local db = RBB.economy.db
+    if db == nil then return end
+    local names = { "carbonium", "steel", "cobalt", "palladium", "titanium",
+                    "uranium_ore", "morphium", "flammable_gas", "geothermal",
+                    "mud", "magma", "sludge", "water" }
+    pcall(function()
+        for _, n in ipairs(names) do
+            local okH, has = pcall(function() return db:HasInt(EconomyDbKeyResource(n)) end)
+            if okH and has then
+                RBB.economy.resources[n] = db:GetIntOrDefault(EconomyDbKeyResource(n), 0)
+            end
+        end
+    end)
+end
+
+-- Getter-Ladder: liefert (resourceName, amount) aus einem Event-Objekt oder
+-- nil. Kandidaten decken die unbekannte Event-API ab (Felder Resource bzw.
+-- ResourceBasket laut api-deep-dive.md §1); jede Stufe pcall-gesichert.
+local function TryEventAmount(evt)
+    if evt == nil then return nil end
+
+    -- Stufe 1: evt:GetResource() -> Objekt mit GetName()/GetAmount()
+    local ok1, res = pcall(function() return evt:GetResource() end)
+    if ok1 and res ~= nil then
+        local okN, name = pcall(function() return res:GetName() end)
+        if (not okN or name == nil) then
+            okN, name = pcall(function() return res:GetResourceName() end)
+        end
+        if (not okN or name == nil) then
+            okN, name = pcall(function() return res.name end)
+        end
+        local okA, amount = pcall(function() return res:GetAmount() end)
+        if (not okA or amount == nil) then
+            okA, amount = pcall(function() return res:GetCount() end)
+        end
+        if (not okA or amount == nil) then
+            okA, amount = pcall(function() return res.amount end)
+        end
+        if okN and okA and name ~= nil and amount ~= nil then
+            return tostring(name), amount
+        end
+    end
+
+    -- Stufe 2: evt:GetResourceName() + evt:GetAmount()
+    local ok2n, name2 = pcall(function() return evt:GetResourceName() end)
+    local ok2a, amount2 = pcall(function() return evt:GetAmount() end)
+    if ok2n and ok2a and name2 ~= nil and amount2 ~= nil then
+        return tostring(name2), amount2
+    end
+
+    -- Stufe 3: evt:GetResourceBasket() -> Objekt mit GetResourceName/GetAmount
+    local ok3, basket = pcall(function() return evt:GetResourceBasket() end)
+    if ok3 and basket ~= nil then
+        local ok3n, name3 = pcall(function() return basket:GetResourceName() end)
+        if (not ok3n or name3 == nil) then
+            ok3n, name3 = pcall(function() return basket:GetName() end)
+        end
+        local ok3a, amount3 = pcall(function() return basket:GetAmount() end)
+        if ok3n and ok3a and name3 ~= nil and amount3 ~= nil then
+            return tostring(name3), amount3
+        end
+    end
+
+    return nil -- Event nicht lesbar (unbekannte API-Variante)
+end
+
+-- Farm-Buchung: Ressourcen-Konto + farmedValue (+Erst-Lock der Quelle).
+local function EconomyBookFarm(source, name, rawAmount)
+    local e = RBB.economy
+
+    if e.eventLocked then
+        if e.source ~= source then
+            return -- andere Quelle ist aktiv: kein Doppel-Zaehlen
+        end
+    elseif source == "tick" then
+        -- auto-Phase: Tick-Einkommen OHNE Sperre — das erste fehlerfrei
+        -- gelesene Farm-Event sperrt die Quelle (Muster Baustein 05).
+    else
+        e.source = source
+        e.eventLocked = true
+        Log("event=economy_source source=%s status=active", source)
+    end
+
+    local amount = math.floor(tonumber(rawAmount) or 0)
+    if amount <= 0 then return end
+
+    local factor = RBB.economyCfg.resourceFactors[name]
+    if factor == nil then factor = RBB.economyCfg.defaultFactor end
+    local value = amount * factor
+
+    local res = e.resources[name] or 0
+    e.resources[name] = res + amount
+    e.farmed = e.farmed + value
+
+    EconomySave()
+    EconomySaveResource(name)
+    Log("event=economy_farm source=%s resource=%s amount=%d value=%d farmed=%d built=%d",
+        source, name, amount, value, e.farmed, EconomyBuiltValue())
+end
+
+-- Event-Handler (je Quelle ein Handler; Fehler zaehlen -> Fallback tick).
+local function HandleFarmEvent(evt, source)
+    local okCall, err = pcall(function()
+        local name, rawAmount = TryEventAmount(evt)
+        if name == nil or rawAmount == nil then
+            error("event_unreadable")
+        end
+        EconomyBookFarm(source, name, rawAmount)
+    end)
+    if not okCall then
+        local e = RBB.economy
+        -- Fehler der (potentiellen) Event-Quelle zaehlen; unabhaengig davon,
+        -- ob sie schon gesperrt ist oder nicht. Ab Obergrenze: dauerhafter
+        -- Fallback auf tick (dokumentierter Degradationspfad).
+        if e.source ~= "tick" and (not e.eventLocked or e.source == source) then
+            e.sourceErrors = e.sourceErrors + 1
+            if e.sourceErrors >= RBB.economyCfg.maxSourceErrors then
+                e.source = "tick"
+                e.eventLocked = true
+                Log("event=economy_source source=tick status=fallback reason=handler_errors err=%s",
+                    tostring(err))
+            end
+        end
+    end
+end
+
+local function OnResourceObtainedEvent(evt)
+    HandleFarmEvent(evt, "resource_obtained")
+end
+
+local function OnResourceChangeEvent(evt)
+    HandleFarmEvent(evt, "resource_change")
+end
+
+-- Fallback-Quelle: HourEvent zahlt pauschal, solange keine Event-Quelle
+-- aktiv gesperrt ist (auto) oder die Quelle dauerhaft auf tick gefallen ist.
+local function OnHourEventEconomy(evt)
+    local e = RBB.economy
+    if e.eventLocked then
+        if e.source == "tick" then
+            EconomyBookFarm("tick", "hour_tick", RBB.economyCfg.valuePerHourTick)
+        end
+        return
+    end
+    -- auto-Phase (noch kein lesbares Farm-Event): Tick-Einkommen ohne Sperre.
+    EconomyBookFarm("tick", "hour_tick", RBB.economyCfg.valuePerHourTick)
+end
+
+-- ---------------------------------------------------------------------------
+-- Convert (IRREVERSIBEL): bewusste Umwandlung von gefarmtem Wert einer
+-- Ressource in Send-Waehrung (Spar-Pool). Es gibt bewusst KEINEN
+-- Ruecktausch-Pfad (Pool -> Ressource) im Mod.
+-- ---------------------------------------------------------------------------
+local function ConvertToSendPool(rawResource, rawAmount)
+    local e = RBB.economy
+    local name = tostring(rawResource or ""):lower()
+    local amount = math.floor(tonumber(rawAmount) or 0)
+
+    if name == "" or amount <= 0 then
+        WriteConsole("rb_convert: Aufruf: rb_convert <resource> <amount> (z.B. rb_convert carbonium 100)")
+        Log("event=convert status=usage")
+        return
+    end
+    if amount > RBB.economyCfg.maxConvertAmount then
+        WriteConsole("rb_convert: %d zu gross (max %d pro Aufruf)",
+                     amount, RBB.economyCfg.maxConvertAmount)
+        Log("event=convert status=amount_too_big resource=%s amount=%d",
+            name, amount)
+        return
+    end
+
+    local have = e.resources[name] or 0
+    if have < amount then
+        WriteConsole("rb_convert: %s nur %d gefarmt (benoetigt %d) — erst Farmen!",
+                     name, have, amount)
+        Log("event=convert status=insufficient resource=%s have=%d need=%d",
+            name, have, amount)
+        return
+    end
+
+    local factor = RBB.economyCfg.resourceFactors[name]
+    if factor == nil then factor = RBB.economyCfg.defaultFactor end
+    local value = amount * factor
+
+    -- Abbuchung + irreversibler Transfer in den Spar-Pool.
+    e.resources[name] = have - amount
+    e.converted = e.converted + value
+    e.converts = e.converts + 1
+    e.pool = e.pool + value
+
+    EconomySave()
+    EconomySaveResource(name)
+    Log("event=convert resource=%s amount=%d value=%d pool=%d status=ok irreversible=1",
+        name, amount, value, e.pool)
+    WriteConsole("rb_convert: %d %s -> %d Send-Waehrung (IRREVERSIBEL). Pool: %d",
+                 amount, name, value, e.pool)
+end
+
+-- ---------------------------------------------------------------------------
+-- Economy-Status: rb_economy (Anzeige/Reset) — rb_status (Baustein-Stil)
+-- wird um die Economy-Felder ergaenzt (Konsolen-Fallback fuer HUD, #27).
+-- ---------------------------------------------------------------------------
+local function EconomyStatusLines()
+    local e = RBB.economy
+    WriteConsole("economy: source=%s pool=%d farmed=%d converted=%d built=%d converts=%d db_ok=%s",
+                 e.source, e.pool, e.farmed, e.converted, EconomyBuiltValue(),
+                 e.converts, tostring(e.dbOk))
+    -- Ressourcen-Konten (kompakt, nur belegte).
+    local parts = {}
+    local sorted = {}
+    for k, _ in pairs(e.resources) do
+        if e.resources[k] > 0 then sorted[#sorted + 1] = k end
+    end
+    table.sort(sorted)
+    for _, k in ipairs(sorted) do
+        parts[#parts + 1] = string.format("%s:%d", k, e.resources[k])
+    end
+    local resLine = table.concat(parts, " ")
+    if resLine == "" then resLine = "-" end
+    WriteConsole("economy: resources %s", resLine)
+    Log("event=economy_show source=%s pool=%d farmed=%d converted=%d built=%d converts=%d",
+        e.source, e.pool, e.farmed, e.converted, EconomyBuiltValue(), e.converts)
+end
+
+local function ResetEconomy()
+    local e = RBB.economy
+    e.pool = 0
+    e.farmed = 0
+    e.converted = 0
+    e.converts = 0
+    e.resources = {}
+    local db = e.db
+    if db ~= nil then
+        pcall(function()
+            db:SetInt("pool", 0)
+            db:SetInt("farmed", 0)
+            db:SetInt("converted", 0)
+            db:SetInt("converts", 0)
+            for _, n in ipairs({ "carbonium", "steel", "cobalt", "palladium",
+                                "titanium", "uranium_ore", "morphium",
+                                "flammable_gas", "geothermal", "mud", "magma",
+                                "sludge", "water" }) do
+                db:RemoveKey(EconomyDbKeyResource(n))
+            end
+        end)
+    end
+    Log("event=economy_reset status=ok")
+end
+
+local function CmdEconomy(args)
+    if args ~= nil and #args >= 1 and tostring(args[1]) == "reset" then
+        ResetEconomy()
+        WriteConsole("rb_economy: alle Konten + Spar-Pool + Ressourcen-Konten auf 0")
+        return
+    end
+    EconomyStatusLines()
+end
+
+local function CmdConvert(args)
+    local res, amount = nil, nil
+    if args ~= nil and #args >= 1 then res = tostring(args[1]) end
+    if args ~= nil and #args >= 2 then amount = tostring(args[2]) end
+    ConvertToSendPool(res, amount)
+end
+
+pcall(function()
+    ConsoleService:RegisterCommand("rb_convert", function(args)
+        CmdConvert(args)
+    end)
+    ConsoleService:RegisterCommand("rb_economy", function(args)
+        CmdEconomy(args)
+    end)
+end)
+
+-- Registrierung der Farm-/Fallback-Events (einzeln pcall-gesichert; ein
+-- unbekannter Event-Name laesst die anderen unangetastet).
+pcall(function()
+    RegisterGlobalEventHandler("ResourceObtainedEvent", OnResourceObtainedEvent)
+end)
+pcall(function()
+    RegisterGlobalEventHandler("ResourceChangeEvent", OnResourceChangeEvent)
+end)
+pcall(function()
+    RegisterGlobalEventHandler("HourEvent", OnHourEventEconomy)
+end)
+
+-- Init: Persistenz zuruecklesen (Spar-Pool ueberlebt Runden + Neustart).
+EconomyLoad()
+EconomyLoadResources()
+
 -- Lebenszeichen-Log beim Laden (analog Baustein 01 / Spike).
-Log("event=mod_load version=%s status=ok anchor=border_spawner_groups timer_cap=%d",
-    RBB.version, RBB.waveIntervalCapS)
+Log("event=mod_load version=%s status=ok anchor=border_spawner_groups timer_cap=%d econ_source=%s econ_pool=%d",
+    RBB.version, RBB.waveIntervalCapS, RBB.economy.source, RBB.economy.pool)
