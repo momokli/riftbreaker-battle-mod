@@ -6,7 +6,11 @@
 --       Anker der Send-Kreaturen = spawner-Entities der DOM-Gruppen
 --       spawn_enemy_border_{south,north,east,west} statt Spieler-Mech.
 --       DOM-Naturwellen bleiben unangetastet (Basis-Druck).
-
+--   #23 Runden-Takt: DOM-Wellen-Vorbereitung auf max. 300 s gedeckelt
+--       (prepareSpawnTime 420 -> 300, 5-Min-Wellen) + Setup-Log
+--       (difficulty/map size/seed werden beim Server-Start gesetzt, s.
+--       docs/DUEL_SETUP.md — der Mod loggt die aktiv wirksame Difficulty).
+--
 -- Basis: rbbattle v0.2.0-single (feature/single-mod, PR #15) + Baustein 00/01.
 -- Kein io/socket/http, keine Bindings, kein UI-Zusatz. Alle API-Aufrufe sind
 -- pcall-gesichert (graceful no-op, Muster Spike).
@@ -19,6 +23,8 @@
 --      RandomizeSpawnPoint fuer Naturwellen nutzt; Beleg dom_manager.lua
 --      + mission_base.lua, Spiel 2.0.58485)
 --   RegisterGlobalEventHandler("PlayerInitializedEvent", fn)     (findings #14)
+--   DifficultyService:GetCurrentDifficultyName() / CampaignService:
+--   GetCreaturesBaseDifficulty()                                  (dom_manager v2)
 --   ConsoleService:RegisterCommand(...)                           (wie v0.2.0)
 --
 -- Log-Zeilen (externes Parsing, Praefix [RBBATTLE]):
@@ -26,10 +32,12 @@
 --   event=wave level=N status=start|done spawned=.. skipped=.. anchor=border|fallback_mech
 --   event=spawn ok|failed|skip ... anchor=<gruppe>/<id>            (je Kreatur)
 --   event=wave_spawners count=N                                    (Pool-Groesse)
+--   event=dom_timer patch status=ok|skip|no_class cap=300          (#23)
+--   event=setup difficulty=<name> creatures_difficulty=<n>         (bei Map-Ready)
 -- ============================================================================
 
 local RBB = {}
-RBB.version = "0.3.0" -- #26 border-send; #23 folgt (separater Commit)
+RBB.version = "0.3.0"
 
 -- Log-/Konsole-Helfer (Muster Spike): Praefix [RBBATTLE] fuer externes Parsen.
 local LOG_TAG = "[RBBATTLE]"
@@ -96,6 +104,11 @@ RBB.spawnRingMax = 20.0
 -- Kleine Streuung um den Spawn-Anchor, damit Kreaturen nicht exakt uebereinander
 -- stehen; Radius in Metern. (Terrain-Hoehe wird versucht, sonst Anchor-Hoehe.)
 RBB.spawnJitterMax = 3.0
+
+-- #23: Deckel fuer die DOM-Wellen-Vorbereitung in Sekunden (5-Min-Wellen).
+-- Vanilla-Wert in normal/hard-Survival-Rules: 420 (Beleg:
+-- lua/missions/survival/v2/dom_survival_*_rules_{normal,hard}.lua).
+RBB.waveIntervalCapS = 300
 
 -- ---------------------------------------------------------------------------
 -- Kleine Helfer
@@ -319,6 +332,91 @@ local function SpawnWave(level)
 end
 
 -- ---------------------------------------------------------------------------
+-- #23: DOM-Wellen-Timer auf 300 s deckeln (Function-Wrap, vgl. docs/SEND_HOOK.md)
+--
+-- Wrappt dom_mananger:GetPrepareSpawnTime (Klasse, nicht Instanz). Die Klasse
+-- existiert erst, nachdem MissionService:AddGameRule die dom_manager.lua
+-- geladen hat -> Patch-Versuche: Mod-Load, PlayerInitializedEvent und jeder
+-- Send-Aufruf. Idempotent. NIE per require nachladen (Re-Execution wuerde die
+-- Klassen-Tabelle ersetzen und bestehende DOM-Instanzen entkoppeln!).
+-- ---------------------------------------------------------------------------
+RBB.domTimerPatched = false
+RBB.domTimerOrig = nil
+
+local function PatchDomTimer()
+    if RBB.domTimerPatched then
+        return RBB.domTimerOrig ~= nil
+    end
+
+    local dom = nil
+    if type(_G) == "table" then
+        dom = rawget(_G, "dom_mananger")
+    end
+    if type(dom) ~= "table" then
+        return false -- Klasse (noch) nicht geladen; naechster Versuch spaeter
+    end
+
+    local orig = dom.GetPrepareSpawnTime
+    if type(orig) ~= "function" then
+        Log("event=dom_timer patch status=skip reason=no_api")
+        RBB.domTimerPatched = true
+        return false
+    end
+
+    if RBB.domTimerOrig == nil then
+        RBB.domTimerOrig = orig
+        dom.GetPrepareSpawnTime = function(self)
+            local okT, t = pcall(RBB.domTimerOrig, self)
+            if not okT or type(t) ~= "number" then
+                t = RBB.waveIntervalCapS
+            end
+            if t > RBB.waveIntervalCapS then
+                t = RBB.waveIntervalCapS
+            end
+            return t
+        end
+        Log("event=dom_timer patch status=ok cap=%d", RBB.waveIntervalCapS)
+    end
+
+    RBB.domTimerPatched = true
+    return true
+end
+
+-- Setup-/Difficulty-Log (bei Map-Ready): Beleg fuer #23-Teil "Schwierigkeit
+-- hard" aus Sicht des laufenden Servers. Gesetzt wird die Difficulty beim
+-- Server-/Welt-Start (C++/GameServerOptions, s. docs/DUEL_SETUP.md).
+RBB.setupLogged = false
+local function LogMapSetupInfo()
+    if RBB.setupLogged then return end
+    RBB.setupLogged = true
+
+    local difficulty = "?"
+    if type(DifficultyService) == "table"
+        and type(DifficultyService.GetCurrentDifficultyName) == "function" then
+        local okD, name = pcall(DifficultyService.GetCurrentDifficultyName,
+                                DifficultyService)
+        if okD and name ~= nil then difficulty = tostring(name) end
+    end
+
+    local creatureDifficulty = "?"
+    if type(CampaignService) == "table"
+        and type(CampaignService.GetCreaturesBaseDifficulty) == "function" then
+        local okC, cd = pcall(CampaignService.GetCreaturesBaseDifficulty,
+                              CampaignService)
+        if okC and cd ~= nil then creatureDifficulty = tostring(cd) end
+    end
+
+    Log("event=setup difficulty=%s creatures_difficulty=%s timer_cap=%d",
+        difficulty, creatureDifficulty, RBB.waveIntervalCapS)
+end
+
+local function OnPlayerInitialized()
+    -- Welt ist fertig aufgesetzt: DOM-Klasse jetzt sicher verfuegbar.
+    PatchDomTimer()
+    LogMapSetupInfo()
+end
+
+-- ---------------------------------------------------------------------------
 -- Command-Registrierungen: rb_wave (Bestand, Bridge-Pfad Issue #18) + Alias
 -- rb_send (klarer Send-Name fuer spaetere Shop-/Queue-Integration #25).
 -- ---------------------------------------------------------------------------
@@ -327,6 +425,7 @@ local function HandleWaveCommand(args, commandName)
     if args and #args >= 1 then
         level = tonumber(args[1]) or 1
     end
+    PatchDomTimer() -- weiterer Retry-Zeitpunkt (billig, idempotent)
     SpawnWave(level)
 end
 
@@ -342,6 +441,22 @@ pcall(function()
     end)
 end)
 
+-- PlayerInitializedEvent: Patch + Setup-Log, sobald die Welt steht
+-- (findings #14: RegisterGlobalEventHandler laeuft verifiziert in autoexec).
+local evtApiOk, evtApiErr = pcall(function()
+    RegisterGlobalEventHandler("PlayerInitializedEvent", OnPlayerInitialized)
+end)
+if not evtApiOk then
+    Log("event=map_ready status=skip reason=event_api_missing")
+end
+
+-- Erster Patch-Versuch direkt beim Laden (falls die DOM-Klasse schon existiert)
+-- und Setup-Log, falls kein Event-API verfuegbar ist.
+PatchDomTimer()
+if not evtApiOk then
+    LogMapSetupInfo()
+end
+
 -- Lebenszeichen-Log beim Laden (analog Baustein 01 / Spike).
-Log("event=mod_load version=%s status=ok anchor=border_spawner_groups",
-    RBB.version)
+Log("event=mod_load version=%s status=ok anchor=border_spawner_groups timer_cap=%d",
+    RBB.version, RBB.waveIntervalCapS)
