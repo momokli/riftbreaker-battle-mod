@@ -22,6 +22,9 @@
  *   - Line-delimited-JSON-Protokoll v0 (siehe trainer/protocol.md):
  *       Ingress: {"cmd":"ping"}                      -> {"event":"pong"}
  *                {"cmd":"exec","command":"rb_wave 3"}-> dispatch_exec()
+ *                (dispatch_exec ruft seit RE-Stand 2.0.58485 die echte
+ *                 ConsoleService::ExecuteCommand() im Spielprozess auf,
+ *                 siehe Abschnitt "ConsoleService-Anbindung" unten)
  *       Egress : {"event":"state","state":{...}}     (Heartbeat-Platzhalter,
  *                alle 5 s solange ein Client verbunden ist)
  *   - Robustheit: Fehler im Pipe-Dienst duerfen das Spiel NIEMALS
@@ -29,12 +32,10 @@
  *     disconnect = automatischer Reconnect ins naechste Connect.
  *   - Logging: OutputDebugString (DebugView) + %TEMP%\rbbridge.log.
  *
- * Was RE-abhaengig offen ist (TODO/FIXME im Code; Phase 2 des Projekts):
- *   - dispatch_exec(): "rb_wave N" tatsaechlich im Spiel ausfuehren
- *     (RE: Lua-State / ConsoleService-Instanz / ExecuteCommand-Binding im
- *     Spielprozess finden und aufrufen).
+ * Was RE-abhaengig noch offen ist (TODO/FIXME im Code; Phase 2 des Projekts):
  *   - send_state(): echte Spiel-State-Werte (Score, Ressourcen, Wave) aus
- *     dem Prozess lesen statt leerer Platzhalter.
+ *     dem Prozess lesen statt leerer Platzhalter (dispatch_exec selbst ist
+ *     seit dem RE-Stand unten implementiert).
  *
  * Wichtig:
  *   - Kein Datei-I/O ueber die Lua-API noetig - alles laeuft hier in der DLL.
@@ -61,6 +62,7 @@
 #include <windows.h>
 
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -219,7 +221,10 @@ static void json_escape(const char *in, char *out, size_t out_sz)
 /* ------------------------------------------------------------------ */
 
 /*
- * Sendet eine fertige Zeile (JSON + "\n") an den Client.
+ * Sendet eine fertige Zeile an den Client. Protokoll v0 ist strikt
+ * zeilenbasiert: JEDE outbound JSON-Nachricht wird mit '\n' terminiert
+ * (Fix fuer den Newline-Quirk - frueher fehlte der Terminator und Clients
+ * mussten roh/ohne Zeilenstruktur lesen).
  * Rueckgabe 0 = ok, -1 = Fehler (Client weg o.ae.).
  */
 static int send_line(HANDLE hPipe, const char *fmt, ...)
@@ -231,8 +236,10 @@ static int send_line(HANDLE hPipe, const char *fmt, ...)
     va_end(ap);
     if (n < 0)
         return -1;
-    if ((size_t)n >= sizeof(buf))
-        n = (int)sizeof(buf) - 1;
+    if ((size_t)n >= sizeof(buf) - 1) /* Platz fuer '\n' + NUL lassen */
+        n = (int)sizeof(buf) - 2;
+    buf[n++] = '\n';
+    buf[n] = '\0';
 
     DWORD written = 0;
     if (!WriteFile(hPipe, buf, (DWORD)n, &written, NULL) || written != (DWORD)n) {
@@ -258,39 +265,198 @@ static void send_state_placeholder(HANDLE hPipe)
 }
 
 /* ------------------------------------------------------------------ */
+/* ConsoleService-Anbindung (RE)                                       */
+/*                                                                    */
+/* Seit Build 2.0.58485 (GOG-Version == DedicatedServer-Build, DLL    */
+/* md5-identisch, verifiziert 2026-09-09) sind die folgenden Offsets   */
+/* gegen die Modul-Basis von riftbreaker_dll_win_release.dll           */
+/* (ImageBase 0x180000000) bekannt. RVA-Quelle: RE-Protokoll vom       */
+/* 2026-09-09 (trainer/scan + docs), Musterkatalog: patterns_v1.json   */
+/* auf lan (Research-Ablage, Scan-Skripte trainer/scan).               */
+/*                                                                    */
+/*   RVA 0x2F23C80 : ConsoleService-vftable ??_7ConsoleService@Exor@@6B@
+ *   RVA 0x1C0BEF0 : ConsoleService::ExecuteCommand(char const*)
+ *                   (x64: this=RCX, cmd=RDX, void-Rueckgabe)
+ *                                                                    */
+/* ------------------------------------------------------------------ */
+
+#define RBBRIDGE_MODULE_NAME        "riftbreaker_dll_win_release.dll"
+#define RBBRIDGE_RVA_CONSOLE_VFTABLE 0x2F23C80UL /* ??_7ConsoleService@Exor@@6B@ */
+#define RBBRIDGE_RVA_EXEC_COMMAND    0x1C0BEF0UL /* ExecuteCommand(char const*)   */
+
+/* x64-Aufrufkonvention: this=RCX, cmd=RDX - __fastcall ist auf x64 der
+ * Standard (das Schluesselwort dokumentiert die Konvention nur). */
+typedef void (__fastcall *console_exec_fn)(void *self, const char *command);
+
+/*
+ * Lesbare, committete Region ohne PAGE_GUARD? (Lesen dort ist sicher.)
+ */
+static int is_readable_region(const MEMORY_BASIC_INFORMATION *mi)
+{
+    if (mi->State != MEM_COMMIT || (mi->Protect & PAGE_GUARD))
+        return 0;
+    switch (mi->Protect & 0xFF) {
+    case PAGE_READONLY:
+    case PAGE_READWRITE:
+    case PAGE_WRITECOPY:
+    case PAGE_EXECUTE_READ:
+    case PAGE_EXECUTE_READWRITE:
+    case PAGE_EXECUTE_WRITECOPY:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/*
+ * Findet die ConsoleService-Instanz im laufenden Spielprozess.
+ *
+ * Vorgehen:
+ *   1. Modul-Basis per GetModuleHandle (kein LoadLibrary noetig - das
+ *      Spiel hat riftbreaker_dll_win_release.dll laengst geladen).
+ *   2. Erwartete vftable-Adresse = Basis + RVA 0x2F23C80.
+ *   3. Scan des eigenen Adressraums (VirtualQuery-Schleife ueber alle
+ *      MEM_COMMIT- und lesbaren Seiten): gesucht werden 8-Byte-Werte
+ *      (little-endian) == Basis + 0x2F23C80 - also Ablagen des vftable-
+ *      Zeigers. Nur 8-Byte-alignierte Kandidaten zaehlen: eine echte
+ *      vftable-Ablage (Objektanfang, x64) liegt immer aligniert, ein
+ *      Zufallstreffer auf exakt diesen Pointerwert waere praktisch
+ *      ausgeschlossen (Absicherung gegen Muell). Self-check: QWORD an
+ *      der Fundstelle muss == erwarteter vftable-Pointer sein (wird
+ *      durch den Vergleich erfuellt - das Objekt, Fundstelle als this
+ *      interpretiert, beginnt also mit seiner vftable).
+ *   4. Alle Treffer zaehlen, ersten plausiblen Kandidaten nehmen.
+ *
+ * Rueckgabe: Instanz-Pointer (this) oder NULL - der Aufrufer darf sich
+ * auf NULL NICHT verlassen, sondern muss sie als "nicht verfuegbar"
+ * behandeln (Fehler-Event statt Crash).
+ */
+static void *resolve_console_service(void)
+{
+    HMODULE hMod = GetModuleHandleA(RBBRIDGE_MODULE_NAME);
+    if (!hMod) {
+        dbg("resolve_console_service: Modul '%s' nicht geladen (GLE=%lu) - "
+            "kein Spielprozess?",
+            RBBRIDGE_MODULE_NAME, (unsigned long)GetLastError());
+        return NULL;
+    }
+
+    const unsigned char *base    = (const unsigned char *)hMod;
+    const unsigned char *vftable = base + RBBRIDGE_RVA_CONSOLE_VFTABLE;
+    const unsigned char *execfn  = base + RBBRIDGE_RVA_EXEC_COMMAND;
+    const uint64_t needle = (uint64_t)(uintptr_t)vftable;
+
+    /* vftable-Adresse muss in einer lesbaren Region liegen (sonst ist
+     * der Offset fuer diesen Build/diese Basis unplausibel). */
+    MEMORY_BASIC_INFORMATION mi;
+    if (!VirtualQuery(vftable, &mi, sizeof(mi)) ||
+        !is_readable_region(&mi)) {
+        dbg("resolve_console_service: vftable=%p nicht in lesbarer Region "
+            "(base=%p) - Abbruch", (void *)vftable, (void *)base);
+        return NULL;
+    }
+
+    int hits = 0;
+    void *instance = NULL;
+    uintptr_t addr = 0; /* VirtualQuery ab Adresse 0 */
+
+    for (;;) {
+        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
+            break; /* Ende des Adressraums */
+        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
+        if (next <= addr) /* Overflow-Schutz (kommt praktisch nie vor) */
+            break;
+        addr = next;
+
+        if (!is_readable_region(&mi))
+            continue;
+
+        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
+        size_t nq = mi.RegionSize / sizeof(uint64_t); /* BaseAddress ist
+                                                         seiten-, also auch
+                                                         8-Byte-aligniert */
+        for (size_t i = 0; i < nq; i++) {
+            /* Der Vergleich ist zugleich der Self-check: das QWORD an der
+             * Fundstelle MUSS dem erwarteten vftable-Pointer entsprechen
+             * (Fundstelle als this interpretiert => Objekt beginnt mit
+             * seiner vftable; nur echte Ablagen erreichen diesen Zweig). */
+            if (q[i] != needle)
+                continue;
+            hits++;
+            if (instance == NULL)
+                instance = (void *)&q[i]; /* erster plausibler Kandidat */
+        }
+    }
+
+    dbg("resolve_console_service: base=%p vftable=%p execfn=%p hits=%d "
+        "instance=%p",
+        (void *)base, (void *)vftable, (void *)execfn, hits, instance);
+    return instance;
+}
+
+/* ------------------------------------------------------------------ */
 /* Dispatch: Ingress-Kommandos                                         */
 /* ------------------------------------------------------------------ */
 
 /*
  * {"cmd":"exec","command":"rb_wave 3"}
  *
- * Ziel (Phase 2, RE): das Kommando im Spiel ausfuehren - aequivalent zu
- *   ConsoleService:ExecuteCommand("rb_wave 3")
+ * Fuehrt das Kommando im Spiel aus - aequivalent zu
+ *   ConsoleService::ExecuteCommand("rb_wave 3")
  * aus der Lua-Perspektive (der Lua-Mod registriert rb_wave, siehe
  * mod/lua/rbbattle_autoexec.lua im Spike-Branch).
  *
- * TODO(RE): Dafuer muss im Spielprozess gefunden werden:
- *   1. der Lua-State / die ConsoleService-Instanz bzw. die Engine-Funktion,
- *      die Konsolen-Kommandos ausfuehrt (Anhaltspunkt: docs/findings.md,
- *      Punkt 8 - ExecuteCommand existiert nachweislich),
- *   2. eine stabile Aufrufstelle - bevorzugt per AOB-Signatur statt fester
- *      Adresse (Spiel-Updates verschieben alles).
- * Danach hier den Aufruf verdrahten (z.B. Thread im Spielkontext oder
- * Remote-Call in die gefundene Funktion).
+ * RE-Stand (Build 2.0.58485, GOG == Dedi, verifiziert 2026-09-09):
+ *   - Instanz: per resolve_console_service() (Scan nach vftable-Zeiger,
+ *     siehe oben - keine feste Adresse, ASLR-fest).
+ *   - Aufruf: console_exec_fn(base + RVA 0x1C0BEF0)(inst, command),
+ *     direkt im Pipe-Thread. pcall-artige Absicherung gibt es unter
+ *     MinGW-x64 in C nicht (kein __try/__except; nur MSVC kann das) -
+ *     die Absicherung ist der Instanz-Check oben: ohne gefundene
+ *     Instanz wird NICHT aufgerufen, sondern ein Fehler-Event gesendet.
  *
- * Harness-Verhalten: Kommando loggen und mit exec_result antworten.
+ * Antwort bei Erfolg: {"event":"exec_result","ok":true,"command":"..."}
  */
 static void dispatch_exec(HANDLE hPipe, const char *command)
 {
-    dbg("dispatch_exec: command='%s' -> TODO(RE): im Spiel ausfuehren", command);
-
     char escaped[RESP_BUF_SIZE];
     json_escape(command, escaped, sizeof(escaped));
 
+    void *instance = resolve_console_service();
+    if (!instance) {
+        dbg("dispatch_exec: command='%s' -> keine ConsoleService-Instanz "
+            "gefunden, KEIN Aufruf", command);
+        send_line(hPipe,
+                  "{\"event\":\"exec_result\",\"ok\":false,"
+                  "\"command\":\"%s\",\"reason\":"
+                  "\"console_service_not_found\"}",
+                  escaped);
+        return;
+    }
+
+    HMODULE hMod = GetModuleHandleA(RBBRIDGE_MODULE_NAME);
+    if (!hMod) { /* kurz nach resolve() praktisch ausgeschlossen */
+        dbg("dispatch_exec: Modul '%s' verschwunden (GLE=%lu)",
+            RBBRIDGE_MODULE_NAME, (unsigned long)GetLastError());
+        send_line(hPipe,
+                  "{\"event\":\"exec_result\",\"ok\":false,"
+                  "\"command\":\"%s\",\"reason\":"
+                  "\"module_unloaded\"}",
+                  escaped);
+        return;
+    }
+    console_exec_fn fn =
+        (console_exec_fn)((const unsigned char *)hMod +
+                          RBBRIDGE_RVA_EXEC_COMMAND);
+
+    dbg("dispatch_exec: command='%s' -> ExecuteCommand(inst=%p, fn=%p)",
+        command, instance, (void *)fn);
+    fn(instance, command); /* x64: this=RCX, cmd=RDX */
+
+    dbg("dispatch_exec: command='%s' -> zurueckgekehrt (ok)", command);
     send_line(hPipe,
-              "{\"event\":\"exec_result\",\"command\":\"%s\",\"ok\":false,"
-              "\"reason\":\"not_implemented (RE: ConsoleService/Lua-State "
-              "finden)\"}",
+              "{\"event\":\"exec_result\",\"ok\":true,"
+              "\"command\":\"%s\"}",
               escaped);
 }
 
