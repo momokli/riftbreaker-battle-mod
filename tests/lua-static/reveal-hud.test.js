@@ -106,7 +106,7 @@ local function log_has(sub)
 end
 
 -- 1. Mod geladen, Reveal-/HUD-Commands registriert.
-check(log_has("event=mod_load version=0.27.3"), "mod_load version=0.27.3")
+check(log_has("event=mod_load version=0.28.0"), "mod_load version=0.28.0")
 check(_G.__commands["rb_reveal"] ~= nil, "rb_reveal registriert")
 check(_G.__commands["rb_round_start"] ~= nil, "rb_round_start registriert")
 check(_G.__commands["rb_hud"] ~= nil, "rb_hud registriert")
