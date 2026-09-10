@@ -18,6 +18,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      # Warmer npm-Store (Issue #153): npm ci zieht fengari/luaparse aus dem
+      # Cache statt aus dem Netz. Key basiert auf beiden package-lock.json.
+      - name: npm-Dependency-Cache (actions/cache)
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-store-${{ runner.os }}-${{ hashFiles('tests/lua-static/package-lock.json', 'tests/e2e-vollkette/package-lock.json') }}
+          restore-keys: |
+            npm-store-${{ runner.os }}-
       - name: E2E Baustein 06 (tournament-server)
         working-directory: bausteine/06-tournament-server
         run: bash test_e2e.sh
@@ -46,10 +55,28 @@ jobs:
     runs-on: [self-hosted, planet]
     steps:
       - uses: actions/checkout@v4
-      - name: MinGW-W64 installieren (Windows-x64 Cross-Compiler)
-        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+      # MinGW-w64 ist jetzt vorab auf dem Runner-Host installiert
+      # (.github/runner/setup.sh, Issue #153) — kein per-Job-sudo-apt-get mehr.
+      # Der Cross-Compiler muss auf dem Host vorhanden sein; sonst fällt
+      # package_bausteine.sh auf das Quell-Zip für Baustein 04 zurück.
+      - name: ccache-Cache (MinGW-C++-Build rbbridge)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-rbbridge-${{ runner.os }}-${{ hashFiles('bausteine/04-trainer-io/**/*.c') }}
+          restore-keys: |
+            ccache-rbbridge-${{ runner.os }}-
       - name: Baustein-04-Binaries kompilieren + alle Zips bauen
-        run: bash scripts/package_bausteine.sh
+        run: |
+          # ccache-Wrapper aus setup.sh aktivieren, falls vorhanden; sonst
+          # direkter MinGW-Build (graceful degradation, kein Hard-Fail).
+          if [ -d /opt/ccache-rbbattle/bin ]; then
+            export PATH="/opt/ccache-rbbattle/bin:$PATH"
+            echo "ccache-Wrapper aktiv: $(command -v x86_64-w64-mingw32-gcc)"
+          else
+            echo "Hinweis: /opt/ccache-rbbattle/bin fehlt — .github/runner/setup.sh noch nicht ausgeführt; Build ohne ccache."
+          fi
+          bash scripts/package_bausteine.sh
       - name: Artefakte hochladen (dist/*.zip)
         uses: actions/upload-artifact@v4
         with:
@@ -68,6 +95,9 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+      # Der release-Job läuft bewusst auf GitHub-Hosted ubuntu-latest (ephemer,
+      # nicht planet) und braucht MinGW daher weiterhin per apt — das pre-baked
+      # planet-Setup greift hier nicht.
       - name: MinGW-W64 installieren (Windows-x64 Cross-Compiler)
         run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
       - name: Zips bauen (wie Job build)

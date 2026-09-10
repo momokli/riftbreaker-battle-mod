@@ -134,18 +134,22 @@ einem Self-Hosted-Runner auf **planet** (Label `planet`) statt auf
 GitHub-Hosted `ubuntu-latest` — für alle Pull Requests und Push auf `main`.
 Der `release`-Job (Release-Tags `v*`) bleibt bewusst auf `ubuntu-latest`.
 
-**Voraussetzung (Host-seitig, nicht Teil dieses Repos):** Der Runner muss auf
-planet registriert sein, bevor die Checks `test`/`build` grün werden können:
+**Voraussetzung (Host-seitig):** Der Runner muss auf planet registriert sein,
+bevor die Checks `test`/`build` grün werden können. Die Toolchain ist als Code
+versioniert und wird idempotent per Skript aufgezogen (Issue #153):
 
 1. GitHub-Actions-Runner auf planet installieren (bisher `/opt/actions-runner`,
    bislang nur für `momokli/openclaw-deploy` genutzt) und für dieses Repo
    (`momokli/riftbreaker-battle-mod`) mit dem Label `planet` registrieren —
    `runs-on: [self-hosted, planet]` erfordert genau dieses Label.
-2. Toolchain auf dem Runner-Host verifizieren: Node.js 20, npm, Python 3 und
-   MinGW-w64 (`gcc-mingw-w64-x86-64`) für den Windows-x64-Cross-Compile im
-   `build`-Job.
-3. Disk-Platz und Concurrency prüfen — `test` und `build` laufen über
-   `needs: test` nacheinander, aber mehrere PRs können parallel anstehen.
+2. Toolchain **als Code** aufziehen: `bash .github/runner/setup.sh` installiert
+   MinGW-w64 (`gcc-mingw-w64-x86-64`), ccache und zip und registriert ccache als
+   Compiler-Wrapper. Node.js 20 wird in CI über `actions/setup-node` geliefert;
+   das Skript verifiziert node/npm/python nur. Details: `.github/runner/README.md`.
+3. Caches sind in `ci.yml` eingebaut (`actions/cache` für npm-Store und ccache);
+   Disk-Platz und Concurrency bleiben Host-Sache — `test` und `build` laufen über
+   `needs: test` nacheinander, aber mehrere PRs können parallel anstehen (Scale
+   auf ≥2 Runner ist noch offen, siehe `.github/runner/README.md`).
 
 Solange der Runner nicht registriert ist, bleiben die Checks `test`/`build` im
 `pending`/`waiting`-Zustand; die übrigen Gates (`lint.yml`, `pr-quality.yml`)
