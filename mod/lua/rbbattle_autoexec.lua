@@ -1,5 +1,5 @@
 -- ============================================================================
--- rbbattle_autoexec.lua  (Einzel-Mod rbbattle, v0.4.0)
+-- rbbattle_autoexec.lua  (Einzel-Mod rbbattle, v0.5.0)
 --
 -- RIFT BATTLE Mod-Core (Foundation):
 --   #26 Send-Spawn an den 16 natuerlichen Kartenrand-Spawnern
@@ -13,10 +13,19 @@
 --   #24 Economy (Duell-Oekonomie): Alle gefarmten Ressourcen (Carbonium &
 --       Co.) werden als Value getrackt (Ressourcen-Events, Getter-Ladder);
 --       bewusste, IRREVERSIBLE Konvertierung in Send-Waehrung per
---       `rb_convert <resource> <amount>`; Spar-Pool persistiert ueber Runden
+--       `rb_convert <menge>` (Calcium, #40) bzw. `rb_convert <resource>
+--       <amount>`; Spar-Pool persistiert ueber Runden
 --       (Global-Database). Built-Value (= nicht konvertierter Farmwert) wird
 --       getrennt gefuehrt (Reveal-Basis fuer #27). Fallback: HourEvent-Tick,
 --       falls die Ressourcen-Event-API fehlt (docs/research/api-deep-dive.md §1).
+--   #42 MVP Single-Player Self-Send (Sich-selber-senden, Testing Mode):
+--       Mod-Mode `rb_mode sp|duel` (Default sp). `rb_convert` nutzt Calcium
+--       (= Carbonium, #40) als Send-Waehrung. Self-Boost am Wellenstart
+--       (Function-Wrap dom_mananger:OnEnterSpawn, Hook-Muster #36): der Pool
+--       wird als Zusatz-Spawns an den eigenen Rand-Spawnern (#26) ausgegeben;
+--       der %-Staerke-Boost der naechsten Welle (#39) bleibt offen, weil die
+--       dom_manager-Wave-Strength-API unverifiziert ist (docs/SEND_HOOK.md).
+--       Status via `rb_status` (Runde, Pool, naechster Boost).
 --
 -- Basis: rbbattle v0.2.0-single (feature/single-mod, PR #15) + Baustein 00/01.
 -- Kein io/socket/http, keine Bindings, kein UI-Zusatz. Alle API-Aufrufe sind
@@ -39,7 +48,7 @@
 --     -> Persistenz (HasInt/GetIntOrDefault/SetInt/RemoveKey)  (Issue #24)
 --
 -- Log-Zeilen (externes Parsing, Praefix [RBBATTLE]):
---   event=mod_load version=0.4.0 status=ok econ_source=.. econ_pool=.. ...
+--   event=mod_load version=0.5.0 status=ok mode=sp econ_source=.. econ_pool=.. ...
 --   event=wave level=N status=start|done spawned=.. skipped=.. anchor=border|fallback_mech
 --   event=spawn ok|failed|skip ... anchor=<gruppe>/<id>            (je Kreatur)
 --   event=wave_spawners count=N                                    (Pool-Groesse)
@@ -50,10 +59,15 @@
 --   event=economy_farm source=.. resource=.. amount=.. value=.. farmed=.. (#24)
 --   event=convert resource=.. amount=.. value=.. pool=.. irreversible=1   (#24)
 --   event=economy_show / economy_reset                                    (#24)
+--   event=mode mode=sp|duel status=ok|usage|stub                          (#42)
+--   event=wave_hook patch status=ok|skip|no_class reason=no_api           (#42)
+--   event=round round=N status=start mode=.. pool=..                      (#42)
+--   event=self_boost round=N pool_before=.. spent=.. spawned=.. pool_after=.. (#42)
+--   event=status mode=.. round=.. pool=.. boost=..                         (#42)
 -- ============================================================================
 
 local RBB = {}
-RBB.version = "0.4.0"
+RBB.version = "0.5.0"
 
 -- Log-/Konsole-Helfer (Muster Spike): Praefix [RBBATTLE] fuer externes Parsen.
 local LOG_TAG = "[RBBATTLE]"
@@ -125,6 +139,32 @@ RBB.spawnJitterMax = 3.0
 -- Vanilla-Wert in normal/hard-Survival-Rules: 420 (Beleg:
 -- lua/missions/survival/v2/dom_survival_*_rules_{normal,hard}.lua).
 RBB.waveIntervalCapS = 300
+
+-- #42: Mod-Mode (MVP). sp = Single-Player Self-Send (Sich-selber-senden),
+-- duel = 1v1-Duell (folgt spaeter, hier nur Stub). Default sp.
+RBB.mode = "sp"
+RBB.round = 0   -- Runden-Zaehler (+1 bei jedem natuerlichen Wellenstart)
+
+-- #42 Self-Boost: der Spar-Pool (Send-Waehrung) wird am Wellenstart als
+-- Zusatz-Spawns an den eigenen Rand-Spawnern ausgegeben (#26-Pfad). Wert je
+-- Kreatur = Balance-Platzhalter (Tuning #33). Der %-Staerke-Boost der
+-- naechsten Welle (#39) bleibt offen, weil die dom_manager-Wave-Strength-API
+-- unverifiziert ist (docs/SEND_HOOK.md) — #26 ist der dokumentierte Fallback.
+RBB.boostCfg = {
+    units = { -- teuerste zuerst gespawnt (greedy)
+        { blueprint = "units/ground/brabit",    value = 100 },
+        { blueprint = "units/ground/baxmoth",   value = 150 },
+        { blueprint = "units/ground/artigian",  value = 200 },
+        { blueprint = "units/ground/canceroth", value = 300 },
+    },
+    maxBoostCreatures = 20, -- Schutz vor Endlos-Spam je Welle
+}
+
+-- Vorwaertsdeklaration fuer den Wellenstart-Hook (#42): Definition folgt nach
+-- dem Economy-Block (braucht EconomySave); aufgerufen wird er bereits in
+-- OnPlayerInitialized / HandleWaveCommand / Mod-Load (Retry-Zeitpunkte,
+-- Muster PatchDomTimer).
+local PatchWaveStartHook
 
 -- ---------------------------------------------------------------------------
 -- Kleine Helfer
@@ -429,6 +469,7 @@ end
 local function OnPlayerInitialized()
     -- Welt ist fertig aufgesetzt: DOM-Klasse jetzt sicher verfuegbar.
     PatchDomTimer()
+    PatchWaveStartHook()
     LogMapSetupInfo()
 end
 
@@ -442,6 +483,7 @@ local function HandleWaveCommand(args, commandName)
         level = tonumber(args[1]) or 1
     end
     PatchDomTimer() -- weiterer Retry-Zeitpunkt (billig, idempotent)
+    PatchWaveStartHook() -- weiterer Retry-Zeitpunkt (#42)
     SpawnWave(level)
 end
 
@@ -762,13 +804,22 @@ end
 -- Ressource in Send-Waehrung (Spar-Pool). Es gibt bewusst KEINEN
 -- Ruecktausch-Pfad (Pool -> Ressource) im Mod.
 -- ---------------------------------------------------------------------------
+
+-- #40/#42: "Calcium" ist die MVP-Send-Waehrung; im Spiel heisst die Basis-
+-- Ressource "carbonium" (api-deep-dive.md §1). Alias aufloesen.
+local function CanonicalResource(name)
+    local n = tostring(name or ""):lower()
+    if n == "calcium" then return "carbonium" end
+    return n
+end
+
 local function ConvertToSendPool(rawResource, rawAmount)
     local e = RBB.economy
-    local name = tostring(rawResource or ""):lower()
+    local name = CanonicalResource(rawResource)
     local amount = math.floor(tonumber(rawAmount) or 0)
 
     if name == "" or amount <= 0 then
-        WriteConsole("rb_convert: Aufruf: rb_convert <resource> <amount> (z.B. rb_convert carbonium 100)")
+        WriteConsole("rb_convert: Aufruf: rb_convert <menge> (Calcium) oder rb_convert <resource> <menge> (z.B. rb_convert carbonium 100)")
         Log("event=convert status=usage")
         return
     end
@@ -868,6 +919,12 @@ local function CmdEconomy(args)
 end
 
 local function CmdConvert(args)
+    -- #40/#42 MVP: `rb_convert <menge>` konvertiert Calcium (ein Argument);
+    -- `rb_convert <resource> <menge>` bleibt abwaertskompatibel.
+    if args ~= nil and #args == 1 then
+        ConvertToSendPool("calcium", args[1])
+        return
+    end
     local res, amount = nil, nil
     if args ~= nil and #args >= 1 then res = tostring(args[1]) end
     if args ~= nil and #args >= 2 then amount = tostring(args[2]) end
@@ -880,6 +937,206 @@ pcall(function()
     end)
     ConsoleService:RegisterCommand("rb_economy", function(args)
         CmdEconomy(args)
+    end)
+end)
+
+-- ============================================================================
+-- #42 MVP Single-Player Self-Send: Mod-Mode + Self-Boost + Status
+--
+-- Mod-Mode (`rb_mode sp|duel`, Default sp): im sp-Mode boostet der Spar-Pool
+-- die EIGENE naechste Naturwelle (Sich-selber-senden). Im duel-Mode (Stub)
+-- passiert noch nichts — das 1v1-Routing folgt spaeter (#25/#27).
+--
+-- Self-Boost (Wellenstart-Hook, Muster #36): der Function-Wrap an
+-- dom_mananger:OnEnterSpawn laeuft im selben Call wie die Naturwelle. Der Pool
+-- wird greedy (teuerste zuerst) in Zusatz-Spawns an den eigenen Rand-Spawnern
+-- (#26) umgesetzt und verbraucht; Rest-Pool bleibt fuer die naechste Welle.
+-- Der %-Staerke-Boost (#39) ist offen (unverifizierte Wave-Strength-API,
+-- docs/SEND_HOOK.md) — #26 ist der dokumentierte Fallback.
+-- ============================================================================
+
+-- Berechnet (deterministisch) die Boost-Kreaturen aus einem Pool-Wert:
+-- greedy vom teuersten zum billigsten Blueprint. Liefert spent (verbrauchter
+-- Pool), spawned (Anzahl Kreaturen), counts (blueprint -> Anzahl) und order
+-- (Reihenfolge der Blueprints). Pure Logik — ohne Game-API, unit-testbar.
+local function ComputeBoost(pool)
+    local budget = math.floor(tonumber(pool) or 0)
+    if budget <= 0 then return 0, 0, {}, {} end
+
+    -- Teuerste zuerst (Kopie, deterministische Sortierung).
+    local units = {}
+    for _, u in ipairs(RBB.boostCfg.units) do
+        units[#units + 1] = { blueprint = u.blueprint, value = u.value }
+    end
+    table.sort(units, function(a, b) return a.value > b.value end)
+
+    local spent = 0
+    local spawned = 0
+    local counts = {}
+    local order = {}
+    while spawned < RBB.boostCfg.maxBoostCreatures do
+        local chosen = nil
+        for _, u in ipairs(units) do
+            if u.value <= (budget - spent) then chosen = u break end
+        end
+        if chosen == nil then break end
+        spent = spent + chosen.value
+        spawned = spawned + 1
+        if counts[chosen.blueprint] == nil then order[#order + 1] = chosen.blueprint end
+        counts[chosen.blueprint] = (counts[chosen.blueprint] or 0) + 1
+    end
+    return spent, spawned, counts, order
+end
+
+-- Wendet den Self-Boost an: Pool -> Zusatz-Spawns an eigenen Rand-Spawnern.
+-- Verbraucht nur, was tatsaechlich gespawnt werden konnte; Rest bleibt im Pool.
+local function ApplySelfBoost()
+    if RBB.mode ~= "sp" then return end
+    local e = RBB.economy
+    if e.pool <= 0 then return end
+
+    local poolBefore = e.pool
+    local spent, spawned, counts, order = ComputeBoost(poolBefore)
+    if spawned == 0 then
+        Log("event=self_boost status=skip reason=pool_too_small pool=%d", poolBefore)
+        return
+    end
+
+    local spawners = GetBorderSpawners()
+    local anchorMode = "border"
+    local mech, playerPos = nil, nil
+    if #spawners == 0 then
+        anchorMode = "fallback_mech"
+        local okM, m = pcall(function() return PlayerService:GetPlayerControlledEnt(0) end)
+        if not okM or m == nil or m == INVALID_ID then
+            Log("event=self_boost status=skip reason=no_anchor pool=%d", poolBefore)
+            return
+        end
+        local okP, p = pcall(function() return EntityService:GetPosition(m) end)
+        if not okP or p == nil then
+            Log("event=self_boost status=skip reason=no_anchor pool=%d", poolBefore)
+            return
+        end
+        mech, playerPos = m, p
+    end
+
+    local totalSpawned = 0
+    for _, bp in ipairs(order) do
+        local count = counts[bp] or 0
+        for _ = 1, count do
+            if BlueprintExists(bp) then
+                local okSpawn = false
+                if anchorMode == "border" then
+                    okSpawn = SpawnCreatureAtBorderSpawner(bp, spawners)
+                else
+                    okSpawn = SpawnCreatureAtRandomOffset(mech, bp, playerPos)
+                end
+                if okSpawn then totalSpawned = totalSpawned + 1 end
+            end
+        end
+    end
+
+    -- Nur den tatsaechlich verbrauchten Pool abbuchen (spent ist deterministisch).
+    e.pool = poolBefore - spent
+    EconomySave()
+    Log("event=self_boost round=%d pool_before=%d spent=%d spawned=%d pool_after=%d anchor=%s",
+        RBB.round, poolBefore, spent, totalSpawned, e.pool, anchorMode)
+    WriteConsole("rb_boost: Welle %d — Pool %d -> +%d Boost-Kreaturen (Rest-Pool %d)",
+        RBB.round, poolBefore, totalSpawned, e.pool)
+end
+
+-- Kurztext fuer rb_status: was boostet die naechste Welle?
+local function BoostSummary()
+    if RBB.mode ~= "sp" then return "duel (kein self-boost)" end
+    local e = RBB.economy
+    if e.pool <= 0 then return "keiner (pool leer)" end
+    local _, spawned = ComputeBoost(e.pool)
+    return string.format("naechste welle: +%d spawns (pool %d)", spawned, e.pool)
+end
+
+-- Wird aus dem OnEnterSpawn-Wrap aufgerufen: Runde zaehlen + Self-Boost.
+local function OnNaturalWaveStart()
+    RBB.round = RBB.round + 1
+    Log("event=round round=%d status=start mode=%s pool=%d",
+        RBB.round, RBB.mode, RBB.economy.pool)
+    if RBB.mode == "sp" then
+        ApplySelfBoost()
+    end
+end
+
+-- Wellenstart-Hook (#36-Muster): wrap dom_mananger:OnEnterSpawn (Klasse,
+-- nicht Instanz). Idempotent, lazy (Mod-Load/PlayerInitializedEvent/jeder
+-- Send). Naturwelle bleibt unangetastet (Original zuerst).
+RBB.waveStartPatched = false
+RBB.waveStartOrig = nil
+
+PatchWaveStartHook = function()
+    if RBB.waveStartPatched then
+        return RBB.waveStartOrig ~= nil
+    end
+
+    local dom = nil
+    if type(_G) == "table" then
+        dom = rawget(_G, "dom_mananger")
+    end
+    if type(dom) ~= "table" then
+        return false -- Klasse (noch) nicht geladen; naechster Versuch spaeter
+    end
+
+    local orig = dom.OnEnterSpawn
+    if type(orig) ~= "function" then
+        Log("event=wave_hook patch status=skip reason=no_api")
+        RBB.waveStartPatched = true
+        return false
+    end
+
+    if RBB.waveStartOrig == nil then
+        RBB.waveStartOrig = orig
+        dom.OnEnterSpawn = function(self, state)
+            pcall(RBB.waveStartOrig, self, state) -- Naturwelle UNANGETASTET
+            OnNaturalWaveStart()
+        end
+        Log("event=wave_hook patch status=ok")
+    end
+
+    RBB.waveStartPatched = true
+    return true
+end
+
+-- ---------------------------------------------------------------------------
+-- Commands: rb_mode (sp|duel) + rb_status (Runde, Pool, naechster Boost).
+-- ---------------------------------------------------------------------------
+local function CmdMode(args)
+    local m = nil
+    if args ~= nil and #args >= 1 then m = tostring(args[1]):lower() end
+    if m == "sp" then
+        RBB.mode = "sp"
+        Log("event=mode mode=sp status=ok")
+        WriteConsole("rb_mode: sp (Single-Player Self-Send)")
+    elseif m == "duel" then
+        RBB.mode = "duel"
+        Log("event=mode mode=duel status=stub")
+        WriteConsole("rb_mode: duel (1v1) — noch nicht implementiert (MVP = sp). Weiter als sp testen.")
+    else
+        Log("event=mode status=usage mode=%s", RBB.mode)
+        WriteConsole("rb_mode: Aufruf rb_mode sp|duel (aktuell: %s)", RBB.mode)
+    end
+end
+
+local function CmdStatus(args)
+    local boost = BoostSummary()
+    WriteConsole("rb_status: mode=%s runde=%d pool=%d boost=%s",
+        RBB.mode, RBB.round, RBB.economy.pool, boost)
+    Log("event=status mode=%s round=%d pool=%d boost=%s",
+        RBB.mode, RBB.round, RBB.economy.pool, boost)
+end
+
+pcall(function()
+    ConsoleService:RegisterCommand("rb_mode", function(args)
+        CmdMode(args)
+    end)
+    ConsoleService:RegisterCommand("rb_status", function(args)
+        CmdStatus(args)
     end)
 end)
 
@@ -899,6 +1156,10 @@ end)
 EconomyLoad()
 EconomyLoadResources()
 
+-- Wellenstart-Hook (#42) beim Laden versuchen (nachdem alle Definitionen
+-- stehen; weitere Retry-Zeitpunkte: OnPlayerInitialized / jeder Send).
+PatchWaveStartHook()
+
 -- Lebenszeichen-Log beim Laden (analog Baustein 01 / Spike).
-Log("event=mod_load version=%s status=ok anchor=border_spawner_groups timer_cap=%d econ_source=%s econ_pool=%d",
-    RBB.version, RBB.waveIntervalCapS, RBB.economy.source, RBB.economy.pool)
+Log("event=mod_load version=%s status=ok mode=%s anchor=border_spawner_groups timer_cap=%d econ_source=%s econ_pool=%d",
+    RBB.version, RBB.mode, RBB.waveIntervalCapS, RBB.economy.source, RBB.economy.pool)

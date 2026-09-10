@@ -1,8 +1,25 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.4.0 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.5.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
+
+**v0.5.0 — MVP Single-Player Self-Send (Sich-selber-senden, Issue #42):**
+- **Mod-Mode `rb_mode sp|duel`** (Default `sp`): im `sp`-Mode boostet der
+  Send-Pool die **eigene nächste Naturwelle** — der Testmodus zum
+  Alleine-Ausprobieren. `duel` ist ein Stub (1v1-Routing folgt, #25/#27).
+- **`rb_convert` Calcium-first (#40):** `rb_convert <menge>` konvertiert
+  **Calcium** (= Spiel-Ressource `carbonium`, Faktor 1) irreversibel in den
+  Send-Pool; `rb_convert <resource> <menge>` bleibt abwärtskompatibel
+  (Alias `calcium` ≡ `carbonium`). Pool persistiert (#24).
+- **Self-Boost am Wellenstart (Hook aus #36):** Function-Wrap an
+  `dom_mananger:OnEnterSpawn` — beim Start der natürlichen Welle wird der Pool
+  **greedy (teuerste Kreatur zuerst)** in Zusatz-Spawns an den eigenen
+  Rand-Spawnern (#26) umgesetzt und verbraucht. Der %-Stärke-Boost der
+  nächsten Welle (#39) bleibt offen, weil die dom_manager-Wave-Strength-API
+  unverifiziert ist (`docs/SEND_HOOK.md`) — #26 ist der dokumentierte Fallback.
+- **`rb_status`**: zeigt Runde, Pool und den nächsten Boost (Konsolen-Fallback
+  für das spätere HUD, #27).
 
 **v0.4.0 — Economy (Duell-Ökonomie, Issue #24):**
 - **Issue #24:** Alle **gefarmten Ressourcen** (Carbonium, Cobalt, …) werden als
@@ -35,7 +52,8 @@ v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 
 Inhalt des Mod-Ordners: Skeleton-Lebenszeichen-Log beim Laden +
 Console-Commands `rb_wave <level>` / `rb_send <level>` (Send-Wellen-Spawning an
-Kartenrand-Spawnern) + DOM-Timer-Deckel + Economy (`rb_convert`, `rb_economy`).
+Kartenrand-Spawnern) + DOM-Timer-Deckel + Economy (`rb_convert`, `rb_economy`) +
+Self-Send-MVP (`rb_mode`, `rb_status`, Self-Boost-Hook).
 Kein UI, keine Bindings, kein Bridge-Zusatz, **kein io/socket/http**.
 
 **Mod-Descriptor** (`<GUID>.manifest` im Mod-Root): deklariert Metadaten + die
@@ -95,20 +113,25 @@ und Workshop-Mods tun (Quelle: fandom „Basic Modding Guide“, Ordner
 | `rb_wave 1` … `rb_wave 3` (Konsole/Bridge) | Spawnt Send-Welle an **zufälligen natürlichen Kartenrand-Spawnern** (5 Brabits / +3 Baxmoth / +2 Artigian +1 Canceroth, je Kreatur zufälliger Spawner aus den 4 Gruppen `spawn_enemy_border_*`); ungültige Stufe (`rb_wave 99`) fällt mit Warnung auf Welle 1 zurück. Kein Spieler-Mech nötig (Server-only). Ohne Rand-Spawner: Fallback-Ring um den Mech |
 | `rb_send <level>` | Alias für `rb_wave` (Send-Semantik für Shop-/Queue-Integration #25) |
 | `rb_wave`-Log-Anker | `anchor=border spawners=N` (bzw. `anchor=fallback_mech`), je Kreatur `anchor=<gruppe>/<id>` im `event=spawn ok`-Log |
-| `rb_convert <resource> <amount>` | Wandelt gefarmte Ressource **irreversibel** in Send-Währung (Spar-Pool): `rb_convert carbonium 100` → 100 Value → Pool (Faktor-Tabelle `resourceFactors`, z.B. palladium 2×, uranium_ore 3×; unbekannte Ressourcen 1×). Ablehnung bei zu wenig Farm-Menge (`status=insufficient`); kein Rücktausch. Balance = Platzhalter (Tuning #33) |
+| `rb_convert <resource> <amount>` | Wandelt gefarmte Ressource **irreversibel** in Send-Währung (Spar-Pool). **MVP:** `rb_convert <menge>` konvertiert **Calcium** (`carbonium`, Faktor 1); `rb_convert calcium 100` ≡ `rb_convert carbonium 100` ≡ `rb_convert 100`. Weitere Ressourcen (Faktor-Tabelle `resourceFactors`, z.B. palladium 2×, uranium_ore 3×) via 2-Arg-Form. Ablehnung bei zu wenig Farm-Menge (`status=insufficient`); kein Rücktausch. Balance = Platzhalter (Tuning #33) |
 | `rb_economy` / `rb_economy reset` | Status: Quelle, Pool, farmed/converted/built, Ressourcen-Konten, DB-Status. `reset` = Entwickler-Werkzeug (alles auf 0, inkl. Ressourcen-Keys der DB) |
+| `rb_mode sp\|duel` | Modus-Umschaltung: `sp` = Solo-Test (Default, self-send), `duel` = 1v1 (Stub, folgt später) |
+| `rb_status` | Zeigt `mode`, `runde`, `pool` und den `boost` (nächste Welle) — die Kontrollanzeige des Testmodus |
 
 Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.4.0 status=ok anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
+[RBBATTLE] event=mod_load version=0.5.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100
 [RBBATTLE] event=convert resource=carbonium amount=100 value=100 pool=100 status=ok irreversible=1
+[RBBATTLE] event=wave_hook patch status=ok                       ← Self-Boost-Hook aktiv (#42)
 [RBBATTLE] event=dom_timer patch status=ok cap=300        ← nach PlayerInitializedEvent
 [RBBATTLE] event=setup difficulty=hard creatures_difficulty=5 timer_cap=300
+[RBBATTLE] event=round round=1 status=start mode=sp pool=100   ← natürlicher Wellenstart
+[RBBATTLE] event=self_boost round=1 pool_before=100 spent=100 spawned=1 pool_after=0   ← Self-Boost
 [RBBATTLE] event=wave level=3 status=start
 [RBBATTLE] event=wave_spawners count=16 groups=4          ← Pool der Rand-Spawner
 [RBBATTLE] event=spawn ok blueprint=units/ground/baxmoth entity=12345 anchor=spawn_enemy_border_west/...
@@ -145,8 +168,11 @@ erwartet, s. #7); (4) macOS-Mod-Support ungeklärt.
   Timer-Wrap 420→300 / Werte <300 bleiben; Fallback Mech-Ring; kein Anker).
   v0.4.0: 3 Szenarien / 30 Checks (Farm-Event-Ladder + Source-Lock;
   Convert irreversibel + Faktoren + Guards; Persistenz-Resume nach Neustart;
-  Reset; Fallback tick nach 3 Handler-Fehlern). In-Game-Test steht aus
-  (Operator, Prod).
+  Reset; Fallback tick nach 3 Handler-Fehlern). v0.5.0: 2 Szenarien / 22
+  Checks (rb_mode Default/Wechsel/usage; rb_convert Calcium-first + Alias +
+  Guards; rb_status Runde/Pool/Boost; Self-Boost-Hook: Original-OnEnterSpawn
+  zuerst, Runden-Zähler, Pool greedy → Spawn, Rest-Pool). In-Game-Test steht
+  aus (Operator, Prod).
 - **Economy-Fallback dokumentiert:** Der Mod hat keinen verifizierten Zugriff
   aufs Spieler-Ressourcen-Konto (api-deep-dive.md §1); Value kommt aus
   Ernte-Events (Getter-Ladder). Sind die Events nicht lesbar, schaltet die
