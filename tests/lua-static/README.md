@@ -24,11 +24,14 @@ npm test        # = node --test
 
 1. Mod lädt, Version 0.26.0, HQ initialisiert (`hq_hp=100 hq_dead=false`).
 2. Leak-Flow: `EnteredTriggerEvent` → `event=leak` → `event=hq_hp`.
-3. HQ-Tod durch Leaks (HP ≤ 0) → `event=hq_dead` + `event=match_end` (genau einmal).
-4. Idempotenz: weiterer Leak nach Tod ändert nichts.
-5. HQ-Tod-Kette: `RespawnFailedEvent` der getrackten HQ-Entity → `match_end`.
-6. `RespawnFailedEvent` eines anderen Gebäudes → **kein** Match-Ende.
-7. `RespawnFailedEvent` ohne zugeordnete Entity → nur Hinweis (`event=hq_respawn`).
+3. Zone-/Team-Filter (#152): Leak nur für feindliche Kreaturen — Trigger ohne
+   Entity (`no_trigger_entity`), eigene HQ-Entity (`own_hq`), eigener Mech
+   oder eigene Team-Id 1 (`own_team`) werden übersprungen.
+4. HQ-Tod durch Leaks (HP ≤ 0) → `event=hq_dead` + `event=match_end` (genau einmal).
+5. Idempotenz: weiterer Leak nach Tod ändert nichts.
+6. HQ-Tod-Kette: `RespawnFailedEvent` der getrackten HQ-Entity → `match_end`.
+7. `RespawnFailedEvent` eines anderen Gebäudes → **kein** Match-Ende.
+8. `RespawnFailedEvent` ohne zugeordnete Entity → nur Hinweis (`event=hq_respawn`).
 
 `send-queue.test.js` deckt Issue #25 (Send-Queue & Shop-HUD) ab:
 

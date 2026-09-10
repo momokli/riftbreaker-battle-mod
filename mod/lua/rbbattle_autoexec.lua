@@ -1950,6 +1950,9 @@ PatchSpawnWavesHook()
 --   * Trigger-Zone selbst (Asset/Engine-API ums HQ): OFFEN — im Repo nicht
 --     belegt; die Zone wird als Spiel-Asset/Blueprint ums HQ autorisiert
 --     (oder per unverifizierter Engine-API), der Mod ist die Empfaengerseite.
+--   * Zone-/Team-Filter (#152): der Leak greift nur fuer eine lesbare,
+--     feindliche Kreatur (evt:GetEntity()), nicht fuer eigenen Mech/HQ/
+--     Team-1-Entities (siehe OnEnteredTrigger) -- kein False-Positive-Sieg.
 --   * RespawnFailedEvent: verifiziert existent (dom_manager.lua lauscht
 --     selbst darauf, s. docs/SEND_HOOK.md); Handler-Feuerung/Getter fuer den
 --     Mod sind "wahrscheinlich" (wie EntityKilledEvent, api-deep-dive.md §2).
@@ -2078,19 +2081,56 @@ local function HqEventEntity(evt)
     return nil
 end
 
+-- #152: Zone-/Team-Filter fuer den Leak. EnteredTriggerEvent feuert bei JEDEM
+-- Map-Trigger, nicht nur bei der HQ-Zone (Issue #143: sofortige Niederlage
+-- durch fremde Trigger; der #143-Gate allein -- gebundene HQ-Entity -- reicht
+-- nicht, sobald die Entity auto-erkannt ist). Ein Leak zaehlt deshalb nur,
+-- wenn die eintretende Entity (evt:GetEntity()) lesbar ist UND nicht zum
+-- eigenen Team gehoert: eigener Mech (GetPlayerControlledEnt), die eigene
+-- HQ-Entity oder Team-Id 1 (Player; Team-Semantik mod/README.md #7) werden
+-- uebersprungen. Unlesbar/unbestimmbar -> uebersprungen (defensiv, kein
+-- False-Positive-Sieg). Die eigentliche Trigger-Zonen-Identitaet (welcher
+-- Trigger die HQ-Zone ist) bleibt OFFEN (Asset/Engine-API unbelegt, s. Kopf)
+-- -- der Filter haelt den Leak inaktiv fuer alles, was nicht nachweislich eine
+-- feindliche Kreatur ist.
+local function HqLeakEntityIsEnemy(evt)
+    local ent = HqEventEntity(evt)
+    if ent == nil or ent == INVALID_ID then
+        return false, "no_trigger_entity"
+    end
+    if ent == RBB.hq.entity then
+        return false, "own_hq"
+    end
+    local okM, mech = pcall(function() return PlayerService:GetPlayerControlledEnt(0) end)
+    if okM and mech ~= nil and mech ~= INVALID_ID and mech == ent then
+        return false, "own_team"
+    end
+    local okT, team = pcall(function() return evt:GetTeamId() end)
+    if okT and team ~= nil and tonumber(team) == 1 then
+        return false, "own_team"
+    end
+    return true, nil
+end
+
 -- #28 Leak-Erkennung (EnteredTriggerEvent): die Trigger-Zone ums HQ feuert,
--- sobald eine Kreatur sie betritt -> Leak. Event-Name UND Zone sind
--- unverifiziert (s. Kopf) -- EnteredTriggerEvent koennte jeder beliebige
--- Map-Trigger sein, nicht zwingend die HQ-Zone (Issue #143: sofortige
--- Niederlage durch fremde Trigger). Deshalb bleibt der Leak-Handler defensiv
--- inaktiv, bis eine HQ-Entity zugeordnet ist (rb_hq entity <id>, Issue #144)
--- -- Muster wie OnRespawnFailed weiter unten.
+-- sobald eine feindliche Kreatur sie betritt -> Leak. Event-Name UND Zone sind
+-- unverifiziert (s. Kopf). Defensive Kette: ohne gebundene HQ-Entity inaktiv
+-- (#143/#144, rb_hq entity <id>); mit Entity greift der Zone-/Team-Filter
+-- (#152) -- nur feindliche Kreaturen senken den HQ-HP.
 local function OnEnteredTrigger(evt)
     if RBB.hq.dead then return end
     if RBB.hq.entity == nil then
         if not RBB.hq.unarmedLeakLogged then
             RBB.hq.unarmedLeakLogged = true
             Log("event=hq_leak status=skip reason=no_hq_entity hint=rb_hq_entity")
+        end
+        return
+    end
+    local isEnemy, skipReason = HqLeakEntityIsEnemy(evt)
+    if not isEnemy then
+        if not RBB.hq.filteredLeakLogged then
+            RBB.hq.filteredLeakLogged = true
+            Log("event=hq_leak status=skip reason=%s", skipReason)
         end
         return
     end
@@ -2148,6 +2188,7 @@ local function CmdHq(args)
         RBB.hq.dead = false
         RBB.hq.unmatchedLogged = false
         RBB.hq.unarmedLeakLogged = false
+        RBB.hq.filteredLeakLogged = false
         Log("event=hq_reset status=ok hp=%d", RBB.hq.hp)
         WriteConsole("rb_hq: Win-Condition zurueckgesetzt (hp=%d)", RBB.hq.hp)
         return
