@@ -22,7 +22,7 @@ npm test        # = node --test
 
 `win-condition.test.js` deckt Issue #28 (Win-Condition) ab:
 
-1. Mod lädt, Version 0.10.0, HQ initialisiert (`hq_hp=100 hq_dead=false`).
+1. Mod lädt, Version 0.11.0, HQ initialisiert (`hq_hp=100 hq_dead=false`).
 2. Leak-Flow: `EnteredTriggerEvent` → `event=leak` → `event=hq_hp`.
 3. HQ-Tod durch Leaks (HP ≤ 0) → `event=hq_dead` + `event=match_end` (genau einmal).
 4. Idempotenz: weiterer Leak nach Tod ändert nichts.

@@ -1,8 +1,18 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.10.0 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.11.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
+
+**v0.11.0 — Landing Live-Status-Widget (Issue #30, Website/keine Mod-Laufzeit-Änderung):**
+- `site/live-status.js` (UMD): `deriveStatus(state)` + Poll-Widget für die
+  Landing — „Lobby leer“ / „N Spieler in Lobby“ / „Match läuft: A vs B“ /
+  „Solo-Match läuft“ / „Status unbekannt“ (API nicht erreichbar), 5 s Poll,
+  kein Poll im Hintergrund-Tab.
+- `site/index.html`: Live-Status-Widget im Hero + Dashboard-Link ins
+  Spectator-Dashboard.
+- `tests/live-status/`: `node --test` (14 Checks) + CI-Schritt.
+- Reine Website-/Test-Änderung — **keine Mod-Änderung**.
 
 **v0.10.0 — Tooling/Test-Release (Mod-Laufzeit unverändert, Issues #10/#11):**
 - `tools/headless-client/nav-lobby.sh`: Screenshot-gesteuerte Navigation bis in
