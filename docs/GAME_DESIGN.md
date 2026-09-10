@@ -180,7 +180,7 @@ Abgleich des Design-Kerns gegen den implementierten Mod-/Server-/Site-Stand.
 |---|---|---|---|
 | Sync-Start / GO (Ready-Check) | ✅ implementiert (DOM-Ebene; Server-Ebene offen) | #22 | `debug_dom_pause`/`debug_dom_resume`; docs/SYNC_START.md |
 | Economy: Farm-Value | ✅ implementiert | #24 | `ResourceObtainedEvent`/`ResourceChangeEvent` (Getter-Ladder); Fallback HourEvent-Tick |
-| Economy: Convert irreversibel | ✅ implementiert | #24/#40 | `rb_convert` (Calcium/carbonium first, Faktor 1); Pool persistiert (DB `rbbattle_economy`) |
+| Economy: Convert irreversibel | ✅ implementiert | #24/#40 | `rb_convert` (Calcium/carbonium **only**, Faktor 1); andere Ressourcen → `not_send_currency`; Pool persistiert (DB `rbbattle_economy`) |
 | Built-Value (getrennt geführt) | ✅ implementiert | #24/#27 | Reveal-Basis |
 | Send-Queue & Shop-HUD (Tiered Units + Boss) | ✅ implementiert | #25 | `rb_buy_wave`/`rb_shop`/`rb_queue`; Queue-Flush bei `dom_mananger:OnEnterSpawn` |
 | Send-Boost (nächste Welle %-verstärken) | ✅ implementiert | #39 | `rb_boost <stufe|pct>`; Flush am `SpawnWavesForDifficultyLevel`-Chokepoint (`event=boost`) |
