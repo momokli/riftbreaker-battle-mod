@@ -15,8 +15,9 @@ Reine Standardbibliothek (urllib) — keine Dependencies. Konfiguration via Env:
   RBBRIDGE_POLL_INTERVAL Sekunden zwischen Polls (Default: 2.0)
 
 Ablauf (dokumentiert in docs/TOURNAMENT_API.md):
-  1. phase "running" zum ersten Mal gesehen  -> cmd "go"      (Fallback, falls
-     der GO-Push des Servers nicht ankam — Sends sind idempotent)
+  1. phase "running" zum ersten Mal gesehen  -> Unpause-Kommando(n)      (Fallback,
+     falls der GO-Push des Servers nicht ankam — idempotent; die authoritative
+     Liste kommt aus TOURNAMENT_GO_COMMANDS des Servers, Default debug_dom_resume)
   2. round hochgezählt                        -> cmd "round_start <n>"
   3. reveal neu (round > zuletzt gesehen)     -> cmd "reveal" (HUD-Aufdeckung)
   4. phase "finished"                         -> cmd "match_over"
@@ -122,7 +123,11 @@ def main() -> None:
 
         if phase == "running":
             if not seen_running:
-                run_game_command("go")  # Fallback, falls Push nicht ankam
+                # GO-Fallback (Sync-Start, Issue #22), falls der Push nicht ankam:
+                # Unpause der pausierten Welt. Muss der Server-Konfiguration
+                # TOURNAMENT_GO_COMMANDS entsprechen (Default debug_dom_resume,
+                # DOM-Ebene — SYNC_START.md). Quoting (Issue #18): EIN String.
+                run_game_command("debug_dom_resume")
                 seen_running = True
             if round_no > seen_round:
                 run_game_command(f"round_start {round_no}")

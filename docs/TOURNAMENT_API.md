@@ -22,6 +22,7 @@ Rust/axum in `tournament/` (Issue #29), Web-UI in `tournament/web/`
 | `TOURNAMENT_AUTO_GO` | `true` | GO automatisch, sobald beide Welten ready |
 | `RBBRIDGE_A_URL` | — | HTTP-Endpoint der Welt-A-Bridge (GO-Push) |
 | `RBBRIDGE_B_URL` | — | HTTP-Endpoint der Welt-B-Bridge (GO-Push) |
+| `TOURNAMENT_GO_COMMANDS` | `debug_dom_resume` | Komma-separierte Unpause-/Start-Kommandos je Welt beim GO (je EIN gequotetes Argument, Issue #18) |
 | `TOURNAMENT_GO_TIMEOUT_MS` | `3000` | Timeout je Broadcast-Endpoint |
 | `TOURNAMENT_HQ_HP` | `100` | Start-HP jedes HQ |
 | `TOURNAMENT_WEB_DIR` | `<crate>/web` | Verzeichnis der statischen Web-UI |
@@ -107,8 +108,17 @@ broadcastet GO an beide `RBBRIDGE_*_URL`-Endpoints (async). Bei
 Broadcast-Payload an jede Bridge (`POST` auf `RBBRIDGE_*_URL`):
 
 ```json
-{"cmd": "go", "match_id": "rift-1", "round": 1}
+{"cmd": "go", "match_id": "rift-1", "round": 1,
+ "commands": ["debug_dom_resume"]}
 ```
+
+`commands` ist die **geordnete** Liste der Unpause-/Start-Kommandos, die die
+Bridge je Welt ausführen muss (Sync-Start, Issue #22): `exec_cmd_client
+"<cmd>"` als EIN gequotetes Argument (Issue #18). Default ist
+`debug_dom_resume` (DOM-Ebene, verifiziert — SYNC_START.md); die native
+Server-Pause (`resume_game`, unverifiziert) wird per `TOURNAMENT_GO_COMMANDS`
+ergänzt, ihr Fallback ist das automatische `ResumeGame` beim Client-Join
+(`server_pause_game_when_empty`).
 
 Die Bridge führt daraus ihr GO aus (Unpause der pausierten Welt) — über
 `exec_cmd_client`/den rbbridge-exec-Dispatch; der Server behandelt den Push
@@ -240,7 +250,7 @@ exec-Kanal aus (`exec_cmd_client`/rbbridge-exec-Dispatch):
 
 | Beobachtung in `/state` | Bridge-Kommando | Wirkung |
 |---|---|---|
-| `phase` wird `running` | `go` | Unpause/Start des Runden-Loops (Fallback, falls der GO-Push nicht ankam) |
+| `phase` wird `running` | `debug_dom_resume` (bzw. `TOURNAMENT_GO_COMMANDS`) | Unpause/Start des Runden-Loops (Fallback, falls der GO-Push nicht ankam; Idempotenz vorausgesetzt) |
 | `round` steigt | `round_start <n>` | Neue Build-Phase, HUD-Updates |
 | `reveal.round` neu | `reveal` | HUD-Aufdeckung: Built-Values + eingehende Komposition |
 | `phase` wird `finished` | `match_over` | Sieg-/Verlierer-Screen |

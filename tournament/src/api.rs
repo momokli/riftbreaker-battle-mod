@@ -38,6 +38,10 @@ pub struct Config {
     pub auto_go: bool,
     /// rbbridge-HTTP-Endpoints je Welt (für den GO-Broadcast); None = kein Push.
     pub bridge: [Option<String>; 2],
+    /// Unpause-/Start-Kommandos, die die Bridge je Welt beim GO ausführt
+    /// (Issue #22 Sync-Start): `exec_cmd_client "<cmd>"` als EIN gequotetes
+    /// Argument (Issue #18). Reihenfolge = Ausführungsreihenfolge.
+    pub go_commands: Vec<String>,
     /// Timeout je Broadcast-Endpoint.
     pub go_timeout: Duration,
     /// Start-HP jedes HQ.
@@ -437,11 +441,19 @@ async fn health(AxumState(app): AxumState<AppState>) -> ApiResult<Json<Value>> {
 // ---- GO-Broadcast ----
 
 /// GO-Payload an beide rbbridge-Endpoints (Push; Poll auf /state ist Fallback).
-fn go_payload(match_id: &str, round: u32) -> Value {
+///
+/// `commands` = die Unpause-/Start-Kommandos, die die Bridge je Welt in dieser
+/// Reihenfolge ausführt (Issue #22 Sync-Start): `exec_cmd_client "<cmd>"` als
+/// EIN gequotetes Argument (Issue #18). Default (verifiziert, SYNC_START.md):
+/// `debug_dom_resume` (DOM-Ebene). Die native Server-Pause (`resume_game`) ist
+/// unverifiziert und wird per Env ergänzt; ihr Fallback ist das automatische
+/// `ResumeGame` beim Client-Join (`server_pause_game_when_empty`).
+fn go_payload(match_id: &str, round: u32, commands: &[String]) -> Value {
     json!({
         "cmd": "go",
         "match_id": match_id,
         "round": round,
+        "commands": commands,
     })
 }
 
@@ -451,7 +463,8 @@ async fn broadcast_go(app: &AppState, round: u32) -> Value {
         let guard = app.state.read().await;
         guard.match_id.clone()
     };
-    let payload = go_payload(&match_id, round);
+    let commands = app.cfg.go_commands.clone();
+    let payload = go_payload(&match_id, round, &commands);
     let timeout = app.cfg.go_timeout;
 
     let mut results = serde_json::Map::new();
@@ -510,6 +523,7 @@ mod tests {
             port: 0,
             auto_go: false,
             bridge: [None, None],
+            go_commands: vec!["debug_dom_resume".to_string()],
             go_timeout: Duration::from_millis(800),
             hq_hp_start: 100.0,
             web_dir: PathBuf::from("web"), // wird in Tests nicht gebraucht
@@ -968,6 +982,10 @@ mod tests {
             assert!(req.contains("\"cmd\":\"go\""), "req: {req}");
             assert!(req.contains("\"round\":1"), "req: {req}");
             assert!(req.contains("rift-1"), "req: {req}");
+            assert!(
+                req.contains("\"commands\":[\"debug_dom_resume\"]"),
+                "req: {req}"
+            );
         }
 
         // /state zeigt Zustell-Status
@@ -1102,5 +1120,22 @@ mod tests {
         let (_, v3) = call(&app, "GET", &format!("/events?since={first_seq}"), None).await;
         assert_eq!(v3["events"].as_array().unwrap().len(), all.len() - 1);
         assert_eq!(v3["last_seq"].as_u64().unwrap(), last_seq);
+    }
+
+    #[test]
+    fn go_payload_carries_ordered_unpause_commands() {
+        let p = go_payload("rift-1", 1, &["debug_dom_resume".to_string()]);
+        assert_eq!(p["cmd"], "go");
+        assert_eq!(p["match_id"], "rift-1");
+        assert_eq!(p["round"], 1);
+        assert_eq!(p["commands"], json!(["debug_dom_resume"]));
+
+        // Mehrere Kommandos bleiben in Reihenfolge (DOM zuerst, native Server-Pause danach).
+        let p2 = go_payload(
+            "rift-1",
+            1,
+            &["debug_dom_resume".to_string(), "resume_game".to_string()],
+        );
+        assert_eq!(p2["commands"], json!(["debug_dom_resume", "resume_game"]));
     }
 }
