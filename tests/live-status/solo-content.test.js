@@ -53,6 +53,9 @@ test('site/solo.html: Sektionen haben klare Funktion (Verbinden / Spielen / Stat
   // Spielen: konkrete Commands im How-to und in der Command-Tabelle.
   assert.ok(html.includes('rb_convert'), 'rb_convert vorhanden');
   assert.ok(html.includes('rb_status'), 'rb_status vorhanden');
+  // Send-Boost (#39): die Seite bewirbt den "Boost für die nächste Welle" —
+  // der zugehörige Command muss in der Command-Tabelle stehen.
+  assert.ok(html.includes('rb_boost'), 'rb_boost vorhanden (Send-Boost #39)');
 
   // Status: Live-Status-Widget und Verweis auf die Status-Seite.
   assert.ok(html.includes('id="liveStatus"'), 'Live-Status-Widget vorhanden');

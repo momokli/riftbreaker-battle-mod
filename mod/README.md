@@ -1,6 +1,6 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.29.0 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.30.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 
@@ -8,7 +8,7 @@ v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 > haben, sonst lehnt der Client die Lobby mit **„different set of mods“** ab.
 > Kurzanleitung: [`docs/PLAYER_SETUP.md`](../docs/PLAYER_SETUP.md).
 
-**v0.29.0 — HQ-Erkennung per Entity-TYP + Setup-Phase (Commence-Flow) + HQ-Leak-Filter (Issue #144/#158/#152):**
+**v0.30.0 — HQ-Erkennung per Entity-TYP + Setup-Phase (Commence-Flow) + HQ-Leak-Filter (Issue #144/#158/#152):**
 - *HQ-Erkennung* (#144): `HqAutoDetectEntity()` bindet das HQ jetzt über den Entity-*Typ* `headquarters`
   (`FindService:FindEntitiesByType`, am Spiel-Source belegt: `graph/logic/logic_if_building_health.lua`)
   statt über die leere Gruppe `headquarters`; damit greift der Commence-Flow (#158) und der manuelle
@@ -349,6 +349,17 @@ und Workshop-Mods tun (Quelle: fandom „Basic Modding Guide“, Ordner
   nicht zwingend „common“ heißen — Pfad über Steam → Verwalten → Lokale Dateien
   anzeigen lassen.
 
+### Update per Tool (empfohlen)
+
+Statt manuell zu entpacken: `tools/mod-updater/mod_update.py` findet den
+Mods-Ordner, holt das aktuelle `rbbattle.zip`, legt ein Backup der alten
+Version an und ersetzt die Mod ([#120](https://github.com/momokli/riftbreaker-battle-mod/issues/120),
+Details in `tools/mod-updater/README.md`):
+
+```bash
+python3 tools/mod-updater/mod_update.py update
+```
+
 ## Aktivierung / In-Game-Konsole
 
 - Konsole öffnen mit `` ` `` / `~` / `ö` / `'` (je nach Tastatur-Layout;
@@ -378,7 +389,7 @@ und Workshop-Mods tun (Quelle: fandom „Basic Modding Guide“, Ordner
 | `rb_hud` | **Reveal-HUD (#27):** HUD-Standardfelder — Runde, Countdown, eigener Pool, HQ-HP beider Teams + Reveal-Zustand (`reveal=hidden\|revealed`). Gegner-Built/incoming/HQ sind vor Wellenstart `hidden` |
 | `rb_reveal <built_opp> <hq_opp> [incoming]` | **Gegner-Injektion (#27):** die Bridge injiziert die vom Server aufgedeckten Gegner-Werte (Built-Value, HQ-HP, eingehende Send-Komposition) → Reveal beider Teams komplett |
 | `rb_round_start [n]` | **Build-Phase (#27):** verbirgt den Reveal wieder (Bridge-Signal „round steigt“); `<n>` nur informativ |
-| `rb_hud_ui` | **Click-HUD (#99):** öffnet/schließt das HUD-Overlay (2-Button-Popup, Muster `rb_shop`). „Ja“ (`button_yes`) kauft die gerüstete Quick-Send-Einheit in die Send-Queue, „Nein“ (`button_no`) schließt ohne Aktion. Ein-/ausblendbar per erneutem Aufruf |
+| `rb_hud_ui` | **Click-HUD (#99):** öffnet/schließt das HUD-Overlay (2-Button-Popup, Muster `rb_shop`). „Ja“ (`button_yes`) kauft die gerüstete Quick-Send-Einheit in die Send-Queue, „Nein“ (`button_no`) schließt ohne Aktion. Geschlossen wird ausschließlich über „Nein“; ein erneuter Aufruf bei bereits offenem Overlay ist ein No-op (`status=already_open`) |
 | `rb_quick [<unit> [count]]` | **Quick-Send rüsten (#99):** legt die per Klick gesendete Einheit fest (Default `brabit` ×1). `<unit>` = Shop-Id (`brabit`/`baxmoth`/`artigian`/`canceroth`/`boss`); `rb_shop` zeigt die Liste |
 | `rb_quick_step <+N\|-N\|xN>` | **Send-Menge-Stepper (#147, MVP):** passt die per `rb_quick`/`rb_hud_ui` gerüstete Menge relativ an — `+1`/`-1` für Feinjustierung, `x10`/`x100`/`x1000` für Grobjustierung (Clicker-Stil), ohne eine exakte Zahl zu tippen. Gedeckelt auf `1..maxQueueCreatures` (40). Ein klickbares Stepper-Overlay ist mangels verifizierter Multi-Button-GUI-API noch offen — dieser Command liefert bereits die Logik dafür |
 
@@ -386,7 +397,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.29.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
+[RBBATTLE] event=mod_load version=0.30.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100

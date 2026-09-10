@@ -8,6 +8,10 @@
 <meta name="theme-color" content="#05070a">
 <!-- Tournament-API-Basis (Issue #30): Basis-URL des Referee-Servers; Landing-Widget pollt <base>/state. Relativ = gleicher Origin. -->
 <meta name="rb-tournament-api" content="/tournament">
+<!-- Issue #173: Cockpit-Match-Page — Build/Server für die Footer-Leiste + optionales Operator-Gate ("on" = aktiv). Kein Secret im Repo. -->
+<meta name="rb-build-version" content="0.30.0-dev">
+<meta name="rb-game-server" content="65.21.27.234:6321">
+<meta name="rb-operator-gate" content="off">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2 28 9v14L16 30 4 23V9z' fill='none' stroke='%233fd0d4' stroke-width='3'/%3E%3C/svg%3E">
 <style>
 
@@ -332,13 +336,17 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
 @media(max-width:660px){.connect-grid{grid-template-columns:1fr}}
 </style>
 <script>document.documentElement.classList.add("js")</script>
+<link rel="stylesheet" href="solo-cockpit.css">
 </head>
 <body>
 
 <!-- ================= TOPBAR ================= -->
 <header class="topbar">
   <div class="topbar-in">
-    <a class="brand" href="/">rb<span class="slash">//</span>rift-battle</a>
+    <a class="brand" href="/">
+      <span class="ck-logo" aria-hidden="true">&#x2B21;</span>
+      <span class="ck-brand-title">RIFT BATTLE <span class="slash">//</span> SOLO</span>
+    </a>
     <nav aria-label="Hauptnavigation">
       <a href="/"><span class="n">00</span>landing</a>
       <a href="#devlog"><span class="n">01</span>dev-log</a>
@@ -347,11 +355,56 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
       <a href="#cmds"><span class="n">04</span>commands</a>
       <a href="#hinweise"><span class="n">05</span>hinweise</a>
     </nav>
-    <a class="gh-link" href="https://github.com/momokli/riftbreaker-battle-mod" target="_blank" rel="noopener">github ↗</a>
+    <div class="ck-toppills">
+      <span class="ck-live is-idle" id="ckLive" title="Live-Verbindung zum Dev-Server">
+        <span class="ck-live-dot" id="ckLiveDot" aria-hidden="true"></span>
+        <span id="ckLiveText">LIVE</span>
+      </span>
+      <span class="ck-pill ck-optional">// OPERATOR: ALPHA</span>
+      <span class="ck-lock ck-optional" id="ckLock" title="Operator-Zugang gesichert">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 10V7a6 6 0 0 1 12 0v3" fill="none" stroke="currentColor" stroke-width="2"></path><rect x="4" y="10" width="16" height="11" fill="none" stroke="currentColor" stroke-width="2"></rect></svg>
+        <span>ACCESS: SECURED / LEVEL 4</span>
+      </span>
+    </div>
+    <a class="gh-link" href="https://github.com/momokli/riftbreaker-battle-mod" target="_blank" rel="noopener">github &#x2197;</a>
   </div>
 </header>
 
 <main id="top">
+
+<!-- ================= COCKPIT (Match-Page, Issue #173 / #159) ================= -->
+<section id="cockpit" class="ck" aria-label="Solo-Match-Cockpit">
+  <div class="ck-strip">
+    <div class="ck-phasebar" id="ckPhaseBar" role="group" aria-label="Match-Phase">
+      <span class="ck-phase-badge" data-phase="setup">[ SETUP ]</span>
+      <span class="ck-phase-badge" data-phase="waves"><span class="ck-dot" aria-hidden="true"></span>WAVES</span>
+      <span class="ck-phase-badge" data-phase="gameover">[ GAME OVER ]</span>
+    </div>
+    <div class="ck-wave">
+      <span class="ck-wave-num" id="ckWave">WELLE --</span>
+      <span class="ck-wave-sub" id="ckThreat">BEDROHUNG: &#x2014;</span>
+    </div>
+    <div class="ck-hq" id="ckHq">
+      <div class="ck-hq-head"><span>BASE HQ INTEGRITÄT</span><b id="ckHqText">--%</b></div>
+      <div class="ck-hqbar" id="ckHqBar" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="HQ-Integrität"></div>
+      <div class="ck-hq-sub"><span id="ckHqTeam">HQ</span><span id="ckHqRaw">&#x2014;</span></div>
+    </div>
+    <div class="ck-chips">
+      <div class="ck-chip ck-chip--p1">
+        <div class="ck-chip-head"><span id="ckP1Name">P1: &#x2014;</span><span class="ok" id="ckP1State">[ &#x2014; ]</span></div>
+        <div class="ck-chip-body" id="ckP1Stats">HP &#x2014; · SCORE &#x2014; · WAVE &#x2014;</div>
+      </div>
+      <div class="ck-chip ck-chip--p2">
+        <div class="ck-chip-head"><span id="ckP2Name">P2: &#x2014;</span><span class="warn" id="ckP2State">[ &#x2014; ]</span></div>
+        <div class="ck-chip-body" id="ckP2Stats">HP &#x2014; · SCORE &#x2014; · WAVE &#x2014;</div>
+      </div>
+    </div>
+  </div>
+  <div class="ck-announce" id="ckAnnounce" data-kind="idle" role="status" aria-live="polite">
+    <span class="ck-announce-icon" aria-hidden="true">!</span>
+    <span class="ck-announce-text" id="ckAnnounceText">STANDBY &#x2014; WARTE AUF START</span>
+  </div>
+</section>
 
 <!-- ================= HERO ================= -->
 <section class="hero" aria-labelledby="heroTitle">
@@ -403,7 +456,13 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
       <div class="term-bar">
         <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
         <span class="term-title" id="devlogWho">wer spielt: wird geladen …</span>
+        <span class="ck-console-hint">SPEICHER: 256KB // FILTER: ALLE_EREIGNISSE</span>
         <span class="term-ts" id="devlogConn">verbinde …</span>
+        <span class="ck-console-actions">
+          <button type="button" id="ckAutoscroll" class="is-on">AUTO-SCROLL: [AKTIV]</button>
+          <button type="button" id="ckPause">STREAM PAUSIEREN</button>
+          <button type="button" id="ckClear">LOG LEEREN</button>
+        </span>
       </div>
       <div class="term-body" id="devlogBody" aria-live="polite" aria-label="Live-Event-Log des Tournament-Servers"></div>
     </div>
@@ -411,6 +470,33 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
       <span class="ok">▲</span>
       <span>Spielstand-Persistenz (<code class="inl">rb_points</code> im Mod) ist noch kein eigener Event-Typ hier — Stand: <a href="https://github.com/momokli/riftbreaker-battle-mod/issues/65" target="_blank" rel="noopener">Issue #65 ↗</a>.</span>
     </div>
+  </div>
+</section>
+
+<!-- ================= GOD COMMANDS (Operator-Override, Issue #173) ================= -->
+<section id="godcommands" class="ck-god" aria-labelledby="godTitle">
+  <div class="ck-god-head">
+    <span class="ck-god-title" id="godTitle">/// GOD COMMANDS // OPERATOR OVERRIDE</span>
+    <span class="ck-god-badge">LEVEL 4 AUTHORIZED</span>
+    <span class="ck-god-status" id="ckCmdStatus">BEREIT</span>
+  </div>
+  <div class="ck-god-grid">
+    <button type="button" class="ck-cmd ck-cmd--primary" data-ck-cmd="wave_toggle">
+      <span class="ck-cmd-label">[ WELLE START / PAUSE ]</span>
+      <span class="ck-cmd-sub">TOGGLE WAVE CYCLE [SPACE]</span>
+    </button>
+    <button type="button" class="ck-cmd ck-cmd--neutral" data-ck-cmd="give_resources">
+      <span class="ck-cmd-label">[ RESSOURCEN INJIZIEREN ]</span>
+      <span class="ck-cmd-sub">+5000 CARBONIUM / IRONIUM [F2]</span>
+    </button>
+    <button type="button" class="ck-cmd ck-cmd--warn" data-ck-cmd="destroy_hq" data-ck-destructive="1">
+      <span class="ck-cmd-label">[ HQ ZERSTÖREN (TEST) ]</span>
+      <span class="ck-cmd-sub">SOFORTIGER KERN-KOLLAPS [CTRL+DEL]</span>
+    </button>
+    <button type="button" class="ck-cmd ck-cmd--hazard" data-ck-cmd="restart" data-ck-destructive="1">
+      <span class="ck-cmd-label">[ SPIEL NEU STARTEN ]</span>
+      <span class="ck-cmd-sub">RESET ALLER SYSTEME [SHIFT+F5]</span>
+    </button>
   </div>
 </section>
 
@@ -515,6 +601,10 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
             <td>Wandelt Calcium <b>unwiderruflich</b> in den Pool — Boost für die <b>nächste Welle</b>.</td>
           </tr>
           <tr>
+            <td>rb_boost <b>&lt;stufe|pct&gt;</b></td>
+            <td>Kauft den <b>prozentualen Aufschlag</b> für die <b>nächste Welle</b> aus dem Pool: Stufen <b>s1</b> +25 · <b>s2</b> +50 · <b>s3</b> +100 oder freie <b>pct</b>. Genau <b>eine</b> Welle, nicht kumulativ.</td>
+          </tr>
+          <tr>
             <td>rb_status</td>
             <td>Zeigt <b>Runde</b>, <b>Pool</b> und <b>Boost</b>.</td>
           </tr>
@@ -581,6 +671,14 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
     <div class="foot-in">
       <span><span class="ps" style="color:var(--ok)">rb@rift</span>:~$ echo "gg wp"</span>
       <span class="gg">solo-test bestanden? — gg wp</span>
+    </div>
+    <div class="ck-footstrip">
+      <span>BUILD <b id="ckBuild">0.30.0-dev</b> [DEV]</span>
+      <span aria-hidden="true">|</span>
+      <span>SERVER <b id="ckServer">rift.projectmellon.de :6321</b></span>
+      <span class="ck-foot-right">
+        <span><span class="ck-foot-dot" aria-hidden="true"></span> PING <b id="ckPing">—</b></span>
+      </span>
     </div>
     <p class="disclaimer">
       RIFT BATTLE ist ein inoffizielles Fan-Projekt. The Riftbreaker © EXOR Studios — nicht von EXOR unterstützt. · © 2026 momokli ·
@@ -761,16 +859,41 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
   if (!body || !window.RBDevLog || !window.RBTournamentStatus) return;
 
   var base = RBTournamentStatus.resolveApiBase(document);
+  var autoScroll = true;
+  var paused = false;
 
-  function appendLine(desc) {
-    var div = document.createElement("div");
-    div.className = "line " + desc.cls;
-    div.textContent = desc.text;
-    body.appendChild(div);
-    body.scrollTop = body.scrollHeight;
+  /* Issue #173: Log-Zeilen mit Timestamp [HH:MM:SS] + Event-Tag [kind]. */
+  function fmtTime(t) {
+    var d = (typeof t === "number" && isFinite(t)) ? new Date(t) : new Date();
+    function p(n) { return (n < 10 ? "0" : "") + n; }
+    return "[" + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds()) + "]";
   }
 
-  RBDevLog.createLogWidget({
+  function appendLine(desc) {
+    if (paused) return;
+    var div = document.createElement("div");
+    div.className = "line ck-logline " + desc.cls;
+
+    var ts = document.createElement("span");
+    ts.className = "ck-ts";
+    ts.textContent = fmtTime(desc.t);
+
+    var tag = document.createElement("span");
+    tag.className = "ck-tag";
+    tag.textContent = "[" + desc.kind + "]";
+
+    var msg = document.createElement("span");
+    msg.className = "ck-msg";
+    msg.textContent = String(desc.text || "").replace(/^\[[^\]]*\]\s*/, "");
+
+    div.appendChild(ts);
+    div.appendChild(tag);
+    div.appendChild(msg);
+    body.appendChild(div);
+    if (autoScroll) body.scrollTop = body.scrollHeight;
+  }
+
+  var log = RBDevLog.createLogWidget({
     apiBase: base,
     onEvents: function (events) {
       events.forEach(appendLine);
@@ -779,7 +902,24 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
     onError: function () {
       if (connEl) connEl.textContent = "verbindung unterbrochen …";
     },
-  }).start();
+  });
+  log.start();
+
+  /* Konsole-Controls (Design: AUTO-SCROLL / STREAM PAUSIEREN / LOG LEEREN). */
+  var autoBtn = document.getElementById("ckAutoscroll");
+  var pauseBtn = document.getElementById("ckPause");
+  var clearBtn = document.getElementById("ckClear");
+  if (autoBtn) autoBtn.addEventListener("click", function () {
+    autoScroll = !autoScroll;
+    autoBtn.textContent = "AUTO-SCROLL: [" + (autoScroll ? "AKTIV" : "MANUELL") + "]";
+    autoBtn.classList.toggle("is-on", autoScroll);
+  });
+  if (pauseBtn) pauseBtn.addEventListener("click", function () {
+    paused = !paused;
+    pauseBtn.textContent = paused ? "STREAM FORTSETZEN" : "STREAM PAUSIEREN";
+    pauseBtn.classList.toggle("is-on", paused);
+  });
+  if (clearBtn) clearBtn.addEventListener("click", function () { body.innerHTML = ""; });
 
   RBTournamentStatus.createWidget({
     apiBase: base,
@@ -845,6 +985,148 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
     ev.preventDefault();
     widget.start(nameEl ? nameEl.value : "");
   });
+})();
+</script>
+
+<!-- ================= Operator-Gate (optional, Issue #173) ================= -->
+<div class="ck-gate" id="ckGate" hidden>
+  <form class="ck-gate-box" id="ckGateForm" autocomplete="off">
+    <div class="ck-gate-title">RESTRICTED — OPERATOR ACCESS</div>
+    <p class="ck-gate-sub">Dieses Cockpit entscheidet über den Dev-Server. Zugangscode erforderlich. Der Code liegt NICHT im Repo (Operator-/Caddy-Auth, siehe #159).</p>
+    <input class="ck-gate-input" id="ckGateInput" type="password" placeholder="ACCESS CODE" spellcheck="false" autocomplete="off">
+    <div class="ck-gate-actions"><button class="ck-cmd ck-cmd--primary" type="submit" id="ckGateBtn">UNLOCK</button></div>
+    <div class="ck-gate-err" id="ckGateErr" role="alert"></div>
+  </form>
+</div>
+
+<script src="solo-cockpit.js"></script>
+<script>
+(function () {
+  "use strict";
+  if (!window.RBSoloCockpit) return;
+  var api = window.RBSoloCockpit;
+  var base = window.RBTournamentStatus ? window.RBTournamentStatus.resolveApiBase(document) : "/tournament";
+
+  function meta(name) {
+    var m = document.querySelector('meta[name="' + name + '"]');
+    return m && m.content ? m.content.trim() : "";
+  }
+
+  /* --- Footer: Build-Version + Server --- */
+  var buildEl = document.getElementById("ckBuild");
+  if (buildEl) buildEl.textContent = meta("rb-build-version") || "dev";
+  var serverEl = document.getElementById("ckServer");
+  if (serverEl) {
+    var srv = meta("rb-game-server") || (window.location ? window.location.host : "");
+    serverEl.textContent = srv.replace(/^https?:\/\//, "") + (/:\d+$/.test(srv) ? "" : " :6321");
+  }
+
+  /* --- Top-Bar: LIVE-Pill --- */
+  var liveEl = document.getElementById("ckLive");
+  function setLive(up) {
+    if (!liveEl) return;
+    liveEl.classList.toggle("is-live", !!up);
+    liveEl.classList.toggle("is-idle", !up);
+    var t = document.getElementById("ckLiveText");
+    if (t) t.textContent = up ? "LIVE" : "OFFLINE";
+  }
+
+  /* --- State-Strip --- */
+  var SEGMENTS = 24;
+  var hqBar = document.getElementById("ckHqBar");
+  function renderHq(pct, critical) {
+    if (hqBar) {
+      var on = Math.round((pct / 100) * SEGMENTS);
+      hqBar.innerHTML = "";
+      for (var i = 0; i < SEGMENTS; i++) {
+        var s = document.createElement("span");
+        s.className = "seg" + (i < on ? " on" : "");
+        hqBar.appendChild(s);
+      }
+      hqBar.setAttribute("aria-valuenow", String(pct));
+      var wrap = document.getElementById("ckHq");
+      if (wrap) wrap.classList.toggle("is-critical", !!critical);
+    }
+    var t = document.getElementById("ckHqText");
+    if (t) t.textContent = pct + "%";
+    var raw = document.getElementById("ckHqRaw");
+    if (raw) raw.textContent = critical ? "KRITISCH <20%" : "NOMINAL";
+  }
+  function chipName(prefix, p) { return prefix + ": " + (p && p.player ? p.player : "—"); }
+  function chipStats(p) {
+    return "HP " + (p && p.hpPct !== null ? p.hpPct + "%" : "—") +
+      " · SCORE " + (p && p.score !== null ? p.score : "—") +
+      " · WAVE " + (p && p.wave !== null ? p.wave : "—");
+  }
+  function renderView(view) {
+    setLive(true);
+    var map = { "SETUP": "setup", "WAVES": "waves", "GAME OVER": "gameover" };
+    var active = map[view.phaseLabel] || "setup";
+    Array.prototype.forEach.call(document.querySelectorAll("#ckPhaseBar .ck-phase-badge"), function (b) {
+      b.classList.toggle("is-active", b.getAttribute("data-phase") === active);
+    });
+    var w = document.getElementById("ckWave");
+    if (w) w.textContent = view.waveText;
+    var th = document.getElementById("ckThreat");
+    if (th) th.textContent = "PHASE: " + view.phaseLabel + (view.round !== null ? " · RUNDE " + view.round : "");
+    renderHq(view.hq.pct, view.hq.critical);
+    var n1 = document.getElementById("ckP1Name"); if (n1) n1.textContent = chipName("P1", view.players.p1);
+    var s1 = document.getElementById("ckP1Stats"); if (s1) s1.textContent = chipStats(view.players.p1);
+    var n2 = document.getElementById("ckP2Name"); if (n2) n2.textContent = chipName("P2", view.players.p2);
+    var s2 = document.getElementById("ckP2Stats"); if (s2) s2.textContent = chipStats(view.players.p2);
+    var an = document.getElementById("ckAnnounce");
+    if (an) {
+      an.setAttribute("data-kind", view.announce.kind);
+      var at = document.getElementById("ckAnnounceText");
+      if (at) at.textContent = view.announce.text;
+    }
+  }
+  api.createCockpit({ apiBase: base, render: renderView, onError: function () { setLive(false); } }).start();
+
+  /* --- God-Commands-Panel --- */
+  var cmdStatus = document.getElementById("ckCmdStatus");
+  function setCmdStatus(text, cls) {
+    if (!cmdStatus) return;
+    cmdStatus.textContent = text;
+    cmdStatus.classList.remove("is-ok", "is-err");
+    if (cls) cmdStatus.classList.add(cls);
+  }
+  var panel = api.createGodPanel({
+    apiBase: base,
+    onResult: function (res) {
+      if (res.aborted) { setCmdStatus("ABGEBROCHEN", "is-err"); return; }
+      if (res.ok) { setCmdStatus("OK — " + res.action, "is-ok"); return; }
+      setCmdStatus("FEHLER — " + (res.error || "unbekannt"), "is-err");
+    },
+  });
+  Array.prototype.forEach.call(document.querySelectorAll("[data-ck-cmd]"), function (btn) {
+    btn.addEventListener("click", function () {
+      setCmdStatus("SENDE … " + btn.getAttribute("data-ck-cmd"));
+      panel.send(btn.getAttribute("data-ck-cmd"));
+    });
+  });
+
+  /* --- Optionales Operator-Gate (Meta rb-operator-gate=on) --- */
+  var gate = api.createAccessGate({ enabled: meta("rb-operator-gate") === "on" });
+  var gateEl = document.getElementById("ckGate");
+  var godEl = document.getElementById("godcommands");
+  if (gate.enabled && !gate.isUnlocked() && gateEl) {
+    gateEl.hidden = false;
+    if (godEl) godEl.setAttribute("aria-hidden", "true");
+    var form = document.getElementById("ckGateForm");
+    if (form) form.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var inp = document.getElementById("ckGateInput");
+      var err = document.getElementById("ckGateErr");
+      if (gate.unlock(inp ? inp.value : "")) {
+        gateEl.hidden = true;
+        if (godEl) godEl.removeAttribute("aria-hidden");
+        if (err) err.textContent = "";
+      } else if (err) {
+        err.textContent = "Zugangscode erforderlich";
+      }
+    });
+  }
 })();
 </script>
 </body>
