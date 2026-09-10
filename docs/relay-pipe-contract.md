@@ -11,12 +11,13 @@ fixiert die Parameter, die der Relay einhält.
 | Aspekt | Wert |
 |---|---|
 | Pipe-Name | `\\.\pipe\rbbattle` (`rbbridge.c` `PIPE_NAME_A`; Relay via `RBB_PIPE_PATH` konfigurierbar) |
-| Richtung (Relay) | Nur Schreiben (fire-and-forget); die Antwort `exec_result` liest der v0-Relay nicht |
+| Richtung | Duplex über **dieselbe Verbindung** (`PIPE_ACCESS_DUPLEX`): Relay schreibt `exec`, liest auf demselben Handle die `exec_result`-Antwort (Issue #73) |
 | Encoding | UTF-8 |
 | Framing | line-delimited JSON — eine Nachricht = eine Zeile, mit `\n` abgeschlossen |
-| Nachricht | `{"cmd":"exec","command":"<command>","cmd_id":<id>}` (kompaktes JSON, keine Leerzeichen) |
+| Nachricht (Relay → rbbridge) | `{"cmd":"exec","command":"<command>","cmd_id":<id>}` (kompaktes JSON, keine Leerzeichen) |
+| Nachricht (rbbridge → Relay) | `{"event":"exec_result","command":"<command>","ok":true\|false,"reason":"..."}` (kein `cmd_id`-Echo — rbbridge kennt das Feld nicht, Matching läuft über `command`, s. u.) |
 | Max. Zeilenlänge | 8 KiB — längere Zeilen verwirft der Empfänger (`rbbridge.c` `PIPE_LINE_MAX`) |
-| Timeout | Client-seitig `RBB_PIPE_TIMEOUT_S` (Default 5,0 s) für Connect+Write; `rbbridge.c` kennt selbst keinen Client-Timeout (`POLL_MS` 100 ist nur der Serviceloop-Takt) |
+| Timeout | Client-seitig `RBB_PIPE_TIMEOUT_S` (Default 5,0 s), zweiphasig: (1) Connect+Write — Ablauf hier ist ein Fehler; (2) danach dieselbe Budgetzeit für die `exec_result`-Antwort — Ablauf hier ist **kein** Fehler, nur „keine Antwort“. `rbbridge.c` kennt selbst keinen Client-Timeout (`POLL_MS` 100 ist nur der Serviceloop-Takt) |
 
 ## Verhalten des Relay
 
@@ -30,9 +31,35 @@ fixiert die Parameter, die der Relay einhält.
 - `cmd_id` wird vom Tournament-Server vergeben (Ganzzahl) und dient dem Relay
   als Dedup-Schlüssel; die rbbridge ignoriert `cmd_id` (sie liest nur `cmd`/
   `command`).
+- **Antwortrichtung (Issue #73):** Nach erfolgreichem Write liest der Relay
+  auf demselben Pipe-Handle weiter, bis eine `exec_result`-Zeile mit
+  passendem `command`-Feld kommt oder `RBB_PIPE_TIMEOUT_S` abläuft. Andere
+  Nachrichten der DLL (`pong`, `score_update`, `error`, …) auf derselben
+  Verbindung werden dabei übersprungen, nicht als Fehler gewertet. Ergebnis
+  wird strukturiert geloggt: `dispatch result cmd_id=... status=ok`,
+  `status=error reason=...` oder `status=timeout` (keine Antwort — blockiert
+  keine weiteren Dispatches, s. u.).
+- Ein Antwort-Timeout ist **kein** Dispatch-Fehler: Das Kommando wurde
+  bereits erfolgreich geschrieben und bleibt ack-markiert. Nur ein
+  Connect/Write-Fehler (Pipe nicht erreichbar) landet in der Retry-Queue.
 
 ## Test ohne Windows
 
-Linux: FIFO als Named-Pipe-Ersatz (`RBB_PIPE_PATH` auf einen FIFO-Pfad).
-Siehe `bausteine/07-relay/test_dispatch.py` (Erfolg/Pipe-fehlt/Ack) und
-`tests/e2e-vollkette/vollkette.test.js`.
+Linux: FIFO als Named-Pipe-Ersatz (`RBB_PIPE_PATH` auf einen FIFO-Pfad) für
+den Schreibpfad. **Wichtig:** Eine FIFO ist eine einzelne Queue — schreibt
+der Relay auf einem `O_RDWR`-Handle und liest sofort danach auf demselben
+fd (wie beim echten Duplex-Pipe-Kontrakt), bekommt er deterministisch seine
+eigene gerade geschriebene Zeile zurück; ein externer Prozess/Reader (z. B.
+`cat`) sieht dabei nie etwas — kein Scheduling-Zufall, sondern reine
+FIFO-Queue-Semantik (bei einer echten Windows-Named-Pipe mit getrennten
+Puffern je Richtung tritt das nicht auf). Deshalb:
+- Schreibpfad (Inhalt der exec-Zeile): FIFO-Fake in
+  `bausteine/07-relay/test_dispatch.py` (`PipeClientTest`, nutzt nur
+  `send_exec`, das nicht zurückliest).
+- Antwortpfad (`exec_result` parsen/matchen): `os.pipe()` in
+  `bausteine/07-relay/test_dispatch.py` (`ReadResultTest`) — echte getrennte
+  Enden, keine Selbst-Lese-Falle.
+- End-to-End (Timeout-Verhalten, kein Haenger): FIFO in
+  `bausteine/07-relay/test_e2e_prototype.sh` und
+  `tests/e2e-vollkette/vollkette.test.js` — dort ohne Responder, geprüft wird
+  `dispatch result cmd_id=... status=timeout`.
