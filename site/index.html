@@ -336,7 +336,7 @@ footer{padding:46px 0 64px;border-top:1px solid var(--line);font-size:12.5px;col
         </div>
         <div class="term-body" id="log" role="img" aria-label="Animiertes Terminal-Replay einer Match-Runde: Lobby, Ready, GO, Build, Send, Reveal, Leaks, HQ-Tod, Rematch"></div>
         <pre class="nojs" aria-hidden="true">--- statischer Mitschnitt (ohne JavaScript) ---
-[riftbattle-sim v0.2.1 — dedicated world · seed 0xC0FFEE · map: volcanic-plains]
+[riftbattle-sim v0.5.0 — dedicated world · seed 0xC0FFEE · map: volcanic-plains]
 [lobby]  P1 connected · P2 connected · 2/2
 [ok]     ready — P1 ✓ · P2 ✓ · beide welten pausiert · sync ok
 [go]     GO — RUNDE 1 · beide welten laufen synchron
@@ -431,8 +431,10 @@ footer{padding:46px 0 64px;border-top:1px solid var(--line);font-size:12.5px;col
           <div class="hint"><span class="ok">▲</span><span>Status: frühe Alpha. Fehler, Ideen &amp; Feedback gerne als GitHub-Issue — und ein <b>Steam-Workshop-Release</b> ist in Vorbereitung.</span></div>
           <div class="links">
             <a href="https://github.com/momokli/riftbreaker-battle-mod" target="_blank" rel="noopener">github repo ↗</a>
-            <a href="https://github.com/momokli/riftbreaker-battle-mod/blob/main/docs/GAME_DESIGN.md" target="_blank" rel="noopener">game-design lesen ↗</a>
+            <a href="https://github.com/momokli/riftbreaker-battle-mod/blob/main/docs/concept.md" target="_blank" rel="noopener">design lesen ↗</a>
             <a href="https://github.com/momokli/riftbreaker-battle-mod/blob/main/docs/workshop.md" target="_blank" rel="noopener">workshop-anleitung ↗</a>
+            <a href="solo.html">solo test mode (1v1 gegen sich selbst) ↗</a>
+            <a href="connectivity.html">server-status ↗</a>
           </div>
         </div>
         <div class="down-cta">
@@ -505,7 +507,7 @@ footer{padding:46px 0 64px;border-top:1px solid var(--line);font-size:12.5px;col
   /* Schritte: [phase-index, kind, html, pause-nach-Zeile(ms)]
      kinds: sys(gedimmt) p1 p2 ok warn hl(hervorgehoben) */
   var LINES = [
-    [0, "sys",  "riftbattle-sim v0.2.1 — dedicated world · seed <b class='acc'>0xC0FFEE</b> · map: volcanic-plains", 640],
+    [0, "sys",  "riftbattle-sim v0.5.0 — dedicated world · seed <b class='acc'>0xC0FFEE</b> · map: volcanic-plains", 640],
     [0, "sys",  "lobby — <b class='p1'>P1</b> connected · <b class='p2'>P2</b> connected · 2/2", 760],
     [1, "ok",   "ready — P1 ✓ · P2 ✓ · beide welten pausiert · sync ok", 700],
     [1, "sys",  "startsequenz: welten booten identisch …", 1050],
