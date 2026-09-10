@@ -1,0 +1,16 @@
+WorkspaceManifest
+{
+	description "UklGVCBCQVRUTEUgLSBSdW5kZW4tRHVlbGwtTW9kdXMgKEJpdGVyLUJhdHRsZXMtYXJ0aWcpLiBOdXIgTHVhLU1vZC4="
+	tags
+	modified_game_files
+	title "UkJCYXR0bGU="
+	homepage
+	modio_published_file "0"
+	visibility "0"
+	game_version "EXE: 1186 DATA: 847"
+	version "0.4.0"
+	localizations
+	author
+	steam_published_file "0"
+	dependencies
+}

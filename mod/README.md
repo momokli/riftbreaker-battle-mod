@@ -38,6 +38,13 @@ Console-Commands `rb_wave <level>` / `rb_send <level>` (Send-Wellen-Spawning an
 Kartenrand-Spawnern) + DOM-Timer-Deckel + Economy (`rb_convert`, `rb_economy`).
 Kein UI, keine Bindings, kein Bridge-Zusatz, **kein io/socket/http**.
 
+**Mod-Descriptor** (`<GUID>.manifest` im Mod-Root): deklariert Metadaten + die
+Spielversion, gegen die der Mod gebaut ist (`game_version "EXE: 1186 DATA: 847"`
+für Spiel 2.0.58485). Ohne Descriptor zeigt der Client „Unknown game version“
+(Issue #17). Format = `WorkspaceManifest { … }` der EXOR-Workspace-Tools
+(Beleg: echte Workshop-Mods, z. B. github.com/lilly1987/Riftbreaker-mods;
+Spiel-Regex `EXE: <n> DATA: <n>`).
+
 ## Installation (lokaler Mods-Ordner)
 
 Der Inhalt dieses Ordners (`mod/`) ist **eine Mod**: Er spiegelt die
@@ -51,6 +58,7 @@ und Workshop-Mods tun (Quelle: fandom „Basic Modding Guide“, Ordner
    ```
    <SteamLibrary>\steamapps\common\Riftbreaker\mods\rbbattle\
        lua\rbbattle_autoexec.lua
+       {96745BE8-78FD-4C30-9718-D57AA40B9C09}.manifest
    ```
    (`mods\` ggf. neu anlegen; der Spiel-Ordner `mods` ist identisch mit dem
    Workspace-Ordner, den die „Riftbreaker Tools“ verwenden.)
