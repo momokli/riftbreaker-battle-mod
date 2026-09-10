@@ -76,7 +76,7 @@ jobs:
         run: |
           set -euo pipefail
           if ! ssh -o BatchMode=yes -o ConnectTimeout=10 planet 'id -u' >/dev/null 2>&1; then
-            echo "::error::deploy-check braucht SSH-Zugriff runner@planet → root@planet (Alias 'planet'). Einrichtung: deploy/README.md → „deploy-check (PR-Gate)"."
+            echo "::error::deploy-check braucht SSH-Zugriff runner@planet -> root@planet (Alias planet). Einrichtung: deploy/README.md, Abschnitt deploy-check (PR-Gate)."
             exit 1
           fi
 
