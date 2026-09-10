@@ -45,9 +45,11 @@ ProtectControlGroups=yes
 RestrictNamespaces=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
-# Schreibzugriff nur hier (Job-Logs + Checkout); bei anderem CHECKOUT_DIR
-# diesen Pfad entsprechend ergänzen:
-ReadWritePaths=/var/log/rbbattle-deploy /opt/rbbattle-deploy
+# Schreibzugriff nur hier (Job-Logs, Checkout, Playbook-Zielpfade);
+# bei anderem CHECKOUT_DIR diesen Pfad entsprechend ergänzen.
+# Rollen 3–6 (tournament/website/probe) brauchen beim ersten Lauf ggf.
+# zusätzliche Pfade (/etc/systemd/system, /usr/local/bin|etc, /home/momo).
+ReadWritePaths=/var/log/rbbattle-deploy /opt/rbbattle-deploy /srv/rbmods-site /opt/http/rift.projectmellon.de /srv/rbgame /opt/rbmods
 
 [Install]
 WantedBy=multi-user.target
