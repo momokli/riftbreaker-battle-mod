@@ -22,11 +22,14 @@ name: Deploy Check
 # verbindet sich mit keinem Host, braucht also keine echten Hosts; das echte
 # Inventar wird weiterhin strukturell per yamllint validiert.
 
+# WICHTIG: Der PR-Trigger hat bewusst KEINEN paths-Filter.
+# `deploy-check` ist ein Required Status Check auf main; ein pfad-gefilterter
+# Workflow, der auf einem PR gar nicht startet, hinterlaesst den Check dauerhaft
+# als "Expected" und blockiert damit JEDEN PR, der deploy/ nicht anfasst.
+# Der Job laeuft daher auf allen PRs (kostet ~1 min) und ist bei PRs ohne
+# deploy/-Bezug trivial gruen. Nur der push-Trigger bleibt pfad-gefiltert.
 on:
   pull_request:
-    paths:
-      - 'deploy/**'
-      - '.github/workflows/deploy-check.yml'
   push:
     branches: [main]
     paths:
