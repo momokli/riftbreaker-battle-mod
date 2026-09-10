@@ -1,0 +1,91 @@
+name: Progress
+
+# Woechentliche Fortschritts-Uebersicht -> docs/PROGRESS.md (offene Issues nach
+# Milestone/Label, offene PRs, letzte Releases, CI-Status).
+#
+# Loop-Schutz (bewusst mehrfach abgesichert):
+#  1. Trigger sind NUR schedule + workflow_dispatch — KEIN push/main-Trigger.
+#  2. Der Commit-Titel enthaelt "[skip ci]".
+#  3. Mit GITHUB_TOKEN gepushte Commits loesen generell KEINE neuen Workflow-Runs aus.
+# So kann dieser Job sich nicht selbst (oder andere Workflows) erneut antriggern.
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: progress
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: docs/PROGRESS.md aktualisieren
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PROGRESS.md generieren
+        run: |
+          set -uo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+          OUT="docs/PROGRESS.md"
+
+          issue_json="$(mktemp)"; pr_json="$(mktemp)"
+          gh issue list --repo "$REPO" --state open --limit 300 --json number,title,milestone,labels >"$issue_json" || echo '[]' >"$issue_json"
+          gh pr list --repo "$REPO" --state open --limit 300 --json number,title,author >"$pr_json" || echo '[]' >"$pr_json"
+
+          n_issues="$(jq 'length' "$issue_json")"
+          n_prs="$(jq 'length' "$pr_json")"
+
+          {
+            echo "# Projekt-Fortschritt"
+            echo
+            echo "> Automatisch generiert von [\`progress.yml\`](.github/workflows/progress.yml)."
+            echo "> Stand: $(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo
+            echo "## Offene Issues ($n_issues)"
+            echo
+            if [ "$n_issues" -eq 0 ]; then echo "_Keine offenen Issues._"; echo; fi
+            jq -r '
+              group_by(.milestone.title // "Ohne Milestone")
+              | sort_by(.[0].milestone.title // "zzz Ohne Milestone")
+              | .[]
+              | (.[0].milestone.title // "Ohne Milestone") as $m
+              | "### \($m)\n\n" + (map("- #\(.number) \(.title)" + (if (.labels|length) > 0 then "  `" + ([.labels[].name] | join("` `")) + "`" else "" end)) | join("\n")) + "\n"
+            ' "$issue_json"
+            echo "## Offene Pull Requests ($n_prs)"
+            echo
+            if [ "$n_prs" -eq 0 ]; then echo "_Keine offenen Pull Requests._"; else
+              jq -r '.[] | "- #\(.number) \(.title) (@\(.author.login))"' "$pr_json"
+            fi
+            echo
+            echo "## Letzte Releases"
+            echo
+            gh release list --repo "$REPO" --limit 5 --exclude-drafts | awk -F'\t' '{print "- " $1 " (" $4 ")"}' || true
+            echo
+            echo "## CI-Status (letzte Laeufe)"
+            echo
+            gh run list --repo "$REPO" --limit 5 --json workflowName,status,conclusion,headBranch,createdAt \
+              --jq '.[] | "- \(.workflowName): \(.status)/\(.conclusion) - \(.headBranch)"' || true
+            echo
+          } > "$OUT"
+
+      - name: Commit + Push (nur bei Aenderung)
+        run: |
+          if [ -z "$(git status --porcelain docs/PROGRESS.md)" ]; then
+            echo "Keine Aenderung — nichts zu committen."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/PROGRESS.md
+          git commit -m "docs: update PROGRESS.md [skip ci]"
+          git push
