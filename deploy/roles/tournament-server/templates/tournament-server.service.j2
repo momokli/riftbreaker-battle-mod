@@ -1,0 +1,22 @@
+[Unit]
+Description=RIFT BATTLE Tournament-Server (Referee + Web-UI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory={{ tournament_install_dir }}
+Environment=TOURNAMENT_HOST=0.0.0.0
+Environment=TOURNAMENT_PORT={{ tournament_port }}
+Environment=TOURNAMENT_AUTO_GO=true
+Environment=RBBRIDGE_A_URL={{ tournament_bridge_a_url }}
+Environment=RBBRIDGE_B_URL={{ tournament_bridge_b_url }}
+Environment=TOURNAMENT_WEB_DIR={{ tournament_install_dir }}/web
+Environment=RUST_LOG=info
+ExecStart={{ tournament_install_dir }}/tournament-server
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

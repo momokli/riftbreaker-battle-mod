@@ -1,0 +1,10 @@
+[Unit]
+Description=RIFT BATTLE Server-Probe alle {{ probe_interval_min }} min
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec={{ probe_interval_min }}min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

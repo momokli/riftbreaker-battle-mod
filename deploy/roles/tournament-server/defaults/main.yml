@@ -1,0 +1,4 @@
+---
+# Defaults der Rolle tournament-server (systemd, Rust/axum).
+# Binary-Quelle auf dem Control-Node; Build: cd tournament && cargo build --release
+tournament_binary_src: "{{ playbook_dir }}/../tournament/target/release/tournament-server"

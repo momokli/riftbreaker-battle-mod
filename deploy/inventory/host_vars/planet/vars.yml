@@ -1,0 +1,57 @@
+---
+# ============================================================================
+# planet — nicht-geheime Variablen (host_vars/planet/vars.yml)
+# Geheimnisse (Server-Passwort) NUR in vault.yml (ansible-vault verschlüsselt).
+# ============================================================================
+
+# --- Dedicated Game-Server (Dev-SP, 6321, 1v1 "vs sich selbst") -------------
+riftbreaker_game_dir: /srv/rbgame
+riftbreaker_mod_dir: "{{ riftbreaker_game_dir }}/mods/rbbattle"
+riftbreaker_server_image: rb-headless-client:latest
+riftbreaker_server_container: riftbreaker-dedicated
+riftbreaker_server_port_udp: 6321
+riftbreaker_server_exe: DedicatedServer.exe
+# Welt/Config gemäß docs/DUEL_SETUP.md (Operator-verifiziert, feste Seed = Parität).
+riftbreaker_server_campaign: mp_survival
+riftbreaker_server_mission: jungle
+riftbreaker_server_difficulty: hard
+riftbreaker_server_map_size: large
+riftbreaker_server_seed: 42
+
+# --- Vanilla-Server (docker, 6322, kein Mod) ---------------------------------
+vanilla_game_dir: /srv/rbgame-vanilla
+vanilla_server_image: rb-headless-client:latest
+vanilla_container: rb-winetest
+vanilla_port_udp: 6322
+vanilla_server_exe: DedicatedServer.exe
+vanilla_server_campaign: mp_survival
+vanilla_server_mission: jungle
+vanilla_server_difficulty: normal
+
+# --- Tournament-Server (systemd, Rust/axum aus tournament/) ------------------
+tournament_install_dir: /opt/rbmods/tournament-server
+tournament_unit: tournament-server
+tournament_port: 8080
+tournament_bridge_a_url: "http://127.0.0.1:9001/exec"
+tournament_bridge_b_url: "http://127.0.0.1:9002/exec"
+
+# --- Website (statics + Caddy, mellon-caddy-Container) -----------------------
+website_domain: rift.projectmellon.de
+website_docroot: /srv/rbmods-site
+website_mods_dir: "{{ website_docroot }}/mods"
+website_caddy_container: mellon-caddy
+website_caddyfile_host_path: /home/momo/Caddyfile
+website_caddyfile_d_dir: /home/momo/Caddyfile.d
+website_caddy_import_line: "import /etc/caddy/Caddyfile.d/*"
+
+# --- Mods-Zip (Paketierung + md5-Parität) ------------------------------------
+mods_zip_name: rbbattle.zip
+mods_zip_dest: "{{ website_mods_dir }}/{{ mods_zip_name }}"
+
+# --- Probe-Timer (systemd, scripts/probe_servers.sh) -------------------------
+probe_bin: /usr/local/bin/rbmods-probe.sh
+probe_out: "{{ website_docroot }}/status.json"
+probe_site_url: "https://{{ website_domain }}"
+probe_endpoints_file: /usr/local/etc/rbmods-probe.endpoints
+probe_interval_min: 2
+probe_server_ip: 65.21.27.234
