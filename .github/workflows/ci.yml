@@ -30,6 +30,9 @@ jobs:
       - name: Vollketten-E2E (Issue #11: rb_wave 3 Web-UI → Server → Relay → rbbridge → Mod)
         working-directory: tests/e2e-vollkette
         run: npm ci && npm test
+      - name: Landing Live-Status-Widget (Issue #30)
+        working-directory: tests/live-status
+        run: node --test
 
   build:
     name: Build + Package (rbbridge.dll/exe, dist/*.zip)

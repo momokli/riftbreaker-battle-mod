@@ -1,0 +1,9 @@
+{
+  "name": "rbbattle-live-status-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Landing Live-Status-Widget (Issue #30): pure deriveStatus-Unit-Tests + HTTP-Mock (Fixture /state) + statische Checks.",
+  "scripts": {
+    "test": "node --test"
+  }
+}
