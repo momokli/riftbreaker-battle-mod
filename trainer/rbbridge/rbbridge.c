@@ -25,7 +25,8 @@
  *                (dispatch_exec ruft seit RE-Stand 2.0.58485 die echte
  *                 ConsoleService::ExecuteCommand() im Spielprozess auf,
  *                 siehe Abschnitt "ConsoleService-Anbindung" unten)
- *       Egress : {"event":"state","state":{...}}     (Heartbeat-Platzhalter,
+ *       Egress : {"event":"score_update","score":...,"resources":{...},
+ *                "wave":...} (periodischer State-Snapshot, Issue #13,
  *                alle 5 s solange ein Client verbunden ist)
  *   - Robustheit: Fehler im Pipe-Dienst duerfen das Spiel NIEMALS
  *     abstuerzen; kein Client/kein Connect = ruhiger Wartethread; Client-
@@ -33,9 +34,10 @@
  *   - Logging: OutputDebugString (DebugView) + %TEMP%\rbbridge.log.
  *
  * Was RE-abhaengig noch offen ist (TODO/FIXME im Code; Phase 2 des Projekts):
- *   - send_state(): echte Spiel-State-Werte (Score, Ressourcen, Wave) aus
- *     dem Prozess lesen statt leerer Platzhalter (dispatch_exec selbst ist
- *     seit dem RE-Stand unten implementiert).
+ *   - read_game_state(): echte Spiel-State-Werte (Score, Ressourcen, Wave)
+ *     aus dem Prozess lesen statt Defaults (alles 0). Der score_update-
+ *     Egress (send_state) ist damit strukturell schon verdrahtet
+ *     (dispatch_exec selbst ist seit dem RE-Stand unten implementiert).
  *
  * Wichtig:
  *   - Kein Datei-I/O ueber die Lua-API noetig - alles laeuft hier in der DLL.
@@ -250,18 +252,51 @@ static int send_line(HANDLE hPipe, const char *fmt, ...)
 }
 
 /*
- * Egress-Platzhalter: periodischer Spiel-State.
+ * Spiel-State-Egress (Issue #13): periodischer State-Snapshot.
  *
- * FIXME(RE): Hier spaeter echte Werte aus dem Spielprozess eintragen
- * (Score, Ressourcen, aktuelle Wave, Rundenstand ...), sobald die
- * Adressen/Signaturen per scan/ ermittelt sind. Die Events daraus fressen
- * spaeter score_update/wave_* (siehe trainer/protocol.md).
+ * send_state() emittiert score_update gemaeß trainer/protocol.md (Score,
+ * Ressourcen, aktuelle Wave). Die Struktur ist stabil und wird vom Server
+ * (POST /report event=score_update) und der Web-UI konsumiert; die Werte
+ * kommen aus read_game_state().
  */
-static void send_state_placeholder(HANDLE hPipe)
+typedef struct {
+    uint64_t score;
+    uint64_t resources_iron;
+    uint64_t resources_carbon;
+    uint32_t wave;
+} game_state_t;
+
+/*
+ * Liest den aktuellen Spiel-State aus dem Prozess.
+ *
+ * FIXME(RE): echte Werte (Score, Ressourcen, aktuelle Wave) ueber die per
+ * scan/ ermittelten Adressen/Signaturen lesen. Bis dahin liefert diese
+ * Funktion einen neutralen Snapshot (alles 0): Das Protokoll ist damit
+ * end-to-end verdrahtet, die Werte folgen in der RE-Phase.
+ */
+static void read_game_state(game_state_t *st)
 {
+    memset(st, 0, sizeof(*st));
+}
+
+/*
+ * send_state(): periodischer State-Snapshot (Egress, Issue #13).
+ *
+ * Emittiert score_update gemaeß trainer/protocol.md. Die Werte stammen aus
+ * read_game_state() (bis zur RE-Phase Defaults, alles 0).
+ */
+static void send_state(HANDLE hPipe)
+{
+    game_state_t st;
+    read_game_state(&st);
     send_line(hPipe,
-              "{\"event\":\"state\",\"t\":%llu,\"state\":{}}",
-              (unsigned long long)GetTickCount64());
+              "{\"event\":\"score_update\",\"t\":%llu,\"score\":%llu,"
+              "\"resources\":{\"iron\":%llu,\"carbon\":%llu},\"wave\":%u}",
+              (unsigned long long)GetTickCount64(),
+              (unsigned long long)st.score,
+              (unsigned long long)st.resources_iron,
+              (unsigned long long)st.resources_carbon,
+              (unsigned)st.wave);
 }
 
 /* ------------------------------------------------------------------ */
@@ -570,11 +605,11 @@ static int serve_client(HANDLE hPipe)
             }
         }
 
-        /* State-Heartbeat (Egress-Platzhalter), nur bei aktivem Client */
+        /* State-Heartbeat (score_update, Egress Issue #13), nur bei Client */
         DWORD now = GetTickCount();
         if (last_beat == 0 || now - last_beat >= HEARTBEAT_MS) {
             last_beat = now;
-            send_state_placeholder(hPipe);
+            send_state(hPipe);
         }
 
         Sleep(POLL_MS);

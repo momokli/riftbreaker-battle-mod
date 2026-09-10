@@ -44,6 +44,14 @@ function fmtPending(sends) {
   return `⏳ ${n} Einheiten / ${v} Wert in der Queue (nächste Welle)`;
 }
 
+function fmtScore(t) {
+  if (!t) return "—";
+  const rsrc = (t.resources && typeof t.resources === "object")
+    ? Object.entries(t.resources).map(([k, v]) => `${k} ${v}`).join(" · ")
+    : "";
+  return `⚡ Score ${t.score || 0} · Wave ${t.wave || 0}${rsrc ? " · " + rsrc : ""}`;
+}
+
 function barClass(hp, max) {
   if (max <= 0) return "low";
   const r = hp / max;
@@ -116,6 +124,7 @@ function render(state) {
       $(`hqFill${w}`).style.width = pct + "%";
       $(`hqFill${w}`).className = "hq-fill " + barClass(hp, max);
       $(`hqLabel${w}`).textContent = `HQ ${Math.round(hp)} / ${max}`;
+      $(`score${w}`).textContent = fmtScore(t);
       $(`pending${w}`).textContent = t ? fmtPending(t.pending_sends) : "";
     };
     renderTeam("A", "hqFillA");

@@ -139,6 +139,7 @@ Nur in Phase `running` (sonst 409). Der Send wird in die Queue der
 ```json
 {"world": "A", "event": "wave_start", "built_value": 8200}
 {"world": "A", "event": "hq_hp", "hp": 70.0}
+{"world": "A", "event": "score_update", "score": 1240, "resources": {"iron": 320, "carbon": 80}, "wave": 4}
 ```
 
 - `wave_start`: Wellenstart der Welt (Lock). `built_value` optional
@@ -146,6 +147,10 @@ Nur in Phase `running` (sonst 409). Der Send wird in die Queue der
   `{"effect": "locked"|"duplicate", "round": …, "rounds_done": …, "phase": …}`.
 - `hq_hp`: aktueller HQ-HP (absolut, 0 = HQ-Tod → Match-Ende). Antwort
   `{"match_over": bool, "winner": …, "hq_hp": …}`.
+- `score_update`: periodischer State-Snapshot (send_state-Egress, Issue #13) —
+  Score, Ressourcen und aktuelle Wave einer Welt. Idempotent; der Feed wird nur
+  bei Score-/Wave-Änderung belastet. Antwort
+  `{"event": "score_update", "score": …, "wave": …, "changed": bool, "phase": …}`.
 
 ### POST /rematch
 
@@ -202,6 +207,7 @@ Jeder Eintrag trägt ein monotones `seq`-Feld (Cursor ohne Event-Verlust).
   "teams": {
     "A": {
       "player": "momo", "ready": true, "hq_hp": 100.0,
+      "score": 1240, "resources": {"iron": 320, "carbon": 80}, "wave": 4,
       "pending_sends": [ {"from": "B", "units": […], "value": 900, "round": 2, "ts": …} ],
       "go_broadcast": {"at": …, "ok": true, "error": null, "endpoint": "http://…"}
     },

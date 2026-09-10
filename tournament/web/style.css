@@ -181,6 +181,7 @@ button.primary { border-color: var(--accent); background: rgba(63, 208, 212, 0.0
   text-shadow: 0 0 6px rgba(0,0,0,0.6);
 }
 .pending { margin-top: 4px; font-size: 11.5px; min-height: 16px; }
+.score { margin-top: 6px; font-size: 12px; min-height: 16px; color: var(--text); letter-spacing: 0.02em; }
 
 .go-status {
   margin-top: 10px;
