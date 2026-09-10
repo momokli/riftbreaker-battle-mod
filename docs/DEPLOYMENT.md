@@ -61,6 +61,47 @@ Befüllung: siehe `deploy/README.md` → „Vault".
 Stack teilweise ad-hoc ohne Ansible (Docker manuell, Website aus manueller
 Kopie — siehe Issue-Kommentar zur stale Landing). Gap: `deploy/` fehlte → Issue #45.
 
+Der laufende Dev-SP-Server (:6321) ist ein Community-Docker-Setup
+(`j3n5-group/riftbreaker-docker`) unter `/srv/riftbreaker` (Compose, Wine).
+Die `deploy/`-Rollen (`riftbreaker-server`, `mods-zip`) sind der Zielstand,
+aber auf planet noch nicht an diese Instanz angebunden — `/srv/rbgame` und
+`/opt/rbmods/compose/…` existieren dort (noch) nicht.
+
+## Interim-Deploy :6321 (Issue #156)
+
+Bis zur CD (#91) wird die Mod auf :6321 manuell eingespielt (reproduzierbar):
+
+```bash
+# 1) Mod-Zip aus Repo main bauen (Content-Root = mod/):
+bash scripts/package_bausteine.sh          # → dist/rbbattle.zip
+
+# 2) Auf planet kopieren + md5-Parität (lokal == remote):
+scp dist/rbbattle.zip planet:/tmp/rbbattle.zip
+md5sum dist/rbbattle.zip                   # lokal
+ssh planet md5sum /tmp/rbbattle.zip        # remote, muss übereinstimmen
+
+# 3) Spieler-Check VOR jedem Neustart (leer = letzter Log `PauseGame`).
+#    Sind Spieler online: NICHT neu starten, im Issue vermerken.
+ssh planet 'tail -3 "/srv/riftbreaker/data/wine/drive_c/users/steamuser/Documents/The Riftbreaker/exor_logs.txt"'
+
+# 4) Mod ersetzen (Backup + entpacken, Ownership beibehalten):
+ssh planet 'cd /srv/riftbreaker/data/server/mods && \
+  tar -czf rbbattle.bak-$(date +%Y%m%d-%H%M%S).tar.gz rbbattle && \
+  rm -rf rbbattle && mkdir rbbattle && \
+  unzip -q /tmp/rbbattle.zip -d rbbattle && chown -R momo:momo rbbattle'
+
+# 5) Container neu starten:
+ssh planet 'cd /srv/riftbreaker && docker compose restart riftbreaker-server'
+
+# 6) Smoke-Test: mod_load version=<VERSION> status=ok, Container healthy, Port 6321/udp offen.
+ssh planet 'grep -a mod_load "/srv/riftbreaker/data/wine/drive_c/users/steamuser/Documents/The Riftbreaker/exor_logs.txt" | tail -1'
+```
+
+Mod-Ordner (Host → Container): `data/server/mods/rbbattle` →
+`/opt/riftbreaker/mods/rbbattle`. `exor_logs.txt`:
+`data/wine/drive_c/users/steamuser/Documents/The Riftbreaker/`.
+Rollback: Backup-`tar.gz` unter `data/server/mods/` zurückentpacken + neu starten.
+
 ## Betriebsregeln
 
 - Mod-Parität vor jedem Release prüfen (md5).
