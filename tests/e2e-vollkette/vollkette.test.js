@@ -269,8 +269,6 @@ test('Vollkette: rb_wave 3 → Server-Outbox → Relay-Dispatch auf die Pipe (dy
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rb11-e2e-'));
   let server = null;
   let relay = null;
-  let pipeReader = null;
-  let getPipeData = null;
 
   const serverLog = path.join(dir, 'server.log');
   const relayLog = path.join(dir, 'relay.log');
@@ -309,13 +307,19 @@ test('Vollkette: rb_wave 3 → Server-Outbox → Relay-Dispatch auf die Pipe (dy
     // 3) Relay für player_a starten (pollt die Outbox).
     fs.writeFileSync(fakeLog, '[RBBATTLE] event=score_update score=0\n');
 
-    // Fake rbbridge-Pipe: FIFO (Named-Pipe-Ersatz unter Linux) + Leser.
+    // Fake rbbridge-Pipe: FIFO (Named-Pipe-Ersatz unter Linux). Kein
+    // externer "cat"-Leser mehr (Issue #73): dispatch_exec liest nach dem
+    // Schreiben auf DEMSELBEN Handle die exec_result-Antwort (PIPE_ACCESS_
+    // DUPLEX-Aequivalent) - eine FIFO ist aber nur eine einzelne Queue, also
+    // bekommt der Relay deterministisch seine eigene gerade geschriebene
+    // Zeile zurueck, bevor ein externer Reader je etwas sieht (verifiziert;
+    // bei einer echten Windows-Named-Pipe mit getrennten Puffern je Richtung
+    // passiert das nicht). Byte-Inhalt der exec-Zeile ist stattdessen per
+    // FIFO in bausteine/07-relay/test_dispatch.py (PipeClientTest) und die
+    // Response-Verarbeitung per os.pipe() in ReadResultTest abgedeckt; hier
+    // pruefen wir nur, dass der Dispatch gegen eine echte Pipe nicht bricht.
     const pipePath = path.join(dir, 'fake_pipe');
     execSync(`mkfifo "${pipePath}"`);
-    let pipeData = '';
-    pipeReader = spawn('cat', [pipePath]);
-    pipeReader.stdout.on('data', (c) => { pipeData += c; });
-    getPipeData = () => pipeData;
 
     relay = spawn('python3', [RELAY_PY], {
       env: {
@@ -326,6 +330,9 @@ test('Vollkette: rb_wave 3 → Server-Outbox → Relay-Dispatch auf die Pipe (dy
         RBB_SERVER: base,
         RBB_POLL_S: '0.2',
         RBB_PIPE_PATH: pipePath,
+        // Ohne echten rbbridge-Responder wartet dispatch_exec sonst den
+        // vollen Default (5s) auf eine exec_result-Antwort, die nie kommt.
+        RBB_PIPE_TIMEOUT_S: '1',
       },
       stdio: ['ignore', fs.openSync(relayLog, 'a'), fs.openSync(relayLog, 'a')],
     });
@@ -348,13 +355,11 @@ test('Vollkette: rb_wave 3 → Server-Outbox → Relay-Dispatch auf die Pipe (dy
       fs.readFileSync(relayLog, 'utf8').includes('dispatch sent cmd_id='), 8000);
     assert.ok(dispatched, 'Relay loggt "dispatch sent cmd_id="');
 
-    // Die Fake-Pipe (FIFO) muss die exec-Zeile empfangen haben.
-    const gotPipe = await waitFor(() => getPipeData().includes('"cmd":"exec"'), 8000);
-    assert.ok(gotPipe, 'Fake-Pipe empfing {"cmd":"exec",...}');
-    const pipeLine = JSON.parse(getPipeData().trim().split('\n')[0]);
-    assert.strictEqual(pipeLine.cmd, 'exec');
-    assert.strictEqual(pipeLine.command, 'rb_wave 3');
-    assert.ok(Number(pipeLine.cmd_id) >= 1, `cmd_id >= 1 (got ${pipeLine.cmd_id})`);
+    // Kein exec_result von der Fake-Pipe (kein Responder) -> Timeout, aber
+    // kein Haenger im Dispatch-Thread (Issue #73).
+    const timedOut = await waitFor(() =>
+      fs.readFileSync(relayLog, 'utf8').includes('dispatch result cmd_id=1 status=timeout'), 8000);
+    assert.ok(timedOut, 'Relay meldet status=timeout statt zu haengen');
 
     // Server-Seite: exec_command control -> player_a protokolliert.
     assert.ok(
@@ -362,7 +367,6 @@ test('Vollkette: rb_wave 3 → Server-Outbox → Relay-Dispatch auf die Pipe (dy
       'Server loggt exec_command control -> player_a',
     );
   } finally {
-    if (pipeReader) { try { pipeReader.kill('SIGKILL'); } catch (e) { /* ignore */ } }
     if (relay) relay.kill('SIGTERM');
     if (server) server.kill('SIGTERM');
     await new Promise((r) => setTimeout(r, 200));
@@ -383,7 +387,7 @@ test('Relay → rbbridge-Pipe: Pipe fehlt → dispatch failed reason=pipe_unavai
 sys.path.insert(0, ${JSON.stringify(relayDir)})
 import relay
 class StubPipe:
-    def send_exec(self, command, cmd_id):
+    def send_exec_and_wait(self, command, cmd_id):
         raise OSError('pipe gone (fake)')
 cfg = {'log_path':'/tmp/x','player_id':'p','match_id':'m','server':'http://x','poll_s':1.0}
 r = relay.Relay(cfg, pipe=StubPipe())

@@ -11,9 +11,12 @@ Prototyp-Strecke Spiel -> Trainer -> Relay -> Server -> Web-UI:
         -> Server legt Antworten/Kommandos in die Outbox des Spielers
         -> GET /poll/:player_id  (Poll-Loop im Relay)
         -> event.exec_command  ->  dispatch_exec: {"cmd":"exec","command":...,
-           "cmd_id":...} auf die rbbridge-Named-Pipe (\\\\.\\pipe\\rbbattle),
-           fire-and-forget; Pipe nicht erreichbar -> Retry mit Backoff
-           (Kommando wird erst NACH Erfolg als ack markiert, kein Verlust)
+           "cmd_id":...} auf die rbbridge-Named-Pipe (\\\\.\\pipe\\rbbattle);
+           Pipe nicht erreichbar -> Retry mit Backoff (Kommando wird erst
+           NACH erfolgreichem Schreiben als ack markiert, kein Verlust).
+           Danach wird auf derselben Verbindung die exec_result-Antwort
+           gelesen (Issue #73) und geloggt (status=ok|error|timeout) -
+           eine ausbleibende Antwort ist kein Fehler, nur ein Log-Hinweis.
            andere Event-Typen -> nur loggen
 
 Nur Standardbibliothek (Python 3.7+), kein pip-Paket noetig.
@@ -41,7 +44,10 @@ Verhalten:
     - exec_command wird als {"cmd":"exec",...} auf die rbbridge-Pipe geschrieben;
       ist die Pipe nicht erreichbar (Spiel laeuft nicht), wird das Kommando
       NICHT verworfen, sondern mit Backoff erneut versucht (Log
-      "dispatch failed reason=pipe_unavailable").
+      "dispatch failed reason=pipe_unavailable"). Nach erfolgreichem Schreiben
+      wird auf derselben Verbindung bis zu RBB_PIPE_TIMEOUT_S auf die
+      exec_result-Antwort gewartet (Log "dispatch result cmd_id=... status=
+      ok|error|timeout"); ein Timeout hier blockiert keine weiteren Dispatches.
     - Log-Rotation (6 Dateien): erkannt (Datei schrumpft), Tail startet vorn.
     - Beenden: Strg+C (graceful), Encoding: UTF-8 mit errors=replace.
 
@@ -176,12 +182,16 @@ def backoff_sleep(attempt, stop):
 class PipeClient:
     """Minimaler Client fuer die rbbridge-Named-Pipe (exec-Kanal).
 
-    Schreibt eine JSON-Zeile {"cmd":"exec","command":...,"cmd_id":...}
-    auf die Pipe und schliesst sie wieder (fire-and-forget; die Antwort
-    exec_result der rbbridge wird im v0-Relay nicht gelesen). Connect+
-    Write sind per Timeout begrenzt, damit eine nicht erreichbare Pipe
-    (Spiel laeuft nicht / rbbridge nicht injiziert / Pipe belegt) die
-    Dispatch-Schleife nicht blockiert.
+    Schreibt eine JSON-Zeile {"cmd":"exec","command":...,"cmd_id":...} auf
+    die Pipe. Zwei Varianten:
+      - send_exec: schreibt und schliesst wieder (fire-and-forget, liest
+        keine Antwort) - fuer einfache Faelle/Tests.
+      - send_exec_and_wait: schreibt und liest auf DERSELBEN Verbindung die
+        exec_result-Antwort der rbbridge (PIPE_ACCESS_DUPLEX, Issue #73),
+        bevor sie schliesst. Vom Relay-Dispatch-Pfad genutzt.
+    Connect+Write sind in beiden Faellen per Timeout begrenzt, damit eine
+    nicht erreichbare Pipe (Spiel laeuft nicht / rbbridge nicht injiziert /
+    Pipe belegt) die Dispatch-Schleife nicht blockiert.
 
     - Windows: Pfad \\\.\\pipe\\rbbattle -> os.open (Named Pipe; blockiert
       bis ein Server/Instanz-Slot frei ist - Timeout greift hier).
@@ -194,13 +204,17 @@ class PipeClient:
         self.timeout_s = timeout_s
 
     def _open_flags(self):
+        # Beide Richtungen ueber denselben Handle (rbbridge: PIPE_ACCESS_DUPLEX,
+        # exec_result kommt auf derselben Verbindung zurueck, Issue #73).
         # Windows: Named Pipe wie pipe_client.py (O_RDWR, blockiert bis ein
         # Server/Instanz-Slot frei ist -> Timeout greift). Linux (Test): FIFO
-        # (Named-Pipe-Ersatz) nur zum Schreiben oeffnen -> blockiert bis ein
-        # Leser da ist (Timeout greift), deterministisches Writer/Reader-Handshake.
+        # mit O_RDWR ist eine von striktem POSIX abweichende, unter Linux aber
+        # garantierte Erweiterung (open(7)) - blockiert nicht wie reines
+        # O_WRONLY/O_RDONLY und erlaubt echtes Request/Response als
+        # Named-Pipe-Ersatz.
         if os.name == 'nt':
             return os.O_RDWR | getattr(os, 'O_BINARY', 0)
-        return os.O_WRONLY
+        return os.O_RDWR
 
     def _write(self, data):
         fd = os.open(self.path, self._open_flags())
@@ -212,7 +226,10 @@ class PipeClient:
 
     def send_exec(self, command, cmd_id):
         """Schreibt die exec-Zeile; liefert die Byte-Zahl oder wirft
-        OSError/TimeoutError, wenn die Pipe nicht erreichbar ist."""
+        OSError/TimeoutError, wenn die Pipe nicht erreichbar ist.
+
+        Fire-and-forget (kein Read der Antwort) - fuer die Antwort siehe
+        send_exec_and_wait."""
         payload = {'cmd': 'exec', 'command': command, 'cmd_id': cmd_id}
         # Kompaktes JSON ohne Leerzeichen (Vertrag trainer/protocol.md).
         data = (json.dumps(payload, ensure_ascii=False, separators=(',', ':')) + '\n').encode('utf-8')
@@ -238,6 +255,109 @@ class PipeClient:
         if 'error' in result:
             raise result['error']
         return result['n']
+
+    def _read_result(self, fd, command, deadline):
+        """Liest Zeilen vom fd, bis ein passendes exec_result kommt oder
+        die deadline (Unix-Timestamp, None = unbegrenzt) erreicht ist.
+
+        Andere Nachrichten der DLL (pong/score_update/error/...) werden
+        uebersprungen - nur ein exec_result mit demselben command-Feld
+        zaehlt als Treffer (rbbridge kennt kein cmd_id, s. protocol.md).
+        os.read() selbst hat kein natives Timeout; der Deadline-Check
+        greift nur zwischen zwei Reads - der eigentliche Gesamt-Timeout
+        wird vom Aufrufer (send_exec_and_wait) per Thread-Join durchgesetzt,
+        das hier ist nur ein "genug erfolglos gelesen -> aufgeben"-Schutz
+        gegen eine gespraechige Gegenseite.
+        """
+        buf = b''
+        lines_seen = 0
+        while deadline is None or time.time() < deadline:
+            try:
+                chunk = os.read(fd, 4096)
+            except OSError:
+                return None
+            if not chunk:
+                return None  # Gegenseite hat geschlossen - keine Antwort mehr
+            buf += chunk
+            while b'\n' in buf:
+                line, buf = buf.split(b'\n', 1)
+                lines_seen += 1
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line.decode('utf-8', errors='replace'))
+                except ValueError:
+                    continue
+                if isinstance(msg, dict) and msg.get('event') == 'exec_result' \
+                        and msg.get('command') == command:
+                    return msg
+                if lines_seen > 200:
+                    return None  # Schutz gegen endlose Fremd-Zeilen
+        return None
+
+    def send_exec_and_wait(self, command, cmd_id):
+        """Schreibt die exec-Zeile und liest auf derselben Verbindung die
+        exec_result-Antwort (rbbridge ist PIPE_ACCESS_DUPLEX - ein
+        Client-Handle fuer beide Richtungen, s. trainer/protocol.md).
+
+        Liefert (bytes_geschrieben, result): result ist das geparste
+        exec_result-Dict, oder None, wenn innerhalb von timeout_s keine
+        passende Antwort ankam. Ein Antwort-Timeout ist KEIN Fehler -
+        das Kommando wurde erfolgreich geschrieben. Wirft OSError/
+        TimeoutError nur, wenn schon Connect/Write fehlschlagen (wie
+        send_exec).
+        """
+        payload = {'cmd': 'exec', 'command': command, 'cmd_id': cmd_id}
+        data = (json.dumps(payload, ensure_ascii=False, separators=(',', ':')) + '\n').encode('utf-8')
+        timeout_s = self.timeout_s if (self.timeout_s and self.timeout_s > 0) else None
+
+        result = {}
+        written = threading.Event()
+        finished = threading.Event()
+
+        def _run():
+            try:
+                fd = os.open(self.path, self._open_flags())
+            except OSError as e:
+                result['error'] = e
+                finished.set()
+                return
+            try:
+                try:
+                    os.write(fd, data)
+                except OSError as e:
+                    result['error'] = e
+                    return
+                result['n'] = len(data)
+                written.set()
+                deadline = None if timeout_s is None else time.time() + timeout_s
+                result['msg'] = self._read_result(fd, command, deadline)
+            finally:
+                os.close(fd)
+                finished.set()
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+
+        if timeout_s is None:
+            finished.wait()
+        else:
+            # Phase 1: auf Connect+Write warten (wie send_exec) - Timeout
+            # hier ist ein echter Fehler (Pipe nicht erreichbar).
+            if not written.wait(timeout_s):
+                if finished.is_set() and 'error' in result:
+                    raise result['error']
+                raise TimeoutError('pipe connect/write timeout nach {}s'.format(timeout_s))
+            # Phase 2: Budget fuer die exec_result-Antwort - Timeout hier ist
+            # KEIN Fehler (Kommando wurde schon geschrieben), nur "keine
+            # Antwort"; der Hintergrund-Thread bleibt in dem Fall als Daemon
+            # haengen (analog send_exec), blockiert aber nichts weiter.
+            finished.wait(timeout_s)
+
+        if 'error' in result:
+            raise result['error']
+        return result.get('n', len(data)), result.get('msg')
 
 
 class Relay:
@@ -454,12 +574,15 @@ class Relay:
         self.dispatch_queue.put((time.time(), self.dispatch_seq, item))
 
     def dispatch_exec(self, command, cmd_id):
-        """Schreibt die exec-Zeile auf die rbbridge-Pipe (fire-and-forget).
+        """Schreibt die exec-Zeile auf die rbbridge-Pipe und liest die
+        exec_result-Antwort auf derselben Verbindung (Issue #73).
 
-        Liefert die geschriebene Byte-Zahl; wirft OSError/TimeoutError,
-        wenn die Pipe nicht erreichbar ist.
+        Liefert (bytes_geschrieben, result) - result ist das exec_result-Dict
+        oder None bei Antwort-Timeout (kein Fehler). Wirft OSError/
+        TimeoutError, wenn schon Connect/Write fehlschlagen (Pipe nicht
+        erreichbar).
         """
-        return self.pipe.send_exec(command, cmd_id)
+        return self.pipe.send_exec_and_wait(command, cmd_id)
 
     def _requeue_dispatch(self, item, due):
         self.dispatch_seq += 1
@@ -480,7 +603,7 @@ class Relay:
         command = item['command']
         cid = item['cmd_id']
         try:
-            n = self.dispatch_exec(command, cid)
+            n, msg = self.dispatch_exec(command, cid)
         except (OSError, TimeoutError, ConnectionError) as e:
             delay = min(BACKOFF_MAX, BACKOFF_BASE * (2 ** item['attempt']))
             item['attempt'] += 1
@@ -492,7 +615,19 @@ class Relay:
         self.pending_keys.discard(key)
         self._prune_acked()
         log('dispatch sent cmd_id={} len={}'.format(key, n))
+        self._log_dispatch_result(key, command, msg)
         return True
+
+    def _log_dispatch_result(self, key, command, msg):
+        """Loggt die exec_result-Antwort (oder deren Ausbleiben, Issue #73)."""
+        if msg is None:
+            log('dispatch result cmd_id={} status=timeout command={!r}'.format(key, command))
+            return
+        if msg.get('ok'):
+            log('dispatch result cmd_id={} status=ok command={!r}'.format(key, command))
+        else:
+            log('dispatch result cmd_id={} status=error command={!r} reason={!r}'.format(
+                key, command, msg.get('reason', '')))
 
     def dispatch_loop(self):
         log('dispatch: pipe={} timeout={}s'.format(

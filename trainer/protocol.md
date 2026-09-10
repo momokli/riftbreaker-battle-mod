@@ -40,6 +40,22 @@ Wahrheitsquelle, Events sind nur Benachrichtigungen.
   In der RE-Phase wird `dispatch_exec` an den echten Spiel-Console-Dienst
   angeschlossen (dann gilt `"ok":true`). Bis dahin antwortet die DLL mit
   `exec_result ... "ok":false`.
+- **Client-seitig implementiert:** `bausteine/07-relay/relay.py` schreibt
+  `exec`-Zeilen nach diesem Vertrag auf die Pipe (`dispatch_exec`, Issue
+  #60), inkl. eines zusätzlichen `cmd_id`-Felds zur Korrelation (unbekannte
+  Felder werden von der DLL ignoriert, s. o.). Pfad/Timeout über
+  `RBB_PIPE_PATH`/`RBB_PIPE_TIMEOUT_S` konfigurierbar; ist die Pipe nicht
+  erreichbar, verwirft der Relay das Kommando nicht, sondern versucht es mit
+  Backoff erneut.
+- **Antwortrichtung gelesen (Issue #73):** Nach erfolgreichem Schreiben liest
+  der Relay auf **demselben** Pipe-Handle weiter (PIPE_ACCESS_DUPLEX-
+  Aequivalent) und wertet die `exec_result`-Zeile aus — Matching über das
+  `command`-Feld (rbbridge kennt `cmd_id` nicht, s. o.), andere Nachrichten
+  (`pong`/`score_update`/…) auf derselben Verbindung werden übersprungen.
+  Bleibt die Antwort innerhalb `RBB_PIPE_TIMEOUT_S` aus, ist das kein Fehler
+  (das Kommando wurde bereits geschrieben) — nur ein Log-Hinweis (`dispatch
+  result cmd_id=... status=timeout`). Details/Timeout-Phasen:
+  `docs/relay-pipe-contract.md`.
 - Strukturierte Server→Spiel-Events (unten) werden später entweder über
   `exec`-Wrapper (`command="rbbattle_event <json>"`, vom Lua-Mod registriert)
   oder direkt über eine RE-gefundene Aufrufstelle zugestellt — Entscheidung

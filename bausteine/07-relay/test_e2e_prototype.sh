@@ -30,11 +30,9 @@ DIR=$(mktemp -d /tmp/rb07-e2e.XXXXXX)
 SERVER_PID=""
 RELAY_PID=""
 SSE_PID=""
-PIPE_PID=""
 
 # shellcheck disable=SC2317  # False Positive: cleanup wird via "trap ... EXIT" aufgerufen
 cleanup() {
-  [ -n "$PIPE_PID" ] && kill "$PIPE_PID" 2>/dev/null
   [ -n "$RELAY_PID" ] && kill "$RELAY_PID" 2>/dev/null
   [ -n "$SSE_PID" ] && kill "$SSE_PID" 2>/dev/null
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
@@ -119,8 +117,12 @@ check "POST /match/create liefert match_id" test -n "$MID"
 echo "match_id=$MID"
 
 echo "== Relay starten (player_a, match $MID, log=$DIR/fake.log) =="
+# RBB_PIPE_TIMEOUT_S kurz halten: ohne echten rbbridge-Responder wartet
+# dispatch_exec sonst den vollen Default (5s) auf eine exec_result-Antwort,
+# die hier nie kommt (s. u., Issue #73).
 RBB_PLAYER_ID=player_a RBB_MATCH_ID="$MID" RBB_LOG_PATH="$DIR/fake.log" \
-RBB_SERVER="$URL" RBB_PIPE_PATH="$DIR/fake_pipe" python3 "$RELAY_PY" >"$DIR/relay.log" 2>&1 &
+RBB_SERVER="$URL" RBB_PIPE_PATH="$DIR/fake_pipe" RBB_PIPE_TIMEOUT_S=1 \
+python3 "$RELAY_PY" >"$DIR/relay.log" 2>&1 &
 RELAY_PID=$!
 check "relay registriert sich (register: ok)" \
   wait_for 20 '\[relay\] register: ok player_id=player_a' "$DIR/relay.log"
@@ -154,9 +156,18 @@ check "SSE: Zustellung sichtbar (delivery incoming_wave an player_b)" \
 
 echo "== rbbridge-Pipe-Fake vorbereiten (Named-Pipe-Ersatz unter Linux) =="
 mkfifo "$DIR/fake_pipe"
-cat "$DIR/fake_pipe" > "$DIR/pipe.log" 2>&1 &
-PIPE_PID=$!
 check "Fake-Pipe ist ein FIFO" test -p "$DIR/fake_pipe"
+# Kein passiver "cat"-Reader hier (Issue #73): Seit dispatch_exec nach dem
+# Schreiben auf DEMSELBEN Handle auch die exec_result-Antwort liest
+# (PIPE_ACCESS_DUPLEX-Aequivalent), liest eine FIFO-Queue jeden nachfolgenden
+# read() IMMER als naechstes vom zuerst lesenden Handle - der Relay bekommt
+# also deterministisch seine eigene gerade geschriebene Zeile zurueck, ein
+# externer Leser (cat) sieht nie etwas (verifiziert, kein Scheduling-Zufall;
+# bei einer echten Windows-Named-Pipe mit getrennten Puffern je Richtung
+# passiert das nicht). Byte-Inhalt der exec-Zeile ist stattdessen per FIFO in
+# bausteine/07-relay/test_dispatch.py (PipeClientTest) und die
+# Response-Verarbeitung per os.pipe() in ReadResultTest abgedeckt; hier
+# pruefen wir nur, dass der Dispatch gegen eine echte Pipe nicht bricht.
 
 echo "== exec_command -> dispatch auf die Fake-Pipe =="
 CODE_EC=$(http_code -X POST "$URL/event" -H 'Content-Type: application/json' \
@@ -165,10 +176,8 @@ CODE_EC=$(http_code -X POST "$URL/event" -H 'Content-Type: application/json' \
 check "POST /event exec_command rb_wave 3 -> 200" test "$CODE_EC" = 200
 check "relay dispatcht auf die Fake-Pipe (dispatch sent)" \
   wait_for 20 'dispatch sent cmd_id=' "$DIR/relay.log"
-check "Fake-Pipe empfing exec-Zeile (cmd=exec)" \
-  wait_for 20 '"cmd":"exec"' "$DIR/pipe.log"
-check "Fake-Pipe JSON enthält command=rb_wave 3" \
-  grep -q '"command":"rb_wave 3"' "$DIR/pipe.log"
+check "relay meldet das Dispatch-Ergebnis (kein exec_result -> status=timeout)" \
+  wait_for 20 'dispatch result cmd_id=1 status=timeout' "$DIR/relay.log"
 check "SSE: exec_command-Zustellung sichtbar (delivery)" \
   grep -q '"kind":"delivery".*"event":"exec_command".*"command":"rb_wave 3"' "$DIR/sse.log"
 
