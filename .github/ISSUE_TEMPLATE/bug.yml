@@ -1,0 +1,63 @@
+name: Bug report
+description: Etwas funktioniert nicht wie erwartet
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > **Wichtig:** Erst mit `!claim` im Kommentar claimen, bevor du losarbeitest —
+        > so verhindern wir Doppelarbeit (siehe [CONTRIBUTING.md](https://github.com/momokli/riftbreaker-battle-mod/blob/main/CONTRIBUTING.md)).
+
+  - type: textarea
+    id: beschreibung
+    attributes:
+      label: Beschreibung
+      description: Was läuft schief?
+      placeholder: Kurz und konkret beschreiben.
+    validations:
+      required: true
+
+  - type: textarea
+    id: schritte
+    attributes:
+      label: Schritte zum Reproduzieren
+      description: Wie lässt sich das Problem auslösen?
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+
+  - type: textarea
+    id: erwartet
+    attributes:
+      label: Erwartetes Verhalten
+    validations:
+      required: true
+
+  - type: textarea
+    id: tatsaechlich
+    attributes:
+      label: Tatsächliches Verhalten
+    validations:
+      required: true
+
+  - type: input
+    id: umgebung
+    attributes:
+      label: Umgebung
+      description: Baustein/Betroffener Bereich, Betriebssystem, Version/Commit.
+      placeholder: z. B. bausteine/07-relay, Windows 11, v0.16.0
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Screenshots
+      description: Relevante Ausgaben (bitte keine Secrets!).
+      render: text
+    validations:
+      required: false

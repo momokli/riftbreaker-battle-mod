@@ -1,0 +1,3 @@
+# Issue-Chooser-Konfiguration.
+# Freie Issues bleiben erlaubt; die Vorlagen helfen beim Strukturieren.
+blank_issues_enabled: true
