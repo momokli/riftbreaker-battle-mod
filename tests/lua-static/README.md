@@ -72,6 +72,19 @@ npm test        # = node --test
 8. Fremdes Popup (z. B. `rb_shop`, `open=false`) → Guard ignoriert den Klick
    (kein zusätzlicher Kauf).
 
+`balance.test.js` deckt Issue #33 (Balance & Tuning v1) ab:
+
+1. Mod lädt, Version 0.19.0 (kein Version-Bump); `rb_balance` registriert.
+2. `rb_balance` legt die v1-Preisliste offen: 5 Units / 4 Tiers / 1 Boss mit
+   den dokumentierten Preisen (brabit 100, baxmoth 150, artigian 200,
+   canceroth 300, boss 800).
+3. Preis-Invarianten (nicht trivial): eindeutige Unit-Ids, genau 1 Boss,
+   positive Integer-Preise, strikt steigend t1 < t2 < t3 < boss.
+4. HQ-HP-Kurve: Formel-Konstanten (start=100, per_round=20, cap=4) + Stichproben
+   r1..r6 (100/120/140/160/180/180) — monoton nicht-fallend, gedeckelt.
+5. Wellenstart setzt den HQ-HP auf den Runden-Maxwert (Runde 1→100, 2→120,
+   3→140); die Kurve heilt zurücks aufs Runden-Max.
+
 ## Grenzen (ehrlich dokumentiert)
 
 Die Stub-Services ersetzen die Spiel-Engine; **nicht** live-verifizierbar sind
@@ -97,3 +110,8 @@ Für #99 gilt analog: die Klick-/Overlay-Logik (Toggle, `button_yes` → `BuyWav
 `button_no` → schließen, Fremd-Popup-Guard) ist statisch getestet; das tatsächliche
 Pop-up-Rendering des 2-Button-Templates (`popup_ingame_2buttons`) und die
 `GuiPopupResultEvent`-Feuerung im Spiel sind live-verifizierbar (Operator, Prod).
+
+Für #33 gilt analog: Preisliste und HQ-HP-Kurve sind reine Daten-/Formel-Logik und
+statisch getestet; das **Gefühl** ("War Level 3 zu brutal?", richtige Preise,
+richtige HP-Kurve) ist ausschließlich live verifizierbar (Operator, Test-Duell
+Momo vs. Matheo) — alle Werte sind als "braucht Live-Test" markiert.
