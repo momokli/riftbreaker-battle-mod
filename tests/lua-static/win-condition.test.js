@@ -27,6 +27,7 @@ const modSource = fs.readFileSync(MOD_PATH, 'utf8');
 const STUBS = `
 -- ==== Stub-Services (fengari/Stub-Services, Muster mod/README.md) ====
 _G.__logs = {}
+_G.__console = {}
 _G.__handlers = {}
 _G.__commands = {}
 _G.__db = {}
@@ -36,7 +37,7 @@ LogService = {
     Log = function(self, msg) _G.__logs[#_G.__logs + 1] = msg end,
 }
 ConsoleService = {
-    Write = function(self, msg) end,
+    Write = function(self, msg) _G.__console[#_G.__console + 1] = msg end,
     RegisterCommand = function(self, name, fn) _G.__commands[name] = fn end,
 }
 -- #144: _G.__findTypes[type] steuert, was FindEntitiesByType pro Typ
@@ -103,6 +104,13 @@ local function count_logs(sub)
         if string.find(m, sub, 1, true) then n = n + 1 end
     end
     return n
+end
+
+local function console_has(sub)
+    for _, m in ipairs(_G.__console) do
+        if string.find(m, sub, 1, true) then return true end
+    end
+    return false
 end
 
 -- Hilfs-Event: eintretende Entity (evt:GetEntity()) + optionale Team-Id
@@ -177,6 +185,8 @@ check(log_has("event=leak damage=10 hp_before=10 hp=0"), "10. Leak -> hp 10->0")
 check(log_has("event=hq_dead status=match_end hp=0"), "event=hq_dead bei HP<=0")
 check(log_has("event=match_end reason=hq_destroyed winner=opponent"), "event=match_end")
 check(count_logs("event=match_end") == 1, "match_end genau einmal")
+check(console_has("GAME OVER") and console_has("HQ destroyed"),
+    "#157: in-game Annonce 'GAME OVER — HQ destroyed' nach HQ-Tod")
 
 -- 5. Idempotenz: weiterer Leak nach Tod aendert nichts.
 _G.__handlers["EnteredTriggerEvent"](trigger_evt(9999))
