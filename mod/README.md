@@ -1,8 +1,18 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.7.0 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.8.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
+
+**v0.8.0 — Headless-Client bootet bis Hauptmenü (Issue #9, Mod-Laufzeit unverändert):**
+- `tools/headless-client/`: Compose-Service (`docker-compose.yml`, shm_size 1 GB,
+  `init: true` für saubere SIGTERM-Weiterleitung) plus deterministischer
+  Menü-Nachweis `wait-menu.sh` (Graustufen-Standardabweichung > `RENDER_MIN_STD`;
+  Timeout sichert letzten Frame und gibt `exit 1`), `run-client.sh` mit
+  `--no-verify`/`--screenshot`, Trockenlauf-Tests `test-wait-menu.sh` (5/5) und
+  dokumentierter Proton-GE-Fallback (DXVK-on-lavapipe).
+- Reines Tooling-/Doku-Release — **keine Mod-Änderung**.
+- Landing-Seite: Link-Fix (`docs/concept.md`) + Links zu Solo-/Status-Seite (#56).
 
 **v0.7.0 — rb_wave ohne Spieler (Spawn-Anker alternativ zum Mech, Issue #12):**
 - **Anker-Kette OHNE Spieler:** `rb_wave`/`rb_send` wählt den Spawn-Anker in
@@ -141,7 +151,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.7.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
+[RBBATTLE] event=mod_load version=0.8.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100
@@ -191,7 +201,8 @@ erwartet, s. #7); (4) macOS-Mod-Support ungeklärt.
   Checks (rb_mode Default/Wechsel/usage; rb_convert Calcium-first + Alias +
   Guards; rb_status Runde/Pool/Boost; Self-Boost-Hook: Original-OnEnterSpawn
   zuerst, Runden-Zähler, Pool greedy → Spawn, Rest-Pool). v0.6.0: keine
-  Mod-Änderung (Tooling-Release, #7/#8). v0.7.0: 5 Szenarien /
+  Mod-Änderung (Tooling-Release, #7/#8). v0.8.0: keine Mod-Änderung
+  (Tooling/Site-Release, #9/#56). v0.7.0: 5 Szenarien /
   14 Checks (Anker-Kette border→mission→mech; Missions-Fallback ohne Spieler
   spawnt 5/8 Kreaturen im Ring um den Spawnpunkt; Initial-Spawnpoint-Fallback;
   kein Anker → Skip). In-Game-Test steht aus (Operator, Prod).
