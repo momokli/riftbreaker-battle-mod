@@ -1,8 +1,26 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.11.0 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.12.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
+
+**v0.12.0 — Send-Queue & Shop-HUD: Tiered Units + Bosse boosten die nächste Welle (Issue #25):**
+- **Shop mit Tier-Struktur (Legion-TD-2-artig) + Boss-Tier:** zentrale
+  Preisliste v1 `RBB.shopCfg` (Tier 1/2/3 + Boss). **Struktur/Platzhalter,
+  KEIN Balancing** — Blueprints sind Platzhalter aus dem bestehenden
+  Wellen-Pool; echte Boss-/Unit-Listen + Tuning folgen in der
+  Balance-Session (#33/#12).
+- **`rb_buy_wave <unit> [count]` (Kauf-Hook):** kauft Einheiten aus dem Shop
+  in die Send-Queue und deduziert den Spar-Pool sofort (irreversibel).
+  Guards: unbekannte Unit / zu wenig Pool / Queue voll (maxQueueCreatures).
+- **Send-Queue:** ersetzt den MVP-Self-Boost (#42). Die Queue wird vom
+  Wellenstart-Hook (`dom_mananger:OnEnterSpawn`) beim nächsten natürlichen
+  Wellenstart als Zusatz-Spawns an den eigenen Rand-Spawnern (#26)
+  ausgeliefert — Tiered Units + Bosse boosten so die **nächste** Welle.
+  Senden jederzeit bis Wellenstart, unbegrenzt oft.
+- **Custom-UI-Shop (`rb_shop`):** Popup (GuiService:OpenPopup, Muster
+  Baustein 02) mit der Tier-/Preis-Liste + Konsolen-Fallback. `rb_queue`
+  zeigt den Queue-Stand. `rb_status` zeigt jetzt die Queue statt des Boost.
 
 **v0.11.0 — Landing Live-Status-Widget (Issue #30, Website/keine Mod-Laufzeit-Änderung):**
 - `site/live-status.js` (UMD): `deriveStatus(state)` + Poll-Widget für die
@@ -119,9 +137,10 @@ v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 Inhalt des Mod-Ordners: Skeleton-Lebenszeichen-Log beim Laden +
 Console-Commands `rb_wave <level>` / `rb_send <level>` (Send-Wellen-Spawning an
 Kartenrand-Spawnern) + DOM-Timer-Deckel + Economy (`rb_convert`, `rb_economy`) +
-Self-Send-MVP (`rb_mode`, `rb_status`, Self-Boost-Hook) +
+Send-Queue & Shop-HUD (`rb_buy_wave`, `rb_shop`, `rb_queue`, Send-Queue-Hook, #25) +
 Win-Condition (`rb_hq`, Leak-/HQ-Tod → Match-Ende, #28).
-Kein UI, keine Bindings, kein Bridge-Zusatz, **kein io/socket/http**.
+Custom-UI-Shop-Popup (`rb_shop`), keine Bindings, kein Bridge-Zusatz,
+**kein io/socket/http**.
 
 **Mod-Descriptor** (`<GUID>.manifest` im Mod-Root): deklariert Metadaten + die
 Spielversion, gegen die der Mod gebaut ist (`game_version "EXE: 1186 DATA: 847"`
@@ -182,24 +201,28 @@ und Workshop-Mods tun (Quelle: fandom „Basic Modding Guide“, Ordner
 | `rb_wave`-Log-Anker | `anchor=border spawners=N` (bzw. `anchor=fallback_mech`), je Kreatur `anchor=<gruppe>/<id>` im `event=spawn ok`-Log |
 | `rb_convert <resource> <amount>` | Wandelt gefarmte Ressource **irreversibel** in Send-Währung (Spar-Pool). **MVP:** `rb_convert <menge>` konvertiert **Calcium** (`carbonium`, Faktor 1); `rb_convert calcium 100` ≡ `rb_convert carbonium 100` ≡ `rb_convert 100`. Weitere Ressourcen (Faktor-Tabelle `resourceFactors`, z.B. palladium 2×, uranium_ore 3×) via 2-Arg-Form. Ablehnung bei zu wenig Farm-Menge (`status=insufficient`); kein Rücktausch. Balance = Platzhalter (Tuning #33) |
 | `rb_economy` / `rb_economy reset` | Status: Quelle, Pool, farmed/converted/built, Ressourcen-Konten, DB-Status. `reset` = Entwickler-Werkzeug (alles auf 0, inkl. Ressourcen-Keys der DB) |
-| `rb_mode sp\|duel` | Modus-Umschaltung: `sp` = Solo-Test (Default, self-send), `duel` = 1v1 (Stub, folgt später) |
-| `rb_status` | Zeigt `mode`, `runde`, `pool` und den `boost` (nächste Welle) — die Kontrollanzeige des Testmodus |
+| `rb_buy_wave <unit> [count]` | **Kauf-Hook (#25):** kauft `<unit>` (Shop-Id: `brabit`/`baxmoth`/`artigian`/`canceroth`/`boss`) in die Send-Queue und deduziert den Spar-Pool sofort (irreversibel). `rb_shop` zeigt alle Units/Preise. Guards: unbekannte Unit, zu wenig Pool, Queue voll |
+| `rb_shop` | **Custom-UI-Shop (#25):** öffnet ein Popup mit der Tier-/Preis-Liste (Tier 1/2/3 + Boss) + Konsolen-Liste (Fallback ohne Spieler/API) |
+| `rb_queue` | **Send-Queue-Status (#25):** Anzahl, Gesamtwert und Blueprint-Liste der für die nächste Welle gekauften Einheiten |
+| `rb_mode sp\|duel` | Modus-Umschaltung: `sp` = Solo-Test (Default, sendet an die eigene nächste Welle), `duel` = 1v1 (Stub, folgt später) |
+| `rb_status` | Zeigt `mode`, `runde`, `pool` und die `queue` (für die nächste Welle) — die Kontrollanzeige des Testmodus |
 | `rb_hq` / `rb_hq leak [dmg]` / `rb_hq entity <id>` / `rb_hq reset` | Win-Condition-Status + Dev-Werkzeuge (#28): HQ-HP zeigen, manuellen Leak anwenden, HQ-Entity zuordnen, Zustand zurücksetzen (Muster `rb_economy reset`) |
 
 Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.8.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
+[RBBATTLE] event=mod_load version=0.12.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100
 [RBBATTLE] event=convert resource=carbonium amount=100 value=100 pool=100 status=ok irreversible=1
-[RBBATTLE] event=wave_hook patch status=ok                       ← Self-Boost-Hook aktiv (#42)
+[RBBATTLE] event=buy_wave unit=brabit tier=t1 count=1 price=100 total=100 pool=0 queue=1 status=ok   ← Kauf-Hook (#25)
+[RBBATTLE] event=wave_hook patch status=ok                       ← Send-Queue-Hook aktiv (#42/#25)
 [RBBATTLE] event=dom_timer patch status=ok cap=300        ← nach PlayerInitializedEvent
 [RBBATTLE] event=setup difficulty=hard creatures_difficulty=5 timer_cap=300
-[RBBATTLE] event=round round=1 status=start mode=sp pool=100   ← natürlicher Wellenstart
-[RBBATTLE] event=self_boost round=1 pool_before=100 spent=100 spawned=1 pool_after=0   ← Self-Boost
+[RBBATTLE] event=round round=1 status=start mode=sp pool=0 queue=1   ← natürlicher Wellenstart
+[RBBATTLE] event=send_queue round=1 status=done spawned=1 value=100 anchor=border   ← Send-Queue ausgeliefert (Boost)
 [RBBATTLE] event=wave level=3 status=start
 [RBBATTLE] event=wave_spawners count=16 groups=4          ← Pool der Rand-Spawner
 [RBBATTLE] event=spawn ok blueprint=units/ground/baxmoth entity=12345 anchor=spawn_enemy_border_west/...
@@ -258,7 +281,11 @@ HP≤0-Pfad (Leak) als Match-Ende.
   kein Anker → Skip). v0.9.0: 18 Checks / 7 Szenarien (Win-Condition:
 Leak → HQ-HP-Senkung → Match-Ende bei HP ≤ 0; RespawnFailedEvent-Kette der
 HQ-Entity; negative Fälle: andere Entity / ohne Entity-Zuordnung; Idempotenz
-nach HQ-Tod). In-Game-Test steht aus (Operator, Prod).
+nach HQ-Tod). v0.12.0: 1 Szenario / 23 Checks (Send-Queue & Shop-HUD:
+rb_shop Tier-Liste + Popup; rb_buy_wave Guards usage/unbekannt/insufficient;
+Farm→Convert→Kauf brabit/boss→Queue; rb_queue-Status; Wellenstart → Flush →
+send_queue done; Queue danach leer; erneuter Kauf + 2. Welle). In-Game-Test
+steht aus (Operator, Prod).
 - **Economy-Fallback dokumentiert:** Der Mod hat keinen verifizierten Zugriff
   aufs Spieler-Ressourcen-Konto (api-deep-dive.md §1); Value kommt aus
   Ernte-Events (Getter-Ladder). Sind die Events nicht lesbar, schaltet die
