@@ -49,6 +49,24 @@ Grundsätze:
   `ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass`.
 - **Rollback** = vorherige `rbbattle.zip` / vorheriges Binary wieder einspielen.
 
+## Continuous Deploy (CD) — Issue #91
+
+Nach jedem Merge auf `main` deployt
+[`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) automatisch auf
+den Solo-DEV-Server (planet, Port 6321) — **rolling**, immer der aktuelle Stand
+zum Testen. Der Lauf nutzt ausschließlich das Ansible-Playbook
+(`ansible-playbook -i deploy/inventory deploy/site.yml --vault-password-file …`),
+SSH mesh-first über den Tailscale-Alias `planet`.
+
+Topologie (Momo-Entscheidung, 2026-09-10): **EIN** Server auf `:6321` statt
+Steam-/Non-Steam-Dualität; ein Direct-IP-Server (`disable_steam "1"`) deckt
+beide Stores ab. Der **Tag→prod-Kanal ist vorerst gestrichen** — es gibt
+bewusst keinen Tag-Trigger und keine prod-Umgebung im Workflow.
+
+Secrets liegen ausschließlich als GitHub-Secrets im Environment `dev`
+(`SSH_HOST`, `SSH_KEY`, `ANSIBLE_VAULT_PASS`) und werden nie im Repo oder in
+Logs ausgegeben.
+
 ## Server-Passwort (Vault)
 
 Das Server-Passwort liegt **nie im Klartext** im Repo. Es steht in
