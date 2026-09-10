@@ -28,6 +28,13 @@ const { lua, lauxlib, lualib, to_luastring, to_jsstring } = require('fengari');
 const MOD_PATH = path.join(__dirname, '..', '..', 'mod', 'lua', 'rbbattle_autoexec.lua');
 const modSource = fs.readFileSync(MOD_PATH, 'utf8');
 
+// Erwartete Mod-Version dynamisch aus der Mod-Quelle lesen (RBB.version),
+// damit Version-Bumps auf main die Assertions nicht stale machen (#150).
+const MOD_VERSION = (modSource.match(/RBB\.version\s*=\s*"([^"]+)"/) || [])[1];
+if (!MOD_VERSION) {
+    throw new Error('RBB.version nicht in mod/lua/rbbattle_autoexec.lua gefunden');
+}
+
 // Stub-Services + Mod + Assertions als EIN Lua-Chunk. dom_mananger hat hier —
 // wie boost.test.js — SpawnWavesForDifficultyLevel (+ maxDifficultyLevel),
 // damit der Skalierungs-Chokepoint (#41) greift. currentDifficultyLevel=4,
@@ -125,8 +132,8 @@ local function log_has(sub)
 end
 
 -- 1. Mod geladen (kein Version-Bump), Presets als Konfiguration vorhanden.
-check(log_has("event=mod_load version=0.24.1"), "mod_load version=0.24.1 (kein Version-Bump)")
-check(log_has("event=mod_load version=0.24.1 status=ok mode=sp anchor=border_spawner_groups timer_cap=480 preset=A"),
+check(log_has("event=mod_load version=${MOD_VERSION}"), "mod_load version=${MOD_VERSION} (kein Version-Bump)")
+check(log_has("event=mod_load version=${MOD_VERSION} status=ok mode=sp anchor=border_spawner_groups timer_cap=480 preset=A"),
     "mod_load: timer_cap=480 preset=A")
 
 -- 2. Preset-Konfiguration (direkt, RBB im selben Chunk sichtbar).
