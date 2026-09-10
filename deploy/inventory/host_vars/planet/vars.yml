@@ -7,6 +7,10 @@
 # --- Dedicated Game-Server (Dev-SP, 6321, 1v1 "vs sich selbst") -------------
 riftbreaker_game_dir: /srv/rbgame
 riftbreaker_mod_dir: "{{ riftbreaker_game_dir }}/mods/rbbattle"
+# Mod-Backups liegen AUSSERHALB von mods/ — der Dedicated Server lädt sonst
+# jeden Backup-Ordner mit *.manifest als zweite Mod (Befund 2026-09-10,
+# Issue #212; Guard + Verifikation in der Rolle).
+riftbreaker_backup_dir: "{{ riftbreaker_game_dir }}-backups"
 riftbreaker_server_image: rb-headless-client:latest
 riftbreaker_server_container: riftbreaker-dedicated
 riftbreaker_server_port_udp: 6321

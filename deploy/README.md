@@ -280,7 +280,7 @@ curl -sS http://127.0.0.1:6323/deploy/<job_id>/status \
 
 | Rolle | Typ | Was |
 |---|---|---|
-| `riftbreaker-server` | docker | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install |
+| `riftbreaker-server` | docker | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation |
 | `vanilla-server` | docker | Vanilla 6322, kein Mod |
 | `tournament-server` | systemd | Rust/axum Referee + Web-UI (Binary aus `tournament/`) |
 | `website` | statics + Caddy | `site/*` → Docroot, Caddy-Snippet + `/tournament/*`-Proxy |
@@ -326,3 +326,19 @@ deploy/
 
 Vorherige `rbbattle.zip` (Release/Git-History) bzw. das vorherige
 `tournament-server`-Binary zurückkopieren und erneut deployen.
+
+## Mod-Backups & mods/-Guard (Issue #212)
+
+Mod-Backups liegen **nie** in `<server>/mods/` (der Dedicated Server lädt jeden
+Ordner mit `*.manifest` als eigene Mod → Versionskonflikt + doppelte Handler).
+Die Rolle `riftbreaker-server`
+
+- sichert den alten Mod-Stand nach `{{ riftbreaker_backup_dir }}` (`rbbattle-<ts>.tar.gz`),
+- fährt vor dem Deploy einen **Guard** (Fremd-Ordner mit `*.manifest` in `mods/`
+  werden weggeschoben bzw. der Deploy bricht ab),
+- **verifiziert** nach dem Deploy `docker logs` (genau eine `event=mod_load`-Zeile,
+  erwartete Version, keine `handler_errors`/`event_unreadable`) und rollt sonst
+  aus dem Backup zurück.
+
+Regel, Befund und Kontrollwerkzeug (`tools/mods-guard/check_mods_dir.py`):
+[`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md) → „Mod-Backups & mods/-Guard".
