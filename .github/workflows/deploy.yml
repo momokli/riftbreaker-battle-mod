@@ -9,15 +9,16 @@ name: Deploy (CD)
 # (disable_steam "1"). Der Tag→prod-Kanal ist vorerst gestrichen — dieser
 # Workflow hat daher bewusst KEINEN tag-Trigger und KEINE prod-Umgebung.
 #
-# Deploy läuft ausschließlich über das bestehende Ansible-Playbook:
-#   ansible-playbook -i deploy/inventory deploy/site.yml --vault-password-file …
-# SSH mesh-first über den Tailscale-Alias "planet", niemals über Public-IP.
+# Deploy läuft NICHT mehr über SSH, sondern über den lokalen HTTP-Hook auf
+# planet (dort läuft der self-hosted Runner): POST /deploy → Hook macht
+# git fetch + Hard-Checkout der SHA und führt den Deploy aus (ansible-playbook
+# als DEPLOY_CMD), danach Polling GET /deploy/<job_id>/status bis success.
+# Setup/Migration: deploy/README.md → „CD: HTTP-Deploy-Hook (planet)".
 #
-# Secrets (GitHub-Environment "dev"; Werte werden von Momo bereitgestellt,
-# liegen NIE im Repo und werden NIE geloggt):
-#   SSH_HOST            Tailscale-Adresse des Deploy-Hosts (planet)
-#   SSH_KEY             privater SSH-Key für root@planet
-#   ANSIBLE_VAULT_PASS  Passwort für deploy/inventory/host_vars/planet/vault.yml
+# Secret (GitHub-Environment "dev"; Wert von Momo, nie im Repo/Log):
+#   DEPLOY_TOKEN  — gemeinsames Bearer-Token Hook ↔ Workflow.
+# Die alten Secrets SSH_HOST/SSH_KEY/ANSIBLE_VAULT_PASS werden nicht mehr
+# benutzt und können im Environment "dev" gelöscht werden.
 
 on:
   push:
@@ -36,57 +37,86 @@ jobs:
   deploy-dev:
     name: Deploy Dev (planet :6321)
     runs-on: [self-hosted, planet]
+    timeout-minutes: 15
     environment:
       name: dev
       url: https://rift.projectmellon.de/solo.html
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Ansible installieren (gepinnt)
-        run: |
-          python3 -m pip install --disable-pip-version-check "ansible-core==2.19.*"
-          ansible --version
-
-      - name: SSH mesh-first einrichten (Tailscale-Alias planet)
+      - name: Deploy anstoßen (HTTP-Hook auf planet)
         env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_KEY: ${{ secrets.SSH_KEY }}
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
         run: |
           set -euo pipefail
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          # Deploy-Key ablegen — Wert kommt ausschließlich aus dem Secret,
-          # wird nie ausgegeben.
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_rb_deploy
-          chmod 600 ~/.ssh/id_rb_deploy
-          # Bestehende ~/.ssh/config NICHT überschreiben: "planet"-Block nur
-          # ergänzen, falls er fehlt (mesh-first, nie Public-IP).
-          if ! grep -qE '^[[:space:]]*Host[[:space:]]+planet([[:space:]]|$)' ~/.ssh/config 2>/dev/null; then
-            {
-              echo ""
-              echo "Host planet"
-              echo "  HostName ${SSH_HOST}"
-              echo "  User root"
-              echo "  IdentityFile ~/.ssh/id_rb_deploy"
-              echo "  IdentitiesOnly yes"
-              echo "  StrictHostKeyChecking accept-new"
-            } >> ~/.ssh/config
+
+          # POST /deploy — Bearer-Token; Payload = Event-SHA + Ref
+          # (github.sha / github.ref), als 202 mit job_id quittiert.
+          if ! response="$(curl --silent --show-error --fail --max-time 30 \
+            --retry 3 --retry-connrefused --retry-delay 2 \
+            --request POST "http://127.0.0.1:6321/deploy" \
+            --header "Authorization: Bearer ${DEPLOY_TOKEN}" \
+            --header "Content-Type: application/json" \
+            --data "{\"sha\":\"${GITHUB_SHA}\",\"ref\":\"${GITHUB_REF}\"}")"; then
+            echo "::error::POST /deploy fehlgeschlagen — läuft der Hook auf planet? (systemctl status rbbattle-deploy-hook)"
+            exit 1
           fi
-          chmod 600 ~/.ssh/config
-          # Konnektivitäts-Gate: ohne erreichbaren Host bricht der Job hier ab.
-          ssh -o BatchMode=yes planet 'echo mesh-first ok: "$(hostname)"'
 
-      - name: Deploy via Ansible (site.yml, mesh-first + Vault)
+          job_id="$(printf '%s' "$response" | python3 -c \
+            'import json,sys; print(json.load(sys.stdin)["job_id"])')"
+          if ! printf '%s' "$job_id" | grep -Eq '^[0-9a-f-]{36}$'; then
+            echo "::error::Unerwartete job_id in Hook-Antwort: ${job_id}"
+            exit 1
+          fi
+
+          echo "Deploy-Job gestartet: ${job_id} (sha=${GITHUB_SHA})"
+          echo "JOB_ID=${job_id}" >> "$GITHUB_ENV"
+
+      - name: Deploy-Status abwarten (Polling, max. 10 min)
         env:
-          ANSIBLE_VAULT_PASS: ${{ secrets.ANSIBLE_VAULT_PASS }}
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
         run: |
           set -euo pipefail
-          vault_file="$(mktemp)"
-          trap 'rm -f "$vault_file"' EXIT
-          printf '%s' "$ANSIBLE_VAULT_PASS" > "$vault_file"
-          chmod 600 "$vault_file"
-          ansible-playbook -i deploy/inventory deploy/site.yml --vault-password-file "$vault_file"
+
+          # Polling GET /deploy/<job_id>/status alle 15 s, Gesamttimeout 10 min.
+          # Grün NUR bei status=success; sonst exit 1 mit letzten Log-Zeilen.
+          deadline=$((SECONDS + 600))
+          while true; do
+            response=""
+            if ! response="$(curl --silent --show-error --fail --max-time 30 \
+              --header "Authorization: Bearer ${DEPLOY_TOKEN}" \
+              "http://127.0.0.1:6321/deploy/${JOB_ID}/status")"; then
+              echo "Warnung: Status-Abruf fehlgeschlagen — neuer Versuch in 15 s."
+              response=""
+            fi
+            if [ -n "$response" ]; then
+              status="$(printf '%s' "$response" | python3 -c \
+                'import json,sys; print(json.load(sys.stdin)["status"])')"
+              case "$status" in
+                success)
+                  echo "Deploy erfolgreich (sha=${GITHUB_SHA})."
+                  exit 0
+                  ;;
+                failed)
+                  echo "::error::Deploy fehlgeschlagen — letzte Log-Zeilen:"
+                  printf '%s' "$response" | python3 -c \
+                    'import json,sys; print(json.load(sys.stdin).get("log_tail", ""))'
+                  exit 1
+                  ;;
+                running)
+                  echo "Deploy läuft … ($(date -u +%H:%M:%S) UTC)"
+                  ;;
+                *)
+                  echo "::error::Unbekannter Deploy-Status: ${status}"
+                  exit 1
+                  ;;
+              esac
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::Timeout (10 min): Deploy-Status weiter 'running' — letzte Log-Zeilen:"
+              if [ -n "$response" ]; then
+                printf '%s' "$response" | python3 -c \
+                  'import json,sys; print(json.load(sys.stdin).get("log_tail", ""))'
+              fi
+              exit 1
+            fi
+            sleep 15
+          done
