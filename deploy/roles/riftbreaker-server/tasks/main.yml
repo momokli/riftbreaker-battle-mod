@@ -34,6 +34,7 @@
   check_mode: false
 
 - name: Container-Name gehört uns (oder ist frei)
+  # Im echten Deploy ein Hard-Fail (der Deploy würde hier scheitern).
   assert:
     that:
       - "(rbbattle_container_owner.rc != 0) or ((rbbattle_container_owner.stdout | trim) in ['', riftbreaker_compose_project])"
@@ -42,6 +43,23 @@
       Projekt belegt (Label com.docker.compose.project='{{ rbbattle_container_owner.stdout | trim }}').
       Vor dem Deploy entfernen (docker rm -f {{ riftbreaker_server_container }}),
       sonst scheitert `docker compose up -d` am Namenskonflikt.
+  when: not ansible_check_mode
+
+# Im PR-Gate (--check) nur sichtbar warnen, nicht rot: eine fremd belegte
+# Container-Name ist Host-Zustand (z. B. ein parallel laufender Deploy), kein
+# PR-Fehler — der Required-Check muss davon unabhängig stabil bleiben. Der
+# echte Deploy bricht unverändert hart ab (Task oben).
+- name: "WARNUNG: fremd belegter Container-Name (nur im --check)"
+  debug:
+    msg: >-
+      WARNUNG: Container-Name '{{ riftbreaker_server_container }}' ist von einem
+      fremden Projekt belegt (Label com.docker.compose.project='{{ rbbattle_container_owner.stdout | trim }}').
+      Ein echter Deploy würde hier scheitern — vor dem Deploy aufräumen
+      (docker rm -f {{ riftbreaker_server_container }}).
+  when:
+    - ansible_check_mode
+    - rbbattle_container_owner.rc == 0
+    - (rbbattle_container_owner.stdout | trim) not in ['', riftbreaker_compose_project]
 
 - name: docker-compose.yml rendern
   template:

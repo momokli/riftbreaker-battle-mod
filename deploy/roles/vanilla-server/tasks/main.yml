@@ -33,6 +33,18 @@
       Container-Name '{{ vanilla_container }}' ist von einem fremden Projekt
       belegt (Label com.docker.compose.project='{{ vanilla_container_owner.stdout | trim }}').
       Vor dem Deploy entfernen (docker rm -f {{ vanilla_container }}).
+  when: not ansible_check_mode
+
+- name: "WARNUNG: fremd belegter Container-Name (nur im --check)"
+  debug:
+    msg: >-
+      WARNUNG: Container-Name '{{ vanilla_container }}' ist von einem fremden
+      Projekt belegt (Label com.docker.compose.project='{{ vanilla_container_owner.stdout | trim }}').
+      Ein echter Deploy würde hier scheitern.
+  when:
+    - ansible_check_mode
+    - vanilla_container_owner.rc == 0
+    - (vanilla_container_owner.stdout | trim) not in ['', vanilla_compose_project]
 
 - name: docker-compose.yml rendern
   template:
