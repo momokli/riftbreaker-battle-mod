@@ -80,3 +80,10 @@ Implementierung ist der echte Rust-Dienst mit Rift-Battle-Semantik
 pollen `GET /state` und führen Kommandos via exec-Kanal aus; der Lua-Mod/
 RE-Layer meldet Wellenstart und HQ-HP über `POST /report`
 (send_state-Egress, Issue #13 — konzeptionell übernommen).
+
+## Ausblick — Spieler-Profile (Post-1v1)
+
+Persistente Spieler-Profile (ELO, Bilanz, Historie) für das Rangsystem (#128)
+sind entworfen, aber noch nicht implementiert: Felder, Typen,
+Speicher-Entscheidung (SQLite) und der Nachweis, dass der API-v1-Vertrag
+unverändert bleibt, stehen in [`docs/PLAYER_PROFILE_MODEL.md`](../docs/PLAYER_PROFILE_MODEL.md).
