@@ -109,6 +109,22 @@ npm test        # = node --test
    `not_send_currency` (nicht `insufficient`).
 6. Pool bleibt durch die Ablehnungen unangetastet (`economy_show`).
 
+`wave-presets.test.js` deckt Issue #41 (Wellen-Takt + Grundschwierigkeit) ab:
+
+1. Mod lädt (kein Version-Bump); `RBB.wavePresets` als Preset-Konfiguration
+   vorhanden (`baseDifficulty="normal"`, `active="A"`).
+2. Preset-Werte: A = 8 Min (480 s) volle Größe (strengthPct 100), B = 4 Min
+   (240 s) halbe Größe (strengthPct 50); `RBB.waveIntervalCapS` = 480 (Preset A).
+3. Point-of-Switch `RBB.wavePresets.active`: unbekannte ID fällt auf A zurück;
+   aktives B liefert intervalS 240.
+4. Wellen-Stärke-Skalierung (`ScaleWaveLevel`): `floor(level * pct/100)`, min. 1
+   (100 % = unverändert, 50 % = halbiert).
+5. Integration am `SpawnWavesForDifficultyLevel`-Chokepoint: Variante A lässt die
+   Naturwelle unverändert (Level 4 → 4), Variante B halbiert (4 → 2, 3 → 1, 1 → 1);
+   Debug-Trigger (`addToSpawned=false`) bleibt unangetastet.
+6. `rb_balance` legt die Presets als Log-Fläche offen (`wave_preset`/`wave_preset_cfg`);
+   das Setup-Log führt Preset + Grundschwierigkeit mit.
+
 `persistence.test.js` deckt Issue #65 (Persistenz des Spar-Pools) ab:
 
 1. Phase 1 (frischer Run): Farm 2000 carbonium → `rb_convert 1500` → Pool 1500;
@@ -158,3 +174,12 @@ lan-lua-src (Spiel 2.0.58485) **verifiziert**; die Boost-Zahlen (Stufen-Preise,
 Caps, Prozent→Level-Delta `ceil(level*pct/100)`) sind dokumentierte Annahmen
 und brauchen Live-Test — die tatsächliche Wrap-Wirksamkeit am
 `SpawnWavesForDifficultyLevel`-Chokepoint ist live verifizierbar (Operator).
+
+Für #41 gilt analog: die Preset-Konfiguration (Takt + Grundschwierigkeit) und
+die Wellen-Stärke-Skalierung (`floor(level * strengthPct/100)`, min. 1) sind
+reine Daten-/Formel-Logik und statisch getestet; welcher Takt das richtige
+**Gefühl** trifft (selten+voll vs. häufig+halb) ist ausschließlich live
+verifizierbar (Operator, Test-Duell Momo vs. Matheo) — alle Werte sind als
+„braucht Live-Test“ markiert. `baseDifficulty="normal"` ist eine Server-seitige
+Einstellung (docs/DUEL_SETUP.md), die der Mod nicht selbst setzt, sondern nur
+dokumentiert/loggt.
