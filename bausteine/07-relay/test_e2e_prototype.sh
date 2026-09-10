@@ -8,7 +8,7 @@
 #
 #   log-Zeile -> relay tail -> POST /event -> Server
 #     -> SSE /stream (Web-UI-Feed) UND Outbox -> GET /poll/:player_id
-#     -> exec_command -> relay loggt "dispatch pending: <command>" (v0-TODO)
+#     -> exec_command -> relay dispatcht {"cmd":"exec",...} auf die Fake-Pipe
 #   + Web-UI-Dateien (06/web) werden ausgeliefert (html/js, 404 sonst)
 #
 # Assertions werden gezaehlt; Exit 0 = alles ok, 1 = Fehler.
@@ -30,8 +30,10 @@ DIR=$(mktemp -d /tmp/rb07-e2e.XXXXXX)
 SERVER_PID=""
 RELAY_PID=""
 SSE_PID=""
+PIPE_PID=""
 
 cleanup() {
+  [ -n "$PIPE_PID" ] && kill "$PIPE_PID" 2>/dev/null
   [ -n "$RELAY_PID" ] && kill "$RELAY_PID" 2>/dev/null
   [ -n "$SSE_PID" ] && kill "$SSE_PID" 2>/dev/null
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
@@ -117,7 +119,7 @@ echo "match_id=$MID"
 
 echo "== Relay starten (player_a, match $MID, log=$DIR/fake.log) =="
 RBB_PLAYER_ID=player_a RBB_MATCH_ID="$MID" RBB_LOG_PATH="$DIR/fake.log" \
-RBB_SERVER="$URL" python3 "$RELAY_PY" >"$DIR/relay.log" 2>&1 &
+RBB_SERVER="$URL" RBB_PIPE_PATH="$DIR/fake_pipe" python3 "$RELAY_PY" >"$DIR/relay.log" 2>&1 &
 RELAY_PID=$!
 check "relay registriert sich (register: ok)" \
   wait_for 20 '\[relay\] register: ok player_id=player_a' "$DIR/relay.log"
@@ -149,13 +151,23 @@ check "SSE: /event-Eingang sichtbar (input type=score_update)" \
 check "SSE: Zustellung sichtbar (delivery incoming_wave an player_b)" \
   grep -q '"kind":"delivery".*"player_id":"player_b".*"event":"incoming_wave"' "$DIR/sse.log"
 
-echo "== exec_command -> dispatch pending (relay-stdout) =="
+echo "== rbbridge-Pipe-Fake vorbereiten (Named-Pipe-Ersatz unter Linux) =="
+mkfifo "$DIR/fake_pipe"
+cat "$DIR/fake_pipe" > "$DIR/pipe.log" 2>&1 &
+PIPE_PID=$!
+check "Fake-Pipe ist ein FIFO" test -p "$DIR/fake_pipe"
+
+echo "== exec_command -> dispatch auf die Fake-Pipe =="
 CODE_EC=$(http_code -X POST "$URL/event" -H 'Content-Type: application/json' \
   -d "{\"match_id\":\"$MID\",\"player_id\":\"player_a\",\
        \"event\":{\"type\":\"exec_command\",\"command\":\"rb_wave 3\"}}")
 check "POST /event exec_command rb_wave 3 -> 200" test "$CODE_EC" = 200
-check "relay loggt 'dispatch pending: rb_wave 3'" \
-  wait_for 20 'dispatch pending: rb_wave 3' "$DIR/relay.log"
+check "relay dispatcht auf die Fake-Pipe (dispatch sent)" \
+  wait_for 20 'dispatch sent cmd_id=' "$DIR/relay.log"
+check "Fake-Pipe empfing exec-Zeile (cmd=exec)" \
+  wait_for 20 '"cmd":"exec"' "$DIR/pipe.log"
+check "Fake-Pipe JSON enthält command=rb_wave 3" \
+  grep -q '"command":"rb_wave 3"' "$DIR/pipe.log"
 check "SSE: exec_command-Zustellung sichtbar (delivery)" \
   grep -q '"kind":"delivery".*"event":"exec_command".*"command":"rb_wave 3"' "$DIR/sse.log"
 
@@ -177,9 +189,9 @@ assert any(e.get('event') == 'incoming_wave' and e.get('level') == 2
 assert cmds and cmds[0].get('command') == 'rb_status', evs
 PY
 check "GET /poll/player_b liefert exec_command rb_status" test $? = 0
-grep -q 'dispatch pending: rb_status' "$DIR/relay.log"
+grep -q 'rb_status' "$DIR/relay.log"
 NEG=$?
-check "relay hat rb_status NICHT dispatchen koennen (kein pending rb_status)" test "$NEG" != 0
+check "relay hat rb_status NICHT dispatchen koennen (kein rb_status im relay.log)" test "$NEG" != 0
 
 echo "== Web-UI-Dateien (statisch aus 06/web) =="
 check "GET / -> 200 (index.html)" test "$(http_code "$URL/")" = 200
