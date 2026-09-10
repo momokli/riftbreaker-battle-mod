@@ -18,6 +18,7 @@ const http = require('node:http');
 const ROOT = path.join(__dirname, '..', '..');
 const MODULE_PATH = path.join(ROOT, 'site', 'live-status.js');
 const INDEX_HTML = path.join(ROOT, 'site', 'index.html');
+const SOLO_HTML = path.join(ROOT, 'site', 'solo.html');
 
 const statusMod = require(MODULE_PATH);
 const { deriveStatus, createWidget, resolveApiBase } = statusMod;
@@ -151,6 +152,15 @@ test('resolveApiBase: Meta-Tag hat Vorrang, sonst Default', () => {
 
 test('site/index.html verdrahtet das Live-Status-Widget', () => {
   const html = fs.readFileSync(INDEX_HTML, 'utf8');
+  assert.ok(html.includes('meta name="rb-tournament-api"'), 'Meta-Tag für API-Basis vorhanden');
+  assert.ok(html.includes('id="liveStatus"'), 'Widget-Container vorhanden');
+  assert.ok(html.includes('id="liveLine"'), 'Status-Zeile vorhanden');
+  assert.ok(html.includes('script src="live-status.js"'), 'Modul-Script eingebunden');
+  assert.ok(html.includes('RBTournamentStatus.createWidget'), 'Widget-Init ruft createWidget auf');
+});
+
+test('site/solo.html verdrahtet das Live-Status-Widget', () => {
+  const html = fs.readFileSync(SOLO_HTML, 'utf8');
   assert.ok(html.includes('meta name="rb-tournament-api"'), 'Meta-Tag für API-Basis vorhanden');
   assert.ok(html.includes('id="liveStatus"'), 'Widget-Container vorhanden');
   assert.ok(html.includes('id="liveLine"'), 'Status-Zeile vorhanden');
