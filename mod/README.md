@@ -1,6 +1,6 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.30.1 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.31.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 
@@ -8,7 +8,7 @@ v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 > haben, sonst lehnt der Client die Lobby mit **„different set of mods“** ab.
 > Kurzanleitung: [`docs/PLAYER_SETUP.md`](../docs/PLAYER_SETUP.md).
 
-**v0.30.1 — HQ-Erkennung per Entity-TYP + Setup-Phase (Commence-Flow) + HQ-Leak-Filter (Issue #144/#158/#152):**
+**v0.31.0 — HQ-Erkennung per Entity-TYP + Setup-Phase (Commence-Flow) + HQ-Leak-Filter (Issue #144/#158/#152):**
 - *HQ-Erkennung* (#144): `HqAutoDetectEntity()` bindet das HQ jetzt über den Entity-*Typ* `headquarters`
   (`FindService:FindEntitiesByType`, am Spiel-Source belegt: `graph/logic/logic_if_building_health.lua`)
   statt über die leere Gruppe `headquarters`; damit greift der Commence-Flow (#158) und der manuelle
@@ -397,7 +397,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.30.1 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
+[RBBATTLE] event=mod_load version=0.31.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100
