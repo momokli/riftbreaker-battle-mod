@@ -104,7 +104,8 @@ def _selftest():
     for args, expected in cases:
         got = build_exec_command(args)
         ok = got == expected
-        print(f"[selftest] {'OK  ' if ok else 'FAIL'} build_exec_command({args!r}) -> {got!r} (erwartet {expected!r})", flush=True)
+        status = "OK  " if ok else "FAIL"
+        print(f"[selftest] {status} build_exec_command({args!r}) -> {got!r} (erwartet {expected!r})", flush=True)
         if not ok:
             failed += 1
     print(f"[selftest] {'OK' if failed == 0 else str(failed) + ' FEHLER'}", flush=True)
@@ -131,12 +132,12 @@ def main():
 
     # 1) ping -> erwartet pong
     send(fd, {"cmd": "ping"})
-    line = recv_and_print(fd, buf)
+    recv_and_print(fd, buf)
 
     # 2) optional exec -> v0-Harness antwortet ok:false (no-op, RE-Punkt)
     if exec_cmd is not None:
         send(fd, {"cmd": "exec", "command": exec_cmd})
-        line = recv_and_print(fd, buf)
+        recv_and_print(fd, buf)
 
     # 3) optional weiterlesen (Heartbeat-Events alle ~5 s)
     if watch:

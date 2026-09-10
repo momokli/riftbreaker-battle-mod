@@ -1,0 +1,9 @@
+# Ruff-Konfiguration (Python-Lint) — genutzt von .github/workflows/lint.yml
+#
+# Regel-Set: Default-Familien E (pycodestyle) + F (pyflakes). Bewusst kein
+# erweitertes Regelwerk, damit der Bestandscode nicht ohne Mehrwert umgebaut wird.
+target-version = "py38"
+line-length = 120
+
+[lint]
+select = ["E", "F"]

@@ -91,13 +91,10 @@ def find_riftbreaker_pid():
 
 
 def open_game(argv):
-    hint = None
     pid = None
     for a in argv:
         if a.isdigit():
             pid = int(a)
-        else:
-            hint = a
 
     if pid is None:
         pid = find_riftbreaker_pid()
