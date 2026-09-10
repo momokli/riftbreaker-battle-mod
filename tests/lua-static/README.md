@@ -22,7 +22,7 @@ npm test        # = node --test
 
 `win-condition.test.js` deckt Issue #28 (Win-Condition) ab:
 
-1. Mod lädt, Version 0.24.1, HQ initialisiert (`hq_hp=100 hq_dead=false`).
+1. Mod lädt, Version 0.24.2, HQ initialisiert (`hq_hp=100 hq_dead=false`).
 2. Leak-Flow: `EnteredTriggerEvent` → `event=leak` → `event=hq_hp`.
 3. HQ-Tod durch Leaks (HP ≤ 0) → `event=hq_dead` + `event=match_end` (genau einmal).
 4. Idempotenz: weiterer Leak nach Tod ändert nichts.
@@ -32,7 +32,7 @@ npm test        # = node --test
 
 `send-queue.test.js` deckt Issue #25 (Send-Queue & Shop-HUD) ab:
 
-1. Mod lädt, Version 0.24.1; `rb_buy_wave`/`rb_shop`/`rb_queue` registriert,
+1. Mod lädt, Version 0.24.2; `rb_buy_wave`/`rb_shop`/`rb_queue` registriert,
    Wellenstart-Hook aktiv (`event=wave_hook patch status=ok`).
 2. `rb_shop` listet 4 Tiers (inkl. Boss) + öffnet das Custom-UI-Popup
    (Template `popup_template_1button`).
@@ -59,7 +59,7 @@ npm test        # = node --test
 
 `click-hud.test.js` deckt Issue #99 (Click-HUD / Senden per Klick) ab:
 
-1. Mod lädt, Version 0.24.1; `rb_hud_ui`/`rb_quick` registriert,
+1. Mod lädt, Version 0.24.2; `rb_hud_ui`/`rb_quick` registriert,
    `GuiPopupResultEvent`-Handler aktiv.
 2. `rb_quick` ohne Args → `status=usage` (Default `brabit` ×1).
 3. `rb_quick brabit 2` → `status=armed`; `rb_quick unbekannt` → `unknown_unit`.
@@ -74,7 +74,7 @@ npm test        # = node --test
 
 `balance.test.js` deckt Issue #33 (Balance & Tuning v1) ab:
 
-1. Mod lädt, Version 0.24.1 (kein Version-Bump); `rb_balance` registriert.
+1. Mod lädt, Version 0.24.2 (kein Version-Bump); `rb_balance` registriert.
 2. `rb_balance` legt die v1-Preisliste offen: 5 Units / 4 Tiers / 1 Boss mit
    den dokumentierten Preisen (brabit 100, baxmoth 150, artigian 200,
    canceroth 300, boss 800).
