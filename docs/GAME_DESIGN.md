@@ -210,6 +210,27 @@ Send-Mechanik-Vereinfachungs-Issue #205 (braucht Bestätigung durch momokli).
 Live-Test**, ob der Zusammenhang zwischen Level und tatsächlicher
 Wellenstärke wirklich linear ist.
 
+**Zwei Wege zur echten Kurve (statt der reinen Annahme):**
+
+1. **Schneller Weg (falls verfügbar):** die entschlüsselte Spielquelle direkt
+   nachschlagen — `rules.maxAttackCountPerDifficulty[level]` bzw.
+   `rules.waves[group][level]` (referenziert im Quelltext-Kommentar zu #39,
+   „VERIFIZIERT am lan-lua-src, Spiel 2.0.58485“ — dieselbe Quelle, die den
+   HQ-Entity-Typ für #144 bestätigt hat). Falls dieser Source-Zugriff besteht,
+   ist ein direkter Blick in die Tabelle zuverlässiger als jedes Sampling.
+2. **Mess-Fallback (Issue #213, `event=richtwert_sample`):** der
+   `SpawnWavesForDifficultyLevel`-Chokepoint zählt bei jeder Naturwelle
+   automatisch lebende Gegner-Kreaturen vor/nach dem Spawn (best-effort über
+   `FindService:FindEntitiesByGroup`/`FindEntitiesByType`, Kandidatenliste
+   `RBB.enemyCountGroupCandidates`/`enemyCountTypeCandidates` — **unverifizierte
+   Ratekandidaten**, anders als die am Source bestätigten Rand-Spawner/HQ-Typ).
+   Bei Erfolg loggt jede Naturwelle `event=richtwert_sample level=%d
+   before=%d after=%d delta=%d` — über 2–4 Test-Sessions gesammelt (wie von
+   Matheo vorgeschlagen) ergibt das reale Level→Kreaturenzahl-Datenpunkte für
+   die Kurve. Findet kein Kandidat etwas, loggt es `status=unavailable`
+   (harmlos, keine Spielwirkung) — dann bleibt nur Weg 1 oder manuelles
+   Auszählen auf dem Bildschirm.
+
 ### Wellen-Takt & Grundschwierigkeit (Issue #41, Test-Varianten)
 
 Der Wellen-Takt ist nicht mehr fest verdrahtet, sondern als explizite,

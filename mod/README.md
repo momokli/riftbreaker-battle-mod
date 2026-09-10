@@ -407,6 +407,8 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 [RBBATTLE] event=buy_wave unit=brabit tier=t1 count=1 price=100 total=100 pool=0 queue=1 status=ok   ← Kauf-Hook (#25)
 [RBBATTLE] event=boost status=ok pct=25 total_pct=25 price=200 pool=1800 buys=1   ← Send-Boost Kauf (#39)
 [RBBATTLE] event=richtwert_preview calcium=200 level=4 wave_richtwert=400 pct=50.0   ← Richtwert-Vorschau (#213, reine Vorschau, kein Kauf)
+[RBBATTLE] event=richtwert_sample_source status=found kind=group name=enemy   ← Gegner-Zaehl-Quelle gefunden (#213-Sampling, einmalig pro Session)
+[RBBATTLE] event=richtwert_sample level=4 before=5 after=13 delta=8   ← Naturwelle bei Level 4 hat 8 Kreaturen gespawnt (#213, echte Messung fuer die Kurve)
 [RBBATTLE] event=wave_hook patch status=ok                       ← Send-Queue-Hook aktiv (#42/#25)
 [RBBATTLE] event=boost patch status=ok                           ← Boost-Chokepoint-Hook aktiv (#39)
 [RBBATTLE] event=dom_timer patch status=ok cap=300        ← nach PlayerInitializedEvent

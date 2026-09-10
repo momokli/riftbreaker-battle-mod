@@ -49,9 +49,24 @@ ConsoleService = {
     Write = function(self, msg) end,
     RegisterCommand = function(self, name, fn) _G.__commands[name] = fn end,
 }
+-- #213-Sampling: _G.__enemySeq[group] ist eine Liste von Groessen, die
+-- FindEntitiesByGroup fuer GENAU diese Gruppe der Reihe nach liefert (ein
+-- Wert pro Aufruf -- simuliert "vorher" dann "nachher" ohne echten
+-- Spiel-State). Andere Gruppen/Typen liefern {} (kein Treffer).
+_G.__enemySeq = {}
+_G.__enemySeqIdx = {}
 FindService = {
-    FindEntitiesByType = function(self, t) return { 100 } end,
-    FindEntitiesByGroup = function(self, g) return { 100 } end,
+    FindEntitiesByType = function(self, t) return {} end,
+    FindEntitiesByGroup = function(self, g)
+        local seq = _G.__enemySeq[g]
+        if seq == nil then return {} end
+        local i = (_G.__enemySeqIdx[g] or 0) + 1
+        _G.__enemySeqIdx[g] = i
+        local n = seq[i] or seq[#seq]
+        local arr = {}
+        for k = 1, n do arr[k] = k end
+        return arr
+    end,
     FindPlayerSpawnPoints = function(self) return {} end,
 }
 MapGenerator = { GetInitialSpawnPoint = function(self) return nil end }
@@ -84,9 +99,13 @@ GuiService = {
 }
 
 dom_mananger = {
+    maxDifficultyLevel = 9,
+    currentDifficultyLevel = 4,
     OnEnterSpawn = function(self, state)
         _G.__waveStarts = _G.__waveStarts + 1
+        self:SpawnWavesForDifficultyLevel(self.currentDifficultyLevel, true)
     end,
+    SpawnWavesForDifficultyLevel = function(self, level, addToSpawned) end,
     GetPrepareSpawnTime = function(self) return 300 end,
 }
 
@@ -112,6 +131,14 @@ local function log_has(sub)
         if string.find(m, sub, 1, true) then return true end
     end
     return false
+end
+
+local function log_count(sub)
+    local c = 0
+    for _, m in ipairs(_G.__logs) do
+        if string.find(m, sub, 1, true) then c = c + 1 end
+    end
+    return c
 end
 
 -- 1. Reine Formel: WaveRichtwert(level) = level * richtwertPerLevel (100).
@@ -152,6 +179,28 @@ check(log_has("event=balance richtwert_cfg richtwert_per_level=100 calcium_per_r
     "rb_balance: Richtwert-Konfiguration geloggt")
 check(log_has("event=balance richtwert level=1 value=100"), "rb_balance: Richtwert-Kurve Level 1 -> 100")
 check(log_has("event=balance richtwert level=9 value=900"), "rb_balance: Richtwert-Kurve Level 9 -> 900")
+
+-- 6. #213-Sampling: Naturwelle spawnt (Gruppe "enemy" liefert 5 dann 13) ->
+--    event=richtwert_sample mit level/before/after/delta. RBB.commenced wird
+--    direkt gesetzt (das HQ-Auto-Detect ist hier nicht das Testziel).
+RBB.commenced = true
+_G.__enemySeq["enemy"] = { 5, 13 }
+dom_mananger.OnEnterSpawn(dom_mananger, {})
+check(log_has("event=richtwert_sample_source status=found kind=group name=enemy"),
+    "6. Sampling-Quelle gefunden: Gruppe 'enemy'")
+check(log_has("event=richtwert_sample level=4 before=5 after=13 delta=8"),
+    "6. Sample: Level 4, 5 -> 13 Kreaturen (delta=8)")
+
+-- 7. Zweite Naturwelle: die einmal gefundene Quelle wird WIEDERVERWENDET
+--    (kein erneutes Duchprobieren aller Kandidaten, kein zweites
+--    richtwert_sample_source-Log).
+_G.__enemySeq["enemy"] = { 13, 20 }
+_G.__enemySeqIdx["enemy"] = 0
+dom_mananger.OnEnterSpawn(dom_mananger, {})
+check(log_count("event=richtwert_sample_source") == 1,
+    "7. Sampling-Quelle wird nur einmal geloggt (wiederverwendet)")
+check(log_has("event=richtwert_sample level=4 before=13 after=20 delta=7"),
+    "7. Zweites Sample nutzt dieselbe Quelle (13 -> 20, delta=7)")
 
 print("FAILURES=" .. failures)
 _G.__failures = failures

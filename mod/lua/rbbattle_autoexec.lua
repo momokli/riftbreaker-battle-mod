@@ -1899,6 +1899,59 @@ end
 RBB.spawnWavesPatched = false
 RBB.spawnWavesOrig = nil
 
+-- #213: Kandidaten fuer die Erkennung lebender Gegner-Kreaturen (Sampling der
+-- Wellen-Richtwert-Kurve: wie viele Kreaturen spawnt eine Naturwelle bei
+-- welchem difficultyLevel tatsaechlich?). Anders als die Rand-Spawner (#26)
+-- oder der HQ-Typ (#144, am Source verifiziert) ist hier KEINE Quelle
+-- bekannt -- reine Rateversuche nach demselben Muster wie HqAutoDetectEntity.
+-- Traegt NUR zur Diagnose bei (Log-Zeile event=richtwert_sample), keine
+-- Spielwirkung. Schnellerer Weg waere ein direkter Blick in die entschluesselte
+-- Spielquelle (rules.maxAttackCountPerDifficulty[level], s. Kommentar oben) --
+-- falls verfuegbar, ist das zuverlaessiger als dieses Sampling.
+RBB.enemyCountGroupCandidates = { "enemy", "enemies", "creatures", "enemy_creatures" }
+RBB.enemyCountTypeCandidates = { "creature", "enemy_creature", "monster" }
+RBB.enemyCountSource = nil -- { kind="group"|"type", name=".." } nach erstem Treffer (gemerkt fuer die Session)
+
+-- Zaehlt aktuell lebende Gegner-Kreaturen (bester Versuch). Merkt sich den
+-- ERSTEN Kandidaten mit >0 Treffern fuer die restliche Session (kein
+-- Neu-Durchprobieren jede Welle); liefert nil, wenn kein Kandidat je etwas
+-- findet (API fehlt oder alle Kandidaten falsch) -- dann bleibt das Sampling
+-- inaktiv, ohne den Rest des Mods zu beeintraechtigen.
+local function CountEnemyEntities()
+    if RBB.enemyCountSource ~= nil then
+        local ok, list
+        if RBB.enemyCountSource.kind == "group" then
+            ok, list = pcall(function() return FindService:FindEntitiesByGroup(RBB.enemyCountSource.name) end)
+        else
+            ok, list = pcall(function() return FindService:FindEntitiesByType(RBB.enemyCountSource.name) end)
+        end
+        if ok and type(list) == "table" then return #list end
+        return nil
+    end
+
+    if FindService and FindService.FindEntitiesByGroup then
+        for _, name in ipairs(RBB.enemyCountGroupCandidates) do
+            local ok, list = pcall(function() return FindService:FindEntitiesByGroup(name) end)
+            if ok and type(list) == "table" and #list > 0 then
+                RBB.enemyCountSource = { kind = "group", name = name }
+                Log("event=richtwert_sample_source status=found kind=group name=%s", name)
+                return #list
+            end
+        end
+    end
+    if FindService and FindService.FindEntitiesByType then
+        for _, name in ipairs(RBB.enemyCountTypeCandidates) do
+            local ok, list = pcall(function() return FindService:FindEntitiesByType(name) end)
+            if ok and type(list) == "table" and #list > 0 then
+                RBB.enemyCountSource = { kind = "type", name = name }
+                Log("event=richtwert_sample_source status=found kind=type name=%s", name)
+                return #list
+            end
+        end
+    end
+    return nil
+end
+
 PatchSpawnWavesHook = function()
     if RBB.spawnWavesPatched then
         return RBB.spawnWavesOrig ~= nil
@@ -1923,6 +1976,7 @@ PatchSpawnWavesHook = function()
         RBB.spawnWavesOrig = orig
         dom.SpawnWavesForDifficultyLevel = function(self, difficultyLevel, shouldAddtoSpawnedAttacks)
             local newLevel = difficultyLevel
+            local beforeCount = nil
             if shouldAddtoSpawnedAttacks == true then
                 -- Naturwelle (OnEnterSpawn, addToSpawned=true); Debug-Trigger
                 -- (false) bleibt unangetastet. Grundschwierigkeits-Skalierung
@@ -1930,8 +1984,20 @@ PatchSpawnWavesHook = function()
                 local preset = ActiveWavePreset()
                 newLevel = ScaleWaveLevel(difficultyLevel, preset.strengthPct)
                 newLevel = ApplyPendingBoost(self, newLevel)
+                beforeCount = CountEnemyEntities() -- #213: Sampling-Snapshot vor dem Spawn
             end
-            return RBB.spawnWavesOrig(self, newLevel, shouldAddtoSpawnedAttacks)
+            local result = RBB.spawnWavesOrig(self, newLevel, shouldAddtoSpawnedAttacks)
+            if shouldAddtoSpawnedAttacks == true then
+                -- #213: Snapshot-Diff nach dem (synchronen) Naturwellen-Spawn.
+                local afterCount = CountEnemyEntities()
+                if beforeCount ~= nil and afterCount ~= nil then
+                    Log("event=richtwert_sample level=%d before=%d after=%d delta=%d",
+                        newLevel, beforeCount, afterCount, afterCount - beforeCount)
+                else
+                    Log("event=richtwert_sample level=%d status=unavailable", newLevel)
+                end
+            end
+            return result
         end
         Log("event=boost patch status=ok")
     end
