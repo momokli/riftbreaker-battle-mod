@@ -137,4 +137,12 @@ out06="$OUT_DIR/rbb-06-tournament-server.zip"
 zip_content_root "$SRC06" "$out06"
 echo "NAME=rbb-06-tournament-server.zip ZIP=$out06"
 
-echo "[package_bausteine] fertig: $(ls "$OUT_DIR"/rbb-*.zip | wc -l) Zip(s) in $OUT_DIR"
+# Einzel-Mod (Issue #16): der fusionierte Mod mod/ als rbbattle.zip —
+# Primär-Download. Content-Root = mod/ (lua/ + <GUID>.manifest + README.md an
+# der Zip-Wurzel), genau wie er nach <game>/mods/rbbattle/ gehoert.
+SRCMOD="$ROOT/mod"
+outmod="$OUT_DIR/rbbattle.zip"
+zip_content_root "$SRCMOD" "$outmod"
+echo "NAME=rbbattle.zip ZIP=$outmod"
+
+echo "[package_bausteine] fertig: $(ls "$OUT_DIR"/rbb-*.zip | wc -l) Baustein-Zip(s) + rbbattle.zip in $OUT_DIR"

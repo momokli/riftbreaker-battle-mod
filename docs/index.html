@@ -61,6 +61,10 @@
   .card .row { display: flex; align-items: center; justify-content: space-between;
                gap: .6rem; flex-wrap: wrap; }
 
+  /* ---------- hero (primärer Mod-Download) ---------- */
+  .hero { background: #2b7d84; }
+  .hero .inner { background: #0c1518; }
+
   /* ---------- status chips: untested = #6b7a85, ok/fail vorbereitet ---------- */
   .chip {
     display: inline-block;
@@ -101,6 +105,18 @@
     <h1>rift-breaker-explorations</h1>
     <p class="prompt"><span class="lbl">status:</span> 9 sub-projects | 1 ok · 2 partial · 6 untested</p>
   </header>
+
+  <section class="panel hero"><div class="inner card">
+    <h2><span class="idx">★</span> — rbbattle <span style="color:#52d273">(Einzel-Mod · v0.14.0)</span></h2>
+    <p class="desc">Fusion aus Baustein 00 + 01 (+ Shop/Queue, Economy, Win-Condition, Reveal-HUD) — ein Download, eine <code>mod_load</code>-Zeile.</p>
+    <div class="row">
+      <span class="chip ok">primär</span>
+      <a class="dl" href="https://github.com/momokli/riftbreaker-battle-mod/releases/download/v0.14.0/rbbattle.zip"><span class="arrow">&gt;</span> rbbattle.zip</a>
+      <a class="dl" href="https://github.com/momokli/riftbreaker-battle-mod/blob/main/mod/README.md"><span class="arrow">&gt;</span> install &amp; commands</a>
+    </div>
+  </div></section>
+
+  <p class="prompt"><span class="lbl">bausteine:</span> einzelne Komponenten (rbb-00 … rbb-06)</p>
 
   <main class="grid">
     <section class="panel"><div class="inner card">
