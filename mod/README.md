@@ -1,12 +1,18 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.22.0 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.23.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 
 > **Multiplayer:** Beide Spieler müssen **exakt dieselben Mods** installiert
 > haben, sonst lehnt der Client die Lobby mit **„different set of mods“** ab.
 > Kurzanleitung: [`docs/PLAYER_SETUP.md`](../docs/PLAYER_SETUP.md).
+
+**v0.23.0 — Mod-Zip-Version aus Metadaten + Download-Link an deployed Stand (Issue #119):**
+- `scripts/mod_version.sh` als Single Source of Truth für die Mod-Version (liest `mod/<GUID>.manifest`, Feld `version`).
+- `package_bausteine.sh` erzeugt zusätzlich das versionierte `rbbattle-v<version>.zip`; `rbbattle.zip` bleibt der stabile Alias für die Deploy-Kette.
+- Website **dev** (`solo.html`, `connectivity.html`): Download zeigt auf das Same-Origin-Zip `/mods/rbbattle.zip` (deployed `main`-Stand). **prod** (`index.html`) unverändert auf das getaggte Release.
+- Deploy-Rolle `mods-zip` kopiert das versionierte Zip zusätzlich nach planet.
 
 **v0.22.0 — CD: Deploy-Parkierung bis 0 Spieler online (Issue #118):**
 - Neues eigenständiges Modul `tools/deploy-gate/` (`deploy_gate.py`): `decide()` als reine
@@ -337,7 +343,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.22.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
+[RBBATTLE] event=mod_load version=0.23.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100
