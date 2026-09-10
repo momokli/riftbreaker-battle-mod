@@ -16,6 +16,7 @@ build/
 dist/
 bin/
 out/
+target/
 *.log
 
 # Python

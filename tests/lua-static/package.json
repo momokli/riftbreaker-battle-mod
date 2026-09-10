@@ -1,0 +1,13 @@
+{
+  "name": "rbbattle-lua-static-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Statische Verifikation des Lua-Mods (fengari + luaparse): Syntax-Check + Stub-Service-Szenarien ohne Spielausfuehrung.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "fengari": "^0.1.5",
+    "luaparse": "^0.3.1"
+  }
+}
