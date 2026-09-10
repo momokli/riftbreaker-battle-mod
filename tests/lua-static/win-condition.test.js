@@ -39,11 +39,11 @@ ConsoleService = {
     Write = function(self, msg) end,
     RegisterCommand = function(self, name, fn) _G.__commands[name] = fn end,
 }
--- #144: _G.__findGroups[group] steuert, was FindEntitiesByGroup pro Gruppe
+-- #144: _G.__findTypes[type] steuert, was FindEntitiesByType pro Typ
 -- liefert (Test setzt das gezielt); Default = leere Liste (kein Treffer).
-_G.__findGroups = {}
+_G.__findTypes = {}
 FindService = {
-    FindEntitiesByGroup = function(self, g) return _G.__findGroups[g] or {} end,
+    FindEntitiesByType = function(self, t) return _G.__findTypes[t] or {} end,
     FindPlayerSpawnPoints = function(self) return {} end,
 }
 MapGenerator = { GetInitialSpawnPoint = function(self) return nil end }
@@ -213,7 +213,7 @@ check(count_logs("event=hq_leak status=skip reason=no_hq_entity") == 2, "Leak-Sk
 -- 10. Issue #144: HqAutoDetectEntity -- automatische HQ-Entity-Bindung.
 check(_G.__handlers["PlayerInitializedEvent"] ~= nil, "PlayerInitializedEvent registriert")
 
--- 10a. Gruppe "headquarters" liefert 0 Treffer -> not_found, entity bleibt nil.
+-- 10a. Typ "headquarters" liefert 0 Treffer -> not_found, entity bleibt nil.
 _G.__handlers["PlayerInitializedEvent"](nil)
 check(log_has("event=hq_autodetect status=not_found candidates=headquarters"),
     "10a. Autodetect ohne Treffer -> status=not_found")
@@ -227,13 +227,13 @@ _G.__commands["rb_wave"]({ "1" })
 check(count_logs("event=hq_autodetect status=not_found") == 1,
     "10b. Wiederholter Fehlversuch loggt nicht erneut (Guard)")
 
--- 10c. Mehrdeutiger Treffer (2 Entities in der Gruppe) -> kein Rateschuss,
+-- 10c. Mehrdeutiger Treffer (2 Entities vom Typ) -> kein Rateschuss,
 --      Entity bleibt ungebunden.
 _G.__commands["rb_hq"]({ "reset" })
-_G.__findGroups["headquarters"] = { 501, 502 }
+_G.__findTypes["headquarters"] = { 501, 502 }
 _G.__handlers["PlayerInitializedEvent"](nil)
-check(not log_has("event=hq_autodetect status=ok group=headquarters entity=501")
-    and not log_has("event=hq_autodetect status=ok group=headquarters entity=502"),
+check(not log_has("event=hq_autodetect status=ok type=headquarters entity=501")
+    and not log_has("event=hq_autodetect status=ok type=headquarters entity=502"),
     "10c. Mehrdeutiger Treffer (2 Entities) bindet KEINE der beiden Entities")
 _G.__commands["rb_hq"]({ "leak" })
 check(log_has("event=hq_leak status=skip reason=no_hq_entity"),
@@ -241,21 +241,21 @@ check(log_has("event=hq_leak status=skip reason=no_hq_entity"),
 
 -- 10d. Genau EIN Treffer -> automatische Bindung, Leak greift ab sofort.
 _G.__commands["rb_hq"]({ "reset" })
-_G.__findGroups["headquarters"] = { 777 }
+_G.__findTypes["headquarters"] = { 777 }
 _G.__handlers["PlayerInitializedEvent"](nil)
-check(log_has("event=hq_autodetect status=ok group=headquarters entity=777"),
+check(log_has("event=hq_autodetect status=ok type=headquarters entity=777"),
     "10d. Genau ein Treffer -> automatische Bindung")
 _G.__handlers["EnteredTriggerEvent"](trigger_evt(9999))
 check(log_has("event=leak damage=10 hp_before=100 hp=90"),
     "10d. Leak greift nach automatischer Bindung sofort (kein rb_hq entity noetig)")
 
 -- 10e. Bereits gebundene Entity wird NICHT ueberschrieben (auch bei erneutem Aufruf).
-_G.__findGroups["headquarters"] = { 999 }
+_G.__findTypes["headquarters"] = { 999 }
 _G.__handlers["PlayerInitializedEvent"](nil)
-check(not log_has("event=hq_autodetect status=ok group=headquarters entity=999"),
+check(not log_has("event=hq_autodetect status=ok type=headquarters entity=999"),
     "10e. Bereits gebundene Entity wird nicht durch einen zweiten Treffer ersetzt")
 
-_G.__findGroups["headquarters"] = nil -- aufraeumen fuer nachfolgende Tests
+_G.__findTypes["headquarters"] = nil -- aufraeumen fuer nachfolgende Tests
 
 print("FAILURES=" .. failures)
 _G.__failures = failures

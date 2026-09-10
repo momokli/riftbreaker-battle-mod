@@ -10,7 +10,7 @@
 //   2) Ohne HQ haelt der Wellenstart (dom_mananger.OnEnterSpawn) AN: kein
 //      Spawn, kein Runden-Zaehler — aber kein debug_dom_pause (Spiel laeuft).
 //   3) Held-Hinweis (event=commence status=held reason=no_hq) genau einmal.
-//   4) HQ platziert -> FindEntitiesByGroup("headquarters") erkennt es (via
+//   4) HQ platziert -> FindEntitiesByType("headquarters") erkennt es (via
 //      HourEvent-Tick, periodische Erkennung) -> event=commence status=ok.
 //   5) Nach Commence laeuft der Wellenstart normal (Spawn + round=1).
 //   6) Commence idempotent; manueller Fallback rb_hq entity commencet ebenfalls.
@@ -31,8 +31,8 @@ const { lua, lauxlib, lualib, to_luastring, to_jsstring } = require('fengari');
 const MOD_PATH = path.join(__dirname, '..', '..', 'mod', 'lua', 'rbbattle_autoexec.lua');
 const modSource = fs.readFileSync(MOD_PATH, 'utf8');
 
-// Stub-Services (Muster win-condition.test.js). FindEntitiesByGroup ist ueber
-// _G.__findGroups steuerbar (0 Treffer = kein HQ -> Setup-Phase; 1 Treffer =
+// Stub-Services (Muster win-condition.test.js). FindEntitiesByType ist ueber
+// _G.__findTypes steuerbar (0 Treffer = kein HQ -> Setup-Phase; 1 Treffer =
 // HQ platziert -> Commence). WriteConsole wird nach _G.__console gespiegelt,
 // damit die In-Game-Announce-Texte assertiert werden koennen.
 const STUBS = `
@@ -43,7 +43,7 @@ _G.__handlers = {}
 _G.__commands = {}
 _G.__db = {}
 _G.__waveStarts = 0
-_G.__findGroups = {}
+_G.__findTypes = {}
 INVALID_ID = -1
 
 LogService = {
@@ -54,7 +54,7 @@ ConsoleService = {
     RegisterCommand = function(self, name, fn) _G.__commands[name] = fn end,
 }
 FindService = {
-    FindEntitiesByGroup = function(self, g) return _G.__findGroups[g] or {} end,
+    FindEntitiesByType = function(self, t) return _G.__findTypes[t] or {} end,
     FindPlayerSpawnPoints = function(self) return {} end,
 }
 MapGenerator = { GetInitialSpawnPoint = function(self) return nil end }
@@ -155,11 +155,11 @@ check(log_count("event=commence status=held reason=no_hq") == 1, "Held-Log genau
 check(_G.__waveStarts == 0, "weiterhin kein Wellenstart ohne HQ")
 
 -- 4. HQ platziert -> periodische Erkennung ueber den HourEvent-Tick:
---    FindEntitiesByGroup("headquarters") = 1 Treffer -> Commence.
-_G.__findGroups["headquarters"] = { 777 }
+--    FindEntitiesByType("headquarters") = 1 Treffer -> Commence.
+_G.__findTypes["headquarters"] = { 777 }
 _G.__handlers["HourEvent"](nil)
-check(log_has("event=hq_autodetect status=ok group=headquarters entity=777"),
-    "HQ auto-erkannt (FindEntitiesByGroup headquarters)")
+check(log_has("event=hq_autodetect status=ok type=headquarters entity=777"),
+    "HQ auto-erkannt (FindEntitiesByType headquarters)")
 check(log_has("event=commence status=ok"), "Commence-Announce: event=commence status=ok")
 check(console_has("Headquarter placed"),
     "Commence-Announce in-game: 'Headquarter placed — waves commencing'")
@@ -171,10 +171,10 @@ check(log_has("event=round round=1 status=start"), "round=1 status=start nach Co
 
 -- 6. Commence idempotent: weiterer Tick bindet die Entity nicht neu und
 --    loggt kein zweites status=ok.
-_G.__findGroups["headquarters"] = { 888 }
+_G.__findTypes["headquarters"] = { 888 }
 _G.__handlers["HourEvent"](nil)
 check(log_count("event=commence status=ok") == 1, "Commence idempotent (kein zweites status=ok)")
-check(not log_has("event=hq_autodetect status=ok group=headquarters entity=888"),
+check(not log_has("event=hq_autodetect status=ok type=headquarters entity=888"),
     "bereits gebundene HQ-Entity wird nicht ueberschrieben")
 
 print("FAILURES=" .. failures)
