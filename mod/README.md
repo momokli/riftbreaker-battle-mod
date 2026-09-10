@@ -1,6 +1,6 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.18.0 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.18.1 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 
@@ -283,7 +283,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.18.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
+[RBBATTLE] event=mod_load version=0.18.1 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100
