@@ -5,9 +5,10 @@ Das Spiel schreibt `[RBBATTLE] key=value`-Zeilen in `exor_logs.txt` (Baustein 03
 der Relay **tailt** diese Datei, parst die Zeilen und **liefert sie per
 `POST /event`** an den Tournament-Server (Baustein 06) ein. Im Poll-Loop holt er
 seine Outbox-Events (`GET /poll/:player_id`) ab — `exec_command` ist der
-Control-Kanal von der Web-UI (Baustein 08) und wird hier als **dispatch pending**
-geloggt und ack-markiert. Der echte Dispatch ins Spiel (`dispatch_exec` via
-Pipe/rbbridge) bleibt bewusst TODO (RE-Phase).
+Control-Kanal von der Web-UI (Baustein 08) und wird als
+`{"cmd":"exec",...}` auf die rbbridge-Named-Pipe dispatcht (fire-and-forget).
+Ist die Pipe nicht erreichbar, wird das Kommando nicht verworfen, sondern mit
+Backoff erneut versucht (erst nach Erfolg ack-markiert).
 
 Nur Standardbibliothek (Python 3.7+), kein pip-Paket.
 
@@ -20,6 +21,8 @@ Nur Standardbibliothek (Python 3.7+), kein pip-Paket.
 | `RBB_MATCH_ID` | Match-ID für `POST /event` | leer → Events werden nicht gepostet (Log-Hinweis) |
 | `RBB_SERVER` | Basis-URL des Tournament-Servers | `http://127.0.0.1:8080` |
 | `RBB_POLL_S` | Poll-Intervall | `1.0` |
+| `RBB_PIPE_PATH` | rbbridge-Named-Pipe | `\\.\pipe\rbbattle` (wie `rbbridge.c` `PIPE_NAME_A`) |
+| `RBB_PIPE_TIMEOUT_S` | Timeout Pipe-Connect/Write (s) | `5.0` |
 
 ## Start
 
@@ -29,10 +32,11 @@ RBB_SERVER=http://127.0.0.1:8080 python3 relay.py
 ```
 
 Beim Start registriert sich der Relay am Server (Retry, bis der Server da ist);
-dann laufen drei Threads: **tail** (Log → Queue), **post** (Queue → `/event`,
+dann laufen vier Threads: **tail** (Log → Queue), **post** (Queue → `/event`,
 Retry mit Backoff 1–30 s bei Netzfehlern, nichts geht verloren), **poll**
-(`/poll/:player_id`, `exec_command` → `dispatch pending`, andere Typen nur
-loggen). Strg+C beendet sauber; Log-Rotation wird erkannt.
+(`/poll/:player_id`, `exec_command` → Dispatch-Queue), **dispatch** (schreibt
+`{"cmd":"exec",...}` auf die rbbridge-Pipe; bei Pipe-Fehler Retry mit Backoff).
+Strg+C beendet sauber; Log-Rotation wird erkannt.
 
 ## Wie testen ohne Spiel
 
@@ -55,19 +59,25 @@ loggen). Strg+C beendet sauber; Log-Rotation wird erkannt.
    python3 relay.py
    # Log zeigt: tail: ... -> post: ok type=score_update/wave_sent ...
    ```
-5. Kommando von der Web-UI (oder curl) schicken — der Relay loggt den Dispatch:
+5. rbbridge-Pipe-Fake anlegen (Named-Pipe-Ersatz unter Linux) und Kommando schicken:
    ```bash
+   mkfifo /tmp/fake_pipe && cat /tmp/fake_pipe > /tmp/pipe.log &   # Leser
+   # Relay mit RBB_PIPE_PATH=/tmp/fake_pipe neu starten
    curl -s -X POST localhost:8080/event \
         -d '{"match_id":"<match_id>","player_id":"player_a",\
              "event":{"type":"exec_command","command":"rb_wave 1"}}'
-   # relay-stdout: dispatch pending: rb_wave 1 (cmd_id=1)
+   # relay-stdout: dispatch sent cmd_id=1 len=...
+   # /tmp/pipe.log: {"cmd":"exec","command":"rb_wave 1","cmd_id":1}
    ```
 6. Kompletter Durchstich inkl. Assertions: `bash test_e2e_prototype.sh` (Baustein 07, s. u.)
+
+Unit-Tests des Pipe-Dispatchs (Erfolg / Pipe-fehlt / Ack-Pfad, ohne Spiel,
+FIFO als Named-Pipe-Ersatz): `python3 -m unittest test_dispatch -v`.
 
 ## Status
 
 - [x] tail: Log-Polling, Rotation, UTF-8 `errors=replace`, unvollständige Zeilen werden zurückgehalten
 - [x] post: `POST /event`, Backoff-Retry bei Netzfehler (Queue, kein Verlust), 4xx = Konfigurationsfehler (log + weiter)
-- [x] poll: Outbox abholen, `exec_command` → `dispatch pending: <command>` + ack (cmd_id), andere Typen loggen
+- [x] poll: Outbox abholen, `exec_command` → Dispatch-Queue, andere Typen loggen
+- [x] dispatch: `{"cmd":"exec",...}` auf die rbbridge-Pipe, Retry/Backoff bei Pipe-Fehler, ack erst nach Erfolg (Issue #60)
 - [x] register beim Start + Re-Register bei 404 (Server-Neustart)
-- [ ] `dispatch_exec` ins Spiel (Pipe/rbbridge) — bewusst TODO, siehe Protokoll-RE
