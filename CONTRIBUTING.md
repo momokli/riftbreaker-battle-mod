@@ -87,7 +87,12 @@ Neben Menschen arbeiten AI-Agents am Repo. Die verbindlichen Regeln stehen in
 
 ## Branch- & Milestone-Konvention
 
-- **Branches:** `feature/…` für Neues, `fix/…` für Fehlerbehebungen.
+- **Branches:** `feature/…` für Neues, `fix/…` für Fehlerbehebungen. Für
+  Issue-Arbeit hat sich `fix/issue-<n>` als Konvention etabliert.
+- **Branch nach Squash-Merge löschen:** Ein gemergter Branch ist ein Rest — den
+  Remote-Head nach dem Merge entfernen (`git push origin --delete <branch>`),
+  damit `git branch -a` und die Branch-Liste in der UI sauber bleiben.
+  Alternativ in den Repo-Settings „Automatically delete head branches“ aktivieren.
 - **Milestones** bündeln die Arbeit pro Release. Aktuell: **`RIFT BATTLE v1`**.
 - **Releases** werden ausschließlich über Tags `vX.Y.Z` ausgelöst (Workflow `ci.yml`).
 
