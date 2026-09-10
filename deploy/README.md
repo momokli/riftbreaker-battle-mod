@@ -7,9 +7,11 @@ Ziel-Stack + Betriebsregeln: [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md).
 
 - `ansible` (core ≥ 2.19) auf dem Control-Node (dem Rechner, von dem du deployst).
 - SSH mesh-first: Alias `planet` in `~/.ssh/config` (Tailscale), `root`-Login.
-- Auf planet: Docker + `docker compose`, `systemd`, `rsync` (für Paketierung),
+- Auf planet: Docker + `docker compose`, `systemd`,
   Caddy als Container `mellon-caddy`.
-- `zip` **oder** `python3` (für `scripts/package_bausteine.sh`).
+- Auf dem Control-Node: `zip` **oder** `python3` (für
+  `scripts/package_bausteine.sh` — die Paketierung läuft dort, nicht auf
+  planet; siehe Rolle `mods-zip`, `delegate_to: localhost`).
 
 ## Vault (Server-Passwort)
 
