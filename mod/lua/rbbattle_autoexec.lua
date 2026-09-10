@@ -11,8 +11,9 @@
 --       FindPlayerSpawnPoints + MapGenerator:GetInitialSpawnPoint) — beides
 --       serverseitig verfuegbar, sobald die Welt gebootet ist. Erst wenn auch
 --       die fehlen, wird der Spieler-Mech als letzter Fallback genutzt.
---   #23 Runden-Takt: DOM-Wellen-Vorbereitung auf max. 300 s gedeckelt
---       (prepareSpawnTime 420 -> 300, 5-Min-Wellen) + Setup-Log
+--   #23 Runden-Takt: DOM-Wellen-Vorbereitung wird auf den Wellen-Takt des
+--       aktiven Presets gedeckelt (RBB.wavePresets, #41; prepareSpawnTime
+--       420 -> Preset-Intervall) + Setup-Log
 --       (difficulty/map size/seed werden beim Server-Start gesetzt, s.
 --       docs/DUEL_SETUP.md — der Mod loggt die aktiv wirksame Difficulty).
 --   #24 Economy (Duell-Oekonomie): Alle gefarmten Ressourcen (Carbonium &
@@ -74,6 +75,10 @@
 --       jedem Wellenstart auf den Runden-Maxwert. Der Wellen-Takt bleibt
 --       waveIntervalCapS (nur dokumentiert, nicht fest verdrahtet). Alle
 --       Werte sind eine Balance-Annahme und brauchen Live-Test (#33).
+--   #41 Wellen-Takt + Grundschwierigkeit (Test-Varianten): explizite Presets
+--       A = alle 8 Min in voller Groesse, B = alle 4 Min in halber Groesse
+--       (RBB.wavePresets); Grundschwierigkeit "normal" (leichter als hard,
+--       weil Sends die Schwierigkeit zusaetzlich erhoehen). Kein Version-Bump.
 --
 -- Basis: rbbattle v0.2.0-single (feature/single-mod, PR #15) + Baustein 00/01.
 -- Kein io/socket/http, keine Bindings, kein eigenes HUD-Framework (nur
@@ -206,10 +211,34 @@ RBB.spawnRingMax = 20.0
 -- stehen; Radius in Metern. (Terrain-Hoehe wird versucht, sonst Anchor-Hoehe.)
 RBB.spawnJitterMax = 3.0
 
--- #23: Deckel fuer die DOM-Wellen-Vorbereitung in Sekunden (5-Min-Wellen).
--- Vanilla-Wert in normal/hard-Survival-Rules: 420 (Beleg:
--- lua/missions/survival/v2/dom_survival_*_rules_{normal,hard}.lua).
-RBB.waveIntervalCapS = 300
+-- #41: Wellen-Takt + Grundschwierigkeit als explizite, dokumentierte
+-- Konfigurations-Presets (zu testen, Issue #41). Zwei Varianten:
+--   A = alle 8 Min (480 s) in VOLLER Groesse (strengthPct 100)
+--   B = alle 4 Min (240 s) in HALBER Groesse (strengthPct 50)
+-- Grundschwierigkeit: "normal" (leichter als der bisherige Default "hard"),
+-- weil Sends die Schwierigkeit zusaetzlich erhoehen (Basis-Druck niedriger).
+-- Der Wellen-Takt ist bewusst NICHT fest verdrahtet: waveIntervalCapS wird
+-- aus dem aktiven Preset abgeleitet (docs/GAME_DESIGN.md §Wellen-Takt).
+RBB.wavePresets = {
+    baseDifficulty = "normal",  -- Grundschwierigkeit (Server-Seite, docs/DUEL_SETUP.md)
+    active = "A",               -- aktives Preset (A|B), aenderbar vor Map-Start
+    variants = {
+        A = { id = "A", intervalS = 480, strengthPct = 100 },  -- 8 Min, volle Groesse
+        B = { id = "B", intervalS = 240, strengthPct = 50 },   -- 4 Min, halbe Groesse
+    },
+}
+
+-- Aktives Wellen-Preset (ein Point-of-Switch vor dem Map-Start; unbekannte
+-- aktive ID faellt auf Variante A zurueck).
+local function ActiveWavePreset()
+    return RBB.wavePresets.variants[RBB.wavePresets.active]
+        or RBB.wavePresets.variants.A
+end
+
+-- #23: Deckel fuer die DOM-Wellen-Vorbereitung in Sekunden — abgeleitet aus
+-- dem aktiven Wellen-Preset (#41). Vanilla-Wert in normal/hard-Survival-Rules:
+-- 420 (Beleg lua/missions/survival/v2/dom_survival_*_rules_{normal,hard}.lua).
+RBB.waveIntervalCapS = ActiveWavePreset().intervalS
 
 -- #42: Mod-Mode (MVP). sp = Single-Player Self-Send (Sich-selber-senden),
 -- duel = 1v1-Duell (folgt spaeter, hier nur Stub). Default sp.
@@ -617,7 +646,8 @@ local function SpawnWave(level)
 end
 
 -- ---------------------------------------------------------------------------
--- #23: DOM-Wellen-Timer auf 300 s deckeln (Function-Wrap, vgl. docs/SEND_HOOK.md)
+-- #23: DOM-Wellen-Timer auf den aktiven Wellen-Takt deckeln (RBB.waveIntervalCapS,
+-- Function-Wrap, vgl. docs/SEND_HOOK.md)
 --
 -- Wrappt dom_mananger:GetPrepareSpawnTime (Klasse, nicht Instanz). Die Klasse
 -- existiert erst, nachdem MissionService:AddGameRule die dom_manager.lua
@@ -691,8 +721,10 @@ local function LogMapSetupInfo()
         if okC and cd ~= nil then creatureDifficulty = tostring(cd) end
     end
 
-    Log("event=setup difficulty=%s creatures_difficulty=%s timer_cap=%d",
-        difficulty, creatureDifficulty, RBB.waveIntervalCapS)
+    local preset = ActiveWavePreset()
+    Log("event=setup difficulty=%s creatures_difficulty=%s timer_cap=%d preset=%s interval=%d strength_pct=%d base_difficulty=%s",
+        difficulty, creatureDifficulty, RBB.waveIntervalCapS,
+        preset.id, preset.intervalS, preset.strengthPct, RBB.wavePresets.baseDifficulty)
 end
 
 local function OnPlayerInitialized()
@@ -1675,6 +1707,21 @@ local function BoostLevelDelta(level, pct)
     return delta
 end
 
+-- #41: Wellen-Staerke-Skalierung (diskreter Hebel ueber difficultyLevel, wie
+-- der Boost #39). Preset B = "halbe Groesse" -> floor(level * pct/100), min. 1;
+-- Preset A = "volle Groesse" (strengthPct 100) -> Level unveraendert.
+-- Approximation (diskrete Level statt Kreaturen-Anzahl), braucht Live-Test (#41).
+local function ScaleWaveLevel(level, strengthPct)
+    local l = math.floor(tonumber(level) or 1)
+    if l < 1 then l = 1 end
+    local pct = math.floor(tonumber(strengthPct) or 100)
+    if pct >= 100 then return l end
+    if pct <= 0 then pct = 1 end
+    local scaled = math.floor(l * pct / 100)
+    if scaled < 1 then scaled = 1 end
+    return scaled
+end
+
 -- Wendet den akkumulierten Boost auf die naechste Naturwelle an (nur sp) und
 -- setzt ihn danach zurueck. Liefert das ggf. erhoehte difficultyLevel. Bei
 -- duel bleibt der Boost liegen (Stub, analog FlushSendQueue).
@@ -1742,8 +1789,11 @@ PatchSpawnWavesHook = function()
             local newLevel = difficultyLevel
             if shouldAddtoSpawnedAttacks == true then
                 -- Naturwelle (OnEnterSpawn, addToSpawned=true); Debug-Trigger
-                -- (false) bleibt unangetastet.
-                newLevel = ApplyPendingBoost(self, difficultyLevel)
+                -- (false) bleibt unangetastet. Grundschwierigkeits-Skalierung
+                -- (#41) vor dem Send-Boost (#39).
+                local preset = ActiveWavePreset()
+                newLevel = ScaleWaveLevel(difficultyLevel, preset.strengthPct)
+                newLevel = ApplyPendingBoost(self, newLevel)
             end
             return RBB.spawnWavesOrig(self, newLevel, shouldAddtoSpawnedAttacks)
         end
@@ -2061,7 +2111,14 @@ local function CmdBalance(args)
     end
     Log("event=balance boost_cfg price_per_pct=%d max_boost_pct=%d max_boosts_per_wave=%d",
         RBB.boostCfg.pricePerPct, RBB.boostCfg.maxBoostPct, RBB.boostCfg.maxBoostsPerWave)
-    WriteConsole("rb_balance: Preisliste + HQ-HP-Kurve + Boost-Stufen geloggt (braucht Live-Test, #33/#39)")
+    -- Wellen-Presets (#41): Variante A/B (Takt + Groesse) als Dokumentation.
+    for _, v in pairs(RBB.wavePresets.variants) do
+        Log("event=balance wave_preset id=%s interval=%d strength_pct=%d",
+            v.id, v.intervalS, v.strengthPct)
+    end
+    Log("event=balance wave_preset_cfg active=%s base_difficulty=%s timer_cap=%d",
+        RBB.wavePresets.active, RBB.wavePresets.baseDifficulty, RBB.waveIntervalCapS)
+    WriteConsole("rb_balance: Preisliste + HQ-HP-Kurve + Boost-Stufen + Wellen-Presets geloggt (braucht Live-Test, #33/#39/#41)")
 end
 
 pcall(function()
@@ -2324,6 +2381,6 @@ pcall(function()
 end)
 
 -- Lebenszeichen-Log beim Laden (analog Baustein 01 / Spike).
-Log("event=mod_load version=%s status=ok mode=%s anchor=border_spawner_groups timer_cap=%d econ_source=%s econ_pool=%d hq_hp=%d hq_dead=%s",
-    RBB.version, RBB.mode, RBB.waveIntervalCapS, RBB.economy.source, RBB.economy.pool,
-    RBB.hq.hp, tostring(RBB.hq.dead))
+Log("event=mod_load version=%s status=ok mode=%s anchor=border_spawner_groups timer_cap=%d preset=%s econ_source=%s econ_pool=%d hq_hp=%d hq_dead=%s",
+    RBB.version, RBB.mode, RBB.waveIntervalCapS, RBB.wavePresets.active,
+    RBB.economy.source, RBB.economy.pool, RBB.hq.hp, tostring(RBB.hq.dead))

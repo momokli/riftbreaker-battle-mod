@@ -20,13 +20,13 @@
 | Format | 1v1 (2v2-ready: Shared Base + gemeinsamer Send-Pool) |
 | Server | 2× Dedicated (je Welt ein Duellant) + Tournament-Server (Referee) + Web-UI |
 | Karte | Gleicher Seed für beide Welten (Fairness), Größe "large" (Cap: `difficulty_max_map_size`) |
-| Schwierigkeit | Preset `hard` |
-| Naturwellen | Alle 5 Minuten (Patch `prepareSpawnTime` 420→300 s), endlos skalierend |
+| Schwierigkeit | Preset `normal` (leichter als `hard`; Sends erhöhen den Druck) |
+| Naturwellen | Preset-abhängig (#41): Variante A = 8 Min volle Größe, Variante B = 4 Min halbe Größe (`RBB.wavePresets`); Default folgt Testergebnis |
 | Start | Beide Welten pausiert bis GO — DOM-Ebene: `debug_dom_pause` → GO = `debug_dom_resume` (verifiziert, docs/SYNC_START.md); Server-Ebene: `debug_pause_server`/`cfg_server_pause_game_when_empty` (nativ, Resume-Kommando per `dump_console_commands` offen) |
 
 ## Runden-Loop (der Herzschlag)
 ```
-BUILD-PHASE (5 Min)
+BUILD-PHASE (Preset-Takt: 8 Min / 4 Min, #41)
   ├─ Farmen (Erz) + Defensen aufbauen
   ├─ SENDEN: jederzeit bis Wellenstart, unbegrenzt oft
   │    Ressourcen → SEND-WÄHRUNG [IRREVERSIBEL = Commitment]
@@ -74,8 +74,8 @@ HQ-TOD → Match verloren
 | Feature | Mechanik |
 |---|---|
 | Sync-Start | `debug_pause_server`/`debug_dom_pause`; GO = `debug_dom_resume` (DOM-Ebene, verifiziert) |
-| 5-Min-Takt | `prepareSpawnTime` (DOM-Rules) 420→300 s |
-| Schwierigkeit | Difficulty-Presets `rules_hard` |
+| Wellen-Takt | `prepareSpawnTime` (DOM-Rules) 420 → Preset-Intervall (A=480 s / B=240 s) |
+| Schwierigkeit | Difficulty-Presets `rules_normal` (leichter als hard) + Wellen-Stärke-Skalierung |
 | HQ | Entity `headquarters`, `HealthService`, `ReportHeadquaterDamage` |
 | HQ-Tod | `RespawnFailedEvent` → `ReportGameFailed` + `ShowEndGameHud` |
 | Leak-Detection | `EnteredTriggerEvent` (Trigger-Zone um HQ, Team-/BP-Filter) |
@@ -159,12 +159,32 @@ Level-Delta approximiert: `delta = ceil(level * pct/100)`, min. 1, gedeckelt auf
 `false` bleibt unangetastet). **braucht Live-Test** — Prozent→Level-Delta und
 Stufen-Preise sind eine dokumentierte Annahme, keine verifizierte Kurve.
 
-### Wellen-Takt (bewusst NICHT fest verdrahtet)
+### Wellen-Takt & Grundschwierigkeit (Issue #41, Test-Varianten)
 
-Der 5-Minuten-Takt bleibt die bestehende Konfig `RBB.waveIntervalCapS = 300`
-(`prepareSpawnTime` 420→300, Patch `dom_mananger:GetPrepareSpawnTime`). Die
-Takt-Entscheidung wird hier **nur dokumentiert**, nicht neu fest verdrahtet —
-eine Änderung des Takts ist Issue #41 vorbehalten.
+Der Wellen-Takt ist nicht mehr fest verdrahtet, sondern als explizite,
+dokumentierte Konfigurations-Presets in `RBB.wavePresets` gefasst
+(`mod/lua/rbbattle_autoexec.lua`). Zwei Varianten werden im Test-Duell
+verglichen:
+
+| Variante | Takt | Größe | `intervalS` | `strengthPct` |
+|---|---|---|---|---|
+| A | alle 8 Min | volle Größe | 480 | 100 |
+| B | alle 4 Min | halbe Größe | 240 | 50 |
+
+- `RBB.waveIntervalCapS` wird aus dem aktiven Preset abgeleitet (Patch
+  `dom_mananger:GetPrepareSpawnTime`, `prepareSpawnTime` 420 → Preset-Intervall).
+- Die Wellen-Stärke ist diskret über `difficultyLevel` indiziert (1..9);
+  „halbe Größe“ wird als `floor(level * strengthPct/100)`, min. 1, approximiert
+  am Chokepoint `dom_mananger:SpawnWavesForDifficultyLevel` (vor dem Send-Boost
+  #39).
+- Grundschwierigkeit: `baseDifficulty = "normal"` (leichter als der bisherige
+  Default `hard`) — Sends erhöhen die Schwierigkeit zusätzlich, der Basis-Druck
+  soll niedriger sein. Server-seitig gesetzt (docs/DUEL_SETUP.md).
+- Umschaltung vor Map-Start über `RBB.wavePresets.active` (`"A"`|`"B"`).
+
+**braucht Live-Test** — welcher Takt (selten+voll vs. häufig+halb) das richtige
+Gefühl trifft, entscheidet der Test-Duell (Momo vs. Matheo, Feedback-Protokoll);
+der Default folgt dem Testergebnis.
 
 ## Offene Tuning-Punkte (nach Interview, Stand nach #33-v1)
 - ~~Preisliste (Tiered Units + Bosse)~~ → v1 dokumentiert (Tabelle oben) — **braucht Live-Test**.
@@ -189,7 +209,8 @@ Abgleich des Design-Kerns gegen den implementierten Mod-/Server-/Site-Stand.
 | Win-Condition HQ-Tod (Logik) | ✅ implementiert | #28 | `rb_hq`; Leak → HQ-HP; `hq_dead`/`match_end` (Server-Buchung vorhanden) |
 | Win-Condition (Trigger-Zone, HQ-Entity-ID, Sieg-Screen) | ⚠️ offen | #28 | `EnteredTriggerEvent`-Feuerung + Trigger-Zone-Asset unbelegt; HQ-Entity via `rb_hq entity <id>` |
 | Live-Status (Landing) | ✅ implementiert (Website) | #30 | `site/live-status.js` + Landing-Widget + Dashboard-Link |
-| Balancing (Preisliste v1, HQ-HP-Kurve) | 🟡 v1 dokumentiert (braucht Live-Test) | #33 | `rb_balance`/`rb_shop`; `RBB.shopCfg` + `RBB.hqCfg` (Formel + Cap); Wellen-Takt bleibt `waveIntervalCapS` |
+| Balancing (Preisliste v1, HQ-HP-Kurve) | 🟡 v1 dokumentiert (braucht Live-Test) | #33 | `rb_balance`/`rb_shop`; `RBB.shopCfg` + `RBB.hqCfg` (Formel + Cap) |
+| Wellen-Takt + Grundschwierigkeit (Presets A/B) | 🟡 v1 dokumentiert (braucht Live-Test) | #41 | `RBB.wavePresets` (A=480 s voll, B=240 s halb); `rb_balance`; Skalierung am `SpawnWavesForDifficultyLevel`-Chokepoint |
 
 Hinweis: Diese Doku hält den Design-Kern fest. Die Balancing-Zahlen v1
 (Shop-Preise + HQ-HP-Kurve + Boost-Stufen) stehen oben im Abschnitt
