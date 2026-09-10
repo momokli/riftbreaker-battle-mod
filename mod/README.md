@@ -1,8 +1,19 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.9.0 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.10.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
+
+**v0.10.0 — Tooling/Test-Release (Mod-Laufzeit unverändert, Issues #10/#11):**
+- `tools/headless-client/nav-lobby.sh`: Screenshot-gesteuerte Navigation bis in
+  die Lobby + Server-Connect (Plan-Datei, `NAV_SERVERS`-Auflösung,
+  Render-Check-Abbruch bei schwarzem Frame); in Dockerfile/Compose verdrahtet,
+  Trockenlauf-Tests `test-nav-lobby.sh` (14/14). Menü-Koordinaten/-Timings und
+  der echte In-Game-Connect sind **OFFEN (Operator, Prod)**.
+- `tests/e2e-vollkette/`: Vollketten-E2E `rb_wave 3` (Web-UI → Server → Relay →
+  rbbridge → Mod-Spawn, fengari+Stub) als CI-Schritt; die Live-Client-Schritte
+  sind explizit als `skip`/OFFEN markiert.
+- Reines Tooling-/Test-Release — **keine Mod-Änderung**.
 
 **v0.9.0 — Win-Condition: HQ-HP, Leak-Erkennung, HQ-Tod → Match-Ende (Issue #28):**
 - **Mod:** Leaks (feindliche Kreaturen in der Trigger-Zone ums HQ,
