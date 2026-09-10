@@ -105,6 +105,17 @@ local function count_logs(sub)
     return n
 end
 
+-- Hilfs-Event: eintretende Entity (evt:GetEntity()) + optionale Team-Id
+-- (evt:GetTeamId()); simuliert EnteredTriggerEvent im Stub.
+local function trigger_evt(entity, teamId)
+    local evt = { entity = entity }
+    function evt:GetEntity() return self.entity end
+    if teamId ~= nil then
+        function evt:GetTeamId() return teamId end
+    end
+    return evt
+end
+
 -- 1. Mod geladen, Version 0.26.0, HQ initialisiert.
 check(log_has("event=mod_load version=0.26.0"), "mod_load version=0.26.0")
 check(log_has("hq_hp=100 hq_dead=false"), "mod_load enthaelt hq_hp=100 hq_dead=false")
@@ -119,22 +130,56 @@ check(log_has("event=hq_leak status=skip reason=no_hq_entity"), "2. Leak OHNE HQ
 check(not log_has("event=leak damage=10 hp_before=100"), "kein Leak-Log ohne gebundene Entity")
 check(log_has("hq_hp=100 hq_dead=false"), "HQ-HP unveraendert (100) nach uebersprungenem Leak")
 
--- 3. HQ-Entity zuordnen (Issue #144), danach greift die Leak-Erkennung.
+-- 3. HQ-Entity zuordnen (Issue #144); danach greift die Leak-Erkennung NUR
+--    fuer feindliche Kreaturen (Zone-/Team-Filter #152).
 _G.__commands["rb_hq"]({ "entity", "12345" })
 check(log_has("event=hq_entity status=ok entity=12345"), "rb_hq entity")
+
+-- 3a. Trigger OHNE lesbare Entity -> uebersprungen (kein False-Positive).
 _G.__handlers["EnteredTriggerEvent"](nil)
-check(log_has("event=leak damage=10 hp_before=100 hp=90"), "1. Leak (mit Entity) -> hp 100->90")
+check(log_has("event=hq_leak status=skip reason=no_trigger_entity"),
+    "3a. Trigger ohne Entity -> skip no_trigger_entity")
+check(not log_has("event=leak damage=10 hp_before=100"), "kein Leak ohne Trigger-Entity")
+
+-- 3b. Eigene HQ-Entity als Trigger-Entity -> uebersprungen.
+_G.__commands["rb_hq"]({ "reset" })
+_G.__commands["rb_hq"]({ "entity", "12345" })
+_G.__handlers["EnteredTriggerEvent"](trigger_evt(12345))
+check(log_has("event=hq_leak status=skip reason=own_hq"),
+    "3b. eigene HQ-Entity -> skip own_hq")
+
+-- 3c. Eigener Mech (GetPlayerControlledEnt=1) -> uebersprungen.
+_G.__commands["rb_hq"]({ "reset" })
+_G.__commands["rb_hq"]({ "entity", "12345" })
+_G.__handlers["EnteredTriggerEvent"](trigger_evt(1))
+check(log_has("event=hq_leak status=skip reason=own_team"),
+    "3c. eigener Mech -> skip own_team")
+
+-- 3d. Eigene Team-Id (GetTeamId==1) -> uebersprungen.
+_G.__commands["rb_hq"]({ "reset" })
+_G.__commands["rb_hq"]({ "entity", "12345" })
+_G.__handlers["EnteredTriggerEvent"](trigger_evt(9999, 1))
+check(log_has("event=hq_leak status=skip reason=own_team"),
+    "3d. eigene Team-Id 1 -> skip own_team")
+
+-- 3e. Feindliche Kreatur (fremde Entity, keine eigene Team-Id) -> Leak greift.
+_G.__commands["rb_hq"]({ "reset" })
+_G.__commands["rb_hq"]({ "entity", "12345" })
+_G.__handlers["EnteredTriggerEvent"](trigger_evt(9999))
+check(log_has("event=leak damage=10 hp_before=100 hp=90"), "3e. feindliche Kreatur -> hp 100->90")
 check(log_has("event=hq_hp hp=90 dead=false"), "Report event=hq_hp hp=90")
 
 -- 4. HQ-Tod durch Leaks (10x10 = 100 -> hp 0 -> Match-Ende).
-for _ = 1, 9 do _G.__handlers["EnteredTriggerEvent"](nil) end
+_G.__commands["rb_hq"]({ "reset" })
+_G.__commands["rb_hq"]({ "entity", "12345" })
+for _ = 1, 10 do _G.__handlers["EnteredTriggerEvent"](trigger_evt(9999)) end
 check(log_has("event=leak damage=10 hp_before=10 hp=0"), "10. Leak -> hp 10->0")
 check(log_has("event=hq_dead status=match_end hp=0"), "event=hq_dead bei HP<=0")
 check(log_has("event=match_end reason=hq_destroyed winner=opponent"), "event=match_end")
 check(count_logs("event=match_end") == 1, "match_end genau einmal")
 
 -- 5. Idempotenz: weiterer Leak nach Tod aendert nichts.
-_G.__handlers["EnteredTriggerEvent"](nil)
+_G.__handlers["EnteredTriggerEvent"](trigger_evt(9999))
 check(count_logs("event=match_end") == 1, "kein zweites match_end (idempotent)")
 
 -- 6. RespawnFailedEvent-Pfad (HQ-Tod-Kette) mit zugeordneter Entity.
@@ -200,7 +245,7 @@ _G.__findGroups["headquarters"] = { 777 }
 _G.__handlers["PlayerInitializedEvent"](nil)
 check(log_has("event=hq_autodetect status=ok group=headquarters entity=777"),
     "10d. Genau ein Treffer -> automatische Bindung")
-_G.__handlers["EnteredTriggerEvent"](nil)
+_G.__handlers["EnteredTriggerEvent"](trigger_evt(9999))
 check(log_has("event=leak damage=10 hp_before=100 hp=90"),
     "10d. Leak greift nach automatischer Bindung sofort (kein rb_hq entity noetig)")
 
