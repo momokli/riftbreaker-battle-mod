@@ -297,6 +297,7 @@ RBB.boost = {
 -- Muster PatchDomTimer).
 local PatchWaveStartHook
 local PatchSpawnWavesHook
+local HqAutoDetectEntity
 local BoostSummary
 
 -- Vorwaertsdeklaration fuer die HQ-HP-Kurve (#33): Definition folgt im
@@ -700,6 +701,7 @@ local function OnPlayerInitialized()
     PatchDomTimer()
     PatchWaveStartHook()
     PatchSpawnWavesHook()
+    HqAutoDetectEntity() -- #144: HQ-Entity ist jetzt (falls vorhanden) im Level
     LogMapSetupInfo()
 end
 
@@ -715,6 +717,7 @@ local function HandleWaveCommand(args, commandName)
     PatchDomTimer() -- weiterer Retry-Zeitpunkt (billig, idempotent)
     PatchWaveStartHook() -- weiterer Retry-Zeitpunkt (#42)
     PatchSpawnWavesHook() -- weiterer Retry-Zeitpunkt (#39)
+    HqAutoDetectEntity() -- weiterer Retry-Zeitpunkt (#144)
     SpawnWave(level)
 end
 
@@ -1867,9 +1870,16 @@ PatchSpawnWavesHook()
 --   * RespawnFailedEvent: verifiziert existent (dom_manager.lua lauscht
 --     selbst darauf, s. docs/SEND_HOOK.md); Handler-Feuerung/Getter fuer den
 --     Mod sind "wahrscheinlich" (wie EntityKilledEvent, api-deep-dive.md §2).
---   * HQ-Entity-Identifikation: OFFEN — kein verifizierter Blueprint/Lookup;
---     Operator kann die Entity per `rb_hq entity <id>` zuordnen; sonst greift
---     nur der HP<=0-Pfad (Leak) als Match-Ende.
+--   * HQ-Entity-Identifikation: TEILWEISE (Issue #144) — HqAutoDetectEntity()
+--     versucht bei PlayerInitializedEvent/jedem rb_wave-Aufruf automatisch
+--     ueber FindService:FindEntitiesByGroup("headquarters") zu binden (Gruppen-
+--     Name aus docs/GAME_DESIGN.md-Tabelle "HQ | Entity `headquarters`,
+--     `HealthService`, `ReportHeadquaterDamage`" -- dort selbst UNVERIFIZIERT,
+--     in docs/research/ nicht belegt). Nur EIN eindeutiger Treffer wird
+--     gebunden (event=hq_autodetect status=ok); bei 0 oder >1 Treffern bleibt
+--     `rb_hq entity <id>` der verlaessliche manuelle Fallback (kein Rateschuss
+--     bei Mehrdeutigkeit). Braucht In-Game-Bestaetigung, ob "headquarters" der
+--     richtige Gruppen-Name ist.
 -- ============================================================================
 
 -- Konfiguration (hqHpStart muss TOURNAMENT_HQ_HP des Servers entsprechen,
@@ -1902,6 +1912,45 @@ RBB.hq = {
     entity = nil,       -- getrackte HQ-Entity (nil = nicht zugeordnet)
     dead = false,       -- true nach HQ-Tod (Match-Ende gemeldet)
 }
+
+-- #144: Kandidaten-Gruppennamen fuer die automatische HQ-Entity-Erkennung.
+-- "headquarters" ist der einzige im Repo dokumentierte Name (docs/GAME_DESIGN.md,
+-- dort selbst UNVERIFIZIERT) -- weitere Kandidaten hier ergaenzen, sobald ein
+-- In-Game-Test den tatsaechlichen Gruppen-/Blueprint-Namen bestaetigt/widerlegt.
+RBB.hqEntityGroupCandidates = { "headquarters" }
+
+-- #144: versucht RBB.hq.entity automatisch zu binden (Muster #26 Rand-Spawner:
+-- FindService:FindEntitiesByGroup). Nur bei GENAU einem Treffer wird gebunden,
+-- um keinen Rateschuss bei Mehrdeutigkeit zu riskieren; bei 0/>1 Treffern
+-- bleibt der manuelle `rb_hq entity <id>`-Fallback die verlaessliche Option.
+-- Bereits gebundene Entity (manuell oder frueherer Versuch) wird nicht
+-- ueberschrieben. Idempotent, pcall-gesichert, mehrfach aufrufbar (Retry-
+-- Muster wie PatchWaveStartHook: Mod-Load/PlayerInitializedEvent/jeder Send).
+-- Nicht-ok-Ausgang (0/>1 Treffer je Kandidat, API fehlt) wird NUR einmal
+-- geloggt (Guard wie unmatchedLogged/unarmedLeakLogged) -- HqAutoDetectEntity
+-- wird bei jedem rb_wave/rb_send aufgerufen (Retry-Muster), das soll nicht
+-- pro Aufruf spammen. Ein Erfolg wird immer geloggt und bindet sofort.
+HqAutoDetectEntity = function()
+    if RBB.hq.entity ~= nil then return end
+    if FindService and FindService.FindEntitiesByGroup then
+        for _, group in ipairs(RBB.hqEntityGroupCandidates) do
+            local ok, list = pcall(function()
+                return FindService:FindEntitiesByGroup(group)
+            end)
+            if ok and type(list) == "table" and #list == 1 then
+                RBB.hq.entity = list[1]
+                Log("event=hq_autodetect status=ok group=%s entity=%s",
+                    group, tostring(list[1]))
+                return
+            end
+        end
+    end
+    if not RBB.hq.autodetectFailLogged then
+        RBB.hq.autodetectFailLogged = true
+        Log("event=hq_autodetect status=not_found candidates=%s hint=rb_hq_entity",
+            table.concat(RBB.hqEntityGroupCandidates, ","))
+    end
+end
 
 -- Report-Flaeche Richtung Tournament-Server (Bridge reicht die Zeile an
 -- POST /report hq_hp weiter; der Mod hat keinen eigenen I/O-Kanal).

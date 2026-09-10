@@ -187,7 +187,7 @@ Abgleich des Design-Kerns gegen den implementierten Mod-/Server-/Site-Stand.
 | Sends → Gegner-Welt (1v1-Routing) | ⚠️ offen | #25/#27/#29 | aktuell `rb_mode sp` (Self-Send an eigene Rand-Spawner); `duel` = Stub |
 | Reveal-HUD (Built-Value + WAS kommt) | ✅ implementiert | #27 | `rb_hud`/`rb_reveal`/`rb_round_start`; `event=reveal`/`reveal_opp` |
 | Win-Condition HQ-Tod (Logik) | ✅ implementiert | #28 | `rb_hq`; Leak → HQ-HP; `hq_dead`/`match_end` (Server-Buchung vorhanden) |
-| Win-Condition (Trigger-Zone, HQ-Entity-ID, Sieg-Screen) | ⚠️ offen | #28 | `EnteredTriggerEvent`-Feuerung + Trigger-Zone-Asset unbelegt; HQ-Entity via `rb_hq entity <id>` |
+| Win-Condition (Trigger-Zone, HQ-Entity-ID, Sieg-Screen) | 🟡 teilweise (braucht Live-Test) | #28/#143/#144 | `EnteredTriggerEvent`-Feuerung + Trigger-Zone-Asset unbelegt (Leak seit #143 gegated, kein False-Positive-Sieg mehr); HQ-Entity seit #144 auto-erkannt (`HqAutoDetectEntity`, Gruppe `headquarters` unverifiziert) mit `rb_hq entity <id>` als Fallback |
 | Live-Status (Landing) | ✅ implementiert (Website) | #30 | `site/live-status.js` + Landing-Widget + Dashboard-Link |
 | Balancing (Preisliste v1, HQ-HP-Kurve) | 🟡 v1 dokumentiert (braucht Live-Test) | #33 | `rb_balance`/`rb_shop`; `RBB.shopCfg` + `RBB.hqCfg` (Formel + Cap); Wellen-Takt bleibt `waveIntervalCapS` |
 
