@@ -1,0 +1,27 @@
+---
+# yamllint-Konfiguration für den Deploy-Gate (deploy-check.yml).
+#
+# Ziel: echte YAML-Fehler im Deployment (falsche Einrückung, doppelte Keys,
+# kaputte Syntax) vor dem Merge fangen — ohNE an bewusst breiten, bestehenden
+# Ansible-Dateien zu scheitern. Darum sind rein kosmetische Regeln entschärft:
+#
+#   - line-length: Ansible-Tasks/YAML-Kommentare im Repo sind absichtlich
+#     breiter als 80 Zeichen → als WARNING (nicht error) geführt.
+#   - truthy: nur 'true'/'false' als Wahrheitswerte (kein yes/no), Keys
+#     ausgenommen (jinja/templates).
+#   - document-start: '---' ist im Repo nicht überall gesetzt.
+#   - comments-indentation: Kommentar-Einrückung ist nicht durchgesetzt.
+
+extends: default
+
+rules:
+  line-length:
+    max: 200
+    level: warning
+    allow-non-breakable-words: true
+    allow-non-breakable-inline-mappings: true
+  truthy:
+    allowed-values: ['true', 'false']
+    check-keys: false
+  document-start: disable
+  comments-indentation: disable
