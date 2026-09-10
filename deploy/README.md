@@ -162,6 +162,7 @@ sudo tee /usr/local/bin/rbbattle-deploy >/dev/null <<'EOF'
 #!/bin/sh
 set -eu
 export HOME=/opt/rbbattle-deploy
+export ANSIBLE_CONFIG=/etc/rbbattle-deploy/ansible.cfg
 cd /opt/rbbattle-deploy/repo
 exec /opt/rb-ansible/bin/ansible-playbook \
   -i deploy/inventory deploy/site.yml \
@@ -180,6 +181,27 @@ deploy ALL=(root) NOPASSWD: /usr/local/bin/rbbattle-deploy ""
 EOF
 sudo chmod 0440 /etc/sudoers.d/rbbattle-deploy
 sudo visudo -cf /etc/sudoers.d/rbbattle-deploy
+
+# e) Loopback-SSH für den Hook-/Sandbox-Kontext (Details: „SSH-Ziel")
+sudo install -d -o root -g root -m 0700 /opt/rbbattle-deploy/.ssh
+sudo ssh-keyscan -t ed25519 100.77.143.105 >> /opt/rbbattle-deploy/.ssh/known_hosts
+sudo install -m 0600 -o root -g root /root/.ssh/id_ed25519 /etc/rbbattle-deploy/id_ed25519
+sudo tee /etc/rbbattle-deploy/ssh_config >/dev/null <<'EOF'
+Host planet
+  HostName 100.77.143.105
+  User root
+  IdentityFile /etc/rbbattle-deploy/id_ed25519
+  IdentitiesOnly yes
+  BatchMode yes
+  StrictHostKeyChecking accept-new
+  UserKnownHostsFile /opt/rbbattle-deploy/.ssh/known_hosts
+EOF
+sudo chmod 600 /etc/rbbattle-deploy/ssh_config
+sudo tee /etc/rbbattle-deploy/ansible.cfg >/dev/null <<'EOF'
+[ssh_connection]
+ssh_args = -F /etc/rbbattle-deploy/ssh_config
+EOF
+sudo chmod 640 /etc/rbbattle-deploy/ansible.cfg
 ```
 
 **Wichtig — Härtung vs. sudo:** Die Unit setzt `NoNewPrivileges=no` (alles
@@ -191,11 +213,16 @@ sudoers-Kommando begrenzt (Wrapper, ohne Argumente, root-owned). Der
 Hook-Prozess selbst läuft weiterhin non-root als User `deploy`.
 
 **SSH-Ziel:** Das Playbook verbindet sich weiterhin per SSH mit dem
-Inventory-Host `planet` (mesh-first über den `~/.ssh/config`-Alias). Weil
-jetzt auf planet selbst deployt wird, muss dieser Loopback-Weg dort
-funktionieren (wie zuvor für den Runner-User; der Wrapper nutzt
-`HOME=/opt/rbbattle-deploy` — dort ggf. `.ssh/config`/Keys hinterlegen).
-Ersten echten Lauf im Job-Log unter `/var/log/rbbattle-deploy/` prüfen.
+Inventory-Host `planet` (mesh-first über Tailscale). Auf planet verifiziert
+(2026-09-10): `ssh` liest `~/.ssh/config` aus dem passwd-Home (`/root`) —
+das `HOME`-Env des Wrappers genügt dafür nicht, und `/root` ist in der
+Unit-Sandbox (`ProtectHome=yes`) unsichtbar. Deshalb liegt die
+Loopback-Konfiguration root-only unter `/etc/rbbattle-deploy/`: `ssh_config`
+(nutzt per `ssh -F` den Key `/etc/rbbattle-deploy/id_ed25519`) +
+`ansible.cfg` (`ssh_args = -F …`), aktiviert über
+`ANSIBLE_CONFIG=/etc/rbbattle-deploy/ansible.cfg` im Wrapper; known_hosts
+unter `/opt/rbbattle-deploy/.ssh/`. Ersten echten Lauf im Job-Log unter
+`/var/log/rbbattle-deploy/` prüfen.
 
 ### Betrieb
 
