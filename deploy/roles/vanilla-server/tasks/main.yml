@@ -1,5 +1,6 @@
 ---
-# Rolle: vanilla-server — zweite Instanz ohne Mods (6322).
+# Rolle: vanilla-server — zweite Instanz ohne Mods (6322). Nutzt dasselbe
+# headless-client-Image wie :6321 (einmal bauen reicht).
 
 - name: Game-Verzeichnis sicherstellen
   file:
@@ -13,6 +14,26 @@
     state: directory
     mode: "0755"
 
+# Fehlerklasse „Container-Name belegt" — siehe riftbreaker-server (Issue #209).
+- name: Bestehenden Container mit unserem Namen prüfen (Fremd-Belegung?)
+  # `docker container inspect` — nur Container (nicht gleichnamige Images).
+  command: >-
+    docker container inspect --format '{% raw %}{{ index .Config.Labels "com.docker.compose.project" }}{% endraw %}'
+    {{ vanilla_container }}
+  register: vanilla_container_owner
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Container-Name gehört uns (oder ist frei)
+  assert:
+    that:
+      - "(vanilla_container_owner.rc != 0) or ((vanilla_container_owner.stdout | trim) in ['', vanilla_compose_project])"
+    fail_msg: >-
+      Container-Name '{{ vanilla_container }}' ist von einem fremden Projekt
+      belegt (Label com.docker.compose.project='{{ vanilla_container_owner.stdout | trim }}').
+      Vor dem Deploy entfernen (docker rm -f {{ vanilla_container }}).
+
 - name: docker-compose.yml rendern
   template:
     src: docker-compose.yml.j2
@@ -21,9 +42,7 @@
   register: vanilla_compose
 
 - name: Container sicherstellen (docker compose up -d, idempotent)
-  command:
-    cmd: docker compose up -d --remove-orphans
-    chdir: "{{ vanilla_deploy_dir }}"
+  command: docker compose -f {{ vanilla_deploy_dir }}/docker-compose.yml up -d --remove-orphans
   register: vanilla_up
   changed_when: >-
     ('Recreated' in vanilla_up.stdout)

@@ -1,0 +1,27 @@
+---
+# Defaults der Rolle game-content (Issue #209).
+#
+# Provisioniert den Dedicated-Server-Content (Steam-App 4114030) deklarativ und
+# idempotent in riftbreaker_game_dir. Primär: SteamCMD anonym. Fallback:
+# idempotenter Sync aus einem kanonischen Cache (riftbreaker_content_mode=sync).
+
+# steamcmd | sync
+riftbreaker_content_mode: steamcmd
+
+# Steam-App-ID des Dedicated-Servers (Steam-Layout: Binary in bin/).
+riftbreaker_app_id: "4114030"
+
+# Binary, an dem der Content als "vorhanden" erkannt wird (Steam-Layout).
+riftbreaker_server_bin: bin/DedicatedServer.exe
+
+# SteamCMD-Installation (Self-Bootstrap; auf Ubuntu 24.04 kein Distro-Paket).
+steamcmd_dir: /opt/steamcmd
+steamcmd_url: https://media.steampowered.com/client/installer/steamcmd_linux.tar.gz
+
+# Kanonischer Cache für den Sync-Fallback (nur bei mode=sync genutzt): ein
+# vollständiger Steam-Stand der App, z. B. der frühere Community-Checkout.
+riftbreaker_content_cache_dir: /srv/riftbreaker/data/server
+
+# Mit `-e riftbreaker_content_force=true` erzwingt ein app_update auch bei
+# vorhandenem Content (z. B. Patch). Default false = nur installieren, wenn fehlt.
+riftbreaker_content_force: false

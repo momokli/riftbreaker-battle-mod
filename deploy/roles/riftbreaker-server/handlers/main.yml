@@ -1,0 +1,10 @@
+---
+# Handler: Container sauber neu starten, wenn sich Mod oder Server-Config
+# geändert hat (Issue #209). `docker compose up -d` allein startet einen
+# unveränderten Container NICHT neu — ein reines Mod-Update (Volume-Inhalt)
+# bliebe sonst wirkungslos und der Merge wäre still ohne Wirkung.
+- name: restart riftbreaker-server
+  command: >-
+    docker compose -f {{ riftbreaker_deploy_dir }}/docker-compose.yml
+    up -d --force-recreate --remove-orphans
+  changed_when: true
