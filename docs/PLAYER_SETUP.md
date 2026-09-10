@@ -11,7 +11,7 @@ Dateien). Weicht auch nur ein Mod ab, lehnt der Client die Lobby mit
 Skeleton + Wave-Spawn + Shop/Queue + Economy + Win-Condition + Reveal-HUD).
 
 - **Immer aktuellste Version:**
-  `https://github.com/momokli/riftbreaker-battle-mod/releases/latest/download/rbbattle.zip`
+  `https://rift.projectmellon.de/mods/rbbattle.zip` (der deployte `main`-Stand)
 - Beide Spieler laden **denselben** Zip und entpacken ihn in den Mods-Ordner
   (genauer Pfad: `mod/README.md` → „Installation“).
 

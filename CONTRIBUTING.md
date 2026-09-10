@@ -22,13 +22,13 @@ Quality-Gates in diesem Repo. Sprache: Deutsch oder Englisch — beides ist ok.
 - **Nicht an ungeclaimten Issues arbeiten** — erst `!claim`.
 - **PR immer mit Issue verlinkt** (`Closes #N` schließt automatisch, `Refs #N` referenziert nur) — Pflicht, sonst schlägt das Issue-Referenz-Gate fehl.
 - **Definition of Done**
-  - CI grün: **lint + pr-quality + ci**.
+  - CI grün: **lint + pr-quality + ci + deploy-check**.
   - Neuer Code hat Tests.
   - Keine Debug-Reste, keine Credentials/Secrets im Diff.
 - **Commit-Konvention:** [Conventional Commits](https://www.conventionalcommits.org/)
   (`feat:`, `fix:`, `docs:`, `chore:`, `ci:`, `refactor:`, `test:`, `build:`, `perf:`,
   `style:`, `revert:`), Message auf Englisch.
-- **Releases** macht nur ein Maintainer über einen `v*-Tag` (z. B. `v1.2.0`).
+- **Tags sind reine Marker:** `v*-Tags` (z. B. `v1.2.0`) markieren Stände, legen aber **keine** GitHub-Releases mehr an (seit Issue #209). Der veröffentlichte Download ist der deployte Stand (`https://rift.projectmellon.de/mods/rbbattle.zip`).
 
 ## Issue-Referenz-Pflicht (Hard-Fail)
 
@@ -94,7 +94,7 @@ Neben Menschen arbeiten AI-Agents am Repo. Die verbindlichen Regeln stehen in
   damit `git branch -a` und die Branch-Liste in der UI sauber bleiben.
   Alternativ in den Repo-Settings „Automatically delete head branches“ aktivieren.
 - **Milestones** bündeln die Arbeit pro Release. Aktuell: **`RIFT BATTLE v1`**.
-- **Releases** werden ausschließlich über Tags `vX.Y.Z` ausgelöst (Workflow `ci.yml`).
+- **Tags** `vX.Y.Z` sind reine Marker — kein Release-Job mehr (seit Issue #209).
 
 ## Quality & Fortschritt
 
@@ -103,7 +103,8 @@ Neben Menschen arbeiten AI-Agents am Repo. Die verbindlichen Regeln stehen in
 | Workflow | Zweck |
 |---|---|
 | [`lint.yml`](.github/workflows/lint.yml) | shellcheck, ruff, actionlint |
-| [`ci.yml`](.github/workflows/ci.yml) | Tests (Bausteine/E2E/Lua-static) + Build + Release |
+| [`ci.yml`](.github/workflows/ci.yml) | Tests (Bausteine/E2E/Lua-static) + Build + Package |
+| [`deploy-check.yml`](.github/workflows/deploy-check.yml) | Deploy-Vorhersage auf dem planet-Runner: yamllint + `docker compose config` + `ansible --check --diff` |
 | [`pr-quality.yml`](.github/workflows/pr-quality.yml) | Conventional-Commit-PR-Titel (hart) + Issue-Referenz (hart) |
 | [`followup-issues.yml`](.github/workflows/followup-issues.yml) | Follow-up-Issues beim Schließen von Issues (Label `follow-up`) |
 
@@ -134,10 +135,10 @@ Damit Reviews auf Inhalt statt Format konzentrieren, läuft statisches Linting i
 
 ## CI-Runner (planet)
 
-Die Jobs `test` und `build` in [`ci.yml`](.github/workflows/ci.yml) laufen auf
-einem Self-Hosted-Runner auf **planet** (Label `planet`) statt auf
-GitHub-Hosted `ubuntu-latest` — für alle Pull Requests und Push auf `main`.
-Der `release`-Job (Release-Tags `v*`) bleibt bewusst auf `ubuntu-latest`.
+Die Jobs `test`, `build` und `deploy-check` in bzw. neben
+[`ci.yml`](.github/workflows/ci.yml) laufen auf einem Self-Hosted-Runner auf
+**planet** (Label `planet`) statt auf GitHub-Hosted `ubuntu-latest` — für alle
+Pull Requests und Push auf `main`.
 
 **Voraussetzung (Host-seitig):** Der Runner muss auf planet registriert sein,
 bevor die Checks `test`/`build` grün werden können. Die Toolchain ist als Code
