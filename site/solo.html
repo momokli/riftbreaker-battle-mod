@@ -547,6 +547,8 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
     <p class="secintro">
       Sechs Schritte bis zum ersten <span class="acc">solo-test</span>.
       <b>rb_convert ist unwiderruflich</b> — der Pool kommt erst bei der <b>nächsten Welle</b> zurück.
+      <br><b>Modus wählen:</b> <span class="acc">rb_mode sp</span> = <b>Solo Normal</b> (echter Spielfluss, Default) — fürs Spielgefühl.
+      <span class="acc">rb_mode sp_op</span> = <b>Solo OP</b> (Test/Cheats: hoher Startpool + schneller Rundentakt) — nur zum gezielten Testen von Shop/HUD/Convert/Waves, nicht fürs echte Spielgefühl.
     </p>
     <div class="demo-grid">
       <ol class="phases" id="stepRail" aria-label="Solo-Test-Schritte">
@@ -609,8 +611,8 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
             <td>Zeigt <b>Runde</b>, <b>Pool</b> und <b>Boost</b>.</td>
           </tr>
           <tr>
-            <td>rb_mode <b>sp|duel</b></td>
-            <td><b>sp</b> = Solo-Test · <b>duel</b> = folgt später.</td>
+            <td>rb_mode <b>sp|sp_op|duel</b></td>
+            <td><b>sp</b> = Solo <b>Normal</b> (echter Spielfluss, Default) · <b>sp_op</b> = Solo <b>OP</b> (Test/Cheats: hoher Startpool + schneller Rundentakt) · <b>duel</b> = folgt später.</td>
           </tr>
           <tr>
             <td>rb_wave <b>&lt;level&gt;</b></td>

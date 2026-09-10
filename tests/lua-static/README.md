@@ -164,6 +164,19 @@ kein Spiel-Zugriff; bleibt Operator-Lauf (Prod).
 4. Nach Commence läuft der Wellenstart normal (Spawn + `round=1`).
 5. Commence idempotent; manueller Fallback `rb_hq entity <id>` commencet ebenfalls.
 
+`solo-modes.test.js` deckt Issue #145 (Zwei Solo-Modi) ab:
+
+1. Default = "Solo Normal" (`sp`): Pool 0, Rundentakt = aktives Wellen-Preset,
+   `RBB.soloOp=false` (kein impliziter Cheat-Zustand); `rb_status` → `mode=sp … op=false`.
+2. `rb_mode sp_op` ("Solo OP", Test/Cheats): `event=mode mode=sp_op status=ok` +
+   `event=solo_op status=on`; Pool → `opCfg.startPool` (100000), Rundentakt →
+   `opCfg.waveIntervalS` (60 s); `RBB.mode` bleibt `sp` (Self-Send greift).
+3. `rb_status` im OP-Modus: `mode=sp_op` + Cheat-Pool + `op=true` sichtbar.
+4. Rückweg `rb_mode sp`: `event=solo_op status=off`, Pool + Rundentakt exakt
+   wiederhergestellt (verlustfrei, auch bei vorhandenem Pool).
+5. `rb_mode duel` bleibt Stub und verlässt Solo OP; unbekanntes Arg → `usage`,
+   Modus unverändert; doppeltes `sp_op` ist idempotent (nur ein `status=on`).
+
 ## Grenzen (ehrlich dokumentiert)
 
 Die Stub-Services ersetzen die Spiel-Engine; **nicht** live-verifizierbar sind
