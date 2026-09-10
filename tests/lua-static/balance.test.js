@@ -2,7 +2,9 @@
 
 // Statische Verifikation des Lua-Mods (rbbattle_autoexec.lua) fuer Issue #33
 // (Balance & Tuning v1): dokumentierte v1-Preisliste (Tiered Units + Bosse)
-// und HQ-HP-Kurve ueber Runden. Wie send-queue.test.js:
+// und HQ-HP-Kurve ueber Runden. Issue #116 (Follow-up zu #33) ergaenzt den
+// Balance-Selbst-Check (`RBB.CheckBalance` / `event=balance_check`) — inkl.
+// Negativfaellen (gebrochene Preisliste / HQ-Kurve). Wie send-queue.test.js:
 // 1) luaparse-Syntax-Check (Lua 5.1), 2) fengari-Lua-VM mit Stub-Services +
 // Assertions auf die [RBBATTLE]-Log-Zeilen. Kein Live-Spieltest (dafuer ist
 // der Operator zustaendig); geprueft wird die reine Daten-/Formel-Logik:
@@ -11,6 +13,8 @@
 //     genau 1 Boss, eindeutige Unit-Ids, positive Integer-Preise.
 //   - HQ-HP-Kurve folgt der dokumentierten Formel (start + per_round*min(r-1,cap))
 //     und ist gedeckelt; der Wellenstart setzt den HQ-HP auf den Runden-Maxwert.
+//   - Balance-Selbst-Check (#116) meldet ok bei intakter Konfiguration und
+//     fail + konkrete Invariante bei manipulierten Tuning-Daten.
 //
 // Aufruf: `npm test` (= `node --test`) aus tests/lua-static/.
 
@@ -185,6 +189,40 @@ _G.__handlers["EnteredTriggerEvent"](nil)   -- -10 -> 100
 dom_mananger.OnEnterSpawn(nil, {})           -- Runde 3 -> 140
 check(log_has("event=hq_curve round=3 maxhp=140 hp=140"), "Wellenstart Runde 3: HP=140 (heilt aufs Max)")
 
+-- 7. #116 Follow-up zu #33: rb_balance gibt einen Selbst-Check der Balance-
+--    Invarianten aus (status=ok, Zahlen spiegeln die Daten).
+check(RBB ~= nil and type(RBB.CheckBalance) == "function", "RBB.CheckBalance vorhanden")
+check(log_has("event=balance_check status=ok units=5 tiers=4 boss=1 issues=0"),
+    "balance_check status=ok units=5 tiers=4 boss=1 issues=0")
+check(RBB.CheckBalance() == true, "CheckBalance liefert true bei intakter Konfiguration")
+
+-- 8. Negativfall Preisliste: Boss-Preis unter Tier-3 druecken -> nicht mehr
+--    strikt steigend -> status=fail + konkrete Invariante im Log.
+local bossUnit = RBB.shopCfg.tiers[#RBB.shopCfg.tiers].units[1]
+local savedBoss = bossUnit.price
+bossUnit.price = 100
+local savedLogs = {}
+for i = 1, #_G.__logs do savedLogs[i] = _G.__logs[i] end
+check(RBB.CheckBalance() == false, "CheckBalance erkennt gebrochene Preisliste (false)")
+check(log_has("event=balance_check status=fail"), "balance_check status=fail geloggt")
+check(log_has("event=balance_check issue=tier_price_not_increasing:boss"),
+    "Invariante tier_price_not_increasing:boss gemeldet")
+_G.__logs = savedLogs
+bossUnit.price = savedBoss
+check(RBB.CheckBalance() == true, "CheckBalance wieder ok nach Restore")
+
+-- 9. Negativfall HQ-Kurve: negativer Runden-Zuwachs -> nicht-monotone Kurve.
+local savedPer = RBB.hqCfg.hqHpPerRound
+RBB.hqCfg.hqHpPerRound = -5
+local savedLogs2 = {}
+for i = 1, #_G.__logs do savedLogs2[i] = _G.__logs[i] end
+check(RBB.CheckBalance() == false, "CheckBalance erkennt gebrochene HQ-Kurve (false)")
+check(log_has("event=balance_check issue=hq_per_round"), "Invariante hq_per_round gemeldet")
+check(log_has("event=balance_check issue=hq_not_monotone:2"), "Invariante hq_not_monotone:2 gemeldet")
+_G.__logs = savedLogs2
+RBB.hqCfg.hqHpPerRound = savedPer
+check(RBB.CheckBalance() == true, "CheckBalance wieder ok nach HQ-Restore")
+
 print("FAILURES=" .. failures)
 _G.__failures = failures
 `;
@@ -216,7 +254,7 @@ test('Lua-Syntax (luaparse, Lua 5.1)', () => {
         'mod/lua/rbbattle_autoexec.lua muss gültiges Lua 5.1 sein');
 });
 
-test('Issue #33: Preisliste v1 + HQ-HP-Kurve (fengari + Stub-Services)', () => {
+test('Issue #33/#116: Preisliste v1 + HQ-HP-Kurve + Balance-Selbst-Check (fengari + Stub-Services)', () => {
     const failures = runLua(STUBS + modSource + '\n' + ASSERTIONS);
     assert.strictEqual(failures, 0, `Assertion-Fehler im Lua-Harness: ${failures}`);
 });

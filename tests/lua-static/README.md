@@ -88,6 +88,16 @@ npm test        # = node --test
 5. Wellenstart setzt den HQ-HP auf den Runden-Maxwert (Runde 1→100, 2→120,
    3→140); die Kurve heilt zurücks aufs Runden-Max.
 
+Zusätzlich deckt dieselbe Datei Issue #116 (Follow-up zu #33) ab: den
+Balance-Selbst-Check (`RBB.CheckBalance` / `event=balance_check`).
+
+6. Intakte Konfiguration → `event=balance_check status=ok units=5 tiers=4
+   boss=1 issues=0`, `CheckBalance()` liefert `true`.
+7. Negativfall Preisliste: Boss-Preis unter Tier-3 gedrückt → `status=fail` +
+   `issue=tier_price_not_increasing:boss`; nach Restore wieder `ok`.
+8. Negativfall HQ-Kurve: negativer `hqHpPerRound` → `issue=hq_per_round` +
+   `issue=hq_not_monotone:2`; nach Restore wieder `ok`.
+
 `boost.test.js` deckt Issue #39 (Send-Boost) ab:
 
 1. Mod lädt; `rb_boost` registriert; Boost-Chokepoint-Hook aktiv

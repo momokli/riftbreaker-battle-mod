@@ -90,6 +90,15 @@ Erste, zentral dokumentierte Balance-Werte — **alle brauchen Live-Test** (kein
 Spieltest durch den Agenten; die Werte sind eine dokumentierte Annahme, keine
 verifizierte Kurve).
 
+**Selbst-Check (Issue #116, Follow-up zu #33):** `rb_balance` prüft die
+Invarianten der Tuning-Daten direkt in der Mod (`RBB.CheckBalance` /
+`event=balance_check`) — Tier-Preise strikt steigend, genau ein Boss,
+eindeutige Unit-Ids, positive Integer-Preise, HQ-Kurve monoton + gedeckelt.
+`status=ok` (mit `units/tiers/boss/issues`-Zahlen) bestätigt ein intaktes
+Datenbild; `status=fail` + `event=balance_check issue=<invariante>` markiert
+stilles Verrutschen der Werte. Reine Daten-Logik (statisch getestet in
+`tests/lua-static/balance.test.js`), kein Live-Test nötig.
+
 ### Preisliste v1 (Tiered Units + Bosse)
 
 Zentrale Datenbasis: `RBB.shopCfg` in `mod/lua/rbbattle_autoexec.lua` (Preise in

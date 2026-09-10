@@ -135,6 +135,8 @@
 --   event=hq_status / hq_reset / hq_entity                                 (#28)
 --   event=hq_curve round=.. maxhp=.. hp=..                                (#33)
 --   event=balance unit=.. tier=.. price=.. boss=.. / hq_curve ..           (#33)
+--   event=balance_check status=ok|fail units=.. tiers=.. boss=.. issues=..  (#116)
+--   event=balance_check issue=<invariante>                                (#116)
 --   event=reveal round=.. status=revealed built_own=.. built_opp=.. send_own=.. incoming=.. (#27)
 --   event=reveal_opp round=.. built_opp=.. hq_opp=.. incoming=.. status=ok  (#27)
 --   event=round_start round=.. status=build reveal=hidden                   (#27)
@@ -2301,6 +2303,91 @@ pcall(function()
     end)
 end)
 
+-- #116 (Follow-up zu #33): Selbst-Check der Balance-Daten. Die v1-Tuning-Werte
+-- (Preisliste, HQ-HP-Kurve) sind eine dokumentierte Annahme — dieser Check
+-- schuetzt sie gegen stilles Verrutschen (Tier-Preise nicht mehr monoton,
+-- mehrere/kein Boss, nicht-positive Preise, nicht-monotone/ungedeckelte
+-- HQ-Kurve). Reine Daten-Logik, read-only, keine API-Aenderung.
+RBB.BalanceIssues = function()
+    local issues = {}
+    local tiers = (RBB.shopCfg and RBB.shopCfg.tiers) or {}
+
+    local unitCount, tierCount, bossCount = 0, 0, 0
+    local seen = {}
+    local tierMax = {}
+    local order = {}
+    for _, tier in ipairs(tiers) do
+        tierCount = tierCount + 1
+        order[#order + 1] = tier.id
+        local maxPrice = nil
+        for _, u in ipairs(tier.units or {}) do
+            unitCount = unitCount + 1
+            if u.boss == true then bossCount = bossCount + 1 end
+            if seen[u.id] then
+                issues[#issues + 1] = "duplicate_unit:" .. tostring(u.id)
+            end
+            seen[u.id] = true
+            local p = tonumber(u.price)
+            if p == nil or p <= 0 or math.floor(p) ~= p then
+                issues[#issues + 1] = "bad_price:" .. tostring(u.id)
+            elseif maxPrice == nil or p > maxPrice then
+                maxPrice = p
+            end
+        end
+        if maxPrice ~= nil then tierMax[tier.id] = maxPrice end
+    end
+
+    if unitCount == 0 then issues[#issues + 1] = "no_units" end
+    if bossCount ~= 1 then issues[#issues + 1] = "boss_count:" .. bossCount end
+
+    -- Preise strikt steigend ueber die (nicht-leeren) Tiers (t1 < t2 < ... < boss).
+    local prev = nil
+    for _, tierId in ipairs(order) do
+        local m = tierMax[tierId]
+        if m ~= nil then
+            if prev ~= nil and m <= prev then
+                issues[#issues + 1] = "tier_price_not_increasing:" .. tostring(tierId)
+            end
+            prev = m
+        end
+    end
+
+    -- HQ-HP-Kurve: Konstanten plausibel, monoton nicht-fallend, gedeckelt.
+    local cfg = RBB.hqCfg or {}
+    if (tonumber(cfg.hqHpStart) or 0) <= 0 then issues[#issues + 1] = "hq_start" end
+    if (tonumber(cfg.hqHpPerRound) or -1) < 0 then issues[#issues + 1] = "hq_per_round" end
+    if (tonumber(cfg.hqHpRoundCap) or -1) < 0 then issues[#issues + 1] = "hq_cap" end
+    local cap = math.max(0, math.floor(tonumber(cfg.hqHpRoundCap) or 0))
+    local last = nil
+    for r = 1, cap + 3 do
+        local v = HqMaxHp(r)
+        if last ~= nil and v < last then
+            issues[#issues + 1] = "hq_not_monotone:" .. r
+        end
+        last = v
+    end
+    if HqMaxHp(cap + 1) ~= HqMaxHp(cap + 2) then
+        issues[#issues + 1] = "hq_not_capped"
+    end
+
+    return issues, unitCount, tierCount, bossCount
+end
+
+-- Loggt das Ergebnis des Selbst-Checks (#116) und liefert true bei ok.
+RBB.CheckBalance = function()
+    local issues, unitCount, tierCount, bossCount = RBB.BalanceIssues()
+    local status = "ok"
+    if #issues > 0 then status = "fail" end
+    Log("event=balance_check status=%s units=%d tiers=%d boss=%d issues=%d r1=%d r6=%d",
+        status, unitCount, tierCount, bossCount, #issues, HqMaxHp(1), HqMaxHp(6))
+    if status == "fail" then
+        for _, msg in ipairs(issues) do
+            Log("event=balance_check issue=%s", msg)
+        end
+    end
+    return status == "ok"
+end
+
 -- #33: rb_balance — zentrale Balance-Daten (Preisliste + HQ-HP-Kurve) als
 -- Log-Flaeche. Read-only; testbare Vertragsflaeche fuer die Tuning-Werte.
 local function CmdBalance(args)
@@ -2328,6 +2415,8 @@ local function CmdBalance(args)
     end
     Log("event=balance wave_preset_cfg active=%s base_difficulty=%s timer_cap=%d",
         RBB.wavePresets.active, RBB.wavePresets.baseDifficulty, RBB.waveIntervalCapS)
+    -- #116: Invarianten der Tuning-Daten als Log-Flaeche (ok|fail + issue=..).
+    RBB.CheckBalance()
     WriteConsole("rb_balance: Preisliste + HQ-HP-Kurve + Boost-Stufen + Wellen-Presets geloggt (braucht Live-Test, #33/#39/#41)")
 end
 
