@@ -59,6 +59,32 @@ identisch); der Mod **loggt** die aktiv wirksame Difficulty zur Verifikation
    - `dump_console_commands` + Config-Dump, um die tatsächlichen
      CVar-Namen für Seed/Map-Size zu bestätigen (Karte/Version abhängig)
 
+## SP-Mode / Mod-Parität (Issue #44) — Client joint ohne Mod
+
+Im SP-Mode läuft der Mod **nur auf dem Server**; der Client joint **ohne** Mod.
+Da der Mod reine Lua ist (keine neuen Entities/Assets/UI, `mod/lua/`), muss ein
+Vanilla-Client nichts rendern. Die Engine-Content-Prüfung (`ContentMismatch`,
+„different set of mods“) verhindert den Join aber als Paritäts-Gate — Lösung aus
+dem Research (Befund im Issue #44): die CVar
+**`debug_disable_content_version_check 1`** serverseitig setzen.
+
+**Server-Konfiguration (Operator-Aufgabe, wie Difficulty/Seed):**
+
+```text
+set debug_disable_content_version_check 1
+```
+
+- Als Console-Command nach Server-Start **oder** als Start-/Config-Argument des
+  Dedicated Servers setzen (C++-CVar `cfg_debug_disable_content_version_check`,
+  offiziell registriert — Beleg `console_commands.txt` Z. 269).
+- **Nur der Server** braucht die Einstellung — der Client bleibt vanilla.
+- Verifikation: Vanilla-Client joint den SP-Server ohne „different set of mods“.
+
+Fallback (falls die CVar im Ziel-Build nicht greift): No-Op-Client-Mod installieren
+(dieselbe Content-Liste, client-seitig wirkungslos) — erst im Live-Join-Test prüfen
+(siehe Research-Empfehlung 2 im Issue). `external_content`-Mounting (Empfehlung 3)
+bleibt als letzter Ausweg offen.
+
 ## Bekannte Grenzen / offene Punkte
 
 - Exakte CVar-Namen für Seed & Map-Size sind **nicht statisch belegbar**

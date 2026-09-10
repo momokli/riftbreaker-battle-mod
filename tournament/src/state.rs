@@ -74,6 +74,46 @@ impl std::str::FromStr for World {
     }
 }
 
+/// Match-Modus. Serialisiert als lowercase-String (duel|sp).
+///
+/// `Sp` = Solo-/SP-Mode (Issue #44): Der Mod läuft nur auf dem Server, ein
+/// einzelner Spieler (P1, Welt A) tritt gegen eine serverseitig erzeugte
+/// Spiegel-Seite (MIRROR, Welt B) an — man duelliert sich gegen sich selbst.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Duel,
+    Sp,
+}
+
+impl Mode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Mode::Duel => "duel",
+            Mode::Sp => "sp",
+        }
+    }
+}
+
+impl fmt::Display for Mode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for Mode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "duel" => Ok(Mode::Duel),
+            "sp" | "solo" => Ok(Mode::Sp),
+            _ => Err(format!(
+                "ungültiger Modus '{s}' — erwartet 'duel' oder 'sp'"
+            )),
+        }
+    }
+}
+
 /// Match-Phase. Serialisiert als lowercase-String (lobby|ready|running|finished).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
@@ -137,6 +177,8 @@ pub struct BroadcastStatus {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct LogEntry {
+    /// Monotone Feed-Sequenz (Cursor für Poll-Bridges, z. B. Telegram-Feed).
+    pub seq: u64,
     pub t: u64,
     pub kind: &'static str,
     pub msg: String,
@@ -157,6 +199,7 @@ pub struct TeamState {
 #[derive(Debug, Clone)]
 pub struct MatchState {
     pub match_id: String,
+    pub mode: Mode,
     pub phase: Phase,
     /// Aktuelle Build-Runde (1 nach GO, +1 nach vollständigem Reveal).
     pub round: u32,
@@ -171,6 +214,8 @@ pub struct MatchState {
     /// Letzte Ereignisse (Terminal-Feed für die Web-UI).
     pub feed: VecDeque<LogEntry>,
     pub feed_cap: usize,
+    /// Nächste zu vergebende Feed-Sequenz.
+    next_seq: u64,
 }
 
 impl MatchState {
@@ -178,6 +223,7 @@ impl MatchState {
     pub fn new(hq_hp_start: f64) -> Self {
         MatchState {
             match_id: "rift-1".to_string(),
+            mode: Mode::Duel,
             phase: Phase::Lobby,
             round: 0,
             rounds_done: 0,
@@ -189,6 +235,7 @@ impl MatchState {
             reveal: None,
             feed: VecDeque::new(),
             feed_cap: 60,
+            next_seq: 0,
         }
     }
 
@@ -211,11 +258,29 @@ impl MatchState {
         if self.feed.len() >= self.feed_cap {
             self.feed.pop_front();
         }
+        let seq = self.next_seq;
+        self.next_seq += 1;
         self.feed.push_back(LogEntry {
+            seq,
             t: now_ms(),
             kind,
             msg: msg.into(),
         });
+    }
+
+    /// Alle Feed-Einträge mit `seq > since` (chronologisch). Cursor für
+    /// Poll-Bridges (Telegram-Feed u. a.), damit kein Event verloren geht.
+    pub fn feed_since(&self, since: u64) -> Vec<LogEntry> {
+        self.feed
+            .iter()
+            .filter(|e| e.seq > since)
+            .cloned()
+            .collect()
+    }
+
+    /// Höchste bislang vergebene Feed-Sequenz (Cursor-Stand für Bridges).
+    pub fn last_seq(&self) -> u64 {
+        self.feed.back().map(|e| e.seq).unwrap_or(0)
     }
 
     pub fn player(&self, w: World) -> Option<&str> {
@@ -370,6 +435,54 @@ impl MatchState {
         Ok(StartEffect { started: true })
     }
 
+    /// POST /sp — SP-Mode starten (Issue #44): Ein Spieler (P1, Welt A) gegen
+    /// eine serverseitig erzeugte Spiegel-Seite (MIRROR, Welt B). Kein zweiter
+    /// Client nötig — der Server ist der Gegner (man duelliert sich selbst).
+    pub fn start_sp(&mut self, player: &str) -> Result<StartEffect, StateError> {
+        let player = player.trim();
+        if player.is_empty() {
+            return Err(StateError::new(
+                "invalid",
+                "player-Name darf nicht leer sein",
+            ));
+        }
+        if player.chars().count() > 32 {
+            return Err(StateError::new("invalid", "player-Name max. 32 Zeichen"));
+        }
+        if self.phase == Phase::Running {
+            return Err(StateError::new(
+                "conflict",
+                format!("Match läuft bereits (Phase: {})", self.phase.as_str()),
+            ));
+        }
+
+        // Sauberer SP-Ausgangszustand (verwirft ready-/Rematch-Stände).
+        let hq = self.hq_hp_start;
+        self.mode = Mode::Sp;
+        self.phase = Phase::Lobby;
+        self.round = 0;
+        self.rounds_done = 0;
+        self.winner = None;
+        self.reveal = None;
+        self.started_at = None;
+        self.teams = [TeamState::fresh(hq), TeamState::fresh(hq)];
+        self.teams[Self::slot(World::A)].player = Some(player.to_string());
+        self.teams[Self::slot(World::B)].player = Some("MIRROR".to_string());
+        self.teams[Self::slot(World::A)].ready = true;
+        self.teams[Self::slot(World::B)].ready = true;
+
+        self.log(
+            "sp",
+            format!("SP-Mode gestartet: '{player}' (P1) vs MIRROR (Server-Spiegel)"),
+        );
+
+        self.phase = Phase::Running;
+        self.round = 1;
+        self.started_at = Some(now_ms());
+        self.log("go", "Runde 1 beginnt (SP: P1 vs MIRROR)");
+        Ok(StartEffect { started: true })
+    }
+
     /// POST /send — Send von `from` → Gegner-Welt (Wave-Routing), Runde wird zugestempelt.
     pub fn route_send(
         &mut self,
@@ -433,6 +546,25 @@ impl MatchState {
                 self.round
             ),
         );
+        // SP-Mode: P1-Sends werden gespiegelt — derselbe Send kommt als
+        // Gegner-Seite (MIRROR) zurück zu P1 (man duelliert sich gegen sich selbst).
+        if self.mode == Mode::Sp && from == World::A {
+            let mirror = SendBatch {
+                from: World::B,
+                units: batch.units.clone(),
+                value,
+                round: batch.round,
+                ts: batch.ts,
+            };
+            self.team_mut(World::A).pending.push(mirror);
+            self.log(
+                "send",
+                format!(
+                    "MIRROR (Spiegel) → P1: {total_units} Einheiten, Wert {value} (Runde {})",
+                    self.round
+                ),
+            );
+        }
         Ok(batch)
     }
 
@@ -465,13 +597,20 @@ impl MatchState {
             }
         }
 
-        let pending = std::mem::take(&mut self.team_mut(world).pending);
-        // Batchs dieser (oder früherer) Runden werden gedraint; später gestempelte
-        // bleiben für kommende Wellen stehen (defensiv — siehe Invariante: Stempel
-        // ist immer die aktuelle Runde, die erst nach beiden Locks hochzählt).
-        let (drained, remaining): (Vec<SendBatch>, Vec<SendBatch>) =
-            pending.into_iter().partition(|b| b.round <= round);
-        self.team_mut(world).pending = remaining;
+        // SP-Mode: Die Gegner-Seite (MIRROR, Welt B) wird serverseitig erzeugt und
+        // mitgelockt, sobald P1 (Welt A) seinen Wellenstart meldet. Ein expliziter
+        // Wellenstart von B ist im SP-Mode nicht vorgesehen.
+        if self.mode == Mode::Sp && world == World::B {
+            return Err(StateError::new(
+                "conflict",
+                "SP-Mode: MIRROR (B) wird serverseitig gelockt — nur P1 (A) meldet wave_start",
+            ));
+        }
+        let lock_worlds: Vec<World> = if self.mode == Mode::Sp && world == World::A {
+            vec![World::A, World::B]
+        } else {
+            vec![world]
+        };
 
         let mut reveal = match self.reveal.take() {
             Some(r) if r.round == round => r,
@@ -481,17 +620,29 @@ impl MatchState {
                 incoming: BTreeMap::new(),
             },
         };
-        if let Some(bv) = built_value {
-            reveal.built.insert(world, bv);
+
+        for w in &lock_worlds {
+            let pending = std::mem::take(&mut self.team_mut(*w).pending);
+            // Batchs dieser (oder früherer) Runden werden gedraint; später gestempelte
+            // bleiben für kommende Wellen stehen (defensiv — siehe Invariante: Stempel
+            // ist immer die aktuelle Runde, die erst nach beiden Locks hochzählt).
+            let (drained, remaining): (Vec<SendBatch>, Vec<SendBatch>) =
+                pending.into_iter().partition(|b| b.round <= round);
+            let drained_count = drained.len();
+            self.team_mut(*w).pending = remaining;
+            // Im SP-Mode spiegelt MIRROR (B) den Built-Value von P1 (gleiche Seite).
+            if let Some(bv) = built_value {
+                reveal.built.insert(*w, bv);
+            }
+            reveal.incoming.insert(*w, drained);
+            self.log(
+                "wave",
+                format!("Welt {w}: Wellenstart Runde {round} — {drained_count} Send(s) aufgedeckt"),
+            );
         }
-        reveal.incoming.insert(world, drained);
-        let drained_count = reveal.incoming[&world].len();
+
         let complete = World::ALL.iter().all(|w| reveal.incoming.contains_key(w));
         self.reveal = Some(reveal);
-        self.log(
-            "wave",
-            format!("Welt {world}: Wellenstart Runde {round} — {drained_count} Send(s) aufgedeckt"),
-        );
 
         // Beide Welten gelockt? → Reveal komplett, nächste Runde beginnt.
         if complete {
@@ -532,6 +683,11 @@ impl MatchState {
         let before = self.hq_hp_of(world);
         let hp = hp.min(self.hq_hp_start); // heilen über Startwert nicht erlaubt
         self.team_mut(world).hq_hp = hp;
+        // SP-Mode: MIRROR (B) spiegelt die HQ-HP von P1 (A) — es gibt nur EIN
+        // reales HQ, die Gegner-Seite ist die Spiegelung des Spielers.
+        if self.mode == Mode::Sp && world == World::A {
+            self.team_mut(World::B).hq_hp = hp;
+        }
         self.log("hq", format!("Welt {world}: HQ-HP {before:.0} → {hp:.0}"));
         if hp <= 0.0 {
             let winner = world.opponent();
@@ -541,6 +697,8 @@ impl MatchState {
                 "finish",
                 format!("HQ von Welt {world} zerstört — Sieger: Welt {winner}"),
             );
+            // Match-Ende-Hinweis (Log + Telegram + UI): nächster Spieler kann joinen.
+            self.log("match_end", "Match beendet — nächster Spieler kann joinen");
             return Ok(HqEffect { match_over: true });
         }
         Ok(HqEffect { match_over: false })
@@ -625,6 +783,7 @@ impl MatchState {
         let feed: Vec<LogEntry> = self.feed.iter().rev().take(30).cloned().collect();
         StateView {
             match_id: self.match_id.clone(),
+            mode: self.mode.as_str().to_string(),
             phase: self.phase.as_str().to_string(),
             round: self.round,
             rounds_done: self.rounds_done,
@@ -656,6 +815,7 @@ impl TeamState {
 #[derive(Debug, Clone, Serialize)]
 pub struct StateView {
     pub match_id: String,
+    pub mode: String,
     pub phase: String,
     pub round: u32,
     pub rounds_done: u32,
@@ -1319,5 +1479,136 @@ mod tests {
             StateError::new("invalid", "x").http_status(),
             StatusCode::BAD_REQUEST
         );
+    }
+
+    // ---- SP-Mode (Issue #44): Mirror-Konzept, Match-Ende, Feed-Cursor ----
+
+    #[test]
+    fn sp_mode_registers_p1_and_mirror() {
+        let mut s = fresh();
+        let e = s.start_sp("  momo  ").unwrap();
+        assert!(e.started);
+        assert_eq!(s.mode, Mode::Sp);
+        assert_eq!(s.phase, Phase::Running);
+        assert_eq!(s.round, 1);
+        assert_eq!(s.player(World::A), Some("momo"));
+        assert_eq!(s.player(World::B), Some("MIRROR"));
+        assert!(s.is_ready(World::A));
+        assert!(s.is_ready(World::B));
+
+        let mut s2 = fresh();
+        assert_eq!(s2.start_sp("   ").unwrap_err().code, "invalid");
+        assert_eq!(s2.start_sp(&"x".repeat(40)).unwrap_err().code, "invalid");
+    }
+
+    #[test]
+    fn sp_mode_blocked_while_running() {
+        let mut s = fresh();
+        s.start_sp("momo").unwrap();
+        assert_eq!(s.start_sp("matheo").unwrap_err().code, "conflict");
+    }
+
+    #[test]
+    fn sp_mode_send_mirrors_back() {
+        let mut s = fresh();
+        s.start_sp("momo").unwrap();
+        let batch = s
+            .route_send(
+                World::A,
+                vec![UnitSpec {
+                    unit: "creeper".into(),
+                    count: 4,
+                }],
+                400,
+            )
+            .unwrap();
+        assert_eq!(batch.from, World::A);
+        // Original-Send landet bei MIRROR (B).
+        assert_eq!(pending(&s, World::B).len(), 1);
+        // Spiegel-Send kommt zurück zu P1 (A).
+        assert_eq!(pending(&s, World::A).len(), 1);
+        let mirror = &pending(&s, World::A)[0];
+        assert_eq!(mirror.from, World::B);
+        assert_eq!(mirror.value, 400);
+        assert_eq!(mirror.units.len(), 1);
+        assert_eq!(mirror.units[0].unit, "creeper");
+    }
+
+    #[test]
+    fn sp_mode_wave_start_locks_both_sides() {
+        let mut s = fresh();
+        s.start_sp("momo").unwrap();
+        s.route_send(
+            World::A,
+            vec![UnitSpec {
+                unit: "creeper".into(),
+                count: 3,
+            }],
+            300,
+        )
+        .unwrap();
+        // Nur P1 (A) meldet den Wellenstart → beide Seiten werden gelockt.
+        assert_eq!(
+            s.wave_start(World::A, Some(5000)).unwrap(),
+            WaveEffect::Locked
+        );
+        let rev = s.reveal.as_ref().unwrap();
+        assert_eq!(rev.round, 1);
+        assert_eq!(rev.built.get(&World::A), Some(&5000));
+        assert_eq!(rev.built.get(&World::B), Some(&5000)); // MIRROR spiegelt Built-Value
+        assert_eq!(rev.incoming[&World::A].len(), 1);
+        assert_eq!(rev.incoming[&World::B].len(), 1);
+        assert_eq!(rev.incoming[&World::A][0].from, World::B); // Spiegel
+        assert_eq!(rev.incoming[&World::B][0].from, World::A); // Original
+        assert_eq!(s.round, 2);
+        assert_eq!(s.rounds_done, 1);
+
+        // Expliziter Wellenstart von B ist im SP-Mode nicht erlaubt.
+        let mut s2 = fresh();
+        s2.start_sp("momo").unwrap();
+        assert_eq!(s2.wave_start(World::B, None).unwrap_err().code, "conflict");
+    }
+
+    #[test]
+    fn sp_mode_hq_mirrors_and_emits_match_end() {
+        let mut s = fresh();
+        s.start_sp("momo").unwrap();
+        s.report_hq(World::A, 70.0).unwrap();
+        assert_eq!(s.hq_hp_of(World::A), 70.0);
+        assert_eq!(s.hq_hp_of(World::B), 70.0); // Spiegel
+        let e = s.report_hq(World::A, 0.0).unwrap();
+        assert!(e.match_over);
+        assert_eq!(s.phase, Phase::Finished);
+        assert_eq!(s.hq_hp_of(World::B), 0.0);
+        assert!(s
+            .feed
+            .iter()
+            .any(|f| f.kind == "match_end" && f.msg.contains("nächster Spieler")));
+    }
+
+    #[test]
+    fn feed_seq_is_monotonic_and_cursor_works() {
+        let mut s = fresh();
+        register_all(&mut s);
+        s.start_match().unwrap();
+        let seqs: Vec<u64> = s.feed.iter().map(|e| e.seq).collect();
+        assert!(!seqs.is_empty());
+        assert!(seqs.windows(2).all(|w| w[0] < w[1]));
+        let last = *seqs.last().unwrap();
+        assert!(s.feed_since(last).is_empty());
+        assert_eq!(s.feed_since(seqs[0]).len(), seqs.len() - 1);
+        assert_eq!(s.last_seq(), last);
+    }
+
+    #[test]
+    fn mode_parsing_and_display() {
+        assert_eq!("sp".parse::<Mode>().unwrap(), Mode::Sp);
+        assert_eq!("duel".parse::<Mode>().unwrap(), Mode::Duel);
+        assert_eq!(" DUEL ".parse::<Mode>().unwrap(), Mode::Duel);
+        assert_eq!("solo".parse::<Mode>().unwrap(), Mode::Sp);
+        assert!("x".parse::<Mode>().is_err());
+        assert_eq!(Mode::Sp.as_str(), "sp");
+        assert_eq!(Mode::Duel.as_str(), "duel");
+        assert_eq!(format!("{}", Mode::Sp), "sp");
     }
 }

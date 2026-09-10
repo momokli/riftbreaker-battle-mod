@@ -56,6 +56,7 @@ function render(state) {
   $("conn").className = "conn ok";
   $("matchId").textContent = state.match_id;
   $("rematchNo").textContent = state.rematches;
+  if ($("modeTag")) $("modeTag").textContent = (state.mode || "duel").toUpperCase();
   $("roundNo").textContent = state.round;
   $("roundsDone").textContent = state.rounds_done ? `(${state.rounds_done} erledigt)` : "";
   $("phaseTag").textContent = state.phase.toUpperCase();
@@ -210,6 +211,17 @@ async function doAction(act) {
         flash(data.match_started ? "GO! Match gestartet (Runde 1)" : `Welt ${world} ready`);
       } else {
         flash(data.error || "Ready fehlgeschlagen", true);
+      }
+    } else if (act === "sp") {
+      const name = $("nameSp").value.trim();
+      if (!name) return flash("Name eingeben!");
+      const { status, data } = await api("POST", "/sp", { player: name });
+      if (status === 200) {
+        me = { world: "A", player: name };
+        localStorage.setItem("rb-me", JSON.stringify(me));
+        flash(`SP-Mode gestartet — ${name} (P1) vs MIRROR`);
+      } else {
+        flash(data.error || "SP-Start fehlgeschlagen", true);
       }
     } else if (act === "go") {
       const { status, data } = await api("POST", "/go", {});

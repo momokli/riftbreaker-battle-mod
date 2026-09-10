@@ -15,7 +15,8 @@ tournament/
 │   └── broadcast.rs   minimaler HTTP/1.1-Push-Client (GO-Broadcast)
 ├── web/               Lobby-UI + Spectator-Dashboard (Terminal-Stil)
 ├── bridge/
-│   └── poller_example.py   Referenz-Poller für die rbbridge-Seite (v1)
+│   ├── poller_example.py   Referenz-Poller für die rbbridge-Seite (v1)
+│   └── telegram_feed.py    Feed-Bridge: Events → Telegram-Topic (Issue #44)
 └── .gitignore
 ```
 
@@ -23,7 +24,7 @@ tournament/
 
 ```bash
 cargo build --release    # Binary: target/release/tournament-server
-cargo test               # 33 Tests: State-Machine + API-Level (Mock-Endpoints)
+cargo test               # State-Machine + API-Level (Mock-Endpoints)
 cargo clippy --all-targets && cargo fmt --check
 ```
 
@@ -35,6 +36,35 @@ RBBRIDGE_B_URL=http://10.0.0.6:9001/exec ./target/release/tournament-server
 ```
 
 Web-UI: `http://<host>:8080/` · Zustand: `GET /state` · Health: `GET /health`
+
+## SP-Mode (Issue #44) — Server-only, Mirror
+
+Der Mod läuft nur auf dem Server; ein Client joint ohne Mod. Ein einzelner
+Spieler (P1, Welt A) tritt gegen eine serverseitig erzeugte Spiegel-Seite
+(MIRROR, Welt B) an — man duelliert sich gegen sich selbst. Start:
+
+```bash
+curl -X POST http://<host>:8080/sp -H 'content-type: application/json' \
+     -d '{"player": "momo"}'
+```
+
+Sends von P1 werden gespiegelt (Original → MIRROR, Spiegel → P1); `wave_start`
+von P1 lockt beide Seiten und spiegelt den Built-Value; HQ-HP von P1 wird auf
+die MIRROR-Seite gespiegelt. Bei HQ-Tod endet das Match mit `match_end` und dem
+Hinweis „nächster Spieler kann joinen“. Siehe `docs/TOURNAMENT_API.md`.
+
+## Telegram-Feed (Issue #44)
+
+`bridge/telegram_feed.py` pollt `GET /events?since=<cursor>` und postet neue
+Referee-Events (Runde, Send/Boost, HQ-HP, Match-Ende, …) in ein Telegram-Topic.
+
+```bash
+TELEGRAM_BOT_TOKEN=<token> TELEGRAM_CHAT_ID=@channel TELEGRAM_TOPIC_ID=42 \
+TOURNAMENT_EVENTS_URL=http://<host>:8080/events \
+python3 bridge/telegram_feed.py
+
+python3 bridge/telegram_feed.py --self-test   # Syntax-/Unit-Check ohne Netz
+```
 
 ## Protokoll
 

@@ -152,11 +152,49 @@ Nur in Phase `running` (sonst 409). Der Send wird in die Queue der
 `{}` — Reset in die Lobby (nur nicht in `running`, sonst 409). Antwort:
 `{"phase": "lobby", "rematches": 1}`.
 
+### POST /sp — SP-Mode starten (Issue #44, Server-only)
+
+```json
+{"player": "momo"}
+```
+
+Startet ein Solo-/SP-Match: P1 (`player`) wird für Welt A registriert, die
+Gegner-Seite ist die serverseitig erzeugte **MIRROR**-Seite (Welt B) — man
+duelliert sich gegen sich selbst. Kein zweiter Client nötig. Antwort:
+
+```json
+{"started": true, "phase": "running", "round": 1, "mode": "sp",
+ "teams": {"A": {"player": "momo", …}, "B": {"player": "MIRROR", …}}}
+```
+
+SP-Mode-Semantik (Mirror-Konzept):
+- **Sends gespiegelt:** `POST /send` von A routet normal zu B **und** legt einen
+  identischen Spiegel-Batch (von B) zurück in die Queue von A — die eigenen
+  Sends kommen als Gegner-Seite zurück.
+- **Wellenstart:** `POST /report wave_start` von A lockt **beide** Seiten
+  (A + MIRROR B) und spiegelt den Built-Value auf B. Ein expliziter
+  `wave_start` von B wird mit 409 abgewiesen.
+- **HQ-HP gespiegelt:** `hq_hp` von A setzt auch die MIRROR-HP (es gibt nur
+  EIN reales HQ).
+- **Match-Ende:** Bei HQ ≤ 0 → Phase `finished` + Feed-Event `match_end` mit
+  dem Hinweis „nächster Spieler kann joinen“.
+
+### GET /events — Feed-Cursor für Poll-Bridges (Telegram-Feed u. a.)
+
+```
+GET /events?since=<seq>
+```
+
+Liefert `{"events": [...], "last_seq": <n>}`. `since` filtert auf Feed-Einträge
+mit `seq > since`; `last_seq` ist die höchste vergebene Sequenz (Cursor-Stand).
+Jeder Eintrag trägt ein monotones `seq`-Feld (Cursor ohne Event-Verlust).
+
 ### GET /state — Match-Zustand (Poll-Kanal für Bridges + Web-UI)
 
 ```json
 {
   "match_id": "rift-1",
+  "mode": "duel|sp",
   "phase": "lobby|ready|running|finished",
   "round": 2, "rounds_done": 1, "rematches": 0,
   "winner": null | "A" | "B",
@@ -174,7 +212,7 @@ Nur in Phase `running` (sonst 409). Der Send wird in die Queue der
     "built": {"A": 8200, "B": 6400},
     "incoming": {"A": [ …Sends von B… ], "B": [ …Sends von A… ]}
   } | null,
-  "feed": [ {"t": …, "kind": "go|send|wave|reveal|hq|finish|rematch|…", "msg": "…"} ]
+  "feed": [ {"seq": 3, "t": …, "kind": "go|send|wave|reveal|hq|finish|match_end|…", "msg": "…"} ]
 }
 ```
 

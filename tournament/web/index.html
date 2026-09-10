@@ -38,13 +38,25 @@
     <button data-act="go" id="goBtn">▶ GO — MATCH STARTEN</button>
   </div>
   <p class="hint">Beide Welten booten pausiert (gleicher Seed). Erst wenn beide READY sind, feuert der Referee GO an beide rbbridge-Endpoints.</p>
+
+  <div class="sp-panel">
+    <h3>⚔ SOLO (SP) — SERVER-ONLY · CLIENT OHNE MOD</h3>
+    <div class="lobby-row">
+      <div class="team-card">
+        <div class="slot" id="slotSp">P1 vs MIRROR (Server-Spiegel)</div>
+        <label>Pilot <input id="nameSp" maxlength="32" placeholder="Name"></label>
+        <button data-act="sp">SOLO STARTEN</button>
+      </div>
+    </div>
+    <p class="hint">Ein Spieler duelliert sich gegen sich selbst: Sends werden gespiegelt, Events laufen live ins Telegram-Topic. Am Match-Ende: „nächster Spieler kann joinen“.</p>
+  </div>
 </section>
 
 <section id="dashboard" class="panel hidden">
   <div class="dash-head">
     <div class="phase"><span id="phaseTag">—</span></div>
     <div class="round">RUNDE <span id="roundNo">0</span> <span class="dim" id="roundsDone"></span></div>
-    <div class="match"><span class="dim">match</span> <span id="matchId">—</span> <span class="dim">rematch</span> #<span id="rematchNo">0</span></div>
+    <div class="match"><span class="dim">match</span> <span id="matchId">—</span> <span class="dim">modus</span> <span id="modeTag">—</span> <span class="dim">rematch</span> #<span id="rematchNo">0</span></div>
   </div>
 
   <div class="hq-row">
@@ -76,6 +88,7 @@
 
   <div id="winnerBox" class="winner hidden">
     <div class="winner-line">🏆 HQ ZERSTÖRT — SIEGER: <span id="winnerName">—</span></div>
+    <p class="hint">🛑 Match beendet — nächster Spieler kann joinen.</p>
     <button data-act="rematch">↻ REMATCH</button>
     <p class="hint">Rematch setzt beide Welten zurück in die Lobby — Spieler bleiben registriert.</p>
   </div>
