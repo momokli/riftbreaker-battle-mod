@@ -128,7 +128,7 @@
 --   event=leak damage=.. hp_before=.. hp=..                                (#28)
 --   event=hq_hp hp=.. dead=..                                              (#28)
 --   event=hq_dead status=match_end hp=0                                    (#28)
---   event=match_end reason=hq_destroyed winner=opponent                    (#28)
+--   event=match_end reason=hq_destroyed                                    (#28)
 --   (hq_dead) -> in-game Annonce "GAME OVER — HQ destroyed"; Solo-Feed     (#157)
 --   klinkt auf event=hq_dead ein: Telegram Topic 312 + genau EIN            (#157)
 --   docker restart pro Match-Ende (Cooldown-Guard, kein Flapping).          (#157)
@@ -703,7 +703,8 @@ local function PatchDomTimer()
     if type(_G) == "table" then
         dom = rawget(_G, "dom_mananger")
     end
-    if type(dom) ~= "table" then
+    local dType = type(dom)
+    if dType ~= "table" and dType ~= "userdata" then
         return false -- Klasse (noch) nicht geladen; naechster Versuch spaeter
     end
 
@@ -1603,6 +1604,7 @@ end
 -- Wird aus dem OnEnterSpawn-Wrap aufgerufen: Runde zaehlen + Send-Queue
 -- ausliefern (Boost der naechsten Naturwelle).
 local function OnNaturalWaveStart()
+    if RBB.hq.dead then return end
     RBB.round = RBB.round + 1
     EconomyCheckpoint()   -- #65: Spar-Pool an der Rundengrenze persistieren
     -- #33: HQ-HP-Kurve ueber Runden — bei Wellenstart HP auf Runden-Max setzen
@@ -1636,7 +1638,8 @@ PatchWaveStartHook = function()
     if type(_G) == "table" then
         dom = rawget(_G, "dom_mananger")
     end
-    if type(dom) ~= "table" then
+    local dType = type(dom)
+    if dType ~= "table" and dType ~= "userdata" then
         return false -- Klasse (noch) nicht geladen; naechster Versuch spaeter
     end
 
@@ -1854,7 +1857,8 @@ PatchSpawnWavesHook = function()
     if type(_G) == "table" then
         dom = rawget(_G, "dom_mananger")
     end
-    if type(dom) ~= "table" then
+    local dType = type(dom)
+    if dType ~= "table" and dType ~= "userdata" then
         return false -- Klasse (noch) nicht geladen; naechster Versuch spaeter
     end
 
@@ -2184,8 +2188,9 @@ local function HqOnDestroyed()
     RBB.hq.dead = true
     RBB.hq.hp = 0
     Log("event=hq_dead status=match_end hp=0")
-    Log("event=match_end reason=hq_destroyed winner=opponent")
+    Log("event=match_end reason=hq_destroyed")
     WriteConsole("GAME OVER — HQ destroyed")
+    WriteConsole("Match end — restarting game in 5 seconds...")
 end
 
 -- Leak: eine Kreatur hat die HQ-Zone erreicht -> HQ-HP sinkt. Reine Logik
