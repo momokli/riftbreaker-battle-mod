@@ -231,6 +231,37 @@ Wellenstärke wirklich linear ist.
    (harmlos, keine Spielwirkung) — dann bleibt nur Weg 1 oder manuelles
    Auszählen auf dem Bildschirm.
 
+**Folgefrage (Matheo): nicht nur zählen, auch die Typen kennen.** Ein reiner
+Zahlenwert reicht nicht, um einen %-Boost passend zur echten
+Wellen-Zusammensetzung draufzurechnen — dafür müsste man wissen, WELCHE
+Kreaturentypen gespawnt wurden, nicht nur wie viele. Das Sampling bildet
+deshalb zusätzlich die Differenz der Entity-Listen (nicht nur der Zahl) und
+löst jede neu gespawnte Entity über die bereits vorhandene
+`EntityService:GetName`-API (Muster `GetEntityNameOrId`, auch für die
+Rand-Spawner-Logs genutzt) zu einem Typnamen auf:
+
+```
+event=richtwert_sample_types level=<n> total=<delta> types=<typ>:<anzahl>,...
+```
+
+Damit lässt sich ein %-Boost später **pro vorhandenem Typ** anteilig
+draufrechnen (z.B. 20 % mehr von jedem Typ, mit Restbetrag-Mitnahme bei
+kleinen Prozentsätzen statt Abrunden auf 0) — statt eine beliebige
+Füll-Kreatur zu wählen. Die zusätzlichen Kreaturen würden über den bereits
+vorhandenen Rand-Spawner-Mechanismus gespawnt (der alte Shop-/Queue-Weg,
+blueprint-basiert, ohne die `difficultyLevel`-Deckel bei 9) — das macht die
+Verstärkung gleichzeitig beliebig fein UND unbegrenzt nach oben, löst also
+beide in #205 diskutierten Probleme (Rundung auf ganze Level, Decke bei
+Level 9). Bleibt Recherche/Vorbereitung (#213) — die eigentliche
+Boost-Logik gehört weiter ins größere Send-Mechanik-Issue #205.
+
+**Fallback-Idee, falls die Live-Typ-Erkennung nicht greift:** bekannte
+"Wellen-Pack"-Muster katalogisieren (typische Kreaturen-Gruppen, aus denen
+sich Naturwellen zusammensetzen) und beim Boost ein zur Ziel-Stärke
+passendes Pack zufällig mit ausschicken, statt einzelne Kreaturen exakt zu
+matchen. Setzt Wissen über die tatsächlichen Pack-Definitionen voraus (Quelle
+offen — ggf. wieder die entschlüsselte Spielquelle, falls zugänglich).
+
 ### Wellen-Takt & Grundschwierigkeit (Issue #41, Test-Varianten)
 
 Der Wellen-Takt ist nicht mehr fest verdrahtet, sondern als explizite,

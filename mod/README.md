@@ -409,6 +409,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 [RBBATTLE] event=richtwert_preview calcium=200 level=4 wave_richtwert=400 pct=50.0   ← Richtwert-Vorschau (#213, reine Vorschau, kein Kauf)
 [RBBATTLE] event=richtwert_sample_source status=found kind=group name=enemy   ← Gegner-Zaehl-Quelle gefunden (#213-Sampling, einmalig pro Session)
 [RBBATTLE] event=richtwert_sample level=4 before=5 after=13 delta=8   ← Naturwelle bei Level 4 hat 8 Kreaturen gespawnt (#213, echte Messung fuer die Kurve)
+[RBBATTLE] event=richtwert_sample_types level=4 total=8 types=artigian:3,baxmoth:2,brabit:3   ← Typ-Verteilung der neu gespawnten Kreaturen (#213-Folgefrage: proportionaler %-Boost pro Typ statt Fuellkreatur)
 [RBBATTLE] event=wave_hook patch status=ok                       ← Send-Queue-Hook aktiv (#42/#25)
 [RBBATTLE] event=boost patch status=ok                           ← Boost-Chokepoint-Hook aktiv (#39)
 [RBBATTLE] event=dom_timer patch status=ok cap=300        ← nach PlayerInitializedEvent

@@ -1912,12 +1912,13 @@ RBB.enemyCountGroupCandidates = { "enemy", "enemies", "creatures", "enemy_creatu
 RBB.enemyCountTypeCandidates = { "creature", "enemy_creature", "monster" }
 RBB.enemyCountSource = nil -- { kind="group"|"type", name=".." } nach erstem Treffer (gemerkt fuer die Session)
 
--- Zaehlt aktuell lebende Gegner-Kreaturen (bester Versuch). Merkt sich den
+-- Liefert die Liste lebender Gegner-Kreaturen (bester Versuch, Entity-IDs --
+-- nicht nur die Anzahl, damit Diffs gebildet werden koennen). Merkt sich den
 -- ERSTEN Kandidaten mit >0 Treffern fuer die restliche Session (kein
 -- Neu-Durchprobieren jede Welle); liefert nil, wenn kein Kandidat je etwas
 -- findet (API fehlt oder alle Kandidaten falsch) -- dann bleibt das Sampling
 -- inaktiv, ohne den Rest des Mods zu beeintraechtigen.
-local function CountEnemyEntities()
+local function SnapshotEnemyEntities()
     if RBB.enemyCountSource ~= nil then
         local ok, list
         if RBB.enemyCountSource.kind == "group" then
@@ -1925,7 +1926,7 @@ local function CountEnemyEntities()
         else
             ok, list = pcall(function() return FindService:FindEntitiesByType(RBB.enemyCountSource.name) end)
         end
-        if ok and type(list) == "table" then return #list end
+        if ok and type(list) == "table" then return list end
         return nil
     end
 
@@ -1935,7 +1936,7 @@ local function CountEnemyEntities()
             if ok and type(list) == "table" and #list > 0 then
                 RBB.enemyCountSource = { kind = "group", name = name }
                 Log("event=richtwert_sample_source status=found kind=group name=%s", name)
-                return #list
+                return list
             end
         end
     end
@@ -1945,11 +1946,43 @@ local function CountEnemyEntities()
             if ok and type(list) == "table" and #list > 0 then
                 RBB.enemyCountSource = { kind = "type", name = name }
                 Log("event=richtwert_sample_source status=found kind=type name=%s", name)
-                return #list
+                return list
             end
         end
     end
     return nil
+end
+
+-- #213-Folgefrage (Matheo): nicht nur ZAEHLEN, sondern auch sehen, WELCHE
+-- Typen eine Naturwelle spawnt -- Grundlage dafuer, einen %-Boost proportional
+-- pro vorhandenem Kreaturentyp draufzurechnen (statt eines beliebigen
+-- Fuellkreatur-Typs). Bildet die Differenz zweier Entity-Listen (vorher/
+-- nachher) und zaehlt pro Typname (ueber die bereits vorhandene
+-- GetEntityNameOrId, Muster Rand-Spawner-Spawn-Log). Liefert eine sortierte
+-- Liste { {name=.., count=..}, ... } fuer deterministische Ausgabe.
+local function DiffEntityTypes(before, after)
+    local beforeSet = {}
+    for _, id in ipairs(before) do beforeSet[id] = true end
+
+    local counts = {}
+    local order = {}
+    for _, id in ipairs(after) do
+        if not beforeSet[id] then
+            local name = GetEntityNameOrId(id)
+            if counts[name] == nil then
+                counts[name] = 0
+                order[#order + 1] = name
+            end
+            counts[name] = counts[name] + 1
+        end
+    end
+    table.sort(order)
+
+    local result = {}
+    for _, name in ipairs(order) do
+        result[#result + 1] = { name = name, count = counts[name] }
+    end
+    return result
 end
 
 PatchSpawnWavesHook = function()
@@ -1976,7 +2009,7 @@ PatchSpawnWavesHook = function()
         RBB.spawnWavesOrig = orig
         dom.SpawnWavesForDifficultyLevel = function(self, difficultyLevel, shouldAddtoSpawnedAttacks)
             local newLevel = difficultyLevel
-            local beforeCount = nil
+            local beforeList = nil
             if shouldAddtoSpawnedAttacks == true then
                 -- Naturwelle (OnEnterSpawn, addToSpawned=true); Debug-Trigger
                 -- (false) bleibt unangetastet. Grundschwierigkeits-Skalierung
@@ -1984,15 +2017,26 @@ PatchSpawnWavesHook = function()
                 local preset = ActiveWavePreset()
                 newLevel = ScaleWaveLevel(difficultyLevel, preset.strengthPct)
                 newLevel = ApplyPendingBoost(self, newLevel)
-                beforeCount = CountEnemyEntities() -- #213: Sampling-Snapshot vor dem Spawn
+                beforeList = SnapshotEnemyEntities() -- #213: Sampling-Snapshot vor dem Spawn
             end
             local result = RBB.spawnWavesOrig(self, newLevel, shouldAddtoSpawnedAttacks)
             if shouldAddtoSpawnedAttacks == true then
                 -- #213: Snapshot-Diff nach dem (synchronen) Naturwellen-Spawn.
-                local afterCount = CountEnemyEntities()
-                if beforeCount ~= nil and afterCount ~= nil then
+                local afterList = SnapshotEnemyEntities()
+                if beforeList ~= nil and afterList ~= nil then
+                    local beforeCount, afterCount = #beforeList, #afterList
                     Log("event=richtwert_sample level=%d before=%d after=%d delta=%d",
                         newLevel, beforeCount, afterCount, afterCount - beforeCount)
+                    -- #213-Folgefrage: welche Typen genau kamen dazu (fuer
+                    -- proportionalen %-Boost pro Typ statt Fuellkreatur).
+                    local types = DiffEntityTypes(beforeList, afterList)
+                    local parts = {}
+                    for _, t in ipairs(types) do
+                        parts[#parts + 1] = t.name .. ":" .. t.count
+                    end
+                    Log("event=richtwert_sample_types level=%d total=%d types=%s",
+                        newLevel, afterCount - beforeCount,
+                        #parts > 0 and table.concat(parts, ",") or "none")
                 else
                     Log("event=richtwert_sample level=%d status=unavailable", newLevel)
                 end

@@ -49,12 +49,16 @@ ConsoleService = {
     Write = function(self, msg) end,
     RegisterCommand = function(self, name, fn) _G.__commands[name] = fn end,
 }
--- #213-Sampling: _G.__enemySeq[group] ist eine Liste von Groessen, die
--- FindEntitiesByGroup fuer GENAU diese Gruppe der Reihe nach liefert (ein
--- Wert pro Aufruf -- simuliert "vorher" dann "nachher" ohne echten
--- Spiel-State). Andere Gruppen/Typen liefern {} (kein Treffer).
+-- #213-Sampling: _G.__enemySeq[group] ist eine Liste von ENTITY-ID-LISTEN,
+-- die FindEntitiesByGroup fuer GENAU diese Gruppe der Reihe nach liefert (ein
+-- Eintrag pro Aufruf -- simuliert "vorher" dann "nachher" ohne echten
+-- Spiel-State, echte IDs statt nur Groessen -> Diff nach Entity-ID moeglich).
+-- Andere Gruppen/Typen liefern {} (kein Treffer).
 _G.__enemySeq = {}
 _G.__enemySeqIdx = {}
+-- _G.__entityNames[id] -> Typname, den EntityService:GetName(id) liefert
+-- (Grundlage fuer die Typ-Verteilung in event=richtwert_sample_types).
+_G.__entityNames = {}
 FindService = {
     FindEntitiesByType = function(self, t) return {} end,
     FindEntitiesByGroup = function(self, g)
@@ -62,10 +66,7 @@ FindService = {
         if seq == nil then return {} end
         local i = (_G.__enemySeqIdx[g] or 0) + 1
         _G.__enemySeqIdx[g] = i
-        local n = seq[i] or seq[#seq]
-        local arr = {}
-        for k = 1, n do arr[k] = k end
-        return arr
+        return seq[i] or seq[#seq]
     end,
     FindPlayerSpawnPoints = function(self) return {} end,
 }
@@ -73,7 +74,7 @@ MapGenerator = { GetInitialSpawnPoint = function(self) return nil end }
 ResourceManager = { GetBlueprint = function(self, bp) return true end }
 EnvironmentService = { GetTerrainHeight = function(self, pos) return 0 end }
 EntityService = {
-    GetName = function(self, e) return "" end,
+    GetName = function(self, e) return _G.__entityNames[e] or "" end,
     GetPosition = function(self, e) return { x = 0, y = 0, z = 0 } end,
     SpawnEntity = function(self, ...) return 1 end,
 }
@@ -180,27 +181,51 @@ check(log_has("event=balance richtwert_cfg richtwert_per_level=100 calcium_per_r
 check(log_has("event=balance richtwert level=1 value=100"), "rb_balance: Richtwert-Kurve Level 1 -> 100")
 check(log_has("event=balance richtwert level=9 value=900"), "rb_balance: Richtwert-Kurve Level 9 -> 900")
 
--- 6. #213-Sampling: Naturwelle spawnt (Gruppe "enemy" liefert 5 dann 13) ->
---    event=richtwert_sample mit level/before/after/delta. RBB.commenced wird
---    direkt gesetzt (das HQ-Auto-Detect ist hier nicht das Testziel).
+-- 6. #213-Sampling: Naturwelle spawnt (Gruppe "enemy" liefert vorher 5
+--    Alt-Entities, nachher +8 neue: 3x brabit, 2x baxmoth, 3x artigian) ->
+--    event=richtwert_sample (before/after/delta) + event=richtwert_sample_types
+--    (Typ-Verteilung der NEUEN Entities, Matheos Folgefrage). RBB.commenced
+--    wird direkt gesetzt (das HQ-Auto-Detect ist hier nicht das Testziel).
 RBB.commenced = true
-_G.__enemySeq["enemy"] = { 5, 13 }
+local before6 = { 1, 2, 3, 4, 5 }
+local after6 = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 }
+_G.__entityNames[6] = "brabit"; _G.__entityNames[7] = "brabit"; _G.__entityNames[8] = "brabit"
+_G.__entityNames[9] = "baxmoth"; _G.__entityNames[10] = "baxmoth"
+_G.__entityNames[11] = "artigian"; _G.__entityNames[12] = "artigian"; _G.__entityNames[13] = "artigian"
+_G.__enemySeq["enemy"] = { before6, after6 }
 dom_mananger.OnEnterSpawn(dom_mananger, {})
 check(log_has("event=richtwert_sample_source status=found kind=group name=enemy"),
     "6. Sampling-Quelle gefunden: Gruppe 'enemy'")
 check(log_has("event=richtwert_sample level=4 before=5 after=13 delta=8"),
     "6. Sample: Level 4, 5 -> 13 Kreaturen (delta=8)")
+check(log_has("event=richtwert_sample_types level=4 total=8 types=artigian:3,baxmoth:2,brabit:3"),
+    "6. Typ-Verteilung der 8 neuen Kreaturen korrekt gezaehlt (alphabetisch sortiert)")
 
 -- 7. Zweite Naturwelle: die einmal gefundene Quelle wird WIEDERVERWENDET
---    (kein erneutes Duchprobieren aller Kandidaten, kein zweites
---    richtwert_sample_source-Log).
-_G.__enemySeq["enemy"] = { 13, 20 }
+--    (kein erneutes Durchprobieren aller Kandidaten, kein zweites
+--    richtwert_sample_source-Log). Neue Kreaturen (14, 15) sind unbekannten
+--    Typs (kein Eintrag in _G.__entityNames) -> Fallback auf die Entity-Id
+--    als Name (GetEntityNameOrId-Verhalten, kein Crash bei unbekanntem Typ).
+local before7 = after6
+local after7 = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 }
+_G.__enemySeq["enemy"] = { before7, after7 }
 _G.__enemySeqIdx["enemy"] = 0
 dom_mananger.OnEnterSpawn(dom_mananger, {})
 check(log_count("event=richtwert_sample_source") == 1,
     "7. Sampling-Quelle wird nur einmal geloggt (wiederverwendet)")
-check(log_has("event=richtwert_sample level=4 before=13 after=20 delta=7"),
-    "7. Zweites Sample nutzt dieselbe Quelle (13 -> 20, delta=7)")
+check(log_has("event=richtwert_sample level=4 before=13 after=15 delta=2"),
+    "7. Zweites Sample nutzt dieselbe Quelle (13 -> 15, delta=2)")
+check(log_has("event=richtwert_sample_types level=4 total=2 types=14:1,15:1"),
+    "7. Unbekannter Typ faellt auf die Entity-Id zurueck (kein Crash)")
+
+-- 8. Keine neuen Kreaturen (delta=0) -> types=none statt leerem String.
+local before8 = after7
+local after8 = after7
+_G.__enemySeq["enemy"] = { before8, after8 }
+_G.__enemySeqIdx["enemy"] = 0
+dom_mananger.OnEnterSpawn(dom_mananger, {})
+check(log_has("event=richtwert_sample_types level=4 total=0 types=none"),
+    "8. Kein Delta -> types=none (kein leerer/kaputter String)")
 
 print("FAILURES=" .. failures)
 _G.__failures = failures
