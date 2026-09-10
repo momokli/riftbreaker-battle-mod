@@ -17,7 +17,7 @@
 
 use crate::broadcast;
 use crate::state::{MatchState, Phase, ReadyEffect, StateError, World};
-use axum::extract::State as AxumState;
+use axum::extract::{Query, State as AxumState};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -150,6 +150,18 @@ struct ReportReq {
     built_value: Option<u64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct SpReq {
+    player: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct EventsQuery {
+    /// Cursor: nur Feed-Einträge mit `seq > since` liefern.
+    #[serde(default)]
+    since: Option<u64>,
+}
+
 // ---- Router ----
 
 pub fn router(app: AppState) -> Router {
@@ -161,7 +173,9 @@ pub fn router(app: AppState) -> Router {
         .route("/send", post(send))
         .route("/report", post(report))
         .route("/rematch", post(rematch))
+        .route("/sp", post(sp))
         .route("/state", get(state_get))
+        .route("/events", get(events))
         .route("/health", get(health))
         .fallback_service(tower_http::services::ServeDir::new(web))
         .with_state(app)
@@ -350,6 +364,35 @@ async fn rematch(AxumState(app): AxumState<AppState>) -> ApiResult<Json<Value>> 
         "phase": view.phase,
         "rematches": view.rematches,
     })))
+}
+
+/// POST /sp — SP-Mode starten (Issue #44): P1 vs MIRROR (Server-Spiegel).
+/// Kein zweiter Client nötig; der Server erzeugt die Gegner-Seite.
+async fn sp(AxumState(app): AxumState<AppState>, Json(req): Json<SpReq>) -> ApiResult<Json<Value>> {
+    let effect = app.with_state(|s| s.start_sp(&req.player)).await?;
+    let view = app.state.read().await.view();
+    Ok(Json(json!({
+        "started": effect.started,
+        "phase": view.phase,
+        "round": view.round,
+        "mode": view.mode,
+        "teams": view.teams,
+    })))
+}
+
+/// GET /events — Feed-Cursor für Poll-Bridges (Telegram-Feed u. a.).
+/// `?since=<seq>` liefert nur Einträge mit `seq > since`; `last_seq` ist die
+/// höchste vergebene Sequenz (Cursor-Stand).
+async fn events(
+    AxumState(app): AxumState<AppState>,
+    Query(q): Query<EventsQuery>,
+) -> ApiResult<Json<Value>> {
+    let since = q.since.unwrap_or(0);
+    let (feed_events, last_seq) = {
+        let guard = app.state.read().await;
+        (guard.feed_since(since), guard.last_seq())
+    };
+    Ok(Json(json!({ "events": feed_events, "last_seq": last_seq })))
 }
 
 /// GET /state — kompakter Match-Zustand (wird von UI + Bridges gepollt).
@@ -865,5 +908,111 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(v["ok"], true);
         assert_eq!(v["phase"], "lobby");
+    }
+
+    #[tokio::test]
+    async fn sp_endpoint_starts_sp_match_and_mirrors() {
+        let app = make_app(test_cfg()).await;
+        let (s, v) = call(&app, "POST", "/sp", Some(json!({"player": "momo"}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["started"], true);
+        assert_eq!(v["phase"], "running");
+        assert_eq!(v["round"], 1);
+        assert_eq!(v["mode"], "sp");
+        assert_eq!(v["teams"]["A"]["player"], "momo");
+        assert_eq!(v["teams"]["B"]["player"], "MIRROR");
+
+        // Send von P1 (A) → wird zu MIRROR (B) geroutet UND zurückgespiegelt zu A.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/send",
+            Some(json!({"world": "A", "units": [{"unit": "creeper", "count": 4}], "value": 400})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["queued_for"], "B");
+        let (_, state) = call(&app, "GET", "/state", None).await;
+        assert_eq!(
+            state["teams"]["A"]["pending_sends"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            state["teams"]["B"]["pending_sends"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(state["teams"]["A"]["pending_sends"][0]["from"], "B"); // Spiegel
+
+        // Wellenstart von P1 (A) lockt beide Seiten + spiegelt Built-Value.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "A", "event": "wave_start", "built_value": 8000})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["round"], 2);
+        assert_eq!(v["rounds_done"], 1);
+        let (_, state) = call(&app, "GET", "/state", None).await;
+        assert_eq!(
+            state["reveal"]["incoming"]["A"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(
+            state["reveal"]["incoming"]["B"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(state["reveal"]["built"]["A"], 8000);
+        assert_eq!(state["reveal"]["built"]["B"], 8000);
+
+        // Match-Ende via HQ-HP 0 → match_end im Feed, HQ beider Seiten 0.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "A", "event": "hq_hp", "hp": 0})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["match_over"], true);
+        let (_, state) = call(&app, "GET", "/state", None).await;
+        let feed = state["feed"].as_array().unwrap();
+        assert!(feed.iter().any(|e| e["kind"] == "match_end"));
+        assert_eq!(state["teams"]["A"]["hq_hp"], 0.0);
+        assert_eq!(state["teams"]["B"]["hq_hp"], 0.0);
+    }
+
+    #[tokio::test]
+    async fn events_endpoint_supports_cursor() {
+        let app = make_app(test_cfg()).await;
+        register(&app, "A", "momo").await;
+        register(&app, "B", "matheo").await;
+        call(&app, "POST", "/go", Some(json!({}))).await;
+
+        // Ohne Cursor: alle bislang vergebenen Events.
+        let (s, v) = call(&app, "GET", "/events", None).await;
+        assert_eq!(s, StatusCode::OK);
+        let all = v["events"].as_array().unwrap().clone();
+        assert!(!all.is_empty());
+        let last_seq = v["last_seq"].as_u64().unwrap();
+        assert_eq!(all.last().unwrap()["seq"].as_u64().unwrap(), last_seq);
+
+        // Cursor = höchste Sequenz → keine neuen Events.
+        let (_, v2) = call(&app, "GET", &format!("/events?since={last_seq}"), None).await;
+        assert_eq!(v2["events"].as_array().unwrap().len(), 0);
+        assert_eq!(v2["last_seq"].as_u64().unwrap(), last_seq);
+
+        // Cursor mitten drin → nur spätere Events.
+        let first_seq = all[0]["seq"].as_u64().unwrap();
+        let (_, v3) = call(&app, "GET", &format!("/events?since={first_seq}"), None).await;
+        assert_eq!(v3["events"].as_array().unwrap().len(), all.len() - 1);
+        assert_eq!(v3["last_seq"].as_u64().unwrap(), last_seq);
     }
 }
