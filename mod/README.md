@@ -252,9 +252,10 @@ v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
   v0.5.0 — reines Tooling-Release.
 
 **v0.5.0 — MVP Single-Player Self-Send (Sich-selber-senden, Issue #42):**
-- **Mod-Mode `rb_mode sp|duel`** (Default `sp`): im `sp`-Mode boostet der
-  Send-Pool die **eigene nächste Naturwelle** — der Testmodus zum
-  Alleine-Ausprobieren. `duel` ist ein Stub (1v1-Routing folgt, #25/#27).
+- **Mod-Mode `rb_mode sp|sp_op|duel`** (Default `sp`): im `sp`-Mode boostet der
+  Send-Pool die **eigene nächste Naturwelle**. `sp` = **Solo Normal** (echter
+  Spielfluss), `sp_op` = **Solo OP** (Test/Cheats: hoher Startpool + schneller
+  Rundentakt, #145). `duel` ist ein Stub (1v1-Routing folgt, #25/#27).
 - **`rb_convert` Calcium-first (#40):** `rb_convert <menge>` konvertiert
   **Calcium** (= Spiel-Ressource `carbonium`, Faktor 1) irreversibel in den
   Send-Pool; `rb_convert <resource> <menge>` bleibt abwärtskompatibel
@@ -383,7 +384,7 @@ python3 tools/mod-updater/mod_update.py update
 | `rb_shop` | **Custom-UI-Shop (#25):** öffnet ein Popup mit der Tier-/Preis-Liste (Tier 1/2/3 + Boss) + Konsolen-Liste (Fallback ohne Spieler/API) |
 | `rb_queue` | **Send-Queue-Status (#25):** Anzahl, Gesamtwert und Blueprint-Liste der für die nächste Welle gekauften Einheiten |
 | `rb_boost <stufe|pct>` | **Send-Boost (#39):** kauft einen prozentualen Aufschlag auf die nächste Naturwelle (Stufen `s1`=+25% (200), `s2`=+50% (400), `s3`=+100% (800) oder freie pct-Eingabe à 8 Währung/Prozentpunkt) aus dem Spar-Pool (sofort irreversibel). Beim nächsten natürlichen Wellenstart wird der Boost am `SpawnWavesForDifficultyLevel`-Chokepoint angewendet (difficultyLevel-Delta) und zurückgesetzt — genau eine Welle, nicht kumulativ. Guards: unbekannte Stufe, pct ≤ 0, `maxBoostPct` (200), `maxBoostsPerWave` (4), zu wenig Pool. `duel` = Boost-Flush nur in `sp` |
-| `rb_mode sp\|duel` | Modus-Umschaltung: `sp` = Solo-Test (Default, sendet an die eigene nächste Welle), `duel` = 1v1 (Stub, folgt später) |
+| `rb_mode sp\|sp_op\|duel` | Modus-Umschaltung: `sp` = Solo **Normal** (Default, echter Spielfluss, sendet an die eigene nächste Welle), `sp_op` = Solo **OP** (Test/Cheats: hoher Startpool + schneller Rundentakt), `duel` = 1v1 (Stub, folgt später) |
 | `rb_status` | Zeigt `mode`, `runde`, `pool`, die `queue` und den `boost` (für die nächste Welle) — die Kontrollanzeige des Testmodus |
 | `rb_hq` / `rb_hq leak [dmg]` / `rb_hq entity <id>` / `rb_hq reset` | Win-Condition-Status + Dev-Werkzeuge (#28): HQ-HP zeigen, manuellen Leak anwenden, HQ-Entity zuordnen, Zustand zurücksetzen (Muster `rb_economy reset`). Die HQ-Entity wird seit #144 zusätzlich automatisch versucht zu binden (`HqAutoDetectEntity`, bei `PlayerInitializedEvent`/jedem `rb_wave`); `rb_hq entity <id>` bleibt der manuelle Fallback, falls die Auto-Erkennung nichts findet |
 | `rb_hud` | **Reveal-HUD (#27):** HUD-Standardfelder — Runde, Countdown, eigener Pool, HQ-HP beider Teams + Reveal-Zustand (`reveal=hidden\|revealed`). Gegner-Built/incoming/HQ sind vor Wellenstart `hidden` |

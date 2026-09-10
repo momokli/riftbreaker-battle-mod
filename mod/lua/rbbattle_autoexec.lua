@@ -25,7 +25,7 @@
 --       getrennt gefuehrt (Reveal-Basis fuer #27). Fallback: HourEvent-Tick,
 --       falls die Ressourcen-Event-API fehlt (docs/research/api-deep-dive.md §1).
 --   #42 MVP Single-Player Self-Send (Sich-selber-senden, Testing Mode):
---       Mod-Mode `rb_mode sp|duel` (Default sp). `rb_convert` nutzt NUR
+--       Mod-Mode `rb_mode sp|sp_op|duel` (Default sp). `rb_convert` nutzt NUR
 --       Calcium (= Carbonium, #40) als Send-Waehrung. Self-Boost am Wellenstart
 --       (Function-Wrap dom_mananger:OnEnterSpawn, Hook-Muster #36): der Pool
 --       wird als Zusatz-Spawns an den eigenen Rand-Spawnern (#26) ausgegeben;
@@ -114,7 +114,9 @@
 --   event=convert resource=.. amount=.. value=.. pool=.. irreversible=1   (#24)
 --   event=economy_show / economy_reset                                    (#24)
 --   event=economy_checkpoint round=.. pool=.. status=ok|skip reason=no_db  (#65)
---   event=mode mode=sp|duel status=ok|usage|stub                          (#42)
+--   event=mode mode=sp|sp_op|duel status=ok|usage|stub                  (#42/#145)
+--   event=solo_op status=on|off pool=.. interval=..                        (#145)
+--   event=status mode=sp|sp_op|duel round=.. pool=.. queue=.. op=..      (#42/#25/#145)
 --   event=wave_hook patch status=ok|skip|no_class reason=no_api           (#42)
 --   event=round round=N status=start mode=.. pool=.. queue=..             (#42/#25)
 --   event=commence status=pending|held|ok [hint=place_hq] [reason=no_hq]   (#158)
@@ -122,7 +124,7 @@
 --   event=shop status=listed|popup_opened|popup_skipped|api_missing tiers=.. (#25)
 --   event=queue status=show count=.. value=.. pool=..                     (#25)
 --   event=send_queue round=N status=done|empty|skip spawned=.. value=.. anchor=.. (#25)
---   event=status mode=.. round=.. pool=.. queue=..                         (#42/#25)
+
 --   event=leak damage=.. hp_before=.. hp=..                                (#28)
 --   event=hq_hp hp=.. dead=..                                              (#28)
 --   event=hq_dead status=match_end hp=0                                    (#28)
@@ -251,6 +253,21 @@ RBB.waveIntervalCapS = ActiveWavePreset().intervalS
 -- duel = 1v1-Duell (folgt spaeter, hier nur Stub). Default sp.
 RBB.mode = "sp"
 RBB.round = 0   -- Runden-Zaehler (+1 bei jedem natuerlichen Wellenstart)
+
+-- #145: Zwei Solo-Modi. "Solo Normal" = das bisherige sp-Verhalten (Default,
+-- EXAKT unveraendert). "Solo OP" (rb_mode sp_op) = Test-/Debug-Modus mit klar
+-- anderen Startwerten (hoher Startpool + schneller Rundentakt), damit man
+-- Shop/HUD/Convert/Waves ohne Grind testen kann. Der Cheat-Zustand liegt in
+-- RBB.soloOp; RBB.mode bleibt dabei "sp", damit alle bestehenden Checks
+-- (Self-Send, Boost-Flush, QueueSummary) unangetastet greifen. Umschalten ist
+-- explizit (rb_mode) und stellt die vorherigen Normalwerte exakt wieder her,
+-- damit niemand versehentlich mit manipuliertem Zustand weiterspielt.
+RBB.soloOp = false
+RBB.soloOpSaved = nil   -- { pool, cap } der Normalwerte fuer den Rueckweg zu sp
+RBB.opCfg = {
+    startPool     = 100000, -- Cheat: hoher Startpool statt 0
+    waveIntervalS = 60,     -- Cheat: schneller Rundentakt (statt Preset 480/240)
+}
 
 -- #158 Setup-Phase / Commence-Flow: Spielstart OHNE Auto-HQ. Solange der
 -- Spieler das HQ nicht selbst ueber das Build-Menue platziert hat, haelt der
@@ -1376,7 +1393,7 @@ end
 -- (#26) aus — Tiered Units + Bosse boosten so die NAEchste Welle. Senden
 -- jederzeit bis Wellenstart, unbegrenzt oft (maxQueueCreatures als Deckel).
 --
--- Mod-Mode (`rb_mode sp|duel`, Default sp): im sp-Mode boostet die Queue die
+-- Mod-Mode (`rb_mode sp|sp_op|duel`, Default sp): im sp-Mode boostet die Queue die
 -- EIGENE naechste Naturwelle (Sich-selber-senden). Im duel-Mode (Stub)
 -- passiert noch nichts — das 1v1-Routing folgt spaeter (#27).
 --
@@ -1879,22 +1896,62 @@ end)
 
 -- ---------------------------------------------------------------------------
 -- Commands: rb_buy_wave (Kauf-Hook), rb_shop (Custom-UI), rb_queue (Status),
--- rb_mode (sp|duel) + rb_status (Runde, Pool, Queue).
+-- rb_mode (sp|sp_op|duel) + rb_status (Runde, Pool, Queue).
 -- ---------------------------------------------------------------------------
+local function ModeLabel()
+    if RBB.mode == "duel" then return "duel" end
+    if RBB.soloOp then return "sp_op" end
+    return "sp"
+end
+
+-- #145: Solo-OP-Cheats an/aus. Beim Einschalten die vorherigen Normalwerte
+-- (Pool + Rundentakt) merken und den Cheat-Zustand herstellen; beim
+-- Ausschalten exakt zurueck (Setup-Phase bleibt sauber). Idempotent.
+local function ApplySoloOp(on)
+    if on and not RBB.soloOp then
+        RBB.soloOpSaved = { pool = RBB.economy.pool, cap = RBB.waveIntervalCapS }
+        RBB.soloOp = true
+        RBB.economy.pool = RBB.opCfg.startPool
+        RBB.waveIntervalCapS = RBB.opCfg.waveIntervalS
+        Log("event=solo_op status=on pool=%d interval=%d",
+            RBB.economy.pool, RBB.waveIntervalCapS)
+    elseif (not on) and RBB.soloOp then
+        if RBB.soloOpSaved ~= nil then
+            RBB.economy.pool = RBB.soloOpSaved.pool
+            RBB.waveIntervalCapS = RBB.soloOpSaved.cap
+        else
+            RBB.economy.pool = 0
+            RBB.waveIntervalCapS = ActiveWavePreset().intervalS
+        end
+        RBB.soloOpSaved = nil
+        RBB.soloOp = false
+        Log("event=solo_op status=off pool=%d interval=%d",
+            RBB.economy.pool, RBB.waveIntervalCapS)
+    end
+end
+
 local function CmdMode(args)
     local m = nil
     if args ~= nil and #args >= 1 then m = tostring(args[1]):lower() end
     if m == "sp" then
+        ApplySoloOp(false)
         RBB.mode = "sp"
         Log("event=mode mode=sp status=ok")
-        WriteConsole("rb_mode: sp (Single-Player Self-Send)")
+        WriteConsole("rb_mode: sp (Solo Normal — regulärer Ablauf)")
+    elseif m == "sp_op" or m == "sp-op" then
+        RBB.mode = "sp"
+        ApplySoloOp(true)
+        Log("event=mode mode=sp_op status=ok")
+        WriteConsole("rb_mode: sp_op (Solo OP — Test/Cheats: Pool %d, Takt %ds)",
+            RBB.opCfg.startPool, RBB.opCfg.waveIntervalS)
     elseif m == "duel" then
+        ApplySoloOp(false)
         RBB.mode = "duel"
         Log("event=mode mode=duel status=stub")
         WriteConsole("rb_mode: duel (1v1) — noch nicht implementiert (MVP = sp). Weiter als sp testen.")
     else
-        Log("event=mode status=usage mode=%s", RBB.mode)
-        WriteConsole("rb_mode: Aufruf rb_mode sp|duel (aktuell: %s)", RBB.mode)
+        Log("event=mode status=usage mode=%s", ModeLabel())
+        WriteConsole("rb_mode: Aufruf rb_mode sp|sp_op|duel (aktuell: %s)", ModeLabel())
     end
 end
 
@@ -1902,9 +1959,9 @@ local function CmdStatus(args)
     local queue = QueueSummary()
     local boost = BoostSummary()
     WriteConsole("rb_status: mode=%s runde=%d pool=%d queue=%s boost=%s",
-        RBB.mode, RBB.round, RBB.economy.pool, queue, boost)
-    Log("event=status mode=%s round=%d pool=%d queue=%s boost=%s",
-        RBB.mode, RBB.round, RBB.economy.pool, queue, boost)
+        ModeLabel(), RBB.round, RBB.economy.pool, queue, boost)
+    Log("event=status mode=%s round=%d pool=%d queue=%s boost=%s op=%s",
+        ModeLabel(), RBB.round, RBB.economy.pool, queue, boost, tostring(RBB.soloOp))
 end
 
 pcall(function()
