@@ -127,6 +127,9 @@
 --   event=hq_hp hp=.. dead=..                                              (#28)
 --   event=hq_dead status=match_end hp=0                                    (#28)
 --   event=match_end reason=hq_destroyed winner=opponent                    (#28)
+--   (hq_dead) -> in-game Annonce "GAME OVER — HQ destroyed"; Solo-Feed     (#157)
+--   klinkt auf event=hq_dead ein: Telegram Topic 312 + genau EIN            (#157)
+--   docker restart pro Match-Ende (Cooldown-Guard, kein Flapping).          (#157)
 --   event=hq_respawn status=unmatched entity=..                            (#28)
 --   event=hq_zone status=.. entity=.. hp=.. dead=..                        (#28)
 --   event=hq_status / hq_reset / hq_entity                                 (#28)
@@ -2112,14 +2115,18 @@ local function HqReportHp()
 end
 
 -- HQ-Tod: Match-Ende melden (Sieg = Gegenseite; der Server setzt winner).
--- Idempotent.
+-- #157: in-game End-Announce + Feed-Signal. Der Solo-Feed (tools/solo-feed)
+-- klinkt auf `event=hq_dead` ein -> Telegram Topic 312 + genau EIN docker
+-- restart pro Match-Ende (Cooldown-Guard liegt im Feed; der Mod hat keinen
+-- eigenen I/O-Kanal und kann den Prozess nicht selbst neu starten).
+-- Idempotent: der Guard hier (RBB.hq.dead) feuert das Ende nur genau einmal.
 local function HqOnDestroyed()
     if RBB.hq.dead then return end
     RBB.hq.dead = true
     RBB.hq.hp = 0
     Log("event=hq_dead status=match_end hp=0")
     Log("event=match_end reason=hq_destroyed winner=opponent")
-    WriteConsole("HQ zerstoert — Match beendet (Sieg Gegenseite)")
+    WriteConsole("GAME OVER — HQ destroyed")
 end
 
 -- Leak: eine Kreatur hat die HQ-Zone erreicht -> HQ-HP sinkt. Reine Logik

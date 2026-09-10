@@ -39,6 +39,9 @@ jobs:
       - name: Unit-Test Deploy-Gate (Issue #118)
         working-directory: tools/deploy-gate
         run: python3 -m unittest test_deploy_gate -v
+      - name: Unit-Test Solo-Feed (Issue #157)
+        working-directory: tools/solo-feed
+        run: python3 -m unittest test_feed -v
       - name: Lua Static Tests (fengari + luaparse, Issue #28)
         working-directory: tests/lua-static
         run: npm ci && npm test
