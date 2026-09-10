@@ -1,12 +1,25 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.17.0 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.18.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 
 > **Multiplayer:** Beide Spieler müssen **exakt dieselben Mods** installiert
 > haben, sonst lehnt der Client die Lobby mit **„different set of mods“** ab.
 > Kurzanleitung: [`docs/PLAYER_SETUP.md`](../docs/PLAYER_SETUP.md).
+
+**v0.18.0 — Relay liest rbbridge-Antwort (`exec_result`) + Deployment (Issues #73, #45):**
+- `bausteine/07-relay/relay.py`: `dispatch_exec` liest nach dem Schreiben auf derselben
+  Verbindung die `exec_result`-Antwort der rbbridge und loggt
+  `dispatch result cmd_id=… status=ok|error|timeout` (Antwort-Timeout = kein Fehler,
+  kein Hänger im Dispatch-Thread). `docs/relay-pipe-contract.md` + `trainer/protocol.md`
+  um die Antwortrichtung ergänzt.
+- Neu: `deploy/` — Ansible-Playbook für planet (systemd + docker: tournament-server,
+  vanilla-/riftbreaker-server, `mods-zip`, `website`, `probe-timer`); Vault-Platzhalter,
+  **kein** automatischer Deploy.
+- CI/CD (#78/#80) + Repo-Hygiene (#85): Issue-Ref-Pflicht im PR-Body, Follow-up-Issue-System,
+  Repo-`AGENTS.md`; Pipeline-Artefakt-Dateien aus dem Repo-Root entfernt.
+- Kein Balancing (#33/#39/#40/#41) berührt.
 
 **v0.17.0 — Always-latest Downloads & Mod-Parität + CI/CD-Härtung (Issues #31, #75):**
 - Landing (`docs/index.html`): alle Download-Links auf den permanenten Redirect
@@ -270,7 +283,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.17.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
+[RBBATTLE] event=mod_load version=0.18.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100
@@ -345,7 +358,7 @@ HQ-Entity; negative Fälle: andere Entity / ohne Entity-Zuordnung; Idempotenz
 nach HQ-Tod). v0.12.0: 1 Szenario / 23 Checks (Send-Queue & Shop-HUD:
 rb_shop Tier-Liste + Popup; rb_buy_wave Guards usage/unbekannt/insufficient;
 Farm→Convert→Kauf brabit/boss→Queue; rb_queue-Status; Wellenstart → Flush →
-send_queue done; Queue danach leer; erneuter Kauf + 2. Welle). v0.17.0:
+send_queue done; Queue danach leer; erneuter Kauf + 2. Welle). v0.18.0:
 Reveal-HUD (#27) 1 Szenario / 14 Checks (rb_hud vor Wellenstart reveal=hidden;
 Farm→Convert→Kauf → built_own=3000; Wellenstart → event=reveal mit
 send_own=brabit:2; rb_reveal → built_opp/incoming/hq_opp; rb_hud beide Teams;
