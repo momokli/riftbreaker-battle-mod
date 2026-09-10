@@ -6,6 +6,11 @@
 --       Anker der Send-Kreaturen = spawner-Entities der DOM-Gruppen
 --       spawn_enemy_border_{south,north,east,west} statt Spieler-Mech.
 --       DOM-Naturwellen bleiben unangetastet (Basis-Druck).
+--   #12 rb_wave OHNE Spieler: Fehlen die Kartenrand-Spawner, faellt der
+--       Anker auf die Missions-Spawnpunkte zurueck (FindService:
+--       FindPlayerSpawnPoints + MapGenerator:GetInitialSpawnPoint) — beides
+--       serverseitig verfuegbar, sobald die Welt gebootet ist. Erst wenn auch
+--       die fehlen, wird der Spieler-Mech als letzter Fallback genutzt.
 --   #23 Runden-Takt: DOM-Wellen-Vorbereitung auf max. 300 s gedeckelt
 --       (prepareSpawnTime 420 -> 300, 5-Min-Wellen) + Setup-Log
 --       (difficulty/map size/seed werden beim Server-Start gesetzt, s.
@@ -49,7 +54,7 @@
 --
 -- Log-Zeilen (externes Parsing, Praefix [RBBATTLE]):
 --   event=mod_load version=0.6.0 status=ok mode=sp econ_source=.. econ_pool=.. ...
---   event=wave level=N status=start|done spawned=.. skipped=.. anchor=border|fallback_mech
+--   event=wave level=N status=start|done spawned=.. skipped=.. anchor=border|mission|mech
 --   event=spawn ok|failed|skip ... anchor=<gruppe>/<id>            (je Kreatur)
 --   event=wave_spawners count=N                                    (Pool-Groesse)
 --   event=dom_timer patch status=ok|skip|no_class cap=300          (#23)
@@ -126,8 +131,9 @@ RBB.borderSpawnGroups = {
     "spawn_enemy_border_west",
 }
 
--- Fallback (v0.2.0-Verhalten), falls die Welt keine Rand-Spawner hat:
--- Ring um den Spieler-Mech. Abstaende wie v0.2.0.
+-- Fallback (v0.2.0-Verhalten), falls die Welt weder Rand-Spawner noch
+-- Missions-Spawnpunkte hat: Ring um den Spieler-Mech. Abstaende wie v0.2.0.
+-- Der Ring wird auch fuer Missions-Spawnpunkte (#12) genutzt.
 RBB.spawnRingMin = 8.0
 RBB.spawnRingMax = 20.0
 
@@ -214,6 +220,41 @@ local function GetBorderSpawners()
     return found
 end
 
+-- ---------------------------------------------------------------------------
+-- #12: Missions-Spawnpunkte als Anker OHNE Spieler (Fallback, wenn die Welt
+-- keine Kartenrand-Spawner hat). mission_base:SelectPlayerSpawnPoint nutzt
+-- FindService:FindPlayerSpawnPoints() + MapGenerator:GetInitialSpawnPoint();
+-- beide sind serverseitig verfuegbar, sobald die Welt gebootet ist — kein
+-- Client/Player noetig (docs/ASSUMPTIONS.md Fakten 2/3).
+-- ---------------------------------------------------------------------------
+
+-- Liefert die Liste der Missions-/Player-Spawnpunkte (frisch pro Aufruf;
+-- leer = keine Spawnpunkte auffindbar -> Mech-Fallback).
+local function GetMissionSpawnPoints()
+    local found = {}
+    if type(FindService) == "table" then
+        local ok, ents = pcall(function()
+            return FindService:FindPlayerSpawnPoints()
+        end)
+        if ok and type(ents) == "table" then
+            for _, ent in ipairs(ents) do
+                if ent ~= nil and ent ~= INVALID_ID then
+                    found[#found + 1] = ent
+                end
+            end
+        end
+    end
+    if #found == 0
+        and type(MapGenerator) == "table"
+        and type(MapGenerator.GetInitialSpawnPoint) == "function" then
+        local ok, sp = pcall(MapGenerator.GetInitialSpawnPoint, MapGenerator)
+        if ok and sp ~= nil and sp ~= INVALID_ID then
+            found[#found + 1] = sp
+        end
+    end
+    return found
+end
+
 local function GetEntityNameOrId(ent)
     if type(EntityService) ~= "table" then return tostring(ent) end
     local ok, name = pcall(function()
@@ -245,6 +286,47 @@ local function SpawnCreatureAtBorderSpawner(blueprint, spawners)
     local y = GetTerrainHeight(x, z)
     if y == nil then
         y = pos.y -- Fallback: Anchor-Hoehe (Nicht-Spielbar-Streifen)
+    end
+
+    local ok, ent = pcall(function()
+        return EntityService:SpawnEntity(blueprint, x, y, z, "")
+    end)
+    if not ok then
+        Log("event=spawn api_error blueprint=%s anchor=%s err=%s",
+            blueprint, GetEntityNameOrId(anchor), tostring(ent))
+        return false
+    end
+    if ent == nil or ent == INVALID_ID then
+        Log("event=spawn failed blueprint=%s anchor=%s",
+            blueprint, GetEntityNameOrId(anchor))
+        return false
+    end
+    Log("event=spawn ok blueprint=%s entity=%s anchor=%s",
+        blueprint, tostring(ent), GetEntityNameOrId(anchor))
+    return true
+end
+
+-- #12: Spawnt EINE Kreatur im Ring um einen zufaelligen Missions-Spawnpunkt
+-- (Fallback-Anker OHNE Spieler). Liefert true/false (+ Log) - nie Fehler.
+local function SpawnCreatureAtMissionSpawnPoint(blueprint, points)
+    local anchor = points[math.random(#points)]
+    local posOk, pos = pcall(function()
+        return EntityService:GetPosition(anchor)
+    end)
+    if not posOk or pos == nil then
+        Log("event=spawn failed blueprint=%s anchor=%s reason=no_position",
+            blueprint, GetEntityNameOrId(anchor))
+        return false
+    end
+
+    local angle = math.random() * 2.0 * math.pi
+    local radius = RBB.spawnRingMin + math.random() * (RBB.spawnRingMax - RBB.spawnRingMin)
+    local x = pos.x + math.cos(angle) * radius
+    local z = pos.z + math.sin(angle) * radius
+
+    local y = GetTerrainHeight(x, z)
+    if y == nil then
+        y = pos.y -- Fallback: Spawnpunkt-Hoehe
     end
 
     local ok, ent = pcall(function()
@@ -315,19 +397,32 @@ local function SpawnWave(level)
     local spawned = 0
     local skipped = 0
 
-    -- #26: Kartenrand-Spawner ermitteln (Bevorzugt; braucht KEINEN Spieler,
-    -- funktioniert damit auch auf leeren/unpausierten Servern, vgl. Issue #12).
+    -- Anker-Aufloesung (alle Stufen OHNE Spieler moeglich, vgl. Issue #12):
+    --   1) border  = natuerliche Kartenrand-Spawner (#26)
+    --   2) mission = Missions-Spawnpunkte (#12, serverseitig verfuegbar)
+    --   3) mech    = Spieler-Mech-Ring (letzter Fallback, braucht Spieler)
     local spawners = GetBorderSpawners()
     local anchorMode = "border"
+    local missionPoints = nil
+    local anchorCount = #spawners
     if #spawners == 0 then
-        anchorMode = "fallback_mech"
-        Log("event=wave level=%d status=no_border_spawners warn=fallback_mech", level)
+        missionPoints = GetMissionSpawnPoints()
+        anchorCount = #missionPoints
+        if #missionPoints > 0 then
+            anchorMode = "mission"
+            Log("event=wave level=%d status=no_border_spawners anchor=mission_spawn_point count=%d",
+                level, #missionPoints)
+        else
+            anchorMode = "mech"
+            anchorCount = 1
+            Log("event=wave level=%d status=no_border_spawners warn=fallback_mech", level)
+        end
     end
 
-    -- Fallback-Pfad: Spieler-Mech + Position (nur bei Bedarf laden).
+    -- Mech-Fallback: Spieler-Mech + Position (nur bei Bedarf laden).
     local mech = nil
     local playerPos = nil
-    if anchorMode == "fallback_mech" then
+    if anchorMode == "mech" then
         local playerOk, m = pcall(function()
             return PlayerService:GetPlayerControlledEnt(0)
         end)
@@ -367,6 +462,8 @@ local function SpawnWave(level)
                 local okSpawn = false
                 if anchorMode == "border" then
                     okSpawn = SpawnCreatureAtBorderSpawner(unitDef.blueprint, spawners)
+                elseif anchorMode == "mission" then
+                    okSpawn = SpawnCreatureAtMissionSpawnPoint(unitDef.blueprint, missionPoints)
                 else
                     okSpawn = SpawnCreatureAtRandomOffset(mech, unitDef.blueprint, playerPos)
                 end
@@ -380,8 +477,8 @@ local function SpawnWave(level)
         end
     end
 
-    Log("event=wave level=%d status=done spawned=%d skipped=%d anchor=%s spawners=%d",
-        level, spawned, skipped, anchorMode, #spawners)
+    Log("event=wave level=%d status=done spawned=%d skipped=%d anchor=%s anchors=%d",
+        level, spawned, skipped, anchorMode, anchorCount)
     WriteConsole("rb_wave level %d: %d Kreaturen gespawnt (%d uebersprungen), Anker: %s",
                  level, spawned, skipped, anchorMode)
     return spawned > 0
