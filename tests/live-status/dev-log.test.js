@@ -16,6 +16,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
+const vm = require('node:vm');
 
 const ROOT = path.join(__dirname, '..', '..');
 const MODULE_PATH = path.join(ROOT, 'site', 'dev-log.js');
@@ -99,6 +100,66 @@ test('site/solo.html verdrahtet das Dev-Log-Widget', () => {
   assert.ok(html.includes('id="devlogWho"'), '"wer spielt"-Zeile vorhanden');
   assert.ok(html.includes('script src="dev-log.js"'), 'Modul-Script eingebunden');
   assert.ok(html.includes('RBDevLog.createLogWidget'), 'Widget-Init ruft createLogWidget auf');
+});
+
+// ---------------------------------------------------------------------------
+// 2b) Statisch: Inline-Skripte aller Seiten sind syntaktisch kompilierbar
+// ---------------------------------------------------------------------------
+// Regression zu #114: In site/solo.html war der Dev-Log-<script>-Block nie
+// geschlossen (fehlendes `})();` + `</script>`), direkt gefolgt von
+// `<script src="solo-connect.js"></script>`. Der Browser parste dadurch das
+// solo-connect-Script-Tag als JS-Text → SyntaxError → das Dev-Log-Widget lief
+// nie. Der reine String-Check oben hat das nicht erkannt, weil er die Datei
+// nicht als JS auswertet.
+
+const SITE_DIR = path.join(ROOT, 'site');
+
+function inlineScriptBlocks(html) {
+  const blocks = [];
+  const re = /<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) blocks.push(m[1]);
+  return blocks;
+}
+
+test('site/*.html: <script>-Tags sind balanciert (jedes <script> wird geschlossen)', () => {
+  for (const file of fs.readdirSync(SITE_DIR).filter((f) => f.endsWith('.html'))) {
+    const html = fs.readFileSync(path.join(SITE_DIR, file), 'utf8');
+    const open = (html.match(/<script\b/gi) || []).length;
+    const close = (html.match(/<\/script>/gi) || []).length;
+    assert.strictEqual(open, close, `${file}: ${open} <script> vs ${close} </script>`);
+  }
+});
+
+test('site/*.html: jedes Inline-Script kompiliert (kein unterminierter Block)', () => {
+  for (const file of fs.readdirSync(SITE_DIR).filter((f) => f.endsWith('.html'))) {
+    const html = fs.readFileSync(path.join(SITE_DIR, file), 'utf8');
+    const blocks = inlineScriptBlocks(html);
+    blocks.forEach((code, i) => {
+      assert.doesNotMatch(
+        code,
+        /<script\b/i,
+        `${file}: Inline-Block ${i + 1} enthält ein verschachteltes/rohes <script-Tag (unterminierter Block)`,
+      );
+      assert.doesNotThrow(
+        () => new vm.Script(code, { filename: `${file}#inline-${i + 1}` }),
+        `${file}: Inline-Block ${i + 1} hat einen Syntaxfehler`,
+      );
+    });
+  }
+});
+
+test('site/solo.html: Dev-Log-Wiring-Block ist geschlossen (solo-connect folgt als eigenes Script)', () => {
+  const html = fs.readFileSync(SOLO_HTML, 'utf8');
+  // Der Dev-Log-Block muss VOR dem solo-connect-Script enden.
+  const dl = html.indexOf('RBDevLog.createLogWidget');
+  const dlEnd = html.indexOf('</script>', dl);
+  const connectTag = html.indexOf('<script src="solo-connect.js"></script>');
+  assert.ok(dl > -1, 'Dev-Log-Init vorhanden');
+  assert.ok(dlEnd > -1 && dlEnd < connectTag, 'Dev-Log-Init liegt in einem geschlossenen <script>-Block');
+  const block = html.slice(html.lastIndexOf('<script>', dl) + '<script>'.length, dlEnd);
+  assert.ok(/\}\)\(\);\s*$/.test(block), 'Dev-Log-Block wird mit })(); geschlossen');
+  assert.ok(block.includes('.start();'), 'Widget wird gestartet');
 });
 
 // ---------------------------------------------------------------------------
