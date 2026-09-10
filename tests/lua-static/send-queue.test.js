@@ -108,8 +108,8 @@ local function log_has(sub)
     return false
 end
 
--- 1. Mod geladen, Version 0.12.0, Shop-/Queue-Commands + Wellenstart-Hook aktiv.
-check(log_has("event=mod_load version=0.12.0"), "mod_load version=0.12.0")
+-- 1. Mod geladen, Version 0.13.0, Shop-/Queue-Commands + Wellenstart-Hook aktiv.
+check(log_has("event=mod_load version=0.13.0"), "mod_load version=0.13.0")
 check(_G.__commands["rb_buy_wave"] ~= nil, "rb_buy_wave registriert")
 check(_G.__commands["rb_shop"] ~= nil, "rb_shop registriert")
 check(_G.__commands["rb_queue"] ~= nil, "rb_queue registriert")
