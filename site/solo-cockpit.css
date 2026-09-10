@@ -1,0 +1,222 @@
+/*!
+ * RIFT BATTLE — Solo „cockpit console" Match-Page (Issue #173, ref #159)
+ * =====================================================================
+ * Styling gemäß Stitch-Design site/designs/stitch-solo-cockpit-console.zip:
+ *   Canvas #05070A · Panels #0A1018 · 1px Border #16222F · Akzent Cyan #3FD0D4
+ *   Monospace · CRT-Scanlines · harte 90°-Kanten (keine Radien/Bubbles).
+ *
+ * Die Design-Tokens sind bereits in :root von solo.html definiert
+ * (--bg, --panel, --line, --acc, --ok, --p2, --warn, --mono) und werden hier
+ * wiederverwendet. Alle Klassen sind mit dem Präfix .ck- namespaced, damit
+ * bestehende Styles der Landing-Sektion nicht kollidieren.
+ */
+
+/* ---------- Top-Bar: Logo · Titel · LIVE-Pill · Padlock ---------- */
+.brand{display:inline-flex;align-items:center;gap:9px;border:0}
+.ck-logo{
+  width:26px;height:28px;flex:none;display:inline-flex;align-items:center;justify-content:center;
+  background:rgba(63,208,212,.08);color:var(--acc);
+  clip-path:polygon(50% 0,100% 25%,100% 75%,50% 100%,0 75%,0 25%);
+  box-shadow:inset 0 0 0 1px rgba(63,208,212,.5);font-size:13px;line-height:1;
+}
+.ck-brand-title{letter-spacing:.08em}
+.ck-toppills{display:flex;align-items:center;gap:10px;font-size:11px;white-space:nowrap}
+.ck-live{
+  display:inline-flex;align-items:center;gap:6px;padding:3px 9px;
+  border:1px solid rgba(70,217,162,.45);background:rgba(70,217,162,.06);
+  color:var(--ok);letter-spacing:.14em;font-weight:700;
+}
+.ck-live-dot{width:7px;height:7px;background:var(--ok);flex:none}
+.ck-live.is-idle{color:var(--dim);border-color:var(--line2);background:transparent}
+.ck-live.is-idle .ck-live-dot{background:var(--dim);animation:none}
+.ck-live.is-live .ck-live-dot{animation:pulseOk 2.4s ease-in-out infinite}
+.ck-pill{padding:3px 9px;border:1px solid var(--line2);color:var(--dim);background:var(--panel)}
+.ck-lock{
+  display:inline-flex;align-items:center;gap:6px;padding:3px 9px;
+  border:1px solid rgba(63,208,212,.35);color:var(--acc);background:rgba(63,208,212,.04);
+}
+.ck-lock svg{width:12px;height:12px;flex:none}
+@media(max-width:900px){.ck-toppills .ck-optional{display:none}}
+
+/* ---------- Match-Cockpit-Sektion ---------- */
+.ck{
+  border-bottom:1px solid var(--line);
+  background:
+    radial-gradient(700px 260px at 12% -30%,rgba(63,208,212,.06),transparent 65%),
+    var(--bg);
+  padding:14px 22px 18px;
+}
+.ck-strip{
+  max-width:1060px;margin:0 auto;padding:12px 14px;display:flex;flex-wrap:wrap;
+  align-items:stretch;gap:14px;position:relative;
+  background:var(--panel);border:1px solid var(--line);
+}
+.ck-strip::before,.ck-strip::after{
+  content:"";position:absolute;width:8px;height:8px;pointer-events:none;
+  border-top:2px solid var(--acc);
+}
+.ck-strip::before{top:-1px;left:-1px;border-left:2px solid var(--acc)}
+.ck-strip::after{bottom:-1px;right:-1px;border-right:2px solid var(--acc)}
+
+/* Phasen-Badges SETUP / WAVES / GAME OVER */
+.ck-phasebar{display:flex;align-items:center;gap:2px;border:1px solid var(--line);background:var(--bg);padding:2px}
+.ck-phase-badge{
+  font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);
+  padding:4px 8px;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;
+}
+.ck-phase-badge .ck-dot{width:6px;height:6px;background:var(--acc);flex:none}
+.ck-phase-badge.is-active{
+  color:var(--acc);border:1px solid var(--acc);background:rgba(63,208,212,.1);
+  font-weight:700;box-shadow:inset 0 0 0 1px rgba(63,208,212,.25);
+}
+.ck-phase-badge.is-active .ck-dot{animation:pulseOk 2.4s ease-in-out infinite}
+.ck-phase-badge[data-phase="gameover"].is-active{color:var(--warn);border-color:var(--warn);background:rgba(255,107,94,.1)}
+.ck-phase-badge[data-phase="gameover"].is-active .ck-dot{background:var(--warn)}
+
+/* Wave-Counter */
+.ck-wave{display:flex;flex-direction:column;justify-content:center;gap:2px;padding:0 6px}
+.ck-wave-num{color:var(--acc);font-size:22px;font-weight:800;letter-spacing:.1em;line-height:1}
+.ck-wave-sub{color:var(--dim);font-size:10px;letter-spacing:.12em;text-transform:uppercase}
+
+/* HQ-Integritätsmeter */
+.ck-hq{flex:1;min-width:230px;display:flex;flex-direction:column;gap:4px;justify-content:center;
+  border:1px solid var(--line);background:var(--bg);padding:7px 10px}
+.ck-hq-head{display:flex;align-items:baseline;justify-content:space-between;font-size:10px;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+.ck-hq-head b{color:var(--ok);font-size:15px;font-weight:800}
+.ck-hq.is-critical .ck-hq-head b{color:var(--warn)}
+.ck-hqbar{display:flex;gap:2px;height:12px;background:var(--bg2);border:1px solid var(--line);padding:1px}
+.ck-hqbar .seg{flex:1;background:var(--line2)}
+.ck-hqbar .seg.on{background:var(--ok)}
+.ck-hq.is-critical .ck-hqbar .seg.on{background:var(--warn)}
+.ck-hq-sub{display:flex;justify-content:space-between;font-size:10px;letter-spacing:.1em;color:var(--dim)}
+
+/* Player-Chips P1/P2 */
+.ck-chips{display:flex;gap:8px;flex-wrap:wrap;min-width:250px}
+.ck-chip{flex:1;min-width:120px;border:1px solid var(--line);background:var(--bg);padding:6px 9px}
+.ck-chip--p1{border-color:rgba(70,217,162,.4)}
+.ck-chip--p2{border-color:rgba(227,179,92,.4)}
+.ck-chip-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;
+  font-size:10px;letter-spacing:.08em;margin-bottom:3px}
+.ck-chip--p1 .ck-chip-head span:first-child{color:var(--p1);font-weight:700}
+.ck-chip--p2 .ck-chip-head span:first-child{color:var(--p2);font-weight:700}
+.ck-chip-body{font-size:10px;letter-spacing:.06em;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* Announce-Banner COMMENCE / GAME OVER */
+.ck-announce{
+  margin:10px auto 0;max-width:1060px;display:flex;align-items:center;gap:12px;
+  border:1px solid var(--line);border-left:3px solid var(--dim);background:var(--panel);
+  padding:9px 14px;font-size:12.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--bright);
+}
+.ck-announce-icon{
+  width:22px;height:22px;flex:none;display:inline-flex;align-items:center;justify-content:center;
+  border:1px solid var(--dim);color:var(--dim);font-weight:800;
+}
+.ck-announce[data-kind="commence"]{border-left-color:var(--acc);color:var(--acc);background:rgba(63,208,212,.07)}
+.ck-announce[data-kind="commence"] .ck-announce-icon{border-color:var(--acc);color:var(--acc)}
+.ck-announce[data-kind="gameover"]{border-left-color:var(--warn);color:var(--warn);background:rgba(255,107,94,.07)}
+.ck-announce[data-kind="gameover"] .ck-announce-icon{border-color:var(--warn);color:var(--warn)}
+
+/* ---------- Dev-Log-Konsole: Timestamps + Event-Tags ---------- */
+.ck-console-hint{color:var(--dim);font-size:10.5px;letter-spacing:.1em;white-space:nowrap}
+.ck-console-actions{display:flex;gap:6px;margin-left:auto}
+.ck-console-actions button{
+  background:var(--panel2);border:1px solid var(--line2);color:var(--dim);
+  font:11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;padding:4px 8px;cursor:pointer;
+}
+.ck-console-actions button:hover{color:var(--acc);border-color:var(--acc)}
+.ck-console-actions button.is-on{color:var(--acc);border-color:var(--acc)}
+.ck-logline{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.ck-logline .ck-ts{color:var(--dim);font-size:11px;flex:none;opacity:.8}
+.ck-logline .ck-tag{
+  flex:none;font-size:10px;letter-spacing:.06em;padding:1px 5px;
+  border:1px solid currentColor;opacity:.85;
+}
+.ck-logline .ck-msg{flex:1;min-width:0}
+.ck-logline.dl-join .ck-tag{color:var(--acc)}
+.ck-logline.dl-send .ck-tag{color:var(--p1)}
+.ck-logline.dl-wave .ck-tag{color:var(--ok)}
+.ck-logline.dl-hq .ck-tag{color:var(--p2)}
+.ck-logline.dl-hl .ck-tag{color:var(--acc)}
+.ck-logline.dl-sys .ck-tag{color:var(--dim)}
+
+/* ---------- God-Commands-Panel (Operator-Override) ---------- */
+.ck-god{
+  max-width:1060px;margin:26px auto 0;padding:12px 14px;position:relative;
+  background:var(--panel);border:1px solid var(--line);
+}
+.ck-god-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  border-bottom:1px solid var(--line);padding-bottom:9px;margin-bottom:11px}
+.ck-god-title{color:var(--acc);font-size:13.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+.ck-god-badge{font-size:10px;letter-spacing:.12em;color:var(--acc);
+  border:1px solid rgba(63,208,212,.5);background:rgba(63,208,212,.08);padding:2px 7px}
+.ck-god-status{margin-left:auto;font-size:10.5px;letter-spacing:.1em;color:var(--dim)}
+.ck-god-status.is-ok{color:var(--ok)}
+.ck-god-status.is-err{color:var(--warn)}
+.ck-god-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px}
+.ck-cmd{
+  display:flex;flex-direction:column;gap:4px;text-align:left;cursor:pointer;
+  background:#0a1018;border:1px solid var(--line2);color:var(--txt);
+  font:inherit;padding:11px 12px;
+  clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,0 100%);
+  transition:none;
+}
+.ck-cmd .ck-cmd-label{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.ck-cmd .ck-cmd-sub{font-size:10px;letter-spacing:.08em;color:var(--dim)}
+.ck-cmd:hover{background:var(--panel2)}
+.ck-cmd--primary{border-color:var(--acc);color:var(--acc)}
+.ck-cmd--primary:hover{background:var(--acc);color:#03181b}
+.ck-cmd--primary:hover .ck-cmd-sub{color:rgba(3,24,27,.75)}
+.ck-cmd--neutral:hover{border-color:var(--acc);color:var(--acc)}
+.ck-cmd--warn{border-color:var(--p2);color:var(--p2)}
+.ck-cmd--warn:hover{background:rgba(227,179,92,.14)}
+.ck-cmd--hazard{border-color:var(--warn);color:var(--warn)}
+.ck-cmd--hazard:hover{
+  background:
+    repeating-linear-gradient(45deg,rgba(255,107,94,.15),rgba(255,107,94,.15) 6px,transparent 6px,transparent 12px),
+    #0a1018;
+}
+.ck-cmd:disabled{opacity:.45;cursor:not-allowed;filter:none}
+
+/* ---------- Passwort-Gate: RESTRICTED — OPERATOR ACCESS ---------- */
+.ck-gate{
+  position:fixed;inset:0;z-index:90;display:flex;align-items:center;justify-content:center;
+  background:rgba(5,7,10,.82);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);
+}
+.ck-gate[hidden]{display:none}
+.ck-gate-box{
+  width:min(420px,92vw);background:var(--panel);border:1px solid var(--acc);
+  padding:18px;display:flex;flex-direction:column;gap:10px;
+  box-shadow:inset 0 0 0 1px rgba(63,208,212,.25),0 0 24px rgba(63,208,212,.15);
+}
+.ck-gate-title{color:var(--acc);font-size:13px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}
+.ck-gate-sub{color:var(--dim);font-size:11px;margin:0;line-height:1.55}
+.ck-gate-input{
+  background:var(--bg2);border:1px solid var(--line2);color:var(--bright);
+  font:13px/1.4 var(--mono);padding:9px 11px;outline:none;
+}
+.ck-gate-input:focus{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+.ck-gate-actions{display:flex;gap:8px}
+.ck-gate-err{color:var(--warn);font-size:11px;min-height:1em;letter-spacing:.04em}
+
+/* ---------- Footer: Build-Version · Server ---------- */
+.ck-footstrip{
+  display:flex;flex-wrap:wrap;gap:8px 22px;align-items:center;
+  border-top:1px solid var(--line);margin-top:14px;padding-top:12px;
+  font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);
+}
+.ck-footstrip b{color:var(--acc);font-weight:700}
+.ck-footstrip .ck-foot-right{margin-left:auto;display:flex;gap:14px}
+.ck-footstrip .ck-foot-dot{width:7px;height:7px;background:var(--ok);display:inline-block}
+
+@media(prefers-reduced-motion:reduce){
+  .ck-live.is-live .ck-live-dot,.ck-phase-badge.is-active .ck-dot{animation:none}
+}
+@media(max-width:1100px){
+  .ck-god{margin-left:16px;margin-right:16px}
+}
+@media(max-width:660px){
+  .ck{padding:12px 16px 16px}
+  .ck-console-hint{display:none}
+  .ck-brand-title{font-size:12px}
+}
