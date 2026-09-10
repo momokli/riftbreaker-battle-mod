@@ -27,6 +27,9 @@ jobs:
       - name: Unit-Test Relay-Pipe-Dispatch (Issue #60)
         working-directory: bausteine/07-relay
         run: python3 -m unittest test_dispatch -v
+      - name: Unit-Test Deploy-Gate (Issue #118)
+        working-directory: tools/deploy-gate
+        run: python3 -m unittest test_deploy_gate -v
       - name: Lua Static Tests (fengari + luaparse, Issue #28)
         working-directory: tests/lua-static
         run: npm ci && npm test
