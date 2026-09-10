@@ -154,6 +154,9 @@
 .ck-god-status.is-ok{color:var(--ok)}
 .ck-god-status.is-err{color:var(--warn)}
 .ck-god-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px}
+.ck-god-note{margin:10px 0 0;font-size:11px;line-height:1.5;color:var(--dim);letter-spacing:.02em}
+.ck-god-note code{color:var(--acc)}
+.ck-cmd[disabled]{opacity:.45;cursor:not-allowed}
 .ck-cmd{
   display:flex;flex-direction:column;gap:4px;text-align:left;cursor:pointer;
   background:#0a1018;border:1px solid var(--line2);color:var(--txt);

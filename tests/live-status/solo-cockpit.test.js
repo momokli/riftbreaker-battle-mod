@@ -7,8 +7,9 @@
 //     COMMENCE/GAME OVER) — defensiv bei fehlenden Feldern.
 //  2. Statisch: site/solo.html verdrahtet das Cockpit (Sektionen + Widget).
 //  3. HTTP-Mock: createCockpit() pollt /state und ruft render(view).
-//  4. God-Commands: createGodPanel() bestätigt destruktive Aktionen und
-//     POSTet auf <base>/command; fehlender Endpoint degradiert defensiv.
+//  4. God-Commands (#159): createGodPanel() sendet nur erreichbare Aktionen an
+//     existierende Referee-Endpoints (/report, /rematch); nicht erreichbare
+//     Kommandos sind geparkt (kein POST). Fehlender Endpoint degradiert defensiv.
 //  5. Gate: createAccessGate() — optional, ohne Secret im Repo.
 
 const { test } = require('node:test');
@@ -137,6 +138,44 @@ test('site/solo-cockpit.css: Design-Tokens (Canvas/Panel/Border/Cyan) + CRT-Scan
   assert.ok(/clip-path/.test(css), 'harte 90°-Kanten (Chamfer)');
 });
 
+test('site/solo.html parkt nicht erreichbare God-Commands statt sie zu senden', () => {
+  const html = fs.readFileSync(SOLO_HTML, 'utf8');
+  const parked = (html.match(/data-ck-parked="1"/g) || []).length;
+  assert.strictEqual(parked, 2, 'genau 2 geparkte Buttons');
+  assert.match(html, /data-ck-cmd="wave_toggle"[^>]*disabled/, 'Wave-Toggle ist geparkt/disabled');
+  assert.match(html, /data-ck-cmd="give_resources"[^>]*disabled/, 'Ressourcen-Button ist geparkt/disabled');
+  assert.ok(html.includes('id="ckGodNote"'), 'Notiz zu verdrahteten/geparkten Kommandos vorhanden');
+  assert.ok(/GEPARKT — FOLLOW-UP #159/.test(html), 'geparkte Buttons sind als Follow-up markiert');
+});
+
+test('deploy/: /solo-Zugangsschutz per Vault/ENV-Namen dokumentiert, kein Secret im Repo', () => {
+  const tpl = fs.readFileSync(
+    path.join(ROOT, 'deploy', 'roles', 'website', 'templates', 'rbmods.caddy.j2'),
+    'utf8'
+  );
+  assert.ok(tpl.includes('basic_auth'), 'basic_auth im Caddy-Snippet');
+  assert.ok(tpl.includes('solo_basic_auth_hash'), 'Hash-Variable referenziert');
+  assert.ok(/rewrite \/solo \/solo\.html/.test(tpl), '/solo ohne Datei-Endung erreichbar');
+  assert.ok(!/\$2[aby]\$/.test(tpl), 'kein bcrypt-Hash-Wert im Snippet');
+
+  const vars = fs.readFileSync(
+    path.join(ROOT, 'deploy', 'inventory', 'host_vars', 'planet', 'vars.yml'),
+    'utf8'
+  );
+  assert.ok(vars.includes('vault_solo_basic_auth_hash'), 'Hash kommt aus dem Vault (Name dokumentiert)');
+  assert.ok(!/\$2[aby]\$/.test(vars), 'kein bcrypt-Hash-Wert in vars.yml');
+
+  const readme = fs.readFileSync(path.join(ROOT, 'deploy', 'README.md'), 'utf8');
+  assert.ok(readme.includes('SOLO_BASIC_AUTH_HASH'), 'ENV-Variablenname dokumentiert');
+  assert.ok(readme.includes('vault_solo_basic_auth_hash'), 'Vault-Variablenname dokumentiert');
+});
+
+test('site/solo-cockpit.css: geparkte God-Buttons + Notiz gestylt', () => {
+  const css = fs.readFileSync(CSS_PATH, 'utf8');
+  assert.ok(/\.ck-god-note/.test(css), 'Notiz-Stil vorhanden');
+  assert.ok(/\.ck-cmd\[disabled\]/.test(css), 'disabled-Buttons gestylt');
+});
+
 // ---------------------------------------------------------------------------
 // 3) HTTP-Mock: createCockpit pollt /state
 // ---------------------------------------------------------------------------
@@ -211,7 +250,7 @@ test('createGodPanel: destruktiv verlangt Bestätigung; Abbruch sendet NICHT', a
   }
 });
 
-test('createGodPanel: bestätigt -> POST /command {cmd}; Nicht-destruktiv ohne Rückfrage', async () => {
+test('createGodPanel: erreichbare Kommandos POSTen auf den echten Referee-Endpoint', async () => {
   const seen = [];
   const srv = await startServer((req, res) => {
     let body = '';
@@ -230,18 +269,55 @@ test('createGodPanel: bestätigt -> POST /command {cmd}; Nicht-destruktiv ohne R
     onResult: () => {},
   });
   try {
-    const ok = await panel.send('give_resources'); // nicht destruktiv
-    assert.strictEqual(ok.ok, true);
-    assert.strictEqual(asked, 0, 'nicht-destruktiv fragt nicht nach');
+    // HQ zerstören (Test) -> POST /report mit hq_hp=0 (dokumentierter Testweg).
+    const hq = await panel.send('destroy_hq');
+    assert.strictEqual(hq.ok, true);
+    assert.strictEqual(hq.action, 'destroy_hq');
+    // Spiel neu starten -> POST /rematch (Reset in die Lobby).
+    const re = await panel.send('restart');
+    assert.strictEqual(re.ok, true);
 
-    await panel.send('restart'); // destruktiv, bestätigt
-    assert.strictEqual(asked, 1, 'destruktiv fragt genau einmal nach');
-
-    assert.deepStrictEqual(seen[0], { method: 'POST', url: '/command', body: { cmd: 'give_resources' } });
-    assert.deepStrictEqual(seen[1], { method: 'POST', url: '/command', body: { cmd: 'restart' } });
+    assert.strictEqual(asked, 2, 'destruktive Aktionen fragen je genau einmal nach');
+    assert.deepStrictEqual(seen[0], {
+      method: 'POST',
+      url: '/report',
+      body: { world: 'A', event: 'hq_hp', hp: 0 },
+    });
+    assert.deepStrictEqual(seen[1], { method: 'POST', url: '/rematch', body: {} });
   } finally {
     await new Promise((r2) => srv.close(r2));
   }
+});
+
+test('createGodPanel: geparkte Kommandos senden nichts und melden parked (Follow-up #159)', async () => {
+  let posted = 0;
+  const srv = await startServer((req, res) => { posted++; res.writeHead(200); res.end('{}'); });
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  const results = [];
+  const panel = createGodPanel({
+    apiBase: base,
+    confirm: () => true,
+    onResult: (r) => results.push(r),
+  });
+  try {
+    for (const action of ['wave_toggle', 'give_resources']) {
+      const r = await panel.send(action);
+      assert.strictEqual(r.ok, false, action);
+      assert.strictEqual(r.parked, true, action);
+      assert.match(r.error, /Follow-up #159/, action);
+    }
+    assert.strictEqual(posted, 0, 'geparkt => kein POST');
+    assert.strictEqual(results.length, 2);
+  } finally {
+    await new Promise((r2) => srv.close(r2));
+  }
+});
+
+test('createGodPanel: unbekanntes Kommando wird abgelehnt', async () => {
+  const panel = createGodPanel({ apiBase: 'http://127.0.0.1:1', confirm: () => true, onResult: () => {} });
+  const r = await panel.send('nope');
+  assert.strictEqual(r.ok, false);
+  assert.match(r.error, /unbekannt/);
 });
 
 test('createGodPanel: fehlender Endpoint (404) degradiert defensiv mit Fehler', async () => {
@@ -250,13 +326,21 @@ test('createGodPanel: fehlender Endpoint (404) degradiert defensiv mit Fehler', 
   const results = [];
   const panel = createGodPanel({ apiBase: base, confirm: () => true, onResult: (r) => results.push(r) });
   try {
-    const r = await panel.send('wave_toggle');
+    const r = await panel.send('restart');
     assert.strictEqual(r.ok, false);
     assert.strictEqual(r.status, 404);
     assert.strictEqual(results.length, 1);
   } finally {
     await new Promise((r2) => srv.close(r2));
   }
+});
+
+test('isReachable: nur verdrahtete Kommandos sind erreichbar', () => {
+  assert.strictEqual(cockpit.isReachable('destroy_hq'), true);
+  assert.strictEqual(cockpit.isReachable('restart'), true);
+  assert.strictEqual(cockpit.isReachable('wave_toggle'), false);
+  assert.strictEqual(cockpit.isReachable('give_resources'), false);
+  assert.strictEqual(cockpit.isReachable('nope'), false);
 });
 
 // ---------------------------------------------------------------------------

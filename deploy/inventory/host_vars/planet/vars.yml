@@ -44,6 +44,14 @@ website_caddyfile_host_path: /home/momo/Caddyfile
 website_caddyfile_d_dir: /home/momo/Caddyfile.d
 website_caddy_import_line: "import /etc/caddy/Caddyfile.d/*"
 
+# --- Solo-Match-Page /solo — Zugangsschutz (Issue #159) ----------------------
+# Passwortschutz für /solo via Caddy basic_auth. Der bcrypt-Hash liegt NUR im
+# Vault (vault_solo_basic_auth_hash) bzw. host-seitig gesetzt — der Name ist
+# dokumentiert, der Wert NIE im Repo/Logs/PR.
+# Fehlt/leer => /solo bleibt ungeschützt (graceful Default).
+solo_basic_auth_user: operator
+solo_basic_auth_hash: "{{ vault_solo_basic_auth_hash | default('') }}"
+
 # --- Mods-Zip (Paketierung + md5-Parität) ------------------------------------
 mods_zip_name: rbbattle.zip
 mods_zip_dest: "{{ website_mods_dir }}/{{ mods_zip_name }}"
