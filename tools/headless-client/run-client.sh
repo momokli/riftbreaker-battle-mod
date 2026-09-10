@@ -50,7 +50,7 @@ esac
 XVFB_PID=""
 if ! xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
     echo "[run-client] starte Xvfb auf ${DISPLAY}"
-    Xvfb "$DISPLAY" -screen 0 1920x1080x24 -nolisten tcp &
+    Xvfb "$DISPLAY" -screen 0.20.0x1080x24 -nolisten tcp &
     XVFB_PID=$!
     # Warten, bis der X-Server erreichbar ist (max. ~10 s).
     for _ in $(seq 1 50); do
