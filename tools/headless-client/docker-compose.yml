@@ -1,0 +1,37 @@
+# Headless Riftbreaker-Client (Wine + Xvfb + Mesa-llvmpipe, Software-Rendering).
+#
+# Nutzung (auf planet):
+#   docker compose up -d                      # bauen + starten, wartet aufs Hauptmenü
+#   docker compose logs -f rb-headless        # Boot-/Menü-Status + Beweis-Screenshot-Pfad
+#   docker compose exec rb-headless xdo-nav.sh shot /tmp/shot.png
+#   docker compose exec rb-headless wait-menu.sh
+#   docker compose down
+#
+# Voraussetzung: Client-Dateien liegen unter /srv/rbclient/game
+# (siehe tools/headless-client/sync-client-data.sh). Pfade über .env
+# überschreibbar (GAME_DIR, SCREENSHOT_DIR, RB_CLIENT_EXE, RB_CLIENT_ARGS).
+
+services:
+  rb-headless:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: rb-headless-client:latest
+    container_name: rb-headless
+    environment:
+      RB_CLIENT_EXE: ${RB_CLIENT_EXE:-riftbreaker_win_release.exe}
+      # Verbindung zum Testserver (optional):
+      # RB_CLIENT_ARGS: "--server rb-winetest"
+      RB_CLIENT_ARGS: ${RB_CLIENT_ARGS:-}
+      SCREENSHOT_OUT: /srv/rbclient/screenshots/menu.png
+      # Optional (Heuristik-Feintuning für wait-menu.sh):
+      # WAIT_TIMEOUT, RENDER_MIN_STD, RENDER_POLL, RB_WINDOW_TITLE
+    volumes:
+      - ${GAME_DIR:-/srv/rbclient/game}:/srv/rbclient/game
+      - ${SCREENSHOT_DIR:-/srv/rbclient/screenshots}:/srv/rbclient/screenshots
+    # Wine/Spiele brauchen mehr Shared Memory als Docker-Default (64 MB).
+    shm_size: "1gb"
+    # tini als PID 1: saubere Signal-Weiterleitung (SIGTERM → Wine) + Reaping.
+    init: true
+    # Kein GPU-Zugriff nötig — Rendering via Mesa-llvmpipe (siehe Dockerfile).
+    restart: "no"

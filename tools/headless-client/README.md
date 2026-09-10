@@ -1,8 +1,11 @@
 # Headless Riftbreaker-Client (Wine + Xvfb + Mesa-llvmpipe)
 
-**Status: UNVERIFIZIERT** — Konzept, Container-Setup und Tooling sind angelegt,
-aber noch kein End-to-End-Test gelaufen (Live-Deploy ist Operator-Folgeschritt).
-Der Ersttransfer (~13 GB) läuft separat über `sync-client-data.sh`.
+**Status: Teilverifiziert (Issue #9)** — Tooling (Dockerfile/Compose,
+Entrypoint, Boot-bis-Hauptmenü-Fluss, Screenshot-Beweis) ist angelegt und so
+weit wie möglich lokal verifiziert (Shellcheck, `bash -n`, Compose-Config,
+Trockenlauf-Tests). Der **echte In-Game-Boot bis ins Hauptmenü ist offen
+(Operator, Prod)** — er braucht die synchronisierten Client-Dateien und läuft
+auf **planet**, nicht in der Sandbox (kein Game-Asset/GPU/Netz). Details unten.
 
 Auf **planet** läuft der Riftbreaker-Client headless in einem Container
 (Wine + Xvfb + Mesa-llvmpipe Software-Rendering). Steuerung/Auswertung über
@@ -20,11 +23,14 @@ als Basis für Multiplayer-/Client-seitige Tests ohne physischen Desktop.
 | Datei | Zweck |
 |---|---|
 | `Dockerfile` | Container-Image: Wine + Xvfb + xdotool + Mesa-llvmpipe |
-| `run-client.sh` | Entrypoint: Xvfb starten, Client-Exe via Wine booten |
+| `docker-compose.yml` | Compose-Service (Volumes für Game + Screenshots, shm, init) |
+| `run-client.sh` | Entrypoint: Xvfb → Wine-Prefix-Init → Client booten → Menü-Check |
+| `wait-menu.sh` | Wartet auf gerendertes Hauptmenü + legt Beweis-Screenshot ab |
 | `xdo-nav.sh` | xdotool-Navigation-Wrapper (click/key/type/shot) |
 | `sync-client-data.sh` | Voll-Sync lan→planet: Größencheck → rsync → Verifikation |
 | `sync-client.sh` | Minimaler Vorgänger (einfaches `rsync -a`) |
 | `test-sync-client-data.sh` | Trockenlauf-Tests für `sync-client-data.sh` (Fake ssh/rsync) |
+| `test-wait-menu.sh` | Trockenlauf-Tests für `wait-menu.sh` (Fake import/convert) |
 
 ## Voraussetzungen
 
@@ -107,7 +113,8 @@ Ersttransfer ≈ 13 GB — bewusst als eigener Schritt.
 ## 2. Image bauen
 
 ```bash
-# auf planet
+# auf planet, im Verzeichnis tools/headless-client/
+docker compose build        # oder:
 docker build -t rb-headless-client tools/headless-client
 ```
 
@@ -116,31 +123,80 @@ Der Container erzwingt Software-Rendering (`LIBGL_ALWAYS_SOFTWARE=1`,
 
 ## 3. Client starten
 
+Einfachster Weg: Compose (baut das Image, startet den Client, wartet aufs
+Hauptmenü und legt den Beweis-Screenshot ab).
+
+```bash
+cd tools/headless-client
+docker compose up -d               # bauen + starten (Detached)
+docker compose logs -f rb-headless # Boot-/Menü-Status verfolgen
+```
+
+Beim Start (`run-client.sh`) passiert der Reihe nach:
+
+1. **Xvfb** auf `DISPLAY=:99` (1920×1080, falls noch kein X-Server läuft).
+2. **Wine-Prefix-Init** (`wineboot --init`, idempotent).
+3. **Client-Boot** via `wine <exe> [args]`.
+4. **Menü-Check** (`wait-menu.sh`): pollt Screenshots, bis ein Frame nicht mehr
+   einfarbig schwarz ist, und legt den Beweis-Screenshot unter
+   `/srv/rbclient/screenshots/menu.png` ab.
+
+Äquivalent als `docker run`:
+
 ```bash
 docker run --rm --name rb-headless \
   -v /srv/rbclient/game:/srv/rbclient/game \
+  -v /srv/rbclient/screenshots:/srv/rbclient/screenshots \
   -e RB_CLIENT_EXE=riftbreaker_win_release.exe \
   rb-headless-client
 ```
 
-Optionaler Sofort-Screenshot nach dem Start (Hilfe für Verbindungstests):
+### Modi
 
-```bash
-docker run --rm \
-  -v /srv/rbclient/game:/srv/rbclient/game \
-  rb-headless-client --screenshot /tmp/shot.png
-```
+| Aufruf | Verhalten |
+|---|---|
+| `run-client.sh` (Default) | Boot + Menü-Check (Screenshot), dann weiterlaufen |
+| `run-client.sh --no-verify` | Boot, kein Menü-Check, einfach weiterlaufen |
+| `run-client.sh --screenshot <file>` | Boot + Menü-Check, Screenshot nach `<file>`, dann beenden |
 
 Verbindung zum Testserver (zusätzliche Start-Argumente):
 
 ```bash
 docker run --rm \
   -v /srv/rbclient/game:/srv/rbclient/game \
+  -v /srv/rbclient/screenshots:/srv/rbclient/screenshots \
   -e RB_CLIENT_ARGS="--server rb-winetest" \
   rb-headless-client
 ```
 
-## 4. Navigation (Screenshot + xdotool)
+## 4. Boot bis Hauptmenü (Beweis)
+
+`wait-menu.sh` setzt eine **Heuristik** ein (kein pixel-perfekter Menü-Check):
+
+1. Screenshot des virtuellen Displays (`import -window root`).
+2. Ein Frame gilt als *gerendert*, sobald die Grau-Standardabweichung über
+   `RENDER_MIN_STD` (Default `0.02`) liegt — ein leerer/schwarzer Frame hat
+   `std = 0`, sobald Logo/Menü erscheint steigt sie.
+3. Bei Erfolg wird der Frame nach `SCREENSHOT_OUT` kopiert; bei Timeout wird der
+   letzte Frame trotzdem gesichert und `exit 1` zurückgegeben.
+
+```bash
+# manuell gegen den laufenden Container:
+docker compose exec rb-headless wait-menu.sh /srv/rbclient/screenshots/menu.png
+```
+
+Feintuning über Umgebung: `WAIT_TIMEOUT` (Default `120`), `RENDER_MIN_STD`,
+`RENDER_POLL` (Default `3`).
+
+**Verifiziert:** Shellcheck + `bash -n` + Trockenlauf-Tests
+(`test-wait-menu.sh`) der Heuristik.
+
+**Offen (Operator, Prod):** Der *echte* Hauptmenü-Render des Clients — erfordert
+die synchronisierten Game-Dateien, den Container auf planet und ggf. das
+Fenstertitel-/Schwellwert-Tuning (`RENDER_MIN_STD`), falls das Menü sehr dunkel
+lädt. Die Schwelle ist bewusst konservativ (`0.02`) und per Env überschreibbar.
+
+## 5. Navigation (Screenshot + xdotool)
 
 Zweite Shell, gegen den laufenden Container:
 
@@ -159,8 +215,33 @@ docker exec rb-headless xdo-nav.sh type "rb_wave 3"
 Vollständige Sub-Kommandos: `docker exec rb-headless xdo-nav.sh` (ohne Argumente
 zeigt die Hilfe).
 
-## Fallback
+## Fallback: Proton-GE
 
-Falls das Wine-Rendering unter llvmpipe scheitert: **Proton-GE** mit
-**DXVK-on-lavapipe** probieren (Vulkan-Overlay statt OpenGL) — gleiche
-Xvfb-Basis, anderer Render-Stack.
+Falls das Wine-Rendering unter llvmpipe scheitert (kein Frame, Grafikfehler,
+Crash beim Start), auf **Proton-GE** mit **DXVK-on-lavapipe** wechseln —
+Vulkan-Software-Overlay statt OpenGL. Gleiche Xvfb-Basis, anderer Render-Stack.
+
+Vorgehen (auf planet):
+
+1. **Proton-GE** installieren (z. B. via
+   [GloriousEggroll/proton-ge-custom](https://github.com/GloriousEggroll/proton-ge-custom)
+   oder Steam-`CompatibilityTools.d`). Die Wine-Variante im bestehenden
+   Dockerfile wird durch ein Proton-GE-Base-Image ersetzt bzw. Proton-GE als
+   `WINE`-Runtime eingebunden.
+2. **Vulkan-Software-Renderer** ergänzen: `mesa-vulkan-drivers` (lavapipe) statt
+   `libgl1-mesa-dri` und Env auf Vulkan umstellen:
+
+   ```dockerfile
+   ENV VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
+       VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
+       DXVK_CONFIG="dxvk.enableGraphicsPipelineLibrary=false" \
+       WINEDLLOVERRIDES="dxgi,d3d11,d3d10core,d3d9=n,b"
+   ```
+
+3. **Entrypoint unverändert** nutzen (`run-client.sh` + `wait-menu.sh`): die
+   Start-/Menü-Logik ist renderer-agnostisch, nur der Render-Stack im Image
+   ändert sich.
+
+> Proton-GE ist ein dokumentierter Fallback, **kein** verifizierter Pfad — die
+> genauen DXVK/lavapipe-Versionen und DXVK-Config-Flags müssen beim realen
+> In-Game-Test auf planet festgezurrt werden.
