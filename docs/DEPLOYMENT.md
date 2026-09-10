@@ -55,7 +55,7 @@ Nach jedem Merge auf `main` deployt
 [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) automatisch auf
 den Solo-DEV-Server (planet, Port 6321) — **rolling**, immer der aktuelle Stand
 zum Testen. Der Job läuft auf dem self-hosted Runner auf planet und stößt dort
-den lokalen **HTTP-Deploy-Hook** an (`rbbattle-deploy-hook`, `127.0.0.1:6321`):
+den lokalen **HTTP-Deploy-Hook** an (`rbbattle-deploy-hook`, `127.0.0.1:6323`):
 Der Hook macht `git fetch` + Hard-Checkout der Commit-SHA und führt das
 Ansible-Playbook aus (`ansible-playbook -i deploy/inventory deploy/site.yml
 --vault-password-file …`). **Kein SSH aus CI mehr.** Installation/Migration:

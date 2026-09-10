@@ -19,7 +19,7 @@ DEPLOY_CMD (cwd = CHECKOUT_DIR). stdout/stderr landen in
 
 Konfiguration ausschließlich über Umgebungsvariablen
 (EnvironmentFile /etc/rbbattle-deploy/hook.env):
-  LISTEN           default 127.0.0.1:6321
+  LISTEN           default 127.0.0.1:6323 (6321/6322: Game-Server-Ports)
   DEPLOY_TOKEN     Pflicht — gemeinsames Geheimnis mit dem Workflow
   CHECKOUT_DIR     default /opt/rbbattle-deploy/repo
   DEPLOY_CMD       Pflicht — Deploy-Kommando, läuft im Checkout
@@ -63,7 +63,7 @@ DEPLOY_LOCK = threading.Lock()
 
 def load_config():
     """Liest die Konfiguration aus dem Environment; bricht bei Fehlern ab."""
-    listen = os.environ.get("LISTEN", "127.0.0.1:6321")
+    listen = os.environ.get("LISTEN", "127.0.0.1:6323")
     host, sep, port = listen.rpartition(":")
     if not sep or not port.isdigit() or not 1 <= int(port) <= 65535:
         raise SystemExit("LISTEN ungültig: {!r} (erwartet host:port)".format(listen))

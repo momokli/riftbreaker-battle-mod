@@ -52,7 +52,7 @@ jobs:
           # (github.sha / github.ref), als 202 mit job_id quittiert.
           if ! response="$(curl --silent --show-error --fail --max-time 30 \
             --retry 3 --retry-connrefused --retry-delay 2 \
-            --request POST "http://127.0.0.1:6321/deploy" \
+            --request POST "http://127.0.0.1:6323/deploy" \
             --header "Authorization: Bearer ${DEPLOY_TOKEN}" \
             --header "Content-Type: application/json" \
             --data "{\"sha\":\"${GITHUB_SHA}\",\"ref\":\"${GITHUB_REF}\"}")"; then
@@ -83,7 +83,7 @@ jobs:
             response=""
             if ! response="$(curl --silent --show-error --fail --max-time 30 \
               --header "Authorization: Bearer ${DEPLOY_TOKEN}" \
-              "http://127.0.0.1:6321/deploy/${JOB_ID}/status")"; then
+              "http://127.0.0.1:6323/deploy/${JOB_ID}/status")"; then
               echo "Warnung: Status-Abruf fehlgeschlagen — neuer Versuch in 15 s."
               response=""
             fi

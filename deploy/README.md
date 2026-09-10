@@ -68,12 +68,16 @@ Seit der Umstellung (Issue #91) deployt der Workflow **ohne SSH**:
 ```text
 push auf main
   → GitHub-Actions-Job auf dem self-hosted Runner (planet)
-  → POST http://127.0.0.1:6321/deploy  {sha, ref}      [Bearer DEPLOY_TOKEN]
+  → POST http://127.0.0.1:6323/deploy  {sha, ref}      [Bearer DEPLOY_TOKEN]
   → Hook (systemd: rbbattle-deploy-hook)
        git fetch + Hard-Checkout der SHA im CHECKOUT_DIR
        → DEPLOY_CMD (führt `ansible-playbook … site.yml` aus)
   → Workflow pollt GET /deploy/<job_id>/status bis success/failed (max. 10 min)
 ```
+
+Hook-Port ist bewusst **6323**: `6321` ist auf planet vom laufenden Dev-Server
+belegt (docker-proxy, TCP+UDP), `6322` gehört der Vanilla-Instanz — auf
+`127.0.0.1:6323` lauscht sonst niemand (auf planet verifiziert, 2026-09-10).
 
 **Einziges GitHub-Secret:** `DEPLOY_TOKEN` (Environment `dev`). Die alten
 Secrets `SSH_HOST`, `SSH_KEY`, `ANSIBLE_VAULT_PASS` werden nicht mehr benutzt
@@ -106,7 +110,7 @@ openssl rand -hex 32
 # 4) hook.env schreiben (root:deploy 0640; <TOKEN> ersetzen):
 sudo install -o root -g deploy -m 0640 /dev/null /etc/rbbattle-deploy/hook.env
 sudo tee /etc/rbbattle-deploy/hook.env >/dev/null <<'EOF'
-LISTEN=127.0.0.1:6321
+LISTEN=127.0.0.1:6323
 DEPLOY_TOKEN=<TOKEN>
 CHECKOUT_DIR=/opt/rbbattle-deploy/repo
 DEPLOY_CMD=sudo -n /usr/local/bin/rbbattle-deploy
@@ -124,7 +128,7 @@ systemctl status rbbattle-deploy-hook --no-pager
 # 6) Smoke-Test (Antwort muss 202 + {"job_id": …} sein):
 TOKEN="$(sudo awk -F= '/^DEPLOY_TOKEN=/{print $2}' /etc/rbbattle-deploy/hook.env)"
 SHA="$(git -C /opt/rbbattle-deploy/repo rev-parse HEAD)"
-curl -sS -X POST http://127.0.0.1:6321/deploy \
+curl -sS -X POST http://127.0.0.1:6323/deploy \
   -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
   -d "{\"sha\":\"${SHA}\",\"ref\":\"refs/heads/main\"}"
 ```
@@ -139,10 +143,14 @@ gh secret delete SSH_KEY --env dev --repo momokli/riftbreaker-battle-mod
 gh secret delete ANSIBLE_VAULT_PASS --env dev --repo momokli/riftbreaker-battle-mod
 ```
 
-### Wenn der Deploy root braucht (Ansible `become`) — sudoers statt Root-Service
+### Root-Weg (Standard): Ansible `become` über eng begrenztes sudoers
 
-Das Playbook läuft mit `become: true` und braucht root. Deshalb **nicht** die
-Hook-Unit als root betreiben, sondern eng begrenzt: root-Wrapper + sudoers.
+Das Playbook läuft mit `become: true` und braucht root — dieser Weg ist der
+**Standard für den CD**. Deshalb **nicht** die Hook-Unit als root betreiben:
+Der Hook bleibt non-root (User `deploy`); root gibt es ausschließlich über das
+enge sudoers-Snippet unten — NOPASSWD **nur** für den root-owned Wrapper
+`/usr/local/bin/rbbattle-deploy` (ohne Argumente), der das `ansible-playbook`
+aus dem gepinnten venv ausführt.
 
 ```bash
 # a) Ansible root-owned installieren (gepinnt; deploy darf nicht schreiben):
@@ -174,10 +182,13 @@ sudo chmod 0440 /etc/sudoers.d/rbbattle-deploy
 sudo visudo -cf /etc/sudoers.d/rbbattle-deploy
 ```
 
-**Wichtig — Härtung vs. sudo:** `NoNewPrivileges=yes` verhindert jede
-setuid-Eskalation und damit auch `sudo`. Für den sudo-Weg in der Unit daher
-`NoNewPrivileges=no` setzen (alles andere der Härtung bleibt unverändert);
-für einen Deploy ganz ohne root bleibt `NoNewPrivileges=yes` aktiv.
+**Wichtig — Härtung vs. sudo:** Die Unit setzt `NoNewPrivileges=no` (alles
+andere der Härtung bleibt aktiv) — mit `NoNewPrivileges=yes` würde jede
+setuid-Eskalation und damit auch `sudo` scheitern, der Deploy könnte den
+Playbook-Lauf nie starten. Die root-Eskalation über Ansible (`become: true`)
+ist für dieses Playbook unvermeidbar; sie bleibt aber auf das eine
+sudoers-Kommando begrenzt (Wrapper, ohne Argumente, root-owned). Der
+Hook-Prozess selbst läuft weiterhin non-root als User `deploy`.
 
 **SSH-Ziel:** Das Playbook verbindet sich weiterhin per SSH mit dem
 Inventory-Host `planet` (mesh-first über den `~/.ssh/config`-Alias). Weil
@@ -192,7 +203,7 @@ Ersten echten Lauf im Job-Log unter `/var/log/rbbattle-deploy/` prüfen.
 systemctl status rbbattle-deploy-hook               # Service-Zustand
 journalctl -u rbbattle-deploy-hook -f               # Live-Log (Requests/Fehler)
 ls -lt /var/log/rbbattle-deploy/                    # Job-Logs (0640)
-curl -sS http://127.0.0.1:6321/deploy/<job_id>/status \
+curl -sS http://127.0.0.1:6323/deploy/<job_id>/status \
   -H "Authorization: Bearer ${TOKEN}"               # {status, exit_code, log_tail}
 ```
 
@@ -205,7 +216,7 @@ curl -sS http://127.0.0.1:6321/deploy/<job_id>/status \
 - [ ] `deploy`-User + Verzeichnisse angelegt (Schritt 1)
 - [ ] Checkout geklont (Schritt 2), Token + `hook.env` (Schritte 3–4)
 - [ ] Hook + Unit aktiv, Smoke-Test 202 (Schritte 5–6)
-- [ ] Root-Weg: Ansible + Wrapper + sudoers + `vault.pass`, `NoNewPrivileges` angepasst
+- [ ] Root-Weg: Ansible (venv) + Wrapper + sudoers + `vault.pass`
 - [ ] `vault.yml` verschlüsselt + befüllt (falls noch `CHANGE_ME`)
 - [ ] GitHub: `DEPLOY_TOKEN` gesetzt, SSH-Secrets gelöscht
 - [ ] Erster Merge auf `main`: Deploy-Lauf grün

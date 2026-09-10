@@ -1,7 +1,7 @@
 # rbbattle-deploy-hook — HTTP-Deploy-Endpoint (CD) für riftbreaker-battle-mod.
 #
 # Ersetzt den früheren SSH-Deploy aus CI (Issue #91): Der Runner auf planet
-# ruft lokal http://127.0.0.1:6321 auf; der Hook aktualisiert den Checkout
+# ruft lokal http://127.0.0.1:6323 auf; der Hook aktualisiert den Checkout
 # und führt DEPLOY_CMD aus (Details: deploy/hook.py, deploy/README.md).
 #
 # Installation: deploy/README.md → Abschnitt „CD: HTTP-Deploy-Hook (planet)".
@@ -27,11 +27,14 @@ Restart=on-failure
 RestartSec=5
 UMask=0027
 
-# Hardening. Hinweis: NoNewPrivileges=yes unterbindet jede setuid-Eskalation —
-# auch sudo. Braucht DEPLOY_CMD root (Ansible `become`, siehe README →
-# „Wenn der Deploy root braucht"), dort NoNewPrivileges=no setzen; für einen
-# Deploy ganz ohne root bleibt NoNewPrivileges=yes aktiv.
-NoNewPrivileges=yes
+# Hardening. NoNewPrivileges=no ist für den Standardweg nötig: DEPLOY_CMD
+# eskaliert über das enge sudoers-Snippet (NOPASSWD nur für den root-owned
+# Wrapper `/usr/local/bin/rbbattle-deploy` ohne Argumente — siehe README →
+# „Root-Weg (Standard)"), und Ansible nutzt das bei `become: true` für root.
+# NoNewPrivileges=yes würde jede setuid-Eskalation — auch sudo — unterbinden
+# und den Deploy scheitern lassen. Der Hook-Prozess selbst bleibt non-root
+# (User=deploy); root gibt es nur für den einen Wrapper-Aufruf.
+NoNewPrivileges=no
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
