@@ -349,6 +349,17 @@ und Workshop-Mods tun (Quelle: fandom „Basic Modding Guide“, Ordner
   nicht zwingend „common“ heißen — Pfad über Steam → Verwalten → Lokale Dateien
   anzeigen lassen.
 
+### Update per Tool (empfohlen)
+
+Statt manuell zu entpacken: `tools/mod-updater/mod_update.py` findet den
+Mods-Ordner, holt das aktuelle `rbbattle.zip`, legt ein Backup der alten
+Version an und ersetzt die Mod ([#120](https://github.com/momokli/riftbreaker-battle-mod/issues/120),
+Details in `tools/mod-updater/README.md`):
+
+```bash
+python3 tools/mod-updater/mod_update.py update
+```
+
 ## Aktivierung / In-Game-Konsole
 
 - Konsole öffnen mit `` ` `` / `~` / `ö` / `'` (je nach Tastatur-Layout;

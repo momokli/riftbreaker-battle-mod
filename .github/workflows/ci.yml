@@ -42,6 +42,9 @@ jobs:
       - name: Unit-Test Solo-Feed (Issue #157)
         working-directory: tools/solo-feed
         run: python3 -m unittest test_feed -v
+      - name: Unit-Test Mod-Updater (Issue #120)
+        working-directory: tools/mod-updater
+        run: python3 -m unittest test_mod_update -v
       - name: Lua Static Tests (fengari + luaparse, Issue #28)
         working-directory: tests/lua-static
         run: npm ci && npm test
@@ -80,11 +83,15 @@ jobs:
             echo "Hinweis: /opt/ccache-rbbattle/bin fehlt — .github/runner/setup.sh noch nicht ausgeführt; Build ohne ccache."
           fi
           bash scripts/package_bausteine.sh
-      - name: Artefakte hochladen (dist/*.zip)
+      - name: Artefakte hochladen (dist/*.zip + Mod-Updater)
         uses: actions/upload-artifact@v4
         with:
           name: bausteine-zips
-          path: dist/*.zip
+          # Mod-Updater als Einzeldatei mitliefern (Issue #120: ohne Checkout
+          # herunterladbar); rbbattle.zip bleibt der Primaer-Download.
+          path: |
+            dist/*.zip
+            tools/mod-updater/mod_update.py
           if-no-files-found: error
 
   release:
@@ -108,8 +115,11 @@ jobs:
       - name: Release anlegen (falls Tag noch nicht existiert)
         run: |
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo "Release $GITHUB_REF_NAME existiert bereits — Zips nachladen."
-            gh release upload "$GITHUB_REF_NAME" dist/*.zip --clobber
+            echo "Release $GITHUB_REF_NAME existiert bereits — Zips + Mod-Updater nachladen."
+            gh release upload "$GITHUB_REF_NAME" \
+              dist/*.zip tools/mod-updater/mod_update.py --clobber
           else
-            gh release create "$GITHUB_REF_NAME" dist/*.zip --title "$GITHUB_REF_NAME" --generate-notes
+            gh release create "$GITHUB_REF_NAME" \
+              dist/*.zip tools/mod-updater/mod_update.py \
+              --title "$GITHUB_REF_NAME" --generate-notes
           fi
