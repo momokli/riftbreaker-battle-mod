@@ -116,8 +116,8 @@ local function trigger_evt(entity, teamId)
     return evt
 end
 
--- 1. Mod geladen, Version 0.26.0, HQ initialisiert.
-check(log_has("event=mod_load version=0.26.0"), "mod_load version=0.26.0")
+-- 1. Mod geladen, Version 0.27.0, HQ initialisiert.
+check(log_has("event=mod_load version=0.27.0"), "mod_load version=0.27.0")
 check(log_has("hq_hp=100 hq_dead=false"), "mod_load enthaelt hq_hp=100 hq_dead=false")
 check(_G.__handlers["EnteredTriggerEvent"] ~= nil, "EnteredTriggerEvent registriert")
 check(_G.__handlers["RespawnFailedEvent"] ~= nil, "RespawnFailedEvent registriert")

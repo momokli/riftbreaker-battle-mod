@@ -107,7 +107,7 @@ local function log_has(sub)
 end
 
 -- 1. Mod geladen (kein Version-Bump), rb_convert/rb_economy registriert.
-check(log_has("event=mod_load version=0.26.0"), "mod_load version=0.26.0 (kein Version-Bump)")
+check(log_has("event=mod_load version=0.27.0"), "mod_load version=0.27.0 (kein Version-Bump)")
 check(_G.__commands["rb_convert"] ~= nil, "rb_convert registriert")
 check(_G.__commands["rb_economy"] ~= nil, "rb_economy registriert")
 

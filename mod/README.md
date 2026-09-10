@@ -1,12 +1,25 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.26.0 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.27.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 
 > **Multiplayer:** Beide Spieler müssen **exakt dieselben Mods** installiert
 > haben, sonst lehnt der Client die Lobby mit **„different set of mods“** ab.
 > Kurzanleitung: [`docs/PLAYER_SETUP.md`](../docs/PLAYER_SETUP.md).
+
+**v0.27.0 — Setup-Phase (Commence-Flow) + HQ-Leak-Filter (Issue #158/#152):**
+- *Setup-Phase/Commence-Flow* (#158): Das Spiel startet **ohne Auto-HQ**. Solange kein HQ platziert
+  ist, hält nur der Wave-*Progress* an (kein Naturwellen-Spawn, kein Runden-Zähler, keine Send-Queue);
+  das Spiel selbst läuft frei weiter (kein `debug_dom_pause`). Start-Announce „To commence the game,
+  place the headquarter“ (`event=commence status=pending`), HQ erkannt → `event=commence status=ok`
+  + Wellenstart (HQ-Erkennung über `HourEvent`-Tick und manuellen Fallback `rb_hq entity <id>`).
+- *HQ-Leak-Filter* (#152): `EnteredTriggerEvent` feuert bei jedem Map-Trigger — der Leak zählt jetzt
+  nur für eine lesbare **feindliche** Kreatur (`evt:GetEntity()`); eigener Mech/HQ/Team-1-Entities
+  werden übersprungen (`hq_leak status=skip reason=no_trigger_entity|own_hq|own_team`). Behebt die
+  sofortige Niederlage bei Spielstart.
+- *Doku* (#156): Interim-Deploy des Dev-SP-Servers (:6321) reproduzierbar in `docs/DEPLOYMENT.md`
+  dokumentiert (Build → scp/md5-Parität → Spieler-Check → Mod ersetzen → Restart → Smoke-Test).
 
 **v0.26.0 — Spar-Pool-Persistenz + Wellen-Presets (Issue #65/#41):**
 - *Spar-Pool* (`rb_points`/`econ_pool`) wird an der Rundengrenze (Wellenstart) zusätzlich per
@@ -369,7 +382,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.26.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
+[RBBATTLE] event=mod_load version=0.27.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100
