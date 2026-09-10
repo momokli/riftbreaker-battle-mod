@@ -293,6 +293,16 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
 .term-body.small{height:min(400px,56vh)}
 .backlink{margin-top:26px;font-size:13px;display:flex;flex-wrap:wrap;gap:18px}
 
+/* ---------- Dev-Log (Issue #98) ---------- */
+.dl-join{color:var(--acc)}
+.dl-send{color:var(--p1)}
+.dl-wave{color:var(--ok)}
+.dl-hq{color:var(--p2)}
+.dl-sys{color:var(--dim)}
+.dl-hl{
+  color:var(--bright);border-left:2px solid var(--acc);padding-left:10px;
+  background:linear-gradient(90deg,rgba(63,208,212,.14),transparent 80%);
+}
 /* ---------- Solo-Seite: Verbinden & Spielstart (Issue #97) ---------- */
 .connect-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px;align-items:start}
 .connect-form{
@@ -331,10 +341,11 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
     <a class="brand" href="/">rb<span class="slash">//</span>rift-battle</a>
     <nav aria-label="Hauptnavigation">
       <a href="/"><span class="n">00</span>landing</a>
-      <a href="#verbinden"><span class="n">01</span>verbinden</a>
-      <a href="#howto"><span class="n">02</span>how-to</a>
-      <a href="#cmds"><span class="n">03</span>commands</a>
-      <a href="#hinweise"><span class="n">04</span>hinweise</a>
+      <a href="#devlog"><span class="n">01</span>dev-log</a>
+      <a href="#verbinden"><span class="n">02</span>verbinden</a>
+      <a href="#howto"><span class="n">03</span>how-to</a>
+      <a href="#cmds"><span class="n">04</span>commands</a>
+      <a href="#hinweise"><span class="n">05</span>hinweise</a>
     </nav>
     <a class="gh-link" href="https://github.com/momokli/riftbreaker-battle-mod" target="_blank" rel="noopener">github ↗</a>
   </div>
@@ -377,11 +388,34 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
   <span class="scrollhint">▼ scroll — der testlauf wartet</span>
 </section>
 
+<!-- ================= DEV-LOG ================= -->
+<section id="devlog" aria-labelledby="devlogTitle">
+  <div class="container">
+    <div class="sechead">
+      <span class="sechash">[ §01 ]</span>
+      <h2 id="devlogTitle">Dev-Log — live</h2>
+    </div>
+    <p class="secintro">
+      Transparenter Server-Log: jedes Match-Event kommt hier live an, so wie es beim Referee eintrifft —
+      <b class="acc">kein Reload nötig</b>.
+    </p>
+    <div class="term">
+      <div class="term-bar">
+        <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+        <span class="term-title" id="devlogWho">wer spielt: wird geladen …</span>
+        <span class="term-ts" id="devlogConn">verbinde …</span>
+      </div>
+      <div class="term-body" id="devlogBody" aria-live="polite" aria-label="Live-Event-Log des Tournament-Servers"></div>
+    </div>
+    <div class="hint" style="margin-top:18px">
+      <span class="ok">▲</span>
+      <span>Spielstand-Persistenz (<code class="inl">rb_points</code> im Mod) ist noch kein eigener Event-Typ hier — Stand: <a href="https://github.com/momokli/riftbreaker-battle-mod/issues/65" target="_blank" rel="noopener">Issue #65 ↗</a>.</span>
+    </div>
 <!-- ================= VERBINDEN ================= -->
 <section id="verbinden" aria-labelledby="verbindenTitle">
   <div class="container">
     <div class="sechead">
-      <span class="sechash">[ §01 ]</span>
+      <span class="sechash">[ §02 ]</span>
       <h2 id="verbindenTitle">Verbinden &amp; Spiel starten</h2>
     </div>
     <p class="secintro">
@@ -418,7 +452,7 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
 <section id="howto" aria-labelledby="howtoTitle">
   <div class="container">
     <div class="sechead">
-      <span class="sechash">[ §02 ]</span>
+      <span class="sechash">[ §03 ]</span>
       <h2 id="howtoTitle">How-to — solo-test</h2>
     </div>
     <p class="secintro">
@@ -461,7 +495,7 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
 <section id="cmds" class="alt" aria-labelledby="cmdsTitle">
   <div class="container">
     <div class="sechead">
-      <span class="sechash">[ §03 ]</span>
+      <span class="sechash">[ §04 ]</span>
       <h2 id="cmdsTitle">Commands</h2>
     </div>
     <p class="secintro">
@@ -500,7 +534,7 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
 <section id="hinweise" aria-labelledby="hinweiseTitle">
   <div class="container">
     <div class="sechead">
-      <span class="sechash">[ §04 ]</span>
+      <span class="sechash">[ §05 ]</span>
       <h2 id="hinweiseTitle">Hinweise</h2>
     </div>
     <div class="cards">
@@ -714,6 +748,44 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
   RBTournamentStatus.createWidget({ apiBase: base, render: renderStatus }).start();
 })();
 </script>
+<script src="dev-log.js"></script>
+<script>
+(function () {
+  "use strict";
+  var body = document.getElementById("devlogBody");
+  var whoEl = document.getElementById("devlogWho");
+  var connEl = document.getElementById("devlogConn");
+  if (!body || !window.RBDevLog || !window.RBTournamentStatus) return;
+
+  var base = RBTournamentStatus.resolveApiBase(document);
+
+  function appendLine(desc) {
+    var div = document.createElement("div");
+    div.className = "line " + desc.cls;
+    div.textContent = desc.text;
+    body.appendChild(div);
+    body.scrollTop = body.scrollHeight;
+  }
+
+  RBDevLog.createLogWidget({
+    apiBase: base,
+    onEvents: function (events) {
+      events.forEach(appendLine);
+      if (connEl) connEl.textContent = "live";
+    },
+    onError: function () {
+      if (connEl) connEl.textContent = "verbindung unterbrochen …";
+    },
+  }).start();
+
+  RBTournamentStatus.createWidget({
+    apiBase: base,
+    render: function (st) {
+      if (!whoEl) return;
+      var names = st.count > 0 ? st.players.map(function (p) { return p.name; }).join(" · ") : "niemand gerade";
+      whoEl.textContent = "wer spielt: " + names;
+    },
+  }).start();
 <script src="solo-connect.js"></script>
 <script>
 (function () {
