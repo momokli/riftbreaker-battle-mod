@@ -98,6 +98,17 @@ npm test        # = node --test
 5. Freie pct-Eingabe (`rb_boost 30` → linearer Preis 240); Caps (`maxBoostPct`=200,
    `maxBoostsPerWave`=4); `duel`-Modus: Boost-Flush nur in `sp`.
 
+`send-currency.test.js` deckt Issue #40 (Send-Währung Calcium-only) ab:
+
+1. Mod lädt (kein Version-Bump); `rb_convert`/`rb_economy` registriert.
+2. `rb_convert <menge>` (ein Arg) konvertiert Calcium (`carbonium`) → Pool.
+3. `rb_convert calcium <menge>` (Alias) ≡ `rb_convert carbonium <menge>`.
+4. Nicht-Calcium (`steel`) wird abgelehnt (`not_send_currency`), auch wenn es
+   gefarmt wurde — kein Convert-Vorgang, Pool unverändert.
+5. Währung entscheidet VOR der Mengen-Prüfung: ungefarmtes `ironium` →
+   `not_send_currency` (nicht `insufficient`).
+6. Pool bleibt durch die Ablehnungen unangetastet (`economy_show`).
+
 ## Grenzen (ehrlich dokumentiert)
 
 Die Stub-Services ersetzen die Spiel-Engine; **nicht** live-verifizierbar sind
