@@ -39,3 +39,22 @@ test('site/solo.html enthält keine LLM-Prompt-Reste/Anweisungen', () => {
     assert.strictEqual(m, null, `Prompt-/Anweisungs-Rest gefunden (${re}): ${m && m[0]}`);
   }
 });
+
+// Issue #96 — solo.html: Copy gekürzt; jede Sektion hat eine klare Funktion
+// (Verbinden / Spielen / Status) und liefert konkrete Anweisungen statt Fülltext.
+
+test('site/solo.html: Sektionen haben klare Funktion (Verbinden / Spielen / Status)', () => {
+  const html = fs.readFileSync(SOLO_HTML, 'utf8');
+
+  // Verbinden: Join-Anweisung mit konkreter Server-Adresse.
+  assert.ok(/65\.21\.27\.234:6321/.test(html), 'Server-Adresse vorhanden');
+  assert.ok(/join/i.test(html), 'Verbinden-Anweisung vorhanden');
+
+  // Spielen: konkrete Commands im How-to und in der Command-Tabelle.
+  assert.ok(html.includes('rb_convert'), 'rb_convert vorhanden');
+  assert.ok(html.includes('rb_status'), 'rb_status vorhanden');
+
+  // Status: Live-Status-Widget und Verweis auf die Status-Seite.
+  assert.ok(html.includes('id="liveStatus"'), 'Live-Status-Widget vorhanden');
+  assert.ok(html.includes('/connectivity.html'), 'Server-Status-Verweis vorhanden');
+});

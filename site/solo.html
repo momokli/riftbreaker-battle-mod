@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SOLO TEST MODE — RIFT BATTLE Mod für The Riftbreaker</title>
-<meta name="description" content="SOLO TEST MODE — der MVP-Testmodus von RIFT BATTLE: Farmen, Calcium konvertieren (rb_convert), der Pool boostet die NÄCHSTE eigene Welle. Leaks schaden dem HQ. Poker/Duell folgt später.">
+<meta name="description" content="SOLO TEST MODE — RIFT BATTLE: farmen, Calcium in den Pool (rb_convert), Boost für die nächste Welle. Leaks treffen dein HQ.">
 <meta name="theme-color" content="#05070a">
 <!-- Tournament-API-Basis (Issue #30): Basis-URL des Referee-Servers; Landing-Widget pollt <base>/state. Relativ = gleicher Origin. -->
 <meta name="rb-tournament-api" content="/tournament">
@@ -327,21 +327,17 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
     <p class="mode-sub">mode — sich selber senden</p>
     <p class="typedline"><span aria-hidden="true">&gt;&nbsp;</span><span id="typed" aria-hidden="true"></span><span class="caret" aria-hidden="true"></span></p>
     <p class="lead">
-      Der <b>MVP-Testmodus</b> der RIFT-BATTLE-Mechanik zum Alleine-Ausprobieren: <b>farmen</b> →
-      <b>Calcium konvertieren</b> (<span class="acc">rb_convert</span>) → der Pool <b>boostet die
-      NÄCHSTE eigene Welle</b>. Wer Leaks durchlässt, schadet dem eigenen <b>HQ</b>. Der
-      <span class="acc">Poker/Duell-Modus</span> gegen andere Spieler kommt später.
+      Solo-Test der RIFT-BATTLE-Mechanik: <b>farmen</b> → <b>Calcium in den Pool</b>
+      (<span class="acc">rb_convert</span>) → Boost für die <b>nächste Welle</b>. Leaks treffen dein <b>HQ</b>.
     </p>
     <div class="cta">
       <a class="btn" href="https://github.com/momokli/riftbreaker-battle-mod/releases/latest/download/rbbattle.zip">⬇ rbbattle.zip<span class="arr">▼</span></a>
       <a class="btn ghost" href="#howto">▶ how-to lesen</a>
     </div>
     <ul class="tags" aria-label="Feature-Stichworte">
-      <li><b>calcium</b> → <b>send-pool</b></li>
-      <li>boost wirkt auf nächste welle</li>
+      <li><b>rb_convert</b> → pool</li>
+      <li>boost → nächste welle</li>
       <li>leaks → hq-schaden</li>
-      <li>rb_convert · rb_status</li>
-      <li>poker/duel später</li>
     </ul>
     <div class="live-status" id="liveStatus" role="status" aria-live="polite">
       <span class="ls-dot k-unknown" id="liveDot" aria-hidden="true"></span>
@@ -360,18 +356,17 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
       <h2 id="howtoTitle">How-to — solo-test</h2>
     </div>
     <p class="secintro">
-      Sechs Schritte bis zum ersten <span class="acc">solo-test</span> — als <b>Terminal-Replay</b> rechts;
-      scrollt das Replay ins Bild, startet es von selbst. Kern-Regel: <b>Convert ist unwiderruflich</b> —
-      und was der Pool hergibt, kommt erst bei der <b>nächsten Welle</b> als Boost zurück.
+      Sechs Schritte bis zum ersten <span class="acc">solo-test</span>.
+      <b>rb_convert ist unwiderruflich</b> — der Pool kommt erst bei der <b>nächsten Welle</b> zurück.
     </p>
     <div class="demo-grid">
       <ol class="phases" id="stepRail" aria-label="Solo-Test-Schritte">
-        <li class="phase" data-i="0"><span class="rn">01</span><span><span class="pn">laden</span><span class="pd"><code class="inl">rbbattle.zip</code> aus dem <a href="https://github.com/momokli/riftbreaker-battle-mod/releases/latest/download/rbbattle.zip">Release-Download</a> → Steam: <code class="inl">&lt;Steam&gt;\steamapps\common\The Riftbreaker\mods\rbbattle\</code> · GOG: <code class="inl">Installationsordner\mods\</code></span></span></li>
-        <li class="phase" data-i="1"><span class="rn">02</span><span><span class="pn">join</span><span class="pd">Server <b class="acc">65.21.27.234:6321</b> · Passwort bei Momo erfragen</span></span></li>
-        <li class="phase" data-i="2"><span class="rn">03</span><span><span class="pn">farmen</span><span class="pd">Ressourcen abbauen · Defense bauen · Runde läuft</span></span></li>
-        <li class="phase" data-i="3"><span class="rn">04</span><span><span class="pn">rb_convert</span><span class="pd"><code class="inl">rb_convert &lt;menge&gt;</code> — Calcium wird unwiderruflich Send-Pool</span></span></li>
-        <li class="phase" data-i="4"><span class="rn">05</span><span><span class="pn">rb_status</span><span class="pd">zeigt Runde · Pool · Boost</span></span></li>
-        <li class="phase" data-i="5"><span class="rn">06</span><span><span class="pn">überleben</span><span class="pd">Wellenstart: der Boost wirkt — Leaks treffen dein HQ</span></span></li>
+        <li class="phase" data-i="0"><span class="rn">01</span><span><span class="pn">laden</span><span class="pd"><code class="inl">rbbattle.zip</code> → Steam: <code class="inl">…\mods\rbbattle\</code> · GOG: <code class="inl">mods\</code></span></span></li>
+        <li class="phase" data-i="1"><span class="rn">02</span><span><span class="pn">join</span><span class="pd">Server <b class="acc">65.21.27.234:6321</b> · Passwort bei Momo</span></span></li>
+        <li class="phase" data-i="2"><span class="rn">03</span><span><span class="pn">farmen</span><span class="pd">Ressourcen abbauen · Defense bauen</span></span></li>
+        <li class="phase" data-i="3"><span class="rn">04</span><span><span class="pn">rb_convert</span><span class="pd"><code class="inl">rb_convert &lt;menge&gt;</code> → unwiderruflich in den Pool</span></span></li>
+        <li class="phase" data-i="4"><span class="rn">05</span><span><span class="pn">rb_status</span><span class="pd">Runde · Pool · Boost prüfen</span></span></li>
+        <li class="phase" data-i="5"><span class="rn">06</span><span><span class="pn">überleben</span><span class="pd">Boost wirkt · Leaks treffen dein HQ</span></span></li>
       </ol>
 
       <div class="term">
@@ -382,16 +377,11 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
         </div>
         <div class="term-body small" id="log" role="img" aria-label="Animiertes Terminal-Replay eines Solo-Test-Laufs: Laden, Join, Farmen, rb_convert, rb_status, Wellenstart mit Boost und HQ bei 100%"></div>
         <pre class="nojs" aria-hidden="true">--- statischer Mitschnitt (ohne JavaScript) ---
-[riftbattle-solo v0.5.0 — mvp-testmodus · lokale welt · seed 0xSOLO]
-[ok]     mod geladen · runde 1 · "unknown game version" → ignoriert (harmlos)
->        join 65.21.27.234:6321 · auth ok · lobby 1/1 (solo)
->        mine-a läuft · +120 calcium · turret → lvl 2
->        rb_status → runde 1 · pool 0 · boost: keiner · HQ 100%
-[!!]     rb_convert 300 → −300 calcium · send-pool · IRREVERSIBEL
->        rb_status → pool 300 · boost: nächste welle
-[sys]    welle 3 start in 0:10 · boost aktiv · spawn +300 value
-[hl]     WELLE 3 · dein boost: +300 · abwehr: 0 leaks
-[ok]     HQ 100% · solo-test bestanden · rematch? → rb_mode duel (später)</pre>
+[ok]     mod geladen · runde 1
+>        join 65.21.27.234:6321 · lobby 1/1 (solo)
+>        rb_convert 300 → pool 300 · IRREVERSIBEL
+[hl]     WELLE 3 · boost: +300 · 0 leaks
+[ok]     HQ 100% · solo-test bestanden</pre>
         <div class="term-ctl">
           <span id="soloStatus">bereit — autoplay startet beim scrollen</span>
           <button class="btn ghost sm" id="replayBtn" type="button">↻ replay</button>
@@ -409,8 +399,7 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
       <h2 id="cmdsTitle">Commands</h2>
     </div>
     <p class="secintro">
-      Alle Konsolen-Commands des Solo-Test-Modus — Eingabe im <span class="acc">Chat/Konsolen-Feld</span>
-      des Clients (führendes <code class="inl">rb_</code> = Rift-Battle-Namespace).
+      Eingabe im <span class="acc">Chat/Konsolen-Feld</span> des Clients.
     </p>
     <div class="wrap">
       <table class="cmd-table">
@@ -420,24 +409,24 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
         <tbody>
           <tr>
             <td>rb_convert <b>&lt;menge&gt;</b></td>
-            <td>Wandelt <b>&lt;menge&gt;</b> Calcium <b>unwiderruflich</b> in den Send-Pool — der Boost gilt für deine <b>nächste Welle</b>. Kein Rücktausch.</td>
+            <td>Wandelt Calcium <b>unwiderruflich</b> in den Pool — Boost für die <b>nächste Welle</b>.</td>
           </tr>
           <tr>
             <td>rb_status</td>
-            <td>Zeigt <b>Runde</b>, <b>Pool</b> und aktiven <b>Boost</b> — die wichtigste Kontrollanzeige im Testmodus.</td>
+            <td>Zeigt <b>Runde</b>, <b>Pool</b> und <b>Boost</b>.</td>
           </tr>
           <tr>
             <td>rb_mode <b>sp|duel</b></td>
-            <td>Modus-Umschaltung: <b>sp</b> = Solo-Test (jetzt), <b>duel</b> = 1v1-Duell (folgt später).</td>
+            <td><b>sp</b> = Solo-Test · <b>duel</b> = folgt später.</td>
           </tr>
           <tr>
             <td>rb_wave <b>&lt;level&gt;</b></td>
-            <td><b>Debug:</b> startet Welle <b>&lt;level&gt;</b> sofort — zum Üben und Testen der Defense.</td>
+            <td>Startet Welle <b>&lt;level&gt;</b> sofort (Debug).</td>
           </tr>
         </tbody>
       </table>
     </div>
-    <div class="hint" style="margin-top:18px"><span class="ok">▲</span><span>Alle weiteren Befehle &amp; Event-Logs: <a href="https://github.com/momokli/riftbreaker-battle-mod/blob/main/mod/README.md" target="_blank" rel="noopener">mod/README.md ↗</a></span></div>
+    <div class="hint" style="margin-top:18px"><span class="ok">▲</span><span>Weitere Befehle: <a href="https://github.com/momokli/riftbreaker-battle-mod/blob/main/mod/README.md" target="_blank" rel="noopener">mod/README.md ↗</a></span></div>
   </div>
 </section>
 
@@ -455,7 +444,7 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
           <span class="reg">balance</span>
         </div>
         <h3>Balance offen</h3>
-        <p>Preise und <b>Pool-Kurs sind Platzhalter</b> — Tuning passiert erst nach dem MVP-Test. Zahlen können sich zwischen Builds ändern.</p>
+        <p>Preise und Pool-Kurs sind <b>Platzhalter</b> — Tuning nach dem MVP-Test.</p>
       </article>
       <article class="card">
         <div class="card-top">
@@ -463,7 +452,7 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
           <span class="reg">start-meldung</span>
         </div>
         <h3>"Unknown game version"</h3>
-        <p>Die Meldung beim Start ist <b>harmlos</b> — der Mod läuft trotzdem. Kein Grund zum Abbruch, einfach weiterspielen.</p>
+        <p>Harmlos — der Mod läuft trotzdem.</p>
       </article>
       <article class="card">
         <div class="card-top">
@@ -471,7 +460,7 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
           <span class="reg">status</span>
         </div>
         <h3>Server-Status</h3>
-        <p>Läuft der Testserver? Erreichbarkeit &amp; Live-Status: <a href="/connectivity.html">/connectivity.html</a> — Join-Adresse: <b class="acc">65.21.27.234:6321</b>.</p>
+        <p>Erreichbarkeit: <a href="/connectivity.html">/connectivity.html</a> · Join: <b class="acc">65.21.27.234:6321</b>.</p>
       </article>
     </div>
     <div class="backlink">
@@ -491,8 +480,7 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
       <span class="gg">solo-test bestanden? — gg wp</span>
     </div>
     <p class="disclaimer">
-      RIFT BATTLE ist ein inoffizielles Fan-Projekt. The Riftbreaker © EXOR Studios — dieser Mod steht in keiner
-      Verbindung zu EXOR Studios und wird von ihnen nicht unterstützt. · © 2026 momokli ·
+      RIFT BATTLE ist ein inoffizielles Fan-Projekt. The Riftbreaker © EXOR Studios — nicht von EXOR unterstützt. · © 2026 momokli ·
       <a href="https://github.com/momokli/riftbreaker-battle-mod" target="_blank" rel="noopener">github.com/momokli/riftbreaker-battle-mod</a>
     </p>
   </div>
@@ -506,10 +494,9 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
 
   /* ---------- HERO: rotierende Typing-Zeile ---------- */
   var phrases = [
-    "sich selber senden — der pool boostet deine nächste welle",
+    "pool boostet deine nächste welle",
     "farmen → rb_convert → pool → boost",
-    "leaks? die treffen dein eigenes HQ",
-    "poker & duel folgen später"
+    "leaks treffen dein HQ"
   ];
   var typedEl = document.getElementById("typed");
   if (typedEl) {
