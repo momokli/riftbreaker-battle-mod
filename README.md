@@ -11,6 +11,13 @@ Ein **Biter-Battles-artiger Runden-Duell-Modus** für *The Rift Breaker* (EXOR S
 
 Runden-Duell 1v1: Beide Spieler spielen eine eigene Rift-Breaker-Partie. Pro Runde Punkte ansparen (Ressourcen, Kills), um damit **Kreaturen-Wellen zum Gegner zu schicken** oder die **eigene Defense auszubauen**. Gewonnen hat, wer die gegnerische Basis zerstört — oder am Ende die meisten Punkte hat.
 
+## Aktuelles Ziel: Solo-MVP
+
+Nächster Meilenstein ist der **Solo-Modus** — allein gegen sich selbst spielen,
+über [rift.projectmellon.de/solo.html](https://rift.projectmellon.de/solo.html)
+verbinden und starten. Der komplette Weg von hier bis zum 4v4-Release steht in
+[ROADMAP.md](ROADMAP.md).
+
 ## Status
 
 - **Feasibility verifiziert** — Mod-API vorhanden, Grenzen bekannt (Details: [docs/findings.md](docs/findings.md))
