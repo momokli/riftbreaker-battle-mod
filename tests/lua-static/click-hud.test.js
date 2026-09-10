@@ -122,7 +122,7 @@ local function log_count(sub)
 end
 
 -- 1. Mod geladen, Click-HUD-Commands + Klick-Event registriert.
-check(log_has("event=mod_load version=0.28.1"), "mod_load version=0.28.1")
+check(log_has("event=mod_load version=0.28.2"), "mod_load version=0.28.2")
 check(_G.__commands["rb_hud_ui"] ~= nil, "rb_hud_ui registriert")
 check(_G.__commands["rb_quick"] ~= nil, "rb_quick registriert")
 check(_G.__handlers["GuiPopupResultEvent"] ~= nil, "GuiPopupResultEvent registriert")
