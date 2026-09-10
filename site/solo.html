@@ -303,6 +303,33 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
   color:var(--bright);border-left:2px solid var(--acc);padding-left:10px;
   background:linear-gradient(90deg,rgba(63,208,212,.14),transparent 80%);
 }
+/* ---------- Solo-Seite: Verbinden & Spielstart (Issue #97) ---------- */
+.connect-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px;align-items:start}
+.connect-form{
+  display:flex;flex-direction:column;gap:10px;
+  background:var(--panel);padding:18px;
+  clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,14px 100%,0 calc(100% - 14px));
+  box-shadow:inset 0 0 0 1px var(--line);
+}
+.fld{color:var(--dim);font-size:11px;letter-spacing:.16em;text-transform:uppercase}
+.inp{
+  background:var(--bg2);border:1px solid var(--line2);color:var(--bright);
+  font:14px/1.4 var(--mono);padding:10px 12px;border-radius:4px;outline:none;
+}
+.inp:focus{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+.connect-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.connect-status{
+  display:flex;align-items:center;gap:10px;grid-column:1 / -1;
+  border:1px solid var(--line2);background:rgba(63,208,212,.04);padding:11px 14px;font-size:13px;
+  clip-path:polygon(0 0,calc(100% - 12px) 0,100% 12px,100% 100%,12px 100%,0 calc(100% - 12px));
+}
+.cs-dot{width:9px;height:9px;border-radius:50%;background:var(--dim);flex:none}
+.cs-dot.ok{background:var(--ok)}
+.cs-dot.err{background:var(--warn)}
+.cs-dot.busy{background:var(--acc);animation:pulseOk 2.4s ease-in-out infinite}
+.cs-line{color:var(--bright);letter-spacing:.03em;word-break:break-word}
+.btn:disabled{opacity:.45;cursor:not-allowed;filter:none;transform:none}
+@media(max-width:660px){.connect-grid{grid-template-columns:1fr}}
 </style>
 <script>document.documentElement.classList.add("js")</script>
 </head>
@@ -315,9 +342,10 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
     <nav aria-label="Hauptnavigation">
       <a href="/"><span class="n">00</span>landing</a>
       <a href="#devlog"><span class="n">01</span>dev-log</a>
-      <a href="#howto"><span class="n">02</span>how-to</a>
-      <a href="#cmds"><span class="n">03</span>commands</a>
-      <a href="#hinweise"><span class="n">04</span>hinweise</a>
+      <a href="#verbinden"><span class="n">02</span>verbinden</a>
+      <a href="#howto"><span class="n">03</span>how-to</a>
+      <a href="#cmds"><span class="n">04</span>commands</a>
+      <a href="#hinweise"><span class="n">05</span>hinweise</a>
     </nav>
     <a class="gh-link" href="https://github.com/momokli/riftbreaker-battle-mod" target="_blank" rel="noopener">github ↗</a>
   </div>
@@ -383,6 +411,40 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
       <span class="ok">▲</span>
       <span>Spielstand-Persistenz (<code class="inl">rb_points</code> im Mod) ist noch kein eigener Event-Typ hier — Stand: <a href="https://github.com/momokli/riftbreaker-battle-mod/issues/65" target="_blank" rel="noopener">Issue #65 ↗</a>.</span>
     </div>
+<!-- ================= VERBINDEN ================= -->
+<section id="verbinden" aria-labelledby="verbindenTitle">
+  <div class="container">
+    <div class="sechead">
+      <span class="sechash">[ §02 ]</span>
+      <h2 id="verbindenTitle">Verbinden &amp; Spiel starten</h2>
+    </div>
+    <p class="secintro">
+      Referee-Server-Adresse eintragen, <span class="acc">verbinden</span>,
+      Solo-Match starten — P1 gegen den <span class="acc">MIRROR</span>-Spiegel
+      (Self-Send). Start läuft über den bestehenden SP-Flow
+      (Referee → Relay → rbbridge).
+    </p>
+    <div class="connect-grid">
+      <form id="connectForm" class="connect-form" autocomplete="off">
+        <label class="fld" for="serverAddr">Server-Adresse</label>
+        <input id="serverAddr" class="inp" type="text" inputmode="url" placeholder="/tournament" spellcheck="false">
+        <div class="connect-actions">
+          <button class="btn sm" id="connectBtn" type="submit">verbinden</button>
+        </div>
+      </form>
+      <form id="startForm" class="connect-form" autocomplete="off">
+        <label class="fld" for="playerName">Pilot</label>
+        <input id="playerName" class="inp" type="text" maxlength="32" placeholder="dein name" spellcheck="false">
+        <div class="connect-actions">
+          <button class="btn" id="startBtn" type="submit" disabled>spiel starten</button>
+        </div>
+      </form>
+      <div class="connect-status" id="connectStatus" role="status" aria-live="polite">
+        <span class="cs-dot" id="connectDot" aria-hidden="true"></span>
+        <span class="cs-line" id="connectLine">noch nicht verbunden</span>
+      </div>
+    </div>
+    <div class="hint"><span class="ok">→</span><span>Leer = Default <code class="inl">/tournament</code> (gleicher Origin). Andere Adresse z.&nbsp;B. <code class="inl">https://ref.example.com</code>. Der Spielstart dispatcht GO über den Relay an rbbridge (exec_result-Feedback, #73).</span></div>
   </div>
 </section>
 
@@ -390,7 +452,7 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
 <section id="howto" aria-labelledby="howtoTitle">
   <div class="container">
     <div class="sechead">
-      <span class="sechash">[ §02 ]</span>
+      <span class="sechash">[ §03 ]</span>
       <h2 id="howtoTitle">How-to — solo-test</h2>
     </div>
     <p class="secintro">
@@ -433,7 +495,7 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
 <section id="cmds" class="alt" aria-labelledby="cmdsTitle">
   <div class="container">
     <div class="sechead">
-      <span class="sechash">[ §03 ]</span>
+      <span class="sechash">[ §04 ]</span>
       <h2 id="cmdsTitle">Commands</h2>
     </div>
     <p class="secintro">
@@ -472,7 +534,7 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
 <section id="hinweise" aria-labelledby="hinweiseTitle">
   <div class="container">
     <div class="sechead">
-      <span class="sechash">[ §04 ]</span>
+      <span class="sechash">[ §05 ]</span>
       <h2 id="hinweiseTitle">Hinweise</h2>
     </div>
     <div class="cards">
@@ -724,6 +786,60 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
       whoEl.textContent = "wer spielt: " + names;
     },
   }).start();
+<script src="solo-connect.js"></script>
+<script>
+(function () {
+  "use strict";
+  var addressEl = document.getElementById("serverAddr");
+  var nameEl = document.getElementById("playerName");
+  var connectForm = document.getElementById("connectForm");
+  var startForm = document.getElementById("startForm");
+  var startBtn = document.getElementById("startBtn");
+  var dot = document.getElementById("connectDot");
+  var line = document.getElementById("connectLine");
+  if (!connectForm || !startForm || !window.RBSoloConnect) return;
+
+  var fallback = window.RBTournamentStatus
+    ? window.RBTournamentStatus.resolveApiBase(document)
+    : "/tournament";
+
+  function render(st) {
+    if (dot) {
+      dot.className = "cs-dot " + (st.ok ? "ok" : "err");
+    }
+    if (line) {
+      if (st.started) {
+        line.textContent = "match gestartet — " + (st.mode || "?") + " · runde " + (st.round || 1);
+      } else if (st.ok) {
+        line.textContent = "verbunden — phase " + (st.phase || "?") + (st.round ? " · runde " + st.round : "");
+      } else if (st.error) {
+        line.textContent = "fehler — " + st.error;
+      } else {
+        line.textContent = "unbekannt";
+      }
+    }
+    if (startBtn) {
+      startBtn.disabled = !widget.isConnected();
+    }
+  }
+
+  var widget = window.RBSoloConnect.createSoloConnect({
+    apiBase: fallback,
+    getAddress: function () { return addressEl ? addressEl.value : ""; },
+    onState: render,
+  });
+
+  connectForm.addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    if (dot) dot.className = "cs-dot busy";
+    if (line) line.textContent = "verbinde …";
+    widget.connect();
+  });
+
+  startForm.addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    widget.start(nameEl ? nameEl.value : "");
+  });
 })();
 </script>
 </body>
