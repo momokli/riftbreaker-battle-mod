@@ -2,6 +2,7 @@
 
 **Status: UNVERIFIZIERT** — Konzept, Container-Setup und Tooling sind angelegt,
 aber noch kein End-to-End-Test gelaufen (Live-Deploy ist Operator-Folgeschritt).
+Der Ersttransfer (~13 GB) läuft separat über `sync-client-data.sh`.
 
 Auf **planet** läuft der Riftbreaker-Client headless in einem Container
 (Wine + Xvfb + Mesa-llvmpipe Software-Rendering). Steuerung/Auswertung über
@@ -21,7 +22,9 @@ als Basis für Multiplayer-/Client-seitige Tests ohne physischen Desktop.
 | `Dockerfile` | Container-Image: Wine + Xvfb + xdotool + Mesa-llvmpipe |
 | `run-client.sh` | Entrypoint: Xvfb starten, Client-Exe via Wine booten |
 | `xdo-nav.sh` | xdotool-Navigation-Wrapper (click/key/type/shot) |
-| `sync-client.sh` | Client-Dateien von `lan` nach `planet` (rsync) |
+| `sync-client-data.sh` | Voll-Sync lan→planet: Größencheck → rsync → Verifikation |
+| `sync-client.sh` | Minimaler Vorgänger (einfaches `rsync -a`) |
+| `test-sync-client-data.sh` | Trockenlauf-Tests für `sync-client-data.sh` (Fake ssh/rsync) |
 
 ## Voraussetzungen
 
@@ -29,19 +32,75 @@ als Basis für Multiplayer-/Client-seitige Tests ohne physischen Desktop.
   - `lan` → momo@lan (Quelle, Homelab)
   - `planet` → root@planet (Ziel, Hetzner)
   - Mesh-first: nie über Public-IPs.
-- Auf `planet`: Docker + `rsync`.
+- Auf `planet`: Docker; `rsync` ≥ 3.1 auf beiden Seiten (für `--info=progress2`
+  und `--protect-args`).
 - Zielverzeichnis auf planet: `/srv/rbclient/game/` (root).
 - Quelldateien auf lan: `/home/momo/share/games/The Riftbreaker/`.
 
 ## 1. Client-Dateien synchronisieren
 
-```bash
-# Voll-Sync (idempotent, rsync -a):
-tools/headless-client/sync-client.sh
+Die Client-Daten (~13 GB) werden per rsync von `lan` nach `planet` synchronisiert.
+Das vollwertige Skript ist `sync-client-data.sh` (Größencheck → rsync → Verifikation).
+`sync-client.sh` ist nur noch der minimale Vorgänger (einfaches `rsync -a`).
 
-# Probe-Lauf ohne Transfer:
-DRY_RUN=1 tools/headless-client/sync-client.sh
+```bash
+# Voll-Sync + Verifikation (Anzahl/Größe + MD5-Stichprobe):
+tools/headless-client/sync-client-data.sh
+
+# Probe-Lauf (kein Transfer, keine Verifikation):
+tools/headless-client/sync-client-data.sh --dry-run
+
+# Ziel spiegeln (Dateien löschen, die auf lan fehlen):
+tools/headless-client/sync-client-data.sh --delete
+
+# Verifikation überspringen:
+tools/headless-client/sync-client-data.sh --no-verify
+
+# MD5-Stichproben-Raster ändern (Default: jede 50. Datei):
+tools/headless-client/sync-client-data.sh --sample 100
+
+# Hilfe:
+tools/headless-client/sync-client-data.sh --help
 ```
+
+### Ablauf
+
+1. **Vorab-Größencheck** (read-only): Quellgröße auf `lan` vs. freier Platz auf dem
+   Ziel-Filesystem; bricht bei Platzmangel ab.
+2. **rsync** idempotent (`-a --partial --info=progress2`), über die Tailscale-ssh-Aliasse.
+3. **Verifikation**: Dateianzahl + Gesamtgröße müssen übereinstimmen; danach
+   MD5-Stichprobe (jede N-te Datei) auf beiden Seiten identisch sein.
+
+### Includes/Excludes
+
+Inkludiert wird der gesamte Spiel-Ordner. Exkludiert (Dateisystem-/Laufzeit-Müll,
+kein Spielinhalt):
+
+| Pattern | Grund |
+|---|---|
+| `.DS_Store`, `Thumbs.db`, `desktop.ini` | OS-Dateisystem-Artefakte |
+| `*.log`, `*.tmp` | Laufzeit-Logs/Temp-Dateien |
+
+`--delete` entfernt auf planet nur Dateien, die auf lan fehlen und nicht
+exkludiert sind (kein `--delete-excluded`).
+
+### Voraussetzungen (Sync-Skript)
+
+- SSH-Aliasse `lan`/`planet` aus `~/.ssh/config` (Mesh-first, siehe oben).
+- Quelldateien auf lan: `/home/momo/share/games/The Riftbreaker`.
+- Zielverzeichnis auf planet: `/srv/rbclient/game` (bzw. übergeordneter Mount für
+  den Platzcheck).
+- Alle Pfade per Environment überschreibbar: `SRC_HOST`, `SRC_DIR`, `DST_HOST`,
+  `DST_DIR`, `SSH_BIN`, `RSYNC_BIN`, `SAMPLE_EVERY`, `DRY_RUN`.
+
+### Tests (ohne echten Transfer)
+
+```bash
+tools/headless-client/test-sync-client-data.sh
+```
+
+Ersetzt `ssh`/`rsync` durch Fake-Binaries und prüft Argument-/Dry-Run-/
+Verifikationslogik ohne 13-GB-Transfer.
 
 Ersttransfer ≈ 13 GB — bewusst als eigener Schritt.
 
