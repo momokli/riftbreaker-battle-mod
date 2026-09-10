@@ -22,3 +22,6 @@
     - tournament-server
     - website
     - probe-timer
+
+# NEGATIV-TEST: absichtlich kaputte YAML-Syntax
+broken: [unclosed
