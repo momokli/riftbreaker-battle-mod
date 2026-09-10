@@ -1,0 +1,51 @@
+---
+# Rolle: mods-zip — Mod paketieren + md5-Paritäts-Check (hart).
+# 1) Paketierung auf dem Control-Node (repo checkout, scripts/package_bausteine.sh)
+#    → dist/rbbattle.zip (Content-Root = mod/).
+# 2) Zip nach planet kopieren.
+# 3) md5(Zip lokal) == md5(Zip planet) — sonst harter Abbruch.
+
+- name: Mod paketieren (scripts/package_bausteine.sh, Control-Node)
+  command:
+    cmd: bash scripts/package_bausteine.sh
+    chdir: "{{ playbook_dir }}/.."
+  delegate_to: localhost
+  become: false
+  register: package_out
+  changed_when: true
+
+- name: Lokale md5 von dist/rbbattle.zip ermitteln
+  stat:
+    path: "{{ playbook_dir }}/../dist/rbbattle.zip"
+    checksum_algorithm: md5
+  delegate_to: localhost
+  become: false
+  register: local_zip
+  failed_when: not local_zip.stat.exists
+
+- name: Mods-Verzeichnis auf planet anlegen
+  file:
+    path: "{{ website_mods_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: rbbattle.zip nach planet kopieren
+  copy:
+    src: "{{ playbook_dir }}/../dist/rbbattle.zip"
+    dest: "{{ mods_zip_dest }}"
+    mode: "0644"
+    owner: root
+    group: root
+
+- name: Remote md5 ermitteln (planet)
+  stat:
+    path: "{{ mods_zip_dest }}"
+    checksum_algorithm: md5
+  register: remote_zip
+
+- name: md5-Parität hart prüfen (Zip == Prod)
+  fail:
+    msg: >-
+      PARITÄT FEHLGESCHLAGEN: lokale md5={{ local_zip.stat.checksum }}
+      remote md5={{ remote_zip.stat.checksum }} — Deploy abgebrochen.
+  when: local_zip.stat.checksum != remote_zip.stat.checksum

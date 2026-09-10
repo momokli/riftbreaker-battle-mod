@@ -1,0 +1,68 @@
+---
+# Rolle: riftbreaker-server — Dev-SP-Server 6321 (1v1 "vs sich selbst"),
+# docker/wine. Voraussetzung: mods-zip hat rbbattle.zip nach
+# {{ mods_zip_dest }} gepackt (md5-Parität bereits geprüft).
+
+- name: Game-Verzeichnis sicherstellen
+  file:
+    path: "{{ riftbreaker_game_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Deploy-Verzeichnis für Compose anlegen
+  file:
+    path: "{{ riftbreaker_deploy_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: docker-compose.yml rendern
+  template:
+    src: docker-compose.yml.j2
+    dest: "{{ riftbreaker_deploy_dir }}/docker-compose.yml"
+    mode: "0600"
+  register: riftbreaker_compose
+
+- name: Mod-Zip md5 (planet) lesen
+  stat:
+    path: "{{ mods_zip_dest }}"
+    checksum_algorithm: md5
+  register: rbbattle_zip_stat
+
+- name: Installierten Mod-Stand lesen (Marker)
+  slurp:
+    src: "{{ riftbreaker_deploy_dir }}/rbbattle.md5"
+  register: mod_marker
+  failed_when: false
+
+- name: rbbattle-Mod installieren (nur bei Änderung)
+  when: (mod_marker.content | default('')) != (rbbattle_zip_stat.stat.checksum | b64encode)
+  block:
+    - name: Alten Mod-Ordner entfernen
+      file:
+        path: "{{ riftbreaker_mod_dir }}"
+        state: absent
+    - name: Mod-Ordner anlegen
+      file:
+        path: "{{ riftbreaker_mod_dir }}"
+        state: directory
+        mode: "0755"
+    - name: Mod-Zip entpacken (Content-Root = mod/)
+      unarchive:
+        src: "{{ mods_zip_dest }}"
+        dest: "{{ riftbreaker_mod_dir }}"
+        remote_src: true
+    - name: Deploy-Marker schreiben
+      copy:
+        content: "{{ rbbattle_zip_stat.stat.checksum }}"
+        dest: "{{ riftbreaker_deploy_dir }}/rbbattle.md5"
+        mode: "0644"
+
+- name: Container sicherstellen (docker compose up -d, idempotent)
+  command:
+    cmd: docker compose up -d --remove-orphans
+    chdir: "{{ riftbreaker_deploy_dir }}"
+  register: riftbreaker_up
+  changed_when: >-
+    ('Recreated' in riftbreaker_up.stdout)
+    or ('Created' in riftbreaker_up.stdout)
+    or ('Started' in riftbreaker_up.stdout)

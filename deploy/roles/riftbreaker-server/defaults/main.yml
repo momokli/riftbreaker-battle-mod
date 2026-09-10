@@ -1,0 +1,27 @@
+---
+# Defaults der Rolle riftbreaker-server.
+# Planet-spezifische Werte (Pfade, Ports, Passwort) stehen in
+# deploy/inventory/host_vars/planet/ — diese Defaults liefern nur Fallbacks
+# bzw. rollen-lokale Struktur.
+
+riftbreaker_deploy_dir: /opt/rbmods/compose/riftbreaker-dedicated
+
+# Dedicated-Server-Kommando (Operator-verifiziert: docs/DUEL_SETUP.md,
+# docs/ASSUMPTIONS.md). Jedes Argument wird UNVERÄNDERT (ohne
+# Shell-Interpretation) an `wine <exe>` gereicht. Das Passwort kommt aus dem
+# Vault (riftbreaker_server_password).
+riftbreaker_server_command:
+  - "{{ riftbreaker_server_exe }}"
+  - "headless_mode=1"
+  - "cli=1"
+  - "app_mode=server"
+  - "campaign={{ riftbreaker_server_campaign }}"
+  - "mission={{ riftbreaker_server_mission }}"
+  - "difficulty={{ riftbreaker_server_difficulty }}"
+  - "map_size={{ riftbreaker_server_map_size }}"
+  - "seed={{ riftbreaker_server_seed }}"
+  - "debug_disable_content_version_check=1"
+  - "server_pause_game_when_empty=1"
+  - "disable_steam=1"
+  - "password={{ riftbreaker_server_password }}"
+riftbreaker_server_extra_args: []

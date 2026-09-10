@@ -1,0 +1,7 @@
+---
+- name: restart rbmods-probe timer
+  systemd:
+    name: "{{ probe_unit }}.timer"
+    state: restarted
+    enabled: true
+    daemon_reload: true

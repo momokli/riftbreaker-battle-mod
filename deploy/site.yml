@@ -1,0 +1,24 @@
+---
+# RIFT BATTLE — Deployment auf planet (systemd + docker, Website, Mods-Zip).
+#
+# Deploy NUR über dieses Playbook:
+#   ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
+#
+# Reihenfolge ist absichtlich:
+#   1. mods-zip            Paketierung + md5-Parität (liefert rbbattle.zip)
+#   2. riftbreaker-server  Dev-SP-Server 6321 (braucht das gepackte Mod)
+#   3. vanilla-server      Vanilla 6322
+#   4. tournament-server   systemd (Rust/axum)
+#   5. website             statics + Caddy (inkl. /tournament/*-Proxy)
+#   6. probe-timer         systemd-Timer → status.json
+
+- name: RIFT BATTLE — planet deploy
+  hosts: planet
+  become: true
+  roles:
+    - mods-zip
+    - riftbreaker-server
+    - vanilla-server
+    - tournament-server
+    - website
+    - probe-timer

@@ -1,0 +1,43 @@
+---
+# Rolle: website — statische Dateien (site/*) nach Docroot + Caddy-Snippet
+# (statics + /tournament/*-Proxy) + Reload. Idempotent, kein Container-Neustart
+# für statische Dateien.
+
+- name: Docroot sicherstellen
+  file:
+    path: "{{ website_docroot }}"
+    state: directory
+    mode: "0755"
+
+- name: Mods-Verzeichnis sicherstellen
+  file:
+    path: "{{ website_mods_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Statische Seiten deployen (site/*)
+  copy:
+    src: "{{ playbook_dir }}/../site/"
+    dest: "{{ website_docroot }}"
+    mode: "0644"
+
+- name: Caddy-Snippet-Verzeichnis sicherstellen
+  file:
+    path: "{{ website_caddyfile_d_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Caddy-Site-Snippet rendern
+  template:
+    src: rbmods.caddy.j2
+    dest: "{{ website_caddyfile_d_dir }}/rbmods.caddy"
+    mode: "0644"
+  notify: reload caddy
+
+- name: Import-Zeile im Caddyfile sicherstellen
+  lineinfile:
+    path: "{{ website_caddyfile_host_path }}"
+    line: "{{ website_caddy_import_line }}"
+    create: true
+    mode: "0644"
+  notify: reload caddy

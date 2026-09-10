@@ -1,0 +1,38 @@
+---
+# Rolle: probe-timer — systemd-Timer für scripts/probe_servers.sh → status.json.
+
+- name: Probe-Skript installieren
+  copy:
+    src: "{{ playbook_dir }}/../scripts/probe_servers.sh"
+    dest: "{{ probe_bin }}"
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: Endpoint-Liste rendern
+  template:
+    src: rbmods-probe.endpoints.j2
+    dest: "{{ probe_endpoints_file }}"
+    mode: "0644"
+  notify: restart rbmods-probe timer
+
+- name: systemd-Service rendern
+  template:
+    src: rbmods-probe.service.j2
+    dest: "/etc/systemd/system/{{ probe_unit }}.service"
+    mode: "0644"
+  notify: restart rbmods-probe timer
+
+- name: systemd-Timer rendern
+  template:
+    src: rbmods-probe.timer.j2
+    dest: "/etc/systemd/system/{{ probe_unit }}.timer"
+    mode: "0644"
+  notify: restart rbmods-probe timer
+
+- name: Timer aktivieren und starten
+  systemd:
+    name: "{{ probe_unit }}.timer"
+    state: started
+    enabled: true
+    daemon_reload: true
