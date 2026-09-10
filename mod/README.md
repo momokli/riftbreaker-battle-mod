@@ -8,7 +8,27 @@ v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 > haben, sonst lehnt der Client die Lobby mit **„different set of mods“** ab.
 > Kurzanleitung: [`docs/PLAYER_SETUP.md`](../docs/PLAYER_SETUP.md).
 
-**v0.20.0 — Solo-Landing: Copy gekürzt, Sektionen geschärft (Issue #96):**
+**v0.20.0 — Balance & Tuning v1: Preisliste + HQ-HP-Kurve (Issue #33):**
+- `RBB.shopCfg`: dokumentierte v1-Preisliste für Tiered Units + Bosse (brabit 100, baxmoth 150,
+  artigian 200, canceroth 300, boss 800) — bestehende Shop-Struktur (#25), kein neues Framework.
+- HQ-HP-Kurve über Runden: `maxHp(r) = hqHpStart + hqHpPerRound * min(r-1, hqHpRoundCap)`
+  (100/120/140/160/180, Deckel ab Runde 4) — `HqMaxHp` setzt bei jedem Wellenstart
+  (`OnNaturalWaveStart`) den HQ-HP auf den Runden-Maxwert, solange das HQ nicht zerstört ist.
+- Neues read-only Command `rb_balance` (loggt Preisliste + Kurve). `RBB.waveIntervalCapS = 300`
+  unverändert (nur dokumentiert, Änderung → #41). `docs/GAME_DESIGN.md` um „Balance & Tuning v1“ ergänzt.
+- Neuer Test `tests/lua-static/balance.test.js` (Preis-Invarianten, Kurven-Formel, Wellenstart-Wiring).
+
+**v0.19.0 — Solo-Play-Flow: Verbinden, Dev-Log-Console, Click-HUD (Issues #109, #110, #111):**
+- `site/solo.html` + `site/solo-connect.js`: Verbinden-Sektion mit Server-Adresse, Verbinden-Button
+  (ok/Fehler-Feedback) und „Spiel starten“ — Start erst nach erfolgreichem Connect (`POST /sp`).
+- `site/dev-log.js`: transparente Live-Dev-Log-Console (`#devlog`) — streamt alle Turnier-Events
+  (`/events?since=<seq>`) ohne Reload; unbekannte Event-Typen bleiben sichtbar (generischer Fallback).
+- Click-HUD (`rb_hud_ui`, `rb_quick`): ein-/ausblendbares HUD-Overlay, wichtigste Send-Aktion per Klick
+  („Ja“ kauft die gerüstete Einheit in die Send-Queue via `BuyWave`; „Nein“ schließt ohne Aktion).
+- Tests: `tests/live-status/solo-connect.test.js`, `tests/live-status/dev-log.test.js`,
+  `tests/lua-static/click-hud.test.js`.
+
+**v0.18.3 — Solo-Landing: Copy gekürzt, Sektionen geschärft (Issue #96):**
 - `site/solo.html`: Copy deutlich gekürzt (Hero-Lead, Tags, Typing-Phrasen, How-to-Schritte,
   Command-Tabelle, Hinweis-Karten, Footer-Disclaimer, statisches `nojs`-Replay). Jede Sektion
   hat eine klare Funktion (Verbinden / Spielen / Status), keine Struktur-/ID-/Klassen-Änderung
