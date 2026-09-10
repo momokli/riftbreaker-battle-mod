@@ -54,25 +54,29 @@ Grundsätze:
 Nach jedem Merge auf `main` deployt
 [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) automatisch auf
 den Solo-DEV-Server (planet, Port 6321) — **rolling**, immer der aktuelle Stand
-zum Testen. Der Lauf nutzt ausschließlich das Ansible-Playbook
-(`ansible-playbook -i deploy/inventory deploy/site.yml --vault-password-file …`),
-SSH mesh-first über den Tailscale-Alias `planet`.
+zum Testen. Der Job läuft auf dem self-hosted Runner auf planet und stößt dort
+den lokalen **HTTP-Deploy-Hook** an (`rbbattle-deploy-hook`, `127.0.0.1:6323`):
+Der Hook macht `git fetch` + Hard-Checkout der Commit-SHA und führt das
+Ansible-Playbook aus (`ansible-playbook -i deploy/inventory deploy/site.yml
+--vault-password-file …`). **Kein SSH aus CI mehr.** Installation/Migration:
+`deploy/README.md` → „CD: HTTP-Deploy-Hook".
 
 Topologie (Momo-Entscheidung, 2026-09-10): **EIN** Server auf `:6321` statt
 Steam-/Non-Steam-Dualität; ein Direct-IP-Server (`disable_steam "1"`) deckt
 beide Stores ab. Der **Tag→prod-Kanal ist vorerst gestrichen** — es gibt
 bewusst keinen Tag-Trigger und keine prod-Umgebung im Workflow.
 
-Secrets liegen ausschließlich als GitHub-Secrets im Environment `dev`
-(`SSH_HOST`, `SSH_KEY`, `ANSIBLE_VAULT_PASS`) und werden nie im Repo oder in
-Logs ausgegeben.
+Einziges GitHub-Secret ist `DEPLOY_TOKEN` im Environment `dev` (Bearer-Token
+Hook ↔ Workflow). Das Vault-Passwort liegt ausschließlich root-only auf planet
+(`/etc/rbbattle-deploy/vault.pass`) und wird nie im Repo oder in Logs ausgegeben.
 
 ## Server-Passwort (Vault)
 
 Das Server-Passwort liegt **nie im Klartext** im Repo. Es steht in
 `deploy/inventory/host_vars/planet/vault.yml` (Variable
 `riftbreaker_server_password`) und wird mit `ansible-vault` verschlüsselt.
-Befüllung: siehe `deploy/README.md` → „Vault".
+Befüllung: siehe `deploy/README.md` → „Vault". Für den CD-Hook liegt das
+Vault-Passwort als root-only Datei auf planet — **niemals** auf GitHub.
 
 ## Aktueller Zustand (2026-09-10)
 
