@@ -60,7 +60,9 @@ Qualitäts-Dimensionen:
 - Game-Design
 
 Für jede zutreffende Dimension bitte ein **eigenes Issue bzw. einen PR**
-aufmachen und im Follow-up verlinken.
+aufmachen und im Follow-up verlinken. Nicht zutreffende Dimensionen als `n/a`
+markieren; erst wenn alle Dimensionen bewertet und verlinkt sind, das Follow-up
+schließen.
 
 Regeln des Automatismus:
 

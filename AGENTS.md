@@ -53,6 +53,11 @@ zutreffende Punkte eigene Issues/PRs an und verlinke sie im Follow-up:
 - HUD-Design
 - Game-Design
 
+**Auflösen (DoD):** Jede Dimension kurz bewerten. Zutreffende Dimensionen als
+eigenes Issue bzw. PR umsetzen und im Follow-up verlinken (Checkbox abhaken);
+nicht zutreffende Dimensionen als `n/a` markieren. Erst wenn alle sechs
+Dimensionen bewertet und verlinkt sind, das Follow-up schließen.
+
 Follow-ups tragen selbst das Label `follow-up` und erzeugen keine weiteren
 Follow-ups (Label-Guard).
 
