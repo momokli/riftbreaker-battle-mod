@@ -12,7 +12,7 @@ Quality-Gates in diesem Repo. Sprache: Deutsch oder Englisch — beides ist ok.
    Assignee** — so arbeitet niemand doppelt. Nicht mehr dran? `!unclaim` gibt es frei.
 3. **Branch erstellen** — `feature/<kurzbeschreibung>` oder `fix/<kurzbeschreibung>`.
 4. **Arbeiten & committen** — klein und nachvollziehbar (siehe Commit-Konvention).
-5. **Pull Request** — gegen `main`, **immer mit Issue-Link** (`Closes #N` / `Refs #N`).
+5. **Pull Request** — gegen `main`, **immer mit Issue-Link** (`Closes #N` / `Refs #N`) — seit den PR-Gates Pflicht (Hard-Fail, siehe unten).
 6. **Review** — mindestens eine Freigabe; CI muss grün sein.
 7. **Squash-Merge** durch einen Maintainer.
 
@@ -20,15 +20,68 @@ Quality-Gates in diesem Repo. Sprache: Deutsch oder Englisch — beides ist ok.
 
 - **Kein Direct-Push auf `main`.** Alles läuft über einen PR.
 - **Nicht an ungeclaimten Issues arbeiten** — erst `!claim`.
-- **PR immer mit Issue verlinkt** (`Closes #N` schließt automatisch, `Refs #N` referenziert nur).
+- **PR immer mit Issue verlinkt** (`Closes #N` schließt automatisch, `Refs #N` referenziert nur) — Pflicht, sonst schlägt das Issue-Referenz-Gate fehl.
 - **Definition of Done**
-  - CI grün: **lint + test + build**.
+  - CI grün: **lint + pr-quality + ci**.
   - Neuer Code hat Tests.
   - Keine Debug-Reste, keine Credentials/Secrets im Diff.
 - **Commit-Konvention:** [Conventional Commits](https://www.conventionalcommits.org/)
   (`feat:`, `fix:`, `docs:`, `chore:`, `ci:`, `refactor:`, `test:`, `build:`, `perf:`,
   `style:`, `revert:`), Message auf Englisch.
 - **Releases** macht nur ein Maintainer über einen `v*-Tag` (z. B. `v1.2.0`).
+
+## Issue-Referenz-Pflicht (Hard-Fail)
+
+Jeder PR **muss** ein Issue referenzieren — im Titel oder in der Beschreibung
+(`Closes #N` schließt das Issue beim Merge automatisch, `Refs #N` referenziert
+nur). Fehlt die Referenz, schlägt der Check `issue-reference` in
+[`pr-quality.yml`](.github/workflows/pr-quality.yml) **hart fehl** und setzt
+zusätzlich einen Kommentar mit Anleitung an den PR. Sobald Titel oder Body eine
+`#N`-Referenz enthalten, wird der Check beim nächsten Lauf automatisch grün.
+
+**Warum so streng?** Nachvollziehbarkeit vom Code zum Kontext, automatische
+Changelog-/Milestone-Pflege und konsistente Abschlussberichte — jede Änderung
+hat ein nachlesbares Issue. Eingeführt per Dogfooding: Der Hard-Fail selbst
+lief über ein Issue. PR-Vorlage:
+[`.github/pull_request_template.md`](.github/pull_request_template.md).
+
+## Automatische Follow-up-Issues
+
+Beim **Schließen** eines Issues legt
+[`followup-issues.yml`](.github/workflows/followup-issues.yml) automatisch ein
+Follow-up-Issue an (Label `follow-up`) — mit einer Checkliste über die
+Qualitäts-Dimensionen:
+
+- Code-Optimierung
+- Dokumentation
+- Accessibility
+- UI-Design
+- HUD-Design
+- Game-Design
+
+Für jede zutreffende Dimension bitte ein **eigenes Issue bzw. einen PR**
+aufmachen und im Follow-up verlinken.
+
+Regeln des Automatismus:
+
+- Follow-ups tragen selbst das Label `follow-up` und erzeugen beim Schließen
+  **keine weiteren** Follow-ups (keine Ketten).
+- Schließt ein Bot ein Issue, entsteht das Follow-up ohne Assignee; sonst wird
+  die schließende Person zugewiesen (sofern der Login existiert).
+
+## Zusammenarbeit mehrerer Agents
+
+Neben Menschen arbeiten AI-Agents am Repo. Die verbindlichen Regeln stehen in
+[AGENTS.md](AGENTS.md) — u. a.:
+
+- **Issue zuerst:** erst suchen, sonst anlegen.
+- **Claimen per `!claim`-Kommentar:** nur ein Agent pro Issue, fremde Claims
+  respektieren, kein Doppel-Arbeiten
+  ([`issue-claim.yml`](.github/workflows/issue-claim.yml)).
+- **Branches** `feature/…` / `fix/…`; niemals direkt auf `main` pushen.
+- **PR mit Issue-Referenz** (Hard-Fail, siehe oben).
+- **Verifikation:** Remote-Push per `git ls-remote` prüfen, PR-URL im
+  Abschlussbericht nennen.
 
 ## Branch- & Milestone-Konvention
 
@@ -44,7 +97,8 @@ Quality-Gates in diesem Repo. Sprache: Deutsch oder Englisch — beides ist ok.
 |---|---|
 | [`lint.yml`](.github/workflows/lint.yml) | shellcheck, ruff, actionlint |
 | [`ci.yml`](.github/workflows/ci.yml) | Tests (Bausteine/E2E/Lua-static) + Build + Release |
-| [`pr-quality.yml`](.github/workflows/pr-quality.yml) | Conventional-Commit-PR-Titel (hart) + Issue-Referenz-Hinweis (weich) |
+| [`pr-quality.yml`](.github/workflows/pr-quality.yml) | Conventional-Commit-PR-Titel (hart) + Issue-Referenz (hart) |
+| [`followup-issues.yml`](.github/workflows/followup-issues.yml) | Follow-up-Issues beim Schließen von Issues (Label `follow-up`) |
 
 ### Fortschritt
 

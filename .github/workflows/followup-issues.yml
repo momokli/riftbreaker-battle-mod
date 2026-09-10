@@ -1,0 +1,80 @@
+name: Follow-up-Issues
+
+# Automatische Follow-up-Issues: Beim Schliessen eines Issues entsteht ein
+# Follow-up-Issue mit Checkliste der Qualitaets-Dimensionen (Code-Optimierung,
+# Dokumentation, Accessibility, UI-Design, HUD-Design, Game-Design).
+#
+# Guards:
+#  - Issues mit Label "follow-up" werden uebersprungen -> keine Follow-up-Ketten
+#    (jedes Follow-up traegt das Label).
+#  - Assignee wird nur bei Menschen gesetzt (kein "[bot]") und nur, wenn der
+#    Login existiert; bei Fehler wird ohne --assignee wiederholt.
+# Least privilege: issues:write (Label + Issue anlegen), contents:read.
+
+on:
+  issues:
+    types: [closed]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  followup:
+    name: Follow-up-Issue anlegen
+    if: ${{ !contains(github.event.issue.labels.*.name, 'follow-up') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label "follow-up" sicherstellen
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh label create follow-up \
+            --color bf3989 \
+            --description "Automatisch erstelltes Follow-up-Issue" \
+            || true  # existiert das Label bereits, ist der Fehler harmlos
+
+      - name: Follow-up-Issue erstellen
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          CLOSER: ${{ github.actor }}
+        run: |
+          # GitHub-Titel-Limit: 256 Zeichen — bei Bedarf kuerzen.
+          TITLE="Follow-up zu #$ISSUE_NUMBER: $ISSUE_TITLE"
+          if (( ${#TITLE} > 256 )); then
+            TITLE="Follow-up zu #$ISSUE_NUMBER: ${ISSUE_TITLE:0:120} …"
+          fi
+
+          BODY="$(cat <<EOF
+          Automatisch erstellt als Follow-up zu #$ISSUE_NUMBER („$ISSUE_TITLE“), geschlossen von @$CLOSER.
+
+          Für jede zutreffende Dimension ein eigenes Issue bzw. einen PR aufmachen und hier verlinken:
+
+          - [ ] Code-Optimierung
+          - [ ] Dokumentation
+          - [ ] Accessibility
+          - [ ] UI-Design
+          - [ ] HUD-Design
+          - [ ] Game-Design
+          EOF
+          )"
+
+          # Assignee nur bei Menschen (kein "[bot]") und nur, wenn Login existiert.
+          ASSIGNEE=()
+          case "$CLOSER" in
+            *'[bot]')
+              ;;
+            *)
+              if gh api "users/$CLOSER" >/dev/null 2>&1; then
+                ASSIGNEE=(--assignee "$CLOSER")
+              fi
+              ;;
+          esac
+
+          # Bei Fehler (z. B. Assignee nicht zuweisbar) ohne Assignee wiederholen.
+          gh issue create --title "$TITLE" --label follow-up --body "$BODY" "${ASSIGNEE[@]}" \
+            || gh issue create --title "$TITLE" --label follow-up --body "$BODY"
