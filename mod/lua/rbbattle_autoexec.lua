@@ -52,6 +52,13 @@
 --       die Bridge injiziert die Gegner-Werte (rb_reveal). rb_hud liefert die
 --       HUD-Standardfelder (Runde, Countdown, Pool, HQ beider Teams);
 --       rb_round_start verbirgt den Reveal fuer die naechste Build-Phase.
+--   #99 Click-HUD (Senden per Klick statt Tippen): toggle-bares HUD-Overlay
+--       (GuiService:OpenPopup, 2-Button-Template) + die wichtigste Send-
+--       Aktion (Einheit kaufen -> Send-Queue) per Klick (GuiPopupResultEvent,
+--       button_yes -> BuyWave). rb_hud_ui oeffnet/schliesst das Overlay,
+--       rb_quick [unit [count]] ruestet die Quick-Send-Einheit (Default
+--       brabit). Convert bleibt bewusst Konsolen-/Bridge-Aktion (braucht
+--       Menge). Kein Version-Bump (Release/Tag macht der Loop).
 --
 -- Basis: rbbattle v0.2.0-single (feature/single-mod, PR #15) + Baustein 00/01.
 -- Kein io/socket/http, keine Bindings, kein eigenes HUD-Framework (nur
@@ -105,6 +112,8 @@
 --   event=reveal_opp round=.. built_opp=.. hq_opp=.. incoming=.. status=ok  (#27)
 --   event=round_start round=.. status=build reveal=hidden                   (#27)
 --   event=hud round=.. countdown=.. pool=.. built_own=.. built_opp=.. incoming=.. hq_own=.. hq_opp=.. reveal=.. (#27)
+--   event=hud_ui status=opened|already_open|closed|no_player|api_missing|error result=.. action=.. quick=.. count=.. (#99)
+--   event=quick_send status=armed|usage|unknown_unit unit=.. count=.. price=.. (#99)
 -- ============================================================================
 
 local RBB = {}
@@ -1803,6 +1812,163 @@ pcall(function()
     ConsoleService:RegisterCommand("rb_hud", function(args)
         CmdHud(args)
     end)
+end)
+
+-- ============================================================================
+-- #99 Click-HUD (Senden per Klick statt Tippen): toggle-bares HUD-Overlay +
+-- wichtigste Send-Aktion per Klick. Overlay = GuiService:OpenPopup mit dem
+-- 2-Button-Template (Muster Baustein 02 / rb_shop); Klick = GuiPopupResultEvent
+-- (button_yes = senden, button_no = schliessen). Reicht die bestehende
+-- Befehls-/Event-Schicht durch: Klick ruft BuyWave (= rb_buy_wave-Logik) auf,
+-- der Wellenstart-Hook (#25) liefert die Queue weiterhin bei der naechsten
+-- Naturwelle aus. MVP-Umfang: Convert bleibt Konsolen-/Bridge-Aktion (braucht
+-- Menge). Kein Version-Bump (Release/Tag macht der Loop).
+-- ============================================================================
+
+-- Laufzeit-Zustand des Click-HUD.
+RBB.clickHud = {
+    open       = false,     -- Overlay (Popup) aktuell offen
+    quickUnit  = "brabit",  -- MVP-Quick-Send-Einheit (billigste Tier-1)
+    quickCount = 1,         -- Einheiten je Klick
+}
+
+-- Overlay-Text: Rundenzustand + was ein Klick auf "Ja" senden wuerde.
+local function ClickHudText()
+    local q = RBB.sendQueue
+    local countdown = RevealCountdown()
+    local unit, _ = FindShopUnit(RBB.clickHud.quickUnit)
+    local price = (unit and unit.price or 0) * RBB.clickHud.quickCount
+    local lines = {
+        '<style="header_35">RBBATTLE — Send-HUD</style>',
+        string.format("Runde: %d", RBB.round),
+        string.format("Countdown: %d s", countdown),
+        string.format("Pool: %d", RBB.economy.pool),
+        string.format("Queue: %d Einheiten", q.count),
+    }
+    lines[#lines + 1] = ""
+    if unit ~= nil then
+        lines[#lines + 1] = string.format(
+            '<style="big_red">Senden:</style> %s x%d (%d) in die Queue',
+            RBB.clickHud.quickUnit, RBB.clickHud.quickCount, price)
+    else
+        lines[#lines + 1] = string.format(
+            '<style="big_red">Senden:</style> unbekannte Unit \'%s\' — rb_quick <unit>',
+            RBB.clickHud.quickUnit)
+    end
+    return table.concat(lines, "\r\n")
+end
+
+-- Oeffnet das Click-HUD-Overlay (2-Button-Popup: Ja = senden, Nein = zu).
+-- Best-effort wie rb_shop: ohne Spieler/API -> nur Log (status=no_player/..).
+local function OpenClickHud()
+    if not (GuiService and GuiService.OpenPopup) then
+        Log("event=hud_ui status=api_missing")
+        return
+    end
+    local okM, mech = pcall(function()
+        return PlayerService:GetPlayerControlledEnt(0)
+    end)
+    if not okM or mech == nil or mech == INVALID_ID then
+        Log("event=hud_ui status=no_player")
+        return
+    end
+    local ok, err = pcall(function()
+        return GuiService:OpenPopup(mech, "gui/popup/popup_ingame_2buttons", ClickHudText())
+    end)
+    if not ok then
+        Log("event=hud_ui status=error err=%s", tostring(err))
+        return
+    end
+    RBB.clickHud.open = true
+    Log("event=hud_ui status=opened quick=%s count=%d round=%d countdown=%d pool=%d queue=%d",
+        RBB.clickHud.quickUnit, RBB.clickHud.quickCount, RBB.round,
+        RevealCountdown(), RBB.economy.pool, RBB.sendQueue.count)
+end
+
+-- GuiPopupResultEvent (Klick-Handler): "Ja" -> Quick-Send (BuyWave), "Nein"
+-- -> schliessen ohne Aktion. Reagiert nur, wenn unser Overlay offen ist
+-- (Guarded, damit z. B. das Shop-Popup hier nicht faelschlich ausloest).
+local function OnGuiPopupResult(evt)
+    if not RBB.clickHud.open then
+        return -- nicht unser Popup (z. B. rb_shop) -> ignorieren
+    end
+    local okR, result = pcall(function() return evt:GetResult() end)
+    if not okR or result == nil then
+        -- Event nicht lesbar -> Zustand freigeben, kein Crash.
+        RBB.clickHud.open = false
+        return
+    end
+    if result == "button_yes" then
+        -- Wichtigste Send-Aktion per Klick: Einheit(en) in die Queue kaufen.
+        -- Nutzt die bestehende Befehls-Schicht (BuyWave = rb_buy_wave-Logik).
+        BuyWave(RBB.clickHud.quickUnit, RBB.clickHud.quickCount)
+        Log("event=hud_ui status=closed result=button_yes action=quick_send unit=%s count=%d",
+            RBB.clickHud.quickUnit, RBB.clickHud.quickCount)
+    else
+        Log("event=hud_ui status=closed result=%s action=none",
+            tostring(result))
+    end
+    RBB.clickHud.open = false
+end
+
+-- rb_hud_ui: Overlay ein-/ausblenden (Toggle).
+local function CmdHudUi(args)
+    if RBB.clickHud.open then
+        Log("event=hud_ui status=already_open")
+        WriteConsole("rb_hud_ui: Send-HUD ist bereits offen (Ja = senden, Nein = schliessen)")
+        return
+    end
+    OpenClickHud()
+end
+
+-- rb_quick [<unit> [count]]: Quick-Send-Einheit ruesten (Default brabit).
+local function CmdQuick(args)
+    local unitId = nil
+    local count = nil
+    if args ~= nil and #args >= 1 then unitId = tostring(args[1]):lower() end
+    if args ~= nil and #args >= 2 then count = tostring(args[2]) end
+
+    if unitId == nil or unitId == "" or unitId == "help" then
+        WriteConsole("rb_quick: Aufruf rb_quick [<unit> [count]] — aktuell: %s x%d (rb_shop zeigt Units)",
+            RBB.clickHud.quickUnit, RBB.clickHud.quickCount)
+        Log("event=quick_send status=usage unit=%s count=%d",
+            RBB.clickHud.quickUnit, RBB.clickHud.quickCount)
+        return
+    end
+
+    local unit, _ = FindShopUnit(unitId)
+    if unit == nil then
+        WriteConsole("rb_quick: unbekannte Unit '%s' — rb_shop zeigt die Liste", unitId)
+        Log("event=quick_send status=unknown_unit unit=%s", unitId)
+        return
+    end
+
+    local n = math.floor(tonumber(count) or 1)
+    if n < 1 then n = 1 end
+    if n > RBB.shopCfg.maxQueueCreatures then
+        n = RBB.shopCfg.maxQueueCreatures
+    end
+    RBB.clickHud.quickUnit = unitId
+    RBB.clickHud.quickCount = n
+    Log("event=quick_send status=armed unit=%s count=%d price=%d",
+        unitId, n, unit.price)
+    WriteConsole("rb_quick: Quick-Send = %s x%d (%d je) — rb_hud_ui oeffnet das Send-HUD",
+        unitId, n, unit.price)
+end
+
+pcall(function()
+    ConsoleService:RegisterCommand("rb_hud_ui", function(args)
+        CmdHudUi(args)
+    end)
+    ConsoleService:RegisterCommand("rb_quick", function(args)
+        CmdQuick(args)
+    end)
+end)
+
+-- Klick-Event registrieren (pcall-gesichert; unbekannter Event-Name laesst
+-- den Rest unangetastet). Muster Baustein 02 (GuiPopupResultEvent).
+pcall(function()
+    RegisterGlobalEventHandler("GuiPopupResultEvent", OnGuiPopupResult)
 end)
 
 -- Lebenszeichen-Log beim Laden (analog Baustein 01 / Spike).

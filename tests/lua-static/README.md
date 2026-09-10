@@ -57,6 +57,21 @@ npm test        # = node --test
 7. `rb_round_start` verbirgt den Reveal wieder (`reveal=hidden`); zweiter
    Wellenstart lockt erneut.
 
+`click-hud.test.js` deckt Issue #99 (Click-HUD / Senden per Klick) ab:
+
+1. Mod lädt, Version 0.18.3; `rb_hud_ui`/`rb_quick` registriert,
+   `GuiPopupResultEvent`-Handler aktiv.
+2. `rb_quick` ohne Args → `status=usage` (Default `brabit` ×1).
+3. `rb_quick brabit 2` → `status=armed`; `rb_quick unbekannt` → `unknown_unit`.
+4. Farm → Convert → Pool 2000.
+5. `rb_hud_ui` öffnet das Overlay (Template `popup_ingame_2buttons`)
+   → `event=hud_ui status=opened`; erneuter Aufruf → `already_open`.
+6. Klick „Ja“ (`button_yes`) → `BuyWave` kauft `brabit` ×2 in die Queue
+   (`event=buy_wave … queue=2`) + `event=hud_ui status=closed action=quick_send`.
+7. Klick „Nein“ (`button_no`) → schließt ohne Kauf (Queue unverändert).
+8. Fremdes Popup (z. B. `rb_shop`, `open=false`) → Guard ignoriert den Klick
+   (kein zusätzlicher Kauf).
+
 ## Grenzen (ehrlich dokumentiert)
 
 Die Stub-Services ersetzen die Spiel-Engine; **nicht** live-verifizierbar sind
@@ -77,3 +92,8 @@ Gegner-Injektion → `rb_hud`) ist statisch getestet; die Gegner-Werte kommen
 zur Laufzeit von der Bridge (kein eigener I/O-Kanal des Mods) und das
 1v1-Routing/der Reveal beider Teams liegt beim Tournament-Server — beides ist
 nicht live-verifizierbar (Operator, Prod).
+
+Für #99 gilt analog: die Klick-/Overlay-Logik (Toggle, `button_yes` → `BuyWave`,
+`button_no` → schließen, Fremd-Popup-Guard) ist statisch getestet; das tatsächliche
+Pop-up-Rendering des 2-Button-Templates (`popup_ingame_2buttons`) und die
+`GuiPopupResultEvent`-Feuerung im Spiel sind live-verifizierbar (Operator, Prod).
