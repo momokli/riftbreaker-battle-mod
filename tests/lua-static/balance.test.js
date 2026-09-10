@@ -167,6 +167,9 @@ check(r5 == 180 and r6 == 180, "Kurve gedeckelt: r5 = r6 = 180")
 check(r1 <= r2 and r2 <= r3 and r3 <= r4 and r4 <= r5 and r5 <= r6,
     "Kurve monoton nicht-fallend")
 
+-- #158 Setup-Phase: HQ platziert -> Commence (Waves starten).
+_G.__handlers["PlayerInitializedEvent"](nil)
+
 -- 5. Wellenstart setzt den HQ-HP auf den Runden-Maxwert (Kurve wirkt).
 --    Runde 1 -> 100, Runde 2 -> 120 (unabhaengig vom Leak-Zwischenstand).
 dom_mananger.OnEnterSpawn(nil, {})

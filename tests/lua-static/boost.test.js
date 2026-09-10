@@ -171,6 +171,9 @@ dom_mananger.SpawnWavesForDifficultyLevel(dom_mananger, 2, false)
 check(_G.__spawnedLevel == 2 and _G.__spawnedAdd == false, "Debug-Trigger: Level unangetastet (2)")
 check(log_count("event=boost status=flush") == 0, "kein Boost-Flush durch Debug-Trigger")
 
+-- #158 Setup-Phase: HQ platziert -> Commence (Waves starten).
+_G.__handlers["PlayerInitializedEvent"](nil)
+
 -- 6. Natuerlicher Wellenstart -> Boost angewendet (50% @ Level 2 -> Delta 1 -> Level 3).
 wave()
 check(log_has("event=boost status=flush round=1 pct=50 level_from=2 level_to=3 delta=1 buys=2"),

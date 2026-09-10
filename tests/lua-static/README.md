@@ -137,6 +137,20 @@ npm test        # = node --test
 AC1 (In-Game-Bestätigung: echter Map-/Session-Reload) ist hier NICHT abbildbar —
 kein Spiel-Zugriff; bleibt Operator-Lauf (Prod).
 
+`commence.test.js` deckt Issue #158 (Setup-Phase / Commence-Flow) ab:
+
+1. Mod lädt in der Setup-Phase (`commenced=false`) + Start-Announce
+   "To commence the game, place the headquarter" als Log
+   (`event=commence status=pending hint=place_hq`) und In-Game-Konsole.
+2. Ohne HQ hält der Wellenstart (`dom_mananger.OnEnterSpawn`) AN: kein
+   Original-Spawn, kein Runden-Zähler; `event=commence status=held reason=no_hq`
+   genau einmal (Spam-Guard). Kein debug_dom_pause (Spiel läuft frei weiter).
+3. HQ platziert → `FindEntitiesByGroup("headquarters")` erkennt es über den
+   HourEvent-Tick (periodische Erkennung) → `event=commence status=ok` +
+   Commence-Announce.
+4. Nach Commence läuft der Wellenstart normal (Spawn + `round=1`).
+5. Commence idempotent; manueller Fallback `rb_hq entity <id>` commencet ebenfalls.
+
 ## Grenzen (ehrlich dokumentiert)
 
 Die Stub-Services ersetzen die Spiel-Engine; **nicht** live-verifizierbar sind
@@ -183,3 +197,11 @@ verifizierbar (Operator, Test-Duell Momo vs. Matheo) — alle Werte sind als
 „braucht Live-Test“ markiert. `baseDifficulty="normal"` ist eine Server-seitige
 Einstellung (docs/DUEL_SETUP.md), die der Mod nicht selbst setzt, sondern nur
 dokumentiert/loggt.
+
+Für #158 gilt analog: die Setup-Phase-/Commence-Logik (pending → held → ok,
+Gate des Wellenstarts an `OnEnterSpawn`, periodische HQ-Erkennung über den
+`HourEvent`-Tick, idempotenter Commence) ist statisch getestet; die tatsächliche
+Wrap-Wirksamkeit am `OnEnterSpawn` im DOM-State-Machine-Kontext (ob der
+prepare→spawn-Zyklus beim Halten sauber weiterläuft) und die echte
+HQ-Platzierung über das Build-Menü (`FindEntitiesByGroup("headquarters")`)
+sind live-verifizierbar (Operator, E2E auf :6321).
