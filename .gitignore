@@ -22,3 +22,8 @@ target/
 # Python
 __pycache__/
 *.pyc
+
+# Agent-/Pipeline-Arbeitsdateien (Repo-Root): PR-Body-Drafts + TaskFlow-Progress
+# (siehe #85/#87 — Reste der CI/CD-Pipeline-Arbeit, gehoeren nicht ins Repo)
+/pr-body-*.md
+/progress-*.md
