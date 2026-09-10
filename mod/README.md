@@ -374,7 +374,8 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 [RBBATTLE] event=wave_spawners count=16 groups=4          ← Pool der Rand-Spawner
 [RBBATTLE] event=spawn ok blueprint=units/ground/baxmoth entity=12345 anchor=spawn_enemy_border_west/...
 [RBBATTLE] event=wave level=3 status=done spawned=8 skipped=0 anchor=border spawners=16
-[RBBATTLE] event=leak damage=10 hp_before=100 hp=90        ← Kreatur erreicht HQ-Zone (#28)
+[RBBATTLE] event=hq_leak status=skip reason=no_hq_entity   ← Leak inaktiv ohne gebundene HQ-Entity (#143, Fix zu #28)
+[RBBATTLE] event=leak damage=10 hp_before=100 hp=90        ← Kreatur erreicht HQ-Zone, NUR mit gebundener Entity (`rb_hq entity <id>`, #28/#144)
 [RBBATTLE] event=hq_hp hp=90 dead=false                    ← Report → Server (POST /report hq_hp)
 [RBBATTLE] event=reveal_opp round=1 built_opp=6400 hq_opp=80 incoming=brabit:2 status=ok   ← Gegner-Werte injiziert (#27)
 [RBBATTLE] event=hud round=1 countdown=300 pool=1800 built_own=3000 built_opp=6400 incoming=brabit:2 hq_own=100 hq_opp=80 reveal=revealed   ← HUD-Felder (#27)
