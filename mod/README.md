@@ -1,12 +1,25 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.20.0 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.21.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 
 > **Multiplayer:** Beide Spieler müssen **exakt dieselben Mods** installiert
 > haben, sonst lehnt der Client die Lobby mit **„different set of mods“** ab.
 > Kurzanleitung: [`docs/PLAYER_SETUP.md`](../docs/PLAYER_SETUP.md).
+
+**v0.21.0 — Send-Boost: nächste Naturwelle prozentual verstärken (Issue #39):**
+- Neues Command `rb_boost <stufe|pct>`: kauft einen prozentualen Aufschlag auf die **nächste
+  Naturwelle** aus dem Spar-Pool (irreversibel). Stufen `s1` +25% (200), `s2` +50% (400),
+  `s3` +100% (800) oder freie pct-Eingabe à 8 Währung/Prozentpunkt. Caps: `maxBoostPct=200`,
+  `maxBoostsPerWave=4`.
+- Neuer Patch-Hook `PatchSpawnWavesHook`: wrappt `dom_mananger:SpawnWavesForDifficultyLevel`
+  (idempotent + pcall = Vanilla-Fallback). Der Boost wird beim nächsten natürlichen Wellenstart
+  als difficultyLevel-Delta angewendet und danach zurückgesetzt — genau eine Welle, nicht kumulativ.
+  Debug-Trigger (`addToSpawned=false`) bleibt unangetastet; `duel` = Boost-Flush nur in `sp`.
+- Anzeige in `rb_status`/`rb_shop`/`rb_balance`; Doku in `docs/GAME_DESIGN.md` + `tests/lua-static/README.md`.
+- Neuer Test `tests/lua-static/boost.test.js` (Guards, Kauf, Flush, Caps, duel-Stub).
+  Prozent→Level-Delta und Stufen-Preise sind dokumentierte **Annahmen** — **braucht Live-Test** (#33).
 
 **v0.20.0 — Balance & Tuning v1: Preisliste + HQ-HP-Kurve (Issue #33):**
 - `RBB.shopCfg`: dokumentierte v1-Preisliste für Tiered Units + Bosse (brabit 100, baxmoth 150,
@@ -313,7 +326,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.20.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
+[RBBATTLE] event=mod_load version=0.21.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100
