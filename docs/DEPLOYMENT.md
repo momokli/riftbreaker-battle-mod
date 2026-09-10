@@ -16,6 +16,14 @@
 | rbmods-probe.timer | planet | systemd | — | Connectivity-Checks alle 2 Min → `status.json` |
 | rbbridge | in Mod-Containern | Prozess | — | Command-Injection (`exec_cmd_client`, Argument IMMER als EIN gequotierter String) |
 
+## Kanonische Landing
+
+- **`site/` ist die einzige kanonische Landing** (GitHub Pages via
+  `pages.yml`, Source-Pfad `site`, kein Build-Schritt). Downloads bleiben
+  GitHub Releases (dist-Zips).
+- `docs/index.html` ist **keine zweite Landing** mehr: ein dünner
+  Verweis/Redirect auf die Landing, ohne eigene Download-/Versions-Links.
+
 ## Deployment-Plan (Ansible, inventory `planet`)
 
 Rollen in `deploy/roles/` (Details: `deploy/README.md`):

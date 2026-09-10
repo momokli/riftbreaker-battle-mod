@@ -36,9 +36,10 @@ Architektur & Design: [docs/concept.md](docs/concept.md) · Install & Spike-Test
   rbbridge-DLL + `pipe_client.py`, ohne Spiel testbar via notepad.exe).
 - **[scripts/package_mod.sh](scripts/package_mod.sh)** — packt den Mod-Ordner
   (`mod/`) als ZIP nach `dist/` für manuelle Verteilung/Tests.
-- **[docs/index.html](docs/index.html)** — schlichte Download-Seite
-  (GitHub Pages: <https://momokli.github.io/riftbreaker-battle-mod/>, Quelle
-  Branch `main` Pfad `/docs`).
+- **[site/index.html](site/index.html)** — kanonische Landing (GitHub Pages:
+  <https://momokli.github.io/riftbreaker-battle-mod/>, Quelle Branch `main`
+  Pfad `/site` via GitHub Actions). `docs/index.html` ist nur noch ein
+  Verweis auf die Landing (keine eigenen Download-/Versions-Links).
 - **[docs/workshop.md](docs/workshop.md)** — Steam-Workshop-Anleitung
   (AppID 780310, SteamCMD, friends-only). **Nur der Lua-Mod, nie der Trainer.**
 
@@ -57,7 +58,7 @@ riftbreaker-battle-mod/
 ├── trainer/   # Sidecar/Trainer (Harness v0: Injector + DLL + RE-Scan-Tools)
 ├── server/    # Relay-Server (geplant, Node)
 ├── scripts/   # Tooling (package_mod.sh: Mod-ZIP bauen)
-├── docs/      # Konzept, Findings, Download-Seite (index.html), Workshop-Anleitung
+├── docs/      # Konzept, Findings, Workshop-Anleitung (+ index.html = Verweis auf site/)
 └── README.md
 ```
 
