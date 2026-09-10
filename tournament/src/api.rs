@@ -5,7 +5,7 @@
 //!   POST /ready   Welt ready                  {"world": "A"|"B"}
 //!   POST /go      GO-Broadcast + Start        {} | {"retry": true}
 //!   POST /send    Wave-Routing A→B            {"world": "A", "units": [...], "value": n}
-//!   POST /report  Welt-Events (send_state)    {"world": "A", "event": "wave_start"|"hq_hp", ...}
+//!   POST /report  Welt-Events (send_state)    {"world": "A", "event": "wave_start"|"hq_hp"|"score_update", ...}
 //!   POST /rematch Reset in die Lobby          {}
 //!   GET  /state   Match-Zustand (Poll)        —
 //!   GET  /health  Healthcheck                 —
@@ -23,6 +23,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -148,6 +149,15 @@ struct ReportReq {
     /// Für event "wave_start": gebauter Wert der Welt zum Lock.
     #[serde(default)]
     built_value: Option<u64>,
+    /// Für event "score_update": Punktestand (send_state-Egress, Issue #13).
+    #[serde(default)]
+    score: Option<u64>,
+    /// Für event "score_update": Ressourcen-Snapshot (z. B. {"iron":320}).
+    #[serde(default)]
+    resources: Option<BTreeMap<String, u64>>,
+    /// Für event "score_update": aktuelle Wave.
+    #[serde(default)]
+    wave: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -348,9 +358,26 @@ async fn report(
                 "hq_hp": hq_hp,
             })))
         }
+        "score_update" => {
+            let score = req.score.unwrap_or(0);
+            let resources = req.resources.unwrap_or_default();
+            let wave = req.wave.unwrap_or(0);
+            let effect = app
+                .with_state(|s| s.score_update(world, score, resources, wave))
+                .await?;
+            let view = app.state.read().await.view();
+            Ok(Json(json!({
+                "world": world.as_str(),
+                "event": "score_update",
+                "score": score,
+                "wave": wave,
+                "changed": effect.changed,
+                "phase": view.phase,
+            })))
+        }
         other => Err(StateError::new(
             "invalid",
-            format!("unbekanntes event '{other}' (erwartet: wave_start, hq_hp)"),
+            format!("unbekanntes event '{other}' (erwartet: wave_start, hq_hp, score_update)"),
         )
         .into()),
     }
@@ -827,6 +854,67 @@ mod tests {
         let (s, v) = call(&app, "POST", "/rematch", None).await;
         assert_eq!(s, StatusCode::CONFLICT);
         assert_eq!(err_type(&v), "conflict");
+    }
+
+    #[tokio::test]
+    async fn score_update_snapshot_appears_in_state() {
+        let app = make_app(test_cfg()).await;
+        // Vor Registrierung → 404.
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "A", "event": "score_update", "score": 10})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+
+        ready_state(&app).await;
+        call(&app, "POST", "/go", Some(json!({}))).await;
+
+        // Periodischer Snapshot mit Ressourcen.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({
+                "world": "A", "event": "score_update",
+                "score": 1240, "resources": {"iron": 320, "carbon": 80}, "wave": 4
+            })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["event"], "score_update");
+        assert_eq!(v["changed"], true);
+
+        // /state zeigt den Snapshot in der Team-View.
+        let (_, st) = call(&app, "GET", "/state", None).await;
+        assert_eq!(st["teams"]["A"]["score"], 1240);
+        assert_eq!(st["teams"]["A"]["wave"], 4);
+        assert_eq!(st["teams"]["A"]["resources"]["iron"], 320);
+        assert_eq!(st["teams"]["A"]["resources"]["carbon"], 80);
+        assert_eq!(st["teams"]["B"]["score"], 0); // unberührt
+
+        // Unveränderter Snapshot → changed=false, kein weiterer Feed-Eintrag.
+        let (_, v2) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({
+                "world": "A", "event": "score_update",
+                "score": 1240, "resources": {"iron": 320, "carbon": 80}, "wave": 4
+            })),
+        )
+        .await;
+        assert_eq!(v2["changed"], false);
+
+        // Feed dokumentiert die Score-Änderung.
+        let (_, ev) = call(&app, "GET", "/events", None).await;
+        assert!(ev["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "score"));
     }
 
     /// Mock-HTTP-Endpoint: akzeptiert eine Verbindung, liefert Request-Text.

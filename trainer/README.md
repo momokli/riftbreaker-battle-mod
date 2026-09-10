@@ -48,7 +48,7 @@ Außenwelt.** Der Lua-Mod bleibt reine Spiellogik — er darf (Findings:
 | Komponente | Inhalt | Aufgabe |
 |---|---|---|
 | `injector/injector.c` | `injector.exe` (x64, Windows) | DLL zur Laufzeit in den Spielprozess laden (Remote-`LoadLibraryW`); Ziel per PID oder Prozessname |
-| `rbbridge/rbbridge.c` | `rbbridge.dll` + `rbbridge_standalone.exe` (x64, Windows) | In-Game-Gateway: Named-Pipe-Server `\\.\pipe\rbbattle`, line-delimited JSON v0; `exec`-Dispatch mit `TODO(RE)`; State-Heartbeat-Platzhalter. **Dual-Mode:** eine Quelle baut per `-DRBBRIDGE_STANDALONE` zusätzlich eine Standalone-EXE mit identischem Protokoll (Test ohne Injection, Baustein 04 Test 0) |
+| `rbbridge/rbbridge.c` | `rbbridge.dll` + `rbbridge_standalone.exe` (x64, Windows) | In-Game-Gateway: Named-Pipe-Server `\\.\pipe\rbbattle`, line-delimited JSON v0; `exec`-Dispatch mit `TODO(RE)`; `score_update`-State-Snapshot (send_state-Egress, Issue #13). **Dual-Mode:** eine Quelle baut per `-DRBBRIDGE_STANDALONE` zusätzlich eine Standalone-EXE mit identischem Protokoll (Test ohne Injection, Baustein 04 Test 0) |
 | `scan/` | Python + pymem | RE-Phase: Prozess-/Modul-Info (`scan_find.py`), interaktiver Wert-Scan (`scan_values.py`) → `offsets.json` |
 | `protocol.md` | Spezifikation | Event-Schema v0 (Spiel ⇄ Server) |
 
@@ -179,8 +179,9 @@ Alles, was den Spielprozess von innen versteht, ist Phase 2
    `ConsoleService:ExecuteCommand` spawnt nachweislich), bevorzugt per
    AOB-Signatur statt fester Adresse. Anhaltspunkt für die Verdrahtung:
    Experiment C im Spike (Log-Bridge `[RBBATTLE] event=...`).
-2. **`send_state_placeholder()`** (`rbbridge.c`): echte State-Werte (Score,
-   Ressourcen, Wave) aus dem Prozess lesen → `score_update`-Events.
+2. **`read_game_state()`** (`rbbridge.c`): echte State-Werte (Score,
+   Ressourcen, Wave) aus dem Prozess lesen → `score_update`-Events
+   (Struktur in `send_state()` verdrahtet, Werte Default bis RE).
 3. **Offsets finden:** `scan/scan_values.py` + Cheat-Engine-Workflow
    (Anleitung: `scan/README.md`), Ergebnisse → `trainer/scan/offsets.json`.
 4. **Event-Zustellung Server→Spiel** strukturiert verdrahten

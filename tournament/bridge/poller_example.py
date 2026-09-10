@@ -85,6 +85,21 @@ def report_hq_hp(hp: float) -> None:
     post_report({"world": WORLD, "event": "hq_hp", "hp": hp})
 
 
+def report_score_update(score: int, resources: dict, wave: int) -> None:
+    """Periodischen State-Snapshot melden (send_state-Egress, Issue #13).
+
+    Der rbbridge-State-Heartbeat (score_update) wird hier an den Referee
+    weitergeleitet → erscheint in /state und der Web-UI.
+    """
+    post_report({
+        "world": WORLD,
+        "event": "score_update",
+        "score": score,
+        "resources": resources,
+        "wave": wave,
+    })
+
+
 def main() -> None:
     if WORLD not in ("A", "B"):
         sys.exit(f"RBBRIDGE_POLL_WORLD muss 'A' oder 'B' sein (ist: {WORLD})")

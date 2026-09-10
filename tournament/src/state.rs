@@ -190,6 +190,10 @@ pub struct TeamState {
     pub player: Option<String>,
     pub ready: bool,
     pub hq_hp: f64,
+    /// Letzter `score_update`-Snapshot (send_state-Egress, Issue #13).
+    pub score: u64,
+    pub resources: BTreeMap<String, u64>,
+    pub wave: u32,
     /// Sends, die in die nächste Welle dieser Welt laufen (noch nicht gedraint).
     pub pending: Vec<SendBatch>,
     pub broadcast: BroadcastStatus,
@@ -704,6 +708,36 @@ impl MatchState {
         Ok(HqEffect { match_over: false })
     }
 
+    /// POST /report — score_update (send_state-Egress, Issue #13): periodischer
+    /// State-Snapshot (Score, Ressourcen, Wave) einer Welt. Idempotent; der
+    /// Feed wird nur bei Score-/Wave-Änderung belastet.
+    pub fn score_update(
+        &mut self,
+        world: World,
+        score: u64,
+        resources: BTreeMap<String, u64>,
+        wave: u32,
+    ) -> Result<ScoreEffect, StateError> {
+        if self.player(world).is_none() {
+            return Err(StateError::new(
+                "not_found",
+                format!("Welt {world} ist nicht registriert"),
+            ));
+        }
+        let changed;
+        {
+            let team = self.team_mut(world);
+            changed = team.score != score || team.wave != wave;
+            team.score = score;
+            team.resources = resources;
+            team.wave = wave;
+        }
+        if changed {
+            self.log("score", format!("Welt {world}: Score {score}, Wave {wave}"));
+        }
+        Ok(ScoreEffect { changed })
+    }
+
     /// POST /rematch — Reset in die Lobby (Spieler bleiben registriert).
     pub fn rematch(&mut self) -> Result<(), StateError> {
         if self.phase == Phase::Running {
@@ -725,6 +759,9 @@ impl MatchState {
             let team = self.team_mut(w);
             team.ready = false;
             team.hq_hp = hq;
+            team.score = 0;
+            team.resources.clear();
+            team.wave = 0;
             team.pending.clear();
             team.broadcast = BroadcastStatus::default();
         }
@@ -762,6 +799,9 @@ impl MatchState {
                     player: t.player.clone(),
                     ready: t.ready,
                     hq_hp: t.hq_hp,
+                    score: t.score,
+                    resources: t.resources.clone(),
+                    wave: t.wave,
                     pending_sends: t.pending.clone(),
                     go_broadcast: t.broadcast.clone(),
                 },
@@ -804,6 +844,9 @@ impl TeamState {
             player: None,
             ready: false,
             hq_hp: hq_hp_start,
+            score: 0,
+            resources: BTreeMap::new(),
+            wave: 0,
             pending: Vec::new(),
             broadcast: BroadcastStatus::default(),
         }
@@ -833,6 +876,9 @@ pub struct TeamView {
     pub player: Option<String>,
     pub ready: bool,
     pub hq_hp: f64,
+    pub score: u64,
+    pub resources: BTreeMap<String, u64>,
+    pub wave: u32,
     pub pending_sends: Vec<SendBatch>,
     pub go_broadcast: BroadcastStatus,
 }
@@ -907,6 +953,11 @@ pub enum WaveEffect {
 #[derive(Debug, Clone, PartialEq)]
 pub struct HqEffect {
     pub match_over: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScoreEffect {
+    pub changed: bool,
 }
 
 fn now_ms() -> u64 {
@@ -1610,5 +1661,53 @@ mod tests {
         assert_eq!(Mode::Sp.as_str(), "sp");
         assert_eq!(Mode::Duel.as_str(), "duel");
         assert_eq!(format!("{}", Mode::Sp), "sp");
+    }
+
+    // ---- send_state-Egress (Issue #13): score_update-Snapshot ----
+
+    fn res(iron: u64, carbon: u64) -> BTreeMap<String, u64> {
+        BTreeMap::from([("iron".to_string(), iron), ("carbon".to_string(), carbon)])
+    }
+
+    #[test]
+    fn score_update_records_snapshot_and_logs_on_change() {
+        let mut s = fresh();
+        // nicht registriert → not_found
+        assert_eq!(
+            s.score_update(World::A, 10, res(1, 2), 1).unwrap_err().code,
+            "not_found"
+        );
+        start(&mut s);
+        let e = s.score_update(World::A, 1240, res(320, 80), 4).unwrap();
+        assert!(e.changed);
+        assert_eq!(s.team(World::A).score, 1240);
+        assert_eq!(s.team(World::A).wave, 4);
+        assert_eq!(s.team(World::A).resources["iron"], 320);
+        assert_eq!(s.team(World::A).resources["carbon"], 80);
+        // unveränderter Snapshot → kein neuer Feed-Eintrag
+        let before = s.feed.len();
+        let e = s.score_update(World::A, 1240, res(320, 80), 4).unwrap();
+        assert!(!e.changed);
+        assert_eq!(s.feed.len(), before);
+        // geänderte Wave → Feed-Eintrag
+        s.score_update(World::A, 1240, res(320, 80), 5).unwrap();
+        assert!(s.feed.iter().any(|f| f.kind == "score"));
+        // View enthält den Snapshot
+        let v = s.view();
+        assert_eq!(v.teams["A"].score, 1240);
+        assert_eq!(v.teams["A"].wave, 5);
+        assert_eq!(v.teams["A"].resources["iron"], 320);
+    }
+
+    #[test]
+    fn score_update_reset_on_rematch() {
+        let mut s = fresh();
+        start(&mut s);
+        s.score_update(World::A, 900, res(10, 10), 3).unwrap();
+        s.report_hq(World::A, 0.0).unwrap();
+        s.rematch().unwrap();
+        assert_eq!(s.team(World::A).score, 0);
+        assert_eq!(s.team(World::A).wave, 0);
+        assert!(s.team(World::A).resources.is_empty());
     }
 }

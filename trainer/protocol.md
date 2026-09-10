@@ -25,7 +25,7 @@ Wahrheitsquelle, Events sind nur Benachrichtigungen.
 ```json
 {"event":"pong","t":12345678}
 {"event":"exec_result","command":"rb_wave 3","ok":false,"reason":"not_implemented (RE: ConsoleService/Lua-State finden)"}
-{"event":"state","t":12345678,"state":{}}
+{"event":"score_update","t":12345678,"score":0,"resources":{"iron":0,"carbon":0},"wave":0}
 {"event":"error","error":"unknown_cmd"}
 ```
 
@@ -92,8 +92,8 @@ werden ignoriert (vorwärtskompatibel). Alle Events sind benachrichtigend
 
 | Event | Erzeuger im Spiel | Stand im Harness |
 |---|---|---|
-| `pong`, `exec_result`, `state`, `error` | `rbbridge.c` (Pipe-Server) | ✅ implementiert |
-| `score_update`, `wave_received`, `round_*`, `match_end` | **TODO(RE):** Werte/Adressen per `scan/` finden bzw. Events aus Lua-Signalen (`[RBBATTLE] event=...` Log-Prefix im Mod, Experiment C) ableiten | offen |
+| `pong`, `exec_result`, `score_update`, `error` | `rbbridge.c` (Pipe-Server) | ✅ implementiert |
+| `score_update`, `wave_received`, `round_*`, `match_end` | **TODO(RE):** Werte/Adressen per `scan/` finden bzw. Events aus Lua-Signalen (`[RBBATTLE] event=...` Log-Prefix im Mod, Experiment C) ableiten | offen (Struktur in `send_state()` verdrahtet, Werte Default bis RE) |
 | `wave_sent` | Lua-Mod beim Kauf der Welle (meldet über `exec`-Kanal / künftigen Event-Pfad) | offen (Mod folgt aus Spike) |
 | `round_start`, `incoming_wave`, `round_end`, `match_end` (Server→Spiel) | Empfang in DLL → Zustellung an Spiel/Lua | **TODO(RE):** dispatch_exec-Anschluss; Lua-seitig registriert der Mod `rb_wave <level>` bereits (Spike) |
 
@@ -104,7 +104,7 @@ werden ignoriert (vorwärtskompatibel). Alle Events sind benachrichtigend
 - Pro Zeile eine Nachricht; Antworten (`pong`, `exec_result`, ...) über eine
   korrelierbare ID zuordnen, sobald mehr als fire-and-forget gebraucht wird
   (v0: Reihenfolge + `command`-Echo reichen).
-- Regelmäßig `{"cmd":"ping"}` als Liveness-Check; `state`-Heartbeat kommt
-  ohnehin alle 5 s von der DLL.
+- Regelmäßig `{"cmd":"ping"}` als Liveness-Check; der `score_update`-Snapshot
+  kommt ohnehin alle 5 s von der DLL (send_state-Egress, Issue #13).
 - Keine Annahme über garantierten Empfang — bei Lücke einfach nächsten
   Zustand per Pull (z. B. `exec`-Kommando `rbbattle_state` im Lua-Mod) holen.
