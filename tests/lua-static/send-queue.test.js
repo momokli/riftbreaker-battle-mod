@@ -41,6 +41,7 @@ ConsoleService = {
     RegisterCommand = function(self, name, fn) _G.__commands[name] = fn end,
 }
 FindService = {
+    FindEntitiesByType = function(self, t) return { 100 } end,
     FindEntitiesByGroup = function(self, g) return { 100 } end,
     FindPlayerSpawnPoints = function(self) return {} end,
 }
