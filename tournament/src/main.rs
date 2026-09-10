@@ -19,6 +19,7 @@
 
 mod api;
 mod broadcast;
+mod elo;
 mod state;
 
 use api::{AppState, Config};
