@@ -1,0 +1,12 @@
+# RIFT BATTLE — Website-Snippet (verwaltet von deploy/ role website, Jinja).
+# NICHT manuell editieren. Einbindung im Caddyfile: {{ website_caddy_import_line }}
+{{ website_domain }} {
+	root * {{ website_docroot }}
+	encode gzip
+	file_server
+
+	# Tournament-Server (Web-UI + API) unter /tournament/* — Präfix wird gestrippt.
+	handle_path /tournament/* {
+		reverse_proxy 127.0.0.1:{{ tournament_port }}
+	}
+}

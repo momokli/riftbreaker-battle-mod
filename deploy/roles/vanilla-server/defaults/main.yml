@@ -1,0 +1,17 @@
+---
+# Defaults der Rolle vanilla-server (kein Mod, schnelle Test-Joins).
+vanilla_deploy_dir: /opt/rbmods/compose/rb-winetest
+
+# Vanilla-Server-Kommando — kein Mod, kein Content-Version-Check-Override.
+# Passwort kommt aus dem Vault (riftbreaker_server_password).
+vanilla_server_command:
+  - "{{ vanilla_server_exe }}"
+  - "headless_mode=1"
+  - "cli=1"
+  - "app_mode=server"
+  - "campaign={{ vanilla_server_campaign }}"
+  - "mission={{ vanilla_server_mission }}"
+  - "difficulty={{ vanilla_server_difficulty }}"
+  - "disable_steam=1"
+  - "password={{ riftbreaker_server_password }}"
+vanilla_server_extra_args: []

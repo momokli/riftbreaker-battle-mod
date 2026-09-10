@@ -1,0 +1,11 @@
+[Unit]
+Description=RIFT BATTLE Server-Probe (status.json)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=RB_OUT={{ probe_out }}
+Environment=RB_SITE_URL={{ probe_site_url }}
+Environment=RB_ENDPOINTS_FILE={{ probe_endpoints_file }}
+ExecStart={{ probe_bin }}

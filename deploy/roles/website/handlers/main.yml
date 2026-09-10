@@ -1,0 +1,4 @@
+---
+- name: reload caddy
+  command: docker exec {{ website_caddy_container }} caddy reload --config /etc/caddy/Caddyfile
+  changed_when: false

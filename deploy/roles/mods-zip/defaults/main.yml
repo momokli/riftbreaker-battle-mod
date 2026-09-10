@@ -1,0 +1,4 @@
+---
+# Defaults der Rolle mods-zip (Paketierung + md5-Parität).
+# Paketierung läuft auf dem Control-Node (scripts/package_bausteine.sh),
+# das Zip wird nach planet kopiert und die md5-Parität hart geprüft.

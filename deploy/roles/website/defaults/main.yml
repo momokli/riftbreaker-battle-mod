@@ -1,0 +1,5 @@
+---
+# Defaults der Rolle website (statics + Caddy).
+# Caddy läuft als Container (mellon-caddy); das Site-Snippet wird in
+# {{ website_caddyfile_d_dir }} abgelegt und über einen `import` im Caddyfile
+# eingebunden. Einbindung ist idempotent (lineinfile).

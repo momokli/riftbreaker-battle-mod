@@ -1,0 +1,31 @@
+---
+# Rolle: vanilla-server — zweite Instanz ohne Mods (6322).
+
+- name: Game-Verzeichnis sicherstellen
+  file:
+    path: "{{ vanilla_game_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Deploy-Verzeichnis für Compose anlegen
+  file:
+    path: "{{ vanilla_deploy_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: docker-compose.yml rendern
+  template:
+    src: docker-compose.yml.j2
+    dest: "{{ vanilla_deploy_dir }}/docker-compose.yml"
+    mode: "0600"
+  register: vanilla_compose
+
+- name: Container sicherstellen (docker compose up -d, idempotent)
+  command:
+    cmd: docker compose up -d --remove-orphans
+    chdir: "{{ vanilla_deploy_dir }}"
+  register: vanilla_up
+  changed_when: >-
+    ('Recreated' in vanilla_up.stdout)
+    or ('Created' in vanilla_up.stdout)
+    or ('Started' in vanilla_up.stdout)

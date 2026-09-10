@@ -1,0 +1,16 @@
+---
+# ============================================================================
+# planet — VAULT (Geheimnisse). NIE Klartext committen!
+# ============================================================================
+# Diese Datei enthält das Server-Passwort. Vor dem ersten Deploy:
+#
+#   1) Datei verschlüsseln und Wert eintragen (statt "CHANGE_ME"):
+#        ansible-vault encrypt deploy/inventory/host_vars/planet/vault.yml
+#        ansible-vault edit   deploy/inventory/host_vars/planet/vault.yml
+#   2) Playbook-Lauf mit Vault-Passwort:
+#        ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
+#
+# Referenz im Repo: KEIN Klartext-Passwort. Der Platzhalter unten ist
+# ausschließlich eine leere Schablone (wird beim ersten echten Deploy ersetzt
+# und die Datei danach verschlüsselt).
+riftbreaker_server_password: "CHANGE_ME"
