@@ -4,6 +4,17 @@ Einzel-Mod **rbbattle** v0.6.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 
+**v0.7.0 — rb_wave ohne Spieler (Spawn-Anker alternativ zum Mech, Issue #12):**
+- **Anker-Kette OHNE Spieler:** `rb_wave`/`rb_send` wählt den Spawn-Anker in
+  3 Stufen — (1) natürliche Kartenrand-Spawner (`spawn_enemy_border_*`, #26),
+  (2) **Missions-Spawnpunkte** (Fallback NEU: `FindService:FindPlayerSpawnPoints()`
+  + `MapGenerator:GetInitialSpawnPoint()`), (3) Spieler-Mech-Ring (letzter
+  Fallback, braucht einen Spieler). Stufe (1) und (2) sind serverseitig
+  verfügbar, sobald die Welt gebootet ist — `rb_wave` spawnt damit auf einem
+  **leeren (unpausierten) Server ohne Client/Spieler**.
+- Log: `event=wave … anchor=border|mission|mech`; Missions-Fallback loggt
+  `event=wave … status=no_border_spawners anchor=mission_spawn_point count=N`.
+
 **v0.6.0 — Headless-Client-Tooling (Issues #7/#8), Mod-Laufzeit unverändert:**
 - `tools/headless-client/`: Container-Setup (Wine + Xvfb + Mesa-llvmpipe),
   Entrypoint `run-client.sh` und xdotool-Navigation `xdo-nav.sh` (#7).
@@ -180,8 +191,10 @@ erwartet, s. #7); (4) macOS-Mod-Support ungeklärt.
   Checks (rb_mode Default/Wechsel/usage; rb_convert Calcium-first + Alias +
   Guards; rb_status Runde/Pool/Boost; Self-Boost-Hook: Original-OnEnterSpawn
   zuerst, Runden-Zähler, Pool greedy → Spawn, Rest-Pool). v0.6.0: keine
-  Mod-Änderung (Tooling-Release, #7/#8). In-Game-Test steht
-  aus (Operator, Prod).
+  Mod-Änderung (Tooling-Release, #7/#8). v0.7.0: 5 Szenarien /
+  14 Checks (Anker-Kette border→mission→mech; Missions-Fallback ohne Spieler
+  spawnt 5/8 Kreaturen im Ring um den Spawnpunkt; Initial-Spawnpoint-Fallback;
+  kein Anker → Skip). In-Game-Test steht aus (Operator, Prod).
 - **Economy-Fallback dokumentiert:** Der Mod hat keinen verifizierten Zugriff
   aufs Spieler-Ressourcen-Konto (api-deep-dive.md §1); Value kommt aus
   Ernte-Events (Getter-Ladder). Sind die Events nicht lesbar, schaltet die
