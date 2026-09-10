@@ -1,0 +1,91 @@
+name: PR Quality
+
+# Qualitaets-Gates fuer Pull Requests:
+#  - semantic-title:  PR-Titel muss Conventional Commits folgen (HARD FAIL).
+#  - issue-reference: PR-Body soll ein Issue referenzieren; fehlt die Referenz,
+#                     wird nur ein freundlicher Warnkommentar gesetzt (kein Fail).
+# Least privilege: contents:read (Titel lesen) + pull-requests:write (Kommentar).
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  semantic-title:
+    name: Conventional-Commit-Titel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Erlaubte Typen (Conventional Commits).
+          types: |
+            feat
+            fix
+            docs
+            chore
+            ci
+            refactor
+            test
+            build
+            perf
+            style
+            revert
+
+  issue-reference:
+    name: Issue-Referenz im PR-Body
+    runs-on: ubuntu-latest
+    steps:
+      - name: PR-Body auf Issue-Referenz pruefen
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = (context.payload.pull_request.body || '');
+            // Matcht "#123" ebenso wie "owner/repo#123".
+            const hasRef = /#\d+/.test(body);
+            if (hasRef) {
+              core.info('Issue-Referenz im PR-Body gefunden — kein Kommentar noetig.');
+              return;
+            }
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const marker = '<!-- pr-quality: issue-reference -->';
+
+            try {
+              // Idempotenz: nur einmal warnen.
+              const { data: comments } = await github.rest.issues.listComments({
+                owner, repo, issue_number, per_page: 100,
+              });
+              if (comments.some((c) => c.body && c.body.includes(marker))) {
+                core.info('Warnkommentar existiert bereits — uebersprungen.');
+                return;
+              }
+
+              const text = [
+                marker,
+                '👋 **Hinweis zur Nachvollziehbarkeit**',
+                '',
+                'Dieser Pull Request nennt in der Beschreibung keine Issue-Referenz.',
+                'Bitte verlinke das zugehoerige Issue, z. B. mit `Closes #123`',
+                '(schliesst das Issue beim Merge automatisch) oder `Refs #123`',
+                '(reine Referenz). Das ist keine Pflicht, hilft aber bei Review,',
+                'Nachverfolgung und Changelog. Danke! 🛠️',
+              ].join('\n');
+
+              await github.rest.issues.createComment({
+                owner, repo, issue_number, body: text,
+              });
+              core.info('Warnkommentar gesetzt.');
+            } catch (err) {
+              // Fork-PRs haben ggf. nur Lesezugriff — dann bewusst nicht fehlschlagen.
+              core.warning(
+                'Warnkommentar konnte nicht gesetzt werden ' +
+                '(z. B. Fork-PR ohne Schreibrechte): ' + err.message
+              );
+            }
