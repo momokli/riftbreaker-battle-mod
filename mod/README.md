@@ -1,8 +1,18 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.15.0 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.16.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
+
+**v0.16.0 — Relay-Dispatch auf die rbbridge-Pipe + Live-Status auf solo.html (Issues #60, #62):**
+- `bausteine/07-relay/relay.py`: `dispatch_exec` ist kein v0-TODO mehr — ein
+  `exec_command` aus der Web-UI wird als `{"cmd":"exec","command":…,"cmd_id":…}`
+  auf die rbbridge-Named-Pipe (`\\.\pipe\rbbattle`, via `RBB_PIPE_PATH`) geschrieben.
+  Pipe nicht erreichbar → **kein** Ack-Verbrennen, sondern Retry mit Backoff
+  (`dispatch failed reason=pipe_unavailable`). Vertrag: `docs/relay-pipe-contract.md`.
+- `site/solo.html` (SP-/quasi-PROD-Einstieg): Live-Lobby-Status-Widget verdrahtet
+  (analog `site/index.html`) — zeigt Spiel-/Lobby-Status des Turnier-Servers.
+- Kein Balancing (#33/#39/#40/#41) berührt.
 
 **v0.15.0 — Einzel-Mod-Paket als Primär-Download (Issue #16):**
 - `scripts/package_bausteine.sh` baut zusätzlich `rbbattle.zip` (Content-Root `mod/`:
@@ -245,7 +255,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.15.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
+[RBBATTLE] event=mod_load version=0.16.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100
@@ -320,7 +330,7 @@ HQ-Entity; negative Fälle: andere Entity / ohne Entity-Zuordnung; Idempotenz
 nach HQ-Tod). v0.12.0: 1 Szenario / 23 Checks (Send-Queue & Shop-HUD:
 rb_shop Tier-Liste + Popup; rb_buy_wave Guards usage/unbekannt/insufficient;
 Farm→Convert→Kauf brabit/boss→Queue; rb_queue-Status; Wellenstart → Flush →
-send_queue done; Queue danach leer; erneuter Kauf + 2. Welle). v0.15.0:
+send_queue done; Queue danach leer; erneuter Kauf + 2. Welle). v0.16.0:
 Reveal-HUD (#27) 1 Szenario / 14 Checks (rb_hud vor Wellenstart reveal=hidden;
 Farm→Convert→Kauf → built_own=3000; Wellenstart → event=reveal mit
 send_own=brabit:2; rb_reveal → built_opp/incoming/hq_opp; rb_hud beide Teams;

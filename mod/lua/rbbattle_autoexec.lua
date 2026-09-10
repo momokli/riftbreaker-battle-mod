@@ -1,5 +1,5 @@
 -- ============================================================================
--- rbbattle_autoexec.lua  (Einzel-Mod rbbattle, v0.15.0)
+-- rbbattle_autoexec.lua  (Einzel-Mod rbbattle, v0.16.0)
 --
 -- RIFT BATTLE Mod-Core (Foundation):
 --   #26 Send-Spawn an den 16 natuerlichen Kartenrand-Spawnern
@@ -75,7 +75,7 @@
 --     -> Persistenz (HasInt/GetIntOrDefault/SetInt/RemoveKey)  (Issue #24)
 --
 -- Log-Zeilen (externes Parsing, Praefix [RBBATTLE]):
---   event=mod_load version=0.15.0 status=ok mode=sp econ_source=.. econ_pool=.. hq_hp=.. hq_dead=..
+--   event=mod_load version=0.16.0 status=ok mode=sp econ_source=.. econ_pool=.. hq_hp=.. hq_dead=..
 --   event=wave level=N status=start|done spawned=.. skipped=.. anchor=border|mission|mech
 --   event=spawn ok|failed|skip ... anchor=<gruppe>/<id>            (je Kreatur)
 --   event=wave_spawners count=N                                    (Pool-Groesse)
@@ -108,7 +108,7 @@
 -- ============================================================================
 
 local RBB = {}
-RBB.version = "0.15.0"
+RBB.version = "0.16.0"
 
 -- Log-/Konsole-Helfer (Muster Spike): Praefix [RBBATTLE] fuer externes Parsen.
 local LOG_TAG = "[RBBATTLE]"

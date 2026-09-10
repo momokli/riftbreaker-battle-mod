@@ -24,6 +24,9 @@ jobs:
       - name: E2E Baustein 07 (relay-Prototyp)
         working-directory: bausteine/07-relay
         run: bash test_e2e_prototype.sh
+      - name: Unit-Test Relay-Pipe-Dispatch (Issue #60)
+        working-directory: bausteine/07-relay
+        run: python3 -m unittest test_dispatch -v
       - name: Lua Static Tests (fengari + luaparse, Issue #28)
         working-directory: tests/lua-static
         run: npm ci && npm test
