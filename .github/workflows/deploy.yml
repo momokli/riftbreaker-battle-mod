@@ -1,0 +1,92 @@
+name: Deploy (CD)
+
+# Continuous Deployment: jeder Merge auf main rollt den aktuellen Mod-Stand
+# automatisch auf den Solo-DEV-Server (planet, Port 6321) aus — immer der
+# aktuelle Stand zum Testen (Issue #91).
+#
+# Topologie-Update (2026-09-10, Issue #91): EIN Server auf :6321 statt
+# Steam-/Non-Steam-Dualität; ein Direct-IP-Server deckt beide Stores ab
+# (disable_steam "1"). Der Tag→prod-Kanal ist vorerst gestrichen — dieser
+# Workflow hat daher bewusst KEINEN tag-Trigger und KEINE prod-Umgebung.
+#
+# Deploy läuft ausschließlich über das bestehende Ansible-Playbook:
+#   ansible-playbook -i deploy/inventory deploy/site.yml --vault-password-file …
+# SSH mesh-first über den Tailscale-Alias "planet", niemals über Public-IP.
+#
+# Secrets (GitHub-Environment "dev"; Werte werden von Momo bereitgestellt,
+# liegen NIE im Repo und werden NIE geloggt):
+#   SSH_HOST            Tailscale-Adresse des Deploy-Hosts (planet)
+#   SSH_KEY             privater SSH-Key für root@planet
+#   ANSIBLE_VAULT_PASS  Passwort für deploy/inventory/host_vars/planet/vault.yml
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Rolling Deploy auf genau einen Server: niemals parallel, ein laufender Lauf
+# wird nicht abgebrochen (der Stand muss atomar bleiben).
+concurrency:
+  group: cd-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy-dev:
+    name: Deploy Dev (planet :6321)
+    runs-on: [self-hosted, planet]
+    environment:
+      name: dev
+      url: https://rift.projectmellon.de/solo.html
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Ansible installieren (gepinnt)
+        run: |
+          python3 -m pip install --disable-pip-version-check "ansible-core==2.19.*"
+          ansible --version
+
+      - name: SSH mesh-first einrichten (Tailscale-Alias planet)
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          # Deploy-Key ablegen — Wert kommt ausschließlich aus dem Secret,
+          # wird nie ausgegeben.
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_rb_deploy
+          chmod 600 ~/.ssh/id_rb_deploy
+          # Bestehende ~/.ssh/config NICHT überschreiben: "planet"-Block nur
+          # ergänzen, falls er fehlt (mesh-first, nie Public-IP).
+          if ! grep -qE '^[[:space:]]*Host[[:space:]]+planet([[:space:]]|$)' ~/.ssh/config 2>/dev/null; then
+            {
+              echo ""
+              echo "Host planet"
+              echo "  HostName ${SSH_HOST}"
+              echo "  User root"
+              echo "  IdentityFile ~/.ssh/id_rb_deploy"
+              echo "  IdentitiesOnly yes"
+              echo "  StrictHostKeyChecking accept-new"
+            } >> ~/.ssh/config
+          fi
+          chmod 600 ~/.ssh/config
+          # Konnektivitäts-Gate: ohne erreichbaren Host bricht der Job hier ab.
+          ssh -o BatchMode=yes planet 'echo mesh-first ok: "$(hostname)"'
+
+      - name: Deploy via Ansible (site.yml, mesh-first + Vault)
+        env:
+          ANSIBLE_VAULT_PASS: ${{ secrets.ANSIBLE_VAULT_PASS }}
+        run: |
+          set -euo pipefail
+          vault_file="$(mktemp)"
+          trap 'rm -f "$vault_file"' EXIT
+          printf '%s' "$ANSIBLE_VAULT_PASS" > "$vault_file"
+          chmod 600 "$vault_file"
+          ansible-playbook -i deploy/inventory deploy/site.yml --vault-password-file "$vault_file"

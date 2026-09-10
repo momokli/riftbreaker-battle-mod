@@ -42,6 +42,29 @@ ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
 Reihenfolge der Rollen (site.yml): `mods-zip` → `riftbreaker-server` →
 `vanilla-server` → `tournament-server` → `website` → `probe-timer`.
 
+## Continuous Deploy (CD)
+
+Nach jedem Merge auf `main` rollt der Workflow
+[`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) den aktuellen
+Mod-Stand automatisch auf den Solo-DEV-Server aus (planet, Port 6321) — über
+`ansible-playbook -i deploy/inventory deploy/site.yml --vault-password-file …`.
+
+Topologie (Issue #91, 2026-09-10): **EIN** Server auf `:6321` statt
+Steam-/Non-Steam-Dualität (Direct-IP, `disable_steam "1"` deckt beide Stores ab).
+Der **Tag→prod-Kanal ist vorerst gestrichen** — der Workflow kennt bewusst
+keinen Tag-Trigger und keine prod-Umgebung.
+
+Voraussetzung (von Momo bereitzustellen, liegt nie im Repo):
+
+- GitHub-Environment `dev` anlegen (optional mit Required Reviewers).
+- Secrets im Environment `dev`:
+  - `SSH_HOST` — Tailscale-Adresse des Deploy-Hosts (planet).
+  - `SSH_KEY` — privater SSH-Key für `root@planet`.
+  - `ANSIBLE_VAULT_PASS` — Vault-Passwort (siehe Abschnitt „Vault").
+
+Der Job läuft auf dem Self-Hosted-Runner `planet` (Tailscale-Mesh); SSH erfolgt
+mesh-first über den `planet`-Alias, niemals über Public-IP.
+
 ## Rollen
 
 | Rolle | Typ | Was |
