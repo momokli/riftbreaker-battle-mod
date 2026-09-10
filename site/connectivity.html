@@ -195,6 +195,7 @@ code{color:var(--acc);font-family:var(--mono);font-size:11.5px}
     <nav aria-label="Hauptnavigation">
       <a href="/"><span class="n">01</span>landing</a>
       <a href="connectivity.html" class="on"><span class="n">02</span>server-status</a>
+      <a href="/solo.html"><span class="n">03</span>solo-test</a>
     </nav>
   </div>
 </header>
@@ -249,7 +250,7 @@ code{color:var(--acc);font-family:var(--mono);font-size:11.5px}
               <td class="udp" data-udp>—</td>
               <td class="last" data-last>—</td>
               <td><button class="copybtn" type="button" data-copy="65.21.27.234:6321">IP</button></td>
-              <td class="note">SP-Server: Mod läuft <b>nur auf dem Server</b> — Client joint <b>ohne</b> Mod (Parität via <code>debug_disable_content_version_check 1</code>, Issue #44). Server-Passwort bei Momo erfragen.</td>
+              <td class="note">Mod-Datei aus <b>/mods/rbbattle.zip</b> in den Mod-Ordner legen — sonst meldet der Server <b>„different set of mods“</b>. Server-Passwort bei Momo erfragen.</td>
             </tr>
             <tr data-id="RIFT-VANILLA">
               <td><span class="rn">02</span><span class="name">RIFT-VANILLA</span></td>
@@ -261,15 +262,15 @@ code{color:var(--acc);font-family:var(--mono);font-size:11.5px}
               <td><button class="copybtn" type="button" data-copy="65.21.27.234:6322">IP</button></td>
               <td class="note">Vanilla-Testserver — schnelle Test-Joins <b>ohne</b> Mod-Installation.</td>
             </tr>
-            <tr data-id="STEAM-BROWSER">
-              <td><span class="rn">03</span><span class="name">STEAM-BROWSER</span></td>
-              <td class="host none">n/a</td>
-              <td class="mods"><span class="none">—</span></td>
-              <td><span class="badge b-plan" data-badge>GEPLANT</span></td>
-              <td class="udp udp-na" data-udp>—</td>
+            <tr data-id="STEAM-TEST">
+              <td><span class="rn">03</span><span class="name">STEAM-TEST</span></td>
+              <td class="host">65.21.27.234<span class="p">:6323</span></td>
+              <td class="mods"><span class="none">KEINE</span></td>
+              <td><span class="badge b-wait" data-badge>…</span></td>
+              <td class="udp" data-udp>—</td>
               <td class="last" data-last>—</td>
-              <td><button class="copybtn" type="button" disabled data-copy="">IP</button></td>
-              <td class="note">Geplant: Steam-Serverlisten-Kompatibilität — es läuft noch kein Server.</td>
+              <td><button class="copybtn" type="button" data-copy="65.21.27.234:6323">IP</button></td>
+              <td class="note">Steam-Testserver — Join über den <b>Steam-Server-Browser</b>, Name: <b>„Mellon Riftbreaker Steam Test“</b>.</td>
             </tr>
           </tbody>
         </table>
@@ -342,13 +343,6 @@ code{color:var(--acc);font-family:var(--mono);font-size:11.5px}
       else { udp.textContent = "—"; udp.className = "udp udp-na"; }
       row.querySelector("[data-last]").textContent = fmt(ep.checkedAt || json.checkedAt);
     });
-
-    // GEPLANT-Zeile bleibt statisch
-    var steam = document.querySelector('tr[data-id="STEAM-BROWSER"]');
-    if(steam){
-      setBadge(steam.querySelector("[data-badge]"), "GEPLANT");
-      steam.querySelector("[data-last]").textContent = "—";
-    }
 
     $("#termts").textContent = "Stand: " + fmt(new Date().toISOString());
     $("#netwarn").classList.remove("show");
