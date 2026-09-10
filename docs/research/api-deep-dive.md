@@ -113,30 +113,36 @@ DB-Methoden (WIKI `docs/misc/database-class.md`): `HasInt(key)`,
 `GetInt(key)`, `GetIntOrDefault(key, default)`, `SetInt(key, v)`,
 `RemoveKey(key)`, `Clear()`, analog `String`/`Float`.
 
-**Persistenz über Sessions:** unverifiziert. Koreanischer Kommentar im
-LILLY-Test zu einer Global-DB: „nach Spielstart immer geteilt“
-(= pro laufendem Spiel geteilt); ob der Wert einen **Map-Neustart**/
-**Spielneustart** überlebt, ist nicht belegt → **In-Game-Test offen**
-(Map neu laden, `rb_points` prüfen). Der Baustein schreibt Punkte als
-Spiegel in `PlayerService:GetOrCreateGlobalDatabase("rbbattle_05_economy")`
-und liest sie beim Laden zurück; `rb_points reset` setzt auf 0 zurück.
-DB-Ausfälle sind per pcall toleriert (Mod läuft dann rein im Speicher).
+**Persistenz über Sessions:** **verifiziert (Session-/Server-Neustart, beobachtend).**
+Koreanischer Kommentar im LILLY-Test zu einer Global-DB: „nach Spielstart
+immer geteilt“ (= pro laufendem Spiel geteilt). Der Produktiv-Log des
+Dev-SP-Servers (:6321) belegt die Persistenz über **zwei echte
+Session-/Server-Neustarts**: `farmed` ging 0 (erster Boot `status=new`,
+16:53) → 155 (nächster Boot `status=resume`, 17:37) → 160 (dritter Boot
+`status=resume`, 18:14). Der Baustein schreibt Punkte als Spiegel in
+`PlayerService:GetOrCreateGlobalDatabase("rbbattle_05_economy")` (integrierter
+Mod: `rbbattle_economy`) und liest sie beim Laden zurück; `rb_economy reset`
+setzt auf 0 zurück. DB-Ausfälle sind per pcall toleriert (Mod läuft dann
+rein im Speicher).
 
-**Stand #65 (statische Analyse, 10.09.2026):** Die Persistenz ist weiterhin
-**nicht in-game verifiziert** (AC1 offen — braucht Operator-Lauf auf dem
-Dedi: `rb_convert` → Pool > 0, Map/Match neu laden, `rb_status` prüft
-`econ_pool`). Codebar wurde der defensive Fallback (AC3) umgesetzt: Der
-integrierte Mod (`mod/lua/rbbattle_autoexec.lua`) spiegelt den Spar-Pool
-`pool` bei **jeder** Änderung (`rb_convert`/`rb_buy_wave`/`rb_boost`) in die
-Global-DB `rbbattle_economy` (`EconomySave`) und liest sie beim Boot zurück
-(`EconomyLoad` → `status=resume`). Neu in #65: `EconomyCheckpoint()` schreibt
-den Pool **zusätzlich an der Rundengrenze** (Wellenstart `OnNaturalWaveStart`,
-`event=economy_checkpoint`) und zieht einen beim Boot nicht auflösbaren
-DB-Handle nach (Retry-Muster). Statisch getestet in
-`tests/lua-static/persistence.test.js` (fengari, 2 Phasen: Checkpoint schreibt
-`pool` in die Stub-DB; Reload mit vorbefüllter DB → `status=resume`). Offen
-bleibt allein, ob `PlayerService:GetOrCreateGlobalDatabase` den Wert über
-einen echten Map-/Session-Reload hält (AC1, Operator).
+**Stand #65 (RE-Verifikation, 10.09.2026):** Die Persistenz über einen
+**Session-/Server-Neustart ist beobachtet** (s. o.: `farmed` 0→155→160 über
+zwei Neustarts, Boot-Log `status=resume`). Der Spar-Pool `pool` teilt
+denselben Save-/Load-Pfad wie `farmed` — `EconomySave` schreibt
+`pool`+`farmed`+`converted`+`converts` in einem pcall-Block, `EconomyLoad`
+liest sie gemeinsam → die Pool-Persistenz ist damit auf Mechanik-Ebene
+belegt. **Nicht direkt beobachtet** ist ein literal `pool > 0`, der einen
+Reload überlebt: in Prod wurde nie konvertiert, `pool` blieb stets 0. Der
+kontrollierte AC1-Test ist technisch headless machbar — der Konsolen-Pfad
+ist auf :6321 verifiziert (`exec_cmd_client "rb_convert 160"` →
+`ConsoleService::ExecuteCommand`, rbbridge-Log zeigt erfolgreichen Dispatch;
+`rb_status`/`event=status` liest `pool`) — aber der abschließende
+Map-/Session-Reload ist ein **destruktiver Eingriff** auf dem Live-Dedi und
+bleibt bis zur Freigabe offen (AGENTS: restart = Freigabe nötig; Spieler-Check
+vorher). Der defensive Fallback (AC3) bleibt umgesetzt: `EconomySave` bei jeder
+Änderung + `EconomyCheckpoint()` an der Rundengrenze
+(`event=economy_checkpoint`), statisch getestet in
+`tests/lua-static/persistence.test.js`.
 
 ---
 
@@ -161,7 +167,7 @@ dokumentiert für spätere Bausteine (Upgrade-Käufe gegen Punkte).
 | Ressourcen-Konto lesen/schreiben | **NEIN** — kein verifizierter API-Zugriff aufs Spieler-Konto; eigenes Punktesystem | — |
 | Kill-Event (Punkte je Kill) | **JA (wahrscheinlich)** — `EntityKilledEvent` existiert, Broadcast-Mechanik verifiziert, Getter `GetEntity`/`GetBlueprint` per Konvention; **nicht In-Game belegt** | Laufzeit-Selbsttest im Mod (auto→kill-Umschaltung) + In-Game-Test |
 | Tick-Event (Fallback) | **JA (wahrscheinlich)** — `HourEvent` (globaler Spielzeit-Takt, Feld `Hour`) | In-Game: Frequenz von `HourEvent` beobachten |
-| Persistenz zwischen Sessions | **JA (API vorhanden, Persistenz unverifiziert)** — Global-Database statt GlobalVars; defensiver Checkpoint (#65) an der Rundengrenze implementiert + statisch getestet | In-Game: Map neu laden → `rb_status` (`econ_pool`) — AC1 offen |
+| Persistenz zwischen Sessions | **JA (verifiziert, Session-Neustart beobachtet)** — Global-Database statt GlobalVars; `farmed` 0→155→160 über zwei Neustarts (`status=resume`); Pool teilt denselben Save/Load-Pfad | Kontrolliert: `rb_convert` → Pool>0 → Reload → `rb_status` — gated auf destruktiven Reload (Freigabe) |
 | Research/Upgrades | **JA** — `UnlockResearch`/`UnlockBuilding` | späterer Baustein |
 
 ## 6. Offene Punkte
@@ -172,4 +178,4 @@ dokumentiert für spätere Bausteine (Upgrade-Käufe gegen Punkte).
   Gegner-Basis-Schaden in späteren Bausteinen; hier egal: Punkte nur für
   selbst gespawnte, getrackte Kreaturen-IDs.)
 - `HourEvent`-Getter (`GetHour()`) und Frequenz in-game unbestätigt.
-- Global-DB überlebt Map-Neustart? (s. §3).
+- Global-DB überlebt Map-Neustart/Reload in-place + literal `pool > 0`? Session-Neustart ist verifiziert (s. §3); der kontrollierte Reload-Test bleibt gated auf Freigabe.
