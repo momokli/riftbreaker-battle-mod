@@ -198,6 +198,8 @@ Host planet
 EOF
 sudo chmod 600 /etc/rbbattle-deploy/ssh_config
 sudo tee /etc/rbbattle-deploy/ansible.cfg >/dev/null <<'EOF'
+[defaults]
+remote_tmp = /opt/rbbattle-deploy/.ansible/tmp
 [ssh_connection]
 ssh_args = -F /etc/rbbattle-deploy/ssh_config
 EOF
@@ -219,7 +221,7 @@ das `HOME`-Env des Wrappers genügt dafür nicht, und `/root` ist in der
 Unit-Sandbox (`ProtectHome=yes`) unsichtbar. Deshalb liegt die
 Loopback-Konfiguration root-only unter `/etc/rbbattle-deploy/`: `ssh_config`
 (nutzt per `ssh -F` den Key `/etc/rbbattle-deploy/id_ed25519`) +
-`ansible.cfg` (`ssh_args = -F …`), aktiviert über
+`ansible.cfg` (`ssh_args = -F …` + `remote_tmp` für die Sandbox), aktiviert über
 `ANSIBLE_CONFIG=/etc/rbbattle-deploy/ansible.cfg` im Wrapper; known_hosts
 unter `/opt/rbbattle-deploy/.ssh/`. Ersten echten Lauf im Job-Log unter
 `/var/log/rbbattle-deploy/` prüfen.
