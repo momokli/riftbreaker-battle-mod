@@ -169,6 +169,47 @@ Level-Delta approximiert: `delta = ceil(level * pct/100)`, min. 1, gedeckelt auf
 `false` bleibt unangetastet). **braucht Live-Test** — Prozent→Level-Delta und
 Stufen-Preise sind eine dokumentierte Annahme, keine verifizierte Kurve.
 
+### Wellen-Richtwert (Issue #213, Recherche für #205)
+
+Aus dem Design-Interview #199 (ECO-6, Matheo): der Calcium-Preis für eine
+%-Wellenverstärkung soll nicht linear/fix sein (wie aktuell
+`boostCfg.pricePerPct`), sondern sich automatisch an die Spielkurve anhängen
+— feste Calcium-Menge = fester **absoluter** Richtwert-Zuwachs, die
+tatsächliche %-Verstärkung ergibt sich relativ zum Richtwert der aktuellen
+Welle. Dieselbe Calcium-Menge wird so relativ schwächer, je größer/später die
+Welle ist.
+
+**Datenbasis-Problem:** die tatsächliche Kreaturen-Zusammensetzung einer
+Naturwelle kommt aus nativer Engine-Tabelle (`GetWavePool(level)` →
+`rules.waves[group][level]`, s. oben) — ohne Live-Spiel/RE-Zugriff nicht
+enumerierbar. Die Naturwellen-Stärke ist aber bereits einzig über
+`difficultyLevel` (1..9) indiziert — das ist die einzige Stärke-Größe, die
+der Mod tatsächlich kennt.
+
+**Formel (dokumentierte Annahme, `RBB.richtwertCfg`):**
+
+```
+Richtwert(level) = richtwertPerLevel * level        (richtwertPerLevel = 100)
+%-Boost(calcium, level) = (calcium / calciumPerRichtwert) / Richtwert(level) * 100
+                                                       (calciumPerRichtwert = 1)
+```
+
+| Level | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
+|---|---|---|---|---|---|---|---|---|---|
+| Richtwert | 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900 |
+
+Beispiel: 100 Calcium bei Level 1 (Richtwert 100) → +100%; dieselben 100
+Calcium bei Level 9 (Richtwert 900) → nur noch +11,1%. Lesbar per
+`rb_richtwert [<calcium> [level]]` (Vorschau) bzw. `rb_balance` (Kurve).
+
+**Wichtig:** reine Formel-Dokumentation (Issue #213) — `BoostPctForCalcium`
+ist **nicht** an `rb_boost`/`BuyBoost` angeschlossen; ob/wie diese Formel die
+aktuelle lineare Preisformel ersetzt, gehört ins größere
+Send-Mechanik-Vereinfachungs-Issue #205 (braucht Bestätigung durch momokli).
+`richtwertPerLevel`/`calciumPerRichtwert` sind Annahmen — **braucht
+Live-Test**, ob der Zusammenhang zwischen Level und tatsächlicher
+Wellenstärke wirklich linear ist.
+
 ### Wellen-Takt & Grundschwierigkeit (Issue #41, Test-Varianten)
 
 Der Wellen-Takt ist nicht mehr fest verdrahtet, sondern als explizite,

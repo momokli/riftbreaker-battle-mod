@@ -1789,6 +1789,60 @@ local function BoostLevelDelta(level, pct)
     return delta
 end
 
+-- ============================================================================
+-- #213: Wellen-Richtwert (Recherche fuer #205 "Send-Mechanik vereinfachen").
+--
+-- Zielbild (Design-Interview #199, ECO-6, Matheo): der Calcium-Preis fuer
+-- eine %-Wellenverstaerkung soll nicht linear/fix sein (wie aktuell
+-- RBB.boostCfg.pricePerPct), sondern sich automatisch an die Spielkurve
+-- anhaengen: X Calcium kauft immer denselben ABSOLUTEN Richtwert-Zuwachs;
+-- die tatsaechliche %-Verstaerkung ist dieser Zuwachs relativ zum Richtwert
+-- der AKTUELLEN Welle -- dieselbe Calcium-Menge wird also relativ schwaecher,
+-- je groesser/spaeter die Welle ist.
+--
+-- Datenbasis-Problem: die tatsaechliche Kreaturen-Zusammensetzung einer
+-- Naturwelle kommt aus nativen Engine-Daten (GetWavePool(difficultyLevel) ->
+-- rules.waves[group][difficultyLevel], s. Kommentar zu #39/#41 oben) -- diese
+-- Tabelle ist im Mod NICHT enumeriert und ohne Live-Spiel/RE-Zugriff nicht
+-- einsehbar. Die Naturwellen-Staerke ist aber bereits jetzt einzig ueber
+-- difficultyLevel (1..9) indiziert -- das ist die einzige Groesse, die der
+-- Mod tatsaechlich kennt und als Hebel nutzt (RBB.boost/ScaleWaveLevel).
+--
+-- Deshalb: Richtwert(level) = richtwertPerLevel * level als dokumentierte
+-- Annahme (direkte Proportionalitaet zum einzigen bekannten Staerke-Hebel) --
+-- braucht Live-Test, ob dieser Zusammenhang linear ist oder staerker waechst.
+-- richtwertPerLevel=100 ist so gewaehlt, dass die Beispielzahlen aus ECO-6
+-- (100 Richtwert bei kleiner Welle, 1000 bei grosser) im Level-Bereich 1..10
+-- landen.
+--
+-- WICHTIG: reine Recherche/Formel-Dokumentation (Issue #213). BoostPctForCalcium
+-- ist NICHT an rb_boost/BuyBoost angeschlossen -- die eigentliche Preisformel-
+-- Umstellung gehoert ins groessere Send-Mechanik-Issue #205.
+-- ============================================================================
+RBB.richtwertCfg = {
+    richtwertPerLevel = 100, -- Annahme: Richtwert waechst linear mit difficultyLevel
+    calciumPerRichtwert = 1, -- Annahme: 1 Calcium kauft 1 Richtwert-Punkt (ECO-6-Beispiel)
+}
+
+-- Richtwert einer Naturwelle bei gegebenem difficultyLevel (reine Formel).
+WaveRichtwert = function(level)
+    local l = math.floor(tonumber(level) or 1)
+    if l < 1 then l = 1 end
+    return l * RBB.richtwertCfg.richtwertPerLevel
+end
+
+-- %-Verstaerkung, die `calcium` Send-Waehrung bei einer Welle mit `level`
+-- bewirken wuerde (reine Formel, kein Pool-Abzug/keine Wirkung auf RBB.boost).
+-- Ergebnis in Prozentpunkten (z.B. 10 = +10%).
+BoostPctForCalcium = function(calcium, level)
+    local c = math.floor(tonumber(calcium) or 0)
+    if c < 0 then c = 0 end
+    local richtwertBought = c / RBB.richtwertCfg.calciumPerRichtwert
+    local waveRichtwert = WaveRichtwert(level)
+    if waveRichtwert <= 0 then return 0 end
+    return (richtwertBought / waveRichtwert) * 100.0
+end
+
 -- #41: Wellen-Staerke-Skalierung (diskreter Hebel ueber difficultyLevel, wie
 -- der Boost #39). Preset B = "halbe Groesse" -> floor(level * pct/100), min. 1;
 -- Preset A = "volle Groesse" (strengthPct 100) -> Level unveraendert.
@@ -2472,14 +2526,45 @@ local function CmdBalance(args)
     end
     Log("event=balance wave_preset_cfg active=%s base_difficulty=%s timer_cap=%d",
         RBB.wavePresets.active, RBB.wavePresets.baseDifficulty, RBB.waveIntervalCapS)
+    -- #213: Wellen-Richtwert-Formel + Stichproben Level 1..9 (Forschungsstand,
+    -- NICHT an rb_boost angeschlossen -- s. Kommentar bei WaveRichtwert).
+    Log("event=balance richtwert_cfg richtwert_per_level=%d calcium_per_richtwert=%d",
+        RBB.richtwertCfg.richtwertPerLevel, RBB.richtwertCfg.calciumPerRichtwert)
+    for l = 1, 9 do
+        Log("event=balance richtwert level=%d value=%d", l, WaveRichtwert(l))
+    end
     -- #116: Invarianten der Tuning-Daten als Log-Flaeche (ok|fail + issue=..).
     RBB.CheckBalance()
-    WriteConsole("rb_balance: Preisliste + HQ-HP-Kurve + Boost-Stufen + Wellen-Presets geloggt (braucht Live-Test, #33/#39/#41)")
+    WriteConsole("rb_balance: Preisliste + HQ-HP-Kurve + Boost-Stufen + Wellen-Presets + Richtwert-Kurve geloggt (braucht Live-Test, #33/#39/#41/#213)")
+end
+
+-- #213: rb_richtwert [<calcium> [level]] -- Vorschau der Richtwert-Formel:
+-- ohne Args die Kurve (Level 1..9), mit Calcium+Level die resultierende
+-- %-Verstaerkung. Read-only, wirkt NICHT auf RBB.boost/den Pool.
+local function CmdRichtwert(args)
+    local calciumArg = args ~= nil and #args >= 1 and tonumber(args[1]) or nil
+    if calciumArg == nil then
+        for l = 1, 9 do
+            Log("event=richtwert level=%d value=%d", l, WaveRichtwert(l))
+        end
+        WriteConsole("rb_richtwert: Kurve fuer Level 1..9 geloggt (Aufruf mit rb_richtwert <calcium> [level] fuer eine %%-Vorschau)")
+        return
+    end
+    local level = args ~= nil and #args >= 2 and tonumber(args[2]) or RBB.round
+    if level == nil or level < 1 then level = 1 end
+    local pct = BoostPctForCalcium(calciumArg, level)
+    Log("event=richtwert_preview calcium=%d level=%d wave_richtwert=%d pct=%.1f",
+        math.floor(calciumArg), level, WaveRichtwert(level), pct)
+    WriteConsole("rb_richtwert: %d Calcium bei Level %d (Richtwert %d) -> +%.1f%% (Vorschau, wirkt nicht auf rb_boost)",
+        math.floor(calciumArg), level, WaveRichtwert(level), pct)
 end
 
 pcall(function()
     ConsoleService:RegisterCommand("rb_balance", function(args)
         CmdBalance(args)
+    end)
+    ConsoleService:RegisterCommand("rb_richtwert", function(args)
+        CmdRichtwert(args)
     end)
 end)
 
