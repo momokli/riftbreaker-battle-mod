@@ -66,6 +66,7 @@ HQ-TOD → Match verloren
 ## HUD (In-Game, Custom-UI)
 - Immer sichtbar: Rundennummer, Countdown bis Wellenstart, eigener Send-Pool.
 - Bei Wellenstart (Reveal): Built-Value beider Teams, eingehende Send-Komposition, HQ-HP beider Teams.
+- Senden per Klick (#99): `rb_hud_ui` öffnet ein 2-Button-Overlay — „Ja“ kauft die gerüstete Quick-Send-Einheit in die Send-Queue, „Nein“ schließt ohne Aktion. Einheit/Menge rüsten `rb_quick [<unit> [count]]` und der Clicker-Stepper `rb_quick_step <+N|-N|xN>` (#147-MVP).
 
 ## 2v2 (später)
 - Beide Teammates teilen sich EINE Welt: gemeinsame Defense, gemeinsamer Send-Pool (Legion-TD-artig).
@@ -215,6 +216,7 @@ Abgleich des Design-Kerns gegen den implementierten Mod-/Server-/Site-Stand.
 | Send-Boost (nächste Welle %-verstärken) | ✅ implementiert | #39 | `rb_boost <stufe|pct>`; Flush am `SpawnWavesForDifficultyLevel`-Chokepoint (`event=boost`) |
 | Sends → Gegner-Welt (1v1-Routing) | ⚠️ offen | #25/#27/#29 | aktuell `rb_mode sp` (Self-Send an eigene Rand-Spawner); `duel` = Stub |
 | Reveal-HUD (Built-Value + WAS kommt) | ✅ implementiert | #27 | `rb_hud`/`rb_reveal`/`rb_round_start`; `event=reveal`/`reveal_opp` |
+| Click-HUD (Senden per Klick) | ✅ implementiert | #99 | `rb_hud_ui` (2-Button-Popup `popup_ingame_2buttons`)/`rb_quick`/`rb_quick_step`; Klick via `GuiPopupResultEvent` → `BuyWave` (= `rb_buy_wave`); `event=hud_ui`/`quick_send`/`quick_step` |
 | Win-Condition HQ-Tod (Logik) | ✅ implementiert | #28 | `rb_hq`; Leak → HQ-HP; `hq_dead`/`match_end` (Server-Buchung vorhanden) |
 | Win-Condition (Trigger-Zone, HQ-Entity-ID, Sieg-Screen) | 🟡 teilweise (braucht Live-Test) | #28/#143/#144 | `EnteredTriggerEvent`-Feuerung + Trigger-Zone-Asset unbelegt (Leak seit #143 gegated, kein False-Positive-Sieg mehr); HQ-Entity seit #144 auto-erkannt (`HqAutoDetectEntity`, Entity-Typ `headquarters` — am Spiel-Source belegt: `FindEntityByType("headquarters")` in `graph/logic/logic_if_building_health.lua`) mit `rb_hq entity <id>` als Fallback |
 | Live-Status (Landing) | ✅ implementiert (Website) | #30 | `site/live-status.js` + Landing-Widget + Dashboard-Link |
