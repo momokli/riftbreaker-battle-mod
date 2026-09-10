@@ -18,6 +18,11 @@ Testablauf OHNE Spiel (siehe README.md):
        python pipe_client.py                -> ping, erwartet pong
        python pipe_client.py exec rb_wave 3 -> zusaetzlich exec (v0: ok:false)
        python pipe_client.py --watch        -> danach weiterlesen (Heartbeats)
+       python pipe_client.py --selftest     -> argv->Command-Verbindung pruefen
+
+Argument-Handling (Issue #18): die Kommando-Tokens ab argv[2] werden zu
+EINEM String verbunden (build_exec_command), damit unquotierte Argumente
+erhalten bleiben - `exec rb_wave 3` -> {"cmd":"exec","command":"rb_wave 3"}.
 
 Hinweis: Laeuft kein Pipe-Server (EXE nicht gestartet bzw. DLL nicht
 injiziert), blockiert os.open() bis der Server bereit ist (Windows-Semantik
@@ -67,15 +72,55 @@ def recv_and_print(fd, buf):
     return line
 
 
+def build_exec_command(args):
+    """Baut den exec-Command-String aus den CLI-Argumenten.
+
+    Konvention: `pipe_client.py exec <command...>` — `args` ist sys.argv[1:],
+    args[0] == "exec" ist der Subcommand-Marker. Die eigentlichen
+    Kommando-Tokens stehen ab args[1] (= argv ab Index 2) und werden zu
+    EINEM String verbunden, damit unquotierte Argumente erhalten bleiben
+    (Issue #18: `exec_cmd_client rb_wave 3` verlor "3" -> level 1).
+
+    Liefert den Command-String oder None, wenn kein exec-Kommando angegeben ist.
+    """
+    if args and args[0] == "exec":
+        return " ".join(args[1:]) if len(args) > 1 else ""
+    return None
+
+
+def _selftest():
+    """Prueft die argv->Command-Verbindung ohne Pipe-Zugriff (Issue #18)."""
+    cases = [
+        (["exec", "rb_wave", "3"], "rb_wave 3"),   # unquotiert: Argument bleibt erhalten
+        (["exec", "rb_wave"], "rb_wave"),           # nur Kommando, kein Argument
+        (["exec", "rb_wave 3"], "rb_wave 3"),       # bereits gequotet (EIN Argument)
+        (["exec", "go"], "go"),
+        (["exec", "round_start", "2"], "round_start 2"),
+        (["exec"], ""),                             # exec ohne Kommando
+        ([], None),                                 # kein exec
+        (["ping"], None),                           # kein exec-Subcommand
+    ]
+    failed = 0
+    for args, expected in cases:
+        got = build_exec_command(args)
+        ok = got == expected
+        print(f"[selftest] {'OK  ' if ok else 'FAIL'} build_exec_command({args!r}) -> {got!r} (erwartet {expected!r})", flush=True)
+        if not ok:
+            failed += 1
+    print(f"[selftest] {'OK' if failed == 0 else str(failed) + ' FEHLER'}", flush=True)
+    return failed
+
+
 def main():
     args = sys.argv[1:]
+    if "--selftest" in args:
+        sys.exit(1 if _selftest() else 0)
+
     watch = "--watch" in args
     args = [a for a in args if a != "--watch"]
 
     # Optional: exec-Kommando als Argumente, z. B. "exec rb_wave 3".
-    exec_cmd = None
-    if args and args[0] == "exec":
-        exec_cmd = " ".join(args[1:]) if len(args) > 1 else ""
+    exec_cmd = build_exec_command(args)
 
     print(f"[pipe_client] verbinde mit {PIPE_NAME} ...", flush=True)
     print("[pipe_client] (blockiert bis rbbridge.dll injiziert ist - ggf. jetzt injizieren)", flush=True)

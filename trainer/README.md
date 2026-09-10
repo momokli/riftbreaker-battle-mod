@@ -132,6 +132,31 @@ $r.ReadLine()   # -> {"event":"pong","t":...}
 `exec_result ... "ok":false` (TODO(RE)) — Protokoll-Details:
 [protocol.md](protocol.md).
 
+### Command-Argumente (Quoting, Issue #18)
+
+Der `exec`-Kanal transportiert **ein** Kommando als String
+(`{"cmd":"exec","command":"<command>"}`). Der lokale Command-Runner
+`exec_cmd_client` reicht `argv` an die Bridge weiter — **einzelne
+Kommando-Argumente müssen als EIN String gequotet werden**, sonst verliert
+die Bridge das zweite Token (Live-Befund Prod 2026-09-09):
+
+```bat
+:: FALSCH — "3" geht verloren, Bridge empfängt command="rb_wave" -> level 1
+exec_cmd_client.exe rb_wave 3
+
+:: RICHTIG — command="rb_wave 3" -> level 3 (8 Spawns)
+exec_cmd_client.exe "rb_wave 3"
+```
+
+Client-seitig wird das dadurch abgefangen, dass der Client `argv` **ab Index 2**
+an den Command-String anhängt (unquotierte Argumente bleiben so erhalten). Der
+Referenz-Client `bausteine/04-trainer-io/pipe_client.py` macht das bereits —
+äquivalent zu `exec_cmd_client "rb_wave 3"`:
+
+```bat
+python pipe_client.py exec rb_wave 3   ->  {"cmd":"exec","command":"rb_wave 3"}
+```
+
 ### 4. Logs
 
 - `OutputDebugString` → DebugView (Sysinternals), Filter `rbbridge`.

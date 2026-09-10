@@ -107,6 +107,22 @@ beim Start).
    → sendet `{"cmd":"exec","command":"rb_wave 3"}`, druckt die Antwort.
 5. Aufräumen: notepad.exe schließen (DLL lebt nur im Prozess).
 
+## Argumente & Quoting (Issue #18)
+
+Der `exec`-Kanal transportiert **ein** Kommando als String. `pipe_client.py`
+verbindet die Kommando-Tokens ab `argv[2]` zu EINEM String (`build_exec_command`),
+sodass unquotierte Argumente erhalten bleiben:
+
+```bat
+python pipe_client.py exec rb_wave 3   ->  {"cmd":"exec","command":"rb_wave 3"}
+```
+
+Der Produktiv-Command-Runner `exec_cmd_client.exe` verliert unquotierte
+Argumente dagegen (Live-Befund 2026-09-09: `exec_cmd_client.exe rb_wave 3` ->
+`command="rb_wave"` -> level 1). Dort daher als EIN String quoten:
+`exec_cmd_client.exe "rb_wave 3"` -> level 3 (8 Spawns). Selbsttest ohne
+Pipe: `python pipe_client.py --selftest`.
+
 ## Erwartetes Ergebnis
 
 - Test 0, Schritt 2 bzw. Test 1, Schritt 3, ping:

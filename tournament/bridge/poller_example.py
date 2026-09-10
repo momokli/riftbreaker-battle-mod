@@ -46,10 +46,17 @@ def run_game_command(cmd: str) -> None:
     (im Ziel-Setup z. B. exec_cmd_client <cmd> gegen die rbbridge-Named-Pipe
     \\\\.\\pipe\\rbbattle — siehe trainer/protocol.md). Bewusst idempotente
     Kommandos verwenden (GO/Unpause doppelt ist unkritisch).
+
+    Quoting (Issue #18): `cmd` ist EIN String; beim Aufruf des Command-Runners
+    als EIN Argument übergeben, sonst verliert `exec_cmd_client` die Argumente
+    hinter dem ersten Token (`exec_cmd_client rb_wave 3` -> command="rb_wave"
+    -> level 1; `exec_cmd_client "rb_wave 3"` -> level 3).
     """
     print(f"[bridge:{WORLD}] exec: {cmd}", flush=True)
-    # TODO(RE): durch echten exec_cmd_client-Aufruf ersetzen
-    # subprocess.run(["exec_cmd_client", cmd], check=False)
+    # TODO(RE): durch echten exec_cmd_client-Aufruf ersetzen.
+    # Quoting beachten (Issue #18): cmd als EIN Listenelement = ein Argument:
+    #   subprocess.run(["exec_cmd_client", cmd], check=False)
+    # NICHT: subprocess.run(["exec_cmd_client", *cmd.split()], check=False)
 
 
 def get_state():
