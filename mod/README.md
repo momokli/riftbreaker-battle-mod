@@ -279,8 +279,9 @@ und Workshop-Mods tun (Quelle: fandom „Basic Modding Guide“, Ordner
 | `rb_buy_wave <unit> [count]` | **Kauf-Hook (#25):** kauft `<unit>` (Shop-Id: `brabit`/`baxmoth`/`artigian`/`canceroth`/`boss`) in die Send-Queue und deduziert den Spar-Pool sofort (irreversibel). `rb_shop` zeigt alle Units/Preise. Guards: unbekannte Unit, zu wenig Pool, Queue voll |
 | `rb_shop` | **Custom-UI-Shop (#25):** öffnet ein Popup mit der Tier-/Preis-Liste (Tier 1/2/3 + Boss) + Konsolen-Liste (Fallback ohne Spieler/API) |
 | `rb_queue` | **Send-Queue-Status (#25):** Anzahl, Gesamtwert und Blueprint-Liste der für die nächste Welle gekauften Einheiten |
+| `rb_boost <stufe|pct>` | **Send-Boost (#39):** kauft einen prozentualen Aufschlag auf die nächste Naturwelle (Stufen `s1`=+25% (200), `s2`=+50% (400), `s3`=+100% (800) oder freie pct-Eingabe à 8 Währung/Prozentpunkt) aus dem Spar-Pool (sofort irreversibel). Beim nächsten natürlichen Wellenstart wird der Boost am `SpawnWavesForDifficultyLevel`-Chokepoint angewendet (difficultyLevel-Delta) und zurückgesetzt — genau eine Welle, nicht kumulativ. Guards: unbekannte Stufe, pct ≤ 0, `maxBoostPct` (200), `maxBoostsPerWave` (4), zu wenig Pool. `duel` = Boost-Flush nur in `sp` |
 | `rb_mode sp\|duel` | Modus-Umschaltung: `sp` = Solo-Test (Default, sendet an die eigene nächste Welle), `duel` = 1v1 (Stub, folgt später) |
-| `rb_status` | Zeigt `mode`, `runde`, `pool` und die `queue` (für die nächste Welle) — die Kontrollanzeige des Testmodus |
+| `rb_status` | Zeigt `mode`, `runde`, `pool`, die `queue` und den `boost` (für die nächste Welle) — die Kontrollanzeige des Testmodus |
 | `rb_hq` / `rb_hq leak [dmg]` / `rb_hq entity <id>` / `rb_hq reset` | Win-Condition-Status + Dev-Werkzeuge (#28): HQ-HP zeigen, manuellen Leak anwenden, HQ-Entity zuordnen, Zustand zurücksetzen (Muster `rb_economy reset`) |
 | `rb_hud` | **Reveal-HUD (#27):** HUD-Standardfelder — Runde, Countdown, eigener Pool, HQ-HP beider Teams + Reveal-Zustand (`reveal=hidden\|revealed`). Gegner-Built/incoming/HQ sind vor Wellenstart `hidden` |
 | `rb_reveal <built_opp> <hq_opp> [incoming]` | **Gegner-Injektion (#27):** die Bridge injiziert die vom Server aufgedeckten Gegner-Werte (Built-Value, HQ-HP, eingehende Send-Komposition) → Reveal beider Teams komplett |
@@ -298,12 +299,15 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100
 [RBBATTLE] event=convert resource=carbonium amount=100 value=100 pool=100 status=ok irreversible=1
 [RBBATTLE] event=buy_wave unit=brabit tier=t1 count=1 price=100 total=100 pool=0 queue=1 status=ok   ← Kauf-Hook (#25)
+[RBBATTLE] event=boost status=ok pct=25 total_pct=25 price=200 pool=1800 buys=1   ← Send-Boost Kauf (#39)
 [RBBATTLE] event=wave_hook patch status=ok                       ← Send-Queue-Hook aktiv (#42/#25)
+[RBBATTLE] event=boost patch status=ok                           ← Boost-Chokepoint-Hook aktiv (#39)
 [RBBATTLE] event=dom_timer patch status=ok cap=300        ← nach PlayerInitializedEvent
 [RBBATTLE] event=setup difficulty=hard creatures_difficulty=5 timer_cap=300
 [RBBATTLE] event=round round=1 status=start mode=sp pool=0 queue=1   ← natürlicher Wellenstart
 [RBBATTLE] event=reveal round=1 status=revealed built_own=3000 built_opp=hidden send_own=units/ground/brabit:2 incoming=hidden   ← Wellenstart-Reveal (#27)
 [RBBATTLE] event=send_queue round=1 status=done spawned=1 value=100 anchor=border   ← Send-Queue ausgeliefert (Boost)
+[RBBATTLE] event=boost status=flush round=1 pct=25 level_from=2 level_to=3 delta=1 buys=1   ← Send-Boost angewendet (nächste Naturwelle) (#39)
 [RBBATTLE] event=wave level=3 status=start
 [RBBATTLE] event=wave_spawners count=16 groups=4          ← Pool der Rand-Spawner
 [RBBATTLE] event=spawn ok blueprint=units/ground/baxmoth entity=12345 anchor=spawn_enemy_border_west/...

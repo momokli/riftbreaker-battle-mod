@@ -85,6 +85,19 @@ npm test        # = node --test
 5. Wellenstart setzt den HQ-HP auf den Runden-Maxwert (Runde 1→100, 2→120,
    3→140); die Kurve heilt zurücks aufs Runden-Max.
 
+`boost.test.js` deckt Issue #39 (Send-Boost) ab:
+
+1. Mod lädt; `rb_boost` registriert; Boost-Chokepoint-Hook aktiv
+   (`event=boost patch status=ok`).
+2. Guards: usage / unbekannte Stufe / pct ≤ 0 / zu wenig Pool.
+3. Farm → `rb_convert` → Pool; `rb_boost s1` ×2 → `total_pct=50`, `buys=2`
+   (Preis 200 je Stufe, Pool sofort deduziert).
+4. Debug-Trigger (`SpawnWavesForDifficultyLevel(..., false)`) verbraucht den
+   Boost **nicht**; Naturwelle (`addToSpawned=true`) wendet ihn an: 50% @ Level 2
+   → `delta=1` → Level 3 (`event=boost status=flush`), danach zurückgesetzt.
+5. Freie pct-Eingabe (`rb_boost 30` → linearer Preis 240); Caps (`maxBoostPct`=200,
+   `maxBoostsPerWave`=4); `duel`-Modus: Boost-Flush nur in `sp`.
+
 ## Grenzen (ehrlich dokumentiert)
 
 Die Stub-Services ersetzen die Spiel-Engine; **nicht** live-verifizierbar sind
@@ -115,3 +128,10 @@ Für #33 gilt analog: Preisliste und HQ-HP-Kurve sind reine Daten-/Formel-Logik 
 statisch getestet; das **Gefühl** ("War Level 3 zu brutal?", richtige Preise,
 richtige HP-Kurve) ist ausschließlich live verifizierbar (Operator, Test-Duell
 Momo vs. Matheo) — alle Werte sind als "braucht Live-Test" markiert.
+
+Für #39 gilt analog: der DOM-Hebel (Naturwellen-Stärke diskret über
+`difficultyLevel` 1..9, indiziert `GetWavePool`/`GetAttackCount`) ist am
+lan-lua-src (Spiel 2.0.58485) **verifiziert**; die Boost-Zahlen (Stufen-Preise,
+Caps, Prozent→Level-Delta `ceil(level*pct/100)`) sind dokumentierte Annahmen
+und brauchen Live-Test — die tatsächliche Wrap-Wirksamkeit am
+`SpawnWavesForDifficultyLevel`-Chokepoint ist live verifizierbar (Operator).

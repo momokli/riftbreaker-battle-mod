@@ -40,6 +40,14 @@
 --       so die NAEchste Welle. Senden jederzeit bis Wellenstart, unbegrenzt
 --       oft (Deckel maxQueueCreatures). Preisliste v1 = Struktur/Platzhalter,
 --       KEIN Balancing (Tuning #33/#12).
+--   #39 Send-Boost: naechste Naturwelle prozentual verstaerken (zusatzlicher
+--       Hebel NEBEN der Shop-Composition aus #25). `rb_boost <stufe|pct>`
+--       kauft einen prozentualen Aufschlag aus dem Spar-Pool (irreversibel);
+--       beim naechsten natuerlichen Wellenstart wird er auf die Welle
+--       angewendet (Chokepoint dom_mananger:SpawnWavesForDifficultyLevel,
+--       Beleg docs/SEND_HOOK.md) und danach zurueckgesetzt — genau eine
+--       Welle, nicht kumulativ. Stufen/Caps in RBB.boostCfg (Annahme, #33).
+--       duel-Modus: Boost-Flush nur in sp (Stub, Muster FlushSendQueue).
 --   #28 Win-Condition (HQ-HP, Leak, Match-Ende): Leaks (feindliche Kreaturen,
 --       die die Trigger-Zone ums HQ erreichen, EnteredTriggerEvent) senken den
 --       HQ-HP (event=leak/event=hq_hp); HQ-Tod (HP<=0 oder RespawnFailedEvent
@@ -123,6 +131,9 @@
 --   event=hud round=.. countdown=.. pool=.. built_own=.. built_opp=.. incoming=.. hq_own=.. hq_opp=.. reveal=.. (#27)
 --   event=hud_ui status=opened|already_open|closed|no_player|api_missing|error result=.. action=.. quick=.. count=.. (#99)
 --   event=quick_send status=armed|usage|unknown_unit unit=.. count=.. price=.. (#99)
+--   event=boost status=usage|unknown_stage|invalid_pct|max_boosts|cap|insufficient|ok pct=.. total_pct=.. price=.. pool=.. buys=.. (#39)
+--   event=boost status=flush round=.. pct=.. level_from=.. level_to=.. delta=.. buys=.. (#39)
+--   event=boost patch status=ok|skip reason=no_api                                    (#39)
 -- ============================================================================
 
 local RBB = {}
@@ -251,11 +262,42 @@ RBB.sendQueue = {
     value = 0,    -- Summe der Kaufpreise (fuer Anzeige/Status)
 }
 
+-- #39 Send-Boost: prozentualer Aufschlag auf die NAEchste Naturwelle (zusatz-
+-- licher Hebel neben der Shop-Composition aus #25). Preise in Send-Waehrung
+-- (= 1 Carbonium-Value, Faktor 1, vgl. economyCfg). Alle Werte sind eine
+-- dokumentierte Balance-Annahme OHNE Live-Test (braucht Test-Duell, #33):
+--
+--   Stufe  s1  +25%   200
+--   Stufe  s2  +50%   400
+--   Stufe  s3  +100%  800   (freie pct-Eingabe: 8 Waehrung je Prozentpunkt)
+--
+-- Prinzip: linearer Preis (pricePerPct), monotone Stufen. maxBoostPct deckelt
+-- die kumulierte Boost-Summe je Welle, maxBoostsPerWave die Anzahl Kaeufe je
+-- Welle (Schutz vor Endlos-Spam, analog shopCfg.maxQueueCreatures).
+RBB.boostCfg = {
+    stages = {
+        { id = "s1", pct = 25,  price = 200 },
+        { id = "s2", pct = 50,  price = 400 },
+        { id = "s3", pct = 100, price = 800 },
+    },
+    pricePerPct = 8,       -- linearer Preis fuer freie pct-Eingabe (Annahme)
+    maxBoostPct = 200,     -- Cap der kumulierten Boost-Summe je Welle
+    maxBoostsPerWave = 4,  -- max. Boost-Kaeufe je Welle (Schutz vor Spam)
+}
+
+-- #39: Laufzeit-Zustand des Send-Boost (in-memory, je Welle verbraucht).
+RBB.boost = {
+    pct  = 0,   -- akkumulierter %-Boost fuer die naechste Naturwelle
+    buys = 0,   -- Anzahl Boost-Kaeufe in der aktuellen Welle
+}
+
 -- Vorwaertsdeklaration fuer den Wellenstart-Hook (#42): Definition folgt nach
 -- dem Economy-Block (braucht EconomySave); aufgerufen wird er bereits in
 -- OnPlayerInitialized / HandleWaveCommand / Mod-Load (Retry-Zeitpunkte,
 -- Muster PatchDomTimer).
 local PatchWaveStartHook
+local PatchSpawnWavesHook
+local BoostSummary
 
 -- Vorwaertsdeklaration fuer die HQ-HP-Kurve (#33): Definition folgt im
 -- Win-Condition-Block (braucht RBB.hqCfg); aufgerufen wird sie in
@@ -657,6 +699,7 @@ local function OnPlayerInitialized()
     -- Welt ist fertig aufgesetzt: DOM-Klasse jetzt sicher verfuegbar.
     PatchDomTimer()
     PatchWaveStartHook()
+    PatchSpawnWavesHook()
     LogMapSetupInfo()
 end
 
@@ -671,6 +714,7 @@ local function HandleWaveCommand(args, commandName)
     end
     PatchDomTimer() -- weiterer Retry-Zeitpunkt (billig, idempotent)
     PatchWaveStartHook() -- weiterer Retry-Zeitpunkt (#42)
+    PatchSpawnWavesHook() -- weiterer Retry-Zeitpunkt (#39)
     SpawnWave(level)
 end
 
@@ -1351,7 +1395,8 @@ local function CmdShop(args)
         WriteConsole("%s", line)
     end
     WriteConsole("rb_shop: Kauf mit rb_buy_wave <unit> [count] (Pool %d)", RBB.economy.pool)
-    Log("event=shop status=listed tiers=%d pool=%d", #RBB.shopCfg.tiers, RBB.economy.pool)
+    WriteConsole("rb_shop: Boost rb_boost <stufe|pct> — naechste Welle: %s", BoostSummary())
+    Log("event=shop status=listed tiers=%d pool=%d boost=%s", #RBB.shopCfg.tiers, RBB.economy.pool, BoostSummary())
     OpenShopPopup()
 end
 
@@ -1490,6 +1535,211 @@ PatchWaveStartHook = function()
     return true
 end
 
+-- ============================================================================
+-- #39 Send-Boost: naechste Naturwelle prozentual verstaerken (statt bzw.
+-- zusaetzlich zur Shop-Composition aus #25). `rb_boost <stufe|pct>` kauft
+-- einen prozentualen Aufschlag aus dem Spar-Pool (sofort irreversibel
+-- deduziert, Muster rb_buy_wave); beim naechsten natuerlichen Wellenstart
+-- wird der akkumulierte Boost auf die Welle angewendet und zurueckgesetzt.
+--
+-- Technischer Hebel (VERIFIZIERT am lan-lua-src, Spiel 2.0.58485):
+--   dom_mananger:SpawnWavesForDifficultyLevel(difficultyLevel, addToSpawned)
+--   indiziert GetWavePool(difficultyLevel) -> rules.waves[group][difficultyLevel]
+--   und GetAttackCount(difficultyLevel) -> rules.maxAttackCountPerDifficulty
+--   [difficultyLevel]. Die Naturwellen-Staerke ist DISKRET ueber
+--   difficultyLevel (1..maxDifficultyLevel=9) indiziert. Ein prozentualer
+--   Aufschlag wird daher als Level-Delta approximiert:
+--       delta = ceil(level * pct/100), min. 1, gedeckelt auf maxDifficultyLevel.
+--   addToSpawned==true = Naturwelle (OnEnterSpawn); false = Debug-Trigger
+--   (debug_dom_manager_spawn_wave_level) und bleibt unangetastet.
+--   Alle Boost-Zahlen sind dokumentierte Annahmen (brauchen Live-Test, #33).
+--   Patch idempotent + pcall, Fehlschlag = harmlos (Vanilla), Muster
+--   PatchWaveStartHook. duel-Modus: Boost-Flush nur in sp (Stub).
+-- ============================================================================
+
+-- Stufen-Lookup (id -> Stufen-Def); nil = unbekannt.
+local function FindBoostStage(stageId)
+    for _, s in ipairs(RBB.boostCfg.stages) do
+        if s.id == stageId then return s end
+    end
+    return nil
+end
+
+-- Linearer Preis fuer freie pct-Eingabe (Annahme, pricePerPct je Prozent).
+local function BoostPriceForPct(pct)
+    return math.max(1, math.ceil(pct * RBB.boostCfg.pricePerPct))
+end
+
+-- Kauf: `rb_boost <stufe|pct>`. Deduziert den Spar-Pool sofort und akkumuliert
+-- den Boost fuer die naechste Welle. Guards: usage / unbekannte Stufe / pct
+-- ungueltig / max Boosts je Welle / Boost-Cap / zu wenig Pool. Liefert nie
+-- einen Fehler nach aussen.
+local function BuyBoost(rawArg)
+    local b = RBB.boost
+    local arg = tostring(rawArg or ""):lower()
+
+    if arg == "" or arg == "help" then
+        WriteConsole("rb_boost: Aufruf rb_boost <stufe|pct> — Stufen: s1=+25%% (%d), s2=+50%% (%d), s3=+100%% (%d); oder pct (z.B. rb_boost 30)",
+            RBB.boostCfg.stages[1].price, RBB.boostCfg.stages[2].price, RBB.boostCfg.stages[3].price)
+        Log("event=boost status=usage")
+        return
+    end
+
+    local pct, price
+    local stage = FindBoostStage(arg)
+    if stage ~= nil then
+        pct, price = stage.pct, stage.price
+    else
+        local n = tonumber(arg)
+        if n == nil then
+            WriteConsole("rb_boost: unbekannte Stufe '%s' — rb_boost s1|s2|s3 oder pct", arg)
+            Log("event=boost status=unknown_stage stage=%s", arg)
+            return
+        end
+        pct = math.floor(n)
+        price = BoostPriceForPct(pct)
+    end
+
+    if pct <= 0 then
+        WriteConsole("rb_boost: pct muss > 0 sein (bekam %d)", pct)
+        Log("event=boost status=invalid_pct pct=%d", pct)
+        return
+    end
+
+    if b.buys >= RBB.boostCfg.maxBoostsPerWave then
+        WriteConsole("rb_boost: max %d Boosts pro Welle erreicht", RBB.boostCfg.maxBoostsPerWave)
+        Log("event=boost status=max_boosts buys=%d pct=%d", b.buys, b.pct)
+        return
+    end
+
+    if b.pct + pct > RBB.boostCfg.maxBoostPct then
+        WriteConsole("rb_boost: Boost-Cap erreicht (%d%% + %d%% > max %d%%)",
+            b.pct, pct, RBB.boostCfg.maxBoostPct)
+        Log("event=boost status=cap pct=%d add=%d max=%d", b.pct, pct, RBB.boostCfg.maxBoostPct)
+        return
+    end
+
+    if RBB.economy.pool < price then
+        WriteConsole("rb_boost: Pool reicht nicht (%d < %d) — erst rb_convert",
+            RBB.economy.pool, price)
+        Log("event=boost status=insufficient pct=%d price=%d pool=%d",
+            pct, price, RBB.economy.pool)
+        return
+    end
+
+    RBB.economy.pool = RBB.economy.pool - price
+    b.pct = b.pct + pct
+    b.buys = b.buys + 1
+    EconomySave()
+
+    Log("event=boost status=ok pct=%d total_pct=%d price=%d pool=%d buys=%d",
+        pct, b.pct, price, RBB.economy.pool, b.buys)
+    WriteConsole("rb_boost: +%d%% naechste Welle (%d) -> total %d%%, Pool %d",
+        pct, price, b.pct, RBB.economy.pool)
+end
+
+-- Kurztext fuer rb_status/rb_shop: was boostet die naechste Welle?
+BoostSummary = function()
+    if RBB.mode ~= "sp" then return "duel (kein send)" end
+    local b = RBB.boost
+    if b.pct == 0 then return "kein boost" end
+    return string.format("+%d%% (buys=%d)", b.pct, b.buys)
+end
+
+-- %-Boost -> Level-Delta (diskreter Hebel, s. Block-Kommentar oben).
+local function BoostLevelDelta(level, pct)
+    local delta = math.ceil(level * pct / 100.0)
+    if delta < 1 then delta = 1 end
+    return delta
+end
+
+-- Wendet den akkumulierten Boost auf die naechste Naturwelle an (nur sp) und
+-- setzt ihn danach zurueck. Liefert das ggf. erhoehte difficultyLevel. Bei
+-- duel bleibt der Boost liegen (Stub, analog FlushSendQueue).
+local function ApplyPendingBoost(self, difficultyLevel)
+    local b = RBB.boost
+    if RBB.mode ~= "sp" or b.pct <= 0 then
+        return difficultyLevel
+    end
+
+    local level = math.floor(tonumber(difficultyLevel) or 1)
+    if level < 1 then level = 1 end
+
+    local maxLevel = level
+    if type(self) == "table" and type(self.maxDifficultyLevel) == "number"
+        and self.maxDifficultyLevel > 0 then
+        maxLevel = self.maxDifficultyLevel
+    end
+
+    local delta = BoostLevelDelta(level, b.pct)
+    local newLevel = level + delta
+    if newLevel > maxLevel then newLevel = maxLevel end
+
+    local pct = b.pct
+    local buys = b.buys
+    b.pct = 0
+    b.buys = 0
+
+    Log("event=boost status=flush round=%d pct=%d level_from=%d level_to=%d delta=%d buys=%d",
+        RBB.round + 1, pct, level, newLevel, newLevel - level, buys)
+    WriteConsole("rb_boost: Welle %d — +%d%% Boost angewendet (Level %d -> %d)",
+        RBB.round + 1, pct, level, newLevel)
+    return newLevel
+end
+
+-- Wellenstart-Chokepoint-Hook (#39): wrap dom_mananger:SpawnWavesForDifficultyLevel
+-- (Klasse, nicht Instanz). Naturwelle (addToSpawned=true) wird um den Boost
+-- erhoeht; Debug-Trigger (false) bleibt unangetastet. Idempotent, lazy
+-- (Mod-Load/PlayerInitializedEvent/jeder Send), pcall-gesichert.
+RBB.spawnWavesPatched = false
+RBB.spawnWavesOrig = nil
+
+PatchSpawnWavesHook = function()
+    if RBB.spawnWavesPatched then
+        return RBB.spawnWavesOrig ~= nil
+    end
+
+    local dom = nil
+    if type(_G) == "table" then
+        dom = rawget(_G, "dom_mananger")
+    end
+    if type(dom) ~= "table" then
+        return false -- Klasse (noch) nicht geladen; naechster Versuch spaeter
+    end
+
+    local orig = dom.SpawnWavesForDifficultyLevel
+    if type(orig) ~= "function" then
+        Log("event=boost patch status=skip reason=no_api")
+        RBB.spawnWavesPatched = true
+        return false
+    end
+
+    if RBB.spawnWavesOrig == nil then
+        RBB.spawnWavesOrig = orig
+        dom.SpawnWavesForDifficultyLevel = function(self, difficultyLevel, shouldAddtoSpawnedAttacks)
+            local newLevel = difficultyLevel
+            if shouldAddtoSpawnedAttacks == true then
+                -- Naturwelle (OnEnterSpawn, addToSpawned=true); Debug-Trigger
+                -- (false) bleibt unangetastet.
+                newLevel = ApplyPendingBoost(self, difficultyLevel)
+            end
+            return RBB.spawnWavesOrig(self, newLevel, shouldAddtoSpawnedAttacks)
+        end
+        Log("event=boost patch status=ok")
+    end
+
+    RBB.spawnWavesPatched = true
+    return true
+end
+
+pcall(function()
+    ConsoleService:RegisterCommand("rb_boost", function(args)
+        local arg = nil
+        if args ~= nil and #args >= 1 then arg = tostring(args[1]) end
+        BuyBoost(arg)
+    end)
+end)
+
 -- ---------------------------------------------------------------------------
 -- Commands: rb_buy_wave (Kauf-Hook), rb_shop (Custom-UI), rb_queue (Status),
 -- rb_mode (sp|duel) + rb_status (Runde, Pool, Queue).
@@ -1513,10 +1763,11 @@ end
 
 local function CmdStatus(args)
     local queue = QueueSummary()
-    WriteConsole("rb_status: mode=%s runde=%d pool=%d queue=%s",
-        RBB.mode, RBB.round, RBB.economy.pool, queue)
-    Log("event=status mode=%s round=%d pool=%d queue=%s",
-        RBB.mode, RBB.round, RBB.economy.pool, queue)
+    local boost = BoostSummary()
+    WriteConsole("rb_status: mode=%s runde=%d pool=%d queue=%s boost=%s",
+        RBB.mode, RBB.round, RBB.economy.pool, queue, boost)
+    Log("event=status mode=%s round=%d pool=%d queue=%s boost=%s",
+        RBB.mode, RBB.round, RBB.economy.pool, queue, boost)
 end
 
 pcall(function()
@@ -1559,6 +1810,9 @@ EconomyLoadResources()
 -- Wellenstart-Hook (#42) beim Laden versuchen (nachdem alle Definitionen
 -- stehen; weitere Retry-Zeitpunkte: OnPlayerInitialized / jeder Send).
 PatchWaveStartHook()
+
+-- Send-Boost-Hook (#39) beim Laden versuchen (gleiche Retry-Zeitpunkte).
+PatchSpawnWavesHook()
 
 -- ============================================================================
 -- #28 Win-Condition: HQ-HP, Leak-Erkennung (EnteredTriggerEvent), HQ-Tod
@@ -1779,7 +2033,13 @@ local function CmdBalance(args)
     Log("event=balance hq_curve start=%d per_round=%d cap=%d r1=%d r2=%d r3=%d r4=%d r5=%d r6=%d",
         RBB.hqCfg.hqHpStart, RBB.hqCfg.hqHpPerRound, RBB.hqCfg.hqHpRoundCap,
         HqMaxHp(1), HqMaxHp(2), HqMaxHp(3), HqMaxHp(4), HqMaxHp(5), HqMaxHp(6))
-    WriteConsole("rb_balance: Preisliste + HQ-HP-Kurve geloggt (braucht Live-Test, #33)")
+    -- Send-Boost (#39): Stufen + Caps (Annahme, braucht Live-Test).
+    for _, s in ipairs(RBB.boostCfg.stages) do
+        Log("event=balance boost_stage id=%s pct=%d price=%d", s.id, s.pct, s.price)
+    end
+    Log("event=balance boost_cfg price_per_pct=%d max_boost_pct=%d max_boosts_per_wave=%d",
+        RBB.boostCfg.pricePerPct, RBB.boostCfg.maxBoostPct, RBB.boostCfg.maxBoostsPerWave)
+    WriteConsole("rb_balance: Preisliste + HQ-HP-Kurve + Boost-Stufen geloggt (braucht Live-Test, #33/#39)")
 end
 
 pcall(function()

@@ -127,6 +127,38 @@ Server-Default `TOURNAMENT_HQ_HP` entsprechen. **braucht Live-Test** — ob
 20 HP/Runde das richtige Gefühl trifft und ob das Deckel bei Runde 4 passt, ist
 offen.
 
+### Send-Boost (Issue #39)
+
+Zusätzlicher, reinerer Hebel neben der Shop-Composition (#25): der Send verstärkt
+die **nächste Naturwelle prozentual** statt Kreaturen zu kaufen. Kauf per
+`rb_boost <stufe|pct>` (irreversibel vom Spar-Pool abgezogen); beim nächsten
+natürlichen Wellenstart wird der akkumulierte Boost auf die Welle angewendet
+und zurückgesetzt — genau eine Welle, nicht kumulativ.
+
+Zentrale Datenbasis: `RBB.boostCfg` in `mod/lua/rbbattle_autoexec.lua` (Preise in
+Send-Währung = 1 Carbonium-Value, Faktor 1). Lesbar per `rb_balance`/`rb_status`.
+
+| Stufe | Boost | Preis | Anmerkung |
+|---|---|---|---|
+| s1 | +25% | 200 | |
+| s2 | +50% | 400 | |
+| s3 | +100% | 800 | |
+| freie pct-Eingabe | +N% | N × 8 | linearer Preis (`pricePerPct`) |
+
+Caps: `maxBoostPct = 200` (kumulierte Summe je Welle), `maxBoostsPerWave = 4`
+(Schutz vor Endlos-Spam, analog `shopCfg.maxQueueCreatures`).
+
+**Technischer Hebel (verifiziert am lan-lua-src, Spiel 2.0.58485):** die
+Naturwellen-Stärke ist diskret über `difficultyLevel` (1..9) indiziert —
+`dom_mananger:SpawnWavesForDifficultyLevel(level, addToSpawned)` → `GetWavePool`
+(`rules.waves[group][level]`) + `GetAttackCount`
+(`rules.maxAttackCountPerDifficulty[level]`). Der prozentuale Aufschlag wird als
+Level-Delta approximiert: `delta = ceil(level * pct/100)`, min. 1, gedeckelt auf
+`maxDifficultyLevel`. Der Boost hängt am Chokepoint
+`SpawnWavesForDifficultyLevel` (Naturwelle = `addToSpawned=true`; Debug-Trigger
+`false` bleibt unangetastet). **braucht Live-Test** — Prozent→Level-Delta und
+Stufen-Preise sind eine dokumentierte Annahme, keine verifizierte Kurve.
+
 ### Wellen-Takt (bewusst NICHT fest verdrahtet)
 
 Der 5-Minuten-Takt bleibt die bestehende Konfig `RBB.waveIntervalCapS = 300`
@@ -136,6 +168,7 @@ eine Änderung des Takts ist Issue #41 vorbehalten.
 
 ## Offene Tuning-Punkte (nach Interview, Stand nach #33-v1)
 - ~~Preisliste (Tiered Units + Bosse)~~ → v1 dokumentiert (Tabelle oben) — **braucht Live-Test**.
+- ~~Send-Boost (nächste Welle %-verstärken)~~ → v1 dokumentiert (Stufen/Caps oben) — **braucht Live-Test** (Prozent→Level-Delta ist Annahme).
 - Naturwellen-Gefühl: "War Level 3 zu brutal?" (Live-Test 16:32: 8 Kreaturen, Momo gestorben) — **braucht Live-Test** (offen).
 - ~~HQ-HP-Kurve über Runden~~ → v1 dokumentiert (Formel/Tabelle oben) — **braucht Live-Test**.
 
@@ -150,6 +183,7 @@ Abgleich des Design-Kerns gegen den implementierten Mod-/Server-/Site-Stand.
 | Economy: Convert irreversibel | ✅ implementiert | #24/#40 | `rb_convert` (Calcium/carbonium first, Faktor 1); Pool persistiert (DB `rbbattle_economy`) |
 | Built-Value (getrennt geführt) | ✅ implementiert | #24/#27 | Reveal-Basis |
 | Send-Queue & Shop-HUD (Tiered Units + Boss) | ✅ implementiert | #25 | `rb_buy_wave`/`rb_shop`/`rb_queue`; Queue-Flush bei `dom_mananger:OnEnterSpawn` |
+| Send-Boost (nächste Welle %-verstärken) | ✅ implementiert | #39 | `rb_boost <stufe|pct>`; Flush am `SpawnWavesForDifficultyLevel`-Chokepoint (`event=boost`) |
 | Sends → Gegner-Welt (1v1-Routing) | ⚠️ offen | #25/#27/#29 | aktuell `rb_mode sp` (Self-Send an eigene Rand-Spawner); `duel` = Stub |
 | Reveal-HUD (Built-Value + WAS kommt) | ✅ implementiert | #27 | `rb_hud`/`rb_reveal`/`rb_round_start`; `event=reveal`/`reveal_opp` |
 | Win-Condition HQ-Tod (Logik) | ✅ implementiert | #28 | `rb_hq`; Leak → HQ-HP; `hq_dead`/`match_end` (Server-Buchung vorhanden) |
@@ -158,6 +192,6 @@ Abgleich des Design-Kerns gegen den implementierten Mod-/Server-/Site-Stand.
 | Balancing (Preisliste v1, HQ-HP-Kurve) | 🟡 v1 dokumentiert (braucht Live-Test) | #33 | `rb_balance`/`rb_shop`; `RBB.shopCfg` + `RBB.hqCfg` (Formel + Cap); Wellen-Takt bleibt `waveIntervalCapS` |
 
 Hinweis: Diese Doku hält den Design-Kern fest. Die Balancing-Zahlen v1
-(Shop-Preise + HQ-HP-Kurve) stehen oben im Abschnitt „Balance & Tuning v1
-(Issue #33)“; die übrigen Werte (Ressourcen-Faktoren, Wellen-Stärke-Boost)
-bleiben den Tuning-Issues #39/#40/#41 vorbehalten.
+(Shop-Preise + HQ-HP-Kurve + Boost-Stufen) stehen oben im Abschnitt
+„Balance & Tuning v1 (Issue #33)“; die übrigen Werte (Ressourcen-Faktoren)
+bleiben den Tuning-Issues #40/#41 vorbehalten.
