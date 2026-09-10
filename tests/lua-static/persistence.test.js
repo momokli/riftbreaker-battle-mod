@@ -121,6 +121,9 @@ _G.__commands["rb_convert"]({ "1500" })
 check(log_has("event=convert resource=carbonium amount=1500 value=1500 pool=1500 status=ok irreversible=1"),
     "convert 1500 -> pool 1500")
 
+-- #158 Setup-Phase: HQ platziert -> Commence (Waves starten).
+_G.__handlers["PlayerInitializedEvent"](nil)
+
 -- Rundengrenze (Wellenstart) -> defensiver Checkpoint in die Global-DB.
 dom_mananger.OnEnterSpawn(nil, {})
 check(log_has("event=round round=1 status=start mode=sp pool=1500 queue=0"),

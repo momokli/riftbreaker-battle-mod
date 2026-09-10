@@ -130,6 +130,9 @@ _G.__commands["rb_hud"]({})
 check(log_has("event=hud round=0 countdown=300 pool=1800 built_own=3000 built_opp=hidden incoming=hidden hq_own=100 hq_opp=hidden reveal=hidden"),
     "rb_hud vor Wellenstart: built_own=3000, Gegner weiter verborgen")
 
+-- #158 Setup-Phase: HQ platziert -> Commence (Waves starten).
+_G.__handlers["PlayerInitializedEvent"](nil)
+
 -- 5. BEI Wellenstart: eigener Built-Value + eigene Send-Komposition werden gelockt.
 dom_mananger.OnEnterSpawn(nil, {})
 check(_G.__waveStarts == 1, "Original-OnEnterSpawn genau 1x (Naturwelle unangetastet)")

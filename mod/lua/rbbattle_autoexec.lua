@@ -117,6 +117,7 @@
 --   event=mode mode=sp|duel status=ok|usage|stub                          (#42)
 --   event=wave_hook patch status=ok|skip|no_class reason=no_api           (#42)
 --   event=round round=N status=start mode=.. pool=.. queue=..             (#42/#25)
+--   event=commence status=pending|held|ok [hint=place_hq] [reason=no_hq]   (#158)
 --   event=buy_wave unit=.. tier=.. count=.. price=.. total=.. pool=.. queue=.. status=.. (#25)
 --   event=shop status=listed|popup_opened|popup_skipped|api_missing tiers=.. (#25)
 --   event=queue status=show count=.. value=.. pool=..                     (#25)
@@ -246,6 +247,15 @@ RBB.waveIntervalCapS = ActiveWavePreset().intervalS
 RBB.mode = "sp"
 RBB.round = 0   -- Runden-Zaehler (+1 bei jedem natuerlichen Wellenstart)
 
+-- #158 Setup-Phase / Commence-Flow: Spielstart OHNE Auto-HQ. Solange der
+-- Spieler das HQ nicht selbst ueber das Build-Menue platziert hat, haelt der
+-- Wave-PROGRESS an (kein Spawn, kein Runden-Zaehler) — das Spiel selbst
+-- laeuft frei weiter (kein debug_dom_pause). Sobald das HQ ueber
+-- FindService:FindEntitiesByGroup("headquarters") erkannt wird (#144/#151),
+-- starten die Wellen (commenced=true) + Commence-Announce.
+RBB.commenced = false        -- Setup-Phase aktiv, bis HQ erkannt
+RBB.commenceHeldLogged = false -- Spam-Guard fuer den "held"-Log im Wellenstart-Hook
+
 -- #33 Balance & Tuning v1: PREISLISTE v1 (Tiered Units + Bosse) als zentrale
 -- Datenbasis fuer den Shop. Preise in Send-Waehrung (= 1 Carbonium-Value,
 -- Faktor 1, vgl. economyCfg). Die Preise sind eine dokumentierte erste
@@ -329,6 +339,8 @@ local PatchWaveStartHook
 local PatchSpawnWavesHook
 local HqAutoDetectEntity
 local BoostSummary
+local CommenceGame
+local AnnounceSetupPhase
 
 -- Vorwaertsdeklaration fuer die HQ-HP-Kurve (#33): Definition folgt im
 -- Win-Condition-Block (braucht RBB.hqCfg); aufgerufen wird sie in
@@ -731,6 +743,7 @@ end
 
 local function OnPlayerInitialized()
     -- Welt ist fertig aufgesetzt: DOM-Klasse jetzt sicher verfuegbar.
+    AnnounceSetupPhase() -- #158: Start-Announce (Setup-Phase, HQ noch offen)
     PatchDomTimer()
     PatchWaveStartHook()
     PatchSpawnWavesHook()
@@ -1615,6 +1628,17 @@ PatchWaveStartHook = function()
     if RBB.waveStartOrig == nil then
         RBB.waveStartOrig = orig
         dom.OnEnterSpawn = function(self, state)
+            if not RBB.commenced then
+                -- #158 Setup-Phase: Waves pausiert bis HQ platziert. NUR der
+                -- Wave-PROGRESS haelt an (kein Naturwellen-Spawn, kein
+                -- Runden-Zaehler, keine Send-Queue/Reveal); das Spiel selbst
+                -- laeuft weiter (kein debug_dom_pause).
+                if not RBB.commenceHeldLogged then
+                    RBB.commenceHeldLogged = true
+                    Log("event=commence status=held reason=no_hq")
+                end
+                return
+            end
             pcall(RBB.waveStartOrig, self, state) -- Naturwelle UNANGETASTET
             OnNaturalWaveStart()
         end
@@ -1907,8 +1931,16 @@ end)
 pcall(function()
     RegisterGlobalEventHandler("ResourceChangeEvent", OnResourceChangeEvent)
 end)
+-- #158: HourEvent-Tick (globaler Spielzeit-Takt) dient auch als Retry-Takt fuer
+-- die HQ-Erkennung: der Spieler platziert das HQ waehrend der Setup-Phase ueber
+-- das Build-Menue, ohne ein rb_wave/rb_send aufzurufen — der Tick erkennt es
+-- und stoesst den Commence an (Muster Retry-Punkte PatchDomTimer).
+local function OnHourEvent(evt)
+    OnHourEventEconomy(evt)
+    HqAutoDetectEntity()
+end
 pcall(function()
-    RegisterGlobalEventHandler("HourEvent", OnHourEventEconomy)
+    RegisterGlobalEventHandler("HourEvent", OnHourEvent)
 end)
 
 -- Init: Persistenz zuruecklesen (Spar-Pool ueberlebt Runden + Neustart).
@@ -1999,6 +2031,35 @@ RBB.hq = {
     dead = false,       -- true nach HQ-Tod (Match-Ende gemeldet)
 }
 
+-- ============================================================================
+-- #158 Setup-Phase / Commence-Flow: Spielstart OHNE Auto-HQ. Bis der Spieler
+-- das HQ selbst ueber das Build-Menue platziert (erkannt via FindEntitiesByGroup
+-- "headquarters", #144/#151), haelt der Wave-PROGRESS an. Es wird NUR der
+-- Wave-PROGRESS pausiert, NICHT das Spiel (kein debug_dom_pause). Kein
+-- HQ-Auto-Place. Announce auf drei Kanaelen (u.a. Telegram Topic 312 ueber die
+-- Bridge, Web-Konsole ggf. nur vorbereitet):
+--   in-game     = WriteConsole (In-Game-Konsole)
+--   Telegram    = [RBBATTLE] event=commence ... (Bridge -> Topic 312)
+--   Web-Konsole = dieselbe Log-Zeile (dev-log/solo.html, nur vorbereitet)
+-- ============================================================================
+
+-- Start-Announce (Setup-Phase): einmalig, idempotent.
+RBB.setupAnnounced = false
+AnnounceSetupPhase = function()
+    if RBB.setupAnnounced then return end
+    RBB.setupAnnounced = true
+    Log("event=commence status=pending hint=place_hq")
+    WriteConsole("To commence the game, place the headquarter")
+end
+
+-- Commence: HQ erkannt -> Waves starten + Commence-Announce. Idempotent.
+CommenceGame = function()
+    if RBB.commenced then return end
+    RBB.commenced = true
+    Log("event=commence status=ok")
+    WriteConsole("Headquarter placed — waves commencing")
+end
+
 -- #144: Kandidaten-Gruppennamen fuer die automatische HQ-Entity-Erkennung.
 -- "headquarters" ist der einzige im Repo dokumentierte Name (docs/GAME_DESIGN.md,
 -- dort selbst UNVERIFIZIERT) -- weitere Kandidaten hier ergaenzen, sobald ein
@@ -2027,6 +2088,7 @@ HqAutoDetectEntity = function()
                 RBB.hq.entity = list[1]
                 Log("event=hq_autodetect status=ok group=%s entity=%s",
                     group, tostring(list[1]))
+                CommenceGame() -- #158: HQ erkannt -> Waves starten
                 return
             end
         end
@@ -2201,6 +2263,7 @@ local function CmdHq(args)
             return
         end
         RBB.hq.entity = id
+        CommenceGame() -- #158: manuelle HQ-Zuordnung -> Waves starten
         Log("event=hq_entity status=ok entity=%s", tostring(id))
         WriteConsole("rb_hq: HQ-Entity %s zugeordnet", tostring(id))
         return
@@ -2277,6 +2340,10 @@ end)
 -- Init: HQ-HP auf Startwert setzen (Spielzustand im Speicher; der Server
 -- fuehrt die autoritative Buchung).
 RBB.hq.hp = RBB.hqCfg.hqHpStart
+
+-- #158: Start-Announce der Setup-Phase (Fallback fuer Mod-Load ohne
+-- PlayerInitializedEvent; idempotent neben OnPlayerInitialized).
+AnnounceSetupPhase()
 
 -- ============================================================================
 -- #27 Reveal-HUD: Commands (rb_reveal = Gegner-Injektion, rb_round_start =

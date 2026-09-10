@@ -157,6 +157,11 @@ _G.__commands["rb_queue"]({})
 check(log_has("event=queue status=show count=3 value=1000 pool=1000"),
     "rb_queue count=3 value=1000 pool=1000")
 
+-- #158 Setup-Phase: HQ platziert -> Commence (Waves starten). Der Test prueft
+-- die Wellen-/Queue-Mechanik NACH dem Commence; die Setup-Phase selbst deckt
+-- commence.test.js ab.
+_G.__handlers["PlayerInitializedEvent"](nil)
+
 -- 8. Wellenstart -> Send-Queue ausliefern (Boost der naechsten Naturwelle).
 dom_mananger.OnEnterSpawn(nil, {})
 check(_G.__waveStarts == 1, "Original-OnEnterSpawn genau 1x (Naturwelle unangetastet)")
