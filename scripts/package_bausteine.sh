@@ -145,5 +145,16 @@ outmod="$OUT_DIR/rbbattle.zip"
 zip_content_root "$SRCMOD" "$outmod"
 echo "NAME=rbbattle.zip ZIP=$outmod"
 
+# Einzel-Mod versioniert (Issue #119): die Mod-Version kommt aus den
+# Mod-Metadaten (mod/<GUID>.manifest, Feld `version`), nicht aus Git-SHA oder
+# Datum. rbbattle-v<version>.zip ist der kanonische, versionierte Download;
+# rbbattle.zip bleibt der stabile Alias für die Deploy-Kette (md5-Parität +
+# Server-Extraktion), damit Download-Link und Server-Stand nie auseinanderlaufen.
+MOD_VERSION="$(bash "$ROOT/scripts/mod_version.sh")"
+outmod_ver="$OUT_DIR/rbbattle-v$MOD_VERSION.zip"
+cp "$outmod" "$outmod_ver"
+echo "NAME=rbbattle-v$MOD_VERSION.zip ZIP=$outmod_ver"
+echo "MOD_VERSION=$MOD_VERSION"
+
 n_zip=$(find "$OUT_DIR" -maxdepth 1 -name 'rbb-*.zip' | wc -l)
 echo "[package_bausteine] fertig: ${n_zip} Baustein-Zip(s) + rbbattle.zip in $OUT_DIR"

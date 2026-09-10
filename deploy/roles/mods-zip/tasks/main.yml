@@ -14,6 +14,19 @@
   register: package_out
   changed_when: true
 
+- name: Mod-Version aus Manifest lesen (Control-Node)
+  command:
+    cmd: bash scripts/mod_version.sh
+    chdir: "{{ playbook_dir }}/.."
+  delegate_to: localhost
+  become: false
+  register: mod_version_out
+  changed_when: false
+
+- name: Mod-Version ableiten (Fact)
+  set_fact:
+    mod_version: "{{ mod_version_out.stdout | trim }}"
+
 - name: Lokale md5 von dist/rbbattle.zip ermitteln
   stat:
     path: "{{ playbook_dir }}/../dist/rbbattle.zip"
@@ -33,6 +46,18 @@
   copy:
     src: "{{ playbook_dir }}/../dist/rbbattle.zip"
     dest: "{{ mods_zip_dest }}"
+    mode: "0644"
+    owner: root
+    group: root
+
+# Versionierter Download (Issue #119): rbbattle-v<version>.zip wird zusätzlich
+# nach planet gelegt. rbbattle.zip bleibt der stabile, atomar ausgetauschte
+# Download (Server-Extraktion nutzt dieselbe Datei -> Parität). Das versionierte
+# Zip trägt die Mod-Version im Dateinamen (Quelle: Mod-Manifest).
+- name: Versioniertes Mod-Zip (rbbattle-v<version>.zip) nach planet kopieren
+  copy:
+    src: "{{ playbook_dir }}/../dist/rbbattle-v{{ mod_version }}.zip"
+    dest: "{{ website_mods_dir }}/rbbattle-v{{ mod_version }}.zip"
     mode: "0644"
     owner: root
     group: root

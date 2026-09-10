@@ -3,7 +3,7 @@
 # package_mod.sh — zippt den Mod-Ordner (mod/) fuer manuelle Verteilung/Tests.
 #
 # Verwendung:
-#   scripts/package_mod.sh                 -> dist/rbbattle-mod-<datum>.zip
+#   scripts/package_mod.sh                 -> dist/rbbattle-mod-<version>.zip
 #   scripts/package_mod.sh v0.2.0          -> dist/rbbattle-mod-v0.2.0.zip
 #
 # Inhalt des Zips: der komplette Mod-Ordner (mod/) - also das Lua-Mod mit
@@ -18,7 +18,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
-VERSION="${1:-$(date +%Y%m%d)}"
+VERSION="${1:-$(bash "$ROOT/scripts/mod_version.sh")}"
 SRC_DIR="$ROOT/mod"
 OUT_DIR="$ROOT/dist"
 OUT_FILE="$OUT_DIR/rbbattle-mod-$VERSION.zip"
