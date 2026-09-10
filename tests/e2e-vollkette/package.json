@@ -1,0 +1,13 @@
+{
+  "name": "rbbattle-e2e-vollkette",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Vollketten-E2E (Issue #11): rb_wave 3 via Web-UI -> Tournament-Server -> Relay -> rbbridge -> Mod-Spawn. Statisch/deterministisch so weit wie moeglich; Live-Client-Schritte als OFFEN/skip.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "fengari": "^0.1.5",
+    "luaparse": "^0.3.1"
+  }
+}

@@ -27,6 +27,9 @@ jobs:
       - name: Lua Static Tests (fengari + luaparse, Issue #28)
         working-directory: tests/lua-static
         run: npm ci && npm test
+      - name: Vollketten-E2E (Issue #11: rb_wave 3 Web-UI → Server → Relay → rbbridge → Mod)
+        working-directory: tests/e2e-vollkette
+        run: npm ci && npm test
 
   build:
     name: Build + Package (rbbridge.dll/exe, dist/*.zip)
