@@ -1,12 +1,23 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.21.0 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.22.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 
 > **Multiplayer:** Beide Spieler müssen **exakt dieselben Mods** installiert
 > haben, sonst lehnt der Client die Lobby mit **„different set of mods“** ab.
 > Kurzanleitung: [`docs/PLAYER_SETUP.md`](../docs/PLAYER_SETUP.md).
+
+**v0.22.0 — CD: Deploy-Parkierung bis 0 Spieler online (Issue #118):**
+- Neues eigenständiges Modul `tools/deploy-gate/` (`deploy_gate.py`): `decide()` als reine
+  Entscheidungslogik (force / unknown / 0 Spieler / n>0) und `wait_until_empty()` als Poll-Loop,
+  der parkt und automatisch ausrollt, sobald alle Spieler disconnected sind.
+- `--force` (sofort), `--timeout <s>` (Exit 2 statt Endlos-Hängen), pluggable Spielerzahl via
+  `--count-cmd`/`RBM_COUNT_CMD` bzw. `--player-count` (Tests/Override).
+- Unit-Tests `tests/…` in `tools/deploy-gate/test_deploy_gate.py` (13 Cases) + CI-Schritt im
+  `test`-Job; `lint.yml`/`compileall` deckt jetzt `tools/` mit ab.
+- Offene Voraussetzung: verbindliche Spielerzahl-Quelle (RCON/Query) noch nicht festgelegt
+  (gehört zur vollständigen CD-Pipeline #91) — Provider ist daher austauschbar ausgelegt.
 
 **v0.21.0 — Send-Boost: nächste Naturwelle prozentual verstärken (Issue #39):**
 - Neues Command `rb_boost <stufe|pct>`: kauft einen prozentualen Aufschlag auf die **nächste
@@ -326,7 +337,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.21.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
+[RBBATTLE] event=mod_load version=0.22.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100
