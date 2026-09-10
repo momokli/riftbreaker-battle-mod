@@ -344,7 +344,7 @@ und Workshop-Mods tun (Quelle: fandom „Basic Modding Guide“, Ordner
 | `rb_boost <stufe|pct>` | **Send-Boost (#39):** kauft einen prozentualen Aufschlag auf die nächste Naturwelle (Stufen `s1`=+25% (200), `s2`=+50% (400), `s3`=+100% (800) oder freie pct-Eingabe à 8 Währung/Prozentpunkt) aus dem Spar-Pool (sofort irreversibel). Beim nächsten natürlichen Wellenstart wird der Boost am `SpawnWavesForDifficultyLevel`-Chokepoint angewendet (difficultyLevel-Delta) und zurückgesetzt — genau eine Welle, nicht kumulativ. Guards: unbekannte Stufe, pct ≤ 0, `maxBoostPct` (200), `maxBoostsPerWave` (4), zu wenig Pool. `duel` = Boost-Flush nur in `sp` |
 | `rb_mode sp\|duel` | Modus-Umschaltung: `sp` = Solo-Test (Default, sendet an die eigene nächste Welle), `duel` = 1v1 (Stub, folgt später) |
 | `rb_status` | Zeigt `mode`, `runde`, `pool`, die `queue` und den `boost` (für die nächste Welle) — die Kontrollanzeige des Testmodus |
-| `rb_hq` / `rb_hq leak [dmg]` / `rb_hq entity <id>` / `rb_hq reset` | Win-Condition-Status + Dev-Werkzeuge (#28): HQ-HP zeigen, manuellen Leak anwenden, HQ-Entity zuordnen, Zustand zurücksetzen (Muster `rb_economy reset`) |
+| `rb_hq` / `rb_hq leak [dmg]` / `rb_hq entity <id>` / `rb_hq reset` | Win-Condition-Status + Dev-Werkzeuge (#28): HQ-HP zeigen, manuellen Leak anwenden, HQ-Entity zuordnen, Zustand zurücksetzen (Muster `rb_economy reset`). Die HQ-Entity wird seit #144 zusätzlich automatisch versucht zu binden (`HqAutoDetectEntity`, bei `PlayerInitializedEvent`/jedem `rb_wave`); `rb_hq entity <id>` bleibt der manuelle Fallback, falls die Auto-Erkennung nichts findet |
 | `rb_hud` | **Reveal-HUD (#27):** HUD-Standardfelder — Runde, Countdown, eigener Pool, HQ-HP beider Teams + Reveal-Zustand (`reveal=hidden\|revealed`). Gegner-Built/incoming/HQ sind vor Wellenstart `hidden` |
 | `rb_reveal <built_opp> <hq_opp> [incoming]` | **Gegner-Injektion (#27):** die Bridge injiziert die vom Server aufgedeckten Gegner-Werte (Built-Value, HQ-HP, eingehende Send-Komposition) → Reveal beider Teams komplett |
 | `rb_round_start [n]` | **Build-Phase (#27):** verbirgt den Reveal wieder (Bridge-Signal „round steigt“); `<n>` nur informativ |
@@ -374,8 +374,10 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 [RBBATTLE] event=wave_spawners count=16 groups=4          ← Pool der Rand-Spawner
 [RBBATTLE] event=spawn ok blueprint=units/ground/baxmoth entity=12345 anchor=spawn_enemy_border_west/...
 [RBBATTLE] event=wave level=3 status=done spawned=8 skipped=0 anchor=border spawners=16
+[RBBATTLE] event=hq_autodetect status=ok group=headquarters entity=54321   ← automatische HQ-Bindung (#144, unverifizierter Gruppen-Name)
+[RBBATTLE] event=hq_autodetect status=not_found candidates=headquarters hint=rb_hq_entity   ← kein Treffer -> manueller Fallback noetig (#144)
 [RBBATTLE] event=hq_leak status=skip reason=no_hq_entity   ← Leak inaktiv ohne gebundene HQ-Entity (#143, Fix zu #28)
-[RBBATTLE] event=leak damage=10 hp_before=100 hp=90        ← Kreatur erreicht HQ-Zone, NUR mit gebundener Entity (`rb_hq entity <id>`, #28/#144)
+[RBBATTLE] event=leak damage=10 hp_before=100 hp=90        ← Kreatur erreicht HQ-Zone, NUR mit gebundener Entity (automatisch #144 oder `rb_hq entity <id>`, #28)
 [RBBATTLE] event=hq_hp hp=90 dead=false                    ← Report → Server (POST /report hq_hp)
 [RBBATTLE] event=reveal_opp round=1 built_opp=6400 hq_opp=80 incoming=brabit:2 status=ok   ← Gegner-Werte injiziert (#27)
 [RBBATTLE] event=hud round=1 countdown=300 pool=1800 built_own=3000 built_opp=6400 incoming=brabit:2 hq_own=100 hq_opp=80 reveal=revealed   ← HUD-Felder (#27)
@@ -411,9 +413,16 @@ erwartet, s. #7); (4) macOS-Mod-Support ungeklärt.
 Trigger-Zone-Asset ums HQ sind nicht belegt (Repo-Recherche hat kein
 Trigger-Event, s. api-deep-dive.md) — Handler ist pcall-gesichert registriert,
 Log `event=hq_zone status=skip|pending|armed` zeigt den Zustand.
-(6) **HQ-Entity-Identifikation (#28):** kein verifizierter Blueprint/Lookup —
-Operator ordnet die Entity per `rb_hq entity <id>` zu; sonst greift nur der
-HP≤0-Pfad (Leak) als Match-Ende.
+(6) **HQ-Entity-Identifikation (#28, #144):** `HqAutoDetectEntity()` versucht
+bei `PlayerInitializedEvent`/jedem `rb_wave`-Aufruf automatisch über
+`FindService:FindEntitiesByGroup("headquarters")` zu binden (Gruppen-Name aus
+`docs/GAME_DESIGN.md` — dort selbst **unverifiziert**, in `docs/research/`
+nicht belegt). Nur ein eindeutiger Treffer wird gebunden
+(`event=hq_autodetect status=ok`); bei 0/>1 Treffern bleibt `rb_hq entity <id>`
+der verlässliche manuelle Fallback (`event=hq_autodetect status=not_found`,
+einmalig geloggt). **Braucht In-Game-Bestätigung**, ob `"headquarters"` der
+richtige Gruppen-Name ist — falls nicht, weitere Kandidaten in
+`RBB.hqEntityGroupCandidates` ergänzen.
 
 ## Technische Notizen
 
