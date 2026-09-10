@@ -59,6 +59,13 @@
 --       rb_quick [unit [count]] ruestet die Quick-Send-Einheit (Default
 --       brabit). Convert bleibt bewusst Konsolen-/Bridge-Aktion (braucht
 --       Menge). Kein Version-Bump (Release/Tag macht der Loop).
+--   #33 Balance & Tuning v1 (Preisliste + HQ-HP-Kurve, KEIN Live-Test):
+--       shopCfg ist die zentrale, dokumentierte v1-Preisliste (Tiered Units +
+--       Bosse); die HQ-HP-Kurve ueber Runden ist als Formel dokumentiert
+--       (hqCfg.hqHpPerRound/hqHpRoundCap -> HqMaxHp) und setzt den HQ-HP bei
+--       jedem Wellenstart auf den Runden-Maxwert. Der Wellen-Takt bleibt
+--       waveIntervalCapS (nur dokumentiert, nicht fest verdrahtet). Alle
+--       Werte sind eine Balance-Annahme und brauchen Live-Test (#33).
 --
 -- Basis: rbbattle v0.2.0-single (feature/single-mod, PR #15) + Baustein 00/01.
 -- Kein io/socket/http, keine Bindings, kein eigenes HUD-Framework (nur
@@ -108,6 +115,8 @@
 --   event=hq_respawn status=unmatched entity=..                            (#28)
 --   event=hq_zone status=.. entity=.. hp=.. dead=..                        (#28)
 --   event=hq_status / hq_reset / hq_entity                                 (#28)
+--   event=hq_curve round=.. maxhp=.. hp=..                                (#33)
+--   event=balance unit=.. tier=.. price=.. boss=.. / hq_curve ..           (#33)
 --   event=reveal round=.. status=revealed built_own=.. built_opp=.. send_own=.. incoming=.. (#27)
 --   event=reveal_opp round=.. built_opp=.. hq_opp=.. incoming=.. status=ok  (#27)
 --   event=round_start round=.. status=build reveal=hidden                   (#27)
@@ -196,11 +205,22 @@ RBB.waveIntervalCapS = 300
 RBB.mode = "sp"
 RBB.round = 0   -- Runden-Zaehler (+1 bei jedem natuerlichen Wellenstart)
 
--- #25 Send-Queue & Shop-HUD: Preisliste v1 (Struktur/Platzhalter — KEIN
--- Balancing, Tuning in Issue #33/#12). Tier-Struktur Legion-TD-2-artig:
--- guenstige Tier-1-Einheiten bis teure Boss-Einheiten. Blueprints sind
--- Platzhalter aus dem bestehenden Wellen-/Boost-Pool; echte Boss-/Unit-Listen
--- aus den Spieldaten folgen in der Balance-Session (#33).
+-- #33 Balance & Tuning v1: PREISLISTE v1 (Tiered Units + Bosse) als zentrale
+-- Datenbasis fuer den Shop. Preise in Send-Waehrung (= 1 Carbonium-Value,
+-- Faktor 1, vgl. economyCfg). Die Preise sind eine dokumentierte erste
+-- Balance-Annahme OHNE Live-Test (braucht Test-Duell, #33):
+--
+--   Tier 1  brabit       100   (billigster Basis-Send)
+--   Tier 1  baxmoth      150
+--   Tier 2  artigian     200
+--   Tier 3  canceroth    300
+--   Boss    boss         800   (8x billigster Tier-1, Single-Slot im Tier)
+--
+-- Prinzip: monoton steigende Preise ueber die Tiers, Boss als teuerste Einheit.
+-- Blueprints sind weiterhin Platzhalter aus dem bestehenden Wellen-/Boost-Pool
+-- (echte Boss-/Unit-Listen aus den Spieldaten folgen separat); die PREIS-
+-- Relationen sind die hier festgelegte Balance-Groesse. Kein eigenes Framework:
+-- der Shop bleibt die bestehende shopCfg-Struktur (#25).
 RBB.shopCfg = {
     tiers = {
         { id = "t1", name = "Tier 1", units = {
@@ -214,8 +234,6 @@ RBB.shopCfg = {
             { id = "canceroth", blueprint = "units/ground/canceroth", price = 300 },
         } },
         { id = "boss", name = "Boss", units = {
-            -- Platzhalter-Boss (Blueprint wie Tier 3; echte Boss-Liste folgt
-            -- in der Balance-Session #33). boss=true markiert die Boss-Tier.
             { id = "boss", blueprint = "units/ground/canceroth", price = 800, boss = true },
         } },
     },
@@ -238,6 +256,11 @@ RBB.sendQueue = {
 -- OnPlayerInitialized / HandleWaveCommand / Mod-Load (Retry-Zeitpunkte,
 -- Muster PatchDomTimer).
 local PatchWaveStartHook
+
+-- Vorwaertsdeklaration fuer die HQ-HP-Kurve (#33): Definition folgt im
+-- Win-Condition-Block (braucht RBB.hqCfg); aufgerufen wird sie in
+-- OnNaturalWaveStart (Wellenstart-Hook) — Muster PatchWaveStartHook.
+local HqMaxHp
 
 -- ---------------------------------------------------------------------------
 -- Kleine Helfer
@@ -1412,6 +1435,13 @@ end
 -- ausliefern (Boost der naechsten Naturwelle).
 local function OnNaturalWaveStart()
     RBB.round = RBB.round + 1
+    -- #33: HQ-HP-Kurve ueber Runden — bei Wellenstart HP auf Runden-Max setzen
+    -- (solange das HQ nicht zerstoert ist).
+    if not RBB.hq.dead then
+        RBB.hq.hp = HqMaxHp(RBB.round)
+        Log("event=hq_curve round=%d maxhp=%d hp=%d",
+            RBB.round, HqMaxHp(RBB.round), RBB.hq.hp)
+    end
     RevealReset()   -- #27: neue Runde beginnt verborgen
     Log("event=round round=%d status=start mode=%s pool=%d queue=%d",
         RBB.round, RBB.mode, RBB.economy.pool, RBB.sendQueue.count)
@@ -1566,12 +1596,29 @@ PatchWaveStartHook()
 --     nur der HP<=0-Pfad (Leak) als Match-Ende.
 -- ============================================================================
 
--- Konfiguration (Balance-Platzhalter; hqHpStart muss TOURNAMENT_HQ_HP des
--- Servers entsprechen, Default 100).
+-- Konfiguration (hqHpStart muss TOURNAMENT_HQ_HP des Servers entsprechen,
+-- Default 100). #33: HQ-HP-Kurve ueber Runden als dokumentierte Formel —
+--   maxHp(r) = hqHpStart + hqHpPerRound * min(r-1, hqHpRoundCap)   (r >= 1)
+-- Tabelle (braucht Live-Test, #33):
+--   Runde  1    2    3    4    5+
+--   maxHP  100  120  140  160  180
+-- Bei jedem Wellenstart (OnNaturalWaveStart) wird der HQ-HP auf diesen
+-- Runden-Maxwert gesetzt, solange das HQ nicht zerstoert ist.
 RBB.hqCfg = {
-    hqHpStart = 100,     -- Start-HP des HQ (Server-Default TOURNAMENT_HQ_HP)
-    leakDamage = 10,     -- HP-Verlust je Leak (Kreatur erreicht die HQ-Zone)
+    hqHpStart = 100,      -- Start-HP des HQ (Server-Default TOURNAMENT_HQ_HP)
+    leakDamage = 10,      -- HP-Verlust je Leak (Kreatur erreicht die HQ-Zone)
+    hqHpPerRound = 20,    -- #33: +HP je abgeschlossener Runde (ab Runde 2)
+    hqHpRoundCap = 4,     -- #33: Kurve nach N Runden gedeckelt (max +20*4=80)
 }
+
+-- #33: HQ-HP-Kurve ueber Runden — reine Formel (unit-testbar). Deckelt die
+-- Wachstums-Runden auf hqHpRoundCap; Ergebnis nie unter hqHpStart.
+HqMaxHp = function(round)
+    local r = math.floor(tonumber(round) or 1)
+    if r < 1 then r = 1 end
+    local growth = math.min(math.max(r - 1, 0), RBB.hqCfg.hqHpRoundCap)
+    return RBB.hqCfg.hqHpStart + RBB.hqCfg.hqHpPerRound * growth
+end
 
 -- Laufzeit-Zustand der Win-Condition.
 RBB.hq = {
@@ -1715,6 +1762,29 @@ end
 pcall(function()
     ConsoleService:RegisterCommand("rb_hq", function(args)
         CmdHq(args)
+    end)
+end)
+
+-- #33: rb_balance — zentrale Balance-Daten (Preisliste + HQ-HP-Kurve) als
+-- Log-Flaeche. Read-only; testbare Vertragsflaeche fuer die Tuning-Werte.
+local function CmdBalance(args)
+    -- Preisliste (Tier-Struktur aus shopCfg, #25).
+    for _, tier in ipairs(RBB.shopCfg.tiers) do
+        for _, u in ipairs(tier.units) do
+            Log("event=balance unit=%s tier=%s price=%d boss=%s",
+                u.id, tier.id, u.price, tostring(u.boss == true))
+        end
+    end
+    -- HQ-HP-Kurve (#33): Konstanten + Stichproben r=1..6 (inkl. Cap).
+    Log("event=balance hq_curve start=%d per_round=%d cap=%d r1=%d r2=%d r3=%d r4=%d r5=%d r6=%d",
+        RBB.hqCfg.hqHpStart, RBB.hqCfg.hqHpPerRound, RBB.hqCfg.hqHpRoundCap,
+        HqMaxHp(1), HqMaxHp(2), HqMaxHp(3), HqMaxHp(4), HqMaxHp(5), HqMaxHp(6))
+    WriteConsole("rb_balance: Preisliste + HQ-HP-Kurve geloggt (braucht Live-Test, #33)")
+end
+
+pcall(function()
+    ConsoleService:RegisterCommand("rb_balance", function(args)
+        CmdBalance(args)
     end)
 end)
 

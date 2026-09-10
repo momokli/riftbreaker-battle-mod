@@ -84,10 +84,60 @@ HQ-TOD → Match verloren
 | Wellen-Routing | DOM-Wellenstart-Hook (Send-Queue mutiert nächste Welle) |
 | State-Egress | `send_state` (Issue #13) → Tournament-Server |
 
-## Offene Tuning-Punkte (nach Interview)
-- Preisliste (Tiered Units + Bosse) — braucht erste Test-Runde mit Momo+Matheo.
-- Naturwellen-Gefühl: "War Level 3 zu brutal?" (Live-Test 16:32: 8 Kreaturen, Momo gestorben).
-- HQ-HP-Kurve über Runden.
+## Balance & Tuning v1 (Issue #33)
+
+Erste, zentral dokumentierte Balance-Werte — **alle brauchen Live-Test** (kein
+Spieltest durch den Agenten; die Werte sind eine dokumentierte Annahme, keine
+verifizierte Kurve).
+
+### Preisliste v1 (Tiered Units + Bosse)
+
+Zentrale Datenbasis: `RBB.shopCfg` in `mod/lua/rbbattle_autoexec.lua` (Preise in
+Send-Währung = 1 Carbonium-Value, Faktor 1). Lesbar per `rb_balance`/`rb_shop`.
+
+| Tier | Unit | Preis | Anmerkung |
+|---|---|---|---|
+| Tier 1 | brabit | 100 | billigster Basis-Send |
+| Tier 1 | baxmoth | 150 | |
+| Tier 2 | artigian | 200 | |
+| Tier 3 | canceroth | 300 | |
+| Boss | boss | 800 | 8× billigster Tier-1, Single-Slot |
+
+Prinzip: monoton steigende Preise über die Tiers, Boss als teuerste Einheit.
+Blueprints sind weiterhin Platzhalter (echte Unit-/Boss-Listen folgen separat);
+die **Preis-Relationen** sind die hier festgelegte Balance-Größe. **braucht
+Live-Test** (Test-Duell Momo vs. Matheo).
+
+### HQ-HP-Kurve über Runden
+
+Dokumentierte Formel (Konstante + Cap in `RBB.hqCfg`):
+
+```
+maxHp(r) = hqHpStart + hqHpPerRound * min(r-1, hqHpRoundCap)   (r >= 1)
+         = 100       + 20           * min(r-1, 4)
+```
+
+| Runde | 1 | 2 | 3 | 4 | 5+ |
+|---|---|---|---|---|---|
+| maxHP | 100 | 120 | 140 | 160 | 180 |
+
+Bei jedem Wellenstart (`OnNaturalWaveStart`) wird der HQ-HP auf diesen
+Runden-Maxwert gesetzt (solange das HQ nicht zerstört ist). `hqHpStart` muss dem
+Server-Default `TOURNAMENT_HQ_HP` entsprechen. **braucht Live-Test** — ob
+20 HP/Runde das richtige Gefühl trifft und ob das Deckel bei Runde 4 passt, ist
+offen.
+
+### Wellen-Takt (bewusst NICHT fest verdrahtet)
+
+Der 5-Minuten-Takt bleibt die bestehende Konfig `RBB.waveIntervalCapS = 300`
+(`prepareSpawnTime` 420→300, Patch `dom_mananger:GetPrepareSpawnTime`). Die
+Takt-Entscheidung wird hier **nur dokumentiert**, nicht neu fest verdrahtet —
+eine Änderung des Takts ist Issue #41 vorbehalten.
+
+## Offene Tuning-Punkte (nach Interview, Stand nach #33-v1)
+- ~~Preisliste (Tiered Units + Bosse)~~ → v1 dokumentiert (Tabelle oben) — **braucht Live-Test**.
+- Naturwellen-Gefühl: "War Level 3 zu brutal?" (Live-Test 16:32: 8 Kreaturen, Momo gestorben) — **braucht Live-Test** (offen).
+- ~~HQ-HP-Kurve über Runden~~ → v1 dokumentiert (Formel/Tabelle oben) — **braucht Live-Test**.
 
 ## Umsetzungsstand (Repo, rbbattle v0.19.0)
 Abgleich des Design-Kerns gegen den implementierten Mod-/Server-/Site-Stand.
@@ -105,8 +155,9 @@ Abgleich des Design-Kerns gegen den implementierten Mod-/Server-/Site-Stand.
 | Win-Condition HQ-Tod (Logik) | ✅ implementiert | #28 | `rb_hq`; Leak → HQ-HP; `hq_dead`/`match_end` (Server-Buchung vorhanden) |
 | Win-Condition (Trigger-Zone, HQ-Entity-ID, Sieg-Screen) | ⚠️ offen | #28 | `EnteredTriggerEvent`-Feuerung + Trigger-Zone-Asset unbelegt; HQ-Entity via `rb_hq entity <id>` |
 | Live-Status (Landing) | ✅ implementiert (Website) | #30 | `site/live-status.js` + Landing-Widget + Dashboard-Link |
-| Balancing (Preisliste, Faktoren, HQ-HP-Kurve) | ⚠️ offen | #33/#39/#40/#41 | Platzhalter — bewusst **nicht** in dieser Doku gesetzt |
+| Balancing (Preisliste v1, HQ-HP-Kurve) | 🟡 v1 dokumentiert (braucht Live-Test) | #33 | `rb_balance`/`rb_shop`; `RBB.shopCfg` + `RBB.hqCfg` (Formel + Cap); Wellen-Takt bleibt `waveIntervalCapS` |
 
-Hinweis: Diese Doku hält den Design-Kern fest und spiegelt **keine** Balancing-Zahlen.
-Die konkreten Werte (Shop-Preise, Ressourcen-Faktoren, HQ-HP-Kurve, Wellen-Stärke-Boost)
-bleiben den Tuning-Issues #33/#39/#40/#41 vorbehalten.
+Hinweis: Diese Doku hält den Design-Kern fest. Die Balancing-Zahlen v1
+(Shop-Preise + HQ-HP-Kurve) stehen oben im Abschnitt „Balance & Tuning v1
+(Issue #33)“; die übrigen Werte (Ressourcen-Faktoren, Wellen-Stärke-Boost)
+bleiben den Tuning-Issues #39/#40/#41 vorbehalten.
