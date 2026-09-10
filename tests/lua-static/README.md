@@ -177,6 +177,20 @@ kein Spiel-Zugriff; bleibt Operator-Lauf (Prod).
 5. `rb_mode duel` bleibt Stub und verlässt Solo OP; unbekanntes Arg → `usage`,
    Modus unverändert; doppeltes `sp_op` ist idempotent (nur ein `status=on`).
 
+`hook-userdata.test.js` deckt Issue #217 (`dom_mananger` ist im
+Autoexec-Environment ein **userdata**, kein Lua-`table`) ab:
+
+1. Der Harness baut `dom_mananger` als **echtes fengari-userdata**
+   (`lua_newuserdata` + Metatable mit `__index`/`__newindex`, Muster wie oben).
+   Sanity: `type(dom_mananger) == "userdata"`.
+2. Alle drei Load-Time-Hooks greifen trotz userdata: `event=dom_timer patch
+   status=ok cap=480`, `event=wave_hook patch status=ok`, `event=boost patch
+   status=ok` (vor dem Fix brachen alle drei am `type(dom) ~= "table"`-Check ab).
+3. Funktional: der Timer-Wrap kappt die userdata-Methode (Stub 600 s) auf den
+   aktiven Preset-Deckel (`480`); nach Commence (HQ-Erkennung) liefert der
+   gewrappte `OnEnterSpawn` `event=round round=1 status=start` und das Original
+   plus Chokepoint-Hook laufen (Preset A: Level unverändert).
+
 ## Grenzen (ehrlich dokumentiert)
 
 Die Stub-Services ersetzen die Spiel-Engine; **nicht** live-verifizierbar sind
