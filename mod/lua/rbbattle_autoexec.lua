@@ -108,7 +108,7 @@
 -- ============================================================================
 
 local RBB = {}
-RBB.version = "0.18.0"
+RBB.version = "0.18.1"
 
 -- Log-/Konsole-Helfer (Muster Spike): Praefix [RBBATTLE] fuer externes Parsen.
 local LOG_TAG = "[RBBATTLE]"
