@@ -44,6 +44,19 @@ npm test        # = node --test
    Welle) — Queue danach leer, Pool unangetastet.
 7. Erneuter Kauf + zweiter Wellenstart (Senden jederzeit, beliebig oft).
 
+`reveal-hud.test.js` deckt Issue #27 (Reveal-HUD / Poker) ab:
+
+1. Mod lädt; `rb_reveal`/`rb_round_start`/`rb_hud` registriert.
+2. Vor Wellenstart: `rb_hud` → `reveal=hidden`, Gegner-Built/incoming/HQ
+   verborgen (`hidden`).
+3. Farm → Convert → Kauf: Built-Value 3000, Queue bereit.
+4. Bei Wellenstart: `event=reveal` lockt eigenen Built-Value + eigene
+   Send-Komposition (`built_own=3000 send_own=units/ground/brabit:2`).
+5. `rb_reveal` injiziert Gegner-Werte (`built_opp`/`hq_opp`/`incoming`).
+6. `rb_hud` danach: Built beider Teams + WAS kommt + HQ beider Teams sichtbar.
+7. `rb_round_start` verbirgt den Reveal wieder (`reveal=hidden`); zweiter
+   Wellenstart lockt erneut.
+
 ## Grenzen (ehrlich dokumentiert)
 
 Die Stub-Services ersetzen die Spiel-Engine; **nicht** live-verifizierbar sind
@@ -58,3 +71,9 @@ am Wellenstart) ist statisch getestet; die tatsächliche `OnEnterSpawn`-Wrap-
 Wirksamkeit im Autoexec-Environment und das Shop-Popup-Rendering sind
 live-verifizierbar (Operator, Prod) — die Boss-/Unit-Blueprints sind bewusst
 Platzhalter (Balance-Session #33/#12).
+
+Für #27 gilt analog: die Reveal-Logik (hidden → Lock bei Wellenstart →
+Gegner-Injektion → `rb_hud`) ist statisch getestet; die Gegner-Werte kommen
+zur Laufzeit von der Bridge (kein eigener I/O-Kanal des Mods) und das
+1v1-Routing/der Reveal beider Teams liegt beim Tournament-Server — beides ist
+nicht live-verifizierbar (Operator, Prod).

@@ -46,6 +46,12 @@
 --       der HQ-Entity) -> event=hq_dead/match_end. Report laeuft als
 --       [RBBATTLE]-Log-Zeile ueber die Bridge an den Tournament-Server
 --       (POST /report hq_hp); Sieg-Zustand + Rematch sind dort implementiert.
+--   #27 Reveal-HUD (Poker): Vor dem Wellenstart sind beide Werte (Gegner-
+--       Built-Value + WAS kommt) verborgen; BEIM Wellenstart lockt der Mod
+--       den EIGENEN Built-Value + die eigene Send-Komposition (event=reveal),
+--       die Bridge injiziert die Gegner-Werte (rb_reveal). rb_hud liefert die
+--       HUD-Standardfelder (Runde, Countdown, Pool, HQ beider Teams);
+--       rb_round_start verbirgt den Reveal fuer die naechste Build-Phase.
 --
 -- Basis: rbbattle v0.2.0-single (feature/single-mod, PR #15) + Baustein 00/01.
 -- Kein io/socket/http, keine Bindings, kein eigenes HUD-Framework (nur
@@ -95,6 +101,10 @@
 --   event=hq_respawn status=unmatched entity=..                            (#28)
 --   event=hq_zone status=.. entity=.. hp=.. dead=..                        (#28)
 --   event=hq_status / hq_reset / hq_entity                                 (#28)
+--   event=reveal round=.. status=revealed built_own=.. built_opp=.. send_own=.. incoming=.. (#27)
+--   event=reveal_opp round=.. built_opp=.. hq_opp=.. incoming=.. status=ok  (#27)
+--   event=round_start round=.. status=build reveal=hidden                   (#27)
+--   event=hud round=.. countdown=.. pool=.. built_own=.. built_opp=.. incoming=.. hq_own=.. hq_opp=.. reveal=.. (#27)
 -- ============================================================================
 
 local RBB = {}
@@ -1086,6 +1096,92 @@ pcall(function()
 end)
 
 -- ============================================================================
+-- #27 Reveal-HUD (Poker): Built-Value + Send-Komposition bei Wellenstart
+--
+-- GDD "Reveal"/"HUD": Vor dem Wellenstart sind beide Werte verborgen
+-- (Gegner-Built-Value + WAS kommt); BEIM Wellenstart werden Built-Value
+-- beider Teams + die Send-Komposition aufgedeckt. Der Mod ist die Lock- und
+-- Empfaengerseite (kein I/O): er lockt den EIGENEN Built-Value + die eigene
+-- Send-Komposition beim natuerlichen Wellenstart (event=reveal), nimmt die
+-- Gegner-Werte per `rb_reveal` (Bridge -> exec) entgegen und liefert die
+-- HUD-Standardfelder per `rb_hud`. `rb_round_start` verbirgt den Reveal
+-- wieder (Start der naechsten Build-Phase, Bridge-Signal "round steigt").
+-- ============================================================================
+
+-- Reveal-Zustand (pro Runde): locked=false = vor Wellenstart (verborgen).
+RBB.reveal = {
+    round    = 0,       -- Runde, auf die sich der (letzte) Reveal bezieht
+    locked   = false,   -- true: bei Wellenstart gelockt (Werte aufgedeckt)
+    builtOwn = 0,       -- eigener Built-Value (Lock bei Wellenstart)
+    builtOpp = 0,       -- Gegner-Built-Value (verborgen bis rb_reveal)
+    sendOwn  = "-",     -- eigene Send-Komposition (WAS rausgeht)
+    incoming = "-",     -- eingehende Send-Komposition (WAS kommt)
+    hqOpp    = 0,       -- Gegner-HQ-HP (verborgen bis rb_reveal)
+    oppKnown = false,   -- true: Gegner-Werte via rb_reveal injiziert
+}
+
+-- Kompakte Komposition einer Einheiten-Liste -> "bp:count,bp:count" (stabil).
+local function RevealComposition(units)
+    local counts, order = {}, {}
+    for _, u in ipairs(units or {}) do
+        local id = tostring(u.blueprint or "?")
+        if counts[id] == nil then
+            counts[id] = 0
+            order[#order + 1] = id
+        end
+        counts[id] = counts[id] + 1
+    end
+    local parts = {}
+    for _, id in ipairs(order) do
+        parts[#parts + 1] = string.format("%s:%d", id, counts[id])
+    end
+    local s = table.concat(parts, ",")
+    if s == "" then s = "-" end
+    return s
+end
+
+-- Countdown bis zur naechsten Welle: DOM-Prepare-Zeit (gekappt), Fallback cap.
+local function RevealCountdown()
+    local t = RBB.waveIntervalCapS
+    local dom = nil
+    if type(_G) == "table" then dom = rawget(_G, "dom_mananger") end
+    if type(dom) == "table" and type(dom.GetPrepareSpawnTime) == "function" then
+        local ok, v = pcall(dom.GetPrepareSpawnTime, dom)
+        if ok and type(v) == "number" then t = math.floor(v) end
+    end
+    return t
+end
+
+-- Vor Wellenstart: beide Werte verbergen (Start einer neuen Build-Phase).
+local function RevealReset()
+    local r = RBB.reveal
+    r.locked = false
+    r.builtOwn = 0
+    r.builtOpp = 0
+    r.sendOwn = "-"
+    r.incoming = "-"
+    r.hqOpp = 0
+    r.oppKnown = false
+end
+
+-- Bei Wellenstart: eigenen Built-Value + Send-Komposition locken + loggen.
+local function RevealLock()
+    local r = RBB.reveal
+    r.round = RBB.round
+    r.locked = true
+    r.builtOwn = EconomyBuiltValue()
+    r.sendOwn = RevealComposition(RBB.sendQueue.units)
+    local builtOpp = "hidden"
+    local incoming = "hidden"
+    if r.oppKnown then
+        builtOpp = tostring(r.builtOpp)
+        incoming = r.incoming
+    end
+    Log("event=reveal round=%d status=revealed built_own=%d built_opp=%s send_own=%s incoming=%s",
+        r.round, r.builtOwn, builtOpp, r.sendOwn, incoming)
+end
+
+-- ============================================================================
 -- #25 Send-Queue & Shop-HUD: Tiered Units + Bosse boosten die naechste Welle
 --
 -- Ersetzt den MVP-Self-Boost (#42): statt den Spar-Pool am Wellenstart
@@ -1307,8 +1403,10 @@ end
 -- ausliefern (Boost der naechsten Naturwelle).
 local function OnNaturalWaveStart()
     RBB.round = RBB.round + 1
+    RevealReset()   -- #27: neue Runde beginnt verborgen
     Log("event=round round=%d status=start mode=%s pool=%d queue=%d",
         RBB.round, RBB.mode, RBB.economy.pool, RBB.sendQueue.count)
+    RevealLock()    -- #27: eigenen Built-Value + Send-Komposition locken (vor Flush)
     if RBB.mode == "sp" then
         FlushSendQueue()
     end
@@ -1626,6 +1724,86 @@ end)
 -- Init: HQ-HP auf Startwert setzen (Spielzustand im Speicher; der Server
 -- fuehrt die autoritative Buchung).
 RBB.hq.hp = RBB.hqCfg.hqHpStart
+
+-- ============================================================================
+-- #27 Reveal-HUD: Commands (rb_reveal = Gegner-Injektion, rb_round_start =
+-- Build-Phase, rb_hud = HUD-Standardfelder).
+-- ============================================================================
+
+-- rb_reveal <built_opp> <hq_opp> [incoming]: die Bridge injiziert die vom
+-- Server aufgedeckten Gegner-Werte (Built-Value, HQ-HP, eingehende Kompo-
+-- sition). Erst damit ist der Reveal beider Teams komplett (rb_hud zeigt
+-- beide Seiten).
+local function CmdReveal(args)
+    local r = RBB.reveal
+    local builtOpp = 0
+    local hqOpp = 0
+    local incoming = "-"
+    if args ~= nil and #args >= 1 then builtOpp = math.floor(tonumber(args[1]) or 0) end
+    if args ~= nil and #args >= 2 then hqOpp = math.floor(tonumber(args[2]) or 0) end
+    if args ~= nil and #args >= 3 then incoming = tostring(args[3]) end
+    r.builtOpp = builtOpp
+    r.hqOpp = hqOpp
+    r.incoming = incoming
+    r.oppKnown = true
+    Log("event=reveal_opp round=%d built_opp=%d hq_opp=%d incoming=%s status=ok",
+        r.round, builtOpp, hqOpp, incoming)
+    WriteConsole("rb_reveal: Gegner built=%d hq=%d incoming=%s",
+        builtOpp, hqOpp, incoming)
+end
+
+-- rb_round_start [n]: neue Build-Phase — Reveal wieder verbergen (Bridge-
+-- Signal "round steigt", vgl. docs/TOURNAMENT_API.md). RBB.round bleibt der
+-- Wellenstart-Zaehler des Mods; <n> ist nur informativ fuer die Anzeige.
+local function CmdRoundStart(args)
+    RevealReset()
+    local n = RBB.round
+    if args ~= nil and #args >= 1 then
+        n = math.floor(tonumber(args[1]) or RBB.round)
+    end
+    Log("event=round_start round=%d status=build reveal=hidden", n)
+    WriteConsole("rb_round_start: Runde %d — Build-Phase, Reveal verborgen", n)
+end
+
+-- rb_hud: HUD-Standardfelder (Runde, Countdown, eigener Pool, HQ beider
+-- Teams) + Reveal-Zustand. Vor Wellenstart (locked=false) sind Gegner-Built,
+-- incoming und Gegner-HQ verborgen ("hidden"); bei Wellenstart werden sie
+-- aufgedeckt (Gegner-Werte erst nach rb_reveal).
+local function CmdHud(args)
+    local r = RBB.reveal
+    local countdown = RevealCountdown()
+    local builtOwn = r.locked and r.builtOwn or EconomyBuiltValue()
+    local builtOpp = "hidden"
+    local incoming = "hidden"
+    local hqOpp = "hidden"
+    local reveal = "hidden"
+    if r.locked then
+        reveal = "revealed"
+        if r.oppKnown then
+            builtOpp = tostring(r.builtOpp)
+            incoming = r.incoming
+            hqOpp = tostring(r.hqOpp)
+        end
+    end
+    Log("event=hud round=%d countdown=%d pool=%d built_own=%d built_opp=%s incoming=%s hq_own=%d hq_opp=%s reveal=%s",
+        RBB.round, countdown, RBB.economy.pool, builtOwn, builtOpp, incoming,
+        RBB.hq.hp, hqOpp, reveal)
+    WriteConsole("rb_hud: runde=%d countdown=%d pool=%d built_own=%d built_opp=%s incoming=%s hq_own=%d hq_opp=%s",
+        RBB.round, countdown, RBB.economy.pool, builtOwn, builtOpp, incoming,
+        RBB.hq.hp, hqOpp)
+end
+
+pcall(function()
+    ConsoleService:RegisterCommand("rb_reveal", function(args)
+        CmdReveal(args)
+    end)
+    ConsoleService:RegisterCommand("rb_round_start", function(args)
+        CmdRoundStart(args)
+    end)
+    ConsoleService:RegisterCommand("rb_hud", function(args)
+        CmdHud(args)
+    end)
+end)
 
 -- Lebenszeichen-Log beim Laden (analog Baustein 01 / Spike).
 Log("event=mod_load version=%s status=ok mode=%s anchor=border_spawner_groups timer_cap=%d econ_source=%s econ_pool=%d hq_hp=%d hq_dead=%s",

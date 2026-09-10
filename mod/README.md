@@ -22,6 +22,20 @@ v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
   Baustein 02) mit der Tier-/Preis-Liste + Konsolen-Fallback. `rb_queue`
   zeigt den Queue-Stand. `rb_status` zeigt jetzt die Queue statt des Boost.
 
+**Reveal-HUD (Poker) — Issue #27 (nächste Version, Mod-Laufzeit weiter v0.12.0):**
+- **Poker-Moment:** Vor dem Wellenstart sind beide Werte verborgen (Gegner-
+  Built-Value + WAS kommt); BEIM natürlichen Wellenstart lockt der Mod den
+  **eigenen Built-Value** + die **eigene Send-Komposition** (`event=reveal`).
+  Die Bridge injiziert die vom Server aufgedeckten Gegner-Werte per
+  `rb_reveal <built_opp> <hq_opp> [incoming]` (`event=reveal_opp`).
+- **`rb_hud`:** HUD-Standardfelder — Rundennummer, Countdown (DOM-Prepare-Zeit
+  gekappt), eigener Pool, HQ-HP beider Teams + Reveal-Zustand
+  (`reveal=hidden|revealed`; Gegner-Felder als `hidden` bis zur Aufdeckung).
+- **`rb_round_start [n]`:** Bridge-Signal „round steigt“ — verbirgt den Reveal
+  wieder für die nächste Build-Phase (TOURNAMENT_API.md Bridge-Tabelle).
+- Reine Mod-Logik (kein I/O); das 1v1-Routing + Reveal beider Teams liegt beim
+  Tournament-Server (tournament/, Issues #29/#30/#44). Statisch getestet.
+
 **v0.11.0 — Landing Live-Status-Widget (Issue #30, Website/keine Mod-Laufzeit-Änderung):**
 - `site/live-status.js` (UMD): `deriveStatus(state)` + Poll-Widget für die
   Landing — „Lobby leer“ / „N Spieler in Lobby“ / „Match läuft: A vs B“ /
@@ -207,6 +221,9 @@ und Workshop-Mods tun (Quelle: fandom „Basic Modding Guide“, Ordner
 | `rb_mode sp\|duel` | Modus-Umschaltung: `sp` = Solo-Test (Default, sendet an die eigene nächste Welle), `duel` = 1v1 (Stub, folgt später) |
 | `rb_status` | Zeigt `mode`, `runde`, `pool` und die `queue` (für die nächste Welle) — die Kontrollanzeige des Testmodus |
 | `rb_hq` / `rb_hq leak [dmg]` / `rb_hq entity <id>` / `rb_hq reset` | Win-Condition-Status + Dev-Werkzeuge (#28): HQ-HP zeigen, manuellen Leak anwenden, HQ-Entity zuordnen, Zustand zurücksetzen (Muster `rb_economy reset`) |
+| `rb_hud` | **Reveal-HUD (#27):** HUD-Standardfelder — Runde, Countdown, eigener Pool, HQ-HP beider Teams + Reveal-Zustand (`reveal=hidden\|revealed`). Gegner-Built/incoming/HQ sind vor Wellenstart `hidden` |
+| `rb_reveal <built_opp> <hq_opp> [incoming]` | **Gegner-Injektion (#27):** die Bridge injiziert die vom Server aufgedeckten Gegner-Werte (Built-Value, HQ-HP, eingehende Send-Komposition) → Reveal beider Teams komplett |
+| `rb_round_start [n]` | **Build-Phase (#27):** verbirgt den Reveal wieder (Bridge-Signal „round steigt“); `<n>` nur informativ |
 
 Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
@@ -222,6 +239,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 [RBBATTLE] event=dom_timer patch status=ok cap=300        ← nach PlayerInitializedEvent
 [RBBATTLE] event=setup difficulty=hard creatures_difficulty=5 timer_cap=300
 [RBBATTLE] event=round round=1 status=start mode=sp pool=0 queue=1   ← natürlicher Wellenstart
+[RBBATTLE] event=reveal round=1 status=revealed built_own=3000 built_opp=hidden send_own=units/ground/brabit:2 incoming=hidden   ← Wellenstart-Reveal (#27)
 [RBBATTLE] event=send_queue round=1 status=done spawned=1 value=100 anchor=border   ← Send-Queue ausgeliefert (Boost)
 [RBBATTLE] event=wave level=3 status=start
 [RBBATTLE] event=wave_spawners count=16 groups=4          ← Pool der Rand-Spawner
@@ -229,6 +247,8 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 [RBBATTLE] event=wave level=3 status=done spawned=8 skipped=0 anchor=border spawners=16
 [RBBATTLE] event=leak damage=10 hp_before=100 hp=90        ← Kreatur erreicht HQ-Zone (#28)
 [RBBATTLE] event=hq_hp hp=90 dead=false                    ← Report → Server (POST /report hq_hp)
+[RBBATTLE] event=reveal_opp round=1 built_opp=6400 hq_opp=80 incoming=brabit:2 status=ok   ← Gegner-Werte injiziert (#27)
+[RBBATTLE] event=hud round=1 countdown=300 pool=1800 built_own=3000 built_opp=6400 incoming=brabit:2 hq_own=100 hq_opp=80 reveal=revealed   ← HUD-Felder (#27)
 [RBBATTLE] event=hq_dead status=match_end hp=0             ← HQ-Tod (HP ≤ 0)
 [RBBATTLE] event=match_end reason=hq_destroyed winner=opponent
 ```
@@ -284,7 +304,11 @@ HQ-Entity; negative Fälle: andere Entity / ohne Entity-Zuordnung; Idempotenz
 nach HQ-Tod). v0.12.0: 1 Szenario / 23 Checks (Send-Queue & Shop-HUD:
 rb_shop Tier-Liste + Popup; rb_buy_wave Guards usage/unbekannt/insufficient;
 Farm→Convert→Kauf brabit/boss→Queue; rb_queue-Status; Wellenstart → Flush →
-send_queue done; Queue danach leer; erneuter Kauf + 2. Welle). In-Game-Test
+send_queue done; Queue danach leer; erneuter Kauf + 2. Welle). Reveal-HUD (#27): 1
+Szenario / 14 Checks (Reveal-HUD: rb_hud vor Wellenstart reveal=hidden;
+Farm→Convert→Kauf → built_own=3000; Wellenstart → event=reveal mit
+send_own=brabit:2; rb_reveal → built_opp/incoming/hq_opp; rb_hud beide Teams;
+rb_round_start → reveal=hidden; 2. Wellenstart). In-Game-Test
 steht aus (Operator, Prod).
 - **Economy-Fallback dokumentiert:** Der Mod hat keinen verifizierten Zugriff
   aufs Spieler-Ressourcen-Konto (api-deep-dive.md §1); Value kommt aus
