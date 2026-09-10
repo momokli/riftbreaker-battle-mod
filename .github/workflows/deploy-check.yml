@@ -1,0 +1,81 @@
+name: Deploy Check
+
+# Merge-Gate: prüft vor dem Merge, ob das Ansible-Deployment unter deploy/
+# noch syntaktisch/strukturell intakt ist — damit kein PR durchrutscht, der
+# den echten Deploy (deploy/site.yml, 6 Rollen) zerlegt.
+#
+# Geprüft wird:
+#   1. yamllint über deploy/ (YAML-Syntax + Struktur, inkl. Inventar/Vars).
+#   2. ansible-playbook --syntax-check über alle Playbooks unter deploy/.
+#
+# Bewusst NICHT enthalten:
+#   - Kein echter --check-Dry-Run: der Deploy braucht das Vault-Passwort
+#     (Server-Passwort). Es liegt KEIN Secret im Workflow, und Vault-Dateien
+#     werden NIE entschlüsselt. Der echte Dry-Run bleibt manuell:
+#       ansible-playbook -i deploy/inventory deploy/site.yml --check --ask-vault-pass
+#   - Kein ansible-lint: würde über die bestehenden Rollen hinaus Stil-Regeln
+#     erzwingen; yamllint + --syntax-check sind die harten Gates.
+#
+# Inventar: für --syntax-check wird ein hermetisches localhost-Inventar
+# benutzt (-i 'localhost,'), damit der Gate unabhängig von Vault-Passwort und
+# SSH-Erreichbarkeit läuft. --syntax-check löst keine Variablen auf und
+# verbindet sich mit keinem Host, braucht also keine echten Hosts; das echte
+# Inventar wird weiterhin strukturell per yamllint validiert.
+
+# WICHTIG: Der PR-Trigger hat bewusst KEINEN paths-Filter.
+# `deploy-check` ist ein Required Status Check auf main; ein pfad-gefilterter
+# Workflow, der auf einem PR gar nicht startet, hinterlaesst den Check dauerhaft
+# als "Expected" und blockiert damit JEDEN PR, der deploy/ nicht anfasst.
+# Der Job laeuft daher auf allen PRs (kostet ~1 min) und ist bei PRs ohne
+# deploy/-Bezug trivial gruen. Nur der push-Trigger bleibt pfad-gefiltert.
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/**'
+      - '.github/workflows/deploy-check.yml'
+  workflow_dispatch:
+
+# Least privilege: nur lesen.
+permissions:
+  contents: read
+
+jobs:
+  deploy-check:
+    # Dieser Job-Name IST der Required-Check-Context in der Branch Protection.
+    name: deploy-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: ansible-core + yamllint installieren (gepinnt)
+        # ansible-core >= 2.19 laut deploy/README.md; yamllint 1.35.1 gepinnt
+        # für reproduzierbare Läufe.
+        run: |
+          python3 -m pip install --disable-pip-version-check \
+            "ansible-core==2.19.*" \
+            "yamllint==1.35.1"
+          ansible --version
+          yamllint --version
+
+      - name: YAML-Lint (deploy/)
+        run: yamllint -c .yamllint deploy/
+
+      - name: Ansible Playbook-Syntax-Check (deploy/)
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          playbooks=(deploy/*.yml)
+          if [ ${#playbooks[@]} -eq 0 ]; then
+            echo "::error::Keine Playbooks unter deploy/*.yml gefunden."
+            exit 1
+          fi
+          for pb in "${playbooks[@]}"; do
+            echo "== ansible-playbook --syntax-check ${pb} =="
+            ansible-playbook --syntax-check -i 'localhost,' "${pb}"
+          done
