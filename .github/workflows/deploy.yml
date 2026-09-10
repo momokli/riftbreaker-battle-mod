@@ -4,10 +4,16 @@ name: Deploy (CD)
 # automatisch auf den Solo-DEV-Server (planet, Port 6321) aus — immer der
 # aktuelle Stand zum Testen (Issue #91).
 #
+# Der komplette planet-Stack wird vom Playbook besessen (Issue #209): deploy/
+# baut das Laufzeit-Image (rb-headless-client:<deploy-sha>), provisioniert den
+# Steam-Content und pinnt das Compose auf den Deploy-SHA. Der Workflow stößt nur
+# an und pollt.
+#
 # Topologie-Update (2026-09-10, Issue #91): EIN Server auf :6321 statt
 # Steam-/Non-Steam-Dualität; ein Direct-IP-Server deckt beide Stores ab
-# (disable_steam "1"). Der Tag→prod-Kanal ist vorerst gestrichen — dieser
-# Workflow hat daher bewusst KEINEN tag-Trigger und KEINE prod-Umgebung.
+# (disable_steam "1"). Der Tag→prod-Kanal ist gestrichen (Tags sind reine
+# Marker, Issue #209) — dieser Workflow hat daher bewusst KEINEN tag-Trigger
+# und KEINE prod-Umgebung.
 #
 # Deploy läuft NICHT mehr über SSH, sondern über den lokalen HTTP-Hook auf
 # planet (dort läuft der self-hosted Runner): POST /deploy → Hook macht
@@ -37,7 +43,9 @@ jobs:
   deploy-dev:
     name: Deploy Dev (planet :6321)
     runs-on: [self-hosted, planet]
-    timeout-minutes: 15
+    # 25 min: ein kalter Image-Build (Wine/Xvfb/Mesa) + Steam-Content-Check
+    # passen nicht in 15 min (Issue #209).
+    timeout-minutes: 25
     environment:
       name: dev
       url: https://rift.projectmellon.de/solo.html
@@ -56,7 +64,7 @@ jobs:
             --header "Authorization: Bearer ${DEPLOY_TOKEN}" \
             --header "Content-Type: application/json" \
             --data "{\"sha\":\"${GITHUB_SHA}\",\"ref\":\"${GITHUB_REF}\"}")"; then
-            echo "::error::POST /deploy fehlgeschlagen — läuft der Hook auf planet? (systemctl status rbbattle-deploy-hook)"
+            echo "::error::POST /deploy fehlgeschlagen — läuft der Hook auf planet? Prüfe auf planet: systemctl status rbbattle-deploy-hook und journalctl -u rbbattle-deploy-hook -n 50"
             exit 1
           fi
 
@@ -70,15 +78,15 @@ jobs:
           echo "Deploy-Job gestartet: ${job_id} (sha=${GITHUB_SHA})"
           echo "JOB_ID=${job_id}" >> "$GITHUB_ENV"
 
-      - name: Deploy-Status abwarten (Polling, max. 10 min)
+      - name: Deploy-Status abwarten (Polling, max. 20 min)
         env:
           DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
         run: |
           set -euo pipefail
 
-          # Polling GET /deploy/<job_id>/status alle 15 s, Gesamttimeout 10 min.
+          # Polling GET /deploy/<job_id>/status alle 15 s, Gesamttimeout 20 min.
           # Grün NUR bei status=success; sonst exit 1 mit letzten Log-Zeilen.
-          deadline=$((SECONDS + 600))
+          deadline=$((SECONDS + 1200))
           while true; do
             response=""
             if ! response="$(curl --silent --show-error --fail --max-time 30 \
@@ -96,7 +104,7 @@ jobs:
                   exit 0
                   ;;
                 failed)
-                  echo "::error::Deploy fehlgeschlagen — letzte Log-Zeilen:"
+                  echo "::error::Deploy fehlgeschlagen — letzte Log-Zeilen (Voll-Log: /var/log/rbbattle-deploy/${JOB_ID}.log auf planet):"
                   printf '%s' "$response" | python3 -c \
                     'import json,sys; print(json.load(sys.stdin).get("log_tail", ""))'
                   exit 1
@@ -111,7 +119,7 @@ jobs:
               esac
             fi
             if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "::error::Timeout (10 min): Deploy-Status weiter 'running' — letzte Log-Zeilen:"
+              echo "::error::Timeout (20 min): Deploy-Status weiter 'running' — letzte Log-Zeilen (Voll-Log: /var/log/rbbattle-deploy/${JOB_ID}.log auf planet):"
               if [ -n "$response" ]; then
                 printf '%s' "$response" | python3 -c \
                   'import json,sys; print(json.load(sys.stdin).get("log_tail", ""))'

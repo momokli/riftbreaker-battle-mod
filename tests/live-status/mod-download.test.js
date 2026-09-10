@@ -9,8 +9,10 @@
 //   2) dev (site/solo.html) verlinkt den Download auf das SAME-ORIGIN-Zip
 //      /mods/rbbattle.zip (der deployed main-Stand auf rift.projectmellon.de) —
 //      nie auf den (ggf. älteren) GitHub-Release.
-//   3) prod (site/index.html) verlinkt den Download auf das aktuelle getaggte
-//      Release (releases/latest/download/rbbattle.zip).
+//   3) prod (site/index.html) verlinkt den Download auf den deployten Stand
+//      (https://rift.projectmellon.de/mods/rbbattle.zip) — der stable, atomar
+//      ausgetauschte Download. GitHub-Releases sind seit Issue #209 reine
+//      Tags-Marker ohne Release-Artefakte.
 
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -54,11 +56,15 @@ test('site/solo.html (dev) verlinkt den Download auf /mods/rbbattle.zip (Same-Or
   );
 });
 
-test('site/index.html (prod) verlinkt den Download auf das getaggte Release', () => {
+test('site/index.html (prod) verlinkt den Download auf den deployten Stand', () => {
   const html = fs.readFileSync(INDEX_HTML, 'utf8');
   assert.ok(
-    html.includes('releases/latest/download/rbbattle.zip'),
-    'prod-Download muss auf das aktuelle getaggte Release zeigen'
+    html.includes('https://rift.projectmellon.de/mods/rbbattle.zip'),
+    'prod-Download muss auf den deployten Stand zeigen'
+  );
+  assert.ok(
+    !/releases\/(latest\/)?download\/rbbattle\.zip/.test(html),
+    'prod-Download darf NICHT auf ein GitHub-Release zeigen (Tags sind reine Marker)'
   );
 });
 
