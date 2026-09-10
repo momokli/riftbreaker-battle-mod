@@ -1,5 +1,10 @@
 # Rift Breaker Battle Mod
 
+[![CI](https://github.com/momokli/riftbreaker-battle-mod/actions/workflows/ci.yml/badge.svg)](https://github.com/momokli/riftbreaker-battle-mod/actions/workflows/ci.yml)
+[![Lint](https://github.com/momokli/riftbreaker-battle-mod/actions/workflows/lint.yml/badge.svg)](https://github.com/momokli/riftbreaker-battle-mod/actions/workflows/lint.yml)
+[![Latest Release](https://img.shields.io/github/v/release/momokli/riftbreaker-battle-mod)](https://github.com/momokli/riftbreaker-battle-mod/releases)
+[![Open Issues](https://img.shields.io/github/issues/momokli/riftbreaker-battle-mod)](https://github.com/momokli/riftbreaker-battle-mod/issues)
+
 Ein **Biter-Battles-artiger Runden-Duell-Modus** für *The Rift Breaker* (EXOR Studios) — Kollaborations-Repo für Konzept, Findings und später den Code.
 
 ## Ziel
@@ -55,3 +60,9 @@ riftbreaker-battle-mod/
 ├── docs/      # Konzept, Findings, Download-Seite (index.html), Workshop-Anleitung
 └── README.md
 ```
+
+## Mitmachen
+
+Beiträge willkommen! Workflow, Claim-System (`!claim` im Issue-Kommentar) und
+Quality-Gates stehen in [CONTRIBUTING.md](CONTRIBUTING.md); den Projektfortschritt
+zeigt [docs/PROGRESS.md](docs/PROGRESS.md).
