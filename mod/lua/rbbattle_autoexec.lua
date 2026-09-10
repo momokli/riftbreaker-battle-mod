@@ -1947,10 +1947,21 @@ local function HqEventEntity(evt)
 end
 
 -- #28 Leak-Erkennung (EnteredTriggerEvent): die Trigger-Zone ums HQ feuert,
--- sobald eine Kreatur sie betritt -> Leak. Event-Name unverifiziert (s. Kopf),
--- Handler pcall-gesichert; ohne Event bleibt die Leak-Erkennung inaktiv.
+-- sobald eine Kreatur sie betritt -> Leak. Event-Name UND Zone sind
+-- unverifiziert (s. Kopf) -- EnteredTriggerEvent koennte jeder beliebige
+-- Map-Trigger sein, nicht zwingend die HQ-Zone (Issue #143: sofortige
+-- Niederlage durch fremde Trigger). Deshalb bleibt der Leak-Handler defensiv
+-- inaktiv, bis eine HQ-Entity zugeordnet ist (rb_hq entity <id>, Issue #144)
+-- -- Muster wie OnRespawnFailed weiter unten.
 local function OnEnteredTrigger(evt)
     if RBB.hq.dead then return end
+    if RBB.hq.entity == nil then
+        if not RBB.hq.unarmedLeakLogged then
+            RBB.hq.unarmedLeakLogged = true
+            Log("event=hq_leak status=skip reason=no_hq_entity hint=rb_hq_entity")
+        end
+        return
+    end
     HqApplyLeak(RBB.hqCfg.leakDamage)
 end
 
@@ -2004,6 +2015,7 @@ local function CmdHq(args)
         RBB.hq.entity = nil
         RBB.hq.dead = false
         RBB.hq.unmatchedLogged = false
+        RBB.hq.unarmedLeakLogged = false
         Log("event=hq_reset status=ok hp=%d", RBB.hq.hp)
         WriteConsole("rb_hq: Win-Condition zurueckgesetzt (hp=%d)", RBB.hq.hp)
         return

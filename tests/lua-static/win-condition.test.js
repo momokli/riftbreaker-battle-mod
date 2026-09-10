@@ -109,33 +109,41 @@ check(_G.__handlers["EnteredTriggerEvent"] ~= nil, "EnteredTriggerEvent registri
 check(_G.__handlers["RespawnFailedEvent"] ~= nil, "RespawnFailedEvent registriert")
 check(_G.__commands["rb_hq"] ~= nil, "rb_hq registriert")
 
--- 2. Leak-Flow: ein Leak senkt den HQ-HP.
+-- 2. Issue #143: OHNE gebundene HQ-Entity bleibt EnteredTriggerEvent inaktiv
+--    (kein False-Positive-Sieg durch fremde/generische Map-Trigger).
 _G.__handlers["EnteredTriggerEvent"](nil)
-check(log_has("event=leak damage=10 hp_before=100 hp=90"), "1. Leak -> hp 100->90")
+check(log_has("event=hq_leak status=skip reason=no_hq_entity"), "2. Leak OHNE HQ-Entity -> uebersprungen")
+check(not log_has("event=leak damage=10 hp_before=100"), "kein Leak-Log ohne gebundene Entity")
+check(log_has("hq_hp=100 hq_dead=false"), "HQ-HP unveraendert (100) nach uebersprungenem Leak")
+
+-- 3. HQ-Entity zuordnen (Issue #144), danach greift die Leak-Erkennung.
+_G.__commands["rb_hq"]({ "entity", "12345" })
+check(log_has("event=hq_entity status=ok entity=12345"), "rb_hq entity")
+_G.__handlers["EnteredTriggerEvent"](nil)
+check(log_has("event=leak damage=10 hp_before=100 hp=90"), "1. Leak (mit Entity) -> hp 100->90")
 check(log_has("event=hq_hp hp=90 dead=false"), "Report event=hq_hp hp=90")
 
--- 3. HQ-Tod durch Leaks (10x10 = 100 -> hp 0 -> Match-Ende).
+-- 4. HQ-Tod durch Leaks (10x10 = 100 -> hp 0 -> Match-Ende).
 for _ = 1, 9 do _G.__handlers["EnteredTriggerEvent"](nil) end
 check(log_has("event=leak damage=10 hp_before=10 hp=0"), "10. Leak -> hp 10->0")
 check(log_has("event=hq_dead status=match_end hp=0"), "event=hq_dead bei HP<=0")
 check(log_has("event=match_end reason=hq_destroyed winner=opponent"), "event=match_end")
 check(count_logs("event=match_end") == 1, "match_end genau einmal")
 
--- 4. Idempotenz: weiterer Leak nach Tod aendert nichts.
+-- 5. Idempotenz: weiterer Leak nach Tod aendert nichts.
 _G.__handlers["EnteredTriggerEvent"](nil)
 check(count_logs("event=match_end") == 1, "kein zweites match_end (idempotent)")
 
--- 5. RespawnFailedEvent-Pfad (HQ-Tod-Kette) mit zugeordneter Entity.
+-- 6. RespawnFailedEvent-Pfad (HQ-Tod-Kette) mit zugeordneter Entity.
 _G.__commands["rb_hq"]({ "reset" })
 check(log_has("event=hq_reset status=ok hp=100"), "rb_hq reset")
 _G.__commands["rb_hq"]({ "entity", "12345" })
-check(log_has("event=hq_entity status=ok entity=12345"), "rb_hq entity")
 local hqEvt = { entity = 12345 }
 function hqEvt:GetEntity() return self.entity end
 _G.__handlers["RespawnFailedEvent"](hqEvt)
 check(count_logs("event=match_end") == 2, "RespawnFailedEvent(HQ) -> match_end")
 
--- 6. RespawnFailedEvent eines ANDEREN Gebaeudes -> kein Match-Ende.
+-- 7. RespawnFailedEvent eines ANDEREN Gebaeudes -> kein Match-Ende.
 _G.__commands["rb_hq"]({ "reset" })
 _G.__commands["rb_hq"]({ "entity", "12345" })
 local otherEvt = { entity = 99999 }
@@ -143,11 +151,16 @@ function otherEvt:GetEntity() return self.entity end
 _G.__handlers["RespawnFailedEvent"](otherEvt)
 check(count_logs("event=match_end") == 2, "RespawnFailedEvent(andere Entity) -> KEIN match_end")
 
--- 7. RespawnFailedEvent ohne zugeordnete Entity -> nur Hinweis, kein Ende.
+-- 8. RespawnFailedEvent ohne zugeordnete Entity -> nur Hinweis, kein Ende.
 _G.__commands["rb_hq"]({ "reset" })
 _G.__handlers["RespawnFailedEvent"](hqEvt)
 check(count_logs("event=match_end") == 2, "RespawnFailedEvent ohne Entity-Zuordnung -> KEIN match_end")
 check(log_has("event=hq_respawn status=unmatched"), "Hinweis event=hq_respawn status=unmatched")
+
+-- 9. Reset setzt auch den Leak-Skip-Hinweis zurueck (erneut ohne Entity -> skip).
+_G.__commands["rb_hq"]({ "reset" })
+_G.__handlers["EnteredTriggerEvent"](nil)
+check(count_logs("event=hq_leak status=skip reason=no_hq_entity") == 2, "Leak-Skip-Hinweis nach Reset erneut geloggt")
 
 print("FAILURES=" .. failures)
 _G.__failures = failures
