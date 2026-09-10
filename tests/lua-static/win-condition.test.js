@@ -39,8 +39,11 @@ ConsoleService = {
     Write = function(self, msg) end,
     RegisterCommand = function(self, name, fn) _G.__commands[name] = fn end,
 }
+-- #144: _G.__findGroups[group] steuert, was FindEntitiesByGroup pro Gruppe
+-- liefert (Test setzt das gezielt); Default = leere Liste (kein Treffer).
+_G.__findGroups = {}
 FindService = {
-    FindEntitiesByGroup = function(self, g) return {} end,
+    FindEntitiesByGroup = function(self, g) return _G.__findGroups[g] or {} end,
     FindPlayerSpawnPoints = function(self) return {} end,
 }
 MapGenerator = { GetInitialSpawnPoint = function(self) return nil end }
@@ -102,8 +105,8 @@ local function count_logs(sub)
     return n
 end
 
--- 1. Mod geladen, Version 0.24.2, HQ initialisiert.
-check(log_has("event=mod_load version=0.24.2"), "mod_load version=0.24.2")
+-- 1. Mod geladen, Version 0.25.0, HQ initialisiert.
+check(log_has("event=mod_load version=0.25.0"), "mod_load version=0.25.0")
 check(log_has("hq_hp=100 hq_dead=false"), "mod_load enthaelt hq_hp=100 hq_dead=false")
 check(_G.__handlers["EnteredTriggerEvent"] ~= nil, "EnteredTriggerEvent registriert")
 check(_G.__handlers["RespawnFailedEvent"] ~= nil, "RespawnFailedEvent registriert")
@@ -161,6 +164,53 @@ check(log_has("event=hq_respawn status=unmatched"), "Hinweis event=hq_respawn st
 _G.__commands["rb_hq"]({ "reset" })
 _G.__handlers["EnteredTriggerEvent"](nil)
 check(count_logs("event=hq_leak status=skip reason=no_hq_entity") == 2, "Leak-Skip-Hinweis nach Reset erneut geloggt")
+
+-- 10. Issue #144: HqAutoDetectEntity -- automatische HQ-Entity-Bindung.
+check(_G.__handlers["PlayerInitializedEvent"] ~= nil, "PlayerInitializedEvent registriert")
+
+-- 10a. Gruppe "headquarters" liefert 0 Treffer -> not_found, entity bleibt nil.
+_G.__handlers["PlayerInitializedEvent"](nil)
+check(log_has("event=hq_autodetect status=not_found candidates=headquarters"),
+    "10a. Autodetect ohne Treffer -> status=not_found")
+_G.__commands["rb_hq"]({ "leak" })
+check(log_has("event=hq_leak status=skip reason=no_hq_entity"),
+    "10a. HQ weiterhin ungebunden -> Leak bleibt uebersprungen")
+
+-- 10b. Erneuter Versuch (z.B. rb_wave) ohne Treffer -> KEIN zweites Log
+--      (Spam-Guard, Reset setzt ihn zurueck).
+_G.__commands["rb_wave"]({ "1" })
+check(count_logs("event=hq_autodetect status=not_found") == 1,
+    "10b. Wiederholter Fehlversuch loggt nicht erneut (Guard)")
+
+-- 10c. Mehrdeutiger Treffer (2 Entities in der Gruppe) -> kein Rateschuss,
+--      Entity bleibt ungebunden.
+_G.__commands["rb_hq"]({ "reset" })
+_G.__findGroups["headquarters"] = { 501, 502 }
+_G.__handlers["PlayerInitializedEvent"](nil)
+check(not log_has("event=hq_autodetect status=ok group=headquarters entity=501")
+    and not log_has("event=hq_autodetect status=ok group=headquarters entity=502"),
+    "10c. Mehrdeutiger Treffer (2 Entities) bindet KEINE der beiden Entities")
+_G.__commands["rb_hq"]({ "leak" })
+check(log_has("event=hq_leak status=skip reason=no_hq_entity"),
+    "10c. Mehrdeutiger Treffer (2 Entities) bindet NICHT -> Leak weiterhin uebersprungen")
+
+-- 10d. Genau EIN Treffer -> automatische Bindung, Leak greift ab sofort.
+_G.__commands["rb_hq"]({ "reset" })
+_G.__findGroups["headquarters"] = { 777 }
+_G.__handlers["PlayerInitializedEvent"](nil)
+check(log_has("event=hq_autodetect status=ok group=headquarters entity=777"),
+    "10d. Genau ein Treffer -> automatische Bindung")
+_G.__handlers["EnteredTriggerEvent"](nil)
+check(log_has("event=leak damage=10 hp_before=100 hp=90"),
+    "10d. Leak greift nach automatischer Bindung sofort (kein rb_hq entity noetig)")
+
+-- 10e. Bereits gebundene Entity wird NICHT ueberschrieben (auch bei erneutem Aufruf).
+_G.__findGroups["headquarters"] = { 999 }
+_G.__handlers["PlayerInitializedEvent"](nil)
+check(not log_has("event=hq_autodetect status=ok group=headquarters entity=999"),
+    "10e. Bereits gebundene Entity wird nicht durch einen zweiten Treffer ersetzt")
+
+_G.__findGroups["headquarters"] = nil -- aufraeumen fuer nachfolgende Tests
 
 print("FAILURES=" .. failures)
 _G.__failures = failures

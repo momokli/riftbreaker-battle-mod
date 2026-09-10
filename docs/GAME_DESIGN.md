@@ -5,7 +5,7 @@
 ## Status
 - **Finalisiert** nach Design-Interview mit Momo (2026-09-09, 18 Entscheidungen in 6 Runden).
 - Kern-Idee v0.2 ("natural waves + send boost") bestätigt und präzisiert.
-- **Repo-Stand rbbattle v0.24.2**: Der Design-Kern ist implementiert — Abgleich unten im Abschnitt „Umsetzungsstand“; dort sind alle offenen Abweichungen explizit als `offen` markiert.
+- **Repo-Stand rbbattle v0.25.0**: Der Design-Kern ist implementiert — Abgleich unten im Abschnitt „Umsetzungsstand“; dort sind alle offenen Abweichungen explizit als `offen` markiert.
 
 ## Match-Flow
 1. **Lobby** (Web-UI/Tournament-Server): Beide Spieler registrieren sich.
@@ -192,7 +192,7 @@ der Default folgt dem Testergebnis.
 - Naturwellen-Gefühl: "War Level 3 zu brutal?" (Live-Test 16:32: 8 Kreaturen, Momo gestorben) — **braucht Live-Test** (offen).
 - ~~HQ-HP-Kurve über Runden~~ → v1 dokumentiert (Formel/Tabelle oben) — **braucht Live-Test**.
 
-## Umsetzungsstand (Repo, rbbattle v0.24.2)
+## Umsetzungsstand (Repo, rbbattle v0.25.0)
 Abgleich des Design-Kerns gegen den implementierten Mod-/Server-/Site-Stand.
 `✅` = implementiert · `⚠️ offen` = noch nicht im Repo umgesetzt.
 
@@ -207,7 +207,7 @@ Abgleich des Design-Kerns gegen den implementierten Mod-/Server-/Site-Stand.
 | Sends → Gegner-Welt (1v1-Routing) | ⚠️ offen | #25/#27/#29 | aktuell `rb_mode sp` (Self-Send an eigene Rand-Spawner); `duel` = Stub |
 | Reveal-HUD (Built-Value + WAS kommt) | ✅ implementiert | #27 | `rb_hud`/`rb_reveal`/`rb_round_start`; `event=reveal`/`reveal_opp` |
 | Win-Condition HQ-Tod (Logik) | ✅ implementiert | #28 | `rb_hq`; Leak → HQ-HP; `hq_dead`/`match_end` (Server-Buchung vorhanden) |
-| Win-Condition (Trigger-Zone, HQ-Entity-ID, Sieg-Screen) | ⚠️ offen | #28 | `EnteredTriggerEvent`-Feuerung + Trigger-Zone-Asset unbelegt; HQ-Entity via `rb_hq entity <id>` |
+| Win-Condition (Trigger-Zone, HQ-Entity-ID, Sieg-Screen) | 🟡 teilweise (braucht Live-Test) | #28/#143/#144 | `EnteredTriggerEvent`-Feuerung + Trigger-Zone-Asset unbelegt (Leak seit #143 gegated, kein False-Positive-Sieg mehr); HQ-Entity seit #144 auto-erkannt (`HqAutoDetectEntity`, Gruppe `headquarters` unverifiziert) mit `rb_hq entity <id>` als Fallback |
 | Live-Status (Landing) | ✅ implementiert (Website) | #30 | `site/live-status.js` + Landing-Widget + Dashboard-Link |
 | Balancing (Preisliste v1, HQ-HP-Kurve) | 🟡 v1 dokumentiert (braucht Live-Test) | #33 | `rb_balance`/`rb_shop`; `RBB.shopCfg` + `RBB.hqCfg` (Formel + Cap) |
 | Wellen-Takt + Grundschwierigkeit (Presets A/B) | 🟡 v1 dokumentiert (braucht Live-Test) | #41 | `RBB.wavePresets` (A=480 s voll, B=240 s halb); `rb_balance`; Skalierung am `SpawnWavesForDifficultyLevel`-Chokepoint |

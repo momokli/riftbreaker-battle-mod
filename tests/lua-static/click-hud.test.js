@@ -4,6 +4,9 @@
 // (Click-HUD: Senden per Klick statt Tippen): toggle-bares HUD-Overlay
 // (GuiService:OpenPopup, 2-Button-Template) + wichtigste Send-Aktion
 // (Einheit kaufen -> Send-Queue) per Klick (GuiPopupResultEvent, button_yes).
+// Deckt zusaetzlich Issue #147 (Send-Amount-HUD) MVP ab: rb_quick_step
+// passt die Quick-Send-Menge relativ an (+N/-N/xN), ohne eine exakte Zahl
+// tippen zu muessen -- die Logik fuer ein spaeteres klickbares Stepper-UI.
 // Wie send-queue.test.js: 1) luaparse-Syntax-Check (Lua 5.1),
 // 2) fengari-Lua-VM mit Stub-Services + Assertions auf die [RBBATTLE]-Log-Zeilen
 // (Vertragsflaeche Bridge/Server).
@@ -119,7 +122,7 @@ local function log_count(sub)
 end
 
 -- 1. Mod geladen, Click-HUD-Commands + Klick-Event registriert.
-check(log_has("event=mod_load version=0.24.2"), "mod_load version=0.24.2")
+check(log_has("event=mod_load version=0.25.0"), "mod_load version=0.25.0")
 check(_G.__commands["rb_hud_ui"] ~= nil, "rb_hud_ui registriert")
 check(_G.__commands["rb_quick"] ~= nil, "rb_quick registriert")
 check(_G.__handlers["GuiPopupResultEvent"] ~= nil, "GuiPopupResultEvent registriert")
@@ -195,6 +198,43 @@ check(buysAfter == buysBefore, "Fremdes Popup (open=false) wird ignoriert (kein 
 _G.__commands["rb_queue"]({})
 check(log_has("event=queue status=show count=2 value=200 pool=1800"),
     "Queue unveraendert nach fremdem Klick (count=2)")
+
+-- 11. Issue #147 MVP: rb_quick_step passt die Quick-Send-Menge relativ an
+--     (+N/-N Feinjustierung, xN Grobjustierung), ohne eine exakte Zahl
+--     tippen zu muessen. quickUnit ist nach Schritt 8 noch "brabit" (count=2).
+_G.__commands["rb_quick_step"]({})
+check(log_has("event=quick_step status=usage unit=brabit count=2"),
+    "rb_quick_step ohne Args -> usage")
+
+_G.__commands["rb_quick_step"]({ "+1" })
+check(log_has("event=quick_step status=ok op=+1 unit=brabit before=2 after=3"),
+    "rb_quick_step +1 -> 2->3")
+
+_G.__commands["rb_quick_step"]({ "x10" })
+check(log_has("event=quick_step status=ok op=x10 unit=brabit before=3 after=30"),
+    "rb_quick_step x10 -> 3->30")
+
+_G.__commands["rb_quick_step"]({ "x1000" })
+check(log_has("event=quick_step status=ok op=x1000 unit=brabit before=30 after=40"),
+    "rb_quick_step x1000 -> gedeckelt auf maxQueueCreatures=40")
+
+_G.__commands["rb_quick_step"]({ "-100" })
+check(log_has("event=quick_step status=ok op=-100 unit=brabit before=40 after=1"),
+    "rb_quick_step -100 -> nie unter 1")
+
+_G.__commands["rb_quick_step"]({ "y5" })
+check(log_has("event=quick_step status=bad_op op=y5"),
+    "rb_quick_step ungueltiges Op-Prefix -> bad_op")
+
+_G.__commands["rb_quick_step"]({ "+0" })
+check(log_has("event=quick_step status=bad_op op=+0"),
+    "rb_quick_step +0 -> bad_op (N muss > 0 sein)")
+
+-- rb_hud_ui zeigt danach die per Step angepasste Menge (count=1 nach -100).
+_G.__commands["rb_hud_ui"]({})
+check(log_has("event=hud_ui status=opened quick=brabit count=1 round=0 countdown=300 pool=1800 queue=2"),
+    "rb_hud_ui zeigt die per rb_quick_step angepasste Menge (count=1)")
+_G.__handlers["GuiPopupResultEvent"](noEvt) -- Overlay wieder schliessen (Testzustand aufraeumen)
 
 print("FAILURES=" .. failures)
 _G.__failures = failures

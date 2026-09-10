@@ -1,5 +1,5 @@
 -- ============================================================================
--- rbbattle_autoexec.lua  (Einzel-Mod rbbattle, v0.24.2)
+-- rbbattle_autoexec.lua  (Einzel-Mod rbbattle, v0.25.0)
 --
 -- RIFT BATTLE Mod-Core (Foundation):
 --   #26 Send-Spawn an den 16 natuerlichen Kartenrand-Spawnern
@@ -102,7 +102,7 @@
 --     -> Persistenz (HasInt/GetIntOrDefault/SetInt/RemoveKey)  (Issue #24)
 --
 -- Log-Zeilen (externes Parsing, Praefix [RBBATTLE]):
---   event=mod_load version=0.24.2 status=ok mode=sp econ_source=.. econ_pool=.. hq_hp=.. hq_dead=..
+--   event=mod_load version=0.25.0 status=ok mode=sp econ_source=.. econ_pool=.. hq_hp=.. hq_dead=..
 --   event=wave level=N status=start|done spawned=.. skipped=.. anchor=border|mission|mech
 --   event=spawn ok|failed|skip ... anchor=<gruppe>/<id>            (je Kreatur)
 --   event=wave_spawners count=N                                    (Pool-Groesse)
@@ -142,7 +142,7 @@
 -- ============================================================================
 
 local RBB = {}
-RBB.version = "0.24.2"
+RBB.version = "0.25.0"
 
 -- Log-/Konsole-Helfer (Muster Spike): Praefix [RBBATTLE] fuer externes Parsen.
 local LOG_TAG = "[RBBATTLE]"
@@ -326,6 +326,7 @@ RBB.boost = {
 -- Muster PatchDomTimer).
 local PatchWaveStartHook
 local PatchSpawnWavesHook
+local HqAutoDetectEntity
 local BoostSummary
 
 -- Vorwaertsdeklaration fuer die HQ-HP-Kurve (#33): Definition folgt im
@@ -732,6 +733,7 @@ local function OnPlayerInitialized()
     PatchDomTimer()
     PatchWaveStartHook()
     PatchSpawnWavesHook()
+    HqAutoDetectEntity() -- #144: HQ-Entity ist jetzt (falls vorhanden) im Level
     LogMapSetupInfo()
 end
 
@@ -747,6 +749,7 @@ local function HandleWaveCommand(args, commandName)
     PatchDomTimer() -- weiterer Retry-Zeitpunkt (billig, idempotent)
     PatchWaveStartHook() -- weiterer Retry-Zeitpunkt (#42)
     PatchSpawnWavesHook() -- weiterer Retry-Zeitpunkt (#39)
+    HqAutoDetectEntity() -- weiterer Retry-Zeitpunkt (#144)
     SpawnWave(level)
 end
 
@@ -1917,9 +1920,16 @@ PatchSpawnWavesHook()
 --   * RespawnFailedEvent: verifiziert existent (dom_manager.lua lauscht
 --     selbst darauf, s. docs/SEND_HOOK.md); Handler-Feuerung/Getter fuer den
 --     Mod sind "wahrscheinlich" (wie EntityKilledEvent, api-deep-dive.md §2).
---   * HQ-Entity-Identifikation: OFFEN — kein verifizierter Blueprint/Lookup;
---     Operator kann die Entity per `rb_hq entity <id>` zuordnen; sonst greift
---     nur der HP<=0-Pfad (Leak) als Match-Ende.
+--   * HQ-Entity-Identifikation: TEILWEISE (Issue #144) — HqAutoDetectEntity()
+--     versucht bei PlayerInitializedEvent/jedem rb_wave-Aufruf automatisch
+--     ueber FindService:FindEntitiesByGroup("headquarters") zu binden (Gruppen-
+--     Name aus docs/GAME_DESIGN.md-Tabelle "HQ | Entity `headquarters`,
+--     `HealthService`, `ReportHeadquaterDamage`" -- dort selbst UNVERIFIZIERT,
+--     in docs/research/ nicht belegt). Nur EIN eindeutiger Treffer wird
+--     gebunden (event=hq_autodetect status=ok); bei 0 oder >1 Treffern bleibt
+--     `rb_hq entity <id>` der verlaessliche manuelle Fallback (kein Rateschuss
+--     bei Mehrdeutigkeit). Braucht In-Game-Bestaetigung, ob "headquarters" der
+--     richtige Gruppen-Name ist.
 -- ============================================================================
 
 -- Konfiguration (hqHpStart muss TOURNAMENT_HQ_HP des Servers entsprechen,
@@ -1952,6 +1962,45 @@ RBB.hq = {
     entity = nil,       -- getrackte HQ-Entity (nil = nicht zugeordnet)
     dead = false,       -- true nach HQ-Tod (Match-Ende gemeldet)
 }
+
+-- #144: Kandidaten-Gruppennamen fuer die automatische HQ-Entity-Erkennung.
+-- "headquarters" ist der einzige im Repo dokumentierte Name (docs/GAME_DESIGN.md,
+-- dort selbst UNVERIFIZIERT) -- weitere Kandidaten hier ergaenzen, sobald ein
+-- In-Game-Test den tatsaechlichen Gruppen-/Blueprint-Namen bestaetigt/widerlegt.
+RBB.hqEntityGroupCandidates = { "headquarters" }
+
+-- #144: versucht RBB.hq.entity automatisch zu binden (Muster #26 Rand-Spawner:
+-- FindService:FindEntitiesByGroup). Nur bei GENAU einem Treffer wird gebunden,
+-- um keinen Rateschuss bei Mehrdeutigkeit zu riskieren; bei 0/>1 Treffern
+-- bleibt der manuelle `rb_hq entity <id>`-Fallback die verlaessliche Option.
+-- Bereits gebundene Entity (manuell oder frueherer Versuch) wird nicht
+-- ueberschrieben. Idempotent, pcall-gesichert, mehrfach aufrufbar (Retry-
+-- Muster wie PatchWaveStartHook: Mod-Load/PlayerInitializedEvent/jeder Send).
+-- Nicht-ok-Ausgang (0/>1 Treffer je Kandidat, API fehlt) wird NUR einmal
+-- geloggt (Guard wie unmatchedLogged/unarmedLeakLogged) -- HqAutoDetectEntity
+-- wird bei jedem rb_wave/rb_send aufgerufen (Retry-Muster), das soll nicht
+-- pro Aufruf spammen. Ein Erfolg wird immer geloggt und bindet sofort.
+HqAutoDetectEntity = function()
+    if RBB.hq.entity ~= nil then return end
+    if FindService and FindService.FindEntitiesByGroup then
+        for _, group in ipairs(RBB.hqEntityGroupCandidates) do
+            local ok, list = pcall(function()
+                return FindService:FindEntitiesByGroup(group)
+            end)
+            if ok and type(list) == "table" and #list == 1 then
+                RBB.hq.entity = list[1]
+                Log("event=hq_autodetect status=ok group=%s entity=%s",
+                    group, tostring(list[1]))
+                return
+            end
+        end
+    end
+    if not RBB.hq.autodetectFailLogged then
+        RBB.hq.autodetectFailLogged = true
+        Log("event=hq_autodetect status=not_found candidates=%s hint=rb_hq_entity",
+            table.concat(RBB.hqEntityGroupCandidates, ","))
+    end
+end
 
 -- Report-Flaeche Richtung Tournament-Server (Bridge reicht die Zeile an
 -- POST /report hq_hp weiter; der Mod hat keinen eigenen I/O-Kanal).
@@ -2377,12 +2426,61 @@ local function CmdQuick(args)
         unitId, n, unit.price)
 end
 
+-- rb_quick_step <+N|-N|xN>: Send-Menge relativ anpassen (Clicker-Stil, #147
+-- MVP: +1/-1 fuer Feinjustierung, x10/x100/x1000 fuer Grobjustierung -- ohne
+-- eine exakte Zahl tippen zu muessen). Wirkt auf dieselbe Quick-Send-Menge
+-- wie rb_quick/rb_hud_ui (#99), kein eigener Zustand. Ein echtes klickbares
+-- Overlay dafuer ist mangels verifizierter Multi-Button-/Freiform-GUI-API
+-- noch offen (s. Issue #147); dieser Command liefert schon die Logik dafuer,
+-- vorerst per Konsole statt per Klick.
+local function CmdQuickStep(args)
+    local opArg = nil
+    if args ~= nil and #args >= 1 then opArg = tostring(args[1]):lower() end
+    if opArg == nil or opArg == "" or opArg == "help" then
+        WriteConsole("rb_quick_step: Aufruf rb_quick_step <+N|-N|xN> (z.B. +1, -1, x10, x100, x1000) -- aktuell: %s x%d",
+            RBB.clickHud.quickUnit, RBB.clickHud.quickCount)
+        Log("event=quick_step status=usage unit=%s count=%d",
+            RBB.clickHud.quickUnit, RBB.clickHud.quickCount)
+        return
+    end
+
+    local kind = opArg:sub(1, 1)
+    local n = tonumber(opArg:sub(2))
+    if (kind ~= "+" and kind ~= "-" and kind ~= "x") or n == nil or n <= 0 then
+        WriteConsole("rb_quick_step: ungueltig '%s' -- Format +N/-N/xN (z.B. +1, x10)", opArg)
+        Log("event=quick_step status=bad_op op=%s", opArg)
+        return
+    end
+    n = math.floor(n)
+
+    local before = RBB.clickHud.quickCount
+    local after = before
+    if kind == "+" then
+        after = before + n
+    elseif kind == "-" then
+        after = before - n
+    else
+        after = before * n
+    end
+    if after < 1 then after = 1 end
+    if after > RBB.shopCfg.maxQueueCreatures then after = RBB.shopCfg.maxQueueCreatures end
+
+    RBB.clickHud.quickCount = after
+    Log("event=quick_step status=ok op=%s unit=%s before=%d after=%d",
+        opArg, RBB.clickHud.quickUnit, before, after)
+    WriteConsole("rb_quick_step: %s -> %s x%d (rb_hud_ui zeigt/sendet)",
+        opArg, RBB.clickHud.quickUnit, after)
+end
+
 pcall(function()
     ConsoleService:RegisterCommand("rb_hud_ui", function(args)
         CmdHudUi(args)
     end)
     ConsoleService:RegisterCommand("rb_quick", function(args)
         CmdQuick(args)
+    end)
+    ConsoleService:RegisterCommand("rb_quick_step", function(args)
+        CmdQuickStep(args)
     end)
 end)
 
