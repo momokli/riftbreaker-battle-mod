@@ -135,7 +135,7 @@ local function console_has(sub)
 end
 
 -- 1. Mod geladen, Setup-Phase aktiv (commenced=false) + Start-Announce.
-check(log_has("event=mod_load version=0.32.0"), "mod_load version=0.32.0")
+check(log_has("event=mod_load version=0.33.0"), "mod_load version=0.33.0")
 check(log_has("event=commence status=pending hint=place_hq"),
     "Start-Announce als Log: event=commence status=pending hint=place_hq")
 check(console_has("To commence the game, place the headquarter"),

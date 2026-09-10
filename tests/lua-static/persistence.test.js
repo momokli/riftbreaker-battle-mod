@@ -110,7 +110,7 @@ local function log_has(sub)
     return false
 end
 
-check(log_has("event=mod_load version=0.32.0"), "mod_load version=0.32.0")
+check(log_has("event=mod_load version=0.33.0"), "mod_load version=0.33.0")
 check(log_has("econ_pool=0"), "frischer Run: mod_load econ_pool=0")
 
 -- Farm 2000 carbonium -> Convert 1500 -> Pool 1500.
