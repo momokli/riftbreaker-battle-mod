@@ -1,0 +1,6 @@
+self-hosted-runner:
+  # Custom-Runner-Label für den planet-Self-Hosted-Runner (siehe CONTRIBUTING.md,
+  # Abschnitt "CI-Runner (planet)"). Ohne diese Deklaration meldet actionlint
+  # "label 'planet' is unknown" und der lint.yml-actionlint-Job wird rot.
+  labels:
+    - planet
