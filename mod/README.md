@@ -1,12 +1,21 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.25.0 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.26.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 
 > **Multiplayer:** Beide Spieler müssen **exakt dieselben Mods** installiert
 > haben, sonst lehnt der Client die Lobby mit **„different set of mods“** ab.
 > Kurzanleitung: [`docs/PLAYER_SETUP.md`](../docs/PLAYER_SETUP.md).
+
+**v0.26.0 — Spar-Pool-Persistenz + Wellen-Presets (Issue #65/#41):**
+- *Spar-Pool* (`rb_points`/`econ_pool`) wird an der Rundengrenze (Wellenstart) zusätzlich per
+  `EconomyCheckpoint()` in die Global-DB geschrieben und beim Mod-Load geladen — der ersparte Pool
+  übersteht so Map-/Session-Reloads (Fix für Issue #65, statisch getestet in `persistence.test.js`).
+- *Wellen-Presets* (`RBB.wavePresets`): **A** = Naturwellen alle 8 Min in voller Größe,
+  **B** = alle 4 Min in halber Größe; Grundschwierigkeit `normal` (Issue #41). Der Wellen-Takt ist
+  nicht mehr fest verdrahtet (`RBB.waveIntervalCapS` folgt dem aktiven Preset). Neue Tests in
+  `wave-presets.test.js`.
 
 **v0.25.0 — CI: Builds + Tests auf planet-Self-Hosted-Runner (Issue #117/#136):**
 - `CI`-Workflow (`.github/workflows/ci.yml`) läuft für PRs und Pushes auf `main` jetzt auf dem
@@ -360,7 +369,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.25.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
+[RBBATTLE] event=mod_load version=0.26.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100

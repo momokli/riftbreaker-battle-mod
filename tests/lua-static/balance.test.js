@@ -110,7 +110,7 @@ local function log_has(sub)
 end
 
 -- 1. Mod geladen (kein Version-Bump), rb_balance registriert.
-check(log_has("event=mod_load version=0.25.0"), "mod_load version=0.25.0 (kein Version-Bump)")
+check(log_has("event=mod_load version=0.26.0"), "mod_load version=0.26.0 (kein Version-Bump)")
 check(_G.__commands["rb_balance"] ~= nil, "rb_balance registriert")
 
 -- 2. rb_balance legt die v1-Preisliste offen (5 Units, 4 Tiers, 1 Boss).
