@@ -15,7 +15,7 @@
 # Aufruf: bash test_e2e.sh   (aus diesem Verzeichnis)
 
 set -u
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit
 
 echo "== Voraussetzungen =="
 if ! command -v node >/dev/null 2>&1; then
@@ -33,6 +33,7 @@ SERVER_PID=""
 A_PID=""
 B_PID=""
 
+# shellcheck disable=SC2317  # False Positive: cleanup wird via "trap ... EXIT" aufgerufen
 cleanup() {
   [ -n "$A_PID" ] && kill "$A_PID" 2>/dev/null
   [ -n "$B_PID" ] && kill "$B_PID" 2>/dev/null
@@ -171,7 +172,8 @@ function req(method, p, body) {
 })();
 ASSERT
 
-URL="$URL" DIR="$DIR" node "$DIR/assert.js"
+export URL DIR
+node "$DIR/assert.js"
 RC=$?
 
 echo "--- server.log (Auszug) ---"

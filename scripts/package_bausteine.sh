@@ -145,4 +145,5 @@ outmod="$OUT_DIR/rbbattle.zip"
 zip_content_root "$SRCMOD" "$outmod"
 echo "NAME=rbbattle.zip ZIP=$outmod"
 
-echo "[package_bausteine] fertig: $(ls "$OUT_DIR"/rbb-*.zip | wc -l) Baustein-Zip(s) + rbbattle.zip in $OUT_DIR"
+n_zip=$(find "$OUT_DIR" -maxdepth 1 -name 'rbb-*.zip' | wc -l)
+echo "[package_bausteine] fertig: ${n_zip} Baustein-Zip(s) + rbbattle.zip in $OUT_DIR"

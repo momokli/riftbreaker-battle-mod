@@ -1,0 +1,50 @@
+name: Spike
+description: Zeitlich begrenzte Untersuchung / Machbarkeitsstudie
+title: "[Spike] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > **Wichtig:** Erst mit `!claim` im Kommentar claimen, bevor du losarbeitest —
+        > so verhindern wir Doppelarbeit (siehe [CONTRIBUTING.md](https://github.com/momokli/riftbreaker-battle-mod/blob/main/CONTRIBUTING.md)).
+
+  - type: textarea
+    id: frage
+    attributes:
+      label: Frage / Hypothese
+      description: Was genau soll der Spike beantworten?
+    validations:
+      required: true
+
+  - type: textarea
+    id: ansatz
+    attributes:
+      label: Ansatz
+      description: Wie soll untersucht werden? (Prototyp, Messreihe, Recherche …)
+    validations:
+      required: true
+
+  - type: input
+    id: timebox
+    attributes:
+      label: Timebox
+      description: Maximaler Aufwand, danach wird entschieden.
+      placeholder: z. B. 1 Tag
+    validations:
+      required: true
+
+  - type: textarea
+    id: ergebnis
+    attributes:
+      label: Erwartetes Ergebnis / Abbruchkriterium
+      description: Was ist ein Erfolg? Was ein begründeter Abbruch?
+    validations:
+      required: false
+
+  - type: textarea
+    id: erkenntnisse
+    attributes:
+      label: Erkenntnisse (nach Abschluss)
+      description: Ergebnis, Empfehlung, Folge-Issues. (Erst beim Abschließen füllen.)
+    validations:
+      required: false

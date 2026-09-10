@@ -1,0 +1,68 @@
+name: Lint
+
+# Statische Checks (shellcheck, ruff, actionlint) als Ergaenzung zu ci.yml
+# (Tests/Build). ci.yml bleibt unveraendert; dieser Workflow ist eigenstaendig.
+# Least privilege: nur contents:read.
+#
+# Lua-Lint (luacheck) ist bewusst NICHT eingebaut: die Riftbreaker-Mod-API-Globals
+# (z. B. Game, EntityService, ...) sind offline nicht aufloesbar, luacheck meldet
+# daher zwangslaeufig False Positives. Lua-Abdeckung erfolgt bereits ueber
+# tests/lua-static (fengari + luaparse).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: shellcheck (First-Party-Skripte)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck installieren
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: shellcheck
+        run: |
+          shellcheck \
+            scripts/*.sh \
+            bausteine/*/test_e2e*.sh \
+            bausteine/07-relay/fake-log.sh \
+            tools/headless-client/*.sh
+
+  python-lint:
+    name: Python-Lint (ruff + compileall)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # Syntax-Fallback zuerst: faengt Parse-Fehler auch dann, wenn die
+      # ruff-Installation scheitert — der Job faellt so nie still durch.
+      - name: Python-Syntax (compileall)
+        run: python3 -m compileall -q scripts trainer bausteine tournament
+      - name: ruff installieren (gepinnt)
+        run: python3 -m pip install --disable-pip-version-check "ruff==0.6.9"
+      # Kein --exit-zero: ruff verletzt den Job bei Findings (E/F, siehe ruff.toml).
+      - name: ruff check
+        run: ruff check .
+
+  actionlint:
+    name: actionlint (Workflow-YAML)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: actionlint installieren (gepinnt)
+        run: |
+          curl -sSL -o actionlint.tar.gz \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
+          tar -xzf actionlint.tar.gz actionlint
+          sudo install -m 0755 actionlint /usr/local/bin/actionlint
+      # -shellcheck= schaltet die eingebettete Shellcheck-Integration ab, damit
+      # die unveraenderte ci.yml nicht durch Shell-Lints der run-Bloecke rot wird.
+      - name: actionlint
+        run: actionlint -shellcheck= .github/workflows/*.yml

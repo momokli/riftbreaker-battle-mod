@@ -34,8 +34,11 @@ now_iso(){ date -u +%Y-%m-%dT%H:%M:%SZ; }
 # UDP-Erreichbarkeit via /dev/udp (exit 0 = Paket rausgegangen)
 udp_ok(){
   local host="$1" port="$2"
-  timeout "$UDP_TIMEOUT" bash -c "echo > /dev/udp/${host}/${port}" >/dev/null 2>&1
-  [ $? -eq 0 ] && echo true || echo false
+  if timeout "$UDP_TIMEOUT" bash -c "echo > /dev/udp/${host}/${port}" >/dev/null 2>&1; then
+    echo true
+  else
+    echo false
+  fi
 }
 
 # Lokaler UDP-Listener auf dem Port vorhanden? (ss; null = Tool fehlt)
@@ -70,7 +73,7 @@ site_check(){
 main(){
   local checked_at e_ts site_out site_up site_code
   checked_at="$(now_iso)"
-  site_out="$(site_check)"; set -- $site_out; site_up="$1"; site_code="$2"
+  site_out="$(site_check)"; site_up="${site_out%% *}"; site_code="${site_out#* }"
 
   # Endpoint-Liste laden: Datei > Default
   local -a E=()

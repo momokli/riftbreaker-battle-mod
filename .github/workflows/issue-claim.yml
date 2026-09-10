@@ -1,0 +1,131 @@
+name: Issue Claim
+
+# Claim-System fuer Issues:
+#   Kommentar "!claim"   -> Issue dem Kommentator zuweisen + Label "claimed".
+#   Kommentar "!unclaim" -> eigene Zuweisung entfernen; ohne Assignees auch das Label.
+#
+# Nur Issues (keine PR-Kommentare), Bot-Kommentare werden ignoriert.
+# Race-Hinweis: parallele Claims sind unkritisch — der PATCH auf "assignees"
+# ist additiv/idempotent (Set-Vereinigung), der erste Claim gewinnt in der Praxis.
+# Least privilege: contents:read + issues:write (pull-requests:read als Reserve).
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  claim:
+    name: Issue claimen / freigeben
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const comment = context.payload.comment;
+            const issue = context.payload.issue;
+
+            // Nur Issues behandeln, PR-Kommentare ueberspringen.
+            if (issue.pull_request) {
+              core.info('PR-Kommentar — uebersprungen.');
+              return;
+            }
+
+            // Bot-Kommentare ignorieren (Dependabot, github-actions, ...).
+            const actor = comment.user.login;
+            if (comment.user.type === 'Bot' || actor.endsWith('[bot]')) {
+              core.info('Bot-Kommentar — uebersprungen.');
+              return;
+            }
+
+            const body = (comment.body || '').trim();
+            if (body !== '!claim' && body !== '!unclaim') {
+              core.info('Kein !claim/!unclaim — nichts zu tun.');
+              return;
+            }
+
+            const { owner, repo } = context.repo;
+            const issue_number = issue.number;
+
+            // Label "claimed" idempotent sicherstellen.
+            async function ensureClaimedLabel() {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name: 'claimed' });
+              } catch (err) {
+                if (err.status === 404) {
+                  await github.rest.issues.createLabel({
+                    owner, repo, name: 'claimed',
+                    color: '0e8a16', description: 'Issue ist geclaimt',
+                  });
+                } else {
+                  throw err;
+                }
+              }
+            }
+
+            if (body === '!claim') {
+              const { data: fresh } = await github.rest.issues.get({ owner, repo, issue_number });
+              const assignees = (fresh.assignees || []).map((a) => a.login);
+              const others = assignees.filter((a) => a !== actor);
+
+              if (others.length > 0) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number,
+                  body: `Schon vergeben an @${others.join(', @')} — ` +
+                        'pick ein anderes Issue oder frag nach Uebergabe.',
+                });
+                return;
+              }
+
+              // Additiv + idempotent: bestehende Assignees bleiben erhalten.
+              const nextAssignees = Array.from(new Set([...assignees, actor]));
+              await github.rest.issues.update({
+                owner, repo, issue_number, assignees: nextAssignees,
+              });
+
+              await ensureClaimedLabel();
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number, labels: ['claimed'],
+              });
+
+              await github.rest.issues.createComment({
+                owner, repo, issue_number, body: `Geclaimt von @${actor} ✅`,
+              });
+              return;
+            }
+
+            // body === '!unclaim'
+            const { data: fresh } = await github.rest.issues.get({ owner, repo, issue_number });
+            const assignees = (fresh.assignees || []).map((a) => a.login);
+
+            if (!assignees.includes(actor)) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number,
+                body: `@${actor} ist aktuell nicht Assignee dieses Issues.`,
+              });
+              return;
+            }
+
+            const nextAssignees = assignees.filter((a) => a !== actor);
+            await github.rest.issues.update({
+              owner, repo, issue_number, assignees: nextAssignees,
+            });
+
+            if (nextAssignees.length === 0) {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner, repo, issue_number, name: 'claimed',
+                });
+              } catch (err) {
+                if (err.status !== 404) throw err;
+              }
+            }
+
+            await github.rest.issues.createComment({
+              owner, repo, issue_number,
+              body: `@${actor} hat das Issue freigegeben (unclaim).`,
+            });

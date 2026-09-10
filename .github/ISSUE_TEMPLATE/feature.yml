@@ -1,0 +1,52 @@
+name: Feature
+description: Neue Funktion oder Verbesserung vorschlagen
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > **Wichtig:** Erst mit `!claim` im Kommentar claimen, bevor du losarbeitest —
+        > so verhindern wir Doppelarbeit (siehe [CONTRIBUTING.md](https://github.com/momokli/riftbreaker-battle-mod/blob/main/CONTRIBUTING.md)).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / Motivation
+      description: Welches Problem löst das Feature? Warum ist es wichtig?
+    validations:
+      required: true
+
+  - type: textarea
+    id: vorschlag
+    attributes:
+      label: Vorgeschlagene Lösung
+      description: Wie könnte die Umsetzung aussehen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: akzeptanzkriterien
+    attributes:
+      label: Akzeptanzkriterien
+      description: Woran erkennen wir, dass das Feature fertig ist? (Testbar formulieren.)
+      value: |
+        - [ ] …
+        - [ ] …
+    validations:
+      required: false
+
+  - type: input
+    id: bereich
+    attributes:
+      label: Betroffene Bausteine / Bereich
+      placeholder: z. B. bausteine/01-wave-spawn, site/, trainer/
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternativen
+    attributes:
+      label: Alternativen / offene Fragen
+    validations:
+      required: false

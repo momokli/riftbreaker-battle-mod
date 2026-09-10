@@ -17,7 +17,7 @@
 # Aufruf: bash test_e2e_prototype.sh   (aus diesem Verzeichnis oder via Pfad)
 
 set -u
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit
 
 SERVER_JS="../06-tournament-server/server.js"
 RELAY_PY="relay.py"
@@ -32,6 +32,7 @@ RELAY_PID=""
 SSE_PID=""
 PIPE_PID=""
 
+# shellcheck disable=SC2317  # False Positive: cleanup wird via "trap ... EXIT" aufgerufen
 cleanup() {
   [ -n "$PIPE_PID" ] && kill "$PIPE_PID" 2>/dev/null
   [ -n "$RELAY_PID" ] && kill "$RELAY_PID" 2>/dev/null
@@ -56,10 +57,10 @@ check() {
 }
 
 # wait_for <sekunden> <grep-muster> <datei>
+# shellcheck disable=SC2317  # False Positive: wait_for wird direkt aufgerufen (SC2317-Bug)
 wait_for() {
   local tries=$1 pattern=$2 file=$3
-  local i
-  for i in $(seq 1 "$tries"); do
+  for _ in $(seq 1 "$tries"); do
     grep -q "$pattern" "$file" 2>/dev/null && return 0
     sleep 0.5
   done
