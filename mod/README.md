@@ -1,8 +1,16 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.5.0 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.6.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
+
+**v0.6.0 — Headless-Client-Tooling (Issues #7/#8), Mod-Laufzeit unverändert:**
+- `tools/headless-client/`: Container-Setup (Wine + Xvfb + Mesa-llvmpipe),
+  Entrypoint `run-client.sh` und xdotool-Navigation `xdo-nav.sh` (#7).
+- Client-Daten-Sync lan→planet: `sync-client-data.sh` (Größencheck → rsync →
+  Verifikation inkl. MD5-Stichprobe) + Trockenlauf-Tests (#8).
+- **Keine Änderung** an `mod/lua/` oder am Send-/Economy-Verhalten gegenüber
+  v0.5.0 — reines Tooling-Release.
 
 **v0.5.0 — MVP Single-Player Self-Send (Sich-selber-senden, Issue #42):**
 - **Mod-Mode `rb_mode sp|duel`** (Default `sp`): im `sp`-Mode boostet der
@@ -122,7 +130,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.5.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
+[RBBATTLE] event=mod_load version=0.6.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100
@@ -171,7 +179,8 @@ erwartet, s. #7); (4) macOS-Mod-Support ungeklärt.
   Reset; Fallback tick nach 3 Handler-Fehlern). v0.5.0: 2 Szenarien / 22
   Checks (rb_mode Default/Wechsel/usage; rb_convert Calcium-first + Alias +
   Guards; rb_status Runde/Pool/Boost; Self-Boost-Hook: Original-OnEnterSpawn
-  zuerst, Runden-Zähler, Pool greedy → Spawn, Rest-Pool). In-Game-Test steht
+  zuerst, Runden-Zähler, Pool greedy → Spawn, Rest-Pool). v0.6.0: keine
+  Mod-Änderung (Tooling-Release, #7/#8). In-Game-Test steht
   aus (Operator, Prod).
 - **Economy-Fallback dokumentiert:** Der Mod hat keinen verifizierten Zugriff
   aufs Spieler-Ressourcen-Konto (api-deep-dive.md §1); Value kommt aus
