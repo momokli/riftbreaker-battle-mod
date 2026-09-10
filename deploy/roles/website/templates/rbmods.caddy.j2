@@ -5,6 +5,21 @@
 	encode gzip
 	file_server
 
+	# /solo (Operator-Match-Page, Issue #159) ohne Datei-Endung erreichbar.
+	rewrite /solo /solo.html
+
+	{% if solo_basic_auth_hash %}
+	# Operator-Zugangsschutz: bcrypt-Hash ausschließlich aus Vault/Operator-ENV
+	# (kein Wert im Repo). Nur aktiv, wenn solo_basic_auth_hash gesetzt ist.
+	@solo path /solo /solo.html
+	handle @solo {
+		basic_auth {
+			{{ solo_basic_auth_user | default('operator') }} {{ solo_basic_auth_hash }}
+		}
+		file_server
+	}
+	{% endif %}
+
 	# Tournament-Server (Web-UI + API) unter /tournament/* — Präfix wird gestrippt.
 	handle_path /tournament/* {
 		reverse_proxy 127.0.0.1:{{ tournament_port }}

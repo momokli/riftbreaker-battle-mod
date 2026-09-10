@@ -481,13 +481,13 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
     <span class="ck-god-status" id="ckCmdStatus">BEREIT</span>
   </div>
   <div class="ck-god-grid">
-    <button type="button" class="ck-cmd ck-cmd--primary" data-ck-cmd="wave_toggle">
+    <button type="button" class="ck-cmd ck-cmd--primary" data-ck-cmd="wave_toggle" data-ck-parked="1" disabled aria-disabled="true" title="Geparkt (Follow-up #159): kein erreichbarer Transport — RCON/Relay nicht deployt">
       <span class="ck-cmd-label">[ WELLE START / PAUSE ]</span>
-      <span class="ck-cmd-sub">TOGGLE WAVE CYCLE [SPACE]</span>
+      <span class="ck-cmd-sub">GEPARKT — FOLLOW-UP #159</span>
     </button>
-    <button type="button" class="ck-cmd ck-cmd--neutral" data-ck-cmd="give_resources">
+    <button type="button" class="ck-cmd ck-cmd--neutral" data-ck-cmd="give_resources" data-ck-parked="1" disabled aria-disabled="true" title="Geparkt (Follow-up #159): kein erreichbarer Transport — RCON/Relay nicht deployt">
       <span class="ck-cmd-label">[ RESSOURCEN INJIZIEREN ]</span>
-      <span class="ck-cmd-sub">+5000 CARBONIUM / IRONIUM [F2]</span>
+      <span class="ck-cmd-sub">GEPARKT — FOLLOW-UP #159</span>
     </button>
     <button type="button" class="ck-cmd ck-cmd--warn" data-ck-cmd="destroy_hq" data-ck-destructive="1">
       <span class="ck-cmd-label">[ HQ ZERSTÖREN (TEST) ]</span>
@@ -498,6 +498,12 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
       <span class="ck-cmd-sub">RESET ALLER SYSTEME [SHIFT+F5]</span>
     </button>
   </div>
+  <p class="ck-god-note" id="ckGodNote">
+    Verdrahtet (v1, erreichbare Referee-Endpoints):
+    <b>HQ zerstören (Test)</b> → <code>POST /report</code> (hq_hp=0) ·
+    <b>Spiel neu starten</b> → <code>POST /rematch</code>.
+    Geparkt (Follow-up #159, kein erreichbarer Transport): Welle Start/Pause · Ressourcen injizieren.
+  </p>
 </section>
 
 <!-- ================= VERBINDEN ================= -->
@@ -1097,6 +1103,7 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
     apiBase: base,
     onResult: function (res) {
       if (res.aborted) { setCmdStatus("ABGEBROCHEN", "is-err"); return; }
+      if (res.parked) { setCmdStatus("GEPARKT — FOLLOW-UP #159", "is-err"); return; }
       if (res.ok) { setCmdStatus("OK — " + res.action, "is-ok"); return; }
       setCmdStatus("FEHLER — " + (res.error || "unbekannt"), "is-err");
     },

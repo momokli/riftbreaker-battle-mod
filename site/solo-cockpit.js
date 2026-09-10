@@ -12,12 +12,15 @@
  * Zweigeteilt wie live-status.js / dev-log.js:
  *   - deriveCockpit(state, opts)  -> pure (ohne DOM/Netz), unit-testbar
  *   - createCockpit(opts)         -> Poll-Loop GET /state -> render(view)
- *   - createGodPanel(opts)        -> Command-Transport (POST /command)
+ *   - createGodPanel(opts)        -> Command-Transport (nur erreichbare Endpoints)
  *   - createAccessGate(opts)      -> optionales Soft-Gate (kein Secret im Repo)
  *
- * Kein Backend für God-Commands im Tournament-Server v1 (#159: Machbarkeit
- * offen). Der Transport POSTet auf `<apiBase>/command`; fehlt der Endpoint,
- * degradiert das Panel mit einem Statusfehler statt zu crashen.
+ * Kein `/command`-Backend im Tournament-Server v1 (#159): der Transport
+ * nutzt ausschließlich EXISTIERENDE Referee-Endpoints (`POST /report`,
+ * `POST /rematch`) für Kommandos, die damit nachweislich machbar sind.
+ * Kommandos ohne erreichbaren Transport bleiben GEPARKT (reachable:false,
+ * kein POST, `todo`-Begründung) statt gegen einen nicht existierenden
+ * Endpoint zu laufen.
  *
  * UMD: CommonJS (Node/Tests) oder global `RBSoloCockpit` (Browser).
  */
@@ -42,13 +45,55 @@
     finished: "GAME OVER",
   };
 
-  /* God-Commands: nur die im Design geforderten Aktionen; destruktive
-     Aktionen verlangen eine Bestätigung. */
+  /* God-Commands (Issue #159).
+   *
+   * v1 verdrahtet NUR Kommandos, die im aktuellen Deployment nachweislich
+   * erreichbar sind — d. h. über einen EXISTIERENDEN Referee-Endpoint
+   * (docs/TOURNAMENT_API.md). Ein Kommando ohne erreichbaren Transport
+   * bleibt sichtbar, wird aber GEPARKT (`reachable:false`) und trägt die
+   * Follow-up-Begründung in `todo`.
+   *
+   * Hintergrund: der Tournament-Server v1 hat KEINEN `/command`-Endpoint
+   * und keinen In-Game-Kommandokanal (RCON/Relay ist nicht deployt, #159).
+   * Deshalb sind Wellen-Steuerung und Ressourcen-Gabe geparkt. */
   var COMMANDS = {
-    wave_toggle: { cmd: "wave_toggle", destructive: false, label: "Welle Start/Pause" },
-    give_resources: { cmd: "give_resources", destructive: false, label: "Ressourcen injizieren" },
-    destroy_hq: { cmd: "destroy_hq", destructive: true, label: "HQ zerstören (Test)" },
-    restart: { cmd: "restart", destructive: true, label: "Spiel neu starten" },
+    destroy_hq: {
+      cmd: "destroy_hq",
+      destructive: true,
+      reachable: true,
+      label: "HQ zerstören (Test)",
+      // POST /report {event:"hq_hp", hp:0} — der dokumentierte Weg des
+      // Referees, ein HQ auf 0 zu setzen (→ Match-Ende, Sieger = Gegner).
+      request: function () {
+        return { path: "/report", method: "POST", body: { world: "A", event: "hq_hp", hp: 0 } };
+      },
+    },
+    restart: {
+      cmd: "restart",
+      destructive: true,
+      reachable: true,
+      label: "Spiel neu starten",
+      // POST /rematch — Reset in die Lobby (nur außerhalb `running`, sonst
+      // 409). Spieler bleiben registriert.
+      request: function () {
+        return { path: "/rematch", method: "POST", body: {} };
+      },
+    },
+    // --- GEPARKT: kein erreichbarer Transport im aktuellen Deployment -----
+    wave_toggle: {
+      cmd: "wave_toggle",
+      destructive: false,
+      reachable: false,
+      label: "Welle Start/Pause",
+      todo: "Follow-up #159: kein Referee-Endpoint für Wellenstart/-pause; braucht rb_* über RCON/Relay (nicht deployt).",
+    },
+    give_resources: {
+      cmd: "give_resources",
+      destructive: false,
+      reachable: false,
+      label: "Ressourcen injizieren",
+      todo: "Follow-up #159: kein Ressourcen-Endpoint; braucht rb_give_* über RCON/Relay (nicht deployt).",
+    },
   };
 
   function clampPct(n) {
@@ -201,7 +246,6 @@
       ? opts.confirm
       : function (msg) { return typeof window !== "undefined" && window.confirm ? window.confirm(msg) : false; };
     var onResult = typeof opts.onResult === "function" ? opts.onResult : function () {};
-    var commandPath = opts.commandPath || "/command";
 
     function send(action) {
       var spec = COMMANDS[action];
@@ -209,6 +253,12 @@
         var bad = { ok: false, action: action, error: "unbekanntes Kommando" };
         onResult(bad);
         return Promise.resolve(bad);
+      }
+      if (!spec.reachable) {
+        // Geparkt: kein erreichbarer Transport — kein POST, klar begründet.
+        var parked = { ok: false, action: action, parked: true, error: spec.todo || "nicht verdrahtet (Follow-up)" };
+        onResult(parked);
+        return Promise.resolve(parked);
       }
       if (spec.destructive && !confirmImpl("SICHERHEITSABFRAGE: '" + spec.label + "' ist destruktiv. Ausführen?")) {
         var abort = { ok: false, action: action, aborted: true };
@@ -220,10 +270,11 @@
         onResult(nf);
         return Promise.resolve(nf);
       }
-      return fetchImpl(base + commandPath, {
-        method: "POST",
+      var req = spec.request();
+      return fetchImpl(base + req.path, {
+        method: req.method || "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ cmd: spec.cmd }),
+        body: JSON.stringify(req.body || {}),
       })
         .then(function (r) {
           return r.json().catch(function () { return null; }).then(function (data) {
@@ -244,7 +295,12 @@
         });
     }
 
-    return { send: send, base: base, commands: COMMANDS };
+    return { send: send, base: base, commands: COMMANDS, isReachable: isReachable };
+  }
+
+  /** true, wenn `action` einen erreichbaren Transport hat (nicht geparkt). */
+  function isReachable(action) {
+    return !!(COMMANDS[action] && COMMANDS[action].reachable);
   }
 
   /* ---------------- Optionales Operator-Gate ----------------
@@ -286,6 +342,7 @@
     createCockpit: createCockpit,
     createGodPanel: createGodPanel,
     createAccessGate: createAccessGate,
+    isReachable: isReachable,
     phaseLabel: phaseLabel,
     clampPct: clampPct,
     COMMANDS: COMMANDS,

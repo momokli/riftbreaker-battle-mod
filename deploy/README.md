@@ -41,6 +41,32 @@ Für den CD-Betrieb liegt das Vault-Passwort ausschließlich auf planet
 (`/etc/rbbattle-deploy/vault.pass`, root-only) — **nie** als GitHub-Secret,
 nie im Repo, nie in Logs.
 
+## Solo-Page-Zugangsschutz (`/solo`, Issue #159)
+
+Die Operator-Match-Page `/solo` ([site/solo.html](../site/solo.html)) wird per
+**Caddy basic_auth** geschützt. Der Passwort-**Hash** liegt ausschließlich im
+Vault — **kein Wert im Repo, in Logs oder PRs**; dokumentiert ist nur der Name.
+
+- **Variablenname (dokumentiert, ohne Wert):** `vault_solo_basic_auth_hash`
+  (Vault, bcrypt) → nicht-geheime Referenz `solo_basic_auth_hash` in
+  `inventory/host_vars/planet/vars.yml`.
+- **Benutzer:** `solo_basic_auth_user` (Default `operator`).
+- **ENV-Variablenname (Betreiber setzt den Wert host-seitig, nie im Repo):**
+  `SOLO_BASIC_AUTH_HASH`.
+
+Hash erzeugen und in den Vault übernehmen (**Wert nie ausgeben/committen**):
+
+```bash
+# bcrypt-Hash im Caddy-Container erzeugen; Ausgabe direkt in den Vault übernehmen:
+docker exec -i mellon-caddy caddy hash-password
+ansible-vault edit deploy/inventory/host_vars/planet/vault.yml
+#    → vault_solo_basic_auth_hash: <bcrypt-hash>
+```
+
+Ist der Hash leer/nicht gesetzt, bleibt `/solo` bewusst **ungeschützt**
+(graceful Default) — der Deploy bricht nicht ab. Das Caddy-Snippet routet
+`/solo` außerdem auf `/solo.html`.
+
 ## Deploy
 
 ```bash
