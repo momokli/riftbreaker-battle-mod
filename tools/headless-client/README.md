@@ -1,11 +1,13 @@
 # Headless Riftbreaker-Client (Wine + Xvfb + Mesa-llvmpipe)
 
-**Status: Teilverifiziert (Issue #9)** — Tooling (Dockerfile/Compose,
-Entrypoint, Boot-bis-Hauptmenü-Fluss, Screenshot-Beweis) ist angelegt und so
-weit wie möglich lokal verifiziert (Shellcheck, `bash -n`, Compose-Config,
-Trockenlauf-Tests). Der **echte In-Game-Boot bis ins Hauptmenü ist offen
-(Operator, Prod)** — er braucht die synchronisierten Client-Dateien und läuft
-auf **planet**, nicht in der Sandbox (kein Game-Asset/GPU/Netz). Details unten.
+**Status: Teilverifiziert (Issue #9 + #10)** — Tooling (Dockerfile/Compose,
+Entrypoint, Boot-bis-Hauptmenü-Fluss, Screenshot-Beweis, Lobby-Navigation +
+Server-Connect) ist angelegt und so weit wie möglich lokal verifiziert
+(Shellcheck, `bash -n`, Compose-Config, Trockenlauf-Tests). Der **echte
+In-Game-Boot bis ins Hauptmenü UND die Lobby-Navigation bis zum
+Server-Connect sind offen (Operator, Prod)** — sie brauchen die
+synchronisierten Client-Dateien und laufen auf **planet**, nicht in der
+Sandbox (kein Game-Asset/GPU/Netz). Details unten.
 
 Auf **planet** läuft der Riftbreaker-Client headless in einem Container
 (Wine + Xvfb + Mesa-llvmpipe Software-Rendering). Steuerung/Auswertung über
@@ -27,10 +29,12 @@ als Basis für Multiplayer-/Client-seitige Tests ohne physischen Desktop.
 | `run-client.sh` | Entrypoint: Xvfb → Wine-Prefix-Init → Client booten → Menü-Check |
 | `wait-menu.sh` | Wartet auf gerendertes Hauptmenü + legt Beweis-Screenshot ab |
 | `xdo-nav.sh` | xdotool-Navigation-Wrapper (click/key/type/shot) |
+| `nav-lobby.sh` | Screenshot-gesteuerte Navigation bis Lobby + Server-Connect (Issue #10) |
 | `sync-client-data.sh` | Voll-Sync lan→planet: Größencheck → rsync → Verifikation |
 | `sync-client.sh` | Minimaler Vorgänger (einfaches `rsync -a`) |
 | `test-sync-client-data.sh` | Trockenlauf-Tests für `sync-client-data.sh` (Fake ssh/rsync) |
 | `test-wait-menu.sh` | Trockenlauf-Tests für `wait-menu.sh` (Fake import/convert) |
+| `test-nav-lobby.sh` | Trockenlauf-Tests für `nav-lobby.sh` (Fake xdo-nav/import/convert) |
 
 ## Voraussetzungen
 
@@ -214,6 +218,56 @@ docker exec rb-headless xdo-nav.sh type "rb_wave 3"
 
 Vollständige Sub-Kommandos: `docker exec rb-headless xdo-nav.sh` (ohne Argumente
 zeigt die Hilfe).
+
+## 5a. Lobby-Navigation + Server-Connect (`nav-lobby.sh`)
+
+`nav-lobby.sh` führt einen **Navigationsplan** (Liste aus xdotool-Aktionen +
+Screenshot-Verifikation) aus, bis die Multiplayer-Lobby erreicht und die
+Verbindung zum Testserver (Default `rb-winetest`) hergestellt ist. Nach jeder
+Maus/Tastatur-Eingabe wird per Screenshot geprüft, dass der Frame noch gerendert
+ist (schwarzer Frame = Client weg → Abbruch).
+
+```bash
+# Default-Plan (Hauptmenü → Multiplayer → Connect) gegen den laufenden Client:
+docker compose exec rb-headless nav-lobby.sh
+
+# Eigener Plan / anderer Server / Trockenlauf:
+docker compose exec rb-headless nav-lobby.sh --plan /pfad/plan.lobby --server rb-winetest
+docker compose exec rb-headless nav-lobby.sh --dry-run
+```
+
+Aktionen (eine je Zeile, `#` = Kommentar, leere Zeilen ignoriert):
+
+| Aktion | Bedeutung |
+|---|---|
+| `shot <file>` | Screenshot ablegen (Beweis) |
+| `click <x> <y> [btn]` | Klick (xdotool, Default button=1) |
+| `key <keysym>` | Taste drücken |
+| `type <text>` | Text tippen (Rest der Zeile = Text) |
+| `wait <sec>` | Sekunden warten |
+| `wait-menu <out.png>` | Warten bis Frame gerendert + Screenshot |
+| `connect <server>` | Server-Adresse auflösen + eintippen + Return |
+| `verify <cmd...>` | Verifikationskommando (exit 0 = ok) |
+
+Server-Auflösung über `NAV_SERVERS` (`"name=host:port …"`, Default
+`rb-winetest=65.21.27.234:6322`). Feintuning über `NAV_TIMEOUT` (Default `180`),
+`NAV_RENDER_CHECK` (`1`|`0`), `RENDER_MIN_STD`, `RENDER_POLL`.
+
+**Verifiziert:** `bash -n` + Trockenlauf-Tests (`test-nav-lobby.sh`):
+Plan-Parsing, Server-Auflösung, Connect-Ablauf (`type <addr>` + `key Return`),
+Render-Check-Abbruch bei schwarzem Frame.
+
+**Offen (Operator, Prod):** Die echten Menü-Koordinaten/-Timings im
+Default-Plan sind bewusst als Startpunkt gesetzt (`click 960 540` u. ä.) und
+müssen beim realen In-Game-Test auf planet festgezurrt werden. Das
+Akzeptanzkriterium „Spieler-Mech existiert auf dem Server (`no_player`
+verschwindet)“ wird serverseitig geprüft (Mod-Log `event=wave … status=no_player`
+vs. `status=spawned`) und ist nicht statisch testbar — hierfür ein
+`verify`-Schritt im Plan gegen den Server-Log (Beispiel):
+
+```
+verify "grep -q 'event=wave .* status=spawned' /var/log/rbclient/server.log"
+```
 
 ## Fallback: Proton-GE
 

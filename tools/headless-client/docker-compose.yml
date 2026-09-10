@@ -4,6 +4,7 @@
 #   docker compose up -d                      # bauen + starten, wartet aufs Hauptmenü
 #   docker compose logs -f rb-headless        # Boot-/Menü-Status + Beweis-Screenshot-Pfad
 #   docker compose exec rb-headless xdo-nav.sh shot /tmp/shot.png
+#   docker compose exec rb-headless nav-lobby.sh   # Lobby-Navigation + Server-Connect (#10)
 #   docker compose exec rb-headless wait-menu.sh
 #   docker compose down
 #

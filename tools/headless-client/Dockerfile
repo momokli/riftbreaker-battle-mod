@@ -57,8 +57,8 @@ VOLUME ["/srv/rbclient/game"]
 WORKDIR /srv/rbclient/game
 
 # Tooling einbinden.
-COPY run-client.sh wait-menu.sh xdo-nav.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/run-client.sh /usr/local/bin/wait-menu.sh /usr/local/bin/xdo-nav.sh
+COPY run-client.sh wait-menu.sh xdo-nav.sh nav-lobby.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/run-client.sh /usr/local/bin/wait-menu.sh /usr/local/bin/xdo-nav.sh /usr/local/bin/nav-lobby.sh
 
 # Client-Exe überschreibbar (Steam-Version: riftbreaker_win_release.exe).
 ENV RB_CLIENT_EXE=riftbreaker_win_release.exe
