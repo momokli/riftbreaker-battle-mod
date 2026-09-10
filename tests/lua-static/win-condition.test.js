@@ -102,8 +102,8 @@ local function count_logs(sub)
     return n
 end
 
--- 1. Mod geladen, Version 0.24.1, HQ initialisiert.
-check(log_has("event=mod_load version=0.24.1"), "mod_load version=0.24.1")
+-- 1. Mod geladen, Version 0.24.2, HQ initialisiert.
+check(log_has("event=mod_load version=0.24.2"), "mod_load version=0.24.2")
 check(log_has("hq_hp=100 hq_dead=false"), "mod_load enthaelt hq_hp=100 hq_dead=false")
 check(_G.__handlers["EnteredTriggerEvent"] ~= nil, "EnteredTriggerEvent registriert")
 check(_G.__handlers["RespawnFailedEvent"] ~= nil, "RespawnFailedEvent registriert")
