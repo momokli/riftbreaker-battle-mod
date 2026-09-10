@@ -1,5 +1,5 @@
 -- ============================================================================
--- rbbattle_autoexec.lua  (Einzel-Mod rbbattle, v0.11.0)
+-- rbbattle_autoexec.lua  (Einzel-Mod rbbattle, v0.12.0)
 --
 -- RIFT BATTLE Mod-Core (Foundation):
 --   #26 Send-Spawn an den 16 natuerlichen Kartenrand-Spawnern
@@ -31,6 +31,15 @@
 --       der %-Staerke-Boost der naechsten Welle (#39) bleibt offen, weil die
 --       dom_manager-Wave-Strength-API unverifiziert ist (docs/SEND_HOOK.md).
 --       Status via `rb_status` (Runde, Pool, naechster Boost).
+--   #25 Send-Queue & Shop-HUD: Custom-UI-Shop mit Tier-Struktur
+--       (Legion-TD-2-artig) + Boss-Tier; `rb_buy_wave <unit> [count]` kauft
+--       Einheiten aus dem Shop in die Send-Queue (deduziert den Spar-Pool
+--       sofort); der Wellenstart-Hook (dom_mananger:OnEnterSpawn) gibt die
+--       Queue beim naechsten natuerlichen Wellenstart als Zusatz-Spawns an
+--       den eigenen Rand-Spawnern (#26) aus — Tiered Units + Bosse boosten
+--       so die NAEchste Welle. Senden jederzeit bis Wellenstart, unbegrenzt
+--       oft (Deckel maxQueueCreatures). Preisliste v1 = Struktur/Platzhalter,
+--       KEIN Balancing (Tuning #33/#12).
 --   #28 Win-Condition (HQ-HP, Leak, Match-Ende): Leaks (feindliche Kreaturen,
 --       die die Trigger-Zone ums HQ erreichen, EnteredTriggerEvent) senken den
 --       HQ-HP (event=leak/event=hq_hp); HQ-Tod (HP<=0 oder RespawnFailedEvent
@@ -39,8 +48,9 @@
 --       (POST /report hq_hp); Sieg-Zustand + Rematch sind dort implementiert.
 --
 -- Basis: rbbattle v0.2.0-single (feature/single-mod, PR #15) + Baustein 00/01.
--- Kein io/socket/http, keine Bindings, kein UI-Zusatz. Alle API-Aufrufe sind
--- pcall-gesichert (graceful no-op, Muster Spike).
+-- Kein io/socket/http, keine Bindings, kein eigenes HUD-Framework (nur
+-- Shop-Popup ueber GuiService:OpenPopup, Muster Baustein 02). Alle API-Aufrufe
+-- sind pcall-gesichert (graceful no-op, Muster Spike).
 --
 -- Genutzte API:
 --   EntityService:SpawnEntity( blueprint, x, y, z, team )        (wie v0.2.0)
@@ -59,7 +69,7 @@
 --     -> Persistenz (HasInt/GetIntOrDefault/SetInt/RemoveKey)  (Issue #24)
 --
 -- Log-Zeilen (externes Parsing, Praefix [RBBATTLE]):
---   event=mod_load version=0.11.0 status=ok mode=sp econ_source=.. econ_pool=.. hq_hp=.. hq_dead=..
+--   event=mod_load version=0.12.0 status=ok mode=sp econ_source=.. econ_pool=.. hq_hp=.. hq_dead=..
 --   event=wave level=N status=start|done spawned=.. skipped=.. anchor=border|mission|mech
 --   event=spawn ok|failed|skip ... anchor=<gruppe>/<id>            (je Kreatur)
 --   event=wave_spawners count=N                                    (Pool-Groesse)
@@ -72,9 +82,12 @@
 --   event=economy_show / economy_reset                                    (#24)
 --   event=mode mode=sp|duel status=ok|usage|stub                          (#42)
 --   event=wave_hook patch status=ok|skip|no_class reason=no_api           (#42)
---   event=round round=N status=start mode=.. pool=..                      (#42)
---   event=self_boost round=N pool_before=.. spent=.. spawned=.. pool_after=.. (#42)
---   event=status mode=.. round=.. pool=.. boost=..                         (#42)
+--   event=round round=N status=start mode=.. pool=.. queue=..             (#42/#25)
+--   event=buy_wave unit=.. tier=.. count=.. price=.. total=.. pool=.. queue=.. status=.. (#25)
+--   event=shop status=listed|popup_opened|popup_skipped|api_missing tiers=.. (#25)
+--   event=queue status=show count=.. value=.. pool=..                     (#25)
+--   event=send_queue round=N status=done|empty|skip spawned=.. value=.. anchor=.. (#25)
+--   event=status mode=.. round=.. pool=.. queue=..                         (#42/#25)
 --   event=leak damage=.. hp_before=.. hp=..                                (#28)
 --   event=hq_hp hp=.. dead=..                                              (#28)
 --   event=hq_dead status=match_end hp=0                                    (#28)
@@ -85,7 +98,7 @@
 -- ============================================================================
 
 local RBB = {}
-RBB.version = "0.11.0"
+RBB.version = "0.12.0"
 
 -- Log-/Konsole-Helfer (Muster Spike): Praefix [RBBATTLE] fuer externes Parsen.
 local LOG_TAG = "[RBBATTLE]"
@@ -164,19 +177,41 @@ RBB.waveIntervalCapS = 300
 RBB.mode = "sp"
 RBB.round = 0   -- Runden-Zaehler (+1 bei jedem natuerlichen Wellenstart)
 
--- #42 Self-Boost: der Spar-Pool (Send-Waehrung) wird am Wellenstart als
--- Zusatz-Spawns an den eigenen Rand-Spawnern ausgegeben (#26-Pfad). Wert je
--- Kreatur = Balance-Platzhalter (Tuning #33). Der %-Staerke-Boost der
--- naechsten Welle (#39) bleibt offen, weil die dom_manager-Wave-Strength-API
--- unverifiziert ist (docs/SEND_HOOK.md) — #26 ist der dokumentierte Fallback.
-RBB.boostCfg = {
-    units = { -- teuerste zuerst gespawnt (greedy)
-        { blueprint = "units/ground/brabit",    value = 100 },
-        { blueprint = "units/ground/baxmoth",   value = 150 },
-        { blueprint = "units/ground/artigian",  value = 200 },
-        { blueprint = "units/ground/canceroth", value = 300 },
+-- #25 Send-Queue & Shop-HUD: Preisliste v1 (Struktur/Platzhalter — KEIN
+-- Balancing, Tuning in Issue #33/#12). Tier-Struktur Legion-TD-2-artig:
+-- guenstige Tier-1-Einheiten bis teure Boss-Einheiten. Blueprints sind
+-- Platzhalter aus dem bestehenden Wellen-/Boost-Pool; echte Boss-/Unit-Listen
+-- aus den Spieldaten folgen in der Balance-Session (#33).
+RBB.shopCfg = {
+    tiers = {
+        { id = "t1", name = "Tier 1", units = {
+            { id = "brabit",   blueprint = "units/ground/brabit",   price = 100 },
+            { id = "baxmoth",  blueprint = "units/ground/baxmoth",  price = 150 },
+        } },
+        { id = "t2", name = "Tier 2", units = {
+            { id = "artigian", blueprint = "units/ground/artigian", price = 200 },
+        } },
+        { id = "t3", name = "Tier 3", units = {
+            { id = "canceroth", blueprint = "units/ground/canceroth", price = 300 },
+        } },
+        { id = "boss", name = "Boss", units = {
+            -- Platzhalter-Boss (Blueprint wie Tier 3; echte Boss-Liste folgt
+            -- in der Balance-Session #33). boss=true markiert die Boss-Tier.
+            { id = "boss", blueprint = "units/ground/canceroth", price = 800, boss = true },
+        } },
     },
-    maxBoostCreatures = 20, -- Schutz vor Endlos-Spam je Welle
+    maxQueueCreatures = 40, -- Schutz vor Endlos-Spam je Welle
+}
+
+-- #25: Send-Queue — gekaufte (noch nicht gesendete) Einheiten fuer die
+-- naechste Naturwelle. Einheiten werden per `rb_buy_wave` aus dem Shop
+-- gekauft (Pool wird sofort deduziert); beim naechsten Wellenstart gibt der
+-- Hook die Queue als Zusatz-Spawns aus und leert sie. In-Memory (wird je
+-- Welle verbraucht), der Spar-Pool persistiert weiterhin ueber Runden.
+RBB.sendQueue = {
+    units = {},   -- { blueprint=.., price=.., boss=.., tier=.. }
+    count = 0,    -- Anzahl Einheiten in der Queue
+    value = 0,    -- Summe der Kaufpreise (fuer Anzeige/Status)
 }
 
 -- Vorwaertsdeklaration fuer den Wellenstart-Hook (#42): Definition folgt nach
@@ -1051,64 +1086,169 @@ pcall(function()
 end)
 
 -- ============================================================================
--- #42 MVP Single-Player Self-Send: Mod-Mode + Self-Boost + Status
+-- #25 Send-Queue & Shop-HUD: Tiered Units + Bosse boosten die naechste Welle
 --
--- Mod-Mode (`rb_mode sp|duel`, Default sp): im sp-Mode boostet der Spar-Pool
--- die EIGENE naechste Naturwelle (Sich-selber-senden). Im duel-Mode (Stub)
--- passiert noch nichts — das 1v1-Routing folgt spaeter (#25/#27).
+-- Ersetzt den MVP-Self-Boost (#42): statt den Spar-Pool am Wellenstart
+-- automatisch (greedy) zu verbrauchen, kauft der Spieler Einheiten EXPLIZIT
+-- aus dem Shop (`rb_buy_wave <unit> [count]`) — der Pool wird sofort
+-- deduziert, die Einheit landet in der Send-Queue. Der Wellenstart-Hook
+-- (dom_mananger:OnEnterSpawn, Muster #36/#42) gibt die Queue beim naechsten
+-- natuerlichen Wellenstart als Zusatz-Spawns an den eigenen Rand-Spawnern
+-- (#26) aus — Tiered Units + Bosse boosten so die NAEchste Welle. Senden
+-- jederzeit bis Wellenstart, unbegrenzt oft (maxQueueCreatures als Deckel).
 --
--- Self-Boost (Wellenstart-Hook, Muster #36): der Function-Wrap an
--- dom_mananger:OnEnterSpawn laeuft im selben Call wie die Naturwelle. Der Pool
--- wird greedy (teuerste zuerst) in Zusatz-Spawns an den eigenen Rand-Spawnern
--- (#26) umgesetzt und verbraucht; Rest-Pool bleibt fuer die naechste Welle.
--- Der %-Staerke-Boost (#39) ist offen (unverifizierte Wave-Strength-API,
--- docs/SEND_HOOK.md) — #26 ist der dokumentierte Fallback.
+-- Mod-Mode (`rb_mode sp|duel`, Default sp): im sp-Mode boostet die Queue die
+-- EIGENE naechste Naturwelle (Sich-selber-senden). Im duel-Mode (Stub)
+-- passiert noch nichts — das 1v1-Routing folgt spaeter (#27).
+--
+-- Custom-UI-Shop (`rb_shop`): oeffnet ein Popup (GuiService:OpenPopup, Muster
+-- Baustein 02) mit der Tier-/Preis-Liste; der Kauf selbst laeuft als
+-- Konsolen-Command `rb_buy_wave` (der Eingabe-Hook fuer die Send-Queue —
+-- Bridge/Trainer fuehren ihn aus, wie rb_wave/rb_convert).
 -- ============================================================================
 
--- Berechnet (deterministisch) die Boost-Kreaturen aus einem Pool-Wert:
--- greedy vom teuersten zum billigsten Blueprint. Liefert spent (verbrauchter
--- Pool), spawned (Anzahl Kreaturen), counts (blueprint -> Anzahl) und order
--- (Reihenfolge der Blueprints). Pure Logik — ohne Game-API, unit-testbar.
-local function ComputeBoost(pool)
-    local budget = math.floor(tonumber(pool) or 0)
-    if budget <= 0 then return 0, 0, {}, {} end
-
-    -- Teuerste zuerst (Kopie, deterministische Sortierung).
-    local units = {}
-    for _, u in ipairs(RBB.boostCfg.units) do
-        units[#units + 1] = { blueprint = u.blueprint, value = u.value }
-    end
-    table.sort(units, function(a, b) return a.value > b.value end)
-
-    local spent = 0
-    local spawned = 0
-    local counts = {}
-    local order = {}
-    while spawned < RBB.boostCfg.maxBoostCreatures do
-        local chosen = nil
-        for _, u in ipairs(units) do
-            if u.value <= (budget - spent) then chosen = u break end
+-- Flache Suche ueber alle Tiers: unitId -> unit-Def + Tier. Nil = unbekannt.
+local function FindShopUnit(unitId)
+    for _, tier in ipairs(RBB.shopCfg.tiers) do
+        for _, u in ipairs(tier.units) do
+            if u.id == unitId then return u, tier end
         end
-        if chosen == nil then break end
-        spent = spent + chosen.value
-        spawned = spawned + 1
-        if counts[chosen.blueprint] == nil then order[#order + 1] = chosen.blueprint end
-        counts[chosen.blueprint] = (counts[chosen.blueprint] or 0) + 1
     end
-    return spent, spawned, counts, order
+    return nil, nil
 end
 
--- Wendet den Self-Boost an: Pool -> Zusatz-Spawns an eigenen Rand-Spawnern.
--- Verbraucht nur, was tatsaechlich gespawnt werden konnte; Rest bleibt im Pool.
-local function ApplySelfBoost()
-    if RBB.mode ~= "sp" then return end
-    local e = RBB.economy
-    if e.pool <= 0 then return end
+-- Kauf: `rb_buy_wave <unitId> [count]`. Deduziert den Spar-Pool sofort und
+-- haengt die Einheit(en) an die Send-Queue. Liefert nie einen Fehler nach
+-- aussen; Validierung (unbekannt/zu teuer/Queue voll) vorab per Log.
+local function BuyWave(rawUnitId, rawCount)
+    local q = RBB.sendQueue
+    local unitId = tostring(rawUnitId or ""):lower()
 
-    local poolBefore = e.pool
-    local spent, spawned, counts, order = ComputeBoost(poolBefore)
-    if spawned == 0 then
-        Log("event=self_boost status=skip reason=pool_too_small pool=%d", poolBefore)
+    if unitId == "" or unitId == "help" then
+        WriteConsole("rb_buy_wave: Aufruf rb_buy_wave <unit> [count] — rb_shop zeigt Units/Preise")
+        Log("event=buy_wave status=usage")
+        return
+    end
+
+    local unit, tier = FindShopUnit(unitId)
+    if unit == nil then
+        WriteConsole("rb_buy_wave: unbekannte Unit '%s' — rb_shop zeigt die Liste", unitId)
+        Log("event=buy_wave status=unknown_unit unit=%s", unitId)
+        return
+    end
+
+    local count = math.floor(tonumber(rawCount) or 1)
+    if count < 1 then count = 1 end
+    if q.count + count > RBB.shopCfg.maxQueueCreatures then
+        WriteConsole("rb_buy_wave: Queue voll (%d + %d > max %d)",
+            q.count, count, RBB.shopCfg.maxQueueCreatures)
+        Log("event=buy_wave status=queue_full unit=%s count=%d queue=%d",
+            unitId, count, q.count)
+        return
+    end
+
+    local total = unit.price * count
+    if RBB.economy.pool < total then
+        WriteConsole("rb_buy_wave: Pool reicht nicht (%d < %d) — erst rb_convert",
+            RBB.economy.pool, total)
+        Log("event=buy_wave status=insufficient unit=%s count=%d need=%d pool=%d",
+            unitId, count, total, RBB.economy.pool)
+        return
+    end
+
+    -- Abbuchung + Queue-Anhang (Kaufpreis sofort faellig, unwiderruflich).
+    RBB.economy.pool = RBB.economy.pool - total
+    for _ = 1, count do
+        q.units[#q.units + 1] = {
+            blueprint = unit.blueprint,
+            price     = unit.price,
+            boss      = unit.boss == true,
+            tier      = tier.id,
+        }
+    end
+    q.count = q.count + count
+    q.value = q.value + total
+    EconomySave()
+
+    Log("event=buy_wave unit=%s tier=%s count=%d price=%d total=%d pool=%d queue=%d status=ok",
+        unitId, tier.id, count, unit.price, total, RBB.economy.pool, q.count)
+    WriteConsole("rb_buy_wave: +%d %s (%s, %d je) -> Queue %d, Pool %d",
+        count, unitId, tier.name, unit.price, q.count, RBB.economy.pool)
+end
+
+-- Textliste des Shops (Tier-Struktur + Preise) fuer Konsole UND Popup.
+local function ShopText()
+    local lines = { "RBBATTLE — Shop (Send-Queue)" }
+    for _, tier in ipairs(RBB.shopCfg.tiers) do
+        lines[#lines + 1] = string.format("— %s —", tier.name)
+        for _, u in ipairs(tier.units) do
+            local boss = ""
+            if u.boss == true then boss = " [BOSS]" end
+            lines[#lines + 1] = string.format("  %s%s  %d", u.id, boss, u.price)
+        end
+    end
+    return lines
+end
+
+-- Custom-UI-Popup (GuiService:OpenPopup, Muster Baustein 02). Best-effort:
+-- ohne Spieler/API -> nur Konsolen-Liste (Log status=popup_skipped/api_missing).
+local function OpenShopPopup()
+    if not (GuiService and GuiService.OpenPopup) then
+        Log("event=shop status=api_missing")
+        return
+    end
+    local okM, mech = pcall(function()
+        return PlayerService:GetPlayerControlledEnt(0)
+    end)
+    if not okM or mech == nil or mech == INVALID_ID then
+        Log("event=shop status=popup_skipped reason=no_player")
+        return
+    end
+    local text = '<style="header_35">RBBATTLE — Shop</style>\r\n'
+        .. table.concat(ShopText(), "\r\n")
+        .. '\r\n<style="big_red">Kauf:</style> rb_buy_wave <unit> [count]'
+    local ok, err = pcall(function()
+        return GuiService:OpenPopup(mech, "gui/popup/popup_template_1button", text)
+    end)
+    if not ok then
+        Log("event=shop status=popup_skipped reason=error err=%s", tostring(err))
+        return
+    end
+    Log("event=shop status=popup_opened tiers=%d", #RBB.shopCfg.tiers)
+end
+
+-- Konsolen-/Status-Anzeige des Shops (immer verfuegbar).
+local function CmdShop(args)
+    for _, line in ipairs(ShopText()) do
+        WriteConsole("%s", line)
+    end
+    WriteConsole("rb_shop: Kauf mit rb_buy_wave <unit> [count] (Pool %d)", RBB.economy.pool)
+    Log("event=shop status=listed tiers=%d pool=%d", #RBB.shopCfg.tiers, RBB.economy.pool)
+    OpenShopPopup()
+end
+
+-- Send-Queue-Status: was ist gekauft und steht fuer die naechste Welle an?
+local function CmdQueue(args)
+    local q = RBB.sendQueue
+    local parts = {}
+    for _, u in ipairs(q.units) do
+        parts[#parts + 1] = u.blueprint
+    end
+    local detail = table.concat(parts, ",")
+    if detail == "" then detail = "-" end
+    WriteConsole("rb_queue: %d Einheiten (Wert %d, Pool %d): %s",
+        q.count, q.value, RBB.economy.pool, detail)
+    Log("event=queue status=show count=%d value=%d pool=%d",
+        q.count, q.value, RBB.economy.pool)
+end
+
+-- Gibt die Send-Queue am Wellenstart als Zusatz-Spawns aus (Boost der
+-- naechsten Welle). Die Queue ist beim Kauf bereits bezahlt (Pool deduziert);
+-- hier wird nur gespawnt und geleert — der Pool bleibt unangetastet.
+local function FlushSendQueue()
+    local q = RBB.sendQueue
+    if q.count == 0 then
+        Log("event=send_queue round=%d status=empty", RBB.round)
         return
     end
 
@@ -1119,58 +1259,58 @@ local function ApplySelfBoost()
         anchorMode = "fallback_mech"
         local okM, m = pcall(function() return PlayerService:GetPlayerControlledEnt(0) end)
         if not okM or m == nil or m == INVALID_ID then
-            Log("event=self_boost status=skip reason=no_anchor pool=%d", poolBefore)
+            Log("event=send_queue round=%d status=skip reason=no_anchor queue=%d",
+                RBB.round, q.count)
             return
         end
         local okP, p = pcall(function() return EntityService:GetPosition(m) end)
         if not okP or p == nil then
-            Log("event=self_boost status=skip reason=no_anchor pool=%d", poolBefore)
+            Log("event=send_queue round=%d status=skip reason=no_anchor queue=%d",
+                RBB.round, q.count)
             return
         end
         mech, playerPos = m, p
     end
 
     local totalSpawned = 0
-    for _, bp in ipairs(order) do
-        local count = counts[bp] or 0
-        for _ = 1, count do
-            if BlueprintExists(bp) then
-                local okSpawn = false
-                if anchorMode == "border" then
-                    okSpawn = SpawnCreatureAtBorderSpawner(bp, spawners)
-                else
-                    okSpawn = SpawnCreatureAtRandomOffset(mech, bp, playerPos)
-                end
-                if okSpawn then totalSpawned = totalSpawned + 1 end
+    for _, u in ipairs(q.units) do
+        if BlueprintExists(u.blueprint) then
+            local okSpawn = false
+            if anchorMode == "border" then
+                okSpawn = SpawnCreatureAtBorderSpawner(u.blueprint, spawners)
+            else
+                okSpawn = SpawnCreatureAtRandomOffset(mech, u.blueprint, playerPos)
             end
+            if okSpawn then totalSpawned = totalSpawned + 1 end
         end
     end
 
-    -- Nur den tatsaechlich verbrauchten Pool abbuchen (spent ist deterministisch).
-    e.pool = poolBefore - spent
-    EconomySave()
-    Log("event=self_boost round=%d pool_before=%d spent=%d spawned=%d pool_after=%d anchor=%s",
-        RBB.round, poolBefore, spent, totalSpawned, e.pool, anchorMode)
-    WriteConsole("rb_boost: Welle %d — Pool %d -> +%d Boost-Kreaturen (Rest-Pool %d)",
-        RBB.round, poolBefore, totalSpawned, e.pool)
+    local value = q.value
+    q.units = {}
+    q.count = 0
+    q.value = 0
+    Log("event=send_queue round=%d status=done spawned=%d value=%d anchor=%s",
+        RBB.round, totalSpawned, value, anchorMode)
+    WriteConsole("rb_send: Welle %d — Send-Queue ausgeliefert (+%d Kreaturen, Wert %d)",
+        RBB.round, totalSpawned, value)
 end
 
 -- Kurztext fuer rb_status: was boostet die naechste Welle?
-local function BoostSummary()
-    if RBB.mode ~= "sp" then return "duel (kein self-boost)" end
-    local e = RBB.economy
-    if e.pool <= 0 then return "keiner (pool leer)" end
-    local _, spawned = ComputeBoost(e.pool)
-    return string.format("naechste welle: +%d spawns (pool %d)", spawned, e.pool)
+local function QueueSummary()
+    if RBB.mode ~= "sp" then return "duel (kein send)" end
+    local q = RBB.sendQueue
+    if q.count == 0 then return "leer" end
+    return string.format("%d units (wert %d)", q.count, q.value)
 end
 
--- Wird aus dem OnEnterSpawn-Wrap aufgerufen: Runde zaehlen + Self-Boost.
+-- Wird aus dem OnEnterSpawn-Wrap aufgerufen: Runde zaehlen + Send-Queue
+-- ausliefern (Boost der naechsten Naturwelle).
 local function OnNaturalWaveStart()
     RBB.round = RBB.round + 1
-    Log("event=round round=%d status=start mode=%s pool=%d",
-        RBB.round, RBB.mode, RBB.economy.pool)
+    Log("event=round round=%d status=start mode=%s pool=%d queue=%d",
+        RBB.round, RBB.mode, RBB.economy.pool, RBB.sendQueue.count)
     if RBB.mode == "sp" then
-        ApplySelfBoost()
+        FlushSendQueue()
     end
 end
 
@@ -1214,7 +1354,8 @@ PatchWaveStartHook = function()
 end
 
 -- ---------------------------------------------------------------------------
--- Commands: rb_mode (sp|duel) + rb_status (Runde, Pool, naechster Boost).
+-- Commands: rb_buy_wave (Kauf-Hook), rb_shop (Custom-UI), rb_queue (Status),
+-- rb_mode (sp|duel) + rb_status (Runde, Pool, Queue).
 -- ---------------------------------------------------------------------------
 local function CmdMode(args)
     local m = nil
@@ -1234,14 +1375,26 @@ local function CmdMode(args)
 end
 
 local function CmdStatus(args)
-    local boost = BoostSummary()
-    WriteConsole("rb_status: mode=%s runde=%d pool=%d boost=%s",
-        RBB.mode, RBB.round, RBB.economy.pool, boost)
-    Log("event=status mode=%s round=%d pool=%d boost=%s",
-        RBB.mode, RBB.round, RBB.economy.pool, boost)
+    local queue = QueueSummary()
+    WriteConsole("rb_status: mode=%s runde=%d pool=%d queue=%s",
+        RBB.mode, RBB.round, RBB.economy.pool, queue)
+    Log("event=status mode=%s round=%d pool=%d queue=%s",
+        RBB.mode, RBB.round, RBB.economy.pool, queue)
 end
 
 pcall(function()
+    ConsoleService:RegisterCommand("rb_buy_wave", function(args)
+        local unitId, count = nil, nil
+        if args ~= nil and #args >= 1 then unitId = tostring(args[1]) end
+        if args ~= nil and #args >= 2 then count = tostring(args[2]) end
+        BuyWave(unitId, count)
+    end)
+    ConsoleService:RegisterCommand("rb_shop", function(args)
+        CmdShop(args)
+    end)
+    ConsoleService:RegisterCommand("rb_queue", function(args)
+        CmdQueue(args)
+    end)
     ConsoleService:RegisterCommand("rb_mode", function(args)
         CmdMode(args)
     end)
