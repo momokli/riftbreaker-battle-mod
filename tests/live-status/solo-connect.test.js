@@ -56,6 +56,24 @@ test('site/solo.html verdrahtet das Solo-Connect-Widget', () => {
   assert.ok(html.includes('RBSoloConnect.createSoloConnect'), 'Widget-Init ruft createSoloConnect auf');
 });
 
+// Regression #112: PR #110 fügte die #devlog-Sektion ohne schließende
+// </div></section> ein — dadurch war #verbinden in #devlog verschachtelt.
+test('site/solo.html: Sektionen sind balanciert — #verbinden nicht in #devlog verschachtelt', () => {
+  const html = fs.readFileSync(SOLO_HTML, 'utf8');
+  const count = (re) => (html.match(re) || []).length;
+  assert.strictEqual(count(/<section\b/g), count(/<\/section>/g), 'öffnende/schließende <section> im Gleichgewicht');
+  assert.strictEqual(count(/<div\b/g), count(/<\/div>/g), 'öffnende/schließende <div> im Gleichgewicht');
+
+  const devlogIdx = html.indexOf('<section id="devlog"');
+  const verbindenIdx = html.indexOf('<section id="verbinden"');
+  assert.ok(devlogIdx >= 0, '#devlog-Sektion vorhanden');
+  assert.ok(verbindenIdx > devlogIdx, '#verbinden folgt auf #devlog');
+  assert.ok(
+    /<\/section>/.test(html.slice(devlogIdx, verbindenIdx)),
+    '#devlog wird vor #verbinden geschlossen (keine Verschachtelung)',
+  );
+});
+
 // ---------------------------------------------------------------------------
 // 3) HTTP-Mock: createSoloConnect
 // ---------------------------------------------------------------------------
