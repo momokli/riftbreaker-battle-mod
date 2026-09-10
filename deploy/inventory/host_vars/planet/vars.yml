@@ -69,3 +69,7 @@ probe_site_url: "https://{{ website_domain }}"
 probe_endpoints_file: /usr/local/etc/rbmods-probe.endpoints
 probe_interval_min: 2
 probe_server_ip: 65.21.27.234
+
+# Game-Content ist auf planet bereits provisioniert (664 MB in /srv/rbgame).
+# SteamCMD-Modus haengt am "apt install lib32gcc-s1" -> sync als No-Op.
+riftbreaker_content_mode: sync
