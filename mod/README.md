@@ -249,7 +249,11 @@ v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
   **Convert ist bewusst & IRREVERSIBEL**: `rb_convert carbonium 100` wandelt
   gefarmten Wert in **Send-Währung** (Spar-Pool) — kein Rücktausch-Pfad.
 - **Spar-Pool persistiert über Runden** (Global-Database `rbbattle_economy`,
-  profilgebunden; überlebt Welt-/Mod-Neustart).
+  profilgebunden) + **defensiver Checkpoint an der Rundengrenze (#65):**
+  `EconomyCheckpoint` schreibt den Pool zusätzlich beim Wellenstart
+  (`event=economy_checkpoint`). Die tatsächliche Persistenz über einen echten
+  Map-/Session-Reload ist weiterhin In-Game zu verifizieren (AC1, Operator —
+  `docs/research/api-deep-dive.md` §3).
 - **Built-Value** (= nicht konvertierter Farmwert, GDD: „was gebaut wurde =
   was NICHT gesendet wurde“) wird getrennt geführt — Reveal-Basis für #27.
 - **Dokumentierter Fallback:** Fehlt die Ressourcen-Event-API (Getter nicht

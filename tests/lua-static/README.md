@@ -125,6 +125,18 @@ npm test        # = node --test
 6. `rb_balance` legt die Presets als Log-Fläche offen (`wave_preset`/`wave_preset_cfg`);
    das Setup-Log führt Preset + Grundschwierigkeit mit.
 
+`persistence.test.js` deckt Issue #65 (Persistenz des Spar-Pools) ab:
+
+1. Phase 1 (frischer Run): Farm 2000 carbonium → `rb_convert 1500` → Pool 1500;
+   Wellenstart (`dom_mananger.OnEnterSpawn`) → `event=economy_checkpoint round=1
+   pool=1500 status=ok` + Stub-DB enthält `pool=1500` (Checkpoint schreibt in die
+   Global-DB).
+2. Phase 2 (Reload): zweite frische Lua-VM mit vorbefüllter DB → `EconomyLoad`
+   resumed (`status=resume pool=1500`) und `mod_load … econ_pool=1500`.
+
+AC1 (In-Game-Bestätigung: echter Map-/Session-Reload) ist hier NICHT abbildbar —
+kein Spiel-Zugriff; bleibt Operator-Lauf (Prod).
+
 ## Grenzen (ehrlich dokumentiert)
 
 Die Stub-Services ersetzen die Spiel-Engine; **nicht** live-verifizierbar sind
