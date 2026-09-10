@@ -1,8 +1,16 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.13.0 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.14.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
+
+**v0.14.0 — Game-Design-Kern v1 (nur Doku/Website, keine Mod-Laufzeit-Änderung):**
+- `docs/GAME_DESIGN.md` wiederhergestellt (PR #68, Issue #20) und gegen den
+  implementierten Repo-Stand abgeglichen (Abschnitt „Umsetzungsstand“ mit
+  ✅ implementiert / ⚠️ offen).
+- Landing (`site/index.html`): „design lesen“ verlinkt wieder auf
+  `docs/GAME_DESIGN.md` statt auf den älteren Architektur-Entwurf `docs/concept.md`.
+- Kein Balancing — die konkreten Zahlen bleiben bei #33/#39/#40/#41.
 
 **v0.12.0 — Send-Queue & Shop-HUD: Tiered Units + Bosse boosten die nächste Welle (Issue #25):**
 - **Shop mit Tier-Struktur (Legion-TD-2-artig) + Boss-Tier:** zentrale
@@ -229,7 +237,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.13.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
+[RBBATTLE] event=mod_load version=0.14.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100
@@ -304,7 +312,7 @@ HQ-Entity; negative Fälle: andere Entity / ohne Entity-Zuordnung; Idempotenz
 nach HQ-Tod). v0.12.0: 1 Szenario / 23 Checks (Send-Queue & Shop-HUD:
 rb_shop Tier-Liste + Popup; rb_buy_wave Guards usage/unbekannt/insufficient;
 Farm→Convert→Kauf brabit/boss→Queue; rb_queue-Status; Wellenstart → Flush →
-send_queue done; Queue danach leer; erneuter Kauf + 2. Welle). v0.13.0:
+send_queue done; Queue danach leer; erneuter Kauf + 2. Welle). v0.14.0:
 Reveal-HUD (#27) 1 Szenario / 14 Checks (rb_hud vor Wellenstart reveal=hidden;
 Farm→Convert→Kauf → built_own=3000; Wellenstart → event=reveal mit
 send_own=brabit:2; rb_reveal → built_opp/incoming/hq_opp; rb_hud beide Teams;
