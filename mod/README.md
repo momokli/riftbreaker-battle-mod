@@ -4,6 +4,10 @@ Einzel-Mod **rbbattle** v0.16.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 
+> **Multiplayer:** Beide Spieler müssen **exakt dieselben Mods** installiert
+> haben, sonst lehnt der Client die Lobby mit **„different set of mods“** ab.
+> Kurzanleitung: [`docs/PLAYER_SETUP.md`](../docs/PLAYER_SETUP.md).
+
 **v0.16.0 — Relay-Dispatch auf die rbbridge-Pipe + Live-Status auf solo.html (Issues #60, #62):**
 - `bausteine/07-relay/relay.py`: `dispatch_exec` ist kein v0-TODO mehr — ein
   `exec_command` aus der Web-UI wird als `{"cmd":"exec","command":…,"cmd_id":…}`
