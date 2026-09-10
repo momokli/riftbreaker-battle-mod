@@ -1,5 +1,5 @@
 -- ============================================================================
--- rbbattle_autoexec.lua  (Einzel-Mod rbbattle, v0.8.0)
+-- rbbattle_autoexec.lua  (Einzel-Mod rbbattle, v0.9.0)
 --
 -- RIFT BATTLE Mod-Core (Foundation):
 --   #26 Send-Spawn an den 16 natuerlichen Kartenrand-Spawnern
@@ -31,6 +31,12 @@
 --       der %-Staerke-Boost der naechsten Welle (#39) bleibt offen, weil die
 --       dom_manager-Wave-Strength-API unverifiziert ist (docs/SEND_HOOK.md).
 --       Status via `rb_status` (Runde, Pool, naechster Boost).
+--   #28 Win-Condition (HQ-HP, Leak, Match-Ende): Leaks (feindliche Kreaturen,
+--       die die Trigger-Zone ums HQ erreichen, EnteredTriggerEvent) senken den
+--       HQ-HP (event=leak/event=hq_hp); HQ-Tod (HP<=0 oder RespawnFailedEvent
+--       der HQ-Entity) -> event=hq_dead/match_end. Report laeuft als
+--       [RBBATTLE]-Log-Zeile ueber die Bridge an den Tournament-Server
+--       (POST /report hq_hp); Sieg-Zustand + Rematch sind dort implementiert.
 --
 -- Basis: rbbattle v0.2.0-single (feature/single-mod, PR #15) + Baustein 00/01.
 -- Kein io/socket/http, keine Bindings, kein UI-Zusatz. Alle API-Aufrufe sind
@@ -53,7 +59,7 @@
 --     -> Persistenz (HasInt/GetIntOrDefault/SetInt/RemoveKey)  (Issue #24)
 --
 -- Log-Zeilen (externes Parsing, Praefix [RBBATTLE]):
---   event=mod_load version=0.8.0 status=ok mode=sp econ_source=.. econ_pool=.. ...
+--   event=mod_load version=0.9.0 status=ok mode=sp econ_source=.. econ_pool=.. hq_hp=.. hq_dead=..
 --   event=wave level=N status=start|done spawned=.. skipped=.. anchor=border|mission|mech
 --   event=spawn ok|failed|skip ... anchor=<gruppe>/<id>            (je Kreatur)
 --   event=wave_spawners count=N                                    (Pool-Groesse)
@@ -69,10 +75,17 @@
 --   event=round round=N status=start mode=.. pool=..                      (#42)
 --   event=self_boost round=N pool_before=.. spent=.. spawned=.. pool_after=.. (#42)
 --   event=status mode=.. round=.. pool=.. boost=..                         (#42)
+--   event=leak damage=.. hp_before=.. hp=..                                (#28)
+--   event=hq_hp hp=.. dead=..                                              (#28)
+--   event=hq_dead status=match_end hp=0                                    (#28)
+--   event=match_end reason=hq_destroyed winner=opponent                    (#28)
+--   event=hq_respawn status=unmatched entity=..                            (#28)
+--   event=hq_zone status=.. entity=.. hp=.. dead=..                        (#28)
+--   event=hq_status / hq_reset / hq_entity                                 (#28)
 -- ============================================================================
 
 local RBB = {}
-RBB.version = "0.8.0"
+RBB.version = "0.9.0"
 
 -- Log-/Konsole-Helfer (Muster Spike): Praefix [RBBATTLE] fuer externes Parsen.
 local LOG_TAG = "[RBBATTLE]"
@@ -1257,6 +1270,211 @@ EconomyLoadResources()
 -- stehen; weitere Retry-Zeitpunkte: OnPlayerInitialized / jeder Send).
 PatchWaveStartHook()
 
+-- ============================================================================
+-- #28 Win-Condition: HQ-HP, Leak-Erkennung (EnteredTriggerEvent), HQ-Tod
+-- (RespawnFailedEvent) -> Match-Ende. GDD "Win-Condition": Leaks (feindliche
+-- Kreaturen, die die Trigger-Zone ums HQ erreichen) senken den HQ-HP; HQ-Tod
+-- beendet das Match (Sieg der Gegenseite).
+--
+-- Aufgabenteilung mit dem Tournament-Server (tournament/, Rust):
+--   Server: HQ-HP-Buchung (POST /report hq_hp), Match-Ende bei HP<=0
+--     (Phase finished + winner), Rematch (POST /rematch) — dort bereits
+--     implementiert (Issues #29/#30/#44, Tests gruen). "Sieg-Screen" ist
+--     Client-UI (Mod hat bewusst KEIN UI) und folgt spaeter; der Server
+--     liefert dafuer bereits winner/finished + Feed-Event match_end, die
+--     Bridge uebersetzt das in `match_over` (tournament/bridge/).
+--   Mod: Spiel-Seite der Win-Condition — Leak -> HP sinkt, event=hq_hp als
+--     Report-Flaeche (Bridge -> POST /report hq_hp), event=hq_dead/match_end
+--     bei HQ-Tod. KEIN io/os/http (Mod hat keinen I/O-Kanal, docs/concept.md):
+--     "Report" = [RBBATTLE]-Log-Zeile, die die Bridge an den Server reicht.
+--
+-- Verifikationsstatus (kein Live-Spiel durch den Agenten):
+--   * HQ-HP-/Leak-/Match-Ende-Logik: reine Lua-Logik, statisch getestet
+--     (fengari/Stub-Services, s. tests/lua-static/win-condition.test.js).
+--   * EnteredTriggerEvent: Event-Name aus der Issue-Anforderung, im Repo
+--     NICHT belegt (docs/research/api-deep-dive.md hat kein Trigger-Event) —
+--     Handler pcall-gesichert registriert; feuert er nicht, degradiert der
+--     Mod ohne Leak-Erkennung (Log event=hq_zone status=skip).
+--   * Trigger-Zone selbst (Asset/Engine-API ums HQ): OFFEN — im Repo nicht
+--     belegt; die Zone wird als Spiel-Asset/Blueprint ums HQ autorisiert
+--     (oder per unverifizierter Engine-API), der Mod ist die Empfaengerseite.
+--   * RespawnFailedEvent: verifiziert existent (dom_manager.lua lauscht
+--     selbst darauf, s. docs/SEND_HOOK.md); Handler-Feuerung/Getter fuer den
+--     Mod sind "wahrscheinlich" (wie EntityKilledEvent, api-deep-dive.md §2).
+--   * HQ-Entity-Identifikation: OFFEN — kein verifizierter Blueprint/Lookup;
+--     Operator kann die Entity per `rb_hq entity <id>` zuordnen; sonst greift
+--     nur der HP<=0-Pfad (Leak) als Match-Ende.
+-- ============================================================================
+
+-- Konfiguration (Balance-Platzhalter; hqHpStart muss TOURNAMENT_HQ_HP des
+-- Servers entsprechen, Default 100).
+RBB.hqCfg = {
+    hqHpStart = 100,     -- Start-HP des HQ (Server-Default TOURNAMENT_HQ_HP)
+    leakDamage = 10,     -- HP-Verlust je Leak (Kreatur erreicht die HQ-Zone)
+}
+
+-- Laufzeit-Zustand der Win-Condition.
+RBB.hq = {
+    hp = 0,             -- aktueller HQ-HP (absolut, wie Server-Report)
+    entity = nil,       -- getrackte HQ-Entity (nil = nicht zugeordnet)
+    dead = false,       -- true nach HQ-Tod (Match-Ende gemeldet)
+}
+
+-- Report-Flaeche Richtung Tournament-Server (Bridge reicht die Zeile an
+-- POST /report hq_hp weiter; der Mod hat keinen eigenen I/O-Kanal).
+local function HqReportHp()
+    Log("event=hq_hp hp=%d dead=%s", RBB.hq.hp, tostring(RBB.hq.dead))
+end
+
+-- HQ-Tod: Match-Ende melden (Sieg = Gegenseite; der Server setzt winner).
+-- Idempotent.
+local function HqOnDestroyed()
+    if RBB.hq.dead then return end
+    RBB.hq.dead = true
+    RBB.hq.hp = 0
+    Log("event=hq_dead status=match_end hp=0")
+    Log("event=match_end reason=hq_destroyed winner=opponent")
+    WriteConsole("HQ zerstoert — Match beendet (Sieg Gegenseite)")
+end
+
+-- Leak: eine Kreatur hat die HQ-Zone erreicht -> HQ-HP sinkt. Reine Logik
+-- (keine Game-API, unit-testbar ueber die Event-Handler). Bei HP<=0 ->
+-- HqOnDestroyed.
+local function HqApplyLeak(damage)
+    if RBB.hq.dead then return end
+    local d = math.floor(tonumber(damage) or RBB.hqCfg.leakDamage)
+    if d <= 0 then return end
+    local before = RBB.hq.hp
+    RBB.hq.hp = math.max(0, RBB.hq.hp - d)
+    Log("event=leak damage=%d hp_before=%d hp=%d", d, before, RBB.hq.hp)
+    HqReportHp()
+    if RBB.hq.hp <= 0 then
+        HqOnDestroyed()
+    end
+end
+
+-- Event-Getter-Ladder: liefert die ausloesende Entity eines Events oder nil
+-- (Getter pro Event sind unbekannt, s. api-deep-dive.md §2 — Konvention
+-- evt:GetEntity(), wie bei PlayerCreatedEvent verifiziert).
+local function HqEventEntity(evt)
+    if evt == nil then return nil end
+    local ok, ent = pcall(function() return evt:GetEntity() end)
+    if ok and ent ~= nil and ent ~= INVALID_ID then return ent end
+    return nil
+end
+
+-- #28 Leak-Erkennung (EnteredTriggerEvent): die Trigger-Zone ums HQ feuert,
+-- sobald eine Kreatur sie betritt -> Leak. Event-Name unverifiziert (s. Kopf),
+-- Handler pcall-gesichert; ohne Event bleibt die Leak-Erkennung inaktiv.
+local function OnEnteredTrigger(evt)
+    if RBB.hq.dead then return end
+    HqApplyLeak(RBB.hqCfg.leakDamage)
+end
+
+-- #28 HQ-Tod-Kette (RespawnFailedEvent): feuert, wenn ein Gebaeude/Entity
+-- nicht mehr respawnen kann (zerstoert). Nur Match-Ende, wenn es die
+-- getrackte HQ-Entity trifft. Ohne getrackte Entity loggt der Handler einen
+-- Hinweis statt faelschlich das Match zu beenden (kein Blindflug).
+local function OnRespawnFailed(evt)
+    if RBB.hq.dead then return end
+    local ent = HqEventEntity(evt)
+    if ent == nil then
+        return -- Event nicht lesbar -> nicht auswertbar (kein Crash)
+    end
+    if RBB.hq.entity == nil then
+        -- HQ-Entity nicht zugeordnet: nur Hinweis (einmalig), kein Match-Ende.
+        if not RBB.hq.unmatchedLogged then
+            RBB.hq.unmatchedLogged = true
+            Log("event=hq_respawn status=unmatched entity=%s hint=rb_hq_entity",
+                tostring(ent))
+        end
+        return
+    end
+    if RBB.hq.entity ~= ent then
+        return -- Respawn-Fehler eines anderen Gebaeudes -> kein HQ-Tod
+    end
+    HqOnDestroyed()
+end
+
+-- Zone-/Entity-Status: best-effort-Aufklaerung, was fuer die Win-Condition
+-- (noch) fehlt. Die Trigger-Zone selbst ist OFFEN (Asset/Engine-API).
+local function HqZoneStatus()
+    local zone = "pending"
+    if not RBB.hqEnteredTriggerRegistered then
+        zone = "skip reason=event_unregistered"
+    elseif RBB.hq.entity == nil then
+        zone = "pending reason=no_hq_entity"
+    else
+        zone = "armed"
+    end
+    Log("event=hq_zone status=%s entity=%s hp=%d dead=%s",
+        zone, tostring(RBB.hq.entity), RBB.hq.hp, tostring(RBB.hq.dead))
+end
+
+-- Konsolen-Command rb_hq: Status / manueller Leak / Entity-Zuordnung / Reset
+-- (Entwickler-/Operator-Werkzeug, Muster rb_economy).
+local function CmdHq(args)
+    local sub = nil
+    if args ~= nil and #args >= 1 then sub = tostring(args[1]):lower() end
+    if sub == "reset" then
+        RBB.hq.hp = RBB.hqCfg.hqHpStart
+        RBB.hq.entity = nil
+        RBB.hq.dead = false
+        RBB.hq.unmatchedLogged = false
+        Log("event=hq_reset status=ok hp=%d", RBB.hq.hp)
+        WriteConsole("rb_hq: Win-Condition zurueckgesetzt (hp=%d)", RBB.hq.hp)
+        return
+    end
+    if sub == "entity" and args ~= nil and #args >= 2 then
+        local id = tonumber(args[2])
+        if id == nil then
+            WriteConsole("rb_hq: rb_hq entity <id> (numerische Entity-Id)")
+            Log("event=hq_entity status=usage")
+            return
+        end
+        RBB.hq.entity = id
+        Log("event=hq_entity status=ok entity=%s", tostring(id))
+        WriteConsole("rb_hq: HQ-Entity %s zugeordnet", tostring(id))
+        return
+    end
+    if sub == "leak" then
+        local dmg = RBB.hqCfg.leakDamage
+        if args ~= nil and #args >= 2 then dmg = tonumber(args[2]) or dmg end
+        HqApplyLeak(dmg)
+        WriteConsole("rb_hq: Leak angewendet (damage=%d, hp=%d)", dmg, RBB.hq.hp)
+        return
+    end
+    -- Default: Status.
+    WriteConsole("rb_hq: hp=%d dead=%s entity=%s (rb_hq leak|entity|reset)",
+                 RBB.hq.hp, tostring(RBB.hq.dead), tostring(RBB.hq.entity))
+    Log("event=hq_status hp=%d dead=%s entity=%s",
+        RBB.hq.hp, tostring(RBB.hq.dead), tostring(RBB.hq.entity))
+    HqZoneStatus()
+end
+
+pcall(function()
+    ConsoleService:RegisterCommand("rb_hq", function(args)
+        CmdHq(args)
+    end)
+end)
+
+-- #28: Win-Condition-Event-Handler registrieren (pcall-gesichert; unbekannter
+-- Event-Name laesst den Rest unangetastet). hqEnteredTriggerRegistered dient
+-- der Status-Anzeige (rb_hq -> event=hq_zone).
+RBB.hqEnteredTriggerRegistered = false
+pcall(function()
+    RegisterGlobalEventHandler("EnteredTriggerEvent", OnEnteredTrigger)
+    RBB.hqEnteredTriggerRegistered = true
+end)
+pcall(function()
+    RegisterGlobalEventHandler("RespawnFailedEvent", OnRespawnFailed)
+end)
+
+-- Init: HQ-HP auf Startwert setzen (Spielzustand im Speicher; der Server
+-- fuehrt die autoritative Buchung).
+RBB.hq.hp = RBB.hqCfg.hqHpStart
+
 -- Lebenszeichen-Log beim Laden (analog Baustein 01 / Spike).
-Log("event=mod_load version=%s status=ok mode=%s anchor=border_spawner_groups timer_cap=%d econ_source=%s econ_pool=%d",
-    RBB.version, RBB.mode, RBB.waveIntervalCapS, RBB.economy.source, RBB.economy.pool)
+Log("event=mod_load version=%s status=ok mode=%s anchor=border_spawner_groups timer_cap=%d econ_source=%s econ_pool=%d hq_hp=%d hq_dead=%s",
+    RBB.version, RBB.mode, RBB.waveIntervalCapS, RBB.economy.source, RBB.economy.pool,
+    RBB.hq.hp, tostring(RBB.hq.dead))

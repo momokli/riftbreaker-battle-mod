@@ -1,8 +1,24 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.8.0 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.9.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
+
+**v0.9.0 — Win-Condition: HQ-HP, Leak-Erkennung, HQ-Tod → Match-Ende (Issue #28):**
+- **Mod:** Leaks (feindliche Kreaturen in der Trigger-Zone ums HQ,
+  `EnteredTriggerEvent`) senken den HQ-HP (`event=leak`/`event=hq_hp`);
+  HQ-Tod — HP ≤ 0 **oder** `RespawnFailedEvent` der HQ-Entity — meldet
+  `event=hq_dead` + `event=match_end`. Report läuft als `[RBBATTLE]`-Log-Zeile
+  über die Bridge an den Tournament-Server (`POST /report hq_hp`, dort
+  bereits implementiert). Operator-/Dev-Kommando `rb_hq` (Status, `leak`,
+  `entity <id>`, `reset`).
+- **Server (tournament/):** HQ-HP-Buchung, Match-Ende bei HP ≤ 0 (`winner`),
+  `match_end`-Feed und Rematch (`POST /rematch`) sind bereits aus
+  Issues #29/#30/#44 vorhanden — **keine Server-Änderung** nötig, Tests gruen.
+- **Statisch getestet** (fengari/Stub-Services, `tests/lua-static/`): Leak →
+  HP-Senkung → Match-Ende, RespawnFailedEvent-Kette, Idempotenz, negative
+  Fälle. **OFFEN (kein Live-Spiel):** Trigger-Zone-Asset ums HQ,
+  `EnteredTriggerEvent`-Feuerung, HQ-Entity-Identifikation, Sieg-Screen-UI.
 
 **v0.8.0 — Headless-Client bootet bis Hauptmenü (Issue #9, Mod-Laufzeit unverändert):**
 - `tools/headless-client/`: Compose-Service (`docker-compose.yml`, shm_size 1 GB,
@@ -82,7 +98,8 @@ v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 Inhalt des Mod-Ordners: Skeleton-Lebenszeichen-Log beim Laden +
 Console-Commands `rb_wave <level>` / `rb_send <level>` (Send-Wellen-Spawning an
 Kartenrand-Spawnern) + DOM-Timer-Deckel + Economy (`rb_convert`, `rb_economy`) +
-Self-Send-MVP (`rb_mode`, `rb_status`, Self-Boost-Hook).
+Self-Send-MVP (`rb_mode`, `rb_status`, Self-Boost-Hook) +
+Win-Condition (`rb_hq`, Leak-/HQ-Tod → Match-Ende, #28).
 Kein UI, keine Bindings, kein Bridge-Zusatz, **kein io/socket/http**.
 
 **Mod-Descriptor** (`<GUID>.manifest` im Mod-Root): deklariert Metadaten + die
@@ -146,6 +163,7 @@ und Workshop-Mods tun (Quelle: fandom „Basic Modding Guide“, Ordner
 | `rb_economy` / `rb_economy reset` | Status: Quelle, Pool, farmed/converted/built, Ressourcen-Konten, DB-Status. `reset` = Entwickler-Werkzeug (alles auf 0, inkl. Ressourcen-Keys der DB) |
 | `rb_mode sp\|duel` | Modus-Umschaltung: `sp` = Solo-Test (Default, self-send), `duel` = 1v1 (Stub, folgt später) |
 | `rb_status` | Zeigt `mode`, `runde`, `pool` und den `boost` (nächste Welle) — die Kontrollanzeige des Testmodus |
+| `rb_hq` / `rb_hq leak [dmg]` / `rb_hq entity <id>` / `rb_hq reset` | Win-Condition-Status + Dev-Werkzeuge (#28): HQ-HP zeigen, manuellen Leak anwenden, HQ-Entity zuordnen, Zustand zurücksetzen (Muster `rb_economy reset`) |
 
 Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
@@ -165,6 +183,10 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 [RBBATTLE] event=wave_spawners count=16 groups=4          ← Pool der Rand-Spawner
 [RBBATTLE] event=spawn ok blueprint=units/ground/baxmoth entity=12345 anchor=spawn_enemy_border_west/...
 [RBBATTLE] event=wave level=3 status=done spawned=8 skipped=0 anchor=border spawners=16
+[RBBATTLE] event=leak damage=10 hp_before=100 hp=90        ← Kreatur erreicht HQ-Zone (#28)
+[RBBATTLE] event=hq_hp hp=90 dead=false                    ← Report → Server (POST /report hq_hp)
+[RBBATTLE] event=hq_dead status=match_end hp=0             ← HQ-Tod (HP ≤ 0)
+[RBBATTLE] event=match_end reason=hq_destroyed winner=opponent
 ```
 
 (Die genaue Zahl `count=` hängt von der Karte/Map-Size ab — Issue-Erwartung 16.)
@@ -188,6 +210,13 @@ Klassen-Monkey-Patch im echten Autoexec-Environment (Log `event=dom_timer
 patch status=ok` = Indiz; Bestätigung über Wellenabstand/`debug_dom_manager 1`);
 (3) exakte Feind-Team-Zuordnung bei `SpawnEntity` mit `""` (Blueprint-Standard
 erwartet, s. #7); (4) macOS-Mod-Support ungeklärt.
+(5) **Win-Condition (#28):** `EnteredTriggerEvent`-Feuerung und das
+Trigger-Zone-Asset ums HQ sind nicht belegt (Repo-Recherche hat kein
+Trigger-Event, s. api-deep-dive.md) — Handler ist pcall-gesichert registriert,
+Log `event=hq_zone status=skip|pending|armed` zeigt den Zustand.
+(6) **HQ-Entity-Identifikation (#28):** kein verifizierter Blueprint/Lookup —
+Operator ordnet die Entity per `rb_hq entity <id>` zu; sonst greift nur der
+HP≤0-Pfad (Leak) als Match-Ende.
 
 ## Technische Notizen
 
@@ -205,7 +234,10 @@ erwartet, s. #7); (4) macOS-Mod-Support ungeklärt.
   (Tooling/Site-Release, #9/#56). v0.7.0: 5 Szenarien /
   14 Checks (Anker-Kette border→mission→mech; Missions-Fallback ohne Spieler
   spawnt 5/8 Kreaturen im Ring um den Spawnpunkt; Initial-Spawnpoint-Fallback;
-  kein Anker → Skip). In-Game-Test steht aus (Operator, Prod).
+  kein Anker → Skip). v0.9.0: 18 Checks / 7 Szenarien (Win-Condition:
+Leak → HQ-HP-Senkung → Match-Ende bei HP ≤ 0; RespawnFailedEvent-Kette der
+HQ-Entity; negative Fälle: andere Entity / ohne Entity-Zuordnung; Idempotenz
+nach HQ-Tod). In-Game-Test steht aus (Operator, Prod).
 - **Economy-Fallback dokumentiert:** Der Mod hat keinen verifizierten Zugriff
   aufs Spieler-Ressourcen-Konto (api-deep-dive.md §1); Value kommt aus
   Ernte-Events (Getter-Ladder). Sind die Events nicht lesbar, schaltet die
