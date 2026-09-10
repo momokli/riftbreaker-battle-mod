@@ -8,7 +8,9 @@
 #
 #   log-Zeile -> relay tail -> POST /event -> Server
 #     -> SSE /stream (Web-UI-Feed) UND Outbox -> GET /poll/:player_id
-#     -> exec_command -> relay loggt "dispatch pending: <command>" (v0-TODO)
+#     -> exec_command -> dispatch_exec schreibt {"cmd":"exec",...} auf eine
+#        FIFO (Named-Pipe-Ersatz unter Linux, Issue #60) -> relay loggt
+#        "dispatch sent cmd_id=..."
 #   + Web-UI-Dateien (06/web) werden ausgeliefert (html/js, 404 sonst)
 #
 # Assertions werden gezaehlt; Exit 0 = alles ok, 1 = Fehler.
@@ -30,11 +32,19 @@ DIR=$(mktemp -d /tmp/rb07-e2e.XXXXXX)
 SERVER_PID=""
 RELAY_PID=""
 SSE_PID=""
+PIPEREADER_PID=""
 
 cleanup() {
   [ -n "$RELAY_PID" ] && kill "$RELAY_PID" 2>/dev/null
   [ -n "$SSE_PID" ] && kill "$SSE_PID" 2>/dev/null
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
+  # PIPEREADER_PID ist der "while ... cat"-Wrapper; kill trifft nur ihn, nicht
+  # das gerade laufende cat-Kind (haengt sonst als Waise am FIFO) - deshalb
+  # zusaetzlich dessen direkte Kinder beenden.
+  if [ -n "$PIPEREADER_PID" ]; then
+    pkill -P "$PIPEREADER_PID" 2>/dev/null
+    kill "$PIPEREADER_PID" 2>/dev/null
+  fi
   wait 2>/dev/null
   rm -rf "$DIR"
 }
@@ -115,9 +125,17 @@ MID=$(curl -s -X POST "$URL/match/create" -H 'Content-Type: application/json' \
 check "POST /match/create liefert match_id" test -n "$MID"
 echo "match_id=$MID"
 
+echo "== Named-Pipe-Ersatz (FIFO) fuer dispatch_exec anlegen (Issue #60) =="
+PIPE_PATH="$DIR/rbbattle.fifo"
+mkfifo "$PIPE_PATH"
+# Dauerhafter Reader (cat liest bis EOF/Writer-Close, dann naechste Runde) -
+# so ist beim nicht-blockierenden Dispatch-Write praktisch immer ein Reader da.
+( while true; do cat "$PIPE_PATH"; done >>"$DIR/pipe_received.log" 2>/dev/null ) &
+PIPEREADER_PID=$!
+
 echo "== Relay starten (player_a, match $MID, log=$DIR/fake.log) =="
 RBB_PLAYER_ID=player_a RBB_MATCH_ID="$MID" RBB_LOG_PATH="$DIR/fake.log" \
-RBB_SERVER="$URL" python3 "$RELAY_PY" >"$DIR/relay.log" 2>&1 &
+RBB_SERVER="$URL" RBB_PIPE_PATH="$PIPE_PATH" python3 "$RELAY_PY" >"$DIR/relay.log" 2>&1 &
 RELAY_PID=$!
 check "relay registriert sich (register: ok)" \
   wait_for 20 '\[relay\] register: ok player_id=player_a' "$DIR/relay.log"
@@ -149,13 +167,15 @@ check "SSE: /event-Eingang sichtbar (input type=score_update)" \
 check "SSE: Zustellung sichtbar (delivery incoming_wave an player_b)" \
   grep -q '"kind":"delivery".*"player_id":"player_b".*"event":"incoming_wave"' "$DIR/sse.log"
 
-echo "== exec_command -> dispatch pending (relay-stdout) =="
+echo "== exec_command -> dispatch_exec auf die FIFO (Issue #60) =="
 CODE_EC=$(http_code -X POST "$URL/event" -H 'Content-Type: application/json' \
   -d "{\"match_id\":\"$MID\",\"player_id\":\"player_a\",\
        \"event\":{\"type\":\"exec_command\",\"command\":\"rb_wave 3\"}}")
 check "POST /event exec_command rb_wave 3 -> 200" test "$CODE_EC" = 200
-check "relay loggt 'dispatch pending: rb_wave 3'" \
-  wait_for 20 'dispatch pending: rb_wave 3' "$DIR/relay.log"
+check "relay loggt 'dispatch sent cmd_id=1' (Pipe-Fake erreichbar)" \
+  wait_for 20 'dispatch sent cmd_id=1' "$DIR/relay.log"
+check "Pipe-Fake empfaengt exakt die exec-Zeile" \
+  wait_for 20 '{"cmd": "exec", "command": "rb_wave 3", "cmd_id": 1}' "$DIR/pipe_received.log"
 check "SSE: exec_command-Zustellung sichtbar (delivery)" \
   grep -q '"kind":"delivery".*"event":"exec_command".*"command":"rb_wave 3"' "$DIR/sse.log"
 
@@ -177,9 +197,9 @@ assert any(e.get('event') == 'incoming_wave' and e.get('level') == 2
 assert cmds and cmds[0].get('command') == 'rb_status', evs
 PY
 check "GET /poll/player_b liefert exec_command rb_status" test $? = 0
-grep -q 'dispatch pending: rb_status' "$DIR/relay.log"
+grep -q 'rb_status' "$DIR/relay.log"
 NEG=$?
-check "relay hat rb_status NICHT dispatchen koennen (kein pending rb_status)" test "$NEG" != 0
+check "relay (player_a) hat rb_status nie gesehen (andere Outbox, kein Dispatch)" test "$NEG" != 0
 
 echo "== Web-UI-Dateien (statisch aus 06/web) =="
 check "GET / -> 200 (index.html)" test "$(http_code "$URL/")" = 200
@@ -201,6 +221,7 @@ if [ "$FAIL" = 0 ]; then
 fi
 echo "== E2E-PROTOTYP FEHLGESCHLAGEN =="
 echo "--- relay.log ---"; cat "$DIR/relay.log"
+echo "--- pipe_received.log (Fake-Pipe) ---"; cat "$DIR/pipe_received.log" 2>/dev/null || echo "(fehlt)"
 echo "--- poll_b.json ---"; cat "$DIR/poll_b.json" 2>/dev/null || echo "(fehlt)"
 echo "--- poll_assert.log ---"; cat "$DIR/poll_assert.log" 2>/dev/null || echo "(fehlt)"
 echo "--- server.log (Auszug) ---"; grep '\[server\]' "$DIR/server.log" || true

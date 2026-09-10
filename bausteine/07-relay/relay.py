@@ -10,9 +10,12 @@ Prototyp-Strecke Spiel -> Trainer -> Relay -> Server -> Web-UI:
         -> POST {server}/event  {match_id, player_id, event:{type, ...payload}}
         -> Server legt Antworten/Kommandos in die Outbox des Spielers
         -> GET /poll/:player_id  (Poll-Loop im Relay)
-        -> event.exec_command  ->  "dispatch pending: <command>"
-           (v0-TODO: hier spaeter pipe/dispatch_exec in die Spiel-Instanz;
-            bis dahin loggen und als ack markieren)
+        -> event.exec_command  ->  dispatch_exec: {"cmd":"exec","command":"...",
+           "cmd_id":"..."} auf die Named Pipe (Default \\.\pipe\rbbattle,
+           Format wie von trainer/rbbridge/rbbridge.c erwartet, s. auch
+           trainer/protocol.md). Pipe nicht erreichbar -> Kommando wird NICHT
+           ack-markiert, sondern in einer Retry-Queue mit Backoff (1..30s)
+           erneut versucht (dispatch_retry_loop).
            andere Event-Typen -> nur loggen
 
 Nur Standardbibliothek (Python 3.7+), kein pip-Paket noetig.
@@ -25,6 +28,9 @@ Konfiguration (Umgebungsvariablen):
     RBB_SERVER     Basis-URL des Tournament-Servers (Default: http://127.0.0.1:8080)
 
     RBB_POLL_S     Poll-Intervall in Sekunden (Default 1.0)
+    RBB_PIPE_PATH  Pfad/Name der Named Pipe fuer exec-Dispatch
+                   (Default: \\.\pipe\rbbattle, wie rbbridge.c PIPE_NAME_A;
+                   unter Linux/Tests kann hier eine FIFO als Pipe-Fake stehen)
 
 Verhalten:
     - Netzfehler (Server weg/Timeout/5xx): Retry mit exponentiellem Backoff
@@ -60,6 +66,11 @@ BACKOFF_BASE = 1.0    # erster Retry (s)
 BACKOFF_MAX = 30.0    # Retry-Obergrenze (s)
 QUEUE_MAX = 10000     # In-Memory-Queue-Grenze (Backpressure, kein Verlust)
 ACK_MAX = 512         # gemerkte acks (cmd_id), aeltere werden verworfen
+
+DISPATCH_PIPE_PATH = r'\\.\pipe\rbbattle'   # Default wie rbbridge.c PIPE_NAME_A
+DISPATCH_BACKOFF_BASE = 1.0   # erster Dispatch-Retry (s)
+DISPATCH_BACKOFF_MAX = 30.0   # Dispatch-Retry-Obergrenze (s)
+DISPATCH_RETRY_TICK_S = 0.5   # Poll-Intervall der Retry-Queue
 
 # Nur diese event= Typen werden an den Server geschickt (protocol.md,
 # game -> server). Alles andere (z. B. bridge_test, wave) wird geloggt+skip.
@@ -163,12 +174,42 @@ def backoff_sleep(attempt, stop):
         waited += 0.2
 
 
+def dispatch_backoff_delay(attempt):
+    return min(DISPATCH_BACKOFF_MAX, DISPATCH_BACKOFF_BASE * (2 ** attempt))
+
+
+def write_pipe_line(path, line):
+    """Schreibt eine Protokollzeile (Zeilenende ergaenzt) auf die Named Pipe.
+
+    Windows: Named Pipe wird wie ein Client-Handle geoeffnet (rbbridge.c
+    laeuft als Pipe-Server, PIPE_TYPE_BYTE) - ein kurzlebiger Connect je
+    Dispatch reicht, der Server nimmt danach die naechste Verbindung an.
+    Linux/Tests: `path` zeigt auf eine FIFO (Pipe-Fake); nicht-blockierendes
+    Oeffnen laesst "kein Reader verbunden" sofort als OSError (ENXIO)
+    auffliegen - das Pendant zu "Windows-Pipe nicht erreichbar".
+
+    Wirft OSError, wenn die Pipe/FIFO nicht erreichbar ist.
+    """
+    data = (line + '\n').encode('utf-8')
+    if os.name == 'nt':
+        with open(path, 'r+b', buffering=0) as f:
+            f.write(data)
+    else:
+        fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
+        try:
+            os.write(fd, data)
+        finally:
+            os.close(fd)
+
+
 class Relay:
     def __init__(self, cfg):
         self.cfg = cfg
         self.stop = threading.Event()
         self.queue = queue.Queue(maxsize=QUEUE_MAX)
         self.acked = {}  # cmd_id -> ts  (Ack-Markierung der dispatchen Kommandos)
+        self.dispatch_lock = threading.Lock()
+        self.dispatch_pending = []  # Liste von Dicts, s. try_dispatch (Retry-Queue)
 
     # -- Konfiguration ------------------------------------------------------
     @staticmethod
@@ -343,7 +384,7 @@ class Relay:
             time.sleep(interval)
 
     def handle_outgoing(self, ev):
-        """Ein Event aus der Outbox: exec_command -> dispatch (v0: TODO/log)."""
+        """Ein Event aus der Outbox: exec_command -> dispatch_exec (Pipe)."""
         if not isinstance(ev, dict):
             return
         kind = ev.get('event') or ev.get('type')
@@ -354,16 +395,68 @@ class Relay:
             if key in self.acked:
                 log('poll: exec_command bereits ack (cmd_id={}) - uebersprungen'.format(key))
                 return
-            self.acked[key] = time.time()
-            if len(self.acked) > ACK_MAX:
-                # aelteste Haelfte vergessen (nur Duplikat-Schutz, kein Verlust)
-                for old in sorted(self.acked, key=self.acked.get)[:ACK_MAX // 2]:
-                    del self.acked[old]
-            # v0: dispatch_exec ist TODO (RE: ConsoleService/Lua-State finden,
-            # pipe/rbbridge exec). Bis dahin: loggen + als ack markieren.
-            log('dispatch pending: {} (cmd_id={})'.format(command, key))
+            self.try_dispatch(command, cid, key, attempt=0)
         else:
             log('poll: event={} (kein dispatch) {}'.format(kind, json.dumps(ev)))
+
+    def mark_acked(self, key):
+        self.acked[key] = time.time()
+        if len(self.acked) > ACK_MAX:
+            # aelteste Haelfte vergessen (nur Duplikat-Schutz, kein Verlust)
+            for old in sorted(self.acked, key=self.acked.get)[:ACK_MAX // 2]:
+                del self.acked[old]
+
+    def dispatch_exec(self, command, cmd_id):
+        """Schreibt {"cmd":"exec","command":...,"cmd_id":...} auf die Pipe.
+
+        Format wie in trainer/rbbridge/rbbridge.c erwartet (handle_line:
+        cmd=="exec" -> dispatch_exec(command); cmd_id ist ein unbekanntes,
+        vorwaertskompatibles Zusatzfeld, s. trainer/protocol.md). Gibt die
+        Laenge der geschriebenen Zeile zurueck; wirft OSError bei
+        Pipe/FIFO nicht erreichbar.
+        """
+        line = json.dumps({'cmd': 'exec', 'command': command, 'cmd_id': cmd_id})
+        write_pipe_line(self.cfg['pipe_path'], line)
+        return len(line)
+
+    def try_dispatch(self, command, cmd_id, key, attempt):
+        """Ein Dispatch-Versuch. Erfolg -> ack; Fehler -> Retry-Queue (Backoff)."""
+        try:
+            length = self.dispatch_exec(command, cmd_id)
+        except OSError as e:
+            log('dispatch failed reason=pipe_unavailable cmd_id={} command={} err={}'
+                .format(key, command, e))
+            with self.dispatch_lock:
+                self.dispatch_pending.append({
+                    'command': command,
+                    'cmd_id': cmd_id,
+                    'key': key,
+                    'attempt': attempt,
+                    'next_try': time.time() + dispatch_backoff_delay(attempt),
+                })
+            return
+        log('dispatch sent cmd_id={} len={}'.format(key, length))
+        self.mark_acked(key)
+
+    # -- Dispatch-Retry-Queue (Pipe war beim ersten Versuch nicht erreichbar) --
+    def dispatch_retry_loop(self):
+        while not self.stop.is_set():
+            now = time.time()
+            due = []
+            with self.dispatch_lock:
+                remaining = []
+                for item in self.dispatch_pending:
+                    if item['next_try'] <= now:
+                        due.append(item)
+                    else:
+                        remaining.append(item)
+                self.dispatch_pending = remaining
+            for item in due:
+                if item['key'] in self.acked:
+                    continue
+                self.try_dispatch(item['command'], item['cmd_id'], item['key'],
+                                   item['attempt'] + 1)
+            time.sleep(DISPATCH_RETRY_TICK_S)
 
     # -- Registration --------------------------------------------------------
     def register_once(self):
@@ -393,6 +486,7 @@ class Relay:
             threading.Thread(target=self.tail_loop, name='tail', daemon=True),
             threading.Thread(target=self.post_loop, name='post', daemon=True),
             threading.Thread(target=self.poll_loop, name='poll', daemon=True),
+            threading.Thread(target=self.dispatch_retry_loop, name='dispatch', daemon=True),
         ]
         for t in threads:
             t.start()
@@ -407,7 +501,7 @@ class Relay:
 
 def main():
     ap = argparse.ArgumentParser(
-        description='07-relay: exor_logs.txt -> Tournament-Server -> dispatch (v0-TODO)')
+        description='07-relay: exor_logs.txt -> Tournament-Server -> dispatch_exec (Pipe)')
     ap.add_argument('--log', default=os.environ.get('RBB_LOG_PATH') or default_log_path(),
                     help='Pfad zur exor_logs.txt (Default: RBB_LOG_PATH bzw. '
                          '%%USERPROFILE%%\\Documents\\The Riftbreaker\\exor_logs.txt)')
@@ -425,6 +519,7 @@ def main():
         'match_id': os.environ.get('RBB_MATCH_ID', ''),
         'server': os.environ.get('RBB_SERVER', 'http://127.0.0.1:8080'),
         'poll_s': float(os.environ.get('RBB_POLL_S', '1.0')),
+        'pipe_path': os.environ.get('RBB_PIPE_PATH', DISPATCH_PIPE_PATH),
     }
 
     # UTF-8-Ausgabe auch auf Windows-Konsolen (cp1252) erzwingen.

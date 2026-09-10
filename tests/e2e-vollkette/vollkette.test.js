@@ -6,7 +6,7 @@
 // Kette (realer Codefluss):
 //   Web-UI (button data-cmd="rb_wave 3" → app.js POST /event exec_command)
 //     → Tournament-Server (server.js handleEvent → Outbox)
-//     → Relay (relay.py GET /poll → "dispatch pending: rb_wave 3")
+//     → Relay (relay.py GET /poll → dispatch_exec → Named Pipe)
 //     → rbbridge ({"cmd":"exec","command":"rb_wave 3"} → ExecuteCommand)
 //     → Mod (rb_wave → SpawnWave(3) → 8 Kreaturen)
 //     → Spawn am headless Client (LIVE, OFFEN)
@@ -14,12 +14,15 @@
 // Was hier deterministisch geprüft wird (ohne Windows-Spielprozess):
 //   - Web-UI-Trigger            (statisch: Button + app.js POST-Body)
 //   - Server-Handler            (dynamisch: /event → Outbox → cmd_id)
-//   - Relay-Dispatch            (dynamisch: "dispatch pending: rb_wave 3")
+//   - Relay-Dispatch ohne Pipe  (dynamisch: kein Pipe-Fake -> "dispatch failed
+//                                reason=pipe_unavailable", nicht "verschluckt")
+//   - Relay-Dispatch mit Pipe-Fake (Issue #60: dynamisch, FIFO als
+//                                Named-Pipe-Ersatz unter Linux -> "dispatch
+//                                sent", Fake empfängt {"cmd":"exec",...})
 //   - rbbridge-Kommando         (statisch: dispatch_exec → ExecuteCommand)
 //   - Mod-Spawn                 (fengari + Stub-Services: rb_wave 3 → 8 Spawns)
 //
 // Was OFFEN bleibt (kein Live-Client in CI, Linux):
-//   - Relay → rbbridge-Pipe-Dispatch (relay.py dispatch_exec ist v0-TODO)
 //   - ExecuteCommand im echten Spielprozess (DLL-Injection, Windows)
 //   - "Spawn am headless Client sichtbar" (Screenshot-Beweis)
 // Diese Schritte sind als skip/„OFFEN" markiert (siehe letzte Tests).
@@ -30,7 +33,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const luaparse = require('luaparse');
 const { lua, lauxlib, lualib, to_luastring, to_jsstring } = require('fengari');
 
@@ -263,7 +266,7 @@ async function waitFor(fn, timeoutMs, intervalMs) {
   }
 }
 
-test('Vollkette: rb_wave 3 → Server-Outbox → Relay "dispatch pending" (dynamisch)', async () => {
+test('Vollkette: rb_wave 3 → Server-Outbox → Relay-Dispatch-Versuch (dynamisch, ohne Pipe)', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rb11-e2e-'));
   let server = null;
   let relay = null;
@@ -329,15 +332,19 @@ test('Vollkette: rb_wave 3 → Server-Outbox → Relay "dispatch pending" (dynam
     assert.strictEqual(ec.status, 200, `POST /event exec_command -> 200 (got ${ec.status})`);
     assert.strictEqual(ec.json && ec.json.event, 'exec_command');
 
-    // 5) Relay muss das Kommando aus der Outbox pollen und dispatch loggen.
+    // 5) Relay muss das Kommando aus der Outbox pollen und dispatchen wollen.
+    // Kein RBB_PIPE_PATH gesetzt -> Default-Windows-Pipe-Pfad, unter Linux
+    // nicht erreichbar. Das Kommando darf dabei NICHT verschluckt werden
+    // (Issue #60): "dispatch failed reason=pipe_unavailable", nicht mehr
+    // das alte "dispatch pending" (v0-TODO/ack-ohne-Versuch).
     const dispatched = await waitFor(() =>
-      fs.readFileSync(relayLog, 'utf8').includes('dispatch pending: rb_wave 3'), 8000);
-    assert.ok(dispatched, 'Relay loggt "dispatch pending: rb_wave 3"');
+      fs.readFileSync(relayLog, 'utf8').includes('dispatch failed reason=pipe_unavailable'), 8000);
+    assert.ok(dispatched, 'Relay loggt "dispatch failed reason=pipe_unavailable" (keine Pipe in CI)');
 
     // cmd_id wurde vom Server vergeben und an den Relay durchgereicht.
     const relayText = fs.readFileSync(relayLog, 'utf8');
-    const m = relayText.match(/dispatch pending: rb_wave 3 \(cmd_id=(\d+)\)/);
-    assert.ok(m, 'dispatch pending enthält cmd_id');
+    const m = relayText.match(/dispatch failed reason=pipe_unavailable cmd_id=(\d+) command=rb_wave 3/);
+    assert.ok(m, 'dispatch-failed-Zeile enthält cmd_id + command');
     assert.ok(Number(m[1]) >= 1, `cmd_id muss >= 1 sein (got ${m[1]})`);
 
     // Server-Seite: exec_command control -> player_a protokolliert.
@@ -354,12 +361,106 @@ test('Vollkette: rb_wave 3 → Server-Outbox → Relay "dispatch pending" (dynam
 });
 
 // ---------------------------------------------------------------------------
+// Relay → rbbridge-Pipe-Dispatch gegen einen Fake (Issue #60)
+// ---------------------------------------------------------------------------
+//
+// Ersetzt den frueheren OFFEN-Skip: relay.py dispatch_exec ist kein v0-TODO
+// mehr, sondern schreibt {"cmd":"exec","command":...,"cmd_id":...} auf die
+// konfigurierte Pipe. Unter Linux/CI steht dafuer eine FIFO als
+// Named-Pipe-Ersatz (mkfifo) - die echte Windows-Named-Pipe + rbbridge.dll
+// im Spielprozess bleiben weiterhin OFFEN (siehe Test unten).
+
+test('Relay → Pipe-Dispatch: dispatch_exec schreibt exec-Zeile auf FIFO-Fake (Issue #60)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rb60-pipe-fake-'));
+  let server = null;
+  let relay = null;
+
+  const serverLog = path.join(dir, 'server.log');
+  const relayLog = path.join(dir, 'relay.log');
+  const fakeLog = path.join(dir, 'fake.log');
+  const pipePath = path.join(dir, 'rbbattle.fifo');
+  let pipeStream = null;
+  let pipeData = '';
+
+  try {
+    execFileSync('mkfifo', [pipePath]);
+    // Nativer Read-Stream statt Sub-Prozess (bash+cat): FIFO-Reads blockieren
+    // bis der Writer (relay.py dispatch_exec) oeffnet - das passiert async
+    // auf dem libuv-Threadpool, haelt also die Event-Loop nicht an. Vermeidet
+    // Kind-Prozesse, die sich beim Test-Ende nicht sauber beenden lassen.
+    pipeStream = fs.createReadStream(pipePath);
+    pipeStream.on('data', (chunk) => { pipeData += chunk; });
+
+    const port = await freePort();
+    const base = `http://127.0.0.1:${port}`;
+
+    server = spawn(process.execPath, [SERVER_JS], {
+      env: { ...process.env, PORT: String(port) },
+      stdio: ['ignore', fs.openSync(serverLog, 'a'), fs.openSync(serverLog, 'a')],
+    });
+    const healthy = await waitFor(async () => {
+      try {
+        const r = await httpReq('GET', `${base}/health`);
+        return r.status === 200 && r.json && r.json.ok === true;
+      } catch (e) { return false; }
+    }, 8000);
+    assert.ok(healthy, 'Tournament-Server muss /health liefern');
+
+    const regA = await httpReq('POST', `${base}/register`, { player_id: 'player_a' });
+    const regB = await httpReq('POST', `${base}/register`, { player_id: 'player_b' });
+    assert.strictEqual(regA.status, 200);
+    assert.strictEqual(regB.status, 200);
+    const mc = await httpReq('POST', `${base}/match/create`,
+      { players: ['player_a', 'player_b'], rounds: 3 });
+    const matchId = mc.json && mc.json.match_id;
+    assert.ok(matchId, 'match/create liefert match_id');
+
+    fs.writeFileSync(fakeLog, '[RBBATTLE] event=score_update score=0\n');
+    relay = spawn('python3', [RELAY_PY], {
+      env: {
+        ...process.env,
+        RBB_PLAYER_ID: 'player_a',
+        RBB_MATCH_ID: matchId,
+        RBB_LOG_PATH: fakeLog,
+        RBB_SERVER: base,
+        RBB_POLL_S: '0.2',
+        RBB_PIPE_PATH: pipePath,
+      },
+      stdio: ['ignore', fs.openSync(relayLog, 'a'), fs.openSync(relayLog, 'a')],
+    });
+    const registered = await waitFor(() =>
+      fs.readFileSync(relayLog, 'utf8').includes('register: ok player_id=player_a'), 8000);
+    assert.ok(registered, 'Relay registriert sich am Server');
+
+    const ec = await httpReq('POST', `${base}/event`, {
+      match_id: matchId,
+      player_id: 'player_a',
+      event: { type: 'exec_command', command: 'rb_wave 3' },
+    });
+    assert.strictEqual(ec.status, 200);
+
+    const dispatched = await waitFor(() =>
+      fs.readFileSync(relayLog, 'utf8').includes('dispatch sent cmd_id='), 8000);
+    assert.ok(dispatched, 'Relay loggt "dispatch sent cmd_id=..." (Pipe-Fake erreichbar)');
+
+    const receivedLine = await waitFor(() => pipeData.trim().length > 0, 8000);
+    assert.ok(receivedLine, 'Pipe-Fake hat eine Zeile empfangen');
+    const raw = pipeData.trim().split('\n')[0];
+    const payload = JSON.parse(raw);
+    assert.deepStrictEqual(payload, { cmd: 'exec', command: 'rb_wave 3', cmd_id: 1 },
+      `Pipe-Fake muss exakt das exec-Kommando erhalten (got ${raw})`);
+  } finally {
+    if (relay) relay.kill('SIGTERM');
+    if (pipeStream) pipeStream.destroy();
+    if (server) server.kill('SIGTERM');
+    await new Promise((r) => setTimeout(r, 200));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // OFFEN: Live-Client-Schritte (kein Windows-Spielprozess in CI/Linux)
 // ---------------------------------------------------------------------------
-
-test('OFFEN: Relay → rbbridge-Pipe-Dispatch (dispatch_exec im Relay)',
-  { skip: 'OFFEN: relay.py dispatch_exec ist v0-TODO — loggt nur "dispatch pending", schreibt noch nicht {"cmd":"exec"} auf die Pipe (rbbridge)' },
-  () => {});
 
 test('OFFEN: ExecuteCommand im echten Spielprozess (DLL-Injection, Windows)',
   { skip: 'OFFEN: braucht riftbreaker_dll_win_release.dll + injizierte rbbridge.dll — Windows-only, nicht CI-fähig' },

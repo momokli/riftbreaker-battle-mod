@@ -5,9 +5,12 @@ Das Spiel schreibt `[RBBATTLE] key=value`-Zeilen in `exor_logs.txt` (Baustein 03
 der Relay **tailt** diese Datei, parst die Zeilen und **liefert sie per
 `POST /event`** an den Tournament-Server (Baustein 06) ein. Im Poll-Loop holt er
 seine Outbox-Events (`GET /poll/:player_id`) ab — `exec_command` ist der
-Control-Kanal von der Web-UI (Baustein 08) und wird hier als **dispatch pending**
-geloggt und ack-markiert. Der echte Dispatch ins Spiel (`dispatch_exec` via
-Pipe/rbbridge) bleibt bewusst TODO (RE-Phase).
+Control-Kanal von der Web-UI (Baustein 08) und wird per `dispatch_exec` als
+`{"cmd":"exec","command":"...","cmd_id":"..."}` auf die Named Pipe
+`\\.\pipe\rbbattle` geschrieben (Format wie von `trainer/rbbridge/rbbridge.c`
+erwartet, s. `trainer/protocol.md`). Ist die Pipe nicht erreichbar, wird das
+Kommando **nicht** ack-markiert, sondern mit Backoff (1–30 s) erneut versucht
+(Issue #60).
 
 Nur Standardbibliothek (Python 3.7+), kein pip-Paket.
 
@@ -20,6 +23,7 @@ Nur Standardbibliothek (Python 3.7+), kein pip-Paket.
 | `RBB_MATCH_ID` | Match-ID für `POST /event` | leer → Events werden nicht gepostet (Log-Hinweis) |
 | `RBB_SERVER` | Basis-URL des Tournament-Servers | `http://127.0.0.1:8080` |
 | `RBB_POLL_S` | Poll-Intervall | `1.0` |
+| `RBB_PIPE_PATH` | Pfad/Name der Named Pipe für `exec`-Dispatch | `\\.\pipe\rbbattle` (wie `rbbridge.c` `PIPE_NAME_A`) |
 
 ## Start
 
@@ -29,10 +33,12 @@ RBB_SERVER=http://127.0.0.1:8080 python3 relay.py
 ```
 
 Beim Start registriert sich der Relay am Server (Retry, bis der Server da ist);
-dann laufen drei Threads: **tail** (Log → Queue), **post** (Queue → `/event`,
+dann laufen vier Threads: **tail** (Log → Queue), **post** (Queue → `/event`,
 Retry mit Backoff 1–30 s bei Netzfehlern, nichts geht verloren), **poll**
-(`/poll/:player_id`, `exec_command` → `dispatch pending`, andere Typen nur
-loggen). Strg+C beendet sauber; Log-Rotation wird erkannt.
+(`/poll/:player_id`, `exec_command` → `dispatch_exec` auf die Pipe, andere
+Typen nur loggen) und **dispatch** (Retry-Queue: Kommandos, deren Pipe-Write
+fehlschlug, mit Backoff 1–30 s erneut versuchen, bis sie ankommen). Strg+C
+beendet sauber; Log-Rotation wird erkannt.
 
 ## Wie testen ohne Spiel
 
@@ -60,14 +66,26 @@ loggen). Strg+C beendet sauber; Log-Rotation wird erkannt.
    curl -s -X POST localhost:8080/event \
         -d '{"match_id":"<match_id>","player_id":"player_a",\
              "event":{"type":"exec_command","command":"rb_wave 1"}}'
-   # relay-stdout: dispatch pending: rb_wave 1 (cmd_id=1)
+   # relay-stdout ohne erreichbare Pipe (Default \\.\pipe\rbbattle unter Linux):
+   #   dispatch failed reason=pipe_unavailable cmd_id=1 command=rb_wave 1 err=...
+   # mit RBB_PIPE_PATH auf eine erreichbare (Fake-)Pipe:
+   #   dispatch sent cmd_id=1 len=52
    ```
-6. Kompletter Durchstich inkl. Assertions: `bash test_e2e_prototype.sh` (Baustein 07, s. u.)
+6. Kompletter Durchstich inkl. Assertions (inkl. Named-Pipe-Ersatz/FIFO für
+   `dispatch_exec`): `bash test_e2e_prototype.sh` (Baustein 07, s. u.). Isolierte
+   Unit-Tests für `dispatch_exec` (Erfolg/Pipe-fehlt/Ack-Pfad):
+   `python3 -m unittest test_dispatch_pipe -v`.
 
 ## Status
 
 - [x] tail: Log-Polling, Rotation, UTF-8 `errors=replace`, unvollständige Zeilen werden zurückgehalten
 - [x] post: `POST /event`, Backoff-Retry bei Netzfehler (Queue, kein Verlust), 4xx = Konfigurationsfehler (log + weiter)
-- [x] poll: Outbox abholen, `exec_command` → `dispatch pending: <command>` + ack (cmd_id), andere Typen loggen
+- [x] poll: Outbox abholen, `exec_command` → `dispatch_exec`, andere Typen loggen
 - [x] register beim Start + Re-Register bei 404 (Server-Neustart)
-- [ ] `dispatch_exec` ins Spiel (Pipe/rbbridge) — bewusst TODO, siehe Protokoll-RE
+- [x] `dispatch_exec` ins Spiel (Pipe/rbbridge, Issue #60): schreibt
+      `{"cmd":"exec","command":"...","cmd_id":"..."}` auf `RBB_PIPE_PATH`
+      (Default `\\.\pipe\rbbattle`); Pipe nicht erreichbar → kein Ack, Retry
+      mit Backoff (1–30 s) statt Verlust. Getestet gegen einen Named-Pipe-
+      Ersatz (Linux-FIFO) in `test_dispatch_pipe.py` und `test_e2e_prototype.sh`.
+      Offen bleibt die Verifikation gegen die echte Windows-Pipe + injizierte
+      `rbbridge.dll` (braucht einen laufenden Spielprozess, RE-Phase).

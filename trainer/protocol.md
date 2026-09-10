@@ -40,6 +40,13 @@ Wahrheitsquelle, Events sind nur Benachrichtigungen.
   In der RE-Phase wird `dispatch_exec` an den echten Spiel-Console-Dienst
   angeschlossen (dann gilt `"ok":true`). Bis dahin antwortet die DLL mit
   `exec_result ... "ok":false`.
+- **Client-seitig implementiert:** `bausteine/07-relay/relay.py` schreibt
+  `exec`-Zeilen bereits nach diesem Vertrag auf die Pipe (`dispatch_exec`,
+  Issue #60), inkl. eines zusätzlichen `cmd_id`-Felds zur Korrelation
+  (unbekannte Felder werden von der DLL ignoriert, s. o.). Pfad/Timeout über
+  `RBB_PIPE_PATH` konfigurierbar (Default wie `PIPE_NAME_A` hier); ist die
+  Pipe nicht erreichbar, verwirft der Relay das Kommando nicht, sondern
+  versucht es mit Backoff erneut (Details: `bausteine/07-relay/README.md`).
 - Strukturierte Server→Spiel-Events (unten) werden später entweder über
   `exec`-Wrapper (`command="rbbattle_event <json>"`, vom Lua-Mod registriert)
   oder direkt über eine RE-gefundene Aufrufstelle zugestellt — Entscheidung

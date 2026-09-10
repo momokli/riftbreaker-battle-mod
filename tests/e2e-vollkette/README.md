@@ -11,17 +11,22 @@ möglich statisch/deterministisch** — ohne Windows-Spielprozess:
 | rbbridge | `{"cmd":"exec","command":"rb_wave 3"}` → `ExecuteCommand` | statisch (`trainer/rbbridge/rbbridge.c`) |
 | Mod | `rb_wave 3` → `SpawnWave(3)` → 8 Kreaturen (baxmoth×5, artigian×2, canceroth×1) | fengari + Stub-Services |
 
+## Relay → rbbridge-Pipe-Dispatch (Issue #60)
+
+`relay.py` `dispatch_exec` ist kein v0-TODO mehr: Es schreibt
+`{"cmd":"exec","command":"...","cmd_id":"..."}` auf die konfigurierte Named
+Pipe (`RBB_PIPE_PATH`, Default `\\.\pipe\rbbattle`). Geprüft wird das hier
+**dynamisch gegen einen Named-Pipe-Ersatz** (Linux-FIFO, `mkfifo`) — die
+`rbbridge`-Seite selbst ist nur statisch geprüft (Code-Grep, s. o.), echte
+Windows-Named-Pipe + injizierte DLL bleiben offen (s. u.).
+
 ## OFFEN (bewusst als skip markiert)
 
 Diese Schritte brauchen einen laufenden Windows-Spielprozess (headless Dedi +
 injizierte `rbbridge.dll`) und sind in CI/Linux nicht ausführbar:
 
-1. **Relay → rbbridge-Pipe-Dispatch**: `relay.py` `dispatch_exec` ist v0-TODO —
-   loggt nur `dispatch pending`, schreibt noch kein `{"cmd":"exec"}` auf die
-   Named Pipe. (Die `rbbridge`-Seite selbst ist implementiert, wird aber noch
-   nicht vom Relay erreicht.)
-2. **ExecuteCommand im Spielprozess**: DLL-Injection + `ConsoleService::ExecuteCommand`.
-3. **Spawn am headless Client sichtbar (Screenshot)**: Live-Beweis durch den Operator.
+1. **ExecuteCommand im Spielprozess**: DLL-Injection + `ConsoleService::ExecuteCommand`.
+2. **Spawn am headless Client sichtbar (Screenshot)**: Live-Beweis durch den Operator.
 
 ## Aufruf
 
