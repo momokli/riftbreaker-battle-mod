@@ -1,12 +1,19 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.18.2 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.18.3 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 
 > **Multiplayer:** Beide Spieler müssen **exakt dieselben Mods** installiert
 > haben, sonst lehnt der Client die Lobby mit **„different set of mods“** ab.
 > Kurzanleitung: [`docs/PLAYER_SETUP.md`](../docs/PLAYER_SETUP.md).
+
+**v0.18.3 — Solo-Landing: Copy gekürzt, Sektionen geschärft (Issue #96):**
+- `site/solo.html`: Copy deutlich gekürzt (Hero-Lead, Tags, Typing-Phrasen, How-to-Schritte,
+  Command-Tabelle, Hinweis-Karten, Footer-Disclaimer, statisches `nojs`-Replay). Jede Sektion
+  hat eine klare Funktion (Verbinden / Spielen / Status), keine Struktur-/ID-/Klassen-Änderung
+  — Widget-Verdrahtung (`liveStatus`, `live-status.js`) unverändert.
+- Neuer Regressionstest `tests/live-status/solo-content.test.js` (Sektionen-Funktion + Server-Adresse).
 
 **v0.18.0 — Relay liest rbbridge-Antwort (`exec_result`) + Deployment (Issues #73, #45):**
 - `bausteine/07-relay/relay.py`: `dispatch_exec` liest nach dem Schreiben auf derselben
@@ -283,7 +290,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.18.2 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
+[RBBATTLE] event=mod_load version=0.18.3 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100
