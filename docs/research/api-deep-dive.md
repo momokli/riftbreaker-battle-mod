@@ -122,6 +122,22 @@ Spiegel in `PlayerService:GetOrCreateGlobalDatabase("rbbattle_05_economy")`
 und liest sie beim Laden zurück; `rb_points reset` setzt auf 0 zurück.
 DB-Ausfälle sind per pcall toleriert (Mod läuft dann rein im Speicher).
 
+**Stand #65 (statische Analyse, 10.09.2026):** Die Persistenz ist weiterhin
+**nicht in-game verifiziert** (AC1 offen — braucht Operator-Lauf auf dem
+Dedi: `rb_convert` → Pool > 0, Map/Match neu laden, `rb_status` prüft
+`econ_pool`). Codebar wurde der defensive Fallback (AC3) umgesetzt: Der
+integrierte Mod (`mod/lua/rbbattle_autoexec.lua`) spiegelt den Spar-Pool
+`pool` bei **jeder** Änderung (`rb_convert`/`rb_buy_wave`/`rb_boost`) in die
+Global-DB `rbbattle_economy` (`EconomySave`) und liest sie beim Boot zurück
+(`EconomyLoad` → `status=resume`). Neu in #65: `EconomyCheckpoint()` schreibt
+den Pool **zusätzlich an der Rundengrenze** (Wellenstart `OnNaturalWaveStart`,
+`event=economy_checkpoint`) und zieht einen beim Boot nicht auflösbaren
+DB-Handle nach (Retry-Muster). Statisch getestet in
+`tests/lua-static/persistence.test.js` (fengari, 2 Phasen: Checkpoint schreibt
+`pool` in die Stub-DB; Reload mit vorbefüllter DB → `status=resume`). Offen
+bleibt allein, ob `PlayerService:GetOrCreateGlobalDatabase` den Wert über
+einen echten Map-/Session-Reload hält (AC1, Operator).
+
 ---
 
 ## 4. Research / Upgrades (Kurzfassung)
@@ -145,7 +161,7 @@ dokumentiert für spätere Bausteine (Upgrade-Käufe gegen Punkte).
 | Ressourcen-Konto lesen/schreiben | **NEIN** — kein verifizierter API-Zugriff aufs Spieler-Konto; eigenes Punktesystem | — |
 | Kill-Event (Punkte je Kill) | **JA (wahrscheinlich)** — `EntityKilledEvent` existiert, Broadcast-Mechanik verifiziert, Getter `GetEntity`/`GetBlueprint` per Konvention; **nicht In-Game belegt** | Laufzeit-Selbsttest im Mod (auto→kill-Umschaltung) + In-Game-Test |
 | Tick-Event (Fallback) | **JA (wahrscheinlich)** — `HourEvent` (globaler Spielzeit-Takt, Feld `Hour`) | In-Game: Frequenz von `HourEvent` beobachten |
-| Persistenz zwischen Sessions | **JA (API vorhanden, Persistenz unverifiziert)** — Global-Database statt GlobalVars | In-Game: Map neu laden → `rb_points` |
+| Persistenz zwischen Sessions | **JA (API vorhanden, Persistenz unverifiziert)** — Global-Database statt GlobalVars; defensiver Checkpoint (#65) an der Rundengrenze implementiert + statisch getestet | In-Game: Map neu laden → `rb_status` (`econ_pool`) — AC1 offen |
 | Research/Upgrades | **JA** — `UnlockResearch`/`UnlockBuilding` | späterer Baustein |
 
 ## 6. Offene Punkte

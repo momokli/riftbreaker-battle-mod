@@ -108,6 +108,7 @@
 --   event=economy_farm source=.. resource=.. amount=.. value=.. farmed=.. (#24)
 --   event=convert resource=.. amount=.. value=.. pool=.. irreversible=1   (#24)
 --   event=economy_show / economy_reset                                    (#24)
+--   event=economy_checkpoint round=.. pool=.. status=ok|skip reason=no_db  (#65)
 --   event=mode mode=sp|duel status=ok|usage|stub                          (#42)
 --   event=wave_hook patch status=ok|skip|no_class reason=no_api           (#42)
 --   event=round round=N status=start mode=.. pool=.. queue=..             (#42/#25)
@@ -911,6 +912,37 @@ local function EconomyLoadResources()
     end)
 end
 
+-- #65: Defensiver Persistenz-Checkpoint an der Rundengrenze (Wellenstart =
+-- Ende der vorherigen Build-/Send-Phase). Der Pool wird transaktional bei
+-- jeder Aenderung gespiegelt (EconomySave); dieser Checkpoint schreibt ihn
+-- ZUSAETZLICH an der Rundengrenze in die Global-DB und zieht dabei einen beim
+-- Boot nicht aufloesbaren DB-Handle nach (Retry-Muster wie PatchWaveStartHook/
+-- PatchSpawnWavesHook). So ueberlebt der Spar-Pool einen Map-/Session-Reload
+-- auch dann, wenn der letzte transaktionale Save verlorenging oder die
+-- Global-DB erst nach dem Mod-Load verfuegbar war. AC1 (In-Game-Bestaetigung)
+-- bleibt offen: die Global-DB-Persistenz ueber Reload ist statisch nicht
+-- beweisbar (docs/research/api-deep-dive.md §3).
+local function EconomyCheckpoint()
+    local e = RBB.economy
+    if not e.dbOk then
+        local okDb, db = pcall(function()
+            return PlayerService:GetOrCreateGlobalDatabase(EconomyDbName())
+        end)
+        if okDb and db ~= nil then
+            e.db = db
+            e.dbOk = true
+        end
+    end
+    if e.dbOk then
+        EconomySave()
+        Log("event=economy_checkpoint round=%d pool=%d farmed=%d converted=%d status=ok",
+            RBB.round, e.pool, e.farmed, e.converted)
+    else
+        Log("event=economy_checkpoint round=%d pool=%d status=skip reason=no_db",
+            RBB.round, e.pool)
+    end
+end
+
 -- Getter-Ladder: liefert (resourceName, amount) aus einem Event-Objekt oder
 -- nil. Kandidaten decken die unbekannte Event-API ab (Felder Resource bzw.
 -- ResourceBasket laut api-deep-dive.md §1); jede Stufe pcall-gesichert.
@@ -1505,6 +1537,7 @@ end
 -- ausliefern (Boost der naechsten Naturwelle).
 local function OnNaturalWaveStart()
     RBB.round = RBB.round + 1
+    EconomyCheckpoint()   -- #65: Spar-Pool an der Rundengrenze persistieren
     -- #33: HQ-HP-Kurve ueber Runden — bei Wellenstart HP auf Runden-Max setzen
     -- (solange das HQ nicht zerstoert ist).
     if not RBB.hq.dead then
