@@ -350,6 +350,7 @@ und Workshop-Mods tun (Quelle: fandom „Basic Modding Guide“, Ordner
 | `rb_round_start [n]` | **Build-Phase (#27):** verbirgt den Reveal wieder (Bridge-Signal „round steigt“); `<n>` nur informativ |
 | `rb_hud_ui` | **Click-HUD (#99):** öffnet/schließt das HUD-Overlay (2-Button-Popup, Muster `rb_shop`). „Ja“ (`button_yes`) kauft die gerüstete Quick-Send-Einheit in die Send-Queue, „Nein“ (`button_no`) schließt ohne Aktion. Ein-/ausblendbar per erneutem Aufruf |
 | `rb_quick [<unit> [count]]` | **Quick-Send rüsten (#99):** legt die per Klick gesendete Einheit fest (Default `brabit` ×1). `<unit>` = Shop-Id (`brabit`/`baxmoth`/`artigian`/`canceroth`/`boss`); `rb_shop` zeigt die Liste |
+| `rb_quick_step <+N\|-N\|xN>` | **Send-Menge-Stepper (#147, MVP):** passt die per `rb_quick`/`rb_hud_ui` gerüstete Menge relativ an — `+1`/`-1` für Feinjustierung, `x10`/`x100`/`x1000` für Grobjustierung (Clicker-Stil), ohne eine exakte Zahl zu tippen. Gedeckelt auf `1..maxQueueCreatures` (40). Ein klickbares Stepper-Overlay ist mangels verifizierter Multi-Button-GUI-API noch offen — dieser Command liefert bereits die Logik dafür |
 
 Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
@@ -382,6 +383,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 [RBBATTLE] event=reveal_opp round=1 built_opp=6400 hq_opp=80 incoming=brabit:2 status=ok   ← Gegner-Werte injiziert (#27)
 [RBBATTLE] event=hud round=1 countdown=300 pool=1800 built_own=3000 built_opp=6400 incoming=brabit:2 hq_own=100 hq_opp=80 reveal=revealed   ← HUD-Felder (#27)
 [RBBATTLE] event=quick_send status=armed unit=brabit count=1 price=100   ← Quick-Send gerüstet (#99)
+[RBBATTLE] event=quick_step status=ok op=x10 unit=brabit before=1 after=10   ← Send-Menge-Stepper (#147 MVP)
 [RBBATTLE] event=hud_ui status=opened quick=brabit count=1 round=1 countdown=300 pool=1800 queue=2   ← Click-HUD offen (#99)
 [RBBATTLE] event=hud_ui status=closed result=button_yes action=quick_send unit=brabit count=1   ← Klick auf „Ja“ sendet (#99)
 [RBBATTLE] event=hq_dead status=match_end hp=0             ← HQ-Tod (HP ≤ 0)

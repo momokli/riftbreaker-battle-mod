@@ -2369,12 +2369,61 @@ local function CmdQuick(args)
         unitId, n, unit.price)
 end
 
+-- rb_quick_step <+N|-N|xN>: Send-Menge relativ anpassen (Clicker-Stil, #147
+-- MVP: +1/-1 fuer Feinjustierung, x10/x100/x1000 fuer Grobjustierung -- ohne
+-- eine exakte Zahl tippen zu muessen). Wirkt auf dieselbe Quick-Send-Menge
+-- wie rb_quick/rb_hud_ui (#99), kein eigener Zustand. Ein echtes klickbares
+-- Overlay dafuer ist mangels verifizierter Multi-Button-/Freiform-GUI-API
+-- noch offen (s. Issue #147); dieser Command liefert schon die Logik dafuer,
+-- vorerst per Konsole statt per Klick.
+local function CmdQuickStep(args)
+    local opArg = nil
+    if args ~= nil and #args >= 1 then opArg = tostring(args[1]):lower() end
+    if opArg == nil or opArg == "" or opArg == "help" then
+        WriteConsole("rb_quick_step: Aufruf rb_quick_step <+N|-N|xN> (z.B. +1, -1, x10, x100, x1000) -- aktuell: %s x%d",
+            RBB.clickHud.quickUnit, RBB.clickHud.quickCount)
+        Log("event=quick_step status=usage unit=%s count=%d",
+            RBB.clickHud.quickUnit, RBB.clickHud.quickCount)
+        return
+    end
+
+    local kind = opArg:sub(1, 1)
+    local n = tonumber(opArg:sub(2))
+    if (kind ~= "+" and kind ~= "-" and kind ~= "x") or n == nil or n <= 0 then
+        WriteConsole("rb_quick_step: ungueltig '%s' -- Format +N/-N/xN (z.B. +1, x10)", opArg)
+        Log("event=quick_step status=bad_op op=%s", opArg)
+        return
+    end
+    n = math.floor(n)
+
+    local before = RBB.clickHud.quickCount
+    local after = before
+    if kind == "+" then
+        after = before + n
+    elseif kind == "-" then
+        after = before - n
+    else
+        after = before * n
+    end
+    if after < 1 then after = 1 end
+    if after > RBB.shopCfg.maxQueueCreatures then after = RBB.shopCfg.maxQueueCreatures end
+
+    RBB.clickHud.quickCount = after
+    Log("event=quick_step status=ok op=%s unit=%s before=%d after=%d",
+        opArg, RBB.clickHud.quickUnit, before, after)
+    WriteConsole("rb_quick_step: %s -> %s x%d (rb_hud_ui zeigt/sendet)",
+        opArg, RBB.clickHud.quickUnit, after)
+end
+
 pcall(function()
     ConsoleService:RegisterCommand("rb_hud_ui", function(args)
         CmdHudUi(args)
     end)
     ConsoleService:RegisterCommand("rb_quick", function(args)
         CmdQuick(args)
+    end)
+    ConsoleService:RegisterCommand("rb_quick_step", function(args)
+        CmdQuickStep(args)
     end)
 end)
 
