@@ -22,7 +22,7 @@ npm test        # = node --test
 
 `win-condition.test.js` deckt Issue #28 (Win-Condition) ab:
 
-1. Mod lädt, Version 0.23.0, HQ initialisiert (`hq_hp=100 hq_dead=false`).
+1. Mod lädt, Version 0.24.0, HQ initialisiert (`hq_hp=100 hq_dead=false`).
 2. Leak-Flow: `EnteredTriggerEvent` → `event=leak` → `event=hq_hp`.
 3. HQ-Tod durch Leaks (HP ≤ 0) → `event=hq_dead` + `event=match_end` (genau einmal).
 4. Idempotenz: weiterer Leak nach Tod ändert nichts.
@@ -32,7 +32,7 @@ npm test        # = node --test
 
 `send-queue.test.js` deckt Issue #25 (Send-Queue & Shop-HUD) ab:
 
-1. Mod lädt, Version 0.23.0; `rb_buy_wave`/`rb_shop`/`rb_queue` registriert,
+1. Mod lädt, Version 0.24.0; `rb_buy_wave`/`rb_shop`/`rb_queue` registriert,
    Wellenstart-Hook aktiv (`event=wave_hook patch status=ok`).
 2. `rb_shop` listet 4 Tiers (inkl. Boss) + öffnet das Custom-UI-Popup
    (Template `popup_template_1button`).
@@ -59,7 +59,7 @@ npm test        # = node --test
 
 `click-hud.test.js` deckt Issue #99 (Click-HUD / Senden per Klick) ab:
 
-1. Mod lädt, Version 0.23.0; `rb_hud_ui`/`rb_quick` registriert,
+1. Mod lädt, Version 0.24.0; `rb_hud_ui`/`rb_quick` registriert,
    `GuiPopupResultEvent`-Handler aktiv.
 2. `rb_quick` ohne Args → `status=usage` (Default `brabit` ×1).
 3. `rb_quick brabit 2` → `status=armed`; `rb_quick unbekannt` → `unknown_unit`.
@@ -74,7 +74,7 @@ npm test        # = node --test
 
 `balance.test.js` deckt Issue #33 (Balance & Tuning v1) ab:
 
-1. Mod lädt, Version 0.23.0 (kein Version-Bump); `rb_balance` registriert.
+1. Mod lädt, Version 0.24.0 (kein Version-Bump); `rb_balance` registriert.
 2. `rb_balance` legt die v1-Preisliste offen: 5 Units / 4 Tiers / 1 Boss mit
    den dokumentierten Preisen (brabit 100, baxmoth 150, artigian 200,
    canceroth 300, boss 800).
@@ -97,6 +97,17 @@ npm test        # = node --test
    → `delta=1` → Level 3 (`event=boost status=flush`), danach zurückgesetzt.
 5. Freie pct-Eingabe (`rb_boost 30` → linearer Preis 240); Caps (`maxBoostPct`=200,
    `maxBoostsPerWave`=4); `duel`-Modus: Boost-Flush nur in `sp`.
+
+`send-currency.test.js` deckt Issue #40 (Send-Währung Calcium-only) ab:
+
+1. Mod lädt (kein Version-Bump); `rb_convert`/`rb_economy` registriert.
+2. `rb_convert <menge>` (ein Arg) konvertiert Calcium (`carbonium`) → Pool.
+3. `rb_convert calcium <menge>` (Alias) ≡ `rb_convert carbonium <menge>`.
+4. Nicht-Calcium (`steel`) wird abgelehnt (`not_send_currency`), auch wenn es
+   gefarmt wurde — kein Convert-Vorgang, Pool unverändert.
+5. Währung entscheidet VOR der Mengen-Prüfung: ungefarmtes `ironium` →
+   `not_send_currency` (nicht `insufficient`).
+6. Pool bleibt durch die Ablehnungen unangetastet (`economy_show`).
 
 ## Grenzen (ehrlich dokumentiert)
 

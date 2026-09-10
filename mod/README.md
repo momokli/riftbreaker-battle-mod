@@ -1,6 +1,6 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.23.0 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.24.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 
@@ -8,7 +8,7 @@ v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 > haben, sonst lehnt der Client die Lobby mit **„different set of mods“** ab.
 > Kurzanleitung: [`docs/PLAYER_SETUP.md`](../docs/PLAYER_SETUP.md).
 
-**v0.23.0 — Mod-Zip-Version aus Metadaten + Download-Link an deployed Stand (Issue #119):**
+**v0.24.0 — Mod-Zip-Version aus Metadaten + Download-Link an deployed Stand (Issue #119):**
 - `scripts/mod_version.sh` als Single Source of Truth für die Mod-Version (liest `mod/<GUID>.manifest`, Feld `version`).
 - `package_bausteine.sh` erzeugt zusätzlich das versionierte `rbbattle-v<version>.zip`; `rbbattle.zip` bleibt der stabile Alias für die Deploy-Kette.
 - Website **dev** (`solo.html`, `connectivity.html`): Download zeigt auf das Same-Origin-Zip `/mods/rbbattle.zip` (deployed `main`-Stand). **prod** (`index.html`) unverändert auf das getaggte Release.
@@ -324,7 +324,7 @@ und Workshop-Mods tun (Quelle: fandom „Basic Modding Guide“, Ordner
 | `rb_wave 1` … `rb_wave 3` (Konsole/Bridge) | Spawnt Send-Welle an **zufälligen natürlichen Kartenrand-Spawnern** (5 Brabits / +3 Baxmoth / +2 Artigian +1 Canceroth, je Kreatur zufälliger Spawner aus den 4 Gruppen `spawn_enemy_border_*`); ungültige Stufe (`rb_wave 99`) fällt mit Warnung auf Welle 1 zurück. Kein Spieler-Mech nötig (Server-only). Ohne Rand-Spawner: Fallback-Ring um den Mech |
 | `rb_send <level>` | Alias für `rb_wave` (Send-Semantik für Shop-/Queue-Integration #25) |
 | `rb_wave`-Log-Anker | `anchor=border spawners=N` (bzw. `anchor=fallback_mech`), je Kreatur `anchor=<gruppe>/<id>` im `event=spawn ok`-Log |
-| `rb_convert <resource> <amount>` | Wandelt gefarmte Ressource **irreversibel** in Send-Währung (Spar-Pool). **MVP:** `rb_convert <menge>` konvertiert **Calcium** (`carbonium`, Faktor 1); `rb_convert calcium 100` ≡ `rb_convert carbonium 100` ≡ `rb_convert 100`. Weitere Ressourcen (Faktor-Tabelle `resourceFactors`, z.B. palladium 2×, uranium_ore 3×) via 2-Arg-Form. Ablehnung bei zu wenig Farm-Menge (`status=insufficient`); kein Rücktausch. Balance = Platzhalter (Tuning #33) |
+| `rb_convert <resource> <amount>` | Wandelt gefarmte Ressource **irreversibel** in Send-Währung (Spar-Pool). **MVP (#40):** Send-Währung ist **NUR Calcium** (`carbonium`, Faktor 1) — `rb_convert <menge>` ≡ `rb_convert calcium 100` ≡ `rb_convert carbonium 100`. Jede andere Ressource wird abgelehnt (`status=not_send_currency`); Mapping zentral in `RBB.economyCfg.sendCurrency` (Ironium-Qualitäts-Split folgt). Ablehnung bei zu wenig Farm-Menge (`status=insufficient`); kein Rücktausch. Balance = Platzhalter (Tuning #33) |
 | `rb_economy` / `rb_economy reset` | Status: Quelle, Pool, farmed/converted/built, Ressourcen-Konten, DB-Status. `reset` = Entwickler-Werkzeug (alles auf 0, inkl. Ressourcen-Keys der DB) |
 | `rb_buy_wave <unit> [count]` | **Kauf-Hook (#25):** kauft `<unit>` (Shop-Id: `brabit`/`baxmoth`/`artigian`/`canceroth`/`boss`) in die Send-Queue und deduziert den Spar-Pool sofort (irreversibel). `rb_shop` zeigt alle Units/Preise. Guards: unbekannte Unit, zu wenig Pool, Queue voll |
 | `rb_shop` | **Custom-UI-Shop (#25):** öffnet ein Popup mit der Tier-/Preis-Liste (Tier 1/2/3 + Boss) + Konsolen-Liste (Fallback ohne Spieler/API) |
@@ -343,7 +343,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.23.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
+[RBBATTLE] event=mod_load version=0.24.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100

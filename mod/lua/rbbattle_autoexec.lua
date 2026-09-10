@@ -1,5 +1,5 @@
 -- ============================================================================
--- rbbattle_autoexec.lua  (Einzel-Mod rbbattle, v0.23.0)
+-- rbbattle_autoexec.lua  (Einzel-Mod rbbattle, v0.24.0)
 --
 -- RIFT BATTLE Mod-Core (Foundation):
 --   #26 Send-Spawn an den 16 natuerlichen Kartenrand-Spawnern
@@ -18,14 +18,14 @@
 --   #24 Economy (Duell-Oekonomie): Alle gefarmten Ressourcen (Carbonium &
 --       Co.) werden als Value getrackt (Ressourcen-Events, Getter-Ladder);
 --       bewusste, IRREVERSIBLE Konvertierung in Send-Waehrung per
---       `rb_convert <menge>` (Calcium, #40) bzw. `rb_convert <resource>
+--       `rb_convert <menge>` (Calcium, #40) bzw. `rb_convert calcium
 --       <amount>`; Spar-Pool persistiert ueber Runden
 --       (Global-Database). Built-Value (= nicht konvertierter Farmwert) wird
 --       getrennt gefuehrt (Reveal-Basis fuer #27). Fallback: HourEvent-Tick,
 --       falls die Ressourcen-Event-API fehlt (docs/research/api-deep-dive.md §1).
 --   #42 MVP Single-Player Self-Send (Sich-selber-senden, Testing Mode):
---       Mod-Mode `rb_mode sp|duel` (Default sp). `rb_convert` nutzt Calcium
---       (= Carbonium, #40) als Send-Waehrung. Self-Boost am Wellenstart
+--       Mod-Mode `rb_mode sp|duel` (Default sp). `rb_convert` nutzt NUR
+--       Calcium (= Carbonium, #40) als Send-Waehrung. Self-Boost am Wellenstart
 --       (Function-Wrap dom_mananger:OnEnterSpawn, Hook-Muster #36): der Pool
 --       wird als Zusatz-Spawns an den eigenen Rand-Spawnern (#26) ausgegeben;
 --       der %-Staerke-Boost der naechsten Welle (#39) bleibt offen, weil die
@@ -97,7 +97,7 @@
 --     -> Persistenz (HasInt/GetIntOrDefault/SetInt/RemoveKey)  (Issue #24)
 --
 -- Log-Zeilen (externes Parsing, Praefix [RBBATTLE]):
---   event=mod_load version=0.23.0 status=ok mode=sp econ_source=.. econ_pool=.. hq_hp=.. hq_dead=..
+--   event=mod_load version=0.24.0 status=ok mode=sp econ_source=.. econ_pool=.. hq_hp=.. hq_dead=..
 --   event=wave level=N status=start|done spawned=.. skipped=.. anchor=border|mission|mech
 --   event=spawn ok|failed|skip ... anchor=<gruppe>/<id>            (je Kreatur)
 --   event=wave_spawners count=N                                    (Pool-Groesse)
@@ -137,7 +137,7 @@
 -- ============================================================================
 
 local RBB = {}
-RBB.version = "0.23.0"
+RBB.version = "0.24.0"
 
 -- Log-/Konsole-Helfer (Muster Spike): Praefix [RBBATTLE] fuer externes Parsen.
 local LOG_TAG = "[RBBATTLE]"
@@ -795,6 +795,17 @@ RBB.economyCfg = {
     },
     defaultFactor = 1,      -- Faktor fuer Ressourcen ohne Eintrag
 
+    -- #40 Send-Waehrung (zentrales Mapping): MVP = NUR Calcium (Masse). Im
+    -- Spiel heisst Calcium "carbonium" (api-deep-dive.md §1); der Alias
+    -- "calcium" wird in CanonicalResource aufgeloest. Nur hier gelistete
+    -- Ressourcen sind per rb_convert konvertierbar; der spaetere Ironium-
+    -- Qualitaets-Split (Ironium -> Bosse) ergaenzt hier ein zweites Mapping.
+    -- Achtung: getrennt von resourceFactors — jenes zaehlt den Farm-Value
+    -- ALLER Ressourcen (#24), dieses bestimmt die Konvertierbarkeit (#40).
+    sendCurrency = {
+        carbonium = 1,   -- Calcium -> Send-Waehrung, Faktor 1
+    },
+
     -- Fallback-Einkommen pro HourEvent (nur Modus tick/auto).
     valuePerHourTick = 5,
 
@@ -1050,7 +1061,7 @@ local function ConvertToSendPool(rawResource, rawAmount)
     local amount = math.floor(tonumber(rawAmount) or 0)
 
     if name == "" or amount <= 0 then
-        WriteConsole("rb_convert: Aufruf: rb_convert <menge> (Calcium) oder rb_convert <resource> <menge> (z.B. rb_convert carbonium 100)")
+        WriteConsole("rb_convert: Aufruf: rb_convert <menge> (Calcium) bzw. rb_convert carbonium <menge>")
         Log("event=convert status=usage")
         return
     end
@@ -1059,6 +1070,18 @@ local function ConvertToSendPool(rawResource, rawAmount)
                      amount, RBB.economyCfg.maxConvertAmount)
         Log("event=convert status=amount_too_big resource=%s amount=%d",
             name, amount)
+        return
+    end
+
+    -- #40 Calcium-only: nur die zentrale Send-Waehrung ist konvertierbar. Der
+    -- spaetere Ironium-Qualitaets-Split ergaenzt RBB.economyCfg.sendCurrency um
+    -- ein zweites Mapping (Ironium -> Bosse); bis dahin wird jede andere
+    -- Ressource abgelehnt — vor der Mengen-Pruefung (Waehrung entscheidet zuerst).
+    local factor = RBB.economyCfg.sendCurrency[name]
+    if factor == nil then
+        WriteConsole("rb_convert: '%s' ist (noch) keine Send-Waehrung — MVP ist Calcium (carbonium), #40",
+                     name)
+        Log("event=convert status=not_send_currency resource=%s", name)
         return
     end
 
@@ -1071,8 +1094,6 @@ local function ConvertToSendPool(rawResource, rawAmount)
         return
     end
 
-    local factor = RBB.economyCfg.resourceFactors[name]
-    if factor == nil then factor = RBB.economyCfg.defaultFactor end
     local value = amount * factor
 
     -- Abbuchung + irreversibler Transfer in den Spar-Pool.
@@ -1150,8 +1171,9 @@ local function CmdEconomy(args)
 end
 
 local function CmdConvert(args)
-    -- #40/#42 MVP: `rb_convert <menge>` konvertiert Calcium (ein Argument);
-    -- `rb_convert <resource> <menge>` bleibt abwaertskompatibel.
+    -- #40 Calcium-only: `rb_convert <menge>` konvertiert Calcium (ein Argument);
+    -- `rb_convert <resource> <menge>` akzeptiert nur Calcium (Alias "calcium"
+    -- ≡ "carbonium"), jede andere Ressource -> not_send_currency.
     if args ~= nil and #args == 1 then
         ConvertToSendPool("calcium", args[1])
         return

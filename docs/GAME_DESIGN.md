@@ -5,7 +5,7 @@
 ## Status
 - **Finalisiert** nach Design-Interview mit Momo (2026-09-09, 18 Entscheidungen in 6 Runden).
 - Kern-Idee v0.2 ("natural waves + send boost") bestätigt und präzisiert.
-- **Repo-Stand rbbattle v0.23.0**: Der Design-Kern ist implementiert — Abgleich unten im Abschnitt „Umsetzungsstand“; dort sind alle offenen Abweichungen explizit als `offen` markiert.
+- **Repo-Stand rbbattle v0.24.0**: Der Design-Kern ist implementiert — Abgleich unten im Abschnitt „Umsetzungsstand“; dort sind alle offenen Abweichungen explizit als `offen` markiert.
 
 ## Match-Flow
 1. **Lobby** (Web-UI/Tournament-Server): Beide Spieler registrieren sich.
@@ -172,7 +172,7 @@ eine Änderung des Takts ist Issue #41 vorbehalten.
 - Naturwellen-Gefühl: "War Level 3 zu brutal?" (Live-Test 16:32: 8 Kreaturen, Momo gestorben) — **braucht Live-Test** (offen).
 - ~~HQ-HP-Kurve über Runden~~ → v1 dokumentiert (Formel/Tabelle oben) — **braucht Live-Test**.
 
-## Umsetzungsstand (Repo, rbbattle v0.23.0)
+## Umsetzungsstand (Repo, rbbattle v0.24.0)
 Abgleich des Design-Kerns gegen den implementierten Mod-/Server-/Site-Stand.
 `✅` = implementiert · `⚠️ offen` = noch nicht im Repo umgesetzt.
 
@@ -180,7 +180,7 @@ Abgleich des Design-Kerns gegen den implementierten Mod-/Server-/Site-Stand.
 |---|---|---|---|
 | Sync-Start / GO (Ready-Check) | ✅ implementiert (DOM-Ebene; Server-Ebene offen) | #22 | `debug_dom_pause`/`debug_dom_resume`; docs/SYNC_START.md |
 | Economy: Farm-Value | ✅ implementiert | #24 | `ResourceObtainedEvent`/`ResourceChangeEvent` (Getter-Ladder); Fallback HourEvent-Tick |
-| Economy: Convert irreversibel | ✅ implementiert | #24/#40 | `rb_convert` (Calcium/carbonium first, Faktor 1); Pool persistiert (DB `rbbattle_economy`) |
+| Economy: Convert irreversibel | ✅ implementiert | #24/#40 | `rb_convert` (Calcium/carbonium **only**, Faktor 1); andere Ressourcen → `not_send_currency`; Pool persistiert (DB `rbbattle_economy`) |
 | Built-Value (getrennt geführt) | ✅ implementiert | #24/#27 | Reveal-Basis |
 | Send-Queue & Shop-HUD (Tiered Units + Boss) | ✅ implementiert | #25 | `rb_buy_wave`/`rb_shop`/`rb_queue`; Queue-Flush bei `dom_mananger:OnEnterSpawn` |
 | Send-Boost (nächste Welle %-verstärken) | ✅ implementiert | #39 | `rb_boost <stufe|pct>`; Flush am `SpawnWavesForDifficultyLevel`-Chokepoint (`event=boost`) |
