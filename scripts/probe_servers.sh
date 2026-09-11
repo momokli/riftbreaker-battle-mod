@@ -63,7 +63,10 @@ container_up(){
 # Die Dedicated-Server-Manifeste tragen die Zeile: version "X.Y.Z"
 mod_version(){
   local dir="$1" out=""
-  [ -n "$dir" ] && [ -d "$dir" ] || { echo ""; return 0; }
+  if [ -z "$dir" ] || [ ! -d "$dir" ]; then
+    echo ""
+    return 0
+  fi
   out="$(grep -rhoE --include='*.manifest' '^[[:space:]]*version[[:space:]]*"[^"]+"' "$dir" 2>/dev/null | head -1)"
   out="${out#*\"}"; out="${out%\"*}"
   echo "$out"
