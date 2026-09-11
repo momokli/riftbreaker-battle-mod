@@ -4,7 +4,7 @@ name: Deploy Check
 # self-hosted Runner auf planet und prüft gegen den echten Host:
 #   1. yamllint über deploy/
 #   2. `ansible-playbook --check --diff` gegen planet für den Container-Stack
-#      (headless-client-image + riftbreaker-server) und die
+#      (dedicated-server-image + riftbreaker-server) und die
 #      Website-Rolle — read-only, Vault wird NIE entschlüsselt.
 #   3. jedes gerenderte Compose-File durch `docker compose config`.
 # Ziel: die Fehlerklasse „Image fehlt / Container-Name belegt / Pfad falsch"
