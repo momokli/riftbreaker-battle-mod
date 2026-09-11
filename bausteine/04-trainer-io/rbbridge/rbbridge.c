@@ -22,19 +22,22 @@
  *   - Line-delimited-JSON-Protokoll v0 (siehe trainer/protocol.md):
  *       Ingress: {"cmd":"ping"}                      -> {"event":"pong"}
  *                {"cmd":"exec","command":"rb_wave 3"}-> dispatch_exec()
- *       Egress : {"event":"state","state":{...}}     (Heartbeat-Platzhalter,
+ *                (dispatch_exec ruft seit RE-Stand 2.0.58485 die echte
+ *                 ConsoleService::ExecuteCommand() im Spielprozess auf,
+ *                 siehe Abschnitt "ConsoleService-Anbindung" unten)
+ *       Egress : {"event":"score_update","score":...,"resources":{...},
+ *                "wave":...} (periodischer State-Snapshot, Issue #13,
  *                alle 5 s solange ein Client verbunden ist)
  *   - Robustheit: Fehler im Pipe-Dienst duerfen das Spiel NIEMALS
  *     abstuerzen; kein Client/kein Connect = ruhiger Wartethread; Client-
  *     disconnect = automatischer Reconnect ins naechste Connect.
  *   - Logging: OutputDebugString (DebugView) + %TEMP%\rbbridge.log.
  *
- * Was RE-abhaengig offen ist (TODO/FIXME im Code; Phase 2 des Projekts):
- *   - dispatch_exec(): "rb_wave N" tatsaechlich im Spiel ausfuehren
- *     (RE: Lua-State / ConsoleService-Instanz / ExecuteCommand-Binding im
- *     Spielprozess finden und aufrufen).
- *   - send_state(): echte Spiel-State-Werte (Score, Ressourcen, Wave) aus
- *     dem Prozess lesen statt leerer Platzhalter.
+ * Was RE-abhaengig noch offen ist (TODO/FIXME im Code; Phase 2 des Projekts):
+ *   - read_game_state(): echte Spiel-State-Werte (Score, Ressourcen, Wave)
+ *     aus dem Prozess lesen statt Defaults (alles 0). Der score_update-
+ *     Egress (send_state) ist damit strukturell schon verdrahtet
+ *     (dispatch_exec selbst ist seit dem RE-Stand unten implementiert).
  *
  * Wichtig:
  *   - Kein Datei-I/O ueber die Lua-API noetig - alles laeuft hier in der DLL.
@@ -61,6 +64,7 @@
 #include <windows.h>
 
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -219,7 +223,10 @@ static void json_escape(const char *in, char *out, size_t out_sz)
 /* ------------------------------------------------------------------ */
 
 /*
- * Sendet eine fertige Zeile (JSON + "\n") an den Client.
+ * Sendet eine fertige Zeile an den Client. Protokoll v0 ist strikt
+ * zeilenbasiert: JEDE outbound JSON-Nachricht wird mit '\n' terminiert
+ * (Fix fuer den Newline-Quirk - frueher fehlte der Terminator und Clients
+ * mussten roh/ohne Zeilenstruktur lesen).
  * Rueckgabe 0 = ok, -1 = Fehler (Client weg o.ae.).
  */
 static int send_line(HANDLE hPipe, const char *fmt, ...)
@@ -231,8 +238,10 @@ static int send_line(HANDLE hPipe, const char *fmt, ...)
     va_end(ap);
     if (n < 0)
         return -1;
-    if ((size_t)n >= sizeof(buf))
-        n = (int)sizeof(buf) - 1;
+    if ((size_t)n >= sizeof(buf) - 1) /* Platz fuer '\n' + NUL lassen */
+        n = (int)sizeof(buf) - 2;
+    buf[n++] = '\n';
+    buf[n] = '\0';
 
     DWORD written = 0;
     if (!WriteFile(hPipe, buf, (DWORD)n, &written, NULL) || written != (DWORD)n) {
@@ -243,18 +252,386 @@ static int send_line(HANDLE hPipe, const char *fmt, ...)
 }
 
 /*
- * Egress-Platzhalter: periodischer Spiel-State.
+ * Spiel-State-Egress (Issue #13): periodischer State-Snapshot.
  *
- * FIXME(RE): Hier spaeter echte Werte aus dem Spielprozess eintragen
- * (Score, Ressourcen, aktuelle Wave, Rundenstand ...), sobald die
- * Adressen/Signaturen per scan/ ermittelt sind. Die Events daraus fressen
- * spaeter score_update/wave_* (siehe trainer/protocol.md).
+ * send_state() emittiert score_update gemaeß trainer/protocol.md (Score,
+ * Ressourcen, aktuelle Wave). Die Struktur ist stabil und wird vom Server
+ * (POST /report event=score_update) und der Web-UI konsumiert; die Werte
+ * kommen aus read_game_state().
  */
-static void send_state_placeholder(HANDLE hPipe)
+typedef struct {
+    uint64_t score;
+    uint64_t resources_iron;
+    uint64_t resources_carbon;
+    uint32_t wave;
+} game_state_t;
+
+/*
+ * Liest den aktuellen Spiel-State aus dem Prozess.
+ *
+ * FIXME(RE): echte Werte (Score, Ressourcen, aktuelle Wave) ueber die per
+ * scan/ ermittelten Adressen/Signaturen lesen. Bis dahin liefert diese
+ * Funktion einen neutralen Snapshot (alles 0): Das Protokoll ist damit
+ * end-to-end verdrahtet, die Werte folgen in der RE-Phase.
+ */
+static void read_game_state(game_state_t *st)
 {
+    memset(st, 0, sizeof(*st));
+}
+
+/*
+ * send_state(): periodischer State-Snapshot (Egress, Issue #13).
+ *
+ * Emittiert score_update gemaeß trainer/protocol.md. Die Werte stammen aus
+ * read_game_state() (bis zur RE-Phase Defaults, alles 0).
+ */
+static void send_state(HANDLE hPipe)
+{
+    game_state_t st;
+    read_game_state(&st);
     send_line(hPipe,
-              "{\"event\":\"state\",\"t\":%llu,\"state\":{}}",
-              (unsigned long long)GetTickCount64());
+              "{\"event\":\"score_update\",\"t\":%llu,\"score\":%llu,"
+              "\"resources\":{\"iron\":%llu,\"carbon\":%llu},\"wave\":%u}",
+              (unsigned long long)GetTickCount64(),
+              (unsigned long long)st.score,
+              (unsigned long long)st.resources_iron,
+              (unsigned long long)st.resources_carbon,
+              (unsigned)st.wave);
+}
+
+/* ------------------------------------------------------------------ */
+/* ConsoleService-Anbindung (RE, AOB-/Signatur-basiert)                */
+/*                                                                    */
+/* Ziel: dispatch_exec() soll ConsoleService::ExecuteCommand(char      */
+/* const*) im laufenden Dedicated-Server ausfuehren - OHNE feste RVAs. */
+/* Alle Adressen werden zur Laufzeit aus der geladenen                 */
+/* riftbreaker_dll_win_release.dll aufgeloest (damit ASLR-/Update-     */
+/* fest):                                                              */
+/*                                                                    */
+/*   a) ExecuteCommand per Byte-Signatur im .text der Modulabbildung:  */
+/*      48 89 5C 24 08 57 48 83 EC 50 48 8B DA E8 4E C8 5B 00         */
+/*      48 8B F8 E8 D6 1F 93 00 48 89 (28 Bytes, Build 2.0.58485 /     */
+/*      0.34.3, im .text eindeutig; entspricht RVA 0x1C0BEF0, wird     */
+/*      aber NICHT als RVA verwendet).                                */
+/*                                                                    */
+/*   b) ConsoleService-vftable per RTTI-Walk:                         */
+/*      - MSVC-RTTI-String ".?AVConsoleService@Exor@@" im Modul ->     */
+/*        nameRva.                                                    */
+/*      - MSVC-TypeDescriptor: name liegt bei TD+0x10 (davor liegen    */
+/*        pVFTable + spare), also TD = nameRva - 0x10.                */
+/*      - pTypeDescriptor ist ein DWORD (image-relative RVA == TD-     */
+/*        RVA) im CompleteObjectLocator (COL); die Fundstelle ist      */
+/*        COL+0xC. Verifikation: COL.signature == 1 und COL.pSelf ==   */
+/*        COL-RVA (pSelf liegt bei COL+0x14, image-relativ).           */
+/*      - Der vftable-Zeiger (QWORD == Modulbasis + COL-RVA) liegt     */
+/*        bei vftable-8 -> vftable = Fundstelle + 8.                  */
+/*                                                                    */
+/*   c) Instanz: Scan des eigenen Adressraums (VirtualQuery-Schleife,  */
+/*      nur MEM_COMMIT + lesbar, kein PAGE_GUARD) nach einem           */
+/*      8-Byte-alignierten QWORD == vftable. Erster Treffer = this.    */
+/*                                                                    */
+/*   d) NICHT-Fund an JEDER Stelle -> dispatch_exec liefert             */
+/*      {"event":"exec_result","ok":false,...,"reason":"..."} + dbg()  */
+/*      und ruft NIEMALS auf. Unter MinGW-x64 gibt es kein SEH         */
+/*      (__try/__except ist MSVC-only) - die Absicherung ist der       */
+/*      Instanz-/Signatur-Check VOR dem Aufruf.                        */
+/*                                                                    */
+/* Gegenprobe (read-only pefile+capstone, planet, 2026-09-11): Die    */
+/* AOB/RTTI-Aufloesung liefert exakt die frueheren festen RVAs         */
+/* (vftable 0x2F23C80, execfn 0x1C0BEF0) - die RVAs sind damit nur     */
+/* noch Verifikations-Notiz, keine Laufzeitadresse.                    */
+/* ------------------------------------------------------------------ */
+
+#define RBBRIDGE_MODULE_NAME "riftbreaker_dll_win_release.dll"
+
+/* MSVC-RTTI-Name der ConsoleService-Klasse (mit NUL-Terminator). */
+static const char RBBRIDGE_RTTI_NAME[] = ".?AVConsoleService@Exor@@";
+
+/* Byte-Signatur des ExecuteCommand-Prologs (28 Bytes, siehe oben). */
+static const unsigned char RBBRIDGE_EXEC_SIG[] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x50,
+    0x48, 0x8B, 0xDA, 0xE8, 0x4E, 0xC8, 0x5B, 0x00, 0x48, 0x8B,
+    0xF8, 0xE8, 0xD6, 0x1F, 0x93, 0x00, 0x48, 0x89
+};
+
+/* x64-Aufrufkonvention: this=RCX, cmd=RDX - __fastcall ist auf x64 der
+ * Standard (das Schluesselwort dokumentiert die Konvention nur). */
+typedef void (__fastcall *console_exec_fn)(void *self, const char *command);
+
+/*
+ * Lesbare, committete Region ohne PAGE_GUARD? (Lesen dort ist sicher.)
+ */
+static int is_readable_region(const MEMORY_BASIC_INFORMATION *mi)
+{
+    if (mi->State != MEM_COMMIT || (mi->Protect & PAGE_GUARD))
+        return 0;
+    switch (mi->Protect & 0xFF) {
+    case PAGE_READONLY:
+    case PAGE_READWRITE:
+    case PAGE_WRITECOPY:
+    case PAGE_EXECUTE_READ:
+    case PAGE_EXECUTE_READWRITE:
+    case PAGE_EXECUTE_WRITECOPY:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/*
+ * Sucht [start, start+len) nach einem Byte-Muster und respektiert dabei
+ * den Seitenschutz per VirtualQuery (nur MEM_COMMIT + lesbar, kein
+ * PAGE_GUARD). Rueckgabe: erster Treffer oder NULL.
+ */
+static const unsigned char *scan_bytes(const unsigned char *start, size_t len,
+                                       const unsigned char *pat, size_t pat_len)
+{
+    if (!start || pat_len == 0 || len < pat_len)
+        return NULL;
+
+    uintptr_t addr = (uintptr_t)start;
+    uintptr_t end  = (uintptr_t)start + len; /* SizeOfImage, kein Overflow */
+
+    while (addr < end) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (!VirtualQuery((const void *)addr, &mi, sizeof(mi)))
+            break;
+        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
+        if (!is_readable_region(&mi)) {
+            if (next <= addr)
+                break;
+            addr = next;
+            continue;
+        }
+        uintptr_t rend = next < end ? next : end;
+        if (rend > addr && (size_t)(rend - addr) >= pat_len) {
+            const unsigned char *p = (const unsigned char *)addr;
+            size_t n = (size_t)(rend - addr);
+            for (size_t i = 0; i + pat_len <= n; i++) {
+                if (memcmp(p + i, pat, pat_len) == 0)
+                    return p + i;
+            }
+        }
+        if (next <= addr)
+            break;
+        addr = next;
+    }
+    return NULL;
+}
+
+static const unsigned char *scan_u32(const unsigned char *start, size_t len,
+                                     uint32_t val)
+{
+    unsigned char pat[4];
+    memcpy(pat, &val, sizeof(pat));
+    return scan_bytes(start, len, pat, sizeof(pat));
+}
+
+static const unsigned char *scan_u64(const unsigned char *start, size_t len,
+                                     uint64_t val)
+{
+    unsigned char pat[8];
+    memcpy(pat, &val, sizeof(pat));
+    return scan_bytes(start, len, pat, sizeof(pat));
+}
+
+/*
+ * Modulbasis + SizeOfImage von riftbreaker_dll_win_release.dll.
+ * Kein LoadLibrary noetig - das Spiel hat die DLL laengst geladen.
+ * Rueckgabe 1 = ok (base/size gesetzt), 0 = Modul fehlt/kein PE.
+ */
+static int module_range(const unsigned char **out_base, size_t *out_size)
+{
+    HMODULE hMod = GetModuleHandleA(RBBRIDGE_MODULE_NAME);
+    if (!hMod) {
+        dbg("module_range: Modul '%s' nicht geladen (GLE=%lu) - kein "
+            "Spielprozess?", RBBRIDGE_MODULE_NAME,
+            (unsigned long)GetLastError());
+        return 0;
+    }
+    const unsigned char *base = (const unsigned char *)hMod;
+    const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)base;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+        dbg("module_range: kein MZ an base=%p", (void *)base);
+        return 0;
+    }
+    const IMAGE_NT_HEADERS *nt =
+        (const IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) {
+        dbg("module_range: kein PE an base=%p", (void *)base);
+        return 0;
+    }
+    *out_base = base;
+    *out_size = (size_t)nt->OptionalHeader.SizeOfImage;
+    return 1;
+}
+
+/*
+ * .text-Bereich (Code-Section) der Modulabbildung.
+ * Rueckgabe 1 = ok, 0 = nicht gefunden.
+ */
+static int text_range(const unsigned char *base,
+                      const unsigned char **out, size_t *out_len)
+{
+    const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)base;
+    const IMAGE_NT_HEADERS *nt =
+        (const IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
+    const IMAGE_SECTION_HEADER *sec = IMAGE_FIRST_SECTION(nt);
+    for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; i++, sec++) {
+        if (memcmp(sec->Name, ".text", 5) == 0) {
+            *out = base + sec->VirtualAddress;
+            *out_len = sec->Misc.VirtualSize;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * Findet die ConsoleService-vftable per RTTI-Walk (siehe Kopfkommentar).
+ * Rueckgabe: vftable-Adresse oder NULL.
+ */
+static const unsigned char *resolve_console_vftable(const unsigned char *base,
+                                                    size_t size)
+{
+    /* sizeof incl. NUL-Terminator -> eindeutiger String-Treffer. */
+    const unsigned char *name = scan_bytes(
+        base, size, (const unsigned char *)RBBRIDGE_RTTI_NAME,
+        sizeof(RBBRIDGE_RTTI_NAME));
+    if (!name) {
+        dbg("resolve_console_vftable: RTTI-Name '%s' nicht gefunden",
+            RBBRIDGE_RTTI_NAME);
+        return NULL;
+    }
+
+    const unsigned char *td = name - 0x10; /* TypeDescriptor-Beginn */
+    uint32_t td_rva = (uint32_t)(uintptr_t)(td - base);
+
+    /* Kandidaten fuer das pTypeDescriptor-Feld (COL+0xC) durchgehen:
+     * erstes DWORD im Modul == td_rva; COL pruefen, sonst weiter. */
+    const unsigned char *p = base;
+    for (;;) {
+        const unsigned char *hit = scan_u32(p, (size_t)((base + size) - p),
+                                            td_rva);
+        if (!hit)
+            break;
+        const unsigned char *col = hit - 0xC;
+        uint32_t col_rva = (uint32_t)(uintptr_t)(col - base);
+        uint32_t sig = 0, pself = 0;
+        memcpy(&sig, col, sizeof(sig));            /* COL.signature   */
+        memcpy(&pself, col + 0x14, sizeof(pself)); /* COL.pSelf (RVA) */
+        if (sig == 1 && pself == col_rva) {
+            /* COL-Zeiger liegt bei vftable-8 -> vftable = Fundstelle+8. */
+            const unsigned char *ref = scan_u64(
+                base, size, (uint64_t)(uintptr_t)(base + col_rva));
+            if (!ref) {
+                dbg("resolve_console_vftable: COL(rva=%08lx) gefunden, aber "
+                    "kein vftable-Zeiger", (unsigned long)col_rva);
+                return NULL;
+            }
+            const unsigned char *vftable = ref + 8;
+            dbg("resolve_console_vftable: name=%p TD(rva=%08lx) COL(rva=%08lx) "
+                "vftable(rva=%08lx)",
+                (void *)name, (unsigned long)td_rva, (unsigned long)col_rva,
+                (unsigned long)(uintptr_t)(vftable - base));
+            return vftable;
+        }
+        p = hit + 1; /* falscher COL-Kandidat -> weiter suchen */
+    }
+
+    dbg("resolve_console_vftable: kein gueltiger COL fuer TD(rva=%08lx)",
+        (unsigned long)td_rva);
+    return NULL;
+}
+
+/*
+ * Findet die ConsoleService-Instanz: 8-Byte-alignierter QWORD == vftable
+ * im eigenen Adressraum (VirtualQuery-Schleife, nur lesbare Regionen).
+ * Der Vergleich ist zugleich Self-check: die Fundstelle als this
+ * interpretiert beginnt also mit ihrer vftable.
+ * Rueckgabe: this oder NULL - der Aufrufer MUSS NULL als "nicht
+ * verfuegbar" behandeln (Fehler-Event statt Crash).
+ */
+static void *resolve_console_instance(const unsigned char *vftable)
+{
+    uint64_t needle = (uint64_t)(uintptr_t)vftable;
+    int hits = 0;
+    void *instance = NULL;
+    uintptr_t addr = 0;
+
+    for (;;) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
+            break; /* Ende des Adressraums */
+        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
+        if (next <= addr) /* Overflow-Schutz (kommt praktisch nie vor) */
+            break;
+        addr = next;
+
+        if (!is_readable_region(&mi))
+            continue;
+
+        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
+        size_t nq = mi.RegionSize / sizeof(uint64_t); /* BaseAddress ist
+                                                         seiten-, also auch
+                                                         8-Byte-aligniert */
+        for (size_t i = 0; i < nq; i++) {
+            if (q[i] != needle)
+                continue;
+            hits++;
+            if (instance == NULL)
+                instance = (void *)&q[i]; /* erster plausibler Kandidat */
+        }
+    }
+    dbg("resolve_console_instance: vftable=%p hits=%d instance=%p",
+        (void *)vftable, hits, instance);
+    return instance;
+}
+
+/*
+ * Loest ExecuteCommand (Signatur) und ConsoleService (RTTI + Instanz)
+ * auf und gibt beides zurueck.
+ * Rueckgabe 1 = ok (fn/instance gesetzt), 0 = nicht gefunden.
+ * Bei 0 sind fn/instance unbestimmt -> NICHT aufrufen.
+ */
+static int resolve_console_service(console_exec_fn *out_fn, void **out_inst)
+{
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    if (!module_range(&base, &size))
+        return 0;
+
+    const unsigned char *text = NULL;
+    size_t text_len = 0;
+    if (!text_range(base, &text, &text_len)) {
+        dbg("resolve_console_service: .text-Section nicht gefunden");
+        return 0;
+    }
+
+    const unsigned char *execfn = scan_bytes(text, text_len,
+                                             RBBRIDGE_EXEC_SIG,
+                                             sizeof(RBBRIDGE_EXEC_SIG));
+    if (!execfn) {
+        dbg("resolve_console_service: ExecuteCommand-Signatur nicht gefunden");
+        return 0;
+    }
+
+    const unsigned char *vftable = resolve_console_vftable(base, size);
+    if (!vftable)
+        return 0;
+
+    void *instance = resolve_console_instance(vftable);
+    if (!instance)
+        return 0;
+
+    dbg("resolve_console_service: base=%p vftable(rva=%08lx) execfn(rva=%08lx) "
+        "instance=%p",
+        (void *)base, (unsigned long)(uintptr_t)(vftable - base),
+        (unsigned long)(uintptr_t)(execfn - base), instance);
+
+    *out_fn = (console_exec_fn)(uintptr_t)execfn;
+    *out_inst = instance;
+    return 1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -264,33 +641,50 @@ static void send_state_placeholder(HANDLE hPipe)
 /*
  * {"cmd":"exec","command":"rb_wave 3"}
  *
- * Ziel (Phase 2, RE): das Kommando im Spiel ausfuehren - aequivalent zu
- *   ConsoleService:ExecuteCommand("rb_wave 3")
+ * Fuehrt das Kommando im Spiel aus - aequivalent zu
+ *   ConsoleService::ExecuteCommand("rb_wave 3")
  * aus der Lua-Perspektive (der Lua-Mod registriert rb_wave, siehe
  * mod/lua/rbbattle_autoexec.lua im Spike-Branch).
  *
- * TODO(RE): Dafuer muss im Spielprozess gefunden werden:
- *   1. der Lua-State / die ConsoleService-Instanz bzw. die Engine-Funktion,
- *      die Konsolen-Kommandos ausfuehrt (Anhaltspunkt: docs/findings.md,
- *      Punkt 8 - ExecuteCommand existiert nachweislich),
- *   2. eine stabile Aufrufstelle - bevorzugt per AOB-Signatur statt fester
- *      Adresse (Spiel-Updates verschieben alles).
- * Danach hier den Aufruf verdrahten (z.B. Thread im Spielkontext oder
- * Remote-Call in die gefundene Funktion).
+ * RE-Stand (Build 2.0.58485, GOG == Dedi, verifiziert 2026-09-09):
+ *   - Adressen: resolve_console_service() loest ExecuteCommand per
+ *     Byte-Signatur (Modul-.text) und die ConsoleService-Instanz per
+ *     RTTI-Walk (vftable) + Adressraum-Scan auf - KEINE festen RVAs,
+ *     damit ASLR-/Update-fest (Details im Kopfkommentar oben).
+ *   - Aufruf: console_exec_fn(inst, command), direkt im Pipe-Thread.
+ *     pcall-artige Absicherung gibt es unter MinGW-x64 in C nicht (kein
+ *     __try/__except; nur MSVC kann das) - die Absicherung ist der
+ *     Signatur-/Instanz-Check: ohne gueltige Aufloesung wird NICHT
+ *     aufgerufen, sondern ein Fehler-Event gesendet.
  *
- * Harness-Verhalten: Kommando loggen und mit exec_result antworten.
+ * Antwort bei Erfolg: {"event":"exec_result","ok":true,"command":"..."}
  */
 static void dispatch_exec(HANDLE hPipe, const char *command)
 {
-    dbg("dispatch_exec: command='%s' -> TODO(RE): im Spiel ausfuehren", command);
-
     char escaped[RESP_BUF_SIZE];
     json_escape(command, escaped, sizeof(escaped));
 
+    console_exec_fn fn = NULL;
+    void *instance = NULL;
+    if (!resolve_console_service(&fn, &instance)) {
+        dbg("dispatch_exec: command='%s' -> ConsoleService/ExecuteCommand "
+            "nicht aufloesbar, KEIN Aufruf", command);
+        send_line(hPipe,
+                  "{\"event\":\"exec_result\",\"ok\":false,"
+                  "\"command\":\"%s\",\"reason\":"
+                  "\"console_service_not_found\"}",
+                  escaped);
+        return;
+    }
+
+    dbg("dispatch_exec: command='%s' -> ExecuteCommand(inst=%p, fn=%p)",
+        command, instance, (void *)fn);
+    fn(instance, command); /* x64: this=RCX, cmd=RDX */
+
+    dbg("dispatch_exec: command='%s' -> zurueckgekehrt (ok)", command);
     send_line(hPipe,
-              "{\"event\":\"exec_result\",\"command\":\"%s\",\"ok\":false,"
-              "\"reason\":\"not_implemented (RE: ConsoleService/Lua-State "
-              "finden)\"}",
+              "{\"event\":\"exec_result\",\"ok\":true,"
+              "\"command\":\"%s\"}",
               escaped);
 }
 
@@ -404,11 +798,11 @@ static int serve_client(HANDLE hPipe)
             }
         }
 
-        /* State-Heartbeat (Egress-Platzhalter), nur bei aktivem Client */
+        /* State-Heartbeat (score_update, Egress Issue #13), nur bei Client */
         DWORD now = GetTickCount();
         if (last_beat == 0 || now - last_beat >= HEARTBEAT_MS) {
             last_beat = now;
-            send_state_placeholder(hPipe);
+            send_state(hPipe);
         }
 
         Sleep(POLL_MS);

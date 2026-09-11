@@ -8,7 +8,7 @@ möglich statisch/deterministisch** — ohne Windows-Spielprozess:
 | Web-UI-Trigger | Button `data-cmd="rb_wave 3"` + `app.js` `POST /event` (`type:"exec_command"`) | statisch |
 | Tournament-Server | `/event` → Outbox → `cmd_id` | dynamisch (echter `server.js`) |
 | Relay | `GET /poll` → `dispatch pending: rb_wave 3 (cmd_id=…)` | dynamisch (echter `relay.py`) |
-| rbbridge | `{"cmd":"exec","command":"rb_wave 3"}` → `ExecuteCommand` | statisch (`trainer/rbbridge/rbbridge.c`) |
+| rbbridge | `{"cmd":"exec","command":"rb_wave 3"}` → `ExecuteCommand` (AOB/RTTI, keine festen RVAs) | statisch (`bausteine/04-trainer-io/rbbridge/rbbridge.c`) |
 | Mod | `rb_wave 3` → `SpawnWave(3)` → 8 Kreaturen (baxmoth×5, artigian×2, canceroth×1) | fengari + Stub-Services |
 
 ## OFFEN (bewusst als skip markiert)

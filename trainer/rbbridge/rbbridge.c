@@ -300,24 +300,59 @@ static void send_state(HANDLE hPipe)
 }
 
 /* ------------------------------------------------------------------ */
-/* ConsoleService-Anbindung (RE)                                       */
+/* ConsoleService-Anbindung (RE, AOB-/Signatur-basiert)                */
 /*                                                                    */
-/* Seit Build 2.0.58485 (GOG-Version == DedicatedServer-Build, DLL    */
-/* md5-identisch, verifiziert 2026-09-09) sind die folgenden Offsets   */
-/* gegen die Modul-Basis von riftbreaker_dll_win_release.dll           */
-/* (ImageBase 0x180000000) bekannt. RVA-Quelle: RE-Protokoll vom       */
-/* 2026-09-09 (trainer/scan + docs), Musterkatalog: patterns_v1.json   */
-/* auf lan (Research-Ablage, Scan-Skripte trainer/scan).               */
+/* Ziel: dispatch_exec() soll ConsoleService::ExecuteCommand(char      */
+/* const*) im laufenden Dedicated-Server ausfuehren - OHNE feste RVAs. */
+/* Alle Adressen werden zur Laufzeit aus der geladenen                 */
+/* riftbreaker_dll_win_release.dll aufgeloest (damit ASLR-/Update-     */
+/* fest):                                                              */
 /*                                                                    */
-/*   RVA 0x2F23C80 : ConsoleService-vftable ??_7ConsoleService@Exor@@6B@
- *   RVA 0x1C0BEF0 : ConsoleService::ExecuteCommand(char const*)
- *                   (x64: this=RCX, cmd=RDX, void-Rueckgabe)
- *                                                                    */
+/*   a) ExecuteCommand per Byte-Signatur im .text der Modulabbildung:  */
+/*      48 89 5C 24 08 57 48 83 EC 50 48 8B DA E8 4E C8 5B 00         */
+/*      48 8B F8 E8 D6 1F 93 00 48 89 (28 Bytes, Build 2.0.58485 /     */
+/*      0.34.3, im .text eindeutig; entspricht RVA 0x1C0BEF0, wird     */
+/*      aber NICHT als RVA verwendet).                                */
+/*                                                                    */
+/*   b) ConsoleService-vftable per RTTI-Walk:                         */
+/*      - MSVC-RTTI-String ".?AVConsoleService@Exor@@" im Modul ->     */
+/*        nameRva.                                                    */
+/*      - MSVC-TypeDescriptor: name liegt bei TD+0x10 (davor liegen    */
+/*        pVFTable + spare), also TD = nameRva - 0x10.                */
+/*      - pTypeDescriptor ist ein DWORD (image-relative RVA == TD-     */
+/*        RVA) im CompleteObjectLocator (COL); die Fundstelle ist      */
+/*        COL+0xC. Verifikation: COL.signature == 1 und COL.pSelf ==   */
+/*        COL-RVA (pSelf liegt bei COL+0x14, image-relativ).           */
+/*      - Der vftable-Zeiger (QWORD == Modulbasis + COL-RVA) liegt     */
+/*        bei vftable-8 -> vftable = Fundstelle + 8.                  */
+/*                                                                    */
+/*   c) Instanz: Scan des eigenen Adressraums (VirtualQuery-Schleife,  */
+/*      nur MEM_COMMIT + lesbar, kein PAGE_GUARD) nach einem           */
+/*      8-Byte-alignierten QWORD == vftable. Erster Treffer = this.    */
+/*                                                                    */
+/*   d) NICHT-Fund an JEDER Stelle -> dispatch_exec liefert             */
+/*      {"event":"exec_result","ok":false,...,"reason":"..."} + dbg()  */
+/*      und ruft NIEMALS auf. Unter MinGW-x64 gibt es kein SEH         */
+/*      (__try/__except ist MSVC-only) - die Absicherung ist der       */
+/*      Instanz-/Signatur-Check VOR dem Aufruf.                        */
+/*                                                                    */
+/* Gegenprobe (read-only pefile+capstone, planet, 2026-09-11): Die    */
+/* AOB/RTTI-Aufloesung liefert exakt die frueheren festen RVAs         */
+/* (vftable 0x2F23C80, execfn 0x1C0BEF0) - die RVAs sind damit nur     */
+/* noch Verifikations-Notiz, keine Laufzeitadresse.                    */
 /* ------------------------------------------------------------------ */
 
-#define RBBRIDGE_MODULE_NAME        "riftbreaker_dll_win_release.dll"
-#define RBBRIDGE_RVA_CONSOLE_VFTABLE 0x2F23C80UL /* ??_7ConsoleService@Exor@@6B@ */
-#define RBBRIDGE_RVA_EXEC_COMMAND    0x1C0BEF0UL /* ExecuteCommand(char const*)   */
+#define RBBRIDGE_MODULE_NAME "riftbreaker_dll_win_release.dll"
+
+/* MSVC-RTTI-Name der ConsoleService-Klasse (mit NUL-Terminator). */
+static const char RBBRIDGE_RTTI_NAME[] = ".?AVConsoleService@Exor@@";
+
+/* Byte-Signatur des ExecuteCommand-Prologs (28 Bytes, siehe oben). */
+static const unsigned char RBBRIDGE_EXEC_SIG[] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x50,
+    0x48, 0x8B, 0xDA, 0xE8, 0x4E, 0xC8, 0x5B, 0x00, 0x48, 0x8B,
+    0xF8, 0xE8, 0xD6, 0x1F, 0x93, 0x00, 0x48, 0x89
+};
 
 /* x64-Aufrufkonvention: this=RCX, cmd=RDX - __fastcall ist auf x64 der
  * Standard (das Schluesselwort dokumentiert die Konvention nur). */
@@ -344,58 +379,188 @@ static int is_readable_region(const MEMORY_BASIC_INFORMATION *mi)
 }
 
 /*
- * Findet die ConsoleService-Instanz im laufenden Spielprozess.
- *
- * Vorgehen:
- *   1. Modul-Basis per GetModuleHandle (kein LoadLibrary noetig - das
- *      Spiel hat riftbreaker_dll_win_release.dll laengst geladen).
- *   2. Erwartete vftable-Adresse = Basis + RVA 0x2F23C80.
- *   3. Scan des eigenen Adressraums (VirtualQuery-Schleife ueber alle
- *      MEM_COMMIT- und lesbaren Seiten): gesucht werden 8-Byte-Werte
- *      (little-endian) == Basis + 0x2F23C80 - also Ablagen des vftable-
- *      Zeigers. Nur 8-Byte-alignierte Kandidaten zaehlen: eine echte
- *      vftable-Ablage (Objektanfang, x64) liegt immer aligniert, ein
- *      Zufallstreffer auf exakt diesen Pointerwert waere praktisch
- *      ausgeschlossen (Absicherung gegen Muell). Self-check: QWORD an
- *      der Fundstelle muss == erwarteter vftable-Pointer sein (wird
- *      durch den Vergleich erfuellt - das Objekt, Fundstelle als this
- *      interpretiert, beginnt also mit seiner vftable).
- *   4. Alle Treffer zaehlen, ersten plausiblen Kandidaten nehmen.
- *
- * Rueckgabe: Instanz-Pointer (this) oder NULL - der Aufrufer darf sich
- * auf NULL NICHT verlassen, sondern muss sie als "nicht verfuegbar"
- * behandeln (Fehler-Event statt Crash).
+ * Sucht [start, start+len) nach einem Byte-Muster und respektiert dabei
+ * den Seitenschutz per VirtualQuery (nur MEM_COMMIT + lesbar, kein
+ * PAGE_GUARD). Rueckgabe: erster Treffer oder NULL.
  */
-static void *resolve_console_service(void)
+static const unsigned char *scan_bytes(const unsigned char *start, size_t len,
+                                       const unsigned char *pat, size_t pat_len)
+{
+    if (!start || pat_len == 0 || len < pat_len)
+        return NULL;
+
+    uintptr_t addr = (uintptr_t)start;
+    uintptr_t end  = (uintptr_t)start + len; /* SizeOfImage, kein Overflow */
+
+    while (addr < end) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (!VirtualQuery((const void *)addr, &mi, sizeof(mi)))
+            break;
+        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
+        if (!is_readable_region(&mi)) {
+            if (next <= addr)
+                break;
+            addr = next;
+            continue;
+        }
+        uintptr_t rend = next < end ? next : end;
+        if (rend > addr && (size_t)(rend - addr) >= pat_len) {
+            const unsigned char *p = (const unsigned char *)addr;
+            size_t n = (size_t)(rend - addr);
+            for (size_t i = 0; i + pat_len <= n; i++) {
+                if (memcmp(p + i, pat, pat_len) == 0)
+                    return p + i;
+            }
+        }
+        if (next <= addr)
+            break;
+        addr = next;
+    }
+    return NULL;
+}
+
+static const unsigned char *scan_u32(const unsigned char *start, size_t len,
+                                     uint32_t val)
+{
+    unsigned char pat[4];
+    memcpy(pat, &val, sizeof(pat));
+    return scan_bytes(start, len, pat, sizeof(pat));
+}
+
+static const unsigned char *scan_u64(const unsigned char *start, size_t len,
+                                     uint64_t val)
+{
+    unsigned char pat[8];
+    memcpy(pat, &val, sizeof(pat));
+    return scan_bytes(start, len, pat, sizeof(pat));
+}
+
+/*
+ * Modulbasis + SizeOfImage von riftbreaker_dll_win_release.dll.
+ * Kein LoadLibrary noetig - das Spiel hat die DLL laengst geladen.
+ * Rueckgabe 1 = ok (base/size gesetzt), 0 = Modul fehlt/kein PE.
+ */
+static int module_range(const unsigned char **out_base, size_t *out_size)
 {
     HMODULE hMod = GetModuleHandleA(RBBRIDGE_MODULE_NAME);
     if (!hMod) {
-        dbg("resolve_console_service: Modul '%s' nicht geladen (GLE=%lu) - "
-            "kein Spielprozess?",
-            RBBRIDGE_MODULE_NAME, (unsigned long)GetLastError());
+        dbg("module_range: Modul '%s' nicht geladen (GLE=%lu) - kein "
+            "Spielprozess?", RBBRIDGE_MODULE_NAME,
+            (unsigned long)GetLastError());
+        return 0;
+    }
+    const unsigned char *base = (const unsigned char *)hMod;
+    const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)base;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+        dbg("module_range: kein MZ an base=%p", (void *)base);
+        return 0;
+    }
+    const IMAGE_NT_HEADERS *nt =
+        (const IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) {
+        dbg("module_range: kein PE an base=%p", (void *)base);
+        return 0;
+    }
+    *out_base = base;
+    *out_size = (size_t)nt->OptionalHeader.SizeOfImage;
+    return 1;
+}
+
+/*
+ * .text-Bereich (Code-Section) der Modulabbildung.
+ * Rueckgabe 1 = ok, 0 = nicht gefunden.
+ */
+static int text_range(const unsigned char *base,
+                      const unsigned char **out, size_t *out_len)
+{
+    const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)base;
+    const IMAGE_NT_HEADERS *nt =
+        (const IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
+    const IMAGE_SECTION_HEADER *sec = IMAGE_FIRST_SECTION(nt);
+    for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; i++, sec++) {
+        if (memcmp(sec->Name, ".text", 5) == 0) {
+            *out = base + sec->VirtualAddress;
+            *out_len = sec->Misc.VirtualSize;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * Findet die ConsoleService-vftable per RTTI-Walk (siehe Kopfkommentar).
+ * Rueckgabe: vftable-Adresse oder NULL.
+ */
+static const unsigned char *resolve_console_vftable(const unsigned char *base,
+                                                    size_t size)
+{
+    /* sizeof incl. NUL-Terminator -> eindeutiger String-Treffer. */
+    const unsigned char *name = scan_bytes(
+        base, size, (const unsigned char *)RBBRIDGE_RTTI_NAME,
+        sizeof(RBBRIDGE_RTTI_NAME));
+    if (!name) {
+        dbg("resolve_console_vftable: RTTI-Name '%s' nicht gefunden",
+            RBBRIDGE_RTTI_NAME);
         return NULL;
     }
 
-    const unsigned char *base    = (const unsigned char *)hMod;
-    const unsigned char *vftable = base + RBBRIDGE_RVA_CONSOLE_VFTABLE;
-    const unsigned char *execfn  = base + RBBRIDGE_RVA_EXEC_COMMAND;
-    const uint64_t needle = (uint64_t)(uintptr_t)vftable;
+    const unsigned char *td = name - 0x10; /* TypeDescriptor-Beginn */
+    uint32_t td_rva = (uint32_t)(uintptr_t)(td - base);
 
-    /* vftable-Adresse muss in einer lesbaren Region liegen (sonst ist
-     * der Offset fuer diesen Build/diese Basis unplausibel). */
-    MEMORY_BASIC_INFORMATION mi;
-    if (!VirtualQuery(vftable, &mi, sizeof(mi)) ||
-        !is_readable_region(&mi)) {
-        dbg("resolve_console_service: vftable=%p nicht in lesbarer Region "
-            "(base=%p) - Abbruch", (void *)vftable, (void *)base);
-        return NULL;
+    /* Kandidaten fuer das pTypeDescriptor-Feld (COL+0xC) durchgehen:
+     * erstes DWORD im Modul == td_rva; COL pruefen, sonst weiter. */
+    const unsigned char *p = base;
+    for (;;) {
+        const unsigned char *hit = scan_u32(p, (size_t)((base + size) - p),
+                                            td_rva);
+        if (!hit)
+            break;
+        const unsigned char *col = hit - 0xC;
+        uint32_t col_rva = (uint32_t)(uintptr_t)(col - base);
+        uint32_t sig = 0, pself = 0;
+        memcpy(&sig, col, sizeof(sig));            /* COL.signature   */
+        memcpy(&pself, col + 0x14, sizeof(pself)); /* COL.pSelf (RVA) */
+        if (sig == 1 && pself == col_rva) {
+            /* COL-Zeiger liegt bei vftable-8 -> vftable = Fundstelle+8. */
+            const unsigned char *ref = scan_u64(
+                base, size, (uint64_t)(uintptr_t)(base + col_rva));
+            if (!ref) {
+                dbg("resolve_console_vftable: COL(rva=%08lx) gefunden, aber "
+                    "kein vftable-Zeiger", (unsigned long)col_rva);
+                return NULL;
+            }
+            const unsigned char *vftable = ref + 8;
+            dbg("resolve_console_vftable: name=%p TD(rva=%08lx) COL(rva=%08lx) "
+                "vftable(rva=%08lx)",
+                (void *)name, (unsigned long)td_rva, (unsigned long)col_rva,
+                (unsigned long)(uintptr_t)(vftable - base));
+            return vftable;
+        }
+        p = hit + 1; /* falscher COL-Kandidat -> weiter suchen */
     }
 
+    dbg("resolve_console_vftable: kein gueltiger COL fuer TD(rva=%08lx)",
+        (unsigned long)td_rva);
+    return NULL;
+}
+
+/*
+ * Findet die ConsoleService-Instanz: 8-Byte-alignierter QWORD == vftable
+ * im eigenen Adressraum (VirtualQuery-Schleife, nur lesbare Regionen).
+ * Der Vergleich ist zugleich Self-check: die Fundstelle als this
+ * interpretiert beginnt also mit ihrer vftable.
+ * Rueckgabe: this oder NULL - der Aufrufer MUSS NULL als "nicht
+ * verfuegbar" behandeln (Fehler-Event statt Crash).
+ */
+static void *resolve_console_instance(const unsigned char *vftable)
+{
+    uint64_t needle = (uint64_t)(uintptr_t)vftable;
     int hits = 0;
     void *instance = NULL;
-    uintptr_t addr = 0; /* VirtualQuery ab Adresse 0 */
+    uintptr_t addr = 0;
 
     for (;;) {
+        MEMORY_BASIC_INFORMATION mi;
         if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
             break; /* Ende des Adressraums */
         uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
@@ -411,10 +576,6 @@ static void *resolve_console_service(void)
                                                          seiten-, also auch
                                                          8-Byte-aligniert */
         for (size_t i = 0; i < nq; i++) {
-            /* Der Vergleich ist zugleich der Self-check: das QWORD an der
-             * Fundstelle MUSS dem erwarteten vftable-Pointer entsprechen
-             * (Fundstelle als this interpretiert => Objekt beginnt mit
-             * seiner vftable; nur echte Ablagen erreichen diesen Zweig). */
             if (q[i] != needle)
                 continue;
             hits++;
@@ -422,11 +583,55 @@ static void *resolve_console_service(void)
                 instance = (void *)&q[i]; /* erster plausibler Kandidat */
         }
     }
-
-    dbg("resolve_console_service: base=%p vftable=%p execfn=%p hits=%d "
-        "instance=%p",
-        (void *)base, (void *)vftable, (void *)execfn, hits, instance);
+    dbg("resolve_console_instance: vftable=%p hits=%d instance=%p",
+        (void *)vftable, hits, instance);
     return instance;
+}
+
+/*
+ * Loest ExecuteCommand (Signatur) und ConsoleService (RTTI + Instanz)
+ * auf und gibt beides zurueck.
+ * Rueckgabe 1 = ok (fn/instance gesetzt), 0 = nicht gefunden.
+ * Bei 0 sind fn/instance unbestimmt -> NICHT aufrufen.
+ */
+static int resolve_console_service(console_exec_fn *out_fn, void **out_inst)
+{
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    if (!module_range(&base, &size))
+        return 0;
+
+    const unsigned char *text = NULL;
+    size_t text_len = 0;
+    if (!text_range(base, &text, &text_len)) {
+        dbg("resolve_console_service: .text-Section nicht gefunden");
+        return 0;
+    }
+
+    const unsigned char *execfn = scan_bytes(text, text_len,
+                                             RBBRIDGE_EXEC_SIG,
+                                             sizeof(RBBRIDGE_EXEC_SIG));
+    if (!execfn) {
+        dbg("resolve_console_service: ExecuteCommand-Signatur nicht gefunden");
+        return 0;
+    }
+
+    const unsigned char *vftable = resolve_console_vftable(base, size);
+    if (!vftable)
+        return 0;
+
+    void *instance = resolve_console_instance(vftable);
+    if (!instance)
+        return 0;
+
+    dbg("resolve_console_service: base=%p vftable(rva=%08lx) execfn(rva=%08lx) "
+        "instance=%p",
+        (void *)base, (unsigned long)(uintptr_t)(vftable - base),
+        (unsigned long)(uintptr_t)(execfn - base), instance);
+
+    *out_fn = (console_exec_fn)(uintptr_t)execfn;
+    *out_inst = instance;
+    return 1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -442,13 +647,15 @@ static void *resolve_console_service(void)
  * mod/lua/rbbattle_autoexec.lua im Spike-Branch).
  *
  * RE-Stand (Build 2.0.58485, GOG == Dedi, verifiziert 2026-09-09):
- *   - Instanz: per resolve_console_service() (Scan nach vftable-Zeiger,
- *     siehe oben - keine feste Adresse, ASLR-fest).
- *   - Aufruf: console_exec_fn(base + RVA 0x1C0BEF0)(inst, command),
- *     direkt im Pipe-Thread. pcall-artige Absicherung gibt es unter
- *     MinGW-x64 in C nicht (kein __try/__except; nur MSVC kann das) -
- *     die Absicherung ist der Instanz-Check oben: ohne gefundene
- *     Instanz wird NICHT aufgerufen, sondern ein Fehler-Event gesendet.
+ *   - Adressen: resolve_console_service() loest ExecuteCommand per
+ *     Byte-Signatur (Modul-.text) und die ConsoleService-Instanz per
+ *     RTTI-Walk (vftable) + Adressraum-Scan auf - KEINE festen RVAs,
+ *     damit ASLR-/Update-fest (Details im Kopfkommentar oben).
+ *   - Aufruf: console_exec_fn(inst, command), direkt im Pipe-Thread.
+ *     pcall-artige Absicherung gibt es unter MinGW-x64 in C nicht (kein
+ *     __try/__except; nur MSVC kann das) - die Absicherung ist der
+ *     Signatur-/Instanz-Check: ohne gueltige Aufloesung wird NICHT
+ *     aufgerufen, sondern ein Fehler-Event gesendet.
  *
  * Antwort bei Erfolg: {"event":"exec_result","ok":true,"command":"..."}
  */
@@ -457,10 +664,11 @@ static void dispatch_exec(HANDLE hPipe, const char *command)
     char escaped[RESP_BUF_SIZE];
     json_escape(command, escaped, sizeof(escaped));
 
-    void *instance = resolve_console_service();
-    if (!instance) {
-        dbg("dispatch_exec: command='%s' -> keine ConsoleService-Instanz "
-            "gefunden, KEIN Aufruf", command);
+    console_exec_fn fn = NULL;
+    void *instance = NULL;
+    if (!resolve_console_service(&fn, &instance)) {
+        dbg("dispatch_exec: command='%s' -> ConsoleService/ExecuteCommand "
+            "nicht aufloesbar, KEIN Aufruf", command);
         send_line(hPipe,
                   "{\"event\":\"exec_result\",\"ok\":false,"
                   "\"command\":\"%s\",\"reason\":"
@@ -468,21 +676,6 @@ static void dispatch_exec(HANDLE hPipe, const char *command)
                   escaped);
         return;
     }
-
-    HMODULE hMod = GetModuleHandleA(RBBRIDGE_MODULE_NAME);
-    if (!hMod) { /* kurz nach resolve() praktisch ausgeschlossen */
-        dbg("dispatch_exec: Modul '%s' verschwunden (GLE=%lu)",
-            RBBRIDGE_MODULE_NAME, (unsigned long)GetLastError());
-        send_line(hPipe,
-                  "{\"event\":\"exec_result\",\"ok\":false,"
-                  "\"command\":\"%s\",\"reason\":"
-                  "\"module_unloaded\"}",
-                  escaped);
-        return;
-    }
-    console_exec_fn fn =
-        (console_exec_fn)((const unsigned char *)hMod +
-                          RBBRIDGE_RVA_EXEC_COMMAND);
 
     dbg("dispatch_exec: command='%s' -> ExecuteCommand(inst=%p, fn=%p)",
         command, instance, (void *)fn);

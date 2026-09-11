@@ -40,7 +40,9 @@ const ROOT = path.join(__dirname, '..', '..');
 const WEB_DIR = path.join(ROOT, 'bausteine', '06-tournament-server', 'web');
 const SERVER_JS = path.join(ROOT, 'bausteine', '06-tournament-server', 'server.js');
 const RELAY_PY = path.join(ROOT, 'bausteine', '07-relay', 'relay.py');
-const RBBRIDGE_C = path.join(ROOT, 'trainer', 'rbbridge', 'rbbridge.c');
+// Kanonische Build-/Distributions-Quelle (scripts/package_bausteine.sh +
+// .github/workflows/ci.yml bauen aus bausteine/) - NICHT trainer/.
+const RBBRIDGE_C = path.join(ROOT, 'bausteine', '04-trainer-io', 'rbbridge', 'rbbridge.c');
 const PROTOCOL_MD = path.join(ROOT, 'trainer', 'protocol.md');
 const MOD_PATH = path.join(ROOT, 'mod', 'lua', 'rbbattle_autoexec.lua');
 
@@ -76,9 +78,20 @@ test('rbbridge: {"cmd":"exec","command":"rb_wave 3"} → ExecuteCommand (statisc
   assert.ok(c.includes('strcmp(cmd, "exec") == 0'), 'rbbridge behandelt cmd=exec');
   assert.ok(c.includes('dispatch_exec(hPipe, command)'), 'exec ruft dispatch_exec auf');
   // dispatch_exec ist seit RE-Stand verdrahtet (kein reiner TODO/no-op mehr):
-  assert.ok(c.includes('RBBRIDGE_RVA_EXEC_COMMAND'), 'ExecuteCommand-RVA definiert');
   assert.ok(c.includes('console_exec_fn'), 'console_exec_fn Typ vorhanden');
   assert.ok(c.includes('fn(instance, command)'), 'ExecuteCommand-Aufruf (this=RCX, cmd=RDX)');
+  assert.ok(c.includes('"ok":true'), 'Erfolgs-Antwort exec_result ok:true vorhanden');
+
+  // AC #243: Adressauflösung per AOB/Signatur statt fester RVAs.
+  assert.ok(c.includes('RBBRIDGE_EXEC_SIG'), 'ExecuteCommand-Byte-Signatur definiert (AOB)');
+  assert.ok(c.includes('RBBRIDGE_RTTI_NAME'), 'RTTI-Name der ConsoleService-Klasse vorhanden');
+  assert.ok(c.includes('scan_bytes'), 'Byte-/Signatur-Scanner vorhanden');
+  assert.ok(c.includes('resolve_console_vftable'), 'vftable per RTTI-Walk aufgelöst');
+  assert.ok(c.includes('resolve_console_service(&fn, &instance)'),
+    'dispatch_exec nutzt die gescannte fn/instance');
+  assert.ok(!c.includes('RBBRIDGE_RVA_'),
+    'KEINE festen RVA-Makros mehr (nur AOB/Signatur)');
+  assert.ok(!c.includes('not_implemented'), 'kein not_implemented-Stub mehr');
 });
 
 test('Protokoll: exec-Kanal "rb_wave 3" dokumentiert (protocol.md)', () => {
