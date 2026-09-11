@@ -18,6 +18,9 @@
   command: "{{ cargo_bin }} --version"
   delegate_to: localhost
   become: false
+  environment:
+    RUSTUP_HOME: "{{ rustup_home }}"
+    CARGO_HOME: "{{ cargo_home }}"
   register: cargo_version
   changed_when: false
   failed_when: false
