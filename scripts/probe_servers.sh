@@ -10,8 +10,9 @@
 # - Zusätzlich HTTP(S)-Selbstcheck der Website (curl -sI).
 # - Schreibt JSON nach $RB_OUT (Default /srv/rbmods-site/status.json).
 #
-# Endpoint-Liste: Zeilen  "id|host|port|container"  (Container optional,
-# leer = kein Mapping). Optional via Datei übersteuern:
+# Endpoint-Liste: Zeilen  "id|host|port|container|manifest_dir"
+# (Container/Manifest-Verzeichnis optional, leer = kein Mapping bzw. keine
+# Versionsermittlung). Optional via Datei übersteuern:
 #   RB_ENDPOINTS_FILE=/pfad/zur/liste ./rbmods-probe.sh
 #   (Zeilen mit führendem '#' = Kommentar)
 # ============================================================
@@ -23,9 +24,9 @@ UDP_TIMEOUT="${RB_UDP_TIMEOUT:-2}"
 HTTP_TIMEOUT="${RB_HTTP_TIMEOUT:-8}"
 ENDPOINTS_FILE="${RB_ENDPOINTS_FILE:-/usr/local/etc/rbmods-probe.endpoints}"
 
-# Default-Endpoint-Liste (id|host|port|container)
+# Default-Endpoint-Liste (id|host|port|container|manifest_dir)
 DEFAULT_ENDPOINTS=(
-  "RIFT-MOD|65.21.27.234|6321|riftbreaker-dedicated"
+  "RIFT-MOD|65.21.27.234|6321|riftbreaker-dedicated|/srv/rbgame/mods/rbbattle"
 )
 
 now_iso(){ date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -58,6 +59,19 @@ container_up(){
   else echo false; fi
 }
 
+# Mod-Version aus dem Manifest-Verzeichnis lesen (leer = nicht verfügbar).
+# Die Dedicated-Server-Manifeste tragen die Zeile: version "X.Y.Z"
+mod_version(){
+  local dir="$1" out=""
+  if [ -z "$dir" ] || [ ! -d "$dir" ]; then
+    echo ""
+    return 0
+  fi
+  out="$(grep -rhoE --include='*.manifest' '^[[:space:]]*version[[:space:]]*"[^"]+"' "$dir" 2>/dev/null | head -1)"
+  out="${out#*\"}"; out="${out%\"*}"
+  echo "$out"
+}
+
 # Website-Selbstcheck → "up httpCode"
 site_check(){
   local code
@@ -85,14 +99,15 @@ main(){
     E=("${DEFAULT_ENDPOINTS[@]}")
   fi
 
-  local -a parts=() line id host port ctr u l c e_ts
+  local -a parts=() line id host port ctr mdir u l c e_ts v
   for line in "${E[@]}"; do
-    IFS='|' read -r id host port ctr <<< "$line"
+    IFS='|' read -r id host port ctr mdir <<< "$line"
     u="$(udp_ok "$host" "$port")"
     l="$(local_listen "$port")"
     if [ -n "${ctr:-}" ]; then c="$(container_up "$ctr")"; else c="null"; fi
+    v="$(mod_version "${mdir:-}")"
     e_ts="$(now_iso)"
-    parts+=("{\"id\":\"${id}\",\"host\":\"${host}\",\"port\":${port},\"udpOk\":${u},\"containerUp\":${c},\"localListen\":${l},\"checkedAt\":\"${e_ts}\"}")
+    parts+=("{\"id\":\"${id}\",\"host\":\"${host}\",\"port\":${port},\"udpOk\":${u},\"containerUp\":${c},\"localListen\":${l},\"version\":\"${v}\",\"checkedAt\":\"${e_ts}\"}")
   done
 
   local json eps_json

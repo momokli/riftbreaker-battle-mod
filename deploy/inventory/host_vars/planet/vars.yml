@@ -55,6 +55,10 @@ solo_basic_auth_hash: "{{ vault_solo_basic_auth_hash | default('') }}"
 # --- Mods-Zip (Paketierung + md5-Parität) ------------------------------------
 mods_zip_name: rbbattle.zip
 mods_zip_dest: "{{ website_mods_dir }}/{{ mods_zip_name }}"
+# Download-Parität (S1): öffentliche URL, die nach JEDEM Deploy gegen den
+# deployten Stand geprüft wird (md5 muss exakt übereinstimmen).
+mods_download_url: "https://{{ website_domain }}/mods/{{ mods_zip_name }}"
+mods_download_tmp: /tmp/rbbattle-download-check.zip
 
 # --- Probe-Timer (systemd, scripts/probe_servers.sh) -------------------------
 probe_bin: /usr/local/bin/rbmods-probe.sh

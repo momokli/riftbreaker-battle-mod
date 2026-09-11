@@ -21,6 +21,44 @@
     dest: "{{ website_docroot }}"
     mode: "0644"
 
+# ---------------------------------------------------------------------------
+# S1: Download-Parität — die öffentliche Download-URL muss EXAKT das deployte
+# Zip liefern, sonst laden Spieler einen anderen Stand als der Server fährt
+# („different set of mods"). Nur im echten Deploy (nie im --check-Gate).
+# ---------------------------------------------------------------------------
+- name: Download-Parität — öffentliche URL nach /tmp laden
+  command: curl -sS --fail --max-time 60 -o {{ mods_download_tmp }} {{ mods_download_url }}
+  register: download_curl
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Download-Parität — md5 des Downloads ermitteln
+  stat:
+    path: "{{ mods_download_tmp }}"
+    checksum_algorithm: md5
+  register: download_zip_stat
+  when: not ansible_check_mode
+
+- name: Download-Parität — md5 des deployten Zips ermitteln
+  stat:
+    path: "{{ mods_zip_dest }}"
+    checksum_algorithm: md5
+  register: mods_zip_local
+  when: not ansible_check_mode
+
+- name: Download-Parität — hart prüfen (md5(URL) == md5(deployt))
+  assert:
+    that:
+      - download_curl.rc == 0
+      - download_zip_stat.stat.exists
+      - download_zip_stat.stat.checksum == mods_zip_local.stat.checksum
+    fail_msg: >-
+      DOWNLOAD-PARITÄT FEHLGESCHLAGEN: {{ mods_download_url }} liefert nicht
+      das deployte rbbattle.zip ({{ mods_zip_dest }}) — md5 weicht ab oder URL
+      nicht erreichbar. Download-Kanal und Server-Stand driften auseinander.
+  when: not ansible_check_mode
+
 - name: Caddy-Snippet-Verzeichnis sicherstellen
   file:
     path: "{{ website_caddyfile_d_dir }}"
