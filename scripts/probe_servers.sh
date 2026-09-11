@@ -2,11 +2,16 @@
 # ============================================================
 # rbmods-probe.sh — Erreichbarkeits-Probe der RIFT-BATTLE-Server
 # ------------------------------------------------------------
-# - UDP-Check je Endpoint OHNE externe Tools: bash /dev/udp-Trick
-#   (timeout 2 bash -c 'echo > /dev/udp/<host>/<port>'; exit 0 = ok)
-#   Hinweis: UDP-connect gelingt auch bei geschlossenem Port, wenn der
-#   Host antwortet → deshalb Zusatzfelder localListen (ss) + containerUp
-#   (docker), damit die Seite LIVE nur bei wirklich laufendem Dienst zeigt.
+# - Liveness-Check je Endpoint (Issue #239/#246): prüft, ob der Server
+#   IM Container wirklich einen UDP-Socket auf dem Port gebunden hat
+#   (docker exec → ss -lun, sonst procfs /proc/net/udp*). Der frühere
+#   /dev/udp-Trick bewies nur "Paket raus", nicht "Server antwortet" — er
+#   meldete "up", während DedicatedServer.exe im Console-Init hing (kein
+#   bind). Genau das hat den Ausfall #239 maskiert (#246).
+#   Feld `udpOk` heißt daher jetzt "gebundener Listener", nicht mehr
+#   "UDP-connect ok".
+# - Zusatzfelder localListen (ss, Host) + containerUp (docker) bleiben als
+#   Kontext erhalten.
 # - Zusätzlich HTTP(S)-Selbstcheck der Website (curl -sI).
 # - Schreibt JSON nach $RB_OUT (Default /srv/rbmods-site/status.json).
 #
@@ -31,10 +36,33 @@ DEFAULT_ENDPOINTS=(
 
 now_iso(){ date -u +%Y-%m-%dT%H:%M:%SZ; }
 
-# UDP-Erreichbarkeit via /dev/udp (exit 0 = Paket rausgegangen)
-udp_ok(){
-  local host="$1" port="$2"
-  if timeout "$UDP_TIMEOUT" bash -c "echo > /dev/udp/${host}/${port}" >/dev/null 2>&1; then
+# Ehrlicher Liveness-Check (Issue #239/#246): true nur, wenn der Dienst IM
+# Container wirklich einen UDP-Socket auf dem Port gebunden hat.
+#
+# Begründung: das Repo definiert kein Query-/Join-Protokoll (kein A2S o. ä.),
+# das man ohne Client sprechen könnte — der /dev/udp-Trick bewies nur, dass
+# ein Paket rausgeht. Verlässliches, host-lokales Signal ist der gebundene
+# Socket im Server-Container. Kein Listener → false.
+# Rückgabe: true | false | null (null = docker/Container nicht verfügbar).
+udp_bound(){
+  local ctr="$1" port="$2" out hex
+  if ! command -v docker >/dev/null 2>&1; then echo null; return; fi
+  if [ -z "$ctr" ]; then echo false; return; fi
+
+  # 1) ss im Container (falls vorhanden) — präzise Port-Spalte.
+  if out="$(timeout "$UDP_TIMEOUT" docker exec "$ctr" ss -lun 2>/dev/null)"; then
+    if [ -n "$out" ]; then
+      if printf '%s\n' "$out" | grep -qE "[:.]${port}[[:space:]]"; then echo true
+      else echo false; fi
+      return
+    fi
+  fi
+
+  # 2) Fallback procfs (immer vorhanden): Port als Hex in local_address.
+  hex="$(printf '%04x' "$port" 2>/dev/null || true)"
+  if [ -z "$hex" ]; then echo false; return; fi
+  if timeout "$UDP_TIMEOUT" docker exec "$ctr" cat /proc/net/udp /proc/net/udp6 2>/dev/null \
+       | awk '{print $2}' | tr '[:upper:]' '[:lower:]' | grep -q ":${hex}$"; then
     echo true
   else
     echo false
@@ -76,7 +104,9 @@ mod_version(){
 site_check(){
   local code
   code="$(curl -s -o /dev/null -w '%{http_code}' -m "$HTTP_TIMEOUT" -I "$SITE_URL" 2>/dev/null)"
-  [ -z "$code" ] && code="000"
+  # curl liefert bei Fehler "000" — als Zahl ``000`` ist das ungültiges JSON.
+  # Auf 0 normalisieren, damit status.json immer valides JSON bleibt.
+  case "$code" in ''|000|*[!0-9]*) code=0 ;; esac
   case "$code" in
     2*|3*) echo "true $code" ;;
     *)     echo "false $code" ;;
@@ -102,7 +132,7 @@ main(){
   local -a parts=() line id host port ctr mdir u l c e_ts v
   for line in "${E[@]}"; do
     IFS='|' read -r id host port ctr mdir <<< "$line"
-    u="$(udp_ok "$host" "$port")"
+    u="$(udp_bound "${ctr:-}" "$port")"
     l="$(local_listen "$port")"
     if [ -n "${ctr:-}" ]; then c="$(container_up "$ctr")"; else c="null"; fi
     v="$(mod_version "${mdir:-}")"
