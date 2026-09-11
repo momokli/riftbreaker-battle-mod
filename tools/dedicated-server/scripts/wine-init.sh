@@ -18,10 +18,6 @@ fi
 export WINEDEBUG="${WINEDEBUG:--all}"
 export WINE="${WINE}"
 export WINEPREFIX="${WINEPREFIX}"
-# wineboot/winetricks warnen ohne gültiges XDG_RUNTIME_DIR; privates setzen.
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/xdg-runtime}"
-mkdir -p "${XDG_RUNTIME_DIR}"
-chmod 700 "${XDG_RUNTIME_DIR}"
 
 echo "[wine-init] Preparing Wine prefix at ${WINEPREFIX}..."
 mkdir -p "${WINEPREFIX}"
