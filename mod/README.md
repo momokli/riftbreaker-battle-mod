@@ -18,11 +18,16 @@ v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
   das Spiel selbst läuft frei weiter (kein `debug_dom_pause`). Start-Announce „To commence the game,
   place the headquarter“ (`event=commence status=pending`), HQ erkannt → `event=commence status=ok`
   + Wellenstart (HQ-Erkennung über `HourEvent`-Tick und manuellen Fallback `rb_hq entity <id>`).
-- *AFK-Timeout* (#231): kein unbegrenztes Warten mehr — wird bis zur Schwelle `RBB.afkCfg.afkHourTicks`
-  (Platzhalter `1`, **braucht Live-Kalibrierung** auf ca. 1 Minute Wanduhrzeit, da der Mod keinen
-  `os.time()`-Zugriff hat) kein HQ platziert, endet das Match automatisch als AFK
-  (`event=afk_timeout` → `event=match_end reason=afk_no_hq`, gleicher Restart-Flow wie echte
-  HQ-Zerstörung). `rb_hq reset` setzt den Zähler mit zurück.
+- *AFK-Timeout* (#231): kein unbegrenztes Warten mehr — ab der Schwelle `RBB.afkCfg.afkHourTicks`
+  ohne platziertes HQ endet das Match automatisch als AFK (`event=afk_timeout` →
+  `event=match_end reason=afk_no_hq`, gleicher Restart-Flow wie echte HQ-Zerstörung, aber **ohne**
+  `event=hq_dead` — der Solo-Feed matcht darauf fest den Text „HQ destroyed“, was für AFK
+  irreführend wäre; PR-Review #232 R2). Default `afkHourTicks = 0` (**deaktiviert**), da die
+  reale `HourEvent`-Frequenz unbestätigt ist (`docs/research/api-deep-dive.md`) — ein scharfer
+  Platzhalter hätte main sonst mit einem möglichen Auto-Loss beim ersten Tick ausgeliefert
+  (PR-Review #232 B2). Erst nach Live-Kalibrierung, wie viele Ticks ca. 1 Minute Wanduhrzeit
+  entsprechen, auf einen Wert > 0 setzen. `rb_hq reset` setzt Zähler **und** die Setup-Phase
+  (`commenced`/`setupAnnounced`) zurück.
 - *HQ-Leak-Filter* (#152): `EnteredTriggerEvent` feuert bei jedem Map-Trigger — der Leak zählt jetzt
   nur für eine lesbare **feindliche** Kreatur (`evt:GetEntity()`); eigener Mech/HQ/Team-1-Entities
   werden übersprungen (`hq_leak status=skip reason=no_trigger_entity|own_hq|own_team`). Behebt die
@@ -392,7 +397,7 @@ python3 tools/mod-updater/mod_update.py update
 | `rb_richtwert [<calcium> [level]]` | **Wellen-Richtwert-Vorschau (#213, Recherche für #205):** ohne Args die Richtwert-Kurve für Level 1–9 (`Richtwert(level) = 100 * level`, Annahme); mit `<calcium>` (+ optional `<level>`, Default aktuelle Runde) die resultierende %-Verstärkung nach der ECO-6-Formel. **Reine Vorschau** — rührt weder `RBB.boost` noch den Pool an, ist nicht an `rb_boost` angeschlossen |
 | `rb_mode sp\|sp_op\|duel` | Modus-Umschaltung: `sp` = Solo **Normal** (Default, echter Spielfluss, sendet an die eigene nächste Welle), `sp_op` = Solo **OP** (Test/Cheats: hoher Startpool + schneller Rundentakt), `duel` = 1v1 (Stub, folgt später) |
 | `rb_status` | Zeigt `mode`, `runde`, `pool`, die `queue` und den `boost` (für die nächste Welle) — die Kontrollanzeige des Testmodus |
-| `rb_hq` / `rb_hq leak [dmg]` / `rb_hq entity <id>` / `rb_hq reset` | Win-Condition-Status + Dev-Werkzeuge (#28): HQ-HP zeigen, manuellen Leak anwenden, HQ-Entity zuordnen, Zustand zurücksetzen (Muster `rb_economy reset`). Die HQ-Entity wird seit #144 zusätzlich automatisch versucht zu binden (`HqAutoDetectEntity`, bei `PlayerInitializedEvent`/jedem `rb_wave`); `rb_hq entity <id>` bleibt der manuelle Fallback, falls die Auto-Erkennung nichts findet. `reset` setzt auch den AFK-Timeout-Zähler zurück (#231) |
+| `rb_hq` / `rb_hq leak [dmg]` / `rb_hq entity <id>` / `rb_hq reset` | Win-Condition-Status + Dev-Werkzeuge (#28): HQ-HP zeigen, manuellen Leak anwenden, HQ-Entity zuordnen, Zustand zurücksetzen (Muster `rb_economy reset`). Die HQ-Entity wird seit #144 zusätzlich automatisch versucht zu binden (`HqAutoDetectEntity`, bei `PlayerInitializedEvent`/jedem `rb_wave`); `rb_hq entity <id>` bleibt der manuelle Fallback, falls die Auto-Erkennung nichts findet. `reset` setzt auch den AFK-Timeout-Zähler und die Setup-Phase (`commenced`/`setupAnnounced`) zurück (#231) |
 | `rb_hud` | **Reveal-HUD (#27):** HUD-Standardfelder — Runde, Countdown, eigener Pool, HQ-HP beider Teams + Reveal-Zustand (`reveal=hidden\|revealed`). Gegner-Built/incoming/HQ sind vor Wellenstart `hidden` |
 | `rb_reveal <built_opp> <hq_opp> [incoming]` | **Gegner-Injektion (#27):** die Bridge injiziert die vom Server aufgedeckten Gegner-Werte (Built-Value, HQ-HP, eingehende Send-Komposition) → Reveal beider Teams komplett |
 | `rb_round_start [n]` | **Build-Phase (#27):** verbirgt den Reveal wieder (Bridge-Signal „round steigt“); `<n>` nur informativ |
@@ -443,8 +448,8 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 [RBBATTLE] event=hud_ui status=closed result=button_yes action=quick_send unit=brabit count=1   ← Klick auf „Ja“ sendet (#99)
 [RBBATTLE] event=hq_dead status=match_end hp=0             ← HQ-Tod (HP ≤ 0)
 [RBBATTLE] event=match_end reason=hq_destroyed              ← seit #217 ohne winner=opponent (Sieger folgt aus dem Tournament-Server-State)
-[RBBATTLE] event=afk_timeout status=match_end ticks=1 threshold=1   ← Setup-Phase-Schwelle erreicht, kein HQ platziert (#231)
-[RBBATTLE] event=match_end reason=afk_no_hq                 ← AFK-Match-Ende, gleicher Restart-Flow wie echte HQ-Zerstoerung
+[RBBATTLE] event=afk_timeout status=match_end ticks=1 threshold=1   ← Setup-Phase-Schwelle erreicht (nach Live-Kalibrierung, Default 0=deaktiviert), kein HQ platziert (#231)
+[RBBATTLE] event=match_end reason=afk_no_hq                 ← AFK-Match-Ende, gleicher Restart-Flow wie echte HQ-Zerstoerung, aber OHNE event=hq_dead (#231)
 ```
 
 (Die genaue Zahl `count=` hängt von der Karte/Map-Size ab — Issue-Erwartung 16.)

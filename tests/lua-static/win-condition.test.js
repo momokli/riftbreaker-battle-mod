@@ -275,31 +275,73 @@ RBB.commenced = false
 RBB.hq.dead = false
 check(_G.__handlers["HourEvent"] ~= nil, "11. HourEvent registriert")
 
--- 11a. Erster Tick (Schwelle afkHourTicks=1) OHNE HQ -> Match endet als AFK.
+-- 11a. Default (PR-Review #232 B2): afkHourTicks=0 == deaktiviert. Viele
+-- Ticks ohne HQ duerfen KEIN Match-Ende ausloesen, solange nicht kalibriert.
+check(RBB.afkCfg.afkHourTicks == 0, "11a. Default afkHourTicks ist deaktiviert (0)")
+for _ = 1, 5 do _G.__handlers["HourEvent"](nil) end
+check(not log_has("event=afk_timeout"), "11a. Kein AFK-Ende bei deaktiviertem Default")
+check(RBB.setupHourTicks == 5, "11a. Tick-Zaehler laeuft trotzdem mit (fuer spaetere Kalibrierung)")
+
+-- Ab hier: Schwelle wie fuer eine kalibrierte Live-Umgebung scharf stellen
+-- (simuliert den Zustand NACH der in #232 offen gelassenen Live-Kalibrierung).
+_G.__commands["rb_hq"]({ "reset" })
+RBB.commenced = false
+RBB.hq.dead = false
+RBB.afkCfg.afkHourTicks = 1
+
+-- 11b. Erster Tick (Schwelle afkHourTicks=1) OHNE HQ -> Match endet als AFK.
+-- PR-Review #232 R2: kein event=hq_dead beim AFK-Ende -- der Solo-Feed
+-- matcht darauf fest den Text "HQ destroyed", was fuer AFK falsch waere.
+-- Delta statt log_has: ein frueherer Test (echter HQ-Tod) hat event=hq_dead
+-- bereits ins kumulative Log geschrieben, log_has wuerde also immer treffen.
+local hqDeadBefore = count_logs("event=hq_dead")
 _G.__handlers["HourEvent"](nil)
 check(log_has("event=afk_timeout status=match_end ticks=1 threshold=1"),
-    "11a. AFK-Timeout nach 1 Tick ausgeloest")
-check(log_has("event=match_end reason=afk_no_hq"), "11a. match_end reason=afk_no_hq")
+    "11b. AFK-Timeout nach 1 Tick ausgeloest")
+check(log_has("event=match_end reason=afk_no_hq"), "11b. match_end reason=afk_no_hq")
 check(console_has("GAME OVER") and console_has("AFK"),
-    "11a. Konsolen-Announce erwaehnt AFK")
+    "11b. Konsolen-Announce erwaehnt AFK")
+check(count_logs("event=hq_dead") == hqDeadBefore,
+    "11b. Kein event=hq_dead beim AFK-Ende (nie ein HQ zerstoert)")
 
--- 11b. Idempotenz: weiterer Tick nach AFK-Ende aendert nichts.
+-- 11c. Idempotenz: weiterer Tick nach AFK-Ende aendert nichts.
 local matchEndsAfterAfk = count_logs("event=match_end")
 _G.__handlers["HourEvent"](nil)
 check(count_logs("event=match_end") == matchEndsAfterAfk,
-    "11b. kein zweites match_end nach AFK-Ende (idempotent)")
+    "11c. kein zweites match_end nach AFK-Ende (idempotent)")
 
--- 11c. Reset setzt den Tick-Zaehler zurueck; HQ rechtzeitig gebunden (rb_hq
+-- 11d. PR-Review #232 R3: der reale Pfad "HQ steht -> Auto-Detect bindet ->
+-- commence" MUSS im selben HourEvent-Tick greifen, bevor der AFK-Zaehler
+-- auswertet (HqAutoDetectEntity laeuft in OnHourEvent vor der AFK-Pruefung).
+_G.__commands["rb_hq"]({ "reset" })
+RBB.commenced = false
+RBB.hq.dead = false
+_G.__findTypes["headquarters"] = { 424242 }
+local afkTicksBeforeAutoDetect = count_logs("event=afk_timeout")
+_G.__handlers["HourEvent"](nil)
+check(RBB.commenced == true,
+    "11d. HqAutoDetectEntity bindet HQ und commenced wird true im selben Tick")
+check(count_logs("event=afk_timeout") == afkTicksBeforeAutoDetect,
+    "11d. Kein AFK-Ende, wenn Auto-Detect im selben Tick zuerst bindet")
+_G.__findTypes["headquarters"] = nil -- aufraeumen
+
+-- 11e. Reset setzt den Tick-Zaehler zurueck; HQ rechtzeitig gebunden (rb_hq
 --      entity loest Commence aus) -> kein AFK-Ende trotz weiterer Ticks.
 _G.__commands["rb_hq"]({ "reset" })
 RBB.commenced = false
 RBB.hq.dead = false
 _G.__commands["rb_hq"]({ "entity", "55555" })
-check(RBB.commenced == true, "11c. rb_hq entity loest Commence aus (Setup-Phase vorbei)")
+check(RBB.commenced == true, "11e. rb_hq entity loest Commence aus (Setup-Phase vorbei)")
 local afkTicksBefore = count_logs("event=afk_timeout")
 _G.__handlers["HourEvent"](nil)
 check(count_logs("event=afk_timeout") == afkTicksBefore,
-    "11c. Kein AFK-Tick mehr, sobald commenced (HQ rechtzeitig platziert)")
+    "11e. Kein AFK-Tick mehr, sobald commenced (HQ rechtzeitig platziert)")
+
+-- 11f. PR-Review #232 Nit: rb_hq reset setzt auch commenced/setupAnnounced
+-- zurueck ("Reset = frische Setup-Phase"), nicht nur den AFK-Tick-Zaehler.
+_G.__commands["rb_hq"]({ "reset" })
+check(RBB.commenced == false, "11f. rb_hq reset setzt RBB.commenced zurueck")
+check(RBB.setupAnnounced == false, "11f. rb_hq reset setzt RBB.setupAnnounced zurueck")
 
 print("FAILURES=" .. failures)
 _G.__failures = failures

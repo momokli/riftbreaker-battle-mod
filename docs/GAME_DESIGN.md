@@ -69,7 +69,12 @@ HQ-TOD → Match verloren
   als sofortige Niederlage zählen kann (erst NACH der Wartezeit wird
   geprüft). Die Schwelle ist über `HourEvent`-Ticks gemessen (kein
   `os.time()`-Zugriff im Mod) — die reale Zuordnung zu „ca. 1 Minute
-  Wanduhrzeit" ist **unverifiziert und braucht Live-Kalibrierung**.
+  Wanduhrzeit" ist **unverifiziert und braucht Live-Kalibrierung**. Deshalb
+  ist die Schwelle standardmäßig **deaktiviert** (`afkHourTicks = 0`,
+  PR-Review #232 B2) — erst nach der Kalibrierung auf einen Wert > 0 setzen.
+  Das AFK-Ende meldet bewusst **kein** `event=hq_dead` (nur
+  `event=match_end reason=afk_no_hq`), da der Solo-Feed auf `hq_dead` fest
+  den Text „HQ destroyed" ankündigt, was hier irreführend wäre (#232 R2).
 
 ## HUD (In-Game, Custom-UI)
 - Immer sichtbar: Rundennummer, Countdown bis Wellenstart, eigener Send-Pool.
