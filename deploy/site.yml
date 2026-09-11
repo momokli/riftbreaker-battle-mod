@@ -10,7 +10,7 @@
 #
 # Reihenfolge ist absichtlich:
 #   1. mods-zip             Paketierung + md5-Parität (liefert rbbattle.zip)
-#   2. headless-client-image baut rb-headless-client:<deploy-sha> (Laufzeit
+#   2. dedicated-server-image baut rb-dedicated:<deploy-sha> (Laufzeit
 #      für :6321)
 #   3. game-content         Steam-Content (App 4114030) nach game_dir
 #   4. riftbreaker-server   Dev-SP-Server 6321 (Mod-Install + Restart-Handler)
@@ -49,7 +49,7 @@
   roles:
     - role: mods-zip
       tags: [content]
-    - role: headless-client-image
+    - role: dedicated-server-image
       tags: [server]
     - role: game-content
       tags: [content]

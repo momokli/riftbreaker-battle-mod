@@ -11,22 +11,19 @@ riftbreaker_mod_dir: "{{ riftbreaker_game_dir }}/mods/rbbattle"
 # jeden Backup-Ordner mit *.manifest als zweite Mod (Befund 2026-09-10,
 # Issue #212; Guard + Verifikation in der Rolle).
 riftbreaker_backup_dir: "{{ riftbreaker_game_dir }}-backups"
-# Gemeinsames Laufzeit-Image (Rolle headless-client-image, Issue #209). Tag =
-# Deploy-SHA aus site.yml (pre_tasks) — KEIN `latest`; das Image existiert
+# Laufzeit-Image (Rolle dedicated-server-image, Issue #241, Community-Rezept).
+# Tag = Deploy-SHA aus site.yml (pre_tasks) — KEIN `latest`; das Image existiert
 # garantiert, bevor der Container startet.
-headless_client_image_name: rb-headless-client
-headless_client_image: "{{ headless_client_image_name }}:{{ deploy_image_tag }}"
-riftbreaker_server_image: "{{ headless_client_image }}"
+dedicated_server_image_name: rb-dedicated
+dedicated_server_image: "{{ dedicated_server_image_name }}:{{ deploy_image_tag }}"
+riftbreaker_server_image: "{{ dedicated_server_image }}"
 riftbreaker_server_container: riftbreaker-dedicated
 riftbreaker_server_port_udp: 6321
-# Steam-Layout: das Binary liegt unter bin/ (Working-Dir = Game-Root).
-riftbreaker_server_exe: bin/DedicatedServer.exe
-# Welt/Config gemäß docs/DUEL_SETUP.md (Operator-verifiziert, feste Seed = Parität).
-riftbreaker_server_campaign: mp_survival
-riftbreaker_server_mission: jungle
-riftbreaker_server_difficulty: hard
-riftbreaker_server_map_size: large
-riftbreaker_server_seed: 42
+# Welt/Config gemäß Community-Rezept (config.cfg.j2). Werte = funktionierender
+# Stand (verifiziert 2026-09-11).
+riftbreaker_server_campaign: mp_survival/mp_survival
+riftbreaker_server_mission: survival/jungle
+riftbreaker_server_difficulty: coop_normal
 
 # --- Tournament-Server (systemd, Rust/axum aus tournament/) ------------------
 tournament_install_dir: /opt/rbmods/tournament-server
