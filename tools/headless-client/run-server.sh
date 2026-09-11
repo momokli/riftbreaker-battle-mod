@@ -1,39 +1,74 @@
 #!/usr/bin/env bash
 #
-# run-server.sh — startet den Riftbreaker-Dedicated-Server headless (Xvfb + Wine).
+# run-server.sh — startet den Riftbreaker-Dedicated-Server headless
+# (xvfb-run + Wine). Entrypoint der Compose-Services (:6321/:6323 in Tests).
 #
-# Die Compose-Services :6321/:6322 nutzen dieses Entrypoint statt `wine` direkt:
-# Wine braucht einen X-Server — auch im `headless_mode=1` beendet sich die
-# Server-Exe sonst sofort mit RC 255. Das Skript startet bei Bedarf Xvfb auf
-# DISPLAY, initialisiert das Wine-Prefix (idempotent) und reicht ALLE Argumente
-# unverändert an `wine` weiter (keine Shell-Interpretation im Compose).
+# Issue #239 — der Läufer muss WIEDERHERSTELLBAR joinable sein. Was dieses
+# Skript tut (proven recipe, siehe progress-fix-239-server-joinable.md):
+#   * `xvfb-run -a` statt eigenem Xvfb auf :99 — kein /tmp/.X99-lock, das einen
+#     Container-Neustart in eine Boot-Schleife schickt.
+#   * wine-init.sh (marker-guarded): wineboot + win10 + vcrun2022 +
+#     d3dcompiler_47 im persistenten Prefix (heilt frische/alte Volumes).
+#   * LAN-Modus (disable_steam "1"): WINEDLLOVERRIDES für die Steam-DLLs
+#     (steamclient=n,b,steam_api64=n,b) + Steam-Env entfernt, damit der
+#     Prozess direkt per IP erreichbar ist (kein Steam-Relay).
+#   * SaveGames-Verzeichnis im Prefix auf $RB_SAVE_DIR symlinken (persistent).
 #
 # Aufruf (Compose): entrypoint: ["run-server.sh"] + command: [<exe>, <args…>]
+# Alle Argumente werden UNVERÄNDERT an `wine` gereicht (keine Shell-Interpretation).
 #
 # Umgebung:
-#   DISPLAY      X-Display (Default: :99)
 #   WINEPREFIX   Wine-Prefix (Default: /root/.wine)
+#   RB_SAVE_DIR  Ziel für persistente Saves (Default: /srv/rbsaves)
 set -euo pipefail
 
-DISPLAY="${DISPLAY:-:99}"
-export DISPLAY
+WINEPREFIX="${WINEPREFIX:-/root/.wine}"
+export WINEPREFIX
+export WINEARCH="${WINEARCH:-win64}"
+export WINEDEBUG="${WINEDEBUG:--all}"
+export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}"
+export GALLIUM_DRIVER="${GALLIUM_DRIVER:-llvmpipe}"
 
-# Xvfb starten, falls auf DISPLAY noch kein X-Server lauscht.
-if ! xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
-    echo "[run-server] starte Xvfb auf ${DISPLAY}"
-    Xvfb "$DISPLAY" -screen 0 1920x1080x24 -nolisten tcp &
-    for _ in $(seq 1 50); do
-        xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 && break
-        sleep 0.2
-    done
-    if ! xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
-        echo "[run-server] FEHLER: Xvfb auf ${DISPLAY} nicht erreichbar" >&2
-        exit 1
-    fi
+RB_SAVE_DIR="${RB_SAVE_DIR:-/srv/rbsaves}"
+export RB_SAVE_DIR
+
+# ---------------------------------------------------------------------------
+# 1) Save-Persistenz: Wine-SaveGames-Dir auf das Save-Volume symlinken.
+#    Der Container läuft als root → Wine-User = root.
+# ---------------------------------------------------------------------------
+WINE_USER_DIR="${WINEPREFIX}/drive_c/users/root"
+mkdir -p "${RB_SAVE_DIR}"
+
+link_save_dir() {
+  local dir="$1"
+  mkdir -p "$(dirname "${dir}")"
+  rm -rf "${dir}"
+  ln -sfn "${RB_SAVE_DIR}" "${dir}"
+  echo "[run-server] Save-Symlink: ${dir} -> ${RB_SAVE_DIR}"
+}
+link_save_dir "${WINE_USER_DIR}/AppData/LocalLow/The Riftbreaker - Dedicated Server/SaveGames"
+link_save_dir "${WINE_USER_DIR}/Documents/The Riftbreaker - Dedicated Server"
+
+# ---------------------------------------------------------------------------
+# 2) Wine-Prefix-Runtime sicherstellen (marker-guarded, idempotent).
+# ---------------------------------------------------------------------------
+if command -v wine-init.sh >/dev/null 2>&1; then
+  wine-init.sh
+else
+  echo "[run-server] WARNUNG: wine-init.sh fehlt — Runtime-Selbstheilung übersprungen." >&2
 fi
 
-# Wine-Prefix initialisieren (idempotent; beim ersten Start etwas langsamer).
-wineboot --init >/dev/null 2>&1 || true
+# ---------------------------------------------------------------------------
+# 3) LAN-Modus (disable_steam "1"): Steam aus dem Spielprozess heraushalten.
+#    Steamclient/steam_api64 als native DLL blocken + Steam-Env entfernen,
+#    damit der Server direkt per IP erreichbar ist (kein Steam-Relay).
+# ---------------------------------------------------------------------------
+export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=},steamclient=n,b,steam_api64=n,b"
+unset SteamAppId SteamGameId STEAMAPPID LD_LIBRARY_PATH 2>/dev/null || true
 
-echo "[run-server] starte: wine $*"
-exec wine "$@"
+# steam_appid.txt würde den Prozess sonst in den Steam-Modus zwingen.
+EXE_DIR="$(dirname "${1:-.}")"
+rm -f steam_appid.txt "${EXE_DIR}/steam_appid.txt" 2>/dev/null || true
+
+echo "[run-server] starte: xvfb-run -a wine $*"
+exec xvfb-run -a wine "$@"
