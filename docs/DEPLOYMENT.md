@@ -140,12 +140,12 @@ Siehe [`tools/mods-guard/`](../tools/mods-guard/README.md).
 Nach jedem Merge auf `main` deployt
 [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) automatisch auf
 den Solo-DEV-Server (planet, Port 6321) — **rolling**, immer der aktuelle Stand
-zum Testen. Der Job läuft auf dem self-hosted Runner auf planet und stößt dort
-den lokalen **HTTP-Deploy-Hook** an (`rbbattle-deploy-hook`, `127.0.0.1:6323`):
-Der Hook macht `git fetch` + Hard-Checkout der Commit-SHA und führt das
-Ansible-Playbook aus (`ansible-playbook -i deploy/inventory deploy/site.yml
---vault-password-file …`). **Kein SSH aus CI mehr.** Installation/Migration:
-`deploy/README.md` → „CD: HTTP-Deploy-Hook".
+zum Testen. Der Job läuft auf dem self-hosted Runner auf planet und verbindet
+sich per **SSH als dedizierter deploy-User** (`ssh rbd "<sha> <ref>"`); die
+forced command (`deploy/deploy-ssh.sh`) validiert die SHA, macht
+`git fetch` + Hard-Checkout und führt das Ansible-Playbook als root aus
+(enges sudoers). Kein Token, kein Polling. Installation/Migration:
+`deploy/README.md` → „CD: SSH-Deploy".
 
 Topologie (Momo-Entscheidung, 2026-09-10): **EIN** Server auf `:6321` statt
 Steam-/Non-Steam-Dualität; ein Direct-IP-Server (`disable_steam "1"`) deckt
