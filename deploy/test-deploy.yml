@@ -29,7 +29,7 @@
 
   roles:
     - role: mods-zip
-    - role: headless-client-image
+    - role: dedicated-server-image
     - role: game-content
     - role: riftbreaker-server
     - role: tournament-server

@@ -123,7 +123,11 @@ watch_server_port() {
   ) &
 }
 
-/scripts/install-update.sh
+if [[ "${SKIP_STEAMCMD_UPDATE:-0}" == "1" ]]; then
+  echo "[entrypoint] SKIP_STEAMCMD_UPDATE=1 — content comes from a mounted volume; skipping SteamCMD update."
+else
+  /scripts/install-update.sh
+fi
 
 mkdir -p "${WINEPREFIX}" "${SAVE_MOUNT}" "${LOG_DIR}" "$(dirname "${WINE_SAVE_DIR}")"
 /scripts/wine-init.sh

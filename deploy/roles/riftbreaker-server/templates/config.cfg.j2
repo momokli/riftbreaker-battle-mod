@@ -1,0 +1,15 @@
+// Verwaltet von deploy/ (config.cfg.j2) — NICHT manuell editieren.
+// Enthält das Server-Passwort → Datei-Rechte 0600 (siehe task).
+
+set server_name "{{ riftbreaker_server_name }}"
+set server_password "{{ riftbreaker_server_password }}"
+set server_rcon_password "{{ riftbreaker_server_rcon_password | default('') }}"
+set server_max_players_count "{{ riftbreaker_server_max_players }}"
+set server_broadcast_enabled "{{ riftbreaker_server_broadcast_enabled }}"
+set server_pause_game_when_empty "{{ riftbreaker_server_pause_game_when_empty }}"
+set app_mode "server"
+set disable_steam "1"
+
+set campaign "{{ riftbreaker_server_campaign }}"
+set mission "{{ riftbreaker_server_mission }}"
+set difficulty "{{ riftbreaker_server_difficulty }}"
