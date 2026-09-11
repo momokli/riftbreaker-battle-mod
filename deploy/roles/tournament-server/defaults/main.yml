@@ -3,8 +3,8 @@
 #
 # Das Binary wird auf dem Control-Node (planet) aus dem Repo-Checkout gebaut
 # (`cd tournament && cargo build --release`). Die Rust-Toolchain (rustup) liegt
-# bewusst unter /opt/rbbattle-deploy (systemd-Hook ReadWritePaths), damit der
-# Build im gehärteten Deploy-Hook schreiben darf. Die Rolle stellt die
+# unter /opt/rbbattle-deploy — im Datenverzeichnis des deploy-Users, damit alles
+# Deploy-Zubehör an einem Ort bleibt. Die Rolle stellt die
 # Toolchain idempotent bereit (installiert nur, wenn cargo fehlt).
 tournament_binary_src: "{{ playbook_dir }}/../tournament/target/release/tournament-server"
 rustup_home: /opt/rbbattle-deploy/rustup
