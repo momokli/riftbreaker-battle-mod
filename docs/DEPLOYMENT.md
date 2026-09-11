@@ -89,20 +89,43 @@ Nach Entfernen des Ordners aus `mods/` + Container-Restart:
    weggeschoben (`riftbreaker_mods_guard_autofix: true`, Default); danach prüft
    ein `assert` hart nach. Mit `riftbreaker_mods_guard_autofix: false` bricht
    der Deploy stattdessen sofort ab.
-3. **Post-Deploy-Verifikation** — `riftbreaker_mod_log_cmd` (Default:
-   `docker exec riftbreaker-dedicated cat /root/exor_logs.txt`) muss genau
-   **eine** `event=mod_load`-Zeile mit der erwarteten Version + `status=ok`
-   enthalten und **keine** `handler_errors`/`event_unreadable`. **Quelle ist der
-   Lua-Log im Container, nicht `docker logs`**: der Dedicated Server schreibt
-   `event=mod_load`/`handler_errors` nach `exor_logs.txt` im Wine-Prefix; im
-   Prefix ist `drive_c/users/root/Documents` ein Symlink auf `$HOME`
-   (`Documents -> /root`) → `/root/exor_logs.txt`. `docker logs` enthält nur die
-   Wrapper-Zeilen von `run-server.sh` und damit **nie** eine `mod_load`-Zeile
-   (Befund planet 2026-09-11, Issue #224). Schlägt die Verifikation fehl, wertet
-   die Rolle den Deploy als fehlgeschlagen und rollt aus dem
-   `rbbattle-<ts>.tar.gz` zurück (sofern vorhanden) + startet den Container neu;
-   erst dann `fail`. Ein leerer Log ergibt eine klare `fail_msg` (kein
+3. **Post-Deploy-Verifikation** — **zweistufig** (Issue #226), weil der
+   Dedicated Server im Idle (siehe „Log-Quelle & Timing" unten) **keinen**
+   Lua-Log schreibt:
+   1. **Artefakt-Check (hart, idle-sicher):** Manifest-Version *und*
+      `RBB.version` im deployten Lua-Stand unter `{{ riftbreaker_mod_dir }}`
+      müssen exakt der erwarteten Version (`mod_version` aus dem Mod-Manifest)
+      entsprechen. Das ist der maßgebliche Gate.
+   2. **Runtime-Log-Check (best effort):** existiert `exor_logs.txt`, muss er
+      genau **eine** `event=mod_load`-Zeile mit der erwarteten Version +
+      `status=ok` und **keine** `handler_errors`/`event_unreadable` enthalten.
+      Fehlt der Log im Idle, ist das **kein Fehler** (die Artefakt-Prüfung gilt).
+
+   Schlägt eine der Prüfungen fehl, wertet die Rolle den Deploy als
+   fehlgeschlagen und rollt aus dem `rbbattle-<ts>.tar.gz` zurück (sofern
+   vorhanden) + startet den Container neu; erst dann `fail`. Fehlende
+   Versionen/leere Trefferlisten ergeben eine klare `fail_msg` (kein
    Ansible-Task-Arg-Crash).
+
+### Log-Quelle & Timing (Befund planet 2026-09-11, Issue #226)
+
+- **Quelle ist der Lua-Log im Container, nicht `docker logs`:** `docker logs`
+  des Dedicated-Servers enthält nur die zwei `run-server.sh`-Wrapper-Zeilen
+  (`[run-server] starte Xvfb …` / `[run-server] starte: wine bin/DedicatedServer.exe …`)
+  und damit **nie** eine `mod_load`-Zeile.
+- **Pfad:** `exor_logs.txt` im Wine-Prefix; `drive_c/users/root/Documents` ist
+  ein Symlink auf `$HOME` (`Documents -> /root`) → `/root/exor_logs.txt`.
+  Abruf: `docker exec riftbreaker-dedicated cat /root/exor_logs.txt`.
+- **Timing:** Der Log entsteht erst, wenn der Server eine Map lädt und Lua
+  ausführt. Mit `server_pause_game_when_empty=1` und **keinen Spielern** (Idle)
+  passiert das **nicht** — nach einem Restart existiert `exor_logs.txt` im Idle
+  gar nicht (Empirie: auch nach >5 Min kein Log, `Running=true`,
+  `RestartCount=0`).
+- Der Log liegt im **Container-Writable-Layer** (kein Bind-Mount des
+  Wine-Prefix) und ist nach `docker compose up -d --force-recreate` ohnehin weg.
+- Deshalb ist der **Artefakt-Check** (deployter Stand auf der Platte) im CD der
+  harte Gate; der Runtime-Log-Check greift nur, wenn zum Prüfzeitpunkt
+  tatsächlich eine Map geladen wurde.
 
 **Kontrollwerkzeug / Regression-Check** (lokal + CI, Exit 1 = Fremd-Ordner):
 
@@ -208,4 +231,7 @@ Rollback: Backup-`tar.gz` aus `/srv/riftbreaker/backups/` nach
 - Keine Credentials in Repo/Logs; kanonischer Server-Log ist `exor_logs.txt`
   im Container (`/root/exor_logs.txt`, Wine-`Documents -> /root`), `rbbridge.log`
   im Temp. `docker logs` des Dedicated-Servers zeigt nur die `run-server.sh`-Wrapper-Zeilen.
+  `exor_logs.txt` entsteht erst bei Map-Load; im Idle **ohne Spieler**
+  (`server_pause_game_when_empty=1`) gar nicht (Issue #226) → im CD ist der
+  idle-sichere Artefakt-Check (#226) maßgeblich, nicht der Runtime-Log.
 - SSH mesh-first (Tailscale), nie über Public-IPs.

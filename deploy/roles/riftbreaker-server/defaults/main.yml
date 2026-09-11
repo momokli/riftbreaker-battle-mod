@@ -46,8 +46,16 @@ riftbreaker_backup_dir: "{{ riftbreaker_game_dir }}-backups"
 #   false = nur prüfen und den Deploy abbrechen (kein Verschieben)
 riftbreaker_mods_guard_autofix: true
 
-# Quelle für den Post-Deploy-Log-Check (genau eine mod_load-Zeile, erwartete
-# Version, keine handler_errors).
+# Quelle für den Post-Deploy-Runtime-Log-Check (best effort; genau eine
+# mod_load-Zeile, erwartete Version, keine handler_errors).
+#
+# WICHTIG (Issue #226): Dieser Check ist NICHT der harte Gate — er läuft nur,
+# wenn der Log tatsächlich existiert. Im Idle (`server_pause_game_when_empty=1`,
+# keine Spieler) lädt der Dedicated Server keine Map, führt also kein Lua aus;
+# `exor_logs.txt` entsteht dann gar nicht (Befund planet 2026-09-11). Der Log
+# liegt zudem im Container-Writable-Layer und ist nach `--force-recreate` weg.
+# Der idle-sichere harte Gate ist der Artefakt-Check in tasks/main.yml
+# (Manifest- + RBB.version im deployten Stand == erwartete Version).
 #
 # Der Dedicated Server schreibt seinen Lua-Log NICHT nach stdout: `docker logs`
 # enthält nur die zwei Wrapper-Zeilen von `run-server.sh` (`starte Xvfb…` /
