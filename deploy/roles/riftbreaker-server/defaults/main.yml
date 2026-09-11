@@ -29,3 +29,26 @@ riftbreaker_server_command:
   - "disable_steam=1"
   - "password={{ riftbreaker_server_password }}"
 riftbreaker_server_extra_args: []
+
+# --- Mods & Backups (Guard gegen Fremd-Mods in mods/) ------------------------
+# Der Dedicated Server lädt JEDEN Unterordner von mods/ mit einer *.manifest
+# als eigene External-Content-Mod — unabhängig vom Ordnernamen. Mod-Backups
+# dürfen daher NIE innerhalb von mods/ liegen (Befund planet 2026-09-10: ein
+# Backup-Ordner mit gleicher Content-ID wird ZUSÄTZLICH geladen, überschreibt
+# die Versionskonstante und registriert die Handler doppelt →
+# `handler_errors`/`event_unreadable`). Siehe docs/DEPLOYMENT.md.
+riftbreaker_mods_dir: "{{ riftbreaker_game_dir }}/mods"
+riftbreaker_backup_dir: "{{ riftbreaker_game_dir }}-backups"
+
+# Guard-Verhalten, wenn ein Fremd-Ordner mit *.manifest in mods/ liegt:
+#   true  = nach {{ riftbreaker_backup_dir }}/stray-<ts>/ wegschieben
+#           (selbstheilend, idempotent)
+#   false = nur prüfen und den Deploy abbrechen (kein Verschieben)
+riftbreaker_mods_guard_autofix: true
+
+# Quelle für den Post-Deploy-Log-Check (genau eine mod_load-Zeile, erwartete
+# Version, keine handler_errors). Kanonischer Mod-Log ist exor_logs.txt; je nach
+# Image erscheinen die Zeilen auch in `docker logs`. Bei Bedarf auf einen
+# EINZELNEN Befehl (kein Pipe) übersteuern, z. B.:
+#   riftbreaker_mod_log_cmd: "cat {{ riftbreaker_game_dir }}/.../exor_logs.txt"
+riftbreaker_mod_log_cmd: "docker logs --tail 5000 {{ riftbreaker_server_container }}"

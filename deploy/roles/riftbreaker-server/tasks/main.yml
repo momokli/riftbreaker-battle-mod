@@ -4,10 +4,31 @@
 # {{ mods_zip_dest }} gepackt (md5-Parität bereits geprüft), game-content hat
 # den Steam-Content nach {{ riftbreaker_game_dir }} gelegt und
 # headless-client-image hat das Laufzeit-Image (Tag = Deploy-SHA) gebaut.
+#
+# WICHTIG — Mod-Backups liegen NIE innerhalb von {{ riftbreaker_mods_dir }}:
+# Der Dedicated Server lädt JEDEN Unterordner mit einer *.manifest in mods/ als
+# eigene External-Content-Mod. Ein Backup-Ordner mit gleicher Content-ID
+# (z. B. rbbattle.bak-<ts>/) wird ZUSÄTZLICH geladen → die Versionskonstante
+# wird überschrieben und beide Kopien registrieren ihre Handler doppelt
+# (`handler_errors`/`event_unreadable`, Befund planet 2026-09-10). Backups
+# daher immer NACH {{ riftbreaker_backup_dir }} (oder als .tar.gz ausserhalb
+# mods/). Guard + Post-Deploy-Verifikation unten; Details: docs/DEPLOYMENT.md.
 
 - name: Game-Verzeichnis sicherstellen
   file:
     path: "{{ riftbreaker_game_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Mods-Verzeichnis sicherstellen
+  file:
+    path: "{{ riftbreaker_mods_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Backup-Verzeichnis AUSSERHALB von mods/ sicherstellen
+  file:
+    path: "{{ riftbreaker_backup_dir }}"
     state: directory
     mode: "0755"
 
@@ -68,6 +89,97 @@
     mode: "0600"
   register: riftbreaker_compose
 
+# ---------------------------------------------------------------------------
+# Guard: in mods/ darf nur der Ziel-Mod-Ordner liegen. Fremd-Ordner mit
+# *.manifest (Backups/Fremd-Mods) würden sonst ZUSÄTZLICH geladen.
+# ---------------------------------------------------------------------------
+- name: Guard — Ordner mit *.manifest in mods/ aufspüren
+  find:
+    paths: "{{ riftbreaker_mods_dir }}"
+    patterns: "*.manifest"
+    file_type: file
+    recurse: true
+  register: riftbreaker_manifest_scan
+
+- name: Guard — Fremd-Mod-Ordner ermitteln (alles ausser dem Ziel-Mod)
+  set_fact:
+    riftbreaker_stray_mod_dirs: >-
+      {{ riftbreaker_manifest_scan.files
+         | map(attribute='path')
+         | map('dirname')
+         | unique
+         | reject('eq', riftbreaker_mod_dir)
+         | list }}
+
+- name: Guard — Ziel für weggeschobene Fremd-Mods (Zeitstempel je Lauf)
+  set_fact:
+    riftbreaker_stray_target: "{{ riftbreaker_backup_dir }}/stray-{{ ansible_date_time.iso8601_basic_short }}"
+  when: riftbreaker_stray_mod_dirs | length > 0
+
+- name: Guard — Ziel-Verzeichnis für weggeschobene Fremd-Mods anlegen
+  file:
+    path: "{{ riftbreaker_stray_target }}"
+    state: directory
+    mode: "0755"
+  when: riftbreaker_stray_mod_dirs | length > 0
+
+- name: Guard — Fremd-Mod-Ordner aus mods/ wegschieben (idempotent)
+  command:
+    cmd: 'mv -- "{{ item }}" "{{ riftbreaker_stray_target }}/"'
+    removes: "{{ item }}"
+  loop: "{{ riftbreaker_stray_mod_dirs }}"
+  when: riftbreaker_mods_guard_autofix | bool
+  register: riftbreaker_stray_moved
+
+- name: Guard — mods/ erneut prüfen (nach Wegschieben)
+  find:
+    paths: "{{ riftbreaker_mods_dir }}"
+    patterns: "*.manifest"
+    file_type: file
+    recurse: true
+  register: riftbreaker_manifest_scan_after
+
+# Im PR-Gate (--check) ist der `mv` oben geskippt → die Fremd-Ordner liegen noch
+# da. Deshalb dort nur warnen (wie beim Container-Namen); der echte Deploy
+# bricht hart ab. Der Required-Check „deploy-check" bleibt so stabil.
+- name: Guard — kein Fremd-Ordner mit Manifest mehr in mods/ (sonst Abbruch)
+  assert:
+    that:
+      - >-
+        (riftbreaker_manifest_scan_after.files
+         | map(attribute='path')
+         | map('dirname')
+         | unique
+         | reject('eq', riftbreaker_mod_dir)
+         | list | length) == 0
+    fail_msg: >-
+      GUARD: In {{ riftbreaker_mods_dir }} liegt ausser {{ riftbreaker_mod_dir }}
+      mindestens ein weiterer Ordner mit *.manifest. Der Dedicated Server lädt
+      ihn zusätzlich (Versionskonflikt + doppelte Handler → handler_errors).
+      Backups NIE in mods/ ablegen — nach {{ riftbreaker_backup_dir }}/ oder als
+      .tar.gz ausserhalb. Deploy abgebrochen.
+    success_msg: >-
+      Guard OK: nur {{ riftbreaker_mod_dir }} trägt eine *.manifest in
+      {{ riftbreaker_mods_dir }}.
+  when: not ansible_check_mode
+
+- name: "WARNUNG: Fremd-Ordner mit *.manifest in mods/ (nur im --check)"
+  debug:
+    msg: >-
+      WARNUNG: In {{ riftbreaker_mods_dir }} liegt ausser {{ riftbreaker_mod_dir }}
+      mindestens ein weiterer Ordner mit *.manifest ({{ riftbreaker_stray_mod_dirs }}).
+      Ein echter Deploy würde ihn wegschieben bzw. abbrechen.
+  when:
+    - ansible_check_mode
+    - riftbreaker_stray_mod_dirs | length > 0
+
+- name: Guard — hat eingegriffen? (Fact)
+  set_fact:
+    riftbreaker_guard_moved: "{{ riftbreaker_stray_mod_dirs | length > 0 }}"
+
+# ---------------------------------------------------------------------------
+# Mod-Stand prüfen und — nur bei Änderung — sichern und ausrollen.
+# ---------------------------------------------------------------------------
 - name: Mod-Zip md5 (planet) lesen
   stat:
     path: "{{ mods_zip_dest }}"
@@ -80,36 +192,159 @@
   register: mod_marker
   failed_when: false
 
-- name: rbbattle-Mod installieren (nur bei Änderung)
-  when: (mod_marker.content | default('')) != (rbbattle_zip_stat.stat.checksum | b64encode)
+- name: Vorhandenen Mod-Ordner prüfen
+  stat:
+    path: "{{ riftbreaker_mod_dir }}"
+  register: riftbreaker_mod_dir_stat
+
+- name: Mod-Update nötig? (Marker != Zip-md5)
+  set_fact:
+    riftbreaker_mod_update_needed: >-
+      {{ (mod_marker.content | default('')) != (rbbattle_zip_stat.stat.checksum | b64encode) }}
+
+- name: Erwartete Mod-Version bestimmen (Fact aus Rolle mods-zip)
+  set_fact:
+    riftbreaker_expected_version: "{{ mod_version | default('') | trim }}"
+
+- name: Backup-Zielpfad je Lauf festlegen (AUSSERHALB von mods/)
+  set_fact:
+    riftbreaker_mod_backup_path: "{{ riftbreaker_backup_dir }}/rbbattle-{{ ansible_date_time.iso8601_basic_short }}.tar.gz"
+  when: riftbreaker_mod_update_needed
+
+- name: Alten Mod-Stand sichern (tar.gz, AUSSERHALB von mods/)
+  command:
+    argv:
+      - tar
+      - -czf
+      - "{{ riftbreaker_mod_backup_path }}"
+      - -C
+      - "{{ riftbreaker_mods_dir }}"
+      - "{{ riftbreaker_mod_dir | basename }}"
+  when:
+    - riftbreaker_mod_update_needed
+    - riftbreaker_mod_dir_stat.stat.isdir | default(false)
+  register: riftbreaker_mod_backup
+  changed_when: true
+
+- name: Mod ausrollen, Container starten und verifizieren (Rollback aus Backup)
+  when: riftbreaker_mod_update_needed or riftbreaker_guard_moved
   block:
     - name: Alten Mod-Ordner entfernen
       file:
         path: "{{ riftbreaker_mod_dir }}"
         state: absent
+      when: riftbreaker_mod_update_needed
+
     - name: Mod-Ordner anlegen
       file:
         path: "{{ riftbreaker_mod_dir }}"
         state: directory
         mode: "0755"
+      when: riftbreaker_mod_update_needed
+
     - name: Mod-Zip entpacken (Content-Root = mod/)
       unarchive:
         src: "{{ mods_zip_dest }}"
         dest: "{{ riftbreaker_mod_dir }}"
         remote_src: true
+      when: riftbreaker_mod_update_needed
+
     # Der Marker ist die Änderungs-Erkennung; sein Schreiben notifyt den
-    # Restart-Handler (Mod-Änderung -> Container wirklich neu starten).
+    # Restart-Handler (Mod-Änderung -> Container wirklich neu starten). Der
+    # Handler wird unten VOR der Verifikation geflusht, damit der neue Stand im
+    # Log steht (Issue #209).
     - name: Deploy-Marker schreiben
       copy:
         content: "{{ rbbattle_zip_stat.stat.checksum }}"
         dest: "{{ riftbreaker_deploy_dir }}/rbbattle.md5"
         mode: "0644"
+      when: riftbreaker_mod_update_needed
       notify: restart riftbreaker-server
 
-- name: Container sicherstellen (docker compose up -d, idempotent)
+    - name: Container neu starten, damit die Verifikation den neuen Stand sieht
+      meta: flush_handlers
+
+    # Nur-Guard-Fall (Mod unverändert, aber Fremd-Ordner weggeschoben): der
+    # Handler wurde nicht notifyt, der Server muss trotzdem neu laden.
+    - name: Container neu laden (nur Guard-Eingriff, Mod unverändert)
+      command: >-
+        docker compose -f {{ riftbreaker_deploy_dir }}/docker-compose.yml
+        up -d --force-recreate --remove-orphans
+      when: not riftbreaker_mod_update_needed
+      changed_when: true
+
+    - name: Server-Log lesen ({{ riftbreaker_mod_log_cmd }})
+      command:
+        cmd: "{{ riftbreaker_mod_log_cmd }}"
+      register: riftbreaker_server_logs
+      changed_when: false
+      failed_when: false
+      when: not ansible_check_mode
+
+    - name: mod_load-Zeilen im Log ermitteln
+      set_fact:
+        riftbreaker_mod_load_lines: >-
+          {{ riftbreaker_server_logs.stdout | regex_findall('event=mod_load[^\n]*') }}
+      when: not ansible_check_mode
+
+    - name: Mod-Load verifizieren (genau eine Zeile, erwartete Version, keine Handler-Fehler)
+      assert:
+        that:
+          - riftbreaker_mod_load_lines | length == 1
+          - "'handler_errors' not in riftbreaker_server_logs.stdout"
+          - "'event_unreadable' not in riftbreaker_server_logs.stdout"
+          - >-
+            (riftbreaker_expected_version | length == 0)
+            or (('version=' ~ riftbreaker_expected_version)
+                in (riftbreaker_mod_load_lines | first | default('')))
+          - >-
+            (riftbreaker_expected_version | length == 0)
+            or ('status=ok' in (riftbreaker_mod_load_lines | first | default('')))
+        fail_msg: >-
+          DEPLOY-VERIFIKATION FEHLGESCHLAGEN: erwartet genau eine
+          `event=mod_load`-Zeile mit version={{ riftbreaker_expected_version | default('?') }}
+          und status=ok, ohne handler_errors/event_unreadable — gefunden
+          {{ riftbreaker_mod_load_lines | length }} mod_load-Zeile(n). Deploy
+          wird aus dem Backup zurückgerollt.
+        success_msg: "Verifikation OK: {{ riftbreaker_mod_load_lines | first }}"
+      when: not ansible_check_mode
+  rescue:
+    - name: Rollback — neuen Mod-Ordner verwerfen
+      file:
+        path: "{{ riftbreaker_mod_dir }}"
+        state: absent
+      when: riftbreaker_mod_backup is defined and (riftbreaker_mod_backup.changed | default(false))
+
+    - name: Rollback — Backup nach mods/ einspielen
+      command:
+        argv:
+          - tar
+          - -xzf
+          - "{{ riftbreaker_mod_backup_path }}"
+          - -C
+          - "{{ riftbreaker_mods_dir }}"
+      when: riftbreaker_mod_backup is defined and (riftbreaker_mod_backup.changed | default(false))
+
+    - name: Rollback — Container neu starten (alten Stand laden)
+      command: >-
+        docker compose -f {{ riftbreaker_deploy_dir }}/docker-compose.yml
+        up -d --force-recreate --remove-orphans
+      when: riftbreaker_mod_backup is defined and (riftbreaker_mod_backup.changed | default(false))
+
+    - name: Deploy als fehlgeschlagen werten (Guard/Verifikation)
+      fail:
+        msg: >-
+          riftbreaker-server-Deploy fehlgeschlagen — Guard bzw. Mod-Load-
+          Verifikation nicht erfüllt.
+          {{ ('Aus Backup zurückgerollt (' ~ riftbreaker_mod_backup_path ~ ').')
+             if (riftbreaker_mod_backup is defined and (riftbreaker_mod_backup.changed | default(false)))
+             else 'Kein Backup vorhanden (Erst-Deploy) — nichts zurückgerollt.' }}
+
+- name: Container sicherstellen (ohne Mod-Änderung/Guard-Eingriff)
+  when: not (riftbreaker_mod_update_needed or riftbreaker_guard_moved)
   command: docker compose -f {{ riftbreaker_deploy_dir }}/docker-compose.yml up -d --remove-orphans
-  register: riftbreaker_up
+  register: riftbreaker_up_idle
   changed_when: >-
-    ('Recreated' in riftbreaker_up.stdout)
-    or ('Created' in riftbreaker_up.stdout)
-    or ('Started' in riftbreaker_up.stdout)
+    ('Recreated' in riftbreaker_up_idle.stdout)
+    or ('Created' in riftbreaker_up_idle.stdout)
+    or ('Started' in riftbreaker_up_idle.stdout)

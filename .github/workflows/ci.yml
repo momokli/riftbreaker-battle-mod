@@ -49,6 +49,9 @@ jobs:
       - name: Unit-Test Mod-Updater (Issue #120)
         working-directory: tools/mod-updater
         run: python3 -m unittest test_mod_update -v
+      - name: Unit-Test Mods-Guard (Issue #212)
+        working-directory: tools/mods-guard
+        run: python3 -m unittest test_check_mods_dir -v
       - name: Lua Static Tests (fengari + luaparse, Issue #28)
         working-directory: tests/lua-static
         run: npm ci && npm test

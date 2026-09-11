@@ -58,6 +58,52 @@ Grundsätze:
   `ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass`.
 - **Rollback** = vorherige `rbbattle.zip` / vorheriges Binary wieder einspielen.
 
+## Mod-Backups & mods/-Guard (Issue #212)
+
+**Regel:** Mod-Backups liegen **NIE** innerhalb von `<server>/mods/` — weder
+als Ordner noch als `.tar.gz`. Zielpfad ist außerhalb, z. B.
+`/srv/riftbreaker/backups/` (rollen-seitig `{{ riftbreaker_backup_dir }}`,
+Default `{{ riftbreaker_game_dir }}-backups`).
+
+**Warum (Befund planet, 2026-09-10):** Der Dedicated Server scannt **alle**
+Unterordner von `<server>/mods/` und lädt jeden Ordner mit einer `*.manifest`
+als eigene External-Content-Mod — unabhängig vom Ordnernamen. Ein Backup-Ordner
+mit gleicher Content-ID (`rbbattle.bak-<ts>/`) wird **zusätzlich** geladen: die
+Versionskonstante wird überschrieben (Log zeigte fälschlich
+`event=mod_load version=0.27.3`, obwohl die aktive Datei `0.33.0` war) und beide
+Kopien registrieren ihre Handler doppelt →
+`[RBBATTLE] event=economy_source source=tick status=fallback
+reason=handler_errors err=lua/rbbattle_autoexec.lua:1084: event_unreadable`.
+Nach Entfernen des Ordners aus `mods/` + Container-Restart:
+`event=mod_load version=0.33.0 status=ok`, keine `handler_errors`.
+
+**Durchgesetzt in drei Stufen** (Rolle `deploy/roles/riftbreaker-server`):
+
+1. **Backups außerhalb** — der alte Mod-Stand wird als
+   `{{ riftbreaker_backup_dir }}/rbbattle-<ts>.tar.gz`
+   (`tar -C <mods> rbbattle`) gesichert; entpackt wird immer nur nach
+   `mods/rbbattle/`.
+2. **Guard vor dem Deploy** (idempotenter Ansible-Task) — außer dem Ziel-Mod
+   (`rbbattle/`) darf kein weiterer Ordner mit `*.manifest` in `mods/` liegen.
+   Fremd-Ordner werden nach `{{ riftbreaker_backup_dir }}/stray-<ts>/`
+   weggeschoben (`riftbreaker_mods_guard_autofix: true`, Default); danach prüft
+   ein `assert` hart nach. Mit `riftbreaker_mods_guard_autofix: false` bricht
+   der Deploy stattdessen sofort ab.
+3. **Post-Deploy-Verifikation** — `docker logs` (bzw. `riftbreaker_mod_log_cmd`)
+   muss genau **eine** `event=mod_load`-Zeile mit der erwarteten Version +
+   `status=ok` enthalten und **keine** `handler_errors`/`event_unreadable`.
+   Schlägt das fehl, wertet die Rolle den Deploy als fehlgeschlagen und rollt
+   aus dem `rbbattle-<ts>.tar.gz` zurück (sofern vorhanden) + startet den
+   Container neu; erst dann `fail`.
+
+**Kontrollwerkzeug / Regression-Check** (lokal + CI, Exit 1 = Fremd-Ordner):
+
+```bash
+python3 tools/mods-guard/check_mods_dir.py /srv/rbgame/mods
+```
+
+Siehe [`tools/mods-guard/`](../tools/mods-guard/README.md).
+
 ## Continuous Deploy (CD) — Issue #91
 
 Nach jedem Merge auf `main` deployt
@@ -119,27 +165,37 @@ ssh planet md5sum /tmp/rbbattle.zip        # remote, muss übereinstimmen
 #    Sind Spieler online: NICHT neu starten, im Issue vermerken.
 ssh planet 'tail -3 "/srv/riftbreaker/data/wine/drive_c/users/steamuser/Documents/The Riftbreaker/exor_logs.txt"'
 
-# 4) Mod ersetzen (Backup + entpacken, Ownership beibehalten):
-ssh planet 'cd /srv/riftbreaker/data/server/mods && \
-  tar -czf rbbattle.bak-$(date +%Y%m%d-%H%M%S).tar.gz rbbattle && \
+# 3b) Guard: in mods/ darf außer rbbattle/ KEIN weiterer Ordner mit *.manifest
+#     liegen (sonst lädt der Server Backup-/Fremd-Kopien zusätzlich).
+ssh planet 'find /srv/riftbreaker/data/server/mods -name "*.manifest" \
+  -printf "%h\n" 2>/dev/null | sort -u | grep -v "/mods/rbbattle$"'   # leer = ok
+
+# 4) Mod ersetzen — Backup AUSSERHALB von mods/, entpacken, Ownership beibehalten:
+ssh planet 'mkdir -p /srv/riftbreaker/backups && cd /srv/riftbreaker/data/server/mods && \
+  tar -czf /srv/riftbreaker/backups/rbbattle-$(date +%Y%m%d-%H%M%S).tar.gz rbbattle && \
   rm -rf rbbattle && mkdir rbbattle && \
   unzip -q /tmp/rbbattle.zip -d rbbattle && chown -R momo:momo rbbattle'
 
 # 5) Container neu starten:
 ssh planet 'cd /srv/riftbreaker && docker compose restart riftbreaker-server'
 
-# 6) Smoke-Test: mod_load version=<VERSION> status=ok, Container healthy, Port 6321/udp offen.
+# 6) Smoke-Test: GENAU EINE mod_load-Zeile mit erwarteter Version + status=ok,
+#    KEINE handler_errors/event_unreadable; Container healthy, Port 6321/udp offen.
+#    (Andernfalls: Deploy als fehlgeschlagen werten + Backup zurückrollen.)
+ssh planet 'grep -a -c mod_load "/srv/riftbreaker/data/wine/drive_c/users/steamuser/Documents/The Riftbreaker/exor_logs.txt"'
 ssh planet 'grep -a mod_load "/srv/riftbreaker/data/wine/drive_c/users/steamuser/Documents/The Riftbreaker/exor_logs.txt" | tail -1'
 ```
 
 Mod-Ordner (Host → Container): `data/server/mods/rbbattle` →
 `/opt/riftbreaker/mods/rbbattle`. `exor_logs.txt`:
 `data/wine/drive_c/users/steamuser/Documents/The Riftbreaker/`.
-Rollback: Backup-`tar.gz` unter `data/server/mods/` zurückentpacken + neu starten.
+Rollback: Backup-`tar.gz` aus `/srv/riftbreaker/backups/` nach
+`data/server/mods/` zurückentpacken + Container neu starten.
 
 ## Betriebsregeln
 
 - Mod-Parität vor jedem Release prüfen (md5).
+- Mod-Backups **nie** in `<server>/mods/` (siehe „Mod-Backups & mods/-Guard").
 - Live-Tests nur bei leerem Server.
 - Keine Credentials in Repo/Logs; `exor_logs` im Container, `rbbridge.log` im Temp.
 - SSH mesh-first (Tailscale), nie über Public-IPs.

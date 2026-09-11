@@ -358,7 +358,7 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 |---|---|---|
 | `headless-client-image` | docker | baut `rb-headless-client:<deploy-sha>` auf planet (gemeinsame Laufzeit :6321/:6322) |
 | `game-content` | steamcmd/sync | Dedicated-Server-Content (App 4114030) nach `riftbreaker_game_dir` (idempotent, fail loud) |
-| `riftbreaker-server` | docker | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install + Restart-Handler |
+| `riftbreaker-server` | docker | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation |
 | `vanilla-server` | docker | Vanilla 6322, kein Mod, gleiches Image |
 | `tournament-server` | systemd | Rust/axum Referee + Web-UI (Binary aus `tournament/`) |
 | `website` | statics + Caddy | `site/*` → Docroot, Caddy-Snippet + `/tournament/*`-Proxy |
@@ -450,3 +450,19 @@ Mod-Zips.
 (siehe unten), der Actions-Runner + seine Dependencies
 (`.github/runner/setup.sh`), der SSH-Zugang des Runners für `deploy-check`,
 Caddy-Container selbst (`mellon-caddy`), DNS/TLS.
+
+## Mod-Backups & mods/-Guard (Issue #212)
+
+Mod-Backups liegen **nie** in `<server>/mods/` (der Dedicated Server lädt jeden
+Ordner mit `*.manifest` als eigene Mod → Versionskonflikt + doppelte Handler).
+Die Rolle `riftbreaker-server`
+
+- sichert den alten Mod-Stand nach `{{ riftbreaker_backup_dir }}` (`rbbattle-<ts>.tar.gz`),
+- fährt vor dem Deploy einen **Guard** (Fremd-Ordner mit `*.manifest` in `mods/`
+  werden weggeschoben bzw. der Deploy bricht ab),
+- **verifiziert** nach dem Deploy `docker logs` (genau eine `event=mod_load`-Zeile,
+  erwartete Version, keine `handler_errors`/`event_unreadable`) und rollt sonst
+  aus dem Backup zurück.
+
+Regel, Befund und Kontrollwerkzeug (`tools/mods-guard/check_mods_dir.py`):
+[`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md) → „Mod-Backups & mods/-Guard".
