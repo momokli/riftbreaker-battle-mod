@@ -29,9 +29,15 @@ jobs:
         run: |
           shellcheck \
             scripts/*.sh \
+            tests/shell/*.sh \
             bausteine/*/test_e2e*.sh \
             bausteine/07-relay/fake-log.sh \
             tools/headless-client/*.sh
+
+      # Red/Green-Beweis, dass die Probe ehrlich meldet (Issue #246): ohne
+      # gebundenen Socket => udpOk=false. Braucht kein Docker (Fake-docker).
+      - name: Probe-Honesty (Fake-Docker, planetfrei)
+        run: tests/shell/probe-servers.test.sh
 
   python-lint:
     name: Python-Lint (ruff + compileall)
