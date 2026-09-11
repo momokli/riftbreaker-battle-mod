@@ -129,8 +129,10 @@ Mod-Stand automatisch auf den Solo-DEV-Server aus (planet, Port 6321).
 
 Topologie (Issue #91, 2026-09-10): **EIN** Server auf `:6321` statt
 Steam-/Non-Steam-Dualität (Direct-IP, `disable_steam "1"` deckt beide Stores ab).
-Der **Tag→prod-Kanal ist vorerst gestrichen** — der Workflow kennt bewusst
-keinen Tag-Trigger und keine prod-Umgebung.
+Der **Tag→prod-Kanal ist on hold** (vorerst gestrichen): reaktiviert, sobald
+ein **zweites Deploy-Target** existiert — aktuell gibt es genau EINEN Server
+(planet, :6321). Der Workflow kennt bewusst keinen Tag-Trigger und keine
+prod-Umgebung.
 
 ## CD: SSH-Deploy (dedizierter deploy-User)
 
@@ -283,7 +285,7 @@ git -C /opt/rbbattle-deploy/repo log --oneline -3
 - [ ] Root-Weg: Ansible (venv) + Wrapper + sudoers + `vault.pass` + Loopback-SSH
 - [ ] `vault.yml` verschlüsselt + befüllt (falls noch `CHANGE_ME`)
 - [ ] Alter Hook dekommissioniert: `systemctl disable --now rbbattle-deploy-hook` + Unit-Datei entfernt
-- [ ] GitHub: `DEPLOY_TOKEN`-Secret gelöscht (obsolet)
+- [x] GitHub: `DEPLOY_TOKEN`-Secret gelöscht (obsolet)
 - [ ] Erster Merge auf `main`: Deploy-Lauf grün
 ## deploy-check (PR-Gate)
 

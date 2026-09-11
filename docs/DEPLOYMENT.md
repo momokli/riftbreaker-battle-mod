@@ -149,14 +149,18 @@ forced command (`deploy/deploy-ssh.sh`) validiert die SHA, macht
 
 Topologie (Momo-Entscheidung, 2026-09-10): **EIN** Server auf `:6321` statt
 Steam-/Non-Steam-Dualität; ein Direct-IP-Server (`disable_steam "1"`) deckt
-beide Stores ab. Der **Tag→prod-Kanal ist gestrichen**: `tags: ['v*']` sind seit
-Issue #209 **reine Marker** (kein Tag-Trigger, keine GitHub-Releases, keine
-prod-Umgebung im Workflow). Veröffentlichter Download ist der deployte Stand
+beide Stores ab. Der **Tag→prod-Kanal ist on hold** (vorerst gestrichen):
+`tags: ['v*']` sind seit Issue #209 **reine Marker** (kein Tag-Trigger, keine
+GitHub-Releases, keine prod-Umgebung im Workflow). Reaktiviert wird der Kanal,
+sobald ein **zweites Deploy-Target** existiert — aktuell gibt es genau EINEN
+Server (planet, :6321). Veröffentlichter Download ist der deployte Stand
 `https://rift.projectmellon.de/mods/rbbattle.zip`.
 
-Einziges GitHub-Secret ist `DEPLOY_TOKEN` im Environment `dev` (Bearer-Token
-Hook ↔ Workflow). Das Vault-Passwort liegt ausschließlich root-only auf planet
-(`/etc/rbbattle-deploy/vault.pass`) und wird nie im Repo oder in Logs ausgegeben.
+Der HTTP-Hook ist seit 2026-09-11 durch den SSH-Deploy abgelöst (Issue #235);
+das `DEPLOY_TOKEN`-Secret im Environment `dev` wurde gelöscht — **es gibt kein
+GitHub-Secret mehr**. Das Vault-Passwort liegt ausschließlich root-only auf
+planet (`/etc/rbbattle-deploy/vault.pass`) und wird nie im Repo oder in Logs
+ausgegeben.
 
 ## Server-Passwort (Vault)
 
