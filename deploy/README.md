@@ -275,6 +275,28 @@ git -C /opt/rbbattle-deploy/repo log --oneline -3
 `deploy/deploy-ssh.sh` aktualisieren (bei Änderungen):
 `sudo install -m 0755 deploy/deploy-ssh.sh /opt/rbbattle-deploy/deploy-ssh.sh`.
 
+### Park, Force & Timeout (Issue #238)
+
+Seit 2026-09-12 parkt der CD-Lauf **vor** dem SSH-Deploy, bis **0 Spieler
+online** sind (Gate-Step in `deploy.yml`, Provider
+`tools/deploy-gate/player_count.py`, Quelle = Container-Log). Der geparkte
+Zustand steht im Job-Log (`deploy-gate: geparkt (n Spieler online)`) und in der
+Step-Summary („geparkt, n Spieler online, warte auf 0").
+
+- **Force (Sofort-Deploy):** Actions → „Deploy (CD)" → **Run workflow** auf
+  `main` mit `force=true` — deployt unabhängig von der Spielerzahl.
+- **Timeout:** Park-Deadline ist per Default 1800 s (30 min; Job
+  `timeout-minutes: 60`), überschreibbar über den Dispatch-Input `timeout`.
+  Läuft die Deadline ab, wird der Step **rot** und es findet **kein** Deploy
+  statt (fail loud, nichts hängt unbegrenzt).
+- **Re-run:** Bei Timeout/Failure den Workflow **re-run** (oder Dispatch mit
+  `force=true`).
+
+**Troubleshooting:** Parkt der Lauf direkt nach einem Server-Restart, obwohl
+niemand spielt, fehlt im Log noch die `PauseGame`-Zeile → der Provider ist
+bewusst konservativ unsicher und parkt bis Timeout (nie blind deployen). Ausweg:
+re-run oder `force=true`.
+
 ### Migrations-Checkliste
 
 - [ ] `deploy`-User + Verzeichnisse + Checkout (Schritt 1)
