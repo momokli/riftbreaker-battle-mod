@@ -1,0 +1,95 @@
+name: Dedicated Server Image
+
+# CI baut das Dedicated-Server-Image und pusht es nach GHCR (Issue #247).
+# Der Deploy zieht das Image aus GHCR (Rolle dedicated-server-image) — ein
+# main-SHA = ein Image, reproduzierbar (Basis-Digest + winetricks-Commit gepinnt).
+#
+# Trigger:
+#   * push auf main OHNE paths-Filter → jeder main-SHA bekommt ein Image
+#     (der Deploy-Tag ist genau dieser main-SHA).
+#   * pull_request nur bei Image-relevanten Pfaden (Fork-PRs bauen nur, ohne Push).
+#   * workflow_dispatch für einen manuellen Rebuild.
+#
+# Nur offizielle Actions (actions/checkout) — kein Third-Party. Läuft auf dem
+# self-hosted Runner auf planet, damit der Build-Layer-Cache warm bleibt.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'tools/dedicated-server/**'
+      - '.github/workflows/dedicated-server-image.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-push:
+    name: build-push
+    runs-on: [self-hosted, planet]
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Push-Berechtigung bestimmen (Fork-PRs nur bauen)
+        id: gate
+        run: |
+          set -euo pipefail
+          push="true"
+          if [ "${{ github.event_name }}" = "pull_request" ] \
+             && [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+            push="false"
+            echo "Fork-PR — nur Build, kein Login/Push nach GHCR."
+          fi
+          echo "push=$push" >> "$GITHUB_OUTPUT"
+
+      - name: Image-Name und Tags berechnen
+        id: meta
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            sha="${{ github.event.pull_request.head.sha }}"
+          else
+            sha="${{ github.sha }}"
+          fi
+          short="$(printf '%s' "$sha" | cut -c1-12)"
+          image="ghcr.io/${{ github.repository_owner }}/riftbreaker-dedicated"
+          tags="$image:sha-$short"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            tags="$tags,$image:pr-${{ github.event.pull_request.number }}"
+          fi
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            tags="$tags,$image:latest"
+          fi
+          {
+            echo "image=$image"
+            echo "tags=$tags"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Login GHCR
+        if: steps.gate.outputs.push == 'true'
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Docker-Image bauen
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra tag_args <<< "${{ steps.meta.outputs.tags }}"
+          args=()
+          for t in "${tag_args[@]}"; do
+            args+=(--tag "$t")
+          done
+          docker build "${args[@]}" tools/dedicated-server
+
+      - name: Docker-Image nach GHCR pushen
+        if: steps.gate.outputs.push == 'true'
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra tag_args <<< "${{ steps.meta.outputs.tags }}"
+          for t in "${tag_args[@]}"; do
+            docker push "$t"
+          done

@@ -11,10 +11,13 @@ riftbreaker_mod_dir: "{{ riftbreaker_game_dir }}/mods/rbbattle"
 # jeden Backup-Ordner mit *.manifest als zweite Mod (Befund 2026-09-10,
 # Issue #212; Guard + Verifikation in der Rolle).
 riftbreaker_backup_dir: "{{ riftbreaker_game_dir }}-backups"
-# Laufzeit-Image (Rolle dedicated-server-image, Issue #241, Community-Rezept).
+# Laufzeit-Image (Rolle dedicated-server-image, Issue #241/#247,
+# Community-Rezept). Das Image wird im CI gebaut und nach GHCR gepusht
+# (siehe tools/dedicated-server/README.md); der Deploy ZIEHT es von dort.
 # Tag = Deploy-SHA aus site.yml (pre_tasks) — KEIN `latest`; das Image existiert
-# garantiert, bevor der Container startet.
-dedicated_server_image_name: rb-dedicated
+# garantiert, bevor der Container startet. Fehlt der Tag in GHCR, baut die
+# Rolle lokal als Fallback.
+dedicated_server_image_name: ghcr.io/momokli/riftbreaker-dedicated
 dedicated_server_image: "{{ dedicated_server_image_name }}:{{ deploy_image_tag }}"
 riftbreaker_server_image: "{{ dedicated_server_image }}"
 riftbreaker_server_container: riftbreaker-dedicated

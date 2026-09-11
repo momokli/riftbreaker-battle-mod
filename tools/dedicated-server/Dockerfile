@@ -2,7 +2,12 @@
 # winetricks, Xvfb, Gecko/Mono — gepflegtes, getestetes Wine-Setup). Wir ergänzen
 # nur noch den steamuser + unsere Entrypoint-/Init-Scripts. Content wird als
 # Volume gemountet (kein SteamCMD im Image).
-FROM scottyhardy/docker-wine:latest
+#
+# Digest-Pin (Issue #247): entspricht scottyhardy/docker-wine:latest vom
+# 2026-09-12 (Ubuntu 24.04 noble, wine-11.0). Aktualisieren:
+#   docker buildx imagetools inspect scottyhardy/docker-wine:latest
+#   → den neuen linux/amd64-Digest unten in FROM eintragen.
+FROM scottyhardy/docker-wine@sha256:e1cbc2d83a945a88702654a028fc18f596a65b3e7d585b7fc0afbed92109e81b
 
 ENV INSTALL_DIR=/opt/riftbreaker \
     WINEPREFIX=/data/.wine \
@@ -11,12 +16,25 @@ ENV INSTALL_DIR=/opt/riftbreaker \
     WINEDLLOVERRIDES="mscoree,mshtml=" \
     STEAM_USER=steamuser
 
-# procps für pgrep (HEALTHCHECK). steamuser für den Container-User.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends procps \
-    && rm -rf /var/lib/apt/lists/* \
+# procs (pgrep für den HEALTHCHECK) und useradd sind im Basis-Image bereits
+# vorhanden (im Container verifiziert, Issue #247) → KEIN apt im Image, damit
+# auch keine ungepinnten Pakete. Die Assertion lässt den Build laut scheitern,
+# falls ein künftiges Basis-Image diese Tools verliert.
+RUN command -v pgrep >/dev/null \
+    && command -v useradd >/dev/null \
     && useradd -m -s /bin/bash "${STEAM_USER}" \
     && mkdir -p "${INSTALL_DIR}"
+
+# winetricks auf Commit pinnen statt den master-Branch des Basis-Images zu nutzen.
+# wget lädt das Skript des Release-Commits; sha256sum -c verifiziert es vor der
+# Nutzung. Aktualisieren: Commit + SHA256 des Blobs `src/winetricks` aus
+# https://github.com/Winetricks/winetricks/releases übernehmen.
+ARG WINETRICKS_COMMIT=b76e1ee79ac57d7aceb384f74518fc423265810c
+ARG WINETRICKS_SHA256=431f82fc74000e6c864409f1d8fb495d696c03928808e3e8acffc45179312a7b
+RUN wget -nv -O /usr/bin/winetricks \
+        "https://raw.githubusercontent.com/Winetricks/winetricks/${WINETRICKS_COMMIT}/src/winetricks" \
+    && echo "${WINETRICKS_SHA256}  /usr/bin/winetricks" | sha256sum -c - \
+    && chmod +x /usr/bin/winetricks
 
 COPY --chown=${STEAM_USER}:${STEAM_USER} scripts/ /scripts/
 RUN sed -i 's/\r$//' /scripts/*.sh && chmod +x /scripts/*.sh

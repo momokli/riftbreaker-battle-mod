@@ -33,10 +33,56 @@ Wine-Laufzeit als der headless Client:
 | `scripts/install-update.sh` | steamcmd `app_update 4114030` (Content) |
 | `config/config.cfg.example` | Vorlage Server-Config (LAN/Direct-IP-Modus) |
 
-## Build
+## Build (CI → GHCR, Issue #247)
+
+Das Image wird **im CI gebaut und nach GHCR gepusht** —
+`.github/workflows/dedicated-server-image.yml`:
+
+- Push auf `main` (ohne paths-Filter) → jeder main-SHA bekommt ein Image.
+- PR mit Änderungen unter `tools/dedicated-server/**` → Build (kein Push bei Fork-PRs).
+- `workflow_dispatch` für einen manuellen Rebuild.
+
+**Image-Name:** `ghcr.io/momokli/riftbreaker-dedicated`
+
+**Tags:**
+
+| Tag | Wann |
+|---|---|
+| `sha-<12>` | immer (Head-Commit des Events) |
+| `latest` | zusätzlich auf `main` |
+| `pr-<nummer>` | zusätzlich bei Pull Requests (nur Repo-eigene) |
+
+Der **Deploy zieht** das Image aus GHCR (Rolle `dedicated-server-image`,
+`dedicated_server_image` = `ghcr.io/momokli/riftbreaker-dedicated:<deploy-sha>`).
+Der lokale Build in der Rolle ist **nur Fallback**, wenn der Tag in GHCR noch
+fehlt (z. B. PR-Gate).
+
+### Pins aktualisieren
+
+Reproduzierbar sind Basis-Image und winetricks gepinnt:
+
+- **Basis-Image (`FROM ...@sha256:...`)** — aktueller Digest entspricht
+  `scottyhardy/docker-wine:latest` vom 2026-09-12 (Ubuntu 24.04, wine-11.0):
+
+  ```bash
+  docker buildx imagetools inspect scottyhardy/docker-wine:latest
+  #   → neuen linux/amd64-Digest in tools/dedicated-server/Dockerfile eintragen
+  ```
+
+- **winetricks (`ARG WINETRICKS_COMMIT` / `WINETRICKS_SHA256`)** — Commit +
+  SHA256 des Blobs `src/winetricks` aus den
+  [Winetricks-Releases](https://github.com/Winetricks/winetricks/releases):
+
+  ```bash
+  COMMIT=<release-commit>
+  curl -fsSL "https://raw.githubusercontent.com/Winetricks/winetricks/$COMMIT/src/winetricks" \
+    | sha256sum
+  ```
+
+### Lokaler Build (Fallback/Debug)
 
 ```bash
-docker build -t rb-dedicated tools/dedicated-server
+docker build -t ghcr.io/momokli/riftbreaker-dedicated:dev tools/dedicated-server
 ```
 
 Der Entrypoint erwartet beim Start `config.cfg` unter `/data/config/config.cfg`

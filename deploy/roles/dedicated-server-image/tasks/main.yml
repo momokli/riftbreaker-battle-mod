@@ -1,37 +1,61 @@
 ---
-# Rolle: dedicated-server-image (Issue #241) — baut rb-dedicated:<deploy-sha>
-# auf dem Zielhost. Das Image ist die Wine-Laufzeit für :6321.
+# Rolle: dedicated-server-image (Issue #241/#247) — stellt das Laufzeit-Image
+# rb-dedicated im Tag {{ deploy_image_tag }} auf dem Zielhost bereit.
 #
-# Idempotenz: Der Tag ist der Deploy-SHA. Existiert das Image bereits, kein
-# Build; sonst greift der Docker-Layer-Cache. Vor dem Containerstart wird hart
-# geprüft, dass das Image existiert.
-
-- name: Build-Kontext-Verzeichnis sicherstellen
-  file:
-    path: "{{ dedicated_server_context_dir }}"
-    state: directory
-    mode: "0755"
-
-- name: Build-Kontext synchronisieren (tools/dedicated-server)
-  copy:
-    src: "{{ playbook_dir }}/../tools/dedicated-server/"
-    dest: "{{ dedicated_server_context_dir }}/"
-    mode: preserve
-    directory_mode: "0755"
-  register: dedicated_server_context
+# Seit Issue #247 wird das Image im CI gebaut und nach GHCR gepusht
+# (`ghcr.io/momokli/riftbreaker-dedicated`). Der Deploy ZIEHT zuerst aus GHCR.
+# Nur wenn der Tag dort noch fehlt (z. B. PR-Gate / noch nicht veröffentlichter
+# SHA) wird lokal als Fallback gebaut — mit denselben gepinnten Inputs
+# (Basis-Digest + winetricks-Commit) → weiterhin reproduzierbar.
+#
+# --check (deploy-check): KEIN pull und KEIN build → keine Side-Effects auf
+# planet. Read-only-Abfragen (docker image inspect) dürfen laufen.
 
 # Read-only-Abfrage, läuft auch im --check (check_mode: false).
-- name: Image-Existenz prüfen (rb-dedicated:{{ deploy_image_tag }})
+- name: Image-Existenz prüfen ({{ dedicated_server_image }})
   command: docker image inspect "{{ dedicated_server_image }}"
   register: dedicated_server_image_info
   changed_when: false
   failed_when: false
   check_mode: false
 
-- name: Dedicated-Server-Image bauen (nur bei fehlendem Tag)
+# Erste Wahl (Issue #247): das Image aus GHCR ziehen. failed_when: false, damit
+# ein noch nicht veröffentlichter Tag den Fallback-Build statt eines Abbruchs
+# auslöst.
+- name: Image aus GHCR ziehen ({{ dedicated_server_image }})
+  command: docker pull "{{ dedicated_server_image }}"
+  register: dedicated_server_image_pull
+  failed_when: false
+  changed_when: dedicated_server_image_pull.rc == 0
+  check_mode: false
+  when: not ansible_check_mode
+
+# --- Fallback: nur wenn der Tag (noch) nicht verfügbar ist -------------------
+- name: Build-Kontext-Verzeichnis sicherstellen (Fallback)
+  file:
+    path: "{{ dedicated_server_context_dir }}"
+    state: directory
+    mode: "0755"
+  when:
+    - not ansible_check_mode
+    - dedicated_server_image_info.rc != 0
+
+- name: Build-Kontext synchronisieren (tools/dedicated-server, Fallback)
+  copy:
+    src: "{{ playbook_dir }}/../tools/dedicated-server/"
+    dest: "{{ dedicated_server_context_dir }}/"
+    mode: preserve
+    directory_mode: "0755"
+  when:
+    - not ansible_check_mode
+    - dedicated_server_image_info.rc != 0
+
+- name: Dedicated-Server-Image bauen (Fallback, nur bei fehlendem Tag)
   command: >-
     docker build --tag {{ dedicated_server_image }} {{ dedicated_server_context_dir }}
-  when: dedicated_server_image_info.rc != 0
+  when:
+    - not ansible_check_mode
+    - dedicated_server_image_info.rc != 0
   register: dedicated_server_build
   changed_when: dedicated_server_build.rc == 0
   failed_when: dedicated_server_build.rc != 0
@@ -39,10 +63,11 @@
 - name: Image garantiert vorhanden, bevor Container starten
   assert:
     that:
-      - dedicated_server_image_info.rc == 0
+      - dedicated_server_image_pull.rc | default(1) == 0
+        or dedicated_server_image_info.rc == 0
         or (dedicated_server_build.rc | default(1)) == 0
     fail_msg: >-
-      Image {{ dedicated_server_image }} fehlt und wurde nicht erfolgreich
-      gebaut — Containerstart wird abgebrochen. Kontext:
-      {{ dedicated_server_context_dir }}
+      Image {{ dedicated_server_image }} fehlt: Pull aus GHCR fehlgeschlagen und
+      lokaler Fallback-Build nicht erfolgreich. Containerstart wird abgebrochen.
+      Kontext: {{ dedicated_server_context_dir }}
   when: not ansible_check_mode

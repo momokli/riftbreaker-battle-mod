@@ -364,6 +364,16 @@ deploy/
   Shell-Kommandos interpoliert. Kein Root-Login — root nur über enges sudoers
   (ein Kommando, ohne Argumente).
 
+## Images: CI baut, Deploy zieht (Issue #247)
+
+Das Laufzeit-Image des Dedicated Servers wird im CI gebaut und nach GHCR
+gepusht (`ghcr.io/momokli/riftbreaker-dedicated`, siehe
+[tools/dedicated-server/README.md](../tools/dedicated-server/README.md)). Die
+Rolle `dedicated-server-image` **pullt** es im Deploy
+(`ghcr.io/momokli/riftbreaker-dedicated:<deploy-sha>`); nur wenn der Tag in
+GHCR fehlt (z. B. PR-Gate), baut sie lokal als Fallback — mit gepinnten Inputs
+(Basis-Digest + winetricks-Commit), also weiterhin reproduzierbar.
+
 ## Rollback
 
 Der Deploy ist an die Revision (SHA) gebunden (Image-Tag + Checkout). Rollback

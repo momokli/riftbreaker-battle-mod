@@ -1,9 +1,13 @@
 ---
-# Rolle: dedicated-server-image (Issue #241) — baut rb-dedicated:<deploy-sha>
-# auf dem Zielhost. Das Image ist die Wine-Laufzeit für :6321
-# (Community-Rezept j3n5-group/riftbreaker-docker, vendored unter
+# Rolle: dedicated-server-image (Issue #241/#247) — stellt das Laufzeit-Image
+# rb-dedicated:<deploy-sha> auf dem Zielhost bereit (Wine-Laufzeit für :6321,
+# Community-Rezept j3n5-group/riftbreaker-docker, vendored unter
 # tools/dedicated-server/). Tag = Deploy-SHA (kein `latest`).
+#
+# Bevorzugt wird das im CI (Issue #247) gebaute Image aus GHCR gezogen; nur
+# wenn der Tag dort fehlt, baut die Rolle lokal als Fallback.
 
-# Staging-Verzeichnis für den Build-Kontext auf dem Zielhost. Der Kontext wird
-# aus dem Repo-Checkout (tools/dedicated-server) dorthin synchronisiert.
+# Staging-Verzeichnis für den Build-Kontext auf dem Zielhost (nur für den
+# Fallback-Build). Der Kontext wird aus dem Repo-Checkout
+# (tools/dedicated-server) dorthin synchronisiert.
 dedicated_server_context_dir: /opt/rbmods/dedicated-server
