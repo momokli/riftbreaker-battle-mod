@@ -47,8 +47,20 @@ riftbreaker_backup_dir: "{{ riftbreaker_game_dir }}-backups"
 riftbreaker_mods_guard_autofix: true
 
 # Quelle für den Post-Deploy-Log-Check (genau eine mod_load-Zeile, erwartete
-# Version, keine handler_errors). Kanonischer Mod-Log ist exor_logs.txt; je nach
-# Image erscheinen die Zeilen auch in `docker logs`. Bei Bedarf auf einen
-# EINZELNEN Befehl (kein Pipe) übersteuern, z. B.:
-#   riftbreaker_mod_log_cmd: "cat {{ riftbreaker_game_dir }}/.../exor_logs.txt"
-riftbreaker_mod_log_cmd: "docker logs --tail 5000 {{ riftbreaker_server_container }}"
+# Version, keine handler_errors).
+#
+# Der Dedicated Server schreibt seinen Lua-Log NICHT nach stdout: `docker logs`
+# enthält nur die zwei Wrapper-Zeilen von `run-server.sh` (`starte Xvfb…` /
+# `starte: wine bin/DedicatedServer.exe …`). `event=mod_load`,
+# `handler_errors` und `event_unreadable` landen in `exor_logs.txt` im
+# Wine-Prefix des Containers. Im Prefix ist das Windows-`Documents` des Users
+# `root` ein Symlink auf `$HOME` (`drive_c/users/root/Documents -> /root`),
+# deshalb liegt der echte Log unter `/root/exor_logs.txt`. Befund planet
+# 2026-09-11 (Issue #224)
+#   docker exec {{ riftbreaker_server_container }} \
+#     readlink -f /root/.wine/drive_c/users/root/Documents   # -> /root
+#
+# Ein EINZELNER Befehl (kein Pipe) — der Task nutzt `command`, kein `shell`.
+# Robustere Variante wäre ein Bind-Mount des Wine-Prefix auf den Host (dann
+# `cat <hostpfad>/exor_logs.txt`); bis dahin liest der Container den Log selbst.
+riftbreaker_mod_log_cmd: "docker exec {{ riftbreaker_server_container }} cat /root/exor_logs.txt"
