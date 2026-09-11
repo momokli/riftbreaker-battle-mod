@@ -136,7 +136,7 @@ local function wave()
 end
 
 -- 1. Mod geladen, rb_boost registriert, Boost-Chokepoint-Hook aktiv.
-check(log_has("event=mod_load version=0.33.0"), "mod_load version=0.33.0")
+check(log_has("event=mod_load version=0.34.0"), "mod_load version=0.34.0")
 check(_G.__commands["rb_boost"] ~= nil, "rb_boost registriert")
 check(log_has("event=boost patch status=ok"), "boost patch ok (SpawnWavesForDifficultyLevel-Hook aktiv)")
 
