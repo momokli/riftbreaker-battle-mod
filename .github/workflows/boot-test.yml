@@ -85,10 +85,10 @@ jobs:
           [ "$RESTARTING" = "false" ] || { echo "::error::Test-Container ist in einer Crash-Loop."; exit 1; }
 
           # HARTES Bind-Gate (Issue #239): "Container läuft" allein ist kein
-          # Beweis — der DedicatedServer kann im Console-Init hängen (cli=1
-          # ohne tty/stdin_open) und NIE einen UDP-Socket binden; genau so war
-          # main grün, obwohl :6321 auf planet keinen Listener hatte. Darum
-          # wird hier der gebundene UDP-Socket im Test-Container assertet.
+          # Beweis — der DedicatedServer kann hängen (Console-Init) und NIE
+          # einen UDP-Socket binden; genau so war main grün, obwohl :6321 auf
+          # planet keinen Listener hatte. Darum wird hier der gebundene
+          # UDP-Socket im Test-Container assertet.
           # Test-Port 6323 = 0x18b3; /proc/net/udp* listet local_address als
           # "<ip>:<port-hex>". Bis zu 150 s pollen (Welt-Boot unter Wine/llvmpipe).
           UDP_HEX="18b3"
@@ -102,8 +102,22 @@ jobs:
             sleep 5
           done
           if [ "$BOUND" != "true" ]; then
-            echo "::error::riftbreaker-dedicated-test hat keinen UDP-Socket auf 6323 gebunden — DedicatedServer hängt im Console-Init (cli=1 ohne tty/stdin_open) und ist nicht joinable (Issue #239)."
-            ssh planet "docker exec riftbreaker-dedicated-test sh -lc 'cat /proc/net/udp /proc/net/udp6 2>/dev/null || true'" || true
+            # Diagnose: was macht der Server? (CPU-Zeit steigt = bootet, wchan=
+            # pipe_read/poll_schedule = hängt; Logs zeigen den letzten Schritt.)
+            echo "::group::Diagnose — kein UDP-Bind auf 6323 (Issue #239)"
+            echo "== docker top (sample 1) =="
+            ssh planet 'docker top riftbreaker-dedicated-test -eo pid,ppid,stat,time,wchan:24,args' || ssh planet 'docker top riftbreaker-dedicated-test' || true
+            sleep 60
+            echo "== docker top (sample 2, +60 s) =="
+            ssh planet 'docker top riftbreaker-dedicated-test -eo pid,ppid,stat,time,wchan:24,args' || ssh planet 'docker top riftbreaker-dedicated-test' || true
+            echo "== docker logs (tail 200) =="
+            ssh planet 'docker logs --tail 200 riftbreaker-dedicated-test 2>&1' || true
+            echo "== /proc/net/udp + udp6 =="
+            ssh planet "docker exec riftbreaker-dedicated-test cat /proc/net/udp /proc/net/udp6 2>/dev/null || true" || true
+            echo "== exor_logs.txt (tail 60) =="
+            ssh planet "docker exec riftbreaker-dedicated-test cat /root/exor_logs.txt" 2>/dev/null | tail -60 || true
+            echo "::endgroup::"
+            echo "::error::riftbreaker-dedicated-test hat keinen UDP-Socket auf 6323 gebunden — DedicatedServer bootet nicht bis zum bind() (Issue #239)."
             exit 1
           fi
           echo "UDP-Bind OK: riftbreaker-dedicated-test lauscht auf 6323/udp."
