@@ -12,7 +12,7 @@ riftbreaker_content_mode: sync
 riftbreaker_content_cache_dir: /srv/rbgame
 website_mods_dir: /opt/rbbattle-deploy/test/mods
 tournament_unit: tournament-server-test
-tournament_port: 8082
+tournament_port: 8091
 tournament_install_dir: /opt/rbmods/tournament-server-test
 # Toolchain des RUNNER-Users (localhost-Builds laufen im Boot-Test als
 # `runner`, nicht als root):

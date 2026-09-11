@@ -83,8 +83,8 @@ jobs:
           [ "$STATUS" = "running" ] || { echo "::error::Test-Container bootet nicht (status=$STATUS)."; exit 1; }
           [ "$RESTARTING" = "false" ] || { echo "::error::Test-Container ist in einer Crash-Loop."; exit 1; }
           curl --silent --show-error --fail --max-time 10 \
-            http://127.0.0.1:8082/health | grep -q '"ok":true'
-          echo "Boot-Test OK: Container läuft stabil, tournament-server healthy auf 8082."
+            http://127.0.0.1:8091/health | grep -q '"ok":true'
+          echo "Boot-Test OK: Container läuft stabil, tournament-server healthy auf 8091."
 
       - name: Aufräumen (Test-Container + Unit stoppen)
         if: always() && steps.gate.outputs.skip != 'true'
