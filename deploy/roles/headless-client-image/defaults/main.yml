@@ -1,9 +1,9 @@
 ---
 # Defaults der Rolle headless-client-image (Issue #209).
 #
-# Das Headless-Client-Image (Wine + Xvfb + Mesa-llvmpipe) ist die gemeinsame
-# Laufzeit für den Dev-SP-Server (:6321) und den Vanilla-Server (:6322). Es
-# wird IM Playbook auf planet gebaut — es gibt kein vorgebautes Image und keinen
+# Das Headless-Client-Image (Wine + Xvfb + Mesa-llvmpipe) ist die Laufzeit
+# für den Dev-SP-Server (:6321). Es wird IM Playbook auf planet gebaut —
+# es gibt kein vorgebautes Image und keinen
 # CI-Push nach GHCR. Der Tag enthält den Deploy-SHA, damit das gerenderte
 # docker-compose.yml exakt diesen Stand pinnt (kein `latest`).
 

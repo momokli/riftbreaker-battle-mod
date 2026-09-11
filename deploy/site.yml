@@ -10,14 +10,13 @@
 #
 # Reihenfolge ist absichtlich:
 #   1. mods-zip             Paketierung + md5-Parität (liefert rbbattle.zip)
-#   2. headless-client-image baut rb-headless-client:<deploy-sha> (gemeinsame
-#      Laufzeit für :6321 + :6322)
+#   2. headless-client-image baut rb-headless-client:<deploy-sha> (Laufzeit
+#      für :6321)
 #   3. game-content         Steam-Content (App 4114030) nach game_dir
 #   4. riftbreaker-server   Dev-SP-Server 6321 (Mod-Install + Restart-Handler)
-#   5. vanilla-server       Vanilla 6322 (kein Mod)
-#   6. tournament-server    systemd (Rust/axum)
-#   7. website              statics + Caddy (inkl. /tournament/*-Proxy)
-#   8. probe-timer          systemd-Timer → status.json
+#   5. tournament-server    systemd (Rust/axum)
+#   6. website              statics + Caddy (inkl. /tournament/*-Proxy)
+#   7. probe-timer          systemd-Timer → status.json
 #
 # Tags erlauben einen gezielten Lauf (z. B. `--tags server` im PR-Gate
 # deploy-check) ohne die übrigen Rollen anzufassen.
@@ -55,8 +54,6 @@
     - role: game-content
       tags: [content]
     - role: riftbreaker-server
-      tags: [server]
-    - role: vanilla-server
       tags: [server]
     - role: tournament-server
       tags: [tournament]

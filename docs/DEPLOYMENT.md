@@ -8,7 +8,6 @@
 | Komponente | Host | Container/Unit | Port | Zweck |
 |---|---|---|---|---|
 | riftbreaker-dedicated | planet | docker (wine) | 6321/udp | Dev-SP-Server: 1v1 „vs sich selbst" (SP-Mode; rbbattle-Mod + rbbridge) |
-| rb-winetest | planet | docker (wine) | 6322/udp | Vanilla-Server (kein Mod, schnelle Test-Joins; gleiches Image wie :6321) |
 | tournament-server | planet | systemd (Rust/axum, `tournament/`) | 8081 | Turnier 1v1: Lobby/Ready/GO/Wave-Routing/Score (2 Welten) |
 | test-Instanzen | planet | docker, on-demand | frei | Test-Server aller Art (Mod-Tests, Balance, Experimente) |
 | Website | planet | statics + Caddy (`mellon-caddy`) | 443 | Landing `/` · `/connectivity.html` · `/solo.html` · `/status.json` · Proxy `/tournament/*` → tournament-server |
@@ -35,20 +34,21 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
    Fehlschlag**.
 2. **headless-client-image** — baut `rb-headless-client:<deploy-sha>` IM
    Playbook auf planet aus `tools/headless-client` (gemeinsame Wine-Laufzeit
-   für :6321 + :6322; Docker-Layer-Cache → billig/idempotent). Das gerenderte
+   für :6321; Docker-Layer-Cache → billig/idempotent). Das gerenderte
    Compose pinnt exakt diesen Tag (kein `latest`).
 3. **game-content** — Dedicated-Server-Content (Steam-App 4114030) deklarativ
-   nach `riftbreaker_game_dir` (SteamCMD anonym; Fallback: idempotenter Sync aus
-   kanonischem Cache). Konvergiert nach `rm -rf`; Fehlschlag ist laut.
+   nach `riftbreaker_game_dir`. **Standard: idempotenter Sync aus dem
+   kanonischen Cache** (`/srv/riftbreaker/data/server`, in Backups) — der
+   SteamCMD-Modus ist deaktiviert (hängt an `lib32gcc-s1`, siehe
+   `vars.yml`). Konvergiert nach `rm -rf`; Fehlschlag ist laut.
 4. **riftbreaker-server** — Docker-Container + Server-Config (Welt
    `mp_survival`/`jungle`, `disable_steam`, Passwort aus Vault), Mod-Install
    in `<game>/mods/rbbattle`; Restart-Handler bei Mod-/Config-Änderung.
-5. **vanilla-server** — zweite Instanz ohne Mods (6322), gleiches Image.
-6. **tournament-server** — systemd-Unit, Env-Konfig (`RBBRIDGE_A_URL`/
+5. **tournament-server** — systemd-Unit, Env-Konfig (`RBBRIDGE_A_URL`/
    `RBBRIDGE_B_URL`), Binary + Web-UI aus `tournament/`.
-7. **website** — statische Dateien (`site/*`) nach Docroot, Caddy-Snippet
+6. **website** — statische Dateien (`site/*`) nach Docroot, Caddy-Snippet
    (statics + `/tournament/*`-Proxy) + Reload.
-8. **probe-timer** — systemd-Timer für `scripts/probe_servers.sh` →
+7. **probe-timer** — systemd-Timer für `scripts/probe_servers.sh` →
    `status.json`.
 
 Grundsätze:
@@ -176,7 +176,7 @@ manuellen Schritte auf planet (`deploy/README.md` → „From-zero").
 Der alte Community-Stack (`j3n5-group/riftbreaker-docker`, Steam-basiert) unter
 `/srv/riftbreaker` ist abgelöst; `/srv/riftbreaker/data/server` bleibt als
 **kanonischer Steam-Content-Cache** liegen (Sync-Fallback für `game-content`).
-Mod-Instanzen: `/srv/rbgame` (:6321), `/srv/rbgame-vanilla` (:6322); Compose
+Mod-Instanz: `/srv/rbgame` (:6321); Compose
 unter `/opt/rbmods/compose/…`.
 
 ## Interim-Deploy :6321 (Issue #156) — historisch, durch #209 überholt

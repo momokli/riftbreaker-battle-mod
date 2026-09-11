@@ -2,14 +2,14 @@
 # Boot-Test-Overrides (CI/CD-Plan F1): Test-Instanz ISOLIERT von Prod —
 # eigene Ports, Container-/Unit-Namen, Pfade. Wird nur vom Pre-Merge-
 # Boot-Test benutzt (deploy/test-deploy.yml via -e @deploy/test-vars.yml).
-# Prod-Ports 6321/6322/8081 bleiben unberührt.
+# Prod-Ports 6321/8081 bleiben unberührt.
 riftbreaker_server_container: riftbreaker-dedicated-test
 riftbreaker_server_port_udp: 6323
 riftbreaker_game_dir: /srv/rbgame-test
 riftbreaker_backup_dir: /srv/rbgame-test-backups
 riftbreaker_deploy_dir: /opt/rbbattle-deploy/test/rb
 riftbreaker_content_mode: sync
-riftbreaker_content_cache_dir: /srv/rbgame
+riftbreaker_content_cache_dir: /srv/riftbreaker/data/server
 website_mods_dir: /opt/rbbattle-deploy/test/mods
 tournament_unit: tournament-server-test
 tournament_port: 8091

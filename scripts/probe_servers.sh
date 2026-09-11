@@ -26,7 +26,6 @@ ENDPOINTS_FILE="${RB_ENDPOINTS_FILE:-/usr/local/etc/rbmods-probe.endpoints}"
 # Default-Endpoint-Liste (id|host|port|container)
 DEFAULT_ENDPOINTS=(
   "RIFT-MOD|65.21.27.234|6321|riftbreaker-dedicated"
-  "RIFT-VANILLA|65.21.27.234|6322|rb-winetest"
 )
 
 now_iso(){ date -u +%Y-%m-%dT%H:%M:%SZ; }

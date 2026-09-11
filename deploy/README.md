@@ -74,7 +74,7 @@ ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
 ```
 
 Reihenfolge der Rollen (site.yml): `mods-zip` → `headless-client-image` →
-`game-content` → `riftbreaker-server` → `vanilla-server` → `tournament-server` →
+`game-content` → `riftbreaker-server` → `tournament-server` →
 `website` → `probe-timer`.
 
 ### From-zero (ein Kommando, Issue #209)
@@ -147,7 +147,7 @@ push auf main
 ```
 
 Hook-Port ist bewusst **6323**: `6321` ist auf planet vom laufenden Dev-Server
-belegt (docker-proxy, TCP+UDP), `6322` gehört der Vanilla-Instanz — auf
+belegt (docker-proxy, TCP+UDP) — auf
 `127.0.0.1:6323` lauscht sonst niemand (auf planet verifiziert, 2026-09-10).
 
 **Einziges GitHub-Secret:** `DEPLOY_TOKEN` (Environment `dev`). Die alten
@@ -356,10 +356,9 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 
 | Rolle | Typ | Was |
 |---|---|---|
-| `headless-client-image` | docker | baut `rb-headless-client:<deploy-sha>` auf planet (gemeinsame Laufzeit :6321/:6322) |
+| `headless-client-image` | docker | baut `rb-headless-client:<deploy-sha>` auf planet (Laufzeit :6321) |
 | `game-content` | steamcmd/sync | Dedicated-Server-Content (App 4114030) nach `riftbreaker_game_dir` (idempotent, fail loud) |
 | `riftbreaker-server` | docker | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation |
-| `vanilla-server` | docker | Vanilla 6322, kein Mod, gleiches Image |
 | `tournament-server` | systemd | Rust/axum Referee + Web-UI. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt) |
 | `website` | statics + Caddy | `site/*` → Docroot, Caddy-Snippet + `/tournament/*`-Proxy |
 | `mods-zip` | — | Paketierung + md5-Paritäts-Check (hart) |
@@ -382,7 +381,6 @@ deploy/
     ├── headless-client-image/     # baut rb-headless-client:<sha>
     ├── game-content/              # Steam-Content (App 4114030) deklarativ
     ├── riftbreaker-server/        # docker 6321 (+ Restart-Handler)
-    ├── vanilla-server/            # docker 6322
     ├── tournament-server/         # systemd
     ├── website/                   # statics + Caddy
     ├── mods-zip/                  # Paketierung + md5-Parität
@@ -434,7 +432,7 @@ Das vorherige `tournament-server`-Binary bzw. die vorherige `rbbattle.zip`
 | `/var/log/rbbattle-deploy/<job_id>.log` | CD-Job-Log (Hook, 0640; Task `deploy.yml` zeigt bei Fehlern die letzten Zeilen) |
 | `journalctl -u rbbattle-deploy-hook` | Hook-Service (Requests/Fehler) |
 | `journalctl -u tournament-server`, `-u rbmods-probe.timer` | systemd-Rollen |
-| `docker logs riftbreaker-dedicated` / `rb-winetest` | Container-Logs (Wine/Server) |
+| `docker logs riftbreaker-dedicated` | Container-Logs (Wine/Server) |
 | `git -C /opt/rbbattle-deploy/repo log --oneline -3` | zuletzt deployte SHA |
 
 ## Was CI/CD besitzt (und was nicht)

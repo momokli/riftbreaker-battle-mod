@@ -19,7 +19,7 @@ DEPLOY_CMD (cwd = CHECKOUT_DIR). stdout/stderr landen in
 
 Konfiguration ausschließlich über Umgebungsvariablen
 (EnvironmentFile /etc/rbbattle-deploy/hook.env):
-  LISTEN           default 127.0.0.1:6323 (6321/6322: Game-Server-Ports)
+  LISTEN           default 127.0.0.1:6323 (6321: Game-Server-Port)
   DEPLOY_TOKEN     Pflicht — gemeinsames Geheimnis mit dem Workflow
   CHECKOUT_DIR     default /opt/rbbattle-deploy/repo
   DEPLOY_CMD       Pflicht — Deploy-Kommando, läuft im Checkout

@@ -3,7 +3,7 @@
 # bootet EINEN Game-Server (Test-Port 6323) + den tournament-server
 # (Test-Port 8082) — isoliert von Prod (eigene Ports/Namen/Pfade via
 # deploy/test-vars.yml). Es geht nur um „baut + bootet".
-# Kein vanilla, kein website/probe (DNS egal, ein Server genügt).
+# Kein website/probe (DNS egal — es geht nur um „baut + bootet").
 # Verifikation + Teardown: .github/workflows/boot-test.yml.
 #
 # Aufruf (Workflow, Dummy-Vault — kein Secret nötig):

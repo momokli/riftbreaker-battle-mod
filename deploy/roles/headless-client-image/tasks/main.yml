@@ -1,7 +1,6 @@
 ---
 # Rolle: headless-client-image (Issue #209) — baut rb-headless-client:<deploy-sha>
-# auf dem Zielhost. Das Image ist die gemeinsame Wine-Laufzeit für :6321 und
-# :6322; einmal bauen reicht für beide.
+# auf dem Zielhost. Das Image ist die Wine-Laufzeit für :6321.
 #
 # Idempotenz:
 #   * Der Tag ist der Deploy-SHA. Ändert sich nichts, existiert das Image

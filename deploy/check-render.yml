@@ -14,7 +14,6 @@
     - inventory/host_vars/planet/vars.yml
     # Rollen-Defaults liefern die Compose-Command-Listen (keine Host-Vars).
     - roles/riftbreaker-server/defaults/main.yml
-    - roles/vanilla-server/defaults/main.yml
 
   vars:
     # Dummy-Werte nur fürs Rendern (kein Secret).
@@ -34,10 +33,4 @@
       template:
         src: roles/riftbreaker-server/templates/docker-compose.yml.j2
         dest: "{{ render_dir }}/riftbreaker-server.yml"
-        mode: "0600"
-
-    - name: vanilla-server Compose rendern
-      template:
-        src: roles/vanilla-server/templates/docker-compose.yml.j2
-        dest: "{{ render_dir }}/vanilla-server.yml"
         mode: "0600"

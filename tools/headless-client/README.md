@@ -12,8 +12,8 @@ Sandbox (kein Game-Asset/GPU/Netz). Details unten.
 Auf **planet** läuft der Riftbreaker-Client headless in einem Container
 (Wine + Xvfb + Mesa-llvmpipe Software-Rendering). Steuerung/Auswertung über
 **Screenshots + xdotool**; der Client verbindet sich in die Lobby bzw. mit dem
-**Testserver `rb-winetest`** — ein echter Game-Client statt nur Server-Prozess,
-als Basis für Multiplayer-/Client-seitige Tests ohne physischen Desktop.
+**Dev-Server (:6321)** — ein echter Game-Client statt nur Server-Prozess, als
+Basis für Multiplayer-/Client-seitige Tests ohne physischen Desktop.
 
 > Hinweis: Für die Server-Vollkette (`rb_wave` → Spawn) ist der headless Client
 > laut [`docs/ASSUMPTIONS.md`](../../docs/ASSUMPTIONS.md) **nicht zwingend

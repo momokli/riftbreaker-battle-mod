@@ -28,16 +28,6 @@ riftbreaker_server_difficulty: hard
 riftbreaker_server_map_size: large
 riftbreaker_server_seed: 42
 
-# --- Vanilla-Server (docker, 6322, kein Mod) ---------------------------------
-vanilla_game_dir: /srv/rbgame-vanilla
-vanilla_server_image: "{{ headless_client_image }}"
-vanilla_container: rb-winetest
-vanilla_port_udp: 6322
-vanilla_server_exe: bin/DedicatedServer.exe
-vanilla_server_campaign: mp_survival
-vanilla_server_mission: jungle
-vanilla_server_difficulty: normal
-
 # --- Tournament-Server (systemd, Rust/axum aus tournament/) ------------------
 tournament_install_dir: /opt/rbmods/tournament-server
 tournament_unit: tournament-server

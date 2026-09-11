@@ -5,7 +5,7 @@ name: Boot-Test (Test-Ports)
 # Der Job-Name IST der Required-Check-Context "boot-test".
 #
 # Kein Secret nötig: Dummy-Vault (Test-Passwort) + Test-Ports/Pfade.
-# Prod (6321/6322/8081) wird nie berührt.
+# Prod (6321/8081) wird nie berührt.
 
 on:
   pull_request:
