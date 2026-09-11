@@ -6,7 +6,7 @@ WINEPREFIX="${WINEPREFIX:-/data/.wine}"
 CONFIG_FILE="${CONFIG_FILE:-/data/config/config.cfg}"
 SAVE_MOUNT="${SAVE_MOUNT:-/data/saves}"
 STEAM_USER="${STEAM_USER:-steamuser}"
-WINE="/usr/local/bin/wine64"
+WINE="/usr/bin/wine"
 LOG_DIR="${WINEPREFIX}/logs"
 CONFIG_DEST="${INSTALL_DIR}/config.cfg"
 STARTUP_CHECK_SECS="${STARTUP_CHECK_SECS:-90}"
@@ -123,11 +123,8 @@ watch_server_port() {
   ) &
 }
 
-if [[ "${SKIP_STEAMCMD_UPDATE:-0}" == "1" ]]; then
-  echo "[entrypoint] SKIP_STEAMCMD_UPDATE=1 — content comes from a mounted volume; skipping SteamCMD update."
-else
-  /scripts/install-update.sh
-fi
+# Content kommt als bind-mount (deploy: /srv/rbgame -> /opt/riftbreaker). Kein
+# SteamCMD im Image -> kein Runtime-Content-Update nötig.
 
 mkdir -p "${WINEPREFIX}" "${SAVE_MOUNT}" "${LOG_DIR}" "$(dirname "${WINE_SAVE_DIR}")"
 /scripts/wine-init.sh

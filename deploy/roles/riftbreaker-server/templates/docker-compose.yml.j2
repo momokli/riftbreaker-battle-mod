@@ -16,8 +16,6 @@ services:
       # Rig-Rezept: Sync-Primitive AUS (sonst Crash im Boost-Thread vor dem bind()).
       WINEESYNC: "0"
       WINEFSYNC: "0"
-      # Content kommt als Volume — SteamCMD-Update im Container überspringen.
-      SKIP_STEAMCMD_UPDATE: "1"
     ports:
       - "{{ riftbreaker_server_port_udp }}:6321/udp"
       - "{{ riftbreaker_server_port_udp }}:6321/tcp"
