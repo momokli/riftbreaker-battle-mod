@@ -80,6 +80,7 @@ static unsigned char *build_image(int with_sig, int with_rtti, int valid_col,
 
     IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(img + NT_OFF);
     nt->Signature = IMAGE_NT_SIGNATURE;
+    nt->FileHeader.Machine = IMAGE_FILE_MACHINE_AMD64; /* pe_image_size prueft x64 */
     nt->FileHeader.NumberOfSections = 1;
     nt->FileHeader.SizeOfOptionalHeader =
         (uint16_t)sizeof(IMAGE_OPTIONAL_HEADER);
