@@ -12,32 +12,50 @@ riftbreaker_compose_project: "{{ riftbreaker_deploy_dir | basename }}"
 
 # Dedicated-Server-Kommando (ExOr „Dedicated Server Setup Guide“).
 # Jedes Argument wird UNVERÄNDERT (ohne Shell-Interpretation) an `wine <exe>`
-# gereicht. Das Passwort steht NICHT mehr hier, sondern in der Startup-Config
+# gereicht. Das Passwort steht NICHT hier, sondern in der Startup-Config
 # (config.cfg.j2, Datei-Rechte 0600).
 #
 # Issue #239 — Root Cause + Fix:
-#   Der Server lief im CLI-Modus (`cli=1`), aber OHNE vollständige
-#   Startup-Config. Laut ExOr-Guide hängt die App dann und wartet auf eine UI,
-#   die es im CLI-Modus nicht gibt („stuck on loading while waiting for input
-#   from a UI that doesn't exist“) — belegt durch den Boot-Test:
-#   DedicatedServer.exe hängt in pipe_read, CPU-Zeit 0, /proc/net/udp ohne
-#   Socket. Fix: `cli=1` + vollständige Startup-Config als Datei (`config=`).
-#   Game-Settings (app_mode/campaign/mission/difficulty/server_*) stehen in
-#   der Config, NICHT mehr als Einzel-Args.
+#   Der Server lief im CLI-Modus (`cli=1`) OHNE vollständige Startup-Config und
+#   mit einem Wine-Prefix, dem Windows>=10, VC++-Runtime und der passende
+#   Wine-Stub fehlten. Er hing in pipe_read (CPU-Zeit 0, /proc/net/udp ohne
+#   Socket) und band nie den UDP-Port. Fix (proven rig recipe, siehe
+#   progress-fix-239-server-joinable.md):
+#     * `cli=1 config=config.cfg` + vollständige Startup-Config als Datei,
+#     * winehq-stable + Prefix-Init (win10, vcrun2022, d3dcompiler_47),
+#     * `xvfb-run -a` statt eigenem Xvfb/:99.
+#   Game-Settings (app_mode/campaign/mission/difficulty/map_size/seed/server_*)
+#   stehen in der Config, NICHT mehr als Einzel-Args.
 riftbreaker_server_command:
   - "{{ riftbreaker_server_exe }}"
-  - "headless_mode=1"
   - "cli=1"
-  - "config={{ riftbreaker_server_config_arg }}"
-  - "map_size={{ riftbreaker_server_map_size }}"
-  - "seed={{ riftbreaker_server_seed }}"
-  - "debug_disable_content_version_check=1"
+  - "config=config.cfg"
 riftbreaker_server_extra_args: []
 
-# Startup-Config (Issue #239): Pfad im Container (Unix) und der an die App
-# gereichte Windows-Pfad für `config=` (Wine-Laufwerk Z: = Container-Root).
+# Startup-Config (Issue #239): die App löst `config=config.cfg` relativ zum
+# Install-Root auf (= Parent von bin/, = game_dir) — nicht relativ zum cwd/exe
+# und nicht aus bin/. Darum liegt die gerenderte Config im game_dir.
 riftbreaker_server_config_path: "{{ riftbreaker_game_dir }}/config.cfg"
-riftbreaker_server_config_arg: "Z:{{ riftbreaker_game_dir }}/config.cfg"
+
+# Persistenz (Issue #239): Named Volumes für Wine-Prefix + Saves.
+#   * Prefix: überlebt `--force-recreate`; ein frisches (leeres) Volume erbt den
+#     im Image vorgewärmten, initialisierten Prefix (Docker kopiert Image-Inhalt
+#     in ein leeres Named Volume). run-server.sh heilt alte Volumes zusätzlich
+#     per wine-init.sh.
+#   * Saves: run-server.sh symlinkt das Wine-SaveGames-Dir auf
+#     riftbreaker_server_save_dir.
+riftbreaker_server_wine_prefix_volume: rb-wine
+riftbreaker_server_saves_volume: rb-saves
+riftbreaker_server_save_dir: /srv/rbsaves
+
+# Server-Optionen (config.cfg.j2, Format `set <key> "<value>"`).
+riftbreaker_server_name: RBBattle
+riftbreaker_server_max_players: 4
+riftbreaker_server_broadcast_enabled: 1
+riftbreaker_server_pause_game_when_empty: 1
+# RCON: Client und Server müssen denselben Wert haben. Leer = RCON aus.
+# In Prod aus dem Vault (vault_server_rcon_password) überschreibbar.
+riftbreaker_server_rcon_password: "{{ vault_server_rcon_password | default('') }}"
 
 # --- Mods & Backups (Guard gegen Fremd-Mods in mods/) ------------------------
 # Der Dedicated Server lädt JEDEN Unterordner von mods/ mit einer *.manifest

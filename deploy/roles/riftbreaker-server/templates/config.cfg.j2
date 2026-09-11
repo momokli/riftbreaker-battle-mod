@@ -4,9 +4,12 @@
 //     cli=1 config=config.cfg
 //
 // `cli=1` allein reicht NICHT: ohne vollständige Startup-Config hängt die App
-// im Ladevorgang und wartet auf eine UI, die es im CLI-Modus nicht gibt — sie
-// bindet dann nie den UDP-Port. Genau das war der Ausfall in Issue #239
-// (Server :6321 nicht joinable, DedicatedServer.exe hängt in pipe_read).
+// im Ladevorgang und bindet nie den UDP-Port. Genau das war der Ausfall in
+// Issue #239 (Server :6321 nicht joinable, DedicatedServer.exe hängt in
+// pipe_read). Die Datei liegt im Install-Root ({{ riftbreaker_game_dir }}),
+// NICHT in bin/ — dort löst die App `config=config.cfg` auf.
+//
+// Format: `set <key> "<value>"`.
 
 // Required: skips the menu state. Without it the server waits forever.
 set app_mode "server"
@@ -15,11 +18,14 @@ set app_mode "server"
 set campaign "{{ riftbreaker_server_campaign }}"
 set mission "{{ riftbreaker_server_mission }}"
 set difficulty "{{ riftbreaker_server_difficulty }}"
+set map_size "{{ riftbreaker_server_map_size }}"
+set seed "{{ riftbreaker_server_seed }}"
 
 // Server-Optionen.
-set server_name "RBBattle"
+set server_name "{{ riftbreaker_server_name }}"
 set server_password "{{ riftbreaker_server_password }}"
-set server_max_players_count "4"
-set server_broadcast_enabled "1"
-set server_pause_game_when_empty "1"
+set server_rcon_password "{{ riftbreaker_server_rcon_password }}"
+set server_max_players_count "{{ riftbreaker_server_max_players }}"
+set server_broadcast_enabled "{{ riftbreaker_server_broadcast_enabled }}"
+set server_pause_game_when_empty "{{ riftbreaker_server_pause_game_when_empty }}"
 set disable_steam "1"

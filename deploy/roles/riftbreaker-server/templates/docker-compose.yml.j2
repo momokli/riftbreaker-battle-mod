@@ -1,14 +1,15 @@
 # Verwaltet von deploy/ role "riftbreaker-server" (Jinja). NICHT manuell editieren.
-# Enthält das Server-Passwort im `command` → Datei-Rechte 0600 (siehe task).
+# Enthält das Server-Passwort in der gerenderten config.cfg → Datei-Rechte 0600.
 services:
   {{ riftbreaker_server_container }}:
     image: "{{ riftbreaker_server_image }}"
     container_name: {{ riftbreaker_server_container }}
     restart: unless-stopped
     init: true
-{# Issue #239: DedicatedServer.exe blockiert im CLI-Modus (`cli=1`) ohne
-   vollstaendige Startup-Config — haengt in pipe_read, CPU-Zeit 0, bindet nie
-   den UDP-Port. Fix: `cli=1 config=<config.cfg>` (siehe config.cfg.j2).
+{# Issue #239: DedicatedServer.exe blockiert im CLI-Modus ohne vollständige
+   Startup-Config — hängt in pipe_read, CPU-Zeit 0, bindet nie den UDP-Port.
+   Fix: `cli=1 config=config.cfg` (die App löst config.cfg relativ zum
+   Install-Root = game_dir auf; die Config rendert dorthin, NICHT nach bin/).
    tty + stdin_open bleiben als Guard gegen jeden restlichen Console-/stdin-
    Init bestehen: sie geben dem Prozess eine echte Konsole, es wird aber
    NICHTS nach stdin geschrieben (stdin nimmt keine Eingabe an). #}
@@ -20,10 +21,17 @@ services:
     environment:
       WINEDEBUG: "-all"
       WINEARCH: win64
+      WINEPREFIX: /root/.wine
       LIBGL_ALWAYS_SOFTWARE: "1"
       GALLIUM_DRIVER: llvmpipe
+      # run-server.sh symlinkt das Wine-SaveGames-Dir auf dieses (Named-)Volume.
+      RB_SAVE_DIR: "{{ riftbreaker_server_save_dir }}"
     volumes:
       - "{{ riftbreaker_game_dir }}:{{ riftbreaker_game_dir }}"
+      # Persistenter Wine-Prefix (überlebt --force-recreate; ein frisches Volume
+      # erbt den im Image vorgewärmten Prefix). run-server.sh heilt alte Volumes.
+      - "{{ riftbreaker_server_wine_prefix_volume }}:/root/.wine"
+      - "{{ riftbreaker_server_saves_volume }}:{{ riftbreaker_server_save_dir }}"
     # Das Steam-Layout legt das Binary unter bin/ ab; WORKDIR muss der
     # Game-Root sein, damit `bin/DedicatedServer.exe` und mods/ stimmen.
     working_dir: "{{ riftbreaker_game_dir }}"
@@ -32,3 +40,7 @@ services:
 {% for arg in (riftbreaker_server_command + riftbreaker_server_extra_args) %}
       - {{ arg | to_json }}
 {% endfor %}
+
+volumes:
+  {{ riftbreaker_server_wine_prefix_volume }}:
+  {{ riftbreaker_server_saves_volume }}:
