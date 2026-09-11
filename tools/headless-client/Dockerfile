@@ -87,7 +87,8 @@ ENV DISPLAY=:99 \
     GALLIUM_DRIVER=llvmpipe \
     WINEARCH=win64 \
     WINEPREFIX=/root/.wine \
-    WINEDEBUG=-all
+    WINEDEBUG=-all \
+    WINEDLLOVERRIDES="mscoree,mshtml="
 
 # Mountpoint für die Client-Dateien (Quelle: sync-client.sh).
 VOLUME ["/srv/rbclient/game"]
