@@ -85,8 +85,8 @@ class ManifestZipTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             mod_dir = Path(tmp) / "rbbattle"
             mod_dir.mkdir()
-            write_manifest(mod_dir / MANIFEST_NAME, "0.34.2")
-            self.assertEqual(mod_update.manifest_version_from_dir(mod_dir), "0.34.2")
+            write_manifest(mod_dir / MANIFEST_NAME, "0.34.3")
+            self.assertEqual(mod_update.manifest_version_from_dir(mod_dir), "0.34.3")
         self.assertIsNone(mod_update.manifest_version_from_dir(Path(tmp) / "gibtsnicht"))
 
 
