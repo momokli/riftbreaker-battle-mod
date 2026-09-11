@@ -4,27 +4,17 @@ name: Deploy (CD)
 # automatisch auf den Solo-DEV-Server (planet, Port 6321) aus — immer der
 # aktuelle Stand zum Testen (Issue #91).
 #
-# Der komplette planet-Stack wird vom Playbook besessen (Issue #209): deploy/
-# baut das Laufzeit-Image (rb-headless-client:<deploy-sha>), provisioniert den
-# Steam-Content und pinnt das Compose auf den Deploy-SHA. Der Workflow stößt nur
-# an und pollt.
-#
 # Topologie-Update (2026-09-10, Issue #91): EIN Server auf :6321 statt
 # Steam-/Non-Steam-Dualität; ein Direct-IP-Server deckt beide Stores ab
-# (disable_steam "1"). Der Tag→prod-Kanal ist gestrichen (Tags sind reine
-# Marker, Issue #209) — dieser Workflow hat daher bewusst KEINEN tag-Trigger
-# und KEINE prod-Umgebung.
+# (disable_steam "1"). Der Tag→prod-Kanal ist vorerst gestrichen — dieser
+# Workflow hat daher bewusst KEINEN tag-Trigger und KEINE prod-Umgebung.
 #
-# Deploy läuft NICHT mehr über SSH, sondern über den lokalen HTTP-Hook auf
-# planet (dort läuft der self-hosted Runner): POST /deploy → Hook macht
-# git fetch + Hard-Checkout der SHA und führt den Deploy aus (ansible-playbook
-# als DEPLOY_CMD), danach Polling GET /deploy/<job_id>/status bis success.
-# Setup/Migration: deploy/README.md → „CD: HTTP-Deploy-Hook (planet)".
-#
-# Secret (GitHub-Environment "dev"; Wert von Momo, nie im Repo/Log):
-#   DEPLOY_TOKEN  — gemeinsames Bearer-Token Hook ↔ Workflow.
-# Die alten Secrets SSH_HOST/SSH_KEY/ANSIBLE_VAULT_PASS werden nicht mehr
-# benutzt und können im Environment "dev" gelöscht werden.
+# Deploy-Mechanik (2026-09-11, ersetzt den HTTP-Hook): der Runner auf planet
+# verbindet sich per SSH als dedizierter deploy-User (`ssh rbd "<sha> <ref>"`).
+# Die forced command (deploy/deploy-ssh.sh) validiert die SHA, macht
+# git fetch + Hard-Checkout und führt das Playbook als root aus (enges
+# sudoers). Ausgabe wird direkt ins Job-Log gestreamt, exit code = Ergebnis —
+# kein Token, kein Polling. Setup: deploy/README.md → „CD: SSH-Deploy".
 
 on:
   push:
@@ -43,88 +33,12 @@ jobs:
   deploy-dev:
     name: Deploy Dev (planet :6321)
     runs-on: [self-hosted, planet]
-    # 25 min: ein kalter Image-Build (Wine/Xvfb/Mesa) + Steam-Content-Check
-    # passen nicht in 15 min (Issue #209).
-    timeout-minutes: 25
+    timeout-minutes: 30
     environment:
       name: dev
       url: https://rift.projectmellon.de/solo.html
     steps:
-      - name: Deploy anstoßen (HTTP-Hook auf planet)
-        env:
-          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+      - name: Deploy per SSH (deploy-User, forced command)
         run: |
           set -euo pipefail
-
-          # POST /deploy — Bearer-Token; Payload = Event-SHA + Ref
-          # (github.sha / github.ref), als 202 mit job_id quittiert.
-          if ! response="$(curl --silent --show-error --fail --max-time 30 \
-            --retry 3 --retry-connrefused --retry-delay 2 \
-            --request POST "http://127.0.0.1:6323/deploy" \
-            --header "Authorization: Bearer ${DEPLOY_TOKEN}" \
-            --header "Content-Type: application/json" \
-            --data "{\"sha\":\"${GITHUB_SHA}\",\"ref\":\"${GITHUB_REF}\"}")"; then
-            echo "::error::POST /deploy fehlgeschlagen — läuft der Hook auf planet? Prüfe auf planet: systemctl status rbbattle-deploy-hook und journalctl -u rbbattle-deploy-hook -n 50"
-            exit 1
-          fi
-
-          job_id="$(printf '%s' "$response" | python3 -c \
-            'import json,sys; print(json.load(sys.stdin)["job_id"])')"
-          if ! printf '%s' "$job_id" | grep -Eq '^[0-9a-f-]{36}$'; then
-            echo "::error::Unerwartete job_id in Hook-Antwort: ${job_id}"
-            exit 1
-          fi
-
-          echo "Deploy-Job gestartet: ${job_id} (sha=${GITHUB_SHA})"
-          echo "JOB_ID=${job_id}" >> "$GITHUB_ENV"
-
-      - name: Deploy-Status abwarten (Polling, max. 20 min)
-        env:
-          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          # Polling GET /deploy/<job_id>/status alle 15 s, Gesamttimeout 20 min.
-          # Grün NUR bei status=success; sonst exit 1 mit letzten Log-Zeilen.
-          deadline=$((SECONDS + 1200))
-          while true; do
-            response=""
-            if ! response="$(curl --silent --show-error --fail --max-time 30 \
-              --header "Authorization: Bearer ${DEPLOY_TOKEN}" \
-              "http://127.0.0.1:6323/deploy/${JOB_ID}/status")"; then
-              echo "Warnung: Status-Abruf fehlgeschlagen — neuer Versuch in 15 s."
-              response=""
-            fi
-            if [ -n "$response" ]; then
-              status="$(printf '%s' "$response" | python3 -c \
-                'import json,sys; print(json.load(sys.stdin)["status"])')"
-              case "$status" in
-                success)
-                  echo "Deploy erfolgreich (sha=${GITHUB_SHA})."
-                  exit 0
-                  ;;
-                failed)
-                  echo "::error::Deploy fehlgeschlagen — letzte Log-Zeilen (Voll-Log: /var/log/rbbattle-deploy/${JOB_ID}.log auf planet):"
-                  printf '%s' "$response" | python3 -c \
-                    'import json,sys; print(json.load(sys.stdin).get("log_tail", ""))'
-                  exit 1
-                  ;;
-                running)
-                  echo "Deploy läuft … ($(date -u +%H:%M:%S) UTC)"
-                  ;;
-                *)
-                  echo "::error::Unbekannter Deploy-Status: ${status}"
-                  exit 1
-                  ;;
-              esac
-            fi
-            if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "::error::Timeout (20 min): Deploy-Status weiter 'running' — letzte Log-Zeilen (Voll-Log: /var/log/rbbattle-deploy/${JOB_ID}.log auf planet):"
-              if [ -n "$response" ]; then
-                printf '%s' "$response" | python3 -c \
-                  'import json,sys; print(json.load(sys.stdin).get("log_tail", ""))'
-              fi
-              exit 1
-            fi
-            sleep 15
-          done
+          ssh -o BatchMode=yes rbd "${GITHUB_SHA} ${GITHUB_REF}"

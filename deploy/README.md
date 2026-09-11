@@ -1,14 +1,14 @@
 # deploy/ — Ansible-Deployment (planet)
 
 Ziel-Stack + Betriebsregeln: [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md).
-**Deploy NUR über dieses Playbook** — kein manuelles Gedudel. Seit Issue #91
-läuft der CD (main→dev) über den lokalen **HTTP-Deploy-Hook** auf planet
-(Abschnitt [„CD: HTTP-Deploy-Hook"](#cd-http-deploy-hook-planet)); der Hook
-führt genau dieses Playbook aus.
+**Deploy NUR über dieses Playbook** — kein manuelles Gedudel. Seit 2026-09-11
+läuft der CD (main→dev) per **SSH über einen dedizierten deploy-User** auf
+planet (Abschnitt [„CD: SSH-Deploy"](#cd-ssh-deploy-dedizierter-deploy-user));
+die forced command führt genau dieses Playbook aus.
 
 ## Voraussetzungen
 
-- `ansible` (core ≥ 2.19) auf dem Control-Node (dem Rechner, von dem du deployst; beim CD ist das planet selbst, als root — siehe Hook-Abschnitt).
+- `ansible` (core ≥ 2.19) auf dem Control-Node (dem Rechner, von dem du deployst; beim CD ist das planet selbst, als root — siehe CD-Abschnitt).
 - SSH mesh-first: Alias `planet` in `~/.ssh/config` (Tailscale), `root`-Login.
 - Auf planet: Docker + `docker compose`, `systemd`,
   Caddy als Container `mellon-caddy`.
@@ -132,96 +132,73 @@ Steam-/Non-Steam-Dualität (Direct-IP, `disable_steam "1"` deckt beide Stores ab
 Der **Tag→prod-Kanal ist vorerst gestrichen** — der Workflow kennt bewusst
 keinen Tag-Trigger und keine prod-Umgebung.
 
-## CD: HTTP-Deploy-Hook (planet)
+## CD: SSH-Deploy (dedizierter deploy-User)
 
-Seit der Umstellung (Issue #91) deployt der Workflow **ohne SSH**:
+Seit 2026-09-11 deployt der Workflow **per SSH über einen dedizierten
+deploy-User** (ersetzt den früheren HTTP-Hook aus #91 — kein Token, kein
+Polling, Ergebnis-Streaming direkt im Job-Log):
 
 ```text
 push auf main
   → GitHub-Actions-Job auf dem self-hosted Runner (planet)
-  → POST http://127.0.0.1:6323/deploy  {sha, ref}      [Bearer DEPLOY_TOKEN]
-  → Hook (systemd: rbbattle-deploy-hook)
-       git fetch + Hard-Checkout der SHA im CHECKOUT_DIR
-       → DEPLOY_CMD (führt `ansible-playbook … site.yml` aus)
-  → Workflow pollt GET /deploy/<job_id>/status bis success/failed (max. 10 min)
+  → ssh rbd "<sha> <ref>"                     [Runner-Key, User deploy]
+  → forced command /opt/rbbattle-deploy/deploy-ssh.sh (läuft als deploy):
+       SHA validieren → git fetch + Hard-Checkout im Checkout
+       → sudo -n /usr/local/bin/rbbattle-deploy (ansible-playbook als root)
+  → exit code = Deploy-Ergebnis (kein Polling, kein Secret)
 ```
 
-Hook-Port ist bewusst **6323**: `6321` ist auf planet vom laufenden Dev-Server
-belegt (docker-proxy, TCP+UDP) — auf
-`127.0.0.1:6323` lauscht sonst niemand (auf planet verifiziert, 2026-09-10).
-
-**Einziges GitHub-Secret:** `DEPLOY_TOKEN` (Environment `dev`). Die alten
-Secrets `SSH_HOST`, `SSH_KEY`, `ANSIBLE_VAULT_PASS` werden nicht mehr benutzt
-und können gelöscht werden. Das Vault-Passwort verlässt planet nicht.
-
-Dateien: [`hook.py`](hook.py) (Python-Stdlib-HTTP-Server für `/deploy` +
-Status, Job-Logs unter `/var/log/rbbattle-deploy/`) und
-[`rbbattle-deploy-hook.service`](rbbattle-deploy-hook.service) (systemd,
-User `deploy`, Hardening).
+**Kein GitHub-Secret nötig** — Auth läuft über den SSH-Key des Runners
+(`~/.ssh/id_rb_deploy`), der auf planet im `authorized_keys` des deploy-Users
+**nur** die forced command ausführen darf (`from="127.0.0.1"`, kein PTY, kein
+Port-Forwarding). Das Vault-Passwort verlässt planet nicht. Das alte
+`DEPLOY_TOKEN`-Secret im Environment `dev` ist obsolet und kann gelöscht
+werden.
 
 ### Installation (einmalig, auf planet)
 
 Voraussetzungen: root-Shell auf planet; das Repo ist öffentlich (anonymes
-`git fetch` genügt). Platzhalter `<TOKEN>` = Ergebnis von `openssl rand -hex 32`.
+`git fetch` genügt). `deploy/deploy-ssh.sh` ist die Quelle für Schritt 2.
 
 ```bash
-# 1) Service-User + Verzeichnisse
+# 1) Service-User + Verzeichnisse + Checkout:
 sudo useradd --system --home /opt/rbbattle-deploy --shell /usr/sbin/nologin deploy
 sudo install -d -o deploy -g deploy -m 0750 /opt/rbbattle-deploy
-sudo install -d -o deploy -g deploy -m 0750 /var/log/rbbattle-deploy
-sudo install -d -o root   -g deploy -m 0750 /etc/rbbattle-deploy
-
-# 2) Checkout initial klonen (öffentliches Repo, nur Lesen)
 sudo -u deploy git clone https://github.com/momokli/riftbreaker-battle-mod.git \
   /opt/rbbattle-deploy/repo
 
-# 3) Token erzeugen — Ausgabe an ZWEI Stellen nötig (planet + GitHub):
-openssl rand -hex 32
+# 2) forced-command-Skript installieren (root-owned, 0755):
+sudo install -m 0755 deploy/deploy-ssh.sh /opt/rbbattle-deploy/deploy-ssh.sh
 
-# 4) hook.env schreiben (root:deploy 0640; <TOKEN> ersetzen):
-sudo install -o root -g deploy -m 0640 /dev/null /etc/rbbattle-deploy/hook.env
-sudo tee /etc/rbbattle-deploy/hook.env >/dev/null <<'EOF'
-LISTEN=127.0.0.1:6323
-DEPLOY_TOKEN=<TOKEN>
-CHECKOUT_DIR=/opt/rbbattle-deploy/repo
-DEPLOY_CMD=sudo -n /usr/local/bin/rbbattle-deploy
-VAULT_PASS_FILE=/etc/rbbattle-deploy/vault.pass
-EOF
-sudo stat -c '%U:%G %a' /etc/rbbattle-deploy/hook.env   # → root:deploy 640
+# 3) Runner-Key als forced command für deploy freigeben (nur von 127.0.0.1):
+sudo install -d -o deploy -g deploy -m 0700 /home/deploy/.ssh
+sudo sh -c 'printf "from=\"127.0.0.1\",command=\"/opt/rbbattle-deploy/deploy-ssh.sh\",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding %s\n" "$(cat /home/runner/.ssh/id_rb_deploy.pub)" > /home/deploy/.ssh/authorized_keys'
+sudo chown deploy:deploy /home/deploy/.ssh/authorized_keys
+sudo chmod 600 /home/deploy/.ssh/authorized_keys
 
-# 5) Hook + Unit installieren und starten:
-sudo install -m 0755 deploy/hook.py /opt/rbbattle-deploy/hook.py
-sudo install -m 0644 deploy/rbbattle-deploy-hook.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now rbbattle-deploy-hook
-systemctl status rbbattle-deploy-hook --no-pager
+# 4) Runner-SSH-Alias (User deploy):
+sudo tee -a /home/runner/.ssh/config >/dev/null <<'SSHALIAS'
 
-# 6) Smoke-Test (Antwort muss 202 + {"job_id": …} sein):
-TOKEN="$(sudo awk -F= '/^DEPLOY_TOKEN=/{print $2}' /etc/rbbattle-deploy/hook.env)"
-SHA="$(git -C /opt/rbbattle-deploy/repo rev-parse HEAD)"
-curl -sS -X POST http://127.0.0.1:6323/deploy \
-  -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
-  -d "{\"sha\":\"${SHA}\",\"ref\":\"refs/heads/main\"}"
-```
+Host rbd
+  HostName 127.0.0.1
+  User deploy
+  IdentityFile ~/.ssh/id_rb_deploy
+  IdentitiesOnly yes
+  StrictHostKeyChecking accept-new
+SSHALIAS
 
-GitHub-Seite (Environment `dev`) — Token aus Schritt 3:
-
-```bash
-gh secret set DEPLOY_TOKEN --env dev --repo momokli/riftbreaker-battle-mod
-gh secret list --env dev --repo momokli/riftbreaker-battle-mod
-gh secret delete SSH_HOST --env dev --repo momokli/riftbreaker-battle-mod
-gh secret delete SSH_KEY --env dev --repo momokli/riftbreaker-battle-mod
-gh secret delete ANSIBLE_VAULT_PASS --env dev --repo momokli/riftbreaker-battle-mod
+# 5) Smoke-Test (führt den ECHTEN Deploy aus; exit 0 = grün):
+sudo -u runner ssh -o BatchMode=yes rbd \
+  "$(git -C /opt/rbbattle-deploy/repo rev-parse origin/main) refs/heads/main"
 ```
 
 ### Root-Weg (Standard): Ansible `become` über eng begrenztes sudoers
 
-Das Playbook läuft mit `become: true` und braucht root — dieser Weg ist der
-**Standard für den CD**. Deshalb **nicht** die Hook-Unit als root betreiben:
-Der Hook bleibt non-root (User `deploy`); root gibt es ausschließlich über das
-enge sudoers-Snippet unten — NOPASSWD **nur** für den root-owned Wrapper
-`/usr/local/bin/rbbattle-deploy` (ohne Argumente), der das `ansible-playbook`
-aus dem gepinnten venv ausführt.
+Das Playbook läuft mit `become: true` und braucht root. Root gibt es
+ausschließlich über das enge sudoers-Snippet unten — NOPASSWD **nur** für den
+root-owned Wrapper `/usr/local/bin/rbbattle-deploy` (ohne Argumente), der das
+`ansible-playbook` aus dem gepinnten venv ausführt. Der deploy-User selbst
+läuft durchgehend non-root (forced command + git-Checkout als deploy).
 
 ```bash
 # a) Ansible root-owned installieren (gepinnt; deploy darf nicht schreiben):
@@ -229,7 +206,7 @@ sudo python3 -m venv /opt/rb-ansible
 sudo /opt/rb-ansible/bin/pip install --disable-pip-version-check "ansible-core==2.19.*"
 
 # b) Root-Wrapper (führt das Playbook im Checkout aus; ignoriert Argumente):
-sudo tee /usr/local/bin/rbbattle-deploy >/dev/null <<'EOF'
+sudo tee /usr/local/bin/rbbattle-deploy >/dev/null <<'WRAPPER'
 #!/bin/sh
 set -eu
 export HOME=/opt/rbbattle-deploy
@@ -238,7 +215,7 @@ cd /opt/rbbattle-deploy/repo
 exec /opt/rb-ansible/bin/ansible-playbook \
   -i deploy/inventory deploy/site.yml \
   --vault-password-file /etc/rbbattle-deploy/vault.pass
-EOF
+WRAPPER
 sudo chown root:root /usr/local/bin/rbbattle-deploy
 sudo chmod 0755 /usr/local/bin/rbbattle-deploy
 
@@ -247,17 +224,17 @@ sudo install -o root -g root -m 0600 /dev/null /etc/rbbattle-deploy/vault.pass
 sudo <editor> /etc/rbbattle-deploy/vault.pass     # Passwort eintragen
 
 # d) Enges sudoers-Snippet — nur dieses Kommando, ohne Argumente:
-sudo tee /etc/sudoers.d/rbbattle-deploy >/dev/null <<'EOF'
+sudo tee /etc/sudoers.d/rbbattle-deploy >/dev/null <<'SUDOERS'
 deploy ALL=(root) NOPASSWD: /usr/local/bin/rbbattle-deploy ""
-EOF
+SUDOERS
 sudo chmod 0440 /etc/sudoers.d/rbbattle-deploy
 sudo visudo -cf /etc/sudoers.d/rbbattle-deploy
 
-# e) Loopback-SSH für den Hook-/Sandbox-Kontext (Details: „SSH-Ziel")
+# e) Loopback-SSH für den Wrapper-Kontext (ansible → planet, mesh-first):
 sudo install -d -o root -g root -m 0700 /opt/rbbattle-deploy/.ssh
 sudo ssh-keyscan -t ed25519 100.77.143.105 >> /opt/rbbattle-deploy/.ssh/known_hosts
 sudo install -m 0600 -o root -g root /root/.ssh/id_ed25519 /etc/rbbattle-deploy/id_ed25519
-sudo tee /etc/rbbattle-deploy/ssh_config >/dev/null <<'EOF'
+sudo tee /etc/rbbattle-deploy/ssh_config >/dev/null <<'SSHCONF'
 Host planet
   HostName 100.77.143.105
   User root
@@ -266,61 +243,48 @@ Host planet
   BatchMode yes
   StrictHostKeyChecking accept-new
   UserKnownHostsFile /opt/rbbattle-deploy/.ssh/known_hosts
-EOF
+SSHCONF
 sudo chmod 600 /etc/rbbattle-deploy/ssh_config
-sudo tee /etc/rbbattle-deploy/ansible.cfg >/dev/null <<'EOF'
+sudo tee /etc/rbbattle-deploy/ansible.cfg >/dev/null <<'ANSIBLECFG'
 [defaults]
 remote_tmp = /opt/rbbattle-deploy/.ansible/tmp
 [ssh_connection]
 ssh_args = -F /etc/rbbattle-deploy/ssh_config
-EOF
+ANSIBLECFG
 sudo chmod 640 /etc/rbbattle-deploy/ansible.cfg
 ```
 
-**Wichtig — Härtung vs. sudo:** Die Unit setzt `NoNewPrivileges=no` (alles
-andere der Härtung bleibt aktiv) — mit `NoNewPrivileges=yes` würde jede
-setuid-Eskalation und damit auch `sudo` scheitern, der Deploy könnte den
-Playbook-Lauf nie starten. Die root-Eskalation über Ansible (`become: true`)
-ist für dieses Playbook unvermeidbar; sie bleibt aber auf das eine
-sudoers-Kommando begrenzt (Wrapper, ohne Argumente, root-owned). Der
-Hook-Prozess selbst läuft weiterhin non-root als User `deploy`.
-
-**SSH-Ziel:** Das Playbook verbindet sich weiterhin per SSH mit dem
-Inventory-Host `planet` (mesh-first über Tailscale). Auf planet verifiziert
-(2026-09-10): `ssh` liest `~/.ssh/config` aus dem passwd-Home (`/root`) —
-das `HOME`-Env des Wrappers genügt dafür nicht, und `/root` ist in der
-Unit-Sandbox (`ProtectHome=yes`) unsichtbar. Deshalb liegt die
-Loopback-Konfiguration root-only unter `/etc/rbbattle-deploy/`: `ssh_config`
-(nutzt per `ssh -F` den Key `/etc/rbbattle-deploy/id_ed25519`) +
-`ansible.cfg` (`ssh_args = -F …` + `remote_tmp` für die Sandbox), aktiviert über
-`ANSIBLE_CONFIG=/etc/rbbattle-deploy/ansible.cfg` im Wrapper; known_hosts
-unter `/opt/rbbattle-deploy/.ssh/`. Ersten echten Lauf im Job-Log unter
-`/var/log/rbbattle-deploy/` prüfen.
+**SSH-Ziel:** Das Playbook verbindet sich per SSH mit dem Inventory-Host
+`planet` (mesh-first über Tailscale). `ssh` liest `~/.ssh/config` aus dem
+passwd-Home (`/root`) — das `HOME`-Env des Wrappers genügt dafür nicht.
+Deshalb liegt die Loopback-Konfiguration root-only unter
+`/etc/rbbattle-deploy/`: `ssh_config` (nutzt per `ssh -F` den Key
+`/etc/rbbattle-deploy/id_ed25519`) + `ansible.cfg` (`ssh_args = -F …` +
+`remote_tmp`), aktiviert über `ANSIBLE_CONFIG=/etc/rbbattle-deploy/ansible.cfg`
+im Wrapper; known_hosts unter `/opt/rbbattle-deploy/.ssh/`.
 
 ### Betrieb
 
 ```bash
-systemctl status rbbattle-deploy-hook               # Service-Zustand
-journalctl -u rbbattle-deploy-hook -f               # Live-Log (Requests/Fehler)
-ls -lt /var/log/rbbattle-deploy/                    # Job-Logs (0640)
-curl -sS http://127.0.0.1:6323/deploy/<job_id>/status \
-  -H "Authorization: Bearer ${TOKEN}"               # {status, exit_code, log_tail}
+# Deploy manuell anstoßen (exit code = Ergebnis; Ausgabe = ansible-Log):
+sudo -u runner ssh -o BatchMode=yes rbd "<sha> refs/heads/main"
+# Zuletzt deployte SHA:
+git -C /opt/rbbattle-deploy/repo log --oneline -3
 ```
 
-`hook.py` aktualisieren (bei Änderungen am Hook):
-`sudo install -m 0755 deploy/hook.py /opt/rbbattle-deploy/hook.py`
-+ `sudo systemctl restart rbbattle-deploy-hook`.
+`deploy/deploy-ssh.sh` aktualisieren (bei Änderungen):
+`sudo install -m 0755 deploy/deploy-ssh.sh /opt/rbbattle-deploy/deploy-ssh.sh`.
 
 ### Migrations-Checkliste
 
-- [ ] `deploy`-User + Verzeichnisse angelegt (Schritt 1)
-- [ ] Checkout geklont (Schritt 2), Token + `hook.env` (Schritte 3–4)
-- [ ] Hook + Unit aktiv, Smoke-Test 202 (Schritte 5–6)
-- [ ] Root-Weg: Ansible (venv) + Wrapper + sudoers + `vault.pass`
+- [ ] `deploy`-User + Verzeichnisse + Checkout (Schritt 1)
+- [ ] forced command + `authorized_keys` (Schritte 2–3), Alias `rbd` (Schritt 4)
+- [ ] Smoke-Test grün (Schritt 5)
+- [ ] Root-Weg: Ansible (venv) + Wrapper + sudoers + `vault.pass` + Loopback-SSH
 - [ ] `vault.yml` verschlüsselt + befüllt (falls noch `CHANGE_ME`)
-- [ ] GitHub: `DEPLOY_TOKEN` gesetzt, SSH-Secrets gelöscht
+- [ ] Alter Hook dekommissioniert: `systemctl disable --now rbbattle-deploy-hook` + Unit-Datei entfernt
+- [ ] GitHub: `DEPLOY_TOKEN`-Secret gelöscht (obsolet)
 - [ ] Erster Merge auf `main`: Deploy-Lauf grün
-
 ## deploy-check (PR-Gate)
 
 [`.github/workflows/deploy-check.yml`](../.github/workflows/deploy-check.yml) ist
@@ -370,8 +334,7 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 deploy/
 ├── site.yml                       # Haupt-Playbook (pre_tasks + Rollenreihenfolge)
 ├── check-render.yml               # deploy-check: rendert Compose-Templates lokal
-├── hook.py                        # CD: HTTP-Deploy-Hook (Python-Stdlib)
-├── rbbattle-deploy-hook.service   # CD: systemd-Unit für den Hook
+├── deploy-ssh.sh                  # CD: forced command für den deploy-User (SSH)
 ├── inventory/
 │   ├── hosts.yml                  # Host "planet" (mesh-first, Tailscale)
 │   └── host_vars/planet/
@@ -395,11 +358,11 @@ deploy/
   (Compose-Datei `0600`, sie enthält das Server-Passwort im `command`).
 - Kein Deploy ohne Freigabe; nichts manuell am produktiven Server.
 - SSH ausschließlich mesh-first über den `planet`-Alias (Tailscale).
-- **Deploy-Hook:** lauscht nur auf `127.0.0.1`; beide Endpunkte benötigen das
-  Bearer-Token (constant-time compare); die SHA aus dem Payload wird strikt
-  validiert und nie in Shell-Kommandos interpoliert; Job-Logs `0640` unter
-  `/var/log/rbbattle-deploy/`. Kein Root-Service — root nur über enges
-  sudoers (ein Kommando, ohne Argumente).
+- **SSH-Deploy:** der Runner-Key darf im `authorized_keys` des deploy-Users
+  NUR die forced command ausführen (`from="127.0.0.1"`, kein PTY, kein
+  Port-/Agent-Forwarding); die SHA wird im Skript strikt validiert und nie in
+  Shell-Kommandos interpoliert. Kein Root-Login — root nur über enges sudoers
+  (ein Kommando, ohne Argumente).
 
 ## Rollback
 
@@ -410,10 +373,8 @@ Der Deploy ist an die Revision (SHA) gebunden (Image-Tag + Checkout). Rollback
 # auf planet (root-Weg) — alten Stand auschecken und deployen:
 cd /opt/rbbattle-deploy/repo && git checkout --force <alte-sha>
 sudo -n /usr/local/bin/rbbattle-deploy
-# oder den Hook mit der alten SHA anstoßen (Workflow-tauglich):
-curl -sS -X POST http://127.0.0.1:6323/deploy \
-  -H "Authorization: Bearer <TOKEN>" -H 'Content-Type: application/json' \
-  -d '{"sha":"<alte-sha>","ref":"refs/heads/main"}'
+# oder per SSH forced command (Workflow-tauglich):
+sudo -u runner ssh -o BatchMode=yes rbd "<alte-sha> refs/heads/main"
 ```
 
 Nur das Mod zurückdrehen (ohne Image/Content):
@@ -429,8 +390,7 @@ Das vorherige `tournament-server`-Binary bzw. die vorherige `rbbattle.zip`
 
 | Ort | Was |
 |---|---|
-| `/var/log/rbbattle-deploy/<job_id>.log` | CD-Job-Log (Hook, 0640; Task `deploy.yml` zeigt bei Fehlern die letzten Zeilen) |
-| `journalctl -u rbbattle-deploy-hook` | Hook-Service (Requests/Fehler) |
+| `gh run view <id> --log` | CD-Job-Log (der `ssh`-Step streamt das ganze ansible-Log) |
 | `journalctl -u tournament-server`, `-u rbmods-probe.timer` | systemd-Rollen |
 | `docker logs riftbreaker-dedicated` | Container-Logs (Wine/Server) |
 | `git -C /opt/rbbattle-deploy/repo log --oneline -3` | zuletzt deployte SHA |
@@ -444,8 +404,8 @@ Caddy-Import-Zeile, systemd-Unit/Timer (tournament/probe), md5-Parität des
 Mod-Zips.
 
 **Nicht owned (bewusst host-seitig/manuell):** Vault-Passwort
-(`/etc/rbbattle-deploy/vault.pass`, root-only), Hook-Installation + `DEPLOY_TOKEN`
-(siehe unten), der Actions-Runner + seine Dependencies
+(`/etc/rbbattle-deploy/vault.pass`, root-only), SSH-Zugang + forced command des
+deploy-Users (siehe CD-Abschnitt), der Actions-Runner + seine Dependencies
 (`.github/runner/setup.sh`), der SSH-Zugang des Runners für `deploy-check`,
 Caddy-Container selbst (`mellon-caddy`), DNS/TLS.
 
