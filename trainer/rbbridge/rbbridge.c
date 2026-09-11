@@ -56,12 +56,182 @@
  *      (-lws2_32 ist nicht noetig: die Named Pipe nutzt nur Win32-API.)
  */
 
+#ifdef RBBRIDGE_HOSTTEST
+/*
+ * Host-Test-Build (tests/e2e-vollkette, KEIN Windows noetig):
+ *   -DRBBRIDGE_HOSTTEST kompiliert AUSSCHLIESSLICH die reinen Scan-/RTTI-
+ *   Funktionen (scan_bytes/scan_u32/scan_u64/resolve_console_vftable/
+ *   resolve_console_service) gegen einen SYNTHETISCHEN PE-artigen Puffer.
+ *   Der Shim stellt die minimalen Win32-Typen bereit und lenkt
+ *   VirtualQuery/GetModuleHandleA auf den Testpuffer um - kein Spielprozess,
+ *   kein Windows, kein Netz. Der echte Windows-Build (MinGW/MSVC, siehe
+ *   #else) ist davon unberuehrt.
+ */
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+typedef int BOOL;
+typedef void *HANDLE;
+typedef void *HMODULE;
+typedef void *LPVOID;
+typedef unsigned long DWORD;
+typedef int32_t LONG;
+typedef size_t SIZE_T;
+typedef uint16_t WORD;
+
+#define WINAPI
+
+#define MEM_COMMIT   0x1000
+#define MEM_FREE     0x10000
+#define PAGE_GUARD   0x100
+#define PAGE_READONLY 0x02
+#define PAGE_READWRITE 0x04
+#define PAGE_WRITECOPY 0x08
+#define PAGE_EXECUTE_READ 0x20
+#define PAGE_EXECUTE_READWRITE 0x40
+#define PAGE_EXECUTE_WRITECOPY 0x80
+
+#define IMAGE_DOS_SIGNATURE 0x5A4D     /* 'MZ'   */
+#define IMAGE_NT_SIGNATURE  0x00004550 /* 'PE\0\0' */
+
+typedef struct {
+    void   *BaseAddress;
+    void   *AllocationBase;
+    DWORD   AllocationProtect;
+    DWORD   __pad0;
+    SIZE_T  RegionSize;
+    DWORD   State;
+    DWORD   Protect;
+    DWORD   Type;
+    DWORD   __pad1;
+} MEMORY_BASIC_INFORMATION;
+
+typedef struct {
+    uint16_t e_magic;      /* 0x00 */
+    uint8_t  _pad0[0x3A];  /* 0x02..0x3B */
+    int32_t  e_lfanew;     /* 0x3C */
+} IMAGE_DOS_HEADER;
+
+typedef struct {
+    uint16_t Machine;
+    uint16_t NumberOfSections;
+    uint32_t TimeDateStamp;
+    uint32_t PointerToSymbolTable;
+    uint32_t NumberOfSymbols;
+    uint16_t SizeOfOptionalHeader;
+    uint16_t Characteristics;
+} IMAGE_FILE_HEADER;
+
+typedef struct {
+    uint8_t  _pad0[0x38];  /* Felder bis SizeOfImage */
+    uint32_t SizeOfImage;  /* 0x38 */
+    uint8_t  _pad1[0xB4];  /* Rest; sizeof == 0xF0 (wie x64-PE) */
+} IMAGE_OPTIONAL_HEADER;
+
+typedef struct {
+    uint32_t Signature;
+    IMAGE_FILE_HEADER FileHeader;
+    IMAGE_OPTIONAL_HEADER OptionalHeader;
+} IMAGE_NT_HEADERS;
+
+typedef union {
+    uint32_t PhysicalAddress;
+    uint32_t VirtualSize;
+} IMAGE_SECTION_MISC;
+
+typedef struct {
+    uint8_t Name[8];
+    IMAGE_SECTION_MISC Misc;
+    uint32_t VirtualAddress;
+    uint32_t SizeOfRawData;
+    uint32_t PointerToRawData;
+    uint32_t PointerToRelocations;
+    uint32_t PointerToLinenumbers;
+    uint16_t NumberOfRelocations;
+    uint16_t NumberOfLinenumbers;
+    uint32_t Characteristics;
+} IMAGE_SECTION_HEADER;
+
+#define IMAGE_FIRST_SECTION(nthead) \
+    ((IMAGE_SECTION_HEADER *)((uintptr_t)(nthead) + \
+      offsetof(IMAGE_NT_HEADERS, OptionalHeader) + \
+      (nthead)->FileHeader.SizeOfOptionalHeader))
+
+/* Synthetisches Modul/Adressraum - die Tests setzen es per ht_set_module(). */
+static unsigned char *g_ht_module_base = NULL;
+static unsigned char *g_ht_region_base = NULL;
+static size_t         g_ht_region_size = 0;
+
+static void ht_set_module(void *base, size_t size)
+{
+    g_ht_module_base = (unsigned char *)base;
+    g_ht_region_base = (unsigned char *)base;
+    g_ht_region_size = size;
+}
+
+static void *ht_GetModuleHandleA(const char *name)
+{
+    (void)name;
+    return (void *)g_ht_module_base; /* NULL == Modul nicht geladen */
+}
+#define GetModuleHandleA ht_GetModuleHandleA
+
+static DWORD ht_GetLastError(void) { return 0; }
+#define GetLastError ht_GetLastError
+
+/*
+ * Minimal-VirtualQuery auf genau EINER synthetischen Region:
+ *   addr <  base            -> freie Region von addr bis base (haelt die
+ *                              Scanschleifen laufen, wie echte MEM_FREE-
+ *                              Regionen unter Windows)
+ *   base <= addr < base+size -> MEM_COMMIT/PAGE_READWRITE (lesbar)
+ *   addr >= base+size        -> 0 (Ende, Scan bricht ab)
+ */
+static SIZE_T ht_VirtualQuery(const void *addr, MEMORY_BASIC_INFORMATION *mi,
+                              SIZE_T mi_len)
+{
+    (void)mi_len;
+    uintptr_t a, b, e;
+    if (!g_ht_region_base)
+        return 0;
+    a = (uintptr_t)addr;
+    b = (uintptr_t)g_ht_region_base;
+    e = b + g_ht_region_size;
+    if (a >= e)
+        return 0;
+    if (a < b) {
+        mi->BaseAddress = (void *)a;
+        mi->AllocationBase = (void *)a;
+        mi->AllocationProtect = 0;
+        mi->RegionSize = (SIZE_T)(b - a);
+        mi->State = MEM_FREE;
+        mi->Protect = 0;
+        mi->Type = 0;
+        return sizeof(*mi);
+    }
+    mi->BaseAddress = (void *)b;
+    mi->AllocationBase = (void *)b;
+    mi->AllocationProtect = PAGE_READWRITE;
+    mi->RegionSize = (SIZE_T)(e - b);
+    mi->State = MEM_COMMIT;
+    mi->Protect = PAGE_READWRITE;
+    mi->Type = 0;
+    return sizeof(*mi);
+}
+#define VirtualQuery ht_VirtualQuery
+
+#else /* !RBBRIDGE_HOSTTEST: echter Windows-Build */
+
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0601 /* GetTickCount64, Win7+ */
 #endif
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+
+#endif /* RBBRIDGE_HOSTTEST */
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -81,6 +251,7 @@
 #define HEARTBEAT_MS      5000 /* Intervall des State-Platzhalter-Events */
 #define POLL_MS           100  /* Serviceloop-Takt (nur bei Client)      */
 
+#ifndef RBBRIDGE_HOSTTEST
 /* Datei-Log: 1 = %TEMP%\rbbridge.log mitschreiben (Default an; abschalten
  * mit Umgebungsvariable RBBRIDGE_LOG=0). DebugView geht immer. */
 static int g_file_log = 1;
@@ -93,6 +264,7 @@ static volatile LONG g_stop = 0;   /* 1 = Thread soll sich beenden       */
 static HANDLE g_thread = NULL;     /* Handle des Pipe-Server-Threads     */
 static LONG g_thread_started = 0;  /* verhindert doppelte Attach-Threads */
 static CRITICAL_SECTION g_log_cs;  /* schuetzt das Datei-Log             */
+#endif /* !RBBRIDGE_HOSTTEST */
 
 /* ------------------------------------------------------------------ */
 /* Logging (OutputDebugString + optionale Datei)                       */
@@ -106,6 +278,9 @@ static void dbg(const char *fmt, ...)
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
 
+#ifdef RBBRIDGE_HOSTTEST
+    (void)buf; /* Host-Test: kein Debug-/Datei-Log */
+#else
     OutputDebugStringA(buf);
 
     if (!g_file_log)
@@ -135,7 +310,10 @@ static void dbg(const char *fmt, ...)
         }
     }
     LeaveCriticalSection(&g_log_cs);
+#endif /* !RBBRIDGE_HOSTTEST */
 }
+
+#ifndef RBBRIDGE_HOSTTEST
 
 /* ------------------------------------------------------------------ */
 /* Minimal-JSON-Helfer (nur fuer das flache v0-Format noetig)          */
@@ -299,6 +477,8 @@ static void send_state(HANDLE hPipe)
               (unsigned)st.wave);
 }
 
+#endif /* !RBBRIDGE_HOSTTEST: JSON-Helfer + send_line/game_state */
+
 /* ------------------------------------------------------------------ */
 /* ConsoleService-Anbindung (RE, AOB-/Signatur-basiert)                */
 /*                                                                    */
@@ -347,16 +527,42 @@ static void send_state(HANDLE hPipe)
 /* MSVC-RTTI-Name der ConsoleService-Klasse (mit NUL-Terminator). */
 static const char RBBRIDGE_RTTI_NAME[] = ".?AVConsoleService@Exor@@";
 
-/* Byte-Signatur des ExecuteCommand-Prologs (28 Bytes, siehe oben). */
+/*
+ * Byte-Signatur des ExecuteCommand-Prologs (28 Bytes, Build 2.0.58485 /
+ * 0.34.3, siehe Kopfkommentar).
+ *
+ * ACHTUNG Build-Bindung: die Bytes 14..17 und 22..25 sind die
+ * rel32-Displacements der beiden CALL-Anweisungen (E8). Sie aendern sich
+ * mit JEDEM Rebuild der Engine, weil die relativen Call-Ziele wandern.
+ * Sie werden daher per Byte-Maske als Wildcards behandelt (0x00 ==
+ * don't care), waehrend die E8-Opcodes (Index 13 und 21) erhalten bleiben.
+ * Damit haengt die Signatur nicht mehr an zwei konkreten rel32-Werten;
+ * sie ist an den Build 2.0.58485 kalibriert (beide Displacements damals
+ * E8 4E C8 5B 00 / E8 D6 1F 93 00) und muss bei einem Engine-Update
+ * gegen die neue .text-Gegenprobe nachgezogen werden.
+ */
 static const unsigned char RBBRIDGE_EXEC_SIG[] = {
     0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x50,
     0x48, 0x8B, 0xDA, 0xE8, 0x4E, 0xC8, 0x5B, 0x00, 0x48, 0x8B,
     0xF8, 0xE8, 0xD6, 0x1F, 0x93, 0x00, 0x48, 0x89
 };
 
+/* Byte-Maske zur Signatur: 0x00 = Wildcard (don't care). Nur die
+ * rel32-Operanden der beiden E8-CALLs sind maskiert, die Opcodes selbst
+ * (Index 13/21) bleiben fest. */
+static const unsigned char RBBRIDGE_EXEC_SIG_MASK[] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF,
+    0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF
+};
+
 /* x64-Aufrufkonvention: this=RCX, cmd=RDX - __fastcall ist auf x64 der
  * Standard (das Schluesselwort dokumentiert die Konvention nur). */
+#ifdef RBBRIDGE_HOSTTEST
+typedef void (*console_exec_fn)(void *self, const char *command);
+#else
 typedef void (__fastcall *console_exec_fn)(void *self, const char *command);
+#endif
 
 /*
  * Lesbare, committete Region ohne PAGE_GUARD? (Lesen dort ist sicher.)
@@ -379,12 +585,32 @@ static int is_readable_region(const MEMORY_BASIC_INFORMATION *mi)
 }
 
 /*
- * Sucht [start, start+len) nach einem Byte-Muster und respektiert dabei
- * den Seitenschutz per VirtualQuery (nur MEM_COMMIT + lesbar, kein
- * PAGE_GUARD). Rueckgabe: erster Treffer oder NULL.
+ * Vergleicht n Bytes an p mit dem Muster pat unter der Byte-Maske mask
+ * (mask == NULL bedeutet: alle Bytes muessen exakt passen). Rueckgabe 1 =
+ * Treffer. Reiner Speichervergleich, keine Win32-Abhaengigkeit.
  */
-static const unsigned char *scan_bytes(const unsigned char *start, size_t len,
-                                       const unsigned char *pat, size_t pat_len)
+static int sig_matches(const unsigned char *p, const unsigned char *pat,
+                       const unsigned char *mask, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        unsigned char m = mask ? mask[i] : 0xFF;
+        if (((p[i] ^ pat[i]) & m) != 0)
+            return 0;
+    }
+    return 1;
+}
+
+/*
+ * Sucht [start, start+len) nach einem Byte-Muster (mit optionaler
+ * Byte-Maske, mask==NULL == exakt) und respektiert dabei den Seitenschutz
+ * per VirtualQuery (nur MEM_COMMIT + lesbar, kein PAGE_GUARD).
+ * Rueckgabe: erster Treffer oder NULL.
+ */
+static const unsigned char *scan_bytes_mask(const unsigned char *start,
+                                            size_t len,
+                                            const unsigned char *pat,
+                                            const unsigned char *mask,
+                                            size_t pat_len)
 {
     if (!start || pat_len == 0 || len < pat_len)
         return NULL;
@@ -408,7 +634,7 @@ static const unsigned char *scan_bytes(const unsigned char *start, size_t len,
             const unsigned char *p = (const unsigned char *)addr;
             size_t n = (size_t)(rend - addr);
             for (size_t i = 0; i + pat_len <= n; i++) {
-                if (memcmp(p + i, pat, pat_len) == 0)
+                if (sig_matches(p + i, pat, mask, pat_len))
                     return p + i;
             }
         }
@@ -417,6 +643,13 @@ static const unsigned char *scan_bytes(const unsigned char *start, size_t len,
         addr = next;
     }
     return NULL;
+}
+
+/* Exakte Suche (keine Wildcards) - Wrapper um scan_bytes_mask(). */
+static const unsigned char *scan_bytes(const unsigned char *start, size_t len,
+                                       const unsigned char *pat, size_t pat_len)
+{
+    return scan_bytes_mask(start, len, pat, NULL, pat_len);
 }
 
 static const unsigned char *scan_u32(const unsigned char *start, size_t len,
@@ -485,6 +718,48 @@ static int text_range(const unsigned char *base,
         }
     }
     return 0;
+}
+
+/*
+ * Plausibilitaets-Check fuer einen vftable-Kandidaten (Risiko "First hit =
+ * this"): Die vftable muss im Modul-Image liegen und als erste Referenz
+ * einen weiteren Image-Zeiger enthalten (echte MSVC-vftables zeigen nur in
+ * den Code des Moduls). execfn wird - falls er in den ersten 128 Slots
+ * auftaucht - als starkes Zusatzsignal gemeldet; er ist NICHT Pflicht, weil
+ * ExecuteCommand nicht virtuell sein muss. Reicht die Plausibilitaet nicht,
+ * wird der Kandidat verworfen (kein Aufruf, Fehler-Event).
+ * Rueckgabe 1 = plausibel, 0 = verwerfen.
+ */
+static int looks_like_vftable(const unsigned char *vftable,
+                              const unsigned char *execfn,
+                              const unsigned char *base, size_t size,
+                              int *out_has_execfn)
+{
+    const unsigned char *img_end = base + size;
+    if (out_has_execfn)
+        *out_has_execfn = 0;
+    if (!vftable || vftable < base || vftable + 8 > img_end)
+        return 0;
+
+    uint64_t first = 0;
+    memcpy(&first, vftable, sizeof(first));
+    const unsigned char *p0 = (const unsigned char *)(uintptr_t)first;
+    if (p0 < base || p0 >= img_end)
+        return 0; /* erste Referenz zeigt nicht ins Modul */
+
+    for (size_t i = 0; i < 128; i++) {
+        const unsigned char *slot = vftable + 8 * i;
+        if (slot + 8 > img_end)
+            break;
+        uint64_t v = 0;
+        memcpy(&v, slot, sizeof(v));
+        if ((const unsigned char *)(uintptr_t)v == execfn) {
+            if (out_has_execfn)
+                *out_has_execfn = 1;
+            break;
+        }
+    }
+    return 1;
 }
 
 /*
@@ -589,13 +864,51 @@ static void *resolve_console_instance(const unsigned char *vftable)
 }
 
 /*
+ * Einmal aufgeloeste ConsoleService-Anbindung (Risiko: Voll-Scan des
+ * Adressraums pro exec). Das Ergebnis wird gecacht und bei Folgeaufrufen
+ * nur BILLIG re-validiert:
+ *   - Modul noch an derselben Basis? (GetModuleHandleA)
+ *   - zeigt *(void**)instance noch auf die gecachte vftable?
+ *   - stehen die Signatur-Bytes noch an fn? (sig_matches, maskiert)
+ * Schlaegt eine Pruefung fehl, wird der Cache verworfen und voll neu
+ * gescannt. Der Dispatch laeuft ausschliesslich im Pipe-Thread (eine
+ * Verbindung zur Zeit) -> kein Lock noetig; waere der Dispatch
+ * multithreaded, muesste der Cache synchronisiert werden (offen).
+ */
+typedef struct {
+    int                  valid;
+    const unsigned char *module_base;
+    const unsigned char *fn;
+    void                *instance;
+    const unsigned char *vftable;
+} console_cache_t;
+
+static console_cache_t g_console_cache;
+
+/*
  * Loest ExecuteCommand (Signatur) und ConsoleService (RTTI + Instanz)
- * auf und gibt beides zurueck.
+ * auf und gibt beides zurueck. Nutzt einen statischen Cache (siehe oben).
  * Rueckgabe 1 = ok (fn/instance gesetzt), 0 = nicht gefunden.
  * Bei 0 sind fn/instance unbestimmt -> NICHT aufrufen.
  */
 static int resolve_console_service(console_exec_fn *out_fn, void **out_inst)
 {
+    /* 1) Billige Re-Validierung eines evtl. vorhandenen Cache-Treffers. */
+    if (g_console_cache.valid) {
+        void *mod = GetModuleHandleA(RBBRIDGE_MODULE_NAME);
+        void *cur_vftable = NULL;
+        memcpy(&cur_vftable, g_console_cache.instance, sizeof(cur_vftable));
+        if ((const unsigned char *)mod == g_console_cache.module_base &&
+            cur_vftable == g_console_cache.vftable &&
+            sig_matches(g_console_cache.fn, RBBRIDGE_EXEC_SIG,
+                        RBBRIDGE_EXEC_SIG_MASK, sizeof(RBBRIDGE_EXEC_SIG))) {
+            *out_fn = (console_exec_fn)(uintptr_t)g_console_cache.fn;
+            *out_inst = g_console_cache.instance;
+            return 1; /* Cache-Treffer, kein Voll-Scan */
+        }
+        g_console_cache.valid = 0; /* ungueltig -> voll neu scannen */
+    }
+
     const unsigned char *base = NULL;
     size_t size = 0;
     if (!module_range(&base, &size))
@@ -608,9 +921,10 @@ static int resolve_console_service(console_exec_fn *out_fn, void **out_inst)
         return 0;
     }
 
-    const unsigned char *execfn = scan_bytes(text, text_len,
-                                             RBBRIDGE_EXEC_SIG,
-                                             sizeof(RBBRIDGE_EXEC_SIG));
+    const unsigned char *execfn = scan_bytes_mask(text, text_len,
+                                                  RBBRIDGE_EXEC_SIG,
+                                                  RBBRIDGE_EXEC_SIG_MASK,
+                                                  sizeof(RBBRIDGE_EXEC_SIG));
     if (!execfn) {
         dbg("resolve_console_service: ExecuteCommand-Signatur nicht gefunden");
         return 0;
@@ -620,19 +934,36 @@ static int resolve_console_service(console_exec_fn *out_fn, void **out_inst)
     if (!vftable)
         return 0;
 
+    int has_execfn = 0;
+    if (!looks_like_vftable(vftable, execfn, base, size, &has_execfn)) {
+        dbg("resolve_console_service: vftable(rva=%08lx) verworfen "
+            "(keine plausible vftable)",
+            (unsigned long)(uintptr_t)(vftable - base));
+        return 0;
+    }
+
     void *instance = resolve_console_instance(vftable);
     if (!instance)
         return 0;
 
     dbg("resolve_console_service: base=%p vftable(rva=%08lx) execfn(rva=%08lx) "
-        "instance=%p",
+        "instance=%p exec_in_vftable=%d",
         (void *)base, (unsigned long)(uintptr_t)(vftable - base),
-        (unsigned long)(uintptr_t)(execfn - base), instance);
+        (unsigned long)(uintptr_t)(execfn - base), instance, has_execfn);
+
+    /* Cache fuellen (Folgeaufrufe nur noch billig re-validieren). */
+    g_console_cache.valid = 1;
+    g_console_cache.module_base = base;
+    g_console_cache.fn = execfn;
+    g_console_cache.instance = instance;
+    g_console_cache.vftable = vftable;
 
     *out_fn = (console_exec_fn)(uintptr_t)execfn;
     *out_inst = instance;
     return 1;
 }
+
+#ifndef RBBRIDGE_HOSTTEST
 
 /* ------------------------------------------------------------------ */
 /* Dispatch: Ingress-Kommandos                                         */
@@ -656,6 +987,15 @@ static int resolve_console_service(console_exec_fn *out_fn, void **out_inst)
  *     __try/__except; nur MSVC kann das) - die Absicherung ist der
  *     Signatur-/Instanz-Check: ohne gueltige Aufloesung wird NICHT
  *     aufgerufen, sondern ein Fehler-Event gesendet.
+ *
+ * OFFENES RISIKO (Thread-Marshalling, nicht host-seitig entscheidbar):
+ *   fn(instance, command) laeuft im Pipe-Thread, NICHT auf dem Main-/
+ *   Spiel-Thread. Ob ConsoleService::ExecuteCommand thread-safe ist bzw.
+ *   auf den Spiel-Thread gemarshalled werden MUSS, ist nicht belegt und
+ *   wird erst der Live-Test (Spielprozess, #252) zeigen. Bis dahin gilt:
+ *   kein Beweis fuer Threadsicherheit - nicht als erledigt betrachten.
+ *   Der Aufruf selbst ist gegen Nicht-Fund abgesichert (Fehler-Event),
+ *   gegen einen Fehl-Fund nur teilweise (siehe looks_like_vftable).
  *
  * Antwort bei Erfolg: {"event":"exec_result","ok":true,"command":"..."}
  */
@@ -1028,3 +1368,5 @@ int main(void)
 }
 
 #endif /* RBBRIDGE_STANDALONE */
+
+#endif /* !RBBRIDGE_HOSTTEST (Dispatch + Pipe-Server + DllMain) */
