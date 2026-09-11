@@ -1,0 +1,25 @@
+// RBBattle Dedicated-Server — Startup-Config (von deploy/ gerendert, Issue #239).
+//
+// Kanonischer CLI-Aufruf laut ExOr „Dedicated Server Setup Guide“:
+//     cli=1 config=config.cfg
+//
+// `cli=1` allein reicht NICHT: ohne vollständige Startup-Config hängt die App
+// im Ladevorgang und wartet auf eine UI, die es im CLI-Modus nicht gibt — sie
+// bindet dann nie den UDP-Port. Genau das war der Ausfall in Issue #239
+// (Server :6321 nicht joinable, DedicatedServer.exe hängt in pipe_read).
+
+// Required: skips the menu state. Without it the server waits forever.
+set app_mode "server"
+
+// Game mode + map + difficulty (Werte laut ExOr-Guide; Survival nutzt coop_*).
+set campaign "{{ riftbreaker_server_campaign }}"
+set mission "{{ riftbreaker_server_mission }}"
+set difficulty "{{ riftbreaker_server_difficulty }}"
+
+// Server-Optionen.
+set server_name "RBBattle"
+set server_password "{{ riftbreaker_server_password }}"
+set server_max_players_count "4"
+set server_broadcast_enabled "1"
+set server_pause_game_when_empty "1"
+set disable_steam "1"

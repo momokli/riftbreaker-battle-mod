@@ -6,10 +6,9 @@ services:
     container_name: {{ riftbreaker_server_container }}
     restart: unless-stopped
     init: true
-{# Issue #239: DedicatedServer.exe blockierte mit `cli=1` (Console-Mode) im
-   Console-Init (wchan=pipe_read) und band NIE den UDP-Port — der Server war
-   auf :6321 nicht joinable. `cli=1` ist darum aus riftbreaker_server_command
-   entfernt (headless_mode=1 + app_mode=server booten die Welt ohne Konsole).
+{# Issue #239: DedicatedServer.exe blockiert im CLI-Modus (`cli=1`) ohne
+   vollstaendige Startup-Config — haengt in pipe_read, CPU-Zeit 0, bindet nie
+   den UDP-Port. Fix: `cli=1 config=<config.cfg>` (siehe config.cfg.j2).
    tty + stdin_open bleiben als Guard gegen jeden restlichen Console-/stdin-
    Init bestehen: sie geben dem Prozess eine echte Konsole, es wird aber
    NICHTS nach stdin geschrieben (stdin nimmt keine Eingabe an). #}

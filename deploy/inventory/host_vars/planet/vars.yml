@@ -22,9 +22,9 @@ riftbreaker_server_port_udp: 6321
 # Steam-Layout: das Binary liegt unter bin/ (Working-Dir = Game-Root).
 riftbreaker_server_exe: bin/DedicatedServer.exe
 # Welt/Config gemäß docs/DUEL_SETUP.md (Operator-verifiziert, feste Seed = Parität).
-riftbreaker_server_campaign: mp_survival
-riftbreaker_server_mission: jungle
-riftbreaker_server_difficulty: hard
+riftbreaker_server_campaign: mp_survival/mp_survival
+riftbreaker_server_mission: survival/jungle
+riftbreaker_server_difficulty: coop_hard
 riftbreaker_server_map_size: large
 riftbreaker_server_seed: 42
 

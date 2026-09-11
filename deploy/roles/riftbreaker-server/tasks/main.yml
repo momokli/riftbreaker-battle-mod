@@ -82,6 +82,14 @@
     - rbbattle_container_owner.rc == 0
     - (rbbattle_container_owner.stdout | trim) not in ['', riftbreaker_compose_project]
 
+- name: Startup-Config für den Dedicated Server rendern
+  # Issue #239: `cli=1` braucht eine vollständige Startup-Config (sonst hängt
+  # die App und bindet nie den UDP-Port). Enthält das Passwort → 0600.
+  template:
+    src: config.cfg.j2
+    dest: "{{ riftbreaker_server_config_path }}"
+    mode: "0600"
+
 - name: docker-compose.yml rendern
   template:
     src: docker-compose.yml.j2

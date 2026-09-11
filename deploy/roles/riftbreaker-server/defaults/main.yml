@@ -10,29 +10,34 @@ riftbreaker_deploy_dir: /opt/rbmods/compose/riftbreaker-dedicated
 # Genutzt für die Fremd-Belegungs-Prüfung des Container-Namens (Issue #209).
 riftbreaker_compose_project: "{{ riftbreaker_deploy_dir | basename }}"
 
-# Dedicated-Server-Kommando (Operator-verifiziert: docs/DUEL_SETUP.md,
-# docs/ASSUMPTIONS.md). Jedes Argument wird UNVERÄNDERT (ohne
-# Shell-Interpretation) an `wine <exe>` gereicht. Das Passwort kommt aus dem
-# Vault (riftbreaker_server_password).
+# Dedicated-Server-Kommando (ExOr „Dedicated Server Setup Guide“).
+# Jedes Argument wird UNVERÄNDERT (ohne Shell-Interpretation) an `wine <exe>`
+# gereicht. Das Passwort steht NICHT mehr hier, sondern in der Startup-Config
+# (config.cfg.j2, Datei-Rechte 0600).
 #
-# Issue #239: `cli=1` (Console-Mode) ist ENTFERNT. Empirischer Beweis aus dem
-# Boot-Test: mit `cli=1` bindet DedicatedServer.exe keinen UDP-Port (hängt im
-# Console-Init auf stdin) — auch NICHT mit tty+stdin_open. `headless_mode=1`
-# + `app_mode=server` booten die Welt ohne Konsole (docs/ASSUMPTIONS.md Fakt 3).
+# Issue #239 — Root Cause + Fix:
+#   Der Server lief im CLI-Modus (`cli=1`), aber OHNE vollständige
+#   Startup-Config. Laut ExOr-Guide hängt die App dann und wartet auf eine UI,
+#   die es im CLI-Modus nicht gibt („stuck on loading while waiting for input
+#   from a UI that doesn't exist“) — belegt durch den Boot-Test:
+#   DedicatedServer.exe hängt in pipe_read, CPU-Zeit 0, /proc/net/udp ohne
+#   Socket. Fix: `cli=1` + vollständige Startup-Config als Datei (`config=`).
+#   Game-Settings (app_mode/campaign/mission/difficulty/server_*) stehen in
+#   der Config, NICHT mehr als Einzel-Args.
 riftbreaker_server_command:
   - "{{ riftbreaker_server_exe }}"
   - "headless_mode=1"
-  - "app_mode=server"
-  - "campaign={{ riftbreaker_server_campaign }}"
-  - "mission={{ riftbreaker_server_mission }}"
-  - "difficulty={{ riftbreaker_server_difficulty }}"
+  - "cli=1"
+  - "config={{ riftbreaker_server_config_arg }}"
   - "map_size={{ riftbreaker_server_map_size }}"
   - "seed={{ riftbreaker_server_seed }}"
   - "debug_disable_content_version_check=1"
-  - "server_pause_game_when_empty=1"
-  - "disable_steam=1"
-  - "password={{ riftbreaker_server_password }}"
 riftbreaker_server_extra_args: []
+
+# Startup-Config (Issue #239): Pfad im Container (Unix) und der an die App
+# gereichte Windows-Pfad für `config=` (Wine-Laufwerk Z: = Container-Root).
+riftbreaker_server_config_path: "{{ riftbreaker_game_dir }}/config.cfg"
+riftbreaker_server_config_arg: "Z:{{ riftbreaker_game_dir }}/config.cfg"
 
 # --- Mods & Backups (Guard gegen Fremd-Mods in mods/) ------------------------
 # Der Dedicated Server lädt JEDEN Unterordner von mods/ mit einer *.manifest
