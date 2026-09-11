@@ -72,7 +72,7 @@ jobs:
           EOF
           ansible-playbook -i "$INV" deploy/test-deploy.yml -e @deploy/test-vars.yml
 
-      - name: Boot verifizieren (Container stabil + tournament healthy)
+      - name: Boot verifizieren (Container stabil + UDP-Bind 6323 + tournament healthy)
         if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
@@ -83,9 +83,34 @@ jobs:
           echo "Test-Container: status=$STATUS restarting=$RESTARTING"
           [ "$STATUS" = "running" ] || { echo "::error::Test-Container bootet nicht (status=$STATUS)."; exit 1; }
           [ "$RESTARTING" = "false" ] || { echo "::error::Test-Container ist in einer Crash-Loop."; exit 1; }
+
+          # HARTES Bind-Gate (Issue #239): "Container läuft" allein ist kein
+          # Beweis — der DedicatedServer kann im Console-Init hängen (cli=1
+          # ohne tty/stdin_open) und NIE einen UDP-Socket binden; genau so war
+          # main grün, obwohl :6321 auf planet keinen Listener hatte. Darum
+          # wird hier der gebundene UDP-Socket im Test-Container assertet.
+          # Test-Port 6323 = 0x18b3; /proc/net/udp* listet local_address als
+          # "<ip>:<port-hex>". Bis zu 150 s pollen (Welt-Boot unter Wine/llvmpipe).
+          UDP_HEX="18b3"
+          BOUND=false
+          for _ in $(seq 1 30); do
+            if ssh planet "docker exec riftbreaker-dedicated-test sh -lc 'cat /proc/net/udp /proc/net/udp6 2>/dev/null || true'" \
+                 | awk '{print $2}' | tr '[:upper:]' '[:lower:]' | grep -q ":${UDP_HEX}$"; then
+              BOUND=true
+              break
+            fi
+            sleep 5
+          done
+          if [ "$BOUND" != "true" ]; then
+            echo "::error::riftbreaker-dedicated-test hat keinen UDP-Socket auf 6323 gebunden — DedicatedServer hängt im Console-Init (cli=1 ohne tty/stdin_open) und ist nicht joinable (Issue #239)."
+            ssh planet "docker exec riftbreaker-dedicated-test sh -lc 'cat /proc/net/udp /proc/net/udp6 2>/dev/null || true'" || true
+            exit 1
+          fi
+          echo "UDP-Bind OK: riftbreaker-dedicated-test lauscht auf 6323/udp."
+
           curl --silent --show-error --fail --max-time 10 \
             http://127.0.0.1:8091/health | grep -q '"ok":true'
-          echo "Boot-Test OK: Container läuft stabil, tournament-server healthy auf 8091."
+          echo "Boot-Test OK: Container läuft stabil, UDP 6323/udp gebunden, tournament-server healthy auf 8091."
 
       - name: Aufräumen (Test-Container + Unit stoppen)
         if: always() && steps.gate.outputs.skip != 'true'
