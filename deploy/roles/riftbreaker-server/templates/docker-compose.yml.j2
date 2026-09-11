@@ -8,7 +8,6 @@ services:
     container_name: {{ riftbreaker_server_container }}
     restart: unless-stopped
     init: true
-    tty: true
     stdin_open: true
     environment:
       LC_ALL: C.UTF-8
