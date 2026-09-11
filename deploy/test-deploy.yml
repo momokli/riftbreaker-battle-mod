@@ -1,0 +1,35 @@
+---
+# Pre-Merge-Boot-Test (CI/CD-Plan F1): baut Image + tournament-server und
+# bootet EINEN Game-Server (Test-Port 6323) + den tournament-server
+# (Test-Port 8082) — isoliert von Prod (eigene Ports/Namen/Pfade via
+# deploy/test-vars.yml). Es geht nur um „baut + bootet".
+# Kein vanilla, kein website/probe (DNS egal, ein Server genügt).
+# Verifikation + Teardown: .github/workflows/boot-test.yml.
+#
+# Aufruf (Workflow, Dummy-Vault — kein Secret nötig):
+#   ansible-playbook -i <tmp-inventory-mit-Dummy-Vault> deploy/test-deploy.yml \
+#     -e @deploy/test-vars.yml
+
+- name: RIFT BATTLE — Pre-Merge-Boot-Test (Test-Ports)
+  hosts: planet
+  become: true
+
+  pre_tasks:
+    - name: Test-SHA für den Image-Tag ermitteln
+      command: git -c safe.directory=* -C {{ playbook_dir }}/.. rev-parse --short=12 HEAD
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      changed_when: false
+      register: rbbattle_test_sha
+
+    - name: Image-Tag (Test-SHA) als Fact setzen
+      set_fact:
+        deploy_image_tag: "{{ rbbattle_test_sha.stdout | trim }}"
+
+  roles:
+    - role: mods-zip
+    - role: headless-client-image
+    - role: game-content
+    - role: riftbreaker-server
+    - role: tournament-server
