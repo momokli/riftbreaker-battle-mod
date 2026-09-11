@@ -19,7 +19,13 @@ services:
     ports:
       - "{{ riftbreaker_server_port_udp }}:{{ riftbreaker_server_port_udp }}/udp"
     environment:
-      WINEDEBUG: "-all"
+      # Issue #239 — Rig-Rezept (1:1): Sync-Primitive AUS + feste Locale, sonst
+      # crasht der DedicatedServer im Boost-Thread vor dem UDP-Bind.
+      WINEESYNC: "0"
+      WINEFSYNC: "0"
+      LC_ALL: C.UTF-8
+      # `err`-Kanal bleibt sichtbar (Diagnose), Rest still.
+      WINEDEBUG: "-all,err+all"
       WINEARCH: win64
       WINEPREFIX: /root/.wine
       LIBGL_ALWAYS_SOFTWARE: "1"

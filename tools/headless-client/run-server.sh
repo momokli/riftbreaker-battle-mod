@@ -11,7 +11,9 @@
 #     d3dcompiler_47 im persistenten Prefix (heilt frische/alte Volumes).
 #   * LAN-Modus (disable_steam "1"): WINEDLLOVERRIDES für die Steam-DLLs
 #     (steamclient=n,b,steam_api64=n,b) + Steam-Env entfernt, damit der
-#     Prozess direkt per IP erreichbar ist (kein Steam-Relay).
+#     Prozess direkt per IP erreichbar ist (kein Steam-Relay). Zusätzlich
+#     WINEESYNC=0/WINEFSYNC=0 + LC_ALL=C.UTF-8 (Rig-Rezept): mit esync/fsync
+#     crasht der Server im Boost-Thread, bevor er den UDP-Port bindet.
 #   * SaveGames-Verzeichnis im Prefix auf $RB_SAVE_DIR symlinken (persistent).
 #
 # Aufruf (Compose): entrypoint: ["run-server.sh"] + command: [<exe>, <args…>]
@@ -25,9 +27,18 @@ set -euo pipefail
 WINEPREFIX="${WINEPREFIX:-/root/.wine}"
 export WINEPREFIX
 export WINEARCH="${WINEARCH:-win64}"
-export WINEDEBUG="${WINEDEBUG:--all}"
+export WINEDEBUG="${WINEDEBUG:--all,err+all}"
 export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}"
 export GALLIUM_DRIVER="${GALLIUM_DRIVER:-llvmpipe}"
+# Issue #239 — Rig-Rezept (1:1): die Wine-Sync-Primitive AUS + feste Locale.
+# Mit esync/fsync crasht der DedicatedServer im Boost-Thread
+# (thread_start_function), bevor er den UDP-Port bindet.
+export WINEESYNC="${WINEESYNC:-0}"
+export WINEFSYNC="${WINEFSYNC:-0}"
+export LC_ALL="${LC_ALL:-C.UTF-8}"
+# Rig nutzt $WINE (Default wine64); wine-init.sh honoriert dieselbe Variable.
+WINE="${WINE:-wine}"
+export WINE
 
 RB_SAVE_DIR="${RB_SAVE_DIR:-/srv/rbsaves}"
 export RB_SAVE_DIR
@@ -70,5 +81,8 @@ unset SteamAppId SteamGameId STEAMAPPID LD_LIBRARY_PATH 2>/dev/null || true
 EXE_DIR="$(dirname "${1:-.}")"
 rm -f steam_appid.txt "${EXE_DIR}/steam_appid.txt" 2>/dev/null || true
 
-echo "[run-server] starte: xvfb-run -a wine $*"
-exec xvfb-run -a wine "$@"
+# Issue #239 — Rig-Rezept (1:1): Steam-Env VOR dem exec zusätzlich per
+# `env -u …` strippen (der Shell-`unset` oben deckt nur die aktuelle Shell ab).
+echo "[run-server] starte: env -u SteamAppId -u SteamGameId -u STEAMAPPID -u LD_LIBRARY_PATH ${WINE} $*"
+exec env -u SteamAppId -u SteamGameId -u STEAMAPPID -u LD_LIBRARY_PATH \
+    xvfb-run -a "${WINE}" "$@"

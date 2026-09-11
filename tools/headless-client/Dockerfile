@@ -82,12 +82,20 @@ RUN curl -fsSL -o /usr/local/bin/winetricks \
 # Software-Rendering erzwingen: Mesa-llvmpipe statt echter GPU.
 # DISPLAY gilt nur für den Client-Pfad (run-client.sh mit eigenem Xvfb :99);
 # der Server-Pfad nutzt `xvfb-run -a` und ignoriert DISPLAY.
+# Issue #239 — Streaming-/Sync-Primitive und Locale wie im funktionierenden Rig:
+#   * WINEESYNC=0/WINEFSYNC=0: die Wine-Sync-Primitive (esync/fsync) bringen den
+#     DedicatedServer-Crash im Boost-Thread; das Rig fährt sie AUS.
+#   * LC_ALL=C.UTF-8: stabile Locale für die Engine (Rig-Rezept).
+#   * WINEDEBUG=-all,err+all: `err`-Kanal bleibt sichtbar (Diagnose), sonst still.
 ENV DISPLAY=:99 \
     LIBGL_ALWAYS_SOFTWARE=1 \
     GALLIUM_DRIVER=llvmpipe \
     WINEARCH=win64 \
     WINEPREFIX=/root/.wine \
-    WINEDEBUG=-all \
+    WINEESYNC=0 \
+    WINEFSYNC=0 \
+    LC_ALL=C.UTF-8 \
+    WINEDEBUG=-all,err+all \
     WINEDLLOVERRIDES="mscoree,mshtml="
 
 # Mountpoint für die Client-Dateien (Quelle: sync-client.sh).
