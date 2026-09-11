@@ -178,6 +178,12 @@ check "relay dispatcht auf die Fake-Pipe (dispatch sent)" \
   wait_for 20 'dispatch sent cmd_id=' "$DIR/relay.log"
 check "relay meldet das Dispatch-Ergebnis (kein exec_result -> status=timeout)" \
   wait_for 20 'dispatch result cmd_id=1 status=timeout' "$DIR/relay.log"
+# Issue #89 (AC aus #73): das Ergebnis geht zusaetzlich als exec_result an den
+# Server und wird per SSE an die Web-UI broadcastet (Dispatch-Feedback).
+check "relay meldet das Ergebnis an den Server (dispatch result reported)" \
+  wait_for 20 'dispatch result reported cmd_id=1 status=timeout' "$DIR/relay.log"
+check "SSE: exec_result-Feedback sichtbar (input type=exec_result)" \
+  wait_for 20 '"kind":"input".*"type":"exec_result"' "$DIR/sse.log"
 check "SSE: exec_command-Zustellung sichtbar (delivery)" \
   grep -q '"kind":"delivery".*"event":"exec_command".*"command":"rb_wave 3"' "$DIR/sse.log"
 

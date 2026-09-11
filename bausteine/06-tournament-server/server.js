@@ -11,7 +11,7 @@
  *
  * Events folgen dem Vertrag aus trainer/protocol.md:
  *   game -> server: score_update, wave_sent, wave_received, round_start,
- *                   round_end, match_end   (eingeliefert per POST /event)
+ *                   round_end, match_end, exec_result   (eingeliefert per POST /event)
  *   server -> game: round_start, incoming_wave, round_end, match_end
  *                   (Zustellung per GET /poll/:player_id, Outbox leert sich)
  *   control -> game: exec_command (Kommando von Web-UI/Operator via POST /event,
@@ -57,6 +57,7 @@ const GAME_EVENT_TYPES = new Set([
   'round_start',
   'round_end',
   'match_end',
+  'exec_result',
 ]);
 
 /** Control->game Kommandos: kommen von Operator/Web-UI, gehen in die Outbox. */
@@ -446,6 +447,24 @@ function handleEvent(req, res) {
           t: now(),
         });
         log(`[server] exec_command control -> ${pid} command="${ev.command}" cmd_id=${cmdCounter} match=${match.match_id}`);
+        break;
+      }
+      case 'exec_result': {
+        // Dispatch-Feedback des Relays (Issue #89, AC aus #73): die rbbridge
+        // hat auf ein exec_command geantwortet (ok/error) bzw. gar nicht
+        // (status=timeout). Der Server haelt keinen eigenen State - er
+        // protokolliert und broadcastet das Ergebnis per SSE an die Web-UI
+        // (pushEvent unten), damit das Kommando-Feedback sichtbar wird.
+        if (typeof ev.command !== 'string' || ev.command.length === 0 || ev.command.length > 512) {
+          sendError(res, 400, 'invalid event payload: command (string 1..512) required', type);
+          return;
+        }
+        if (typeof ev.ok !== 'boolean') {
+          sendError(res, 400, 'invalid event payload: ok (boolean) required', type);
+          return;
+        }
+        log(`[server] exec_result ${pid} command="${ev.command}" ok=${ev.ok}` +
+            `${ev.status ? ' status=' + ev.status : ''} match=${match.match_id}`);
         break;
       }
       default:

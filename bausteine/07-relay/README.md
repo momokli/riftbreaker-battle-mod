@@ -11,7 +11,9 @@ nicht erreichbar, wird das Kommando nicht verworfen, sondern mit Backoff
 erneut versucht (erst nach erfolgreichem Schreiben ack-markiert). Danach
 liest der Relay auf derselben Verbindung die `exec_result`-Antwort
 (Issue #73) und loggt das Ergebnis — eine ausbleibende Antwort ist kein
-Fehler, nur ein Hinweis.
+Fehler, nur ein Hinweis. Das Ergebnis meldet er zusaetzlich
+**best-effort an den Server** (`POST /event`, `event.type=exec_result`,
+Issue #89), damit die Web-UI das Dispatch-Feedback live sieht.
 
 Nur Standardbibliothek (Python 3.7+), kein pip-Paket.
 
@@ -96,4 +98,8 @@ Antwort, ohne Spiel, FIFO bzw. `os.pipe()` als Named-Pipe-Ersatz):
 - [x] dispatch-Antwort: `exec_result` auf derselben Verbindung lesen und
       klassifizieren (`status=ok|error|timeout`), Timeout blockiert keine
       weiteren Dispatches (Issue #73)
+- [x] dispatch-Antwort an den Server melden: `POST /event` mit
+      `event.type=exec_result` (best-effort, kein Dispatch-Fehler bei
+      Meldefehler, ohne `RBB_MATCH_ID` keine Meldung) — Web-UI-Feedback
+      per SSE (Issue #89)
 - [x] register beim Start + Re-Register bei 404 (Server-Neustart)

@@ -9,6 +9,9 @@ Testet PipeClient + Relay-Dispatch/ack-Pfad ohne Windows-Spiel:
   - Ack-Pfad: nach Erfolg wird dieselbe cmd_id nicht erneut dispatcht.
   - exec_result-Antwort (Issue #73): kommt sie an, wird sie geliefert;
     bleibt sie aus, liefert send_exec_and_wait (n, None) statt zu haengen.
+  - Ergebnis-Meldung an den Server (Issue #89): das Dispatch-Ergebnis wird
+    als event.type=exec_result best-effort gepostet; ohne RBB_MATCH_ID nicht,
+    ein Meldefehler ist kein Dispatch-Fehler.
 
 Nur Standardbibliothek (unittest, os, json, tempfile, time).
 
@@ -151,11 +154,11 @@ class PipeClientResultTest(unittest.TestCase):
 
 
 class DispatchFlowTest(unittest.TestCase):
-    def _cfg(self):
+    def _cfg(self, match_id=''):
         return {
             'log_path': '/tmp/fake.log',
             'player_id': 'player_a',
-            'match_id': 'm1',
+            'match_id': match_id,
             'server': 'http://127.0.0.1:8080',
             'poll_s': 1.0,
             'pipe_path': relay.DEFAULT_PIPE_PATH,
@@ -221,6 +224,111 @@ class DispatchFlowTest(unittest.TestCase):
         self.assertIn('dispatch result cmd_id=2 status=ok', logged[1])
         self.assertIn('dispatch result cmd_id=3 status=error', logged[2])
         self.assertIn('not_implemented', logged[2])
+
+
+class DispatchResultReportTest(unittest.TestCase):
+    """Dispatch-Ergebnis an den Server melden (Issue #89, AC aus #73).
+
+    `http_json` wird gestubbt - hier wird der Relay-Pfad geprueft, nicht das
+    Netz. Der Server-Teil (Event-Typ akzeptieren) steht in
+    bausteine/06-tournament-server/test_e2e.sh.
+    """
+
+    def _cfg(self):
+        return {
+            'log_path': '/tmp/fake.log',
+            'player_id': 'player_a',
+            'match_id': 'm1-abcdef',
+            'server': 'http://127.0.0.1:8080',
+            'poll_s': 1.0,
+            'pipe_path': relay.DEFAULT_PIPE_PATH,
+            'pipe_timeout_s': 5.0,
+        }
+
+    def _dispatch_once(self, pipe, cfg=None):
+        r = relay.Relay(cfg or self._cfg(), pipe=pipe)
+        r.handle_outgoing({'event': 'exec_command', 'command': 'rb_wave 3', 'cmd_id': 5})
+        _due, _seq, item = r.dispatch_queue.get_nowait()
+        return r, r._handle_dispatch_item(item)
+
+    def test_reports_error_result_as_exec_result_event(self):
+        calls = []
+        orig = relay.http_json
+        relay.http_json = lambda method, url, body=None: (calls.append((method, url, body)) or (200, {'ok': True}))
+        try:
+            pipe = StubPipe()
+            pipe.result = {'event': 'exec_result', 'command': 'rb_wave 3',
+                           'ok': False, 'reason': 'not_implemented'}
+            r, ok = self._dispatch_once(pipe)
+        finally:
+            relay.http_json = orig
+        self.assertTrue(ok)
+        self.assertEqual(len(calls), 1)
+        method, url, body = calls[0]
+        self.assertEqual(method, 'POST')
+        self.assertTrue(url.endswith('/event'), url)
+        self.assertEqual(body['match_id'], 'm1-abcdef')
+        self.assertEqual(body['player_id'], 'player_a')
+        self.assertEqual(body['event'], {
+            'type': 'exec_result', 'command': 'rb_wave 3', 'cmd_id': 5,
+            'ok': False, 'status': 'error', 'reason': 'not_implemented',
+        })
+        self.assertIn(5, r.acked, 'Melden darf den ack-Status nicht aendern')
+
+    def test_reports_ok_and_timeout(self):
+        calls = []
+        orig = relay.http_json
+        relay.http_json = lambda method, url, body=None: (calls.append(body) or (200, {'ok': True}))
+        try:
+            pipe = StubPipe()
+            pipe.result = {'event': 'exec_result', 'command': 'rb_wave 3', 'ok': True}
+            self._dispatch_once(pipe)
+            pipe.result = None  # keine Antwort -> status=timeout
+            self._dispatch_once(pipe, cfg=dict(self._cfg(), match_id='m1-abcdef'))
+        finally:
+            relay.http_json = orig
+        self.assertEqual(calls[0]['event']['status'], 'ok')
+        self.assertIs(calls[0]['event']['ok'], True)
+        self.assertEqual(calls[1]['event']['status'], 'timeout')
+        self.assertIs(calls[1]['event']['ok'], False)
+        self.assertEqual(calls[1]['event']['reason'], 'no_response')
+
+    def test_no_match_id_skips_report(self):
+        calls = []
+        orig = relay.http_json
+        relay.http_json = lambda method, url, body=None: (calls.append(body) or (200, {'ok': True}))
+        try:
+            pipe = StubPipe()
+            pipe.result = {'event': 'exec_result', 'command': 'rb_wave 3', 'ok': True}
+            r, ok = self._dispatch_once(pipe, cfg=dict(self._cfg(), match_id=''))
+        finally:
+            relay.http_json = orig
+        self.assertTrue(ok, 'Dispatch bleibt erfolgreich')
+        self.assertEqual(calls, [], 'ohne RBB_MATCH_ID keine Meldung')
+        self.assertIn(5, r.acked)
+
+    def test_report_failure_is_nonfatal(self):
+        """Server weg/5xx beim Melden -> nur Log, kein Retry/kein Fehler."""
+        orig = relay.http_json
+
+        def _boom(method, url, body=None):
+            raise relay.urllib.error.URLError('server weg (fake)')
+
+        relay.http_json = _boom
+        logged = []
+        orig_log = relay.log
+        relay.log = lambda msg: logged.append(msg)
+        try:
+            pipe = StubPipe()
+            pipe.result = {'event': 'exec_result', 'command': 'rb_wave 3', 'ok': True}
+            r, ok = self._dispatch_once(pipe)
+        finally:
+            relay.http_json = orig
+            relay.log = orig_log
+        self.assertTrue(ok, 'Meldefehler darf den Dispatch nicht als Fehler werten')
+        self.assertIn(5, r.acked)
+        self.assertNotIn(5, r.pending_keys, 'kein Retry wegen Meldefehler')
+        self.assertTrue(any('report failed' in m for m in logged), logged)
 
 
 if __name__ == '__main__':
