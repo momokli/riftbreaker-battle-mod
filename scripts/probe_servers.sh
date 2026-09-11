@@ -2,11 +2,13 @@
 # ============================================================
 # rbmods-probe.sh — Erreichbarkeits-Probe der RIFT-BATTLE-Server
 # ------------------------------------------------------------
-# - UDP-Check je Endpoint OHNE externe Tools: bash /dev/udp-Trick
-#   (timeout 2 bash -c 'echo > /dev/udp/<host>/<port>'; exit 0 = ok)
-#   Hinweis: UDP-connect gelingt auch bei geschlossenem Port, wenn der
-#   Host antwortet → deshalb Zusatzfelder localListen (ss) + containerUp
-#   (docker), damit die Seite LIVE nur bei wirklich laufendem Dienst zeigt.
+# - Liveness-Check je Endpoint (Issue #239): prueft, ob der DedicatedServer
+#   IM Container wirklich einen UDP-Socket auf dem Port gebunden hat
+#   (docker exec → ss -lun, sonst procfs /proc/net/udp*). Der fruehere
+#   /dev/udp-Trick bewies nur "Paket raus", nicht "Server antwortet" — er
+#   meldete "up", waehrend der Server im Console-Init hing (kein bind).
+#   Zusatzfelder localListen (ss, Host) + containerUp (docker) bleiben als
+#   Kontext erhalten.
 # - Zusätzlich HTTP(S)-Selbstcheck der Website (curl -sI).
 # - Schreibt JSON nach $RB_OUT (Default /srv/rbmods-site/status.json).
 #
@@ -31,10 +33,35 @@ DEFAULT_ENDPOINTS=(
 
 now_iso(){ date -u +%Y-%m-%dT%H:%M:%SZ; }
 
-# UDP-Erreichbarkeit via /dev/udp (exit 0 = Paket rausgegangen)
-udp_ok(){
-  local host="$1" port="$2"
-  if timeout "$UDP_TIMEOUT" bash -c "echo > /dev/udp/${host}/${port}" >/dev/null 2>&1; then
+# Ehrlicher Liveness-Check (Issue #239): prueft, ob der DedicatedServer IM
+# Container wirklich einen UDP-Socket auf dem Port gebunden hat.
+#
+# Bewusst KEIN erfundenes Query-/Join-Protokoll: das Repo definiert keins
+# (kein A2S/Query-Port o. ae. in scripts/, tools/, docs/). Der fruehere
+# /dev/udp-Trick bewies nur, dass ein Paket rausgeht — nicht, dass der
+# Server antwortet; er meldete deshalb faelschlich "up", waehrend der
+# Server im Console-Init hing (kein bind). Verlaessliches, host-lokales
+# Signal: `docker exec <ctr>` + Socket-Liste (ss -lun, sonst procfs
+# /proc/net/udp*). Kein Listener → false.
+# Rueckgabe: true | false | null (null = docker/Container nicht verfuegbar).
+udp_bound(){
+  local ctr="$1" port="$2" hex out
+  if ! command -v docker >/dev/null 2>&1; then echo null; return; fi
+  if [ -z "$ctr" ]; then echo false; return; fi
+
+  # 1) ss im Container (falls vorhanden): praezise Port-Spalte.
+  out="$(timeout "$UDP_TIMEOUT" docker exec "$ctr" ss -lun 2>/dev/null || true)"
+  if [ -n "$out" ]; then
+    if printf '%s\n' "$out" | grep -qE "[:.]${port}[[:space:]]"; then echo true
+    else echo false; fi
+    return
+  fi
+
+  # 2) Fallback procfs (immer vorhanden): Port als Hex in local_address.
+  hex="$(printf '%04x' "$port" 2>/dev/null || true)"
+  if [ -z "$hex" ]; then echo false; return; fi
+  if timeout "$UDP_TIMEOUT" docker exec "$ctr" cat /proc/net/udp /proc/net/udp6 2>/dev/null \
+       | awk '{print $2}' | tr '[:upper:]' '[:lower:]' | grep -q ":${hex}$"; then
     echo true
   else
     echo false
@@ -102,7 +129,7 @@ main(){
   local -a parts=() line id host port ctr mdir u l c e_ts v
   for line in "${E[@]}"; do
     IFS='|' read -r id host port ctr mdir <<< "$line"
-    u="$(udp_ok "$host" "$port")"
+    u="$(udp_bound "${ctr:-}" "$port")"
     l="$(local_listen "$port")"
     if [ -n "${ctr:-}" ]; then c="$(container_up "$ctr")"; else c="null"; fi
     v="$(mod_version "${mdir:-}")"
