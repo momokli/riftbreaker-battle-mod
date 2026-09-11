@@ -48,7 +48,8 @@ jobs:
               sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path
           fi
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          cargo --version
+          # GITHUB_PATH gilt erst im NÄCHSTEN Step — hier daher voller Pfad.
+          "$HOME/.cargo/bin/cargo" --version
 
       - name: SSH-Voraussetzung prüfen (runner -> root@planet)
         if: steps.gate.outputs.skip != 'true'
