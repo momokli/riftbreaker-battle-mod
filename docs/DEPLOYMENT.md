@@ -89,12 +89,20 @@ Nach Entfernen des Ordners aus `mods/` + Container-Restart:
    weggeschoben (`riftbreaker_mods_guard_autofix: true`, Default); danach prüft
    ein `assert` hart nach. Mit `riftbreaker_mods_guard_autofix: false` bricht
    der Deploy stattdessen sofort ab.
-3. **Post-Deploy-Verifikation** — `docker logs` (bzw. `riftbreaker_mod_log_cmd`)
-   muss genau **eine** `event=mod_load`-Zeile mit der erwarteten Version +
-   `status=ok` enthalten und **keine** `handler_errors`/`event_unreadable`.
-   Schlägt das fehl, wertet die Rolle den Deploy als fehlgeschlagen und rollt
-   aus dem `rbbattle-<ts>.tar.gz` zurück (sofern vorhanden) + startet den
-   Container neu; erst dann `fail`.
+3. **Post-Deploy-Verifikation** — `riftbreaker_mod_log_cmd` (Default:
+   `docker exec riftbreaker-dedicated cat /root/exor_logs.txt`) muss genau
+   **eine** `event=mod_load`-Zeile mit der erwarteten Version + `status=ok`
+   enthalten und **keine** `handler_errors`/`event_unreadable`. **Quelle ist der
+   Lua-Log im Container, nicht `docker logs`**: der Dedicated Server schreibt
+   `event=mod_load`/`handler_errors` nach `exor_logs.txt` im Wine-Prefix; im
+   Prefix ist `drive_c/users/root/Documents` ein Symlink auf `$HOME`
+   (`Documents -> /root`) → `/root/exor_logs.txt`. `docker logs` enthält nur die
+   Wrapper-Zeilen von `run-server.sh` und damit **nie** eine `mod_load`-Zeile
+   (Befund planet 2026-09-11, Issue #224). Schlägt die Verifikation fehl, wertet
+   die Rolle den Deploy als fehlgeschlagen und rollt aus dem
+   `rbbattle-<ts>.tar.gz` zurück (sofern vorhanden) + startet den Container neu;
+   erst dann `fail`. Ein leerer Log ergibt eine klare `fail_msg` (kein
+   Ansible-Task-Arg-Crash).
 
 **Kontrollwerkzeug / Regression-Check** (lokal + CI, Exit 1 = Fremd-Ordner):
 
@@ -197,5 +205,7 @@ Rollback: Backup-`tar.gz` aus `/srv/riftbreaker/backups/` nach
 - Mod-Parität vor jedem Release prüfen (md5).
 - Mod-Backups **nie** in `<server>/mods/` (siehe „Mod-Backups & mods/-Guard").
 - Live-Tests nur bei leerem Server.
-- Keine Credentials in Repo/Logs; `exor_logs` im Container, `rbbridge.log` im Temp.
+- Keine Credentials in Repo/Logs; kanonischer Server-Log ist `exor_logs.txt`
+  im Container (`/root/exor_logs.txt`, Wine-`Documents -> /root`), `rbbridge.log`
+  im Temp. `docker logs` des Dedicated-Servers zeigt nur die `run-server.sh`-Wrapper-Zeilen.
 - SSH mesh-first (Tailscale), nie über Public-IPs.

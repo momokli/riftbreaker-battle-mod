@@ -306,7 +306,12 @@
           und status=ok, ohne handler_errors/event_unreadable — gefunden
           {{ riftbreaker_mod_load_lines | length }} mod_load-Zeile(n). Deploy
           wird aus dem Backup zurückgerollt.
-        success_msg: "Verifikation OK: {{ riftbreaker_mod_load_lines | first }}"
+        # `| first | default(...)`: der success_msg wird von Ansible auch dann
+        # ausgewertet, wenn die Bedingung fehlschlägt. Bei leerer
+        # mod_load-Liste würde `| first` sonst mit "No first item, sequence was
+        # empty" als Task-Arg-Fehler crashen — die eigentliche fail_msg käme nie
+        # an und der rescue (Rollback) liefe ohne Erklärung (Issue #224).
+        success_msg: "Verifikation OK: {{ riftbreaker_mod_load_lines | first | default('(keine mod_load-Zeile)') }}"
       when: not ansible_check_mode
   rescue:
     - name: Rollback — neuen Mod-Ordner verwerfen
