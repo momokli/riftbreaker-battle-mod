@@ -156,6 +156,15 @@ function req(method, p, body) {
 
   const bad = await req('POST', '/event', { match_id: mf.match_id, player_id: 'player_a', event: { type: 'explosion' } });
   check('POST /event mit unbekanntem Typ -> 400', bad.status === 400, String(bad.status) + ' ' + JSON.stringify(bad.json));
+  const er = await req('POST', '/event', { match_id: mf.match_id, player_id: 'player_a',
+    event: { type: 'exec_result', command: 'rb_wave 3', ok: false, status: 'error', reason: 'not_implemented' } });
+  check('POST /event exec_result -> 200 (Issue #89)',
+    er.status === 200 && er.json && er.json.event === 'exec_result',
+    String(er.status) + ' ' + JSON.stringify(er.json));
+  const erBad = await req('POST', '/event', { match_id: mf.match_id, player_id: 'player_a',
+    event: { type: 'exec_result', command: 'rb_wave 3' } });
+  check('POST /event exec_result ohne ok -> 400',
+    erBad.status === 400, String(erBad.status) + ' ' + JSON.stringify(erBad.json));
   const nf = await req('GET', '/match/does-not-exist/state');
   check('GET /match/does-not-exist/state -> 404', nf.status === 404, String(nf.status));
   const pf = await req('GET', '/poll/never-registered');

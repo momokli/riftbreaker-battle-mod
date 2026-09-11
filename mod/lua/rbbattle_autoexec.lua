@@ -1,5 +1,5 @@
 -- ============================================================================
--- rbbattle_autoexec.lua  (Einzel-Mod rbbattle, v0.33.0)
+-- rbbattle_autoexec.lua  (Einzel-Mod rbbattle, v0.34.0)
 --
 -- RIFT BATTLE Mod-Core (Foundation):
 --   #26 Send-Spawn an den 16 natuerlichen Kartenrand-Spawnern
@@ -102,7 +102,7 @@
 --     -> Persistenz (HasInt/GetIntOrDefault/SetInt/RemoveKey)  (Issue #24)
 --
 -- Log-Zeilen (externes Parsing, Praefix [RBBATTLE]):
---   event=mod_load version=0.33.0 status=ok mode=sp econ_source=.. econ_pool=.. hq_hp=.. hq_dead=..
+--   event=mod_load version=0.34.0 status=ok mode=sp econ_source=.. econ_pool=.. hq_hp=.. hq_dead=..
 --   event=wave level=N status=start|done spawned=.. skipped=.. anchor=border|mission|mech
 --   event=spawn ok|failed|skip ... anchor=<gruppe>/<id>            (je Kreatur)
 --   event=wave_spawners count=N                                    (Pool-Groesse)
@@ -128,7 +128,7 @@
 --   event=leak damage=.. hp_before=.. hp=..                                (#28)
 --   event=hq_hp hp=.. dead=..                                              (#28)
 --   event=hq_dead status=match_end hp=0                                    (#28)
---   event=match_end reason=hq_destroyed winner=opponent                    (#28)
+--   event=match_end reason=hq_destroyed                                    (#28)
 --   (hq_dead) -> in-game Annonce "GAME OVER — HQ destroyed"; Solo-Feed     (#157)
 --   klinkt auf event=hq_dead ein: Telegram Topic 312 + genau EIN            (#157)
 --   docker restart pro Match-Ende (Cooldown-Guard, kein Flapping).          (#157)
@@ -151,7 +151,7 @@
 -- ============================================================================
 
 local RBB = {}
-RBB.version = "0.33.0"
+RBB.version = "0.34.0"
 
 -- Log-/Konsole-Helfer (Muster Spike): Praefix [RBBATTLE] fuer externes Parsen.
 local LOG_TAG = "[RBBATTLE]"
@@ -703,7 +703,8 @@ local function PatchDomTimer()
     if type(_G) == "table" then
         dom = rawget(_G, "dom_mananger")
     end
-    if type(dom) ~= "table" then
+    local dType = type(dom)
+    if dType ~= "table" and dType ~= "userdata" then
         return false -- Klasse (noch) nicht geladen; naechster Versuch spaeter
     end
 
@@ -1603,6 +1604,7 @@ end
 -- Wird aus dem OnEnterSpawn-Wrap aufgerufen: Runde zaehlen + Send-Queue
 -- ausliefern (Boost der naechsten Naturwelle).
 local function OnNaturalWaveStart()
+    if RBB.hq.dead then return end
     RBB.round = RBB.round + 1
     EconomyCheckpoint()   -- #65: Spar-Pool an der Rundengrenze persistieren
     -- #33: HQ-HP-Kurve ueber Runden — bei Wellenstart HP auf Runden-Max setzen
@@ -1636,7 +1638,8 @@ PatchWaveStartHook = function()
     if type(_G) == "table" then
         dom = rawget(_G, "dom_mananger")
     end
-    if type(dom) ~= "table" then
+    local dType = type(dom)
+    if dType ~= "table" and dType ~= "userdata" then
         return false -- Klasse (noch) nicht geladen; naechster Versuch spaeter
     end
 
@@ -1789,6 +1792,60 @@ local function BoostLevelDelta(level, pct)
     return delta
 end
 
+-- ============================================================================
+-- #213: Wellen-Richtwert (Recherche fuer #205 "Send-Mechanik vereinfachen").
+--
+-- Zielbild (Design-Interview #199, ECO-6, Matheo): der Calcium-Preis fuer
+-- eine %-Wellenverstaerkung soll nicht linear/fix sein (wie aktuell
+-- RBB.boostCfg.pricePerPct), sondern sich automatisch an die Spielkurve
+-- anhaengen: X Calcium kauft immer denselben ABSOLUTEN Richtwert-Zuwachs;
+-- die tatsaechliche %-Verstaerkung ist dieser Zuwachs relativ zum Richtwert
+-- der AKTUELLEN Welle -- dieselbe Calcium-Menge wird also relativ schwaecher,
+-- je groesser/spaeter die Welle ist.
+--
+-- Datenbasis-Problem: die tatsaechliche Kreaturen-Zusammensetzung einer
+-- Naturwelle kommt aus nativen Engine-Daten (GetWavePool(difficultyLevel) ->
+-- rules.waves[group][difficultyLevel], s. Kommentar zu #39/#41 oben) -- diese
+-- Tabelle ist im Mod NICHT enumeriert und ohne Live-Spiel/RE-Zugriff nicht
+-- einsehbar. Die Naturwellen-Staerke ist aber bereits jetzt einzig ueber
+-- difficultyLevel (1..9) indiziert -- das ist die einzige Groesse, die der
+-- Mod tatsaechlich kennt und als Hebel nutzt (RBB.boost/ScaleWaveLevel).
+--
+-- Deshalb: Richtwert(level) = richtwertPerLevel * level als dokumentierte
+-- Annahme (direkte Proportionalitaet zum einzigen bekannten Staerke-Hebel) --
+-- braucht Live-Test, ob dieser Zusammenhang linear ist oder staerker waechst.
+-- richtwertPerLevel=100 ist so gewaehlt, dass die Beispielzahlen aus ECO-6
+-- (100 Richtwert bei kleiner Welle, 1000 bei grosser) im Level-Bereich 1..10
+-- landen.
+--
+-- WICHTIG: reine Recherche/Formel-Dokumentation (Issue #213). BoostPctForCalcium
+-- ist NICHT an rb_boost/BuyBoost angeschlossen -- die eigentliche Preisformel-
+-- Umstellung gehoert ins groessere Send-Mechanik-Issue #205.
+-- ============================================================================
+RBB.richtwertCfg = {
+    richtwertPerLevel = 100, -- Annahme: Richtwert waechst linear mit difficultyLevel
+    calciumPerRichtwert = 1, -- Annahme: 1 Calcium kauft 1 Richtwert-Punkt (ECO-6-Beispiel)
+}
+
+-- Richtwert einer Naturwelle bei gegebenem difficultyLevel (reine Formel).
+WaveRichtwert = function(level)
+    local l = math.floor(tonumber(level) or 1)
+    if l < 1 then l = 1 end
+    return l * RBB.richtwertCfg.richtwertPerLevel
+end
+
+-- %-Verstaerkung, die `calcium` Send-Waehrung bei einer Welle mit `level`
+-- bewirken wuerde (reine Formel, kein Pool-Abzug/keine Wirkung auf RBB.boost).
+-- Ergebnis in Prozentpunkten (z.B. 10 = +10%).
+BoostPctForCalcium = function(calcium, level)
+    local c = math.floor(tonumber(calcium) or 0)
+    if c < 0 then c = 0 end
+    local richtwertBought = c / RBB.richtwertCfg.calciumPerRichtwert
+    local waveRichtwert = WaveRichtwert(level)
+    if waveRichtwert <= 0 then return 0 end
+    return (richtwertBought / waveRichtwert) * 100.0
+end
+
 -- #41: Wellen-Staerke-Skalierung (diskreter Hebel ueber difficultyLevel, wie
 -- der Boost #39). Preset B = "halbe Groesse" -> floor(level * pct/100), min. 1;
 -- Preset A = "volle Groesse" (strengthPct 100) -> Level unveraendert.
@@ -1845,6 +1902,92 @@ end
 RBB.spawnWavesPatched = false
 RBB.spawnWavesOrig = nil
 
+-- #213: Kandidaten fuer die Erkennung lebender Gegner-Kreaturen (Sampling der
+-- Wellen-Richtwert-Kurve: wie viele Kreaturen spawnt eine Naturwelle bei
+-- welchem difficultyLevel tatsaechlich?). Anders als die Rand-Spawner (#26)
+-- oder der HQ-Typ (#144, am Source verifiziert) ist hier KEINE Quelle
+-- bekannt -- reine Rateversuche nach demselben Muster wie HqAutoDetectEntity.
+-- Traegt NUR zur Diagnose bei (Log-Zeile event=richtwert_sample), keine
+-- Spielwirkung. Schnellerer Weg waere ein direkter Blick in die entschluesselte
+-- Spielquelle (rules.maxAttackCountPerDifficulty[level], s. Kommentar oben) --
+-- falls verfuegbar, ist das zuverlaessiger als dieses Sampling.
+RBB.enemyCountGroupCandidates = { "enemy", "enemies", "creatures", "enemy_creatures" }
+RBB.enemyCountTypeCandidates = { "creature", "enemy_creature", "monster" }
+RBB.enemyCountSource = nil -- { kind="group"|"type", name=".." } nach erstem Treffer (gemerkt fuer die Session)
+
+-- Liefert die Liste lebender Gegner-Kreaturen (bester Versuch, Entity-IDs --
+-- nicht nur die Anzahl, damit Diffs gebildet werden koennen). Merkt sich den
+-- ERSTEN Kandidaten mit >0 Treffern fuer die restliche Session (kein
+-- Neu-Durchprobieren jede Welle); liefert nil, wenn kein Kandidat je etwas
+-- findet (API fehlt oder alle Kandidaten falsch) -- dann bleibt das Sampling
+-- inaktiv, ohne den Rest des Mods zu beeintraechtigen.
+local function SnapshotEnemyEntities()
+    if RBB.enemyCountSource ~= nil then
+        local ok, list
+        if RBB.enemyCountSource.kind == "group" then
+            ok, list = pcall(function() return FindService:FindEntitiesByGroup(RBB.enemyCountSource.name) end)
+        else
+            ok, list = pcall(function() return FindService:FindEntitiesByType(RBB.enemyCountSource.name) end)
+        end
+        if ok and type(list) == "table" then return list end
+        return nil
+    end
+
+    if FindService and FindService.FindEntitiesByGroup then
+        for _, name in ipairs(RBB.enemyCountGroupCandidates) do
+            local ok, list = pcall(function() return FindService:FindEntitiesByGroup(name) end)
+            if ok and type(list) == "table" and #list > 0 then
+                RBB.enemyCountSource = { kind = "group", name = name }
+                Log("event=richtwert_sample_source status=found kind=group name=%s", name)
+                return list
+            end
+        end
+    end
+    if FindService and FindService.FindEntitiesByType then
+        for _, name in ipairs(RBB.enemyCountTypeCandidates) do
+            local ok, list = pcall(function() return FindService:FindEntitiesByType(name) end)
+            if ok and type(list) == "table" and #list > 0 then
+                RBB.enemyCountSource = { kind = "type", name = name }
+                Log("event=richtwert_sample_source status=found kind=type name=%s", name)
+                return list
+            end
+        end
+    end
+    return nil
+end
+
+-- #213-Folgefrage (Matheo): nicht nur ZAEHLEN, sondern auch sehen, WELCHE
+-- Typen eine Naturwelle spawnt -- Grundlage dafuer, einen %-Boost proportional
+-- pro vorhandenem Kreaturentyp draufzurechnen (statt eines beliebigen
+-- Fuellkreatur-Typs). Bildet die Differenz zweier Entity-Listen (vorher/
+-- nachher) und zaehlt pro Typname (ueber die bereits vorhandene
+-- GetEntityNameOrId, Muster Rand-Spawner-Spawn-Log). Liefert eine sortierte
+-- Liste { {name=.., count=..}, ... } fuer deterministische Ausgabe.
+local function DiffEntityTypes(before, after)
+    local beforeSet = {}
+    for _, id in ipairs(before) do beforeSet[id] = true end
+
+    local counts = {}
+    local order = {}
+    for _, id in ipairs(after) do
+        if not beforeSet[id] then
+            local name = GetEntityNameOrId(id)
+            if counts[name] == nil then
+                counts[name] = 0
+                order[#order + 1] = name
+            end
+            counts[name] = counts[name] + 1
+        end
+    end
+    table.sort(order)
+
+    local result = {}
+    for _, name in ipairs(order) do
+        result[#result + 1] = { name = name, count = counts[name] }
+    end
+    return result
+end
+
 PatchSpawnWavesHook = function()
     if RBB.spawnWavesPatched then
         return RBB.spawnWavesOrig ~= nil
@@ -1854,7 +1997,8 @@ PatchSpawnWavesHook = function()
     if type(_G) == "table" then
         dom = rawget(_G, "dom_mananger")
     end
-    if type(dom) ~= "table" then
+    local dType = type(dom)
+    if dType ~= "table" and dType ~= "userdata" then
         return false -- Klasse (noch) nicht geladen; naechster Versuch spaeter
     end
 
@@ -1869,6 +2013,7 @@ PatchSpawnWavesHook = function()
         RBB.spawnWavesOrig = orig
         dom.SpawnWavesForDifficultyLevel = function(self, difficultyLevel, shouldAddtoSpawnedAttacks)
             local newLevel = difficultyLevel
+            local beforeList = nil
             if shouldAddtoSpawnedAttacks == true then
                 -- Naturwelle (OnEnterSpawn, addToSpawned=true); Debug-Trigger
                 -- (false) bleibt unangetastet. Grundschwierigkeits-Skalierung
@@ -1876,8 +2021,31 @@ PatchSpawnWavesHook = function()
                 local preset = ActiveWavePreset()
                 newLevel = ScaleWaveLevel(difficultyLevel, preset.strengthPct)
                 newLevel = ApplyPendingBoost(self, newLevel)
+                beforeList = SnapshotEnemyEntities() -- #213: Sampling-Snapshot vor dem Spawn
             end
-            return RBB.spawnWavesOrig(self, newLevel, shouldAddtoSpawnedAttacks)
+            local result = RBB.spawnWavesOrig(self, newLevel, shouldAddtoSpawnedAttacks)
+            if shouldAddtoSpawnedAttacks == true then
+                -- #213: Snapshot-Diff nach dem (synchronen) Naturwellen-Spawn.
+                local afterList = SnapshotEnemyEntities()
+                if beforeList ~= nil and afterList ~= nil then
+                    local beforeCount, afterCount = #beforeList, #afterList
+                    Log("event=richtwert_sample level=%d before=%d after=%d delta=%d",
+                        newLevel, beforeCount, afterCount, afterCount - beforeCount)
+                    -- #213-Folgefrage: welche Typen genau kamen dazu (fuer
+                    -- proportionalen %-Boost pro Typ statt Fuellkreatur).
+                    local types = DiffEntityTypes(beforeList, afterList)
+                    local parts = {}
+                    for _, t in ipairs(types) do
+                        parts[#parts + 1] = t.name .. ":" .. t.count
+                    end
+                    Log("event=richtwert_sample_types level=%d total=%d types=%s",
+                        newLevel, afterCount - beforeCount,
+                        #parts > 0 and table.concat(parts, ",") or "none")
+                else
+                    Log("event=richtwert_sample level=%d status=unavailable", newLevel)
+                end
+            end
+            return result
         end
         Log("event=boost patch status=ok")
     end
@@ -2184,8 +2352,9 @@ local function HqOnDestroyed()
     RBB.hq.dead = true
     RBB.hq.hp = 0
     Log("event=hq_dead status=match_end hp=0")
-    Log("event=match_end reason=hq_destroyed winner=opponent")
+    Log("event=match_end reason=hq_destroyed")
     WriteConsole("GAME OVER — HQ destroyed")
+    WriteConsole("Match end — restarting game in 5 seconds...")
 end
 
 -- Leak: eine Kreatur hat die HQ-Zone erreicht -> HQ-HP sinkt. Reine Logik
@@ -2472,14 +2641,45 @@ local function CmdBalance(args)
     end
     Log("event=balance wave_preset_cfg active=%s base_difficulty=%s timer_cap=%d",
         RBB.wavePresets.active, RBB.wavePresets.baseDifficulty, RBB.waveIntervalCapS)
+    -- #213: Wellen-Richtwert-Formel + Stichproben Level 1..9 (Forschungsstand,
+    -- NICHT an rb_boost angeschlossen -- s. Kommentar bei WaveRichtwert).
+    Log("event=balance richtwert_cfg richtwert_per_level=%d calcium_per_richtwert=%d",
+        RBB.richtwertCfg.richtwertPerLevel, RBB.richtwertCfg.calciumPerRichtwert)
+    for l = 1, 9 do
+        Log("event=balance richtwert level=%d value=%d", l, WaveRichtwert(l))
+    end
     -- #116: Invarianten der Tuning-Daten als Log-Flaeche (ok|fail + issue=..).
     RBB.CheckBalance()
-    WriteConsole("rb_balance: Preisliste + HQ-HP-Kurve + Boost-Stufen + Wellen-Presets geloggt (braucht Live-Test, #33/#39/#41)")
+    WriteConsole("rb_balance: Preisliste + HQ-HP-Kurve + Boost-Stufen + Wellen-Presets + Richtwert-Kurve geloggt (braucht Live-Test, #33/#39/#41/#213)")
+end
+
+-- #213: rb_richtwert [<calcium> [level]] -- Vorschau der Richtwert-Formel:
+-- ohne Args die Kurve (Level 1..9), mit Calcium+Level die resultierende
+-- %-Verstaerkung. Read-only, wirkt NICHT auf RBB.boost/den Pool.
+local function CmdRichtwert(args)
+    local calciumArg = args ~= nil and #args >= 1 and tonumber(args[1]) or nil
+    if calciumArg == nil then
+        for l = 1, 9 do
+            Log("event=richtwert level=%d value=%d", l, WaveRichtwert(l))
+        end
+        WriteConsole("rb_richtwert: Kurve fuer Level 1..9 geloggt (Aufruf mit rb_richtwert <calcium> [level] fuer eine %%-Vorschau)")
+        return
+    end
+    local level = args ~= nil and #args >= 2 and tonumber(args[2]) or RBB.round
+    if level == nil or level < 1 then level = 1 end
+    local pct = BoostPctForCalcium(calciumArg, level)
+    Log("event=richtwert_preview calcium=%d level=%d wave_richtwert=%d pct=%.1f",
+        math.floor(calciumArg), level, WaveRichtwert(level), pct)
+    WriteConsole("rb_richtwert: %d Calcium bei Level %d (Richtwert %d) -> +%.1f%% (Vorschau, wirkt nicht auf rb_boost)",
+        math.floor(calciumArg), level, WaveRichtwert(level), pct)
 end
 
 pcall(function()
     ConsoleService:RegisterCommand("rb_balance", function(args)
         CmdBalance(args)
+    end)
+    ConsoleService:RegisterCommand("rb_richtwert", function(args)
+        CmdRichtwert(args)
     end)
 end)
 

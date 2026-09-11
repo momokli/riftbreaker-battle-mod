@@ -2,6 +2,9 @@
 # Defaults der Rolle vanilla-server (kein Mod, schnelle Test-Joins).
 vanilla_deploy_dir: /opt/rbmods/compose/rb-winetest
 
+# Compose-Projektname = Verzeichnisname (kein explizites `name:` im Compose).
+vanilla_compose_project: "{{ vanilla_deploy_dir | basename }}"
+
 # Vanilla-Server-Kommando — kein Mod, kein Content-Version-Check-Override.
 # Passwort kommt aus dem Vault (riftbreaker_server_password).
 vanilla_server_command:

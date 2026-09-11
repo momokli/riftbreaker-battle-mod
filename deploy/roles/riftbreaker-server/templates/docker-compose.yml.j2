@@ -16,7 +16,10 @@ services:
       GALLIUM_DRIVER: llvmpipe
     volumes:
       - "{{ riftbreaker_game_dir }}:{{ riftbreaker_game_dir }}"
-    entrypoint: ["wine"]
+    # Das Steam-Layout legt das Binary unter bin/ ab; WORKDIR muss der
+    # Game-Root sein, damit `bin/DedicatedServer.exe` und mods/ stimmen.
+    working_dir: "{{ riftbreaker_game_dir }}"
+    entrypoint: ["run-server.sh"]
     command:
 {% for arg in (riftbreaker_server_command + riftbreaker_server_extra_args) %}
       - {{ arg | to_json }}

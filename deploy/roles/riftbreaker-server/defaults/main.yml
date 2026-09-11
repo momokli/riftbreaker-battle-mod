@@ -6,6 +6,10 @@
 
 riftbreaker_deploy_dir: /opt/rbmods/compose/riftbreaker-dedicated
 
+# Compose-Projektname = Verzeichnisname (kein explizites `name:` im Compose).
+# Genutzt für die Fremd-Belegungs-Prüfung des Container-Namens (Issue #209).
+riftbreaker_compose_project: "{{ riftbreaker_deploy_dir | basename }}"
+
 # Dedicated-Server-Kommando (Operator-verifiziert: docs/DUEL_SETUP.md,
 # docs/ASSUMPTIONS.md). Jedes Argument wird UNVERÄNDERT (ohne
 # Shell-Interpretation) an `wine <exe>` gereicht. Das Passwort kommt aus dem

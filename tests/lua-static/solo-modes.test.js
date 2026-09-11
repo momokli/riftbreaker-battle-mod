@@ -126,7 +126,7 @@ local function log_count(sub)
 end
 
 -- 1. Default = Solo Normal (sp), KEIN Cheat-Zustand.
-check(log_has("event=mod_load version=0.33.0 status=ok mode=sp"),
+check(log_has("event=mod_load version=0.34.0 status=ok mode=sp"),
     "mod_load: mode=sp (Default = Solo Normal)")
 check(RBB.soloOp == false, "RBB.soloOp ist per Default false (kein impliziter OP)")
 check(RBB.economy.pool == 0, "Default-Pool = 0 (kein Cheat)")

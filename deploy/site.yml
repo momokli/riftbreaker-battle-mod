@@ -4,21 +4,63 @@
 # Deploy NUR über dieses Playbook:
 #   ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
 #
+# From-zero (Issue #209): das Playbook besitzt den kompletten Stack. Es baut das
+# Laufzeit-Image selbst, provisioniert den Steam-Content und pinnt das Compose
+# auf den Deploy-SHA — es gibt keinen manuellen „einmalig auf planet"-Schritt.
+#
 # Reihenfolge ist absichtlich:
-#   1. mods-zip            Paketierung + md5-Parität (liefert rbbattle.zip)
-#   2. riftbreaker-server  Dev-SP-Server 6321 (braucht das gepackte Mod)
-#   3. vanilla-server      Vanilla 6322
-#   4. tournament-server   systemd (Rust/axum)
-#   5. website             statics + Caddy (inkl. /tournament/*-Proxy)
-#   6. probe-timer         systemd-Timer → status.json
+#   1. mods-zip             Paketierung + md5-Parität (liefert rbbattle.zip)
+#   2. headless-client-image baut rb-headless-client:<deploy-sha> (gemeinsame
+#      Laufzeit für :6321 + :6322)
+#   3. game-content         Steam-Content (App 4114030) nach game_dir
+#   4. riftbreaker-server   Dev-SP-Server 6321 (Mod-Install + Restart-Handler)
+#   5. vanilla-server       Vanilla 6322 (kein Mod)
+#   6. tournament-server    systemd (Rust/axum)
+#   7. website              statics + Caddy (inkl. /tournament/*-Proxy)
+#   8. probe-timer          systemd-Timer → status.json
+#
+# Tags erlauben einen gezielten Lauf (z. B. `--tags server` im PR-Gate
+# deploy-check) ohne die übrigen Rollen anzufassen.
 
 - name: RIFT BATTLE — planet deploy
   hosts: planet
   become: true
+
+  pre_tasks:
+    # Image-Tag = Deploy-SHA (kein `latest`). Läuft auch im --check
+    # (check_mode: false, read-only, lokal), damit das Compose-Template dort
+    # renderbar bleibt und der Gate denselben Stand sieht.
+    - name: Deploy-SHA für den Image-Tag ermitteln
+      # `-c safe.directory=*`: beim CD läuft ansible als root im
+      # deploy-eigenen Checkout — ohne diese Option verweigert git das
+      # rev-parse („dubious ownership"). Read-only.
+      command: git -c safe.directory=* -C {{ playbook_dir }}/.. rev-parse --short=12 HEAD
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      changed_when: false
+      register: rbbattle_deploy_sha
+      tags: always
+
+    - name: Image-Tag (Deploy-SHA) als Fact setzen
+      set_fact:
+        deploy_image_tag: "{{ rbbattle_deploy_sha.stdout | trim }}"
+      tags: always
+
   roles:
-    - mods-zip
-    - riftbreaker-server
-    - vanilla-server
-    - tournament-server
-    - website
-    - probe-timer
+    - role: mods-zip
+      tags: [content]
+    - role: headless-client-image
+      tags: [server]
+    - role: game-content
+      tags: [content]
+    - role: riftbreaker-server
+      tags: [server]
+    - role: vanilla-server
+      tags: [server]
+    - role: tournament-server
+      tags: [tournament]
+    - role: website
+      tags: [website]
+    - role: probe-timer
+      tags: [probe]

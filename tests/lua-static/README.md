@@ -22,7 +22,7 @@ npm test        # = node --test
 
 `win-condition.test.js` deckt Issue #28 (Win-Condition) ab:
 
-1. Mod lädt, Version 0.33.0, HQ initialisiert (`hq_hp=100 hq_dead=false`).
+1. Mod lädt, Version 0.34.0, HQ initialisiert (`hq_hp=100 hq_dead=false`).
 2. Leak-Flow: `EnteredTriggerEvent` → `event=leak` → `event=hq_hp`.
 3. Zone-/Team-Filter (#152): Leak nur für feindliche Kreaturen — Trigger ohne
    Entity (`no_trigger_entity`), eigene HQ-Entity (`own_hq`), eigener Mech
@@ -35,7 +35,7 @@ npm test        # = node --test
 
 `send-queue.test.js` deckt Issue #25 (Send-Queue & Shop-HUD) ab:
 
-1. Mod lädt, Version 0.33.0; `rb_buy_wave`/`rb_shop`/`rb_queue` registriert,
+1. Mod lädt, Version 0.34.0; `rb_buy_wave`/`rb_shop`/`rb_queue` registriert,
    Wellenstart-Hook aktiv (`event=wave_hook patch status=ok`).
 2. `rb_shop` listet 4 Tiers (inkl. Boss) + öffnet das Custom-UI-Popup
    (Template `popup_template_1button`).
@@ -62,7 +62,7 @@ npm test        # = node --test
 
 `click-hud.test.js` deckt Issue #99 (Click-HUD / Senden per Klick) ab:
 
-1. Mod lädt, Version 0.33.0; `rb_hud_ui`/`rb_quick` registriert,
+1. Mod lädt, Version 0.34.0; `rb_hud_ui`/`rb_quick` registriert,
    `GuiPopupResultEvent`-Handler aktiv.
 2. `rb_quick` ohne Args → `status=usage` (Default `brabit` ×1).
 3. `rb_quick brabit 2` → `status=armed`; `rb_quick unbekannt` → `unknown_unit`.
@@ -77,7 +77,7 @@ npm test        # = node --test
 
 `balance.test.js` deckt Issue #33 (Balance & Tuning v1) ab:
 
-1. Mod lädt, Version 0.33.0 (kein Version-Bump); `rb_balance` registriert.
+1. Mod lädt, Version 0.34.0 (kein Version-Bump); `rb_balance` registriert.
 2. `rb_balance` legt die v1-Preisliste offen: 5 Units / 4 Tiers / 1 Boss mit
    den dokumentierten Preisen (brabit 100, baxmoth 150, artigian 200,
    canceroth 300, boss 800).
@@ -176,6 +176,20 @@ kein Spiel-Zugriff; bleibt Operator-Lauf (Prod).
    wiederhergestellt (verlustfrei, auch bei vorhandenem Pool).
 5. `rb_mode duel` bleibt Stub und verlässt Solo OP; unbekanntes Arg → `usage`,
    Modus unverändert; doppeltes `sp_op` ist idempotent (nur ein `status=on`).
+
+`hook-userdata.test.js` deckt Issue #217 (`dom_mananger` ist im
+Autoexec-Environment ein **userdata**, kein Lua-`table`) ab:
+
+1. Der Harness baut `dom_mananger` als **echtes fengari-userdata**
+   (`lua_newuserdata` + Metatable mit `__index`/`__newindex`, Muster wie oben).
+   Sanity: `type(dom_mananger) == "userdata"`.
+2. Alle drei Load-Time-Hooks greifen trotz userdata: `event=dom_timer patch
+   status=ok cap=480`, `event=wave_hook patch status=ok`, `event=boost patch
+   status=ok` (vor dem Fix brachen alle drei am `type(dom) ~= "table"`-Check ab).
+3. Funktional: der Timer-Wrap kappt die userdata-Methode (Stub 600 s) auf den
+   aktiven Preset-Deckel (`480`); nach Commence (HQ-Erkennung) liefert der
+   gewrappte `OnEnterSpawn` `event=round round=1 status=start` und das Original
+   plus Chokepoint-Hook laufen (Preset A: Level unverändert).
 
 ## Grenzen (ehrlich dokumentiert)
 

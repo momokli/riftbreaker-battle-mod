@@ -1,6 +1,6 @@
 # RBBattle Einzel-Mod — Installation & Test (Stand 09.09.2026)
 
-Einzel-Mod **rbbattle** v0.33.0 für den Runden-Duell-Modus („Biter
+Einzel-Mod **rbbattle** v0.34.0 für den Runden-Duell-Modus („Biter
 Battles“-artig, RIFT BATTLE) in *The Riftbreaker*. Nachfolger von
 v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 
@@ -8,7 +8,7 @@ v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
 > haben, sonst lehnt der Client die Lobby mit **„different set of mods“** ab.
 > Kurzanleitung: [`docs/PLAYER_SETUP.md`](../docs/PLAYER_SETUP.md).
 
-**v0.33.0 — HQ-Erkennung per Entity-TYP + Setup-Phase (Commence-Flow) + HQ-Leak-Filter (Issue #144/#158/#152):**
+**v0.34.0 — HQ-Erkennung per Entity-TYP + Setup-Phase (Commence-Flow) + HQ-Leak-Filter (Issue #144/#158/#152):**
 - *HQ-Erkennung* (#144): `HqAutoDetectEntity()` bindet das HQ jetzt über den Entity-*Typ* `headquarters`
   (`FindService:FindEntitiesByType`, am Spiel-Source belegt: `graph/logic/logic_if_building_health.lua`)
   statt über die leere Gruppe `headquarters`; damit greift der Commence-Flow (#158) und der manuelle
@@ -384,6 +384,7 @@ python3 tools/mod-updater/mod_update.py update
 | `rb_shop` | **Custom-UI-Shop (#25):** öffnet ein Popup mit der Tier-/Preis-Liste (Tier 1/2/3 + Boss) + Konsolen-Liste (Fallback ohne Spieler/API) |
 | `rb_queue` | **Send-Queue-Status (#25):** Anzahl, Gesamtwert und Blueprint-Liste der für die nächste Welle gekauften Einheiten |
 | `rb_boost <stufe|pct>` | **Send-Boost (#39):** kauft einen prozentualen Aufschlag auf die nächste Naturwelle (Stufen `s1`=+25% (200), `s2`=+50% (400), `s3`=+100% (800) oder freie pct-Eingabe à 8 Währung/Prozentpunkt) aus dem Spar-Pool (sofort irreversibel). Beim nächsten natürlichen Wellenstart wird der Boost am `SpawnWavesForDifficultyLevel`-Chokepoint angewendet (difficultyLevel-Delta) und zurückgesetzt — genau eine Welle, nicht kumulativ. Guards: unbekannte Stufe, pct ≤ 0, `maxBoostPct` (200), `maxBoostsPerWave` (4), zu wenig Pool. `duel` = Boost-Flush nur in `sp` |
+| `rb_richtwert [<calcium> [level]]` | **Wellen-Richtwert-Vorschau (#213, Recherche für #205):** ohne Args die Richtwert-Kurve für Level 1–9 (`Richtwert(level) = 100 * level`, Annahme); mit `<calcium>` (+ optional `<level>`, Default aktuelle Runde) die resultierende %-Verstärkung nach der ECO-6-Formel. **Reine Vorschau** — rührt weder `RBB.boost` noch den Pool an, ist nicht an `rb_boost` angeschlossen |
 | `rb_mode sp\|sp_op\|duel` | Modus-Umschaltung: `sp` = Solo **Normal** (Default, echter Spielfluss, sendet an die eigene nächste Welle), `sp_op` = Solo **OP** (Test/Cheats: hoher Startpool + schneller Rundentakt), `duel` = 1v1 (Stub, folgt später) |
 | `rb_status` | Zeigt `mode`, `runde`, `pool`, die `queue` und den `boost` (für die nächste Welle) — die Kontrollanzeige des Testmodus |
 | `rb_hq` / `rb_hq leak [dmg]` / `rb_hq entity <id>` / `rb_hq reset` | Win-Condition-Status + Dev-Werkzeuge (#28): HQ-HP zeigen, manuellen Leak anwenden, HQ-Entity zuordnen, Zustand zurücksetzen (Muster `rb_economy reset`). Die HQ-Entity wird seit #144 zusätzlich automatisch versucht zu binden (`HqAutoDetectEntity`, bei `PlayerInitializedEvent`/jedem `rb_wave`); `rb_hq entity <id>` bleibt der manuelle Fallback, falls die Auto-Erkennung nichts findet |
@@ -398,13 +399,17 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.33.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
+[RBBATTLE] event=mod_load version=0.34.0 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100
 [RBBATTLE] event=convert resource=carbonium amount=100 value=100 pool=100 status=ok irreversible=1
 [RBBATTLE] event=buy_wave unit=brabit tier=t1 count=1 price=100 total=100 pool=0 queue=1 status=ok   ← Kauf-Hook (#25)
 [RBBATTLE] event=boost status=ok pct=25 total_pct=25 price=200 pool=1800 buys=1   ← Send-Boost Kauf (#39)
+[RBBATTLE] event=richtwert_preview calcium=200 level=4 wave_richtwert=400 pct=50.0   ← Richtwert-Vorschau (#213, reine Vorschau, kein Kauf)
+[RBBATTLE] event=richtwert_sample_source status=found kind=group name=enemy   ← Gegner-Zaehl-Quelle gefunden (#213-Sampling, einmalig pro Session)
+[RBBATTLE] event=richtwert_sample level=4 before=5 after=13 delta=8   ← Naturwelle bei Level 4 hat 8 Kreaturen gespawnt (#213, echte Messung fuer die Kurve)
+[RBBATTLE] event=richtwert_sample_types level=4 total=8 types=artigian:3,baxmoth:2,brabit:3   ← Typ-Verteilung der neu gespawnten Kreaturen (#213-Folgefrage: proportionaler %-Boost pro Typ statt Fuellkreatur)
 [RBBATTLE] event=wave_hook patch status=ok                       ← Send-Queue-Hook aktiv (#42/#25)
 [RBBATTLE] event=boost patch status=ok                           ← Boost-Chokepoint-Hook aktiv (#39)
 [RBBATTLE] event=dom_timer patch status=ok cap=300        ← nach PlayerInitializedEvent

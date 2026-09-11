@@ -64,6 +64,7 @@ registriert sein. `/health` liefert `{"ok":true}`.
 | `round_start` | `round` | Spielseitige Bestätigung, wird protokolliert |
 | `round_end` | `round` | Spielseitige Auswertung, wird protokolliert |
 | `match_end` | `winner` | Match sofort beenden; `match_end` in **beide** Outboxen |
+| `exec_result` | `command`, `ok` (boolean) | Dispatch-Feedback des Relays (Issue #89): protokollieren + per SSE an die Web-UI broadcasten (kein eigener Server-State) |
 
 ### Runden-Lifecycle
 
@@ -104,6 +105,7 @@ mitgegeben (unbekannte Felder werden laut protocol.md ignoriert → vorwärtskom
 | `round_start` | `POST /event` type `round_start` (Bestätigung) | `match_end` | Outbox nach letzter Runde / bei Spiel-Meldung |
 | `round_end` | `POST /event` type `round_end` (Auswertung) | | |
 | `match_end` | `POST /event` type `match_end` → sofortiges Ende | | |
+| `exec_result` | `POST /event` type `exec_result` (Dispatch-Feedback des Relays, Issue #89) | | |
 
 Abweichung v0-Harness: Im Harness ist der Transport die Named Pipe
 `\\.\pipe\rbbattle`; der Pipe-Client wird später zum Forwarder auf diese

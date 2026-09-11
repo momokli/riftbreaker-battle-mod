@@ -1,7 +1,9 @@
 ---
 # Rolle: riftbreaker-server — Dev-SP-Server 6321 (1v1 "vs sich selbst"),
-# docker/wine. Voraussetzung: mods-zip hat rbbattle.zip nach
-# {{ mods_zip_dest }} gepackt (md5-Parität bereits geprüft).
+# docker/wine. Voraussetzungen: mods-zip hat rbbattle.zip nach
+# {{ mods_zip_dest }} gepackt (md5-Parität bereits geprüft), game-content hat
+# den Steam-Content nach {{ riftbreaker_game_dir }} gelegt und
+# headless-client-image hat das Laufzeit-Image (Tag = Deploy-SHA) gebaut.
 #
 # WICHTIG — Mod-Backups liegen NIE innerhalb von {{ riftbreaker_mods_dir }}:
 # Der Dedicated Server lädt JEDEN Unterordner mit einer *.manifest in mods/ als
@@ -35,6 +37,50 @@
     path: "{{ riftbreaker_deploy_dir }}"
     state: directory
     mode: "0755"
+
+# Fehlerklasse „Container-Name belegt" (Issue #209): ein fremder Container mit
+# unserem Namen (z. B. ein alter Community-Stack) lässt `docker compose up -d`
+# mit Namenskonflikt scheitern. Docker liefert das Compose-Projekt-Label; den
+# Namen darf nur unser eigenes Projekt tragen. Läuft auch im --check.
+- name: Bestehenden Container mit unserem Namen prüfen (Fremd-Belegung?)
+  # `docker container inspect` (nicht `docker inspect`): nur Container, sonst
+  # matcht Docker auch ein gleichnamiges Image (z. B. der alte Community-Stack
+  # `riftbreaker-dedicated:latest`).
+  command: >-
+    docker container inspect --format '{% raw %}{{ index .Config.Labels "com.docker.compose.project" }}{% endraw %}'
+    {{ riftbreaker_server_container }}
+  register: rbbattle_container_owner
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Container-Name gehört uns (oder ist frei)
+  # Im echten Deploy ein Hard-Fail (der Deploy würde hier scheitern).
+  assert:
+    that:
+      - "(rbbattle_container_owner.rc != 0) or ((rbbattle_container_owner.stdout | trim) in ['', riftbreaker_compose_project])"
+    fail_msg: >-
+      Container-Name '{{ riftbreaker_server_container }}' ist von einem fremden
+      Projekt belegt (Label com.docker.compose.project='{{ rbbattle_container_owner.stdout | trim }}').
+      Vor dem Deploy entfernen (docker rm -f {{ riftbreaker_server_container }}),
+      sonst scheitert `docker compose up -d` am Namenskonflikt.
+  when: not ansible_check_mode
+
+# Im PR-Gate (--check) nur sichtbar warnen, nicht rot: eine fremd belegte
+# Container-Name ist Host-Zustand (z. B. ein parallel laufender Deploy), kein
+# PR-Fehler — der Required-Check muss davon unabhängig stabil bleiben. Der
+# echte Deploy bricht unverändert hart ab (Task oben).
+- name: "WARNUNG: fremd belegter Container-Name (nur im --check)"
+  debug:
+    msg: >-
+      WARNUNG: Container-Name '{{ riftbreaker_server_container }}' ist von einem
+      fremden Projekt belegt (Label com.docker.compose.project='{{ rbbattle_container_owner.stdout | trim }}').
+      Ein echter Deploy würde hier scheitern — vor dem Deploy aufräumen
+      (docker rm -f {{ riftbreaker_server_container }}).
+  when:
+    - ansible_check_mode
+    - rbbattle_container_owner.rc == 0
+    - (rbbattle_container_owner.stdout | trim) not in ['', riftbreaker_compose_project]
 
 - name: docker-compose.yml rendern
   template:
@@ -93,6 +139,9 @@
     recurse: true
   register: riftbreaker_manifest_scan_after
 
+# Im PR-Gate (--check) ist der `mv` oben geskippt → die Fremd-Ordner liegen noch
+# da. Deshalb dort nur warnen (wie beim Container-Namen); der echte Deploy
+# bricht hart ab. Der Required-Check „deploy-check" bleibt so stabil.
 - name: Guard — kein Fremd-Ordner mit Manifest mehr in mods/ (sonst Abbruch)
   assert:
     that:
@@ -112,6 +161,17 @@
     success_msg: >-
       Guard OK: nur {{ riftbreaker_mod_dir }} trägt eine *.manifest in
       {{ riftbreaker_mods_dir }}.
+  when: not ansible_check_mode
+
+- name: "WARNUNG: Fremd-Ordner mit *.manifest in mods/ (nur im --check)"
+  debug:
+    msg: >-
+      WARNUNG: In {{ riftbreaker_mods_dir }} liegt ausser {{ riftbreaker_mod_dir }}
+      mindestens ein weiterer Ordner mit *.manifest ({{ riftbreaker_stray_mod_dirs }}).
+      Ein echter Deploy würde ihn wegschieben bzw. abbrechen.
+  when:
+    - ansible_check_mode
+    - riftbreaker_stray_mod_dirs | length > 0
 
 - name: Guard — hat eingegriffen? (Fact)
   set_fact:
@@ -189,28 +249,28 @@
         remote_src: true
       when: riftbreaker_mod_update_needed
 
+    # Der Marker ist die Änderungs-Erkennung; sein Schreiben notifyt den
+    # Restart-Handler (Mod-Änderung -> Container wirklich neu starten). Der
+    # Handler wird unten VOR der Verifikation geflusht, damit der neue Stand im
+    # Log steht (Issue #209).
     - name: Deploy-Marker schreiben
       copy:
         content: "{{ rbbattle_zip_stat.stat.checksum }}"
         dest: "{{ riftbreaker_deploy_dir }}/rbbattle.md5"
         mode: "0644"
       when: riftbreaker_mod_update_needed
+      notify: restart riftbreaker-server
 
-    - name: Container sicherstellen (docker compose up -d, idempotent)
-      command:
-        cmd: docker compose up -d --remove-orphans
-        chdir: "{{ riftbreaker_deploy_dir }}"
-      register: riftbreaker_up
-      changed_when: >-
-        ('Recreated' in riftbreaker_up.stdout)
-        or ('Created' in riftbreaker_up.stdout)
-        or ('Started' in riftbreaker_up.stdout)
+    - name: Container neu starten, damit die Verifikation den neuen Stand sieht
+      meta: flush_handlers
 
-    - name: Container neu starten (Mod neu laden)
-      command:
-        cmd: docker compose restart {{ riftbreaker_server_container }}
-        chdir: "{{ riftbreaker_deploy_dir }}"
-      register: riftbreaker_restart
+    # Nur-Guard-Fall (Mod unverändert, aber Fremd-Ordner weggeschoben): der
+    # Handler wurde nicht notifyt, der Server muss trotzdem neu laden.
+    - name: Container neu laden (nur Guard-Eingriff, Mod unverändert)
+      command: >-
+        docker compose -f {{ riftbreaker_deploy_dir }}/docker-compose.yml
+        up -d --force-recreate --remove-orphans
+      when: not riftbreaker_mod_update_needed
       changed_when: true
 
     - name: Server-Log lesen ({{ riftbreaker_mod_log_cmd }})
@@ -219,11 +279,13 @@
       register: riftbreaker_server_logs
       changed_when: false
       failed_when: false
+      when: not ansible_check_mode
 
     - name: mod_load-Zeilen im Log ermitteln
       set_fact:
         riftbreaker_mod_load_lines: >-
           {{ riftbreaker_server_logs.stdout | regex_findall('event=mod_load[^\n]*') }}
+      when: not ansible_check_mode
 
     - name: Mod-Load verifizieren (genau eine Zeile, erwartete Version, keine Handler-Fehler)
       assert:
@@ -245,6 +307,7 @@
           {{ riftbreaker_mod_load_lines | length }} mod_load-Zeile(n). Deploy
           wird aus dem Backup zurückgerollt.
         success_msg: "Verifikation OK: {{ riftbreaker_mod_load_lines | first }}"
+      when: not ansible_check_mode
   rescue:
     - name: Rollback — neuen Mod-Ordner verwerfen
       file:
@@ -263,9 +326,9 @@
       when: riftbreaker_mod_backup is defined and (riftbreaker_mod_backup.changed | default(false))
 
     - name: Rollback — Container neu starten (alten Stand laden)
-      command:
-        cmd: docker compose restart {{ riftbreaker_server_container }}
-        chdir: "{{ riftbreaker_deploy_dir }}"
+      command: >-
+        docker compose -f {{ riftbreaker_deploy_dir }}/docker-compose.yml
+        up -d --force-recreate --remove-orphans
       when: riftbreaker_mod_backup is defined and (riftbreaker_mod_backup.changed | default(false))
 
     - name: Deploy als fehlgeschlagen werten (Guard/Verifikation)
@@ -279,9 +342,7 @@
 
 - name: Container sicherstellen (ohne Mod-Änderung/Guard-Eingriff)
   when: not (riftbreaker_mod_update_needed or riftbreaker_guard_moved)
-  command:
-    cmd: docker compose up -d --remove-orphans
-    chdir: "{{ riftbreaker_deploy_dir }}"
+  command: docker compose -f {{ riftbreaker_deploy_dir }}/docker-compose.yml up -d --remove-orphans
   register: riftbreaker_up_idle
   changed_when: >-
     ('Recreated' in riftbreaker_up_idle.stdout)

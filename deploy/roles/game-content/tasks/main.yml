@@ -1,0 +1,134 @@
+---
+# Rolle: game-content (Issue #209) — Dedicated-Server-Content bereitstellen.
+#
+# Deklarativ + idempotent: fehlt das Server-Binary, wird der Content gezogen;
+# ist er da, ist der Lauf ein billiger No-Op. Konvergiert nach `rm -rf` des
+# Game-Dirs (Binary weg -> Neubeschaffung).
+#
+# Fail loud: schlägt SteamCMD fehl oder fehlt das Binary danach, bricht der
+# Deploy ab — kein stiller Skip. Fallback (Sync aus kanonischem Cache) ist
+# dokumentiert und über riftbreaker_content_mode=sync aktivierbar.
+
+# --- SteamCMD (nur im Modus steamcmd) ---------------------------------------
+- name: Fremd-Architekturen prüfen (32-bit-libs für SteamCMD)
+  command: dpkg --print-foreign-architectures
+  register: rbbattle_foreign_arch
+  changed_when: false
+  check_mode: false
+  when: riftbreaker_content_mode == 'steamcmd'
+
+- name: i386-Architektur freischalten (SteamCMD braucht lib32gcc-s1)
+  command: dpkg --add-architecture i386
+  when:
+    - riftbreaker_content_mode == 'steamcmd'
+    - "'i386' not in (rbbattle_foreign_arch.stdout_lines | default([]))"
+  changed_when: true
+
+- name: apt-Cache aktualisieren (nach Architektur-Änderung)
+  apt:
+    update_cache: true
+  when:
+    - riftbreaker_content_mode == 'steamcmd'
+    - "'i386' not in (rbbattle_foreign_arch.stdout_lines | default([]))"
+
+- name: SteamCMD-Laufzeitabhängigkeit installieren (lib32gcc-s1)
+  apt:
+    name: lib32gcc-s1
+    state: present
+  when: riftbreaker_content_mode == 'steamcmd'
+
+- name: SteamCMD-Verzeichnis sicherstellen
+  file:
+    path: "{{ steamcmd_dir }}"
+    state: directory
+    mode: "0755"
+  when: riftbreaker_content_mode == 'steamcmd'
+
+- name: SteamCMD-Installation prüfen
+  stat:
+    path: "{{ steamcmd_dir }}/steamcmd.sh"
+  register: rbbattle_steamcmd
+  when: riftbreaker_content_mode == 'steamcmd'
+
+- name: SteamCMD herunterladen
+  get_url:
+    url: "{{ steamcmd_url }}"
+    dest: "{{ steamcmd_dir }}/steamcmd_linux.tar.gz"
+    mode: "0644"
+  when:
+    - riftbreaker_content_mode == 'steamcmd'
+    - not (rbbattle_steamcmd.stat.exists | default(false))
+
+- name: SteamCMD entpacken
+  unarchive:
+    src: "{{ steamcmd_dir }}/steamcmd_linux.tar.gz"
+    dest: "{{ steamcmd_dir }}"
+    remote_src: true
+  when:
+    - riftbreaker_content_mode == 'steamcmd'
+    - not (rbbattle_steamcmd.stat.exists | default(false))
+
+- name: SteamCMD initialisieren (Selbst-Update, einmalig nach Installation)
+  command: "{{ steamcmd_dir }}/steamcmd.sh +quit"
+  register: rbbattle_steamcmd_boot
+  changed_when: false
+  when:
+    - riftbreaker_content_mode == 'steamcmd'
+    - not ansible_check_mode
+    - not (rbbattle_steamcmd.stat.exists | default(false))
+
+# --- Game-Verzeichnis + Content-Status --------------------------------------
+- name: Game-Verzeichnis sicherstellen
+  file:
+    path: "{{ riftbreaker_game_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Content-Status prüfen (Server-Binary)
+  stat:
+    path: "{{ riftbreaker_game_dir }}/{{ riftbreaker_server_bin }}"
+  register: rbbattle_content_bin
+
+- name: Dedicated-Server-Content installieren (SteamCMD, anonym, App {{ riftbreaker_app_id }})
+  command: >-
+    {{ steamcmd_dir }}/steamcmd.sh
+    +force_install_dir {{ riftbreaker_game_dir }}
+    +login anonymous
+    +app_update {{ riftbreaker_app_id }} validate
+    +quit
+  register: rbbattle_steamcmd_update
+  changed_when: "'Success! App' in (rbbattle_steamcmd_update.stdout | default(''))"
+  failed_when: (rbbattle_steamcmd_update.rc | default(0)) != 0
+  when:
+    - riftbreaker_content_mode == 'steamcmd'
+    - (riftbreaker_content_force | bool) or not rbbattle_content_bin.stat.exists
+
+- name: Content aus kanonischem Cache spiegeln (Fallback, idempotent)
+  command: >-
+    rsync -a --exclude=/mods {{ riftbreaker_content_cache_dir }}/
+    {{ riftbreaker_game_dir }}/
+  register: rbbattle_content_sync
+  changed_when: false
+  when:
+    - riftbreaker_content_mode == 'sync'
+    - (riftbreaker_content_force | bool) or not rbbattle_content_bin.stat.exists
+
+- name: Content-Verifikation (Binary vorhanden?)
+  stat:
+    path: "{{ riftbreaker_game_dir }}/{{ riftbreaker_server_bin }}"
+  register: rbbattle_content_after
+  when: not ansible_check_mode
+
+# Fail loud statt stiller Deploy ohne Spieldateien.
+- name: Deploy abbrechen, wenn der Server-Content fehlt
+  fail:
+    msg: >-
+      Dedicated-Server-Content fehlt: {{ riftbreaker_game_dir }}/{{ riftbreaker_server_bin }}
+      existiert nach dem Lauf nicht. SteamCMD (anonym, App {{ riftbreaker_app_id }})
+      hat den Content nicht bereitgestellt. Fallback: Content aus einem
+      kanonischen Cache spiegeln, z. B.
+      `-e riftbreaker_content_mode=sync -e riftbreaker_content_cache_dir=/srv/riftbreaker/data/server`
+      (setzt einen vollständigen Steam-Stand im Cache voraus).
+  when:
+    - not ansible_check_mode
+    - not rbbattle_content_after.stat.exists

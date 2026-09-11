@@ -124,8 +124,8 @@ local function trigger_evt(entity, teamId)
     return evt
 end
 
--- 1. Mod geladen, Version 0.33.0, HQ initialisiert.
-check(log_has("event=mod_load version=0.33.0"), "mod_load version=0.33.0")
+-- 1. Mod geladen, Version 0.34.0, HQ initialisiert.
+check(log_has("event=mod_load version=0.34.0"), "mod_load version=0.34.0")
 check(log_has("hq_hp=100 hq_dead=false"), "mod_load enthaelt hq_hp=100 hq_dead=false")
 check(_G.__handlers["EnteredTriggerEvent"] ~= nil, "EnteredTriggerEvent registriert")
 check(_G.__handlers["RespawnFailedEvent"] ~= nil, "RespawnFailedEvent registriert")
@@ -183,7 +183,7 @@ _G.__commands["rb_hq"]({ "entity", "12345" })
 for _ = 1, 10 do _G.__handlers["EnteredTriggerEvent"](trigger_evt(9999)) end
 check(log_has("event=leak damage=10 hp_before=10 hp=0"), "10. Leak -> hp 10->0")
 check(log_has("event=hq_dead status=match_end hp=0"), "event=hq_dead bei HP<=0")
-check(log_has("event=match_end reason=hq_destroyed winner=opponent"), "event=match_end")
+check(log_has("event=match_end reason=hq_destroyed"), "event=match_end")
 check(count_logs("event=match_end") == 1, "match_end genau einmal")
 check(console_has("GAME OVER") and console_has("HQ destroyed"),
     "#157: in-game Annonce 'GAME OVER — HQ destroyed' nach HQ-Tod")

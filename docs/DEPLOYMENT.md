@@ -8,7 +8,7 @@
 | Komponente | Host | Container/Unit | Port | Zweck |
 |---|---|---|---|---|
 | riftbreaker-dedicated | planet | docker (wine) | 6321/udp | Dev-SP-Server: 1v1 „vs sich selbst" (SP-Mode; rbbattle-Mod + rbbridge) |
-| rb-winetest | planet | docker (wine) | 6322/udp | Vanilla-Server (kein Mod, schnelle Test-Joins) |
+| rb-winetest | planet | docker (wine) | 6322/udp | Vanilla-Server (kein Mod, schnelle Test-Joins; gleiches Image wie :6321) |
 | tournament-server | planet | systemd (Rust/axum, `tournament/`) | 8080 | Turnier 1v1: Lobby/Ready/GO/Wave-Routing/Score (2 Welten) |
 | test-Instanzen | planet | docker, on-demand | frei | Test-Server aller Art (Mod-Tests, Balance, Experimente) |
 | Website | planet | statics + Caddy (`mellon-caddy`) | 443 | Landing `/` · `/connectivity.html` · `/solo.html` · `/status.json` · Proxy `/tournament/*` → tournament-server |
@@ -19,8 +19,10 @@
 ## Kanonische Landing
 
 - **`site/` ist die einzige kanonische Landing** (GitHub Pages via
-  `pages.yml`, Source-Pfad `site`, kein Build-Schritt). Downloads bleiben
-  GitHub Releases (dist-Zips).
+  `pages.yml`, Source-Pfad `site`, kein Build-Schritt). Der Download läuft über
+  den **deployten Stand** `https://rift.projectmellon.de/mods/rbbattle.zip`
+  (Caddy, vom Deploy atomar ausgetauscht). GitHub-Tags (`v*`) sind seit
+  Issue #209 **reine Marker** — keine GitHub-Releases, keine Release-Artefakte.
 - `docs/index.html` ist **keine zweite Landing** mehr: ein dünner
   Verweis/Redirect auf die Landing, ohne eigene Download-/Versions-Links.
 
@@ -31,15 +33,22 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
 1. **mods-zip** — Mod aus `mod/` paketieren (`scripts/package_bausteine.sh`),
    `rbbattle.zip` nach planet; **md5-Paritäts-Check (Zip == Prod) hart als
    Fehlschlag**.
-2. **riftbreaker-server** — Docker-Container + Server-Config (Welt
+2. **headless-client-image** — baut `rb-headless-client:<deploy-sha>` IM
+   Playbook auf planet aus `tools/headless-client` (gemeinsame Wine-Laufzeit
+   für :6321 + :6322; Docker-Layer-Cache → billig/idempotent). Das gerenderte
+   Compose pinnt exakt diesen Tag (kein `latest`).
+3. **game-content** — Dedicated-Server-Content (Steam-App 4114030) deklarativ
+   nach `riftbreaker_game_dir` (SteamCMD anonym; Fallback: idempotenter Sync aus
+   kanonischem Cache). Konvergiert nach `rm -rf`; Fehlschlag ist laut.
+4. **riftbreaker-server** — Docker-Container + Server-Config (Welt
    `mp_survival`/`jungle`, `disable_steam`, Passwort aus Vault), Mod-Install
-   in `<game>/mods/rbbattle`.
-3. **vanilla-server** — zweite Instanz ohne Mods (6322).
-4. **tournament-server** — systemd-Unit, Env-Konfig (`RBBRIDGE_A_URL`/
+   in `<game>/mods/rbbattle`; Restart-Handler bei Mod-/Config-Änderung.
+5. **vanilla-server** — zweite Instanz ohne Mods (6322), gleiches Image.
+6. **tournament-server** — systemd-Unit, Env-Konfig (`RBBRIDGE_A_URL`/
    `RBBRIDGE_B_URL`), Binary + Web-UI aus `tournament/`.
-5. **website** — statische Dateien (`site/*`) nach Docroot, Caddy-Snippet
+7. **website** — statische Dateien (`site/*`) nach Docroot, Caddy-Snippet
    (statics + `/tournament/*`-Proxy) + Reload.
-6. **probe-timer** — systemd-Timer für `scripts/probe_servers.sh` →
+8. **probe-timer** — systemd-Timer für `scripts/probe_servers.sh` →
    `status.json`.
 
 Grundsätze:
@@ -109,8 +118,10 @@ Ansible-Playbook aus (`ansible-playbook -i deploy/inventory deploy/site.yml
 
 Topologie (Momo-Entscheidung, 2026-09-10): **EIN** Server auf `:6321` statt
 Steam-/Non-Steam-Dualität; ein Direct-IP-Server (`disable_steam "1"`) deckt
-beide Stores ab. Der **Tag→prod-Kanal ist vorerst gestrichen** — es gibt
-bewusst keinen Tag-Trigger und keine prod-Umgebung im Workflow.
+beide Stores ab. Der **Tag→prod-Kanal ist gestrichen**: `tags: ['v*']` sind seit
+Issue #209 **reine Marker** (kein Tag-Trigger, keine GitHub-Releases, keine
+prod-Umgebung im Workflow). Veröffentlichter Download ist der deployte Stand
+`https://rift.projectmellon.de/mods/rbbattle.zip`.
 
 Einziges GitHub-Secret ist `DEPLOY_TOKEN` im Environment `dev` (Bearer-Token
 Hook ↔ Workflow). Das Vault-Passwort liegt ausschließlich root-only auf planet
@@ -124,18 +135,20 @@ Das Server-Passwort liegt **nie im Klartext** im Repo. Es steht in
 Befüllung: siehe `deploy/README.md` → „Vault". Für den CD-Hook liegt das
 Vault-Passwort als root-only Datei auf planet — **niemals** auf GitHub.
 
-## Aktueller Zustand (2026-09-10)
+## Aktueller Zustand (2026-09-10, Issue #209)
 
-Stack teilweise ad-hoc ohne Ansible (Docker manuell, Website aus manueller
-Kopie — siehe Issue-Kommentar zur stale Landing). Gap: `deploy/` fehlte → Issue #45.
+`deploy/` **besitzt den Stack**: das Playbook baut das Laufzeit-Image
+(`rb-headless-client:<deploy-sha>`) selbst, provisioniert den Steam-Content und
+pinnt das Compose auf den Deploy-SHA. Ein from-zero-Aufbau braucht keine
+manuellen Schritte auf planet (`deploy/README.md` → „From-zero").
 
-Der laufende Dev-SP-Server (:6321) ist ein Community-Docker-Setup
-(`j3n5-group/riftbreaker-docker`) unter `/srv/riftbreaker` (Compose, Wine).
-Die `deploy/`-Rollen (`riftbreaker-server`, `mods-zip`) sind der Zielstand,
-aber auf planet noch nicht an diese Instanz angebunden — `/srv/rbgame` und
-`/opt/rbmods/compose/…` existieren dort (noch) nicht.
+Der alte Community-Stack (`j3n5-group/riftbreaker-docker`, Steam-basiert) unter
+`/srv/riftbreaker` ist abgelöst; `/srv/riftbreaker/data/server` bleibt als
+**kanonischer Steam-Content-Cache** liegen (Sync-Fallback für `game-content`).
+Mod-Instanzen: `/srv/rbgame` (:6321), `/srv/rbgame-vanilla` (:6322); Compose
+unter `/opt/rbmods/compose/…`.
 
-## Interim-Deploy :6321 (Issue #156)
+## Interim-Deploy :6321 (Issue #156) — historisch, durch #209 überholt
 
 Bis zur CD (#91) wird die Mod auf :6321 manuell eingespielt (reproduzierbar):
 
