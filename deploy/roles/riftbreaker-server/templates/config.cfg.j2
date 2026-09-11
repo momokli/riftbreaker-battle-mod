@@ -1,5 +1,6 @@
 // Verwaltet von deploy/ (config.cfg.j2) — NICHT manuell editieren.
-// Enthält das Server-Passwort → Datei-Rechte 0600 (siehe task).
+// Enthält das Server-Passwort → 0644 (der Container läuft als steamuser,
+// der die read-only-gemountete Datei lesen können muss).
 
 set server_name "{{ riftbreaker_server_name }}"
 set server_password "{{ riftbreaker_server_password }}"

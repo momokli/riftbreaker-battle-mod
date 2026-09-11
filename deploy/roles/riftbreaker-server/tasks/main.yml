@@ -33,11 +33,11 @@
     state: directory
     mode: "0755"
 
-- name: config.cfg rendern (Passwort aus Vault, 0600)
+- name: config.cfg rendern (Passwort aus Vault, 0644 fuer steamuser-lesbar)
   template:
     src: config.cfg.j2
     dest: "{{ riftbreaker_config_dir }}/config.cfg"
-    mode: "0600"
+    mode: "0644"
   notify: restart riftbreaker-server
 
 - name: docker-compose.yml rendern
