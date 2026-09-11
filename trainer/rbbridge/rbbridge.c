@@ -222,6 +222,111 @@ static SIZE_T ht_VirtualQuery(const void *addr, MEMORY_BASIC_INFORMATION *mi,
 }
 #define VirtualQuery ht_VirtualQuery
 
+/*
+ * Shim fuer die #252-Modul-Resolution im Host-Test: die zusaetzlichen
+ * Win32-Primitive (GetModuleHandleW, psapi-Enumeration, Toolhelp32,
+ * LoadLibraryA) existieren hier als INERTE Stubs, damit rbbridge.c ohne
+ * Windows kompiliert und deterministisch bleibt. Der synthetische Puffer
+ * wird ausschliesslich ueber ht_set_module() (Stufe getmodulehandle)
+ * bereitgestellt; alle weiteren Stufen liefern im Host-Test 0/NULL.
+ */
+#define MEM_IMAGE             0x1000000
+#define IMAGE_FILE_MACHINE_AMD64 0x8664
+#define MAX_PATH              260
+#define INVALID_HANDLE_VALUE  ((HANDLE)(intptr_t)-1)
+
+#define TH32CS_SNAPMODULE   0x00000008
+#define TH32CS_SNAPMODULE32 0x00000010
+
+typedef struct {
+    DWORD    dwSize;
+    DWORD    th32ModuleID;
+    DWORD    th32ProcessID;
+    DWORD    GlblcntUsage;
+    DWORD    ProccntUsage;
+    void    *modBaseAddr;
+    DWORD    modBaseSize;
+    HMODULE  hModule;
+    wchar_t  szModule[MAX_PATH];
+    wchar_t  szExePath[MAX_PATH];
+} MODULEENTRY32W;
+
+static HMODULE ht_GetModuleHandleW(const wchar_t *name)
+{
+    (void)name;
+    return (HMODULE)g_ht_module_base; /* NULL == Modul nicht geladen */
+}
+#define GetModuleHandleW ht_GetModuleHandleW
+
+static int ht_wcsicmp(const wchar_t *a, const wchar_t *b)
+{
+    for (;; a++, b++) {
+        wchar_t x = *a, y = *b;
+        if (x >= L'A' && x <= L'Z') x = (wchar_t)(x + 32);
+        if (y >= L'A' && y <= L'Z') y = (wchar_t)(y + 32);
+        if (x != y) return (int)x - (int)y;
+        if (x == 0) return 0;
+    }
+}
+#define _wcsicmp ht_wcsicmp
+
+static HANDLE ht_GetCurrentProcess(void) { return (HANDLE)(intptr_t)-1; }
+#define GetCurrentProcess ht_GetCurrentProcess
+
+static DWORD ht_GetCurrentProcessId(void) { return 4242u; }
+#define GetCurrentProcessId ht_GetCurrentProcessId
+
+/* psapi-Modul-Enumeration: im Host-Test inaktiv. */
+static BOOL ht_EnumProcessModules(HANDLE h, void *mods, SIZE_T cb, DWORD *need)
+{
+    (void)h; (void)mods; (void)cb; (void)need;
+    return 0;
+}
+#define EnumProcessModules ht_EnumProcessModules
+
+static DWORD ht_GetModuleBaseNameW(HANDLE h, HMODULE m, wchar_t *buf, DWORD n)
+{
+    (void)h; (void)m; (void)buf; (void)n;
+    return 0;
+}
+#define GetModuleBaseNameW ht_GetModuleBaseNameW
+
+static DWORD ht_GetModuleFileNameExW(HANDLE h, HMODULE m, wchar_t *buf, DWORD n)
+{
+    (void)h; (void)m; (void)buf; (void)n;
+    return 0;
+}
+#define GetModuleFileNameExW ht_GetModuleFileNameExW
+
+/* Toolhelp32-Modul-Snapshot: im Host-Test inaktiv. */
+static HANDLE ht_CreateToolhelp32Snapshot(DWORD flags, DWORD pid)
+{
+    (void)flags; (void)pid;
+    return INVALID_HANDLE_VALUE;
+}
+#define CreateToolhelp32Snapshot ht_CreateToolhelp32Snapshot
+
+static BOOL ht_Module32FirstW(HANDLE snap, MODULEENTRY32W *me)
+{
+    (void)snap; (void)me;
+    return 0;
+}
+#define Module32FirstW ht_Module32FirstW
+
+static BOOL ht_Module32NextW(HANDLE snap, MODULEENTRY32W *me)
+{
+    (void)snap; (void)me;
+    return 0;
+}
+#define Module32NextW ht_Module32NextW
+
+static BOOL ht_CloseHandle(HANDLE h) { (void)h; return 1; }
+#define CloseHandle ht_CloseHandle
+
+/* LoadLibraryA-Fallback: im Host-Test inaktiv (kein Fund). */
+static HMODULE ht_LoadLibraryA(const char *name) { (void)name; return NULL; }
+#define LoadLibraryA ht_LoadLibraryA
+
 #else /* !RBBRIDGE_HOSTTEST: echter Windows-Build */
 
 #ifndef _WIN32_WINNT
@@ -230,6 +335,8 @@ static SIZE_T ht_VirtualQuery(const void *addr, MEMORY_BASIC_INFORMATION *mi,
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <psapi.h>    /* Issue #252: EnumProcessModules/GetModuleBaseNameW ... */
+#include <tlhelp32.h> /* Issue #252: Toolhelp32 Module32FirstW/NextW           */
 
 #endif /* RBBRIDGE_HOSTTEST */
 
@@ -522,7 +629,10 @@ static void send_state(HANDLE hPipe)
 /* noch Verifikations-Notiz, keine Laufzeitadresse.                    */
 /* ------------------------------------------------------------------ */
 
-#define RBBRIDGE_MODULE_NAME "riftbreaker_dll_win_release.dll"
+#define RBBRIDGE_MODULE_NAME   "riftbreaker_dll_win_release.dll"
+#define RBBRIDGE_MODULE_BASE   "riftbreaker_dll_win_release"
+#define RBBRIDGE_MODULE_NAME_W L"riftbreaker_dll_win_release.dll"
+#define RBBRIDGE_MODULE_BASE_W L"riftbreaker_dll_win_release"
 
 /* MSVC-RTTI-Name der ConsoleService-Klasse (mit NUL-Terminator). */
 static const char RBBRIDGE_RTTI_NAME[] = ".?AVConsoleService@Exor@@";
@@ -668,34 +778,266 @@ static const unsigned char *scan_u64(const unsigned char *start, size_t len,
     return scan_bytes(start, len, pat, sizeof(pat));
 }
 
-/*
- * Modulbasis + SizeOfImage von riftbreaker_dll_win_release.dll.
- * Kein LoadLibrary noetig - das Spiel hat die DLL laengst geladen.
- * Rueckgabe 1 = ok (base/size gesetzt), 0 = Modul fehlt/kein PE.
- */
-static int module_range(const unsigned char **out_base, size_t *out_size)
+/* ------------------------------------------------------------------ */
+/* Modulbasis-Aufloesung (Wine-robust, loader-unabhaengig)             */
+/*                                                                    */
+/* GetModuleHandleA(name) liefert unter Wine GLE=126                  */
+/* (ERROR_MOD_NOT_FOUND): Wine fuehrt das Spiel-DLL nicht zuverlaessig */
+/* unter seinem Basisnamen in der Loader-Liste, obwohl es geladen ist. */
+/* Deshalb wird die Modulbasis in mehreren Stufen bestimmt - die       */
+/* erste erfolgreiche gewinnt, jede Stufe loggt per dbg() welcher Weg  */
+/* griff (module_range: via=...):                                     */
+/*   a) getmodulehandle: GetModuleHandleA/W mit/ohne ".dll"            */
+/*   b) enum:            EnumProcessModules + GetModuleBaseNameW /     */
+/*                       GetModuleFileNameExW (psapi)                  */
+/*   c) toolhelp:        CreateToolhelp32Snapshot(TH32CS_SNAPMODULE|   */
+/*                       TH32CS_SNAPMODULE32) + Module32FirstW/NextW   */
+/*   d) sigbase:         ExecuteCommand-Signatur (RBBRIDGE_EXEC_SIG)   */
+/*                       im GESAMTEN eigenen Adressraum suchen         */
+/*                       (VirtualQuery, nur lesbar/committet) und die  */
+/*                       Modulbasis aus VirtualQuery(execfn)->         */
+/*                       AllocationBase (MEM_IMAGE) ableiten + PE-Check*/
+/*   e) loadlibrary:     LoadLibraryA als letzter Versuch (nur Basis)  */
+/*                                                                    */
+/* Nach Stufe (d) ist GetModuleHandleA irrelevant: der Signatur-Scan   */
+/* findet die Basis unabhaengig vom Loader. Jede Stufe validiert MZ/PE  */
+/* + SizeOfImage, bevor sie akzeptiert wird.                          */
+/* ------------------------------------------------------------------ */
+
+/* Vorwaerts-Deklaration: der Signatur-Scan validiert einen Kandidaten
+ * damit, dass sich in dessen Modul die ConsoleService-vftable wirklich
+ * aufloesen laesst (siehe module_via_sigbase). */
+static const unsigned char *resolve_console_vftable(const unsigned char *base,
+                                                    size_t size);
+
+/* Ist [base] ein x64-PE-Image? Setzt *out_size = SizeOfImage. */
+static int pe_image_size(const unsigned char *base, size_t *out_size)
 {
-    HMODULE hMod = GetModuleHandleA(RBBRIDGE_MODULE_NAME);
-    if (!hMod) {
-        dbg("module_range: Modul '%s' nicht geladen (GLE=%lu) - kein "
-            "Spielprozess?", RBBRIDGE_MODULE_NAME,
-            (unsigned long)GetLastError());
+    if (!base)
         return 0;
-    }
-    const unsigned char *base = (const unsigned char *)hMod;
     const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)base;
-    if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
-        dbg("module_range: kein MZ an base=%p", (void *)base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE)
         return 0;
-    }
     const IMAGE_NT_HEADERS *nt =
         (const IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
-    if (nt->Signature != IMAGE_NT_SIGNATURE) {
-        dbg("module_range: kein PE an base=%p", (void *)base);
+    if (nt->Signature != IMAGE_NT_SIGNATURE)
+        return 0;
+    if (nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64)
+        return 0;
+    *out_size = (size_t)nt->OptionalHeader.SizeOfImage;
+    return 1;
+}
+
+/* Vergleicht den Basenamen (nach letztem '/' bzw. '\') case-insensitiv. */
+static int wname_is_module_icase(const wchar_t *path)
+{
+    const wchar_t *b = path;
+    for (const wchar_t *p = path; *p; p++) {
+        if (*p == L'\\' || *p == L'/')
+            b = p + 1;
+    }
+    return _wcsicmp(b, RBBRIDGE_MODULE_NAME_W) == 0 ||
+           _wcsicmp(b, RBBRIDGE_MODULE_BASE_W) == 0;
+}
+
+/* a) GetModuleHandleA/W mit/ohne ".dll" (und W-Variante). */
+static int module_via_getmodulehandle(const unsigned char **out_base,
+                                      size_t *out_size)
+{
+    HMODULE h;
+    if ((h = GetModuleHandleA(RBBRIDGE_MODULE_NAME)) != NULL &&
+        pe_image_size((const unsigned char *)h, out_size)) {
+        *out_base = (const unsigned char *)h;
+        return 1;
+    }
+    if ((h = GetModuleHandleA(RBBRIDGE_MODULE_BASE)) != NULL &&
+        pe_image_size((const unsigned char *)h, out_size)) {
+        *out_base = (const unsigned char *)h;
+        return 1;
+    }
+    if ((h = GetModuleHandleW(RBBRIDGE_MODULE_NAME_W)) != NULL &&
+        pe_image_size((const unsigned char *)h, out_size)) {
+        *out_base = (const unsigned char *)h;
+        return 1;
+    }
+    if ((h = GetModuleHandleW(RBBRIDGE_MODULE_BASE_W)) != NULL &&
+        pe_image_size((const unsigned char *)h, out_size)) {
+        *out_base = (const unsigned char *)h;
+        return 1;
+    }
+    return 0;
+}
+
+/* b) EnumProcessModules + GetModuleBaseNameW/GetModuleFileNameExW (psapi). */
+static int module_via_enum(const unsigned char **out_base, size_t *out_size)
+{
+    HMODULE mods[1024];
+    DWORD needed = 0;
+    HANDLE self = GetCurrentProcess();
+    if (!EnumProcessModules(self, mods, sizeof(mods), &needed))
+        return 0;
+    size_t count = needed / sizeof(HMODULE);
+    if (count > sizeof(mods) / sizeof(mods[0]))
+        count = sizeof(mods) / sizeof(mods[0]);
+    for (size_t i = 0; i < count; i++) {
+        wchar_t name[MAX_PATH];
+        if (GetModuleBaseNameW(self, mods[i], name, MAX_PATH) &&
+            wname_is_module_icase(name) &&
+            pe_image_size((const unsigned char *)mods[i], out_size)) {
+            *out_base = (const unsigned char *)mods[i];
+            return 1;
+        }
+        wchar_t path[MAX_PATH];
+        if (GetModuleFileNameExW(self, mods[i], path, MAX_PATH) &&
+            wname_is_module_icase(path) &&
+            pe_image_size((const unsigned char *)mods[i], out_size)) {
+            *out_base = (const unsigned char *)mods[i];
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* c) Toolhelp32-Modul-Snapshot (kernel32, kein psapi noetig). */
+static int module_via_toolhelp(const unsigned char **out_base, size_t *out_size)
+{
+    HANDLE snap = CreateToolhelp32Snapshot(
+        TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, GetCurrentProcessId());
+    if (snap == INVALID_HANDLE_VALUE)
+        return 0;
+    MODULEENTRY32W me;
+    me.dwSize = sizeof(me);
+    int found = 0;
+    for (BOOL ok = Module32FirstW(snap, &me); ok; ok = Module32NextW(snap, &me)) {
+        if ((wname_is_module_icase(me.szModule) ||
+             wname_is_module_icase(me.szExePath)) &&
+            pe_image_size((const unsigned char *)me.modBaseAddr, out_size)) {
+            *out_base = (const unsigned char *)me.modBaseAddr;
+            found = 1;
+            break;
+        }
+    }
+    CloseHandle(snap);
+    return found;
+}
+
+/*
+ * d) Loader-unabhaengig (wichtigster Fallback): ExecuteCommand-Signatur im
+ * gesamten eigenen Adressraum suchen (VirtualQuery-Schleife, nur lesbare,
+ * committete Regionen ohne PAGE_GUARD - wie scan_bytes) und die Modulbasis
+ * aus VirtualQuery(execfn)->AllocationBase ableiten (bei MEM_IMAGE = Image-
+ * base) + PE-Check. Liefert die gefundene execfn gleich mit zurueck (spart
+ * den zweiten Scan in resolve_console_service).
+ */
+static int module_via_sigbase(const unsigned char **out_base, size_t *out_size,
+                              const unsigned char **out_execfn)
+{
+    /* Eigenes Modul ausschliessen: RBBRIDGE_EXEC_SIG liegt als Konstante
+     * auch im eigenen Image und wuerde sonst als "Treffer" erkannt. */
+    MEMORY_BASIC_INFORMATION smi;
+    const unsigned char *own = NULL;
+    if (VirtualQuery((const void *)&module_via_sigbase, &smi, sizeof(smi)))
+        own = (const unsigned char *)smi.AllocationBase;
+
+    uintptr_t addr = 0;
+    for (;;) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (!VirtualQuery((const void *)addr, &mi, sizeof(mi)))
+            break; /* Ende des Adressraums */
+        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
+        if (next <= addr) /* Overflow-Schutz */
+            break;
+        addr = next;
+        if (!is_readable_region(&mi))
+            continue;
+        const unsigned char *p = (const unsigned char *)mi.BaseAddress;
+        size_t n = (size_t)mi.RegionSize;
+        for (size_t i = 0; i + sizeof(RBBRIDGE_EXEC_SIG) <= n; i++) {
+            /* Maskierter Vergleich wie im .text-Scan (#251-Tip): die
+             * rel32-Operanden der beiden E8-CALLs sind Wildcards. */
+            if (!sig_matches(p + i, RBBRIDGE_EXEC_SIG,
+                             RBBRIDGE_EXEC_SIG_MASK,
+                             sizeof(RBBRIDGE_EXEC_SIG)))
+                continue;
+            const unsigned char *fn = p + i;
+            MEMORY_BASIC_INFORMATION fmi;
+            if (!VirtualQuery((const void *)fn, &fmi, sizeof(fmi)))
+                continue;
+            if (fmi.Type != MEM_IMAGE)
+                continue;
+            const unsigned char *b = (const unsigned char *)fmi.AllocationBase;
+            if (b == own) /* unser eigenes Image -> kein Kandidat */
+                continue;
+            if (!pe_image_size(b, out_size))
+                continue;
+            /* Nur akzeptieren, wenn sich im Kandidatenmodul die
+             * ConsoleService-vftable wirklich aufloesen laesst. Das ver-
+             * wirft unser eigenes Image bzw. weitere rbbridge-Kopien, die
+             * RBBRIDGE_EXEC_SIG/RTTI nur als Konstanten mitbringen. */
+            if (!resolve_console_vftable(b, *out_size))
+                continue;
+            *out_base = b;
+            *out_execfn = fn;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * e) Letzter Versuch: LoadLibraryA - das geladene Handle dient NUR als
+ * Modulbasis. (Wine kann hier das bereits geladene Modul zurueckgeben;
+ * andernfalls liefert der anschliessende Instanz-Scan keinen Treffer und
+ * dispatch_exec faellt weiterhin graceful zurueck, KEIN Aufruf.)
+ */
+static int module_via_loadlibrary(const unsigned char **out_base,
+                                  size_t *out_size)
+{
+    HMODULE h = LoadLibraryA(RBBRIDGE_MODULE_NAME);
+    if (!h || !pe_image_size((const unsigned char *)h, out_size))
+        return 0;
+    *out_base = (const unsigned char *)h;
+    return 1;
+}
+
+/*
+ * Modulbasis + SizeOfImage von riftbreaker_dll_win_release.dll, Wine-robust.
+ * Setzt *out_via auf die erfolgreiche Stufe (fuer das dbg()-Log) und
+ * *out_execfn auf eine per Adressraum-Scan gefundene ExecuteCommand-Adresse
+ * (oder NULL). Rueckgabe 1 = ok (base/size gesetzt), 0 = nirgends gefunden.
+ */
+static int resolve_module(const unsigned char **out_base, size_t *out_size,
+                          const char **out_via,
+                          const unsigned char **out_execfn)
+{
+    const unsigned char *base = NULL;
+    size_t size = 0;
+
+    *out_via = "none";
+    *out_execfn = NULL;
+
+    if (module_via_getmodulehandle(&base, &size)) {
+        *out_via = "getmodulehandle";
+    } else if (module_via_enum(&base, &size)) {
+        *out_via = "enum";
+    } else if (module_via_toolhelp(&base, &size)) {
+        *out_via = "toolhelp";
+    } else if (module_via_sigbase(&base, &size, out_execfn)) {
+        *out_via = "sigbase";
+    } else if (module_via_loadlibrary(&base, &size)) {
+        *out_via = "loadlibrary";
+    } else {
+        dbg("module_range: '%s' nicht aufloesbar (GetModuleHandle A/W, "
+            "EnumProcessModules, Toolhelp32, Adressraum-Signatur, "
+            "LoadLibraryA alle fehlgeschlagen)",
+            RBBRIDGE_MODULE_NAME);
         return 0;
     }
+
+    dbg("module_range: via=%s base=%p size=%lu execfn=%p", *out_via,
+        (void *)base, (unsigned long)size, (void *)*out_execfn);
     *out_base = base;
-    *out_size = (size_t)nt->OptionalHeader.SizeOfImage;
+    *out_size = size;
     return 1;
 }
 
@@ -911,22 +1253,32 @@ static int resolve_console_service(console_exec_fn *out_fn, void **out_inst)
 
     const unsigned char *base = NULL;
     size_t size = 0;
-    if (!module_range(&base, &size))
+    const char *via = NULL;
+    const unsigned char *execfn = NULL;
+
+    if (!resolve_module(&base, &size, &via, &execfn))
         return 0;
 
-    const unsigned char *text = NULL;
-    size_t text_len = 0;
-    if (!text_range(base, &text, &text_len)) {
-        dbg("resolve_console_service: .text-Section nicht gefunden");
-        return 0;
-    }
-
-    const unsigned char *execfn = scan_bytes_mask(text, text_len,
-                                                  RBBRIDGE_EXEC_SIG,
-                                                  RBBRIDGE_EXEC_SIG_MASK,
-                                                  sizeof(RBBRIDGE_EXEC_SIG));
     if (!execfn) {
-        dbg("resolve_console_service: ExecuteCommand-Signatur nicht gefunden");
+        /* AOB bleibt Pflicht: bevorzugt im .text, sonst im gesamten Abbild.
+         * Maskierter Scan (#251-Tip): die rel32-Operanden der beiden E8-CALLs
+         * sind Wildcards (RBBRIDGE_EXEC_SIG_MASK), nur die E8-Opcodes sind
+         * fest - so haengt die Signatur nicht an konkreten Call-Zielen. */
+        const unsigned char *text = NULL;
+        size_t text_len = 0;
+        if (text_range(base, &text, &text_len))
+            execfn = scan_bytes_mask(text, text_len, RBBRIDGE_EXEC_SIG,
+                                     RBBRIDGE_EXEC_SIG_MASK,
+                                     sizeof(RBBRIDGE_EXEC_SIG));
+        if (!execfn)
+            execfn = scan_bytes_mask(base, size, RBBRIDGE_EXEC_SIG,
+                                     RBBRIDGE_EXEC_SIG_MASK,
+                                     sizeof(RBBRIDGE_EXEC_SIG));
+    }
+    if (!execfn) {
+        dbg("resolve_console_service: ExecuteCommand-Signatur nicht gefunden "
+            "(base=%p size=%lu via=%s)", (void *)base,
+            (unsigned long)size, via);
         return 0;
     }
 
