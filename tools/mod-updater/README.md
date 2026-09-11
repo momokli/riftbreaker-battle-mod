@@ -13,9 +13,9 @@ Mod-Manager-Framework (Nicht-Ziel aus #120).
 1. **Findet** den Mods-Ordner: `--mods-dir` → `RBM_MODS_DIR` → automatische
    Steam-Erkennung (Windows/macOS/Linux, inkl. zusätzlicher Bibliotheken aus
    `steamapps/libraryfolders.vdf`).
-2. **Holt** das aktuelle Mod-Zip: per Default
-   `releases/latest/download/rbbattle.zip`, alternativ `--url` oder ein lokales
-   `--zip` (z. B. schon heruntergeladene Datei).
+2. **Holt** das aktuelle Mod-Zip: per Default den deployten Stand
+   `https://rift.projectmellon.de/mods/rbbattle.zip`, alternativ `--url` oder ein
+   lokales `--zip` (z. B. schon heruntergeladene Datei).
 3. **Vergleicht** installierte vs. aktuelle Version — beide werden aus dem
    Mod-Manifest (`<GUID>.manifest`, Feld `version`) gelesen, der einzigen Quelle
    der Wahrheit (siehe `scripts/mod_version.sh`, Issue #119).

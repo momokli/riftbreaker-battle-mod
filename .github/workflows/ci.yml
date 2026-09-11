@@ -1,9 +1,13 @@
 name: CI
 
+# Tests + Build/Package. Läuft für alle Pull Requests und auf Push nach main.
+#
+# Tags (`v*`) sind reine Marker (Issue #209): dieser Workflow hat KEINEN
+# Tag-Trigger und legt KEINE GitHub-Releases mehr an. Der Download läuft über
+# den deployten Stand (https://rift.projectmellon.de/mods/rbbattle.zip).
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
 
 permissions:
@@ -93,33 +97,3 @@ jobs:
             dist/*.zip
             tools/mod-updater/mod_update.py
           if-no-files-found: error
-
-  release:
-    name: GitHub Release (Tags v*)
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - uses: actions/checkout@v4
-      # Der release-Job läuft bewusst auf GitHub-Hosted ubuntu-latest (ephemer,
-      # nicht planet) und braucht MinGW daher weiterhin per apt — das pre-baked
-      # planet-Setup greift hier nicht.
-      - name: MinGW-W64 installieren (Windows-x64 Cross-Compiler)
-        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
-      - name: Zips bauen (wie Job build)
-        run: bash scripts/package_bausteine.sh
-      - name: Release anlegen (falls Tag noch nicht existiert)
-        run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo "Release $GITHUB_REF_NAME existiert bereits — Zips + Mod-Updater nachladen."
-            gh release upload "$GITHUB_REF_NAME" \
-              dist/*.zip tools/mod-updater/mod_update.py --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" \
-              dist/*.zip tools/mod-updater/mod_update.py \
-              --title "$GITHUB_REF_NAME" --generate-notes
-          fi
