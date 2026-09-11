@@ -38,6 +38,7 @@
     mode: "0755"
   when:
     - not ansible_check_mode
+    - dedicated_server_image_pull.rc | default(1) != 0
     - dedicated_server_image_info.rc != 0
 
 - name: Build-Kontext synchronisieren (tools/dedicated-server, Fallback)
@@ -48,13 +49,15 @@
     directory_mode: "0755"
   when:
     - not ansible_check_mode
+    - dedicated_server_image_pull.rc | default(1) != 0
     - dedicated_server_image_info.rc != 0
 
-- name: Dedicated-Server-Image bauen (Fallback, nur bei fehlendem Tag)
+- name: Dedicated-Server-Image bauen (Fallback, nur bei fehlgeschlagenem Pull)
   command: >-
     docker build --tag {{ dedicated_server_image }} {{ dedicated_server_context_dir }}
   when:
     - not ansible_check_mode
+    - dedicated_server_image_pull.rc | default(1) != 0
     - dedicated_server_image_info.rc != 0
   register: dedicated_server_build
   changed_when: dedicated_server_build.rc == 0
