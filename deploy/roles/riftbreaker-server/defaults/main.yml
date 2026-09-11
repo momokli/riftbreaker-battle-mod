@@ -14,10 +14,14 @@ riftbreaker_compose_project: "{{ riftbreaker_deploy_dir | basename }}"
 # docs/ASSUMPTIONS.md). Jedes Argument wird UNVERÄNDERT (ohne
 # Shell-Interpretation) an `wine <exe>` gereicht. Das Passwort kommt aus dem
 # Vault (riftbreaker_server_password).
+#
+# Issue #239: `cli=1` (Console-Mode) ist ENTFERNT. Empirischer Beweis aus dem
+# Boot-Test: mit `cli=1` bindet DedicatedServer.exe keinen UDP-Port (hängt im
+# Console-Init auf stdin) — auch NICHT mit tty+stdin_open. `headless_mode=1`
+# + `app_mode=server` booten die Welt ohne Konsole (docs/ASSUMPTIONS.md Fakt 3).
 riftbreaker_server_command:
   - "{{ riftbreaker_server_exe }}"
   - "headless_mode=1"
-  - "cli=1"
   - "app_mode=server"
   - "campaign={{ riftbreaker_server_campaign }}"
   - "mission={{ riftbreaker_server_mission }}"

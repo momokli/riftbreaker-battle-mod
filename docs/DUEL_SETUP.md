@@ -37,7 +37,7 @@ identisch); der Mod **loggt** die aktiv wirksame Difficulty zur Verifikation
 
 ## Operator-Checkliste (beide Welten identisch!)
 
-1. **Dedicated Server je Welt** starten (headless: `headless_mode=1 cli=1`;
+1. **Dedicated Server je Welt** starten (headless: `headless_mode=1 app_mode=server` — ohne `cli=1`, Console-Init-Block s. Issue #239;
    DedicatedServer.exe lädt `riftbreaker_dll_win_release.dll`).
 2. **Gleiche Konfiguration** in beiden Servern (GUI „New game“ bzw.
    Server-Options/Config; eine **gemeinsame Config-Quelle** — z. B. dieselbe
