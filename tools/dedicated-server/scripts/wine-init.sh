@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # One-time Wine prefix setup (VC++ runtime, D3D compiler) for DedicatedServer.exe.
+#
+# Issue #241 — Root Cause: `wineboot --init` wurde via `xvfb-run` ausgeführt.
+# Das erzeugte einen XIO-Race (Xvfb stirbt, bevor der wineserver fertig ist)
+# -> `could not load kernel32.dll`, Prefix blieb leer. `wineboot --init` braucht
+# KEINEN X-Server -> jetzt ohne `xvfb-run` (Befund + schwaboy-Hinweis).
 set -euo pipefail
 
 WINE="${WINE:-/usr/local/bin/wine64}"
@@ -10,19 +15,30 @@ if [[ -f "${MARKER}" ]]; then
   exit 0
 fi
 
-echo "[wine-init] Preparing Wine prefix at ${WINEPREFIX}..."
-mkdir -p "${WINEPREFIX}"
-if [[ ! -f "${WINEPREFIX}/system.reg" ]]; then
-  xvfb-run -a "${WINE}" wineboot --init 2>/dev/null || true
-fi
-
-echo "[wine-init] Installing vcrun2022 and d3dcompiler_47 (may take a few minutes)..."
 export WINEDEBUG="${WINEDEBUG:--all}"
 export WINE="${WINE}"
 export WINEPREFIX="${WINEPREFIX}"
-if xvfb-run -a winetricks -q vcrun2022 d3dcompiler_47; then
+# wineboot/winetricks warnen ohne gültiges XDG_RUNTIME_DIR; privates setzen.
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/xdg-runtime}"
+mkdir -p "${XDG_RUNTIME_DIR}"
+chmod 700 "${XDG_RUNTIME_DIR}"
+
+echo "[wine-init] Preparing Wine prefix at ${WINEPREFIX}..."
+mkdir -p "${WINEPREFIX}"
+if [[ ! -f "${WINEPREFIX}/system.reg" ]]; then
+  "${WINE}" wineboot --init 2>/dev/null || true
+fi
+
+echo "[wine-init] Installing vcrun2022 and d3dcompiler_47 (may take a few minutes)..."
+# winetricks BRAUCHT einen Display (der vc_redist-Installer) -> xvfb-run bleibt.
+# Der Exit-Code ist unzuverlässig (vc_redist.x86.exe /q bricht mit 130 ab,
+# obwohl die DLLs per cabextract bereits extrahiert wurden) -> Artefakt-Check.
+xvfb-run -a winetricks -q vcrun2022 d3dcompiler_47 || true
+
+if [[ -f "${WINEPREFIX}/drive_c/windows/system32/vcruntime140.dll" \
+   && -f "${WINEPREFIX}/drive_c/windows/system32/d3dcompiler_47.dll" ]]; then
   touch "${MARKER}"
   echo "[wine-init] Done."
 else
-  echo "[wine-init] WARNING: winetricks failed; server may not start. Reset wine-data volume and retry." >&2
+  echo "[wine-init] WARNING: vcrun2022/d3dcompiler_47-DLLs fehlen; Server startet evtl. nicht. Wine-Volume zurücksetzen und erneut versuchen." >&2
 fi

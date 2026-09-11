@@ -51,6 +51,13 @@ RUN sed -i 's/\r$//' /scripts/*.sh \
     && curl -fsSL -o /usr/local/bin/winetricks https://raw.githubusercontent.com/Winetricks/winetricks/master/src/winetricks \
     && chmod +x /usr/local/bin/winetricks
 
+# Issue #241: Wine-Prefix schon beim Build initialisieren und in das Image
+# baken. Docker kopiert Image-Inhalt in ein LEERES Named Volume beim ersten
+# Mount — ein frisches rb-wine-Volume erbt also den fertigen Prefix (kein
+# Laufzeit-Init, kein Seeding nötig). wineboot braucht kein X; winetricks schon
+# (xvfb-run). Die Laufzeit-Selbstheilung in wine-init.sh bleibt als Fallback.
+RUN /scripts/wine-init.sh
+
 WORKDIR /home/${STEAM_USER}
 
 EXPOSE 6321/tcp 6321/udp
