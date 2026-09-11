@@ -15,7 +15,7 @@ if [[ -f "${MARKER}" ]]; then
   exit 0
 fi
 
-export WINEDEBUG="${WINEDEBUG:--all}"
+export WINEDEBUG="-all"
 export WINE="${WINE}"
 export WINEPREFIX="${WINEPREFIX}"
 
