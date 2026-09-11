@@ -360,7 +360,7 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 | `game-content` | steamcmd/sync | Dedicated-Server-Content (App 4114030) nach `riftbreaker_game_dir` (idempotent, fail loud) |
 | `riftbreaker-server` | docker | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation |
 | `vanilla-server` | docker | Vanilla 6322, kein Mod, gleiches Image |
-| `tournament-server` | systemd | Rust/axum Referee + Web-UI (Binary aus `tournament/`) |
+| `tournament-server` | systemd | Rust/axum Referee + Web-UI. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt) |
 | `website` | statics + Caddy | `site/*` → Docroot, Caddy-Snippet + `/tournament/*`-Proxy |
 | `mods-zip` | — | Paketierung + md5-Paritäts-Check (hart) |
 | `probe-timer` | systemd | `probe_servers.sh` alle 2 Min → `status.json` |

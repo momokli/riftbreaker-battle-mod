@@ -1,9 +1,64 @@
 ---
 # Rolle: tournament-server — systemd-Unit (Rust/axum aus tournament/).
-# Binary + Web-UI kommen aus dem Repo; fehlt das Binary, bricht der Lauf mit
-# klarer Build-Anweisung ab (kein implizites Bauen auf prod).
+#
+# Binary-Quelle: wird auf dem Control-Node (planet) aus dem Repo-Checkout
+# gebaut. Die Rolle stellt die Rust-Toolchain (rustup) idempotent bereit und
+# baut `cargo build --release` selbst — kein implizites Fremd-Bauen, kein
+# CI-Artefakt-Pull. Die Web-UI kommt direkt aus dem Repo-Checkout.
 
-- name: Binärquelle (Control-Node) prüfen
+- name: Cargo-Home anlegen
+  file:
+    path: "{{ cargo_home }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+  become: false
+
+- name: Rust-Toolchain prüfen (cargo auf dem Control-Node)
+  command: "{{ cargo_bin }} --version"
+  delegate_to: localhost
+  become: false
+  environment:
+    RUSTUP_HOME: "{{ rustup_home }}"
+    CARGO_HOME: "{{ cargo_home }}"
+  register: cargo_version
+  changed_when: false
+  failed_when: false
+
+- name: rustup-init herunterladen (nur wenn cargo fehlt)
+  get_url:
+    url: "{{ rustup_init_url }}"
+    dest: "{{ cargo_home }}/rustup-init.sh"
+    mode: "0755"
+    force: true
+  delegate_to: localhost
+  become: false
+  when: cargo_version.rc != 0
+
+- name: Rust-Toolchain installieren (rustup, idempotent)
+  command: >-
+    {{ cargo_home }}/rustup-init.sh -y --default-toolchain stable
+    --profile minimal --no-modify-path
+  delegate_to: localhost
+  become: false
+  environment:
+    RUSTUP_HOME: "{{ rustup_home }}"
+    CARGO_HOME: "{{ cargo_home }}"
+  when: cargo_version.rc != 0
+
+- name: tournament-server bauen (cargo build --release)
+  command: "{{ cargo_bin }} build --release"
+  args:
+    chdir: "{{ playbook_dir }}/../tournament"
+  delegate_to: localhost
+  become: false
+  environment:
+    RUSTUP_HOME: "{{ rustup_home }}"
+    CARGO_HOME: "{{ cargo_home }}"
+  register: tourney_build
+  changed_when: "'Compiling' in (tourney_build.stdout ~ tourney_build.stderr)"
+
+- name: Build-Ergebnis prüfen (Binary muss existieren)
   stat:
     path: "{{ tournament_binary_src }}"
   delegate_to: localhost
@@ -13,9 +68,8 @@
 - name: Build-Anforderung bei fehlendem Binary
   fail:
     msg: >-
-      tournament-server Binary fehlt unter {{ tournament_binary_src }}.
-      Zuerst bauen: 'cd tournament && cargo build --release'
-      (oder CI-Artefakt dorthin ablegen).
+      tournament-server Build fehlgeschlagen oder Binary fehlt unter
+      {{ tournament_binary_src }}. Build-Log oben prüfen.
   when: not tourney_bin_src.stat.exists
 
 - name: Installationsverzeichnis anlegen
