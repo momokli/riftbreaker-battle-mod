@@ -110,6 +110,24 @@ h1 .dim{color:var(--acc);text-shadow:0 0 42px rgba(63,208,212,.5)}
 .ls-line .sub{color:var(--dim);margin-left:8px}
 .ls-link{margin-left:auto;font-size:11.5px;letter-spacing:.06em;border:0;white-space:nowrap;color:var(--acc)}
 .ls-link:hover{color:var(--bright)}
+/* ---------- Ranglisten-Widget (Issue #132) ---------- */
+.lb{
+  margin-top:8px;border:1px solid var(--line2);background:rgba(63,208,212,.03);
+  clip-path:polygon(0 0,calc(100% - 12px) 0,100% 12px,100% 100%,12px 100%,0 calc(100% - 12px));
+  padding:14px 16px;
+}
+.lb-status{color:var(--dim);font-size:13px}
+.lb-table{width:100%;border-collapse:collapse;font-size:13.5px}
+.lb-table th{
+  text-align:left;color:var(--dim);font-weight:400;font-size:11px;
+  letter-spacing:.14em;text-transform:uppercase;padding:6px 10px;border-bottom:1px solid var(--line2);
+}
+.lb-table td{padding:8px 10px;border-bottom:1px solid var(--line)}
+.lb-table tr:last-child td{border-bottom:0}
+.lb-table th.num,.lb-table td.num{text-align:right}
+.lb-table td.lb-rank{color:var(--dim);width:4ch}
+.lb-table td.lb-name{color:var(--bright)}
+.lb-table td.lb-elo{color:var(--acc);font-weight:700}
 .lead{max-width:66ch;margin:18px 0 0}
 .lead .acc{font-weight:700}
 .cta{display:flex;flex-wrap:wrap;gap:14px;margin:34px 0 30px}
@@ -282,6 +300,7 @@ footer{padding:46px 0 64px;border-top:1px solid var(--line);font-size:12.5px;col
       <a href="#demo"><span class="n">02</span>match-ablauf</a>
       <a href="#poker"><span class="n">03</span>poker-core</a>
       <a href="#download"><span class="n">04</span>download</a>
+      <a href="#ranking"><span class="n">05</span>rangliste</a>
     </nav>
     <a class="gh-link" href="https://github.com/momokli/riftbreaker-battle-mod" target="_blank" rel="noopener">github ↗</a>
   </div>
@@ -466,6 +485,31 @@ footer{padding:46px 0 64px;border-top:1px solid var(--line);font-size:12.5px;col
           <a class="btn" href="https://rift.projectmellon.de/mods/rbbattle.zip">⬇ download<span class="arr">▼</span></a>
         </div>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= RANGLISTE ================= -->
+<section id="ranking" class="alt" aria-labelledby="rankTitle">
+  <div class="container">
+    <div class="sechead">
+      <span class="sechash">[ §05 ]</span>
+      <h2 id="rankTitle">Rangliste</h2>
+      <span class="sectag" hidden>elo</span>
+    </div>
+    <p class="secintro">
+      Das <span class="acc">ELO-Rangsystem</span> (#128): Spieler nach Rating sortiert, inklusive Bilanz
+      (wins/losses/draws). Die Tabelle aktualisiert sich live aus der Tournament-API —
+      solange noch keine Profile gespeichert sind, bleibt sie leer.
+    </p>
+    <div class="lb" id="leaderboard" role="status" aria-live="polite">
+      <div class="lb-status" id="lbStatus">rangliste wird geladen …</div>
+      <table class="lb-table" id="lbTable" hidden>
+        <thead>
+          <tr><th>#</th><th>spieler</th><th class="num">elo</th><th class="num">w</th><th class="num">l</th><th class="num">d</th></tr>
+        </thead>
+        <tbody id="lbBody"></tbody>
+      </table>
     </div>
   </div>
 </section>
@@ -659,6 +703,49 @@ footer{padding:46px 0 64px;border-top:1px solid var(--line);font-size:12.5px;col
   }
 
   RBTournamentStatus.createWidget({ apiBase: base, render: renderStatus }).start();
+})();
+</script>
+<script src="leaderboard.js"></script>
+<script>
+(function () {
+  "use strict";
+  var status = document.getElementById("lbStatus");
+  var table = document.getElementById("lbTable");
+  var body = document.getElementById("lbBody");
+  if (!body || !window.RBLeaderboard) return;
+
+  var base = RBLeaderboard.resolveApiBase(document);
+
+  function cell(text, cls) {
+    var td = document.createElement("td");
+    td.textContent = String(text);
+    if (cls) td.className = cls;
+    return td;
+  }
+
+  function renderRow(r) {
+    var tr = document.createElement("tr");
+    tr.appendChild(cell(r.rank, "lb-rank"));
+    tr.appendChild(cell(r.name, "lb-name"));
+    tr.appendChild(cell(r.elo, "lb-elo num"));
+    tr.appendChild(cell(r.wins, "num"));
+    tr.appendChild(cell(r.losses, "num"));
+    tr.appendChild(cell(r.draws, "num"));
+    return tr;
+  }
+
+  function render(res) {
+    var hasRows = res.ok && res.count > 0;
+    if (status) {
+      status.textContent = hasRows ? "" : res.line;
+      status.hidden = hasRows;
+    }
+    if (table) table.hidden = !hasRows;
+    body.textContent = "";
+    res.rows.forEach(function (r) { body.appendChild(renderRow(r)); });
+  }
+
+  RBLeaderboard.createLeaderboardWidget({ apiBase: base, render: render }).start();
 })();
 </script>
 </body>
