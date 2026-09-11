@@ -6,6 +6,15 @@ services:
     container_name: {{ riftbreaker_server_container }}
     restart: unless-stopped
     init: true
+{# Issue #239: DedicatedServer.exe startet mit cli=1 (Console-Mode) und
+   blockiert im Console-Init auf stdin (wchan=pipe_read). Ohne pty/offenes
+   stdin erreicht er den "Welt booten + UDP binden"-Schritt NIE — der Server
+   ist dann nicht joinable (kein Listener auf 6321). tty + stdin_open geben
+   dem Prozess eine echte Konsole, damit die Welt bootet und bind() laeuft.
+   Es wird NICHTS nach stdin geschrieben: die Optionen dienen ausschliesslich
+   dem Console-Init (stdin nimmt keine Eingabe an). #}
+    tty: true
+    stdin_open: true
     shm_size: "1gb"
     ports:
       - "{{ riftbreaker_server_port_udp }}:{{ riftbreaker_server_port_udp }}/udp"
