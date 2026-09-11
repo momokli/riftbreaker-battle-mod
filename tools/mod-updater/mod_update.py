@@ -4,9 +4,9 @@
 mod_update.py — lokale RBBattle-Mod-Installation installieren/aktualisieren (#120).
 
 Dev-/Tester-Werkzeug: findet die lokale Riftbreaker-Mod-Installation, holt das
-aktuelle Mod-Zip (GitHub-Release `rbbattle.zip` oder `--zip`/`--url`), legt
-optional ein Backup der alten Version an, ersetzt die Mod-Dateien und zeigt
-installierte vs. aktuelle Version.
+aktuelle Mod-Zip (deployter Stand oder `--zip`/`--url`), legt optional ein Backup
+der alten Version an, ersetzt die Mod-Dateien und zeigt installierte vs.
+aktuelle Version.
 
 Nicht-Ziel (siehe #120): kein Auto-Update im Spiel, kein Mod-Manager-Framework.
 
@@ -39,9 +39,9 @@ from pathlib import Path
 
 MOD_NAME = "rbbattle"
 GAME_DIR_NAMES = ("Riftbreaker", "The Riftbreaker")
-DEFAULT_RELEASE_URL = (
-    "https://github.com/momokli/riftbreaker-battle-mod/releases/latest/download/rbbattle.zip"
-)
+# Default-Download: der deployte Stand (Caddy, Issue #209). GitHub-Releases
+# sind reine Tags-Marker ohne Artefakte; `--url` bleibt der Override.
+DEFAULT_RELEASE_URL = "https://rift.projectmellon.de/mods/rbbattle.zip"
 MANIFEST_VERSION_RE = re.compile(r'^\s*version\s+"([^"]+)"', re.MULTILINE)
 VDF_PATH_RE = re.compile(r'"path"\s*"([^"]+)"')
 LOG_PREFIX = "[mod_update]"

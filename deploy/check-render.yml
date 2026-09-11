@@ -1,0 +1,43 @@
+---
+# deploy-check (Issue #209): rendert die Compose-Templates LOKAL nach
+# RBBATTLE_RENDER_DIR — Grundlage für `docker compose config` im PR-Gate.
+#
+# Rein lokal, kein Host-Zugriff, kein Vault: die für das Rendern nötigen Werte
+# (Server-Passwort, Solo-Hash) kommen als Dummy aus dem Play (kein Secret, nie
+# produktiv genutzt) — das verschlüsselte vault.yml wird nie entschlüsselt.
+- name: RIFT BATTLE — Compose-Render (deploy-check)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - inventory/host_vars/planet/vars.yml
+    # Rollen-Defaults liefern die Compose-Command-Listen (keine Host-Vars).
+    - roles/riftbreaker-server/defaults/main.yml
+    - roles/vanilla-server/defaults/main.yml
+
+  vars:
+    # Dummy-Werte nur fürs Rendern (kein Secret).
+    deploy_image_tag: check
+    riftbreaker_server_password: check-dummy
+    vault_solo_basic_auth_hash: ""
+    render_dir: "{{ lookup('env', 'RBBATTLE_RENDER_DIR') | default('/tmp/rbbattle-compose-render', true) }}"
+
+  tasks:
+    - name: Render-Verzeichnis sicherstellen
+      file:
+        path: "{{ render_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: riftbreaker-server Compose rendern
+      template:
+        src: roles/riftbreaker-server/templates/docker-compose.yml.j2
+        dest: "{{ render_dir }}/riftbreaker-server.yml"
+        mode: "0600"
+
+    - name: vanilla-server Compose rendern
+      template:
+        src: roles/vanilla-server/templates/docker-compose.yml.j2
+        dest: "{{ render_dir }}/vanilla-server.yml"
+        mode: "0600"

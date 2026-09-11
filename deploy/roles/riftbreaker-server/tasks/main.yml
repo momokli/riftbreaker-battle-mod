@@ -1,7 +1,9 @@
 ---
 # Rolle: riftbreaker-server — Dev-SP-Server 6321 (1v1 "vs sich selbst"),
-# docker/wine. Voraussetzung: mods-zip hat rbbattle.zip nach
-# {{ mods_zip_dest }} gepackt (md5-Parität bereits geprüft).
+# docker/wine. Voraussetzungen: mods-zip hat rbbattle.zip nach
+# {{ mods_zip_dest }} gepackt (md5-Parität bereits geprüft), game-content hat
+# den Steam-Content nach {{ riftbreaker_game_dir }} gelegt und
+# headless-client-image hat das Laufzeit-Image (Tag = Deploy-SHA) gebaut.
 
 - name: Game-Verzeichnis sicherstellen
   file:
@@ -14,6 +16,50 @@
     path: "{{ riftbreaker_deploy_dir }}"
     state: directory
     mode: "0755"
+
+# Fehlerklasse „Container-Name belegt" (Issue #209): ein fremder Container mit
+# unserem Namen (z. B. ein alter Community-Stack) lässt `docker compose up -d`
+# mit Namenskonflikt scheitern. Docker liefert das Compose-Projekt-Label; den
+# Namen darf nur unser eigenes Projekt tragen. Läuft auch im --check.
+- name: Bestehenden Container mit unserem Namen prüfen (Fremd-Belegung?)
+  # `docker container inspect` (nicht `docker inspect`): nur Container, sonst
+  # matcht Docker auch ein gleichnamiges Image (z. B. der alte Community-Stack
+  # `riftbreaker-dedicated:latest`).
+  command: >-
+    docker container inspect --format '{% raw %}{{ index .Config.Labels "com.docker.compose.project" }}{% endraw %}'
+    {{ riftbreaker_server_container }}
+  register: rbbattle_container_owner
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Container-Name gehört uns (oder ist frei)
+  # Im echten Deploy ein Hard-Fail (der Deploy würde hier scheitern).
+  assert:
+    that:
+      - "(rbbattle_container_owner.rc != 0) or ((rbbattle_container_owner.stdout | trim) in ['', riftbreaker_compose_project])"
+    fail_msg: >-
+      Container-Name '{{ riftbreaker_server_container }}' ist von einem fremden
+      Projekt belegt (Label com.docker.compose.project='{{ rbbattle_container_owner.stdout | trim }}').
+      Vor dem Deploy entfernen (docker rm -f {{ riftbreaker_server_container }}),
+      sonst scheitert `docker compose up -d` am Namenskonflikt.
+  when: not ansible_check_mode
+
+# Im PR-Gate (--check) nur sichtbar warnen, nicht rot: eine fremd belegte
+# Container-Name ist Host-Zustand (z. B. ein parallel laufender Deploy), kein
+# PR-Fehler — der Required-Check muss davon unabhängig stabil bleiben. Der
+# echte Deploy bricht unverändert hart ab (Task oben).
+- name: "WARNUNG: fremd belegter Container-Name (nur im --check)"
+  debug:
+    msg: >-
+      WARNUNG: Container-Name '{{ riftbreaker_server_container }}' ist von einem
+      fremden Projekt belegt (Label com.docker.compose.project='{{ rbbattle_container_owner.stdout | trim }}').
+      Ein echter Deploy würde hier scheitern — vor dem Deploy aufräumen
+      (docker rm -f {{ riftbreaker_server_container }}).
+  when:
+    - ansible_check_mode
+    - rbbattle_container_owner.rc == 0
+    - (rbbattle_container_owner.stdout | trim) not in ['', riftbreaker_compose_project]
 
 - name: docker-compose.yml rendern
   template:
@@ -51,16 +97,17 @@
         src: "{{ mods_zip_dest }}"
         dest: "{{ riftbreaker_mod_dir }}"
         remote_src: true
+    # Der Marker ist die Änderungs-Erkennung; sein Schreiben notifyt den
+    # Restart-Handler (Mod-Änderung -> Container wirklich neu starten).
     - name: Deploy-Marker schreiben
       copy:
         content: "{{ rbbattle_zip_stat.stat.checksum }}"
         dest: "{{ riftbreaker_deploy_dir }}/rbbattle.md5"
         mode: "0644"
+      notify: restart riftbreaker-server
 
 - name: Container sicherstellen (docker compose up -d, idempotent)
-  command:
-    cmd: docker compose up -d --remove-orphans
-    chdir: "{{ riftbreaker_deploy_dir }}"
+  command: docker compose -f {{ riftbreaker_deploy_dir }}/docker-compose.yml up -d --remove-orphans
   register: riftbreaker_up
   changed_when: >-
     ('Recreated' in riftbreaker_up.stdout)

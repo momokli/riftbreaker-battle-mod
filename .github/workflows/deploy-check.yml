@@ -1,33 +1,29 @@
 name: Deploy Check
 
-# Merge-Gate: prüft vor dem Merge, ob das Ansible-Deployment unter deploy/
-# noch syntaktisch/strukturell intakt ist — damit kein PR durchrutscht, der
-# den echten Deploy (deploy/site.yml, 6 Rollen) zerlegt.
+# Merge-Gate, das den Deploy wirklich vorhersagt (Issue #209). Läuft auf dem
+# self-hosted Runner auf planet und prüft gegen den echten Host:
+#   1. yamllint über deploy/
+#   2. `ansible-playbook --check --diff` gegen planet für den Container-Stack
+#      (headless-client-image + riftbreaker-server + vanilla-server) und die
+#      Website-Rolle — read-only, Vault wird NIE entschlüsselt.
+#   3. jedes gerenderte Compose-File durch `docker compose config`.
+# Ziel: die Fehlerklasse „Image fehlt / Container-Name belegt / Pfad falsch"
+# wird im PR sichtbar, nicht erst nach dem Merge.
 #
-# Geprüft wird:
-#   1. yamllint über deploy/ (YAML-Syntax + Struktur, inkl. Inventar/Vars).
-#   2. ansible-playbook --syntax-check über alle Playbooks unter deploy/.
+# Nur für PRs aus DIESEM Repo (keine Forks): der Lauf führt PR-Code auf planet
+# aus. Fork-PRs überspringen die Schritte (der Job bleibt grün, damit der
+# Required-Check „deploy-check" nicht als pending hängt).
 #
-# Bewusst NICHT enthalten:
-#   - Kein echter --check-Dry-Run: der Deploy braucht das Vault-Passwort
-#     (Server-Passwort). Es liegt KEIN Secret im Workflow, und Vault-Dateien
-#     werden NIE entschlüsselt. Der echte Dry-Run bleibt manuell:
-#       ansible-playbook -i deploy/inventory deploy/site.yml --check --ask-vault-pass
-#   - Kein ansible-lint: würde über die bestehenden Rollen hinaus Stil-Regeln
-#     erzwingen; yamllint + --syntax-check sind die harten Gates.
-#
-# Inventar: für --syntax-check wird ein hermetisches localhost-Inventar
-# benutzt (-i 'localhost,'), damit der Gate unabhängig von Vault-Passwort und
-# SSH-Erreichbarkeit läuft. --syntax-check löst keine Variablen auf und
-# verbindet sich mit keinem Host, braucht also keine echten Hosts; das echte
-# Inventar wird weiterhin strukturell per yamllint validiert.
+# Voraussetzung (host-seitig, einmalig; siehe deploy/README.md):
+#   * Runner-User `runner` hat SSH-Zugriff als root auf planet (Alias `planet`).
+# Das Vault bleibt root-only und wird hier nicht gelesen — für den Check wird
+# ein Dummy-Vault in ein temporäres Inventar kopiert.
 
-# WICHTIG: Der PR-Trigger hat bewusst KEINEN paths-Filter.
-# `deploy-check` ist ein Required Status Check auf main; ein pfad-gefilterter
-# Workflow, der auf einem PR gar nicht startet, hinterlaesst den Check dauerhaft
-# als "Expected" und blockiert damit JEDEN PR, der deploy/ nicht anfasst.
-# Der Job laeuft daher auf allen PRs (kostet ~1 min) und ist bei PRs ohne
-# deploy/-Bezug trivial gruen. Nur der push-Trigger bleibt pfad-gefiltert.
+# WICHTIG: Der PR-Trigger hat bewusst KEINEN paths-Filter — `deploy-check` ist
+# ein Required Status Check auf main; ein pfad-gefilterter Workflow, der auf
+# einem PR gar nicht startet, hinterlässt den Check dauerhaft als „Expected".
+# Der Job läuft daher auf allen PRs (bei PRs ohne deploy/-Bezug trivial grün).
+# Nur der push-Trigger bleibt pfad-gefiltert.
 on:
   pull_request:
   push:
@@ -45,37 +41,82 @@ jobs:
   deploy-check:
     # Dieser Job-Name IST der Required-Check-Context in der Branch Protection.
     name: deploy-check
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, planet]
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: ansible-core + yamllint installieren (gepinnt)
-        # ansible-core >= 2.19 laut deploy/README.md; yamllint 1.35.1 gepinnt
-        # für reproduzierbare Läufe.
-        run: |
-          python3 -m pip install --disable-pip-version-check \
-            "ansible-core==2.19.*" \
-            "yamllint==1.35.1"
-          ansible --version
-          yamllint --version
-
-      - name: YAML-Lint (deploy/)
-        run: yamllint -c .yamllint deploy/
-
-      - name: Ansible Playbook-Syntax-Check (deploy/)
+      - name: Fork-PR erkennen (Gate nur für Repo-eigene PRs)
+        id: gate
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          playbooks=(deploy/*.yml)
-          if [ ${#playbooks[@]} -eq 0 ]; then
-            echo "::error::Keine Playbooks unter deploy/*.yml gefunden."
+          if [ "${{ github.event_name }}" = "pull_request" ] \
+             && [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+            echo "Fork-PR — deploy-check wird übersprungen (nur Repo-eigene PRs)."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.skip != 'true'
+
+      - name: Tooling bereitstellen (ansible-core + yamllint)
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          VENV="$HOME/.local/ansible-deploy-check"
+          if [ ! -x "$VENV/bin/ansible-playbook" ]; then
+            python3 -m venv "$VENV"
+            "$VENV/bin/pip" install --disable-pip-version-check \
+              "ansible-core==2.19.*" "yamllint==1.35.1"
+          fi
+          echo "$VENV/bin" >> "$GITHUB_PATH"
+          "$VENV/bin/ansible" --version
+          "$VENV/bin/yamllint" --version
+
+      - name: SSH-Voraussetzung prüfen (runner -> root@planet)
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          if ! ssh -o BatchMode=yes -o ConnectTimeout=10 planet 'id -u' >/dev/null 2>&1; then
+            echo "::error::deploy-check braucht SSH-Zugriff runner@planet -> root@planet (Alias planet). Einrichtung: deploy/README.md, Abschnitt deploy-check (PR-Gate)."
             exit 1
           fi
-          for pb in "${playbooks[@]}"; do
-            echo "== ansible-playbook --syntax-check ${pb} =="
-            ansible-playbook --syntax-check -i 'localhost,' "${pb}"
+
+      - name: YAML-Lint (deploy/)
+        if: steps.gate.outputs.skip != 'true'
+        run: yamllint -c .yamllint deploy/
+
+      - name: Compose-Templates rendern + `docker compose config`
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          RENDER_DIR="$(mktemp -d)"
+          RBBATTLE_RENDER_DIR="$RENDER_DIR" ansible-playbook deploy/check-render.yml
+          shopt -s nullglob
+          files=("$RENDER_DIR"/*.yml)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::Keine gerenderten Compose-Dateien gefunden."
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            echo "== docker compose config $(basename "$f") =="
+            docker compose -f "$f" config >/dev/null
           done
+
+      - name: Ansible --check --diff gegen planet (read-only, kein Vault)
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          # Vault wird NIE entschlüsselt: ein Dummy-Vault in ein temporäres
+          # Inventar kopieren (kein Secret; das echte vault.yml wird nicht
+          # gelesen). Der Lauf ist --check (Host wird nie verändert).
+          INV="$(mktemp -d)/inventory"
+          cp -r deploy/inventory "$INV"
+          cat > "$INV/host_vars/planet/vault.yml" <<'EOF'
+          ---
+          riftbreaker_server_password: check-dummy
+          vault_solo_basic_auth_hash: ""
+          EOF
+          # --tags server,website: der Container-Stack + Website. Content-/
+          # Tournament-Rollen brauchen Build-Artefakte (dist/, Rust-Binary) und
+          # sind hier bewusst ausgenommen.
+          ansible-playbook -i "$INV" deploy/site.yml \
+            --check --diff --tags server,website

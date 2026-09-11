@@ -73,8 +73,53 @@ Ist der Hash leer/nicht gesetzt, bleibt `/solo` bewusst **ungeschützt**
 ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
 ```
 
-Reihenfolge der Rollen (site.yml): `mods-zip` → `riftbreaker-server` →
-`vanilla-server` → `tournament-server` → `website` → `probe-timer`.
+Reihenfolge der Rollen (site.yml): `mods-zip` → `headless-client-image` →
+`game-content` → `riftbreaker-server` → `vanilla-server` → `tournament-server` →
+`website` → `probe-timer`.
+
+### From-zero (ein Kommando, Issue #209)
+
+`deploy/` ist die **einzige Quelle der Wahrheit**: Auf einem frischen Host
+reicht ein Lauf — es gibt keine manuellen „einmalig auf planet"-Schritte.
+
+```bash
+# 1) Vault-Passwort bereitstellen (siehe „Vault"; root-only auf dem Zielhost).
+# 2) Ein Kommando:
+ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
+```
+
+Was das Playbook selbst besitzt:
+
+- **Laufzeit-Image** (`headless-client-image`): baut
+  `rb-headless-client:<deploy-sha>` auf dem Zielhost aus
+  `tools/headless-client` (Wine + Xvfb + Mesa-llvmpipe). Der Tag ist der
+  Deploy-SHA der ausgecheckten Revision; das gerenderte `docker-compose.yml`
+  referenziert **exakt** diesen Tag (kein `latest`). Der Tag im Namen macht den
+  Lauf trivially idempotent: unveränderter Stand → Image existiert → kein Build;
+  geänderter Stand → Docker-Layer-Cache, billig. Vor dem Containerstart prüft
+  die Rolle hart, dass das Image existiert.
+- **Spiel-Content** (`game-content`): provisioniert Steam-App `4114030`
+  deklarativ nach `riftbreaker_game_dir` (SteamCMD anonym,
+  `+app_update 4114030 validate`). Idempotent (No-Op, wenn das Server-Binary da
+  ist) und konvergent nach `rm -rf` des Game-Dirs. **Fail loud**: schlägt
+  SteamCMD fehl oder fehlt das Binary danach, bricht der Deploy ab — nie ein
+  stiller Deploy ohne Spieldateien.
+  - Fallback (falls SteamCMD anonym nicht zuverlässig ist): idempotenter Sync
+    aus einem kanonischen Cache —
+    `-e riftbreaker_content_mode=sync -e riftbreaker_content_cache_dir=/srv/riftbreaker/data/server`
+    (setzt einen vollständigen Steam-Stand im Cache voraus).
+  - Patch erzwingen: `-e riftbreaker_content_force=true`.
+- **Mod-Auslieferung** (`riftbreaker-server`): Mod-Install nur bei geändertem
+  md5-Marker; der Marker-Schreibvorgang **notifyt einen Restart-Handler**
+  (`docker compose up -d --force-recreate`). Ohne den bliebe ein reines
+  Mod-Update wirkungslos (Compose startet einen unveränderten Container nicht
+  neu) — Ziel: „Merge → Mod ist auf :6321 wirklich geladen".
+
+### Vault
+
+Wie bisher: Server-Passwort nur in `deploy/inventory/host_vars/planet/vault.yml`
+(`ansible-vault`), Passwort-Referenz via `--ask-vault-pass` bzw. beim CD root-only
+unter `/etc/rbbattle-deploy/vault.pass`. **Nie** im Repo/Log.
 
 ## Continuous Deploy (CD)
 
@@ -276,12 +321,45 @@ curl -sS http://127.0.0.1:6323/deploy/<job_id>/status \
 - [ ] GitHub: `DEPLOY_TOKEN` gesetzt, SSH-Secrets gelöscht
 - [ ] Erster Merge auf `main`: Deploy-Lauf grün
 
+## deploy-check (PR-Gate)
+
+[`.github/workflows/deploy-check.yml`](../.github/workflows/deploy-check.yml) ist
+der Required Check `deploy-check` und läuft auf dem planet-Runner. Er prüft
+read-only gegen planet: `yamllint` über `deploy/`, `docker compose config` für
+jede gerenderte Compose-Datei und `ansible-playbook --check --diff`
+(`--tags server,website`). Das **Vault wird nie entschlüsselt**: für den Lauf
+wird ein Dummy-Vault in ein temporäres Inventar kopiert. Nur PRs aus diesem
+Repo (keine Forks).
+
+Host-Voraussetzungen (einmalig, **nicht** im Repo — Secrets bleiben host-seitig):
+
+```bash
+# 1) Ansible + yamllint im Runner-Home (macht der Workflow selbst, idempotent).
+# 2) SSH-Brücke runner@planet -> root@planet über den Alias `planet`:
+sudo -u runner ssh-keygen -t ed25519 -N '' -f /home/runner/.ssh/id_rb_deploy
+sudo -u runner cat /home/runner/.ssh/id_rb_deploy.pub \
+  | sudo tee -a /root/.ssh/authorized_keys >/dev/null   # from="127.0.0.1" empfohlen
+# /home/runner/.ssh/config:
+#   Host planet
+#     HostName 127.0.0.1
+#     User root
+#     IdentityFile ~/.ssh/id_rb_deploy
+#     IdentitiesOnly yes
+sudo -u runner ssh planet id -u     # muss "0" liefern
+```
+
+Hinweis: Der Runner-User hat bereits (über die `docker`-Gruppe)
+root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
+`--check`.
+
 ## Rollen
 
 | Rolle | Typ | Was |
 |---|---|---|
-| `riftbreaker-server` | docker | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install |
-| `vanilla-server` | docker | Vanilla 6322, kein Mod |
+| `headless-client-image` | docker | baut `rb-headless-client:<deploy-sha>` auf planet (gemeinsame Laufzeit :6321/:6322) |
+| `game-content` | steamcmd/sync | Dedicated-Server-Content (App 4114030) nach `riftbreaker_game_dir` (idempotent, fail loud) |
+| `riftbreaker-server` | docker | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install + Restart-Handler |
+| `vanilla-server` | docker | Vanilla 6322, kein Mod, gleiches Image |
 | `tournament-server` | systemd | Rust/axum Referee + Web-UI (Binary aus `tournament/`) |
 | `website` | statics + Caddy | `site/*` → Docroot, Caddy-Snippet + `/tournament/*`-Proxy |
 | `mods-zip` | — | Paketierung + md5-Paritäts-Check (hart) |
@@ -291,7 +369,8 @@ curl -sS http://127.0.0.1:6323/deploy/<job_id>/status \
 
 ```text
 deploy/
-├── site.yml                       # Haupt-Playbook (Rollenreihenfolge)
+├── site.yml                       # Haupt-Playbook (pre_tasks + Rollenreihenfolge)
+├── check-render.yml               # deploy-check: rendert Compose-Templates lokal
 ├── hook.py                        # CD: HTTP-Deploy-Hook (Python-Stdlib)
 ├── rbbattle-deploy-hook.service   # CD: systemd-Unit für den Hook
 ├── inventory/
@@ -300,7 +379,9 @@ deploy/
 │       ├── vars.yml               # nicht-geheime Konfiguration
 │       └── vault.yml              # Geheimnis (ansible-vault verschlüsselt)
 └── roles/
-    ├── riftbreaker-server/        # docker 6321
+    ├── headless-client-image/     # baut rb-headless-client:<sha>
+    ├── game-content/              # Steam-Content (App 4114030) deklarativ
+    ├── riftbreaker-server/        # docker 6321 (+ Restart-Handler)
     ├── vanilla-server/            # docker 6322
     ├── tournament-server/         # systemd
     ├── website/                   # statics + Caddy
@@ -324,5 +405,48 @@ deploy/
 
 ## Rollback
 
-Vorherige `rbbattle.zip` (Release/Git-History) bzw. das vorherige
-`tournament-server`-Binary zurückkopieren und erneut deployen.
+Der Deploy ist an die Revision (SHA) gebunden (Image-Tag + Checkout). Rollback
+= alte SHA deployen:
+
+```bash
+# auf planet (root-Weg) — alten Stand auschecken und deployen:
+cd /opt/rbbattle-deploy/repo && git checkout --force <alte-sha>
+sudo -n /usr/local/bin/rbbattle-deploy
+# oder den Hook mit der alten SHA anstoßen (Workflow-tauglich):
+curl -sS -X POST http://127.0.0.1:6323/deploy \
+  -H "Authorization: Bearer <TOKEN>" -H 'Content-Type: application/json' \
+  -d '{"sha":"<alte-sha>","ref":"refs/heads/main"}'
+```
+
+Nur das Mod zurückdrehen (ohne Image/Content):
+
+```bash
+# vorherige rbbattle.zip aus der Git-History bauen/sichern und erneut deployen.
+```
+
+Das vorherige `tournament-server`-Binary bzw. die vorherige `rbbattle.zip`
+(git-History) zurückkopieren und erneut deployen.
+
+## Logs
+
+| Ort | Was |
+|---|---|
+| `/var/log/rbbattle-deploy/<job_id>.log` | CD-Job-Log (Hook, 0640; Task `deploy.yml` zeigt bei Fehlern die letzten Zeilen) |
+| `journalctl -u rbbattle-deploy-hook` | Hook-Service (Requests/Fehler) |
+| `journalctl -u tournament-server`, `-u rbmods-probe.timer` | systemd-Rollen |
+| `docker logs riftbreaker-dedicated` / `rb-winetest` | Container-Logs (Wine/Server) |
+| `git -C /opt/rbbattle-deploy/repo log --oneline -3` | zuletzt deployte SHA |
+
+## Was CI/CD besitzt (und was nicht)
+
+**Owned von der Pipeline (`deploy/`):** Laufzeit-Image (`rb-headless-client:<sha>`),
+Spiel-Content (Steam-App 4114030), Compose-Rendering + Containerstart der
+Server-Rollen, Mod-Auslieferung + Restart, Website-Statics + Caddy-Snippet,
+Caddy-Import-Zeile, systemd-Unit/Timer (tournament/probe), md5-Parität des
+Mod-Zips.
+
+**Nicht owned (bewusst host-seitig/manuell):** Vault-Passwort
+(`/etc/rbbattle-deploy/vault.pass`, root-only), Hook-Installation + `DEPLOY_TOKEN`
+(siehe unten), der Actions-Runner + seine Dependencies
+(`.github/runner/setup.sh`), der SSH-Zugang des Runners für `deploy-check`,
+Caddy-Container selbst (`mellon-caddy`), DNS/TLS.
