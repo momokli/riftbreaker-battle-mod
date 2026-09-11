@@ -267,6 +267,40 @@ check(not log_has("event=hq_autodetect status=ok type=headquarters entity=999"),
 
 _G.__findTypes["headquarters"] = nil -- aufraeumen fuer nachfolgende Tests
 
+-- 11. Issue #231: AFK-Timeout waehrend der Setup-Phase (kein HQ platziert).
+-- Setup-Phase explizit erzwingen (unabhaengig vom RBB.commenced-Stand aus
+-- den vorherigen Tests, die per rb_hq entity bereits commenced hatten).
+_G.__commands["rb_hq"]({ "reset" })
+RBB.commenced = false
+RBB.hq.dead = false
+check(_G.__handlers["HourEvent"] ~= nil, "11. HourEvent registriert")
+
+-- 11a. Erster Tick (Schwelle afkHourTicks=1) OHNE HQ -> Match endet als AFK.
+_G.__handlers["HourEvent"](nil)
+check(log_has("event=afk_timeout status=match_end ticks=1 threshold=1"),
+    "11a. AFK-Timeout nach 1 Tick ausgeloest")
+check(log_has("event=match_end reason=afk_no_hq"), "11a. match_end reason=afk_no_hq")
+check(console_has("GAME OVER") and console_has("AFK"),
+    "11a. Konsolen-Announce erwaehnt AFK")
+
+-- 11b. Idempotenz: weiterer Tick nach AFK-Ende aendert nichts.
+local matchEndsAfterAfk = count_logs("event=match_end")
+_G.__handlers["HourEvent"](nil)
+check(count_logs("event=match_end") == matchEndsAfterAfk,
+    "11b. kein zweites match_end nach AFK-Ende (idempotent)")
+
+-- 11c. Reset setzt den Tick-Zaehler zurueck; HQ rechtzeitig gebunden (rb_hq
+--      entity loest Commence aus) -> kein AFK-Ende trotz weiterer Ticks.
+_G.__commands["rb_hq"]({ "reset" })
+RBB.commenced = false
+RBB.hq.dead = false
+_G.__commands["rb_hq"]({ "entity", "55555" })
+check(RBB.commenced == true, "11c. rb_hq entity loest Commence aus (Setup-Phase vorbei)")
+local afkTicksBefore = count_logs("event=afk_timeout")
+_G.__handlers["HourEvent"](nil)
+check(count_logs("event=afk_timeout") == afkTicksBefore,
+    "11c. Kein AFK-Tick mehr, sobald commenced (HQ rechtzeitig platziert)")
+
 print("FAILURES=" .. failures)
 _G.__failures = failures
 `;

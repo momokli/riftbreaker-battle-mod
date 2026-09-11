@@ -363,6 +363,7 @@ local HqAutoDetectEntity
 local BoostSummary
 local CommenceGame
 local AnnounceSetupPhase
+local HqOnDestroyed
 
 -- Vorwaertsdeklaration fuer die HQ-HP-Kurve (#33): Definition folgt im
 -- Win-Condition-Block (braucht RBB.hqCfg); aufgerufen wird sie in
@@ -2168,6 +2169,17 @@ end)
 local function OnHourEvent(evt)
     OnHourEventEconomy(evt)
     HqAutoDetectEntity()
+    -- #231: AFK-Timeout -- solange kein HQ platziert ist (Setup-Phase, #158)
+    -- und das Match noch nicht beendet ist, zaehlt jeder Tick mit. Ab
+    -- afkHourTicks endet das Match automatisch (kein unbegrenztes Warten).
+    if not RBB.commenced and not RBB.hq.dead then
+        RBB.setupHourTicks = RBB.setupHourTicks + 1
+        if RBB.setupHourTicks >= RBB.afkCfg.afkHourTicks then
+            Log("event=afk_timeout status=match_end ticks=%d threshold=%d",
+                RBB.setupHourTicks, RBB.afkCfg.afkHourTicks)
+            HqOnDestroyed("afk_no_hq", "GAME OVER — no headquarter placed in time (AFK)")
+        end
+    end
 end
 pcall(function()
     RegisterGlobalEventHandler("HourEvent", OnHourEvent)
@@ -2273,6 +2285,17 @@ RBB.hq = {
 --   Web-Konsole = dieselbe Log-Zeile (dev-log/solo.html, nur vorbereitet)
 -- ============================================================================
 
+-- #231: AFK-Timeout waehrend der Setup-Phase. Der Mod hat KEINEN Zugriff auf
+-- echte Wanduhrzeit (os.time/io/http, docs/concept.md) -- einziger Zeit-Tick
+-- ist HourEvent (#24-Economy-Fallback nutzt ihn bereits). Dessen reale
+-- Frequenz ist laut docs/research/api-deep-dive.md UNBESTAETIGT -- afkHourTicks
+-- ist daher ein Platzhalter (dokumentierte Annahme, Muster #33/#41), braucht
+-- Live-Kalibrierung, wie viele Ticks ungefaehr 1 Minute Wanduhrzeit entsprechen.
+RBB.afkCfg = {
+    afkHourTicks = 1, -- Ticks ohne platziertes HQ, bis das Match als AFK endet
+}
+RBB.setupHourTicks = 0
+
 -- Start-Announce (Setup-Phase): einmalig, idempotent.
 RBB.setupAnnounced = false
 AnnounceSetupPhase = function()
@@ -2347,13 +2370,15 @@ end
 -- restart pro Match-Ende (Cooldown-Guard liegt im Feed; der Mod hat keinen
 -- eigenen I/O-Kanal und kann den Prozess nicht selbst neu starten).
 -- Idempotent: der Guard hier (RBB.hq.dead) feuert das Ende nur genau einmal.
-local function HqOnDestroyed()
+-- `reason` erlaubt andere Match-Ende-Ausloeser (z.B. #231 AFK-Timeout), ohne
+-- die Restart-/Idempotenz-Logik zu duplizieren. Default = echte HQ-Zerstoerung.
+HqOnDestroyed = function(reason, gameOverMsg)
     if RBB.hq.dead then return end
     RBB.hq.dead = true
     RBB.hq.hp = 0
     Log("event=hq_dead status=match_end hp=0")
-    Log("event=match_end reason=hq_destroyed")
-    WriteConsole("GAME OVER — HQ destroyed")
+    Log("event=match_end reason=%s", reason or "hq_destroyed")
+    WriteConsole(gameOverMsg or "GAME OVER — HQ destroyed")
     WriteConsole("Match end — restarting game in 5 seconds...")
 end
 
@@ -2491,6 +2516,7 @@ local function CmdHq(args)
         RBB.hq.unmatchedLogged = false
         RBB.hq.unarmedLeakLogged = false
         RBB.hq.filteredLeakLogged = false
+        RBB.setupHourTicks = 0
         Log("event=hq_reset status=ok hp=%d", RBB.hq.hp)
         WriteConsole("rb_hq: Win-Condition zurueckgesetzt (hp=%d)", RBB.hq.hp)
         return

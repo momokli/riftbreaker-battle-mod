@@ -62,6 +62,14 @@ HQ-TOD → Match verloren
 - Keine Comeback-Mechanik — HQ-HP ist der Balancer.
 - Keine Extra-Boss-Runden: Bosse kommen mit den Naturwellen mit; Sends sind die Schippe drauf.
 - Endlos: Kein Runden-Cap, die Skalierung entscheidet.
+- **AFK-Timeout (Issue #231):** die Setup-Phase (kein HQ platziert, #158) wartet
+  nicht unbegrenzt — ab einer Schwelle ohne platziertes HQ endet das Match
+  automatisch als AFK (`event=match_end reason=afk_no_hq`), statt endlos zu
+  pausieren. Löst nebenbei auch strukturell, dass ein fehlendes HQ nie mehr
+  als sofortige Niederlage zählen kann (erst NACH der Wartezeit wird
+  geprüft). Die Schwelle ist über `HourEvent`-Ticks gemessen (kein
+  `os.time()`-Zugriff im Mod) — die reale Zuordnung zu „ca. 1 Minute
+  Wanduhrzeit" ist **unverifiziert und braucht Live-Kalibrierung**.
 
 ## HUD (In-Game, Custom-UI)
 - Immer sichtbar: Rundennummer, Countdown bis Wellenstart, eigener Send-Pool.
