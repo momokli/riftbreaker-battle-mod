@@ -1,0 +1,96 @@
+name: Boot-Test (Test-Ports)
+
+# Pre-Merge-Gate (CI/CD-Plan F1): baut + bootet den Stack auf Test-Ports
+# (6323/8082) und beweist so „baut + bootet", bevor ein PR auf main darf.
+# Der Job-Name IST der Required-Check-Context "boot-test".
+#
+# Kein Secret nötig: Dummy-Vault (Test-Passwort) + Test-Ports/Pfade.
+# Prod (6321/6322/8081) wird nie berührt.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  boot-test:
+    name: boot-test
+    runs-on: [self-hosted, planet]
+    timeout-minutes: 25
+    steps:
+      - name: Fork-PR erkennen (Gate nur für Repo-eigene PRs)
+        id: gate
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ] \
+             && [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+            echo "Fork-PR — Boot-Test übersprungen (nur Repo-eigene PRs)."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.skip != 'true'
+
+      - name: Tooling bereitstellen (ansible + rustup für den Runner-User)
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          VENV="$HOME/.local/ansible-deploy-check"
+          if [ ! -x "$VENV/bin/ansible-playbook" ]; then
+            python3 -m venv "$VENV"
+            "$VENV/bin/pip" install --disable-pip-version-check \
+              "ansible-core==2.19.*" "yamllint==1.35.1"
+          fi
+          echo "$VENV/bin" >> "$GITHUB_PATH"
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+              sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          cargo --version
+
+      - name: SSH-Voraussetzung prüfen (runner -> root@planet)
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          if ! ssh -o BatchMode=yes -o ConnectTimeout=10 planet 'id -u' >/dev/null 2>&1; then
+            echo "::error::Boot-Test braucht SSH runner@planet -> root@planet (Alias planet). Einrichtung: deploy/README.md, Abschnitt deploy-check (PR-Gate)."
+            exit 1
+          fi
+
+      - name: Test-Deploy auf Test-Ports (Dummy-Vault, kein Secret)
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          INV="$(mktemp -d)/inventory"
+          cp -r deploy/inventory "$INV"
+          cat > "$INV/host_vars/planet/vault.yml" <<'EOF'
+          ---
+          riftbreaker_server_password: boot-test
+          vault_solo_basic_auth_hash: ""
+          EOF
+          ansible-playbook -i "$INV" deploy/test-deploy.yml -e @deploy/test-vars.yml
+
+      - name: Boot verifizieren (Container stabil + tournament healthy)
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          # Wine/Xvfb brauchen einen Moment — erst nach 30 s prüfen.
+          sleep 30
+          STATUS="$(ssh planet 'docker inspect -f "{{.State.Status}}" riftbreaker-dedicated-test')"
+          RESTARTING="$(ssh planet 'docker inspect -f "{{.State.Restarting}}" riftbreaker-dedicated-test')"
+          echo "Test-Container: status=$STATUS restarting=$RESTARTING"
+          [ "$STATUS" = "running" ] || { echo "::error::Test-Container bootet nicht (status=$STATUS)."; exit 1; }
+          [ "$RESTARTING" = "false" ] || { echo "::error::Test-Container ist in einer Crash-Loop."; exit 1; }
+          curl --silent --show-error --fail --max-time 10 \
+            http://127.0.0.1:8082/health | grep -q '"ok":true'
+          echo "Boot-Test OK: Container läuft stabil, tournament-server healthy auf 8082."
+
+      - name: Aufräumen (Test-Container + Unit stoppen)
+        if: always() && steps.gate.outputs.skip != 'true'
+        run: |
+          ssh planet 'docker compose -f /opt/rbbattle-deploy/test/rb/docker-compose.yml down --remove-orphans 2>/dev/null || docker rm -f riftbreaker-dedicated-test 2>/dev/null || true'
+          ssh planet 'systemctl stop tournament-server-test 2>/dev/null || true'
+          ssh planet 'systemctl disable tournament-server-test 2>/dev/null || true'
+          ssh planet 'rm -f /etc/systemd/system/tournament-server-test.service 2>/dev/null || true'
+          ssh planet 'systemctl daemon-reload 2>/dev/null || true'
