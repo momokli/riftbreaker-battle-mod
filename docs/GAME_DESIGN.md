@@ -169,6 +169,99 @@ Level-Delta approximiert: `delta = ceil(level * pct/100)`, min. 1, gedeckelt auf
 `false` bleibt unangetastet). **braucht Live-Test** — Prozent→Level-Delta und
 Stufen-Preise sind eine dokumentierte Annahme, keine verifizierte Kurve.
 
+### Wellen-Richtwert (Issue #213, Recherche für #205)
+
+Aus dem Design-Interview #199 (ECO-6, Matheo): der Calcium-Preis für eine
+%-Wellenverstärkung soll nicht linear/fix sein (wie aktuell
+`boostCfg.pricePerPct`), sondern sich automatisch an die Spielkurve anhängen
+— feste Calcium-Menge = fester **absoluter** Richtwert-Zuwachs, die
+tatsächliche %-Verstärkung ergibt sich relativ zum Richtwert der aktuellen
+Welle. Dieselbe Calcium-Menge wird so relativ schwächer, je größer/später die
+Welle ist.
+
+**Datenbasis-Problem:** die tatsächliche Kreaturen-Zusammensetzung einer
+Naturwelle kommt aus nativer Engine-Tabelle (`GetWavePool(level)` →
+`rules.waves[group][level]`, s. oben) — ohne Live-Spiel/RE-Zugriff nicht
+enumerierbar. Die Naturwellen-Stärke ist aber bereits einzig über
+`difficultyLevel` (1..9) indiziert — das ist die einzige Stärke-Größe, die
+der Mod tatsächlich kennt.
+
+**Formel (dokumentierte Annahme, `RBB.richtwertCfg`):**
+
+```
+Richtwert(level) = richtwertPerLevel * level        (richtwertPerLevel = 100)
+%-Boost(calcium, level) = (calcium / calciumPerRichtwert) / Richtwert(level) * 100
+                                                       (calciumPerRichtwert = 1)
+```
+
+| Level | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
+|---|---|---|---|---|---|---|---|---|---|
+| Richtwert | 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900 |
+
+Beispiel: 100 Calcium bei Level 1 (Richtwert 100) → +100%; dieselben 100
+Calcium bei Level 9 (Richtwert 900) → nur noch +11,1%. Lesbar per
+`rb_richtwert [<calcium> [level]]` (Vorschau) bzw. `rb_balance` (Kurve).
+
+**Wichtig:** reine Formel-Dokumentation (Issue #213) — `BoostPctForCalcium`
+ist **nicht** an `rb_boost`/`BuyBoost` angeschlossen; ob/wie diese Formel die
+aktuelle lineare Preisformel ersetzt, gehört ins größere
+Send-Mechanik-Vereinfachungs-Issue #205 (braucht Bestätigung durch momokli).
+`richtwertPerLevel`/`calciumPerRichtwert` sind Annahmen — **braucht
+Live-Test**, ob der Zusammenhang zwischen Level und tatsächlicher
+Wellenstärke wirklich linear ist.
+
+**Zwei Wege zur echten Kurve (statt der reinen Annahme):**
+
+1. **Schneller Weg (falls verfügbar):** die entschlüsselte Spielquelle direkt
+   nachschlagen — `rules.maxAttackCountPerDifficulty[level]` bzw.
+   `rules.waves[group][level]` (referenziert im Quelltext-Kommentar zu #39,
+   „VERIFIZIERT am lan-lua-src, Spiel 2.0.58485“ — dieselbe Quelle, die den
+   HQ-Entity-Typ für #144 bestätigt hat). Falls dieser Source-Zugriff besteht,
+   ist ein direkter Blick in die Tabelle zuverlässiger als jedes Sampling.
+2. **Mess-Fallback (Issue #213, `event=richtwert_sample`):** der
+   `SpawnWavesForDifficultyLevel`-Chokepoint zählt bei jeder Naturwelle
+   automatisch lebende Gegner-Kreaturen vor/nach dem Spawn (best-effort über
+   `FindService:FindEntitiesByGroup`/`FindEntitiesByType`, Kandidatenliste
+   `RBB.enemyCountGroupCandidates`/`enemyCountTypeCandidates` — **unverifizierte
+   Ratekandidaten**, anders als die am Source bestätigten Rand-Spawner/HQ-Typ).
+   Bei Erfolg loggt jede Naturwelle `event=richtwert_sample level=%d
+   before=%d after=%d delta=%d` — über 2–4 Test-Sessions gesammelt (wie von
+   Matheo vorgeschlagen) ergibt das reale Level→Kreaturenzahl-Datenpunkte für
+   die Kurve. Findet kein Kandidat etwas, loggt es `status=unavailable`
+   (harmlos, keine Spielwirkung) — dann bleibt nur Weg 1 oder manuelles
+   Auszählen auf dem Bildschirm.
+
+**Folgefrage (Matheo): nicht nur zählen, auch die Typen kennen.** Ein reiner
+Zahlenwert reicht nicht, um einen %-Boost passend zur echten
+Wellen-Zusammensetzung draufzurechnen — dafür müsste man wissen, WELCHE
+Kreaturentypen gespawnt wurden, nicht nur wie viele. Das Sampling bildet
+deshalb zusätzlich die Differenz der Entity-Listen (nicht nur der Zahl) und
+löst jede neu gespawnte Entity über die bereits vorhandene
+`EntityService:GetName`-API (Muster `GetEntityNameOrId`, auch für die
+Rand-Spawner-Logs genutzt) zu einem Typnamen auf:
+
+```
+event=richtwert_sample_types level=<n> total=<delta> types=<typ>:<anzahl>,...
+```
+
+Damit lässt sich ein %-Boost später **pro vorhandenem Typ** anteilig
+draufrechnen (z.B. 20 % mehr von jedem Typ, mit Restbetrag-Mitnahme bei
+kleinen Prozentsätzen statt Abrunden auf 0) — statt eine beliebige
+Füll-Kreatur zu wählen. Die zusätzlichen Kreaturen würden über den bereits
+vorhandenen Rand-Spawner-Mechanismus gespawnt (der alte Shop-/Queue-Weg,
+blueprint-basiert, ohne die `difficultyLevel`-Deckel bei 9) — das macht die
+Verstärkung gleichzeitig beliebig fein UND unbegrenzt nach oben, löst also
+beide in #205 diskutierten Probleme (Rundung auf ganze Level, Decke bei
+Level 9). Bleibt Recherche/Vorbereitung (#213) — die eigentliche
+Boost-Logik gehört weiter ins größere Send-Mechanik-Issue #205.
+
+**Fallback-Idee, falls die Live-Typ-Erkennung nicht greift:** bekannte
+"Wellen-Pack"-Muster katalogisieren (typische Kreaturen-Gruppen, aus denen
+sich Naturwellen zusammensetzen) und beim Boost ein zur Ziel-Stärke
+passendes Pack zufällig mit ausschicken, statt einzelne Kreaturen exakt zu
+matchen. Setzt Wissen über die tatsächlichen Pack-Definitionen voraus (Quelle
+offen — ggf. wieder die entschlüsselte Spielquelle, falls zugänglich).
+
 ### Wellen-Takt & Grundschwierigkeit (Issue #41, Test-Varianten)
 
 Der Wellen-Takt ist nicht mehr fest verdrahtet, sondern als explizite,
