@@ -366,6 +366,16 @@ test('Vollkette: rb_wave 3 → Server-Outbox → Relay-Dispatch auf die Pipe (dy
       fs.readFileSync(serverLog, 'utf8').includes('exec_command control -> player_a'),
       'Server loggt exec_command control -> player_a',
     );
+
+    // Das Dispatch-Ergebnis wird an den Server gemeldet (Issue #89, AC aus
+    // #73) und dort protokolliert -> die Web-UI sieht es per SSE.
+    const reported = await waitFor(() =>
+      fs.readFileSync(relayLog, 'utf8').includes('dispatch result reported cmd_id=1 status=timeout'), 8000);
+    assert.ok(reported, 'Relay meldet das Dispatch-Ergebnis an den Server');
+    const serverSawResult = await waitFor(() =>
+      fs.readFileSync(serverLog, 'utf8')
+        .includes('exec_result player_a command="rb_wave 3" ok=false status=timeout'), 8000);
+    assert.ok(serverSawResult, 'Server protokolliert exec_result (Web-UI-Feedback)');
   } finally {
     if (relay) relay.kill('SIGTERM');
     if (server) server.kill('SIGTERM');

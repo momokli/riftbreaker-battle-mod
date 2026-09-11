@@ -56,6 +56,12 @@ Wahrheitsquelle, Events sind nur Benachrichtigungen.
   (das Kommando wurde bereits geschrieben) — nur ein Log-Hinweis (`dispatch
   result cmd_id=... status=timeout`). Details/Timeout-Phasen:
   `docs/relay-pipe-contract.md`.
+- **Ergebnis an den Server gemeldet (Issue #89):** Der Relay meldet das
+  Dispatch-Ergebnis zusaetzlich best-effort als `POST /event` mit
+  `event.type=exec_result` (`command`, `cmd_id`, `ok`,
+  `status=ok|error|timeout`, optional `reason`) an den Tournament-Server;
+  der protokolliert es und broadcastet es per SSE an die Web-UI
+  (`bausteine/06-tournament-server/README.md`).
 - Strukturierte Server→Spiel-Events (unten) werden später entweder über
   `exec`-Wrapper (`command="rbbattle_event <json>"`, vom Lua-Mod registriert)
   oder direkt über eine RE-gefundene Aufrufstelle zugestellt — Entscheidung

@@ -17,6 +17,9 @@ Prototyp-Strecke Spiel -> Trainer -> Relay -> Server -> Web-UI:
            Danach wird auf derselben Verbindung die exec_result-Antwort
            gelesen (Issue #73) und geloggt (status=ok|error|timeout) -
            eine ausbleibende Antwort ist kein Fehler, nur ein Log-Hinweis.
+           Das Ergebnis wird zusaetzlich best-effort als Event
+           event.type=exec_result an den Server gemeldet (Issue #89), damit
+           die Web-UI das Dispatch-Feedback live sieht.
            andere Event-Typen -> nur loggen
 
 Nur Standardbibliothek (Python 3.7+), kein pip-Paket noetig.
@@ -48,6 +51,8 @@ Verhalten:
       wird auf derselben Verbindung bis zu RBB_PIPE_TIMEOUT_S auf die
       exec_result-Antwort gewartet (Log "dispatch result cmd_id=... status=
       ok|error|timeout"); ein Timeout hier blockiert keine weiteren Dispatches.
+      Das Ergebnis wird zusaetzlich best-effort an den Server gemeldet
+      (event.type=exec_result, Issue #89, fuer das Web-UI-Feedback).
     - Log-Rotation (6 Dateien): erkannt (Datei schrumpft), Tail startet vorn.
     - Beenden: Strg+C (graceful), Encoding: UTF-8 mit errors=replace.
 
@@ -615,19 +620,62 @@ class Relay:
         self.pending_keys.discard(key)
         self._prune_acked()
         log('dispatch sent cmd_id={} len={}'.format(key, n))
-        self._log_dispatch_result(key, command, msg)
+        status = self._log_dispatch_result(key, command, msg)
+        self._report_dispatch_result(key, command, msg, status)
         return True
 
     def _log_dispatch_result(self, key, command, msg):
-        """Loggt die exec_result-Antwort (oder deren Ausbleiben, Issue #73)."""
+        """Loggt die exec_result-Antwort (oder deren Ausbleiben, Issue #73)
+        und liefert die Klassifikation ('ok'|'error'|'timeout')."""
         if msg is None:
             log('dispatch result cmd_id={} status=timeout command={!r}'.format(key, command))
-            return
+            return 'timeout'
         if msg.get('ok'):
             log('dispatch result cmd_id={} status=ok command={!r}'.format(key, command))
-        else:
-            log('dispatch result cmd_id={} status=error command={!r} reason={!r}'.format(
-                key, command, msg.get('reason', '')))
+            return 'ok'
+        log('dispatch result cmd_id={} status=error command={!r} reason={!r}'.format(
+            key, command, msg.get('reason', '')))
+        return 'error'
+
+    def _report_dispatch_result(self, key, command, msg, status):
+        """Meldet das Dispatch-Ergebnis an den Server (Issue #89).
+
+        Der Server (06) nimmt seit #89 den game->server-Event-Typ
+        `exec_result` entgegen und broadcastet ihn per SSE an die Web-UI -
+        damit ist das Dispatch-Feedback nicht mehr nur ein lokales Relay-Log.
+        `ok` = die rbbridge hat mit ok geantwortet; `status` unterscheidet
+        zusaetzlich 'error' (ok:false + reason) von 'timeout' (keine Antwort
+        innerhalb RBB_PIPE_TIMEOUT_S - laut #73 kein Fehler).
+
+        Best-effort: Meldefehler (Server weg, 4xx/5xx) aendern nichts am
+        Dispatch - das Kommando bleibt ack-markiert, es wird nur geloggt.
+        Ohne RBB_MATCH_ID ist keine Einlieferung moeglich (wie post_loop).
+        """
+        if not self.cfg.get('match_id'):
+            return
+        event = {
+            'type': 'exec_result',
+            'command': command,
+            'cmd_id': key,
+            'ok': status == 'ok',
+            'status': status,
+        }
+        if status == 'error':
+            event['reason'] = msg.get('reason', '')
+        elif status == 'timeout':
+            event['reason'] = 'no_response'
+        body = {
+            'match_id': self.cfg['match_id'],
+            'player_id': self.cfg['player_id'],
+            'event': event,
+        }
+        try:
+            http_json('POST', self.url_event(), body)
+            log('dispatch result reported cmd_id={} status={}'.format(key, status))
+        except (urllib.error.HTTPError, urllib.error.URLError,
+                TimeoutError, OSError) as e:
+            log('dispatch result report failed cmd_id={} status={} ({})'.format(
+                key, status, e))
 
     def dispatch_loop(self):
         log('dispatch: pipe={} timeout={}s'.format(

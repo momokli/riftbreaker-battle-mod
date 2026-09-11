@@ -42,6 +42,16 @@ fixiert die Parameter, die der Relay einhält.
 - Ein Antwort-Timeout ist **kein** Dispatch-Fehler: Das Kommando wurde
   bereits erfolgreich geschrieben und bleibt ack-markiert. Nur ein
   Connect/Write-Fehler (Pipe nicht erreichbar) landet in der Retry-Queue.
+- **Meldung an den Server (Issue #89, AC aus #73):** Das Ergebnis wird
+  best-effort als eigenen `POST /event` an den Tournament-Server gemeldet
+  (`event.type=exec_result`, Felder `command`, `cmd_id`, `ok`, `status`,
+  optional `reason`). Der Server protokolliert es und broadcastet es per SSE
+  an die Web-UI; damit ist das Dispatch-Feedback nicht mehr nur ein lokales
+  Relay-Log. `status=timeout` / `ok=false,reason="no_response"` heisst dabei
+  weiterhin "keine Antwort", nicht "Fehlschlag". Ein Meldefehler (Server
+  weg, 4xx/5xx) aendert nichts am Dispatch: das Kommando bleibt ack-markiert,
+  es wird nur geloggt (`dispatch result report failed ...`). Ohne
+  `RBB_MATCH_ID` wird nicht gemeldet (wie beim Event-Post).
 
 ## Test ohne Windows
 
