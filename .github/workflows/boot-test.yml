@@ -72,7 +72,7 @@ jobs:
           EOF
           ansible-playbook -i "$INV" deploy/test-deploy.yml -e @deploy/test-vars.yml
 
-      - name: Boot verifizieren (Container stabil + tournament healthy)
+      - name: Boot verifizieren (Container stabil + UDP-Bind + tournament healthy)
         if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
@@ -83,9 +83,57 @@ jobs:
           echo "Test-Container: status=$STATUS restarting=$RESTARTING"
           [ "$STATUS" = "running" ] || { echo "::error::Test-Container bootet nicht (status=$STATUS)."; exit 1; }
           [ "$RESTARTING" = "false" ] || { echo "::error::Test-Container ist in einer Crash-Loop."; exit 1; }
+
+          # HARTES Bind-Gate (Issue #239): "Container läuft" ist kein Beweis —
+          # DedicatedServer.exe kann vor dem bind() hängen/crashen; dann ist der
+          # Port stumm, obwohl der Container "Up" ist. Genau so war main grün,
+          # während :6321 auf planet keinen Listener hatte. Darum: der Server
+          # muss IM Container wirklich einen UDP-Socket auf seinem Game-Port
+          # gebunden haben. Der Port wird NICHT geraten, sondern aus dem
+          # Docker-Mapping des publizierten Test-Ports gelesen (Rezept mappt
+          # 6323/udp -> container 6321/udp). Bis zu 150 s pollen (Welt-Boot
+          # unter Wine/llvmpipe).
+          CTR=riftbreaker-dedicated-test
+          PUB=6323
+          # `docker port <ctr>` listet "PRIVAT/PROTO -> HOST" (z. B.
+          # "6321/udp -> 0.0.0.0:6323") — der container-interne Port steht
+          # LINKS. Also über den publizierten Test-Port die passende Zeile
+          # finden und deren linke Portnummer nehmen.
+          MAP="$(ssh planet "docker port ${CTR}" 2>/dev/null | grep -E 'udp ->' | grep -E "[:.]${PUB}\$" | head -1 || true)"
+          IPORT="${MAP%%/*}"
+          if [ -z "$IPORT" ]; then
+            echo "::error::Kein UDP-Port-Mapping für ${PUB}/udp am Test-Container (docker port: '${MAP}') — Compose/Rezept prüfen (Issue #239)."
+            exit 1
+          fi
+          HEX="$(printf '%04x' "$IPORT")"
+          BOUND=false
+          for _ in $(seq 1 30); do
+            if ssh planet "docker exec ${CTR} cat /proc/net/udp /proc/net/udp6 2>/dev/null || true" \
+                 | awk '{print $2}' | tr '[:upper:]' '[:lower:]' | grep -q ":${HEX}$"; then
+              BOUND=true
+              break
+            fi
+            sleep 5
+          done
+          if [ "$BOUND" != "true" ]; then
+            echo "::group::Diagnose — kein UDP-Bind auf ${IPORT} (Issue #239)"
+            echo "== docker port =="
+            ssh planet "docker port ${CTR}" || true
+            echo "== docker top =="
+            ssh planet "docker top ${CTR} -eo pid,ppid,stat,time,wchan:24,args" || true
+            echo "== docker logs (tail 120) =="
+            ssh planet "docker logs --tail 120 ${CTR} 2>&1" || true
+            echo "== /proc/net/udp + udp6 =="
+            ssh planet "docker exec ${CTR} cat /proc/net/udp /proc/net/udp6 2>/dev/null || true" || true
+            echo "::endgroup::"
+            echo "::error::${CTR} hat keinen UDP-Socket auf Port ${IPORT} gebunden — DedicatedServer bootet nicht bis zum bind() (Issue #239)."
+            exit 1
+          fi
+          echo "UDP-Bind OK: ${CTR} lauscht auf ${IPORT}/udp (publiziert als 6323/udp)."
+
           curl --silent --show-error --fail --max-time 10 \
             http://127.0.0.1:8091/health | grep -q '"ok":true'
-          echo "Boot-Test OK: Container läuft stabil, tournament-server healthy auf 8091."
+          echo "Boot-Test OK: Container läuft stabil, UDP ${IPORT}/udp gebunden, tournament-server healthy auf 8091."
 
       - name: Aufräumen (Test-Container + Unit stoppen)
         if: always() && steps.gate.outputs.skip != 'true'
