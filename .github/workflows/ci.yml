@@ -100,3 +100,14 @@ jobs:
             dist/*.zip
             tools/mod-updater/mod_update.py
           if-no-files-found: error
+
+  tournament-test:
+    name: Test tournament-server (Rust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ubuntu-latest bringt Rust (rustup, stable) mit; cargo test kompiliert
+      # das tournament/-Crate und führt die State-Machine/API-Tests aus.
+      - name: cargo test
+        working-directory: tournament
+        run: cargo test

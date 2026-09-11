@@ -1,4 +1,13 @@
 ---
 # Defaults der Rolle tournament-server (systemd, Rust/axum).
-# Binary-Quelle auf dem Control-Node; Build: cd tournament && cargo build --release
+#
+# Das Binary wird auf dem Control-Node (planet) aus dem Repo-Checkout gebaut
+# (`cd tournament && cargo build --release`). Die Rust-Toolchain (rustup) liegt
+# bewusst unter /opt/rbbattle-deploy (systemd-Hook ReadWritePaths), damit der
+# Build im gehärteten Deploy-Hook schreiben darf. Die Rolle stellt die
+# Toolchain idempotent bereit (installiert nur, wenn cargo fehlt).
 tournament_binary_src: "{{ playbook_dir }}/../tournament/target/release/tournament-server"
+rustup_home: /opt/rbbattle-deploy/rustup
+cargo_home: /opt/rbbattle-deploy/cargo
+cargo_bin: "{{ cargo_home }}/bin/cargo"
+rustup_init_url: https://sh.rustup.rs
