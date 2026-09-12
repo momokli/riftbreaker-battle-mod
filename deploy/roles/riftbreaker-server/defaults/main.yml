@@ -68,3 +68,16 @@ riftbreaker_bridge_port: 9001
 # einen anderen Port zu zwingen (Issue #289: genau dieser Mismatch machte die
 # Test-Bridge unreachable).
 riftbreaker_bridge_container_port: 9001
+
+# --- Session-Mitschnitt (Issue #280) -----------------------------------------
+# Tailt den Lua-Log im Wine-Volume (read-only) und schreibt pro Session JSONL auf
+# den Host-Bind-Mount. Kein Netzzugriff, keine Spiel-Aenderung. Die Session-ID
+# vergibt der Recorder (commence/match_end als Grenzen).
+riftbreaker_sessions_container: riftbreaker-sessions
+# Standard-Python-Image (stdlib-only Recorder) — kein eigenes Image-Build noetig.
+riftbreaker_sessions_image: "python:3.12-slim"
+# Host-Verzeichnis der JSONL-Protokolle (bind-mount -> /data/sessions im Sidecar).
+riftbreaker_sessions_dir: /srv/rbmods-sessions
+# Recorder-Script auf dem Host (bind-mount ro in den Sidecar).
+riftbreaker_sessions_script: "{{ riftbreaker_deploy_dir }}/session_recorder.py"
+riftbreaker_sessions_script_src: "{{ playbook_dir }}/../tools/session-recorder/session_recorder.py"

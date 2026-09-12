@@ -72,3 +72,7 @@ tournament_install_dir: "/opt/rbmods/tournament-server-test-{{ rbbattle_run_suff
 # `runner`, nicht als root):
 cargo_home: /home/runner/.cargo
 rustup_home: /home/runner/.rustup
+
+# Session-Mitschnitt isoliert von Prod (eigener Container-Name + Ausgabeverzeichnis, Issue #280).
+riftbreaker_sessions_container: riftbreaker-sessions-test
+riftbreaker_sessions_dir: /srv/rbmods-sessions-test
