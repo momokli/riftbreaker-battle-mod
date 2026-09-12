@@ -1,18 +1,27 @@
 name: Deploy Check
 
-# Merge-Gate, das den Deploy wirklich vorhersagt (Issue #209). Läuft auf dem
-# self-hosted Runner auf planet und prüft gegen den echten Host:
-#   1. yamllint über deploy/
-#   2. `ansible-playbook --check --diff` gegen planet für den Container-Stack
-#      (dedicated-server-image + riftbreaker-server) und die
-#      Website-Rolle — read-only, Vault wird NIE entschlüsselt.
-#   3. jedes gerenderte Compose-File durch `docker compose config`.
+# Merge-Gate, das den Deploy wirklich vorhersagt (Issue #209).
+#
+# Aufteilung (Issue #306): rein lokale Checks (yamllint über deploy/,
+# Compose-Templates rendern + `docker compose config`) laufen auf einem
+# GitHub-Hosted-Runner (ubuntu-latest) im Job `deploy-check-local` und
+# entlasten damit den planet-Runner. Nur der echte Host-Check
+# (`ansible-playbook --check --diff` gegen planet, read-only, Vault wird NIE
+# entschlüsselt) bleibt im Job `deploy-check` auf dem self-hosted Runner.
+#
+#   deploy-check-local (GH):  yamllint über deploy/, Compose-Templates rendern,
+#                             jedes gerenderte Compose-File durch
+#                             `docker compose config`.
+#   deploy-check (planet):    ansible --check --diff gegen planet für den
+#                             Container-Stack (dedicated-server-image +
+#                             riftbreaker-server) und die Website-Rolle.
+#
 # Ziel: die Fehlerklasse „Image fehlt / Container-Name belegt / Pfad falsch"
 # wird im PR sichtbar, nicht erst nach dem Merge.
 #
-# Nur für PRs aus DIESEM Repo (keine Forks): der Lauf führt PR-Code auf planet
-# aus. Fork-PRs überspringen die Schritte (der Job bleibt grün, damit der
-# Required-Check „deploy-check" nicht als pending hängt).
+# Nur für PRs aus DIESEM Repo (keine Forks): der `deploy-check`-Lauf führt
+# PR-Code auf planet aus. Fork-PRs überspringen die Schritte (die Jobs bleiben
+# grün, damit der Required-Check „deploy-check" nicht als pending hängt).
 #
 # Voraussetzung (host-seitig, einmalig; siehe deploy/README.md):
 #   * Runner-User `runner` hat SSH-Zugriff als root auf planet (Alias `planet`).
@@ -38,10 +47,11 @@ permissions:
   contents: read
 
 jobs:
-  deploy-check:
-    # Dieser Job-Name IST der Required-Check-Context in der Branch Protection.
-    name: deploy-check
-    runs-on: [self-hosted, planet]
+  deploy-check-local:
+    # Rein lokale Checks (yamllint + Compose-Render + `docker compose config`)
+    # auf einem GitHub-Hosted-Runner — entlastet den planet-Runner (Issue #306).
+    name: deploy-check-local
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Fork-PR erkennen (Gate nur für Repo-eigene PRs)
@@ -50,7 +60,7 @@ jobs:
           set -euo pipefail
           if [ "${{ github.event_name }}" = "pull_request" ] \
              && [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
-            echo "Fork-PR — deploy-check wird übersprungen (nur Repo-eigene PRs)."
+            echo "Fork-PR — deploy-check-local wird übersprungen (nur Repo-eigene PRs)."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -70,15 +80,6 @@ jobs:
           echo "$VENV/bin" >> "$GITHUB_PATH"
           "$VENV/bin/ansible" --version
           "$VENV/bin/yamllint" --version
-
-      - name: SSH-Voraussetzung prüfen (runner -> root@planet)
-        if: steps.gate.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          if ! ssh -o BatchMode=yes -o ConnectTimeout=10 planet 'id -u' >/dev/null 2>&1; then
-            echo "::error::deploy-check braucht SSH-Zugriff runner@planet -> root@planet (Alias planet). Einrichtung: deploy/README.md, Abschnitt deploy-check (PR-Gate)."
-            exit 1
-          fi
 
       - name: YAML-Lint (deploy/)
         if: steps.gate.outputs.skip != 'true'
@@ -100,6 +101,47 @@ jobs:
             echo "== docker compose config $(basename "$f") =="
             docker compose -f "$f" config >/dev/null
           done
+
+  deploy-check:
+    # Dieser Job-Name IST der Required-Check-Context in der Branch Protection.
+    name: deploy-check
+    runs-on: [self-hosted, planet]
+    timeout-minutes: 15
+    steps:
+      - name: Fork-PR erkennen (Gate nur für Repo-eigene PRs)
+        id: gate
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ] \
+             && [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+            echo "Fork-PR — deploy-check wird übersprungen (nur Repo-eigene PRs)."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.skip != 'true'
+
+      - name: Tooling bereitstellen (ansible-core)
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          VENV="$HOME/.local/ansible-deploy-check"
+          if [ ! -x "$VENV/bin/ansible-playbook" ]; then
+            python3 -m venv "$VENV"
+            "$VENV/bin/pip" install --disable-pip-version-check \
+              "ansible-core==2.19.*"
+          fi
+          echo "$VENV/bin" >> "$GITHUB_PATH"
+          "$VENV/bin/ansible" --version
+
+      - name: SSH-Voraussetzung prüfen (runner -> root@planet)
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          if ! ssh -o BatchMode=yes -o ConnectTimeout=10 planet 'id -u' >/dev/null 2>&1; then
+            echo "::error::deploy-check braucht SSH-Zugriff runner@planet -> root@planet (Alias planet). Einrichtung: deploy/README.md, Abschnitt deploy-check (PR-Gate)."
+            exit 1
+          fi
 
       - name: Ansible --check --diff gegen planet (read-only, kein Vault)
         if: steps.gate.outputs.skip != 'true'
