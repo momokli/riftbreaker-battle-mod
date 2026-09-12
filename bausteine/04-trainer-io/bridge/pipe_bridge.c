@@ -299,9 +299,13 @@ static int deadline_passed(DWORD deadline)
     return (LONG)(GetTickCount() - deadline) >= 0;
 }
 
-/* Verbindet mit der Pipe. timeout_ms begrenzt nur ERROR_PIPE_BUSY-Faelle
- * (Server da, aber Instanz belegt); fehlt der Server ganz, kommt sofort
- * ERROR_FILE_NOT_FOUND. INVALID_HANDLE_VALUE = nicht erreichbar. */
+/* Verbindet mit der Pipe. Innerhalb von timeout_ms wird sowohl bei
+ * ERROR_PIPE_BUSY (Server da, aber Instanz belegt) als auch bei
+ * ERROR_FILE_NOT_FOUND weiterprobiert: rbbridge baut zwischen zwei Clients
+ * eine NEUE Pipe-Instanz auf, so dass ein direkter Folge-Connect transient
+ * FILE_NOT_FOUND liefert (live belegt: /health ok, direkt danach /exec ->
+ * 503 pipe_unavailable, danach wieder ok). Jeder andere Fehler gibt sofort
+ * INVALID_HANDLE_VALUE zurueck. INVALID_HANDLE_VALUE = nicht erreichbar. */
 static HANDLE pipe_connect(int timeout_ms)
 {
     const char *path = env_str("RBB_BRIDGE_PIPE", DEFAULT_PIPE_NAME);
@@ -313,12 +317,21 @@ static HANDLE pipe_connect(int timeout_ms)
         if (h != INVALID_HANDLE_VALUE)
             return h;
 
-        if (GetLastError() != ERROR_PIPE_BUSY)
-            return INVALID_HANDLE_VALUE; /* FILE_NOT_FOUND u. a. -> unavailable */
+        {
+            DWORD err = GetLastError();
+            if (err != ERROR_PIPE_BUSY && err != ERROR_FILE_NOT_FOUND)
+                return INVALID_HANDLE_VALUE; /* sonstiger Fehler -> sofort */
 
-        if (deadline_passed(deadline))
-            return INVALID_HANDLE_VALUE;
-        WaitNamedPipeA(path, 100);
+            if (deadline_passed(deadline))
+                return INVALID_HANDLE_VALUE;
+
+            /* Busy: auf eine freie Instanz warten. Not found (Instanz wird
+             * neu aufgebaut): kurz schlafen, dann erneut versuchen. */
+            if (err == ERROR_PIPE_BUSY)
+                WaitNamedPipeA(path, 50);
+            else
+                Sleep(50);
+        }
     }
 }
 
@@ -488,7 +501,8 @@ static void handle_health(SOCKET c)
 {
     char body[128];
     int pipe_ok = 0;
-    HANDLE h = pipe_connect(300);
+    /* Kurzes Fenster: /health ist ein Probe-Connect, der nie lange warten darf. */
+    HANDLE h = pipe_connect(500);
     if (h != INVALID_HANDLE_VALUE) {
         pipe_ok = 1;
         CloseHandle(h);
@@ -526,7 +540,9 @@ static void handle_exec(SOCKET c, const char *body)
         return;
     }
 
-    h = pipe_connect(1500);
+    /* Breiteres Fenster als /health: deckt den transienten Instanz-Neuaufbau
+     * von rbbridge zwischen zwei Clients ab (~2.5 s). */
+    h = pipe_connect(2500);
     if (h == INVALID_HANDLE_VALUE) {
         blog("POST /exec: Pipe %s nicht erreichbar -> pipe_unavailable",
              env_str("RBB_BRIDGE_PIPE", DEFAULT_PIPE_NAME));
