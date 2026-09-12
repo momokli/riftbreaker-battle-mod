@@ -16,15 +16,15 @@ services:
       WINEESYNC: "0"
       WINEFSYNC: "0"
       # Trainer-I/O-Bridge (Issue #265): pipe_bridge.exe lauscht im Container
-      # auf {{ riftbreaker_bridge_port }}; der Host published nur
-      # 127.0.0.1:{{ riftbreaker_bridge_port }} (konsistent mit
-      # tournament_bridge_a_url).
+      # auf {{ riftbreaker_bridge_container_port }} (konstant fuer alle Instanzen);
+      # der Host published nur 127.0.0.1:{{ riftbreaker_bridge_port }} (HOST-Port,
+      # je Instanz; konsistent mit tournament_bridge_a_url).
       RBB_BRIDGE_BIND: "0.0.0.0"
-      RBB_BRIDGE_PORT: "{{ riftbreaker_bridge_port }}"
+      RBB_BRIDGE_PORT: "{{ riftbreaker_bridge_container_port }}"
     ports:
       - "{{ riftbreaker_server_port_udp }}:6321/udp"
       - "{{ riftbreaker_server_port_udp }}:6321/tcp"
-      - "127.0.0.1:{{ riftbreaker_bridge_port }}:9001"
+      - "127.0.0.1:{{ riftbreaker_bridge_port }}:{{ riftbreaker_bridge_container_port }}"
     volumes:
       - "{{ riftbreaker_game_dir }}:/opt/riftbreaker"
       - "{{ riftbreaker_config_dir }}/config.cfg:/data/config/config.cfg:ro"

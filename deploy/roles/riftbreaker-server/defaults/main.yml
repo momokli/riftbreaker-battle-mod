@@ -58,7 +58,11 @@ riftbreaker_mod_log_cmd: "docker logs {{ riftbreaker_server_container }}"
 # POST /exec in exec-Zeilen auf \\.\pipe\rbbattle (erfuellt den bereits
 # konfigurierten tournament_bridge_a_url=http://127.0.0.1:9001/exec).
 # Nur an 127.0.0.1 des Hosts publiziert (nicht ins LAN/Internet).
-# ACHTUNG: riftbreaker_bridge_port ist mit tournament_bridge_a_url gekoppelt
-# (host_vars: http://127.0.0.1:9001/exec) — Aenderungen an BEIDEN Stellen.
+# ACHTUNG: riftbreaker_bridge_port ist der HOST-Port und mit
+# tournament_bridge_a_url gekoppelt (Profil: http://127.0.0.1:<port>/exec) —
+# Aenderungen an BEIDEN Stellen. Der Container-Port ist fuer ALLE Instanzen
+# konstant (riftbreaker_bridge_container_port = 9001); nur das Host-Mapping
+# (riftbreaker_bridge_port) variiert je Instanz (Issue #290).
 riftbreaker_rbtools_dir: "{{ rbtools_dir | default('/opt/rbmods/rbtools') }}"
 riftbreaker_bridge_port: 9001
+riftbreaker_bridge_container_port: 9001

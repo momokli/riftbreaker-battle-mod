@@ -2,7 +2,8 @@
 # Boot-Test-Overrides (CI/CD-Plan F1): Test-Instanz ISOLIERT von Prod —
 # eigene Ports, Container-/Unit-Namen, Pfade. Wird nur vom Pre-Merge-
 # Boot-Test benutzt (deploy/test-deploy.yml via -e @deploy/test-vars.yml).
-# Prod-Ports 6321/8081/9001 bleiben unberührt.
+# Die Prod-Ports der laufenden Instanzen (release 6321/8081/9001, dev
+# 6322/8082/9004) bleiben unberührt (Test: 6323/8091/9003).
 riftbreaker_server_container: riftbreaker-dedicated-test
 riftbreaker_server_port_udp: 6323
 # IO-Bridge-Port isoliert von Prod (9001) — sonst kollidiert der Test-Container

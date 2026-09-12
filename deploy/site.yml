@@ -1,8 +1,22 @@
 ---
-# RIFT BATTLE — Deployment auf planet (systemd + docker, Website, Mods-Zip).
+# RIFT BATTLE — Deployment EINER Dedicated-Server-Instanz auf planet
+# (systemd + docker, Website, Mods-Zip, Probe).
 #
-# Deploy NUR über dieses Playbook:
+# Deploy NUR über die Playbooks in deploy/:
+#   # eine Instanz (Default: release):
 #   ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
+#   # explizit eine andere Instanz:
+#   ansible-playbook -i deploy/inventory deploy/site.yml \
+#     -e riftbreaker_instance=dev --ask-vault-pass
+#   # alle Instanzen (Release + DEV) in einem Lauf:
+#   ansible-playbook -i deploy/inventory deploy/fleet.yml --ask-vault-pass
+#
+# Multi-Instanz (Issue #290): die Instanz wird über das Profil
+# `deploy/instances/<riftbreaker_instance>.yml` gewählt (Default `release`).
+# Das Profil liefert alle instanz-spezifischen Rollen-Variablen (Ports, Namen,
+# Pfade, Volumes, Content-Stand); host_weite Werte (Image, Website, Probe,
+# Content-Cache, Vault) kommen aus deploy/inventory/host_vars/planet/vars.yml.
+# Das Profil hat Vorrang vor host_vars, weil `vars_files` höher priorisiert ist.
 #
 # From-zero (Issue #209): das Playbook besitzt den kompletten Stack. Es baut das
 # Laufzeit-Image selbst, provisioniert den Steam-Content und pinnt das Compose
@@ -10,22 +24,25 @@
 #
 # Reihenfolge ist absichtlich:
 #   1. mods-zip             Paketierung + md5-Parität (liefert rbbattle.zip)
-#   2. dedicated-server-image baut rb-dedicated:<deploy-sha> (Laufzeit
-#      für :6321)
+#   2. dedicated-server-image baut rb-dedicated:<deploy-sha> (Laufzeit)
 #   3. game-content         Steam-Content (App 4114030) nach game_dir
 #   4. rbtools              Windows-x64-Trainer-I/O-Tools bauen+stagen
 #      (/opt/rbmods/rbtools -> /opt/rbtools:ro im Container, Issue #265)
-#   5. riftbreaker-server   Dev-SP-Server 6321 (Mod-Install + Restart-Handler)
+#   5. riftbreaker-server   Dedicated-Server (Mod-Install + Restart-Handler)
 #   6. tournament-server    systemd (Rust/axum)
 #   7. website              statics + Caddy (inkl. /tournament/*-Proxy)
-#   8. probe-timer          systemd-Timer → status.json
+#   8. probe-timer          systemd-Timer → status.json (listet ALLE Instanzen)
 #
 # Tags erlauben einen gezielten Lauf (z. B. `--tags server` im PR-Gate
 # deploy-check) ohne die übrigen Rollen anzufassen.
 
-- name: RIFT BATTLE — planet deploy
+- name: "RIFT BATTLE — planet deploy (Instanz: {{ riftbreaker_instance | default('release') }})"
   hosts: planet
   become: true
+
+  vars_files:
+    # Instanz-Profil; Default `release` = bisherige Prod-Instanz (:6321).
+    - "instances/{{ riftbreaker_instance | default('release') }}.yml"
 
   pre_tasks:
     # Image-Tag = Deploy-SHA (kein `latest`). Läuft auch im --check

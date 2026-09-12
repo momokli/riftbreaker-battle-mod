@@ -1,11 +1,13 @@
 name: Boot-Test (Test-Ports)
 
 # Pre-Merge-Gate (CI/CD-Plan F1): baut + bootet den Stack auf Test-Ports
-# (6323/8082) und beweist so „baut + bootet", bevor ein PR auf main darf.
+# (6323/8091/9003) und beweist so „baut + bootet", bevor ein PR auf main darf.
 # Der Job-Name IST der Required-Check-Context "boot-test".
 #
 # Kein Secret nötig: Dummy-Vault (Test-Passwort) + Test-Ports/Pfade.
-# Prod (6321/8081) wird nie berührt.
+# Multi-Instanz (Issue #290): die Test-Ports kollidieren NICHT mit den laufenden
+# Instanzen — release 6321/9001/8081, dev 6322/9004/8082, Test 6323/9003/8091.
+# Der Boot-Test läuft also auch, während Prod-Instanzen laufen.
 
 on:
   pull_request:

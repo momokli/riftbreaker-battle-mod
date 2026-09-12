@@ -1,10 +1,14 @@
 ---
-# deploy-check (Issue #209): rendert die Compose-Templates LOKAL nach
+# deploy-check (Issue #209/#290): rendert das Compose-Template LOKAL nach
 # RBBATTLE_RENDER_DIR — Grundlage für `docker compose config` im PR-Gate.
 #
 # Rein lokal, kein Host-Zugriff, kein Vault: die für das Rendern nötigen Werte
 # (Server-Passwort, Solo-Hash) kommen als Dummy aus dem Play (kein Secret, nie
 # produktiv genutzt) — das verschlüsselte vault.yml wird nie entschlüsselt.
+#
+# Multi-Instanz: die zu rendernde Instanz wird über `-e riftbreaker_instance=<name>`
+# gewählt (Default `release`); deploy-check.yml ruft das Play je Instanz auf
+# (release + dev), damit beide Compose-Files geprüft werden.
 - name: RIFT BATTLE — Compose-Render (deploy-check)
   hosts: localhost
   connection: local
@@ -12,14 +16,18 @@
 
   vars_files:
     - inventory/host_vars/planet/vars.yml
-    # Rollen-Defaults liefern die Compose-Command-Listen (keine Host-Vars).
+    # Rollen-Defaults liefern die Compose-Command-Listen (keine Host-Vars) —
+    # VOR dem Instanz-Profil laden, damit das Profil sie übersteuert.
     - roles/riftbreaker-server/defaults/main.yml
+    - "instances/{{ riftbreaker_instance | default('release') }}.yml"
 
   vars:
     # Dummy-Werte nur fürs Rendern (kein Secret).
     deploy_image_tag: check
     riftbreaker_server_password: check-dummy
     vault_solo_basic_auth_hash: ""
+    # Instanz via `-e riftbreaker_instance=<name>` (Default release).
+    render_instance: "{{ riftbreaker_instance | default('release') }}"
     render_dir: "{{ lookup('env', 'RBBATTLE_RENDER_DIR') | default('/tmp/rbbattle-compose-render', true) }}"
 
   tasks:
@@ -32,5 +40,5 @@
     - name: riftbreaker-server Compose rendern
       template:
         src: roles/riftbreaker-server/templates/docker-compose.yml.j2
-        dest: "{{ render_dir }}/riftbreaker-server.yml"
+        dest: "{{ render_dir }}/riftbreaker-server-{{ render_instance }}.yml"
         mode: "0600"

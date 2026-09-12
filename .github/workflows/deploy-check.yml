@@ -6,7 +6,7 @@ name: Deploy Check
 #   2. `ansible-playbook --check --diff` gegen planet für den Container-Stack
 #      (dedicated-server-image + riftbreaker-server) und die
 #      Website-Rolle — read-only, Vault wird NIE entschlüsselt.
-#   3. jedes gerenderte Compose-File durch `docker compose config`.
+#   3. jedes gerenderte Compose-File (release + dev) durch `docker compose config`.
 # Ziel: die Fehlerklasse „Image fehlt / Container-Name belegt / Pfad falsch"
 # wird im PR sichtbar, nicht erst nach dem Merge.
 #
@@ -89,7 +89,11 @@ jobs:
         run: |
           set -euo pipefail
           RENDER_DIR="$(mktemp -d)"
-          RBBATTLE_RENDER_DIR="$RENDER_DIR" ansible-playbook deploy/check-render.yml
+          # Beide Instanzen (Issue #290): je Instanz ein Compose-File.
+          for inst in release dev; do
+            RBBATTLE_RENDER_DIR="$RENDER_DIR" \
+              ansible-playbook deploy/check-render.yml -e "riftbreaker_instance=$inst"
+          done
           shopt -s nullglob
           files=("$RENDER_DIR"/*.yml)
           if [ ${#files[@]} -eq 0 ]; then
@@ -117,6 +121,10 @@ jobs:
           EOF
           # --tags server,website: der Container-Stack + Website. Content-/
           # Tournament-Rollen brauchen Build-Artefakte (dist/, Rust-Binary) und
-          # sind hier bewusst ausgenommen.
-          ansible-playbook -i "$INV" deploy/site.yml \
-            --check --diff --tags server,website
+          # sind hier bewusst ausgenommen. Beide Instanzen prüfen (Issue #290).
+          for inst in release dev; do
+            echo "== ansible --check (Instanz: $inst) =="
+            ansible-playbook -i "$INV" deploy/site.yml \
+              -e "riftbreaker_instance=$inst" \
+              --check --diff --tags server,website
+          done

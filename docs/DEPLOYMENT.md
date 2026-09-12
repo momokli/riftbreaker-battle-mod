@@ -7,13 +7,58 @@
 
 | Komponente | Host | Container/Unit | Port | Zweck |
 |---|---|---|---|---|
-| riftbreaker-dedicated | planet | docker (wine) | 6321/udp | Dev-SP-Server: 1v1 „vs sich selbst" (SP-Mode; rbbattle-Mod + rbbridge) |
-| tournament-server | planet | systemd (Rust/axum, `tournament/`) | 8081 | Turnier 1v1: Lobby/Ready/GO/Wave-Routing/Score (2 Welten) |
-| test-Instanzen | planet | docker, on-demand | frei | Test-Server aller Art (Mod-Tests, Balance, Experimente) |
+| riftbreaker-dedicated (**release**) | planet | docker (wine) | 6321/udp (extern) | Release-/Spieler-Server, an einen Git-Tag gebunden (Direct-IP-Join, `disable_steam "1"`) |
+| riftbreaker-dedicated-dev (**dev**) | planet | docker (wine) | 6322/udp (extern) | Rolling DEV-Server (`main`), immer der aktuelle Stand zum Testen |
+| tournament-server | planet | systemd (Rust/axum, `tournament/`) | 8081 | Turnier 1v1 für die **release**-Instanz: Lobby/Ready/GO/Wave-Routing/Score |
+| tournament-server-dev | planet | systemd (Rust/axum, `tournament/`) | 8082 | Turnier 1v1 für die **dev**-Instanz |
+| test-Instanzen | planet | docker, on-demand | frei | Boot-Test/Experimente — eigene Ports (z. B. 6323), **nie** Prod-Ports |
 | Website | planet | statics + Caddy (`mellon-caddy`) | 443 | Landing `/` · `/connectivity.html` · `/solo.html` · `/status.json` · Proxy `/tournament/*` → tournament-server |
 | Mod-Download | planet | statics (Caddy) | 443 | `rbbattle.zip` (Paketierung + md5-Parität) |
-| rbmods-probe.timer | planet | systemd | — | Connectivity-Checks alle 2 Min → `status.json` |
+| rbmods-probe.timer | planet | systemd | — | Connectivity-Checks alle 2 Min → `status.json` (eine Zeile je Instanz) |
 | rbbridge | in Mod-Containern | Prozess | — | Command-Injection (`exec_cmd_client`, Argument IMMER als EIN gequotierter String) |
+
+## Server-Modell: Multi-Instanz (Issue #290)
+
+Auf planet laufen **zwei koexistierende Dedicated-Server-Instanzen**, beide per
+Direct-IP (`65.21.27.234:<port>`, `disable_steam "1"`) von außen erreichbar. Jede
+Instanz hat einen eigenen Stand-Kanal, eigene Container-/Unit-/Pfad-/Volume-
+Namen und einen eigenen UDP-Port — kein Clash.
+
+**Instanz-Schema** (Quelle: `deploy/instances/<name>.yml`; Auswahl via
+`-e riftbreaker_instance=<name>`, Default `release`):
+
+| Instanz | Kanal | Game-UDP (extern) | Bridge (nur 127.0.0.1) | Tournament | Container | Game-Dir | Compose | Unit |
+|---|---|---|---|---|---|---|---|---|
+| `release` | Git-Tag `vX.Y.Z` | 6321 | 9001 | 8081 | `riftbreaker-dedicated` | `/srv/rbgame` | `/opt/rbmods/compose/riftbreaker-dedicated` | `tournament-server` |
+| `dev` | `main` (rolling) | 6322 | 9004 | 8082 | `riftbreaker-dedicated-dev` | `/srv/rbgame-dev` | `/opt/rbmods/compose/riftbreaker-dedicated-dev` | `tournament-server-dev` |
+| `test` (Boot-Test) | PR-SHA | 6323 | 9003 | 8091 | `riftbreaker-dedicated-test` | `/srv/rbgame-test` | `/opt/rbbattle-deploy/test/rb` | `tournament-server-test` |
+
+Regeln:
+
+- **Game-Content getrennt pro Instanz** (`/srv/rbgame` vs. `/srv/rbgame-dev`),
+  beide gespiegelt aus dem kanonischen Steam-Cache
+  (`/srv/riftbreaker/data/server`, `game-content`, Modus `sync`). Der
+  `mods/`-Guard gilt je Instanz.
+- **Bridge-Ports** sind nur an `127.0.0.1` des Hosts publiziert (intern); der
+  Container-Port ist konstant `9001`, nur das Host-Mapping variiert je Instanz.
+  `tournament_bridge_a_url` zeigt auf den Host-Port der eigenen Instanz.
+- **Nur die externen Instanzen** (`release`, `dev`) brauchen offene UDP-Ports.
+  UFW ist host-seitig (nicht Repo-owned): z. B. `ufw allow 6321/udp` und
+  `ufw allow 6322/udp` (einmalig auf planet, bewusst außerhalb des Deploys).
+- **Boot-Test** nutzt 6323/9003/8091 und kollidiert nicht mit laufenden
+  Prod-Instanzen (`release` 6321/9001/8081, `dev` 6322/9004/8082).
+
+**Deploy** (Details: `deploy/README.md`):
+
+```bash
+# eine Instanz (Default release):
+ansible-playbook -i deploy/inventory deploy/site.yml -e riftbreaker_instance=release --ask-vault-pass
+# alle Instanzen in einem Lauf:
+ansible-playbook -i deploy/inventory deploy/fleet.yml --ask-vault-pass
+```
+
+Offene Punkte/Risiken (Ressourcen 2× Wine+Dedi, Engine-Mehrfach-Instanz,
+Steam-Verhalten) stehen unter `Refs #290` im Issue.
 
 ## Kanonische Landing
 
@@ -33,9 +78,9 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
    `rbbattle.zip` nach planet; **md5-Paritäts-Check (Zip == Prod) hart als
    Fehlschlag**.
 2. **dedicated-server-image** — baut `rb-dedicated:<deploy-sha>` IM
-   Playbook auf planet aus `tools/dedicated-server` (Wine-Laufzeit
-   für :6321, Community-Rezept; Docker-Layer-Cache → billig/idempotent). Das
-   gerenderte Compose pinnt exakt diesen Tag (kein `latest`).
+   Playbook auf planet aus `tools/dedicated-server` (Wine-Laufzeit,
+   Community-Rezept; Docker-Layer-Cache → billig/idempotent). EIN Image für
+   alle Instanzen. Das gerenderte Compose pinnt exakt diesen Tag (kein `latest`).
 3. **game-content** — Dedicated-Server-Content (Steam-App 4114030) deklarativ
    nach `riftbreaker_game_dir`. **Standard: idempotenter Sync aus dem
    kanonischen Cache** (`/srv/riftbreaker/data/server`, in Backups) — der
@@ -49,13 +94,17 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
 6. **website** — statische Dateien (`site/*`) nach Docroot, Caddy-Snippet
    (statics + `/tournament/*`-Proxy) + Reload.
 7. **probe-timer** — systemd-Timer für `scripts/probe_servers.sh` →
-   `status.json`.
+   `status.json` (eine Endpoint-Zeile je Instanz, aus `deploy/instances/*.yml`).
 
 Grundsätze:
 
 - **Idempotent** — jeder Lauf konvergiert auf denselben Zustand.
+- **Instanz-Profile** — die instanz-spezifischen Werte stehen in
+  `deploy/instances/<name>.yml` (Auswahl `-e riftbreaker_instance=<name>`,
+  Default `release`); host-weite Werte in `host_vars/planet/vars.yml`.
 - **Deploy nur via Playbook** —
-  `ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass`.
+  `ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass`
+  (eine Instanz) bzw. `deploy/fleet.yml` (alle Instanzen).
 - **Rollback** = vorherige `rbbattle.zip` / vorheriges Binary wieder einspielen.
 
 ## Mod-Backups & mods/-Guard (Issue #212)
@@ -145,22 +194,27 @@ Siehe [`tools/mods-guard/`](../tools/mods-guard/README.md).
 
 Nach jedem Merge auf `main` deployt
 [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) automatisch auf
-den Solo-DEV-Server (planet, Port 6321) — **rolling**, immer der aktuelle Stand
+die **dev-Instanz** (planet, Port 6322) — **rolling**, immer der aktuelle Stand
 zum Testen. Der Job läuft auf dem self-hosted Runner auf planet und verbindet
-sich per **SSH als dedizierter deploy-User** (`ssh rbd "<sha> <ref>"`); die
-forced command (`deploy/deploy-ssh.sh`) validiert die SHA, macht
+sich per **SSH als dedizierter deploy-User** (`ssh rbd "<sha> <ref> dev"`); die
+forced command (`deploy/deploy-ssh.sh`) validiert SHA **und Instanz-Token**, macht
 `git fetch` + Hard-Checkout und führt das Ansible-Playbook als root aus
 (enges sudoers). Kein Token, kein Polling. Installation/Migration:
-`deploy/README.md` → „CD: SSH-Deploy".
+`deploy/README.md` → „CD: SSH-Deploy" und „Multi-Instanz-Deploy".
 
-Topologie (Momo-Entscheidung, 2026-09-10): **EIN** Server auf `:6321` statt
-Steam-/Non-Steam-Dualität; ein Direct-IP-Server (`disable_steam "1"`) deckt
-beide Stores ab. Der **Tag→prod-Kanal ist on hold** (vorerst gestrichen):
-`tags: ['v*']` sind seit Issue #209 **reine Marker** (kein Tag-Trigger, keine
-GitHub-Releases, keine prod-Umgebung im Workflow). Reaktiviert wird der Kanal,
-sobald ein **zweites Deploy-Target** existiert — aktuell gibt es genau EINEN
-Server (planet, :6321). Veröffentlichter Download ist der deployte Stand
-`https://rift.projectmellon.de/mods/rbbattle.zip`.
+Die **release-Instanz** (planet, Port 6321) wird NICHT rolling deployt, sondern
+aus einem Git-Tag über
+[`.github/workflows/deploy-release.yml`](../.github/workflows/deploy-release.yml)
+(`workflow_dispatch` + Tag `vX.Y.Z`, Umgebung `prod`) — der bewusst wieder
+eingeführte **Tag→prod-Kanal** (Issue #209 hatte ihn gestrichen; mit dem
+zweiten Deploy-Target ist er wieder sinnvoll). Damit ist der Live-/Spieler-Stand
+an einen Tag gebunden, während `main` auf der dev-Instanz rollt.
+
+Topologie (Issue #290): **zwei** Direct-IP-Server (`disable_steam "1"` deckt
+Steam- und GOG-Client ab) — `release` :6321 (stabil, Tag) und `dev` :6322
+(rolling). Veröffentlichter Download ist der deployte Stand
+`https://rift.projectmellon.de/mods/rbbattle.zip` (aus dem jeweiligen
+Deploy-Stand).
 
 Der HTTP-Hook ist seit 2026-09-11 durch den SSH-Deploy abgelöst (Issue #235);
 das `DEPLOY_TOKEN`-Secret im Environment `dev` wurde gelöscht — **es gibt kein
@@ -186,8 +240,8 @@ manuellen Schritte auf planet (`deploy/README.md` → „From-zero").
 Der alte Community-Stack (`j3n5-group/riftbreaker-docker`, Steam-basiert) unter
 `/srv/riftbreaker` ist abgelöst; `/srv/riftbreaker/data/server` bleibt als
 **kanonischer Steam-Content-Cache** liegen (Sync-Fallback für `game-content`).
-Mod-Instanz: `/srv/rbgame` (:6321); Compose
-unter `/opt/rbmods/compose/…`.
+Mod-Instanzen: `/srv/rbgame` (:6321, release) und `/srv/rbgame-dev` (:6322,
+dev); Compose unter `/opt/rbmods/compose/riftbreaker-dedicated{,-dev}`.
 
 ## Interim-Deploy :6321 (Issue #156) — historisch, durch #209 überholt
 

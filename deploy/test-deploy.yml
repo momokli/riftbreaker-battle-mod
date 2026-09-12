@@ -1,10 +1,16 @@
 ---
 # Pre-Merge-Boot-Test (CI/CD-Plan F1): baut Image + tournament-server und
 # bootet EINEN Game-Server (Test-Port 6323) + den tournament-server
-# (Test-Port 8082) — isoliert von Prod (eigene Ports/Namen/Pfade via
-# deploy/test-vars.yml). Es geht nur um „baut + bootet".
-# Kein website/probe (DNS egal — es geht nur um „baut + bootet").
+# (Test-Port 8091) — isoliert von Prod UND von den Release-/DEV-Instanzen
+# (eigene Ports/Namen/Pfade via deploy/test-vars.yml). Es geht nur um
+# „baut + bootet". Kein website/probe (DNS egal).
 # Verifikation + Teardown: .github/workflows/boot-test.yml.
+#
+# Multi-Instanz (Issue #290): Basiswerte (Kampagne/Mission/Schwierigkeit,
+# Volume-/Image-Namen, Server-Name) kommen aus dem Release-Profil; die harten
+# Test-Overrides (Ports/Namen/Pfade) setzt `-e @deploy/test-vars.yml` (extra-vars
+# schlagen das Profil). Die Test-Ports (6323/9003/8091) kollidieren nicht mit
+# den Prod-Ports 6321/9001/8081 (release) bzw. 6322/9004/8082 (dev).
 #
 # Aufruf (Workflow, Dummy-Vault — kein Secret nötig):
 #   ansible-playbook -i <tmp-inventory-mit-Dummy-Vault> deploy/test-deploy.yml \
@@ -13,6 +19,10 @@
 - name: RIFT BATTLE — Pre-Merge-Boot-Test (Test-Ports)
   hosts: planet
   become: true
+
+  vars_files:
+    # Basis-Profil (Welt/Config/Volume-Namen); wird von test-vars.yml übersteuert.
+    - instances/release.yml
 
   pre_tasks:
     - name: Test-SHA für den Image-Tag ermitteln

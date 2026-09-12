@@ -1,0 +1,65 @@
+name: Deploy Release (Tag)
+
+# Release-Deploy (Issue #290): deployt die **release-Instanz** (planet, Port
+# 6321) aus einem Git-TAG (vX.Y.Z). Damit ist der Live-/Spieler-Stand an einen
+# Tag gebunden, während die DEV-Instanz (Port 6322) rolling `main` folgt
+# (deploy.yml).
+#
+# Manuell/explizit (workflow_dispatch) — KEIN Auto-Trigger. Der Kanal ist die
+# bewusste Wiedereinführung des in Issue #209 gestrichenen Tag→prod-Pfads; ein
+# Release soll ein bewusster Akt sein. Die Umgebung `prod` kann mit Required
+# Reviewers als Freigabe-Gate belegt werden.
+#
+# Deploy-Mechanik = wie deploy.yml: SSH als deploy-User, forced command
+# deploy/deploy-ssh.sh mit dem Instanz-Token `release`. Checkout = die SHA des
+# Tags (nicht main), damit Mod-Stand UND Image-Tag dem Tag entsprechen.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git-Tag (vX.Y.Z), der auf die release-Instanz deployt wird"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cd-release
+  cancel-in-progress: false
+
+jobs:
+  deploy-release:
+    name: Deploy Release (planet :6321, Tag)
+    runs-on: [self-hosted, planet]
+    timeout-minutes: 30
+    environment:
+      name: prod
+      url: https://rift.projectmellon.de/
+    steps:
+      - name: Tag auflösen (Tag → SHA)
+        id: tag
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag }}"
+          case "$tag" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::Erwartet einen Tag der Form vX.Y.Z, bekam: $tag"; exit 1 ;;
+          esac
+          sha="$(git ls-remote https://github.com/${GITHUB_REPOSITORY}.git \
+                  "refs/tags/${tag}^{}" | awk '{print $1}')"
+          if [ -z "$sha" ]; then
+            sha="$(git ls-remote https://github.com/${GITHUB_REPOSITORY}.git \
+                    "refs/tags/${tag}" | awk '{print $1}')"
+          fi
+          if [ -z "$sha" ]; then
+            echo "::error::Tag ${tag} existiert nicht (oder ist kein Tag-Objekt)."
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Tag ${tag} -> ${sha}"
+
+      - name: Deploy per SSH (deploy-User, forced command, Instanz release)
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes rbd "${{ steps.tag.outputs.sha }} refs/tags/${{ inputs.tag }} release"

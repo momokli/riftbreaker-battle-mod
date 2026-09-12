@@ -70,11 +70,23 @@ Ist der Hash leer/nicht gesetzt, bleibt `/solo` bewusst **ungeschützt**
 ## Deploy
 
 ```bash
+# eine Instanz (Default release):
 ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
+# explizit eine Instanz (release | dev):
+ansible-playbook -i deploy/inventory deploy/site.yml -e riftbreaker_instance=dev --ask-vault-pass
+# alle Instanzen in einem Lauf:
+ansible-playbook -i deploy/inventory deploy/fleet.yml --ask-vault-pass
 ```
 
+Die instanz-spezifischen Werte (Ports, Container-/Unit-/Pfad-/Volume-Namen,
+Welt/Config) kommen aus dem Profil `deploy/instances/<riftbreaker_instance>.yml`
+(Default `release`); host-weite Werte (Image, Website, Probe, Content-Cache,
+Secrets) aus `deploy/inventory/host_vars/planet/vars.yml`. Das Profil hat Vorrang
+vor host_vars (`vars_files` ist höher priorisiert). Details/Schema:
+`docs/DEPLOYMENT.md` → „Server-Modell: Multi-Instanz".
+
 Reihenfolge der Rollen (site.yml): `mods-zip` → `dedicated-server-image` →
-`game-content` → `riftbreaker-server` → `tournament-server` →
+`game-content` → `rbtools` → `riftbreaker-server` → `tournament-server` →
 `website` → `probe-timer`.
 
 ### From-zero (ein Kommando, Issue #209)
@@ -92,7 +104,8 @@ Was das Playbook selbst besitzt:
 
 - **Laufzeit-Image** (`dedicated-server-image`): baut
   `rb-dedicated:<deploy-sha>` auf dem Zielhost aus
-  `tools/dedicated-server` (Wine-Laufzeit für :6321, Community-Rezept). Der Tag ist der
+  `tools/dedicated-server` (Wine-Laufzeit, Community-Rezept; EIN Image für alle
+  Instanzen). Der Tag ist der
   Deploy-SHA der ausgecheckten Revision; das gerenderte `docker-compose.yml`
   referenziert **exakt** diesen Tag (kein `latest`). Der Tag im Namen macht den
   Lauf trivially idempotent: unveränderter Stand → Image existiert → kein Build;
@@ -113,7 +126,7 @@ Was das Playbook selbst besitzt:
   md5-Marker; der Marker-Schreibvorgang **notifyt einen Restart-Handler**
   (`docker compose up -d --force-recreate`). Ohne den bliebe ein reines
   Mod-Update wirkungslos (Compose startet einen unveränderten Container nicht
-  neu) — Ziel: „Merge → Mod ist auf :6321 wirklich geladen".
+  neu) — Ziel: „Merge → Mod ist auf der Ziel-Instanz wirklich geladen".
 
 ### Vault
 
@@ -125,14 +138,16 @@ unter `/etc/rbbattle-deploy/vault.pass`. **Nie** im Repo/Log.
 
 Nach jedem Merge auf `main` rollt der Workflow
 [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) den aktuellen
-Mod-Stand automatisch auf den Solo-DEV-Server aus (planet, Port 6321).
+Mod-Stand automatisch auf die **dev-Instanz** aus (planet, Port 6322). Die
+**release-Instanz** (Port 6321) wird aus einem Tag deployt
+(`deploy-release.yml`, `workflow_dispatch` + `vX.Y.Z`).
 
-Topologie (Issue #91, 2026-09-10): **EIN** Server auf `:6321` statt
-Steam-/Non-Steam-Dualität (Direct-IP, `disable_steam "1"` deckt beide Stores ab).
-Der **Tag→prod-Kanal ist on hold** (vorerst gestrichen): reaktiviert, sobald
-ein **zweites Deploy-Target** existiert — aktuell gibt es genau EINEN Server
-(planet, :6321). Der Workflow kennt bewusst keinen Tag-Trigger und keine
-prod-Umgebung.
+Topologie (Issue #290): **zwei** koexistierende Direct-IP-Server
+(`disable_steam "1"` deckt Steam- und GOG-Client ab) — `release` :6321
+(stabil, an einen Tag gebunden) und `dev` :6322 (rolling `main`). Der
+**Tag→prod-Kanal ist wieder aktiv** (bewusste Wiedereinführung nach #209):
+`deploy-release.yml` deployt einen Tag explizit auf die release-Instanz
+(Umgebung `prod`). `deploy.yml` rollt `main` auf die dev-Instanz.
 
 ## CD: SSH-Deploy (dedizierter deploy-User)
 
@@ -141,12 +156,14 @@ deploy-User** (ersetzt den früheren HTTP-Hook aus #91 — kein Token, kein
 Polling, Ergebnis-Streaming direkt im Job-Log):
 
 ```text
-push auf main
+push auf main (dev)  /  workflow_dispatch Tag vX.Y.Z (release)
   → GitHub-Actions-Job auf dem self-hosted Runner (planet)
-  → ssh rbd "<sha> <ref>"                     [Runner-Key, User deploy]
+  → ssh rbd "<sha> <ref> <instance>"          [Runner-Key, User deploy]
   → forced command /opt/rbbattle-deploy/deploy-ssh.sh (läuft als deploy):
-       SHA validieren → git fetch + Hard-Checkout im Checkout
-       → sudo -n /usr/local/bin/rbbattle-deploy (ansible-playbook als root)
+       SHA + Instanz-Token validieren → Instanz nach /opt/rbbattle-deploy/instance
+       → git fetch + Hard-Checkout im Checkout
+       → sudo -n /usr/local/bin/rbbattle-deploy (ansible-playbook als root;
+         liest die Instanz-Datei und setzt -e riftbreaker_instance=<instanz>)
   → exit code = Deploy-Ergebnis (kein Polling, kein Secret)
 ```
 
@@ -207,15 +224,20 @@ läuft durchgehend non-root (forced command + git-Checkout als deploy).
 sudo python3 -m venv /opt/rb-ansible
 sudo /opt/rb-ansible/bin/pip install --disable-pip-version-check "ansible-core==2.19.*"
 
-# b) Root-Wrapper (führt das Playbook im Checkout aus; ignoriert Argumente):
+# b) Root-Wrapper (führt das Playbook im Checkout aus; ignoriert Argumente,
+#    wählt die Instanz aus der Datei /opt/rbbattle-deploy/instance — geschrieben
+#    von deploy/deploy-ssh.sh, Default `release`):
 sudo tee /usr/local/bin/rbbattle-deploy >/dev/null <<'WRAPPER'
 #!/bin/sh
 set -eu
 export HOME=/opt/rbbattle-deploy
 export ANSIBLE_CONFIG=/etc/rbbattle-deploy/ansible.cfg
+instance="$(cat /opt/rbbattle-deploy/instance 2>/dev/null || echo release)"
+case "$instance" in release|dev) ;; *) instance=release ;; esac
 cd /opt/rbbattle-deploy/repo
 exec /opt/rb-ansible/bin/ansible-playbook \
   -i deploy/inventory deploy/site.yml \
+  -e "riftbreaker_instance=${instance}" \
   --vault-password-file /etc/rbbattle-deploy/vault.pass
 WRAPPER
 sudo chown root:root /usr/local/bin/rbbattle-deploy
@@ -265,11 +287,37 @@ Deshalb liegt die Loopback-Konfiguration root-only unter
 `remote_tmp`), aktiviert über `ANSIBLE_CONFIG=/etc/rbbattle-deploy/ansible.cfg`
 im Wrapper; known_hosts unter `/opt/rbbattle-deploy/.ssh/`.
 
+### Multi-Instanz-Deploy (Issue #290)
+
+Der Deploy einer bestimmten Instanz (`release` | `dev`) via CD/forced command
+setzt **host-seitig** voraus, dass
+
+1. `deploy/deploy-ssh.sh` installiert ist (schreibt `/opt/rbbattle-deploy/instance`),
+   und
+2. der Root-Wrapper (Schritt b, oben) die Datei liest und
+   `-e riftbreaker_instance=<instanz>` setzt.
+
+Solange der Wrapper **nicht** angepasst ist, ignoriert er den Instanz-Token und
+deployt weiterhin `release` — der Workflow bleibt damit rückwärtskompatibel
+(kein ungewollter Umbau der Prod-Instanz durch einen Wrapper, der noch nicht
+nachgezogen ist). Update: Wrapper aus Schritt b neu installieren
+(`sudo install -m 0755 …` bzw. `tee`) + `deploy/deploy-ssh.sh` aktualisieren.
+
+Tag-Deploy auf die release-Instanz (Workflow `deploy-release.yml`):
+
+```bash
+# entspricht manuell:
+sudo -u runner ssh -o BatchMode=yes rbd "<sha-vom-tag> refs/tags/vX.Y.Z release"
+```
+
+Nur die dev-Instanz deployen: `ssh rbd "<sha> refs/heads/main dev"`.
+
 ### Betrieb
 
 ```bash
 # Deploy manuell anstoßen (exit code = Ergebnis; Ausgabe = ansible-Log):
-sudo -u runner ssh -o BatchMode=yes rbd "<sha> refs/heads/main"
+#   <sha> <ref> [<instance>]   — instance: release (Default) | dev
+sudo -u runner ssh -o BatchMode=yes rbd "<sha> refs/heads/main dev"
 # Zuletzt deployte SHA:
 git -C /opt/rbbattle-deploy/repo log --oneline -3
 ```
@@ -283,6 +331,8 @@ git -C /opt/rbbattle-deploy/repo log --oneline -3
 - [ ] forced command + `authorized_keys` (Schritte 2–3), Alias `rbd` (Schritt 4)
 - [ ] Smoke-Test grün (Schritt 5)
 - [ ] Root-Weg: Ansible (venv) + Wrapper + sudoers + `vault.pass` + Loopback-SSH
+- [ ] Multi-Instanz: Wrapper liest `/opt/rbbattle-deploy/instance` (Instanz-Token)
+- [ ] Host-UFW: `ufw allow 6321/udp` + `ufw allow 6322/udp` (release + dev extern)
 - [ ] `vault.yml` verschlüsselt + befüllt (falls noch `CHANGE_ME`)
 - [ ] Alter Hook dekommissioniert: `systemctl disable --now rbbattle-deploy-hook` + Unit-Datei entfernt
 - [x] GitHub: `DEPLOY_TOKEN`-Secret gelöscht (obsolet)
@@ -322,10 +372,10 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 
 | Rolle | Typ | Was |
 |---|---|---|
-| `dedicated-server-image` | docker | baut `rb-dedicated:<deploy-sha>` auf planet (Laufzeit :6321) |
-| `game-content` | steamcmd/sync | Dedicated-Server-Content (App 4114030) nach `riftbreaker_game_dir` (idempotent, fail loud) |
-| `riftbreaker-server` | docker | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation |
-| `tournament-server` | systemd | Rust/axum Referee + Web-UI. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt) |
+| `dedicated-server-image` | docker | baut `rb-dedicated:<deploy-sha>` auf planet (Wine-Laufzeit, EIN Image für alle Instanzen) |
+| `game-content` | steamcmd/sync | Dedicated-Server-Content (App 4114030) nach `riftbreaker_game_dir` der Instanz (idempotent, fail loud) |
+| `riftbreaker-server` | docker | Dedicated-Server der Instanz (Port/Name/Pfade aus dem Profil), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) |
+| `tournament-server` | systemd | Rust/axum Referee + Web-UI der Instanz. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt) |
 | `website` | statics + Caddy | `site/*` → Docroot, Caddy-Snippet + `/tournament/*`-Proxy |
 | `mods-zip` | — | Paketierung + md5-Paritäts-Check (hart) |
 | `probe-timer` | systemd | `probe_servers.sh` alle 2 Min → `status.json` |
@@ -334,18 +384,24 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 
 ```text
 deploy/
-├── site.yml                       # Haupt-Playbook (pre_tasks + Rollenreihenfolge)
+├── site.yml                       # Playbook EINER Instanz (Profil via -e riftbreaker_instance)
+├── fleet.yml                      # alle Instanzen (release + dev) in einem Lauf
 ├── check-render.yml               # deploy-check: rendert Compose-Templates lokal
-├── deploy-ssh.sh                  # CD: forced command für den deploy-User (SSH)
+├── deploy-ssh.sh                  # CD: forced command für den deploy-User (SSH, Instanz-Token)
+├── test-deploy.yml                # Pre-Merge-Boot-Test (Test-Ports)
+├── test-vars.yml                  # Boot-Test-Overrides (Ports/Namen/Pfade)
+├── instances/                     # Instanz-Profile (Issue #290)
+│   ├── release.yml                #   Release-Instanz :6321 (Tag-Kanal)
+│   └── dev.yml                    #   DEV-Instanz :6322 (rolling main)
 ├── inventory/
 │   ├── hosts.yml                  # Host "planet" (mesh-first, Tailscale)
 │   └── host_vars/planet/
-│       ├── vars.yml               # nicht-geheime Konfiguration
+│       ├── vars.yml               # nicht-geheime, HOST-WEITE Konfiguration
 │       └── vault.yml              # Geheimnis (ansible-vault verschlüsselt)
 └── roles/
     ├── dedicated-server-image/    # baut rb-dedicated:<sha>
     ├── game-content/              # Steam-Content (App 4114030) deklarativ
-    ├── riftbreaker-server/        # docker 6321 (+ Restart-Handler)
+    ├── riftbreaker-server/        # docker (Port/Name/Pfade je Instanz)
     ├── tournament-server/         # systemd
     ├── website/                   # statics + Caddy
     ├── mods-zip/                  # Paketierung + md5-Parität
@@ -369,14 +425,15 @@ deploy/
 ## Rollback
 
 Der Deploy ist an die Revision (SHA) gebunden (Image-Tag + Checkout). Rollback
-= alte SHA deployen:
+= alte SHA deployen (je Instanz):
 
 ```bash
 # auf planet (root-Weg) — alten Stand auschecken und deployen:
+#   dritte Zeile = Instanz (release | dev); ohne Angabe = release
 cd /opt/rbbattle-deploy/repo && git checkout --force <alte-sha>
 sudo -n /usr/local/bin/rbbattle-deploy
 # oder per SSH forced command (Workflow-tauglich):
-sudo -u runner ssh -o BatchMode=yes rbd "<alte-sha> refs/heads/main"
+sudo -u runner ssh -o BatchMode=yes rbd "<alte-sha> refs/heads/main dev"
 ```
 
 Nur das Mod zurückdrehen (ohne Image/Content):
@@ -393,8 +450,8 @@ Das vorherige `tournament-server`-Binary bzw. die vorherige `rbbattle.zip`
 | Ort | Was |
 |---|---|
 | `gh run view <id> --log` | CD-Job-Log (der `ssh`-Step streamt das ganze ansible-Log) |
-| `journalctl -u tournament-server`, `-u rbmods-probe.timer` | systemd-Rollen |
-| `docker logs riftbreaker-dedicated` | Container-Logs (Wine/Server) |
+| `journalctl -u tournament-server`, `-u tournament-server-dev`, `-u rbmods-probe.timer` | systemd-Rollen |
+| `docker logs riftbreaker-dedicated` (release) / `docker logs riftbreaker-dedicated-dev` (dev) | Container-Logs (Wine/Server) |
 | `git -C /opt/rbbattle-deploy/repo log --oneline -3` | zuletzt deployte SHA |
 
 ## Was CI/CD besitzt (und was nicht)
