@@ -38,5 +38,7 @@ riftbreaker_mods_guard_autofix: true
 # POST /exec in exec-Zeilen auf \\.\pipe\rbbattle (erfuellt den bereits
 # konfigurierten tournament_bridge_a_url=http://127.0.0.1:9001/exec).
 # Nur an 127.0.0.1 des Hosts publiziert (nicht ins LAN/Internet).
+# ACHTUNG: riftbreaker_bridge_port ist mit tournament_bridge_a_url gekoppelt
+# (host_vars: http://127.0.0.1:9001/exec) — Aenderungen an BEIDEN Stellen.
 riftbreaker_rbtools_dir: "{{ rbtools_dir | default('/opt/rbmods/rbtools') }}"
 riftbreaker_bridge_port: 9001
