@@ -250,23 +250,35 @@ Leitet `exec rb_wave <n>` an den Bridge-/Relay-HTTP-Endpoint der Welt weiter
 (`RBBRIDGE_A_URL`/`RBBRIDGE_B_URL`, `POST <url> {"command":"rb_wave <n>"}`) und
 gibt dessen `exec_result` an die UI zurueck — der Weg fuer den „Spawn Wave"-
 Button der `/solo`-Match-Page. Defaults: `world="A"` (Solo/SP hat nur ein reales
-HQ in A), `n=3`. `n` muss 1..100 sein (sonst 400). Ohne konfigurierten
-Bridge-Endpoint → 409 `conflict` (kein Transport).
+HQ in A), `n=3`. `n` muss 1..100 sein: Werte ausserhalb → 400 `invalid`;
+falscher Typ (z. B. `n:1.5`, `n:-1`, `n:"x"`) wird schon von Serde abgewiesen
+→ **422**, nicht 400. Ohne konfigurierten Bridge-Endpoint → 409 `conflict`
+(kein Transport).
 
 Antwort:
 
 ```json
-{"ok": true, "world": "A", "command": "rb_wave 3",
+{"ok": true, "exec_ok": true, "world": "A", "command": "rb_wave 3",
  "endpoint": "http://127.0.0.1:9001/exec", "status": 200, "error": null,
  "exec_result": {"ok": true, "results": [{"command": "rb_wave 3", "ok": true}]}}
 ```
 
-`ok` spiegelt den Zustell-/Ausfuehr-Erfolg (`exec_result ok:true`). Ein
-Zustell-/Ausfuehrfehler bleibt HTTP 200 mit `ok:false` + `error`/`exec_result`
-(eine 502/503 der Bridge wird durchgereicht), damit die UI den Grund anzeigen
-kann; nur ein fehlender Bridge-Endpoint ist ein 409. Der Versuch wird als
-Feed-Event `kind=wave` protokolliert (sichtbar im Live-Dev-Log der
-`/solo`-Seite). Der Endpoint veraendert den Match-Zustand nicht.
+Zwei getrennte Erfolgsflags (Review #271, Finding 2/3):
+
+- `ok` = **Zustell-Erfolg** — die Bridge/Relay antwortete HTTP 2xx ohne
+  Transportfehler.
+- `exec_ok` = **Ausfuehr-Erfolg** aus dem durchgereichten `exec_result`
+  (`ok:true` bzw. alle `results[].ok`); `null`, wenn kein JSON-Body kam. Die
+  Web-UI leitet dasselbe in `waveResult()` ab.
+
+Eine Bridge, die mit **200/`exec_result.ok=false`** antwortet (z. B.
+`status=timeout` → `reason=no_response` laut
+[relay-pipe-contract.md](relay-pipe-contract.md)), liefert HTTP **200** mit
+`ok:true` und `exec_ok:false` plus `error`/`exec_result`; ein Zustellfehler
+einer 502/503 wird durchgereicht und ergibt `ok:false`. Nur ein fehlender
+Bridge-Endpoint ist ein 409. Der Versuch wird als Feed-Event `kind=wave`
+protokolliert (sichtbar im Live-Dev-Log der `/solo`-Seite). Der Endpoint
+veraendert den Match-Zustand nicht.
 
 Transport: auf dem Dedicated-Server ist der Endpoint die `pipe_bridge` (Wine,
 HTTP → `\\.\pipe\rbbattle`, #265); fuer native Windows-Welten der

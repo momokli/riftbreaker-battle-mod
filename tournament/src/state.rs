@@ -790,7 +790,9 @@ impl MatchState {
 
     /// Feed-Eintrag für einen Operator-Wellen-Spawn (`POST /wave`, Issue #266).
     ///
-    /// `ok` = die Bridge/Relay-Antwort meldete `exec_result ok:true`. Das
+    /// `ok` = **Zustell-Erfolg** (Bridge/Relay antwortete HTTP 2xx, kein
+    /// Transportfehler) — nicht der Ausführ-Erfolg; den liefert die
+    /// `/wave`-Antwort als `exec_ok` aus dem `exec_result`. Das
     /// Gegenstück im Spiel-Log ist `[RBBATTLE] event=wave level=<n> status=start`
     /// (Mod) — nur mit laufendem Spiel verifizierbar (Player-Test offen).
     pub fn log_wave(
@@ -803,7 +805,7 @@ impl MatchState {
     ) {
         let msg = if ok {
             format!(
-                "Welt {world}: {command} — exec_result ok (HTTP {})",
+                "Welt {world}: {command} — zugestellt (HTTP {})",
                 status
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| "?".to_string())

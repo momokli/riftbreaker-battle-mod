@@ -346,6 +346,16 @@ test('waveResult: ok nur bei exec_result ok:true (bzw. alle results[].ok)', () =
     cockpit.waveResult({ ok: true, exec_result: { results: [{ ok: true }, { ok: false }] } }).ok,
     false,
   );
+  // Review #271 Finding 2/3: Referee liefert 200 (Zustellung ok), aber
+  // exec_result.ok=false (z. B. Mod-Timeout) -> ankommen, aber nicht ausgefuehrt.
+  const delivered = cockpit.waveResult({
+    ok: true, exec_ok: false, status: 200,
+    exec_result: { ok: false, reason: 'no_response' },
+  });
+  assert.strictEqual(delivered.sent, true);
+  assert.strictEqual(delivered.ok, false);
+  assert.strictEqual(delivered.status, 200);
+  assert.strictEqual(delivered.reason, 'no_response');
   assert.strictEqual(cockpit.waveResult(null).ok, false);
   assert.strictEqual(cockpit.waveResult({}).sent, false);
 });

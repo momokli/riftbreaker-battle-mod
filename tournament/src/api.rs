@@ -509,13 +509,38 @@ async fn sp(AxumState(app): AxumState<AppState>, Json(req): Json<SpReq>) -> ApiR
     })))
 }
 
+/// `exec_result`-Erfolg einer Bridge-Antwort — gleiche Ableitung wie
+/// `waveResult()` in `site/solo-cockpit.js`: `ok:true` schlaegt durch, sonst
+/// zaehlt `results[]` (nicht-leer und alle `ok:true`). `None` ohne JSON-Body.
+fn exec_result_ok(body: Option<&Value>) -> Option<bool> {
+    let body = body?;
+    if body.get("ok").and_then(Value::as_bool) == Some(true) {
+        return Some(true);
+    }
+    if let Some(results) = body.get("results").and_then(Value::as_array) {
+        if !results.is_empty() {
+            return Some(
+                results
+                    .iter()
+                    .all(|r| r.get("ok").and_then(Value::as_bool) == Some(true)),
+            );
+        }
+    }
+    Some(false)
+}
+
 /// POST /wave — Operator-Wellen-Spawn (Issue #266).
 ///
 /// Leitet `exec rb_wave <n>` an den Bridge-/Relay-HTTP-Endpoint der Welt
 /// weiter (`RBBRIDGE_*_URL`, `POST /exec {"command":"rb_wave <n>"}`) und gibt
 /// dessen `exec_result` an die Web-UI zurueck. Kein Endpoint konfiguriert →
-/// 409 (kein Transport). Ein Zustell-/Ausfuehrfehler bleibt HTTP 200 mit
-/// `ok:false` + `error`/`exec_result`, damit die UI den Grund anzeigen kann.
+/// 409 (kein Transport).
+///
+/// `ok` ist der **Zustell-Erfolg** (HTTP 2xx, kein Transportfehler), `exec_ok`
+/// der **Ausfuehr-Erfolg** aus dem durchgereichten `exec_result`. Eine Bridge,
+/// die mit 200 + `exec_result: {ok:false}` antwortet (z. B. `timeout`),
+/// liefert daher HTTP 200 mit `ok:true` und `exec_ok:false` plus `error`/
+/// `exec_result`, damit die UI den Grund anzeigen kann.
 async fn wave(
     AxumState(app): AxumState<AppState>,
     Json(req): Json<WaveReq>,
@@ -553,14 +578,16 @@ async fn wave(
 
     let payload = json!({ "command": command });
     let res = broadcast::post_json(&endpoint, &payload, app.cfg.go_timeout).await;
-    let ok = res.ok();
+    let delivered = res.ok();
+    let exec_ok = exec_result_ok(res.body.as_ref());
     app.state
         .write()
         .await
-        .log_wave(world, &command, ok, res.status, res.error.as_deref());
+        .log_wave(world, &command, delivered, res.status, res.error.as_deref());
 
     Ok(Json(json!({
-        "ok": ok,
+        "ok": delivered,
+        "exec_ok": exec_ok,
         "world": world.as_str(),
         "command": command,
         "endpoint": endpoint,
@@ -1207,6 +1234,7 @@ mod tests {
         let (s, v) = call(&app, "POST", "/wave", Some(json!({"world": "A", "n": 3}))).await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(v["ok"], true);
+        assert_eq!(v["exec_ok"], true);
         assert_eq!(v["world"], "A");
         assert_eq!(v["command"], "rb_wave 3");
         assert_eq!(v["endpoint"], format!("http://{addr}/exec"));
@@ -1299,6 +1327,45 @@ mod tests {
         assert!(v["error"].as_str().unwrap().contains("503"));
         assert_eq!(v["exec_result"]["ok"], false);
         assert_eq!(v["exec_result"]["reason"], "pipe_unavailable");
+    }
+
+    /// Bridge antwortet HTTP 200, aber `exec_result.ok=false` (z. B. Mod-Timeout
+    /// `no_response`): `ok` bleibt Zustell-Erfolg (`true`), `exec_ok` ist
+    /// `false` — genau der Fall, in dem Doku/`ok`-Semantik auseinanderliefen
+    /// (Review #271, Finding 2/3).
+    #[tokio::test]
+    async fn wave_delivery_ok_with_exec_result_failure() {
+        let (addr, _rx) =
+            mock_json_response("200 OK", r#"{"ok":false,"reason":"no_response"}"#).await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [Some(format!("http://{addr}/exec")), None];
+        let app = make_app(cfg).await;
+        let (s, v) = call(&app, "POST", "/wave", Some(json!({"world": "A", "n": 3}))).await;
+        assert_eq!(s, StatusCode::OK);
+        // Zustell-Erfolg (HTTP 200) — nicht der Ausfuehr-Erfolg.
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["exec_ok"], false);
+        assert_eq!(v["status"], 200);
+        assert_eq!(v["exec_result"]["ok"], false);
+        assert_eq!(v["exec_result"]["reason"], "no_response");
+    }
+
+    /// `results[]` ohne `ok`-Flag bzw. gemischte Ergebnisse — gleiche Ableitung
+    /// wie die UI (`alle results[].ok`).
+    #[tokio::test]
+    async fn wave_exec_ok_from_results_array() {
+        let (addr, _rx) = mock_json_response(
+            "200 OK",
+            r#"{"results":[{"command":"rb_wave 3","ok":true},{"command":"rb_wave 3","ok":false}]}"#,
+        )
+        .await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [Some(format!("http://{addr}/exec")), None];
+        let app = make_app(cfg).await;
+        let (s, v) = call(&app, "POST", "/wave", Some(json!({"n": 3}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["exec_ok"], false);
     }
 
     #[tokio::test]
