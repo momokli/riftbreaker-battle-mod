@@ -110,6 +110,8 @@
 --   event=setup difficulty=<name> creatures_difficulty=<n>         (bei Map-Ready)
 --   event=economy_db status=new|resume|unavailable pool=.. farmed=..      (#24)
 --   event=economy_source source=resource_obtained|resource_change|tick    (#24)
+--   event=economy_source source=account status=seed|active|unavailable    (#242)
+--     (Konto-Snapshot-Diff; status=seed = erster Tick, bucht bewusst nichts)
 --   event=economy_farm source=.. resource=.. amount=.. value=.. farmed=.. (#24)
 --   event=convert resource=.. amount=.. value=.. pool=.. irreversible=1   (#24)
 --   event=economy_show / economy_reset                                    (#24)
@@ -886,6 +888,24 @@ RBB.economyCfg = {
     -- wird (Handler-Fehler = API dieser Event-Klasse unbrauchbar).
     maxSourceErrors = 3,
 
+    -- #242 Konto-Quelle: echtes Farm-Tracking ueber den Ressourcen-Kontostand
+    -- statt ueber die (live als unlesbar bestaetigte) Event-Payload. Gelesen
+    -- wird im bestehenden HourEvent-Tick, gebucht wird die DIFFERENZ zum
+    -- letzten Snapshot. Details/Belege: Issue #242.
+    accountEnabled = true,
+    accountPlayerId = 0,     -- wie GetPlayerControlledEnt(0) im Rest der Mod
+    -- Bewusst eine feste, geordnete Liste statt pairs(resourceFactors): die
+    -- Iterationsreihenfolge von Lua-Tabellen ist nicht definiert, und die
+    -- Log-Reihenfolge soll reproduzierbar sein.
+    accountResources = {
+        "carbonium", "steel", "cobalt", "palladium", "titanium",
+        "uranium_ore", "morphium", "flammable_gas", "geothermal",
+        "mud", "magma", "sludge", "water",
+    },
+    -- Ticks ohne EINE lesbare Ressource, bevor die Konto-Quelle aufgegeben
+    -- wird (dann bleibt es beim Tick-Fallback wie bisher).
+    maxAccountErrors = 3,
+
     -- Obergrenze je Convert-Aufruf (Schutz vor Tippfehlern / Endlos-Args).
     maxConvertAmount = 100000,
 }
@@ -901,6 +921,12 @@ RBB.economy = {
     sourceErrors = 0,        -- Fehler der aktiven/geprueften Event-Quelle
     eventLocked = false,     -- true: eine Event-Quelle ist aktiv gesperrt
     sourceTried = {},        -- Quelle -> true (bereits gescheitert)
+    -- #242 Konto-Quelle: Ressource -> zuletzt gelesener Kontostand. Bewusst
+    -- NICHT persistiert — nach einem Map-/Mod-Load ist der Kontostand ein
+    -- anderer, der erste Tick muss neu einlesen (sonst wuerde die Differenz
+    -- zum alten Spielstand als "gefarmt" gebucht).
+    accountSnapshot = nil,   -- nil = noch nie gelesen (erster Tick seedet nur)
+    accountErrors = 0,       -- Ticks ohne eine einzige lesbare Ressource
     db = nil,                -- Global-Database (nil = nicht verfuegbar)
     dbOk = false,
 }
@@ -1131,10 +1157,112 @@ local function OnResourceChangeEvent(evt)
     HandleFarmEvent(evt, "resource_change")
 end
 
+-- ---------------------------------------------------------------------------
+-- #242 Konto-Quelle: Snapshot-Diff statt Event-Payload.
+--
+-- Die Resource-Event-API ist live als unlesbar bestaetigt (Issue #242:
+-- ResourceObtainedEvent traegt ueberhaupt keinen Betrag, nur Entity+Resource).
+-- Der Kontostand ist dagegen direkt lesbar. Deshalb: im HourEvent-Tick je
+-- Ressource den Stand lesen und die DIFFERENZ zum letzten Tick buchen.
+--
+-- Warum nur positive Deltas: ein sinkender Kontostand ist Verbrauch (Bauen),
+-- kein negativer Farm-Ertrag. Der Snapshot zieht trotzdem nach, sonst wuerde
+-- Wiederaufbauen doppelt als Farm zaehlen.
+-- ---------------------------------------------------------------------------
+
+-- Kontostand einer Ressource oder nil (API nicht vorhanden/nicht lesbar).
+local function TryAccountAmount(name)
+    local ok, amount = pcall(function()
+        return PlayerService:GetResourceAmount(RBB.economyCfg.accountPlayerId, name)
+    end)
+    if not ok or amount == nil then return nil end
+    local n = tonumber(amount)
+    if n == nil then return nil end
+    return n
+end
+
+-- Ein Konto-Tick. Rueckgabe: true = Konto-Quelle ist nutzbar (auch wenn in
+-- diesem Tick nichts gefarmt wurde), false = nicht lesbar, Aufrufer faellt
+-- auf das Tick-Einkommen zurueck.
+local function EconomyAccountTick()
+    local e = RBB.economy
+    local cfg = RBB.economyCfg
+
+    if not cfg.accountEnabled then return false end
+    if e.sourceTried["account"] then return false end
+
+    local snapshot = e.accountSnapshot
+    local seeding = (snapshot == nil)
+    local fresh = {}
+    local readable = 0
+
+    for _, name in ipairs(cfg.accountResources) do
+        local amount = TryAccountAmount(name)
+        if amount ~= nil then
+            readable = readable + 1
+            fresh[name] = amount
+            if not seeding then
+                local previous = snapshot[name]
+                if previous ~= nil and amount > previous then
+                    EconomyBookFarm("account", name, amount - previous)
+                end
+            end
+        end
+    end
+
+    if readable == 0 then
+        -- Keine einzige Ressource lesbar: wie die Event-Quellen begrenzt oft
+        -- versuchen, dann dauerhaft aufgeben (kein pcall-Geknatter je Tick).
+        e.accountErrors = e.accountErrors + 1
+        if e.accountErrors >= cfg.maxAccountErrors then
+            e.sourceTried["account"] = true
+            Log("event=economy_source source=account status=unavailable reason=no_readable_resource ticks=%d",
+                e.accountErrors)
+            -- War die Konto-Quelle bereits gesperrt (sie lief also schon) und
+            -- faellt jetzt aus, MUSS die Sperre auf tick umgelegt werden —
+            -- sonst zahlt weder Konto noch Tick, und die Economy stuende still.
+            if e.eventLocked and e.source == "account" then
+                e.source = "tick"
+                Log("event=economy_source source=tick status=fallback reason=account_lost")
+            end
+        end
+        return false
+    end
+
+    e.accountSnapshot = fresh
+
+    if seeding then
+        -- Erster Tick bucht bewusst NICHTS: der Startbestand ist nicht gefarmt.
+        Log("event=economy_source source=account status=seed resources=%d", readable)
+        -- Die Quelle ist damit belegt nutzbar -> sperren, sonst liefe das
+        -- pauschale Tick-Einkommen neben dem echten Tracking weiter. Das gilt
+        -- auch, wenn vorher schon auf "tick" gesperrt wurde: echtes Tracking
+        -- loest den Platzhalter ab (der Aufrufer laesst nur tick/account
+        -- ueberhaupt bis hierher durch).
+        e.source = "account"
+        e.eventLocked = true
+        Log("event=economy_source source=account status=active")
+    end
+
+    return true
+end
+
 -- Fallback-Quelle: HourEvent zahlt pauschal, solange keine Event-Quelle
 -- aktiv gesperrt ist (auto) oder die Quelle dauerhaft auf tick gefallen ist.
 local function OnHourEventEconomy(evt)
     local e = RBB.economy
+
+    -- #242: echtes Konto-Tracking hat Vorrang vor dem pauschalen Tick.
+    -- Auch dann, wenn bereits auf "tick" gesperrt wurde: der Tick ist ein
+    -- Platzhalter-Einkommen, keine verifizierte Quelle — und im live
+    -- bestaetigten Ablauf (#242) feuern die unlesbaren Resource-Events oft
+    -- VOR dem ersten HourEvent, sperren also auf tick, bevor das Konto
+    -- ueberhaupt einmal gelesen wurde. Nur eine echte, lesbare Event-Quelle
+    -- (resource_obtained/resource_change) hat Vorrang.
+    if (not e.eventLocked) or e.source == "account" or e.source == "tick" then
+        if EconomyAccountTick() then return end
+    end
+
     if e.eventLocked then
         if e.source == "tick" then
             EconomyBookFarm("tick", "hour_tick", RBB.economyCfg.valuePerHourTick)
