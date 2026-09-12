@@ -34,7 +34,7 @@ Wine-Laufzeit als der headless Client:
 |---|---|
 | `Dockerfile` | Erweitert `scottyhardy/docker-wine:latest` (winehq-stable, winetricks, Xvfb, gosu aus dem Base) um `procps` + `iproute2` und legt den `steamuser` an |
 | `scripts/docker-entrypoint.sh` | root → `gosu steamuser` → entrypoint |
-| `scripts/entrypoint.sh` | Config kopieren, Logs streamen, Port-/Startup-Watch, Server starten |
+| `scripts/entrypoint.sh` | Config kopieren, Logs streamen, Port-/Startup-Watch, Trainer-I/O-Supervisor (Injection + Bridge), Server starten |
 | `scripts/wine-init.sh` | Einmalige Prefix-Init (win10, vcrun2022, d3dcompiler_47) |
 | `config/config.cfg.example` | Vorlage Server-Config (LAN/Direct-IP-Modus) |
 
@@ -51,3 +51,33 @@ docker build -t rb-dedicated tools/dedicated-server
 
 Der Entrypoint erwartet beim Start `config.cfg` unter `/data/config/config.cfg`
 (vom Compose als read-only gemountet).
+
+## Trainer-I/O im Container (Issue #265)
+
+Der Dedicated-Server ist ohne Injection ein reiner Spielserver. Fuer den
+Trainerkommando-Kanal (GO/Wave vom Tournament-Server) braucht er:
+
+1. **Die Tools** (`injector.exe`, `rbbridge.dll`, `pipe_bridge.exe`) unter
+   `/opt/rbtools` — vom Deploy als read-only Volume gemountet. Gebaut werden sie
+   auf dem Zielhost aus `bausteine/04-trainer-io/`
+   (`scripts/build_rbbridge_tools.sh`, Rolle `rbtools`).
+2. **Injection + Bridge** — der Entrypoint startet vor dem Server-`exec` einen
+   Supervisor: eigenes `Xvfb :99` (Readiness per Socket, `xdpyinfo` fehlt im
+   Image), warten auf `DedicatedServer.exe`, dann
+   `wine injector.exe DedicatedServer.exe 'Z:\opt\rbtools\rbbridge.dll'` mit
+   Retry/Backoff (bis `INJECT_TIMEOUT_SECS`, Default 180 s), zuletzt
+   `wine pipe_bridge.exe`. Fehlt `/opt/rbtools`: nur Warnung, der Server laeuft
+   normal weiter.
+3. **Der HTTP-Endpunkt** — `pipe_bridge.exe` lauscht im Container auf 9001;
+   das Compose publiziert `127.0.0.1:9001:9001`. `POST /exec` uebersetzt in
+   exec-Zeilen auf `\\.\pipe\rbbattle` (der Wine-Named-Pipe ist nur aus Wine
+   erreichbar). Damit ist `RBBRIDGE_A_URL=http://127.0.0.1:9001/exec` des
+   Tournament-Servers kein toter Endpoint mehr.
+
+Verdrahtung, Protokoll und Testanleitung: `docs/INGRESS_IO.md`.
+
+Smoke-Test im Container (Beispiel):
+```bash
+curl -s http://127.0.0.1:9001/health
+curl -s -X POST http://127.0.0.1:9001/exec -d '{"command":"rb_wave 3"}'
+```

@@ -41,8 +41,19 @@ dieses README gibt es nur hier.
 injector/injector.c      <- kanonisch (injector.exe, x64, Windows; Spiegel: trainer/injector/)
 rbbridge/rbbridge.c      <- kanonisch (baut rbbridge.dll UND
                             rbbridge_standalone.exe, x64, Windows; Spiegel: trainer/rbbridge/)
-pipe_client.py           <- NEU: Test-Client (Python 3, Windows, nur Standardbibliothek)
+bridge/pipe_bridge.c     <- NEU (Issue #265): baut pipe_bridge.exe — HTTP(9001)->Pipe-Bridge
+                            (x64, Windows; Win32 + ws2_32; nur in dieser Quelle, kein Spiegel)
+pipe_client.py           <- Test-Client (Python 3, Windows, nur Standardbibliothek)
 ```
+
+## Hinweis zur Bridge (Issue #265)
+
+`bridge/pipe_bridge.c` → `pipe_bridge.exe` ist der HTTP-Endpunkt, den der
+Dedicated-Server-Deploy braucht: er laeuft als Wine-x64-Prozess im Container,
+nimmt `GET /health` und `POST /exec` an und uebersetzt die Kommandos in
+exec-Zeilen auf `\\.\pipe\rbbattle` (der Wine-Named-Pipe ist nur aus Wine
+erreichbar). Details, Verdrahtung und Testanleitung: `docs/INGRESS_IO.md`.
+Alle vier Binaries baut `scripts/build_rbbridge_tools.sh <outdir>`.
 
 ## Build (Windows, x64)
 
@@ -56,7 +67,12 @@ x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -shared -o rbbridge.dll rbbridge\rbbrid
 :: rbbridge_standalone.exe (Test 0, kein -lws2_32 noetig)
 x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe rbbridge\rbbridge.c
 x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe injector\injector.c
+:: pipe_bridge.exe (HTTP-Bridge, Issue #265; braucht ws2_32)
+x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o pipe_bridge.exe bridge\pipe_bridge.c -lws2_32
 ```
+
+Alle vier zusammen (Linux-Cross-Build, kanonischer Weg):
+`bash scripts/build_rbbridge_tools.sh /tmp/rbtools-build`.
 
 Option B — MSVC (Developer Prompt):
 ```bat
@@ -196,6 +212,7 @@ injizieren (os.open blockiert, bis der Pipe-Server existiert).
 - [x] exec-Dispatch per AOB-Signatur/RTTI (statt fester RVAs) + Cache
 - [x] Host-Test `rbbridge_hosttest.c` (scan_bytes + RTTI-Resolver, synthetischer PE-Puffer)
 - [x] Cross-Build (x86_64-w64-mingw32-gcc): rbbridge.dll + rbbridge_standalone.exe kompilieren
+- [x] pipe_bridge.c (HTTP(9001)->Pipe-Bridge, Test 2 `--ping`/`--once`), Cross-Build via `scripts/build_rbbridge_tools.sh` (#265)
 - [ ] Windows-Build-Test: DLL + Standalone-EXE + Injector (Matheo/Momo)
 - [ ] Windows-Test 0: Standalone-EXE + pipe_client.py → ping/pong (Matheo/Momo)
 - [ ] Windows-Test 1: Injection in notepad.exe + ping/pong (Matheo/Momo)
