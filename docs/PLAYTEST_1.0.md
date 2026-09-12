@@ -44,6 +44,28 @@ Ergebnis signiert wird.
   1.0 und zwingend Muss** (M10).
 - Der Website-Proxy (#322, Preflight P4) **muss vor dem Test gefixt sein**.
 
+### 0.2 1.0-Voraussetzungen (Release-Blocker)
+
+Diese Punkte müssen **vor** dem Play-Test erledigt und deployt sein — sie sind
+Teil des 1.0-Presets, nicht „nice to have“:
+
+| Voraussetzung | Issue/PR | Nachweis |
+|---|---|---|
+| Website liefert `/tournament/*` (ein Host-Caddy-Eintrag, eigener Rift-Caddy) | **#322**, Preflight P4 | `/tournament/health` → `200` |
+| Runde 2 / Round-Reset | **#281** (PR #285), M8 | Reset + saubere Runde 2 |
+| Telemetry / Session-Mitschnitt | **#280** (PR #283), M10 | Session-Artefakt liegt vor |
+| Welle 1–3 abgearbeitet | **#319** | Release-Plan abgehakt |
+| Deployter Stand == Commit | — | Traceability-Block (Abschnitt 10) |
+
+### 0.3 Abnahme-Regel: **ein Milestone = ein Play-Test**
+
+- **Ein Milestone ist abgenommen, wenn sein Play-Test „happy“ ist** (Momo).
+  Nicht „alle Issues zu“, nicht „CI grün“ — der Play-Test ist die Abnahme.
+- **`1.0`** = dieses Dokument. Alles danach clustert in **`soon`** (1.X) —
+  grobe Modi-Ideen (solo → 1v1 → 2v2 → 3v3 → 4v4) bleiben dabei als Cluster
+  sichtbar, auch wenn sie noch nicht ausgearbeitet sind.
+- Semver-Mapping: Milestone-Cluster = Version. Taggen erst nach „happy“.
+
 ---
 
 ## 1. Baseline-Mechanik — was der Tag einfriert
