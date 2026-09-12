@@ -454,6 +454,25 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 (Die genaue Zahl `count=` hängt von der Karte/Map-Size ab — Issue-Erwartung 16.)
 
+## Rolle im Referee-Modell (Issue #268)
+
+Der Tournament-Server ist die autoritative Event-/State-Quelle (Wellen-Takt,
+HQ-Tod → Restart, Runden-Zähler); die Lua ist **Executor**: sie führt
+Commands aus (`rb_wave N`, `restart`) und meldet die obigen Events nach oben.
+Der Referee konsumiert dafür genau diese Zeilen:
+
+| Event-Zeile (Lua) | Referee-Event (`POST /referee/event`) |
+|---|---|
+| `event=wave level=N status=done` | `{"world":"A","type":"wave_done","level":N}` |
+| `event=hq_dead status=match_end` | `{"world":"A","type":"hq_destroyed"}` |
+| (Modul geladen / nach Restart) | `{"world":"A","type":"ready"}` |
+
+Der Referee antwortet mit Commands (`rb_wave <level+1>` bzw. `restart`). Das
+aktuell noch in der Lua liegende Runden-/Match-Regime (natürlicher
+Wellen-Timer als Rundentakt) wird erst mit laufendem Spiel in einem eigenen
+Schritt entfernt (Stufe 2, Player-Test OFFEN) — Details:
+[`docs/REFEREE.md`](../docs/REFEREE.md).
+
 ## FINDINGS-Tabelle (Stand Recherche — In-Game-Test des Umbaus offen)
 
 | # | Frage | Ergebnis laut Doku + Original-Spieldaten | Quelle |
