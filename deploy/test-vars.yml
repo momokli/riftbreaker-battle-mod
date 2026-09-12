@@ -2,9 +2,12 @@
 # Boot-Test-Overrides (CI/CD-Plan F1): Test-Instanz ISOLIERT von Prod —
 # eigene Ports, Container-/Unit-Namen, Pfade. Wird nur vom Pre-Merge-
 # Boot-Test benutzt (deploy/test-deploy.yml via -e @deploy/test-vars.yml).
-# Prod-Ports 6321/8081 bleiben unberührt.
+# Prod-Ports 6321/8081/9001 bleiben unberührt.
 riftbreaker_server_container: riftbreaker-dedicated-test
 riftbreaker_server_port_udp: 6323
+# IO-Bridge-Port isoliert von Prod (9001) — sonst kollidiert der Test-Container
+# mit dem Prod-Container auf 127.0.0.1:9001 (Issue #265/#272).
+riftbreaker_bridge_port: 9003
 riftbreaker_game_dir: /srv/rbgame-test
 riftbreaker_backup_dir: /srv/rbgame-test-backups
 riftbreaker_deploy_dir: /opt/rbbattle-deploy/test/rb
@@ -13,6 +16,7 @@ riftbreaker_content_cache_dir: /srv/riftbreaker/data/server
 website_mods_dir: /opt/rbbattle-deploy/test/mods
 tournament_unit: tournament-server-test
 tournament_port: 8091
+tournament_bridge_a_url: "http://127.0.0.1:9003/exec"
 tournament_install_dir: /opt/rbmods/tournament-server-test
 # Toolchain des RUNNER-Users (localhost-Builds laufen im Boot-Test als
 # `runner`, nicht als root):
