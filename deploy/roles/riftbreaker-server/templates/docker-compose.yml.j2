@@ -34,6 +34,30 @@ services:
       # entrypoint injiziert Z:\opt\rbtools\rbbridge.dll und startet pipe_bridge.exe.
       - "{{ riftbreaker_rbtools_dir }}:/opt/rbtools:ro"
 
+  # Session-Mitschnitt (Issue #280): tailt den Lua-Log im Wine-Volume (ro) und
+  # schreibt pro Session eine JSONL nach {{ riftbreaker_sessions_dir }} auf dem
+  # Host. Kein Port, kein Netzzugriff; toleriert Container-Restarts (Cursor).
+  {{ riftbreaker_sessions_container }}:
+    image: "{{ riftbreaker_sessions_image }}"
+    container_name: {{ riftbreaker_sessions_container }}
+    restart: unless-stopped
+    depends_on:
+      - {{ riftbreaker_server_container }}
+    volumes:
+      # Quelle: derselbe Wine-Prefix wie der Server (nur lesend).
+      - "{{ riftbreaker_wine_volume }}:/data/.wine:ro"
+      # Ziel: Host-Bind-Mount (query-bar via tail/grep/jq).
+      - "{{ riftbreaker_sessions_dir }}:/data/sessions"
+      - "{{ riftbreaker_sessions_script }}:/app/session_recorder.py:ro"
+    command:
+      - python3
+      - -u
+      - /app/session_recorder.py
+      - --wine-prefix
+      - /data/.wine
+      - --out-dir
+      - /data/sessions
+
 volumes:
   {{ riftbreaker_wine_volume }}:
   {{ riftbreaker_saves_volume }}:
