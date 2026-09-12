@@ -2,6 +2,9 @@
 
 > Ziel-Stack + Deployment-Plan. **Deploy NUR über das Ansible-Playbook in
 > `deploy/`** (kein manuelles Gedudel). Umsetzung: Issue #45.
+>
+> Wie groß muss die Kiste sein? → [`SERVER_SIZING.md`](SERVER_SIZING.md)
+> (CPU/RAM/Storage je Betriebs-Szenario, gemessen auf planet).
 
 ## Ziel-Stack (was IMMER betrieben wird)
 
