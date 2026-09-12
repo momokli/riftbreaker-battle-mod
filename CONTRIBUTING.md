@@ -104,6 +104,7 @@ Neben Menschen arbeiten AI-Agents am Repo. Die verbindlichen Regeln stehen in
 |---|---|
 | [`lint.yml`](.github/workflows/lint.yml) | shellcheck, ruff, actionlint |
 | [`ci.yml`](.github/workflows/ci.yml) | Tests (Bausteine/E2E/Lua-static) + Build + Package |
+| [`boot-test.yml`](.github/workflows/boot-test.yml) | Pre-Merge-Boot **+ Core-IO-Gate (Issue #289)**: baut/bootet den Test-Stack und fährt C1–C4 (Ingress-Effekt-Invariante, Egress, Server-Auftrag) |
 | [`deploy-check.yml`](.github/workflows/deploy-check.yml) | Deploy-Vorhersage auf dem planet-Runner: yamllint + `docker compose config` + `ansible --check --diff` |
 | [`pr-quality.yml`](.github/workflows/pr-quality.yml) | Conventional-Commit-PR-Titel (hart) + Issue-Referenz (hart) |
 | [`followup-issues.yml`](.github/workflows/followup-issues.yml) | Follow-up-Issues beim Schließen von Issues (Label `follow-up`) |
