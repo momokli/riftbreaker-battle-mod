@@ -108,7 +108,6 @@
     removes: "{{ item }}"
   loop: "{{ riftbreaker_stray_mod_dirs }}"
   when: riftbreaker_mods_guard_autofix | bool
-  register: riftbreaker_stray_moved
 
 - name: Guard — mods/ erneut prüfen (nach Wegschieben)
   find:
@@ -186,6 +185,17 @@
 - name: Erwartete Mod-Version bestimmen (Fact aus Rolle mods-zip)
   set_fact:
     riftbreaker_expected_version: "{{ mod_version | default('') | trim }}"
+
+# PR-Review #286 Blocker 2: der Marker wird unten VOR der Verifikation auf
+# den NEUEN Zip-md5 geschrieben. Schlaegt die Verifikation fehl, rollt der
+# `rescue`-Block bisher nur den Mod-ORDNER zurueck, nicht den Marker — der
+# naechste Deploy saehe dann marker==neuer-md5 und wuerde die Iteration
+# still wieder ueberspringen (die #245-Garantie waere pro fehlgeschlagenem
+# Deploy einmal ausser Kraft). Der alte Stand wird daher hier gemerkt, damit
+# `rescue` ihn zurueckschreiben kann.
+- name: Bisherigen Marker-Stand merken (fuer Rollback)
+  set_fact:
+    riftbreaker_old_marker_checksum: "{{ mod_marker.content | default('') | b64decode }}"
 
 - name: Backup-Zielpfad je Lauf festlegen (AUSSERHALB von mods/)
   set_fact:
@@ -334,9 +344,21 @@
       set_fact:
         riftbreaker_mod_load_lines: >-
           {{ riftbreaker_server_logs.stdout | default('') | regex_findall('event=mod_load[^\n]*') }}
+      when: not ansible_check_mode
+
+    # PR-Review #286 Blocker 1: `docker logs` (Community-Rezept #241) hat so
+    # gut wie IMMER Output (Entrypoint-/Wine-Boot-Zeilen) — "Log vorhanden"
+    # ueber reine Nicht-Leere zu bestimmen macht den Check damit effektiv
+    # IMMER hart, auch direkt nach einem frischen `--force-recreate`, wenn
+    # die Welt noch keine Map geladen hat (0 mod_load-Zeilen sind dann
+    # KEIN Fehler, sondern "noch nicht so weit"). Massgeblich ist daher, ob
+    # tatsaechlich schon eine mod_load-Zeile im Log steht, nicht ob der
+    # Log-Aufruf irgendeinen Output hatte.
+    - name: "Verifikation — Runtime-Log tatsaechlich vorhanden? (mod_load-Zeile, nicht nur Output)"
+      set_fact:
         riftbreaker_runtime_log_present: >-
           {{ (riftbreaker_server_logs.rc | default(1)) == 0
-             and (riftbreaker_server_logs.stdout | default('') | length) > 0 }}
+             and (riftbreaker_mod_load_lines | length) > 0 }}
       when: not ansible_check_mode
 
     - name: "Verifikation — Runtime-Log prüfen (nur wenn vorhanden)"
@@ -391,6 +413,28 @@
           - -C
           - "{{ riftbreaker_mods_dir }}"
       when: riftbreaker_mod_backup is defined and (riftbreaker_mod_backup.changed | default(false))
+
+    # PR-Review #286 Blocker 2: ohne das hier wuerde der Marker auf dem
+    # NEUEN (fehlgeschlagenen) Zip-Stand stehen bleiben, obwohl mods/ auf den
+    # alten Stand zurueckgerollt wurde — der naechste Deploy uebersaehe die
+    # Mod-Aenderung dann stillschweigend (riftbreaker_mod_update_needed waere
+    # faelschlich false).
+    - name: Rollback — Marker auf alten Stand zuruecksetzen
+      copy:
+        content: "{{ riftbreaker_old_marker_checksum }}"
+        dest: "{{ riftbreaker_deploy_dir }}/rbbattle.md5"
+        mode: "0644"
+      when:
+        - riftbreaker_mod_backup is defined and (riftbreaker_mod_backup.changed | default(false))
+        - riftbreaker_old_marker_checksum | length > 0
+
+    - name: Rollback — Marker entfernen (Erst-Deploy fehlgeschlagen, kein alter Stand)
+      file:
+        path: "{{ riftbreaker_deploy_dir }}/rbbattle.md5"
+        state: absent
+      when:
+        - riftbreaker_mod_backup is defined and (riftbreaker_mod_backup.changed | default(false))
+        - riftbreaker_old_marker_checksum | length == 0
 
     - name: Rollback — Container neu starten (alten Stand laden)
       command: >-

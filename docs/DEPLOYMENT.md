@@ -239,9 +239,13 @@ Rollback: Backup-`tar.gz` aus `/srv/riftbreaker/backups/` nach
 - Mod-Backups **nie** in `<server>/mods/` (siehe „Mod-Backups & mods/-Guard").
 - Live-Tests nur bei leerem Server.
 - Keine Credentials in Repo/Logs; kanonischer Server-Log ist `exor_logs.txt`
-  im Container (`/root/exor_logs.txt`, Wine-`Documents -> /root`), `rbbridge.log`
-  im Temp. `docker logs` des Dedicated-Servers zeigt nur die `run-server.sh`-Wrapper-Zeilen.
-  `exor_logs.txt` entsteht erst bei Map-Load; im Idle **ohne Spieler**
-  (`server_pause_game_when_empty=1`) gar nicht (Issue #226) → im CD ist der
-  idle-sichere Artefakt-Check (#226) maßgeblich, nicht der Runtime-Log.
+  im Wine-Prefix (benanntes Volume, kein Bind-Mount). Seit dem
+  Community-Rezept (#241) tailt der Entrypoint ihn selbst nach stdout, also
+  zeigt `docker logs {{ riftbreaker_server_container }}` die
+  `[RBBATTLE] event=...`-Zeilen wieder mit (s. „Log-Quelle & Timing" oben) —
+  aber erst, sobald eine Map geladen ist. Direkt nach einem
+  `--force-recreate` (frisch gestarteter Container) ist das **nicht** der
+  Fall, egal ob Spieler online sind oder nicht → im CD bleibt der
+  idle-/boot-sichere Artefakt-Check (#226/#245) maßgeblich, nicht der
+  Runtime-Log.
 - SSH mesh-first (Tailscale), nie über Public-IPs.
