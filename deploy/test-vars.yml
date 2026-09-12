@@ -11,6 +11,11 @@ riftbreaker_bridge_port: 9003
 riftbreaker_game_dir: /srv/rbgame-test
 riftbreaker_backup_dir: /srv/rbgame-test-backups
 riftbreaker_deploy_dir: /opt/rbbattle-deploy/test/rb
+# Session-Mitschnitt isoliert von Prod (eigener Container-Name + eigenes
+# Ausgabeverzeichnis, Issue #280) — sonst kollidiert der Test-Container mit dem
+# Prod-Sidecar ("name is already in use").
+riftbreaker_sessions_container: riftbreaker-sessions-test
+riftbreaker_sessions_dir: /srv/rbmods-sessions-test
 riftbreaker_content_mode: sync
 riftbreaker_content_cache_dir: /srv/riftbreaker/data/server
 website_mods_dir: /opt/rbbattle-deploy/test/mods

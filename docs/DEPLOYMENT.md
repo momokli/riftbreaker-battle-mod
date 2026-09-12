@@ -107,25 +107,53 @@ Nach Entfernen des Ordners aus `mods/` + Container-Restart:
    Versionen/leere Trefferlisten ergeben eine klare `fail_msg` (kein
    Ansible-Task-Arg-Crash).
 
-### Log-Quelle & Timing (Befund planet 2026-09-11, Issue #226)
+### Log-Quelle & Timing (Stand: Rezept #241/#265, Issue #226/#280)
 
-- **Quelle ist der Lua-Log im Container, nicht `docker logs`:** `docker logs`
-  des Dedicated-Servers enthält nur die zwei `run-server.sh`-Wrapper-Zeilen
-  (`[run-server] starte Xvfb …` / `[run-server] starte: wine bin/DedicatedServer.exe …`)
-  und damit **nie** eine `mod_load`-Zeile.
-- **Pfad:** `exor_logs.txt` im Wine-Prefix; `drive_c/users/root/Documents` ist
-  ein Symlink auf `$HOME` (`Documents -> /root`) → `/root/exor_logs.txt`.
-  Abruf: `docker exec riftbreaker-dedicated cat /root/exor_logs.txt`.
+- **Quelle ist der Lua-Log im Wine-Prefix.** Der Entrypoint streamt ihn nach
+  `docker logs` (`tail -F` → `[server] …`-Zeilen, inkl. `[RBBATTLE] event=…`),
+  aber `docker logs` ist **transient** (pro Container-ID, kein Restart-Artefakt).
+  Kanonisch/persistent ist die Datei bzw. der Session-Mitschnitt (#280).
+- **Pfad (aktuelles Rezept):** Named Volume `rb-wine` → `/data/.wine`;
+  `exor_logs.txt` liegt unter
+  `/data/.wine/drive_c/users/steamuser/Documents/The Riftbreaker/exor_logs.txt`.
+  Abruf: `docker exec riftbreaker-dedicated tail -n 50 \`
+  `"/data/.wine/drive_c/users/steamuser/Documents/The Riftbreaker/exor_logs.txt"`.
+  (Historisch, altes root-Image vor #241: `/root/exor_logs.txt`, `Documents -> /root`.)
 - **Timing:** Der Log entsteht erst, wenn der Server eine Map lädt und Lua
   ausführt. Mit `server_pause_game_when_empty=1` und **keinen Spielern** (Idle)
-  passiert das **nicht** — nach einem Restart existiert `exor_logs.txt` im Idle
-  gar nicht (Empirie: auch nach >5 Min kein Log, `Running=true`,
-  `RestartCount=0`).
-- Der Log liegt im **Container-Writable-Layer** (kein Bind-Mount des
-  Wine-Prefix) und ist nach `docker compose up -d --force-recreate` ohnehin weg.
-- Deshalb ist der **Artefakt-Check** (deployter Stand auf der Platte) im CD der
-  harte Gate; der Runtime-Log-Check greift nur, wenn zum Prüfzeitpunkt
+  passiert das **nicht**. Der Deploy-Default ist seither `0` (#265), damit der
+  Ingress-/Referee-Kanal eine laufende Lua-Welt hat.
+- Der **Artefakt-Check** (deployter Stand auf der Platte) im CD bleibt der harte,
+  idle-sichere Gate; der Runtime-Log-Check greift nur, wenn zum Prüfzeitpunkt
   tatsächlich eine Map geladen wurde.
+
+### Session-Mitschnitt (Issue #280)
+
+Der Compose-Stack enthält einen **Sidecar** `{{ riftbreaker_sessions_container }}`
+(`python:3.12-slim`, Default-Name `riftbreaker-sessions`), der den Lua-Log im
+Wine-Volume **read-only** tailt und jede `[RBBATTLE] event=…`-Zeile als JSONL
+**pro Session** auf einen Host-Bind-Mount schreibt:
+
+```text
+{{ riftbreaker_sessions_dir }}                 # Default: /srv/rbmods-sessions
+  index.jsonl                # Summary je abgeschlossener Session
+  <session_id>.jsonl         # session_start, events (seq/ts/event/fields/raw), session_end
+  <session_id>.summary.json  # Dauer, Event-Count, Waves, hq_hp_min, hq_dead
+```
+
+- **Session-ID** vergibt der Recorder (UTC-Zeitstempel + Zufallssuffix); die Mod
+  bleibt unverändert (kein Version-Bump).
+- **Boundaries:** Session öffnet mit erstem Event (`mod_load`/`setup`/`commence`),
+  **`event=match_end` schließt** sie. `event=hq_dead` ist Metrik, keine Grenze.
+- **Restart-fest:** Cursor + offene Session liegen in `.state.json`; erkannte
+  Log-Truncation liest ab Offset 0, ohne bereits geschriebene JSONL zu verlieren.
+- **Query vom Host:** `tail -f {{ riftbreaker_sessions_dir }}/index.jsonl` bzw.
+  `docker exec {{ riftbreaker_sessions_container }} tail -n 20 /data/sessions/index.jsonl`.
+
+Werkzeug/Tests: [`tools/session-recorder/`](../tools/session-recorder/README.md)
+(`python3 -m unittest test_session_recorder`).
+**Nur-mit-Player-Verifikation (offen, Momo/Matheo):** realer Match-Verlauf
+(`commence` → Wellen → `hq_dead` → `match_end`) landet lückenlos im JSONL.
 
 **Kontrollwerkzeug / Regression-Check** (lokal + CI, Exit 1 = Fremd-Ordner):
 

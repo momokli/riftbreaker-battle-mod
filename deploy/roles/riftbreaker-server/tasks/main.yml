@@ -33,6 +33,20 @@
     state: directory
     mode: "0755"
 
+- name: "Session-Verzeichnis sicherstellen (Issue #280)"
+  file:
+    path: "{{ riftbreaker_sessions_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: "Session-Recorder-Script bereitstellen (Issue #280)"
+  copy:
+    src: "{{ riftbreaker_sessions_script_src }}"
+    dest: "{{ riftbreaker_sessions_script }}"
+    remote_src: true
+    mode: "0644"
+  notify: restart riftbreaker-server
+
 - name: config.cfg rendern (Passwort aus Vault, 0644 fuer steamuser-lesbar)
   template:
     src: config.cfg.j2
