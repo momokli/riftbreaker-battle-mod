@@ -60,3 +60,32 @@
       --check: Build von {{ tournament_image }} übersprungen
       (Image {{ 'vorhanden' if tournament_image_info.rc == 0 else 'fehlt' }}).
   when: ansible_check_mode
+
+# --- Legacy-systemd entfernen (Issue #275, Design D7/ US4) -------------------
+# Die frühere systemd-Unit (Host-Prozess auf Port 8081) wird idempotent entfernt.
+# Der Installationspfad/Binary bleibt absichtlich liegen (Rollback-Sicherheit) —
+# nur die Unit verschwindet. Läuft auch, wenn keine Unit existiert (stat-guarded).
+
+- name: Legacy-Unit prüfen ({{ tournament_legacy_unit }})
+  stat:
+    path: "/etc/systemd/system/{{ tournament_legacy_unit }}.service"
+  register: tournament_legacy_unit_stat
+  check_mode: false
+
+- name: Legacy-Unit stoppen + deaktivieren (nur wenn vorhanden)
+  systemd:
+    name: "{{ tournament_legacy_unit }}"
+    state: stopped
+    enabled: false
+  when: tournament_legacy_unit_stat.stat.exists
+
+- name: Legacy-Unit-Datei entfernen
+  file:
+    path: "/etc/systemd/system/{{ tournament_legacy_unit }}.service"
+    state: absent
+  when: tournament_legacy_unit_stat.stat.exists
+
+- name: systemd-Manager neu laden (Unit-Entfernung sichtbar machen)
+  systemd:
+    daemon_reload: true
+  when: tournament_legacy_unit_stat.stat.exists
