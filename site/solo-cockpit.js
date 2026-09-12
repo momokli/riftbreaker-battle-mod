@@ -6,7 +6,7 @@
  * (site/designs/stitch-solo-cockpit-console.zip):
  *   - State-Strip: Phase (SETUP/WAVES/GAME OVER), Wave, HQ-Integrität, P1/P2
  *   - Announce-Banner: COMMENCE (running) / GAME OVER (finished) / STANDBY
- *   - God-Commands-Panel: Wave-Start/Pause, Ressourcen, HQ zerstören, Restart
+ *   - God-Commands-Panel: Welle spawnen (rb_wave), Ressourcen, HQ zerstören, Restart
  *   - optionales Operator-Gate
  *
  * Zweigeteilt wie live-status.js / dev-log.js:
@@ -35,6 +35,7 @@
 
   var DEFAULT_API_BASE = "/tournament";
   var DEFAULT_POLL_MS = 3000;
+  var DEFAULT_WAVE_N = 3;
   var GATE_STORAGE_KEY = "rb-operator-unlocked";
 
   /* kind -> Phasenlabel des State-Strips */
@@ -80,13 +81,6 @@
       },
     },
     // --- GEPARKT: kein erreichbarer Transport im aktuellen Deployment -----
-    wave_toggle: {
-      cmd: "wave_toggle",
-      destructive: false,
-      reachable: false,
-      label: "Welle Start/Pause",
-      todo: "Follow-up #159: kein Referee-Endpoint für Wellenstart/-pause; braucht rb_* über RCON/Relay (nicht deployt).",
-    },
     give_resources: {
       cmd: "give_resources",
       destructive: false,
@@ -94,7 +88,45 @@
       label: "Ressourcen injizieren",
       todo: "Follow-up #159: kein Ressourcen-Endpoint; braucht rb_give_* über RCON/Relay (nicht deployt).",
     },
+    /* Operator-Wellen-Spawn (#266): POST /wave → der Referee leitet
+       `exec rb_wave <n>` an den Bridge-/Relay-HTTP-Endpoint weiter und gibt
+       das `exec_result` zurück. Ersetzt das bis #159 geparkte wave_toggle. */
+    wave_spawn: {
+      cmd: "wave_spawn",
+      destructive: false,
+      reachable: true,
+      label: "Welle spawnen",
+      request: function () {
+        return { path: "/wave", method: "POST", body: { world: "A", n: DEFAULT_WAVE_N } };
+      },
+    },
   };
+
+  /**
+   * Wertet die `/wave`-Antwort des Referees für die UI aus (pure, testbar):
+   * `ok` nur, wenn der Referee zustellte UND das durchgereichte
+   * `exec_result` Erfolg meldet (`ok:true` oder alle `results[].ok`).
+   */
+  function waveResult(res) {
+    var data = res && typeof res === "object" ? res : {};
+    var er = data.exec_result;
+    var execOk = false;
+    if (er && typeof er === "object") {
+      if (er.ok === true) {
+        execOk = true;
+      } else if (Array.isArray(er.results) && er.results.length > 0) {
+        execOk = er.results.every(function (r) { return r && r.ok === true; });
+      }
+    }
+    return {
+      sent: !!data.ok,
+      ok: !!data.ok && execOk,
+      command: typeof data.command === "string" ? data.command : null,
+      status: data.status === undefined ? null : data.status,
+      error: typeof data.error === "string" && data.error ? data.error : null,
+      reason: er && typeof er.reason === "string" ? er.reason : null,
+    };
+  }
 
   function clampPct(n) {
     if (typeof n !== "number" || !isFinite(n)) return 0;
@@ -343,11 +375,13 @@
     createGodPanel: createGodPanel,
     createAccessGate: createAccessGate,
     isReachable: isReachable,
+    waveResult: waveResult,
     phaseLabel: phaseLabel,
     clampPct: clampPct,
     COMMANDS: COMMANDS,
     PHASE_LABELS: PHASE_LABELS,
     DEFAULT_API_BASE: DEFAULT_API_BASE,
     DEFAULT_POLL_MS: DEFAULT_POLL_MS,
+    DEFAULT_WAVE_N: DEFAULT_WAVE_N,
   };
 });

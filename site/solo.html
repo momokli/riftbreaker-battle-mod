@@ -481,9 +481,9 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
     <span class="ck-god-status" id="ckCmdStatus">BEREIT</span>
   </div>
   <div class="ck-god-grid">
-    <button type="button" class="ck-cmd ck-cmd--primary" data-ck-cmd="wave_toggle" data-ck-parked="1" disabled aria-disabled="true" title="Geparkt (Follow-up #159): kein erreichbarer Transport — RCON/Relay nicht deployt">
-      <span class="ck-cmd-label">[ WELLE START / PAUSE ]</span>
-      <span class="ck-cmd-sub">GEPARKT — FOLLOW-UP #159</span>
+    <button type="button" class="ck-cmd ck-cmd--primary" data-ck-cmd="wave_spawn" title="Operator-Wellen-Spawn: POST /wave → exec rb_wave 3 ueber Bridge/Relay (exec_result)">
+      <span class="ck-cmd-label">[ WELLE SPAWNEN ]</span>
+      <span class="ck-cmd-sub">rb_wave 3 → RELAY/BRIDGE</span>
     </button>
     <button type="button" class="ck-cmd ck-cmd--neutral" data-ck-cmd="give_resources" data-ck-parked="1" disabled aria-disabled="true" title="Geparkt (Follow-up #159): kein erreichbarer Transport — RCON/Relay nicht deployt">
       <span class="ck-cmd-label">[ RESSOURCEN INJIZIEREN ]</span>
@@ -500,9 +500,10 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
   </div>
   <p class="ck-god-note" id="ckGodNote">
     Verdrahtet (v1, erreichbare Referee-Endpoints):
+    <b>Welle spawnen</b> → <code>POST /wave</code> (<code>exec rb_wave 3</code> über Bridge/Relay, mit <code>exec_result</code>) ·
     <b>HQ zerstören (Test)</b> → <code>POST /report</code> (hq_hp=0) ·
     <b>Spiel neu starten</b> → <code>POST /rematch</code>.
-    Geparkt (Follow-up #159, kein erreichbarer Transport): Welle Start/Pause · Ressourcen injizieren.
+    Geparkt (Follow-up #159, kein erreichbarer Transport): Ressourcen injizieren.
   </p>
 </section>
 
@@ -1104,8 +1105,13 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
     onResult: function (res) {
       if (res.aborted) { setCmdStatus("ABGEBROCHEN", "is-err"); return; }
       if (res.parked) { setCmdStatus("GEPARKT — FOLLOW-UP #159", "is-err"); return; }
-      if (res.ok) { setCmdStatus("OK — " + res.action, "is-ok"); return; }
-      setCmdStatus("FEHLER — " + (res.error || "unbekannt"), "is-err");
+      if (!res.ok) { setCmdStatus("FEHLER — " + (res.error || "unbekannt"), "is-err"); return; }
+      if (res.action === "wave_spawn") {
+        var w = api.waveResult(res.data);
+        if (w.ok) { setCmdStatus("EXEC OK — " + (w.command || "rb_wave"), "is-ok"); return; }
+        if (w.sent) { setCmdStatus("GESENDET — exec_result " + (w.reason || w.error || "nicht ok"), "is-err"); return; }
+      }
+      setCmdStatus("OK — " + res.action, "is-ok");
     },
   });
   Array.prototype.forEach.call(document.querySelectorAll("[data-ck-cmd]"), function (btn) {
