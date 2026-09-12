@@ -432,6 +432,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 [RBBATTLE] event=wave_spawners count=16 groups=4          ← Pool der Rand-Spawner
 [RBBATTLE] event=spawn ok blueprint=units/ground/baxmoth entity=12345 anchor=spawn_enemy_border_west/...
 [RBBATTLE] event=wave level=3 status=done spawned=8 skipped=0 anchor=border spawners=16
+[RBBATTLE] event=wave level=3 status=no_spawns spawned=0 skipped=0 anchor=border anchors=16   ← Anker da, aber KEINE Kreatur entstanden (#288: ehrlicher Status statt status=done)
 [RBBATTLE] event=hq_autodetect status=ok group=headquarters entity=54321   ← automatische HQ-Bindung (#144, unverifizierter Gruppen-Name)
 [RBBATTLE] event=hq_autodetect status=not_found candidates=headquarters hint=rb_hq_entity   ← kein Treffer -> manueller Fallback noetig (#144)
 [RBBATTLE] event=hq_leak status=skip reason=no_hq_entity   ← Leak inaktiv ohne gebundene HQ-Entity (#143, Fix zu #28)
@@ -472,6 +473,13 @@ aktuell noch in der Lua liegende Runden-/Match-Regime (natürlicher
 Wellen-Timer als Rundentakt) wird erst mit laufendem Spiel in einem eigenen
 Schritt entfernt (Stufe 2, Player-Test OFFEN) — Details:
 [`docs/REFEREE.md`](../docs/REFEREE.md).
+
+> **Falsch-Gruen (#288):** `exec_result.ok=true` aus dem Exec-Kanal belegt nur,
+> dass `ConsoleService::ExecuteCommand` lief — **nicht**, dass gespawnt wurde.
+> Spawn-Beweis ist die Log-Zeile `event=wave … status=done` (nur bei
+> `spawned>0`, sonst `status=no_spawns`) bzw. live der Player-Test.
+> Gate/Analyse: [`docs/INGRESS_IO.md`](../docs/INGRESS_IO.md)
+> → „Kernpfad-Gate ohne Player (#288)“.
 
 ## FINDINGS-Tabelle (Stand Recherche — In-Game-Test des Umbaus offen)
 
