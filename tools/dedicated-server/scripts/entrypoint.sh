@@ -41,6 +41,11 @@ RBBRIDGE_TOOLS_DIR="${RBBRIDGE_TOOLS_DIR:-/opt/rbtools}"
 RBBRIDGE_DLL_WIN="${RBBRIDGE_DLL_WIN:-Z:\\opt\\rbtools\\rbbridge.dll}"
 RBBRIDGE_DISPLAY="${RBBRIDGE_DISPLAY:-:99}"
 INJECT_TIMEOUT_SECS="${INJECT_TIMEOUT_SECS:-180}"
+# Best-effort Wartezeit auf die laufende Lua-Welt VOR der Injection (#265).
+GAMEPLAY_WAIT_SECS="${GAMEPLAY_WAIT_SECS:-120}"
+# Harte Obergrenze fuer einen einzelnen injector.exe-Lauf; verhindert den
+# Command-Substitution-Deadlock (siehe FIX unten).
+INJECT_CMD_TIMEOUT_SECS="${INJECT_CMD_TIMEOUT_SECS:-60}"
 
 copy_server_config() {
   local dest="$1"
@@ -122,15 +127,42 @@ start_ingress_supervisor() {
       return 0
     fi
 
+    # Injection erst, wenn die Lua-Welt laeuft (#265, live belegt): bei
+    # pause_game_when_empty=0 friert das Lua-Log nach dem Laden ein; eine zu
+    # fruehe Injection ist unnoetig riskant (Loader-Lock). Best effort, max.
+    # GAMEPLAY_WAIT_SECS; laeuft die Zeit ab, wird trotzdem injiziert.
+    echo "[entrypoint] ingress: warte auf Spielbereitschaft (max ${GAMEPLAY_WAIT_SECS}s)"
+    gameplay_deadline=$((SECONDS + GAMEPLAY_WAIT_SECS))
+    gameplay_ready=0
+    while (( SECONDS < gameplay_deadline )); do
+      if grep_logs 'Server entered ServerGameplayState' \
+         || grep_logs 'event=mod_load' \
+         || grep_logs 'ServerGameplayState'; then
+        gameplay_ready=1
+        break
+      fi
+      sleep 2
+    done
+    if (( gameplay_ready == 1 )); then
+      echo "[entrypoint] ingress: Spiel bereit (GameplayState/mod_load im Log)"
+    else
+      echo "[entrypoint] ingress: WARNUNG: Spielbereitschaft nach ${GAMEPLAY_WAIT_SECS}s nicht gesehen — injiziere trotzdem" >&2
+    fi
+
     echo "[entrypoint] ingress: injiziere rbbridge.dll in DedicatedServer.exe (bis ${INJECT_TIMEOUT_SECS}s)"
     deadline=$((SECONDS + INJECT_TIMEOUT_SECS))
     attempt=0
     injected=0
     while (( SECONDS < deadline )); do
       attempt=$((attempt + 1))
-      out="$("${WINE}" "${tools_dir}/injector.exe" DedicatedServer.exe "${RBBRIDGE_DLL_WIN}" 2>&1)"
-      rc=$?
-      printf '%s\n' "${out}" | sed 's/^/[rbtools] /'
+      # Ausgabe NICHT per Command-Substitution einsammeln: langlebige
+      # Wine-Helferprozesse erben das Schreib-Ende der $(...)-Pipe -> die
+      # Substitution bekommt nie EOF und der Supervisor blockiert dauerhaft
+      # (live auf planet belegt). Stattdessen in eine Datei umleiten und per
+      # timeout begrenzen.
+      ilog=/tmp/rbtools-inject.log
+      if timeout "${INJECT_CMD_TIMEOUT_SECS}" "${WINE}" "${tools_dir}/injector.exe" DedicatedServer.exe "${RBBRIDGE_DLL_WIN}" >"$ilog" 2>&1; then rc=0; else rc=$?; fi
+      sed 's/^/[rbtools] /' "$ilog"
       if (( rc == 0 )); then
         injected=1
         echo "[entrypoint] ingress: Injection erfolgreich (Versuch ${attempt})"
@@ -145,7 +177,12 @@ start_ingress_supervisor() {
     fi
 
     echo "[entrypoint] ingress: starte pipe_bridge.exe (HTTP 9001 -> Named-Pipe rbbattle)"
-    exec "${WINE}" "${tools_dir}/pipe_bridge.exe" 2>&1
+    # NICHT exec'en: die Subshell soll das vorzeitige Ende der Bridge loggen
+    # koennen, ohne den Supervisor (set +e) zu crashen.
+    "${WINE}" "${tools_dir}/pipe_bridge.exe" 2>&1 &
+    bridge_pid=$!
+    wait "${bridge_pid}"
+    echo "[entrypoint] ingress: WARNUNG: pipe_bridge.exe beendet (rc=$?) — Server laeuft weiter" >&2
   ) &
 }
 
