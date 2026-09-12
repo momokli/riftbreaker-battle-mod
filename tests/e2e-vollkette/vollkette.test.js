@@ -18,9 +18,17 @@
 //   - rbbridge-Kommando         (statisch: dispatch_exec → ExecuteCommand)
 //   - Mod-Spawn                 (fengari + Stub-Services: rb_wave 3 → 8 Spawns)
 //
-// Was OFFEN bleibt (kein Live-Client in CI, Linux):
-//   - ExecuteCommand im echten Spielprozess (DLL-Injection, Windows)
-//   - "Spawn am headless Client sichtbar" (Screenshot-Beweis)
+// Was jetzt geprüft wird (Issue #252):
+//   - Wine-robuste Modul-Resolution: statische Prüfung der Resolutions-
+//     Primitive (GetModuleHandle A/W, EnumProcessModules, Toolhelp32,
+//     loader-unabhängiger Signatur-Scan → AllocationBase, LoadLibraryA)
+//     + graceful-Fehlerpfad (ok:false + reason).
+//   - Opt-in Live-Test (RBB_LIVE_PIPE=1): verbindet die echte rbbridge-Pipe
+//     und erwartet exec_result ok:true.
+//
+// Was OFFEN bleibt (nicht headless prüfbar):
+//   - "Spawn am headless Client sichtbar" (Screenshot-Beweis) → Player-Test
+//     Momo/Matheo, ausdrücklich offen.
 // Der Relay → rbbridge-Pipe-Dispatch (relay.py dispatch_exec) ist seit
 // Issue #60 implementiert und wird hier gegen einen FIFO-Fake (Named-Pipe-
 // Ersatz unter Linux) geprüft; nur der echte rbbridge-Dispatch (Windows,
@@ -40,7 +48,9 @@ const ROOT = path.join(__dirname, '..', '..');
 const WEB_DIR = path.join(ROOT, 'bausteine', '06-tournament-server', 'web');
 const SERVER_JS = path.join(ROOT, 'bausteine', '06-tournament-server', 'server.js');
 const RELAY_PY = path.join(ROOT, 'bausteine', '07-relay', 'relay.py');
-const RBBRIDGE_C = path.join(ROOT, 'trainer', 'rbbridge', 'rbbridge.c');
+// Kanonische Build-/Distributions-Quelle (scripts/package_bausteine.sh +
+// .github/workflows/ci.yml bauen aus bausteine/) - NICHT trainer/.
+const RBBRIDGE_C = path.join(ROOT, 'bausteine', '04-trainer-io', 'rbbridge', 'rbbridge.c');
 const PROTOCOL_MD = path.join(ROOT, 'trainer', 'protocol.md');
 const MOD_PATH = path.join(ROOT, 'mod', 'lua', 'rbbattle_autoexec.lua');
 
@@ -76,9 +86,43 @@ test('rbbridge: {"cmd":"exec","command":"rb_wave 3"} → ExecuteCommand (statisc
   assert.ok(c.includes('strcmp(cmd, "exec") == 0'), 'rbbridge behandelt cmd=exec');
   assert.ok(c.includes('dispatch_exec(hPipe, command)'), 'exec ruft dispatch_exec auf');
   // dispatch_exec ist seit RE-Stand verdrahtet (kein reiner TODO/no-op mehr):
-  assert.ok(c.includes('RBBRIDGE_RVA_EXEC_COMMAND'), 'ExecuteCommand-RVA definiert');
   assert.ok(c.includes('console_exec_fn'), 'console_exec_fn Typ vorhanden');
   assert.ok(c.includes('fn(instance, command)'), 'ExecuteCommand-Aufruf (this=RCX, cmd=RDX)');
+  // Erfolgs-Literal im EMITTIERTEN C-String prüfen, nicht im Kommentar:
+  // im Quelltext steht \"ok\":true (der Kommentar hat nur "ok":true).
+  assert.ok(c.includes('\\"ok\\":true'),
+    'emittiertes exec_result-Literal \\"ok\\":true vorhanden (nicht nur Kommentar)');
+
+  // AC #243: Adressauflösung per AOB/Signatur statt fester RVAs.
+  assert.ok(c.includes('RBBRIDGE_EXEC_SIG'), 'ExecuteCommand-Byte-Signatur definiert (AOB)');
+  assert.ok(c.includes('RBBRIDGE_RTTI_NAME'), 'RTTI-Name der ConsoleService-Klasse vorhanden');
+  assert.ok(c.includes('scan_bytes'), 'Byte-/Signatur-Scanner vorhanden');
+  assert.ok(c.includes('resolve_console_vftable'), 'vftable per RTTI-Walk aufgelöst');
+  assert.ok(c.includes('resolve_console_service(&fn, &instance)'),
+    'dispatch_exec nutzt die gescannte fn/instance');
+  assert.ok(!c.includes('RBBRIDGE_RVA_'),
+    'KEINE festen RVA-Makros mehr (nur AOB/Signatur)');
+  assert.ok(!c.includes('not_implemented'), 'kein not_implemented-Stub mehr');
+});
+
+test('rbbridge: Fehlerpfad console_service_not_found emittiert ok:false (kein Aufruf)', () => {
+  const c = fs.readFileSync(RBBRIDGE_C, 'utf8');
+  // Fehlerzweig in dispatch_exec: resolve == 0 -> ok:false + return, BEVOR
+  // fn(...) gerufen wird. Der Resolver liefert 0 bei fehlendem Modul /
+  // fehlendem RTTI-Name / fehlender Signatur (verhaltensbasiert geprüft im
+  // Host-Harness rbbridge_hosttest.c), hier wird das emittierte Literal
+  // gegen den echten C-String geprüft (nicht gegen den Kommentar).
+  const idxGuard = c.indexOf('if (!resolve_console_service(&fn, &instance))');
+  const idxErr = c.indexOf('\\"ok\\":false');
+  const idxCall = c.indexOf('fn(instance, command);');
+  assert.ok(idxGuard > 0, 'dispatch_exec fragt resolve_console_service ab');
+  assert.ok(idxErr > idxGuard, 'Fehlerzweig emittiert \\"ok\\":false');
+  assert.ok(c.includes('console_service_not_found'),
+    'Fehlerzweig nennt reason console_service_not_found');
+  assert.ok(idxCall > idxErr, 'fn(...) folgt erst nach dem Fehlerzweig');
+  const between = c.slice(idxGuard, idxCall);
+  assert.ok(between.includes('send_line') && between.includes('return;'),
+    'Fehlerzweig sendet Fehler-Event und kehrt vor fn(...) zurück');
 });
 
 test('Protokoll: exec-Kanal "rb_wave 3" dokumentiert (protocol.md)', () => {
@@ -422,10 +466,98 @@ print('RESULT ' + json.dumps({'ok': ok, 'acked': 7 in r.acked, 'pending': 7 in r
   }
 });
 
-test('OFFEN: ExecuteCommand im echten Spielprozess (DLL-Injection, Windows)',
-  { skip: 'OFFEN: braucht riftbreaker_dll_win_release.dll + injizierte rbbridge.dll — Windows-only, nicht CI-fähig' },
-  () => {});
+// ---------------------------------------------------------------------------
+// Issue #252: Wine-robuste Modul-Resolution (statisch)
+// ---------------------------------------------------------------------------
+// GetModuleHandleA("riftbreaker_dll_win_release.dll") liefert unter Wine
+// GLE=126 (ERROR_MOD_NOT_FOUND) -> console_service_not_found. Deshalb loest
+// resolve_module() die Modulbasis in mehreren Stufen auf (GetModuleHandle
+// A/W, EnumProcessModules, Toolhelp32, loader-unabhaengiger Signatur-Scan
+// ueber VirtualQuery->AllocationBase, LoadLibraryA). Diese Primitive werden
+// hier statisch geprueft; der echte Pipe-Roundtrip ist der opt-in Live-Test
+// weiter unten.
+test('rbbridge: Wine-robuste Modul-Resolution (statisch, Issue #252)', () => {
+  const c = fs.readFileSync(RBBRIDGE_C, 'utf8');
 
-test('OFFEN: Spawn am headless Client sichtbar (Screenshot-Beweis)',
-  { skip: 'OFFEN: braucht den laufenden headless Game-Client (Dedi) + Screenshot — nur Operator live' },
+  // Gemeinsame Auflösung + Stufen-Log.
+  assert.ok(c.includes('resolve_module'), 'resolve_module() vorhanden');
+  assert.ok(c.includes('module_range: via='), 'dbg() loggt die gegriffene Stufe');
+
+  // a) GetModuleHandleA/W - mit und ohne ".dll".
+  assert.ok(c.includes('module_via_getmodulehandle'), 'Stufe a: GetModuleHandle');
+  assert.ok(c.includes('GetModuleHandleA(RBBRIDGE_MODULE_BASE)') &&
+    c.includes('GetModuleHandleW(RBBRIDGE_MODULE_NAME_W)'),
+    'auch Namensvarianten ohne ".dll" + W-Variante');
+
+  // b) Modul-Enumeration (psapi).
+  assert.ok(c.includes('EnumProcessModules'), 'Stufe b: EnumProcessModules');
+  assert.ok(c.includes('GetModuleBaseNameW'), 'Basename (W) verglichen');
+  assert.ok(c.includes('GetModuleFileNameExW'), 'Vollpfad (W) verglichen');
+  assert.ok(c.includes('_wcsicmp'), 'Basenamen case-insensitiv');
+
+  // c) Toolhelp32.
+  assert.ok(c.includes('CreateToolhelp32Snapshot'), 'Stufe c: Toolhelp32-Snapshot');
+  assert.ok(c.includes('TH32CS_SNAPMODULE') && c.includes('TH32CS_SNAPMODULE32'),
+    'TH32CS_SNAPMODULE|SNAPMODULE32');
+  assert.ok(c.includes('Module32FirstW') && c.includes('Module32NextW'),
+    'Module32FirstW/NextW-Walk');
+
+  // d) Loader-unabhaengig: Signatur im gesamten Adressraum -> AllocationBase.
+  assert.ok(c.includes('module_via_sigbase'), 'Stufe d: Signatur-Scan');
+  assert.ok(c.includes('VirtualQuery') && c.includes('AllocationBase'),
+    'Modulbasis aus VirtualQuery(execfn)->AllocationBase');
+  assert.ok(c.includes('MEM_IMAGE'), 'AllocationBase nur bei MEM_IMAGE (Imagebase)');
+
+  // e) Letzter Versuch.
+  assert.ok(c.includes('module_via_loadlibrary') &&
+    c.includes('LoadLibraryA(RBBRIDGE_MODULE_NAME)'),
+    'Stufe e: LoadLibraryA-Fallback');
+
+  // Graceful-Fehlerpfad: ok:false + reason, niemals ohne gueltige Aufloesung aufrufen.
+  assert.ok(c.includes('"ok":false') && c.includes('console_service_not_found'),
+    'graceful exec_result ok:false reason=console_service_not_found');
+  assert.ok(c.includes('KEIN Aufruf'), 'bei Nicht-Fund wird NICHT aufgerufen');
+});
+
+// Opt-in Live-Test: verbindet die echte Named Pipe und erwartet ok:true.
+// Ohne RBB_LIVE_PIPE=1 uebersprungen (Windows/Wine + laufender Spielprozess
+// mit injizierter rbbridge.dll noetig; nicht CI-faehig).
+test('LIVE: ExecuteCommand ueber rbbridge-Pipe (opt-in RBB_LIVE_PIPE=1)',
+  process.env.RBB_LIVE_PIPE === '1'
+    ? {}
+    : { skip: 'OFFEN/opt-in: RBB_LIVE_PIPE=1 setzen mit laufendem Spielprozess + injizierter rbbridge.dll (Windows/Wine, \\.\\pipe\\rbbattle)' },
+  async () => {
+    const net = require('node:net');
+    const line = await new Promise((resolve, reject) => {
+      const sock = net.connect('\\\\.\\pipe\\rbbattle');
+      let buf = '';
+      const timer = setTimeout(() => {
+        sock.destroy();
+        reject(new Error('Timeout auf exec_result'));
+      }, 15000);
+      sock.on('connect', () => {
+        sock.write(JSON.stringify({ cmd: 'exec', command: 'rb_status' }) + '\n');
+      });
+      sock.on('data', (d) => {
+        buf += d.toString('utf8');
+        const hit = buf.split('\n').find((l) => l.includes('"exec_result"'));
+        if (hit) {
+          clearTimeout(timer);
+          sock.end();
+          resolve(hit);
+        }
+      });
+      sock.on('error', (e) => { clearTimeout(timer); reject(e); });
+    });
+    const j = JSON.parse(line);
+    assert.strictEqual(j.event, 'exec_result');
+    assert.strictEqual(j.ok, true, 'ExecuteCommand muss ok:true liefern');
+  });
+
+// ---------------------------------------------------------------------------
+// OFFEN: Player-Test (nicht headless pruefbar)
+// ---------------------------------------------------------------------------
+
+test('OFFEN (Player-Test Momo/Matheo): Spawn am headless Client sichtbar',
+  { skip: 'OFFEN: "Welle spawnt sichtbar" (rb_wave 3 -> status=done spawned=N + sichtbare Kreaturen) braucht einen beigetretenen Spieler/Client + Screenshot — Player-Test Momo/Matheo, NICHT erledigt' },
   () => {});
