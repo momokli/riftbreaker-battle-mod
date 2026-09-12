@@ -1,0 +1,22 @@
+---
+# RIFT BATTLE — Fleet-Deploy: ALLE Dedicated-Server-Instanzen in EINEM Lauf
+# (Issue #290). Deployt `release` (Tag-Stand) und `dev` (rolling main)
+# nacheinander; beide koexistieren auf planet mit getrennten Ports, Namen,
+# Pfaden und Volume-/Unit-Namen.
+#
+#   ansible-playbook -i deploy/inventory deploy/fleet.yml --ask-vault-pass
+#
+# Jede Instanz läuft als eigener site.yml-Play mit ihrem Profil
+# (deploy/instances/<name>.yml, Auswahl via `riftbreaker_instance`). Reihenfolge
+# `release` vor `dev`: der stabile Spieler-Stand wird zuerst (und damit auch
+# bei einem Abbruch) sichergestellt.
+#
+# Hinweis: host-weite Rollen (Image, Mods-Zip, Website, Probe) laufen je Play
+# idempotent mit; der zweite Lauf ist ein billiger No-Op (Image-Tag existiert,
+# md5-Parität, Caddy-Reload, identische Probe-Endpoint-Liste = alle Instanzen).
+- import_playbook: site.yml
+  vars:
+    riftbreaker_instance: release
+- import_playbook: site.yml
+  vars:
+    riftbreaker_instance: dev

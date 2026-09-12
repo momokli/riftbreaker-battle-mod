@@ -25,8 +25,11 @@ HTTP_TIMEOUT="${RB_HTTP_TIMEOUT:-8}"
 ENDPOINTS_FILE="${RB_ENDPOINTS_FILE:-/usr/local/etc/rbmods-probe.endpoints}"
 
 # Default-Endpoint-Liste (id|host|port|container|manifest_dir)
+# Multi-Instanz (Issue #290): eine Zeile je Instanz. Normalerweise übersteuert
+# die deployte Liste /usr/local/etc/rbmods-probe.endpoints (probe-timer-Rolle).
 DEFAULT_ENDPOINTS=(
   "RIFT-MOD|65.21.27.234|6321|riftbreaker-dedicated|/srv/rbgame/mods/rbbattle"
+  "RIFT-DEV|65.21.27.234|6322|riftbreaker-dedicated-dev|/srv/rbgame-dev/mods/rbbattle"
 )
 
 now_iso(){ date -u +%Y-%m-%dT%H:%M:%SZ; }

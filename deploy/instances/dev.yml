@@ -1,0 +1,40 @@
+---
+# ============================================================================
+# Instanz-Profil "dev" (Issue #290) — rolling DEV-Instanz.
+# ============================================================================
+# Gewählt über `-e riftbreaker_instance=dev` (z. B. CD-Workflow deploy.yml).
+# Vollständig getrennt von "release": eigener UDP-Port, eigenes Game-Dir,
+# eigene Volume-/Container-/Unit-Namen, eigener Host-Bridge-Port.
+#
+# Stand-Kanal: `main` (rolling) — immer der aktuelle Stand zum Testen.
+#
+# Port-Schema (siehe docs/DEPLOYMENT.md): release 6321 / dev 6322 / Test 6323.
+# Bridge: release 9001 / dev 9004 / Test 9003. Tournament: release 8081 /
+# dev 8082 / Test 8091. Keine Überschneidung.
+riftbreaker_instance_name: dev
+riftbreaker_instance_channel: main
+riftbreaker_instance_external: true
+# Kennung in der host-weiten Probe (status.json / connectivity.html).
+riftbreaker_instance_probe_id: RIFT-DEV
+
+# --- Dedicated-Server-Instanz ------------------------------------------------
+riftbreaker_server_container: riftbreaker-dedicated-dev
+riftbreaker_server_port_udp: 6322
+riftbreaker_bridge_port: 9004
+riftbreaker_game_dir: /srv/rbgame-dev
+riftbreaker_mod_dir: "{{ riftbreaker_game_dir }}/mods/rbbattle"
+riftbreaker_backup_dir: "{{ riftbreaker_game_dir }}-backups"
+riftbreaker_deploy_dir: /opt/rbmods/compose/riftbreaker-dedicated-dev
+riftbreaker_wine_volume: rb-wine-dev
+riftbreaker_saves_volume: rb-saves-dev
+riftbreaker_server_name: RBBattle-DEV
+riftbreaker_server_campaign: mp_survival/mp_survival
+riftbreaker_server_mission: survival/jungle
+riftbreaker_server_difficulty: coop_normal
+
+# --- Tournament-Server (systemd) ---------------------------------------------
+tournament_unit: tournament-server-dev
+tournament_port: 8082
+tournament_install_dir: /opt/rbmods/tournament-server-dev
+tournament_bridge_a_url: "http://127.0.0.1:9004/exec"
+tournament_bridge_b_url: "http://127.0.0.1:9005/exec"

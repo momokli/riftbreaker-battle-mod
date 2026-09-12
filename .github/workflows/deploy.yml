@@ -1,20 +1,29 @@
 name: Deploy (CD)
 
 # Continuous Deployment: jeder Merge auf main rollt den aktuellen Mod-Stand
-# automatisch auf den Solo-DEV-Server (planet, Port 6321) aus — immer der
-# aktuelle Stand zum Testen (Issue #91).
+# automatisch auf die **DEV-Instanz** (planet, Port 6322) aus — rolling, immer
+# der aktuelle Stand zum Testen.
 #
-# Topologie-Update (2026-09-10, Issue #91): EIN Server auf :6321 statt
-# Steam-/Non-Steam-Dualität; ein Direct-IP-Server deckt beide Stores ab
-# (disable_steam "1"). Der Tag→prod-Kanal ist vorerst gestrichen — dieser
-# Workflow hat daher bewusst KEINEN tag-Trigger und KEINE prod-Umgebung.
+# Multi-Instanz (Issue #290): seit #290 gibt es zwei koexistierende Instanzen
+# auf planet:
+#   * release (Port 6321) — stabiler Spieler-Stand, an einen Git-TAG gebunden;
+#     deployt NICHT über diesen Workflow, sondern über deploy-release.yml
+#     (workflow_dispatch + Tag) — der bewusst wieder eingeführte Tag-Kanal.
+#   * dev (Port 6322) — dieser Workflow, rolling `main`.
+# Beide sind getrennt (Ports/Namen/Pfade/Volumes) und beeinflussen sich nicht.
 #
 # Deploy-Mechanik (2026-09-11, ersetzt den HTTP-Hook): der Runner auf planet
-# verbindet sich per SSH als dedizierter deploy-User (`ssh rbd "<sha> <ref>"`).
-# Die forced command (deploy/deploy-ssh.sh) validiert die SHA, macht
-# git fetch + Hard-Checkout und führt das Playbook als root aus (enges
-# sudoers). Ausgabe wird direkt ins Job-Log gestreamt, exit code = Ergebnis —
-# kein Token, kein Polling. Setup: deploy/README.md → „CD: SSH-Deploy".
+# verbindet sich per SSH als dedizierter deploy-User
+# (`ssh rbd "<sha> <ref> <instance>"`). Die forced command (deploy/deploy-ssh.sh)
+# validiert die SHA + Instanz, macht git fetch + Hard-Checkout und führt das
+# Playbook als root aus (enges sudoers). Ausgabe wird direkt ins Job-Log
+# gestreamt, exit code = Ergebnis — kein Token, kein Polling. Setup:
+# deploy/README.md → „CD: SSH-Deploy".
+#
+# Hinweis: Bis die host-seitige Wrapper-/sudoers-Installation den Instanz-Token
+# übernimmt (deploy/README.md → „Multi-Instanz-Deploy"), ignoriert der Wrapper
+# das dritte Feld und deployt weiterhin `release` — der Workflow ist damit
+# vorwärts- und rückwärtskompatibel.
 
 on:
   push:
@@ -23,7 +32,7 @@ on:
 permissions:
   contents: read
 
-# Rolling Deploy auf genau einen Server: niemals parallel, ein laufender Lauf
+# Rolling Deploy auf die DEV-Instanz: niemals parallel, ein laufender Lauf
 # wird nicht abgebrochen (der Stand muss atomar bleiben).
 concurrency:
   group: cd-dev
@@ -31,14 +40,14 @@ concurrency:
 
 jobs:
   deploy-dev:
-    name: Deploy Dev (planet :6321)
+    name: Deploy Dev (planet :6322)
     runs-on: [self-hosted, planet]
     timeout-minutes: 30
     environment:
       name: dev
       url: https://rift.projectmellon.de/solo.html
     steps:
-      - name: Deploy per SSH (deploy-User, forced command)
+      - name: Deploy per SSH (deploy-User, forced command, Instanz dev)
         run: |
           set -euo pipefail
-          ssh -o BatchMode=yes rbd "${GITHUB_SHA} ${GITHUB_REF}"
+          ssh -o BatchMode=yes rbd "${GITHUB_SHA} ${GITHUB_REF} dev"

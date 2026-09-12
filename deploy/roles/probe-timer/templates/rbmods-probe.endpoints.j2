@@ -1,3 +1,7 @@
 # RIFT BATTLE Endpoint-Liste (id|host|port|container|manifest_dir) —
-# verwaltet von deploy/. Format: scripts/probe_servers.sh ('#' = Kommentar).
-RIFT-MOD|{{ probe_server_ip }}|{{ riftbreaker_server_port_udp }}|{{ riftbreaker_server_container }}|{{ riftbreaker_mod_dir }}
+# verwaltet von deploy/ (probe-timer). Format: scripts/probe_servers.sh
+# ('#' = Kommentar). Eine Zeile JE Instanz aus host_vars `riftbreaker_fleet`
+# (Multi-Instanz, Issue #290) — kein Cross-Talk, eigene Zeile je Instanz.
+{% for inst in riftbreaker_fleet %}
+{{ inst.probe_id }}|{{ probe_server_ip }}|{{ inst.port_udp }}|{{ inst.container }}|{{ inst.game_dir }}/mods/rbbattle
+{% endfor %}

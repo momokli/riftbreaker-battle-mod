@@ -1,36 +1,39 @@
 ---
 # ============================================================================
-# planet — nicht-geheime Variablen (host_vars/planet/vars.yml)
+# planet — nicht-geheime, HOST-WEITE Variablen (host_vars/planet/vars.yml)
 # Geheimnisse (Server-Passwort) NUR in vault.yml (ansible-vault verschlüsselt).
+#
+# Multi-Instanz (Issue #290): instanz-spezifische Werte (Ports, Container-/
+# Unit-Namen, Pfade, Volumes, Content-Dirs) stehen NICHT mehr hier, sondern in
+# je einem Profil pro Instanz: deploy/instances/<name>.yml. Gewählt wird das
+# Profil über `-e riftbreaker_instance=<name>` (Default `release`), siehe
+# deploy/site.yml und deploy/fleet.yml. Hier bleiben nur Werte, die für ALLE
+# Instanzen gleich sind (Image, Website, Probe, Content-Cache, Secrets).
 # ============================================================================
 
-# --- Dedicated Game-Server (Dev-SP, 6321, 1v1 "vs sich selbst") -------------
-riftbreaker_game_dir: /srv/rbgame
-riftbreaker_mod_dir: "{{ riftbreaker_game_dir }}/mods/rbbattle"
-# Mod-Backups liegen AUSSERHALB von mods/ — der Dedicated Server lädt sonst
-# jeden Backup-Ordner mit *.manifest als zweite Mod (Befund 2026-09-10,
-# Issue #212; Guard + Verifikation in der Rolle).
-riftbreaker_backup_dir: "{{ riftbreaker_game_dir }}-backups"
-# Laufzeit-Image (Rolle dedicated-server-image, Issue #241, Community-Rezept).
+# --- Instanz-Registry (host-weite Sicht) -------------------------------------
+# Bewusst schlank: nur was der host-weite Probe-Timer braucht (eine Zeile je
+# Instanz in status.json). Die vollständigen instanz-spezifischen Werte stehen
+# in deploy/instances/<name>.yml. Bei Änderung von externem UDP-Port,
+# Container-Name oder Game-Dir eines Profils hier mitpflegen.
+riftbreaker_fleet:
+  - probe_id: RIFT-MOD
+    port_udp: 6321
+    container: riftbreaker-dedicated
+    game_dir: /srv/rbgame
+  - probe_id: RIFT-DEV
+    port_udp: 6322
+    container: riftbreaker-dedicated-dev
+    game_dir: /srv/rbgame-dev
+
+# --- Laufzeit-Image (Rolle dedicated-server-image, Issue #241) ---------------
 # Tag = Deploy-SHA aus site.yml (pre_tasks) — KEIN `latest`; das Image existiert
-# garantiert, bevor der Container startet.
+# garantiert, bevor der Container startet. EIN Image für ALLE Instanzen
+# (identische Wine-Laufzeit), nur die Container-/Port-/Volume-Parameter
+# unterscheiden sich je Profil.
 dedicated_server_image_name: rb-dedicated
 dedicated_server_image: "{{ dedicated_server_image_name }}:{{ deploy_image_tag }}"
 riftbreaker_server_image: "{{ dedicated_server_image }}"
-riftbreaker_server_container: riftbreaker-dedicated
-riftbreaker_server_port_udp: 6321
-# Welt/Config gemäß Community-Rezept (config.cfg.j2). Werte = funktionierender
-# Stand (verifiziert 2026-09-11).
-riftbreaker_server_campaign: mp_survival/mp_survival
-riftbreaker_server_mission: survival/jungle
-riftbreaker_server_difficulty: coop_normal
-
-# --- Tournament-Server (systemd, Rust/axum aus tournament/) ------------------
-tournament_install_dir: /opt/rbmods/tournament-server
-tournament_unit: tournament-server
-tournament_port: 8081
-tournament_bridge_a_url: "http://127.0.0.1:9001/exec"
-tournament_bridge_b_url: "http://127.0.0.1:9002/exec"
 
 # --- Website (statics + Caddy, mellon-caddy-Container) -----------------------
 website_domain: rift.projectmellon.de
@@ -58,6 +61,8 @@ mods_download_url: "https://{{ website_domain }}/mods/{{ mods_zip_name }}"
 mods_download_tmp: /tmp/rbbattle-download-check.zip
 
 # --- Probe-Timer (systemd, scripts/probe_servers.sh) -------------------------
+# Eine Probe je Instanz (siehe probe-timer-Endpoint-Template); die Werte hier
+# sind host-weit (IP, Ziele, Intervall).
 probe_bin: /usr/local/bin/rbmods-probe.sh
 probe_out: "{{ website_docroot }}/status.json"
 probe_site_url: "https://{{ website_domain }}"
@@ -65,6 +70,8 @@ probe_endpoints_file: /usr/local/etc/rbmods-probe.endpoints
 probe_interval_min: 2
 probe_server_ip: 65.21.27.234
 
-# Game-Content ist auf planet bereits provisioniert (664 MB in /srv/rbgame).
-# SteamCMD-Modus haengt am "apt install lib32gcc-s1" -> sync als No-Op.
+# --- Game-Content (host-weit) ------------------------------------------------
+# Der Dedicated-Server-Content (Steam-App 4114030) liegt als kanonischer Cache
+# auf planet und wird pro Instanz nach <game_dir> gespiegelt (modus sync).
+# SteamCMD haengt am "apt install lib32gcc-s1" -> sync als Default.
 riftbreaker_content_mode: sync

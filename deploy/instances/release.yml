@@ -1,0 +1,44 @@
+---
+# ============================================================================
+# Instanz-Profil "release" (Issue #290) — Release-/Spieler-Instanz.
+# ============================================================================
+# Gewählt über `-e riftbreaker_instance=release` (Default, siehe deploy/site.yml).
+# Diese Datei enthält ALLE flachen Rollen-Variablen der Instanz; host_weite
+# Werte (Image, Website, Probe, Content-Cache, Vault-Secrets) bleiben in
+# deploy/inventory/host_vars/planet/vars.yml.
+#
+# Stand-Kanal: Git-Tag (vX.Y.Z). Die Instanz wird aus einem Tag-Checkout
+# deployt (Workflow deploy-release.yml) und rollt NICHT mit `main`.
+#
+# ACHTUNG: Diese Werte sind die heute laufende Prod-Instanz (:6321) — sie
+# dürfen sich nicht ändern, sonst rollt der Deploy die Prod-Instanz um
+# (Container-Name, Pfade, Volume-Namen, Ports).
+riftbreaker_instance_name: release
+riftbreaker_instance_channel: tag
+riftbreaker_instance_external: true
+# Kennung in der host-weiten Probe (status.json / connectivity.html).
+riftbreaker_instance_probe_id: RIFT-MOD
+
+# --- Dedicated-Server-Instanz ------------------------------------------------
+riftbreaker_server_container: riftbreaker-dedicated
+riftbreaker_server_port_udp: 6321
+# Host-seitiger Bridge-Port (nur an 127.0.0.1 publiziert); der Container-Port
+# ist konstant 9001 (riftbreaker_bridge_container_port).
+riftbreaker_bridge_port: 9001
+riftbreaker_game_dir: /srv/rbgame
+riftbreaker_mod_dir: "{{ riftbreaker_game_dir }}/mods/rbbattle"
+riftbreaker_backup_dir: "{{ riftbreaker_game_dir }}-backups"
+riftbreaker_deploy_dir: /opt/rbmods/compose/riftbreaker-dedicated
+riftbreaker_wine_volume: rb-wine
+riftbreaker_saves_volume: rb-saves
+riftbreaker_server_name: RBBattle
+riftbreaker_server_campaign: mp_survival/mp_survival
+riftbreaker_server_mission: survival/jungle
+riftbreaker_server_difficulty: coop_normal
+
+# --- Tournament-Server (systemd) ---------------------------------------------
+tournament_unit: tournament-server
+tournament_port: 8081
+tournament_install_dir: /opt/rbmods/tournament-server
+tournament_bridge_a_url: "http://127.0.0.1:9001/exec"
+tournament_bridge_b_url: "http://127.0.0.1:9002/exec"
