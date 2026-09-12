@@ -1,11 +1,13 @@
-name: Boot-Test (Test-Ports)
+name: Boot-Test (interne Verifikation)
 
-# Pre-Merge-Gate (CI/CD-Plan F1): baut + bootet den Stack auf Test-Ports
-# (6323/8082) und beweist so „baut + bootet", bevor ein PR auf main darf.
+# Pre-Merge-Gate (CI/CD-Plan F1, Issue #275): baut die Images und bootet den
+# Game-Server + den Tournament-Server als ZWEI Container im selben Compose/Netz.
+# Die Test-Instanz hat BEWUSST keine Host-Ports; verifiziert wird ausschliesslich
+# INTERN per `docker inspect`/`docker exec` (kein Host-curl) — deterministisch,
+# ohne Port-Kollision mit Prod (6321/8081/9001 bleiben Prod vorbehalten).
 # Der Job-Name IST der Required-Check-Context "boot-test".
 #
-# Kein Secret nötig: Dummy-Vault (Test-Passwort) + Test-Ports/Pfade.
-# Prod (6321/8081) wird nie berührt.
+# Kein Secret nötig: Dummy-Vault (Test-Passwort) + Test-Pfade.
 
 on:
   pull_request:
@@ -13,8 +15,8 @@ on:
 permissions:
   contents: read
 
-# Serialisieren: nur EIN Test-Container zur Zeit (Ports 6323/8091/9003 sind
-# pro Lauf exklusiv) — verhindert Port-Kollisionen bei parallelen PR-Läufen.
+# Serialisieren: nur EIN Test-Container-Set zur Zeit (Netz rb_default ist pro
+# Lauf exklusiv) — verhindert Kollisionen bei parallelen PR-Läufen.
 concurrency:
   group: boot-test
   cancel-in-progress: false
@@ -38,10 +40,12 @@ jobs:
       - uses: actions/checkout@v4
         if: steps.gate.outputs.skip != 'true'
 
-      - name: Tooling bereitstellen (ansible + rustup für den Runner-User)
+      - name: Tooling bereitstellen (ansible für den Runner-User)
         if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
+          # Kein rustup/cargo mehr: der Tournament-Server wird als Image im
+          # Docker-Build gebaut (Issue #275), nicht mehr auf dem Runner.
           VENV="$HOME/.local/ansible-deploy-check"
           if [ ! -x "$VENV/bin/ansible-playbook" ]; then
             python3 -m venv "$VENV"
@@ -49,13 +53,7 @@ jobs:
               "ansible-core==2.19.*" "yamllint==1.35.1"
           fi
           echo "$VENV/bin" >> "$GITHUB_PATH"
-          if ! command -v cargo >/dev/null 2>&1; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-              sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path
-          fi
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          # GITHUB_PATH gilt erst im NÄCHSTEN Step — hier daher voller Pfad.
-          "$HOME/.cargo/bin/cargo" --version
+          "$VENV/bin/ansible" --version
 
       - name: SSH-Voraussetzung prüfen (runner -> root@planet)
         if: steps.gate.outputs.skip != 'true'
@@ -69,14 +67,14 @@ jobs:
         if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
-          # Infra-Gate: ein zuvor abgebrochener Lauf kann den Test-Container
-          # bzw. das Netz stehen lassen. Dann ist Test-Port 9001 belegt und der
-          # Deploy scheitert mit "port is already allocated" — das Required-Gate
-          # `boot-test` stünde dauerhaft rot, unabhängig vom PR-Diff.
-          ssh planet 'docker rm -f riftbreaker-dedicated-test 2>/dev/null || true'
+          # Infra-Gate: ein zuvor abgebrochener Lauf kann die Test-Container bzw.
+          # das Netz stehen lassen. Dann ist das Netz rb_default belegt und der
+          # Deploy scheitert — das Required-Gate `boot-test` stünde dauerhaft rot,
+          # unabhängig vom PR-Diff.
+          ssh planet 'docker rm -f riftbreaker-dedicated-test riftbreaker-dedicated-test-tournament 2>/dev/null || true'
           ssh planet 'docker network rm rb_default 2>/dev/null || true'
 
-      - name: Test-Deploy auf Test-Ports (Dummy-Vault, kein Secret)
+      - name: Test-Deploy ohne Host-Ports (Dummy-Vault, kein Secret)
         if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
@@ -89,27 +87,99 @@ jobs:
           EOF
           ansible-playbook -i "$INV" deploy/test-deploy.yml -e @deploy/test-vars.yml
 
-      - name: Boot verifizieren (Container stabil + tournament healthy)
+      - name: Boot verifizieren (intern — docker inspect/exec, keine Host-Ports)
         if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
-          # Wine/Xvfb brauchen einen Moment — erst nach 30 s prüfen.
-          sleep 30
-          STATUS="$(ssh planet 'docker inspect -f "{{.State.Status}}" riftbreaker-dedicated-test')"
-          RESTARTING="$(ssh planet 'docker inspect -f "{{.State.Restarting}}" riftbreaker-dedicated-test')"
-          echo "Test-Container: status=$STATUS restarting=$RESTARTING"
-          [ "$STATUS" = "running" ] || { echo "::error::Test-Container bootet nicht (status=$STATUS)."; exit 1; }
-          [ "$RESTARTING" = "false" ] || { echo "::error::Test-Container ist in einer Crash-Loop."; exit 1; }
-          curl --silent --show-error --fail --max-time 10 \
-            http://127.0.0.1:8091/health | grep -q '"ok":true'
-          echo "Boot-Test OK: Container läuft stabil, tournament-server healthy auf 8091."
+          ssh planet bash -s <<'REMOTE'
+          set -euo pipefail
+          DEDI=riftbreaker-dedicated-test
+          TOURN=riftbreaker-dedicated-test-tournament
 
-      - name: Aufräumen (Test-Container + Unit stoppen)
+          echo "== Container-Status =="
+          dst="$(docker inspect -f '{{.State.Status}}' "$DEDI")"
+          drst="$(docker inspect -f '{{.State.Restarting}}' "$DEDI")"
+          echo "dedicated: status=$dst restarting=$drst"
+          [ "$dst" = running ] || { echo "::error::$DEDI bootet nicht (status=$dst)"; exit 1; }
+          [ "$drst" = false ] || { echo "::error::$DEDI ist in einer Crash-Loop"; exit 1; }
+
+          echo "== Tournament healthy (bounded retry) =="
+          healthy=false
+          for i in $(seq 1 30); do
+            tst="$(docker inspect -f '{{.State.Status}}' "$TOURN" 2>/dev/null || echo missing)"
+            ths="$(docker inspect -f '{{.State.Health.Status}}' "$TOURN" 2>/dev/null || echo unknown)"
+            echo "try $i: status=$tst health=$ths"
+            if [ "$tst" = running ] && [ "$ths" = healthy ]; then healthy=true; break; fi
+            sleep 5
+          done
+          [ "$healthy" = true ] || { echo "::error::$TOURN wird nicht healthy"; exit 1; }
+
+          echo "== /health intern (docker exec) =="
+          docker exec "$TOURN" curl -fsS http://127.0.0.1:8081/health | tee /tmp/tournament-health.json
+          grep -q '"ok":true' /tmp/tournament-health.json \
+            || { echo "::error::/health liefert kein ok:true"; exit 1; }
+
+          echo "== Kein Host-Port der Test-Instanz =="
+          for c in "$DEDI" "$TOURN"; do
+            p="$(docker port "$c")"
+            if [ -n "$p" ]; then
+              echo "::error::$c publiziert Host-Ports: $p"
+              exit 1
+            fi
+          done
+          # Nur die alten, test-spezifischen Ports pruefen: 8081/9001 gehoeren im
+          # Produktivbetrieb dem Dedi-/Tournament-Container (loopback-Publish) und
+          # sind hier bewusst NICHT verboten — der Test selbst publiziert nichts
+          # (docker port ist oben leer).
+          if ss -ltn | grep -qE ':(6323|8091|9003)\b'; then
+            echo "::error::Alter Test-Host-Port belegt:"
+            ss -ltn | grep -E ':(6323|8091|9003)\b' || true
+            exit 1
+          fi
+          echo "keine Test-Host-Ports (docker port leer, ss sauber)"
+
+          echo "== Interner DNS-Pfad zur Bridge (bounded retry) =="
+          dns_ok=false
+          for i in $(seq 1 30); do
+            if out="$(docker exec "$TOURN" curl -fsS "http://$DEDI:9001/health" 2>/dev/null)"; then
+              echo "try $i: $out"
+              if printf '%s' "$out" | grep -q '"ok":true'; then dns_ok=true; break; fi
+            else
+              echo "try $i: Bridge noch nicht erreichbar"
+            fi
+            sleep 5
+          done
+          [ "$dns_ok" = true ] || { echo "::error::Bridge $DEDI:9001 aus dem Tournament-Container nicht erreichbar (Docker-DNS)"; exit 1; }
+
+          echo "== POST /wave intern (200 + ok:true + exec_ok:true, bounded retry) =="
+          wave_ok=false
+          for i in $(seq 1 24); do
+            raw="$(docker exec "$TOURN" curl -sS -X POST \
+              -H 'content-type: application/json' \
+              -d '{"world":"A","n":3}' \
+              -w '\n%{http_code}' http://127.0.0.1:8081/wave 2>/dev/null || true)"
+            code="${raw##*$'\n'}"
+            body="${raw%$'\n'*}"
+            echo "try $i: http=$code body=$body"
+            if [ "$code" = 200 ] \
+               && printf '%s' "$body" | grep -q '"ok":true' \
+               && printf '%s' "$body" | grep -q '"exec_ok":true'; then
+              wave_ok=true; break
+            fi
+            sleep 10
+          done
+          [ "$wave_ok" = true ] || { echo "::error::POST /wave liefert kein exec_ok:true (Bridge/Mod nicht bereit)"; exit 1; }
+
+          echo "Boot-Test OK: beide Container laufen, /health + Bridge-DNS + /wave intern verifiziert."
+          REMOTE
+
+      - name: Aufräumen (Container + Netz + Legacy-Unit-Reste)
         if: always() && steps.gate.outputs.skip != 'true'
         run: |
-          ssh planet 'docker compose -f /opt/rbbattle-deploy/test/rb/docker-compose.yml down --remove-orphans 2>/dev/null || docker rm -f riftbreaker-dedicated-test 2>/dev/null || true'
+          ssh planet 'docker compose -f /opt/rbbattle-deploy/test/rb/docker-compose.yml down --remove-orphans 2>/dev/null || true'
+          ssh planet 'docker rm -f riftbreaker-dedicated-test riftbreaker-dedicated-test-tournament 2>/dev/null || true'
           ssh planet 'docker network rm rb_default 2>/dev/null || true'
+          # Legacy-Test-Unit best-effort entfernen (kein systemd-Verifikationspfad):
           ssh planet 'systemctl stop tournament-server-test 2>/dev/null || true'
-          ssh planet 'systemctl disable tournament-server-test 2>/dev/null || true'
           ssh planet 'rm -f /etc/systemd/system/tournament-server-test.service 2>/dev/null || true'
           ssh planet 'systemctl daemon-reload 2>/dev/null || true'
