@@ -43,8 +43,8 @@ Ziel (Issue #22): Beide Welten booten pausiert; erst wenn beide Spieler
      `dump_console_commands` bestätigen; Kandidaten aus Research:
      `resume_game`) bzw. Fallback Client-Join.
 5. **Nachweis**: beide Welten loggen ab GO den DOM-Takt
-   (`[RBBATTLE] event=dom_timer patch status=ok cap=300` in rbbattle v0.3.0;
-   Wellenstart-Zeitstempel im Log vergleichen → Sync-Beweis).
+   (`[RBBATTLE] event=dom_timer patch status=ok cap=480` (Preset A) in rbbattle
+   v0.3.0+; Wellenstart-Zeitstempel im Log vergleichen → Sync-Beweis).
 
 ## Verifikations-Befehle (live, Prod)
 

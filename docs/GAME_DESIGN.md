@@ -88,7 +88,7 @@ HQ-TOD → Match verloren
 | Feature | Mechanik |
 |---|---|
 | Sync-Start | `debug_pause_server`/`debug_dom_pause`; GO = `debug_dom_resume` (DOM-Ebene, verifiziert) |
-| Wellen-Takt | `prepareSpawnTime` (DOM-Rules) 420 → Preset-Intervall (A=480 s / B=240 s) |
+| Wellen-Takt | `prepareSpawnTime` (DOM-Rules, normal/hard 420) wird auf das Preset-Intervall **gedeckelt** (A=480 s / B=240 s); `#278`: der Deckel senkt nur |
 | Schwierigkeit | Difficulty-Presets `rules_normal` (leichter als hard) + Wellen-Stärke-Skalierung |
 | HQ | Entity `headquarters`, `HealthService`, `ReportHeadquaterDamage` |
 | HQ-Tod | `RespawnFailedEvent` → `ReportGameFailed` + `ShowEndGameHud` |
@@ -287,8 +287,14 @@ verglichen:
 | A | alle 8 Min | volle Größe | 480 | 100 |
 | B | alle 4 Min | halbe Größe | 240 | 50 |
 
-- `RBB.waveIntervalCapS` wird aus dem aktiven Preset abgeleitet (Patch
-  `dom_mananger:GetPrepareSpawnTime`, `prepareSpawnTime` 420 → Preset-Intervall).
+- `RBB.waveIntervalCapS` wird aus dem aktiven Preset abgeleitet und als **Deckel**
+  auf `dom_mananger:GetPrepareSpawnTime` gelegt (Patch, `#278`): der Mod **senkt**
+  den Rules-Wert (normal/hard: 420) auf höchstens den Preset-Wert, **hebt** ihn
+  aber nie an. Für Preset B (240) greift der Deckel; für Preset A (480) bleibt
+  deshalb der kleinere Rules-Wert (420) wirksam. Das Setup-Log trennt seit
+  `#278` `interval_cfg` (Preset-Ziel) von `interval_eff` (wirksamer Timer).
+  Ob Preset A den Rules-Wert **anheben** soll (echte 8-Min-Wellen) und welcher
+  Wert gewollt ist (#23: 300 s vs. #41: 480 s) — **offene Entscheidung** (`#278`).
 - Die Wellen-Stärke ist diskret über `difficultyLevel` indiziert (1..9);
   „halbe Größe“ wird als `floor(level * strengthPct/100)`, min. 1, approximiert
   am Chokepoint `dom_mananger:SpawnWavesForDifficultyLevel` (vor dem Send-Boost
@@ -303,6 +309,11 @@ Gefühl trifft, entscheidet der Test-Duell (Momo vs. Matheo, Feedback-Protokoll)
 der Default folgt dem Testergebnis.
 
 ## Offene Tuning-Punkte (nach Interview, Stand nach #33-v1)
+- **Wellen-Takt-Diskrepanz (`#278`)**: Das Setup-Log zeigte `interval=480`, wirksam
+  war aber der kleinere Rules-Wert (420) bzw. live beobachtet ~300 s. Das Log
+  trennt jetzt `interval_cfg`/`interval_eff` (Fix). Ob Preset A den Timer
+  **anheben** soll und welcher Wert gewollt ist (#23: 300 s / 5-Min-Wellen vs.
+  #41: A=480 s) — **Entscheidung offen, Player-Test Momo/Matheo**.
 - ~~Preisliste (Tiered Units + Bosse)~~ → v1 dokumentiert (Tabelle oben) — **braucht Live-Test**.
 - ~~Send-Boost (nächste Welle %-verstärken)~~ → v1 dokumentiert (Stufen/Caps oben) — **braucht Live-Test** (Prozent→Level-Delta ist Annahme).
 - Naturwellen-Gefühl: "War Level 3 zu brutal?" (Live-Test 16:32: 8 Kreaturen, Momo gestorben) — **braucht Live-Test** (offen).
