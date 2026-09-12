@@ -259,7 +259,7 @@
     # Handler wurde nicht notifyt, der Server muss trotzdem neu laden.
     - name: Container neu laden (nur Guard-Eingriff, Mod unverändert)
       command: >-
-        docker compose -f {{ riftbreaker_deploy_dir }}/docker-compose.yml
+        docker compose -p {{ riftbreaker_compose_project }} -f {{ riftbreaker_deploy_dir }}/docker-compose.yml
         up -d --force-recreate --remove-orphans
       when: not riftbreaker_mod_update_needed
       changed_when: true
@@ -438,7 +438,7 @@
 
     - name: Rollback — Container neu starten (alten Stand laden)
       command: >-
-        docker compose -f {{ riftbreaker_deploy_dir }}/docker-compose.yml
+        docker compose -p {{ riftbreaker_compose_project }} -f {{ riftbreaker_deploy_dir }}/docker-compose.yml
         up -d --force-recreate --remove-orphans
       when: riftbreaker_mod_backup is defined and (riftbreaker_mod_backup.changed | default(false))
 
@@ -453,7 +453,7 @@
 
 - name: Container sicherstellen (ohne Mod-Änderung/Guard-Eingriff)
   when: not (riftbreaker_mod_update_needed or riftbreaker_guard_moved)
-  command: docker compose -f {{ riftbreaker_deploy_dir }}/docker-compose.yml up -d --remove-orphans
+  command: docker compose -p {{ riftbreaker_compose_project }} -f {{ riftbreaker_deploy_dir }}/docker-compose.yml up -d --remove-orphans
   register: riftbreaker_up_idle
   changed_when: >-
     ('Recreated' in riftbreaker_up_idle.stdout)
