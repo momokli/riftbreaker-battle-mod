@@ -35,6 +35,10 @@ Konfiguration (Umgebungsvariablen):
     RBB_PIPE_PATH  rbbridge-Named-Pipe (Default \\\\.\\pipe\\rbbattle, wie
                    rbbridge.c PIPE_NAME_A)
     RBB_PIPE_TIMEOUT_S  Timeout fuer Pipe-Connect/Write in Sekunden (Default 5.0)
+    RBB_REFEREE    "1" aktiviert den Referee-Rueckkanal (Issue #268):
+                   [RBBATTLE]-Events -> POST /referee/event, GET /referee/poll
+                   -> Commands auf die Pipe. Default aus (Alt-Pfad unveraendert).
+    RBB_WORLD      Welt fuer den Referee-Rueckkanal: A oder B (Default A).
 
 Verhalten:
     - Netzfehler (Server weg/Timeout/5xx): Retry mit exponentiellem Backoff
@@ -93,6 +97,16 @@ SERVER_EVENT_TYPES = frozenset([
     'match_end',
 ])
 
+# Referee-Rueckkanal (Issue #268): Spiel-Log-Events -> POST /referee/event,
+# GET /referee/poll -> Commands -> rbbridge-Pipe. Nur aktiv mit RBB_REFEREE=1
+# (Default aus, der Alt-Pfad zu Server 06 bleibt unveraendert). Der Referee ist
+# die autoritative Quelle, die Lua nur Executor: map_referee_event() uebersetzt
+# die [RBBATTLE]-Zeilen in die Event-Typen des Referees:
+#   event=wave level=N status=done -> wave_done(level)
+#   event=hq_dead                  -> hq_destroyed
+#   event=mod_load|setup           -> ready (Map geladen = Executor oben)
+REFEREE_READY_TYPES = frozenset(['mod_load', 'setup'])
+
 # Tokens, die der Server als Zahl erwartet -> in der Log-Zeile ohne Anfuehrungs-
 # zeichen -> hier zu int/float konvertieren.
 NUMERIC_KEYS = frozenset([
@@ -119,11 +133,13 @@ def parse_line(raw):
 
     Rueckgabe:
       ("post", etype, payload)  - Event, das zum Server gehoert
-      ("skip", etype, {})       - [RBBATTLE] mit event=, Typ aber nicht server-faehig
+      ("skip", etype, payload)  - [RBBATTLE] mit event=, Typ aber nicht server-faehig
+                                  (payload = geparste key=value-Tokens, fuer den
+                                   Referee-Rueckkanal #268)
       None                       - keine [RBBATTLE]-Zeile / kein event= (raw-Meldung)
 
     "[RBBATTLE] event=wave_sent level=2 cost=50" -> ("post", "wave_sent", {"level": 2, "cost": 50})
-    "[RBBATTLE] event=bridge_test status=done"    -> ("skip", "bridge_test", {})
+    "[RBBATTLE] event=bridge_test status=done"    -> ("skip", "bridge_test", {"status": "done"})
     "[RBBATTLE] skeleton ok"                      -> None
     """
     try:
@@ -161,8 +177,43 @@ def parse_line(raw):
     if not etype:
         return None
     if etype not in SERVER_EVENT_TYPES:
-        return ('skip', etype, {})
+        # Payload auch beim Skip mitgeben: der Referee-Rueckkanal (#268) braucht
+        # level/status der [RBBATTLE]-Zeilen, die der Alt-Pfad nur ueberspringt.
+        return ('skip', etype, tokens)
     return ('post', etype, tokens)
+
+
+def map_referee_event(etype, payload, world):
+    """[RBBATTLE]-Event -> Referee-Event (Issue #268), sonst None.
+
+    Die in-game Lua ist reiner Executor: sie meldet Wellen-Ende, HQ-Tod und
+    Map-Ready als Log-Zeilen; der Referee entscheidet daraus die Commands
+    (`rb_wave N` / `restart`). Reine Funktion ohne I/O - deterministisch
+    testbar (Event-In -> Event-Out).
+
+    "ready" wird aus der Map-Lade-Zeile abgeleitet (`event=mod_load` bzw.
+    `event=setup`); mehrfaches ready ist im Referee idempotent (keine zweite
+    Welle). `hq_destroyed` wird nur aus `event=hq_dead` abgeleitet, nicht aus
+    dem Folge-`event=match_end` (eine Quelle, Duplikate faengt der Referee).
+    """
+    if etype == 'wave':
+        # Nur das abgeschlossene Wellen-Ende ist ein Referee-Signal; die
+        # start-Zeile desselben Events bleibt wirkungslos.
+        if str(payload.get('status', '')) != 'done':
+            return None
+        level = payload.get('level')
+        if level is None:
+            return None
+        try:
+            level = int(level)
+        except (TypeError, ValueError):
+            return None
+        return {'world': world, 'type': 'wave_done', 'level': level}
+    if etype == 'hq_dead':
+        return {'world': world, 'type': 'hq_destroyed'}
+    if etype in REFEREE_READY_TYPES:
+        return {'world': world, 'type': 'ready'}
+    return None
 
 
 def http_json(method, url, body=None):
@@ -374,6 +425,9 @@ class Relay:
         self.acked = {}        # cmd_id -> ts  (erfolgreich dispatcht)
         self.pending_keys = set()  # keys in der Dispatch-Queue (Retry-Schutz)
         self.dispatch_seq = 0
+        # Referee-Rueckkanal (#268): Events rein, Commands raus. Eigene Queue,
+        # weil Referee-Events KEINEN RBB_MATCH_ID brauchen (anders als post_loop).
+        self.referee_queue = queue.Queue(maxsize=QUEUE_MAX)
         self.pipe = pipe if pipe is not None else PipeClient(
             cfg.get('pipe_path', DEFAULT_PIPE_PATH),
             cfg.get('pipe_timeout_s', PIPE_TIMEOUT),
@@ -392,6 +446,14 @@ class Relay:
 
     def url_register(self):
         return self.base_url(self.cfg) + '/register'
+
+    def url_referee_event(self):
+        return self.base_url(self.cfg) + '/referee/event'
+
+    def url_referee_poll(self):
+        world = self.cfg.get('world', 'A')
+        return (self.base_url(self.cfg) + '/referee/poll?world='
+                + urllib.parse.quote(str(world), safe=''))
 
     # -- Tail (Produzent) ---------------------------------------------------
     def tail_loop(self):
@@ -442,6 +504,10 @@ class Relay:
                         continue
                     action, etype, payload = parsed
                     raw_text = raw.decode('utf-8', errors='replace').strip()
+                    if self.cfg.get('referee'):
+                        rev = map_referee_event(etype, payload, self.cfg.get('world', 'A'))
+                        if rev is not None:
+                            self._enqueue_referee_event(rev, raw_text)
                     if action == 'skip':
                         log('tail: event={} nicht server-faehig, uebersprungen: {}'.format(etype, raw_text))
                         continue
@@ -506,6 +572,108 @@ class Relay:
                 self.queue.put(item)
                 backoff_sleep(attempt, self.stop)
                 attempt += 1
+
+    # -- Referee-Rueckkanal (#268) ------------------------------------------
+    def _enqueue_referee_event(self, rev, raw_text):
+        """Ein Referee-Event in die Rueckkanal-Queue legen (Backpressure)."""
+        item = {'event': rev, 'raw': raw_text}
+        while not self.stop.is_set():
+            try:
+                self.referee_queue.put(item, timeout=0.5)
+                log('referee: event {} <- {}'.format(rev.get('type'), raw_text))
+                return
+            except queue.Full:
+                log('referee-queue voll - tail blockiert (Backpressure)')
+
+    def post_referee_event(self, event):
+        """POST {server}/referee/event; liefert (status, data) wie http_json."""
+        return http_json('POST', self.url_referee_event(), event)
+
+    def referee_post_loop(self):
+        attempt = 0
+        while not self.stop.is_set():
+            try:
+                item = self.referee_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                status, data = self.post_referee_event(item['event'])
+                if 200 <= status < 300:
+                    # Der Referee liefert die entschiedenen Commands direkt in
+                    # der Antwort UND legt sie in die Outbox (Poll-Pfad).
+                    for c in ((data or {}).get('commands') or []):
+                        self._dispatch_referee_command(c)
+                    log('referee: ok type={} ({})'.format(
+                        item['event'].get('type'), item['raw']))
+                    attempt = 0
+                else:
+                    log('referee: HTTP {} - verworfen: {}'.format(status, item['raw']))
+                    attempt = 0
+            except urllib.error.HTTPError as e:
+                if 500 <= e.code:
+                    # Server-Probleme: Event bleibt in der Queue (Retry/Backoff).
+                    log('referee: HTTP {} (server) - retry in ~{}s: {}'.format(
+                        e.code, min(BACKOFF_MAX, BACKOFF_BASE * (2 ** attempt)),
+                        item['raw']))
+                    self.referee_queue.put(item)
+                    backoff_sleep(attempt, self.stop)
+                    attempt += 1
+                else:
+                    # 400/404/409 = Konfigurationsfehler, Retry aendert nichts.
+                    log('referee: HTTP {} abgelehnt - verworfen: {}'.format(e.code, item['raw']))
+                    attempt = 0
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                log('referee: netzfehler ({}) - retry in ~{}s: {}'.format(
+                    e, min(BACKOFF_MAX, BACKOFF_BASE * (2 ** attempt)), item['raw']))
+                self.referee_queue.put(item)
+                backoff_sleep(attempt, self.stop)
+                attempt += 1
+
+    def referee_poll_loop(self):
+        interval = self.cfg.get('poll_s', 1.0)
+        log('referee: GET {} (Intervall {}s)'.format(self.url_referee_poll(), interval))
+        attempt = 0
+        while not self.stop.is_set():
+            try:
+                status, data = http_json('GET', self.url_referee_poll())
+                attempt = 0
+                if status == 200 and isinstance(data, dict):
+                    self.handle_referee_poll(data)
+                else:
+                    log('referee: HTTP {} - unerwartete Antwort'.format(status))
+            except urllib.error.HTTPError as e:
+                if 500 <= e.code:
+                    backoff_sleep(attempt, self.stop)
+                    attempt += 1
+                else:
+                    log('referee: HTTP {} - uebersprungen'.format(e.code))
+                    attempt = 0
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                log('referee: netzfehler ({}) - retry in ~{}s'.format(
+                    e, min(BACKOFF_MAX, BACKOFF_BASE * (2 ** attempt))))
+                backoff_sleep(attempt, self.stop)
+                attempt += 1
+            time.sleep(interval)
+
+    def handle_referee_poll(self, data):
+        """Commands aus GET /referee/poll in die Dispatch-Queue legen.
+
+        Jeder Command traegt `command` + `cmd_id`; `cmd_id` ist der Dedup-
+        Schluessel des Relay-/Pipe-Vertrags (Push und Poll teilen ihn), so dass
+        ein per Push zugestellter Command hier nicht erneut dispatcht wird.
+        """
+        for c in (data.get('commands') or []):
+            if not isinstance(c, dict):
+                continue
+            self._dispatch_referee_command(c)
+
+    def _dispatch_referee_command(self, c):
+        command = c.get('command') if isinstance(c, dict) else None
+        if not command:
+            return
+        cid = c.get('cmd_id')
+        self.enqueue_dispatch(command, cid)
+        log('referee: command cmd_id={} {!r}'.format(cid, command))
 
     # -- GET /poll/:player_id (Dispatch-Loop) --------------------------------
     def poll_loop(self):
@@ -723,6 +891,11 @@ class Relay:
             threading.Thread(target=self.poll_loop, name='poll', daemon=True),
             threading.Thread(target=self.dispatch_loop, name='dispatch', daemon=True),
         ]
+        if self.cfg.get('referee'):
+            threads += [
+                threading.Thread(target=self.referee_post_loop, name='referee-post', daemon=True),
+                threading.Thread(target=self.referee_poll_loop, name='referee-poll', daemon=True),
+            ]
         for t in threads:
             t.start()
         log('laufend (Strg+C zum Beenden)')
@@ -748,6 +921,12 @@ def main():
               '(Spieler-/Instanz-ID fuer /register und /poll).', file=sys.stderr)
         sys.exit(2)
 
+    world = os.environ.get('RBB_WORLD', 'A').strip().upper()
+    if world not in ('A', 'B'):
+        print('[relay] Fehler: RBB_WORLD muss A oder B sein (ist: {!r}).'.format(world),
+              file=sys.stderr)
+        sys.exit(2)
+
     cfg = {
         'log_path': args.log,
         'player_id': player_id,
@@ -756,6 +935,9 @@ def main():
         'poll_s': float(os.environ.get('RBB_POLL_S', '1.0')),
         'pipe_path': os.environ.get('RBB_PIPE_PATH', DEFAULT_PIPE_PATH),
         'pipe_timeout_s': float(os.environ.get('RBB_PIPE_TIMEOUT_S', str(PIPE_TIMEOUT))),
+        # Referee-Rueckkanal (#268): Events rein, Commands raus.
+        'referee': os.environ.get('RBB_REFEREE', '') not in ('', '0', 'false', 'no', 'off'),
+        'world': world,
     }
 
     # UTF-8-Ausgabe auch auf Windows-Konsolen (cp1252) erzwingen.
@@ -769,6 +951,11 @@ def main():
     print('[relay] start: player={} match={} server={} log={}'.format(
         player_id, cfg['match_id'] or '(keiner - Events werden nicht gepostet)',
         cfg['server'], cfg['log_path']), flush=True)
+    if cfg['referee']:
+        print('[relay] referee-Rueckkanal aktiv: world={} -> {}/referee/event, '
+              'poll {}/referee/poll?world={}'.format(
+                  cfg['world'], cfg['server'].rstrip('/'),
+                  cfg['server'].rstrip('/'), cfg['world']), flush=True)
     relay.register_with_retry()
     relay.run()
 

@@ -28,6 +28,8 @@ Nur Standardbibliothek (Python 3.7+), kein pip-Paket.
 | `RBB_POLL_S` | Poll-Intervall | `1.0` |
 | `RBB_PIPE_PATH` | rbbridge-Named-Pipe | `\\.\pipe\rbbattle` (wie `rbbridge.c` `PIPE_NAME_A`) |
 | `RBB_PIPE_TIMEOUT_S` | Timeout Pipe-Connect/Write (s) | `5.0` |
+| `RBB_REFEREE` | `"1"` aktiviert den Referee-Rückkanal (#268): `[RBBATTLE]`-Events → `POST /referee/event`, `GET /referee/poll` → Commands auf die Pipe | aus |
+| `RBB_WORLD` | Welt des Referee-Rückkanals (`A`/`B`) | `A` |
 
 ## Start
 
@@ -89,6 +91,41 @@ Unit-Tests des Pipe-Dispatchs (Erfolg / Pipe-fehlt / Ack-Pfad / exec_result-
 Antwort, ohne Spiel, FIFO bzw. `os.pipe()` als Named-Pipe-Ersatz):
 `python3 -m unittest test_dispatch -v`.
 
+## Referee-Rückkanal (Issue #268)
+
+Mit `RBB_REFEREE=1` fährt der Relay zusätzlich den Rückkanal des
+Tournament-Servers als autoritativer Referee (die in-game Lua ist reiner
+Executor). Zwei zusätzliche Threads; die drei Alt-Pfade zu Server 06 bleiben
+unverändert, `RBB_REFEREE` ist default **aus**:
+
+- **Events rein** (`referee-post`): `map_referee_event()` übersetzt die
+  `[RBBATTLE]`-Zeilen in Referee-Events und postet an `POST /referee/event` —
+  `event=wave level=N status=done` → `wave_done`, `event=hq_dead` →
+  `hq_destroyed`, `event=mod_load`/`event=setup` → `ready`. Der Referee
+  antwortet mit den entschiedenen Commands (`rb_wave N`, `restart`);
+  Netzfehler werden mit Backoff wiederholt, 4xx verworfen.
+- **Commands raus** (`referee-poll`): `GET /referee/poll?world=<W>` holt die
+  offenen Commands und legt sie über die bestehende Dispatch-Queue auf die
+  rbbridge-Pipe. Der `cmd_id` ist der Dedup-Schlüssel: ein per Push
+  (`POST /report hq_dead`, #267) zugestellter Command wird über den Poll nicht
+  erneut dispatcht (Push **oder** Poll, s. `docs/relay-pipe-contract.md`).
+
+Der Referee-Pfad braucht **kein** `RBB_MATCH_ID` (match-unabhängige Events,
+anders als `post_loop`):
+
+```bash
+RBB_REFEREE=1 RBB_WORLD=A RBB_PLAYER_ID=player_a \
+RBB_SERVER=http://127.0.0.1:8081 RBB_LOG_PATH=/tmp/fake.log python3 relay.py
+```
+
+Deterministische Tests **ohne Spiel/Netz** (Log-Zeile → Referee-Event,
+Poll-Commands → Pipe-Dispatch, `cmd_id`-Dedup): `python3 -m unittest
+test_referee -v`. Die Entscheidung selbst (`ready` → `rb_wave 1`, …) liegt im
+Server (`tournament/src/referee.rs`), dort ebenfalls ohne Player getestet.
+
+Der volle Loop **mit** Spieler (Welle spawnt sichtbar → HQ zerstört →
+Restart über die echte Pipe) bleibt **OFFEN** (Player-Test, #265/#268).
+
 ## Status
 
 - [x] tail: Log-Polling, Rotation, UTF-8 `errors=replace`, unvollständige Zeilen werden zurückgehalten
@@ -103,3 +140,6 @@ Antwort, ohne Spiel, FIFO bzw. `os.pipe()` als Named-Pipe-Ersatz):
       Meldefehler, ohne `RBB_MATCH_ID` keine Meldung) — Web-UI-Feedback
       per SSE (Issue #89)
 - [x] register beim Start + Re-Register bei 404 (Server-Neustart)
+- [x] Referee-Rückkanal (#268, `RBB_REFEREE=1`): `[RBBATTLE]`-Events →
+      `POST /referee/event`, `GET /referee/poll` → Dispatch an die Pipe —
+      **ohne Spiel getestet** (`test_referee.py`, 16 Tests); Player-Loop OFFEN

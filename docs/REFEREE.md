@@ -13,10 +13,20 @@ ins Log schrieb.
   (Executor)   Relay/Pipe #265  (Server)   rb_wave N / restart   (Executor)
 ```
 
-Transport ist der IO-Kanal aus #265: `Tournament-Server → relay.py
-(07-relay) → Named Pipe \\.\pipe\rbbattle → rbbridge.dll →
-ConsoleService::ExecuteCommand`. Der Referee selbst ist transport-neutral und
-kennt nur Events rein / Commands raus.
+Transport ist der IO-Kanal aus #265: Commands gehen
+`Tournament-Server → relay.py (07-relay) → Named Pipe \\.\pipe\rbbattle →
+rbbridge.dll → ConsoleService::ExecuteCommand`; die Events kommen denselben Weg
+zurück. Der Referee selbst ist transport-neutral und kennt nur Events rein /
+Commands raus.
+
+Der **Relay-Rückkanal** ist in `bausteine/07-relay/relay.py` implementiert
+(`RBB_REFEREE=1`, #268): der Log-Tail übersetzt die `[RBBATTLE]`-Zeilen über
+`map_referee_event()` in Referee-Events und postet sie an `POST
+/referee/event`; ein eigener Poll-Thread holt `GET /referee/poll?world=<W>` und
+legt die Commands über die bestehende Dispatch-Queue auf die Pipe. Der `cmd_id`
+ist der Dedup-Schlüssel gegen Doppelzustellung (Push **oder** Poll). Ohne Spiel
+testbar: `python3 -m unittest test_referee` (Event-In → Event-Out,
+Poll-Command → Pipe-Dispatch).
 
 ## Rollen
 
@@ -146,3 +156,7 @@ GO-spezifischen `/state`-Broadcast-Status (bewusst, R3).
   fertig und getestet, der Transport folgt mit #265. Der Restart-Push ist
   **server-seitig verdrahtet** (`POST /report` `hq_dead` → `restart` an
   `RBBRIDGE_<W>_URL`); die Live-Zustellung über die echte Pipe bleibt offen.
+  Der **Rückkanal** (Events rein / Commands raus) ist relay-seitig
+  implementiert und ohne Spiel getestet (`bausteine/07-relay`, `RBB_REFEREE=1`,
+  `test_referee.py`); offen bleibt der deployte Betrieb im Dedicated-Container
+  und der Player-Test.
