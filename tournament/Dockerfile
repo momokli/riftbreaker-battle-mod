@@ -42,7 +42,7 @@ EXPOSE 8081
 # Liveness über den eigenen /health-Endpoint (curl ist im Image). --start-period
 # deckt den Start ab; der Boot-Test prüft zusätzlich Health.Status=healthy.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
-    CMD-SHELL curl -fsS "http://127.0.0.1:${TOURNAMENT_PORT}/health" || exit 1
+    CMD curl -fsS "http://127.0.0.1:${TOURNAMENT_PORT}/health" || exit 1
 
 USER tournament
 ENTRYPOINT ["/usr/local/bin/tournament-server"]
