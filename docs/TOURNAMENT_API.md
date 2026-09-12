@@ -194,6 +194,41 @@ SP-Mode-Semantik (Mirror-Konzept):
 - **Match-Ende:** Bei HQ ≤ 0 → Phase `finished` + Feed-Event `match_end` mit
   dem Hinweis „nächster Spieler kann joinen“.
 
+### POST /wave — Operator-Wellen-Spawn (Issue #266)
+
+```json
+{"world": "A", "n": 3}
+```
+
+Leitet `exec rb_wave <n>` an den Bridge-/Relay-HTTP-Endpoint der Welt weiter
+(`RBBRIDGE_A_URL`/`RBBRIDGE_B_URL`, `POST <url> {"command":"rb_wave <n>"}`) und
+gibt dessen `exec_result` an die UI zurueck — der Weg fuer den „Spawn Wave"-
+Button der `/solo`-Match-Page. Defaults: `world="A"` (Solo/SP hat nur ein reales
+HQ in A), `n=3`. `n` muss 1..100 sein (sonst 400). Ohne konfigurierten
+Bridge-Endpoint → 409 `conflict` (kein Transport).
+
+Antwort:
+
+```json
+{"ok": true, "world": "A", "command": "rb_wave 3",
+ "endpoint": "http://127.0.0.1:9001/exec", "status": 200, "error": null,
+ "exec_result": {"ok": true, "results": [{"command": "rb_wave 3", "ok": true}]}}
+```
+
+`ok` spiegelt den Zustell-/Ausfuehr-Erfolg (`exec_result ok:true`). Ein
+Zustell-/Ausfuehrfehler bleibt HTTP 200 mit `ok:false` + `error`/`exec_result`
+(eine 502/503 der Bridge wird durchgereicht), damit die UI den Grund anzeigen
+kann; nur ein fehlender Bridge-Endpoint ist ein 409. Der Versuch wird als
+Feed-Event `kind=wave` protokolliert (sichtbar im Live-Dev-Log der
+`/solo`-Seite). Der Endpoint veraendert den Match-Zustand nicht.
+
+Transport: auf dem Dedicated-Server ist der Endpoint die `pipe_bridge` (Wine,
+HTTP → `\\.\pipe\rbbattle`, #265); fuer native Windows-Welten der
+`relay.py`-Pfad (gleiches `exec`/`exec_result`-Protokoll, s.
+[relay-pipe-contract.md](relay-pipe-contract.md)). Der Live-Beweis, dass die
+Welle im Spiel sichtbar spawnt (`[RBBATTLE] event=wave level=3 status=start`),
+ist ein Player-Test (Momo/Matheo) und bleibt offen.
+
 ### GET /events — Feed-Cursor für Poll-Bridges (Telegram-Feed u. a.)
 
 ```
