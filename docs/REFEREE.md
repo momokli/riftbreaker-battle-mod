@@ -38,7 +38,7 @@ kennt nur Events rein / Commands raus.
 
 | `type` | Bedeutung | Wirkung im Referee |
 |---|---|---|
-| `ready` | Executor oben (Map geladen / nach `rb_reset`) | Welle 1 der (neuen) Runde wird ausgegeben |
+| `ready` | Executor oben (Map geladen; nach `rb_reset` **Mapping OFFEN**, s. Offene Punkte) | Welle 1 der (neuen) Runde wird ausgegeben |
 | `wave_done` | `event=wave level=N status=done` aus dem Game-Log | nächste Welle (`level+1`), sofern unter dem Deckel |
 | `hq_destroyed` | `event=hq_dead` aus dem Game-Log | Restart-Command + Runde +1, Wellen ruhen bis `ready` |
 
@@ -108,6 +108,19 @@ GO-spezifischen `/state`-Broadcast-Status (bewusst, R3).
 
 ## Offene Punkte / Design-Entscheidungen
 
+* **Referee-`ready` nach Reset: OFFEN (Live-Loop).** Nach dem in-game Reset
+  emittiert der Mod nur `event=commence status=pending|ok` (Setup-/HQ-Placement-
+  Phase, `mod/lua/rbbattle_autoexec.lua:~2321`); er sendet **kein** `ready`
+  (`event=map_ready` feuert nur beim Map-Load) und es gibt keinen Modul-Reload.
+  Der Executor→Referee-Transport des Live-Loops (#265) ist noch nicht verdrahtet
+  und mappt `commence` **nicht** auf das Referee-Event `{"type":"ready"}`.
+  Folge: Der Referee bleibt nach `hq_destroyed` in `restart_pending` und gibt für
+  die neue Runde **kein** `rb_wave 1` aus — die Session-Boundary ist damit nur
+  **mod-seitig** geschlossen (`event=match_end` → `event=reset` →
+  `event=commence`), nicht referee-seitig. In-game läuft die Welle weiter, weil
+  der Server-Takt (Stufe 2) bewusst noch offen ist. Für den geschlossenen
+  Live-Loop muss der Relay/Executor `commence` (`status=pending|ok`) auf
+  `{"world":"W","type":"ready"}` mappen (Teil von #265, s. `mod/README.md`).
 * **Wellen-Takt ist Event-getaktet, nicht zeitgetaktet (v1).** Der Referee gibt
   die nächste Welle erst nach dem `wave_done` der vorigen aus — kein
   Server-Timer, keine Uhr. Das hält die Logik deterministisch und ohne Player

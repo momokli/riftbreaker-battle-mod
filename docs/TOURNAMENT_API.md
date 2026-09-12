@@ -207,7 +207,7 @@ Commands gehen in der Antwort und/oder über `GET /referee/poll` zurück.
 
 | `type` | Wirkung | Command |
 |---|---|---|
-| `ready` | Executor oben (Map geladen / nach `rb_reset`) | `rb_wave 1` |
+| `ready` | Executor oben (Map geladen; nach `rb_reset` **Mapping OFFEN**, s. `REFEREE.md` „Offene Punkte") | `rb_wave 1` |
 | `wave_done` (mit `level`) | Welle abgeschlossen | `rb_wave <level+1>` (bis `TOURNAMENT_REFEREE_MAX_WAVE`) |
 | `hq_destroyed` | HQ zerstört | `rb_reset` (Mod: Runde auf 0, Setup-Phase), Runde +1, Wellen ruhen bis `ready` |
 

@@ -469,7 +469,14 @@ Der Referee konsumiert dafür genau diese Zeilen:
 |---|---|
 | `event=wave level=N status=done` | `{"world":"A","type":"wave_done","level":N}` |
 | `event=hq_dead status=match_end` | `{"world":"A","type":"hq_destroyed"}` |
-| (Modul geladen / nach Restart) | `{"world":"A","type":"ready"}` |
+| (Modul geladen) | `{"world":"A","type":"ready"}` |
+
+> **Referee-`ready` nach Reset: OFFEN (Live-Loop, #281/#265).** Nach dem
+> in-game Reset emittiert der Mod nur `event=commence status=pending hint=place_hq`
+> — **kein** `ready` (und keinen Modul-Reload). Der `commence`→`ready`-Mapping
+> des Relays ist noch nicht verdrahtet; der Referee bleibt bis dahin in
+> `restart_pending` und gibt für die neue Runde **kein** `rb_wave 1` aus. Details:
+> [`docs/REFEREE.md`](../docs/REFEREE.md) → „Offene Punkte“.
 
 Der Referee antwortet mit Commands (`rb_wave <level+1>` bzw. `rb_reset`). Das
 aktuell noch in der Lua liegende Runden-/Match-Regime (natürlicher
