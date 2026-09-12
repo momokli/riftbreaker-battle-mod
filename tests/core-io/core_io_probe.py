@@ -335,6 +335,11 @@ def wait_for_boot(host: Host, container: str, bridge_url: str, timeout: float) -
                 last = "Mod noch nicht geladen ([RBBATTLE] fehlt)"
         time.sleep(8)
     err("C1 boot rot: {} (letzter Stand: {})".format("Timeout nach {}s".format(int(timeout)), last))
+    log("--- Container-Log (letzte 60 Zeilen, Diagnose) ---")
+    dump = host.run("docker logs --tail 60 {} 2>&1".format(shlex.quote(container)), timeout=45.0)
+    for ln in (dump.stdout or "").splitlines():
+        log("  " + ln)
+    log("--- Ende Container-Log ---")
     return False
 
 
