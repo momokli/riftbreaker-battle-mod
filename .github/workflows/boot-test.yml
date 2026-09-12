@@ -13,6 +13,12 @@ on:
 permissions:
   contents: read
 
+# Serialisieren: nur EIN Test-Container zur Zeit (Ports 6323/8091/9003 sind
+# pro Lauf exklusiv) — verhindert Port-Kollisionen bei parallelen PR-Läufen.
+concurrency:
+  group: boot-test
+  cancel-in-progress: false
+
 jobs:
   boot-test:
     name: boot-test
