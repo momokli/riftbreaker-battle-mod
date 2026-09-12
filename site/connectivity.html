@@ -207,8 +207,10 @@ code{color:var(--acc);font-family:var(--mono);font-size:11.5px}
     <span class="chip">NETWORK · LIVE-DIAGNOSTIK</span>
     <h1>SERVER-<span class="dim">STATUS</span></h1>
     <p class="lead">
-      Erreichbarkeit der Riftbreaker-Server über UDP. Prüfung läuft serverseitig alle 2 Minuten
-      (<code>rbmods-probe.timer</code>), diese Seite fragt <code>/status.json</code> alle 30&nbsp;s ab.
+      Live-Status der Riftbreaker-Server: ob der Dienst im Container wirklich einen
+      UDP-Socket gebunden hat (nicht nur „Container läuft"). Prüfung läuft serverseitig
+      alle 2 Minuten (<code>rbmods-probe.timer</code>), diese Seite fragt
+      <code>/status.json</code> alle 30&nbsp;s ab.
     </p>
     <p class="lead" style="margin-top:8px">
       <span id="sitedot" class="pulse-dot busy"></span><span id="sitepill">SITE: PRÜFE …</span>
@@ -257,7 +259,7 @@ code{color:var(--acc);font-family:var(--mono);font-size:11.5px}
         </div>
         <div class="legend">
           <span class="it"><span class="sw sw-live"></span>LIVE — Server erreichbar, Container läuft</span>
-          <span class="it"><span class="sw sw-fail"></span>FAIL — UDP-Pfad gestört / Host nicht erreichbar</span>
+          <span class="it"><span class="sw sw-fail"></span>FAIL — Container läuft, aber kein UDP-Socket gebunden (Dienst hängt/bootet nicht durch)</span>
           <span class="it"><span class="sw sw-off"></span>OFFLINE — Container bzw. Listener aus</span>
           <span class="it"><span class="sw sw-plan"></span>GEPLANT — noch kein Server</span>
         </div>
