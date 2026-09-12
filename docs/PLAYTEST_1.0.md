@@ -358,7 +358,7 @@ Diese Punkte sind **belegt** und beeinflussen den Testablauf:
    (`/config/caddy/autosave.json`) enthält **null** Treffer für „tournament“.
    `solo.html` lädt, seine API-Aufrufe (`apiBase=/tournament`) laufen aber ins
    404. **Workaround für den Test:** Web-UI mit Server-Adresse `http://<planet>:8081`
-   öffnen, oder die Szenarien per `curl` fahren. **Fix = eigenes Issue.**
+   öffnen, oder die Szenarien per `curl` fahren. **Fix:** Issue #322.
 2. **C4-spawn ist headless nicht beweisbar** → deshalb ist S5/M5 der
    entscheidende manuelle Beweis (`tests/core-io/README.md`).
 3. **Egress bis in den Referee ist nur teilweise belegt:** Auf dem
