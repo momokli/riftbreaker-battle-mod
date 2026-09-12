@@ -45,6 +45,16 @@ fi
 
 echo "[build_rbbridge_tools] Toolchain: $TOOLCHAIN -> $OUT_DIR"
 
+# Reproduzierbarer PE-Zeitstempel: ohne --no-insert-timestamp schreibt der
+# Linker die Build-Zeit in den PE-Header -> jedes Rebuild erzeugt andere Bytes,
+# die Ansible-copy-Change-Detection (Checksummen) schlaege dann immer an und der
+# Container wuerde bei JEDEM Deploy neu gestartet. Mit dem Flag sind Builds bei
+# gleichem Quellstand byte-identisch. (Nur GNU-ld/MinGW; zig/lld ausgelassen.)
+LD_REPRO=()
+if [ "$TOOLCHAIN" = "mingw" ]; then
+    LD_REPRO=("-Wl,--no-insert-timestamp")
+fi
+
 # cc <args...>: ruft den gewaehlten Cross-Compiler (mingw direkt, zig via cc).
 cc() {
     if [ "$TOOLCHAIN" = "mingw" ]; then
@@ -67,10 +77,10 @@ done
 
 # --- Bauen ------------------------------------------------------------------
 (cd "$OUT_DIR" \
-    && cc -O2 -Wall -Wextra -shared -o rbbridge.dll "$RBBRIDGE_SRC" \
-    && cc -O2 -Wall -Wextra -o injector.exe "$INJECTOR_SRC" \
-    && cc -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe "$RBBRIDGE_SRC" \
-    && cc -O2 -Wall -Wextra -o pipe_bridge.exe "$BRIDGE_SRC" -lws2_32)
+    && cc -O2 -Wall -Wextra ${LD_REPRO[@]+"${LD_REPRO[@]}"} -shared -o rbbridge.dll "$RBBRIDGE_SRC" \
+    && cc -O2 -Wall -Wextra ${LD_REPRO[@]+"${LD_REPRO[@]}"} -o injector.exe "$INJECTOR_SRC" \
+    && cc -O2 -Wall -Wextra ${LD_REPRO[@]+"${LD_REPRO[@]}"} -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe "$RBBRIDGE_SRC" \
+    && cc -O2 -Wall -Wextra ${LD_REPRO[@]+"${LD_REPRO[@]}"} -o pipe_bridge.exe "$BRIDGE_SRC" -lws2_32)
 
 # Zig-Artefakte (.pdb/.lib/.o) entfernen, falls vorhanden.
 rm -f "$OUT_DIR"/*.pdb "$OUT_DIR"/*.lib "$OUT_DIR"/*.o
