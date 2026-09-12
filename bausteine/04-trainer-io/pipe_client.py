@@ -134,7 +134,8 @@ def main():
     send(fd, {"cmd": "ping"})
     recv_and_print(fd, buf)
 
-    # 2) optional exec -> v0-Harness antwortet ok:false (no-op, RE-Punkt)
+    # 2) optional exec -> dispatch_exec loest ConsoleService per AOB/RTTI auf:
+    #    ohne Spielmodul ok:false (console_service_not_found), im Spielprozess ok:true
     if exec_cmd is not None:
         send(fd, {"cmd": "exec", "command": exec_cmd})
         recv_and_print(fd, buf)

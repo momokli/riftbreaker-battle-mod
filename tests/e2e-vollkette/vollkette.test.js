@@ -40,7 +40,9 @@ const ROOT = path.join(__dirname, '..', '..');
 const WEB_DIR = path.join(ROOT, 'bausteine', '06-tournament-server', 'web');
 const SERVER_JS = path.join(ROOT, 'bausteine', '06-tournament-server', 'server.js');
 const RELAY_PY = path.join(ROOT, 'bausteine', '07-relay', 'relay.py');
-const RBBRIDGE_C = path.join(ROOT, 'trainer', 'rbbridge', 'rbbridge.c');
+// Kanonische Build-/Distributions-Quelle (scripts/package_bausteine.sh +
+// .github/workflows/ci.yml bauen aus bausteine/) - NICHT trainer/.
+const RBBRIDGE_C = path.join(ROOT, 'bausteine', '04-trainer-io', 'rbbridge', 'rbbridge.c');
 const PROTOCOL_MD = path.join(ROOT, 'trainer', 'protocol.md');
 const MOD_PATH = path.join(ROOT, 'mod', 'lua', 'rbbattle_autoexec.lua');
 
@@ -76,9 +78,43 @@ test('rbbridge: {"cmd":"exec","command":"rb_wave 3"} → ExecuteCommand (statisc
   assert.ok(c.includes('strcmp(cmd, "exec") == 0'), 'rbbridge behandelt cmd=exec');
   assert.ok(c.includes('dispatch_exec(hPipe, command)'), 'exec ruft dispatch_exec auf');
   // dispatch_exec ist seit RE-Stand verdrahtet (kein reiner TODO/no-op mehr):
-  assert.ok(c.includes('RBBRIDGE_RVA_EXEC_COMMAND'), 'ExecuteCommand-RVA definiert');
   assert.ok(c.includes('console_exec_fn'), 'console_exec_fn Typ vorhanden');
   assert.ok(c.includes('fn(instance, command)'), 'ExecuteCommand-Aufruf (this=RCX, cmd=RDX)');
+  // Erfolgs-Literal im EMITTIERTEN C-String prüfen, nicht im Kommentar:
+  // im Quelltext steht \"ok\":true (der Kommentar hat nur "ok":true).
+  assert.ok(c.includes('\\"ok\\":true'),
+    'emittiertes exec_result-Literal \\"ok\\":true vorhanden (nicht nur Kommentar)');
+
+  // AC #243: Adressauflösung per AOB/Signatur statt fester RVAs.
+  assert.ok(c.includes('RBBRIDGE_EXEC_SIG'), 'ExecuteCommand-Byte-Signatur definiert (AOB)');
+  assert.ok(c.includes('RBBRIDGE_RTTI_NAME'), 'RTTI-Name der ConsoleService-Klasse vorhanden');
+  assert.ok(c.includes('scan_bytes'), 'Byte-/Signatur-Scanner vorhanden');
+  assert.ok(c.includes('resolve_console_vftable'), 'vftable per RTTI-Walk aufgelöst');
+  assert.ok(c.includes('resolve_console_service(&fn, &instance)'),
+    'dispatch_exec nutzt die gescannte fn/instance');
+  assert.ok(!c.includes('RBBRIDGE_RVA_'),
+    'KEINE festen RVA-Makros mehr (nur AOB/Signatur)');
+  assert.ok(!c.includes('not_implemented'), 'kein not_implemented-Stub mehr');
+});
+
+test('rbbridge: Fehlerpfad console_service_not_found emittiert ok:false (kein Aufruf)', () => {
+  const c = fs.readFileSync(RBBRIDGE_C, 'utf8');
+  // Fehlerzweig in dispatch_exec: resolve == 0 -> ok:false + return, BEVOR
+  // fn(...) gerufen wird. Der Resolver liefert 0 bei fehlendem Modul /
+  // fehlendem RTTI-Name / fehlender Signatur (verhaltensbasiert geprüft im
+  // Host-Harness rbbridge_hosttest.c), hier wird das emittierte Literal
+  // gegen den echten C-String geprüft (nicht gegen den Kommentar).
+  const idxGuard = c.indexOf('if (!resolve_console_service(&fn, &instance))');
+  const idxErr = c.indexOf('\\"ok\\":false');
+  const idxCall = c.indexOf('fn(instance, command);');
+  assert.ok(idxGuard > 0, 'dispatch_exec fragt resolve_console_service ab');
+  assert.ok(idxErr > idxGuard, 'Fehlerzweig emittiert \\"ok\\":false');
+  assert.ok(c.includes('console_service_not_found'),
+    'Fehlerzweig nennt reason console_service_not_found');
+  assert.ok(idxCall > idxErr, 'fn(...) folgt erst nach dem Fehlerzweig');
+  const between = c.slice(idxGuard, idxCall);
+  assert.ok(between.includes('send_line') && between.includes('return;'),
+    'Fehlerzweig sendet Fehler-Event und kehrt vor fn(...) zurück');
 });
 
 test('Protokoll: exec-Kanal "rb_wave 3" dokumentiert (protocol.md)', () => {
