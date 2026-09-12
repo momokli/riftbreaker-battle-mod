@@ -49,3 +49,6 @@
     daemon_reload: true
     enabled: true
     state: started
+  # Check-Mode: die Unit-Datei wird im Check-Mode nicht geschrieben ->
+  # state:started findet den Service nicht. Daher in --check überspringen.
+  when: not ansible_check_mode
