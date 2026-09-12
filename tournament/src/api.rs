@@ -6,6 +6,8 @@
 //!   POST /go      GO-Broadcast + Start        {} | {"retry": true}
 //!   POST /send    Wave-Routing A→B            {"world": "A", "units": [...], "value": n}
 //!   POST /report  Welt-Events (send_state)    {"world": "A", "event": "wave_start"|"hq_hp"|"score_update", ...}
+//!   POST /referee/event  Spiel-Event an den Referee (Issue #268) {"world":"A","type":"ready"|"wave_done"|"hq_destroyed","level":n}
+//!   GET  /referee/poll   Offene Referee-Commands einer Welt  ?world=A
 //!   POST /rematch Reset in die Lobby          {}
 //!   POST /wave    Operator-Wellen-Spawn       {"world":"A","n":3} → exec rb_wave 3
 //!   GET  /state   Match-Zustand (Poll)        —
@@ -17,6 +19,7 @@
 //! (vorwärtskompatibel, wie im Protokoll des Trainers üblich).
 
 use crate::broadcast;
+use crate::referee::{Command, GameEvent, GameEventKind, Referee, RefereeConfig};
 use crate::state::{MatchState, Phase, ReadyEffect, StateError, World};
 use axum::extract::{Query, State as AxumState};
 use axum::response::{IntoResponse, Response};
@@ -47,6 +50,9 @@ pub struct Config {
     pub go_timeout: Duration,
     /// Start-HP jedes HQ.
     pub hq_hp_start: f64,
+    /// Referee: Wellen-Deckel (0 = unbegrenzt) und Restart-Command (Issue #268).
+    pub referee_max_wave: u32,
+    pub referee_restart_cmd: String,
     /// Verzeichnis der statischen Web-UI.
     pub web_dir: PathBuf,
 }
@@ -68,13 +74,20 @@ impl Config {
 #[derive(Clone)]
 pub struct AppState {
     pub state: Arc<RwLock<MatchState>>,
+    /// Server-seitiger Referee (autoritative Event-/State-Quelle, Issue #268).
+    pub referee: Arc<RwLock<Referee>>,
     pub cfg: Arc<Config>,
 }
 
 impl AppState {
     pub fn new(cfg: Config) -> Self {
+        let referee = Referee::new(RefereeConfig {
+            max_wave: cfg.referee_max_wave,
+            restart_cmd: cfg.referee_restart_cmd.clone(),
+        });
         AppState {
             state: Arc::new(RwLock::new(MatchState::new(cfg.hq_hp_start))),
+            referee: Arc::new(RwLock::new(referee)),
             cfg: Arc::new(cfg),
         }
     }
@@ -192,6 +205,22 @@ struct EventsQuery {
     since: Option<u64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct RefereeEventReq {
+    world: String,
+    /// `ready` | `wave_done` | `hq_destroyed` (snake_case).
+    #[serde(rename = "type")]
+    kind: GameEventKind,
+    /// Nur für `wave_done`: abgeschlossenes Wellen-Level.
+    #[serde(default)]
+    level: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RefereePollQuery {
+    world: String,
+}
+
 // ---- Router ----
 
 pub fn router(app: AppState) -> Router {
@@ -202,6 +231,8 @@ pub fn router(app: AppState) -> Router {
         .route("/go", post(go))
         .route("/send", post(send))
         .route("/report", post(report))
+        .route("/referee/event", post(referee_event))
+        .route("/referee/poll", get(referee_poll))
         .route("/rematch", post(rematch))
         .route("/sp", post(sp))
         .route("/wave", post(wave))
@@ -404,6 +435,56 @@ async fn report(
     }
 }
 
+/// POST /referee/event — Spiel-Event an den Referee (Issue #268).
+///
+/// Die in-game Lua ist reiner **Executor**: sie meldet Ereignisse (Welle
+/// fertig, HQ zerstört, ready) über den Rückkanal (Relay/Pipe, #265) und
+/// bekommt hier die daraus entschiedenen Commands zurück. Die Antwort enthält
+/// zusätzlich den Referee-Zustand der Welt; dieselben Commands liegen in der
+/// Outbox (`GET /referee/poll?world=A`), falls der Aufrufer nur meldet.
+///
+/// Duplikate/veraltete Events sind idempotent (keine Doppel-Welle, kein
+/// Doppel-Restart).
+async fn referee_event(
+    AxumState(app): AxumState<AppState>,
+    Json(req): Json<RefereeEventReq>,
+) -> ApiResult<Json<Value>> {
+    let world = parse_world(&req.world)?;
+    let kind = req.kind;
+    if kind == GameEventKind::WaveDone && req.level.is_none() {
+        return Err(StateError::new("invalid", "type 'wave_done' benötigt Feld 'level'").into());
+    }
+    let ev = GameEvent {
+        world,
+        kind,
+        level: req.level,
+    };
+    let commands: Vec<Command> = app.referee.write().await.on_event(ev);
+    let view = app.referee.read().await.world_view(world);
+    Ok(Json(json!({
+        "world": world.as_str(),
+        "type": kind,
+        "accepted": true,
+        "commands": commands,
+        "state": view,
+    })))
+}
+
+/// GET /referee/poll — offene Referee-Commands einer Welt abholen (Outbox drain).
+async fn referee_poll(
+    AxumState(app): AxumState<AppState>,
+    Query(q): Query<RefereePollQuery>,
+) -> ApiResult<Json<Value>> {
+    let world = parse_world(&q.world)?;
+    let commands = app.referee.write().await.poll(world);
+    let view = app.referee.read().await.world_view(world);
+    Ok(Json(json!({
+        "world": world.as_str(),
+        "commands": commands,
+        "state": view,
+    })))
+}
+
 /// POST /rematch — Reset in die Lobby (Spieler bleiben registriert).
 async fn rematch(AxumState(app): AxumState<AppState>) -> ApiResult<Json<Value>> {
     app.with_state(|s| s.rematch()).await?;
@@ -604,6 +685,8 @@ mod tests {
             go_commands: vec!["debug_dom_resume".to_string()],
             go_timeout: Duration::from_millis(800),
             hq_hp_start: 100.0,
+            referee_max_wave: 0,
+            referee_restart_cmd: "restart".to_string(),
             web_dir: PathBuf::from("web"), // wird in Tests nicht gebraucht
         }
     }
@@ -1348,5 +1431,123 @@ mod tests {
             &["debug_dom_resume".to_string(), "resume_game".to_string()],
         );
         assert_eq!(p2["commands"], json!(["debug_dom_resume", "resume_game"]));
+    }
+
+    #[tokio::test]
+    async fn referee_event_in_command_out_over_http() {
+        let app = make_app(test_cfg()).await;
+
+        // ready → rb_wave 1 für Welt A (Event-In → Command-Out).
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/referee/event",
+            Some(json!({"world": "A", "type": "ready"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["accepted"], true);
+        assert_eq!(v["commands"][0]["command"], "rb_wave 1");
+        assert_eq!(v["commands"][0]["world"], "A");
+        assert_eq!(v["state"]["running"], true);
+        assert_eq!(v["state"]["waves_in_flight"], 1);
+
+        // wave_done level=1 → rb_wave 2.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/referee/event",
+            Some(json!({"world": "A", "type": "wave_done", "level": 1})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["commands"][0]["command"], "rb_wave 2");
+
+        // Doppeltes wave_done level=1 → keine neue Welle (idempotent).
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/referee/event",
+            Some(json!({"world": "A", "type": "wave_done", "level": 1})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["commands"].as_array().unwrap().len(), 0);
+
+        // hq_destroyed → restart, Runde 1.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/referee/event",
+            Some(json!({"world": "A", "type": "hq_destroyed"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["commands"][0]["command"], "restart");
+        assert_eq!(v["state"]["restart_pending"], true);
+        assert_eq!(v["state"]["rounds"], 1);
+
+        // Nach dem Neustart: ready → wieder rb_wave 1.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/referee/event",
+            Some(json!({"world": "A", "type": "ready"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["commands"][0]["command"], "rb_wave 1");
+    }
+
+    #[tokio::test]
+    async fn referee_event_validates_and_polls_outbox() {
+        let app = make_app(test_cfg()).await;
+
+        // Unbekannte Welt → 400.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/referee/event",
+            Some(json!({"world": "C", "type": "ready"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        assert_eq!(err_type(&v), "invalid");
+
+        // Unbekannter Typ → 400 (serde lehnt den Enum-Wert ab).
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/referee/event",
+            Some(json!({"world": "A", "type": "bogus"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+
+        // wave_done ohne level → 400.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/referee/event",
+            Some(json!({"world": "A", "type": "wave_done"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        assert_eq!(err_type(&v), "invalid");
+
+        // ready → Command in der Outbox; Poll liefert und leert sie.
+        call(
+            &app,
+            "POST",
+            "/referee/event",
+            Some(json!({"world": "B", "type": "ready"})),
+        )
+        .await;
+        let (s, v) = call(&app, "GET", "/referee/poll?world=B", None).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["commands"].as_array().unwrap().len(), 1);
+        assert_eq!(v["commands"][0]["command"], "rb_wave 1");
+        let (_, v) = call(&app, "GET", "/referee/poll?world=B", None).await;
+        assert_eq!(v["commands"].as_array().unwrap().len(), 0);
     }
 }

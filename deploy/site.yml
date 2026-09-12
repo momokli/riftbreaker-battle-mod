@@ -13,10 +13,12 @@
 #   2. dedicated-server-image baut rb-dedicated:<deploy-sha> (Laufzeit
 #      für :6321)
 #   3. game-content         Steam-Content (App 4114030) nach game_dir
-#   4. riftbreaker-server   Dev-SP-Server 6321 (Mod-Install + Restart-Handler)
-#   5. tournament-server    systemd (Rust/axum)
-#   6. website              statics + Caddy (inkl. /tournament/*-Proxy)
-#   7. probe-timer          systemd-Timer → status.json
+#   4. rbtools              Windows-x64-Trainer-I/O-Tools bauen+stagen
+#      (/opt/rbmods/rbtools -> /opt/rbtools:ro im Container, Issue #265)
+#   5. riftbreaker-server   Dev-SP-Server 6321 (Mod-Install + Restart-Handler)
+#   6. tournament-server    systemd (Rust/axum)
+#   7. website              statics + Caddy (inkl. /tournament/*-Proxy)
+#   8. probe-timer          systemd-Timer → status.json
 #
 # Tags erlauben einen gezielten Lauf (z. B. `--tags server` im PR-Gate
 # deploy-check) ohne die übrigen Rollen anzufassen.
@@ -53,6 +55,8 @@
       tags: [server]
     - role: game-content
       tags: [content]
+    - role: rbtools
+      tags: [server]
     - role: riftbreaker-server
       tags: [server]
     - role: tournament-server
