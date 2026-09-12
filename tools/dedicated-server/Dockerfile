@@ -7,13 +7,15 @@ FROM scottyhardy/docker-wine:latest
 ENV INSTALL_DIR=/opt/riftbreaker \
     WINEPREFIX=/data/.wine \
     WINEARCH=win64 \
-    WINEDEBUG=-all,err+all \
+    WINEDEBUG=-all \
     WINEDLLOVERRIDES="mscoree,mshtml=" \
     STEAM_USER=steamuser
 
-# procps für pgrep (HEALTHCHECK). steamuser für den Container-User.
+# procps für pgrep (HEALTHCHECK), iproute2 für `ss` im Port-Watch
+# (scripts/entrypoint.sh watch_server_port). Ohne iproute2 ist der
+# In-Container-Port-Check still (das Basis-Image bringt `ss` nicht mit).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends procps \
+    && apt-get install -y --no-install-recommends procps iproute2 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -s /bin/bash "${STEAM_USER}" \
     && mkdir -p "${INSTALL_DIR}"

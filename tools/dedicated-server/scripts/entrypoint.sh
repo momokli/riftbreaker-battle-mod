@@ -17,7 +17,9 @@ STEAM_MODE=0
 STEAM_GAME_APPID="${STEAM_GAME_APPID:-780310}"
 
 export WINEPREFIX
-export WINEDEBUG="${WINEDEBUG:--all,err+all}"
+# Eine Quelle für WINEDEBUG: -all (vgl. Dockerfile-ENV + wine-init.sh). Verhindert
+# widersprüchliche Syntax (-all,err+all); per Compose-Env übersteuerbar.
+export WINEDEBUG="${WINEDEBUG:--all}"
 
 if [[ ! -f "${CONFIG_FILE}" ]]; then
   echo "[entrypoint] ERROR: missing ${CONFIG_FILE}" >&2
@@ -108,8 +110,7 @@ watch_server_port() {
     return 0
   fi
   (
-    local i
-    for i in $(seq 1 36); do
+    for _ in $(seq 1 36); do
       if ss -H -uln 2>/dev/null | grep -q ':6321 '; then
         echo "[entrypoint] UDP port 6321 is open — server should accept connections"
         return 0

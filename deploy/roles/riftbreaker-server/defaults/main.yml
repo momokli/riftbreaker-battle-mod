@@ -9,7 +9,7 @@ riftbreaker_compose_project: "{{ riftbreaker_deploy_dir | basename }}"
 # --- Dedicated-Server (Community-Rezept, Issue #241) ------------------------
 # Das Image rb-dedicated:<sha> kommt aus der Rolle dedicated-server-image.
 # Der Server startet mit `cli=1 config=config.cfg` — die Config wird hier aus
-# config.cfg.j2 gerendert (Datei-Rechte 0600, Passwort aus dem Vault).
+# config.cfg.j2 gerendert (Datei-Rechte 0644, steamuser-lesbar; Passwort aus dem Vault).
 riftbreaker_server_container: riftbreaker-dedicated
 riftbreaker_server_port_udp: 6321
 
