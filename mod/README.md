@@ -413,6 +413,9 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100
+[RBBATTLE] event=economy_source source=account status=seed resources=13   ← Konto-Quelle liest ein, bucht bewusst nichts (#242)
+[RBBATTLE] event=economy_source source=account status=active              ← Konto-Tracking aktiv (ersetzt das pauschale Tick-Einkommen)
+[RBBATTLE] event=economy_farm source=account resource=carbonium amount=250 value=250 farmed=250 built=250   ← Zuwachs seit letztem Tick (#242)
 [RBBATTLE] event=convert resource=carbonium amount=100 value=100 pool=100 status=ok irreversible=1
 [RBBATTLE] event=buy_wave unit=brabit tier=t1 count=1 price=100 total=100 pool=0 queue=1 status=ok   ← Kauf-Hook (#25)
 [RBBATTLE] event=boost status=ok pct=25 total_pct=25 price=200 pool=1800 buys=1   ← Send-Boost Kauf (#39)
@@ -535,11 +538,20 @@ Farm→Convert→Kauf → built_own=3000; Wellenstart → event=reveal mit
 send_own=brabit:2; rb_reveal → built_opp/incoming/hq_opp; rb_hud beide Teams;
 rb_round_start → reveal=hidden; 2. Wellenstart). In-Game-Test
 steht aus (Operator, Prod).
-- **Economy-Fallback dokumentiert:** Der Mod hat keinen verifizierten Zugriff
-  aufs Spieler-Ressourcen-Konto (api-deep-dive.md §1); Value kommt aus
-  Ernte-Events (Getter-Ladder). Sind die Events nicht lesbar, schaltet die
-  Quelle nach 3 Fehlern dauerhaft auf HourEvent-Tick um (Log
-  `event=economy_source source=tick status=fallback reason=handler_errors`).
+- **Economy-Quellen (Reihenfolge, #24/#242):** Zuerst die Ernte-Events
+  (Getter-Ladder). Sind sie nicht lesbar, schaltet die Quelle nach 3 Fehlern
+  dauerhaft um (Log `event=economy_source source=tick status=fallback
+  reason=handler_errors`) — genau das ist der **live bestätigte** Fall (#242:
+  `ResourceObtainedEvent` trägt Entity + Ressourcen-*Name*, aber gar keinen
+  Betrag). Seit #242 greift davor der **Konto-Snapshot-Diff**: im
+  HourEvent-Tick wird je Ressource `PlayerService:GetResourceAmount(0, name)`
+  gelesen und die **Differenz** zum letzten Tick gebucht
+  (`event=economy_farm source=account …`). Der erste Tick seedet nur
+  (`status=seed`) — der Startbestand ist nicht gefarmt; sinkende Stände
+  (Bauen) buchen nichts, ziehen den Snapshot aber nach. Ist die Konto-API
+  nicht lesbar, bleibt es beim pauschalen HourEvent-Tick wie bisher.
+  **Offen (Player-Test):** dass `GetResourceAmount` im Mod-Kontext den
+  erwarteten Wert liefert — RE-seitig belegt, in-game nicht ausgeführt.
 - Balance-Zahlen (Faktoren, Tick-Wert) sind Platzhalter — zentrale Tabelle
   `RBB.economyCfg` am Economy-Block (Tuning: Issue #33).
 - Alle fremden API-Aufrufe sind `pcall`-gesichert: fehlt eine Funktion, kommt
