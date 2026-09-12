@@ -138,6 +138,21 @@ Balance-Selbst-Check (`RBB.CheckBalance` / `event=balance_check`).
 6. `rb_balance` legt die Presets als Log-Fläche offen (`wave_preset`/`wave_preset_cfg`);
    das Setup-Log führt Preset + Grundschwierigkeit mit.
 
+`wave-interval.test.js` deckt Issue #278 (Wave-Interval-Diskrepanz) ab:
+
+1. Das Setup-Log zeigt Preset-Ziel **und** wirksamen DOM-Timer
+   (`interval_cfg=480 interval_eff=420`, wenn der Rules-Wert 420 unter dem
+   Preset-Cap 480 liegt); das alte irreführende Feld `interval=480` ist weg.
+2. Der Cap senkt nur: Rules-Wert 600 → `interval_eff=480` (gekappt),
+   Rules-Wert 240 → `interval_eff=240` (unverändert).
+3. Fehlt die DOM-Timer-API, fällt das Log auf den Cap zurück
+   (`interval_eff` == `interval_cfg`).
+4. Zusätzlich wird das Kappungs-Verhalten der gepatchten `GetPrepareSpawnTime`
+   geprüft.
+
+Das echte Wave-Timing im Spiel ist damit **nicht** bewiesen — offener Punkt
+(Player-Test Momo/Matheo, `#278`).
+
 `persistence.test.js` deckt Issue #65 (Persistenz des Spar-Pools) ab:
 
 1. Phase 1 (frischer Run): Farm 2000 carbonium → `rb_convert 1500` → Pool 1500;

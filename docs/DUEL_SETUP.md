@@ -1,14 +1,21 @@
 # DUEL_SETUP — Welt-Setup für den synchronen Runden-Takt (Issue #23)
 
-Stand: 2026-09-09 · Ziel: **5-Min-Wellen, Schwierigkeit hard, Map large,
-identischer Seed auf beiden Welten** (GDD „Setup“, Issue #23).
+Stand: 2026-09-12 (Update `#278`) · Ziel: **synchroner Wellen-Takt**, Schwierigkeit
+hard, Map large, identischer Seed auf beiden Welten (GDD „Setup“, Issue #23).
+
+> **Update (#41/#278):** Das ursprünglich feste 300-s-Ziel aus #23 ist durch die
+> Wellen-Presets `RBB.wavePresets` (A=480 s / B=240 s) abgelöst. Der Cap wird
+> seither aus dem aktiven Preset abgeleitet und **senkt** den Rules-Wert nur
+> (er hebt nie). Das Setup-Log zeigt seit #278 das Preset-Ziel als `interval_cfg`
+> und den **wirksamen** DOM-Timer als `interval_eff`. Welcher Takt gewollt ist
+> (300 vs. 480) und ob Preset A den Timer anheben soll, ist **offen** (Player-Test).
 
 ## Was der Mod leistet (rbbattle v0.3.0)
 
 | Punkt | Umsetzung | Ort |
 |---|---|---|
-| prepareSpawnTime 420→300 s | `dom_mananger:GetPrepareSpawnTime` wird zur Laufzeit auf **max. 300 s** gedeckelt (Function-Wrap, pcall-gesichert, idempotent; Retry bei Mod-Load, `PlayerInitializedEvent` und jedem `rb_wave`/`rb_send`) | `mod/lua/rbbattle_autoexec.lua` |
-| Verifikations-Log | `[RBBATTLE] event=dom_timer patch status=ok cap=300` + `event=setup difficulty=<name> creatures_difficulty=<n> timer_cap=300` | dito |
+| Runden-Takt (Cap) | `dom_mananger:GetPrepareSpawnTime` wird zur Laufzeit auf **max. das Preset-Intervall** gedeckelt (Function-Wrap, pcall-gesichert, idempotent; Retry bei Mod-Load, `PlayerInitializedEvent` und jedem `rb_wave`/`rb_send`). Der Rules-Wert (normal/hard 420) wird nur gesenkt, nie angehoben (`#278`) | `mod/lua/rbbattle_autoexec.lua` |
+| Verifikations-Log | `[RBBATTLE] event=dom_timer patch status=ok cap=<Preset>` + `event=setup difficulty=<name> creatures_difficulty=<n> timer_cap=<Preset> preset=A interval_cfg=<Preset> interval_eff=<wirksam> strength_pct=<n> base_difficulty=<name>` | dito |
 | Effektiv-Abstand | Zwischen zwei Naturwellen liegt zusätzlich `cooldownAfterAttacks` (Survival-rules 60–240 s je DOM-Level) + `idleTime` (hard: 0) + ggf. Streaming. **Beide Welten laufen identisch** (gleiche Rules/Seed), Fairness bleibt; exakt-300-s-Runden wären nur mit zusätzlichem Cooldown-Patch möglich (Folge-Tuning, bewusst nicht Teil von #23) | dom_manager v2 State-Machine |
 
 ## Was NICHT der Mod setzen kann (Beleg)
@@ -89,9 +96,11 @@ bleibt als letzter Ausweg offen.
 
 - Exakte CVar-Namen für Seed & Map-Size sind **nicht statisch belegbar**
   (nur im C++/Dump); Live-Dump auf dem Ziel-Server nötig (Schritt 4).
-- Effektiver Wellenabstand = 300 s + cooldownAfterAttacks (60–240 s je
-  DOM-Level) → „5-Min-Wellen“ = Deckel der Vorbereitungsphase; ob zusätzlich
-  der Cooldown gedeckelt wird, entscheidet der Balance-Test (Issue #33).
+- Effektiver Wellenabstand = `interval_eff` (wirksamer DOM-Prepare-Timer, s.
+  Setup-Log) + `cooldownAfterAttacks` (60–240 s je DOM-Level) → der Cap deckelt nur
+  die Vorbereitungsphase; ob zusätzlich der Cooldown gedeckelt wird, entscheidet
+  der Balance-Test (Issue #33). Welcher Takt/`interval_eff` gewollt ist
+  (300 aus #23 vs. 480 aus #41), ist `#278` noch **offen** (Player-Test).
 - `PlayerInitializedEvent`-Pfad setzt einen initialisierenden Spieler pro Welt
   voraus (Duell: gegeben); ohne Spieler bleibt der Timer ungepatcht (Log fehlt
   dann → Operator erkennt es sofort).

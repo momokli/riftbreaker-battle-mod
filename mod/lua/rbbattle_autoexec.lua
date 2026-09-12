@@ -106,8 +106,10 @@
 --   event=wave level=N status=start|done spawned=.. skipped=.. anchor=border|mission|mech
 --   event=spawn ok|failed|skip ... anchor=<gruppe>/<id>            (je Kreatur)
 --   event=wave_spawners count=N                                    (Pool-Groesse)
---   event=dom_timer patch status=ok|skip|no_class cap=300          (#23)
---   event=setup difficulty=<name> creatures_difficulty=<n>         (bei Map-Ready)
+--   event=dom_timer patch status=ok|skip|no_class cap=480           (#23/#41)
+--   event=setup difficulty=<name> creatures_difficulty=<n> timer_cap=.. preset=..
+--     interval_cfg=.. interval_eff=.. strength_pct=.. base_difficulty=..  (#23/#41/#278)
+--     interval_cfg = Preset-Ziel, interval_eff = tatsaechlich wirksamer DOM-Timer
 --   event=economy_db status=new|resume|unavailable pool=.. farmed=..      (#24)
 --   event=economy_source source=resource_obtained|resource_change|tick    (#24)
 --   event=economy_farm source=.. resource=.. amount=.. value=.. farmed=.. (#24)
@@ -735,6 +737,23 @@ local function PatchDomTimer()
     return true
 end
 
+-- #278: Effektive DOM-Vorbereitungszeit (Sekunden) fuer Log/HUD. Liest die
+-- (gepatchte) Klasse dom_mananger:GetPrepareSpawnTime — also den echten, vom
+-- Spiel genutzten Wert inklusive #23-Deckel — und faellt auf den Preset-Cap
+-- zurueck, wenn die API (noch) fehlt. Wichtig: der #23-Deckel senkt nur, hebt
+-- nie. Preset A (480) kann gegen einen kleineren rules-Wert (normal/hard: 420)
+-- daher NICHT erzwungen werden -> das Setup-Log unterscheidet deshalb
+-- interval_cfg (Preset-Ziel) und interval_eff (wirksamer Timer).
+local function DomPrepareSpawnTime()
+    local dom = nil
+    if type(_G) == "table" then dom = rawget(_G, "dom_mananger") end
+    if type(dom) == "table" and type(dom.GetPrepareSpawnTime) == "function" then
+        local ok, v = pcall(dom.GetPrepareSpawnTime, dom)
+        if ok and type(v) == "number" then return math.floor(v) end
+    end
+    return nil
+end
+
 -- Setup-/Difficulty-Log (bei Map-Ready): Beleg fuer #23-Teil "Schwierigkeit
 -- hard" aus Sicht des laufenden Servers. Gesetzt wird die Difficulty beim
 -- Server-/Welt-Start (C++/GameServerOptions, s. docs/DUEL_SETUP.md).
@@ -760,9 +779,13 @@ local function LogMapSetupInfo()
     end
 
     local preset = ActiveWavePreset()
-    Log("event=setup difficulty=%s creatures_difficulty=%s timer_cap=%d preset=%s interval=%d strength_pct=%d base_difficulty=%s",
+    -- #278: der effektive Timer ist der rules-Wert (normal/hard: 420), vom
+    -- #23-Deckel nur nach UNTEN begrenzt — nicht zwingend preset.intervalS.
+    -- Beide Werte loggen (cfg = Preset-Ziel, eff = tatsaechlich wirksam).
+    local intervalEff = DomPrepareSpawnTime() or RBB.waveIntervalCapS
+    Log("event=setup difficulty=%s creatures_difficulty=%s timer_cap=%d preset=%s interval_cfg=%d interval_eff=%d strength_pct=%d base_difficulty=%s",
         difficulty, creatureDifficulty, RBB.waveIntervalCapS,
-        preset.id, preset.intervalS, preset.strengthPct, RBB.wavePresets.baseDifficulty)
+        preset.id, preset.intervalS, intervalEff, preset.strengthPct, RBB.wavePresets.baseDifficulty)
 end
 
 local function OnPlayerInitialized()
@@ -1344,14 +1367,7 @@ end
 
 -- Countdown bis zur naechsten Welle: DOM-Prepare-Zeit (gekappt), Fallback cap.
 local function RevealCountdown()
-    local t = RBB.waveIntervalCapS
-    local dom = nil
-    if type(_G) == "table" then dom = rawget(_G, "dom_mananger") end
-    if type(dom) == "table" and type(dom.GetPrepareSpawnTime) == "function" then
-        local ok, v = pcall(dom.GetPrepareSpawnTime, dom)
-        if ok and type(v) == "number" then t = math.floor(v) end
-    end
-    return t
+    return DomPrepareSpawnTime() or RBB.waveIntervalCapS
 end
 
 -- Vor Wellenstart: beide Werte verbergen (Start einer neuen Build-Phase).
