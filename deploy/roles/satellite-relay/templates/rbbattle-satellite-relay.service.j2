@@ -1,0 +1,14 @@
+# Verwaltet von deploy/ role satellite-relay (Jinja). NICHT manuell editieren.
+# Oneshot: stellt die UDP-DNAT-Regeln nach jedem Reboot sicher (Issue #328).
+[Unit]
+Description=Rift Battle satellite UDP relay (DNAT {{ satellite_relay_port }} -> {{ satellite_relay_target_host }}:{{ satellite_relay_target_port }})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/rbbattle-satellite-relay.sh
+
+[Install]
+WantedBy=multi-user.target

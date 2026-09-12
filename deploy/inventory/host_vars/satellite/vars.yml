@@ -1,0 +1,18 @@
+---
+# ============================================================================
+# satellite — nicht-geheime Variablen (host_vars/satellite/vars.yml)
+# ============================================================================
+# Der Satellite ist der "IP-Lender" (Issue #328): ein kleiner Relay-Host mit
+# eigener öffentlicher IPv4, der UDP 6321 per DNAT an die prod-Instanz auf
+# planet (6322) weiterreicht. Damit ist der zweite Dedi trotz clientseitig
+# hardgewiretem Port 6321 öffentlich erreichbar.
+
+# Inbound-UDP-Port auf dem Satellite (Client-Default 6321).
+satellite_relay_port: 6321
+
+# Ziel: planet prod-Instanz (riftbreaker-dedicated-prod, Host-Port 6322).
+satellite_relay_target_host: 65.21.27.234
+satellite_relay_target_port: 6322
+
+# Egress-Interface (öffentlich, Hetzner).
+satellite_relay_interface: eth0

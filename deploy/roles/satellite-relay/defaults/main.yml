@@ -1,0 +1,21 @@
+---
+# Defaults der Rolle satellite-relay (Issue #328).
+#
+# UDP-"IP-Lender"-Relay auf dem Satellite: reicht inbound UDP auf
+# satellite_relay_port per DNAT an satellite_relay_target_host:target_port
+# weiter. Löst das clientseitig effektiv hardgewirete Port-6321-Problem
+# (vgl. #290/#328): der Client wählt weiter 6321 an, die Port-Übersetzung
+# passiert hier auf Netz-Ebene, wo das Spiel sie nicht mitbekommt.
+#
+# Nur Core-Module (kein community.general-Dependency) — konsistent mit dem
+# Rest von deploy/.
+
+# Inbound-UDP-Port auf dem Satellite (der Port, den der Client anwählt).
+satellite_relay_port: 6321
+
+# Ziel: Host + Port der weiterzureichenden Instanz (planet prod = :6322).
+satellite_relay_target_host: 65.21.27.234
+satellite_relay_target_port: 6322
+
+# Egress-Interface (für `ufw route` + MASQUERADE-Rückweg).
+satellite_relay_interface: eth0
