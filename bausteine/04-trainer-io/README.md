@@ -9,27 +9,51 @@
    JSON-Antworten (`pong`, `exec_result`).
 
 Damit ist der I/O-Kanal (Injection + Pipe + Protokoll v0) unabhängig von
-RE-Arbeit am Spiel validierbar. `exec` ist im Harness ein **bewusster
-no-op** (`ok:false`, TODO(RE)) — getestet wird, dass der Kanal antwortet,
-nicht dass er das Spiel steuert.
+RE-Arbeit am Spiel validierbar. `exec` ist **kein no-op mehr**: seit dem
+RE-Stand (Build 2.0.58485) löst `dispatch_exec` `ConsoleService::ExecuteCommand`
+per AOB-Signatur (`.text`) und die `ConsoleService`-Instanz per RTTI-Walk
+(vftable) + Adressraum-Scan auf (**keine festen RVAs**) und ruft sie auf:
+- Erfolg → `{"event":"exec_result","command":"…","ok":true}`
+- Anbindung nicht auflösbar (kein Spielprozess/Modul, Signatur/RTTI/Instanz
+  fehlt) → `ok:false` + `"reason":"console_service_not_found"` — **ohne
+  Crash**, es wird nichts aufgerufen.
+
+**Was ist belegt?** Host-seitig: die Auflösung, die Fehlerbehandlung und der
+Cache sind statisch + im Host-Test `rbbridge_hosttest.c` (synthetischer
+PE-Puffer, `tests/e2e-vollkette`) abgesichert. **Live-Beweis fehlt noch:** dass
+der Aufruf im laufenden Spiel wirklich die Welle spawnt (siehe Status/OFFEN).
 
 Seit dem Dual-Mode-Umbau (DLL + Standalone-EXE aus einer Quelle) gibt es
 zwei Wege, den Kanal zu testen: **Test 0** startet dieselbe Pipe-Server-
 Logik als normale `rbbridge_standalone.exe` — ganz **ohne Injection**;
 **Test 1** ist der bisherige Injection-Test (notepad.exe + injector.exe).
 
-Dateien **1:1 übernommen/synchron** aus `trainer/` (Harness v0, PR #2,
-MD5-geprüft; Dual-Mode-Umbau ist in beiden Kopien identisch); neu ist nur
-`pipe_client.py` + dieses README.
+**Richtung (kanonisch):** `bausteine/04-trainer-io/` ist die kanonische
+Build-/Distributions-Quelle — `scripts/package_bausteine.sh` und der
+Build-Job in `.github/workflows/ci.yml` bauen **ausschließlich** hieraus.
+`trainer/injector/` und `trainer/rbbridge/` sind der **gespiegelte
+Legacy-Klon** (byte-identisch gehalten, MD5-gleich). `pipe_client.py` +
+dieses README gibt es nur hier.
 
 ## Inhalt
 
 ```
-injector/injector.c      <- Kopie aus trainer/injector/ (injector.exe, x64, Windows)
-rbbridge/rbbridge.c      <- Kopie aus trainer/rbbridge/ (baut rbbridge.dll UND
-                            rbbridge_standalone.exe, x64, Windows)
-pipe_client.py           <- NEU: Test-Client (Python 3, Windows, nur Standardbibliothek)
+injector/injector.c      <- kanonisch (injector.exe, x64, Windows; Spiegel: trainer/injector/)
+rbbridge/rbbridge.c      <- kanonisch (baut rbbridge.dll UND
+                            rbbridge_standalone.exe, x64, Windows; Spiegel: trainer/rbbridge/)
+bridge/pipe_bridge.c     <- NEU (Issue #265): baut pipe_bridge.exe — HTTP(9001)->Pipe-Bridge
+                            (x64, Windows; Win32 + ws2_32; nur in dieser Quelle, kein Spiegel)
+pipe_client.py           <- Test-Client (Python 3, Windows, nur Standardbibliothek)
 ```
+
+## Hinweis zur Bridge (Issue #265)
+
+`bridge/pipe_bridge.c` → `pipe_bridge.exe` ist der HTTP-Endpunkt, den der
+Dedicated-Server-Deploy braucht: er laeuft als Wine-x64-Prozess im Container,
+nimmt `GET /health` und `POST /exec` an und uebersetzt die Kommandos in
+exec-Zeilen auf `\\.\pipe\rbbattle` (der Wine-Named-Pipe ist nur aus Wine
+erreichbar). Details, Verdrahtung und Testanleitung: `docs/INGRESS_IO.md`.
+Alle vier Binaries baut `scripts/build_rbbridge_tools.sh <outdir>`.
 
 ## Build (Windows, x64)
 
@@ -43,7 +67,12 @@ x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -shared -o rbbridge.dll rbbridge\rbbrid
 :: rbbridge_standalone.exe (Test 0, kein -lws2_32 noetig)
 x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe rbbridge\rbbridge.c
 x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe injector\injector.c
+:: pipe_bridge.exe (HTTP-Bridge, Issue #265; braucht ws2_32)
+x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o pipe_bridge.exe bridge\pipe_bridge.c -lws2_32
 ```
+
+Alle vier zusammen (Linux-Cross-Build, kanonischer Weg):
+`bash scripts/build_rbbridge_tools.sh /tmp/rbtools-build`.
 
 Option B — MSVC (Developer Prompt):
 ```bat
@@ -76,7 +105,9 @@ beim Start).
    ```
    → verbindet sich (kein notepad, kein injector), sendet `{"cmd":"ping"}`,
    druckt die Antwort.
-3. **exec no-op prüfen** (optional):
+3. **exec prüfen** (optional; ohne Spielprozess gibt es kein
+   Modul → `ok:false`/`console_service_not_found`, der Kanal antwortet
+   trotzdem):
    ```bat
    python pipe_client.py exec rb_wave 3
    ```
@@ -100,7 +131,8 @@ beim Start).
    python pipe_client.py
    ```
    → sendet `{"cmd":"ping"}`, druckt die Antwort.
-4. **exec no-op prüfen**:
+4. **exec prüfen** (im notepad-Prozess gibt es kein Spielmodul → `ok:false`;
+   im injizierten Spielprozess bei erfolgreicher Auflösung `ok:true`):
    ```bat
    python pipe_client.py exec rb_wave 3
    ```
@@ -130,11 +162,19 @@ Pipe: `python pipe_client.py --selftest`.
   -> {"cmd": "ping"}
   <- {"event":"pong","t":<uptime-ms>}
   ```
-- exec (Harness-no-op — Kanal antwortet, Ausführung folgt in der
-  RE-Phase):
-  ```
-  <- {"event":"exec_result","command":"rb_wave 3","ok":false,"reason":"..."}
-  ```
+- exec (führt `ConsoleService::ExecuteCommand` aus, AOB/RTTI-aufgelöst):
+  - Erfolg — Spielprozess, Modul + ConsoleService gefunden:
+    ```
+    <- {"event":"exec_result","command":"rb_wave 3","ok":true}
+    ```
+  - Nicht-Fund — kein Spielprozess/Modul (Test 0 standalone, Test 1 notepad):
+    ```
+    <- {"event":"exec_result","command":"rb_wave 3","ok":false,"reason":"console_service_not_found"}
+    ```
+    (kein Crash — bei Nicht-Fund wird die `ExecuteCommand`-fn nie aufgerufen)
+- Host-Test der Auflösung (ohne Windows/Spielprozess, synthetischer PE-Puffer):
+  `cd tests/e2e-vollkette && npm ci && npm test`
+  → `rbbridge host-test: scan_bytes + RTTI-Resolver`
 - Logs zur Kontrolle (beide Varianten, gleiche Datei):
   - Datei: `%TEMP%\rbbridge.log` (abschaltbar: `RBBRIDGE_LOG=0`),
   - `OutputDebugString` → DebugView (Sysinternals), Filter `rbbridge`.
@@ -147,12 +187,34 @@ gleicher Benutzer; hängt `pipe_client.py` beim Verbinden → Server läuft
 nicht: bei Test 0 `rbbridge_standalone.exe` starten, bei Test 1 die DLL
 injizieren (os.open blockiert, bis der Pipe-Server existiert).
 
+## Risiken & offene Punkte
+
+- **Thread-Marshalling (OFFEN):** `fn(instance, command)` läuft im Pipe-Thread,
+  nicht auf dem Main-/Spiel-Thread. Ob `ConsoleService::ExecuteCommand`
+  thread-safe ist bzw. auf den Spiel-Thread gemarshalled werden muss, ist
+  **nicht belegt** — Live-Test (#252). Nicht als erledigt betrachten.
+- **Fehl-Fund der Instanz (teilweise abgesichert, offen):** die „first hit =
+  this“-Heuristik ist durch den vftable-Plausibilitätscheck
+  (`looks_like_vftable`: vftable im Modul-Image, erste Referenz zeigt ins
+  Image) entschärft; ein völlig falscher Kandidat ist damit nicht zu 100 %
+  ausgeschlossen (der Nicht-Fund ist abgesichert, der Fehl-Fund nicht).
+- **Signatur ist build-gebunden:** die rel32-CALL-Displacements (4+4 Bytes)
+  sind per Byte-Maske als Wildcards behandelt, die `E8`-Opcodes bleiben Pflicht;
+  die übrigen 20 Signatur-Bytes sind an Build 2.0.58485 kalibriert und müssen
+  bei einem Engine-Update gegen die neue `.text`-Gegenprobe nachgezogen werden.
+- **Live-Beweis fehlt (OFFEN):** „Welle spawnt sichtbar + korrekt“ — nur mit
+  Player (Momo/Matheo) prüfbar, hängt an #252.
+
 ## Status
 
-- [x] injector.c / rbbridge.c 1:1 aus trainer/ übernommen (PR #2)
-- [x] rbbridge.c Dual-Mode-Umbau (DLL + Standalone-EXE), Kopie gesynct
+- [x] rbbridge.c/injector.c kanonisch in `bausteine/04-trainer-io/`; `trainer/` byte-identisch gespiegelt (MD5)
+- [x] rbbridge.c Dual-Mode-Umbau (DLL + Standalone-EXE), Spiegel gesynct
+- [x] exec-Dispatch per AOB-Signatur/RTTI (statt fester RVAs) + Cache
+- [x] Host-Test `rbbridge_hosttest.c` (scan_bytes + RTTI-Resolver, synthetischer PE-Puffer)
 - [x] Cross-Build (x86_64-w64-mingw32-gcc): rbbridge.dll + rbbridge_standalone.exe kompilieren
+- [x] pipe_bridge.c (HTTP(9001)->Pipe-Bridge, Test 2 `--ping`/`--once`), Cross-Build via `scripts/build_rbbridge_tools.sh` (#265)
 - [ ] Windows-Build-Test: DLL + Standalone-EXE + Injector (Matheo/Momo)
 - [ ] Windows-Test 0: Standalone-EXE + pipe_client.py → ping/pong (Matheo/Momo)
 - [ ] Windows-Test 1: Injection in notepad.exe + ping/pong (Matheo/Momo)
-- [ ] Windows-Test: exec antwortet ok:false ohne Crash (Matheo/Momo)
+- [ ] Windows-Test: exec ohne Spielprozess → `ok:false`/`console_service_not_found` ohne Crash (Matheo/Momo)
+- [ ] Windows-Test (LIVE, #252): exec im Spielprozess → `ok:true` + Welle sichtbar (Matheo/Momo)

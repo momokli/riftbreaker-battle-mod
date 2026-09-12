@@ -14,6 +14,9 @@ pub struct PushResult {
     pub status: Option<u16>,
     /// Fehlermeldung (Transport/Timeout/nicht-2xx).
     pub error: Option<String>,
+    /// Geparste JSON-Antwort des Endpoints (`exec_result` der Bridge bzw.
+    /// Fehlergrund), soweit vorhanden — wird von `POST /wave` durchgereicht.
+    pub body: Option<Value>,
 }
 
 impl PushResult {
@@ -42,8 +45,20 @@ pub fn validate_http_url(url: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// POSTet `body` als JSON an `url`. Antwort-Status wird geparst; der Body wird
-/// nur für Fehlermeldungen gelesen (Connection: close, max. 4 KiB).
+/// Trennt HTTP-Head und -Body und parst den Body als JSON. Liefert `None`,
+/// wenn kein Body oder kein gültiges JSON vorliegt. Der Body einer
+/// `/exec`-Antwort der Bridge ist das `exec_result` (Issue #266).
+fn parse_json_body(text: &str) -> Option<Value> {
+    let idx = text.find("\r\n\r\n")?;
+    let body = text[idx + 4..].trim();
+    if body.is_empty() {
+        return None;
+    }
+    serde_json::from_str(body).ok()
+}
+
+/// POSTet `body` als JSON an `url`. Antwort-Status und (soweit vorhanden)
+/// JSON-Body werden geparst (Connection: close, max. 8 KiB).
 pub async fn post_json(url: &str, body: &Value, timeout: Duration) -> PushResult {
     let parsed = match url.parse::<http::Uri>() {
         Ok(u) => u,
@@ -51,6 +66,7 @@ pub async fn post_json(url: &str, body: &Value, timeout: Duration) -> PushResult
             return PushResult {
                 status: None,
                 error: Some(format!("URL unparsbar: {e}")),
+                body: None,
             }
         }
     };
@@ -74,8 +90,8 @@ pub async fn post_json(url: &str, body: &Value, timeout: Duration) -> PushResult
         stream.write_all(&body_bytes).await?;
         stream.shutdown().await?;
 
-        // Antwortkopf lesen, dann Body (nur für Fehlertext).
-        let mut buf = [0u8; 4096];
+        // Antwortkopf + Body lesen (Body = JSON-Antwort der Bridge).
+        let mut buf = [0u8; 8192];
         let mut collected = Vec::new();
         loop {
             let n = stream.read(&mut buf).await?;
@@ -83,7 +99,7 @@ pub async fn post_json(url: &str, body: &Value, timeout: Duration) -> PushResult
                 break;
             }
             collected.extend_from_slice(&buf[..n]);
-            if collected.len() >= 4096 {
+            if collected.len() >= 8192 {
                 break;
             }
         }
@@ -98,10 +114,12 @@ pub async fn post_json(url: &str, body: &Value, timeout: Duration) -> PushResult
                 "Timeout nach {} ms (Endpoint {host}:{port})",
                 timeout.as_millis()
             )),
+            body: None,
         },
         Ok(Err(e)) => PushResult {
             status: None,
             error: Some(format!("Transportfehler zu {host}:{port}: {e}")),
+            body: None,
         },
         Ok(Ok(bytes)) => {
             let text = String::from_utf8_lossy(&bytes);
@@ -113,6 +131,7 @@ pub async fn post_json(url: &str, body: &Value, timeout: Duration) -> PushResult
                 Some(c) if (200..300).contains(&c) => PushResult {
                     status: Some(c),
                     error: None,
+                    body: parse_json_body(&text),
                 },
                 Some(c) => {
                     let snippet: String = text.chars().take(200).collect();
@@ -122,6 +141,7 @@ pub async fn post_json(url: &str, body: &Value, timeout: Duration) -> PushResult
                             "Endpoint antwortete {c}: {}",
                             snippet.replace('\n', " ")
                         )),
+                        body: parse_json_body(&text),
                     }
                 }
                 None => PushResult {
@@ -130,6 +150,7 @@ pub async fn post_json(url: &str, body: &Value, timeout: Duration) -> PushResult
                         "Keine HTTP-Statuszeile von {host}:{port}: {}",
                         text.chars().take(120).collect::<String>()
                     )),
+                    body: None,
                 },
             }
         }
@@ -178,6 +199,53 @@ mod tests {
         assert!(head.starts_with("POST /exec HTTP/1.1"), "head: {head}");
         assert!(head.contains("Content-Type: application/json"));
         assert!(request.contains("\"cmd\":\"go\""));
+    }
+
+    #[tokio::test]
+    async fn captures_json_body_as_exec_result() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 8192];
+            let _ = sock.read(&mut buf).await.unwrap();
+            let payload = r#"{"ok":true,"results":[{"command":"rb_wave 3","ok":true}]}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                payload.len(),
+                payload
+            );
+            let _ = sock.write_all(resp.as_bytes()).await;
+            String::from_utf8_lossy(&buf).to_string()
+        });
+        let url = format!("http://{addr}/exec");
+        let res = post_json(
+            &url,
+            &serde_json::json!({"command": "rb_wave 3"}),
+            Duration::from_secs(2),
+        )
+        .await;
+        assert!(res.ok(), "unexpected: {res:?}");
+        let body = res.body.expect("JSON-body wird geparst");
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["results"][0]["command"], "rb_wave 3");
+        let req = handle.await.unwrap();
+        assert!(req.contains("\"command\":\"rb_wave 3\""), "req: {req}");
+    }
+
+    #[test]
+    fn json_body_extraction() {
+        assert_eq!(parse_json_body("no body here"), None);
+        assert_eq!(parse_json_body("HTTP/1.1 200 OK\r\n\r\n"), None);
+        assert_eq!(parse_json_body("HTTP/1.1 200 OK\r\n\r\nnot json"), None);
+        let v = parse_json_body(
+            "HTTP/1.1 200 OK\r\n\r\n{\"ok\":false,\"reason\":\"pipe_unavailable\"}",
+        )
+        .unwrap();
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["reason"], "pipe_unavailable");
     }
 
     #[tokio::test]

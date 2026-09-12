@@ -1,0 +1,75 @@
+---
+# Rolle: rbtools (Issue #265) — baut die Trainer-I/O-Windows-Tools auf dem
+# Zielhost und staged sie an den Mount-Punkt fuer den dedicated-server-Container.
+#
+# Ablauf: Build-Script (scripts/build_rbbridge_tools.sh, baut rbbridge.dll +
+# injector.exe + rbbridge_standalone.exe + pipe_bridge.exe mit MinGW/zig) in das
+# Staging-Verzeichnis, dann `copy` (remote_src) nach {{ rbtools_dir }}. Die
+# Change-Detection laeuft ueber die Checksummen des copy-Moduls: aendern sich die
+# Binaries, wird der Container per Handler neu gestartet (die Injection laeuft
+# beim Start — nur ein Restart bringt eine neue DLL/EXE zur Wirkung).
+#
+# check_mode: Build + Copy werden uebersprungen (nur Hinweis), damit
+# `ansible-playbook --check --tags server` (deploy-check) gruen bleibt.
+
+- name: rbtools-Verzeichnis sicherstellen
+  file:
+    path: "{{ rbtools_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Staging-Verzeichnis fuer den Build sicherstellen
+  file:
+    path: "{{ rbtools_staging_dir }}"
+    state: directory
+    mode: "0755"
+  when: not ansible_check_mode
+
+- name: rbtools bauen (mingw/zig auf dem Zielhost, alle 4 Binaries)
+  command:
+    cmd: bash {{ rbtools_build_script }} {{ rbtools_staging_dir }}
+    chdir: "{{ rbtools_repo_root }}"
+  register: rbtools_build
+  changed_when: true
+  when: not ansible_check_mode
+
+- name: rbtools nach {{ rbtools_dir }} kopieren (Change-Detection per Checksumme)
+  copy:
+    src: "{{ rbtools_staging_dir }}/"
+    dest: "{{ rbtools_dir }}/"
+    remote_src: true
+    mode: preserve
+  register: rbtools_copy
+  when: not ansible_check_mode
+  notify: restart riftbreaker-server
+
+- name: rbtools-Dateien pruefen (stat)
+  stat:
+    path: "{{ rbtools_dir }}/{{ item }}"
+  loop:
+    - rbbridge.dll
+    - injector.exe
+    - rbbridge_standalone.exe
+    - pipe_bridge.exe
+  register: rbtools_stat
+  when: not ansible_check_mode
+
+- name: rbtools vollstaendig gestaged (assert, alle 4 Dateien)
+  assert:
+    that:
+      - item.stat.exists
+      - item.stat.size > 0
+    fail_msg: >-
+      rbtools unvollstaendig in {{ rbtools_dir }}: {{ item.item }} fehlt/leer.
+    quiet: true
+  loop: "{{ rbtools_stat.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: not ansible_check_mode
+
+- name: Check-Mode-Hinweis (rbtools)
+  debug:
+    msg: >-
+      check_mode: rbtools-Build + Copy uebersprungen — Staging
+      {{ rbtools_staging_dir }} und Ziel {{ rbtools_dir }} bleiben unveraendert.
+  when: ansible_check_mode

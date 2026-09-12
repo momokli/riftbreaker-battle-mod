@@ -1,74 +1,64 @@
 ---
 # Defaults der Rolle riftbreaker-server.
 # Planet-spezifische Werte (Pfade, Ports, Passwort) stehen in
-# deploy/inventory/host_vars/planet/ — diese Defaults liefern nur Fallbacks
-# bzw. rollen-lokale Struktur.
+# deploy/inventory/host_vars/planet/ — diese Defaults liefern nur Fallbacks.
 
 riftbreaker_deploy_dir: /opt/rbmods/compose/riftbreaker-dedicated
-
-# Compose-Projektname = Verzeichnisname (kein explizites `name:` im Compose).
-# Genutzt für die Fremd-Belegungs-Prüfung des Container-Namens (Issue #209).
 riftbreaker_compose_project: "{{ riftbreaker_deploy_dir | basename }}"
 
-# Dedicated-Server-Kommando (Operator-verifiziert: docs/DUEL_SETUP.md,
-# docs/ASSUMPTIONS.md). Jedes Argument wird UNVERÄNDERT (ohne
-# Shell-Interpretation) an `wine <exe>` gereicht. Das Passwort kommt aus dem
-# Vault (riftbreaker_server_password).
-riftbreaker_server_command:
-  - "{{ riftbreaker_server_exe }}"
-  - "headless_mode=1"
-  - "cli=1"
-  - "app_mode=server"
-  - "campaign={{ riftbreaker_server_campaign }}"
-  - "mission={{ riftbreaker_server_mission }}"
-  - "difficulty={{ riftbreaker_server_difficulty }}"
-  - "map_size={{ riftbreaker_server_map_size }}"
-  - "seed={{ riftbreaker_server_seed }}"
-  - "debug_disable_content_version_check=1"
-  - "server_pause_game_when_empty=1"
-  - "disable_steam=1"
-  - "password={{ riftbreaker_server_password }}"
-riftbreaker_server_extra_args: []
+# --- Dedicated-Server (Community-Rezept, Issue #241) ------------------------
+# Das Image rb-dedicated:<sha> kommt aus der Rolle dedicated-server-image.
+# Der Server startet mit `cli=1 config=config.cfg` — die Config wird hier aus
+# config.cfg.j2 gerendert (Datei-Rechte 0644, steamuser-lesbar; Passwort aus dem Vault).
+riftbreaker_server_container: riftbreaker-dedicated
+riftbreaker_server_port_udp: 6321
+
+riftbreaker_server_name: RBBattle
+riftbreaker_server_max_players: 4
+riftbreaker_server_broadcast_enabled: 1
+# 0 = die Lua-Welt laeuft headless weiter (Live-Beleg 2026-09-12, #265): mit "1"
+# friert das Lua-Log nach dem Laden ein und `rb_wave 3` erreicht den Mod
+# (exec_result ok:true), erzeugt aber KEIN event=wave. Der Exec-/Wellen-
+# Kontrollkanal (Ingress, #265) und der Referee (#269) brauchen eine laufende
+# Lua-Welt; ohne Spieler liefe sonst keine Welle.
+riftbreaker_server_pause_game_when_empty: 0
+riftbreaker_server_rcon_password: "{{ vault_server_rcon_password | default('') }}"
+
+# Config-Zielpfad (wird als /data/config/config.cfg:ro in den Container gemountet).
+riftbreaker_config_dir: "{{ riftbreaker_deploy_dir }}/config"
+
+# Persistente Named Volumes für Wine-Prefix + Saves (Community-Rezept).
+riftbreaker_wine_volume: rb-wine
+riftbreaker_saves_volume: rb-saves
 
 # --- Mods & Backups (Guard gegen Fremd-Mods in mods/) ------------------------
-# Der Dedicated Server lädt JEDEN Unterordner von mods/ mit einer *.manifest
-# als eigene External-Content-Mod — unabhängig vom Ordnernamen. Mod-Backups
-# dürfen daher NIE innerhalb von mods/ liegen (Befund planet 2026-09-10: ein
-# Backup-Ordner mit gleicher Content-ID wird ZUSÄTZLICH geladen, überschreibt
-# die Versionskonstante und registriert die Handler doppelt →
-# `handler_errors`/`event_unreadable`). Siehe docs/DEPLOYMENT.md.
 riftbreaker_mods_dir: "{{ riftbreaker_game_dir }}/mods"
 riftbreaker_backup_dir: "{{ riftbreaker_game_dir }}-backups"
-
-# Guard-Verhalten, wenn ein Fremd-Ordner mit *.manifest in mods/ liegt:
-#   true  = nach {{ riftbreaker_backup_dir }}/stray-<ts>/ wegschieben
-#           (selbstheilend, idempotent)
-#   false = nur prüfen und den Deploy abbrechen (kein Verschieben)
 riftbreaker_mods_guard_autofix: true
 
 # Quelle für den Post-Deploy-Runtime-Log-Check (best effort; genau eine
-# mod_load-Zeile, erwartete Version, keine handler_errors).
+# mod_load-Zeile, erwartete Version, keine handler_errors). NICHT der harte
+# Gate — der ist der Artefakt-Check in tasks/main.yml (Manifest- + RBB.version
+# im deployten Stand == erwartete Version), der auch ohne Map-Load/Spieler
+# funktioniert (Issue #226/#245).
 #
-# WICHTIG (Issue #226): Dieser Check ist NICHT der harte Gate — er läuft nur,
-# wenn der Log tatsächlich existiert. Im Idle (`server_pause_game_when_empty=1`,
-# keine Spieler) lädt der Dedicated Server keine Map, führt also kein Lua aus;
-# `exor_logs.txt` entsteht dann gar nicht (Befund planet 2026-09-11). Der Log
-# liegt zudem im Container-Writable-Layer und ist nach `--force-recreate` weg.
-# Der idle-sichere harte Gate ist der Artefakt-Check in tasks/main.yml
-# (Manifest- + RBB.version im deployten Stand == erwartete Version).
-#
-# Der Dedicated Server schreibt seinen Lua-Log NICHT nach stdout: `docker logs`
-# enthält nur die zwei Wrapper-Zeilen von `run-server.sh` (`starte Xvfb…` /
-# `starte: wine bin/DedicatedServer.exe …`). `event=mod_load`,
-# `handler_errors` und `event_unreadable` landen in `exor_logs.txt` im
-# Wine-Prefix des Containers. Im Prefix ist das Windows-`Documents` des Users
-# `root` ein Symlink auf `$HOME` (`drive_c/users/root/Documents -> /root`),
-# deshalb liegt der echte Log unter `/root/exor_logs.txt`. Befund planet
-# 2026-09-11 (Issue #224)
-#   docker exec {{ riftbreaker_server_container }} \
-#     readlink -f /root/.wine/drive_c/users/root/Documents   # -> /root
-#
-# Ein EINZELNER Befehl (kein Pipe) — der Task nutzt `command`, kein `shell`.
-# Robustere Variante wäre ein Bind-Mount des Wine-Prefix auf den Host (dann
-# `cat <hostpfad>/exor_logs.txt`); bis dahin liest der Container den Log selbst.
-riftbreaker_mod_log_cmd: "docker exec {{ riftbreaker_server_container }} cat /root/exor_logs.txt"
+# Community-Rezept (Issue #241): der Wine-Prefix liegt im benannten Volume
+# {{ riftbreaker_wine_volume }}, nicht auf dem Host — der Lua-Log ist daher nur
+# über den Container erreichbar. `tools/dedicated-server/scripts/entrypoint.sh`
+# (follow_server_logs) tailt exor_logs.txt selbst nach stdout, daher reicht
+# hier `docker logs` (anders als beim alten Wine-Client-Image, wo `docker logs`
+# nur die run-server.sh-Wrapper-Zeilen zeigte und `docker exec ... cat
+# exor_logs.txt` nötig war).
+riftbreaker_mod_log_cmd: "docker logs {{ riftbreaker_server_container }}"
+
+# --- Trainer-I/O-Bridge (Issue #265) -----------------------------------------
+# Die Rolle rbtools stagt die Windows-Tools (injector.exe/rbbridge.dll/
+# pipe_bridge.exe) nach {{ rbtools_dir }}; von dort read-only nach /opt/rbtools
+# im Container. Die Bridge (Wine-x64) nimmt HTTP auf 9001 an und uebersetzt
+# POST /exec in exec-Zeilen auf \\.\pipe\rbbattle (erfuellt den bereits
+# konfigurierten tournament_bridge_a_url=http://127.0.0.1:9001/exec).
+# Nur an 127.0.0.1 des Hosts publiziert (nicht ins LAN/Internet).
+# ACHTUNG: riftbreaker_bridge_port ist mit tournament_bridge_a_url gekoppelt
+# (host_vars: http://127.0.0.1:9001/exec) — Aenderungen an BEIDEN Stellen.
+riftbreaker_rbtools_dir: "{{ rbtools_dir | default('/opt/rbmods/rbtools') }}"
+riftbreaker_bridge_port: 9001

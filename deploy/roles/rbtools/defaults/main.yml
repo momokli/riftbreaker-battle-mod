@@ -1,0 +1,23 @@
+---
+# Defaults der Rolle rbtools (Issue #265).
+#
+# Die Rolle baut die Windows-x64-Trainer-I/O-Tools (rbbridge.dll, injector.exe,
+# rbbridge_standalone.exe, pipe_bridge.exe) auf dem Zielhost (MinGW-w64) und
+# legt sie nach {{ rbtools_dir }}. Von dort werden sie vom Compose der Rolle
+# riftbreaker-server read-only nach /opt/rbtools in den Container gemountet.
+#
+# Kein Binary im Image/Repo: gebaut wird zur Deploy-Zeit aus dem Repo-Checkout,
+# die Change-Detection uebernimmt Ansible-`copy` (Checksummen).
+
+# Kanonischer Ablageort auf dem Zielhost (= Volume-Quelle fuer /opt/rbtools:ro).
+rbtools_dir: /opt/rbmods/rbtools
+
+# Staging-Verzeichnis fuer den Build; von hier kopiert die Rolle nach
+# {{ rbtools_dir }} (remote_src, Change-Detection per copy).
+rbtools_staging_dir: /opt/rbmods/rbtools-staging
+
+# Repo-Root auf dem Zielhost (Playbook liegt unter deploy/).
+rbtools_repo_root: "{{ playbook_dir }}/.."
+
+# Build-Script (kanonisch, baut alle 4 Binaries; harter Fehler ohne Toolchain).
+rbtools_build_script: "{{ rbtools_repo_root }}/scripts/build_rbbridge_tools.sh"

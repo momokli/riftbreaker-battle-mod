@@ -25,6 +25,8 @@ Rust/axum in `tournament/` (Issue #29), Web-UI in `tournament/web/`
 | `TOURNAMENT_GO_COMMANDS` | `debug_dom_resume` | Komma-separierte Unpause-/Start-Kommandos je Welt beim GO (je EIN gequotetes Argument, Issue #18) |
 | `TOURNAMENT_GO_TIMEOUT_MS` | `3000` | Timeout je Broadcast-Endpoint |
 | `TOURNAMENT_HQ_HP` | `100` | Start-HP jedes HQ |
+| `TOURNAMENT_REFEREE_MAX_WAVE` | `0` | Wellen-Deckel des Referees (`0` = unbegrenzt, Issue #268) |
+| `TOURNAMENT_REFEREE_RESTART_CMD` | `restart` | Command des Referees bei HQ-Tod (Issue #268) |
 | `TOURNAMENT_WEB_DIR` | `<crate>/web` | Verzeichnis der statischen Web-UI |
 | `RUST_LOG` | `info` | Log-Level |
 
@@ -38,9 +40,14 @@ Bridges erkennen den Start ausschließlich über Polling von `GET /state`.
 LOBBY ── beide Spieler registriert ──► LOBBY
 LOBBY ── beide Welten ready (AUTO_GO=off) ──► READY (GO steht aus)
 LOBBY/READY ── POST /go (oder AUTO_GO beim 2. Ready) ──► RUNNING (Runde 1)
-RUNNING ── Runden-Loop ── HQ einer Welt ≤ 0 ──► FINISHED (winner)
+RUNNING ── Runden-Loop ── HQ einer Welt ≤ 0 (event=hq_hp) ──► FINISHED (winner)
 FINISHED ── POST /rematch ──► LOBBY (Spieler bleiben, Rematch-Zähler +1)
 ```
+
+> **`POST /report event=hq_dead` beendet kein Match** und wechselt den
+> MatchState **nicht** nach `FINISHED`: Das Event fasst ausschließlich den
+> Referee an (`restart` + Runde +1 für den Mod-Runde-Neustart, #267).
+> Match-Ende läuft weiterhin über `event=hq_hp` mit `hp ≤ 0` → `FINISHED`.
 
 ### Runden-Loop (RUNNING)
 
@@ -150,6 +157,7 @@ Nur in Phase `running` (sonst 409). Der Send wird in die Queue der
 {"world": "A", "event": "wave_start", "built_value": 8200}
 {"world": "A", "event": "hq_hp", "hp": 70.0}
 {"world": "A", "event": "score_update", "score": 1240, "resources": {"iron": 320, "carbon": 80}, "wave": 4}
+{"world": "A", "event": "hq_dead"}
 ```
 
 - `wave_start`: Wellenstart der Welt (Lock). `built_value` optional
@@ -161,6 +169,73 @@ Nur in Phase `running` (sonst 409). Der Send wird in die Queue der
   Score, Ressourcen und aktuelle Wave einer Welt. Idempotent; der Feed wird nur
   bei Score-/Wave-Änderung belastet. Antwort
   `{"event": "score_update", "score": …, "wave": …, "changed": bool, "phase": …}`.
+- `hq_dead` (Aliase `hq_destroy`/`hq_destroyed`, Issue #267): HQ-Tod aus dem
+  echten Spiel (Mod-Log `event=hq_dead status=match_end hp=0`). Wird als
+  `HqDestroyed` in den Referee gespeist; der Referee entscheidet genau EIN
+  `restart` (aus `TOURNAMENT_REFEREE_RESTART_CMD`) und der Server **pusht** es an
+  die Bridge der Welt
+  (`POST <RBBRIDGE_<W>_URL> {"command": "restart", "cmd_id": …, "world": "A", "reason": …}`,
+  analog GO-Broadcast). Antwort
+  `{"event": "hq_dead", "phase": …, "rounds": …, "restart": bool, "ignored": bool, "referee_running": bool, "restart_pending": bool, "acked": n, "commands": […], "broadcast": […]}`
+  (`broadcast[i] = {command, cmd_id, ok, status, error, endpoint}`).
+  **Kein `match_over`/`winner`:** #267 startet nur die Runde neu, kein Match-Ende
+  (s. o.).
+  **Idempotent + genau einmal zugestellt:** ein zweites `hq_dead` liefert aus dem
+  Referee keine Commands → `restart:false`, `ignored:true`, **kein** zweiter Push.
+  Erfolgreich gepushte Commands werden aus der Referee-Outbox entfernt (`acked`)
+  — der Poll-Pfad (`GET /referee/poll`) liefert sie daher **nicht** doppelt
+  („Push **oder** Poll“). Schlägt der Push fehl oder ist kein Endpoint
+  konfiguriert (`RBBRIDGE_<W>_URL`), bleibt das Command in der Outbox und wird
+  über den Poll zugestellt (`ok:null`/Fehler, kein Panic/Crash). `ignored:true`
+  heißt „vom Referee-Guard verworfen (kein laufendes Match bzw. Repeat nach
+  Restart)“; `referee_running`/`restart_pending` unterscheiden die beiden Fälle.
+
+> Der Live-Player-Test (echtes HQ zerstören → Runde startet sichtbar neu) bleibt
+> **offen** und braucht den deployten IO-Kanal (#265).
+
+### POST /referee/event — Spiel-Event an den Referee (Issue #268)
+
+Der Referee ist die autoritative Event-/State-Quelle; die in-game Lua ist
+reiner Executor. Spiel-Events kommen über den Rückkanal (Relay/Pipe, #265),
+Commands gehen in der Antwort und/oder über `GET /referee/poll` zurück.
+
+```json
+{"world": "A", "type": "ready"}
+{"world": "A", "type": "wave_done", "level": 3}
+{"world": "A", "type": "hq_destroyed"}
+```
+
+| `type` | Wirkung | Command |
+|---|---|---|
+| `ready` | Executor oben (Map geladen / nach `restart`) | `rb_wave 1` |
+| `wave_done` (mit `level`) | Welle abgeschlossen | `rb_wave <level+1>` (bis `TOURNAMENT_REFEREE_MAX_WAVE`) |
+| `hq_destroyed` | HQ zerstört | `restart`, Runde +1, Wellen ruhen bis `ready` |
+
+Duplikate/veraltete Level/mehrfaches `hq_destroyed` sind idempotent (kein
+Doppel-Command). Antwort:
+
+```json
+{"world": "A", "type": "wave_done", "accepted": true,
+ "commands": [{"world": "A", "command": "rb_wave 4", "cmd_id": 7, "reason": "wave_done"}],
+ "state": {"running": true, "restart_pending": false, "waves_in_flight": 4,
+           "next_level": 4, "rounds": 0, "commands_sent": 4, "queued_commands": 1}}
+```
+
+Fehler: unbekannte Welt → 400 `invalid`; `wave_done` ohne `level` → 400;
+unbekannter `type` → 422 (serde).
+
+### GET /referee/poll — offene Referee-Commands (Issue #268)
+
+`?world=A` — holt alle noch nicht abgeholten Commands der Welt (leert die
+Outbox):
+
+```json
+{"world": "A", "commands": [{"world": "A", "command": "rb_wave 4", "cmd_id": 7, "reason": "wave_done"}],
+ "state": { … }}
+```
+
+Konzept, Zustandsmaschine, Test-Split und offene Punkte (Player-Test,
+Lua-Reduktion, #265): [`docs/REFEREE.md`](REFEREE.md).
 
 ### POST /rematch
 
@@ -193,6 +268,61 @@ SP-Mode-Semantik (Mirror-Konzept):
   EIN reales HQ).
 - **Match-Ende:** Bei HQ ≤ 0 → Phase `finished` + Feed-Event `match_end` mit
   dem Hinweis „nächster Spieler kann joinen“.
+
+### POST /wave — Operator-Wellen-Spawn (Issue #266)
+
+```json
+{"world": "A", "n": 3}
+```
+
+Leitet `exec rb_wave <n>` an den Bridge-/Relay-HTTP-Endpoint der Welt weiter
+(`RBBRIDGE_A_URL`/`RBBRIDGE_B_URL`, `POST <url> {"command":"rb_wave <n>"}`) und
+gibt dessen `exec_result` an die UI zurueck — der Weg fuer den „Spawn Wave"-
+Button der `/solo`-Match-Page. Defaults: `world="A"` (Solo/SP hat nur ein reales
+HQ in A), `n=3`. `n` muss 1..100 sein: Werte ausserhalb → 400 `invalid`;
+falscher Typ (z. B. `n:1.5`, `n:-1`, `n:"x"`) wird schon von Serde abgewiesen
+→ **422**, nicht 400. Ohne konfigurierten Bridge-Endpoint → 409 `conflict`
+(kein Transport).
+
+Antwort:
+
+```json
+{"ok": true, "exec_ok": true, "world": "A", "command": "rb_wave 3",
+ "endpoint": "http://127.0.0.1:9001/exec", "status": 200, "error": null,
+ "exec_result": {"ok": true, "results": [{"command": "rb_wave 3", "ok": true}]}}
+```
+
+Zwei getrennte Erfolgsflags (Review #271, Finding 2/3):
+
+- `ok` = **Zustell-Erfolg** — die Bridge/Relay antwortete HTTP 2xx ohne
+  Transportfehler.
+- `exec_ok` = **Ausfuehr-Erfolg** aus dem durchgereichten `exec_result`
+  (`ok:true` bzw. alle `results[].ok`); `null`, wenn kein JSON-Body kam. Die
+  Web-UI leitet dasselbe in `waveResult()` ab.
+
+Eine Bridge, die mit **200/`exec_result.ok=false`** antwortet (z. B.
+`status=timeout` → `reason=no_response` laut
+[relay-pipe-contract.md](relay-pipe-contract.md)), liefert HTTP **200** mit
+`ok:true` und `exec_ok:false` plus `error`/`exec_result`; ein Zustellfehler
+einer 502/503 wird durchgereicht und ergibt `ok:false`. Nur ein fehlender
+Bridge-Endpoint ist ein 409. Der Versuch wird als Feed-Event `kind=wave`
+protokolliert (sichtbar im Live-Dev-Log der `/solo`-Seite). Der Endpoint
+veraendert den Match-Zustand nicht.
+
+Transport: auf dem Dedicated-Server ist der Endpoint die `pipe_bridge` (Wine,
+HTTP → `\\.\pipe\rbbattle`, #265); fuer native Windows-Welten der
+`relay.py`-Pfad (gleiches `exec`/`exec_result`-Protokoll, s.
+[relay-pipe-contract.md](relay-pipe-contract.md)). Der Live-Beweis, dass die
+Welle im Spiel sichtbar spawnt (`[RBBATTLE] event=wave level=3 status=start`),
+ist ein Player-Test (Momo/Matheo) und bleibt offen.
+
+Client-Verhalten der `/solo`-UI (#266): der Transport bricht clientseitig nach
+8 s ab (AbortController, `DEFAULT_CMD_TIMEOUT_MS` in `solo-cockpit.js`) und
+stellt einen Haenger als eigenen Fehlerzustand dar (`timeout:true`, Statuszeile
+`FEHLER — Zeitüberschreitung …`, `is-err`) — nicht als Erfolg. Der Spawn-Button
+ist waehrend des laufenden Requests gesperrt (kein Doppel-POST). Eine 200-Antwort
+mit unparsebarem Body wird als `UNKLARE ANTWORT — Welle nicht bestätigt`
+(`is-err`) gezeigt, nie als „OK".
 
 ### GET /events — Feed-Cursor für Poll-Bridges (Telegram-Feed u. a.)
 
@@ -256,6 +386,7 @@ exec-Kanal aus (`exec_cmd_client`/rbbridge-exec-Dispatch):
 | `phase` wird `finished` | `match_over` | Sieg-/Verlierer-Screen |
 | — | `POST /report wave_start` | Welt meldet Lock + Built-Value (vom Mod/RE-Layer ausgelöst) |
 | — | `POST /report hq_hp` | Welt meldet HQ-HP (send_state-Egress, Issue #13) |
+| — | `POST /report hq_dead` | Welt meldet HQ-Tod (Mod-Log, #267) → Referee-`restart`-Push an `RBBRIDGE_*_URL` |
 
 Der GO-Push des Servers (`RBBRIDGE_*_URL`) und das Poll-Fallback sind
 **redundant aber idempotent**: Kommandos dürfen doppelt ankommen
