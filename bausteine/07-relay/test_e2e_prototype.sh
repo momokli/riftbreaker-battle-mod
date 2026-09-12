@@ -2,7 +2,7 @@
 #
 # E2E-Prototyp Baustein 07/08 — Strecke Spiel-Log → Relay → Server → Web-UI
 #
-# Startet den Tournament-Server (06, Port 8765), simuliert Spiel-Log-Zeilen
+# Startet den Tournament-Server (06, zufälliger freier Port), simuliert Spiel-Log-Zeilen
 # ([RBBATTLE] key=value, wie der Lua-Mod sie schreibt), startet den Relay (07)
 # dagegen und prueft die ganze Strecke:
 #
@@ -21,7 +21,7 @@ cd "$(dirname "$0")" || exit
 
 SERVER_JS="../06-tournament-server/server.js"
 RELAY_PY="relay.py"
-PORT=8765
+PORT=$(( (RANDOM % 20000) + 20000 ))
 URL="http://127.0.0.1:$PORT"
 
 OK=0
