@@ -89,9 +89,13 @@ curl -s -X POST localhost:8080/report -d '{"world":"A","event":"hq_dead"}'
 
 Der Server akzeptiert das Mod-Log-Event `hq_dead` (Aliase `hq_destroy`/
 `hq_destroyed`) über `POST /report` und **pusht** den resultierenden
-`restart`-Command an die Bridge der Welt (IO-Kanal, analog GO). Duplikate sind
-idempotent (kein zweiter Push); ohne `RBBRIDGE_*_URL` → `ok:null`, kein Crash.
-Der Live-Player-Test bleibt offen (#265).
+`restart`-Command (inkl. `cmd_id`) an die Bridge der Welt (IO-Kanal, analog GO).
+Erfolgreich gepushte Commands werden aus der Referee-Outbox genommen → der
+`/referee/poll`-Pfad liefert denselben Restart **nicht** doppelt (Push *oder*
+Poll); ohne `RBBRIDGE_*_URL` bzw. bei Push-Fehler übernimmt der Poll (`ok:null`,
+kein Crash). Duplikate sind idempotent (`ignored:true`, kein zweiter Push). Das
+Event beendet **kein** Match (kein `match_over`; Match-Ende läuft über
+`event=hq_hp`). Der Live-Player-Test bleibt offen (#265).
 
 Konzept, Zustandsmaschine, Test-Split (OHNE Player erledigt, Player-Loop
 OFFEN) und offene Punkte: [`docs/REFEREE.md`](../docs/REFEREE.md).

@@ -242,6 +242,25 @@ impl Referee {
         self.worlds[Self::slot(w)].outbox.drain(..).collect()
     }
 
+    /// Entfernt die per `cmd_id` bezeichneten Commands aus der Outbox der Welt
+    /// und liefert die Anzahl der tatsächlich entfernten Einträge (Issue #267).
+    ///
+    /// Wird nach einem **erfolgreichen** Push an die Bridge aufgerufen: das
+    /// zugestellte Command wird „geackt“, damit der Poll-Pfad
+    /// (`GET /referee/poll`) es **nicht** ein zweites Mal zustellt. Nicht
+    /// gepushte bzw. fehlgeschlagene Commands bleiben in der Outbox und werden
+    /// über den Poll zugestellt (Retry-Fallback). Damit ist die Zustellung
+    /// pro Command genau einmal — „Push **oder** Poll“, nie beides.
+    pub fn ack(&mut self, w: World, ids: &[u64]) -> usize {
+        if ids.is_empty() {
+            return 0;
+        }
+        let outbox = &mut self.worlds[Self::slot(w)].outbox;
+        let before = outbox.len();
+        outbox.retain(|c| !ids.contains(&c.cmd_id));
+        before - outbox.len()
+    }
+
     /// Sicht auf eine Welt (für `/referee/event`-Antwort und Monitoring).
     pub fn world_view(&self, w: World) -> WorldRefereeView {
         let wr = &self.worlds[Self::slot(w)];
@@ -415,6 +434,22 @@ mod tests {
         assert!(r.poll(World::A).is_empty()); // geleert
         let b = r.poll(World::B);
         assert_eq!(b[0].cmd_id, 2);
+    }
+
+    #[test]
+    fn ack_removes_only_matching_commands() {
+        let mut r = Referee::new(RefereeConfig::default());
+        r.on_event(ready(World::A)); // cmd_id 1: rb_wave 1
+        let restart = r.on_event(hq_destroyed(World::A)); // cmd_id 2: restart
+        assert_eq!(restart[0].cmd_id, 2);
+        // Nur das Restart-Command acken → die (nie gepushte) Welle bleibt liegen.
+        assert_eq!(r.ack(World::A, &[2]), 1);
+        let rest = r.poll(World::A);
+        assert_eq!(rest.len(), 1);
+        assert_eq!(rest[0].command, "rb_wave 1");
+        // Ack ohne Treffer bzw. leer ist ein No-op.
+        assert_eq!(r.ack(World::A, &[99]), 0);
+        assert_eq!(r.ack(World::A, &[]), 0);
     }
 
     #[test]

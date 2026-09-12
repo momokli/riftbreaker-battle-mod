@@ -65,9 +65,18 @@ Zustellung (drei Wege):
    `POST /report` `hq_dead` (#267) — server-seitig verdrahtet, Live-Zustellung
    über die Pipe offen (#265).
 
-Ein Push an `RBBRIDGE_*_URL` (wie der GO-Broadcast) ist **server-seitig
-verdrahtet** (Server-267, `/report` `hq_dead` → `push_referee_commands`) — die
-Live-Zustellung über die echte Pipe bleibt offen (#265). Siehe offene Punkte.
+**Genau eine Zustellung pro Command (B1, #267).** Der `/report`-`hq_dead`-Pfad
+pusht inklusive `cmd_id` und **ackt** ein erfolgreich zugestelltes Command
+(entfernt es aus der Outbox). Der Poll liefert es dann nicht erneut: Push
+**oder** Poll, nie beides — auch wenn der #265-Poll-Executor live ist. Schlägt
+der Push fehl (Endpoint down/Timeout/nicht-2xx) bzw. ist kein Endpoint
+konfiguriert, bleibt das Command in der Outbox und wird über den Poll
+zugestellt (Retry). Ein gepushter Payload trägt `cmd_id`/`world`/`reason`
+zusätzlich zum `command`; der Dedup-Schlüssel ist `cmd_id`
+(`docs/relay-pipe-contract.md`). Der Push läuft **synchron im Request** (wie der
+manuelle GO-Broadcast, nicht wie `AUTO_GO`/`spawn_go_broadcast`) und wird im
+Antwortfeld `broadcast` gemeldet; er schreibt **nicht** in den
+GO-spezifischen `/state`-Broadcast-Status (bewusst, R3).
 
 ## Zustandsmaschine (pro Welt)
 
@@ -109,6 +118,18 @@ Live-Zustellung über die echte Pipe bleibt offen (#265). Siehe offene Punkte.
   läuft über `docker restart` in `tools/solo-feed/`). Default `restart`
   (`TOURNAMENT_REFEREE_RESTART_CMD`); die exakte native Command-Bezeichnung
   klärt der Player-Test.
+* **Kein MatchState-`FINISHED` beim HQ-Tod, Antwort ohne `match_over` (B2, #267).**
+  `POST /report event=hq_dead` fasst **nur** den Referee an (`restart`, Runde +1);
+  der Match-Zustand bleibt unverändert. Die Antwort meldet darum den realen
+  Referee-Zustand (`restart`/`rounds`/`referee_running`/`restart_pending`) und die
+  aktuelle `phase` — kein `match_over:true` (das wäre nur über
+  `event=hq_hp` mit `hp ≤ 0` wahr, das den Übergang nach `FINISHED` wirklich
+  ausführt).
+* **`ignored` statt `duplicate` (R1, #267).** Ein verworfenes `hq_dead` liefert
+  `ignored:true`; `referee_running`/`restart_pending` unterscheiden „kein
+  laufendes Match“ (beide `false`) von „Repeat nach Restart“ (`restart_pending`
+  `true`). `restart` ist an das konfigurierte Restart-Command gebunden, nicht an
+  „irgendein Command“ (R2).
 * **Koexistenz mit der bestehenden Match-State-Machine.** `MatchState`
   (`state.rs`, Duel-Flow aus #29/#30/#44) verwaltet Lobby/Ready/GO/Reveal; der
   Referee ist die **neue autoritative Wellen-/HQ-/Runden-Quelle** für den
