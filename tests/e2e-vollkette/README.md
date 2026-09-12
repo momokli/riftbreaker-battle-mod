@@ -21,8 +21,17 @@ Windows, kein Spielprozess, kein Netz. Geprüft werden `scan_bytes`/
 `scan_bytes_mask` (inkl. rel32-Wildcards und E8-Pflicht), der
 RTTI-Walk (`resolve_console_vftable`), der Resolver inkl. Cache
 (`resolve_console_service`) und die Fehlerpfade (Modul/RTTI/Signatur/Instanz
-fehlt → `0`/`NULL`, kein Crash). Ist kein Host-CC vorhanden, wird der Test
-**sichtbar übersprungen** (skip mit Begründung, nie stillschweigend grün).
+fehlt → `0`/`NULL`, kein Crash).
+
+Zusätzlich (Review PR #257): **Stufe (d) der Modul-Resolution wird positiv
+ausführbar getestet** — der Loader-Pfad (a) wird ausgeblendet
+(`GetModuleHandleA/W` → NULL), (b)/(c)/(e) sind inert, und die synthetische
+Region liefert `Type=MEM_IMAGE` → `resolve_module` löst über den
+Signatur-Scan (`via=sigbase`) auf. Dazu Negativfälle (eigenes Image/Signatur
+ohne vftable → verworfen), ein Cache-Treffer **ohne** `GetModuleHandleA`
+(Wine-Fall, kein Voll-Scan) sowie defensive `pe_image_size`-Fälle
+(`e_lfanew`-Schranke, `SizeOfImage > 0`). Ist kein Host-CC vorhanden, wird der
+Test **sichtbar übersprungen** (skip mit Begründung, nie stillschweigend grün).
 
 ## Geprüft (Issue #252)
 
