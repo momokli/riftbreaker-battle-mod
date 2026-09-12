@@ -813,7 +813,9 @@ mod tests {
             go_timeout: Duration::from_millis(800),
             hq_hp_start: 100.0,
             referee_max_wave: 0,
-            referee_restart_cmd: "restart".to_string(),
+            // Explizite Test-Konfiguration (kein `Default`): hier bewusst
+            // `rb_reset` wie der produktive Env-Default aus `main.rs` (#281).
+            referee_restart_cmd: "rb_reset".to_string(),
             web_dir: PathBuf::from("web"), // wird in Tests nicht gebraucht
         }
     }
@@ -1546,30 +1548,30 @@ mod tests {
         assert_eq!(v["rounds"], 1);
         assert_eq!(v["acked"], 1);
         assert_eq!(v["broadcast"][0]["ok"], true);
-        assert_eq!(v["broadcast"][0]["command"], "restart");
+        assert_eq!(v["broadcast"][0]["command"], "rb_reset");
         assert_eq!(v["broadcast"][0]["cmd_id"], 2);
 
-        // Genau EIN Capture mit `command:restart` **inkl. `cmd_id`** (Dedup-Schlüssel).
+        // Genau EIN Capture mit `command:rb_reset` **inkl. `cmd_id`** (Dedup-Schlüssel).
         tokio::time::sleep(Duration::from_millis(100)).await;
         {
             let caps = captures.lock().await;
             assert_eq!(caps.len(), 1, "caps: {caps:?}");
             assert!(
-                caps[0].contains("\"command\":\"restart\""),
+                caps[0].contains("\"command\":\"rb_reset\""),
                 "req: {}",
                 caps[0]
             );
             assert!(caps[0].contains("\"cmd_id\":2"), "req: {}", caps[0]);
         }
 
-        // B1-Kern: das gepushte `restart` darf **nicht** erneut über den Poll
+        // B1-Kern: das gepushte `rb_reset` darf **nicht** erneut über den Poll
         // auftauchen (Push und Poll sind genau EINE Zustellung, nicht zwei).
         let (s, poll) = call(&app, "GET", "/referee/poll?world=A", None).await;
         assert_eq!(s, StatusCode::OK);
         let polled = poll["commands"].as_array().unwrap();
         assert!(
-            !polled.iter().any(|c| c["command"] == "restart"),
-            "gepushtes restart darf nicht doppelt im Poll liegen: {polled:?}"
+            !polled.iter().any(|c| c["command"] == "rb_reset"),
+            "gepushtes rb_reset darf nicht doppelt im Poll liegen: {polled:?}"
         );
 
         // Duplikat → keine Commands → restart:false, ignored:true, kein Push.
@@ -1642,7 +1644,7 @@ mod tests {
         let (_, poll) = call(&app, "GET", "/referee/poll?world=A", None).await;
         let polled = poll["commands"].as_array().unwrap();
         assert!(
-            polled.iter().any(|c| c["command"] == "restart"),
+            polled.iter().any(|c| c["command"] == "rb_reset"),
             "Restart muss ohne Bridge per Poll zustellbar sein: {polled:?}"
         );
     }
@@ -1678,7 +1680,7 @@ mod tests {
         let (_, poll) = call(&app, "GET", "/referee/poll?world=A", None).await;
         let polled = poll["commands"].as_array().unwrap();
         assert!(
-            polled.iter().any(|c| c["command"] == "restart"),
+            polled.iter().any(|c| c["command"] == "rb_reset"),
             "nach Push-Fehler muss der Poll den Restart liefern: {polled:?}"
         );
     }
@@ -1909,7 +1911,7 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(v["commands"].as_array().unwrap().len(), 0);
 
-        // hq_destroyed → restart, Runde 1.
+        // hq_destroyed → rb_reset, Runde 1.
         let (s, v) = call(
             &app,
             "POST",
@@ -1918,7 +1920,7 @@ mod tests {
         )
         .await;
         assert_eq!(s, StatusCode::OK);
-        assert_eq!(v["commands"][0]["command"], "restart");
+        assert_eq!(v["commands"][0]["command"], "rb_reset");
         assert_eq!(v["state"]["restart_pending"], true);
         assert_eq!(v["state"]["rounds"], 1);
 
