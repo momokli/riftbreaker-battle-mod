@@ -1,26 +1,29 @@
 # Verwaltet von deploy/ role "riftbreaker-server" (Jinja). NICHT manuell editieren.
-# Enthält das Server-Passwort im `command` → Datei-Rechte 0600 (siehe task).
+# Community-Rezept (Issue #241): DedicatedServer.exe cli=1 config=config.cfg.
+# Content wird aus {{ riftbreaker_game_dir }} gemountet (SteamCMD im Container
+# übersprungen), Mod liegt unter {{ riftbreaker_mods_dir }}.
 services:
   {{ riftbreaker_server_container }}:
     image: "{{ riftbreaker_server_image }}"
     container_name: {{ riftbreaker_server_container }}
     restart: unless-stopped
     init: true
-    shm_size: "1gb"
-    ports:
-      - "{{ riftbreaker_server_port_udp }}:{{ riftbreaker_server_port_udp }}/udp"
+    stdin_open: true
     environment:
-      WINEDEBUG: "-all"
-      WINEARCH: win64
-      LIBGL_ALWAYS_SOFTWARE: "1"
-      GALLIUM_DRIVER: llvmpipe
+      LC_ALL: C.UTF-8
+      LANG: C.UTF-8
+      # Rig-Rezept: Sync-Primitive AUS (sonst Crash im Boost-Thread vor dem bind()).
+      WINEESYNC: "0"
+      WINEFSYNC: "0"
+    ports:
+      - "{{ riftbreaker_server_port_udp }}:6321/udp"
+      - "{{ riftbreaker_server_port_udp }}:6321/tcp"
     volumes:
-      - "{{ riftbreaker_game_dir }}:{{ riftbreaker_game_dir }}"
-    # Das Steam-Layout legt das Binary unter bin/ ab; WORKDIR muss der
-    # Game-Root sein, damit `bin/DedicatedServer.exe` und mods/ stimmen.
-    working_dir: "{{ riftbreaker_game_dir }}"
-    entrypoint: ["run-server.sh"]
-    command:
-{% for arg in (riftbreaker_server_command + riftbreaker_server_extra_args) %}
-      - {{ arg | to_json }}
-{% endfor %}
+      - "{{ riftbreaker_game_dir }}:/opt/riftbreaker"
+      - "{{ riftbreaker_config_dir }}/config.cfg:/data/config/config.cfg:ro"
+      - "{{ riftbreaker_wine_volume }}:/data/.wine"
+      - "{{ riftbreaker_saves_volume }}:/data/saves"
+
+volumes:
+  {{ riftbreaker_wine_volume }}:
+  {{ riftbreaker_saves_volume }}:

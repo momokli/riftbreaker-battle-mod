@@ -32,6 +32,11 @@ jobs:
             bausteine/*/test_e2e*.sh \
             bausteine/07-relay/fake-log.sh \
             tools/headless-client/*.sh
+      # Dedicated-Server-Image-Scripts (Issue #241). Eigener Schritt statt
+      # Einreihen in die Liste oben, um den Hunk von #254 (tests/shell) nicht
+      # zu überlappen (parallele PRs, ein Datei-Block).
+      - name: shellcheck (dedicated-server)
+        run: shellcheck tools/dedicated-server/scripts/*.sh
 
   python-lint:
     name: Python-Lint (ruff + compileall)
