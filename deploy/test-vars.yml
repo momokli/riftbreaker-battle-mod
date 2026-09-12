@@ -38,6 +38,13 @@ riftbreaker_mod_dir: "{{ riftbreaker_game_dir }}/mods/rbbattle"
 riftbreaker_backup_dir: "{{ riftbreaker_game_dir }}-backups"
 riftbreaker_deploy_dir: "/opt/rbbattle-deploy/test/rb-{{ rbbattle_run_suffix }}"
 website_mods_dir: "/opt/rbbattle-deploy/test/mods-{{ rbbattle_run_suffix }}"
+# Der Build-Kontext (tools/dedicated-server) wurde bisher in einen festen Pfad
+# (/opt/rbmods/dedicated-server) synchronisiert. Bei zwei parallelen Läufen
+# schreiben beide in dasselbe Verzeichnis, während `docker build` daraus liest
+# → Race (halb geschriebene Files). Das ist genau die Kollisionsklasse aus
+# #307/Review-F2 und unterläuft die #304-Vorbereitung. Daher je Lauf eindeutig;
+# wird im Teardown mit entfernt.
+dedicated_server_context_dir: "/opt/rbbattle-deploy/test/dedicated-server-{{ rbbattle_run_suffix }}"
 
 # Named Volumes je Lauf (Docker-Volumes sind global -> eindeutig nötig).
 riftbreaker_wine_volume: "rb-test-wine-{{ rbbattle_run_suffix }}"

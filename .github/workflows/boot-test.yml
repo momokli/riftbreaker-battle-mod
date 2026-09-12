@@ -154,6 +154,11 @@ jobs:
           ssh planet "docker compose -p '${P}' -f '${D}/docker-compose.yml' down --remove-orphans -v 2>/dev/null || true"
           ssh planet "docker rm -f '${C}' 2>/dev/null || true"
           ssh planet "docker network rm '${P}_default' 2>/dev/null || true"
+          # Named Volumes zusaetzlich explizit (Fallback, falls `compose down -v`
+          # nicht greift — Compose-File nach fruehem Abbruch fehlt, Review-F3).
+          ssh planet "docker volume rm 'rb-test-wine-${RBBATTLE_RUN_ID}' 'rb-test-saves-${RBBATTLE_RUN_ID}' 2>/dev/null || true"
+          # Run-spezifischer Build-Kontext (Review-F2).
+          ssh planet "rm -rf '/opt/rbbattle-deploy/test/dedicated-server-${RBBATTLE_RUN_ID}' 2>/dev/null || true"
           ssh planet "systemctl stop '${U}' 2>/dev/null || true"
           ssh planet "systemctl disable '${U}' 2>/dev/null || true"
           ssh planet "rm -f '/etc/systemd/system/${U}.service' 2>/dev/null || true"
@@ -223,11 +228,21 @@ jobs:
           ssh planet "docker compose -p '${P}' -f '${D}/docker-compose.yml' down --remove-orphans -v 2>/dev/null || true"
           ssh planet "docker rm -f '${C}' 2>/dev/null || true"
           ssh planet "docker network rm '${P}_default' 2>/dev/null || true"
+          # `down -v` raeumt die Named Volumes nur, wenn das Compose-File noch
+          # existiert. Im Fallback-Zweig (File fehlt nach fruehem Abbruch) blieben
+          # `rb-test-wine-/rb-test-saves-<run_id>` als Leck zurueck (Review-F3) —
+          # daher hier explizit.
+          ssh planet "docker volume rm 'rb-test-wine-${RBBATTLE_RUN_ID}' 'rb-test-saves-${RBBATTLE_RUN_ID}' 2>/dev/null || true"
           # systemd-Unit dieses Laufs entfernen.
           ssh planet "systemctl stop '${U}' 2>/dev/null || true"
           ssh planet "systemctl disable '${U}' 2>/dev/null || true"
           ssh planet "rm -f '/etc/systemd/system/${U}.service' 2>/dev/null || true"
           ssh planet "systemctl daemon-reload 2>/dev/null || true"
           # Je Lauf eindeutige Host-Pfade entfernen (sonst akkumulieren pro Lauf
-          # ~664 MB Game-Content + Mods/Deploy-Artefakte).
-          ssh planet "rm -rf '${D}' '/srv/rbgame-test-${RBBATTLE_RUN_ID}' '/srv/rbgame-test-${RBBATTLE_RUN_ID}-backups' '/opt/rbbattle-deploy/test/mods-${RBBATTLE_RUN_ID}' '/opt/rbmods/tournament-server-test-${RBBATTLE_RUN_ID}' 2>/dev/null || true"
+          # ~664 MB Game-Content + Mods/Deploy-Artefakte + Build-Kontext F2).
+          ssh planet "rm -rf '${D}' '/srv/rbgame-test-${RBBATTLE_RUN_ID}' '/srv/rbgame-test-${RBBATTLE_RUN_ID}-backups' '/opt/rbbattle-deploy/test/mods-${RBBATTLE_RUN_ID}' '/opt/rbbattle-deploy/test/dedicated-server-${RBBATTLE_RUN_ID}' '/opt/rbmods/tournament-server-test-${RBBATTLE_RUN_ID}' 2>/dev/null || true"
+          # Altlasten des ALTEN, festen Test-Schemas (vor #307): dessen Cleanup
+          # zielte auf feste Namen, die diese run-scoped Logik nie mehr anfasst.
+          # Idempotent + gefahrlos (reine Test-Pfade, kein Prod-Overlap), daher
+          # einmalig hier mit abgeraeumt (Review-F4).
+          ssh planet "rm -rf '/srv/rbgame-test' '/srv/rbgame-test-backups' '/opt/rbmods/tournament-server-test' 2>/dev/null || true"
