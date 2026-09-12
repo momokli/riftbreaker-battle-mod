@@ -543,15 +543,19 @@ steht aus (Operator, Prod).
   dauerhaft um (Log `event=economy_source source=tick status=fallback
   reason=handler_errors`) — genau das ist der **live bestätigte** Fall (#242:
   `ResourceObtainedEvent` trägt Entity + Ressourcen-*Name*, aber gar keinen
-  Betrag). Seit #242 greift davor der **Konto-Snapshot-Diff**: im
+  Betrag). Seit #242 **kann** davor der **Konto-Snapshot-Diff** greifen (`RBB.economyCfg.accountEnabled`, **Default aus** — siehe unten): im
   HourEvent-Tick wird je Ressource `PlayerService:GetResourceAmount(0, name)`
   gelesen und die **Differenz** zum letzten Tick gebucht
   (`event=economy_farm source=account …`). Der erste Tick seedet nur
   (`status=seed`) — der Startbestand ist nicht gefarmt; sinkende Stände
   (Bauen) buchen nichts, ziehen den Snapshot aber nach. Ist die Konto-API
   nicht lesbar, bleibt es beim pauschalen HourEvent-Tick wie bisher.
-  **Offen (Player-Test):** dass `GetResourceAmount` im Mod-Kontext den
-  erwarteten Wert liefert — RE-seitig belegt, in-game nicht ausgeführt.
+  **Default aus, bewusst** (gleiches Muster wie `afkHourTicks = 0`, #231/#232):
+  dass `GetResourceAmount` im Mod-Kontext den erwarteten Wert liefert, ist
+  RE-seitig belegt, aber **in-game nicht ausgeführt**. Auf `true` setzen,
+  sobald ein Spieler `event=economy_farm source=account` mit plausiblen
+  Werten im Log bestätigt hat. Bis dahin verhält sich die Economy exakt
+  wie vor #242.
 - Balance-Zahlen (Faktoren, Tick-Wert) sind Platzhalter — zentrale Tabelle
   `RBB.economyCfg` am Economy-Block (Tuning: Issue #33).
 - Alle fremden API-Aufrufe sind `pcall`-gesichert: fehlt eine Funktion, kommt

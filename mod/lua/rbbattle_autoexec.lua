@@ -892,7 +892,17 @@ RBB.economyCfg = {
     -- statt ueber die (live als unlesbar bestaetigte) Event-Payload. Gelesen
     -- wird im bestehenden HourEvent-Tick, gebucht wird die DIFFERENZ zum
     -- letzten Snapshot. Details/Belege: Issue #242.
-    accountEnabled = true,
+    --
+    -- DEFAULT AUS, bewusst (gleiches Muster wie afkHourTicks = 0 in #231/#232):
+    -- dass PlayerService:GetResourceAmount im Mod-/Duel-Kontext liefert, ist
+    -- RE-seitig belegt, aber NICHT in-game ausgefuehrt. Dazu kommt ein
+    -- ungeklaerter Befund: auf diesem Branch fiel das Core-IO-Gate zweimal mit
+    -- C2 'pipe_unavailable' aus, waehrend ein Branch ohne diese Aenderung
+    -- dasselbe Gate zweimal bestand (PR #296). Eine Kausalitaet ist nicht
+    -- belegt -- aber solange sie nicht ausgeschlossen ist, wird hier nichts
+    -- scharf geschaltet. Auf true setzen, sobald ein Spieler bestaetigt hat,
+    -- dass 'event=economy_farm source=account' mit plausiblen Werten kommt.
+    accountEnabled = false,
     accountPlayerId = 0,     -- wie GetPlayerControlledEnt(0) im Rest der Mod
     -- Bewusst eine feste, geordnete Liste statt pairs(resourceFactors): die
     -- Iterationsreihenfolge von Lua-Tabellen ist nicht definiert, und die

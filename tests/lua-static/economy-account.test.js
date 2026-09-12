@@ -123,6 +123,10 @@ local function log_count(sub)
     end
     return n
 end
+-- Die Konto-Quelle ist per Default AUS (#242: nicht in-game verifiziert).
+-- Jeder Fall, der sie fahren will, schaltet sie hier explizit scharf.
+RBB.economyCfg.accountEnabled = true
+
 -- Ein HourEvent-Tick mit dem angegebenen Kontostand.
 local function tick(account)
     if account ~= nil then _G.__account = account end
@@ -169,6 +173,27 @@ function runCase(prelude, assertions) {
 test('Lua-Syntax (luaparse, Lua 5.1)', () => {
     assert.doesNotThrow(() => luaparse.parse(modSource),
         'mod/lua/rbbattle_autoexec.lua muss gültiges Lua 5.1 sein');
+});
+
+// ---------------------------------------------------------------------------
+// 0) Default: die Quelle ist AUS und fasst das Konto nicht an.
+// ---------------------------------------------------------------------------
+
+test('#242 (0): Default ist AUS — kein Konto-Zugriff, Tick-Einkommen wie bisher', () => {
+    // Kein Einschalten hier: Dieser Fall prueft genau den ausgelieferten Stand.
+    const { failures, report } = runLua(null, `
+RBB.economyCfg.accountEnabled = false   -- explizit: Default-Erwartung
+_G.__account = { carbonium = 5000 }
+_G.__handlers["HourEvent"](nil)
+_G.__handlers["HourEvent"](nil)
+check(_G.__accountReads == 0,
+    "das Konto wird gar nicht erst gelesen (reads=" .. tostring(_G.__accountReads) .. ")")
+check(not log_has("event=economy_source source=account"),
+    "keine Konto-Logzeile")
+check(log_has("event=economy_farm source=tick resource=hour_tick"),
+    "Tick-Einkommen laeuft wie vor diesem PR")
+`);
+    assert.strictEqual(failures, 0, 'Assertion-Fehler:\n' + report);
 });
 
 // ---------------------------------------------------------------------------
