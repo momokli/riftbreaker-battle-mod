@@ -9,7 +9,20 @@
 #
 # Nur Core-Module (kein community.general-Dependency) — konsistent mit dem
 # Rest von deploy/.
-
+#
+# EINZIGE QUELLE der satellite_relay_*-Werte (Issue #328, Review #329): bewusst
+# KEINE host_vars/satellite/, sonst würde host_vars die Defaults still
+# überschreiben (Precedence). Die Rolle läuft ohnehin nur gegen den Host
+# `satellite`. Falls host-spezifische Abweichungen nötig werden, hier ändern.
+#
+# Bewusste Design-Grenzen (nicht-blockierende Review-Hinweise #329):
+#   * Das Relay-Script fügt Regeln idempotent HINZU, entfernt aber keine
+#     veralteten: bei Port-/Ziel-Wechsel können alte PREROUTING/POSTROUTING-
+#     Regeln stehen bleiben. Für einen dedizierten „IP-Lender“ bewusst so.
+#   * DNAT-PREROUTING ist nicht auf Ingress-Interface/Source eingeschränkt und
+#     MASQUERADE nicht auf -o {{ satellite_relay_interface }} begrenzt — der Host
+#     ist ausschließlich Relay, daher bewusst ohne Einschränkung.
+#
 # Inbound-UDP-Port auf dem Satellite (der Port, den der Client anwählt).
 satellite_relay_port: 6321
 
