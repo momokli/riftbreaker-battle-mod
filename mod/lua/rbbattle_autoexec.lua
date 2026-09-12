@@ -129,9 +129,13 @@
 --   event=hq_hp hp=.. dead=..                                              (#28)
 --   event=hq_dead status=match_end hp=0                                    (#28)
 --   event=match_end reason=hq_destroyed                                    (#28)
+--   event=reset round=0 status=ok|skip reason=.. count=..                 (#281)
+--     (Niederlage -> Round-Reset auf 0: Setup-/HQ-Placement-Phase, Economy
+--      0, Wave-Timer 0; genau EIN Reset pro Niederlage, kein Restart-Loop)
 --   (hq_dead) -> in-game Annonce "GAME OVER — HQ destroyed"; Solo-Feed     (#157)
 --   klinkt auf event=hq_dead ein: Telegram Topic 312 + genau EIN            (#157)
---   docker restart pro Match-Ende (Cooldown-Guard, kein Flapping).          (#157)
+--   docker restart pro Match-Ende (Fallback; Primaer seit #281: in-game    (#157)
+--   Round-Reset `rb_reset` auf 0 -- Setup-/HQ-Placement-Phase, Econ 0).    (#281)
 --   event=hq_respawn status=unmatched entity=..                            (#28)
 --   event=hq_zone status=.. entity=.. hp=.. dead=..                        (#28)
 --   event=hq_status / hq_reset / hq_entity                                 (#28)
@@ -364,6 +368,7 @@ local BoostSummary
 local CommenceGame
 local AnnounceSetupPhase
 local HqOnDestroyed
+local RoundReset
 
 -- Vorwaertsdeklaration fuer die HQ-HP-Kurve (#33): Definition folgt im
 -- Win-Condition-Block (braucht RBB.hqCfg); aufgerufen wird sie in
@@ -2168,6 +2173,13 @@ end)
 -- und stoesst den Commence an (Muster Retry-Punkte PatchDomTimer).
 local function OnHourEvent(evt)
     OnHourEventEconomy(evt)
+    -- #281: ausstehenden Round-Reset nach Niederlage ausfuehren (genau einmal;
+    -- danach kein pending mehr -> keine Schleife). Tick-Pfad = In-Game-Reset
+    -- ohne externen Trigger (nur echte HQ-Zerstoerung, s. `RBB.reset.auto`);
+    -- der Referee kann per `rb_reset` immer sofort ausloesen.
+    if RBB.reset.pending and RBB.reset.auto then
+        RoundReset("hour_tick", true)
+    end
     HqAutoDetectEntity()
     -- #231: AFK-Timeout -- solange kein HQ platziert ist (Setup-Phase, #158)
     -- und das Match noch nicht beendet ist, zaehlt jeder Tick mit. Ab
@@ -2372,8 +2384,9 @@ end
 -- HQ-Tod: Match-Ende melden (Sieg = Gegenseite; der Server setzt winner).
 -- #157: in-game End-Announce + Feed-Signal. Der Solo-Feed (tools/solo-feed)
 -- klinkt auf `event=hq_dead` ein -> Telegram Topic 312 + genau EIN docker
--- restart pro Match-Ende (Cooldown-Guard liegt im Feed; der Mod hat keinen
--- eigenen I/O-Kanal und kann den Prozess nicht selbst neu starten).
+-- restart pro Match-Ende (Cooldown-Guard liegt im Feed). Seit #281 ist der
+-- in-game Round-Reset (`rb_reset`, s. u.) der Primaerpfad; der docker restart
+-- bleibt grober Fallback fuer Umgebungen ohne den in-game Reset.
 -- Idempotent: der Guard hier (RBB.hq.dead) feuert das Ende nur genau einmal.
 -- `reason` erlaubt andere Match-Ende-Ausloeser (z.B. #231 AFK-Timeout), ohne
 -- die Restart-/Idempotenz-Logik zu duplizieren. Default = echte HQ-Zerstoerung.
@@ -2388,12 +2401,104 @@ HqOnDestroyed = function(reason, gameOverMsg)
     if RBB.hq.dead then return end
     RBB.hq.dead = true
     RBB.hq.hp = 0
+    -- #281: Niederlage erkannt -> Reset auf 0 schaerfen. Genau EIN Reset pro
+    -- Niederlage; ausgefuehrt vom naechsten HourEvent-Tick (in-game, nur bei
+    -- echter HQ-Zerstoerung -- s. `auto`) ODER vom Referee-Command `rb_reset`
+    -- ueber den IO-Kanal (#267).
+    RBB.reset.pending = true
+    -- `auto` = true nur bei echter HQ-Zerstoerung (reason nil): dann fuehrt der
+    -- Tick den Reset selbsttaetig aus. Ein AFK-Ende (reason "afk_no_hq") wird
+    -- NICHT auto-ausgefuehrt, sonst wuerde der noch scharfe AFK-Zaehler die
+    -- frische Setup-Phase sofort wieder beenden -> Restart-Schleife.
+    RBB.reset.auto = (reason == nil)
     if reason == nil then
         Log("event=hq_dead status=match_end hp=0")
     end
     Log("event=match_end reason=%s", reason or "hq_destroyed")
     WriteConsole(gameOverMsg or "GAME OVER — HQ destroyed")
-    WriteConsole("Match end — restarting game in 5 seconds...")
+    WriteConsole("Match end — round resets on next tick")
+end
+
+-- ============================================================================
+-- #281 Niederlage -> deterministischer Round-Reset auf 0
+--
+-- Ziel: nach `match_end reason=hq_destroyed` geht die Runde deterministisch +
+-- idempotent auf 0 zurueck: Setup-/HQ-Placement-Phase, Economy-Pool 0,
+-- Runden-/Wave-Timer 0. Genau EIN Reset pro Niederlage, keine Restart-Schleife.
+--
+-- Trigger (ein Kern `RoundReset`, zwei Wege):
+--   1. In-game (bevorzugt): `HqOnDestroyed` schaerft den Reset (`pending`); der
+--      naechste HourEvent-Tick fuehrt ihn aus (die Lua hat keine Uhr, HourEvent
+--      ist der einzige Tick -- Muster #231/#24).
+--   2. IO-Kanal (#265/#267): der Referee pusht `TOURNAMENT_REFEREE_RESTART_CMD`
+--      (Default `rb_reset`) an die Bridge -> ConsoleService -> `rb_reset`.
+-- Container-Restart (tools/solo-feed) bleibt dokumentierter grober Fallback.
+--
+-- Idempotenz/kein Loop: `RoundReset` arbeitet nur, solange ein Reset aussteht
+-- (`RBB.reset.pending`), setzt das Flag und zaehlt `count` hoch; Folgeaufrufe
+-- sind `status=skip` (kein zweiter Reset). Nach dem Reset ist `RBB.hq.entity`
+-- nil -> die Leak-Erkennung ist bis zur naechsten HQ-Platzierung inaktiv
+-- (kein sofortiger zweiter HQ-Tod).
+-- ============================================================================
+
+-- Reset-Zustand: `pending` schaerft genau EINE Niederlage; `count` zaehlt die
+-- ausgefuehrten Resets (Beleg "genau ein Reset pro Niederlage").
+RBB.reset = {
+    pending = false,
+    auto    = false, -- true: Tick-Pfad darf autonom ausfuehren (echte HQ-Zerstoerung)
+    count   = 0,
+}
+
+-- Fuehrt den ausstehenden Reset aus und liefert true, sonst false. `silent`
+-- unterdrueckt das Skip-Log (Tick-Pfad -> sonst eine Zeile pro Tick).
+RoundReset = function(reason, silent)
+    if not RBB.reset.pending then
+        if not silent then
+            Log("event=reset status=skip reason=not_pending")
+        end
+        return false
+    end
+    RBB.reset.pending = false
+    RBB.reset.count = RBB.reset.count + 1
+
+    -- Runde + Wave-Timer auf 0; Setup-/HQ-Placement-Phase neu.
+    RBB.round = 0
+    RBB.commenced = false
+    RBB.setupAnnounced = false
+    RBB.commenceHeldLogged = false
+    RBB.setupHourTicks = 0
+    RBB.waveIntervalCapS = ActiveWavePreset().intervalS
+
+    -- HQ frisch: HP=Start, nicht tot, Entity wird neu erkannt (#144).
+    -- `entity=nil` => Leak-Erkennung bleibt inaktiv, bis ein neues HQ steht
+    -- (kein sofortiger zweiter HQ-Tod -> keine Restart-Schleife).
+    RBB.hq.hp = RBB.hqCfg.hqHpStart
+    RBB.hq.dead = false
+    RBB.hq.entity = nil
+    RBB.hq.unmatchedLogged = false
+    RBB.hq.unarmedLeakLogged = false
+    RBB.hq.filteredLeakLogged = false
+    RBB.hq.autodetectFailLogged = false
+
+    -- Economy-Pool 0 (+ DB) + Send-Queue/Boost/Reveal leeren.
+    ResetEconomy()
+    RBB.sendQueue.units = {}
+    RBB.sendQueue.count = 0
+    RBB.sendQueue.value = 0
+    RBB.boost.pct = 0
+    RBB.boost.buys = 0
+    RevealReset()
+    RBB.reveal.round = 0
+
+    PatchDomTimer() -- Timer-Cap nach Reset erneut sichern (idempotent)
+
+    Log("event=reset round=0 status=ok reason=%s count=%d",
+        reason or "manual", RBB.reset.count)
+    WriteConsole("Round reset — place your headquarter to commence")
+    -- Session-Boundary: die alte Session endete mit `match_end` (s. o.), die
+    -- neue startet hier sichtbar als Setup-Phase (commence pending/place_hq).
+    AnnounceSetupPhase()
+    return true
 end
 
 -- Leak: eine Kreatur hat die HQ-Zone erreicht -> HQ-HP sinkt. Reine Logik
@@ -2527,6 +2632,8 @@ local function CmdHq(args)
         RBB.hq.hp = RBB.hqCfg.hqHpStart
         RBB.hq.entity = nil
         RBB.hq.dead = false
+        RBB.reset.pending = false -- #281: Dev-Reset loescht einen offenen Round-Reset
+        RBB.reset.auto = false
         RBB.hq.unmatchedLogged = false
         RBB.hq.unarmedLeakLogged = false
         RBB.hq.filteredLeakLogged = false
@@ -2571,6 +2678,20 @@ end
 pcall(function()
     ConsoleService:RegisterCommand("rb_hq", function(args)
         CmdHq(args)
+    end)
+end)
+
+-- #281: Round-Reset auf 0 nach Niederlage. In-game-Lua-Reset (bevorzugt),
+-- aufrufbar per IO-Kanal (`TOURNAMENT_REFEREE_RESTART_CMD=rb_reset`, vom
+-- Referee nach `hq_dead` gepusht) oder als Operator-/Dev-Kommando.
+-- Idempotent: genau EIN Reset pro Niederlage.
+pcall(function()
+    ConsoleService:RegisterCommand("rb_reset", function(args)
+        local reason = nil
+        if args ~= nil and #args >= 1 then reason = tostring(args[1]) end
+        if not RoundReset(reason or "command") then
+            WriteConsole("rb_reset: kein Reset offen (bereits zurueckgesetzt)")
+        end
     end)
 end)
 

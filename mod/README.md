@@ -20,9 +20,11 @@ v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
   + Wellenstart (HQ-Erkennung über `HourEvent`-Tick und manuellen Fallback `rb_hq entity <id>`).
 - *AFK-Timeout* (#231): kein unbegrenztes Warten mehr — ab der Schwelle `RBB.afkCfg.afkHourTicks`
   ohne platziertes HQ endet das Match automatisch als AFK (`event=afk_timeout` →
-  `event=match_end reason=afk_no_hq`, gleicher Restart-Flow wie echte HQ-Zerstörung, aber **ohne**
-  `event=hq_dead` — der Solo-Feed matcht darauf fest den Text „HQ destroyed“, was für AFK
-  irreführend wäre; PR-Review #232 R2). Default `afkHourTicks = 0` (**deaktiviert**), da die
+  `event=match_end reason=afk_no_hq`, **ohne** `event=hq_dead` — der Solo-Feed matcht darauf fest den Text
+  „HQ destroyed“, was für AFK irreführend wäre; PR-Review #232 R2). Ein AFK-Ende wird
+  **nicht** automatisch resettet (der scharfe AFK-Zähler würde die frische Setup-Phase sonst
+  sofort wieder beenden → Restart-Schleife, #281); ein Operator kann per `rb_reset` explizit
+  zurücksetzen. Default `afkHourTicks = 0` (**deaktiviert**), da die
   reale `HourEvent`-Frequenz unbestätigt ist (`docs/research/api-deep-dive.md`) — ein scharfer
   Platzhalter hätte main sonst mit einem möglichen Auto-Loss beim ersten Tick ausgeliefert
   (PR-Review #232 B2). Erst nach Live-Kalibrierung, wie viele Ticks ca. 1 Minute Wanduhrzeit
@@ -398,6 +400,7 @@ python3 tools/mod-updater/mod_update.py update
 | `rb_mode sp\|sp_op\|duel` | Modus-Umschaltung: `sp` = Solo **Normal** (Default, echter Spielfluss, sendet an die eigene nächste Welle), `sp_op` = Solo **OP** (Test/Cheats: hoher Startpool + schneller Rundentakt), `duel` = 1v1 (Stub, folgt später) |
 | `rb_status` | Zeigt `mode`, `runde`, `pool`, die `queue` und den `boost` (für die nächste Welle) — die Kontrollanzeige des Testmodus |
 | `rb_hq` / `rb_hq leak [dmg]` / `rb_hq entity <id>` / `rb_hq reset` | Win-Condition-Status + Dev-Werkzeuge (#28): HQ-HP zeigen, manuellen Leak anwenden, HQ-Entity zuordnen, Zustand zurücksetzen (Muster `rb_economy reset`). Die HQ-Entity wird seit #144 zusätzlich automatisch versucht zu binden (`HqAutoDetectEntity`, bei `PlayerInitializedEvent`/jedem `rb_wave`); `rb_hq entity <id>` bleibt der manuelle Fallback, falls die Auto-Erkennung nichts findet. `reset` setzt auch den AFK-Timeout-Zähler und die Setup-Phase (`commenced`/`setupAnnounced`) zurück (#231) |
+| `rb_reset [reason]` | **Round-Reset auf 0 nach Niederlage (#281):** setzt Runde + Wave-Timer auf 0, Economy-Pool (+DB) auf 0, leert Send-Queue/Boost/Reveal und geht in die **HQ-Placement-Phase** zurück (Waves gehalten bis ein neues HQ steht). Wird vom Referee per IO-Kanal gepusht (`TOURNAMENT_REFEREE_RESTART_CMD=rb_reset`, nach `event=hq_dead`) oder als Operator-Kommando aufgerufen. **Idempotent:** genau EIN Reset pro Niederlage (`status=skip reason=not_pending` ohne offene Niederlage); echte HQ-Zerstoerung wird zusaetzlich autonom am naechsten `HourEvent`-Tick resettet |
 | `rb_hud` | **Reveal-HUD (#27):** HUD-Standardfelder — Runde, Countdown, eigener Pool, HQ-HP beider Teams + Reveal-Zustand (`reveal=hidden\|revealed`). Gegner-Built/incoming/HQ sind vor Wellenstart `hidden` |
 | `rb_reveal <built_opp> <hq_opp> [incoming]` | **Gegner-Injektion (#27):** die Bridge injiziert die vom Server aufgedeckten Gegner-Werte (Built-Value, HQ-HP, eingehende Send-Komposition) → Reveal beider Teams komplett |
 | `rb_round_start [n]` | **Build-Phase (#27):** verbirgt den Reveal wieder (Bridge-Signal „round steigt“); `<n>` nur informativ |
@@ -448,8 +451,9 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 [RBBATTLE] event=hud_ui status=closed result=button_yes action=quick_send unit=brabit count=1   ← Klick auf „Ja“ sendet (#99)
 [RBBATTLE] event=hq_dead status=match_end hp=0             ← HQ-Tod (HP ≤ 0)
 [RBBATTLE] event=match_end reason=hq_destroyed              ← seit #217 ohne winner=opponent (Sieger folgt aus dem Tournament-Server-State)
+[RBBATTLE] event=reset round=0 status=ok reason=hour_tick count=1   ← Round-Reset auf 0 nach Niederlage: Setup-/HQ-Placement-Phase, Economy 0, Wave-Timer 0 (#281)
 [RBBATTLE] event=afk_timeout status=match_end ticks=1 threshold=1   ← Setup-Phase-Schwelle erreicht (nach Live-Kalibrierung, Default 0=deaktiviert), kein HQ platziert (#231)
-[RBBATTLE] event=match_end reason=afk_no_hq                 ← AFK-Match-Ende, gleicher Restart-Flow wie echte HQ-Zerstoerung, aber OHNE event=hq_dead (#231)
+[RBBATTLE] event=match_end reason=afk_no_hq                 ← AFK-Match-Ende OHNE event=hq_dead (#231); NICHT auto-resettet (keine Restart-Schleife, #281) -- Operator: rb_reset
 ```
 
 (Die genaue Zahl `count=` hängt von der Karte/Map-Size ab — Issue-Erwartung 16.)
@@ -458,7 +462,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 Der Tournament-Server ist die autoritative Event-/State-Quelle (Wellen-Takt,
 HQ-Tod → Restart, Runden-Zähler); die Lua ist **Executor**: sie führt
-Commands aus (`rb_wave N`, `restart`) und meldet die obigen Events nach oben.
+Commands aus (`rb_wave N`, `rb_reset`) und meldet die obigen Events nach oben.
 Der Referee konsumiert dafür genau diese Zeilen:
 
 | Event-Zeile (Lua) | Referee-Event (`POST /referee/event`) |
@@ -467,7 +471,7 @@ Der Referee konsumiert dafür genau diese Zeilen:
 | `event=hq_dead status=match_end` | `{"world":"A","type":"hq_destroyed"}` |
 | (Modul geladen / nach Restart) | `{"world":"A","type":"ready"}` |
 
-Der Referee antwortet mit Commands (`rb_wave <level+1>` bzw. `restart`). Das
+Der Referee antwortet mit Commands (`rb_wave <level+1>` bzw. `rb_reset`). Das
 aktuell noch in der Lua liegende Runden-/Match-Regime (natürlicher
 Wellen-Timer als Rundentakt) wird erst mit laufendem Spiel in einem eigenen
 Schritt entfernt (Stufe 2, Player-Test OFFEN) — Details:
