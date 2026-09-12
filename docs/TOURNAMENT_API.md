@@ -316,6 +316,14 @@ HTTP → `\\.\pipe\rbbattle`, #265); fuer native Windows-Welten der
 Welle im Spiel sichtbar spawnt (`[RBBATTLE] event=wave level=3 status=start`),
 ist ein Player-Test (Momo/Matheo) und bleibt offen.
 
+Client-Verhalten der `/solo`-UI (#266): der Transport bricht clientseitig nach
+8 s ab (AbortController, `DEFAULT_CMD_TIMEOUT_MS` in `solo-cockpit.js`) und
+stellt einen Haenger als eigenen Fehlerzustand dar (`timeout:true`, Statuszeile
+`FEHLER — Zeitüberschreitung …`, `is-err`) — nicht als Erfolg. Der Spawn-Button
+ist waehrend des laufenden Requests gesperrt (kein Doppel-POST). Eine 200-Antwort
+mit unparsebarem Body wird als `UNKLARE ANTWORT — Welle nicht bestätigt`
+(`is-err`) gezeigt, nie als „OK".
+
 ### GET /events — Feed-Cursor für Poll-Bridges (Telegram-Feed u. a.)
 
 ```
