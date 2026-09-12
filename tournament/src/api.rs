@@ -5,7 +5,7 @@
 //!   POST /ready   Welt ready                  {"world": "A"|"B"}
 //!   POST /go      GO-Broadcast + Start        {} | {"retry": true}
 //!   POST /send    Wave-Routing A→B            {"world": "A", "units": [...], "value": n}
-//!   POST /report  Welt-Events (send_state)    {"world": "A", "event": "wave_start"|"hq_hp"|"score_update", ...}
+//!   POST /report  Welt-Events (send_state)    {"world": "A", "event": "wave_start"|"hq_hp"|"score_update"|"hq_dead", ...}
 //!   POST /referee/event  Spiel-Event an den Referee (Issue #268) {"world":"A","type":"ready"|"wave_done"|"hq_destroyed","level":n}
 //!   GET  /referee/poll   Offene Referee-Commands einer Welt  ?world=A
 //!   POST /rematch Reset in die Lobby          {}
@@ -354,6 +354,7 @@ async fn send(
 /// POST /report — Welt-Events (send_state-Egress, Issue #13 konzeptionell):
 ///   {"world":"A","event":"wave_start","built_value":1234}
 ///   {"world":"A","event":"hq_hp","hp":70.0}
+///   {"world":"A","event":"hq_dead"}   (Mod-Log; #267)
 async fn report(
     AxumState(app): AxumState<AppState>,
     Json(req): Json<ReportReq>,
@@ -410,12 +411,72 @@ async fn report(
                 "phase": view.phase,
             })))
         }
+        // HQ-Tod aus dem echten Spielverlauf (Mod-Log `event=hq_dead`, #267).
+        // Wird als `HqDestroyed` in den Referee gespeist; der Referee liefert
+        // daraus genau EIN `restart` (Duplikate leer = idempotent). Die
+        // Commands werden an die Bridge der Welt gepusht (IO-Kanal, analog GO).
+        "hq_dead" | "hq_destroy" | "hq_destroyed" => {
+            let ev = GameEvent {
+                world,
+                kind: GameEventKind::HqDestroyed,
+                level: None,
+            };
+            let commands: Vec<Command> = app.referee.write().await.on_event(ev);
+            let referee_view = app.referee.read().await.world_view(world);
+            let broadcast = push_referee_commands(&app, world, &commands).await;
+            let view = app.state.read().await.view();
+            Ok(Json(json!({
+                "world": world.as_str(),
+                "event": "hq_dead",
+                "match_over": true,
+                "winner": view.winner,
+                "rounds": referee_view.rounds,
+                "restart": !commands.is_empty(),
+                "duplicate": commands.is_empty(),
+                "commands": commands,
+                "broadcast": broadcast,
+            })))
+        }
         other => Err(StateError::new(
             "invalid",
-            format!("unbekanntes event '{other}' (erwartet: wave_start, hq_hp, score_update)"),
+            format!(
+                "unbekanntes event '{other}' (erwartet: wave_start, hq_hp, score_update, hq_dead)"
+            ),
         )
         .into()),
     }
+}
+
+/// Pusht die vom Referee entschiedenen Commands an die Bridge der Welt
+/// (IO-Kanal, analog GO-Broadcast, Issue #267).
+///
+/// Je Command: `POST <bridge_for(world)> {"command": "<cmd>"}` via
+/// [`broadcast::post_json`]. Ohne konfigurierten Endpoint (`RBBRIDGE_<W>_URL`)
+/// wird `ok: null` gemeldet — kein Panic, kein `unwrap`. Mehrere Commands
+/// werden in ihrer Reihenfolge gepusht.
+async fn push_referee_commands(app: &AppState, world: World, commands: &[Command]) -> Vec<Value> {
+    let mut results = Vec::with_capacity(commands.len());
+    for cmd in commands {
+        match app.cfg.bridge_for(world) {
+            Some(url) => {
+                let payload = json!({ "command": cmd.command });
+                let res = broadcast::post_json(url, &payload, app.cfg.go_timeout).await;
+                results.push(json!({
+                    "command": cmd.command,
+                    "ok": res.ok(),
+                    "status": res.status,
+                    "error": res.error,
+                    "endpoint": url,
+                }));
+            }
+            None => results.push(json!({
+                "command": cmd.command,
+                "ok": Value::Null,
+                "note": "kein Endpoint konfiguriert (RBBRIDGE_<W>_URL)",
+            })),
+        }
+    }
+    results
 }
 
 /// POST /referee/event — Spiel-Event an den Referee (Issue #268).
@@ -1088,6 +1149,130 @@ mod tests {
         assert!(v["broadcast"]["A"]["error"].is_string());
         let (_, v) = call(&app, "GET", "/state", None).await;
         assert_eq!(v["teams"]["A"]["go_broadcast"]["ok"], false);
+    }
+
+    /// Capture-Mock-HTTP-Endpoint (#267): nimmt jede Verbindung an und sammelt
+    /// die Request-Bytes in `Arc<Mutex<Vec<String>>>` — so lässt sich prüfen,
+    /// dass genau EIN Restart-Push rausgeht (und ein Duplikat keinen zweiten).
+    async fn capture_endpoint() -> (SocketAddr, Arc<tokio::sync::Mutex<Vec<String>>>) {
+        use tokio::io::AsyncReadExt;
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let captures: Arc<tokio::sync::Mutex<Vec<String>>> =
+            Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let sink = captures.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => break,
+                };
+                let mut buf = [0u8; 8192];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let _ = sock
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await;
+                sink.lock()
+                    .await
+                    .push(String::from_utf8_lossy(&buf[..n]).to_string());
+            }
+        });
+        (addr, captures)
+    }
+
+    /// #267: `hq_dead` → Referee `restart` → genau EIN Push an die Bridge;
+    /// ein zweites `hq_dead` ist idempotent (kein zweiter Push).
+    #[tokio::test]
+    async fn report_hq_dead_pushes_restart_once() {
+        let (addr, captures) = capture_endpoint().await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [Some(format!("http://{addr}/cmd")), None];
+        let app = make_app(cfg).await;
+
+        // Referee-Guard: ein HQ kann nur in einem LAUFENDEN Match sterben.
+        // Erst `ready` (echte Event-Reihenfolge ready → Wellen → hq_dead);
+        // /referee/event pusht nichts, nur /report hq_dead pusht den Restart.
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/referee/event",
+            Some(json!({"world": "A", "type": "ready"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "A", "event": "hq_dead"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["event"], "hq_dead");
+        assert_eq!(v["match_over"], true);
+        assert_eq!(v["restart"], true);
+        assert_eq!(v["duplicate"], false);
+        assert_eq!(v["rounds"], 1);
+        assert_eq!(v["broadcast"][0]["ok"], true);
+        assert_eq!(v["broadcast"][0]["command"], "restart");
+
+        // Genau EIN Capture mit {"command":"restart"}.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        {
+            let caps = captures.lock().await;
+            assert_eq!(caps.len(), 1, "caps: {caps:?}");
+            assert!(
+                caps[0].contains("\"command\":\"restart\""),
+                "req: {}",
+                caps[0]
+            );
+        }
+
+        // Duplikat → keine Commands → restart:false, duplicate:true, kein Push.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "A", "event": "hq_dead"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["restart"], false);
+        assert_eq!(v["duplicate"], true);
+        assert_eq!(v["rounds"], 1);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(captures.lock().await.len(), 1, "kein zweiter Push erwartet");
+    }
+
+    /// #267: ohne konfigurierte Bridge → 200 + `ok:null`, kein Panic.
+    #[tokio::test]
+    async fn report_hq_dead_without_bridge_is_ok() {
+        let app = make_app(test_cfg()).await; // bridge = [None, None]
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/referee/event",
+            Some(json!({"world": "A", "type": "ready"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "A", "event": "hq_dead"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["restart"], true);
+        assert_eq!(v["broadcast"][0]["ok"], Value::Null);
+        assert!(v["broadcast"][0]["note"].is_string());
     }
 
     #[tokio::test]
