@@ -486,7 +486,10 @@ Der Referee antwortet mit Commands (`rb_wave <level+1>` bzw. `rb_reset`). Das
 aktuell noch in der Lua liegende Runden-/Match-Regime (natürlicher
 Wellen-Timer als Rundentakt) wird erst mit laufendem Spiel in einem eigenen
 Schritt entfernt (Stufe 2, Player-Test OFFEN) — Details:
-[`docs/REFEREE.md`](../docs/REFEREE.md).
+[`docs/REFEREE.md`](../docs/REFEREE.md). Der Transport (Log-Zeile →
+`POST /referee/event`, `GET /referee/poll` → Pipe) liegt im Relay:
+`bausteine/07-relay/relay.py` (`RBB_REFEREE=1`, ohne Spiel getestet in
+`test_referee.py`).
 
 > **Falsch-Gruen (#288):** `exec_result.ok=true` aus dem Exec-Kanal belegt nur,
 > dass `ConsoleService::ExecuteCommand` lief — **nicht**, dass gespawnt wurde.
