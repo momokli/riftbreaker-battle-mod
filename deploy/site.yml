@@ -17,7 +17,7 @@
 #      (/opt/rbmods/rbtools -> /opt/rbtools:ro im Container, Issue #265)
 #   5. riftbreaker-server   Dev-SP-Server 6321 (Mod-Install + Restart-Handler)
 #   6. tournament-server    systemd (Rust/axum)
-#   7. website              statics + Caddy (inkl. /tournament/*-Proxy)
+#   7. website              statics + eigener rift-caddy (inkl. /tournament/*-Proxy)
 #   8. probe-timer          systemd-Timer → status.json
 #
 # Tags erlauben einen gezielten Lauf (z. B. `--tags server` im PR-Gate

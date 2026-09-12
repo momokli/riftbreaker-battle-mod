@@ -1,5 +1,32 @@
 ---
-# Defaults der Rolle website (statics + Caddy).
-# Caddy läuft als Container (mellon-caddy); das Site-Snippet wird in
-# {{ website_caddyfile_d_dir }} abgelegt und über einen `import` im Caddyfile
-# eingebunden. Einbindung ist idempotent (lineinfile).
+# Defaults der Rolle website (statics + eigener rift-caddy + EIN Host-Eintrag).
+#
+# Issue #322: Der Riftbreaker-Stack hat einen EIGENEN Caddy-Container
+# (`rift-caddy`, plain HTTP, reines Durchreichen) für Statics + den
+# `/tournament/*`-Proxy. Der geteilte Host-Caddy (`mellon-caddy`) bekommt genau
+# EINEN Eintrag (`rift.projectmellon.de` → reverse_proxy 127.0.0.1:<port>) —
+# kein `Caddyfile.d`-Mount, keine Snippet-Import-Zeile mehr.
+#
+# Die planet-spezifischen Werte (Domain, Pfade, Ports, Container-Namen) stehen in
+# deploy/inventory/host_vars/planet/vars.yml; diese Defaults liefern nur
+# generische Fallbacks, damit Templates auch ohne Host-Vars renderbar sind.
+
+website_domain: rift.projectmellon.de
+website_docroot: /srv/rbmods-site
+website_mods_dir: "{{ website_docroot }}/mods"
+
+# Eigener Rift-Caddy.
+rift_caddy_container: rift-caddy
+rift_caddy_image: caddy:2
+rift_caddy_port: 8787
+rift_caddy_deploy_dir: /opt/rbmods/compose/rift-caddy
+rift_caddy_data_dir: "{{ rift_caddy_deploy_dir }}/data"
+rift_caddy_config_dir: "{{ rift_caddy_deploy_dir }}/config"
+rift_caddy_site_root: /srv/site
+website_upload_port: 8322
+
+# Geteilter Host-Caddy.
+website_host_caddy_container: mellon-caddy
+website_host_caddyfile_path: /home/momo/Caddyfile
+website_host_caddyfile_owner: momo
+website_host_caddyfile_group: momo

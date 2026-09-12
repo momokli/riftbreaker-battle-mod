@@ -1,0 +1,46 @@
+# Verwaltet von deploy/ role "website" (Jinja) — NICHT manuell editieren.
+#
+# Eigener, schlanker Caddy NUR für {{ website_domain }}: Statics aus dem
+# Docroot + /tournament/*-Proxy an den tournament-server. Plain HTTP, lauscht
+# ausschliesslich auf 127.0.0.1:{{ rift_caddy_port }} — TLS terminiert weiterhin
+# der geteilte Host-Caddy ({{ website_host_caddy_container }}), der hierher
+# proxyt. Deshalb kein Hostname im Site-Label (der Host-Caddy reicht den
+# Original-Host durch) und kein ACME.
+:{{ rift_caddy_port }} {
+	bind 127.0.0.1
+	root * {{ rift_caddy_site_root }}
+	encode gzip
+
+	# /mods: Mod-Distribution (unveraendert): Zip-Download + Browse, Upload via dufs.
+	redir /mods /mods/
+	handle /mods/upload* {
+		reverse_proxy 127.0.0.1:{{ website_upload_port }}
+	}
+	handle_path /mods/* {
+		root * {{ rift_caddy_site_root }}/mods
+		file_server browse
+	}
+
+	# /solo (Operator-Match-Page, Issue #159) ohne Datei-Endung erreichbar.
+	# Der Operator-Zugangsschutz (basic_auth) ist nur aktiv, wenn
+	# solo_basic_auth_hash gesetzt ist (bcrypt-Hash NUR aus Vault/Operator-ENV).
+	rewrite /solo /solo.html
+	@solo path /solo /solo.html
+	handle @solo {
+		{% if solo_basic_auth_hash %}basic_auth {
+			{{ solo_basic_auth_user | default('operator') }} {{ solo_basic_auth_hash }}
+		}
+		{% endif %}file_server
+	}
+
+	# Tournament-Server (Web-UI + API, z. B. der /wave-Knopf) unter
+	# /tournament/* — Präfix wird gestrippt.
+	handle_path /tournament/* {
+		reverse_proxy 127.0.0.1:{{ tournament_port }}
+	}
+
+	# Statics (Landing, /solo.html, /status.json, …).
+	handle {
+		file_server
+	}
+}
