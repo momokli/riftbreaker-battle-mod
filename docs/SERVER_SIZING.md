@@ -33,7 +33,7 @@ bzw. größeren Zuschnitte stehen unten.
 |---|---|---|---|
 | `riftbreaker-dedicated` (`:6321`, Docker + Wine + Xvfb + llvmpipe) | ~1,2–1,8 Cores (Ø ~1,55, Peak 174 %) | 1,42 GiB (RSS `DedicatedServer.exe` ~1,45 GiB, 48 Threads) | 664 MB Content + 5,15 GB Image (3,59 GB shared / **1,56 GB unique je Build**) |
 | `tournament-server` (Rust/axum, systemd, `:8081`) | ~0 % | ~4 MB | 9 MB |
-| `mellon-caddy` (Website `:443`) | ~0 % | ~50–100 MB | 585 MB (`/opt/http`, v. a. Mod-Zips) |
+| `mellon-caddy` (Website `:443`) | ~0 % | ~50–100 MB | 585 MB Docroot (`website_docroot`, host-seitig `/srv/rbmods-site`; im Container gemessen unter `/opt/http`) — v. a. Mod-Zips |
 | Probe-Timer (2-Min-Takt) + `status.json` | ~0 % | ~10 MB | — |
 
 **Der Dedicated Server ist praktisch die gesamte Last.** Tournament-Server,
@@ -51,7 +51,7 @@ erst recht. Wer hier mit „idle ≈ 0 %" plant, hat die Kiste zu klein gekauft.
 |---|---|
 | **GPU** | nicht nötig — Mesa-llvmpipe rendert in Xvfb auf der CPU |
 | **Schnelle Platte (IOPS)** | Disk-I/O seit Start nur **455 MB read / 18 MB write** — keine laufende DB, kein IOPS-Druck. NVMe ist *nice to have* (Image-Builds), keine Anforderung aus dem Laufzeitbetrieb |
-| **Dicker Uplink** | idle **~100 kB/s**; extern ist nur **UDP 6321** offen |
+| **Dicker Uplink** | idle **~100 kB/s**. Extern war zum Messzeitpunkt nur **UDP 6321** offen — das ist Host-Firewall-Zustand, **nicht** aus dem Repo nachprüfbar (es gibt keine Firewall-Rolle unter `deploy/roles/`), gilt also nur für diesen Host zu diesem Zeitpunkt |
 | **32-bit-Support** | x86_64; SteamCMD-Modus (braucht `lib32gcc-s1`) ist ohnehin deaktiviert, siehe `deploy/inventory/host_vars/planet/vars.yml` |
 
 ---
@@ -62,7 +62,7 @@ erst recht. Wer hier mit „idle ≈ 0 %" plant, hat die Kiste zu klein gekauft.
 |---|---|---|---|---|
 | **Solo-Dev-Server** (1 Instanz `:6321`, Mod-Iteration) | 2 vCPU | 4 GiB | 30 GB | getrennt vom Prod-/Duell-Host halten — siehe unten |
 | **1v1-„Prod"/Duelle** (2 Instanzen + Tournament + Website) | **4 vCPU** | **8 GiB** | **50 GB** | ⭐ Recommended Card |
-| **Multi-Match / Turnier** (mehrere parallele Welten) | 4–6 vCPU | 8–16 GiB | 50–100 GB | skaliert linear, s. Faustformel |
+| **Multi-Match / Turnier** (mehrere parallele Welten) | 4–6 vCPU | 8–16 GiB | 50–100 GB | **hochgerechnet** über die Faustformel unten — nicht mit N>2 gemessen |
 | **Dev + CD-Builds auf demselben Host** (Image-Build, `cargo`, MinGW) | **6 vCPU** | **16 GiB** | **100 GB** | Builds fressen kurzzeitig alle Kerne + Build-Cache |
 | **Doku/Website-only** (Caddy + statics) | 1 vCPU | 512 MB–1 GiB | 5 GB | unabhängig skalierbar |
 
@@ -194,3 +194,6 @@ Snapshot trifft gerne einen Peak.
 - Issue #291 (dieses Dokument), #247 (reproduzierbare Images),
   #236 (stabiler Test-Server), #238 (Deploy nur bei 0 Spielern),
   #290 (Multi-Instanz-Hosting)
+- #301 (Retention/Aufräumen — die Storage-Zahlen hier sind der Anlass),
+  #298 (Netz-Exposition ist nicht deklarativ verwaltet — betrifft die
+  „nur UDP 6321 offen"-Zeile oben)
