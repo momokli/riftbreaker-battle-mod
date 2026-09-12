@@ -160,7 +160,7 @@ test('site/solo.html: Welle-Spawn verdrahtet, nur noch unerreichbare Commands ge
 
 test('deploy/: /solo-Zugangsschutz per Vault/ENV-Namen dokumentiert, kein Secret im Repo', () => {
   const tpl = fs.readFileSync(
-    path.join(ROOT, 'deploy', 'roles', 'website', 'templates', 'rbmods.caddy.j2'),
+    path.join(ROOT, 'deploy', 'roles', 'website', 'templates', 'rift-caddy.Caddyfile.j2'),
     'utf8'
   );
   assert.ok(tpl.includes('basic_auth'), 'basic_auth im Caddy-Snippet');

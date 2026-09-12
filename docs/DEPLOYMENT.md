@@ -81,7 +81,7 @@ rift.projectmellon.de → Host-Caddy (mellon-caddy, hostet viele Domains)
 Eigenschaften:
 
 - **Genau EIN** Eintrag im geteilten Host-Caddy (`rift.projectmellon.de` →
-  `reverse_proxy 127.0.0.1:{{ rift_caddy_port }}`), idempotent via `blockinfile`
+  `reverse_proxy 127.0.0.1:8787`), idempotent via `blockinfile`
   (Marker `RIFT PROJECTMELLON (managed by deploy/roles/website)`). Kein
   `Caddyfile.d`-Mount, keine Snippet-Import-Zeile mehr. Die frühere, manuell
   gepflegte Rift-Blöcke/Import-Zeile entfernt die Rolle (kein Parallel-Block).

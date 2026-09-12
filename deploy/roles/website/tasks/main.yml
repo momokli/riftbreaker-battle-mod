@@ -96,19 +96,27 @@
     src: rift-caddy.Caddyfile.j2
     dest: "{{ rift_caddy_deploy_dir }}/Caddyfile"
     mode: "0644"
-  notify: restart rift-caddy
+  register: rift_caddy_caddyfile
 
 - name: Rift-Caddy docker-compose.yml rendern
   template:
     src: docker-compose.yml.j2
     dest: "{{ rift_caddy_deploy_dir }}/docker-compose.yml"
     mode: "0644"
-  notify: restart rift-caddy
+  register: rift_caddy_compose
 
-- name: Rift-Caddy starten (docker compose up, idempotent)
+# Re-Deploy-Fall (Review #326, Finding 1): `docker compose up -d` recreated einen
+# laufenden Container bei reiner Config-Änderung NICHT — der Bind-Mount zeigt die
+# neue Datei, der laufende Caddy lädt sie aber erst beim Recreate. Ohne Recreate
+# prüften `caddy validate`/Health die ALTE Instanz. Deshalb hier — VOR
+# Validate/Health — bei geänderter Config `--force-recreate` fahren; der
+# Erst-Deploy wird ohnehin neu erstellt. Bei unveränderter Config bleibt es beim
+# idempotenten `up -d` (kein unnötiger Neustart).
+- name: Rift-Caddy starten (Recreate nur bei geänderter Config)
   command: >-
     docker compose -f {{ rift_caddy_deploy_dir }}/docker-compose.yml
     up -d --remove-orphans
+    {{ '--force-recreate' if (rift_caddy_caddyfile.changed or rift_caddy_compose.changed) else '' }}
   changed_when: false
   when: not ansible_check_mode
 
