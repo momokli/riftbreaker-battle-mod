@@ -34,6 +34,31 @@ services:
       # entrypoint injiziert Z:\opt\rbtools\rbbridge.dll und startet pipe_bridge.exe.
       - "{{ riftbreaker_rbtools_dir }}:/opt/rbtools:ro"
 
+  # Tournament-Server (Issue #275): eigener Container im SELBEN Compose/Netz.
+  # Die Bridge (pipe_bridge.exe im Dedi-Container) ist darüber per Docker-DNS
+  # unter {{ riftbreaker_server_container }}:{{ riftbreaker_bridge_port }} erreichbar
+  # — kein Host-Port nötig. Gestartet/aktualisiert mit `docker compose up -d`.
+  {{ tournament_container }}:
+    image: "{{ tournament_image }}"
+    container_name: {{ tournament_container }}
+    restart: unless-stopped
+    init: true
+    environment:
+      TOURNAMENT_HOST: "0.0.0.0"
+      TOURNAMENT_PORT: "{{ tournament_port }}"
+      TOURNAMENT_AUTO_GO: "{{ tournament_auto_go }}"
+      TOURNAMENT_WEB_DIR: "/app/web"
+      RUST_LOG: "info"
+      # Bridge-Endpoint Welt A: Docker-DNS des Dedi-Service (gleiches Netz).
+      RBBRIDGE_A_URL: "{{ tournament_bridge_a_url }}"
+{% if tournament_bridge_b_url %}
+      RBBRIDGE_B_URL: "{{ tournament_bridge_b_url }}"
+{% endif %}
+{% if tournament_publish_host %}
+    ports:
+      - "{{ tournament_publish_host }}"
+{% endif %}
+
 volumes:
   {{ riftbreaker_wine_volume }}:
   {{ riftbreaker_saves_volume }}:

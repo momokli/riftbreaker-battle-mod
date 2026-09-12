@@ -25,12 +25,17 @@ riftbreaker_server_campaign: mp_survival/mp_survival
 riftbreaker_server_mission: survival/jungle
 riftbreaker_server_difficulty: coop_normal
 
-# --- Tournament-Server (systemd, Rust/axum aus tournament/) ------------------
-tournament_install_dir: /opt/rbmods/tournament-server
-tournament_unit: tournament-server
+# --- Tournament-Server (Issue #275) ------------------------------------------
+# Läuft als zweiter Container im Compose des Dedi-Servers (gleiches default-Netz);
+# der Bridge-Endpoint ist Docker-DNS des Dedi-Service (Default in der Rolle
+# riftbreaker-server), NICHT 127.0.0.1. Prod publiziert die Tournament-UI nur auf
+# Loopback — der Caddy-Proxy /tournament/* hängt daran.
 tournament_port: 8081
-tournament_bridge_a_url: "http://127.0.0.1:9001/exec"
-tournament_bridge_b_url: "http://127.0.0.1:9002/exec"
+tournament_publish_host: "127.0.0.1:8081:8081"
+# v1 hat keine Welt-B-Bridge: leer = kein toter Push-Endpoint (Design D3b).
+tournament_bridge_b_url: ""
+# Frühere systemd-Unit, die dieser Deploy idempotent ablöst/entfernt.
+tournament_legacy_unit: tournament-server
 
 # --- Website (statics + Caddy, mellon-caddy-Container) -----------------------
 website_domain: rift.projectmellon.de

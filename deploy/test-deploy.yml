@@ -1,10 +1,14 @@
 ---
-# Pre-Merge-Boot-Test (CI/CD-Plan F1): baut Image + tournament-server und
-# bootet EINEN Game-Server (Test-Port 6323) + den tournament-server
-# (Test-Port 8082) — isoliert von Prod (eigene Ports/Namen/Pfade via
-# deploy/test-vars.yml). Es geht nur um „baut + bootet".
-# Kein website/probe (DNS egal — es geht nur um „baut + bootet").
+# Pre-Merge-Boot-Test (CI/CD-Plan F1, Issue #275): baut die Images, bootet den
+# Game-Server UND den Tournament-Server als ZWEI Container im selben Compose/Netz
+# — isoliert von Prod (eigene Namen/Pfade via deploy/test-vars.yml). Die
+# Test-Instanz hat BEWUSST keine Host-Ports; Verifikation läuft intern per
+# `docker exec` (kein Host-curl). Es geht nur um „baut + bootet + Netz-Kanal".
+# Kein website/probe (DNS egal).
 # Verifikation + Teardown: .github/workflows/boot-test.yml.
+#
+# Reihenfolge Absicht: tournament-server (Image + Legacy-Unit weg) VOR
+# riftbreaker-server (Compose up startet beide Container).
 #
 # Aufruf (Workflow, Dummy-Vault — kein Secret nötig):
 #   ansible-playbook -i <tmp-inventory-mit-Dummy-Vault> deploy/test-deploy.yml \
@@ -31,5 +35,5 @@
     - role: mods-zip
     - role: dedicated-server-image
     - role: game-content
-    - role: riftbreaker-server
     - role: tournament-server
+    - role: riftbreaker-server

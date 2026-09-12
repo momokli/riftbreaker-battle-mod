@@ -47,3 +47,21 @@ riftbreaker_mods_guard_autofix: true
 # (host_vars: http://127.0.0.1:9001/exec) — Aenderungen an BEIDEN Stellen.
 riftbreaker_rbtools_dir: "{{ rbtools_dir | default('/opt/rbmods/rbtools') }}"
 riftbreaker_bridge_port: 9001
+
+# --- Tournament-Server (Issue #275, Design D2/D3) ----------------------------
+# Zweiter Service im SELBEN Compose (gleiche Datei = gleiches default-Netz):
+# der Tournament-Container erreicht die Bridge im Dedi-Container über Docker-DNS.
+# Das Image rb-tournament:<deploy-sha> baut die Rolle tournament-server; die
+# Reihenfolge in site.yml/test-deploy.yml ist tournament-server VOR dieser Rolle.
+tournament_image: "rb-tournament:{{ deploy_image_tag }}"
+# Eindeutig pro Instanz abgeleitet (Prod: ...-tournament, Test: ...-test-tournament).
+tournament_container: "{{ riftbreaker_server_container }}-tournament"
+tournament_port: 8081
+# Prod: nur Loopback publizieren (Caddy-Proxy /tournament/* hängt daran).
+# Test: leer (kein Host-Port; Verifikation per docker exec, Design D5/D6).
+tournament_publish_host: "127.0.0.1:8081:8081"
+tournament_auto_go: "true"
+# Bridge-Endpoint Welt A = Docker-DNS des Dedi-Service, NICHT 127.0.0.1 (D3).
+tournament_bridge_a_url: "http://{{ riftbreaker_server_container }}:{{ riftbreaker_bridge_port }}/exec"
+# v1 hat keine Welt-B-Bridge: leer = kein toter Push-Endpoint (Design D3b).
+tournament_bridge_b_url: ""

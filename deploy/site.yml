@@ -15,13 +15,20 @@
 #   3. game-content         Steam-Content (App 4114030) nach game_dir
 #   4. rbtools              Windows-x64-Trainer-I/O-Tools bauen+stagen
 #      (/opt/rbmods/rbtools -> /opt/rbtools:ro im Container, Issue #265)
-#   5. riftbreaker-server   Dev-SP-Server 6321 (Mod-Install + Restart-Handler)
-#   6. tournament-server    systemd (Rust/axum)
+#   5. tournament-server    baut rb-tournament:<deploy-sha> (Rust/axum, Dockerfile)
+#      und entfernt die frühere systemd-Unit (Issue #275)
+#   6. riftbreaker-server   Dev-SP-Server 6321 + Tournament-Container im selben
+#      Compose/Netz (Mod-Install + Restart-Responsibility)
 #   7. website              statics + Caddy (inkl. /tournament/*-Proxy)
 #   8. probe-timer          systemd-Timer → status.json
 #
+# Reihenfolge Absicht: tournament-server VOR riftbreaker-server — das Compose
+# publiziert (Prod) 127.0.0.1:8081; die alte Unit muss vorher gestoppt/entfernt
+# sein (sonst Bind-Konflikt).
+#
 # Tags erlauben einen gezielten Lauf (z. B. `--tags server` im PR-Gate
-# deploy-check) ohne die übrigen Rollen anzufassen.
+# deploy-check) ohne die übrigen Rollen anzufassen. `--tags server` baut via
+# tournament-server auch das Tournament-Image mit.
 
 - name: RIFT BATTLE — planet deploy
   hosts: planet
@@ -57,10 +64,10 @@
       tags: [content]
     - role: rbtools
       tags: [server]
+    - role: tournament-server
+      tags: [tournament, server]
     - role: riftbreaker-server
       tags: [server]
-    - role: tournament-server
-      tags: [tournament]
     - role: website
       tags: [website]
     - role: probe-timer
