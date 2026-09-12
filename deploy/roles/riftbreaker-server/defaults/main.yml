@@ -36,6 +36,21 @@ riftbreaker_mods_dir: "{{ riftbreaker_game_dir }}/mods"
 riftbreaker_backup_dir: "{{ riftbreaker_game_dir }}-backups"
 riftbreaker_mods_guard_autofix: true
 
+# Quelle für den Post-Deploy-Runtime-Log-Check (best effort; genau eine
+# mod_load-Zeile, erwartete Version, keine handler_errors). NICHT der harte
+# Gate — der ist der Artefakt-Check in tasks/main.yml (Manifest- + RBB.version
+# im deployten Stand == erwartete Version), der auch ohne Map-Load/Spieler
+# funktioniert (Issue #226/#245).
+#
+# Community-Rezept (Issue #241): der Wine-Prefix liegt im benannten Volume
+# {{ riftbreaker_wine_volume }}, nicht auf dem Host — der Lua-Log ist daher nur
+# über den Container erreichbar. `tools/dedicated-server/scripts/entrypoint.sh`
+# (follow_server_logs) tailt exor_logs.txt selbst nach stdout, daher reicht
+# hier `docker logs` (anders als beim alten Wine-Client-Image, wo `docker logs`
+# nur die run-server.sh-Wrapper-Zeilen zeigte und `docker exec ... cat
+# exor_logs.txt` nötig war).
+riftbreaker_mod_log_cmd: "docker logs {{ riftbreaker_server_container }}"
+
 # --- Trainer-I/O-Bridge (Issue #265) -----------------------------------------
 # Die Rolle rbtools stagt die Windows-Tools (injector.exe/rbbridge.dll/
 # pipe_bridge.exe) nach {{ rbtools_dir }}; von dort read-only nach /opt/rbtools
