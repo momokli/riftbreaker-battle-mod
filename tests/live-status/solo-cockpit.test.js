@@ -7,9 +7,10 @@
 //     COMMENCE/GAME OVER) — defensiv bei fehlenden Feldern.
 //  2. Statisch: site/solo.html verdrahtet das Cockpit (Sektionen + Widget).
 //  3. HTTP-Mock: createCockpit() pollt /state und ruft render(view).
-//  4. God-Commands (#159): createGodPanel() sendet nur erreichbare Aktionen an
-//     existierende Referee-Endpoints (/report, /rematch); nicht erreichbare
-//     Kommandos sind geparkt (kein POST). Fehlender Endpoint degradiert defensiv.
+//  4. God-Commands (#159/#266): createGodPanel() sendet nur erreichbare
+//     Aktionen an existierende Referee-Endpoints (/report, /rematch, /wave);
+//     nicht erreichbare Kommandos sind geparkt (kein POST). Fehlender
+//     Endpoint degradiert defensiv. waveResult() wertet das exec_result aus.
 //  5. Gate: createAccessGate() — optional, ohne Secret im Repo.
 
 const { test } = require('node:test');
@@ -124,7 +125,7 @@ test('site/solo.html enthält die Design-Sektionen (Top-Bar, State-Strip, Announ
   // Announce-Banner.
   assert.ok(html.includes('id="ckAnnounce"'), 'Announce-Banner vorhanden');
   // God-Commands: 4 Aktionen, destruktive markiert.
-  assert.ok(/_START \/ PAUSE|WELLE START \/ PAUSE/.test(html) || html.includes('data-ck-cmd="wave_toggle"'), 'Wave-Toggle vorhanden');
+  assert.ok(/WELLE SPAWNEN/.test(html) && html.includes('data-ck-cmd="wave_spawn"'), 'Wave-Spawn-Button vorhanden');
   const destructive = (html.match(/data-ck-destructive="1"/g) || []).length;
   assert.strictEqual(destructive, 2, 'genau 2 destruktive Buttons (HQ zerstören, Restart)');
   // Footer: Build-Version + Server.
@@ -138,14 +139,17 @@ test('site/solo-cockpit.css: Design-Tokens (Canvas/Panel/Border/Cyan) + CRT-Scan
   assert.ok(/clip-path/.test(css), 'harte 90°-Kanten (Chamfer)');
 });
 
-test('site/solo.html parkt nicht erreichbare God-Commands statt sie zu senden', () => {
+test('site/solo.html: Welle-Spawn verdrahtet, nur noch unerreichbare Commands geparkt', () => {
   const html = fs.readFileSync(SOLO_HTML, 'utf8');
   const parked = (html.match(/data-ck-parked="1"/g) || []).length;
-  assert.strictEqual(parked, 2, 'genau 2 geparkte Buttons');
-  assert.match(html, /data-ck-cmd="wave_toggle"[^>]*disabled/, 'Wave-Toggle ist geparkt/disabled');
+  assert.strictEqual(parked, 1, 'genau 1 geparkter Button (Ressourcen)');
   assert.match(html, /data-ck-cmd="give_resources"[^>]*disabled/, 'Ressourcen-Button ist geparkt/disabled');
+  // #266: Wave-Spawn ist verdrahtet (kein parked/disabled).
+  assert.ok(html.includes('data-ck-cmd="wave_spawn"'), 'Wave-Spawn-Button verdrahtet');
+  assert.doesNotMatch(html, /data-ck-cmd="wave_spawn"[^>]*disabled/, 'Wave-Spawn ist nicht disabled');
   assert.ok(html.includes('id="ckGodNote"'), 'Notiz zu verdrahteten/geparkten Kommandos vorhanden');
   assert.ok(/GEPARKT — FOLLOW-UP #159/.test(html), 'geparkte Buttons sind als Follow-up markiert');
+  assert.ok(/POST \/wave/.test(html), 'God-Note dokumentiert POST /wave');
 });
 
 test('deploy/: /solo-Zugangsschutz per Vault/ENV-Namen dokumentiert, kein Secret im Repo', () => {
@@ -289,7 +293,74 @@ test('createGodPanel: erreichbare Kommandos POSTen auf den echten Referee-Endpoi
   }
 });
 
-test('createGodPanel: geparkte Kommandos senden nichts und melden parked (Follow-up #159)', async () => {
+test('createGodPanel: wave_spawn POSTet /wave und liefert exec_result durch', async () => {
+  const seen = [];
+  const srv = await startServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      seen.push({ method: req.method, url: req.url, body: JSON.parse(body || '{}') });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        ok: true, world: 'A', command: 'rb_wave 3',
+        exec_result: { ok: true, results: [{ command: 'rb_wave 3', ok: true }] },
+      }));
+    });
+  });
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  const results = [];
+  const panel = createGodPanel({ apiBase: base, confirm: () => true, onResult: (r) => results.push(r) });
+  try {
+    const r = await panel.send('wave_spawn');
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.action, 'wave_spawn');
+    assert.deepStrictEqual(seen, [{ method: 'POST', url: '/wave', body: { world: 'A', n: 3 } }]);
+    const w = cockpit.waveResult(r.data);
+    assert.strictEqual(w.ok, true);
+    assert.strictEqual(w.sent, true);
+    assert.strictEqual(w.command, 'rb_wave 3');
+    assert.strictEqual(results.length, 1);
+  } finally {
+    await new Promise((r2) => srv.close(r2));
+  }
+});
+
+test('waveResult: ok nur bei exec_result ok:true (bzw. alle results[].ok)', () => {
+  assert.deepStrictEqual(
+    cockpit.waveResult({ ok: true, command: 'rb_wave 3', exec_result: { ok: true } }),
+    { sent: true, ok: true, command: 'rb_wave 3', status: null, error: null, reason: null },
+  );
+  assert.strictEqual(
+    cockpit.waveResult({ ok: true, exec_result: { results: [{ ok: true }, { ok: true }] } }).ok,
+    true,
+  );
+  const bad = cockpit.waveResult({
+    ok: false, status: 503, error: 'Endpoint antwortete 503',
+    exec_result: { ok: false, reason: 'pipe_unavailable' },
+  });
+  assert.strictEqual(bad.sent, false);
+  assert.strictEqual(bad.ok, false);
+  assert.strictEqual(bad.status, 503);
+  assert.strictEqual(bad.reason, 'pipe_unavailable');
+  assert.strictEqual(
+    cockpit.waveResult({ ok: true, exec_result: { results: [{ ok: true }, { ok: false }] } }).ok,
+    false,
+  );
+  // Review #271 Finding 2/3: Referee liefert 200 (Zustellung ok), aber
+  // exec_result.ok=false (z. B. Mod-Timeout) -> ankommen, aber nicht ausgefuehrt.
+  const delivered = cockpit.waveResult({
+    ok: true, exec_ok: false, status: 200,
+    exec_result: { ok: false, reason: 'no_response' },
+  });
+  assert.strictEqual(delivered.sent, true);
+  assert.strictEqual(delivered.ok, false);
+  assert.strictEqual(delivered.status, 200);
+  assert.strictEqual(delivered.reason, 'no_response');
+  assert.strictEqual(cockpit.waveResult(null).ok, false);
+  assert.strictEqual(cockpit.waveResult({}).sent, false);
+});
+
+test('createGodPanel: geparktes Kommando sendet nichts und meldet parked (Follow-up #159)', async () => {
   let posted = 0;
   const srv = await startServer((req, res) => { posted++; res.writeHead(200); res.end('{}'); });
   const base = `http://127.0.0.1:${srv.address().port}`;
@@ -300,14 +371,14 @@ test('createGodPanel: geparkte Kommandos senden nichts und melden parked (Follow
     onResult: (r) => results.push(r),
   });
   try {
-    for (const action of ['wave_toggle', 'give_resources']) {
+    for (const action of ['give_resources']) {
       const r = await panel.send(action);
       assert.strictEqual(r.ok, false, action);
       assert.strictEqual(r.parked, true, action);
       assert.match(r.error, /Follow-up #159/, action);
     }
     assert.strictEqual(posted, 0, 'geparkt => kein POST');
-    assert.strictEqual(results.length, 2);
+    assert.strictEqual(results.length, 1);
   } finally {
     await new Promise((r2) => srv.close(r2));
   }
@@ -338,7 +409,8 @@ test('createGodPanel: fehlender Endpoint (404) degradiert defensiv mit Fehler', 
 test('isReachable: nur verdrahtete Kommandos sind erreichbar', () => {
   assert.strictEqual(cockpit.isReachable('destroy_hq'), true);
   assert.strictEqual(cockpit.isReachable('restart'), true);
-  assert.strictEqual(cockpit.isReachable('wave_toggle'), false);
+  assert.strictEqual(cockpit.isReachable('wave_spawn'), true);
+  assert.strictEqual(cockpit.isReachable('wave_toggle'), false); // entfernt (#266)
   assert.strictEqual(cockpit.isReachable('give_resources'), false);
   assert.strictEqual(cockpit.isReachable('nope'), false);
 });
