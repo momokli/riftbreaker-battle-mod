@@ -46,6 +46,11 @@ jobs:
       - name: Unit-Test Relay-Pipe-Dispatch (Issue #60)
         working-directory: bausteine/07-relay
         run: python3 -m unittest test_dispatch -v
+      # Referee-Rueckkanal (#268): Event-In/Uebersetzung + Fehlerpfade
+      # (URLError/5xx -> requeue in Reihenfolge, 4xx -> verwerfen).
+      - name: Unit-Test Referee-Rueckkanal (Issue #268)
+        working-directory: bausteine/07-relay
+        run: python3 -m unittest test_referee -v
       - name: Unit-Test Deploy-Gate (Issue #118)
         working-directory: tools/deploy-gate
         run: python3 -m unittest test_deploy_gate -v

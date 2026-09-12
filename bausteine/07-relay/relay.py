@@ -117,6 +117,16 @@ NUMERIC_KEYS = frozenset([
 log_lock = threading.Lock()
 
 
+def env_flag_enabled(name):
+    """True, wenn die Env-Var gesetzt und nicht aus ist.
+
+    Aus-Werte: '' (unset), '0', 'false', 'no', 'off' - getrimmt und
+    case-insensitiv, damit `RBB_REFEREE=False`/`OFF`/`No` NICHT einschaltet
+    (Finding 4, #284).
+    """
+    return os.environ.get(name, '').strip().lower() not in ('', '0', 'false', 'no', 'off')
+
+
 def log(msg):
     with log_lock:
         sys.stdout.write('[relay] ' + msg + '\n')
@@ -425,9 +435,13 @@ class Relay:
         self.acked = {}        # cmd_id -> ts  (erfolgreich dispatcht)
         self.pending_keys = set()  # keys in der Dispatch-Queue (Retry-Schutz)
         self.dispatch_seq = 0
+        self.dispatch_lock = threading.Lock()  # schliesst das check-then-act in enqueue_dispatch
         # Referee-Rueckkanal (#268): Events rein, Commands raus. Eigene Queue,
         # weil Referee-Events KEINEN RBB_MATCH_ID brauchen (anders als post_loop).
-        self.referee_queue = queue.Queue(maxsize=QUEUE_MAX)
+        # Prioritaets-Queue nach Einreihungs-`seq`: ein Retry reiht das Event
+        # VORNE wieder ein, statt es ans Ende zu legen (kein Reordering, #284).
+        self.referee_queue = queue.PriorityQueue(maxsize=QUEUE_MAX)
+        self.referee_seq = 0
         self.pipe = pipe if pipe is not None else PipeClient(
             cfg.get('pipe_path', DEFAULT_PIPE_PATH),
             cfg.get('pipe_timeout_s', PIPE_TIMEOUT),
@@ -575,27 +589,48 @@ class Relay:
 
     # -- Referee-Rueckkanal (#268) ------------------------------------------
     def _enqueue_referee_event(self, rev, raw_text):
-        """Ein Referee-Event in die Rueckkanal-Queue legen (Backpressure)."""
-        item = {'event': rev, 'raw': raw_text}
+        """Ein Referee-Event in die Rueckkanal-Queue legen (Backpressure).
+
+        Die Queue ist nach der Einreihungs-Reihenfolge (`seq`) priorisiert:
+        ein Retry reiht das Event mit seiner urspruenglichen `seq` VORNE ein
+        (siehe `_requeue_referee_event`) statt ans Ende - die Event-Ordnung
+        bleibt damit erhalten (Finding 2, #284).
+        """
+        item = {'event': rev, 'raw': raw_text, 'attempt': 0, 'seq': self.referee_seq}
+        self.referee_seq += 1
         while not self.stop.is_set():
             try:
-                self.referee_queue.put(item, timeout=0.5)
+                self.referee_queue.put((item['seq'], item), timeout=0.5)
                 log('referee: event {} <- {}'.format(rev.get('type'), raw_text))
                 return
             except queue.Full:
                 log('referee-queue voll - tail blockiert (Backpressure)')
+
+    def _requeue_referee_event(self, item):
+        """Fehlgeschlagenes Referee-Event VORNE wieder einreihen (Retry).
+
+        Erhaelt die urspruengliche `seq` -> kein Reordering (`hq_dead` kann
+        nicht vor ein noch offenes `wave_done` rutschen, sonst geht eine
+        beschlossene Welle verloren) und zaehlt den Backoff item-lokal statt
+        in einem geteilten Zaehler (Finding 2, #284).
+        """
+        item['attempt'] = item.get('attempt', 0) + 1
+        # Ein Slot wurde gerade durch das `get` frei -> `put` blockiert nicht.
+        self.referee_queue.put((item['seq'], item))
 
     def post_referee_event(self, event):
         """POST {server}/referee/event; liefert (status, data) wie http_json."""
         return http_json('POST', self.url_referee_event(), event)
 
     def referee_post_loop(self):
-        attempt = 0
         while not self.stop.is_set():
             try:
-                item = self.referee_queue.get(timeout=0.5)
+                _seq, item = self.referee_queue.get(timeout=0.5)
             except queue.Empty:
                 continue
+            # Item-lokaler Versuch (nicht geteilt): ein fremdes Event darf den
+            # Backoff dieses Events nicht zuruecksetzen (Finding 2, #284).
+            attempt = item.get('attempt', 0)
             try:
                 status, data = self.post_referee_event(item['event'])
                 if 200 <= status < 300:
@@ -605,29 +640,25 @@ class Relay:
                         self._dispatch_referee_command(c)
                     log('referee: ok type={} ({})'.format(
                         item['event'].get('type'), item['raw']))
-                    attempt = 0
                 else:
                     log('referee: HTTP {} - verworfen: {}'.format(status, item['raw']))
-                    attempt = 0
             except urllib.error.HTTPError as e:
                 if 500 <= e.code:
-                    # Server-Probleme: Event bleibt in der Queue (Retry/Backoff).
+                    # Server-Probleme: Event VORNE wieder einreihen (Retry/Backoff).
                     log('referee: HTTP {} (server) - retry in ~{}s: {}'.format(
                         e.code, min(BACKOFF_MAX, BACKOFF_BASE * (2 ** attempt)),
                         item['raw']))
-                    self.referee_queue.put(item)
+                    self._requeue_referee_event(item)
                     backoff_sleep(attempt, self.stop)
-                    attempt += 1
                 else:
-                    # 400/404/409 = Konfigurationsfehler, Retry aendert nichts.
+                    # 400/404/409 = Konfigurationsfehler, Retry aendert nichts
+                    # -> verwerfen (kein Requeue).
                     log('referee: HTTP {} abgelehnt - verworfen: {}'.format(e.code, item['raw']))
-                    attempt = 0
             except (urllib.error.URLError, TimeoutError, OSError) as e:
                 log('referee: netzfehler ({}) - retry in ~{}s: {}'.format(
                     e, min(BACKOFF_MAX, BACKOFF_BASE * (2 ** attempt)), item['raw']))
-                self.referee_queue.put(item)
+                self._requeue_referee_event(item)
                 backoff_sleep(attempt, self.stop)
-                attempt += 1
 
     def referee_poll_loop(self):
         interval = self.cfg.get('poll_s', 1.0)
@@ -672,8 +703,10 @@ class Relay:
         if not command:
             return
         cid = c.get('cmd_id')
-        self.enqueue_dispatch(command, cid)
-        log('referee: command cmd_id={} {!r}'.format(cid, command))
+        # Nur loggen, wenn wirklich eingereiht wurde: ein Dedup-Treffer bleibt
+        # sonst als irrefuehrender "command"-Log stehen (Finding 5, #284).
+        if self.enqueue_dispatch(command, cid):
+            log('referee: command cmd_id={} {!r}'.format(cid, command))
 
     # -- GET /poll/:player_id (Dispatch-Loop) --------------------------------
     def poll_loop(self):
@@ -737,14 +770,22 @@ class Relay:
 
     # -- Dispatch (exec_command -> rbbridge-Pipe) ---------------------------
     def enqueue_dispatch(self, command, cid):
-        """Legt ein exec_command einmalig in die Dispatch-Queue."""
+        """Legt ein exec_command einmalig in die Dispatch-Queue.
+
+        Rueckgabe: True = neu eingereiht, False = bereits bekannt (Dedup).
+        Der Lock schliesst das check-then-act auf `pending_keys`/`dispatch_seq`
+        (Finding 6, #284): Push- und Poll-Thread koennen inzwischen dieselbe
+        `cmd_id` parallel sehen.
+        """
         key = cid if cid is not None else command
-        if key in self.acked or key in self.pending_keys:
-            return
-        self.pending_keys.add(key)
-        self.dispatch_seq += 1
-        item = {'key': key, 'command': command, 'cmd_id': cid, 'attempt': 0}
-        self.dispatch_queue.put((time.time(), self.dispatch_seq, item))
+        with self.dispatch_lock:
+            if key in self.acked or key in self.pending_keys:
+                return False
+            self.pending_keys.add(key)
+            self.dispatch_seq += 1
+            item = {'key': key, 'command': command, 'cmd_id': cid, 'attempt': 0}
+            self.dispatch_queue.put((time.time(), self.dispatch_seq, item))
+            return True
 
     def dispatch_exec(self, command, cmd_id):
         """Schreibt die exec-Zeile auf die rbbridge-Pipe und liest die
@@ -936,7 +977,8 @@ def main():
         'pipe_path': os.environ.get('RBB_PIPE_PATH', DEFAULT_PIPE_PATH),
         'pipe_timeout_s': float(os.environ.get('RBB_PIPE_TIMEOUT_S', str(PIPE_TIMEOUT))),
         # Referee-Rueckkanal (#268): Events rein, Commands raus.
-        'referee': os.environ.get('RBB_REFEREE', '') not in ('', '0', 'false', 'no', 'off'),
+        # Case-insensitiv (Finding 4, #284): `RBB_REFEREE=False`/`OFF`/`No` bleibt AUS.
+        'referee': env_flag_enabled('RBB_REFEREE'),
         'world': world,
     }
 

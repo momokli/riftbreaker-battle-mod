@@ -22,6 +22,7 @@ Nur Standardbibliothek: python3 -m unittest test_referee -v
 import os
 import sys
 import unittest
+import urllib.error
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -181,6 +182,146 @@ class RefereeTransportTest(unittest.TestCase):
         r.handle_referee_poll({})
         r.handle_referee_poll({'commands': [None, {}, {'command': ''}]})
         self.assertTrue(r.dispatch_queue.empty())
+
+
+class FailPipe:
+    """Pipe-Fake, bei dem jeder Dispatch scheitert (Pipe nicht erreichbar)."""
+
+    def __init__(self):
+        self.calls = []
+
+    def send_exec_and_wait(self, command, cmd_id):
+        self.calls.append((command, cmd_id))
+        raise OSError('pipe unavailable (fake)')
+
+
+class RefereeErrorPathTest(unittest.TestCase):
+    """Fehlerpfade des referee_post_loop (Finding 3, #284):
+    URLError -> requeue (VORNE, kein Reordering), HTTP 5xx -> requeue,
+    HTTP 4xx -> verwerfen, Pipe-down -> requeue ohne ack.
+
+    Deterministisch ohne Netz: `http_json`/`backoff_sleep` sind gemockt, der
+    Loop terminiert, sobald der Fake `stop` setzt.
+    """
+
+    def _relay(self, pipe=None):
+        cfg = {
+            'server': 'http://127.0.0.1:8081',
+            'player_id': 'p',
+            'match_id': '',
+            'poll_s': 0.01,
+            'pipe_path': '/tmp/nope',
+            'pipe_timeout_s': 0.1,
+            'referee': True,
+            'world': 'A',
+        }
+        return relay.Relay(cfg, pipe=pipe if pipe is not None else StubPipe())
+
+    def _run_post_loop(self, r, fake):
+        """referee_post_loop mit gemocktem http_json (ohne echtes Backoff-Sleep)."""
+        with mock.patch.object(relay, 'http_json', fake), \
+                mock.patch.object(relay, 'backoff_sleep', lambda *a, **k: None):
+            r.referee_post_loop()
+
+    def test_urlerror_requeues_and_preserves_order(self):
+        """Netzfehler: Event bleibt erhalten UND haelt seine Reihenfolge.
+
+        e1 scheitert einmal -> e1 wird VORNE wieder eingereiht -> e2 wird nie
+        vor e1 verarbeitet (die alte FIFO-Variante haette [e2, e1] geliefert).
+        """
+        r = self._relay()
+        r._enqueue_referee_event({'world': 'A', 'type': 'ready'}, 'e1')
+        r._enqueue_referee_event({'world': 'A', 'type': 'hq_destroyed'}, 'e2')
+        seen = []
+
+        def fake(method, url, body=None):
+            seen.append(body['type'])
+            if len(seen) == 1:
+                raise urllib.error.URLError('server weg (fake)')
+            if len(seen) == 3:
+                r.stop.set()
+            return 200, {'commands': []}
+
+        self._run_post_loop(r, fake)
+        self.assertEqual(seen, ['ready', 'ready', 'hq_destroyed'])
+        self.assertTrue(r.referee_queue.empty())
+
+    def test_http_5xx_requeues(self):
+        """HTTP 5xx: Event bleibt in der Queue und wird wiederholt."""
+        r = self._relay()
+        r._enqueue_referee_event({'world': 'A', 'type': 'wave_done', 'level': 2}, 'e1')
+        calls = []
+
+        def fake(method, url, body=None):
+            calls.append(1)
+            if len(calls) == 1:
+                raise urllib.error.HTTPError(url, 503, 'busy', {}, None)
+            r.stop.set()
+            return 200, {'commands': []}
+
+        self._run_post_loop(r, fake)
+        self.assertEqual(len(calls), 2, 'nach dem 503 genau ein Retry')
+        self.assertTrue(r.referee_queue.empty())
+
+    def test_http_4xx_is_discarded(self):
+        """HTTP 4xx: Konfigurationsfehler -> verwerfen, KEIN Retry."""
+        r = self._relay()
+        r._enqueue_referee_event({'world': 'A', 'type': 'ready'}, 'e1')
+        calls = []
+
+        def fake(method, url, body=None):
+            calls.append(1)
+            r.stop.set()
+            raise urllib.error.HTTPError(url, 400, 'bad request', {}, None)
+
+        self._run_post_loop(r, fake)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(r.referee_queue.empty(), 'verworfen, nicht requeued')
+
+    def test_pipe_down_requeues_without_ack(self):
+        """Pipe-down (Referee-Command): nicht acken, mit Backoff requeuen."""
+        pipe = FailPipe()
+        r = self._relay(pipe)
+        r.handle_referee_poll({'commands': [
+            {'world': 'A', 'command': 'rb_wave 2', 'cmd_id': 5}]})
+        _due, _seq, item = r.dispatch_queue.get_nowait()
+        self.assertFalse(r._handle_dispatch_item(item))
+        self.assertNotIn(5, r.acked, 'Pipe-Fehler darf NICHT als ack verbrennen')
+        self.assertIn(5, r.pending_keys, 'Kommando bleibt fuer Retry gemerkt')
+        self.assertEqual(r.dispatch_queue.qsize(), 1, 'requeued')
+        self.assertEqual(pipe.calls, [('rb_wave 2', 5)])
+
+    def test_dedup_logs_command_only_when_enqueued(self):
+        """Finding 5: der Dedup-Treffer erzeugt kein zweites "command"-Log."""
+        r = self._relay(StubPipe())
+        payload = {'commands': [{'world': 'A', 'command': 'restart', 'cmd_id': 9}]}
+        logged = []
+        orig_log = relay.log
+        relay.log = lambda msg: logged.append(msg)
+        try:
+            r.handle_referee_poll(payload)
+            r.handle_referee_poll(payload)  # dieselbe cmd_id -> dedup
+        finally:
+            relay.log = orig_log
+        cmds = [m for m in logged if m.startswith('referee: command')]
+        self.assertEqual(len(cmds), 1, logged)
+
+
+class EnvFlagTest(unittest.TestCase):
+    """Finding 4: RBB_REFEREE-Aus-Werte werden case-insensitiv erkannt."""
+
+    def test_referee_flag_case_insensitive(self):
+        for val in ('', '0', 'false', 'False', 'FALSE', 'no', 'No', 'off', 'OFF', ' 0 '):
+            with mock.patch.dict(os.environ, {'RBB_REFEREE': val}):
+                self.assertFalse(relay.env_flag_enabled('RBB_REFEREE'), repr(val))
+        for val in ('1', 'true', 'True', 'yes', 'on', 'ON'):
+            with mock.patch.dict(os.environ, {'RBB_REFEREE': val}):
+                self.assertTrue(relay.env_flag_enabled('RBB_REFEREE'), repr(val))
+
+    def test_unset_flag_is_off(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('RBB_REFEREE', None)
+            self.assertFalse(relay.env_flag_enabled('RBB_REFEREE'))
 
 
 if __name__ == '__main__':

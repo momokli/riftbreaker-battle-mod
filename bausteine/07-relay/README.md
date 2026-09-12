@@ -103,7 +103,10 @@ unverändert, `RBB_REFEREE` ist default **aus**:
   `event=wave level=N status=done` → `wave_done`, `event=hq_dead` →
   `hq_destroyed`, `event=mod_load`/`event=setup` → `ready`. Der Referee
   antwortet mit den entschiedenen Commands (`rb_wave N`, `restart`);
-  Netzfehler werden mit Backoff wiederholt, 4xx verworfen.
+  Netzfehler/5xx werden mit Backoff wiederholt, 4xx verworfen. Ein Retry
+  reiht das Event **vorne** (nach Einreihungs-`seq`) wieder ein, damit die
+  Event-Reihenfolge nicht kippt (`hq_dead` nie vor `wave_done`); der Backoff
+  zählt item-lokal.
 - **Commands raus** (`referee-poll`): `GET /referee/poll?world=<W>` holt die
   offenen Commands und legt sie über die bestehende Dispatch-Queue auf die
   rbbridge-Pipe. Der `cmd_id` ist der Dedup-Schlüssel: ein per Push
@@ -119,9 +122,11 @@ RBB_SERVER=http://127.0.0.1:8081 RBB_LOG_PATH=/tmp/fake.log python3 relay.py
 ```
 
 Deterministische Tests **ohne Spiel/Netz** (Log-Zeile → Referee-Event,
-Poll-Commands → Pipe-Dispatch, `cmd_id`-Dedup): `python3 -m unittest
-test_referee -v`. Die Entscheidung selbst (`ready` → `rb_wave 1`, …) liegt im
-Server (`tournament/src/referee.rs`), dort ebenfalls ohne Player getestet.
+Poll-Commands → Pipe-Dispatch, `cmd_id`-Dedup, Fehlerpfade `URLError`/5xx →
+requeue in Reihenfolge, 4xx → verwerfen, Pipe-down → requeue ohne ack):
+`python3 -m unittest test_referee -v`. Die Entscheidung selbst (`ready` →
+`rb_wave 1`, …) liegt im Server (`tournament/src/referee.rs`), dort ebenfalls
+ohne Player getestet.
 
 Der volle Loop **mit** Spieler (Welle spawnt sichtbar → HQ zerstört →
 Restart über die echte Pipe) bleibt **OFFEN** (Player-Test, #265/#268).
@@ -142,4 +147,5 @@ Restart über die echte Pipe) bleibt **OFFEN** (Player-Test, #265/#268).
 - [x] register beim Start + Re-Register bei 404 (Server-Neustart)
 - [x] Referee-Rückkanal (#268, `RBB_REFEREE=1`): `[RBBATTLE]`-Events →
       `POST /referee/event`, `GET /referee/poll` → Dispatch an die Pipe —
-      **ohne Spiel getestet** (`test_referee.py`, 16 Tests); Player-Loop OFFEN
+      **ohne Spiel getestet** (`test_referee.py`, 23 Tests, inkl. Fehlerpfade);
+      Player-Loop OFFEN

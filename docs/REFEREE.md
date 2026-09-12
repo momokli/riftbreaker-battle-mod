@@ -24,9 +24,12 @@ Der **Relay-Rückkanal** ist in `bausteine/07-relay/relay.py` implementiert
 `map_referee_event()` in Referee-Events und postet sie an `POST
 /referee/event`; ein eigener Poll-Thread holt `GET /referee/poll?world=<W>` und
 legt die Commands über die bestehende Dispatch-Queue auf die Pipe. Der `cmd_id`
-ist der Dedup-Schlüssel gegen Doppelzustellung (Push **oder** Poll). Ohne Spiel
-testbar: `python3 -m unittest test_referee` (Event-In → Event-Out,
-Poll-Command → Pipe-Dispatch).
+ist der Dedup-Schlüssel gegen Doppelzustellung (Push **oder** Poll).
+Netz-/5xx-Fehler beim Posten werden mit Backoff wiederholt; ein Retry reiht das
+Event vorne (nach Einreihungs-`seq`) wieder ein, so dass die Event-Reihenfolge
+nicht kippt (kein Reordering). 4xx wird verworfen. Ohne Spiel testbar:
+`python3 -m unittest test_referee` (Event-In → Event-Out, Poll-Command →
+Pipe-Dispatch, Fehlerpfade).
 
 ## Rollen
 
