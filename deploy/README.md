@@ -74,8 +74,12 @@ ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
 ```
 
 Reihenfolge der Rollen (site.yml): `mods-zip` → `dedicated-server-image` →
-`game-content` → `riftbreaker-server` → `tournament-server` →
+`game-content` → `rbtools` → `tournament-server` → `riftbreaker-server` →
 `website` → `probe-timer`.
+
+`tournament-server` baut das Image `rb-tournament:<deploy-sha>` und muss VOR
+`riftbreaker-server` laufen: dessen Compose startet beide Container (Game +
+Tournament) im selben Netz und publiziert (Prod) `127.0.0.1:8081`.
 
 ### From-zero (ein Kommando, Issue #209)
 
@@ -114,6 +118,11 @@ Was das Playbook selbst besitzt:
   (`docker compose up -d --force-recreate`). Ohne den bliebe ein reines
   Mod-Update wirkungslos (Compose startet einen unveränderten Container nicht
   neu) — Ziel: „Merge → Mod ist auf :6321 wirklich geladen".
+- **Tournament-Image** (`tournament-server`): baut `rb-tournament:<deploy-sha>`
+  aus `tournament/` (Multi-Stage-Dockerfile), gleiche Idempotenz-Logik wie das
+  Dedi-Image. Der Tournament-Server läuft als zweiter Container im Compose des
+  Dedi-Servers (gleiches default-Netz); eine frühere systemd-Unit wird
+  idempotent entfernt (Issue #275).
 
 ### Vault
 
@@ -324,8 +333,8 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 |---|---|---|
 | `dedicated-server-image` | docker | baut `rb-dedicated:<deploy-sha>` auf planet (Laufzeit :6321) |
 | `game-content` | steamcmd/sync | Dedicated-Server-Content (App 4114030) nach `riftbreaker_game_dir` (idempotent, fail loud) |
-| `riftbreaker-server` | docker | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation |
-| `tournament-server` | systemd | Rust/axum Referee + Web-UI. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt) |
+| `riftbreaker-server` | docker | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation. Startet außerdem den **Tournament-Container** im selben Compose/Netz (Issue #275) |
+| `tournament-server` | docker | baut `rb-tournament:<deploy-sha>` aus `tournament/` (Multi-Stage-Dockerfile); entfernt die frühere systemd-Unit. Der Dienst läuft als zweiter Compose-Service (Rust/axum Referee + Web-UI) |
 | `website` | statics + Caddy | `site/*` → Docroot, Caddy-Snippet + `/tournament/*`-Proxy |
 | `mods-zip` | — | Paketierung + md5-Paritäts-Check (hart) |
 | `probe-timer` | systemd | `probe_servers.sh` alle 2 Min → `status.json` |
@@ -345,8 +354,8 @@ deploy/
 └── roles/
     ├── dedicated-server-image/    # baut rb-dedicated:<sha>
     ├── game-content/              # Steam-Content (App 4114030) deklarativ
-    ├── riftbreaker-server/        # docker 6321 (+ Restart-Handler)
-    ├── tournament-server/         # systemd
+    ├── riftbreaker-server/        # docker 6321 + Tournament-Container (Compose)
+    ├── tournament-server/         # docker: baut rb-tournament:<sha>
     ├── website/                   # statics + Caddy
     ├── mods-zip/                  # Paketierung + md5-Parität
     └── probe-timer/               # systemd-Timer
@@ -385,25 +394,27 @@ Nur das Mod zurückdrehen (ohne Image/Content):
 # vorherige rbbattle.zip aus der Git-History bauen/sichern und erneut deployen.
 ```
 
-Das vorherige `tournament-server`-Binary bzw. die vorherige `rbbattle.zip`
-(git-History) zurückkopieren und erneut deployen.
+Das vorherige `rb-tournament`-Image (alte SHA) bzw. die vorherige
+`rbbattle.zip` (git-History) erneut deployen (Image-Tag = Deploy-SHA).
 
 ## Logs
 
 | Ort | Was |
 |---|---|
 | `gh run view <id> --log` | CD-Job-Log (der `ssh`-Step streamt das ganze ansible-Log) |
-| `journalctl -u tournament-server`, `-u rbmods-probe.timer` | systemd-Rollen |
+| `journalctl -u rbmods-probe.timer` | systemd-Timer (probe) |
+| `docker logs riftbreaker-dedicated-tournament` | Tournament-Container-Logs (Log-Level via `RUST_LOG`) |
 | `docker logs riftbreaker-dedicated` | Container-Logs (Wine/Server) |
 | `git -C /opt/rbbattle-deploy/repo log --oneline -3` | zuletzt deployte SHA |
 
 ## Was CI/CD besitzt (und was nicht)
 
 **Owned von der Pipeline (`deploy/`):** Laufzeit-Image (`rb-dedicated:<sha>`),
-Spiel-Content (Steam-App 4114030), Compose-Rendering + Containerstart der
-Server-Rollen, Mod-Auslieferung + Restart, Website-Statics + Caddy-Snippet,
-Caddy-Import-Zeile, systemd-Unit/Timer (tournament/probe), md5-Parität des
-Mod-Zips.
+Tournament-Image (`rb-tournament:<sha>`), Spiel-Content (Steam-App 4114030),
+Compose-Rendering + Containerstart der Server-Rollen (inkl. Tournament-Container),
+Mod-Auslieferung + Restart, Website-Statics + Caddy-Snippet, Caddy-Import-Zeile,
+Entfernung der Legacy-systemd-Unit (tournament), systemd-Timer (probe), md5-Parität
+des Mod-Zips.
 
 **Nicht owned (bewusst host-seitig/manuell):** Vault-Passwort
 (`/etc/rbbattle-deploy/vault.pass`, root-only), SSH-Zugang + forced command des

@@ -8,7 +8,7 @@
 | Komponente | Host | Container/Unit | Port | Zweck |
 |---|---|---|---|---|
 | riftbreaker-dedicated | planet | docker (wine) | 6321/udp | Dev-SP-Server: 1v1 „vs sich selbst" (SP-Mode; rbbattle-Mod + rbbridge) |
-| tournament-server | planet | systemd (Rust/axum, `tournament/`) | 8081 | Turnier 1v1: Lobby/Ready/GO/Wave-Routing/Score (2 Welten) |
+| tournament-server | planet | docker (`rb-tournament`, gleiches Compose/Netz wie riftbreaker-dedicated) | 8081 (Prod: loopback-Publish) | Turnier 1v1: Lobby/Ready/GO/Wave-Routing/Score (2 Welten) |
 | test-Instanzen | planet | docker, on-demand | frei | Test-Server aller Art (Mod-Tests, Balance, Experimente) |
 | Website | planet | statics + Caddy (`mellon-caddy`) | 443 | Landing `/` · `/connectivity.html` · `/solo.html` · `/status.json` · Proxy `/tournament/*` → tournament-server |
 | Mod-Download | planet | statics (Caddy) | 443 | `rbbattle.zip` (Paketierung + md5-Parität) |
@@ -44,8 +44,14 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
 4. **riftbreaker-server** — Docker-Container + Server-Config (Welt
    `mp_survival`/`jungle`, `disable_steam`, Passwort aus Vault), Mod-Install
    in `<game>/mods/rbbattle`; Restart-Handler bei Mod-/Config-Änderung.
-5. **tournament-server** — systemd-Unit, Env-Konfig (`RBBRIDGE_A_URL`/
-   `RBBRIDGE_B_URL`), Binary + Web-UI aus `tournament/`.
+   Startet außerdem den **Tournament-Container** im selben Compose/Netz
+   (Issue #275).
+5. **tournament-server** — baut `rb-tournament:<deploy-sha>` aus `tournament/`
+   (Multi-Stage-Dockerfile) und entfernt die frühere systemd-Unit. Läuft in
+   `site.yml` VOR `riftbreaker-server`, damit das Image beim Compose-Up existiert
+   und die alte Unit (Port 8081) vorher weg ist. Der Dienst ist der zweite
+   Compose-Service; der Bridge-Endpoint ist die Docker-DNS des Dedi-Service
+   (`RBBRIDGE_A_URL=http://<dedi-container>:9001/exec`), nicht `127.0.0.1`.
 6. **website** — statische Dateien (`site/*`) nach Docroot, Caddy-Snippet
    (statics + `/tournament/*`-Proxy) + Reload.
 7. **probe-timer** — systemd-Timer für `scripts/probe_servers.sh` →
@@ -56,7 +62,8 @@ Grundsätze:
 - **Idempotent** — jeder Lauf konvergiert auf denselben Zustand.
 - **Deploy nur via Playbook** —
   `ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass`.
-- **Rollback** = vorherige `rbbattle.zip` / vorheriges Binary wieder einspielen.
+- **Rollback** = vorherige Image-SHA (`rb-dedicated`/`rb-tournament`) bzw.
+  vorherige `rbbattle.zip` (git-History) erneut deployen.
 
 ## Mod-Backups & mods/-Guard (Issue #212)
 

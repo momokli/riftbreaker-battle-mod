@@ -68,16 +68,24 @@ Trainerkommando-Kanal (GO/Wave vom Tournament-Server) braucht er:
    Retry/Backoff (bis `INJECT_TIMEOUT_SECS`, Default 180 s), zuletzt
    `wine pipe_bridge.exe`. Fehlt `/opt/rbtools`: nur Warnung, der Server laeuft
    normal weiter.
-3. **Der HTTP-Endpunkt** — `pipe_bridge.exe` lauscht im Container auf 9001;
-   das Compose publiziert `127.0.0.1:9001:9001`. `POST /exec` uebersetzt in
+3. **Der HTTP-Endpunkt** — `pipe_bridge.exe` lauscht im Container auf 9001.
+   Der Tournament-Server erreicht ihn über Docker-DNS (gleiches Compose-Netz,
+   `RBBRIDGE_A_URL=http://<dedi-container>:9001/exec`); in Prod publiziert das
+   Compose zusätzlich loopback (`127.0.0.1:9001:9001`, Operator-Komfort), die
+   Test-Instanz hat keinen Host-Port (Issue #275). `POST /exec` uebersetzt in
    exec-Zeilen auf `\\.\pipe\rbbattle` (der Wine-Named-Pipe ist nur aus Wine
-   erreichbar). Damit ist `RBBRIDGE_A_URL=http://127.0.0.1:9001/exec` des
-   Tournament-Servers kein toter Endpoint mehr.
+   erreichbar).
 
 Verdrahtung, Protokoll und Testanleitung: `docs/INGRESS_IO.md`.
 
-Smoke-Test im Container (Beispiel):
+Smoke-Test (Produkt-Instanz, loopback-Publish):
 ```bash
 curl -s http://127.0.0.1:9001/health
 curl -s -X POST http://127.0.0.1:9001/exec -d '{"command":"rb_wave 3"}'
+```
+
+Smoke-Test intern (ohne Host-Port, Issue #275 — auch für die Test-Instanz):
+```bash
+docker exec riftbreaker-dedicated-tournament \
+  curl -s http://riftbreaker-dedicated:9001/health
 ```

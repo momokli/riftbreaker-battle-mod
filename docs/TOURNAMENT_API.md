@@ -31,7 +31,9 @@ Rust/axum in `tournament/` (Issue #29), Web-UI in `tournament/web/`
 | `RUST_LOG` | `info` | Log-Level |
 
 `RBBRIDGE_*_URL` zeigen auf den HTTP-Adapter der jeweiligen Dedi-Bridge
-(z. B. `http://10.0.0.5:9001/exec`). Fehlen sie, entfällt der Push und die
+(z. B. `http://10.0.0.5:9001/exec`). Im Deploy zeigen sie auf die Docker-DNS des
+Dedi-Service im selben Compose-Netz (`http://<dedi-container>:9001/exec`, Issue
+#275) — nicht auf `127.0.0.1`. Fehlen sie, entfällt der Push und die
 Bridges erkennen den Start ausschließlich über Polling von `GET /state`.
 
 ## Match-Lebenszyklus
@@ -288,7 +290,7 @@ Antwort:
 
 ```json
 {"ok": true, "exec_ok": true, "world": "A", "command": "rb_wave 3",
- "endpoint": "http://127.0.0.1:9001/exec", "status": 200, "error": null,
+ "endpoint": "http://riftbreaker-dedicated:9001/exec", "status": 200, "error": null,
  "exec_result": {"ok": true, "results": [{"command": "rb_wave 3", "ok": true}]}}
 ```
 

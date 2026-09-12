@@ -28,8 +28,9 @@ Embeddable-Interpreter ins Image (fragil, `os.open`-auf-Pipe ungeprüft).
 
 Die Bridge `pipe_bridge.exe` ist dagegen ein kleiner, testbarer **Wine-x64-
 Prozess ohne Fremd-Deps** (Win32 + `ws2_32`), der den bereits konfigurierten
-`POST /exec`-Kontrakt tatsächlich erfüllt und aus dem Host über den publizierten
-Port `127.0.0.1:9001` erreichbar ist.
+`POST /exec`-Kontrakt tatsächlich erfüllt. Erreichbar ist die Bridge über das
+Docker-Netz (Tournament-Container → `http://<dedi-container>:9001/exec`) und in
+Prod zusätzlich über den loopback-Publish `127.0.0.1:9001` (Operator-Komfort).
 
 `relay.py` bleibt der Pfad für native Windows-Welten (2-Welten-Setup) und ist
 protokollkompatibel (gleiche Pipe-Zeilen).
@@ -48,7 +49,9 @@ Ansible-Rolle rbtools:                               3. wine injector.exe Dedica
   notify: restart riftbreaker-server                 5. exec wine DedicatedServer.exe …
 Compose:
   volumes: /opt/rbmods/rbtools:/opt/rbtools:ro
-  ports:   127.0.0.1:9001:9001
+  # Container-intern spricht der Tournament-Service die Bridge über Docker-DNS an
+  # (http://<dedi-container>:9001/exec). Prod publiziert zusaetzlich loopback
+  # (127.0.0.1:9001:9001); die Test-Instanz hat keinen Host-Port (Issue #275).
 ```
 
 Wine sieht den Container-Root als `Z:` → die DLL liegt als
@@ -66,8 +69,8 @@ Wine sieht den Container-Root als `Z:` → die DLL liegt als
 | `bausteine/04-trainer-io/bridge/pipe_bridge.c` | HTTP(9001)→Pipe-Bridge (Quelle, x64) |
 | `scripts/build_rbbridge_tools.sh` | baut alle 4 Binaries in ein Staging-Dir |
 | `deploy/roles/rbtools/{defaults,tasks}` | Build + Stage nach `/opt/rbmods/rbtools` |
-| `deploy/roles/riftbreaker-server/templates/docker-compose.yml.j2` | Mount `/opt/rbtools:ro`, Port `127.0.0.1:9001:9001` |
-| `deploy/roles/riftbreaker-server/defaults/main.yml` | `riftbreaker_bridge_port` |
+| `deploy/roles/riftbreaker-server/templates/docker-compose.yml.j2` | Mount `/opt/rbtools:ro`; Bridge im Dedi-Container, Publish `{{ riftbreaker_bridge_publish_host }}` (Prod loopback, optional) |
+| `deploy/roles/riftbreaker-server/defaults/main.yml` | `riftbreaker_bridge_port_internal` (fix 9001), `riftbreaker_bridge_publish_host` |
 | `tools/dedicated-server/scripts/entrypoint.sh` | Injection-Supervisor + Bridge-Start |
 
 ## Bridge-Protokoll (HTTP)
@@ -94,7 +97,7 @@ Auf der Pipe (v0, line-delimited JSON) schreibt die Bridge je Kommando
 
 | Env | Default | Bedeutung |
 |---|---|---|
-| `RBB_BRIDGE_BIND` | `0.0.0.0` | Bind-Adresse (im Container; Host published nur 127.0.0.1) |
+| `RBB_BRIDGE_BIND` | `0.0.0.0` | Bind-Adresse im Container. **Muss `0.0.0.0` bleiben** — sonst ist die Bridge aus dem Tournament-Container nicht erreichbar (Issue #275, R4). Prod publiziert nur loopback, der Test gar nicht |
 | `RBB_BRIDGE_PORT` | `9001` | TCP-Port |
 | `RBB_BRIDGE_PIPE` | `\\.\pipe\rbbattle` | Pipe-Pfad |
 | `RBB_BRIDGE_TIMEOUT_MS` | `5000` | Antwort-Timeout je Kommando |
@@ -129,8 +132,12 @@ Quelländerungen anschlägt.
 2. Nach dem Deploy im Container:
    - `docker logs riftbreaker-dedicated` → `[entrypoint] ingress: Injection
      erfolgreich`, `[pipe_bridge] HTTP-Bridge lauscht auf 0.0.0.0:9001`.
-   - `curl -s http://127.0.0.1:9001/health` → `{"ok":true,"pipe":true}`.
-   - `curl -s -X POST http://127.0.0.1:9001/exec -d '{"command":"rb_wave 3"}'`
+   - **Interner Weg (maßgeblich, Issue #275):** aus dem Tournament-Container
+     `docker exec riftbreaker-dedicated-tournament curl -s http://riftbreaker-dedicated:9001/health`
+     → `{"ok":true,"pipe":true}` (Docker-DNS).
+   - **Prod-Komfort:** `curl -s http://127.0.0.1:9001/health` → `{"ok":true,"pipe":true}`
+     (loopback-Publish; im Test gibt es keinen Host-Port).
+   - `docker exec riftbreaker-dedicated-tournament curl -s -X POST http://riftbreaker-dedicated:9001/exec -d '{"command":"rb_wave 3"}'`
      → `{"ok":true,"results":[{"command":"rb_wave 3","ok":true}]}`.
    - Game-Log (`/data/.wine/.../exor_logs.txt`): `event=wave level=3 status=start`
      (+ `status=done`), **kein Crash**.

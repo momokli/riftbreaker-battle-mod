@@ -8,6 +8,8 @@ Dienst mit ausgeliefert.
 ```text
 tournament/
 ├── Cargo.toml
+├── Dockerfile         Multi-Stage-Image (Builder rust:bookworm → Runtime debian-slim, Issue #275)
+├── .dockerignore      Build-Kontext (schliesst target/ u. a. aus)
 ├── src/
 │   ├── main.rs        Einstieg, Env-Konfiguration (keine Hardcodes)
 │   ├── state.rs       Match-State-Machine (pure Logic) + Unit-Tests
@@ -29,7 +31,25 @@ cargo test               # State-Machine + API-Level (Mock-Endpoints)
 cargo clippy --all-targets && cargo fmt --check
 ```
 
-## Start
+## Docker-Image (Issue #275)
+
+Multi-Stage-`Dockerfile` (`rust:bookworm` Builder → `debian:bookworm-slim`
+Runtime, non-root, `curl` für den HEALTHCHECK). Build-Kontext ist dieses
+Verzeichnis:
+
+```bash
+docker build -t rb-tournament:dev tournament/
+docker run --rm -p 127.0.0.1:8081:8081 -e TOURNAMENT_PORT=8081 \
+  -e RBBRIDGE_A_URL=http://<dedi-container>:9001/exec rb-tournament:dev
+```
+
+Im Deploy baut die Rolle `tournament-server` das Image
+`rb-tournament:<deploy-sha>` und startet den Dienst als **zweiten Service im
+Compose des Dedi-Servers** (gleiches Docker-Netz; die Bridge ist per Docker-DNS
+unter `http://<dedi-container>:9001/exec` erreichbar). Eine frühere systemd-Unit
+gleichen Namens wird idempotent entfernt.
+
+## Start (lokal, ohne Docker)
 
 ```bash
 TOURNAMENT_PORT=8080 RBBRIDGE_A_URL=http://10.0.0.5:9001/exec \
