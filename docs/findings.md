@@ -39,7 +39,7 @@ Matheos Prototyp-Repo (<https://github.com/BestToasty/riftbreaker_mod>, Stand 07
 
 ## Offene Punkte (klärt der In-Game-Test, nicht mehr die Doku)
 
-- macOS-Mod-Support (offiziell „Steam/GamePass PC“; Ordner-Pfad analog anlegen).
+- macOS-Mod-Support — **verifiziert: keine native macOS-Version** (Steam-App 780310 `mac:false`, nur Windows); Mod-Install nur über Wine-basiertes GPTK/CrossOver/Whisky oder Windows-VM (Parallels). In-Game-Test auf echtem Mac bleibt offen (`docs/research/macos-mod-support.md`).
 - Exakte Feind-Team-Zuordnung bei `SpawnEntity(..., "")` (Blueprint-Standard erwartet).
 - Popup-/HUD-Verhalten in realistischen Spielsituationen (Fokus, Mehrfach-Popups).
 - Bind-Persistenz der Konsole über Sessions hinweg (unschädlich, s. mod/README).
