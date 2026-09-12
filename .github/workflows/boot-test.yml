@@ -6,27 +6,75 @@ name: Boot-Test (Test-Ports)
 #
 # Kein Secret nötig: Dummy-Vault (Test-Passwort) + Test-Ports/Pfade.
 # Prod (6321/8081) wird nie berührt.
+#
+# Path-Filter (Issue #303, Option A): Der Job `boot-test` läuft IMMER (damit der
+# Required-Check nie als "Expected" hängen bleibt), überspringt aber den teuren
+# Deploy/Boot, wenn kein relevanter Pfad (mod/, deploy/, tools/dedicated-server/,
+# scripts/, dieses Workflow-File) geändert wurde. Doku-/Metadaten-PRs ziehen den
+# Gate damit nicht mehr.
+#
+# Keine globale `concurrency`-Group mehr (Issue #303): GitHubs Concurrency
+# verdrängt wartende Läufe statt sie zu reihen — bei mehreren offenen PRs blieb
+# der Required-Check so offen. Aktuell serialisiert der EINE Self-Hosted-Runner
+# (planet) die Läufe ohnehin; die Test-Ports (6323/8091/9003) bleiben dadurch
+# exklusiv. VOR einem Scale-out auf >=2 Runner (#304) muss die Port-Exklusivität
+# neu abgesichert werden (#290, Port-/Container-Namen je Lauf ableiten).
 
 on:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-# Serialisieren: nur EIN Test-Container zur Zeit (Ports 6323/8091/9003 sind
-# pro Lauf exklusiv) — verhindert Port-Kollisionen bei parallelen PR-Läufen.
-concurrency:
-  group: boot-test
-  cancel-in-progress: false
-
 jobs:
+  changes:
+    name: Relevante Pfade (Boot-Test-Gate)
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.decide.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Relevante Pfade bestimmen
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # workflow_dispatch erzwingt den Boot-Test immer: das ist der Zweck —
+          # einen verhungerten Lauf ohne Leer-Commit nachholen zu können.
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Over-inclusive bei jedem Diff-Problem: lieber einmal zu viel laufen
+          # als einen relevanten Change fälschlich zu skippen (Gate bliebe
+          # sonst fälschlich grün). Doku-PRs landen hier auf relevant=false.
+          CHANGED="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || true)"
+          if printf '%s\n' "$CHANGED" \
+             | grep -Eq '^(mod/|deploy/|tools/dedicated-server/|scripts/|\.github/workflows/boot-test\.yml)'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+          fi
+
   boot-test:
     name: boot-test
+    needs: changes
     runs-on: [self-hosted, planet]
     timeout-minutes: 25
     steps:
+      - name: Keine relevanten Pfade — Boot-Test übersprungen (Gate bleibt grün)
+        if: needs.changes.outputs.relevant != 'true'
+        run: echo "Keine boot-test-relevanten Pfade geändert — kein Deploy/Boot nötig."
+
       - name: Fork-PR erkennen (Gate nur für Repo-eigene PRs)
         id: gate
+        if: needs.changes.outputs.relevant == 'true'
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "pull_request" ] \
@@ -36,10 +84,10 @@ jobs:
           fi
 
       - uses: actions/checkout@v4
-        if: steps.gate.outputs.skip != 'true'
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
 
       - name: Tooling bereitstellen (ansible + rustup für den Runner-User)
-        if: steps.gate.outputs.skip != 'true'
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           VENV="$HOME/.local/ansible-deploy-check"
@@ -58,7 +106,7 @@ jobs:
           "$HOME/.cargo/bin/cargo" --version
 
       - name: SSH-Voraussetzung prüfen (runner -> root@planet)
-        if: steps.gate.outputs.skip != 'true'
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           if ! ssh -o BatchMode=yes -o ConnectTimeout=10 planet 'id -u' >/dev/null 2>&1; then
             echo "::error::Boot-Test braucht SSH runner@planet -> root@planet (Alias planet). Einrichtung: deploy/README.md, Abschnitt deploy-check (PR-Gate)."
@@ -66,7 +114,7 @@ jobs:
           fi
 
       - name: Runner-Cleanup (stehengebliebene Test-Container/Netz entfernen)
-        if: steps.gate.outputs.skip != 'true'
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           # Infra-Gate: ein zuvor abgebrochener Lauf kann den Test-Container
@@ -77,7 +125,7 @@ jobs:
           ssh planet 'docker network rm rb_default 2>/dev/null || true'
 
       - name: Test-Deploy auf Test-Ports (Dummy-Vault, kein Secret)
-        if: steps.gate.outputs.skip != 'true'
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           INV="$(mktemp -d)/inventory"
@@ -90,7 +138,7 @@ jobs:
           ansible-playbook -i "$INV" deploy/test-deploy.yml -e @deploy/test-vars.yml
 
       - name: Boot verifizieren (Container stabil + UDP-Bind + tournament healthy)
-        if: steps.gate.outputs.skip != 'true'
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           # Wine/Xvfb brauchen einen Moment — erst nach 30 s prüfen.
@@ -153,7 +201,7 @@ jobs:
           echo "Boot-Test OK: Container läuft stabil, UDP ${IPORT}/udp gebunden, tournament-server healthy auf 8091."
 
       - name: Aufräumen (Test-Container + Unit stoppen)
-        if: always() && steps.gate.outputs.skip != 'true'
+        if: always() && needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           ssh planet 'docker compose -f /opt/rbbattle-deploy/test/rb/docker-compose.yml down --remove-orphans 2>/dev/null || docker rm -f riftbreaker-dedicated-test 2>/dev/null || true'
           ssh planet 'docker network rm rb_default 2>/dev/null || true'
