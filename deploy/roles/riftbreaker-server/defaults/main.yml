@@ -16,7 +16,12 @@ riftbreaker_server_port_udp: 6321
 riftbreaker_server_name: RBBattle
 riftbreaker_server_max_players: 4
 riftbreaker_server_broadcast_enabled: 1
-riftbreaker_server_pause_game_when_empty: 1
+# 0 = die Lua-Welt laeuft headless weiter (Live-Beleg 2026-09-12, #265): mit "1"
+# friert das Lua-Log nach dem Laden ein und `rb_wave 3` erreicht den Mod
+# (exec_result ok:true), erzeugt aber KEIN event=wave. Der Exec-/Wellen-
+# Kontrollkanal (Ingress, #265) und der Referee (#269) brauchen eine laufende
+# Lua-Welt; ohne Spieler liefe sonst keine Welle.
+riftbreaker_server_pause_game_when_empty: 0
 riftbreaker_server_rcon_password: "{{ vault_server_rcon_password | default('') }}"
 
 # Config-Zielpfad (wird als /data/config/config.cfg:ro in den Container gemountet).
