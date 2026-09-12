@@ -159,10 +159,20 @@ typedef struct {
       offsetof(IMAGE_NT_HEADERS, OptionalHeader) + \
       (nthead)->FileHeader.SizeOfOptionalHeader))
 
-/* Synthetisches Modul/Adressraum - die Tests setzen es per ht_set_module(). */
+/* Synthetisches Modul/Adressraum - die Tests setzen es per ht_set_module().
+ *
+ * g_ht_module_base ist die LOADER-Sicht (GetModuleHandleA/W), g_ht_region_*
+ * die VirtualQuery-Sicht. ht_set_module() setzt beide gemeinsam;
+ * ht_set_loader_visible(0) versteckt NUR die Loader-Sicht (Wine-Zielszenario:
+ * Stufe (a) liefert NULL, obwohl die Region per VirtualQuery sichtbar bleibt)
+ * und macht damit Stufe (d) (Signatur -> VirtualQuery->AllocationBase) positiv
+ * testbar (Review B1). g_ht_region_type liefert den Type der synthetischen
+ * Region (0 wie zuvor, oder MEM_IMAGE fuer Stufe (d)). */
 static unsigned char *g_ht_module_base = NULL;
 static unsigned char *g_ht_region_base = NULL;
 static size_t         g_ht_region_size = 0;
+static int            g_ht_region_type = 0;  /* 0 | MEM_IMAGE (Stufe d) */
+static const void    *g_ht_own_base = NULL;  /* Override "eigenes Image"  */
 
 static void ht_set_module(void *base, size_t size)
 {
@@ -171,15 +181,23 @@ static void ht_set_module(void *base, size_t size)
     g_ht_region_size = size;
 }
 
+/* Loader-Sicht (GetModuleHandleA/W) ein-/ausblenden, Region bleibt bestehen. */
+static void ht_set_loader_visible(int visible)
+{
+    g_ht_module_base = visible ? g_ht_region_base : NULL;
+}
+
+static void ht_set_region_type(int type) { g_ht_region_type = type; }
+
+/* Erzwingt die fuer den "eigenes Image"-Ausschluss massgebliche Basis. */
+static void ht_set_own_base(const void *base) { g_ht_own_base = base; }
+
 static void *ht_GetModuleHandleA(const char *name)
 {
     (void)name;
     return (void *)g_ht_module_base; /* NULL == Modul nicht geladen */
 }
 #define GetModuleHandleA ht_GetModuleHandleA
-
-static DWORD ht_GetLastError(void) { return 0; }
-#define GetLastError ht_GetLastError
 
 /*
  * Minimal-VirtualQuery auf genau EINER synthetischen Region:
@@ -217,7 +235,7 @@ static SIZE_T ht_VirtualQuery(const void *addr, MEMORY_BASIC_INFORMATION *mi,
     mi->RegionSize = (SIZE_T)(e - b);
     mi->State = MEM_COMMIT;
     mi->Protect = PAGE_READWRITE;
-    mi->Type = 0;
+    mi->Type = (DWORD)g_ht_region_type; /* Default 0; B1: MEM_IMAGE */
     return sizeof(*mi);
 }
 #define VirtualQuery ht_VirtualQuery
@@ -339,6 +357,15 @@ static HMODULE ht_LoadLibraryA(const char *name) { (void)name; return NULL; }
 #include <tlhelp32.h> /* Issue #252: Toolhelp32 Module32FirstW/NextW           */
 
 #endif /* RBBRIDGE_HOSTTEST */
+
+/* Host-Test-Hook fuer die "eigene Imagebasis" in module_via_sigbase().
+ * Produktion: IMMER NULL (die Basis wird real per VirtualQuery bestimmt).
+ * Host-Test: per ht_set_own_base() erzwingbar (deterministischer Negativfall). */
+#ifdef RBBRIDGE_HOSTTEST
+#define RBBRIDGE_OWN_IMAGE_BASE() ((const unsigned char *)g_ht_own_base)
+#else
+#define RBBRIDGE_OWN_IMAGE_BASE() ((const unsigned char *)NULL)
+#endif
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -810,7 +837,10 @@ static const unsigned char *scan_u64(const unsigned char *start, size_t len,
 static const unsigned char *resolve_console_vftable(const unsigned char *base,
                                                     size_t size);
 
-/* Ist [base] ein x64-PE-Image? Setzt *out_size = SizeOfImage. */
+/* Ist [base] ein x64-PE-Image? Setzt *out_size = SizeOfImage.
+ * Defensiv: MZ-Check, e_lfanew-Schranke (hinter dem DOS-Header und in
+ * plausiblen Grenzen, schuetzt vor absurden Kandidaten aus Stufe (d)),
+ * PE-Signatur, x64-Machine und SizeOfImage > 0. */
 static int pe_image_size(const unsigned char *base, size_t *out_size)
 {
     if (!base)
@@ -818,11 +848,16 @@ static int pe_image_size(const unsigned char *base, size_t *out_size)
     const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)base;
     if (dos->e_magic != IMAGE_DOS_SIGNATURE)
         return 0;
+    uint32_t e_lfanew = (uint32_t)dos->e_lfanew;
+    if (e_lfanew < (uint32_t)sizeof(IMAGE_DOS_HEADER) || e_lfanew > 0x1000u)
+        return 0;
     const IMAGE_NT_HEADERS *nt =
-        (const IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
+        (const IMAGE_NT_HEADERS *)(base + e_lfanew);
     if (nt->Signature != IMAGE_NT_SIGNATURE)
         return 0;
     if (nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64)
+        return 0;
+    if (nt->OptionalHeader.SizeOfImage == 0)
         return 0;
     *out_size = (size_t)nt->OptionalHeader.SizeOfImage;
     return 1;
@@ -933,11 +968,15 @@ static int module_via_sigbase(const unsigned char **out_base, size_t *out_size,
                               const unsigned char **out_execfn)
 {
     /* Eigenes Modul ausschliessen: RBBRIDGE_EXEC_SIG liegt als Konstante
-     * auch im eigenen Image und wuerde sonst als "Treffer" erkannt. */
-    MEMORY_BASIC_INFORMATION smi;
-    const unsigned char *own = NULL;
-    if (VirtualQuery((const void *)&module_via_sigbase, &smi, sizeof(smi)))
-        own = (const unsigned char *)smi.AllocationBase;
+     * auch im eigenen Image und wuerde sonst als "Treffer" erkannt.
+     * Im Host-Test kann die "eigene" Basis per ht_set_own_base() erzwungen
+     * werden (deterministischer Negativfall, Review B1). */
+    const unsigned char *own = RBBRIDGE_OWN_IMAGE_BASE();
+    if (!own) {
+        MEMORY_BASIC_INFORMATION smi;
+        if (VirtualQuery((const void *)&module_via_sigbase, &smi, sizeof(smi)))
+            own = (const unsigned char *)smi.AllocationBase;
+    }
 
     uintptr_t addr = 0;
     for (;;) {
@@ -1209,7 +1248,9 @@ static void *resolve_console_instance(const unsigned char *vftable)
  * Einmal aufgeloeste ConsoleService-Anbindung (Risiko: Voll-Scan des
  * Adressraums pro exec). Das Ergebnis wird gecacht und bei Folgeaufrufen
  * nur BILLIG re-validiert:
- *   - Modul noch an derselben Basis? (GetModuleHandleA)
+ *   - Modul-PE-Header an der gecachten Basis noch gueltig + gleiche Groesse?
+ *     (pe_image_size; UNTER WINE liefert GetModuleHandleA NULL -> die
+ *     Gueltigkeit darf nicht daran haengen, siehe Re-Validierung unten)
  *   - zeigt *(void**)instance noch auf die gecachte vftable?
  *   - stehen die Signatur-Bytes noch an fn? (sig_matches, maskiert)
  * Schlaegt eine Pruefung fehl, wird der Cache verworfen und voll neu
@@ -1220,6 +1261,7 @@ static void *resolve_console_instance(const unsigned char *vftable)
 typedef struct {
     int                  valid;
     const unsigned char *module_base;
+    size_t               module_size;
     const unsigned char *fn;
     void                *instance;
     const unsigned char *vftable;
@@ -1235,12 +1277,26 @@ static console_cache_t g_console_cache;
  */
 static int resolve_console_service(console_exec_fn *out_fn, void **out_inst)
 {
-    /* 1) Billige Re-Validierung eines evtl. vorhandenen Cache-Treffers. */
+    /* 1) Billige Re-Validierung eines evtl. vorhandenen Cache-Treffers.
+     *
+     * ACHTUNG Wine (#252): GetModuleHandleA(name) liefert dort NULL
+     * (GLE=126), obwohl das Modul geladen ist. Die Re-Validierung darf
+     * deshalb NICHT (allein) an GetModuleHandleA haengen - sonst wird der
+     * Cache bei JEDEM exec verworfen und es folgt ein Voll-Scan-Stall.
+     * Liefert GetModuleHandleA aber eine Basis, MUSS sie zur gecachten
+     * passen (Modul entladen/neu geladen -> neuer Scan). Die eigentliche
+     * Gueltigkeit tragen der PE-Header an der gecachten Basis + der
+     * Instanz-/vftable- und Signatur-Check. */
     if (g_console_cache.valid) {
         void *mod = GetModuleHandleA(RBBRIDGE_MODULE_NAME);
         void *cur_vftable = NULL;
+        size_t cur_size = 0;
         memcpy(&cur_vftable, g_console_cache.instance, sizeof(cur_vftable));
-        if ((const unsigned char *)mod == g_console_cache.module_base &&
+        int mod_ok = (mod == NULL) ||
+                     ((const unsigned char *)mod == g_console_cache.module_base);
+        if (mod_ok &&
+            pe_image_size(g_console_cache.module_base, &cur_size) &&
+            cur_size == g_console_cache.module_size &&
             cur_vftable == g_console_cache.vftable &&
             sig_matches(g_console_cache.fn, RBBRIDGE_EXEC_SIG,
                         RBBRIDGE_EXEC_SIG_MASK, sizeof(RBBRIDGE_EXEC_SIG))) {
@@ -1306,6 +1362,7 @@ static int resolve_console_service(console_exec_fn *out_fn, void **out_inst)
     /* Cache fuellen (Folgeaufrufe nur noch billig re-validieren). */
     g_console_cache.valid = 1;
     g_console_cache.module_base = base;
+    g_console_cache.module_size = size;
     g_console_cache.fn = execfn;
     g_console_cache.instance = instance;
     g_console_cache.vftable = vftable;

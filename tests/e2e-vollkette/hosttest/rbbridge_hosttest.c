@@ -8,6 +8,11 @@
  *   - scan_bytes / scan_bytes_mask (Byte-Suche, Wildcard-Maske)
  *   - resolve_console_vftable (RTTI-Walk: RTTI-Name -> TD -> COL -> vftable)
  *   - resolve_console_service (Signatur + vftable + Instanz + Cache)
+ *   - Stufe (d) der Modul-Resolution POSITIV (Loader-Sicht aus, Region
+ *     MEM_IMAGE, (b)/(c)/(e) inert -> via=sigbase) + Negativfaelle
+ *     (eigenes Image / Signatur ohne vftable -> verworfen) (Review B1)
+ *   - Cache-Re-Validierung ohne GetModuleHandleA (Wine-Fall, Review R1)
+ *   - pe_image_size defensiv (e_lfanew-Schranke, SizeOfImage > 0, R2)
  *   - Fehlerpfade: Modul fehlt / RTTI-Name fehlt / COL invalide /
  *     Signatur fehlt / Instanz fehlt -> Resolver liefert 0/NULL (kein Crash).
  *
@@ -253,6 +258,83 @@ int main(void)
     check(resolve_console_service(&fn, &inst) == 0,
           "resolve_console_service: Instanz fehlt -> 0");
     free(no_inst);
+
+    /* -------------------------------------------------------------- */
+    /* B1 (Review): Stufe (d) POSITIV - Loader-Sicht aus, Region         */
+    /* MEM_IMAGE, (b)/(c)/(e) inert.                                     */
+    /* -------------------------------------------------------------- */
+    unsigned char *imgd = build_image(1, 1, 1, 1, 1);
+    ht_set_module(imgd, IMG_SIZE);
+    ht_set_loader_visible(0);      /* (a) GetModuleHandleA/W -> NULL     */
+    ht_set_region_type(MEM_IMAGE); /* (d) VirtualQuery-Region MEM_IMAGE  */
+    ht_set_own_base(NULL);
+    g_console_cache.valid = 0;
+    {
+        const unsigned char *rb = NULL, *refn = NULL;
+        size_t rs = 0;
+        const char *rvia = NULL;
+        check(resolve_module(&rb, &rs, &rvia, &refn) == 1 &&
+              rb == imgd && rs == IMG_SIZE && rvia != NULL &&
+              strcmp(rvia, "sigbase") == 0 && refn == imgd + SIG_OFF,
+              "B1: resolve_module via=sigbase (a/b/c/e neutralisiert)");
+    }
+    check(resolve_console_service(&fn, &inst) == 1 &&
+          (const unsigned char *)(uintptr_t)fn == imgd + SIG_OFF &&
+          inst == (void *)(imgd + INST_OFF),
+          "B1: Stufe (d) positiv (Scan -> base/vftable/Instanz)");
+
+    /* R1 (Review/Wine): Cache-Treffer OHNE Loader-Sicht. Nach dem (d)-Erfolg
+     * ist der Cache gefuellt; (d) wird jetzt unaufloesbar (Region-Type 0)
+     * und die Loader-Sicht bleibt versteckt -> ein Erfolg kann NUR aus der
+     * Cache-Re-Validierung stammen (kein Voll-Scan). */
+    ht_set_region_type(0);
+    fn = NULL; inst = NULL;
+    check(resolve_console_service(&fn, &inst) == 1 &&
+          inst == (void *)(imgd + INST_OFF),
+          "R1: Cache-Treffer ohne GetModuleHandleA (kein Voll-Scan)");
+    check(g_console_cache.valid == 1, "R1: Cache bleibt gueltig (Wine-Fall)");
+
+    /* B1-Negativ: "eigenes Image" (own == Kandidat) -> verworfen. */
+    ht_set_region_type(MEM_IMAGE);
+    ht_set_own_base(imgd);
+    g_console_cache.valid = 0;
+    fn = NULL; inst = NULL;
+    check(resolve_console_service(&fn, &inst) == 0,
+          "B1-Negativ: eigenes Image (own==Kandidat) -> verworfen");
+    check(g_console_cache.valid == 0, "B1-Negativ: kein Cache-Fill");
+
+    /* B1-Negativ: Modul traegt nur die Signatur, aber keine ConsoleService-
+     * vftable (RTTI) - genau der Fall des eigenen Images -> verworfen. */
+    ht_set_own_base(NULL);
+    unsigned char *sig_only = build_image(1, 0, 0, 0, 0);
+    ht_set_module(sig_only, IMG_SIZE);
+    ht_set_loader_visible(0);
+    ht_set_region_type(MEM_IMAGE);
+    g_console_cache.valid = 0;
+    fn = NULL; inst = NULL;
+    check(resolve_console_service(&fn, &inst) == 0,
+          "B1-Negativ: Sig ohne vftable -> Stufe (d) verwirft -> 0");
+    free(sig_only);
+
+    /* R2: pe_image_size defensiv (e_lfanew-Schranke, SizeOfImage > 0). */
+    unsigned char *pit = build_image(0, 0, 0, 0, 0);
+    size_t psz = 123;
+    check(pe_image_size(pit, &psz), "R2: gueltiges PE -> ok");
+    ((IMAGE_DOS_HEADER *)pit)->e_lfanew = 0; /* < sizeof(DOS-Header) */
+    check(!pe_image_size(pit, &psz), "R2: e_lfanew == 0 -> verworfen");
+    ((IMAGE_DOS_HEADER *)pit)->e_lfanew = 0x4000; /* zu gross */
+    check(!pe_image_size(pit, &psz), "R2: e_lfanew zu gross -> verworfen");
+    ((IMAGE_DOS_HEADER *)pit)->e_lfanew = NT_OFF;
+    ((IMAGE_NT_HEADERS *)(pit + NT_OFF))->OptionalHeader.SizeOfImage = 0;
+    check(!pe_image_size(pit, &psz), "R2: SizeOfImage == 0 -> verworfen");
+    free(pit);
+
+    /* Test-Knobs fuer alles Nachfolgende zuruecksetzen. */
+    ht_set_loader_visible(1);
+    ht_set_region_type(0);
+    ht_set_own_base(NULL);
+    g_console_cache.valid = 0;
+    free(imgd);
 
     free(img);
 
