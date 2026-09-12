@@ -1,0 +1,19 @@
+# Verwaltet von deploy/ role "website" (Jinja). NICHT manuell editieren.
+#
+# Eigener Rift-Caddy-Container (Issue #322): plain HTTP, reines Durchreichen.
+# network_mode host, damit
+#   1) der /tournament/*-Proxy auf den tournament-server (127.0.0.1:{{ tournament_port }})
+#      des Hosts zeigt und
+#   2) der geteilte Host-Caddy ({{ website_host_caddy_container }}, ebenfalls host-net)
+#      auf 127.0.0.1:{{ rift_caddy_port }} hierher proxen kann.
+services:
+  {{ rift_caddy_container }}:
+    image: "{{ rift_caddy_image }}"
+    container_name: {{ rift_caddy_container }}
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - "{{ rift_caddy_deploy_dir }}/Caddyfile:/etc/caddy/Caddyfile:ro"
+      - "{{ website_docroot }}:{{ rift_caddy_site_root }}:ro"
+      - "{{ rift_caddy_data_dir }}:/data"
+      - "{{ rift_caddy_config_dir }}:/config"

@@ -1,7 +1,19 @@
 ---
-# Rolle: website — statische Dateien (site/*) nach Docroot + Caddy-Snippet
-# (statics + /tournament/*-Proxy) + Reload. Idempotent, kein Container-Neustart
-# für statische Dateien.
+# Rolle: website — statische Dateien (site/*) nach Docroot + eigener
+# Rift-Caddy-Container (Statics + /tournament/*-Proxy) + EIN Eintrag im
+# geteilten Host-Caddy. Idempotent.
+#
+# Architektur (Issue #322):
+#   rift.projectmellon.de → Host-Caddy (mellon-caddy)
+#                            └─ reverse_proxy 127.0.0.1:{{ rift_caddy_port }}
+#                                  └─ rift-caddy (eigener Container, plain HTTP)
+#                                       ├─ file_server  {{ rift_caddy_site_root }}
+#                                       └─ handle_path /tournament/* → 127.0.0.1:{{ tournament_port }}
+#
+# Der geteilte Host-Caddy bekommt GENAU EINEN (idempotenten) Eintrag — kein
+# Caddyfile.d-Mount, keine Import-Zeile mehr. Die frühere, manuell gepflegte
+# Rift-Block- und Import-Zeile wird entfernt, damit Caddyfile und Rolle
+# übereinstimmen (kein Parallel-Block).
 
 - name: Docroot sicherstellen
   file:
@@ -59,23 +71,91 @@
       nicht erreichbar. Download-Kanal und Server-Stand driften auseinander.
   when: not ansible_check_mode
 
-- name: Caddy-Snippet-Verzeichnis sicherstellen
+# ---------------------------------------------------------------------------
+# Eigener Rift-Caddy (Issue #322): Container + Config im Rift-Stack. Zuert
+# aufbauen und validieren, danach erst den Host-Caddy umbiegen — so gibt es
+# kein Fenster, in dem der Host-Eintrag auf einen toten Port zeigt.
+# ---------------------------------------------------------------------------
+- name: Rift-Caddy Deploy-Verzeichnis sicherstellen
   file:
-    path: "{{ website_caddyfile_d_dir }}"
+    path: "{{ rift_caddy_deploy_dir }}"
     state: directory
     mode: "0755"
 
-- name: Caddy-Site-Snippet rendern
-  template:
-    src: rbmods.caddy.j2
-    dest: "{{ website_caddyfile_d_dir }}/rbmods.caddy"
-    mode: "0644"
-  notify: reload caddy
+- name: Rift-Caddy Daten-/Config-Verzeichnis sicherstellen
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ rift_caddy_data_dir }}"
+    - "{{ rift_caddy_config_dir }}"
 
-- name: Import-Zeile im Caddyfile sicherstellen
-  lineinfile:
-    path: "{{ website_caddyfile_host_path }}"
-    line: "{{ website_caddy_import_line }}"
-    create: true
+- name: Rift-Caddy Caddyfile rendern
+  template:
+    src: rift-caddy.Caddyfile.j2
+    dest: "{{ rift_caddy_deploy_dir }}/Caddyfile"
     mode: "0644"
-  notify: reload caddy
+  notify: restart rift-caddy
+
+- name: Rift-Caddy docker-compose.yml rendern
+  template:
+    src: docker-compose.yml.j2
+    dest: "{{ rift_caddy_deploy_dir }}/docker-compose.yml"
+    mode: "0644"
+  notify: restart rift-caddy
+
+- name: Rift-Caddy starten (docker compose up, idempotent)
+  command: >-
+    docker compose -f {{ rift_caddy_deploy_dir }}/docker-compose.yml
+    up -d --remove-orphans
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Rift-Caddy Konfiguration validieren (caddy validate)
+  command: docker exec {{ rift_caddy_container }} caddy validate --config /etc/caddy/Caddyfile
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Rift-Caddy erreichbar? (lokaler Health über 127.0.0.1)
+  uri:
+    url: "http://127.0.0.1:{{ rift_caddy_port }}/tournament/health"
+    status_code: 200
+  register: rift_caddy_health
+  retries: 5
+  delay: 2
+  until: rift_caddy_health.status == 200
+  changed_when: false
+  when: not ansible_check_mode
+
+# ---------------------------------------------------------------------------
+# Geteilter Host-Caddy: genau EIN Eintrag. Alte manuelle Rift-Definition und
+# die verwaiste Snippet-Import-Zeile zuerst entfernen (sonst kollidiert die
+# Domain bzw. schlägt der Glob-Import ins leere Verzeichnis fehl).
+# ---------------------------------------------------------------------------
+- name: Alten manuell gepflegten Rift-Block aus dem Host-Caddyfile entfernen
+  replace:
+    path: "{{ website_host_caddyfile_path }}"
+    regexp: '(?ms)^# BEGIN RIFT PROJECTMELLON MODS.*?^# END RIFT PROJECTMELLON MODS\n?'
+    replace: ''
+  notify: reload host caddy
+
+- name: Verwaiste Snippet-Import-Zeile aus dem Host-Caddyfile entfernen
+  lineinfile:
+    path: "{{ website_host_caddyfile_path }}"
+    line: "import /etc/caddy/Caddyfile.d/*"
+    state: absent
+  notify: reload host caddy
+
+- name: Host-Caddy-Eintrag sicherstellen (genau EIN Block)
+  blockinfile:
+    path: "{{ website_host_caddyfile_path }}"
+    marker: "# {mark} RIFT PROJECTMELLON (managed by deploy/roles/website)"
+    owner: "{{ website_host_caddyfile_owner }}"
+    group: "{{ website_host_caddyfile_group }}"
+    mode: "0644"
+    block: |
+      {{ website_domain }} {
+          reverse_proxy 127.0.0.1:{{ rift_caddy_port }}
+      }
+  notify: reload host caddy

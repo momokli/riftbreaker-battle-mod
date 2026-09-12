@@ -13,7 +13,7 @@
 | riftbreaker-dedicated | planet | docker (wine) | 6321/udp | Dev-SP-Server: 1v1 „vs sich selbst" (SP-Mode; rbbattle-Mod + rbbridge) |
 | tournament-server | planet | systemd (Rust/axum, `tournament/`) | 8081 | Turnier 1v1: Lobby/Ready/GO/Wave-Routing/Score (2 Welten) |
 | test-Instanzen | planet | docker, on-demand | frei | Test-Server aller Art (Mod-Tests, Balance, Experimente) |
-| Website | planet | statics + Caddy (`mellon-caddy`) | 443 | Landing `/` · `/connectivity.html` · `/solo.html` · `/status.json` · Proxy `/tournament/*` → tournament-server |
+| Website | planet | statics + **eigener** Caddy (`rift-caddy`, plain HTTP) hinter `mellon-caddy` | 443 → 127.0.0.1:8787 | Landing `/` · `/connectivity.html` · `/solo.html` · `/status.json` · Proxy `/tournament/*` → tournament-server |
 | Mod-Download | planet | statics (Caddy) | 443 | `rbbattle.zip` (Paketierung + md5-Parität) |
 | rbmods-probe.timer | planet | systemd | — | Connectivity-Checks alle 2 Min → `status.json` |
 | rbbridge | in Mod-Containern | Prozess | — | Command-Injection (`exec_cmd_client`, Argument IMMER als EIN gequotierter String) |
@@ -49,8 +49,10 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
    in `<game>/mods/rbbattle`; Restart-Handler bei Mod-/Config-Änderung.
 5. **tournament-server** — systemd-Unit, Env-Konfig (`RBBRIDGE_A_URL`/
    `RBBRIDGE_B_URL`), Binary + Web-UI aus `tournament/`.
-6. **website** — statische Dateien (`site/*`) nach Docroot, Caddy-Snippet
-   (statics + `/tournament/*`-Proxy) + Reload.
+6. **website** — statische Dateien (`site/*`) nach Docroot, eigener
+   **`rift-caddy`** (plain HTTP: Statics + `/tournament/*`-Proxy) und **EIN**
+   Eintrag im geteilten Host-Caddy (`mellon-caddy`) für die Domain. Details:
+   „Website-Pfad“ unten.
 7. **probe-timer** — systemd-Timer für `scripts/probe_servers.sh` →
    `status.json`.
 
@@ -60,6 +62,46 @@ Grundsätze:
 - **Deploy nur via Playbook** —
   `ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass`.
 - **Rollback** = vorherige `rbbattle.zip` / vorheriges Binary wieder einspielen.
+
+## Website-Pfad — eigener Rift-Caddy + EIN Host-Eintrag (Issue #322)
+
+Die öffentliche Web-UI (`solo.html`, `/wave`-Knopf, Live-Log) nutzt
+`apiBase = "/tournament"` (gleicher Origin). Der `/tournament/*`-Proxy läuft
+**nicht** mehr als Snippet im geteilten Host-Caddy, sondern in einem **eigenen
+Rift-Caddy**:
+
+```text
+rift.projectmellon.de → Host-Caddy (mellon-caddy, hostet viele Domains)
+                         └─ reverse_proxy 127.0.0.1:8787
+                              └─ rift-caddy (eigener Container, plain HTTP, net=host)
+                                   ├─ file_server  /srv/site   (Statics, /solo, /mods)
+                                   └─ handle_path /tournament/* → 127.0.0.1:8081
+```
+
+Eigenschaften:
+
+- **Genau EIN** Eintrag im geteilten Host-Caddy (`rift.projectmellon.de` →
+  `reverse_proxy 127.0.0.1:{{ rift_caddy_port }}`), idempotent via `blockinfile`
+  (Marker `RIFT PROJECTMELLON (managed by deploy/roles/website)`). Kein
+  `Caddyfile.d`-Mount, keine Snippet-Import-Zeile mehr. Die frühere, manuell
+  gepflegte Rift-Blöcke/Import-Zeile entfernt die Rolle (kein Parallel-Block).
+- **rift-caddy** ist ein eigener Container (`caddy:2`, `network_mode: host`) und
+  lauscht ausschließlich auf `127.0.0.1:8787`. TLS terminiert weiterhin der
+  Host-Caddy.
+- `/solo` und `/solo.html` sind erreichbar (`rewrite /solo /solo.html`); der
+  optionale basic_auth-Schutz (Issue #159) bleibt (nur wenn
+  `vault_solo_basic_auth_hash` gesetzt ist).
+- `/mods/*` (Zip-Download + Browse, Upload via dufs) bleibt unverändert.
+- Variablen: `deploy/inventory/host_vars/planet/vars.yml` (`rift_caddy_*`,
+  `website_host_caddyfile_*`); Umsetzung: `deploy/roles/website/`.
+
+Akzeptanz-Beleg (Play-Test-Preflight **P4**, `docs/PLAYTEST_1.0.md`):
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://rift.projectmellon.de/tournament/health   # 200
+curl -s -o /dev/null -w '%{http_code}\n' https://rift.projectmellon.de/solo.html          # 200
+curl -s -o /dev/null -w '%{http_code}\n' https://rift.projectmellon.de/mods/rbbattle.zip   # 200
+```
 
 ## Mod-Backups & mods/-Guard (Issue #212)
 
