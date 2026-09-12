@@ -1,13 +1,16 @@
 ---
-# Defaults der Rolle tournament-server (systemd, Rust/axum).
+# Defaults der Rolle tournament-server (Issue #275) — baut rb-tournament:<deploy-sha>
+# auf dem Zielhost aus dem Image-Rezept tournament/Dockerfile.
 #
-# Das Binary wird auf dem Control-Node (planet) aus dem Repo-Checkout gebaut
-# (`cd tournament && cargo build --release`). Die Rust-Toolchain (rustup) liegt
-# unter /opt/rbbattle-deploy — im Datenverzeichnis des deploy-Users, damit alles
-# Deploy-Zubehör an einem Ort bleibt. Die Rolle stellt die
-# Toolchain idempotent bereit (installiert nur, wenn cargo fehlt).
-tournament_binary_src: "{{ playbook_dir }}/../tournament/target/release/tournament-server"
-rustup_home: /opt/rbbattle-deploy/rustup
-cargo_home: /opt/rbbattle-deploy/cargo
-cargo_bin: "{{ cargo_home }}/bin/cargo"
-rustup_init_url: https://sh.rustup.rs
+# Das Image ist die Laufzeit des Tournament-Servers (Rust/axum). Es läuft als
+# zweiter Service im Compose der Rolle riftbreaker-server (gleiches default-Netz
+# → der Tournament-Container erreicht die Dedi-Bridge per Docker-DNS). Kein
+# Host-Build (rustup/cargo) und keine systemd-Unit mehr.
+#
+# Idempotenz: Tag = Deploy-SHA (kein `latest`). Existiert das Image, kein Build;
+# sonst greift der Docker-Layer-Cache. Das Compose pinnt exakt diesen Tag.
+tournament_build_context_dir: /opt/rbmods/tournament-build
+tournament_image_name: rb-tournament
+tournament_image: "{{ tournament_image_name }}:{{ deploy_image_tag }}"
+# Legacy-systemd-Unit, die dieser Deploy ablöst (idempotent entfernt).
+tournament_legacy_unit: tournament-server

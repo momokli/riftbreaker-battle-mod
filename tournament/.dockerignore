@@ -1,0 +1,7 @@
+# Build-Kontext klein halten (Issue #275): nur Cargo.toml/Cargo.lock, src/,
+# web/ und die Dockerfile selbst werden gebraucht.
+target
+.git
+.gitignore
+*.md
+bridge

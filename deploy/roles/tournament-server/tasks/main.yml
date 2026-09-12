@@ -1,108 +1,62 @@
 ---
-# Rolle: tournament-server — systemd-Unit (Rust/axum aus tournament/).
+# Rolle: tournament-server (Issue #275) — baut rb-tournament:<deploy-sha> auf dem
+# Zielhost aus tournament/ (Multi-Stage-Dockerfile). Kein rustup/cargo mehr auf
+# dem Control-Node, kein Binary-Copy, keine systemd-Unit.
 #
-# Binary-Quelle: wird auf dem Control-Node (planet) aus dem Repo-Checkout
-# gebaut. Die Rolle stellt die Rust-Toolchain (rustup) idempotent bereit und
-# baut `cargo build --release` selbst — kein implizites Fremd-Bauen, kein
-# CI-Artefakt-Pull. Die Web-UI kommt direkt aus dem Repo-Checkout.
+# WICHTIG (Reihenfolge, Design R5): diese Rolle läuft in site.yml/test-deploy.yml
+# VOR riftbreaker-server. Das Compose dort publiziert (Prod) 127.0.0.1:8081 und
+# startet den Tournament-Container; die frühere systemd-Unit muss vorher weg sein,
+# sonst Bind-Konflikt auf 8081.
+#
+# Idempotenz: Der Tag ist der Deploy-SHA. Existiert das Image bereits → kein
+# Build; sonst Docker-Layer-Cache. Vor dem Compose-Up wird hart geprüft, dass das
+# Image existiert.
 
-- name: Cargo-Home anlegen
+- name: Build-Kontext-Verzeichnis sicherstellen
   file:
-    path: "{{ cargo_home }}"
+    path: "{{ tournament_build_context_dir }}"
     state: directory
     mode: "0755"
-  delegate_to: localhost
-  become: false
 
-- name: Rust-Toolchain prüfen (cargo auf dem Control-Node)
-  command: "{{ cargo_bin }} --version"
-  delegate_to: localhost
-  become: false
-  environment:
-    RUSTUP_HOME: "{{ rustup_home }}"
-    CARGO_HOME: "{{ cargo_home }}"
-  register: cargo_version
+- name: Build-Kontext synchronisieren (tournament/)
+  copy:
+    src: "{{ playbook_dir }}/../tournament/"
+    dest: "{{ tournament_build_context_dir }}/"
+    mode: preserve
+    directory_mode: "0755"
+  register: tournament_build_context
+
+# Read-only-Abfrage, läuft auch im --check (check_mode: false).
+- name: Image-Existenz prüfen ({{ tournament_image }})
+  command: docker image inspect "{{ tournament_image }}"
+  register: tournament_image_info
   changed_when: false
   failed_when: false
+  check_mode: false
 
-- name: rustup-init herunterladen (nur wenn cargo fehlt)
-  get_url:
-    url: "{{ rustup_init_url }}"
-    dest: "{{ cargo_home }}/rustup-init.sh"
-    mode: "0755"
-    force: true
-  delegate_to: localhost
-  become: false
-  when: cargo_version.rc != 0
-
-- name: Rust-Toolchain installieren (rustup, idempotent)
+- name: Tournament-Image bauen (nur bei fehlendem Tag)
   command: >-
-    {{ cargo_home }}/rustup-init.sh -y --default-toolchain stable
-    --profile minimal --no-modify-path
-  delegate_to: localhost
-  become: false
-  environment:
-    RUSTUP_HOME: "{{ rustup_home }}"
-    CARGO_HOME: "{{ cargo_home }}"
-  when: cargo_version.rc != 0
+    docker build --tag {{ tournament_image }} {{ tournament_build_context_dir }}
+  when:
+    - not ansible_check_mode
+    - tournament_image_info.rc != 0
+  register: tournament_image_build
+  changed_when: tournament_image_build.rc == 0
+  failed_when: tournament_image_build.rc != 0
 
-- name: tournament-server bauen (cargo build --release)
-  command: "{{ cargo_bin }} build --release"
-  args:
-    chdir: "{{ playbook_dir }}/../tournament"
-  delegate_to: localhost
-  become: false
-  environment:
-    RUSTUP_HOME: "{{ rustup_home }}"
-    CARGO_HOME: "{{ cargo_home }}"
-  register: tourney_build
-  changed_when: "'Compiling' in (tourney_build.stdout ~ tourney_build.stderr)"
+- name: Image garantiert vorhanden, bevor das Compose startet
+  assert:
+    that:
+      - tournament_image_info.rc == 0
+        or (tournament_image_build.rc | default(1)) == 0
+    fail_msg: >-
+      Image {{ tournament_image }} fehlt und wurde nicht erfolgreich gebaut —
+      Compose-Start wird abgebrochen. Kontext: {{ tournament_build_context_dir }}
+  when: not ansible_check_mode
 
-- name: Build-Ergebnis prüfen (Binary muss existieren)
-  stat:
-    path: "{{ tournament_binary_src }}"
-  delegate_to: localhost
-  become: false
-  register: tourney_bin_src
-
-- name: Build-Anforderung bei fehlendem Binary
-  fail:
+- name: Hinweis im --check (kein Build, kein Containerstart)
+  debug:
     msg: >-
-      tournament-server Build fehlgeschlagen oder Binary fehlt unter
-      {{ tournament_binary_src }}. Build-Log oben prüfen.
-  when: not tourney_bin_src.stat.exists
-
-- name: Installationsverzeichnis anlegen
-  file:
-    path: "{{ tournament_install_dir }}"
-    state: directory
-    mode: "0755"
-
-- name: Binary deployen
-  copy:
-    src: "{{ tournament_binary_src }}"
-    dest: "{{ tournament_install_dir }}/tournament-server"
-    mode: "0755"
-    owner: root
-    group: root
-  notify: restart tournament-server
-
-- name: Web-UI deployen
-  copy:
-    src: "{{ playbook_dir }}/../tournament/web"
-    dest: "{{ tournament_install_dir }}"
-    mode: "0644"
-
-- name: systemd-Unit rendern
-  template:
-    src: tournament-server.service.j2
-    dest: "/etc/systemd/system/{{ tournament_unit }}.service"
-    mode: "0644"
-  notify: restart tournament-server
-
-- name: Unit aktivieren und starten
-  systemd:
-    name: "{{ tournament_unit }}"
-    state: started
-    enabled: true
-    daemon_reload: true
+      --check: Build von {{ tournament_image }} übersprungen
+      (Image {{ 'vorhanden' if tournament_image_info.rc == 0 else 'fehlt' }}).
+  when: ansible_check_mode
