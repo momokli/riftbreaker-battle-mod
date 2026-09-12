@@ -343,12 +343,27 @@ und Workshop-Mods tun (Quelle: fandom „Basic Modding Guide“, Ordner
 - mod.io: `C:\Users\Public\mod.io\3951\mods\<modid>\`
 
 ### macOS (Steam)
-- Install-Pfad: `~/Library/Application Support/Steam/steamapps/common/Riftbreaker/`
-- Dort analog `mods/rbbattle/` anlegen (Ordner ggf. neu erstellen).
-- ⚠️ Offiziell heißt es „Steam **und** GamePass **PC** können modden“ —
-  **ungetestet auf macOS**, in-game prüfen (siehe FINDINGS). Steam-Ordner muss
-  nicht zwingend „common“ heißen — Pfad über Steam → Verwalten → Lokale Dateien
-  anzeigen lassen.
+
+⚠️ **Keine native macOS-Version** — The Riftbreaker (Steam-App 780310) ist
+laut Steam-API **Windows-only** (`appdetails` → `platforms: { windows: true,
+mac: false, linux: false }`) und laut Steam-Systemanforderungen nur für
+Windows 8.1/10 gelistet. Der Pfad
+`~/Library/Application Support/Steam/steamapps/common/Riftbreaker/` existiert
+für dieses Spiel daher **nie** — Steam für macOS installiert keine
+Windows-only-Titel (und „GamePass PC“ ist ebenfalls Windows-only).
+
+**Mac-Routen (alle Windows-Kompatibilität, keine native Version):**
+- **Game Porting Toolkit / CrossOver / Whisky** (alle Wine-basiert) oder
+  **Parallels** (Windows-VM). In beiden Fällen gilt die **Windows-Installation**
+  oben — der Mod-Ordner liegt im Wine-/VM-`drive_c`
+  (z. B. `<Bottle>/drive_c/Program Files (x86)/Steam/steamapps/common/Riftbreaker/mods/rbbattle/`),
+  **nicht** unter `~/Library/Application Support/Steam/...`.
+- **Offener Punkt (braucht Mac-Test durch Momo/Matheo):** ob die Mod unter
+  GPTK/CrossOver/Whisky lädt und die Konsole
+  (`enable_developer_console` in `Conf/initial_config_win` im Wine-`Documents`-Ordner)
+  greift, ist **nicht verifiziert** (siehe `docs/research/macos-mod-support.md`).
+  Der Trainer (Named Pipe / DLL-Injection) ist unter macOS zusätzlich durch
+  SIP + Hardened Runtime erschwert (siehe `docs/concept.md`).
 
 ### Update per Tool (empfohlen)
 
@@ -460,7 +475,7 @@ Duell-Karte (Log `event=wave_spawners count=`); (2) Wirksamkeit des
 Klassen-Monkey-Patch im echten Autoexec-Environment (Log `event=dom_timer
 patch status=ok` = Indiz; Bestätigung über Wellenabstand/`debug_dom_manager 1`);
 (3) exakte Feind-Team-Zuordnung bei `SpawnEntity` mit `""` (Blueprint-Standard
-erwartet, s. #7); (4) macOS-Mod-Support ungeklärt.
+erwartet, s. #7); (4) macOS-Mod-Support: **keine native macOS-Version** (Steam-App 780310 `mac:false`) — nur Wine-basiertes GPTK/CrossOver/Whisky oder Windows-VM (Parallels); Mac-Test offen.
 (5) **Win-Condition (#28):** `EnteredTriggerEvent`-Feuerung und das
 Trigger-Zone-Asset ums HQ sind nicht belegt (Repo-Recherche hat kein
 Trigger-Event, s. api-deep-dive.md) — Handler ist pcall-gesichert registriert,
