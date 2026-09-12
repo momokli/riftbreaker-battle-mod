@@ -99,7 +99,7 @@
   <section class="panel"><div class="inner">
     <h2>ZWECK</h2>
     <p class="zw">&gt; Kompletter Trainer-I/O-Kanal (Trainer-only) — <b>ohne das Spiel</b>: <code>injector.exe</code> lädt <code>rbbridge.dll</code> in einen beliebigen x64-Prozess (Test: <code>notepad.exe</code>), die DLL startet den Named-Pipe-Server <code>\\.\pipe\rbbattle</code>, <code>pipe_client.py</code> sendet <code>ping</code>/<code>exec</code> und druckt die JSON-Antworten.</p>
-    <p class="zw">&gt; <code>exec</code> ist im Harness ein bewusster no-op (<code>ok:false</code>, TODO(RE)) — getestet wird der Kanal, nicht die Spielsteuerung.</p>
+    <p class="zw">&gt; <code>exec</code> löst <code>ConsoleService::ExecuteCommand</code> per AOB-Signatur (<code>.text</code>) + <code>ConsoleService</code>-Instanz per RTTI-Walk/vftable + Adressraum-Scan auf (keine festen RVAs). Ohne Spielprozess/-modul (Test 0 standalone / Test 1 notepad) ist die Instanz nicht auflösbar → Antwort <code>ok:false</code> (<code>console_service_not_found</code>) ohne Crash, der Kanal antwortet trotzdem. Im injizierten Spielprozess (Modul + ConsoleService gefunden) → <code>ok:true</code>. Der Live-Beweis, dass die Welle wirklich spawnt, ist offen (nur mit Player prüfbar, #252).</p>
     <p class="zw">&gt; Seit dem Dual-Mode-Umbau (eine Quelle, zwei Builds) geht der Kanal-Test auch <b>ohne jede Injection</b>: <code>rbbridge_standalone.exe</code> (<code>-DRBBRIDGE_STANDALONE</code>) startet dieselbe Pipe-Server-Logik als normales Konsolen-Programm — Test 0 unten.</p>
     <p class="zw">&gt; Der Injection-Test ist Test 1.</p>
   </div></section>
@@ -134,9 +134,9 @@ x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe injector\injector.c</pr
 &lt;- {"event":"pong","t":&lt;uptime-ms&gt;}</pre>
     </span></label>
     <label class="chk"><input type="checkbox" data-g="t"><span class="body">
-      <span class="t"><span class="opt">[optional]</span> test 03 — exec no-op</span>
+      <span class="t"><span class="opt">[optional]</span> test 03 — exec ohne Spielprozess</span>
       <span class="w">> was: <code>python pipe_client.py exec rb_wave 3</code> ausführen.</span>
-      <span class="e">→ erwartet: Antwort <code>exec_result ... ok:false</code> ohne Crash.</span>
+      <span class="e">→ erwartet: Kein Spielmodul/keine ConsoleService-Instanz auflösbar → Antwort <code>ok:false</code> mit <code>reason":"console_service_not_found</code> ohne Crash (Kanal antwortet trotzdem).</span>
     </span></label>
     <label class="chk"><input type="checkbox" data-g="t"><span class="body">
       <span class="t">test 04 — sauber beenden</span>
@@ -167,10 +167,10 @@ x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe injector\injector.c</pr
 &lt;- {"event":"pong","t":&lt;uptime-ms&gt;}</pre>
     </span></label>
     <label class="chk"><input type="checkbox" data-g="t"><span class="body">
-      <span class="t">test 09 — exec no-op</span>
+      <span class="t">test 09 — exec in fremdem Prozess</span>
       <span class="w">> was: <code>python pipe_client.py exec rb_wave 3</code> ausführen.</span>
-      <span class="e">→ erwartet: Sendet <code>{"cmd":"exec","command":"rb_wave 3"}</code>, Antwort ohne Crash:</span>
-      <pre>&lt;- {"event":"exec_result","command":"rb_wave 3","ok":false,"reason":"..."}</pre>
+      <span class="e">→ erwartet: In <code>notepad.exe</code> fehlt das Spielmodul → Antwort <code>ok:false</code>/<code>console_service_not_found</code> ohne Crash:</span>
+      <pre>&lt;- {"event":"exec_result","command":"rb_wave 3","ok":false,"reason":"console_service_not_found"}</pre>
     </span></label>
     <label class="chk"><input type="checkbox" data-g="t"><span class="body">
       <span class="t"><span class="opt">[optional]</span> test 10 — watch-modus</span>
@@ -210,8 +210,8 @@ x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe injector\injector.c</pr
       <span class="e">→ erwartet: <code>ping</code> → Antwort <code>pong</code> mit <code>t</code> (Pipe-Kanal funktioniert).</span>
     </span></label>
     <label class="chk"><input type="checkbox" data-g="v"><span class="body">
-      <span class="t">kriterium 05 — exec no-op</span>
-      <span class="e">→ erwartet: <code>exec</code> antwortet <code>ok:false</code> ohne Crash (Harness-no-op wie spezifiziert).</span>
+      <span class="t">kriterium 05 — exec-verhalten</span>
+      <span class="e">→ erwartet: <code>exec</code> antwortet ohne Crash — ohne Spielprozess/-modul (Test 0/1) <code>ok:false</code> (<code>console_service_not_found</code>); im injizierten Spielprozess (Modul + ConsoleService gefunden) <code>ok:true</code>. Live-Spawn-Beweis offen (nur mit Player, #252).</span>
     </span></label>
     <label class="chk"><input type="checkbox" data-g="v"><span class="body">
       <span class="t">kriterium 06 — dll-aktivität sichtbar</span>

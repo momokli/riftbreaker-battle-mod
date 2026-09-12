@@ -73,3 +73,17 @@ Follow-ups (Label-Guard).
 Issues, PRs und Kommentare auf **Deutsch oder Englisch** — beides ist ok, aber
 je Thread technisch konsistent (gleiche Begriffe, Pfade, Befehle). Vorher
 prüfen, ob ein passender Thread existiert, statt einen neuen aufzumachen.
+
+## 9. Runtime-/RE-Umgebung auf planet („bedien dich")
+
+Der komplette Game-Ordner liegt auf planet vor — inkl. **Debug-Symbols**. Für
+INGRESS/RE-Arbeit nutz das statt AOB zu raten:
+- `/srv/rbgame/bin/riftbreaker_dll_win_release.pdb` (volles privates PDB)
+- `/srv/rbgame/bin/riftbreaker_dll_win_release.dll` (Spiel-Logik, `Exor::ConsoleService`)
+- `/srv/rbgame/bin/DedicatedServer.exe`
+- RE-Artefakte: `/opt/rb-re/` (strings_dll.txt, FIRST_PASS.md, venv mit pefile+capstone)
+- Bekannte RVAs: vftable `??_7ConsoleService@Exor@@6B@` RVA 0x2F23C80; `ExecuteCommand(char const*)` RVA 0x1C0BEF0
+
+Wine-Gotcha: `GetModuleHandleA("riftbreaker_dll_win_release.dll")` kann unter Wine
+GLE=126 (ERROR_MOD_NOT_FOUND) liefern — Modul-Auflösung explizit prüfen. Live-Test
+(Named Pipe `\\.\pipe\rbbattle`) nur im Wine-Prefix (kein Unix-Socket).

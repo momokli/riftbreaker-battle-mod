@@ -48,7 +48,7 @@ Außenwelt.** Der Lua-Mod bleibt reine Spiellogik — er darf (Findings:
 | Komponente | Inhalt | Aufgabe |
 |---|---|---|
 | `injector/injector.c` | `injector.exe` (x64, Windows) | DLL zur Laufzeit in den Spielprozess laden (Remote-`LoadLibraryW`); Ziel per PID oder Prozessname |
-| `rbbridge/rbbridge.c` | `rbbridge.dll` + `rbbridge_standalone.exe` (x64, Windows) | In-Game-Gateway: Named-Pipe-Server `\\.\pipe\rbbattle`, line-delimited JSON v0; `exec`-Dispatch mit `TODO(RE)`; `score_update`-State-Snapshot (send_state-Egress, Issue #13). **Dual-Mode:** eine Quelle baut per `-DRBBRIDGE_STANDALONE` zusätzlich eine Standalone-EXE mit identischem Protokoll (Test ohne Injection, Baustein 04 Test 0) |
+| `rbbridge/rbbridge.c` | `rbbridge.dll` + `rbbridge_standalone.exe` (x64, Windows) | In-Game-Gateway: Named-Pipe-Server `\\.\pipe\rbbattle`, line-delimited JSON v0; `exec`-Dispatch löst `ConsoleService::ExecuteCommand` per AOB-Signatur/RTTI auf (statt fester RVAs) und führt sie aus; `score_update`-State-Snapshot (send_state-Egress, Issue #13). **Dual-Mode:** eine Quelle baut per `-DRBBRIDGE_STANDALONE` zusätzlich eine Standalone-EXE mit identischem Protokoll (Test ohne Injection, Baustein 04 Test 0). **Hinweis:** kanonische Build-/Distributions-Quelle ist `bausteine/04-trainer-io/`; `trainer/rbbridge/rbbridge.c` ist der byte-identische Spiegel (Legacy-Klon) |
 | `scan/` | Python + pymem | RE-Phase: Prozess-/Modul-Info (`scan_find.py`), interaktiver Wert-Scan (`scan_values.py`) → `offsets.json` |
 | `protocol.md` | Spezifikation | Event-Schema v0 (Spiel ⇄ Server) |
 
@@ -128,8 +128,11 @@ $w.WriteLine('{"cmd":"ping"}'); $w.Flush()
 $r.ReadLine()   # -> {"event":"pong","t":...}
 ```
 
-`{"cmd":"exec","command":"rb_wave 3"}` antwortet im Harness mit
-`exec_result ... "ok":false` (TODO(RE)) — Protokoll-Details:
+`{"cmd":"exec","command":"rb_wave 3"}` führt `ConsoleService::ExecuteCommand`
+per AOB-Signatur/RTTI aus und antwortet bei Erfolg
+`{"event":"exec_result","command":"rb_wave 3","ok":true}`; ist die Anbindung
+nicht auflösbar (kein Spielprozess/Modul), kommt `ok:false` +
+`"reason":"console_service_not_found"` ohne Crash — Protokoll-Details:
 [protocol.md](protocol.md).
 
 ### Command-Argumente (Quoting, Issue #18)
@@ -173,12 +176,12 @@ in die eigene Pipe und das Temp-Log.
 Alles, was den Spielprozess von innen versteht, ist Phase 2
 (Reverse Engineering) und im Code markiert:
 
-1. **`dispatch_exec()`** (`rbbridge.c`): `{"cmd":"exec","command":"rb_wave 3"}`
-   wirklich im Spiel ausführen. Gesucht: ConsoleService-Instanz / Lua-State
-   bzw. die Engine-Funktion hinter `ExecuteCommand` (Findings Punkt 8 —
-   `ConsoleService:ExecuteCommand` spawnt nachweislich), bevorzugt per
-   AOB-Signatur statt fester Adresse. Anhaltspunkt für die Verdrahtung:
-   Experiment C im Spike (Log-Bridge `[RBBATTLE] event=...`).
+1. **`dispatch_exec()`** (`rbbridge.c`): der Aufruf ist **implementiert** —
+   `ConsoleService::ExecuteCommand` wird per AOB-Signatur (`.text`) und die
+   `ConsoleService`-Instanz per RTTI-Walk (vftable) + Adressraum-Scan
+   aufgelöst (keine festen RVAs) und ausgeführt. Ergebnis-Cache + Fehler-Event
+   sind vorhanden. **Offen bleibt allein der Live-Beweis** im laufenden Spiel
+   (spawnt die Welle wirklich? Thread-Marshalling? hängt an **#252**).
 2. **`read_game_state()`** (`rbbridge.c`): echte State-Werte (Score,
    Ressourcen, Wave) aus dem Prozess lesen → `score_update`-Events
    (Struktur in `send_state()` verdrahtet, Werte Default bis RE).
