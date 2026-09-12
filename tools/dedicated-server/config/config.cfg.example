@@ -1,0 +1,79 @@
+// The Riftbreaker dedicated server — copy to config/config.cfg, then edit.
+// Quick start: cp config/config.cfg.example config/config.cfg
+//
+// ONE switch selects the mode (see docs/CONFIGURATION.md):
+//   set disable_steam "1"  -> LAN / direct connect — join with: connect "127.0.0.1"
+//   set disable_steam "0"  -> Steam server browser — Multiplayer -> Server Browser
+
+// SETUP SERVER PARAMS
+
+set server_name "My dedicated Riftbreaker server"
+// Password required when connecting to the server (empty = no password).
+// In Steam mode an empty password is common; in LAN mode set one if you like.
+set server_password "changeme"
+
+// To enable RCON commands on clients, this password must be set on both the client and the server to the same value!
+set server_rcon_password ""
+
+set server_max_players_count "4"
+
+// Visible in the in-game server browser (1 = listed, 0 = private). Required for Steam mode.
+set server_broadcast_enabled "1"
+
+// Pause game server logic flow when there are no players connected
+set server_pause_game_when_empty "1"
+
+// Skip the menu and start the game!
+set app_mode "server"
+
+// MODE SWITCH — the single line that picks LAN vs Steam:
+//   "1" = LAN / direct IP connect (Steam fully blocked for the game process)
+//   "0" = Steam networking ON (server appears in the in-game server browser)
+set disable_steam "1"
+
+// SETUP GAME PARAMS
+
+// Open campaign params:
+// set campaign "open/open"
+
+// Setup starting mission:
+//	 set mission "campaigns/open/headquarters_jungle"
+//	 set mission "campaigns/open/headquarters_metallic"
+//	 set mission "campaigns/open/headquarters_acid"
+//	 set mission "campaigns/open/headquarters_ice"
+//	 set mission "campaigns/open/headquarters_swamp"
+//	 set mission "campaigns/open/headquarters_caverns"
+//	 set mission "campaigns/open/headquarters_desert"
+
+// Difficulty for open campaign: easy/normal/hard/brutal
+// set difficulty "normal"
+
+// ---- OR -----
+
+// Story campaign mode!
+set campaign "mp_story/mp_story"
+
+// Difficulty for story campaign: coop_campaign_easy,coop_campaign_normal,coop_campaign_hard,coop_campaign_brutal
+set difficulty "coop_campaign_brutal"
+
+// ---- OR -----
+
+// Survival mode!
+// set campaign "mp_survival/mp_survival"
+//	 set mission "survival/jungle"
+//	 set mission "survival/acid"
+//	 set mission "survival/desert"
+//	 set mission "survival/magma"
+//	 set mission "survival/ice"
+//	 set mission "survival/metallic"
+//	 set mission "survival/caverns"
+//	 set mission "survival/swamp"
+//	 set mission "survival/swamp_lakes"
+
+// Difficulty for mp survival: coop_easy,coop_normal,coop_hard,coop_brutal
+// set difficulty "coop_normal"
+
+// ---- OR -----
+
+//! Load existing game save:
+// set mission_save "SAVE_NAME"
