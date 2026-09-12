@@ -1,24 +1,25 @@
 ---
-# Boot-Test-Overrides (CI/CD-Plan F1): Test-Instanz ISOLIERT von Prod —
-# eigene Ports, Container-/Unit-Namen, Pfade. Wird nur vom Pre-Merge-
-# Boot-Test benutzt (deploy/test-deploy.yml via -e @deploy/test-vars.yml).
-# Prod-Ports 6321/8081/9001 bleiben unberührt.
+# Boot-Test-Overrides (CI/CD-Plan F1, Issue #275): Test-Instanz ISOLIERT von
+# Prod — eigene Container-Namen + Pfade. Die Test-Instanz hat BEWUSST KEINE
+# Host-Ports: 6321/8081/9001 bleiben Prod vorbehalten, eine Port-Kollision ist
+# damit konstruktiv ausgeschlossen. Verifikation läuft intern per `docker exec`
+# (siehe .github/workflows/boot-test.yml).
+#
+# Wird nur vom Pre-Merge-Boot-Test benutzt
+# (deploy/test-deploy.yml via -e @deploy/test-vars.yml).
 riftbreaker_server_container: riftbreaker-dedicated-test
-riftbreaker_server_port_udp: 6323
-# IO-Bridge-Port isoliert von Prod (9001) — sonst kollidiert der Test-Container
-# mit dem Prod-Container auf 127.0.0.1:9001 (Issue #265/#272).
-riftbreaker_bridge_port: 9003
 riftbreaker_game_dir: /srv/rbgame-test
 riftbreaker_backup_dir: /srv/rbgame-test-backups
 riftbreaker_deploy_dir: /opt/rbbattle-deploy/test/rb
 riftbreaker_content_mode: sync
 riftbreaker_content_cache_dir: /srv/riftbreaker/data/server
 website_mods_dir: /opt/rbbattle-deploy/test/mods
-tournament_unit: tournament-server-test
-tournament_port: 8091
-tournament_bridge_a_url: "http://127.0.0.1:9003/exec"
-tournament_install_dir: /opt/rbmods/tournament-server-test
-# Toolchain des RUNNER-Users (localhost-Builds laufen im Boot-Test als
-# `runner`, nicht als root):
-cargo_home: /home/runner/.cargo
-rustup_home: /home/runner/.rustup
+
+# Keine Host-Ports für die Test-Instanz (Issue #275, Design D5):
+# Game-Ports nicht publizieren, Tournament-UI + Bridge ohne Host-Mapping.
+riftbreaker_server_publish_ports: false
+tournament_publish_host: ""
+riftbreaker_bridge_publish_host: ""
+
+# Frühere systemd-Unit der Test-Instanz (wird idempotent entfernt).
+tournament_legacy_unit: tournament-server-test
