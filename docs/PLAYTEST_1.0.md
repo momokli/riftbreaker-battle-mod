@@ -51,7 +51,7 @@ Teil des 1.0-Presets, nicht „nice to have“:
 
 | Voraussetzung | Issue/PR | Nachweis |
 |---|---|---|
-| Website liefert `/tournament/*` (ein Host-Caddy-Eintrag, eigener Rift-Caddy) | **#322**, Preflight P4 | `/tournament/health` → `200` |
+| Website liefert `/tournament/*` (ein Host-Caddy-Eintrag, eigener Rift-Caddy) | **#322** (agent-fähig, `triage:implement`), Preflight P4 | `/tournament/health` → `200` |
 | Runde 2 / Round-Reset | **#281** (PR #285), M8 | Reset + saubere Runde 2 |
 | Telemetry / Session-Mitschnitt | **#280** (PR #283), M10 | Session-Artefakt liegt vor |
 | Welle 1–3 abgearbeitet | **#319** | Release-Plan abgehakt |
@@ -61,10 +61,13 @@ Teil des 1.0-Presets, nicht „nice to have“:
 
 - **Ein Milestone ist abgenommen, wenn sein Play-Test „happy“ ist** (Momo).
   Nicht „alle Issues zu“, nicht „CI grün“ — der Play-Test ist die Abnahme.
-- **`1.0`** = dieses Dokument. Alles danach clustert in **`soon`** (1.X) —
-  grobe Modi-Ideen (solo → 1v1 → 2v2 → 3v3 → 4v4) bleiben dabei als Cluster
-  sichtbar, auch wenn sie noch nicht ausgearbeitet sind.
+- **`1.0`** = dieses Dokument = Milestone [`1.0`](https://github.com/momokli/riftbreaker-battle-mod/milestone/8).
+  Alles danach clustert in **`soon`** (Milestone 9, semver 1.X) — die groben
+  Modi-Ideen bleiben über Labels sichtbar (`mod:solo` → `mod:1v1` → `mod:2v2`
+  → `mod:3v3` → `mod:4v4`), auch wenn sie noch nicht ausgearbeitet sind.
 - Semver-Mapping: Milestone-Cluster = Version. Taggen erst nach „happy“.
+- Umgesetzt am 2026-09-12 (Momo-Call): Alt-Milestones `1`, `3`, `4`, `5`, `6`, `7`
+  geschlossen; es gibt **genau zwei** offene Cluster (`1.0`, `soon`).
 
 ---
 
