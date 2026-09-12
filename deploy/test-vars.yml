@@ -20,12 +20,15 @@ rbbattle_run_suffix: local
 riftbreaker_server_container: "riftbreaker-dedicated-test-{{ rbbattle_run_suffix }}"
 # Compose-Projekt/-Netz je Lauf eindeutig (Docker-Netzname = <projekt>_default).
 riftbreaker_compose_project: "rb-test-{{ rbbattle_run_suffix }}"
-# Keine festen Host-Port-Mappings mehr (Issue #307): der Game-Server bindet
-# 6321 weiter IM Container (per-Container-Namespace, vom entrypoint geprüft).
-# Leer => das Compose-Template publiziert den Game-Port nur ephemer
-# (127.0.0.1::6321) und KEINEN Bridge-Host-Port.
+# Kein fester Game-Host-Port (Issue #307): leer => das Compose-Template
+# publiziert 6321 nur ephemer (127.0.0.1::6321). Der Game-Server bindet 6321
+# weiter IM Container (per-Container-Namespace, vom entrypoint geprüft).
+# Die Bridge hingegen IST jetzt load-bearing (Core-IO-Gate, Issue #289) und wird
+# immer publiziert: Container-Port 9001, Host-Port je Lauf eindeutig. CI
+# überschreibt riftbreaker_bridge_port; 9003 ist der Fallback für manuelle
+# Einzelläufe.
 riftbreaker_server_port_udp: ""
-riftbreaker_bridge_port: ""
+riftbreaker_bridge_port: 9003
 
 # Host-Pfade je Lauf eindeutig (Issue #307). Werden im Teardown wieder entfernt.
 riftbreaker_game_dir: "/srv/rbgame-test-{{ rbbattle_run_suffix }}"
@@ -51,9 +54,10 @@ tournament_unit: "tournament-server-test-{{ rbbattle_run_suffix }}"
 # zusätzlich mit `-e tournament_port` (gleiche Formel, siehe boot-test.yml),
 # damit curl- und Deploy-Port garantiert identisch sind.
 tournament_port: "{{ 10000 + ((rbbattle_run_suffix | int) % 20000) }}"
-# Im Boot-Test wird die Trainer-I/O-Bridge nie abgefragt (Issue #307) — keine
-# Host-Port-Publizierung, daher auch keine festen Bridge-URLs.
-tournament_bridge_a_url: ""
+# Der Tournament-Server erreicht die Bridge über A_URL (Core-IO-Gate C4,
+# Issue #289). CI überschreibt mit dem je Lauf eindeutigen Bridge-Port;
+# 9003 ist der Fallback für manuelle Einzelläufe.
+tournament_bridge_a_url: "http://127.0.0.1:9003/exec"
 tournament_bridge_b_url: ""
 tournament_install_dir: "/opt/rbmods/tournament-server-test-{{ rbbattle_run_suffix }}"
 

@@ -9,6 +9,14 @@ name: Boot-Test
 # Smoke-Test prüft nur Container-Status + tournament-/health. Prod
 # (6321/9001/8081) wird nie berührt.
 #
+# Seit Issue #289 fährt dieser Job zusätzlich das **Core-IO-Gate** am selben
+# gebooteten Stack: C1 (Mod geladen) -> C2 (Ingress-Effekt, Invariante
+# `ok:true ⟹ Effekt-Logzeile`) -> C3 (Egress an einen laufenden Consumer) ->
+# C4 (serverseitig ausgelöster Wave-Auftrag erreicht den Mod). Damit ist der
+# Kern-Kanal automatisiert abgesichert, der in #288 regressiert ist — ohne
+# zweiten Boot (ein Workflow, ein Boot). Die Probe lebt in tests/core-io/
+# (hermetische Selbsttests in ci.yml `test`).
+#
 # Path-Filter (Issue #303, Option A): Der Job `boot-test` läuft IMMER (damit der
 # Required-Check nie als "Expected" hängen bleibt), überspringt aber den teuren
 # Deploy/Boot, wenn kein relevanter Pfad (mod/, deploy/, tools/dedicated-server/,
@@ -120,14 +128,17 @@ jobs:
         run: |
           set -euo pipefail
           RUN_ID="${{ github.run_id }}"
-          # Deterministic Port aus run_id (monoton steigend): gleichzeitige Läufe
-          # haben benachbarte run_ids -> praktisch immer verschiedene Ports.
-          # Bereich 10000–29999: unterhalb der ephemeren Linux-Range (32768+),
-          # oberhalb Prod (6321/8081/9001–9003). Muss mit der Formel in
-          # deploy/test-vars.yml (tournament_port) übereinstimmen.
-          PORT=$(( 10000 + (RUN_ID % 20000) ))
+          # Tournament-Port (10000–29999) und Bridge-Host-Port (30000–49999) je
+          # Lauf eindeutig aus run_id (monoton steigend -> benachbarte Läufe
+          # haben verschiedene Ports). Muss mit der Formel in test-vars.yml
+          # (tournament_port) übereinstimmen. Unter 32768 kollisionsfrei; der
+          # Bridge-Bereich oberhalb 32768 liegt in der ephemeren Linux-Range, ist
+          # aber deterministisch aus run_id und kurzlebig -> vernachlässigbar.
+          T_PORT=$(( 10000 + (RUN_ID % 20000) ))
+          B_PORT=$(( 30000 + (RUN_ID % 20000) ))
           echo "RBBATTLE_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
-          echo "TOURNAMENT_PORT=$PORT" >> "$GITHUB_ENV"
+          echo "TOURNAMENT_PORT=$T_PORT" >> "$GITHUB_ENV"
+          echo "BRIDGE_PORT=$B_PORT" >> "$GITHUB_ENV"
 
       - name: Runner-Cleanup (stehengebliebene Test-Ressourcen dieses Laufs entfernen)
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
@@ -162,7 +173,9 @@ jobs:
           ansible-playbook -i "$INV" deploy/test-deploy.yml \
             -e @deploy/test-vars.yml \
             -e rbbattle_run_suffix="$RBBATTLE_RUN_ID" \
-            -e tournament_port="$TOURNAMENT_PORT"
+            -e tournament_port="$TOURNAMENT_PORT" \
+            -e riftbreaker_bridge_port="$BRIDGE_PORT" \
+            -e tournament_bridge_a_url="http://127.0.0.1:${BRIDGE_PORT}/exec"
 
       - name: Boot verifizieren (Container stabil + tournament healthy)
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
@@ -179,6 +192,24 @@ jobs:
           curl --silent --show-error --fail --max-time 10 \
             "http://127.0.0.1:${TOURNAMENT_PORT}/health" | grep -q '"ok":true'
           echo "Boot-Test OK: Container läuft stabil, tournament-server healthy auf ${TOURNAMENT_PORT}."
+
+      - name: Core-IO-Gate (C1-C4, Effekt-Invariante — Issue #289)
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          # Beweist am laufenden Test-Server: Ingress wirkt (ok:true ⟹ Effekt-
+          # Logzeile, sonst ROT), Egress erreicht einen laufenden Consumer und
+          # der server-ausgeloeste Wave-Auftrag kommt im Mod an. Der Sicht-Spawn
+          # (spawned>0) ist headless nicht erreichbar -> ::warning:: (offener
+          # Punkt, Player-Test), kein Hard-Fail. Container/Bridge/Tournament
+          # sind je Lauf eindeutig (Issue #307) -> parallele Läufe kollidieren nicht.
+          python3 tests/core-io/core_io_probe.py \
+            --remote "ssh planet" \
+            --container "riftbreaker-dedicated-test-${RBBATTLE_RUN_ID}" \
+            --bridge-url "http://127.0.0.1:${BRIDGE_PORT}/exec" \
+            --tournament-url "http://127.0.0.1:${TOURNAMENT_PORT}" \
+            --boot-timeout 240 \
+            --effect-timeout 60
 
       - name: Aufräumen (Test-Container + Unit + je Lauf eindeutige Pfade/Volumes)
         if: always() && needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'

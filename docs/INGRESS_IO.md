@@ -122,7 +122,13 @@ Quelländerungen anschlägt.
 
 ## Testanleitung
 
-**Ohne Player (Automatik/Host):**
+**Automatisiertes Gate (Issue #289, ohne Player):** `tests/core-io/core_io_probe.py`
+prüft den ganzen Kanal am gebooteten Test-Stack — Boot (C1), Ingress-Effekt
+(C2, Invariante `ok:true ⟹ event=…`), Egress an einen laufenden Consumer (C3)
+und den serverseitig ausgelösten Wave-Auftrag (C4). CI: `.github/workflows/boot-test.yml`
+(Required-Check `boot-test`, Schritt „Core-IO-Gate"); Details: [`tests/core-io/README.md`](../tests/core-io/README.md).
+
+**Manuell (Host/Bridge), ohne Player:**
 
 1. Build: `bash scripts/build_rbbridge_tools.sh /tmp/rbtools-build` → alle 4
    Dateien vorhanden.

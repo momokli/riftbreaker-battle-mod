@@ -37,6 +37,12 @@ jobs:
       - name: E2E Baustein 07 (relay-Prototyp)
         working-directory: bausteine/07-relay
         run: bash test_e2e_prototype.sh
+      # Core-IO-Gate Selbsttest (Issue #289): hermetische Invarianten-Checks der
+      # Gate-Logik (ok:true ohne Effekt ⇒ rot). Kein Container/Netz noetig; die
+      # Live-Probe (C1-C4) faehrt .github/workflows/boot-test.yml.
+      - name: Core-IO-Gate Selbsttest (Invariante, Issue #289)
+        working-directory: tests/core-io
+        run: python3 -m unittest test_invariant -v
       - name: Unit-Test Relay-Pipe-Dispatch (Issue #60)
         working-directory: bausteine/07-relay
         run: python3 -m unittest test_dispatch -v
