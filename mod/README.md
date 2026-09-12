@@ -409,7 +409,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.34.3 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
+[RBBATTLE] event=mod_load version=0.34.3 status=ok mode=sp anchor=border_spawner_groups timer_cap=480 preset=A econ_source=none econ_pool=0
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100
@@ -422,8 +422,8 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 [RBBATTLE] event=richtwert_sample_types level=4 total=8 types=artigian:3,baxmoth:2,brabit:3   ← Typ-Verteilung der neu gespawnten Kreaturen (#213-Folgefrage: proportionaler %-Boost pro Typ statt Fuellkreatur)
 [RBBATTLE] event=wave_hook patch status=ok                       ← Send-Queue-Hook aktiv (#42/#25)
 [RBBATTLE] event=boost patch status=ok                           ← Boost-Chokepoint-Hook aktiv (#39)
-[RBBATTLE] event=dom_timer patch status=ok cap=300        ← nach PlayerInitializedEvent
-[RBBATTLE] event=setup difficulty=hard creatures_difficulty=5 timer_cap=300
+[RBBATTLE] event=dom_timer patch status=ok cap=480        ← nach PlayerInitializedEvent
+[RBBATTLE] event=setup difficulty=hard creatures_difficulty=5 timer_cap=480 preset=A interval_cfg=480 interval_eff=420 strength_pct=100 base_difficulty=normal   ← #278: interval_cfg = Preset-Ziel, interval_eff = wirksamer DOM-Timer
 [RBBATTLE] event=round round=1 status=start mode=sp pool=0 queue=1   ← natürlicher Wellenstart
 [RBBATTLE] event=reveal round=1 status=revealed built_own=3000 built_opp=hidden send_own=units/ground/brabit:2 incoming=hidden   ← Wellenstart-Reveal (#27)
 [RBBATTLE] event=send_queue round=1 status=done spawned=1 value=100 anchor=border   ← Send-Queue ausgeliefert (Boost)
@@ -480,7 +480,7 @@ Schritt entfernt (Stufe 2, Player-Test OFFEN) — Details:
 | 1 | Mod-Layout / Einstiegspunkt | Ordner `<game>/mods/<name>/` spiegelt Content-Root; `lua/*_autoexec.lua` läuft bei Map-Erstellung, Zugriff auf alle Services + `RegisterGlobalEventHandler` | exorstudios-Wiki (autoexec.md); lilly1987/Riftbreaker-mods; fandom Basic Modding Guide |
 | 2 | Wave-Spawn zur Laufzeit | ✅ `EntityService:SpawnEntity(blueprint, x, y, z, team)` — exakt die Implementierung von EXORs eigenem `debug_spawn_entity` (`lua/commands/cheat.lua`); Blueprints `units/ground/*` gegen `entities/units/ground/*.ent` der Spieldaten verifiziert | OriginalPacksData (PonomarevDmitry/RiftbreakersMods); fandom Console commands |
 | 3 | Rand-Spawner finden | ✅ `FindService:FindEntitiesByGroup(group)` — dieselbe API, mit der `dom_manager` (`RandomizeSpawnPoint`) Naturwellen-Anker wählt; Gruppen `spawn_enemy_border_{west,east,north,south}`, Entities werden von `mission_base:SelectWaveSpawnPoints` aus `logic/spawn_enemy`-Entities gruppiert | lua-src 2.0.58485 (`dom_manager.lua`, `mission_base.lua`, `find_utils.lua`) |
-| 4 | 5-Min-Timer (#23) | ✅ `dom_mananger:GetPrepareSpawnTime()` liefert rules-Wert (Survival hard/normal: 420); Mod wrappt die Klassen-Methode auf max. 300 s (idempotent, pcall) | lua-src (`dom_survival_*_rules_hard.lua`, `dom_manager.lua:1135`) |
+| 4 | Wellen-Takt-Cap (#23/#41/#278) | ✅ `dom_mananger:GetPrepareSpawnTime()` liefert den rules-Wert (Survival hard/normal: 420); Mod wrappt die Klassen-Methode auf max. das Preset-Intervall (A=480 / B=240, **senkt nur, hebt nie** → wirksamer Wert für Preset A bleibt 420; Setup-Log trennt `interval_cfg`/`interval_eff`) | lua-src (`dom_survival_*_rules_hard.lua`, `dom_manager.lua:1135`) |
 | 5 | Custom Console Commands | ✅ `ConsoleService:RegisterCommand(name, cb)` — offiziell dokumentiert **und** von EXOR selbst so genutzt (cheat.lua: `debug_spawn_entity` …) | exorstudios-Wiki accessing-keyboard-hotkeys.md; fandom Mod service: ConsoleService; OriginalPacksData lua/commands/cheat.lua |
 | 6 | Logging | ✅ `LogService:Log(...)` → `exor_logs.txt`; `ConsoleService:Write(...)` → In-Game-Konsole | exorstudios-Wiki debugging-using-lua-services.md |
 | 7 | Team-Semantik | Team-String `""` = „Blueprint-Standard“ (EXOR-Cheat nutzt `""`; Spieler-Buildings wie Feinde spawnen korrekt). Team-Ids: Player=1 (Log `GetTeamId` → 1). `"no_team"` existiert für Marker. Für echte Duell-Teams später verifizieren | OriginalPacksData (cheat.lua, wave_ground.lua) |

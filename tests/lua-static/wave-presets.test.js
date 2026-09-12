@@ -192,7 +192,7 @@ check(log_has("event=balance wave_preset_cfg active=A base_difficulty=normal tim
 
 -- 9. Setup-Log (bei Map-Ready) fuehrt Preset + Grundschwierigkeit mit.
 _G.__handlers["PlayerInitializedEvent"]()
-check(log_has("event=setup difficulty=normal creatures_difficulty=5 timer_cap=480 preset=A interval=480 strength_pct=100 base_difficulty=normal"),
+check(log_has("event=setup difficulty=normal creatures_difficulty=5 timer_cap=480 preset=A interval_cfg=480 interval_eff=480 strength_pct=100 base_difficulty=normal"),
     "event=setup: preset A + base_difficulty normal")
 
 print("FAILURES=" .. failures)
