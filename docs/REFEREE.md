@@ -57,13 +57,17 @@ einen Doppel-Restart aus.
 `cmd_id` ist der monotone Dedup-Schlüssel, den der Relay bereits aus dem
 Pipe-Vertrag kennt (`docs/relay-pipe-contract.md`).
 
-Zustellung (zwei Wege, beide getestet):
+Zustellung (drei Wege):
 
 1. **Direkt in der Antwort** von `POST /referee/event` (`commands: [...]`).
 2. **Abholen** über `GET /referee/poll?world=A` (leert die Outbox der Welt).
+3. **Push** an die Bridge (`RBBRIDGE_*_URL`) beim echten HQ-Tod über
+   `POST /report` `hq_dead` (#267) — server-seitig verdrahtet, Live-Zustellung
+   über die Pipe offen (#265).
 
-Ein Push an `RBBRIDGE_*_URL` (wie der GO-Broadcast) ist bewusst **noch nicht**
-verdrahtet — siehe offene Punkte.
+Ein Push an `RBBRIDGE_*_URL` (wie der GO-Broadcast) ist **server-seitig
+verdrahtet** (Server-267, `/report` `hq_dead` → `push_referee_commands`) — die
+Live-Zustellung über die echte Pipe bleibt offen (#265). Siehe offene Punkte.
 
 ## Zustandsmaschine (pro Welt)
 
@@ -118,4 +122,6 @@ verdrahtet — siehe offene Punkte.
   umgesetzt.
 * **Deploy-Dependency #265.** Ohne den deployten IO-Kanal (Relay/Bridge im
   Dedicated-Container) ist der Loop nur halb verdrahtet; der Server-Teil ist
-  fertig und getestet, der Transport folgt mit #265.
+  fertig und getestet, der Transport folgt mit #265. Der Restart-Push ist
+  **server-seitig verdrahtet** (`POST /report` `hq_dead` → `restart` an
+  `RBBRIDGE_<W>_URL`); die Live-Zustellung über die echte Pipe bleibt offen.

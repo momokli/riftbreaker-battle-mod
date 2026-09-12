@@ -83,7 +83,15 @@ curl -s -X POST localhost:8080/referee/event -d '{"world":"A","type":"ready"}'
 curl -s -X POST localhost:8080/referee/event -d '{"world":"A","type":"wave_done","level":1}'
 # hq_destroyed → restart (Runde +1)
 curl -s -X POST localhost:8080/referee/event -d '{"world":"A","type":"hq_destroyed"}'
+# echtes Spiel-Event (Mod-Log, #267): HQ-Tod → Referee-Restart-Push an RBBRIDGE_<W>_URL
+curl -s -X POST localhost:8080/report -d '{"world":"A","event":"hq_dead"}'
 ```
+
+Der Server akzeptiert das Mod-Log-Event `hq_dead` (Aliase `hq_destroy`/
+`hq_destroyed`) über `POST /report` und **pusht** den resultierenden
+`restart`-Command an die Bridge der Welt (IO-Kanal, analog GO). Duplikate sind
+idempotent (kein zweiter Push); ohne `RBBRIDGE_*_URL` → `ok:null`, kein Crash.
+Der Live-Player-Test bleibt offen (#265).
 
 Konzept, Zustandsmaschine, Test-Split (OHNE Player erledigt, Player-Loop
 OFFEN) und offene Punkte: [`docs/REFEREE.md`](../docs/REFEREE.md).

@@ -41,6 +41,7 @@ LOBBY ── beide Spieler registriert ──► LOBBY
 LOBBY ── beide Welten ready (AUTO_GO=off) ──► READY (GO steht aus)
 LOBBY/READY ── POST /go (oder AUTO_GO beim 2. Ready) ──► RUNNING (Runde 1)
 RUNNING ── Runden-Loop ── HQ einer Welt ≤ 0 ──► FINISHED (winner)
+RUNNING ── POST /report event=hq_dead (Mod-Log, #267) ──► FINISHED + Referee-Restart-Push
 FINISHED ── POST /rematch ──► LOBBY (Spieler bleiben, Rematch-Zähler +1)
 ```
 
@@ -152,6 +153,7 @@ Nur in Phase `running` (sonst 409). Der Send wird in die Queue der
 {"world": "A", "event": "wave_start", "built_value": 8200}
 {"world": "A", "event": "hq_hp", "hp": 70.0}
 {"world": "A", "event": "score_update", "score": 1240, "resources": {"iron": 320, "carbon": 80}, "wave": 4}
+{"world": "A", "event": "hq_dead"}
 ```
 
 - `wave_start`: Wellenstart der Welt (Lock). `built_value` optional
@@ -163,6 +165,20 @@ Nur in Phase `running` (sonst 409). Der Send wird in die Queue der
   Score, Ressourcen und aktuelle Wave einer Welt. Idempotent; der Feed wird nur
   bei Score-/Wave-Änderung belastet. Antwort
   `{"event": "score_update", "score": …, "wave": …, "changed": bool, "phase": …}`.
+- `hq_dead` (Aliase `hq_destroy`/`hq_destroyed`, Issue #267): HQ-Tod aus dem
+  echten Spiel (Mod-Log `event=hq_dead status=match_end hp=0`). Wird als
+  `HqDestroyed` in den Referee gespeist; der Referee entscheidet genau EIN
+  `restart` (aus `TOURNAMENT_REFEREE_RESTART_CMD`) und der Server **pusht** es an
+  die Bridge der Welt (`POST <RBBRIDGE_<W>_URL> {"command": "restart"}`, analog
+  GO-Broadcast). Antwort
+  `{"event": "hq_dead", "match_over": true, "winner": …, "rounds": …, "restart": bool, "duplicate": bool, "commands": […], "broadcast": […]}`
+  (`broadcast[i] = {command, ok, status, error, endpoint}`).
+  **Idempotent:** ein zweites `hq_dead` liefert aus dem Referee keine Commands →
+  `restart:false`, `duplicate:true`, **kein** zweiter Push. Ohne konfigurierten
+  Bridge-Endpoint (`RBBRIDGE_<W>_URL`) → `ok:null` (kein Panic/Crash).
+
+> Der Live-Player-Test (echtes HQ zerstören → Runde startet sichtbar neu) bleibt
+> **offen** und braucht den deployten IO-Kanal (#265).
 
 ### POST /referee/event — Spiel-Event an den Referee (Issue #268)
 
@@ -302,6 +318,7 @@ exec-Kanal aus (`exec_cmd_client`/rbbridge-exec-Dispatch):
 | `phase` wird `finished` | `match_over` | Sieg-/Verlierer-Screen |
 | — | `POST /report wave_start` | Welt meldet Lock + Built-Value (vom Mod/RE-Layer ausgelöst) |
 | — | `POST /report hq_hp` | Welt meldet HQ-HP (send_state-Egress, Issue #13) |
+| — | `POST /report hq_dead` | Welt meldet HQ-Tod (Mod-Log, #267) → Referee-`restart`-Push an `RBBRIDGE_*_URL` |
 
 Der GO-Push des Servers (`RBBRIDGE_*_URL`) und das Poll-Fallback sind
 **redundant aber idempotent**: Kommandos dürfen doppelt ankommen
