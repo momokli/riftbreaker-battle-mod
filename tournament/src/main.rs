@@ -12,6 +12,8 @@
 //! | `TOURNAMENT_GO_COMMANDS` | `debug_dom_resume` | Komma-separierte Unpause-/Start-Kommandos je Welt beim GO (Issue #22; je EIN gequotetes Argument, Issue #18) |
 //! | `TOURNAMENT_GO_TIMEOUT_MS` | `3000` | Timeout je Broadcast-Endpoint |
 //! | `TOURNAMENT_HQ_HP` | `100` | Start-HP jedes HQ |
+//! | `TOURNAMENT_REFEREE_MAX_WAVE` | `0` | Wellen-Deckel des Referees (`0` = unbegrenzt, Issue #268) |
+//! | `TOURNAMENT_REFEREE_RESTART_CMD` | `restart` | Command des Referees bei HQ-Tod (Issue #268) |
 //! | `TOURNAMENT_WEB_DIR` | `<crate>/web` | Verzeichnis der statischen Web-UI |
 //! | `RUST_LOG` | `info` | Log-Level (tracing) |
 //!
@@ -20,6 +22,7 @@
 mod api;
 mod broadcast;
 mod elo;
+mod referee;
 mod state;
 
 use api::{AppState, Config};
@@ -69,6 +72,12 @@ fn config_from_env() -> Result<Config, String> {
     let hq_hp_start: f64 = env_str("TOURNAMENT_HQ_HP", "100")
         .parse()
         .map_err(|_| "TOURNAMENT_HQ_HP muss eine Zahl sein".to_string())?;
+    let referee_max_wave: u32 = env_str("TOURNAMENT_REFEREE_MAX_WAVE", "0")
+        .parse()
+        .map_err(|_| {
+            "TOURNAMENT_REFEREE_MAX_WAVE muss eine Zahl sein (0 = unbegrenzt)".to_string()
+        })?;
+    let referee_restart_cmd = env_str("TOURNAMENT_REFEREE_RESTART_CMD", "restart");
 
     // rbbridge-Endpoints validieren (nur http://, v1)
     let bridge_a = match std::env::var("RBBRIDGE_A_URL") {
@@ -107,6 +116,8 @@ fn config_from_env() -> Result<Config, String> {
         go_commands,
         go_timeout: Duration::from_millis(go_timeout_ms),
         hq_hp_start,
+        referee_max_wave,
+        referee_restart_cmd,
         web_dir,
     })
 }
@@ -129,11 +140,13 @@ async fn main() -> ExitCode {
     };
 
     tracing::info!(
-        "RIFT BATTLE Tournament-Server startet auf {}:{} (auto_go={}, hq_hp_start={}, go_commands={:?}, bridge_a={}, bridge_b={})",
+        "RIFT BATTLE Tournament-Server startet auf {}:{} (auto_go={}, hq_hp_start={}, referee_max_wave={}, referee_restart_cmd={:?}, go_commands={:?}, bridge_a={}, bridge_b={})",
         cfg.host,
         cfg.port,
         cfg.auto_go,
         cfg.hq_hp_start,
+        cfg.referee_max_wave,
+        cfg.referee_restart_cmd,
         cfg.go_commands,
         cfg.bridge[0].as_deref().unwrap_or("-"),
         cfg.bridge[1].as_deref().unwrap_or("-"),

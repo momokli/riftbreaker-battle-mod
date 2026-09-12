@@ -13,6 +13,12 @@ on:
 permissions:
   contents: read
 
+# Serialisieren: nur EIN Test-Container zur Zeit (Ports 6323/8091/9003 sind
+# pro Lauf exklusiv) — verhindert Port-Kollisionen bei parallelen PR-Läufen.
+concurrency:
+  group: boot-test
+  cancel-in-progress: false
+
 jobs:
   boot-test:
     name: boot-test
@@ -59,6 +65,17 @@ jobs:
             exit 1
           fi
 
+      - name: Runner-Cleanup (stehengebliebene Test-Container/Netz entfernen)
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          # Infra-Gate: ein zuvor abgebrochener Lauf kann den Test-Container
+          # bzw. das Netz stehen lassen. Dann ist Test-Port 9001 belegt und der
+          # Deploy scheitert mit "port is already allocated" — das Required-Gate
+          # `boot-test` stünde dauerhaft rot, unabhängig vom PR-Diff.
+          ssh planet 'docker rm -f riftbreaker-dedicated-test 2>/dev/null || true'
+          ssh planet 'docker network rm rb_default 2>/dev/null || true'
+
       - name: Test-Deploy auf Test-Ports (Dummy-Vault, kein Secret)
         if: steps.gate.outputs.skip != 'true'
         run: |
@@ -91,6 +108,7 @@ jobs:
         if: always() && steps.gate.outputs.skip != 'true'
         run: |
           ssh planet 'docker compose -f /opt/rbbattle-deploy/test/rb/docker-compose.yml down --remove-orphans 2>/dev/null || docker rm -f riftbreaker-dedicated-test 2>/dev/null || true'
+          ssh planet 'docker network rm rb_default 2>/dev/null || true'
           ssh planet 'systemctl stop tournament-server-test 2>/dev/null || true'
           ssh planet 'systemctl disable tournament-server-test 2>/dev/null || true'
           ssh planet 'rm -f /etc/systemd/system/tournament-server-test.service 2>/dev/null || true'

@@ -107,25 +107,31 @@ Nach Entfernen des Ordners aus `mods/` + Container-Restart:
    Versionen/leere Trefferlisten ergeben eine klare `fail_msg` (kein
    Ansible-Task-Arg-Crash).
 
-### Log-Quelle & Timing (Befund planet 2026-09-11, Issue #226)
+### Log-Quelle & Timing
 
-- **Quelle ist der Lua-Log im Container, nicht `docker logs`:** `docker logs`
-  des Dedicated-Servers enthält nur die zwei `run-server.sh`-Wrapper-Zeilen
-  (`[run-server] starte Xvfb …` / `[run-server] starte: wine bin/DedicatedServer.exe …`)
-  und damit **nie** eine `mod_load`-Zeile.
-- **Pfad:** `exor_logs.txt` im Wine-Prefix; `drive_c/users/root/Documents` ist
-  ein Symlink auf `$HOME` (`Documents -> /root`) → `/root/exor_logs.txt`.
-  Abruf: `docker exec riftbreaker-dedicated cat /root/exor_logs.txt`.
-- **Timing:** Der Log entsteht erst, wenn der Server eine Map lädt und Lua
-  ausführt. Mit `server_pause_game_when_empty=1` und **keinen Spielern** (Idle)
-  passiert das **nicht** — nach einem Restart existiert `exor_logs.txt` im Idle
-  gar nicht (Empirie: auch nach >5 Min kein Log, `Running=true`,
-  `RestartCount=0`).
-- Der Log liegt im **Container-Writable-Layer** (kein Bind-Mount des
-  Wine-Prefix) und ist nach `docker compose up -d --force-recreate` ohnehin weg.
-- Deshalb ist der **Artefakt-Check** (deployter Stand auf der Platte) im CD der
-  harte Gate; der Runtime-Log-Check greift nur, wenn zum Prüfzeitpunkt
-  tatsächlich eine Map geladen wurde.
+**Update (Issue #245, Community-Rezept #241):** Seit dem Umstieg auf das
+Community-Dedicated-Server-Image ist die Quelle wieder **`docker logs`** —
+`tools/dedicated-server/scripts/entrypoint.sh` (`follow_server_logs`) tailt
+`exor_logs.txt` selbst nach stdout, daher landen `[RBBATTLE] event=...`-Zeilen
+jetzt in `docker logs {{ riftbreaker_server_container }}`. `riftbreaker_mod_log_cmd`
+in der Rolle spiegelt das. Der Rest dieses Abschnitts (Befund planet
+2026-09-11, Issue #226, altes Wine-Client-Image) bleibt als historischer
+Kontext stehen, warum der Artefakt-Check der harte Gate ist und nicht der
+Runtime-Log:
+
+- **Altes Image (bis #241):** `docker logs` enthielt nur die zwei
+  `run-server.sh`-Wrapper-Zeilen (`[run-server] starte Xvfb …` / `[run-server]
+  starte: wine bin/DedicatedServer.exe …`) und **nie** eine `mod_load`-Zeile;
+  der Log lag im Container-Writable-Layer unter `/root/exor_logs.txt`
+  (Wine-`Documents -> /root`) und war nur per `docker exec ... cat` erreichbar.
+- **Timing (weiterhin relevant):** Der Log entsteht erst, wenn der Server eine
+  Map lädt und Lua ausführt. Ob/wann das ohne Spieler passiert, hängt von
+  `riftbreaker_server_pause_game_when_empty` ab (aktuell `0` — die Welt läuft
+  headless weiter, Issue #265/#269).
+- Deshalb bleibt der **Artefakt-Check** (deployter Stand auf der Platte,
+  idle-sicher) der harte Gate; der Runtime-Log-Check ist weiterhin nur
+  best-effort und greift, wenn zum Prüfzeitpunkt tatsächlich eine Map geladen
+  wurde.
 
 **Kontrollwerkzeug / Regression-Check** (lokal + CI, Exit 1 = Fremd-Ordner):
 
@@ -192,7 +198,18 @@ unter `/opt/rbmods/compose/…`.
 
 ## Interim-Deploy :6321 (Issue #156) — historisch, durch #209 überholt
 
-Bis zur CD (#91) wird die Mod auf :6321 manuell eingespielt (reproduzierbar):
+> ⚠️ **Nicht mehr ausführen.** Die Befehle unten gehören zum Layout **vor**
+> dem Community-Rezept (#241): Mods als Host-Ordner unter
+> `/srv/riftbreaker/data/server/mods`, Wine-Prefix als Bind-Mount unter
+> `/srv/riftbreaker/data/wine`. Beides existiert so nicht mehr — der
+> Wine-Prefix ist heute ein **benanntes Volume** (`rb-wine`), und
+> `exor_logs.txt` wird vom Entrypoint nach `docker logs` getailt.
+> Aktuelle Pfade und Abrufe: „Log-Quelle & Timing" oben. Der Block bleibt
+> als Referenz stehen, weil die Reihenfolge (Spieler-Check → Guard → Backup
+> außerhalb `mods/` → Neustart → Smoke-Test) die ist, die die Ansible-Rolle
+> heute automatisiert.
+
+Bis zur CD (#91) wurde die Mod auf :6321 manuell eingespielt:
 
 ```bash
 # 1) Mod-Zip aus Repo main bauen (Content-Root = mod/):
@@ -240,9 +257,13 @@ Rollback: Backup-`tar.gz` aus `/srv/riftbreaker/backups/` nach
 - Mod-Backups **nie** in `<server>/mods/` (siehe „Mod-Backups & mods/-Guard").
 - Live-Tests nur bei leerem Server.
 - Keine Credentials in Repo/Logs; kanonischer Server-Log ist `exor_logs.txt`
-  im Container (`/root/exor_logs.txt`, Wine-`Documents -> /root`), `rbbridge.log`
-  im Temp. `docker logs` des Dedicated-Servers zeigt nur die `run-server.sh`-Wrapper-Zeilen.
-  `exor_logs.txt` entsteht erst bei Map-Load; im Idle **ohne Spieler**
-  (`server_pause_game_when_empty=1`) gar nicht (Issue #226) → im CD ist der
-  idle-sichere Artefakt-Check (#226) maßgeblich, nicht der Runtime-Log.
+  im Wine-Prefix (benanntes Volume, kein Bind-Mount). Seit dem
+  Community-Rezept (#241) tailt der Entrypoint ihn selbst nach stdout, also
+  zeigt `docker logs {{ riftbreaker_server_container }}` die
+  `[RBBATTLE] event=...`-Zeilen wieder mit (s. „Log-Quelle & Timing" oben) —
+  aber erst, sobald eine Map geladen ist. Direkt nach einem
+  `--force-recreate` (frisch gestarteter Container) ist das **nicht** der
+  Fall, egal ob Spieler online sind oder nicht → im CD bleibt der
+  idle-/boot-sichere Artefakt-Check (#226/#245) maßgeblich, nicht der
+  Runtime-Log.
 - SSH mesh-first (Tailscale), nie über Public-IPs.
