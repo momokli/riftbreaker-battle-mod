@@ -1275,6 +1275,59 @@ mod tests {
         assert!(v["broadcast"][0]["note"].is_string());
     }
 
+    /// #267: die Aliase `hq_destroy`/`hq_destroyed` verhalten sich exakt wie
+    /// `hq_dead` — der erste Treffer pusht genau EIN `restart`, der zweite
+    /// Alias ist idempotent (kein zweiter Push).
+    #[tokio::test]
+    async fn report_hq_dead_aliases_are_accepted_and_idempotent() {
+        let (addr, captures) = capture_endpoint().await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [Some(format!("http://{addr}/cmd")), None];
+        let app = make_app(cfg).await;
+
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/referee/event",
+            Some(json!({"world": "A", "type": "ready"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+
+        // Alias 1: `hq_destroy` → restart, genau EIN Push.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "A", "event": "hq_destroy"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["event"], "hq_dead");
+        assert_eq!(v["restart"], true);
+        assert_eq!(v["duplicate"], false);
+        assert_eq!(v["broadcast"][0]["ok"], true);
+
+        // Alias 2: `hq_destroyed` → kein zweiter Restart/Push.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "A", "event": "hq_destroyed"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["restart"], false);
+        assert_eq!(v["duplicate"], true);
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            captures.lock().await.len(),
+            1,
+            "genau ein Push über die Aliase"
+        );
+    }
+
     #[tokio::test]
     async fn health_endpoint() {
         let app = make_app(test_cfg()).await;
