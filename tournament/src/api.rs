@@ -5,7 +5,7 @@
 //!   POST /ready   Welt ready                  {"world": "A"|"B"}
 //!   POST /go      GO-Broadcast + Start        {} | {"retry": true}
 //!   POST /send    Wave-Routing A→B            {"world": "A", "units": [...], "value": n}
-//!   POST /report  Welt-Events (send_state)    {"world": "A", "event": "wave_start"|"hq_hp"|"score_update", ...}
+//!   POST /report  Welt-Events (send_state)    {"world": "A", "event": "wave_start"|"hq_hp"|"score_update"|"hq_dead", ...}
 //!   POST /referee/event  Spiel-Event an den Referee (Issue #268) {"world":"A","type":"ready"|"wave_done"|"hq_destroyed","level":n}
 //!   GET  /referee/poll   Offene Referee-Commands einer Welt  ?world=A
 //!   POST /rematch Reset in die Lobby          {}
@@ -354,6 +354,7 @@ async fn send(
 /// POST /report — Welt-Events (send_state-Egress, Issue #13 konzeptionell):
 ///   {"world":"A","event":"wave_start","built_value":1234}
 ///   {"world":"A","event":"hq_hp","hp":70.0}
+///   {"world":"A","event":"hq_dead"}   (Mod-Log; #267)
 async fn report(
     AxumState(app): AxumState<AppState>,
     Json(req): Json<ReportReq>,
@@ -410,12 +411,111 @@ async fn report(
                 "phase": view.phase,
             })))
         }
+        // HQ-Tod aus dem echten Spielverlauf (Mod-Log `event=hq_dead`, #267).
+        // Wird als `HqDestroyed` in den Referee gespeist; der Referee liefert
+        // daraus genau EIN `restart` (Duplikate/ohne laufendes Match leer =
+        // ignoriert). Die Commands werden an die Bridge der Welt gepusht
+        // (IO-Kanal, analog GO); erfolgreich gepushte Commands werden aus der
+        // Referee-Outbox genommen, damit der Poll-Pfad sie nicht doppelt
+        // zustellt (B1, „Push **oder** Poll“).
+        //
+        // KEIN `match_over`: #267 startet nur die Runde neu (Referee), es gibt
+        // hier bewusst keinen MatchState-`FINISHED`-Übergang — Match-Ende läuft
+        // weiterhin über `event=hq_hp` mit `hp <= 0`. Die Antwort spiegelt den
+        // realen Referee-Zustand (`restart`/`rounds`/`running`).
+        "hq_dead" | "hq_destroy" | "hq_destroyed" => {
+            let ev = GameEvent {
+                world,
+                kind: GameEventKind::HqDestroyed,
+                level: None,
+            };
+            let commands: Vec<Command> = app.referee.write().await.on_event(ev);
+            // R2: „restart“ heißt konkret das konfigurierte Restart-Command,
+            // nicht „irgendein emittiertes Command".
+            let restart = commands
+                .iter()
+                .any(|c| c.command == app.cfg.referee_restart_cmd);
+            let outcome = push_referee_commands(&app, world, &commands).await;
+            // B1: erfolgreich gepushte Commands acken (Outbox-rest-los).
+            let acked = app.referee.write().await.ack(world, &outcome.delivered);
+            let referee_view = app.referee.read().await.world_view(world);
+            let view = app.state.read().await.view();
+            Ok(Json(json!({
+                "world": world.as_str(),
+                "event": "hq_dead",
+                "phase": view.phase,
+                "rounds": referee_view.rounds,
+                "restart": restart,
+                "ignored": commands.is_empty(),
+                "referee_running": referee_view.running,
+                "restart_pending": referee_view.restart_pending,
+                "acked": acked,
+                "commands": commands,
+                "broadcast": outcome.results,
+            })))
+        }
         other => Err(StateError::new(
             "invalid",
-            format!("unbekanntes event '{other}' (erwartet: wave_start, hq_hp, score_update)"),
+            format!(
+                "unbekanntes event '{other}' (erwartet: wave_start, hq_hp, score_update, hq_dead)"
+            ),
         )
         .into()),
     }
+}
+
+/// Ergebnis eines Referee-Command-Pushes: die JSON-Results (Antwortfeld) und
+/// die `cmd_id`s, die **erfolgreich** zugestellt wurden (Outbox-Ack, B1).
+struct PushOutcome {
+    results: Vec<Value>,
+    delivered: Vec<u64>,
+}
+
+/// Pusht die vom Referee entschiedenen Commands an die Bridge der Welt
+/// (IO-Kanal, analog GO-Broadcast, Issue #267).
+///
+/// Je Command: `POST <bridge_for(world)> {"command": …, "cmd_id": …,
+/// "world": …, "reason": …}` via [`broadcast::post_json`]. Der `cmd_id` ist der
+/// Dedup-Schlüssel des Relay-/Pipe-Vertrags (`docs/relay-pipe-contract.md`); der
+/// HTTP-Adapter (`pipe_bridge`) liest nur `command`, kennt aber keine Pflicht-
+/// felder mehr. Ohne konfigurierten Endpoint (`RBBRIDGE_<W>_URL`) wird `ok: null`
+/// gemeldet — kein Panic, kein `unwrap`; die Zustellung übernimmt dann der Poll.
+/// Mehrere Commands werden in ihrer Reihenfolge gepusht.
+async fn push_referee_commands(app: &AppState, world: World, commands: &[Command]) -> PushOutcome {
+    let mut results = Vec::with_capacity(commands.len());
+    let mut delivered = Vec::new();
+    for cmd in commands {
+        match app.cfg.bridge_for(world) {
+            Some(url) => {
+                let payload = json!({
+                    "command": cmd.command,
+                    "cmd_id": cmd.cmd_id,
+                    "world": world.as_str(),
+                    "reason": cmd.reason,
+                });
+                let res = broadcast::post_json(url, &payload, app.cfg.go_timeout).await;
+                let ok = res.ok();
+                if ok {
+                    delivered.push(cmd.cmd_id);
+                }
+                results.push(json!({
+                    "command": cmd.command,
+                    "cmd_id": cmd.cmd_id,
+                    "ok": ok,
+                    "status": res.status,
+                    "error": res.error,
+                    "endpoint": url,
+                }));
+            }
+            None => results.push(json!({
+                "command": cmd.command,
+                "cmd_id": cmd.cmd_id,
+                "ok": Value::Null,
+                "note": "kein Endpoint konfiguriert (RBBRIDGE_<W>_URL) — Zustellung via GET /referee/poll",
+            })),
+        }
+    }
+    PushOutcome { results, delivered }
 }
 
 /// POST /referee/event — Spiel-Event an den Referee (Issue #268).
@@ -1088,6 +1188,274 @@ mod tests {
         assert!(v["broadcast"]["A"]["error"].is_string());
         let (_, v) = call(&app, "GET", "/state", None).await;
         assert_eq!(v["teams"]["A"]["go_broadcast"]["ok"], false);
+    }
+
+    /// Capture-Mock-HTTP-Endpoint (#267): nimmt jede Verbindung an und sammelt
+    /// die Request-Bytes in `Arc<Mutex<Vec<String>>>` — so lässt sich prüfen,
+    /// dass genau EIN Restart-Push rausgeht (und ein Duplikat keinen zweiten).
+    async fn capture_endpoint() -> (SocketAddr, Arc<tokio::sync::Mutex<Vec<String>>>) {
+        use tokio::io::AsyncReadExt;
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let captures: Arc<tokio::sync::Mutex<Vec<String>>> =
+            Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let sink = captures.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => break,
+                };
+                let mut buf = [0u8; 8192];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let _ = sock
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await;
+                sink.lock()
+                    .await
+                    .push(String::from_utf8_lossy(&buf[..n]).to_string());
+            }
+        });
+        (addr, captures)
+    }
+
+    /// #267: `hq_dead` → Referee `restart` → genau EIN Push an die Bridge;
+    /// das gepushte Command wird geackt (B1: **kein** zweiter Zustellweg über
+    /// den Poll), ein zweites `hq_dead` ist idempotent (kein zweiter Push).
+    #[tokio::test]
+    async fn report_hq_dead_pushes_restart_once() {
+        let (addr, captures) = capture_endpoint().await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [Some(format!("http://{addr}/cmd")), None];
+        let app = make_app(cfg).await;
+
+        // Referee-Guard: ein HQ kann nur in einem LAUFENDEN Match sterben.
+        // Erst `ready` (echte Event-Reihenfolge ready → Wellen → hq_dead);
+        // /referee/event pusht nichts, nur /report hq_dead pusht den Restart.
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/referee/event",
+            Some(json!({"world": "A", "type": "ready"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "A", "event": "hq_dead"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["event"], "hq_dead");
+        // B2: kein `match_over` (nur Referee-Restart, kein MatchState-FINISHED),
+        // stattdessen der reale Referee-Zustand + die Match-Phase.
+        assert!(
+            v.get("match_over").is_none(),
+            "match_over ist irreführend: {v}"
+        );
+        assert!(v["phase"].is_string());
+        assert_eq!(v["restart"], true);
+        assert_eq!(v["ignored"], false);
+        assert_eq!(v["referee_running"], false);
+        assert_eq!(v["restart_pending"], true);
+        assert_eq!(v["rounds"], 1);
+        assert_eq!(v["acked"], 1);
+        assert_eq!(v["broadcast"][0]["ok"], true);
+        assert_eq!(v["broadcast"][0]["command"], "restart");
+        assert_eq!(v["broadcast"][0]["cmd_id"], 2);
+
+        // Genau EIN Capture mit `command:restart` **inkl. `cmd_id`** (Dedup-Schlüssel).
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        {
+            let caps = captures.lock().await;
+            assert_eq!(caps.len(), 1, "caps: {caps:?}");
+            assert!(
+                caps[0].contains("\"command\":\"restart\""),
+                "req: {}",
+                caps[0]
+            );
+            assert!(caps[0].contains("\"cmd_id\":2"), "req: {}", caps[0]);
+        }
+
+        // B1-Kern: das gepushte `restart` darf **nicht** erneut über den Poll
+        // auftauchen (Push und Poll sind genau EINE Zustellung, nicht zwei).
+        let (s, poll) = call(&app, "GET", "/referee/poll?world=A", None).await;
+        assert_eq!(s, StatusCode::OK);
+        let polled = poll["commands"].as_array().unwrap();
+        assert!(
+            !polled.iter().any(|c| c["command"] == "restart"),
+            "gepushtes restart darf nicht doppelt im Poll liegen: {polled:?}"
+        );
+
+        // Duplikat → keine Commands → restart:false, ignored:true, kein Push.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "A", "event": "hq_dead"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["restart"], false);
+        assert_eq!(v["ignored"], true);
+        assert_eq!(v["rounds"], 1);
+        // Der Referee hat das Repeat (nach Restart) verworfen.
+        assert_eq!(v["restart_pending"], true);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(captures.lock().await.len(), 1, "kein zweiter Push erwartet");
+    }
+
+    /// #267/R1: `hq_dead` **ohne** laufendes Match (kein vorheriges `ready`)
+    /// wird vom Referee-Guard verworfen — `ignored:true`, aber **kein**
+    /// `restart_pending` (unterscheidbar vom Repeat nach einem Restart).
+    #[tokio::test]
+    async fn report_hq_dead_is_ignored_without_running_match() {
+        let app = make_app(test_cfg()).await;
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "A", "event": "hq_dead"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["restart"], false);
+        assert_eq!(v["ignored"], true);
+        assert_eq!(v["rounds"], 0);
+        assert_eq!(v["referee_running"], false);
+        assert_eq!(v["restart_pending"], false);
+    }
+
+    /// #267/B1: ohne konfigurierte Bridge → 200 + `ok:null`, kein Panic; das
+    /// Command bleibt in der Outbox und ist über den Poll abholbar (Fallback).
+    #[tokio::test]
+    async fn report_hq_dead_without_bridge_is_ok() {
+        let app = make_app(test_cfg()).await; // bridge = [None, None]
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/referee/event",
+            Some(json!({"world": "A", "type": "ready"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "A", "event": "hq_dead"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["restart"], true);
+        assert_eq!(v["acked"], 0);
+        assert_eq!(v["broadcast"][0]["ok"], Value::Null);
+        assert!(v["broadcast"][0]["note"].is_string());
+
+        // Kein Push → Command muss im Poll liegen (sonst ginge der Restart verloren).
+        let (_, poll) = call(&app, "GET", "/referee/poll?world=A", None).await;
+        let polled = poll["commands"].as_array().unwrap();
+        assert!(
+            polled.iter().any(|c| c["command"] == "restart"),
+            "Restart muss ohne Bridge per Poll zustellbar sein: {polled:?}"
+        );
+    }
+
+    /// #267/B1: schlägt der Push fehl (Endpoint down), bleibt das Command in der
+    /// Outbox → der Poll stellt es zu. Kein stiller Verlust, kein Doppel.
+    #[tokio::test]
+    async fn report_hq_dead_push_failure_keeps_outbox_for_poll() {
+        let mut cfg = test_cfg();
+        // Port 1 ist praktisch immer zu (Connection refused) → Push-Fehler.
+        cfg.bridge = [Some("http://127.0.0.1:1/exec".to_string()), None];
+        let app = make_app(cfg).await;
+
+        call(
+            &app,
+            "POST",
+            "/referee/event",
+            Some(json!({"world": "A", "type": "ready"})),
+        )
+        .await;
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "A", "event": "hq_dead"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["restart"], true);
+        assert_eq!(v["acked"], 0, "fehlgeschlagener Push darf nicht acken");
+        assert_ne!(v["broadcast"][0]["ok"], true);
+
+        let (_, poll) = call(&app, "GET", "/referee/poll?world=A", None).await;
+        let polled = poll["commands"].as_array().unwrap();
+        assert!(
+            polled.iter().any(|c| c["command"] == "restart"),
+            "nach Push-Fehler muss der Poll den Restart liefern: {polled:?}"
+        );
+    }
+
+    /// #267: die Aliase `hq_destroy`/`hq_destroyed` verhalten sich exakt wie
+    /// `hq_dead` — der erste Treffer pusht genau EIN `restart`, der zweite
+    /// Alias ist idempotent (kein zweiter Push).
+    #[tokio::test]
+    async fn report_hq_dead_aliases_are_accepted_and_idempotent() {
+        let (addr, captures) = capture_endpoint().await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [Some(format!("http://{addr}/cmd")), None];
+        let app = make_app(cfg).await;
+
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/referee/event",
+            Some(json!({"world": "A", "type": "ready"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+
+        // Alias 1: `hq_destroy` → restart, genau EIN Push.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "A", "event": "hq_destroy"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["event"], "hq_dead");
+        assert_eq!(v["restart"], true);
+        assert_eq!(v["ignored"], false);
+        assert_eq!(v["broadcast"][0]["ok"], true);
+
+        // Alias 2: `hq_destroyed` → kein zweiter Restart/Push.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "A", "event": "hq_destroyed"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["restart"], false);
+        assert_eq!(v["ignored"], true);
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            captures.lock().await.len(),
+            1,
+            "genau ein Push über die Aliase"
+        );
     }
 
     #[tokio::test]

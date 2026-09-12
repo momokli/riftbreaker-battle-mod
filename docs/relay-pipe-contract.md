@@ -32,6 +32,15 @@ fixiert die Parameter, die der Relay einhält.
 - `cmd_id` wird vom Tournament-Server vergeben (Ganzzahl) und dient dem Relay
   als Dedup-Schlüssel; die rbbridge ignoriert `cmd_id` (sie liest nur `cmd`/
   `command`).
+- **Push und Poll teilen denselben `cmd_id` (Issue #267).** Der Tournament-Server
+  stellt ein Referee-Command entweder per Push (`POST <RBBRIDGE_<W>_URL>`, jetzt
+  inkl. `cmd_id`/`world`/`reason`) **oder** über die Poll-Outbox
+  (`GET /referee/poll`) zu — nicht über beide: Ein erfolgreich gepushter Command
+  wird serverseitig „geackt“ und aus der Outbox entfernt, der Poll liefert ihn
+  also nicht erneut. Geht die Push-Antwort verloren (Command bleibt in der
+  Outbox), dedupliziert der Relay weiterhin über `cmd_id`; der Push-Payload
+  trägt `cmd_id` deshalb mit. Ein `restart`-Command ist **nicht** idempotent —
+  die Dedup-Zusage ist also verpflichtend, nicht optional.
 - **Antwortrichtung (Issue #73):** Nach erfolgreichem Write liest der Relay
   auf demselben Pipe-Handle weiter, bis eine `exec_result`-Zeile mit
   passendem `command`-Feld kommt oder `RBB_PIPE_TIMEOUT_S` abläuft. Andere
