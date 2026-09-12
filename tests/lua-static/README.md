@@ -33,6 +33,25 @@ npm test        # = node --test
 7. `RespawnFailedEvent` eines anderen Gebäudes → **kein** Match-Ende.
 8. `RespawnFailedEvent` ohne zugeordnete Entity → nur Hinweis (`event=hq_respawn`).
 
+`reset.test.js` deckt Issue #281 (Round-Reset auf 0 nach Niederlage) ab:
+
+1. Mod lädt; `rb_reset` und `rb_hq` registriert.
+2. HQ-Tod simulieren (10 Leaks + `RespawnFailedEvent`-Kette): Reset wird
+   **vorgemerkt** (`RBB.reset.pending`) und `auto` gesetzt, aber **noch nicht**
+   ausgeführt.
+3. Erster `HourEvent`-Tick → Reset feuert **genau einmal** (`event=reset
+   round=0 status=ok reason=hour_tick count=1`): Runde/Wave-Timer 0,
+   Setup-Phase neu (`commenced=false`), HQ-HP zurück auf Start, HQ-Entity
+   gelöscht, Economy-Pool (+DB) 0, Send-Queue/Boost/Reveal geleert.
+4. Loop-Schutz: viele weitere Ticks ändern nichts (kein zweiter Reset, kein
+   zweites `match_end`).
+5. `rb_reset` ohne offene Niederlage → `status=skip reason=not_pending` (kein Reset).
+6. Zweite Niederlage → genau **ein** weiterer Reset, ausgelöst per `rb_reset`
+   (IO-Kanal-Pfad); Session-Boundary-Reihenfolge belegt: `match_end` →
+   `reset` → `commence status=pending hint=place_hq`.
+7. AFK-Ende (`event=afk_timeout`) wird **nicht** autonom resettet (keine
+   Restart-Schleife bei scharfer Schwelle); explizites `rb_reset` funktioniert.
+
 `send-queue.test.js` deckt Issue #25 (Send-Queue & Shop-HUD) ab:
 
 1. Mod lädt, Version 0.34.3; `rb_buy_wave`/`rb_shop`/`rb_queue` registriert,
@@ -245,3 +264,11 @@ Wrap-Wirksamkeit am `OnEnterSpawn` im DOM-State-Machine-Kontext (ob der
 prepare→spawn-Zyklus beim Halten sauber weiterläuft) und die echte
 HQ-Platzierung über das Build-Menü (`FindEntitiesByGroup("headquarters")`)
 sind live-verifizierbar (Operator, E2E auf :6321).
+
+Für #281 gilt analog: die Reset-Logik (idempotenter `RoundReset`, genau ein
+Reset pro Niederlage, Loop-Schutz, Session-Boundary) ist reine Lua-Logik und
+statisch getestet (`reset.test.js`). **Live-verifizierbar (OFFEN, Momo/Matheo):**
+echtes HQ im laufenden Spiel zerstören → Runde startet **sichtbar** neu
+(HQ-Placement-Phase) und der vom Referee gepushte `rb_reset` kommt über die
+echte Pipe im Spiel an. Der Test markiert diesen Punkt bewusst **nicht** als
+erledigt.

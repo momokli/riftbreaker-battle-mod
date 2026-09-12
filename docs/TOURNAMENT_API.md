@@ -26,7 +26,7 @@ Rust/axum in `tournament/` (Issue #29), Web-UI in `tournament/web/`
 | `TOURNAMENT_GO_TIMEOUT_MS` | `3000` | Timeout je Broadcast-Endpoint |
 | `TOURNAMENT_HQ_HP` | `100` | Start-HP jedes HQ |
 | `TOURNAMENT_REFEREE_MAX_WAVE` | `0` | Wellen-Deckel des Referees (`0` = unbegrenzt, Issue #268) |
-| `TOURNAMENT_REFEREE_RESTART_CMD` | `restart` | Command des Referees bei HQ-Tod (Issue #268) |
+| `TOURNAMENT_REFEREE_RESTART_CMD` | `rb_reset` | In-game Command des Referees bei HQ-Tod (Issues #268/#281; Mod-Kommando `rb_reset`) |
 | `TOURNAMENT_WEB_DIR` | `<crate>/web` | Verzeichnis der statischen Web-UI |
 | `RUST_LOG` | `info` | Log-Level |
 
@@ -46,7 +46,7 @@ FINISHED ── POST /rematch ──► LOBBY (Spieler bleiben, Rematch-Zähler 
 
 > **`POST /report event=hq_dead` beendet kein Match** und wechselt den
 > MatchState **nicht** nach `FINISHED`: Das Event fasst ausschließlich den
-> Referee an (`restart` + Runde +1 für den Mod-Runde-Neustart, #267).
+> Referee an (`rb_reset` + Runde +1; der Mod setzt die Runde dann auf 0, #267/#281).
 > Match-Ende läuft weiterhin über `event=hq_hp` mit `hp ≤ 0` → `FINISHED`.
 
 ### Runden-Loop (RUNNING)
@@ -172,9 +172,9 @@ Nur in Phase `running` (sonst 409). Der Send wird in die Queue der
 - `hq_dead` (Aliase `hq_destroy`/`hq_destroyed`, Issue #267): HQ-Tod aus dem
   echten Spiel (Mod-Log `event=hq_dead status=match_end hp=0`). Wird als
   `HqDestroyed` in den Referee gespeist; der Referee entscheidet genau EIN
-  `restart` (aus `TOURNAMENT_REFEREE_RESTART_CMD`) und der Server **pusht** es an
+  `rb_reset` (aus `TOURNAMENT_REFEREE_RESTART_CMD`) und der Server **pusht** es an
   die Bridge der Welt
-  (`POST <RBBRIDGE_<W>_URL> {"command": "restart", "cmd_id": …, "world": "A", "reason": …}`,
+  (`POST <RBBRIDGE_<W>_URL> {"command": "rb_reset", "cmd_id": …, "world": "A", "reason": …}`,
   analog GO-Broadcast). Antwort
   `{"event": "hq_dead", "phase": …, "rounds": …, "restart": bool, "ignored": bool, "referee_running": bool, "restart_pending": bool, "acked": n, "commands": […], "broadcast": […]}`
   (`broadcast[i] = {command, cmd_id, ok, status, error, endpoint}`).
@@ -207,9 +207,9 @@ Commands gehen in der Antwort und/oder über `GET /referee/poll` zurück.
 
 | `type` | Wirkung | Command |
 |---|---|---|
-| `ready` | Executor oben (Map geladen / nach `restart`) | `rb_wave 1` |
+| `ready` | Executor oben (Map geladen / nach `rb_reset`) | `rb_wave 1` |
 | `wave_done` (mit `level`) | Welle abgeschlossen | `rb_wave <level+1>` (bis `TOURNAMENT_REFEREE_MAX_WAVE`) |
-| `hq_destroyed` | HQ zerstört | `restart`, Runde +1, Wellen ruhen bis `ready` |
+| `hq_destroyed` | HQ zerstört | `rb_reset` (Mod: Runde auf 0, Setup-Phase), Runde +1, Wellen ruhen bis `ready` |
 
 Duplikate/veraltete Level/mehrfaches `hq_destroyed` sind idempotent (kein
 Doppel-Command). Antwort:
@@ -386,7 +386,7 @@ exec-Kanal aus (`exec_cmd_client`/rbbridge-exec-Dispatch):
 | `phase` wird `finished` | `match_over` | Sieg-/Verlierer-Screen |
 | — | `POST /report wave_start` | Welt meldet Lock + Built-Value (vom Mod/RE-Layer ausgelöst) |
 | — | `POST /report hq_hp` | Welt meldet HQ-HP (send_state-Egress, Issue #13) |
-| — | `POST /report hq_dead` | Welt meldet HQ-Tod (Mod-Log, #267) → Referee-`restart`-Push an `RBBRIDGE_*_URL` |
+| — | `POST /report hq_dead` | Welt meldet HQ-Tod (Mod-Log, #267) → Referee-`rb_reset`-Push an `RBBRIDGE_*_URL` (#281: In-game-Round-Reset) |
 
 Der GO-Push des Servers (`RBBRIDGE_*_URL`) und das Poll-Fallback sind
 **redundant aber idempotent**: Kommandos dürfen doppelt ankommen

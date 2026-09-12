@@ -10,7 +10,7 @@ ins Log schrieb.
 ```
             Events (Rückkanal)                 Commands
   in-game Lua  ───────────────►  Referee  ───────────────►  in-game Lua
-  (Executor)   Relay/Pipe #265  (Server)   rb_wave N / restart   (Executor)
+  (Executor)   Relay/Pipe #265  (Server)   rb_wave N / rb_reset   (Executor)
 ```
 
 Transport ist der IO-Kanal aus #265: `Tournament-Server → relay.py
@@ -23,7 +23,7 @@ kennt nur Events rein / Commands raus.
 | Seite | Verantwortung |
 |---|---|
 | **Referee** (`tournament/`, `src/referee.rs`) | Wellen-Takt (Level-Vergabe), HQ-Tod → Restart, Runden-Zähler, Dedup/Idempotenz. Deterministisch, kein I/O, keine Uhr. |
-| **Executor** (in-game Lua) | Führt `rb_wave N` / `restart` aus, meldet `ready` / `wave_done` / `hq_destroyed` nach oben. **Keine eigene Runden-/Match-Logik mehr** (Stufe 2, s. u.). |
+| **Executor** (in-game Lua) | Führt `rb_wave N` / `rb_reset` aus, meldet `ready` / `wave_done` / `hq_destroyed` nach oben. **Keine eigene Runden-/Match-Logik mehr** (Stufe 2, s. u.). |
 | **Relay/Bridge** (#265) | Transport beider Richtungen (Log/Pipe → Event, Command → Pipe). |
 
 ## Event-Schema (Executor → Referee)
@@ -38,7 +38,7 @@ kennt nur Events rein / Commands raus.
 
 | `type` | Bedeutung | Wirkung im Referee |
 |---|---|---|
-| `ready` | Executor oben (Map geladen / nach `restart`) | Welle 1 der (neuen) Runde wird ausgegeben |
+| `ready` | Executor oben (Map geladen / nach `rb_reset`) | Welle 1 der (neuen) Runde wird ausgegeben |
 | `wave_done` | `event=wave level=N status=done` aus dem Game-Log | nächste Welle (`level+1`), sofern unter dem Deckel |
 | `hq_destroyed` | `event=hq_dead` aus dem Game-Log | Restart-Command + Runde +1, Wellen ruhen bis `ready` |
 
@@ -51,7 +51,7 @@ einen Doppel-Restart aus.
 
 ```json
 {"world": "A", "command": "rb_wave 3", "cmd_id": 7, "reason": "wave_done"}
-{"world": "A", "command": "restart",  "cmd_id": 8, "reason": "hq_destroyed round=1"}
+{"world": "A", "command": "rb_reset",  "cmd_id": 8, "reason": "hq_destroyed round=1"}
 ```
 
 `cmd_id` ist der monotone Dedup-Schlüssel, den der Relay bereits aus dem
@@ -83,7 +83,7 @@ GO-spezifischen `/state`-Broadcast-Status (bewusst, R3).
 ```text
         ready                 wave_done(level == offen)        hq_destroyed
   ──────────────► RUNNING ──────────────────────────► RUNNING ──────────────► RESTART
-   (rb_wave 1)    Wellen-Puls (rb_wave N+1)                        (restart, Runde+1)
+   (rb_wave 1)    Wellen-Puls (rb_wave N+1)                        (rb_reset, Runde→0)
                        ▲                                                 │
                        └──────────────────── ready ──────────────────────┘
 ```
@@ -93,13 +93,13 @@ GO-spezifischen `/state`-Broadcast-Status (bewusst, R3).
 * `TOURNAMENT_REFEREE_MAX_WAVE` deckelt den Level (`0` = unbegrenzt); ab dem
   Deckel gibt der Referee keine weitere Welle mehr aus.
 * `TOURNAMENT_REFEREE_RESTART_CMD` legt den Restart-Command fest (Default
-  `restart`).
+  `rb_reset` — das in-game Mod-Kommando aus #281).
 
 ## Test-Split (Pflicht, Issue #268)
 
 * **OHNE Player (erledigt, automatisiert):** `cargo test` in `tournament/`.
   Der Referee-Kern ist deterministisch (Event-In → Command-Out): `ready` →
-  `rb_wave 1`, `wave_done` → nächste Welle, `hq_destroyed` → `restart` +
+  `rb_wave 1`, `wave_done` → nächste Welle, `hq_destroyed` → `rb_reset` +
   Runde, Duplikate/Deckel/Welt-Isolation. Zusätzlich HTTP-Level-Tests für
   `POST /referee/event` und `GET /referee/poll`.
 * **NUR mit Player (OFFEN — Player-Test Momo/Matheo):** der volle Loop
@@ -113,13 +113,16 @@ GO-spezifischen `/state`-Broadcast-Status (bewusst, R3).
   Server-Timer, keine Uhr. Das hält die Logik deterministisch und ohne Player
   testbar. Ein zeitbasierter Takt (z. B. Planungsphase mit Deadline) ist ein
   möglicher Folgeschritt.
-* **`restart`-Command ist konfigurierbar, nicht verifiziert.** Der Command
-  „Neustart des Spiels“ ist im Repo nicht live belegt (der bisherige Restart
-  läuft über `docker restart` in `tools/solo-feed/`). Default `restart`
-  (`TOURNAMENT_REFEREE_RESTART_CMD`); die exakte native Command-Bezeichnung
-  klärt der Player-Test.
+* **`rb_reset`-Command ist konfigurierbar (`TOURNAMENT_REFEREE_RESTART_CMD`).**
+  Der Server pusht nach `hq_destroyed` den in-game Round-Reset des Mods
+  (Default `rb_reset`): der Mod setzt Runde/Wave-Timer auf 0, leert die Economy
+  und geht in die HQ-Placement-Phase (in-game Lua, #281). Der frühere grobe
+  Fallback (`docker restart` in `tools/solo-feed/`) bleibt für Umgebungen ohne
+  den in-game Reset dokumentiert. Die **Live-Zustellung** über die echte Pipe
+  (Restart-Command kommt im laufenden Spiel an) klärt der Player-Test.
 * **Kein MatchState-`FINISHED` beim HQ-Tod, Antwort ohne `match_over` (B2, #267).**
-  `POST /report event=hq_dead` fasst **nur** den Referee an (`restart`, Runde +1);
+  `POST /report event=hq_dead` fasst **nur** den Referee an (`rb_reset`, Runde +1
+  im Referee; der Mod setzt die Runde auf 0, #281);
   der Match-Zustand bleibt unverändert. Die Antwort meldet darum den realen
   Referee-Zustand (`restart`/`rounds`/`referee_running`/`restart_pending`) und die
   aktuelle `phase` — kein `match_over:true` (das wäre nur über
@@ -144,5 +147,5 @@ GO-spezifischen `/state`-Broadcast-Status (bewusst, R3).
 * **Deploy-Dependency #265.** Ohne den deployten IO-Kanal (Relay/Bridge im
   Dedicated-Container) ist der Loop nur halb verdrahtet; der Server-Teil ist
   fertig und getestet, der Transport folgt mit #265. Der Restart-Push ist
-  **server-seitig verdrahtet** (`POST /report` `hq_dead` → `restart` an
+  **server-seitig verdrahtet** (`POST /report` `hq_dead` → `rb_reset` an
   `RBBRIDGE_<W>_URL`); die Live-Zustellung über die echte Pipe bleibt offen.
