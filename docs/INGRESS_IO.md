@@ -138,6 +138,48 @@ Quelländerungen anschlägt.
 **Nur mit Player (OFFEN, Momo/Matheo):** „die Welle spawnt sichtbar". Nicht als
 erledigt markieren.
 
+## Kernpfad-Gate ohne Player (Issue #288)
+
+Der Live-Befund aus #288: `POST /wave` liefert `exec_result.ok=true`, aber im
+Spiel entstehen **0 Kreaturen**. `ok:true` belegt nur, dass
+`ConsoleService::ExecuteCommand` lief — **nicht**, dass gespawnt wurde. Der
+Ingress-Kanal (`rb_wave 3` kommt an) ist intakt; der Fehler ist die
+**Falsch-Gruen-Semantik** von `exec_result` plus die nie getestete
+Anker-Aufloesung (`FindService == nil`, kein Spieler).
+
+Zwei Testebenen sichern den Kernpfad **ohne Spieler** ab (CI-faehig):
+
+| Test | Deckt ab |
+|---|---|
+| `tests/lua-static/wave-anchor.test.js` | Anker-Kette border→mission→mech: `FindService=nil`+kein Spieler → `status=no_player`, **kein** `status=done`, 0 `SpawnEntity`-Aufrufe; Rand-Spawner ohne Spieler → `status=done spawned=8 anchor=border`; nur Mech → `anchor=mech`; Anker da, Spawn schlaegt fehl → `status=no_spawns` (kein Falsch-Gruen) |
+| `tests/e2e-vollkette/kern-io-pfad.test.js` | Pipe-Roundtrip `exec → exec_result ok:true` (echter `relay.py` + FIFO-Responder), graceful `ok:false reason=console_service_not_found` (kein Crash), Falsch-Gruen-Kontrakt (`exec_result` traegt keinen Spawn), Egress-Verifikation |
+
+Damit ist `exec_result.ok:true ⟹ spawned>0` **nicht** mehr ungeprueft: der
+Spawn-Beweis ist das Game-Log `event=wave level=N status=done` (nur bei
+`spawned>0`, sonst `status=no_spawns`), im Live-Betrieb der Player-Test.
+
+### Anker-Regression (eingegrenzt)
+
+- Der **Mech ist der einzige Anker, der einen Spawn tatsaechlich ausfuehrt**,
+  wenn keine Rand-/Missions-Spawner existieren; ohne Server-Player → 0 Spawns.
+- Im **Tick-Kontext** einer geladenen Session lief `FindService` (13:27–13:28,
+  `hq_autodetect status=ok`); die im Live-Fall gemessenen 0 Spawns lagen an
+  **nicht geladener Map** (headless, kein Player). Die Rand-/Missions-Anker
+  greifen also, sobald die Welt bootet — headless verifizierbar ist das nur auf
+  Log-Ebene (Stub-Anker, `tests/lua-static/wave-anchor.test.js`).
+- Offen bleibt der **headless ohne Player** nicht erreichbare Teil: ob die
+  Live-Welt Rand-Spawner liefert und die Welle **sichtbar** spawnt → Player-Test.
+
+### Egress (verifiziert: offene Flanke, KEINE Regression)
+
+Die dedizierte `pipe_bridge` ist ein **reiner exec-Kanal**: sie liest nur
+`exec_result`/`pong` und hat keinen HTTP-Client/Report-Pfad → `score_update`
+kann nicht aus dem Spiel heraus. `rbbridge` `send_state` existiert, laeuft aber
+nur im `serve_client`-Heartbeat (Dauer-Verbindung), waehrend die Bridge pro
+Request verbindet. Der Live-Log zeigt entsprechend **kein** `score_update`.
+Das ist kein Regressions-, sondern ein fehlendes Feature → **#13**.
+Gepinnt in `tests/e2e-vollkette/kern-io-pfad.test.js` („EGRESS …").
+
 ## Live-Belege (planet, 2026-09-12)
 
 Erster Live-Lauf des Kanals auf dem Dedicated-Server (Container

@@ -103,7 +103,8 @@
 --
 -- Log-Zeilen (externes Parsing, Praefix [RBBATTLE]):
 --   event=mod_load version=0.34.3 status=ok mode=sp econ_source=.. econ_pool=.. hq_hp=.. hq_dead=..
---   event=wave level=N status=start|done spawned=.. skipped=.. anchor=border|mission|mech
+--   event=wave level=N status=start|done|no_player|no_spawns spawned=.. skipped=.. anchor=border|mission|mech
+--     (#288: status=done nur bei spawned>0 — exec_result ok:true beweist keine Spawns)
 --   event=spawn ok|failed|skip ... anchor=<gruppe>/<id>            (je Kreatur)
 --   event=wave_spawners count=N                                    (Pool-Groesse)
 --   event=dom_timer patch status=ok|skip|no_class cap=300          (#23)
@@ -675,8 +676,17 @@ local function SpawnWave(level)
         end
     end
 
-    Log("event=wave level=%d status=done spawned=%d skipped=%d anchor=%s anchors=%d",
-        level, spawned, skipped, anchorMode, anchorCount)
+    -- #288: status=done nur, wenn wirklich Kreaturen entstanden sind. Der
+    -- Exec-Kanal (exec_result ok:true) belegt nur, dass ExecuteCommand lief —
+    -- NICHT, dass gespawnt wurde. Bei 0 Spawns trotz vorhandener Anker ist das
+    -- eine eigene, ehrliche Statuszeile (kein Falsch-Gruen im Log).
+    if spawned > 0 then
+        Log("event=wave level=%d status=done spawned=%d skipped=%d anchor=%s anchors=%d",
+            level, spawned, skipped, anchorMode, anchorCount)
+    else
+        Log("event=wave level=%d status=no_spawns spawned=0 skipped=%d anchor=%s anchors=%d",
+            level, skipped, anchorMode, anchorCount)
+    end
     WriteConsole("rb_wave level %d: %d Kreaturen gespawnt (%d uebersprungen), Anker: %s",
                  level, spawned, skipped, anchorMode)
     return spawned > 0
