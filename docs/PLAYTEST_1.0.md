@@ -41,7 +41,7 @@ Ergebnis signiert wird.
 - **Echtes 1v1 mit zweitem Spieler ist NICHT Teil von 1.0** (S11 = `n/a`).
 - **Runde 2 / Round-Reset ist Core-Game-Loop und zwingend Muss** (M8).
 - **Telemetry (Session-Mitschnitt + Metriken, #280) ist Core-Dev-Feature von
-  1.0 und zwingend Muss** (M11).
+  1.0 und zwingend Muss** (M10).
 - Der Website-Proxy (#322, Preflight P4) **muss vor dem Test gefixt sein**.
 
 ---
@@ -125,8 +125,7 @@ Preflight-Punkt ist selbst ein 1.0-Blocker.
 | M7 | **HQ-Tod erkannt:** In-Game-HQ-Verlust endet das Match nachvollziehbar | S7 | `event=hq_dead status=match_end` + `event=match_end reason=hq_destroyed`, `/state` `phase=finished` |
 | M8 | **Runde 2 spielbar (Core-Game-Loop, bestätigt):** Nach Niederlage Reset auf 0 und eine neue Runde startet sauber | S8 | Log `rb_reset`/Round-Reset + HQ wieder 100, Wave-Zähler zurück |
 | M9 | **Fehlerverhalten:** Toter Kanal/Timeout gibt eine klare Fehlermeldung statt Hänger oder Falsch-Erfolg | S9 | `/wave` mit gestoppter Bridge → Fehlerantwort ≤ ~3 s, **kein** `ok:true` |
-| M10 | **Stabilität:** Testfenster ohne Crash/Restart-Loop des Containers | S10 | `docker ps` RestartCount unverändert, keine Crash-Logs |
-| M11 | **Telemetry (Core-Dev, bestätigt):** Jede Spiel-Session wird persistent mitgeschnitten (Metriken), zuordenbar zu Match/Session | S13 | Session-Artefakt (Log/Metrik-Datei) liegt vor + Pfad dokumentiert |
+| M10 | **Telemetry (Core-Dev, bestätigt):** Jede Spiel-Session wird persistent mitgeschnitten (Metriken), zuordenbar zu Match/Session | S13 | Session-Artefakt (Log/Metrik-Datei) liegt vor + Pfad dokumentiert |
 
 ---
 
@@ -141,6 +140,7 @@ Diese Punkte werden dokumentiert und fließen in Follow-ups — sie blockieren
 | S2 | HUD/Click-HUD bedienbar (`rb_hud_ui`, `rb_quick`, `rb_quick_step`) | S12 |
 | S3 | Latenz „Knopfdruck → sichtbarer Spawn“ < ~2 s | S5 |
 | S4 | Balance-Feedback festgehalten (Wellen-Gefühl, HQ-HP-Kurve, Preise) | S12 |
+| S5 | Stabilität/Dauerlauf — **„note for later“ (Momo): nicht 1.0-relevant**, ist bereits proven und zeigt sich im Spiel | S10 |
 
 ---
 
@@ -160,7 +160,7 @@ Diese Punkte werden dokumentiert und fließen in Follow-ups — sie blockieren
 Legende: **Erwartung** = beobachtbar/prüfbar. **Beweis** = was ins Protokoll
 kommt. Alle Log-Kommandos siehe Anhang (Abschnitt 8).
 
-### S1 — Kaltstart & Host (C1) → M1, M10
+### S1 — Kaltstart & Host (C1) → M1
 
 - **Vorgehen:** Container frisch starten (oder Deploy auslösen); warten, bis healthy.
 - **Erwartung:** `Up … (healthy)`; im Log **genau eine** `event=mod_load version=<V> status=ok`;
@@ -244,9 +244,12 @@ kommt. Alle Log-Kommandos siehe Anhang (Abschnitt 8).
   der Bridge funktioniert S5 wieder.
 - **Beweis:** Fehlerantwort + Zeitstempel; anschließend grüner Wiederholungslauf.
 
-### S10 — Stabilität / Dauerlauf (mehrere Wellen am Stück) → M10
+### S10 — Stabilität / Dauerlauf (mehrere Wellen am Stück) → Soll („note for later“, **nicht** 1.0-blockierend)
 
-- **Vorgehen:** ≥ 15 Minuten spielen (mehrere Wellen), Container-Status beobachten.
+> Momo (2026-09-12): **nicht wichtig für 1.0** — Stabilität ist bereits proven und
+> zeigt sich im Test. Nur beobachten, kein Gate.
+
+- **Vorgehen:** Mehrere Wellen am Stück spielen (Vorschlag ≥ 15 Min), Container-Status beobachten.
 - **Erwartung:** kein Crash, kein Restart (`RestartCount` gleich), keine
   `handler_errors`; FPS/Spielgefühl nicht eingebrochen.
 - **Beweis:** `docker ps`/`inspect` vor+nach (RestartCount), Log-Auszug.
@@ -270,7 +273,7 @@ kommt. Alle Log-Kommandos siehe Anhang (Abschnitt 8).
   **Eindruck notieren** (nicht bewerten als Gate): Wellen-Gefühl, HQ-HP-Kurve, Preise.
 - **Beweis:** Screenshots + Freitext-Eindruck.
 
-### S13 — Telemetry / Session-Mitschnitt → **M11 (Muss, #280)**
+### S13 — Telemetry / Session-Mitschnitt → **M10 (Muss, #280)**
 
 - **Vorgehen:** Eine vollständige Spiel-Session fahren; danach prüfen, ob der
   Recorder-/Telemetrie-Layer den Lauf persistiert hat.
@@ -410,7 +413,6 @@ Diese Punkte sind **belegt** und beeinflussen den Testablauf:
 | M8 | | | |
 | M9 | | | |
 | M10 | | | |
-| M11 | | | |
 
 ### Soll-Beobachtungen
 
@@ -420,6 +422,7 @@ Diese Punkte sind **belegt** und beeinflussen den Testablauf:
 | S2 | | |
 | S3 | | |
 | S4 | | |
+| S5 (S10/Dauerlauf) | | |
 | S5 | | |
 
 ### Funde / Störungen
@@ -474,13 +477,15 @@ Diese Punkte sind **belegt** und beeinflussen den Testablauf:
 2. **Round-Reset (#281):** Core-Game-Loop → **Muss** (M8).
 3. **Website-Proxy (#322):** **muss gefixt sein**; Fix über eigenen Caddy
    (ein Host-Caddy-Eintrag).
-4. **Telemetry (#280):** Core-Dev-Feature 1.0 → **Muss** (M11).
+4. **Telemetry (#280):** Core-Dev-Feature 1.0 → **Muss** (M10).
 5. **Beweisformat:** **Momos „happy“** + Traceability (Commit/Mod/md5/Deploy).
+6. **Stabilität/Dauerlauf (S10):** **„note for later“** — nicht 1.0-relevant,
+   bereits proven; wird im Test nur beobachtet (Soll S5).
 
 **Noch offen:**
 
-1. **Dauerlauf S10:** Wie lang mindestens (15 Min? eine volle Runde?).
-2. **Timing:** Test **nach** dem #322-Fix + nach Welle 2/3 aus #319, dann Tag
+1. **Timing:** Test **nach** dem #322-Fix + nach Welle 2/3 aus #319, dann Tag
    `v1.0.0` — oder erst taggen und dann testen?
+2. **Freigabe #322:** Bau ich den eigenen Rift-Caddy (+ ein Host-Eintrag) jetzt?
 
 Refs #319, Refs #320, Refs #289, Refs #266, Refs #267, Refs #281, Refs #280, Refs #298
