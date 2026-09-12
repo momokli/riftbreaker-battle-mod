@@ -15,10 +15,27 @@ name: Deploy (CD)
 # git fetch + Hard-Checkout und führt das Playbook als root aus (enges
 # sudoers). Ausgabe wird direkt ins Job-Log gestreamt, exit code = Ergebnis —
 # kein Token, kein Polling. Setup: deploy/README.md → „CD: SSH-Deploy".
+#
+# Deploy-Gate (2026-09-12, Issue #238): VOR dem SSH-Deploy parkt der Workflow,
+# bis 0 Spieler online sind (tools/deploy-gate/, Quelle = Container-Log).
+# Timeout (Default 1800 s, Input `timeout`) bricht rot ab, statt unbegrenzt zu
+# hängen; `workflow_dispatch` mit `force=true` deployt sofort (manueller
+# Override). Concurrency bleibt `cd-dev`/`cancel-in-progress: false`: genau EIN
+# Deploy bei 0 Spielern läuft atomar, der geparkte Lauf hält den Slot.
 
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Sofort deployen (Spielerzahl ignorieren)'
+        type: boolean
+        default: false
+      timeout:
+        description: 'Max. Parkdauer in Sekunden (leer = Default 1800)'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -33,11 +50,49 @@ jobs:
   deploy-dev:
     name: Deploy Dev (planet :6321)
     runs-on: [self-hosted, planet]
-    timeout-minutes: 30
+    # Park-Deadline (Default 1800 s) + Deploy-Puffer.
+    timeout-minutes: 60
     environment:
       name: dev
       url: https://rift.projectmellon.de/solo.html
+    env:
+      # Park-Deadline für deploy_gate.py (Input beim Dispatch, sonst 1800 s).
+      RBM_TIMEOUT_S: ${{ github.event.inputs.timeout || '1800' }}
     steps:
+      # Checkout nötig, damit tools/deploy-gate/* auf dem Runner liegt (Issue #238).
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Gate VOR dem SSH-Deploy: parkt bis 0 Spieler online (Issue #238).
+      # Exit 2 (Timeout) ⇒ Step rot ⇒ kein Deploy.
+      - name: Deploy-Gate (parken bis 0 Spieler online)
+        id: gate
+        env:
+          GATE_FORCE: ${{ github.event.inputs.force || 'false' }}
+        run: |
+          set -euo pipefail
+          args=(--count-cmd "python3 tools/deploy-gate/player_count.py" --interval 30)
+          if [ "$GATE_FORCE" = "true" ]; then
+            args+=(--force)
+          fi
+          python3 tools/deploy-gate/deploy_gate.py "${args[@]}"
+
+      # Park-/Ergebnis-Zustand in die Job-Summary (Issue #238, DoD 2).
+      - name: Deploy-Gate Summary
+        if: always()
+        run: |
+          set -euo pipefail
+          count="$(python3 tools/deploy-gate/player_count.py 2>/dev/null || true)"
+          if [ -z "$count" ]; then count="?"; fi
+          if [ "${{ github.event.inputs.force || 'false' }}" = "true" ]; then
+            echo "- Deploy frei (Force) — Rollout läuft." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${{ steps.gate.outcome }}" = "success" ]; then
+            echo "- Deploy frei: 0 Spieler online — Rollout läuft." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- Geparkt: ${count} Spieler online, warte auf 0 (Timeout ${RBM_TIMEOUT_S}s)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Letzter Step: unverändert. Gate davor, sonst kein Park.
       - name: Deploy per SSH (deploy-User, forced command)
         run: |
           set -euo pipefail

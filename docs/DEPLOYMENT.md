@@ -168,6 +168,13 @@ GitHub-Secret mehr**. Das Vault-Passwort liegt ausschließlich root-only auf
 planet (`/etc/rbbattle-deploy/vault.pass`) und wird nie im Repo oder in Logs
 ausgegeben.
 
+**Deploy-Gate (Issue #238):** Vor dem SSH-Deploy parkt der Lauf, bis **0
+Spieler online** sind (Provider `tools/deploy-gate/player_count.py`, Quelle =
+Container-Log). `workflow_dispatch` mit `force=true` deployt sofort; ein
+Timeout (Default 1800 s) bricht rot ab, statt unbegrenzt zu hängen. Betrieb +
+Troubleshooting: `deploy/README.md` → „CD: SSH-Deploy"; Details:
+`tools/deploy-gate/README.md`.
+
 ## Server-Passwort (Vault)
 
 Das Server-Passwort liegt **nie im Klartext** im Repo. Es steht in
