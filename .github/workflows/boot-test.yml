@@ -1,11 +1,13 @@
-name: Boot-Test (Test-Ports)
+name: Boot-Test
 
-# Pre-Merge-Gate (CI/CD-Plan F1): baut + bootet den Stack auf Test-Ports
-# (6323/8082) und beweist so „baut + bootet", bevor ein PR auf main darf.
-# Der Job-Name IST der Required-Check-Context "boot-test".
+# Pre-Merge-Gate (CI/CD-Plan F1): baut + bootet den Stack und beweist so
+# „baut + bootet", bevor ein PR auf main darf. Der Job-Name IST der
+# Required-Check-Context "boot-test".
 #
-# Kein Secret nötig: Dummy-Vault (Test-Passwort) + Test-Ports/Pfade.
-# Prod (6321/8081) wird nie berührt.
+# Kein Secret nötig: Dummy-Vault (Test-Passwort) + je Lauf eindeutige
+# Namen/Pfade/Ports (Issue #307). Keine festen Host-Ports mehr — der
+# Smoke-Test prüft nur Container-Status + tournament-/health. Prod
+# (6321/9001/8081) wird nie berührt.
 #
 # Path-Filter (Issue #303, Option A): Der Job `boot-test` läuft IMMER (damit der
 # Required-Check nie als "Expected" hängen bleibt), überspringt aber den teuren
@@ -15,10 +17,10 @@ name: Boot-Test (Test-Ports)
 #
 # Keine globale `concurrency`-Group mehr (Issue #303): GitHubs Concurrency
 # verdrängt wartende Läufe statt sie zu reihen — bei mehreren offenen PRs blieb
-# der Required-Check so offen. Aktuell serialisiert der EINE Self-Hosted-Runner
-# (planet) die Läufe ohnehin; die Test-Ports (6323/8091/9003) bleiben dadurch
-# exklusiv. VOR einem Scale-out auf >=2 Runner (#304) muss die Port-Exklusivität
-# neu abgesichert werden (#290, Port-/Container-Namen je Lauf ableiten).
+# der Required-Check so offen. Issue #307 entkoppelt zusätzlich alle festen
+# Ressourcen (Container-/Unit-Namen, Compose-Projekt/-Netz, Named Volumes,
+# Host-Pfade, Tournament-Port) je Lauf über `github.run_id`, sodass parallel
+# laufende boot-tests nicht kollidieren (Vorbereitung für #304 Scale-out).
 
 on:
   pull_request:
@@ -113,18 +115,40 @@ jobs:
             exit 1
           fi
 
-      - name: Runner-Cleanup (stehengebliebene Test-Container/Netz entfernen)
+      - name: Run-Kennung + Tournament-Port ableiten (je Lauf eindeutig)
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
-          # Infra-Gate: ein zuvor abgebrochener Lauf kann den Test-Container
-          # bzw. das Netz stehen lassen. Dann ist Test-Port 9001 belegt und der
-          # Deploy scheitert mit "port is already allocated" — das Required-Gate
-          # `boot-test` stünde dauerhaft rot, unabhängig vom PR-Diff.
-          ssh planet 'docker rm -f riftbreaker-dedicated-test 2>/dev/null || true'
-          ssh planet 'docker network rm rb_default 2>/dev/null || true'
+          RUN_ID="${{ github.run_id }}"
+          # Deterministic Port aus run_id (monoton steigend): gleichzeitige Läufe
+          # haben benachbarte run_ids -> praktisch immer verschiedene Ports.
+          # Bereich 10000–29999: unterhalb der ephemeren Linux-Range (32768+),
+          # oberhalb Prod (6321/8081/9001–9003). Muss mit der Formel in
+          # deploy/test-vars.yml (tournament_port) übereinstimmen.
+          PORT=$(( 10000 + (RUN_ID % 20000) ))
+          echo "RBBATTLE_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
+          echo "TOURNAMENT_PORT=$PORT" >> "$GITHUB_ENV"
 
-      - name: Test-Deploy auf Test-Ports (Dummy-Vault, kein Secret)
+      - name: Runner-Cleanup (stehengebliebene Test-Ressourcen dieses Laufs entfernen)
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          # Infra-Gate: ein zuvor abgebrochener Lauf desselben run_id kann
+          # Container/Netz/Unit stehen lassen. Namen sind je Lauf eindeutig
+          # (Issue #307), daher räumt dieser Lauf NUR seine eigenen Reste weg.
+          C="riftbreaker-dedicated-test-${RBBATTLE_RUN_ID}"
+          P="rb-test-${RBBATTLE_RUN_ID}"
+          D="/opt/rbbattle-deploy/test/rb-${RBBATTLE_RUN_ID}"
+          U="tournament-server-test-${RBBATTLE_RUN_ID}"
+          ssh planet "docker compose -p '${P}' -f '${D}/docker-compose.yml' down --remove-orphans -v 2>/dev/null || true"
+          ssh planet "docker rm -f '${C}' 2>/dev/null || true"
+          ssh planet "docker network rm '${P}_default' 2>/dev/null || true"
+          ssh planet "systemctl stop '${U}' 2>/dev/null || true"
+          ssh planet "systemctl disable '${U}' 2>/dev/null || true"
+          ssh planet "rm -f '/etc/systemd/system/${U}.service' 2>/dev/null || true"
+          ssh planet "systemctl daemon-reload 2>/dev/null || true"
+
+      - name: Test-Deploy (Dummy-Vault, kein Secret; je Lauf eindeutige Ressourcen)
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
@@ -135,29 +159,44 @@ jobs:
           riftbreaker_server_password: boot-test
           vault_solo_basic_auth_hash: ""
           EOF
-          ansible-playbook -i "$INV" deploy/test-deploy.yml -e @deploy/test-vars.yml
+          ansible-playbook -i "$INV" deploy/test-deploy.yml \
+            -e @deploy/test-vars.yml \
+            -e rbbattle_run_suffix="$RBBATTLE_RUN_ID" \
+            -e tournament_port="$TOURNAMENT_PORT"
 
       - name: Boot verifizieren (Container stabil + tournament healthy)
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
+          C="riftbreaker-dedicated-test-${RBBATTLE_RUN_ID}"
           # Wine/Xvfb brauchen einen Moment — erst nach 30 s prüfen.
           sleep 30
-          STATUS="$(ssh planet 'docker inspect -f "{{.State.Status}}" riftbreaker-dedicated-test')"
-          RESTARTING="$(ssh planet 'docker inspect -f "{{.State.Restarting}}" riftbreaker-dedicated-test')"
+          STATUS="$(ssh planet "docker inspect -f '{{.State.Status}}' '${C}'")"
+          RESTARTING="$(ssh planet "docker inspect -f '{{.State.Restarting}}' '${C}'")"
           echo "Test-Container: status=$STATUS restarting=$RESTARTING"
           [ "$STATUS" = "running" ] || { echo "::error::Test-Container bootet nicht (status=$STATUS)."; exit 1; }
           [ "$RESTARTING" = "false" ] || { echo "::error::Test-Container ist in einer Crash-Loop."; exit 1; }
           curl --silent --show-error --fail --max-time 10 \
-            http://127.0.0.1:8091/health | grep -q '"ok":true'
-          echo "Boot-Test OK: Container läuft stabil, tournament-server healthy auf 8091."
+            "http://127.0.0.1:${TOURNAMENT_PORT}/health" | grep -q '"ok":true'
+          echo "Boot-Test OK: Container läuft stabil, tournament-server healthy auf ${TOURNAMENT_PORT}."
 
-      - name: Aufräumen (Test-Container + Unit stoppen)
+      - name: Aufräumen (Test-Container + Unit + je Lauf eindeutige Pfade/Volumes)
         if: always() && needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
-          ssh planet 'docker compose -f /opt/rbbattle-deploy/test/rb/docker-compose.yml down --remove-orphans 2>/dev/null || docker rm -f riftbreaker-dedicated-test 2>/dev/null || true'
-          ssh planet 'docker network rm rb_default 2>/dev/null || true'
-          ssh planet 'systemctl stop tournament-server-test 2>/dev/null || true'
-          ssh planet 'systemctl disable tournament-server-test 2>/dev/null || true'
-          ssh planet 'rm -f /etc/systemd/system/tournament-server-test.service 2>/dev/null || true'
-          ssh planet 'systemctl daemon-reload 2>/dev/null || true'
+          C="riftbreaker-dedicated-test-${RBBATTLE_RUN_ID}"
+          P="rb-test-${RBBATTLE_RUN_ID}"
+          D="/opt/rbbattle-deploy/test/rb-${RBBATTLE_RUN_ID}"
+          U="tournament-server-test-${RBBATTLE_RUN_ID}"
+          # Container + Netz + Named Volumes (down -v); Fallback auf rm -f,
+          # falls das Compose-File (z. B. nach frühem Abbruch) nicht existiert.
+          ssh planet "docker compose -p '${P}' -f '${D}/docker-compose.yml' down --remove-orphans -v 2>/dev/null || true"
+          ssh planet "docker rm -f '${C}' 2>/dev/null || true"
+          ssh planet "docker network rm '${P}_default' 2>/dev/null || true"
+          # systemd-Unit dieses Laufs entfernen.
+          ssh planet "systemctl stop '${U}' 2>/dev/null || true"
+          ssh planet "systemctl disable '${U}' 2>/dev/null || true"
+          ssh planet "rm -f '/etc/systemd/system/${U}.service' 2>/dev/null || true"
+          ssh planet "systemctl daemon-reload 2>/dev/null || true"
+          # Je Lauf eindeutige Host-Pfade entfernen (sonst akkumulieren pro Lauf
+          # ~664 MB Game-Content + Mods/Deploy-Artefakte).
+          ssh planet "rm -rf '${D}' '/srv/rbgame-test-${RBBATTLE_RUN_ID}' '/srv/rbgame-test-${RBBATTLE_RUN_ID}-backups' '/opt/rbbattle-deploy/test/mods-${RBBATTLE_RUN_ID}' '/opt/rbmods/tournament-server-test-${RBBATTLE_RUN_ID}' 2>/dev/null || true"

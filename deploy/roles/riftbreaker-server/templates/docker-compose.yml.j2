@@ -15,16 +15,25 @@ services:
       # Rig-Rezept: Sync-Primitive AUS (sonst Crash im Boost-Thread vor dem bind()).
       WINEESYNC: "0"
       WINEFSYNC: "0"
-      # Trainer-I/O-Bridge (Issue #265): pipe_bridge.exe lauscht im Container
-      # auf {{ riftbreaker_bridge_port }}; der Host published nur
-      # 127.0.0.1:{{ riftbreaker_bridge_port }} (konsistent mit
-      # tournament_bridge_a_url).
+      # Trainer-I/O-Bridge (Issue #265): pipe_bridge.exe lauscht IM Container auf
+      # 9001 (Default). Der Host-Port wird nur publiziert, wenn
+      # riftbreaker_bridge_port gesetzt ist (Prod 9001; Boot-Test: leer =>
+      # kein fester Host-Port, Issue #307).
       RBB_BRIDGE_BIND: "0.0.0.0"
       RBB_BRIDGE_PORT: "{{ riftbreaker_bridge_port }}"
     ports:
+{% if riftbreaker_server_port_udp | default('') %}
       - "{{ riftbreaker_server_port_udp }}:6321/udp"
       - "{{ riftbreaker_server_port_udp }}:6321/tcp"
+{% else %}
+      # Kein fester Host-Port (Issue #307): ephemerer Publish nur auf 127.0.0.1 —
+      # der Game-Server bindet 6321 weiter IM Container (per-Container-Namespace).
+      - "127.0.0.1::6321/udp"
+      - "127.0.0.1::6321/tcp"
+{% endif %}
+{% if riftbreaker_bridge_port | default('') %}
       - "127.0.0.1:{{ riftbreaker_bridge_port }}:9001"
+{% endif %}
     volumes:
       - "{{ riftbreaker_game_dir }}:/opt/riftbreaker"
       - "{{ riftbreaker_config_dir }}/config.cfg:/data/config/config.cfg:ro"
