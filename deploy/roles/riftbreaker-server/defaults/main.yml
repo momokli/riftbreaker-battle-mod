@@ -62,3 +62,9 @@ riftbreaker_mod_log_cmd: "docker logs {{ riftbreaker_server_container }}"
 # (host_vars: http://127.0.0.1:9001/exec) — Aenderungen an BEIDEN Stellen.
 riftbreaker_rbtools_dir: "{{ rbtools_dir | default('/opt/rbmods/rbtools') }}"
 riftbreaker_bridge_port: 9001
+# Container-seitiger Bridge-Port (pipe_bridge.exe). Bleibt IMMER 9001; nur der
+# Host-Port (riftbreaker_bridge_port) variiert je Instanz. Getrennt, damit
+# Test-Vars den Host-Port isolieren koennen, ohne die Bridge im Container auf
+# einen anderen Port zu zwingen (Issue #289: genau dieser Mismatch machte die
+# Test-Bridge unreachable).
+riftbreaker_bridge_container_port: 9001
