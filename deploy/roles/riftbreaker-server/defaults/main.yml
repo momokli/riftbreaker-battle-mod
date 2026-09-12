@@ -30,3 +30,13 @@ riftbreaker_saves_volume: rb-saves
 riftbreaker_mods_dir: "{{ riftbreaker_game_dir }}/mods"
 riftbreaker_backup_dir: "{{ riftbreaker_game_dir }}-backups"
 riftbreaker_mods_guard_autofix: true
+
+# --- Trainer-I/O-Bridge (Issue #265) -----------------------------------------
+# Die Rolle rbtools stagt die Windows-Tools (injector.exe/rbbridge.dll/
+# pipe_bridge.exe) nach {{ rbtools_dir }}; von dort read-only nach /opt/rbtools
+# im Container. Die Bridge (Wine-x64) nimmt HTTP auf 9001 an und uebersetzt
+# POST /exec in exec-Zeilen auf \\.\pipe\rbbattle (erfuellt den bereits
+# konfigurierten tournament_bridge_a_url=http://127.0.0.1:9001/exec).
+# Nur an 127.0.0.1 des Hosts publiziert (nicht ins LAN/Internet).
+riftbreaker_rbtools_dir: "{{ rbtools_dir | default('/opt/rbmods/rbtools') }}"
+riftbreaker_bridge_port: 9001
