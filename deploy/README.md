@@ -314,17 +314,24 @@ re-run oder `force=true`.
 ## deploy-check (PR-Gate)
 
 [`.github/workflows/deploy-check.yml`](../.github/workflows/deploy-check.yml) ist
-der Required Check `deploy-check` und läuft auf dem planet-Runner. Er prüft
-read-only gegen planet: `yamllint` über `deploy/`, `docker compose config` für
-jede gerenderte Compose-Datei und `ansible-playbook --check --diff`
-(`--tags server,website`). Das **Vault wird nie entschlüsselt**: für den Lauf
-wird ein Dummy-Vault in ein temporäres Inventar kopiert. Nur PRs aus diesem
-Repo (keine Forks).
+seit Issue #306 in **zwei Required Checks** aufgeteilt:
+
+- **`deploy-check-local`** (GitHub-Hosted-Runner, `ubuntu-latest`) prüft rein
+  lokal: `yamllint` über `deploy/`, Compose-Templates rendern
+  (`check-render.yml`) und jedes gerenderte Compose-File durch
+  `docker compose config`. Kein Host-/SSH-Zugriff, keine Secrets.
+- **`deploy-check`** (self-hosted Runner, planet) fährt den echten Host-Check
+  read-only gegen planet: `ansible-playbook --check --diff`
+  (`--tags server,website`).
+
+Das **Vault wird nie entschlüsselt**: für den Lauf wird ein Dummy-Vault in ein
+temporäres Inventar kopiert. Nur PRs aus diesem Repo (keine Forks).
 
 Host-Voraussetzungen (einmalig, **nicht** im Repo — Secrets bleiben host-seitig):
 
 ```bash
-# 1) Ansible + yamllint im Runner-Home (macht der Workflow selbst, idempotent).
+# 1) Ansible im Runner-Home (deploy-check, planet; macht der Workflow selbst,
+#    idempotent). yamllint nur für deploy-check-local auf dem GH-Runner.
 # 2) SSH-Brücke runner@planet -> root@planet über den Alias `planet`:
 sudo -u runner ssh-keygen -t ed25519 -N '' -f /home/runner/.ssh/id_rb_deploy
 sudo -u runner cat /home/runner/.ssh/id_rb_deploy.pub \
@@ -359,7 +366,7 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 ```text
 deploy/
 ├── site.yml                       # Haupt-Playbook (pre_tasks + Rollenreihenfolge)
-├── check-render.yml               # deploy-check: rendert Compose-Templates lokal
+├── check-render.yml               # deploy-check-local: rendert Compose-Templates lokal
 ├── deploy-ssh.sh                  # CD: forced command für den deploy-User (SSH)
 ├── inventory/
 │   ├── hosts.yml                  # Host "planet" (mesh-first, Tailscale)
