@@ -363,6 +363,7 @@ local HqAutoDetectEntity
 local BoostSummary
 local CommenceGame
 local AnnounceSetupPhase
+local HqOnDestroyed
 
 -- Vorwaertsdeklaration fuer die HQ-HP-Kurve (#33): Definition folgt im
 -- Win-Condition-Block (braucht RBB.hqCfg); aufgerufen wird sie in
@@ -2168,6 +2169,21 @@ end)
 local function OnHourEvent(evt)
     OnHourEventEconomy(evt)
     HqAutoDetectEntity()
+    -- #231: AFK-Timeout -- solange kein HQ platziert ist (Setup-Phase, #158)
+    -- und das Match noch nicht beendet ist, zaehlt jeder Tick mit. Ab
+    -- afkHourTicks endet das Match automatisch (kein unbegrenztes Warten).
+    -- afkHourTicks <= 0 == deaktiviert (Sentinel, expliziter Guard statt sich
+    -- auf den >=-Vergleich zu verlassen) -- Default bis zur Live-Kalibrierung
+    -- der HourEvent-Frequenz (PR-Review #232 B2: ein scharfer Default haette
+    -- sonst schon beim allerersten Tick ausgeloest, ohne echtes Setup-Fenster).
+    if not RBB.commenced and not RBB.hq.dead then
+        RBB.setupHourTicks = RBB.setupHourTicks + 1
+        if RBB.afkCfg.afkHourTicks > 0 and RBB.setupHourTicks >= RBB.afkCfg.afkHourTicks then
+            Log("event=afk_timeout status=match_end ticks=%d threshold=%d",
+                RBB.setupHourTicks, RBB.afkCfg.afkHourTicks)
+            HqOnDestroyed("afk_no_hq", "GAME OVER — no headquarter placed in time (AFK)")
+        end
+    end
 end
 pcall(function()
     RegisterGlobalEventHandler("HourEvent", OnHourEvent)
@@ -2273,6 +2289,18 @@ RBB.hq = {
 --   Web-Konsole = dieselbe Log-Zeile (dev-log/solo.html, nur vorbereitet)
 -- ============================================================================
 
+-- #231: AFK-Timeout waehrend der Setup-Phase. Der Mod hat KEINEN Zugriff auf
+-- echte Wanduhrzeit (os.time/io/http, docs/concept.md) -- einziger Zeit-Tick
+-- ist HourEvent (#24-Economy-Fallback nutzt ihn bereits). Dessen reale
+-- Frequenz ist laut docs/research/api-deep-dive.md UNBESTAETIGT. Default daher
+-- DEAKTIVIERT (0) bis zur Live-Kalibrierung (PR-Review #232 B2): ein scharfer
+-- Platzhalter haette main mit einem Auto-Loss beim ersten Tick ausgeliefert,
+-- falls ein Tick z.B. nur wenige Sekunden entspricht.
+RBB.afkCfg = {
+    afkHourTicks = 0, -- 0 = deaktiviert; Ticks ohne platziertes HQ, bis das Match als AFK endet
+}
+RBB.setupHourTicks = 0
+
 -- Start-Announce (Setup-Phase): einmalig, idempotent.
 RBB.setupAnnounced = false
 AnnounceSetupPhase = function()
@@ -2347,13 +2375,24 @@ end
 -- restart pro Match-Ende (Cooldown-Guard liegt im Feed; der Mod hat keinen
 -- eigenen I/O-Kanal und kann den Prozess nicht selbst neu starten).
 -- Idempotent: der Guard hier (RBB.hq.dead) feuert das Ende nur genau einmal.
-local function HqOnDestroyed()
+-- `reason` erlaubt andere Match-Ende-Ausloeser (z.B. #231 AFK-Timeout), ohne
+-- die Restart-/Idempotenz-Logik zu duplizieren. Default = echte HQ-Zerstoerung.
+-- `event=hq_dead` wird NUR bei echter HQ-Zerstoerung geloggt (reason == nil):
+-- der Solo-Feed (tools/solo-feed/feed.py) matcht strikt auf diese Zeile und
+-- kuendigt sie fest als "GAME OVER — HQ destroyed" an (Telegram) -- das waere
+-- fuer den AFK-Fall (nie ein HQ zerstoert) irrefuehrend (PR-Review #232 R2).
+-- Der Feed reagiert auf `event=afk_timeout`/`event=match_end reason=afk_no_hq`
+-- aktuell noch nicht -> kein automatischer Restart/Announce fuer AFK, bis ein
+-- Folge-Issue den Feed entsprechend erweitert.
+HqOnDestroyed = function(reason, gameOverMsg)
     if RBB.hq.dead then return end
     RBB.hq.dead = true
     RBB.hq.hp = 0
-    Log("event=hq_dead status=match_end hp=0")
-    Log("event=match_end reason=hq_destroyed")
-    WriteConsole("GAME OVER — HQ destroyed")
+    if reason == nil then
+        Log("event=hq_dead status=match_end hp=0")
+    end
+    Log("event=match_end reason=%s", reason or "hq_destroyed")
+    WriteConsole(gameOverMsg or "GAME OVER — HQ destroyed")
     WriteConsole("Match end — restarting game in 5 seconds...")
 end
 
@@ -2491,6 +2530,12 @@ local function CmdHq(args)
         RBB.hq.unmatchedLogged = false
         RBB.hq.unarmedLeakLogged = false
         RBB.hq.filteredLeakLogged = false
+        RBB.setupHourTicks = 0
+        -- PR-Review #232 Nit: "Reset = frische Setup-Phase" gilt nur, wenn
+        -- reset auch commenced/setupAnnounced zuruecksetzt (sonst bleibt der
+        -- AFK-/Wave-Pause-Zustand vom vorherigen Match haengen).
+        RBB.commenced = false
+        RBB.setupAnnounced = false
         Log("event=hq_reset status=ok hp=%d", RBB.hq.hp)
         WriteConsole("rb_hq: Win-Condition zurueckgesetzt (hp=%d)", RBB.hq.hp)
         return
