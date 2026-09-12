@@ -788,6 +788,35 @@ impl MatchState {
         };
     }
 
+    /// Feed-Eintrag für einen Operator-Wellen-Spawn (`POST /wave`, Issue #266).
+    ///
+    /// `ok` = die Bridge/Relay-Antwort meldete `exec_result ok:true`. Das
+    /// Gegenstück im Spiel-Log ist `[RBBATTLE] event=wave level=<n> status=start`
+    /// (Mod) — nur mit laufendem Spiel verifizierbar (Player-Test offen).
+    pub fn log_wave(
+        &mut self,
+        world: World,
+        command: &str,
+        ok: bool,
+        status: Option<u16>,
+        error: Option<&str>,
+    ) {
+        let msg = if ok {
+            format!(
+                "Welt {world}: {command} — exec_result ok (HTTP {})",
+                status
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "?".to_string())
+            )
+        } else {
+            format!(
+                "Welt {world}: {command} — fehlgeschlagen: {}",
+                error.unwrap_or("unbekannt")
+            )
+        };
+        self.log("wave", msg);
+    }
+
     /// Öffentliche Sicht auf den Zustand (wird als `/state` serialisiert).
     pub fn view(&self) -> StateView {
         let mut teams = BTreeMap::new();

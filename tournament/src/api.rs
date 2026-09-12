@@ -7,6 +7,7 @@
 //!   POST /send    Wave-Routing A→B            {"world": "A", "units": [...], "value": n}
 //!   POST /report  Welt-Events (send_state)    {"world": "A", "event": "wave_start"|"hq_hp"|"score_update", ...}
 //!   POST /rematch Reset in die Lobby          {}
+//!   POST /wave    Operator-Wellen-Spawn       {"world":"A","n":3} → exec rb_wave 3
 //!   GET  /state   Match-Zustand (Poll)        —
 //!   GET  /health  Healthcheck                 —
 //!   GET  /*       statische Web-UI            —
@@ -110,6 +111,11 @@ fn parse_world(s: &str) -> Result<World, StateError> {
         .map_err(|e| StateError::new("invalid", e))
 }
 
+/// Default-Wellennummer fuer `POST /wave` (`exec rb_wave <n>`).
+const DEFAULT_WAVE_N: u32 = 3;
+/// Obergrenze fuer `n` — schuetzt den Referee vor offensichtlichem Unfug.
+const MAX_WAVE_N: u32 = 100;
+
 // ---- Request-Bodies (unbekannte Felder werden ignoriert) ----
 
 #[derive(Debug, Deserialize)]
@@ -170,6 +176,16 @@ struct SpReq {
 }
 
 #[derive(Debug, Deserialize, Default)]
+struct WaveReq {
+    /// Ziel-Welt (Default "A": Solo/SP hat nur ein reales HQ in A).
+    #[serde(default)]
+    world: Option<String>,
+    /// Wellennummer fuer `exec rb_wave <n>` (Default 3).
+    #[serde(default)]
+    n: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Default)]
 struct EventsQuery {
     /// Cursor: nur Feed-Einträge mit `seq > since` liefern.
     #[serde(default)]
@@ -188,6 +204,7 @@ pub fn router(app: AppState) -> Router {
         .route("/report", post(report))
         .route("/rematch", post(rematch))
         .route("/sp", post(sp))
+        .route("/wave", post(wave))
         .route("/state", get(state_get))
         .route("/events", get(events))
         .route("/health", get(health))
@@ -408,6 +425,67 @@ async fn sp(AxumState(app): AxumState<AppState>, Json(req): Json<SpReq>) -> ApiR
         "round": view.round,
         "mode": view.mode,
         "teams": view.teams,
+    })))
+}
+
+/// POST /wave — Operator-Wellen-Spawn (Issue #266).
+///
+/// Leitet `exec rb_wave <n>` an den Bridge-/Relay-HTTP-Endpoint der Welt
+/// weiter (`RBBRIDGE_*_URL`, `POST /exec {"command":"rb_wave <n>"}`) und gibt
+/// dessen `exec_result` an die Web-UI zurueck. Kein Endpoint konfiguriert →
+/// 409 (kein Transport). Ein Zustell-/Ausfuehrfehler bleibt HTTP 200 mit
+/// `ok:false` + `error`/`exec_result`, damit die UI den Grund anzeigen kann.
+async fn wave(
+    AxumState(app): AxumState<AppState>,
+    Json(req): Json<WaveReq>,
+) -> ApiResult<Json<Value>> {
+    let world = match req.world.as_deref() {
+        None | Some("") => World::A,
+        Some(s) => parse_world(s)?,
+    };
+    let n = req.n.unwrap_or(DEFAULT_WAVE_N);
+    if n == 0 || n > MAX_WAVE_N {
+        return Err(StateError::new(
+            "invalid",
+            format!("n muss zwischen 1 und {MAX_WAVE_N} liegen (war {n})"),
+        )
+        .into());
+    }
+    let command = format!("rb_wave {n}");
+    let Some(endpoint) = app.cfg.bridge_for(world).map(str::to_string) else {
+        app.state.write().await.log_wave(
+            world,
+            &command,
+            false,
+            None,
+            Some("kein Bridge-Endpoint konfiguriert"),
+        );
+        return Err(StateError::new(
+            "conflict",
+            format!(
+                "kein Bridge-Endpoint fuer Welt {world} konfiguriert (RBBRIDGE_{}_URL) — kein Transport fuer {command}",
+                world.as_str()
+            ),
+        )
+        .into());
+    };
+
+    let payload = json!({ "command": command });
+    let res = broadcast::post_json(&endpoint, &payload, app.cfg.go_timeout).await;
+    let ok = res.ok();
+    app.state
+        .write()
+        .await
+        .log_wave(world, &command, ok, res.status, res.error.as_deref());
+
+    Ok(Json(json!({
+        "ok": ok,
+        "world": world.as_str(),
+        "command": command,
+        "endpoint": endpoint,
+        "status": res.status,
+        "error": res.error,
+        "exec_result": res.body,
     })))
 }
 
@@ -1005,6 +1083,139 @@ mod tests {
         assert!(v["broadcast"]["A"]["error"].is_string());
         let (_, v) = call(&app, "GET", "/state", None).await;
         assert_eq!(v["teams"]["A"]["go_broadcast"]["ok"], false);
+    }
+
+    /// Mock-HTTP-Endpoint mit konfigurierbarem Status + JSON-Body (exec_result).
+    async fn mock_json_response(
+        status: &'static str,
+        payload: &'static str,
+    ) -> (SocketAddr, tokio::sync::oneshot::Receiver<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 8192];
+            let n = sock.read(&mut buf).await.unwrap();
+            let resp = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                payload.len()
+            );
+            let _ = sock.write_all(resp.as_bytes()).await;
+            let _ = tx.send(String::from_utf8_lossy(&buf[..n]).to_string());
+        });
+        (addr, rx)
+    }
+
+    /// OHNE Player (#266): Klick-Pfad Referee → Bridge → `exec_result ok:true`.
+    #[tokio::test]
+    async fn wave_posts_rb_wave_and_returns_exec_result() {
+        let (addr, rx) = mock_json_response(
+            "200 OK",
+            r#"{"ok":true,"results":[{"command":"rb_wave 3","ok":true}]}"#,
+        )
+        .await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [Some(format!("http://{addr}/exec")), None];
+        let app = make_app(cfg).await;
+
+        let (s, v) = call(&app, "POST", "/wave", Some(json!({"world": "A", "n": 3}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["world"], "A");
+        assert_eq!(v["command"], "rb_wave 3");
+        assert_eq!(v["endpoint"], format!("http://{addr}/exec"));
+        assert_eq!(v["exec_result"]["ok"], true);
+        assert_eq!(v["exec_result"]["results"][0]["command"], "rb_wave 3");
+        assert_eq!(v["exec_result"]["results"][0]["ok"], true);
+
+        // Die Bridge hat exakt das exec-Kommando gesehen.
+        let req = tokio::time::timeout(Duration::from_secs(2), rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(req.starts_with("POST /exec HTTP/1.1"), "req: {req}");
+        assert!(req.contains("\"command\":\"rb_wave 3\""), "req: {req}");
+
+        // Feed dokumentiert den Spawn als kind=wave.
+        let (_, st) = call(&app, "GET", "/state", None).await;
+        assert!(st["feed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "wave" && e["msg"].as_str().unwrap_or("").contains("rb_wave 3")));
+    }
+
+    #[tokio::test]
+    async fn wave_defaults_to_world_a_and_n3() {
+        let (addr, rx) = mock_json_response(
+            "200 OK",
+            r#"{"ok":true,"results":[{"command":"rb_wave 3","ok":true}]}"#,
+        )
+        .await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [Some(format!("http://{addr}/exec")), None];
+        let app = make_app(cfg).await;
+        let (s, v) = call(&app, "POST", "/wave", Some(json!({}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["world"], "A");
+        assert_eq!(v["command"], "rb_wave 3");
+        let req = tokio::time::timeout(Duration::from_secs(2), rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(req.contains("\"command\":\"rb_wave 3\""), "req: {req}");
+    }
+
+    #[tokio::test]
+    async fn wave_without_bridge_endpoint_is_conflict() {
+        let app = make_app(test_cfg()).await; // bridge = [None, None]
+        let (s, v) = call(&app, "POST", "/wave", Some(json!({"world": "A", "n": 3}))).await;
+        assert_eq!(s, StatusCode::CONFLICT);
+        assert_eq!(err_type(&v), "conflict");
+        // Auch ohne Transport wird der Versuch im Feed vermerkt.
+        let (_, st) = call(&app, "GET", "/state", None).await;
+        assert!(st["feed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "wave"));
+    }
+
+    #[tokio::test]
+    async fn wave_rejects_invalid_n_and_world() {
+        let app = make_app(test_cfg()).await;
+        for n in [0u32, 101u32] {
+            let (s, v) = call(&app, "POST", "/wave", Some(json!({"world": "A", "n": n}))).await;
+            assert_eq!(s, StatusCode::BAD_REQUEST, "n={n}");
+            assert_eq!(err_type(&v), "invalid");
+        }
+        let (s, v) = call(&app, "POST", "/wave", Some(json!({"world": "C", "n": 3}))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        assert_eq!(err_type(&v), "invalid");
+    }
+
+    /// Bridge meldet `pipe_unavailable` (503): Referee bleibt 200, `ok:false`
+    /// + durchgereichter Grund — die UI kann den Fehler anzeigen.
+    #[tokio::test]
+    async fn wave_bridge_unavailable_reports_ok_false() {
+        let (addr, _rx) = mock_json_response(
+            "503 Service Unavailable",
+            r#"{"ok":false,"reason":"pipe_unavailable"}"#,
+        )
+        .await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [Some(format!("http://{addr}/exec")), None];
+        let app = make_app(cfg).await;
+        let (s, v) = call(&app, "POST", "/wave", Some(json!({"world": "A", "n": 3}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["status"], 503);
+        assert!(v["error"].as_str().unwrap().contains("503"));
+        assert_eq!(v["exec_result"]["ok"], false);
+        assert_eq!(v["exec_result"]["reason"], "pipe_unavailable");
     }
 
     #[tokio::test]
