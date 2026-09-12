@@ -25,6 +25,8 @@ Rust/axum in `tournament/` (Issue #29), Web-UI in `tournament/web/`
 | `TOURNAMENT_GO_COMMANDS` | `debug_dom_resume` | Komma-separierte Unpause-/Start-Kommandos je Welt beim GO (je EIN gequotetes Argument, Issue #18) |
 | `TOURNAMENT_GO_TIMEOUT_MS` | `3000` | Timeout je Broadcast-Endpoint |
 | `TOURNAMENT_HQ_HP` | `100` | Start-HP jedes HQ |
+| `TOURNAMENT_REFEREE_MAX_WAVE` | `0` | Wellen-Deckel des Referees (`0` = unbegrenzt, Issue #268) |
+| `TOURNAMENT_REFEREE_RESTART_CMD` | `restart` | Command des Referees bei HQ-Tod (Issue #268) |
 | `TOURNAMENT_WEB_DIR` | `<crate>/web` | Verzeichnis der statischen Web-UI |
 | `RUST_LOG` | `info` | Log-Level |
 
@@ -161,6 +163,50 @@ Nur in Phase `running` (sonst 409). Der Send wird in die Queue der
   Score, Ressourcen und aktuelle Wave einer Welt. Idempotent; der Feed wird nur
   bei Score-/Wave-Änderung belastet. Antwort
   `{"event": "score_update", "score": …, "wave": …, "changed": bool, "phase": …}`.
+
+### POST /referee/event — Spiel-Event an den Referee (Issue #268)
+
+Der Referee ist die autoritative Event-/State-Quelle; die in-game Lua ist
+reiner Executor. Spiel-Events kommen über den Rückkanal (Relay/Pipe, #265),
+Commands gehen in der Antwort und/oder über `GET /referee/poll` zurück.
+
+```json
+{"world": "A", "type": "ready"}
+{"world": "A", "type": "wave_done", "level": 3}
+{"world": "A", "type": "hq_destroyed"}
+```
+
+| `type` | Wirkung | Command |
+|---|---|---|
+| `ready` | Executor oben (Map geladen / nach `restart`) | `rb_wave 1` |
+| `wave_done` (mit `level`) | Welle abgeschlossen | `rb_wave <level+1>` (bis `TOURNAMENT_REFEREE_MAX_WAVE`) |
+| `hq_destroyed` | HQ zerstört | `restart`, Runde +1, Wellen ruhen bis `ready` |
+
+Duplikate/veraltete Level/mehrfaches `hq_destroyed` sind idempotent (kein
+Doppel-Command). Antwort:
+
+```json
+{"world": "A", "type": "wave_done", "accepted": true,
+ "commands": [{"world": "A", "command": "rb_wave 4", "cmd_id": 7, "reason": "wave_done"}],
+ "state": {"running": true, "restart_pending": false, "waves_in_flight": 4,
+           "next_level": 4, "rounds": 0, "commands_sent": 4, "queued_commands": 1}}
+```
+
+Fehler: unbekannte Welt → 400 `invalid`; `wave_done` ohne `level` → 400;
+unbekannter `type` → 422 (serde).
+
+### GET /referee/poll — offene Referee-Commands (Issue #268)
+
+`?world=A` — holt alle noch nicht abgeholten Commands der Welt (leert die
+Outbox):
+
+```json
+{"world": "A", "commands": [{"world": "A", "command": "rb_wave 4", "cmd_id": 7, "reason": "wave_done"}],
+ "state": { … }}
+```
+
+Konzept, Zustandsmaschine, Test-Split und offene Punkte (Player-Test,
+Lua-Reduktion, #265): [`docs/REFEREE.md`](REFEREE.md).
 
 ### POST /rematch
 
