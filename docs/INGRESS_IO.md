@@ -138,11 +138,47 @@ Quelländerungen anschlägt.
 **Nur mit Player (OFFEN, Momo/Matheo):** „die Welle spawnt sichtbar". Nicht als
 erledigt markieren.
 
+## Live-Belege (planet, 2026-09-12)
+
+Erster Live-Lauf des Kanals auf dem Dedicated-Server (Container
+`riftbreaker-dedicated`, LAN-Modus):
+
+- **Injector-Attach:** `injector.exe DedicatedServer.exe 'Z:\opt\rbtools\rbbridge.dll'`
+  lädt die DLL in den laufenden Server — **PID vor == PID nach**, DLL als
+  HMODULE im Zielprozess sichtbar (kein Neustart, kein Crash).
+- **Pipe-Ping:** `pipe_bridge.exe --ping` → `pong` auf `\\.\pipe\rbbattle`
+  (Exit 0).
+- **Exec-Kanal:** `POST /exec {"command":"rb_wave 3"}` →
+  `{"ok":true,"results":[{"command":"rb_wave 3","ok":true}]}`.
+- **Game-Log:** `[RBBATTLE] event=wave level=3 status=start`.
+
+**Erkenntnis (Änderung 5, Default angepasst):** Mit
+`server_pause_game_when_empty "1"` bleibt die Lua-Welt stehen (Log friert nach
+dem Laden ein) → `exec rb_wave 3` erreicht den Mod (`exec_result ok:true`),
+erzeugt aber **kein** `event=wave`. Mit `"0"` läuft die Welt headless weiter und
+der Kanal wirkt wie oben. Deshalb ist
+`riftbreaker_server_pause_game_when_empty: 0` jetzt Default.
+
+**Supervisor-Deadlock:** `start_ingress_supervisor` sammelte die
+Injector-Ausgabe per `out="$(...)"` ein; langlebige Wine-Helferprozesse erbten
+das Schreib-Ende der Pipe, `$(...)` bekam nie EOF und der Supervisor hing nach
+„injiziere rbbridge.dll …" dauerhaft (live belegt: keine injector-/pipe_bridge-
+Prozesse, nur die blockierte Bash-Subshell). **Behoben:** Ausgabe in
+`/tmp/rbtools-inject.log` umleiten und den Lauf per `timeout` begrenzen; kein
+Command-Substitution-Deadlock mehr.
+
+**Offen (nur mit Player):** Echtes Spawnen (`status=done`, sichtbare Welle) ist
+im headless-Betrieb **nicht** erreichbar — kein Bord-Spawner / kein Spieler
+(`no_border_spawners` / `no_player`; `find_screenshot` schlug als
+`find_service_missing` fehl). → Player-Test **Momo/Matheo**. Nicht als erledigt
+markieren.
+
 ## Risiken (nicht host-seitig entscheidbar)
 
 - **Thread-Marshalling** des `ConsoleService::ExecuteCommand`-Aufrufs (läuft im
   Pipe-Thread, nicht im Spiel-Thread) — offen, siehe
   `bausteine/04-trainer-io/README.md`.
 - **Signatur build-gebunden** (Build 2.0.58485) — bei Engine-Update nachziehen.
-- Injection unter Wine in `DedicatedServer.exe` ist bislang **nicht live
-  verifiziert** (der Tester-Lauf auf planet liefert den Beweis).
+- Injection unter Wine in `DedicatedServer.exe` ist live verifiziert
+  (2026-09-12, siehe Live-Belege): Attach ohne Prozessneustart, Pipe-Ping und
+  `POST /exec` funktionieren; offen bleibt nur das sichtbare Spawnen mit Player.
