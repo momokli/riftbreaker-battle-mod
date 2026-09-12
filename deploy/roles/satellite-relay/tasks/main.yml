@@ -6,13 +6,15 @@
 #   3. UFW route/forward zu {{ satellite_relay_target_host }}:{{ satellite_relay_target_port }}.
 #   4. iptables-DNAT + MASQUERADE (idempotent, via systemd-Oneshot boot-fest).
 
-- name: ip_forward aktivieren (persistent via sysctl.d)
-  sysctl:
-    name: net.ipv4.ip_forward
-    value: "1"
-    sysctl_file: /etc/sysctl.d/99-rbbattle-satellite-relay.conf
-    state: present
-    reload: true
+- name: ip_forward persistent (sysctl.d-Datei)
+  copy:
+    content: "net.ipv4.ip_forward = 1\n"
+    dest: /etc/sysctl.d/99-rbbattle-satellite-relay.conf
+    mode: "0644"
+
+- name: ip_forward sofort aktivieren
+  command: sysctl -w net.ipv4.ip_forward=1
+  changed_when: false
 
 - name: UFW inbound {{ satellite_relay_port }}/udp öffnen
   command: ufw allow {{ satellite_relay_port }}/udp
