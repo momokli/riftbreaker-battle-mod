@@ -4,6 +4,14 @@ name: Boot-Test (Test-Ports)
 # (6323/8082) und beweist so „baut + bootet", bevor ein PR auf main darf.
 # Der Job-Name IST der Required-Check-Context "boot-test".
 #
+# Seit Issue #289 faehrt dieser Job zusaetzlich das **Core-IO-Gate** am selben
+# gebooteten Stack: C1 (Mod geladen) -> C2 (Ingress-Effekt, Invariante
+# `ok:true ⟹ Effekt-Logzeile`) -> C3 (Egress an einen laufenden Consumer) ->
+# C4 (serverseitig ausgeloester Wave-Auftrag erreicht den Mod). Damit ist der
+# Kern-Kanal automatisiert abgesichert, der in #288 regressiert ist — ohne
+# zweiten Boot (ein Workflow, eine `concurrency`-Gruppe, ein Boot).
+# Die Probe lebt in tests/core-io/ (hermetische Selbsttests in ci.yml `test`).
+#
 # Kein Secret nötig: Dummy-Vault (Test-Passwort) + Test-Ports/Pfade.
 # Prod (6321/8081) wird nie berührt.
 
@@ -103,6 +111,23 @@ jobs:
           curl --silent --show-error --fail --max-time 10 \
             http://127.0.0.1:8091/health | grep -q '"ok":true'
           echo "Boot-Test OK: Container läuft stabil, tournament-server healthy auf 8091."
+
+      - name: Core-IO-Gate (C1-C4, Effekt-Invariante — Issue #289)
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          # Beweist am laufenden Test-Server: Ingress wirkt (ok:true ⟹ Effekt-
+          # Logzeile, sonst ROT), Egress erreicht einen laufenden Consumer und
+          # der server-ausgeloeste Wave-Auftrag kommt im Mod an. Der Sicht-Spawn
+          # (spawned>0) ist headless nicht erreichbar -> ::warning:: (offener
+          # Punkt, Player-Test), kein Hard-Fail.
+          python3 tests/core-io/core_io_probe.py \
+            --remote "ssh planet" \
+            --container riftbreaker-dedicated-test \
+            --bridge-url http://127.0.0.1:9003/exec \
+            --tournament-url http://127.0.0.1:8091 \
+            --boot-timeout 240 \
+            --effect-timeout 60
 
       - name: Aufräumen (Test-Container + Unit stoppen)
         if: always() && steps.gate.outputs.skip != 'true'
