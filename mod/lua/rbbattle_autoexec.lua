@@ -922,7 +922,7 @@ RBB.economyCfg = {
 
 -- Laufzeit-Zustand + Persistenz-Spiegel (Global-Database "rbbattle_economy").
 RBB.economy = {
-    source  = "none",        -- none | resource_obtained | resource_change | tick
+    source  = "none",        -- none | resource_obtained | resource_change | tick | account
     pool    = 0,             -- Send-Waehrung (persistiert, Spar-Pool)
     farmed  = 0,             -- Value aus Farmen, kumuliert (persistiert)
     converted = 0,           -- Value in Send-Waehrung gewandelt (persistiert)

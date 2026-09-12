@@ -413,9 +413,9 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100
-[RBBATTLE] event=economy_source source=account status=seed resources=13   ← Konto-Quelle liest ein, bucht bewusst nichts (#242)
-[RBBATTLE] event=economy_source source=account status=active              ← Konto-Tracking aktiv (ersetzt das pauschale Tick-Einkommen)
-[RBBATTLE] event=economy_farm source=account resource=carbonium amount=250 value=250 farmed=250 built=250   ← Zuwachs seit letztem Tick (#242)
+[RBBATTLE] event=economy_source source=account status=seed resources=13   ← nur bei accountEnabled = true: Konto-Quelle liest ein, bucht bewusst nichts (#242)
+[RBBATTLE] event=economy_source source=account status=active              ← nur bei accountEnabled = true: Konto-Tracking aktiv (ersetzt das pauschale Tick-Einkommen)
+[RBBATTLE] event=economy_farm source=account resource=carbonium amount=250 value=250 farmed=250 built=250   ← nur bei accountEnabled = true: Zuwachs seit letztem Tick (#242)
 [RBBATTLE] event=convert resource=carbonium amount=100 value=100 pool=100 status=ok irreversible=1
 [RBBATTLE] event=buy_wave unit=brabit tier=t1 count=1 price=100 total=100 pool=0 queue=1 status=ok   ← Kauf-Hook (#25)
 [RBBATTLE] event=boost status=ok pct=25 total_pct=25 price=200 pool=1800 buys=1   ← Send-Boost Kauf (#39)
