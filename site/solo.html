@@ -1103,22 +1103,14 @@ code.inl{background:var(--panel2);border:1px solid var(--line2);padding:2px 7px;
   var panel = api.createGodPanel({
     apiBase: base,
     onResult: function (res) {
-      if (res.aborted) { setCmdStatus("ABGEBROCHEN", "is-err"); return; }
-      if (res.parked) { setCmdStatus("GEPARKT — FOLLOW-UP #159", "is-err"); return; }
-      if (!res.ok) { setCmdStatus("FEHLER — " + (res.error || "unbekannt"), "is-err"); return; }
-      if (res.action === "wave_spawn") {
-        var w = api.waveResult(res.data);
-        if (w.ok) { setCmdStatus("EXEC OK — " + (w.command || "rb_wave"), "is-ok"); return; }
-        if (w.sent) { setCmdStatus("GESENDET — exec_result " + (w.reason || w.error || "nicht ok"), "is-err"); return; }
-      }
-      setCmdStatus("OK — " + res.action, "is-ok");
+      // #266: zentrales Mapping (abgebrochen/geparkt/Fehler/wave/OK),
+      // kein Fall-Through auf „OK" bei unklarer /wave-Antwort.
+      var out = api.commandOutcome(res);
+      setCmdStatus(out.text, out.cls);
     },
   });
   Array.prototype.forEach.call(document.querySelectorAll("[data-ck-cmd]"), function (btn) {
-    btn.addEventListener("click", function () {
-      setCmdStatus("SENDE … " + btn.getAttribute("data-ck-cmd"));
-      panel.send(btn.getAttribute("data-ck-cmd"));
-    });
+    api.bindCommandButton(btn, { panel: panel, setStatus: setCmdStatus });
   });
 
   /* --- Optionales Operator-Gate (Meta rb-operator-gate=on) --- */
