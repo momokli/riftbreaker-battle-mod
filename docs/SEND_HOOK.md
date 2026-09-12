@@ -101,7 +101,8 @@ eigene Extra-Waves zu spawnen — Entscheidung fällt in Issue #25.
 - Issue #26: Send-Spawns laufen **jetzt** an den natürlichen Rand-Spawnern
   (Gruppen `spawn_enemy_border_*`, zufällige Auswahl) — dieselben Anker wie die
   Naturwelle; DOM-Code unverändert.
-- Issue #23: DOM-Timer-Cap 300 s via `GetPrepareSpawnTime`-Wrap (Klasse) —
+- Issue #23: DOM-Timer-Cap via `GetPrepareSpawnTime`-Wrap (Klasse); Wert = aktives
+  Preset-Intervall (A=480 s / B=240 s, senkt nur, hebt nie) —
   Pilotnutzung des Function-Wrap-Musters, liefert zugleich den Live-Beweis für
   die Wrap-Wirksamkeit (Operator prüft „Time left“ via `debug_dom_manager 1`
   bzw. `[RBBATTLE] event=dom_timer patch status=ok`).

@@ -14,6 +14,7 @@
     - inventory/host_vars/planet/vars.yml
     # Rollen-Defaults liefern die Compose-Command-Listen (keine Host-Vars).
     - roles/riftbreaker-server/defaults/main.yml
+    - roles/website/defaults/main.yml
 
   vars:
     # Dummy-Werte nur fürs Rendern (kein Secret).
@@ -34,3 +35,9 @@
         src: roles/riftbreaker-server/templates/docker-compose.yml.j2
         dest: "{{ render_dir }}/riftbreaker-server.yml"
         mode: "0600"
+
+    - name: rift-caddy Compose rendern (Issue 322)
+      template:
+        src: roles/website/templates/docker-compose.yml.j2
+        dest: "{{ render_dir }}/rift-caddy.yml"
+        mode: "0644"

@@ -1,19 +1,21 @@
-name: Boot-Test (Test-Ports)
+name: Boot-Test
 
-# Pre-Merge-Gate (CI/CD-Plan F1): baut + bootet den Stack auf Test-Ports
-# (6323/8082) und beweist so „baut + bootet", bevor ein PR auf main darf.
-# Der Job-Name IST der Required-Check-Context "boot-test".
+# Pre-Merge-Gate (CI/CD-Plan F1): baut + bootet den Stack und beweist so
+# „baut + bootet", bevor ein PR auf main darf. Der Job-Name IST der
+# Required-Check-Context "boot-test".
 #
-# Seit Issue #289 faehrt dieser Job zusaetzlich das **Core-IO-Gate** am selben
+# Kein Secret nötig: Dummy-Vault (Test-Passwort) + je Lauf eindeutige
+# Namen/Pfade/Ports (Issue #307). Keine festen Host-Ports mehr — der
+# Smoke-Test prüft nur Container-Status + tournament-/health. Prod
+# (6321/9001/8081) wird nie berührt.
+#
+# Seit Issue #289 fährt dieser Job zusätzlich das **Core-IO-Gate** am selben
 # gebooteten Stack: C1 (Mod geladen) -> C2 (Ingress-Effekt, Invariante
 # `ok:true ⟹ Effekt-Logzeile`) -> C3 (Egress an einen laufenden Consumer) ->
-# C4 (serverseitig ausgeloester Wave-Auftrag erreicht den Mod). Damit ist der
+# C4 (serverseitig ausgelöster Wave-Auftrag erreicht den Mod). Damit ist der
 # Kern-Kanal automatisiert abgesichert, der in #288 regressiert ist — ohne
-# zweiten Boot (ein Workflow, eine `concurrency`-Gruppe, ein Boot).
-# Die Probe lebt in tests/core-io/ (hermetische Selbsttests in ci.yml `test`).
-#
-# Kein Secret nötig: Dummy-Vault (Test-Passwort) + Test-Ports/Pfade.
-# Prod (6321/8081) wird nie berührt.
+# zweiten Boot (ein Workflow, ein Boot). Die Probe lebt in tests/core-io/
+# (hermetische Selbsttests in ci.yml `test`).
 #
 # Path-Filter (Issue #303, Option A): Der Job `boot-test` läuft IMMER (damit der
 # Required-Check nie als "Expected" hängen bleibt), überspringt aber den teuren
@@ -23,10 +25,10 @@ name: Boot-Test (Test-Ports)
 #
 # Keine globale `concurrency`-Group mehr (Issue #303): GitHubs Concurrency
 # verdrängt wartende Läufe statt sie zu reihen — bei mehreren offenen PRs blieb
-# der Required-Check so offen. Aktuell serialisiert der EINE Self-Hosted-Runner
-# (planet) die Läufe ohnehin; die Test-Ports (6323/8091/9003) bleiben dadurch
-# exklusiv. VOR einem Scale-out auf >=2 Runner (#304) muss die Port-Exklusivität
-# neu abgesichert werden (#290, Port-/Container-Namen je Lauf ableiten).
+# der Required-Check so offen. Issue #307 entkoppelt zusätzlich alle festen
+# Ressourcen (Container-/Unit-Namen, Compose-Projekt/-Netz, Named Volumes,
+# Host-Pfade, Tournament-Port) je Lauf über `github.run_id`, sodass parallel
+# laufende boot-tests nicht kollidieren (Vorbereitung für #304 Scale-out).
 
 on:
   pull_request:
@@ -121,18 +123,48 @@ jobs:
             exit 1
           fi
 
-      - name: Runner-Cleanup (stehengebliebene Test-Container/Netz entfernen)
+      - name: Run-Kennung + Tournament-Port ableiten (je Lauf eindeutig)
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
-          # Infra-Gate: ein zuvor abgebrochener Lauf kann den Test-Container
-          # bzw. das Netz stehen lassen. Dann ist Test-Port 9001 belegt und der
-          # Deploy scheitert mit "port is already allocated" — das Required-Gate
-          # `boot-test` stünde dauerhaft rot, unabhängig vom PR-Diff.
-          ssh planet 'docker rm -f riftbreaker-dedicated-test 2>/dev/null || true'
-          ssh planet 'docker network rm rb_default 2>/dev/null || true'
+          RUN_ID="${{ github.run_id }}"
+          # Tournament-Port (10000–29999) und Bridge-Host-Port (30000–49999) je
+          # Lauf eindeutig aus run_id (monoton steigend -> benachbarte Läufe
+          # haben verschiedene Ports). Muss mit der Formel in test-vars.yml
+          # (tournament_port) übereinstimmen. Unter 32768 kollisionsfrei; der
+          # Bridge-Bereich oberhalb 32768 liegt in der ephemeren Linux-Range, ist
+          # aber deterministisch aus run_id und kurzlebig -> vernachlässigbar.
+          T_PORT=$(( 10000 + (RUN_ID % 20000) ))
+          B_PORT=$(( 30000 + (RUN_ID % 20000) ))
+          echo "RBBATTLE_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
+          echo "TOURNAMENT_PORT=$T_PORT" >> "$GITHUB_ENV"
+          echo "BRIDGE_PORT=$B_PORT" >> "$GITHUB_ENV"
 
-      - name: Test-Deploy auf Test-Ports (Dummy-Vault, kein Secret)
+      - name: Runner-Cleanup (stehengebliebene Test-Ressourcen dieses Laufs entfernen)
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          # Infra-Gate: ein zuvor abgebrochener Lauf desselben run_id kann
+          # Container/Netz/Unit stehen lassen. Namen sind je Lauf eindeutig
+          # (Issue #307), daher räumt dieser Lauf NUR seine eigenen Reste weg.
+          C="riftbreaker-dedicated-test-${RBBATTLE_RUN_ID}"
+          P="rb-test-${RBBATTLE_RUN_ID}"
+          D="/opt/rbbattle-deploy/test/rb-${RBBATTLE_RUN_ID}"
+          U="tournament-server-test-${RBBATTLE_RUN_ID}"
+          ssh planet "docker compose -p '${P}' -f '${D}/docker-compose.yml' down --remove-orphans -v 2>/dev/null || true"
+          ssh planet "docker rm -f '${C}' 2>/dev/null || true"
+          ssh planet "docker network rm '${P}_default' 2>/dev/null || true"
+          # Named Volumes zusaetzlich explizit (Fallback, falls `compose down -v`
+          # nicht greift — Compose-File nach fruehem Abbruch fehlt, Review-F3).
+          ssh planet "docker volume rm 'rb-test-wine-${RBBATTLE_RUN_ID}' 'rb-test-saves-${RBBATTLE_RUN_ID}' 2>/dev/null || true"
+          # Run-spezifischer Build-Kontext (Review-F2).
+          ssh planet "rm -rf '/opt/rbbattle-deploy/test/dedicated-server-${RBBATTLE_RUN_ID}' 2>/dev/null || true"
+          ssh planet "systemctl stop '${U}' 2>/dev/null || true"
+          ssh planet "systemctl disable '${U}' 2>/dev/null || true"
+          ssh planet "rm -f '/etc/systemd/system/${U}.service' 2>/dev/null || true"
+          ssh planet "systemctl daemon-reload 2>/dev/null || true"
+
+      - name: Test-Deploy (Dummy-Vault, kein Secret; je Lauf eindeutige Ressourcen)
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
@@ -143,46 +175,74 @@ jobs:
           riftbreaker_server_password: boot-test
           vault_solo_basic_auth_hash: ""
           EOF
-          ansible-playbook -i "$INV" deploy/test-deploy.yml -e @deploy/test-vars.yml
+          ansible-playbook -i "$INV" deploy/test-deploy.yml \
+            -e @deploy/test-vars.yml \
+            -e rbbattle_run_suffix="$RBBATTLE_RUN_ID" \
+            -e tournament_port="$TOURNAMENT_PORT" \
+            -e riftbreaker_bridge_port="$BRIDGE_PORT" \
+            -e tournament_bridge_a_url="http://127.0.0.1:${BRIDGE_PORT}/exec"
 
       - name: Boot verifizieren (Container stabil + tournament healthy)
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
+          C="riftbreaker-dedicated-test-${RBBATTLE_RUN_ID}"
           # Wine/Xvfb brauchen einen Moment — erst nach 30 s prüfen.
           sleep 30
-          STATUS="$(ssh planet 'docker inspect -f "{{.State.Status}}" riftbreaker-dedicated-test')"
-          RESTARTING="$(ssh planet 'docker inspect -f "{{.State.Restarting}}" riftbreaker-dedicated-test')"
+          STATUS="$(ssh planet "docker inspect -f '{{.State.Status}}' '${C}'")"
+          RESTARTING="$(ssh planet "docker inspect -f '{{.State.Restarting}}' '${C}'")"
           echo "Test-Container: status=$STATUS restarting=$RESTARTING"
           [ "$STATUS" = "running" ] || { echo "::error::Test-Container bootet nicht (status=$STATUS)."; exit 1; }
           [ "$RESTARTING" = "false" ] || { echo "::error::Test-Container ist in einer Crash-Loop."; exit 1; }
           curl --silent --show-error --fail --max-time 10 \
-            http://127.0.0.1:8091/health | grep -q '"ok":true'
-          echo "Boot-Test OK: Container läuft stabil, tournament-server healthy auf 8091."
+            "http://127.0.0.1:${TOURNAMENT_PORT}/health" | grep -q '"ok":true'
+          echo "Boot-Test OK: Container läuft stabil, tournament-server healthy auf ${TOURNAMENT_PORT}."
 
       - name: Core-IO-Gate (C1-C4, Effekt-Invariante — Issue #289)
-        if: steps.gate.outputs.skip != 'true'
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           # Beweist am laufenden Test-Server: Ingress wirkt (ok:true ⟹ Effekt-
           # Logzeile, sonst ROT), Egress erreicht einen laufenden Consumer und
           # der server-ausgeloeste Wave-Auftrag kommt im Mod an. Der Sicht-Spawn
           # (spawned>0) ist headless nicht erreichbar -> ::warning:: (offener
-          # Punkt, Player-Test), kein Hard-Fail.
+          # Punkt, Player-Test), kein Hard-Fail. Container/Bridge/Tournament
+          # sind je Lauf eindeutig (Issue #307) -> parallele Läufe kollidieren nicht.
           python3 tests/core-io/core_io_probe.py \
             --remote "ssh planet" \
-            --container riftbreaker-dedicated-test \
-            --bridge-url http://127.0.0.1:9003/exec \
-            --tournament-url http://127.0.0.1:8091 \
+            --container "riftbreaker-dedicated-test-${RBBATTLE_RUN_ID}" \
+            --bridge-url "http://127.0.0.1:${BRIDGE_PORT}/exec" \
+            --tournament-url "http://127.0.0.1:${TOURNAMENT_PORT}" \
             --boot-timeout 240 \
             --effect-timeout 60
 
-      - name: Aufräumen (Test-Container + Unit stoppen)
+      - name: Aufräumen (Test-Container + Unit + je Lauf eindeutige Pfade/Volumes)
         if: always() && needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
-          ssh planet 'docker compose -f /opt/rbbattle-deploy/test/rb/docker-compose.yml down --remove-orphans 2>/dev/null || docker rm -f riftbreaker-dedicated-test 2>/dev/null || true'
-          ssh planet 'docker network rm rb_default 2>/dev/null || true'
-          ssh planet 'systemctl stop tournament-server-test 2>/dev/null || true'
-          ssh planet 'systemctl disable tournament-server-test 2>/dev/null || true'
-          ssh planet 'rm -f /etc/systemd/system/tournament-server-test.service 2>/dev/null || true'
-          ssh planet 'systemctl daemon-reload 2>/dev/null || true'
+          C="riftbreaker-dedicated-test-${RBBATTLE_RUN_ID}"
+          P="rb-test-${RBBATTLE_RUN_ID}"
+          D="/opt/rbbattle-deploy/test/rb-${RBBATTLE_RUN_ID}"
+          U="tournament-server-test-${RBBATTLE_RUN_ID}"
+          # Container + Netz + Named Volumes (down -v); Fallback auf rm -f,
+          # falls das Compose-File (z. B. nach frühem Abbruch) nicht existiert.
+          ssh planet "docker compose -p '${P}' -f '${D}/docker-compose.yml' down --remove-orphans -v 2>/dev/null || true"
+          ssh planet "docker rm -f '${C}' 2>/dev/null || true"
+          ssh planet "docker network rm '${P}_default' 2>/dev/null || true"
+          # `down -v` raeumt die Named Volumes nur, wenn das Compose-File noch
+          # existiert. Im Fallback-Zweig (File fehlt nach fruehem Abbruch) blieben
+          # `rb-test-wine-/rb-test-saves-<run_id>` als Leck zurueck (Review-F3) —
+          # daher hier explizit.
+          ssh planet "docker volume rm 'rb-test-wine-${RBBATTLE_RUN_ID}' 'rb-test-saves-${RBBATTLE_RUN_ID}' 2>/dev/null || true"
+          # systemd-Unit dieses Laufs entfernen.
+          ssh planet "systemctl stop '${U}' 2>/dev/null || true"
+          ssh planet "systemctl disable '${U}' 2>/dev/null || true"
+          ssh planet "rm -f '/etc/systemd/system/${U}.service' 2>/dev/null || true"
+          ssh planet "systemctl daemon-reload 2>/dev/null || true"
+          # Je Lauf eindeutige Host-Pfade entfernen (sonst akkumulieren pro Lauf
+          # ~664 MB Game-Content + Mods/Deploy-Artefakte + Build-Kontext F2).
+          ssh planet "rm -rf '${D}' '/srv/rbgame-test-${RBBATTLE_RUN_ID}' '/srv/rbgame-test-${RBBATTLE_RUN_ID}-backups' '/opt/rbbattle-deploy/test/mods-${RBBATTLE_RUN_ID}' '/opt/rbbattle-deploy/test/dedicated-server-${RBBATTLE_RUN_ID}' '/opt/rbmods/tournament-server-test-${RBBATTLE_RUN_ID}' 2>/dev/null || true"
+          # Altlasten des ALTEN, festen Test-Schemas (vor #307): dessen Cleanup
+          # zielte auf feste Namen, die diese run-scoped Logik nie mehr anfasst.
+          # Idempotent + gefahrlos (reine Test-Pfade, kein Prod-Overlap), daher
+          # einmalig hier mit abgeraeumt (Review-F4).
+          ssh planet "rm -rf '/srv/rbgame-test' '/srv/rbgame-test-backups' '/opt/rbmods/tournament-server-test' 2>/dev/null || true"

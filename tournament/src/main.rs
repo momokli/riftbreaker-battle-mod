@@ -13,7 +13,7 @@
 //! | `TOURNAMENT_GO_TIMEOUT_MS` | `3000` | Timeout je Broadcast-Endpoint |
 //! | `TOURNAMENT_HQ_HP` | `100` | Start-HP jedes HQ |
 //! | `TOURNAMENT_REFEREE_MAX_WAVE` | `0` | Wellen-Deckel des Referees (`0` = unbegrenzt, Issue #268) |
-//! | `TOURNAMENT_REFEREE_RESTART_CMD` | `restart` | Command des Referees bei HQ-Tod (Issue #268) |
+//! | `TOURNAMENT_REFEREE_RESTART_CMD` | `rb_reset` | In-game Command des Referees bei HQ-Tod (Issue #268/#281; Mod-Kommando) |
 //! | `TOURNAMENT_WEB_DIR` | `<crate>/web` | Verzeichnis der statischen Web-UI |
 //! | `RUST_LOG` | `info` | Log-Level (tracing) |
 //!
@@ -77,7 +77,11 @@ fn config_from_env() -> Result<Config, String> {
         .map_err(|_| {
             "TOURNAMENT_REFEREE_MAX_WAVE muss eine Zahl sein (0 = unbegrenzt)".to_string()
         })?;
-    let referee_restart_cmd = env_str("TOURNAMENT_REFEREE_RESTART_CMD", "restart");
+    // #281: Der Referee pusht nach `hq_destroyed` den in-game Round-Reset des
+    // Mods (Default `rb_reset`), damit die Runde auf 0 zurueckgeht
+    // (Setup-/HQ-Placement-Phase, Economy 0, Wave-Timer 0). Der Command ist
+    // konfigurierbar (#268).
+    let referee_restart_cmd = env_str("TOURNAMENT_REFEREE_RESTART_CMD", "rb_reset");
 
     // rbbridge-Endpoints validieren (nur http://, v1)
     let bridge_a = match std::env::var("RBBRIDGE_A_URL") {
