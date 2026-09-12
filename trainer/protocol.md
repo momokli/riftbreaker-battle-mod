@@ -117,7 +117,7 @@ werden ignoriert (vorwärtskompatibel). Alle Events sind benachrichtigend
 | `pong`, `exec_result`, `score_update`, `error` | `rbbridge.c` (Pipe-Server) | ✅ implementiert |
 | `score_update`, `wave_received`, `round_*`, `match_end` | **TODO(RE):** Werte/Adressen per `scan/` finden bzw. Events aus Lua-Signalen (`[RBBATTLE] event=...` Log-Prefix im Mod, Experiment C) ableiten | offen (Struktur in `send_state()` verdrahtet, Werte Default bis RE) |
 | `wave_sent` | Lua-Mod beim Kauf der Welle (meldet über `exec`-Kanal / künftigen Event-Pfad) | offen (Mod folgt aus Spike) |
-| `round_start`, `incoming_wave`, `round_end`, `match_end` (Server→Spiel) | Empfang in DLL → Zustellung an Spiel/Lua | **TODO(RE):** dispatch_exec-Anschluss; Lua-seitig registriert der Mod `rb_wave <level>` bereits (Spike) |
+| `round_start`, `incoming_wave`, `round_end`, `match_end` (Server→Spiel) | Empfang in DLL → Zustellung an Spiel/Lua | ✅ `dispatch_exec` implementiert: `ConsoleService::ExecuteCommand` per AOB-Signatur + RTTI/vftable aufgelöst (keine festen RVAs); Lua-seitig registriert der Mod `rb_wave <level>` bereits (Spike). Offen nur Live-Beweis (#252) |
 
 ## Client-Verhalten (Empfehlung für späteren Pipe-Client/Server-Bridge)
 

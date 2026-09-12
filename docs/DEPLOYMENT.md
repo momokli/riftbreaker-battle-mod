@@ -32,10 +32,10 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
 1. **mods-zip** — Mod aus `mod/` paketieren (`scripts/package_bausteine.sh`),
    `rbbattle.zip` nach planet; **md5-Paritäts-Check (Zip == Prod) hart als
    Fehlschlag**.
-2. **headless-client-image** — baut `rb-headless-client:<deploy-sha>` IM
-   Playbook auf planet aus `tools/headless-client` (gemeinsame Wine-Laufzeit
-   für :6321; Docker-Layer-Cache → billig/idempotent). Das gerenderte
-   Compose pinnt exakt diesen Tag (kein `latest`).
+2. **dedicated-server-image** — baut `rb-dedicated:<deploy-sha>` IM
+   Playbook auf planet aus `tools/dedicated-server` (Wine-Laufzeit
+   für :6321, Community-Rezept; Docker-Layer-Cache → billig/idempotent). Das
+   gerenderte Compose pinnt exakt diesen Tag (kein `latest`).
 3. **game-content** — Dedicated-Server-Content (Steam-App 4114030) deklarativ
    nach `riftbreaker_game_dir`. **Standard: idempotenter Sync aus dem
    kanonischen Cache** (`/srv/riftbreaker/data/server`, in Backups) — der
@@ -149,14 +149,18 @@ forced command (`deploy/deploy-ssh.sh`) validiert die SHA, macht
 
 Topologie (Momo-Entscheidung, 2026-09-10): **EIN** Server auf `:6321` statt
 Steam-/Non-Steam-Dualität; ein Direct-IP-Server (`disable_steam "1"`) deckt
-beide Stores ab. Der **Tag→prod-Kanal ist gestrichen**: `tags: ['v*']` sind seit
-Issue #209 **reine Marker** (kein Tag-Trigger, keine GitHub-Releases, keine
-prod-Umgebung im Workflow). Veröffentlichter Download ist der deployte Stand
+beide Stores ab. Der **Tag→prod-Kanal ist on hold** (vorerst gestrichen):
+`tags: ['v*']` sind seit Issue #209 **reine Marker** (kein Tag-Trigger, keine
+GitHub-Releases, keine prod-Umgebung im Workflow). Reaktiviert wird der Kanal,
+sobald ein **zweites Deploy-Target** existiert — aktuell gibt es genau EINEN
+Server (planet, :6321). Veröffentlichter Download ist der deployte Stand
 `https://rift.projectmellon.de/mods/rbbattle.zip`.
 
-Einziges GitHub-Secret ist `DEPLOY_TOKEN` im Environment `dev` (Bearer-Token
-Hook ↔ Workflow). Das Vault-Passwort liegt ausschließlich root-only auf planet
-(`/etc/rbbattle-deploy/vault.pass`) und wird nie im Repo oder in Logs ausgegeben.
+Der HTTP-Hook ist seit 2026-09-11 durch den SSH-Deploy abgelöst (Issue #235);
+das `DEPLOY_TOKEN`-Secret im Environment `dev` wurde gelöscht — **es gibt kein
+GitHub-Secret mehr**. Das Vault-Passwort liegt ausschließlich root-only auf
+planet (`/etc/rbbattle-deploy/vault.pass`) und wird nie im Repo oder in Logs
+ausgegeben.
 
 ## Server-Passwort (Vault)
 
@@ -169,7 +173,7 @@ Vault-Passwort als root-only Datei auf planet — **niemals** auf GitHub.
 ## Aktueller Zustand (2026-09-10, Issue #209)
 
 `deploy/` **besitzt den Stack**: das Playbook baut das Laufzeit-Image
-(`rb-headless-client:<deploy-sha>`) selbst, provisioniert den Steam-Content und
+(`rb-dedicated:<deploy-sha>`) selbst, provisioniert den Steam-Content und
 pinnt das Compose auf den Deploy-SHA. Ein from-zero-Aufbau braucht keine
 manuellen Schritte auf planet (`deploy/README.md` → „From-zero").
 
