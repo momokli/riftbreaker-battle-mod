@@ -191,7 +191,18 @@ unter `/opt/rbmods/compose/…`.
 
 ## Interim-Deploy :6321 (Issue #156) — historisch, durch #209 überholt
 
-Bis zur CD (#91) wird die Mod auf :6321 manuell eingespielt (reproduzierbar):
+> ⚠️ **Nicht mehr ausführen.** Die Befehle unten gehören zum Layout **vor**
+> dem Community-Rezept (#241): Mods als Host-Ordner unter
+> `/srv/riftbreaker/data/server/mods`, Wine-Prefix als Bind-Mount unter
+> `/srv/riftbreaker/data/wine`. Beides existiert so nicht mehr — der
+> Wine-Prefix ist heute ein **benanntes Volume** (`rb-wine`), und
+> `exor_logs.txt` wird vom Entrypoint nach `docker logs` getailt.
+> Aktuelle Pfade und Abrufe: „Log-Quelle & Timing" oben. Der Block bleibt
+> als Referenz stehen, weil die Reihenfolge (Spieler-Check → Guard → Backup
+> außerhalb `mods/` → Neustart → Smoke-Test) die ist, die die Ansible-Rolle
+> heute automatisiert.
+
+Bis zur CD (#91) wurde die Mod auf :6321 manuell eingespielt:
 
 ```bash
 # 1) Mod-Zip aus Repo main bauen (Content-Root = mod/):
