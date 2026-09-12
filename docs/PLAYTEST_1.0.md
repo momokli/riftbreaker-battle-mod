@@ -32,6 +32,18 @@ Dieses Dokument legt fest, **was dafür funktionieren muss** (Muss-Kriterien),
 **wie** es geprüft wird (Szenarien), **welche Beweise** zählen und **wie** das
 Ergebnis signiert wird.
 
+### 0.1 Scope von 1.0 (von Momo bestätigt, 2026-09-12)
+
+- **1.0 ist solo:** **ein** Dedicated-Server, dazu der **Tournament-Server**.
+- **Der Game-State und das Control MÜSSEN von extern kommen** (Referee/Web —
+  nicht in-game-Lua). Das ist der wichtigste Punkt der Baseline: Server starten
+  → der Referee führt, das Spiel gehorcht, der Spieler sieht es.
+- **Echtes 1v1 mit zweitem Spieler ist NICHT Teil von 1.0** (S11 = `n/a`).
+- **Runde 2 / Round-Reset ist Core-Game-Loop und zwingend Muss** (M8).
+- **Telemetry (Session-Mitschnitt + Metriken, #280) ist Core-Dev-Feature von
+  1.0 und zwingend Muss** (M11).
+- Der Website-Proxy (#322, Preflight P4) **muss vor dem Test gefixt sein**.
+
 ---
 
 ## 1. Baseline-Mechanik — was der Tag einfriert
@@ -68,7 +80,7 @@ Ergebnis signiert wird.
 | Rolle | Wer | Aufgabe |
 |---|---|---|
 | **Tester** | Momo | Führt Szenarien aus, urteilt Muss/Soll, signiert das Protokoll. |
-| **Mitspieler** | Matheo (optional) | Zweite Partei für den 1v1-/Duell-Teil (S11). |
+| **Mitspieler** | Matheo | Für 1.0 **nicht** nötig (solo); 1v1 ist Post-1.0. |
 | **Operator/Beobachter** | Agent | Deploy, Log-Ernte, Beweismittel, Funde als Issues anlegen. |
 
 ---
@@ -83,7 +95,7 @@ Preflight-Punkt ist selbst ein 1.0-Blocker.
 | P1 | Download == deployter Stand | `bash scripts/mod_version.sh` · `curl -sI https://rift.projectmellon.de/mods/rbbattle.zip` · `ssh planet 'md5sum /srv/rbmods-site/mods/rbbattle.zip'` | drei Werte identisch |
 | P2 | Dedicated-Server gesund | `ssh planet 'docker ps --filter name=riftbreaker-dedicated --format "{{.Status}}"'` | `Up … (healthy)`, **kein** Restart-Loop |
 | P3 | Tournament/Referee erreichbar | `ssh planet 'curl -s http://127.0.0.1:8081/health'` | `{"ok":true,"phase":"lobby"}` |
-| P4 | Web-UI **inkl. API-Pfad** erreichbar | `curl -s -o /dev/null -w '%{http_code}\n' https://rift.projectmellon.de/solo.html` **und** `curl -s -o /dev/null -w '%{http_code}\n' https://rift.projectmellon.de/tournament/health` | `200` **und** `200` |
+| P4 | Web-UI **inkl. API-Pfad** erreichbar — **hart: #322 muss gefixt sein** | `curl -s -o /dev/null -w '%{http_code}\n' https://rift.projectmellon.de/solo.html` **und** `curl -s -o /dev/null -w '%{http_code}\n' https://rift.projectmellon.de/tournament/health` | `200` **und** `200` |
 | P5 | Log-Ernte möglich | `ssh planet 'docker exec riftbreaker-dedicated cat /root/exor_logs.txt \| grep -a RBBATTLE \| tail -5'` | `[RBBATTLE] event=mod_load version=<V> status=ok` |
 | P6 | Bridge/Relay erreicht das Spiel | `ssh planet 'curl -s http://127.0.0.1:9001/health'` | `{"ok":true,"pipe":true}` |
 | P7 | Spieler-Kanal frei | `:6321` ohne fremde Spieler; Server für den Test reserviert | ja |
@@ -93,7 +105,8 @@ Preflight-Punkt ist selbst ein 1.0-Blocker.
 > Referee `lobby`, Bridge `pipe:true`). **P4 offen:** `https://rift.projectmellon.de/tournament/health`
 > liefert **404** — die laufende Caddy-Konfiguration enthält **keinen**
 > `/tournament/*`-Proxy (Details siehe Abschnitt 9 „Bekannte Lücken“). Bis das
-> gefixt ist, muss der Web-UI-Pfad direkt über `http://<planet>:8081` laufen.
+> **Entscheidung Momo:** P4 ist **vor** dem 1.0-Test zu fixen (#322), nicht per
+> Workaround zu umgehen.
 
 ---
 
@@ -110,9 +123,10 @@ Preflight-Punkt ist selbst ein 1.0-Blocker.
 | M5 | **Server-Wave sichtbar (Kern!):** Vom Server/Web-Knopf ausgelöster Spawn erzeugt Kreaturen, die der Spieler **sieht** | S5 | Log `event=wave level=3 status=done spawned>0` **und** Sicht-Check Momo |
 | M6 | **Egress/State:** Der Referee kennt den laufenden Spielzustand (Score/Wave/HQ) | S6 | `GET /state` zeigt plausible Werte; Feed-Einträge |
 | M7 | **HQ-Tod erkannt:** In-Game-HQ-Verlust endet das Match nachvollziehbar | S7 | `event=hq_dead status=match_end` + `event=match_end reason=hq_destroyed`, `/state` `phase=finished` |
-| M8 | **Runde 2 spielbar:** Nach Niederlage Reset auf 0 und eine neue Runde startet sauber | S8 | Log `rb_reset`/Round-Reset + HQ wieder 100, Wave-Zähler zurück |
+| M8 | **Runde 2 spielbar (Core-Game-Loop, bestätigt):** Nach Niederlage Reset auf 0 und eine neue Runde startet sauber | S8 | Log `rb_reset`/Round-Reset + HQ wieder 100, Wave-Zähler zurück |
 | M9 | **Fehlerverhalten:** Toter Kanal/Timeout gibt eine klare Fehlermeldung statt Hänger oder Falsch-Erfolg | S9 | `/wave` mit gestoppter Bridge → Fehlerantwort ≤ ~3 s, **kein** `ok:true` |
 | M10 | **Stabilität:** Testfenster ohne Crash/Restart-Loop des Containers | S10 | `docker ps` RestartCount unverändert, keine Crash-Logs |
+| M11 | **Telemetry (Core-Dev, bestätigt):** Jede Spiel-Session wird persistent mitgeschnitten (Metriken), zuordenbar zu Match/Session | S13 | Session-Artefakt (Log/Metrik-Datei) liegt vor + Pfad dokumentiert |
 
 ---
 
@@ -126,13 +140,13 @@ Diese Punkte werden dokumentiert und fließen in Follow-ups — sie blockieren
 | S1 | Economy-Loop spielbar: farmen → `rb_convert` → Boost/Reveal fühlt sich rund an | S12 |
 | S2 | HUD/Click-HUD bedienbar (`rb_hud_ui`, `rb_quick`, `rb_quick_step`) | S12 |
 | S3 | Latenz „Knopfdruck → sichtbarer Spawn“ < ~2 s | S5 |
-| S4 | Session-Mitschnitt persistiert (Recorder, #280) | S13 |
-| S5 | Balance-Feedback festgehalten (Wellen-Gefühl, HQ-HP-Kurve, Preise) | S12 |
+| S4 | Balance-Feedback festgehalten (Wellen-Gefühl, HQ-HP-Kurve, Preise) | S12 |
 
 ---
 
 ## 6. Nicht Teil von 1.0 (`n/a`)
 
+- **Echtes 1v1/2-Spieler-Duell** (S11) — 1.0 ist solo (ein Server + Referee).
 - 2v2 / 3v3 / 4v4, Team-Lobby, Matchmaking.
 - ELO / Rangliste / Spielerprofile (Post-1v1).
 - Balancing-Feintuning (Werte im GDD sind explizit „braucht Live-Test“).
@@ -230,22 +244,23 @@ kommt. Alle Log-Kommandos siehe Anhang (Abschnitt 8).
   der Bridge funktioniert S5 wieder.
 - **Beweis:** Fehlerantwort + Zeitstempel; anschließend grüner Wiederholungslauf.
 
-### S10 — Stabilität/Dauerlauf → M10
+### S10 — Stabilität / Dauerlauf (mehrere Wellen am Stück) → M10
 
 - **Vorgehen:** ≥ 15 Minuten spielen (mehrere Wellen), Container-Status beobachten.
 - **Erwartung:** kein Crash, kein Restart (`RestartCount` gleich), keine
   `handler_errors`; FPS/Spielgefühl nicht eingebrochen.
 - **Beweis:** `docker ps`/`inspect` vor+nach (RestartCount), Log-Auszug.
 
-### S11 — 1v1 mit zweitem Spieler (Duell-Teil) → optional
+### S11 — 1v1 mit zweitem Spieler → **`n/a` für 1.0** (Post-1.0)
 
 - **Vorgehen:** Zwei Spieler (`/lobby` A+B bzw. zwei Dedicated-Welten), beide
   ready → `POST /go` (bzw. AUTO_GO).
 - **Erwartung:** synchroner Start (`debug_dom_resume`), Send-Routing A→B/B→A,
   Reveal bei Wellenstart, Match-Ende bei HQ-Tod einer Seite.
 - **Beweis:** `/state` (teams, reveal) + Screenshots beider Seiten.
-- **Hinweis:** Für die 1.0-Baseline **nicht** blockierend (Milestone #8 = solo
-  online); der Solo-SP-Modus (`POST /sp`) deckt die Ein-Spieler-Variante ab.
+- **Hinweis:** 1.0 ist **solo** (Momo, 2026-09-12): **ein** Dedicated-Server +
+  Tournament-Referee. Der Solo-SP-Modus (`POST /sp`, MIRROR-Welt) ist der
+  1.0-Pfad; dieses Szenario dient nur dem späteren Duell.
 
 ### S12 — Economy/Send-Loop & Balance-Eindruck (Soll) → S1, S2, S5
 
@@ -255,11 +270,13 @@ kommt. Alle Log-Kommandos siehe Anhang (Abschnitt 8).
   **Eindruck notieren** (nicht bewerten als Gate): Wellen-Gefühl, HQ-HP-Kurve, Preise.
 - **Beweis:** Screenshots + Freitext-Eindruck.
 
-### S13 — Session-Mitschnitt (Soll) → S4 (#280)
+### S13 — Telemetry / Session-Mitschnitt → **M11 (Muss, #280)**
 
-- **Vorgehen:** Nach der Session prüfen, ob der Recorder den Lauf persistiert hat.
-- **Erwartung:** Session-Log/Metriken liegt vor (Pfad/Ort dokumentieren).
-- **Beweis:** Datei/Link + kurzer Ausschnitt.
+- **Vorgehen:** Eine vollständige Spiel-Session fahren; danach prüfen, ob der
+  Recorder-/Telemetrie-Layer den Lauf persistiert hat.
+- **Erwartung:** Session-Log/Metrik-Datei liegt vor, ist der Session/Match
+  zuordenbar (Runde, Dauer, Wave/Score-Spuren) und übersteht Container/Prozess-Ende.
+- **Beweis:** Datei/Link + Pfad + kurzer Ausschnitt (Metrik-/Eventzeilen).
 
 ---
 
@@ -349,24 +366,29 @@ python3 tests/core-io/core_io_probe.py --remote "ssh planet" \
 
 Diese Punkte sind **belegt** und beeinflussen den Testablauf:
 
-1. **`/tournament/*`-Proxy der Website ist nicht aktiv (P4 offen).**
+1. **`/tournament/*`-Proxy der Website ist nicht aktiv (P4) — muss gefixt sein.**
    `https://rift.projectmellon.de/tournament/health` → **404**. Ursache
    (read-only geprüft 2026-09-12): Das laufende Caddy-Snippet
    (`/etc/caddy/Caddyfile.d/rbmods.caddy` im Container) **fehlt** — das
    Host-Verzeichnis `/home/momo/Caddyfile.d` ist **nicht** in den
    `mellon-caddy`-Container gemountet, und die laufende Konfiguration
    (`/config/caddy/autosave.json`) enthält **null** Treffer für „tournament“.
-   `solo.html` lädt, seine API-Aufrufe (`apiBase=/tournament`) laufen aber ins
-   404. **Workaround für den Test:** Web-UI mit Server-Adresse `http://<planet>:8081`
-   öffnen, oder die Szenarien per `curl` fahren. **Fix:** Issue #322.
+   `solo.html` lädt, seine API-Aufrufe (`apiBase=/tournament`) laufen aber ins 404.
+   **Entscheidung Momo:** #322 wird gefixt — **nicht** per Workaround umgangen.
+   **Richtung des Fixes:** der Riftbreaker-Stack bekommt einen **eigenen Caddy**
+   (eigener Container, plain HTTP, reines Durchreichen von Statics + `/tournament/*`),
+   damit der Deploy-Host-Caddy nur **EINEN** Eintrag braucht
+   (`rift.projectmellon.de → reverse_proxy 127.0.0.1:<rift-caddy>`). Die
+   Rift-Routen liegen dann komplett im Rift-Stack; der geteilte Caddy wird nicht
+   mehr pro Snippet gemountet/verändert.
 2. **C4-spawn ist headless nicht beweisbar** → deshalb ist S5/M5 der
    entscheidende manuelle Beweis (`tests/core-io/README.md`).
 3. **Egress bis in den Referee ist nur teilweise belegt:** Auf dem
    Dedicated-Server läuft kein Relay, das die Game-Log-Events als
    `POST /event` einliefert (#13/#265). Für M6 zählt daher der
    nachweisbare State-/Feed-Fluss, nicht „jede Mod-Zeile kommt im Server an“.
-4. **M8 (Runde 2) hängt an #281/PR #285** — zum Testzeitpunkt ggf. noch nicht
-   auf `main`.
+4. **M8 (Runde 2) hängt an #281/PR #285** — von Momo als **zwingend** bestätigt;
+   muss zum Testzeitpunkt auf `main` und deployt sein.
 5. **Economy-Fallback:** `event=economy_source source=tick status=fallback`
    kann auftreten (bekannt, #242) — **kein** 1.0-Blocker, aber notieren.
 
@@ -388,6 +410,7 @@ Diese Punkte sind **belegt** und beeinflussen den Testablauf:
 | M8 | | | |
 | M9 | | | |
 | M10 | | | |
+| M11 | | | |
 
 ### Soll-Beobachtungen
 
@@ -405,20 +428,33 @@ Diese Punkte sind **belegt** und beeinflussen den Testablauf:
 |---|---|---|
 | | | |
 
+### Beweisformat (von Momo bestätigt)
+
+- **Die Abnahme ist Momos Urteil:** „Ich bin happy.“ **oder** „Ich bin nicht happy“ —
+  das ist der bindende Beweis, keine Checkbox.
+- Dazu wird die **Nachvollziehbarkeit** angehängt, damit klar ist, **welches
+  Deployment zu welchem Commit gehört**: Commit-SHA, Mod-Version, `rbbattle.zip`-md5,
+  deployter Stand (Container/`mod_load`-Zeile), PR-/Run-URLs. Logs/Screenshots sind
+  Belege, **kein** Ersatz für das Urteil.
+
 ### Urteil
 
-- [ ] **Alle Muss-Kriterien grün** → **`v1.0.0` als Baseline bestätigt.**
-- [ ] Muss-Kriterien offen → **Baseline nicht bestätigt**; Funde als Issues,
-      nächster Kandidat (`v1.0.1`).
+- [ ] **Momo: happy** → **`v1.0.0` als Baseline bestätigt.** (Traceability angehängt)
+- [ ] Muss-Kriterien offen / nicht happy → **Baseline nicht bestätigt**; Funde als
+      Issues, nächster Kandidat (`v1.0.1`).
 
-**Sign-off (Tester):** __________________  **Datum:** ____________
+**Sign-off (Tester):** Momo  __________________  **Datum:** ____________
+
+**Angehängte Traceability:** Commit `____________` · Mod `________` ·
+`rbbattle.zip` md5 `____________` · Deployter Stand `____________`
 
 ---
 
 ## 11. Entscheidungsregeln
 
-1. **Test-Hoheit liegt bei Momo.** Ein „grün“ der CI ersetzt die Sicht-Abnahme
-   nicht; ein „fail“ in S5/M5 blockiert 1.0 auch bei sonst grünem CI.
+1. **Test-Hoheit liegt bei Momo.** Das bindende Urteil ist Momos „happy“ bzw.
+   „nicht happy“; ein „grün“ der CI ersetzt die Sicht-Abnahme nicht, ein `fail`
+   in S5/M5 blockiert 1.0 auch bei sonst grünem CI.
 2. **Muss-Kriterien sind binär.** „geht meistens“ = `fail` (mit Notiz).
 3. **Jeder Fund wird ein Issue** (Label `bug`/`follow-up`) und im Protokoll
    verlinkt — nichts wird nur mündlich festgehalten.
@@ -429,18 +465,22 @@ Diese Punkte sind **belegt** und beeinflussen den Testablauf:
 
 ---
 
-## 12. Offene Fragen an Momo (vor Testlauf klären)
+## 12. Entscheidungen (Momo, 2026-09-12) & Rest-Offenes
 
-1. **Umfang:** Reicht der Solo-Online-Teil (Milestone #8) für `v1.0.0`, oder
-   muss S11 (echtes 1v1 mit Matheo) zwingend mit rein?
-2. **M8/Runde 2:** Gehört der Round-Reset (#281) **zwingend** in die
-   Baseline — oder darf `v1.0.0` ohne ihn als „Core-IO-Baseline“ stehen?
-3. **P4-Proxy:** Fixen wir den `/tournament/*`-Proxy **vor** dem Test (saubere
-   UX) oder testen wir per `:8081`/`curl` gegen?
-4. **Recorder (#280):** Ist der Session-Mitschnitt Baseline-relevant (Muss) oder
-   Beobachtung (Soll)?
-5. **Beweisformat:** Reichen Logzeilen + Screenshots, oder soll zusätzlich ein
-   `rbbattle`-Session-Log als Artefakt an den Tag gehängt werden?
-6. **Dauerlauf:** Wie lang muss S10 mindestens laufen (15 Min? eine Runde?).
+**Entschieden:**
+
+1. **Scope:** 1.0 ist **solo** (ein Dedicated-Server + Tournament-Referee);
+   Game-State + Control **müssen von extern** kommen. 1v1 nicht Teil von 1.0.
+2. **Round-Reset (#281):** Core-Game-Loop → **Muss** (M8).
+3. **Website-Proxy (#322):** **muss gefixt sein**; Fix über eigenen Caddy
+   (ein Host-Caddy-Eintrag).
+4. **Telemetry (#280):** Core-Dev-Feature 1.0 → **Muss** (M11).
+5. **Beweisformat:** **Momos „happy“** + Traceability (Commit/Mod/md5/Deploy).
+
+**Noch offen:**
+
+1. **Dauerlauf S10:** Wie lang mindestens (15 Min? eine volle Runde?).
+2. **Timing:** Test **nach** dem #322-Fix + nach Welle 2/3 aus #319, dann Tag
+   `v1.0.0` — oder erst taggen und dann testen?
 
 Refs #319, Refs #320, Refs #289, Refs #266, Refs #267, Refs #281, Refs #280, Refs #298
