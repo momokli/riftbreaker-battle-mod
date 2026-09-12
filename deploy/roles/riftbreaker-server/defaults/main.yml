@@ -12,6 +12,9 @@ riftbreaker_compose_project: "{{ riftbreaker_deploy_dir | basename }}"
 # config.cfg.j2 gerendert (Datei-Rechte 0644, steamuser-lesbar; Passwort aus dem Vault).
 riftbreaker_server_container: riftbreaker-dedicated
 riftbreaker_server_port_udp: 6321
+# Game-Ports (6321/udp+tcp) auf den Host publizieren? Prod: true (öffentlich).
+# Test: false — die Test-Instanz hat KEINE Host-Ports (Issue #275, Design D5).
+riftbreaker_server_publish_ports: true
 
 riftbreaker_server_name: RBBattle
 riftbreaker_server_max_players: 4
@@ -36,17 +39,23 @@ riftbreaker_mods_dir: "{{ riftbreaker_game_dir }}/mods"
 riftbreaker_backup_dir: "{{ riftbreaker_game_dir }}-backups"
 riftbreaker_mods_guard_autofix: true
 
-# --- Trainer-I/O-Bridge (Issue #265) -----------------------------------------
+# --- Trainer-I/O-Bridge (Issue #265, Port-Entkopplung #275) -------------------
 # Die Rolle rbtools stagt die Windows-Tools (injector.exe/rbbridge.dll/
 # pipe_bridge.exe) nach {{ rbtools_dir }}; von dort read-only nach /opt/rbtools
-# im Container. Die Bridge (Wine-x64) nimmt HTTP auf 9001 an und uebersetzt
-# POST /exec in exec-Zeilen auf \\.\pipe\rbbattle (erfuellt den bereits
-# konfigurierten tournament_bridge_a_url=http://127.0.0.1:9001/exec).
-# Nur an 127.0.0.1 des Hosts publiziert (nicht ins LAN/Internet).
-# ACHTUNG: riftbreaker_bridge_port ist mit tournament_bridge_a_url gekoppelt
-# (host_vars: http://127.0.0.1:9001/exec) — Aenderungen an BEIDEN Stellen.
+# im Container. Die Bridge (Wine-x64) nimmt HTTP an und uebersetzt POST /exec in
+# exec-Zeilen auf \\.\pipe\rbbattle.
+
+# INNERER Bridge-Port: fix 9001 (Design D4). Der Tournament-Container spricht die
+# Bridge ueber Docker-DNS auf genau diesem Port an (tournament_bridge_a_url).
+# Kopplung ist damit konstruktiv: es gibt keinen separaten Aussen-Port mehr.
+# ACHTUNG: RBB_BRIDGE_BIND MUSS 0.0.0.0 bleiben, sonst ist die Bridge aus dem
+# Tournament-Container nicht erreichbar (Risiko R4).
+riftbreaker_bridge_port_internal: 9001
+# Host-Publish der Bridge (String im Format <host>:<hostport>:<containerport>
+# oder leer = kein Publish). Prod: Loopback-only (Operator-curl/Doku). Test:
+# leer. Das Publish-ZIEL ist IMMER riftbreaker_bridge_port_internal.
+riftbreaker_bridge_publish_host: "127.0.0.1:9001:9001"
 riftbreaker_rbtools_dir: "{{ rbtools_dir | default('/opt/rbmods/rbtools') }}"
-riftbreaker_bridge_port: 9001
 
 # --- Tournament-Server (Issue #275, Design D2/D3) ----------------------------
 # Zweiter Service im SELBEN Compose (gleiche Datei = gleiches default-Netz):
@@ -62,6 +71,6 @@ tournament_port: 8081
 tournament_publish_host: "127.0.0.1:8081:8081"
 tournament_auto_go: "true"
 # Bridge-Endpoint Welt A = Docker-DNS des Dedi-Service, NICHT 127.0.0.1 (D3).
-tournament_bridge_a_url: "http://{{ riftbreaker_server_container }}:{{ riftbreaker_bridge_port }}/exec"
+tournament_bridge_a_url: "http://{{ riftbreaker_server_container }}:{{ riftbreaker_bridge_port_internal }}/exec"
 # v1 hat keine Welt-B-Bridge: leer = kein toter Push-Endpoint (Design D3b).
 tournament_bridge_b_url: ""

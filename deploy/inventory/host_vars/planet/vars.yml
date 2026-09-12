@@ -37,6 +37,13 @@ tournament_bridge_b_url: ""
 # Frühere systemd-Unit, die dieser Deploy idempotent ablöst/entfernt.
 tournament_legacy_unit: tournament-server
 
+# --- Netz/Publishes (Issue #275) ---------------------------------------------
+# Prod publiziert die Game-Ports auf den Host (True ist der Rollen-Default) und
+# die Trainer-I/O-Bridge loopback-only. Ziel des Bridge-Publish ist der innere
+# Port (riftbreaker_bridge_port_internal = 9001, fix).
+riftbreaker_server_publish_ports: true
+riftbreaker_bridge_publish_host: "127.0.0.1:9001:9001"
+
 # --- Website (statics + Caddy, mellon-caddy-Container) -----------------------
 website_domain: rift.projectmellon.de
 website_docroot: /srv/rbmods-site

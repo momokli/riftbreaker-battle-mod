@@ -15,16 +15,24 @@ services:
       # Rig-Rezept: Sync-Primitive AUS (sonst Crash im Boost-Thread vor dem bind()).
       WINEESYNC: "0"
       WINEFSYNC: "0"
-      # Trainer-I/O-Bridge (Issue #265): pipe_bridge.exe lauscht im Container
-      # auf {{ riftbreaker_bridge_port }}; der Host published nur
-      # 127.0.0.1:{{ riftbreaker_bridge_port }} (konsistent mit
-      # tournament_bridge_a_url).
+      # Trainer-I/O-Bridge (Issue #265): pipe_bridge.exe lauscht im Container auf
+      # dem fixen inneren Port {{ riftbreaker_bridge_port_internal }}. RBB_BRIDGE_BIND
+      # MUSS 0.0.0.0 bleiben — sonst erreicht der Tournament-Container die Bridge
+      # nicht (Issue #275, Risiko R4).
       RBB_BRIDGE_BIND: "0.0.0.0"
-      RBB_BRIDGE_PORT: "{{ riftbreaker_bridge_port }}"
+      RBB_BRIDGE_PORT: "{{ riftbreaker_bridge_port_internal }}"
+{% if riftbreaker_server_publish_ports or riftbreaker_bridge_publish_host %}
     ports:
+{% if riftbreaker_server_publish_ports %}
       - "{{ riftbreaker_server_port_udp }}:6321/udp"
       - "{{ riftbreaker_server_port_udp }}:6321/tcp"
-      - "127.0.0.1:{{ riftbreaker_bridge_port }}:9001"
+{% endif %}
+{% if riftbreaker_bridge_publish_host %}
+      # Loopback-Publish der Bridge (Prod-Komfort/Operator-curl); Ziel = innerer
+      # Port. Im Test leer (kein Host-Port).
+      - "{{ riftbreaker_bridge_publish_host }}"
+{% endif %}
+{% endif %}
     volumes:
       - "{{ riftbreaker_game_dir }}:/opt/riftbreaker"
       - "{{ riftbreaker_config_dir }}/config.cfg:/data/config/config.cfg:ro"
@@ -36,7 +44,7 @@ services:
 
   # Tournament-Server (Issue #275): eigener Container im SELBEN Compose/Netz.
   # Die Bridge (pipe_bridge.exe im Dedi-Container) ist darüber per Docker-DNS
-  # unter {{ riftbreaker_server_container }}:{{ riftbreaker_bridge_port }} erreichbar
+  # unter {{ riftbreaker_server_container }}:{{ riftbreaker_bridge_port_internal }} erreichbar
   # — kein Host-Port nötig. Gestartet/aktualisiert mit `docker compose up -d`.
   {{ tournament_container }}:
     image: "{{ tournament_image }}"
