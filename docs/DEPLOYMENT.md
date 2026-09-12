@@ -32,10 +32,10 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
 1. **mods-zip** — Mod aus `mod/` paketieren (`scripts/package_bausteine.sh`),
    `rbbattle.zip` nach planet; **md5-Paritäts-Check (Zip == Prod) hart als
    Fehlschlag**.
-2. **headless-client-image** — baut `rb-headless-client:<deploy-sha>` IM
-   Playbook auf planet aus `tools/headless-client` (gemeinsame Wine-Laufzeit
-   für :6321; Docker-Layer-Cache → billig/idempotent). Das gerenderte
-   Compose pinnt exakt diesen Tag (kein `latest`).
+2. **dedicated-server-image** — baut `rb-dedicated:<deploy-sha>` IM
+   Playbook auf planet aus `tools/dedicated-server` (Wine-Laufzeit
+   für :6321, Community-Rezept; Docker-Layer-Cache → billig/idempotent). Das
+   gerenderte Compose pinnt exakt diesen Tag (kein `latest`).
 3. **game-content** — Dedicated-Server-Content (Steam-App 4114030) deklarativ
    nach `riftbreaker_game_dir`. **Standard: idempotenter Sync aus dem
    kanonischen Cache** (`/srv/riftbreaker/data/server`, in Backups) — der
@@ -169,7 +169,7 @@ Vault-Passwort als root-only Datei auf planet — **niemals** auf GitHub.
 ## Aktueller Zustand (2026-09-10, Issue #209)
 
 `deploy/` **besitzt den Stack**: das Playbook baut das Laufzeit-Image
-(`rb-headless-client:<deploy-sha>`) selbst, provisioniert den Steam-Content und
+(`rb-dedicated:<deploy-sha>`) selbst, provisioniert den Steam-Content und
 pinnt das Compose auf den Deploy-SHA. Ein from-zero-Aufbau braucht keine
 manuellen Schritte auf planet (`deploy/README.md` → „From-zero").
 

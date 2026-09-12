@@ -73,7 +73,7 @@ Ist der Hash leer/nicht gesetzt, bleibt `/solo` bewusst **ungeschützt**
 ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
 ```
 
-Reihenfolge der Rollen (site.yml): `mods-zip` → `headless-client-image` →
+Reihenfolge der Rollen (site.yml): `mods-zip` → `dedicated-server-image` →
 `game-content` → `riftbreaker-server` → `tournament-server` →
 `website` → `probe-timer`.
 
@@ -90,9 +90,9 @@ ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
 
 Was das Playbook selbst besitzt:
 
-- **Laufzeit-Image** (`headless-client-image`): baut
-  `rb-headless-client:<deploy-sha>` auf dem Zielhost aus
-  `tools/headless-client` (Wine + Xvfb + Mesa-llvmpipe). Der Tag ist der
+- **Laufzeit-Image** (`dedicated-server-image`): baut
+  `rb-dedicated:<deploy-sha>` auf dem Zielhost aus
+  `tools/dedicated-server` (Wine-Laufzeit für :6321, Community-Rezept). Der Tag ist der
   Deploy-SHA der ausgecheckten Revision; das gerenderte `docker-compose.yml`
   referenziert **exakt** diesen Tag (kein `latest`). Der Tag im Namen macht den
   Lauf trivially idempotent: unveränderter Stand → Image existiert → kein Build;
@@ -320,7 +320,7 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 
 | Rolle | Typ | Was |
 |---|---|---|
-| `headless-client-image` | docker | baut `rb-headless-client:<deploy-sha>` auf planet (Laufzeit :6321) |
+| `dedicated-server-image` | docker | baut `rb-dedicated:<deploy-sha>` auf planet (Laufzeit :6321) |
 | `game-content` | steamcmd/sync | Dedicated-Server-Content (App 4114030) nach `riftbreaker_game_dir` (idempotent, fail loud) |
 | `riftbreaker-server` | docker | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation |
 | `tournament-server` | systemd | Rust/axum Referee + Web-UI. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt) |
@@ -341,7 +341,7 @@ deploy/
 │       ├── vars.yml               # nicht-geheime Konfiguration
 │       └── vault.yml              # Geheimnis (ansible-vault verschlüsselt)
 └── roles/
-    ├── headless-client-image/     # baut rb-headless-client:<sha>
+    ├── dedicated-server-image/    # baut rb-dedicated:<sha>
     ├── game-content/              # Steam-Content (App 4114030) deklarativ
     ├── riftbreaker-server/        # docker 6321 (+ Restart-Handler)
     ├── tournament-server/         # systemd
@@ -397,7 +397,7 @@ Das vorherige `tournament-server`-Binary bzw. die vorherige `rbbattle.zip`
 
 ## Was CI/CD besitzt (und was nicht)
 
-**Owned von der Pipeline (`deploy/`):** Laufzeit-Image (`rb-headless-client:<sha>`),
+**Owned von der Pipeline (`deploy/`):** Laufzeit-Image (`rb-dedicated:<sha>`),
 Spiel-Content (Steam-App 4114030), Compose-Rendering + Containerstart der
 Server-Rollen, Mod-Auslieferung + Restart, Website-Statics + Caddy-Snippet,
 Caddy-Import-Zeile, systemd-Unit/Timer (tournament/probe), md5-Parität des
