@@ -149,6 +149,10 @@ Balance-Selbst-Check (`RBB.CheckBalance` / `event=balance_check`).
    (`interval_eff` == `interval_cfg`).
 4. Zusätzlich wird das Kappungs-Verhalten der gepatchten `GetPrepareSpawnTime`
    geprüft.
+5. `dom_mananger` wird zusätzlich als **echtes fengari-userdata** (Muster
+   `hook-userdata.test.js`) gebaut — wie zur Laufzeit (#217) — und belegt, dass
+   das Log trotzdem `interval_cfg=480 interval_eff=420` liefert (vor dem
+   #217-Fix in `DomPrepareSpawnTime()` rot: Fallback auf den Cap 480).
 
 Das echte Wave-Timing im Spiel ist damit **nicht** bewiesen — offener Punkt
 (Player-Test Momo/Matheo, `#278`).

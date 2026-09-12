@@ -170,6 +170,114 @@ function runScenario(opts) {
     return runLua(stubs(opts) + modSource + '\n' + assertions(opts));
 }
 
+// --- Issue #278/#217: dom_mananger als ECHTES fengari-userdata ---------------
+// Zur Laufzeit ist `dom_mananger` ein userdata-Objekt der Spielklasse, KEIN
+// Lua-`table` (belegt in #217). Dieser Harness baut es exakt wie
+// hook-userdata.test.js (lua_newuserdata + Metatable __index/__newindex) und
+// weist nach, dass das Setup-Log den wirksamen Timer trotzdem korrekt liest:
+// rules 420 < Cap 480 -> interval_cfg=480 interval_eff=420. Vor dem #217-Fix
+// in DomPrepareSpawnTime() (nur `type(dom) == "table"`) faellt es auf den
+// Cap zurueck -> rot.
+function userdataStubs({ prepareTime = 420 } = {}) {
+    return `
+-- ==== Stub-Services (fengari, Muster hook-userdata.test.js) ====
+_G.__logs = {}
+_G.__handlers = {}
+_G.__commands = {}
+_G.__db = {}
+INVALID_ID = -1
+
+LogService = { Log = function(self, msg) _G.__logs[#_G.__logs + 1] = msg end, }
+ConsoleService = {
+    Write = function(self, msg) end,
+    RegisterCommand = function(self, name, fn) _G.__commands[name] = fn end,
+}
+FindService = {
+    FindEntitiesByType = function(self, t) return { 100 } end,
+    FindEntitiesByGroup = function(self, g) return { 100 } end,
+    FindPlayerSpawnPoints = function(self) return {} end,
+}
+MapGenerator = { GetInitialSpawnPoint = function(self) return nil end }
+ResourceManager = { GetBlueprint = function(self, bp) return true end }
+EnvironmentService = { GetTerrainHeight = function(self, pos) return 0 end }
+EntityService = {
+    GetName = function(self, e) return "" end,
+    GetPosition = function(self, e) return { x = 0, y = 0, z = 0 } end,
+    SpawnEntity = function(self, ...) return 1 end,
+}
+PlayerService = {
+    GetPlayerControlledEnt = function(self, i) return 1 end,
+    GetOrCreateGlobalDatabase = function(self, name)
+        local db = {}
+        db.HasInt = function(s, k) return _G.__db[k] ~= nil end
+        db.GetIntOrDefault = function(s, k, d)
+            local v = _G.__db[k]
+            if v ~= nil then return v end
+            return d
+        end
+        db.SetInt = function(s, k, v) _G.__db[k] = v end
+        db.RemoveKey = function(s, k) _G.__db[k] = nil end
+        return db
+    end,
+}
+DifficultyService = { GetCurrentDifficultyName = function(self) return "normal" end }
+CampaignService = { GetCreaturesBaseDifficulty = function(self) return 5 end }
+GuiService = { OpenPopup = function(self, ent, template, text) return true end }
+
+-- dom_mananger-Backing-Store fuer das (vom Harness gebaute) userdata:
+-- __dom_store nimmt Hook-Wrapper auf, __dom_methods die Original-API.
+_G.__dom_store = {}
+_G.__dom_methods = {
+    maxDifficultyLevel = 9,
+    currentDifficultyLevel = 4,
+    GetPrepareSpawnTime = function(self) return ${prepareTime} end,
+    OnEnterSpawn = function(self, state) end,
+    SpawnWavesForDifficultyLevel = function(self, level, addToSpawned) end,
+}
+_G.__dom_mt = {}
+__dom_mt.__index = function(t, k)
+    local v = __dom_store[k]
+    if v ~= nil then return v end
+    return __dom_methods[k]
+end
+__dom_mt.__newindex = function(t, k, v) __dom_store[k] = v end
+
+function RegisterGlobalEventHandler(name, fn)
+    _G.__handlers[name] = fn
+end
+`;
+}
+
+// Fuehrt STUBS aus, baut dom_mananger als userdata, dann mod+ASSERTIONS.
+function runUserdataLua(stubSource, code) {
+    const L = lauxlib.luaL_newstate();
+    lualib.luaL_openlibs(L);
+    const exec = (src, label) => {
+        const loadStatus = lauxlib.luaL_loadstring(L, to_luastring(src));
+        if (loadStatus !== lua.LUA_OK) {
+            const err = to_jsstring(lua.lua_tostring(L, -1));
+            lua.lua_close(L);
+            throw new Error(`Lua-Loadfehler (${label}): ${err}`);
+        }
+        const status = lua.lua_pcall(L, 0, 0, 0);
+        if (status !== lua.LUA_OK) {
+            const err = to_jsstring(lua.lua_tostring(L, -1));
+            lua.lua_close(L);
+            throw new Error(`Lua-Laufzeitfehler (${label}): ${err}`);
+        }
+    };
+    exec(stubSource, 'STUBS');
+    lua.lua_newuserdata(L, 16);                         // userdata auf den Stack
+    lua.lua_getglobal(L, to_luastring('__dom_mt'));     // Metatable
+    lua.lua_setmetatable(L, -2);                        // an userdata binden
+    lua.lua_setglobal(L, to_luastring('dom_mananger')); // als Global
+    exec(code, 'mod+ASSERTIONS');
+    lua.lua_getglobal(L, to_luastring('__failures'));
+    const failures = lua.lua_tonumber(L, -1) || 0;
+    lua.lua_close(L);
+    return failures;
+}
+
 test('Lua-Syntax (luaparse, Lua 5.1)', () => {
     assert.doesNotThrow(() => luaparse.parse(modSource),
         'mod/lua/rbbattle_autoexec.lua muss gültiges Lua 5.1 sein');
@@ -193,4 +301,21 @@ test('Issue #278: rules 240 < Cap 480 -> effektiv 240 (kein Anheben)', () => {
 test('Issue #278: DOM-API fehlt -> Fallback auf Cap (eff == cfg)', () => {
     const failures = runScenario({ domApi: false, prepareTime: 0, cfg: 480, eff: 480, capped: 480, checkCapped: false });
     assert.strictEqual(failures, 0, `Assertion-Fehler im Lua-Harness: ${failures}`);
+});
+
+// Issue #278/#217: `dom_mananger` ist zur Laufzeit userdata. Der Setup-Log
+// muss auch dann interval_eff=420 (rules 420 < Cap 480) zeigen; mit dem
+// table-only-Check lieferte DomPrepareSpawnTime() nil -> Fallback 480 (rot).
+test('Issue #278/#217: userdata dom_mananger -> setup interval_cfg=480 interval_eff=420', () => {
+    const scene = assertions({ cfg: 480, eff: 420, capped: 420 }).replace(
+        '-- Setup-Log (bei Map-Ready) ausloesen.',
+        '-- #217-Sanity: die Klasse ist hier WIRKLICH userdata (nicht table).\n' +
+        'check(type(dom_mananger) == "userdata", "dom_mananger ist userdata")\n' +
+        '-- Setup-Log (bei Map-Ready) ausloesen.',
+    );
+    const failures = runUserdataLua(
+        userdataStubs({ prepareTime: 420 }),
+        modSource + '\n' + scene,
+    );
+    assert.strictEqual(failures, 0, `Assertion-Fehler im userdata-Harness: ${failures}`);
 });

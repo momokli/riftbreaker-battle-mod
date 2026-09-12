@@ -59,9 +59,10 @@ identisch); der Mod **loggt** die aktiv wirksame Difficulty zur Verifikation
 3. **Mod rbbattle v0.3.0** in beiden Welten installiert
    (`<game>/mods/rbbattle/lua/rbbattle_autoexec.lua`).
 4. **Live-Verifikation** (Operator, Prod):
-   - Log beider Welten: `[RBBATTLE] event=dom_timer patch status=ok cap=300`
-     und `event=setup difficulty=hard …`
-   - `debug_dom_manager 1` → „Time left“ im `prepare_spawn`-State ≤ 300 s
+   - Log beider Welten: `[RBBATTLE] event=dom_timer patch status=ok cap=480`
+     (Preset A) und `event=setup difficulty=hard …`
+   - `debug_dom_manager 1` → „Time left“ im `prepare_spawn`-State ≤ 480 s
+     (Preset-Cap; wirksam ist `interval_eff` aus dem Setup-Log)
    - Wellenstart-Zeitstempel beider Welten vergleichen (Log-Sync)
    - `dump_console_commands` + Config-Dump, um die tatsächlichen
      CVar-Namen für Seed/Map-Size zu bestätigen (Karte/Version abhängig)

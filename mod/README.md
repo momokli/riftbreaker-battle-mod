@@ -304,9 +304,11 @@ v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
   Kreatur) statt am Spieler-Mech — **kein Spieler nötig** (Server-only-tauglich).
   DOM-Naturwellen bleiben unangetastet (Basis-Druck). Fallback auf den alten
   Mech-Ring nur, wenn eine Welt keine Rand-Spawner hat.
-- **Issue #23:** DOM-Wellen-Vorbereitung auf **300 s** gedeckelt
+- **Issue #23:** DOM-Wellen-Vorbereitung zunächst auf **300 s** gedeckelt
   (prepareSpawnTime 420→300, 5-Min-Wellen) + Setup-Log (`difficulty`,
-  `creatures_difficulty`). Difficulty/Map-Größe/Seed werden beim Server-Start
+  `creatures_difficulty`). Seit #41/#278 kappt der Mod stattdessen auf das aktive
+  Wellen-Preset (A=480 s / B=240 s, **senkt nur**) und loggt `interval_cfg`/
+  `interval_eff`. Difficulty/Map-Größe/Seed werden beim Server-Start
   gesetzt (C++, kein Lua-Weg) — Ablauf: `docs/DUEL_SETUP.md`.
 - Neuer Command-Alias **`rb_send`** (gleiche Logik wie `rb_wave`).
 - Konzept-Doku: `docs/SEND_HOOK.md` (Wellen-Hook-Strategie), `docs/SYNC_START.md`

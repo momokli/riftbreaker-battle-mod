@@ -747,7 +747,11 @@ end
 local function DomPrepareSpawnTime()
     local dom = nil
     if type(_G) == "table" then dom = rawget(_G, "dom_mananger") end
-    if type(dom) == "table" and type(dom.GetPrepareSpawnTime) == "function" then
+    -- #217/#278: zur Laufzeit ist dom_mananger userdata (Spielklasse), kein
+    -- Lua-table -> beide Typen zulassen, sonst faellt das Log auf den Cap zurueck.
+    local dType = type(dom)
+    if (dType == "table" or dType == "userdata")
+        and type(dom.GetPrepareSpawnTime) == "function" then
         local ok, v = pcall(dom.GetPrepareSpawnTime, dom)
         if ok and type(v) == "number" then return math.floor(v) end
     end
