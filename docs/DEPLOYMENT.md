@@ -18,6 +18,7 @@
 | Website | planet | statics + **eigener** Caddy (`rift-caddy`, plain HTTP) hinter `mellon-caddy` | 443 → 127.0.0.1:8787 | Landing `/` · `/connectivity.html` · `/solo.html` · `/status.json` · Proxy `/tournament/*` → tournament-server |
 | Mod-Download | planet | statics (Caddy) | 443 | `rbbattle.zip` (Paketierung + md5-Parität) |
 | rbmods-probe.timer | planet | systemd | — | Connectivity-Checks alle 2 Min → `status.json` (eine Zeile je Instanz) |
+| rbmods-host-hygiene.timer | planet | systemd | — | wöchentlich dangling Docker-Images aufräumen (`docker image prune`, **kein** `-a`; Issue #308) |
 | rbbridge | in Mod-Containern | Prozess | — | Command-Injection (`exec_cmd_client`, Argument IMMER als EIN gequotierter String) |
 
 ## Server-Modell: Multi-Instanz (Issue #290)
@@ -100,6 +101,11 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
    „Website-Pfad“ unten.
 7. **probe-timer** — systemd-Timer für `scripts/probe_servers.sh` →
    `status.json` (eine Endpoint-Zeile je Instanz, aus `deploy/instances/*.yml`).
+8. **host-hygiene** — wöchentlicher systemd-Timer (Issue #308): entfernt
+   dangling Docker-Images (`docker image prune`, **kein** `-a`; der getaggte
+   Rollback-Stand bleibt erhalten). Installiert `scripts/host_hygiene.sh` +
+   Unit/Timer; automatische Variante der manuellen Aufräum-Befehle in
+   [`SERVER_SIZING.md`](SERVER_SIZING.md).
 
 Grundsätze:
 
@@ -111,6 +117,8 @@ Grundsätze:
   `ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass`
   (eine Instanz) bzw. `deploy/fleet.yml` (alle Instanzen).
 - **Rollback** = vorherige `rbbattle.zip` / vorheriges Binary wieder einspielen.
+  Für ein **Image**-Rollback bleibt das getaggte `rb-dedicated:<alte-sha>`
+  erhalten — die Rolle `host-hygiene` entfernt nur dangling Images (#308).
 
 ## Website-Pfad — eigener Rift-Caddy + EIN Host-Eintrag (Issue #322)
 
