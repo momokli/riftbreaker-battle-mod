@@ -68,6 +68,14 @@
     mode: "0644"
   notify: restart riftbreaker-server
 
+- name: "Referee-Egress-Script bereitstellen (Issue #358/#268)"
+  copy:
+    src: "{{ riftbreaker_referee_egress_script_src }}"
+    dest: "{{ riftbreaker_referee_egress_script }}"
+    remote_src: true
+    mode: "0644"
+  notify: restart riftbreaker-server
+
 - name: config.cfg rendern (Passwort aus Vault, 0644 fuer steamuser-lesbar)
   template:
     src: config.cfg.j2

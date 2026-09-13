@@ -36,7 +36,7 @@ Issue #304.
 |---|---|---|---|
 | `test` (`ci.yml`) | Ports ephemer bzw. `freePort()`; Temps via `mktemp`/`TemporaryDirectory`; npm-Store + ccache über `actions/cache` (concurrency-safe) | ✅ | Random-Ports in den E2E-Skripten, `mktemp -d` |
 | `build` (`ci.yml`) | `dist/` im eigenen `_work`; ccache-Wrapper in `/opt` (concurrency-safe) | ✅ | je Instanz eigenes `_work` |
-| `boot-test` (`boot-test.yml`) | Container/Netz/Volumes/Unit/Host-Pfade/Ports je Lauf über `github.run_id` | ✅ nach Fix | #307/#317 + #318 (Session-Sidecar) |
+| `boot-test` (`boot-test.yml`) | Container/Netz/Volumes/Unit/Host-Pfade/Ports je Lauf über `github.run_id` | ✅ nach Fix | #307/#317 + #318 (Session-Sidecar) + #358 (Egress-Sidecar) |
 | `deploy-check` (`deploy-check.yml`, planet) | read-only `ansible --check`; Ansible-Venv | ✅ nach Fix | vorher nicht-atomares Venv-Setup |
 | `deploy-dev` (`deploy.yml`) | serialisiert durch `concurrency: cd-dev`; kein Shared-Setup | ✅ | eine Deploy-Spur |
 | `deploy-check-local` (`deploy-check-local.yml`) | GitHub-hosted, frische VM je Job | ✅ | kein geteiltes `$HOME` |
@@ -92,6 +92,20 @@ Läufe trotz getrennter Compose-Projekte.
 **Nachher:** Sidecar-Name und -Verzeichnis laufen mit `rbbattle_run_suffix`; der
 Teardown in `boot-test.yml` entfernt beides zusätzlich explizit (inkl. der
 festen Altlast `riftbreaker-sessions-test` / `/srv/rbmods-sessions-test`).
+
+### C) Fester Container-Name des Referee-Egress-Sidecars (behoben, #358)
+
+Derselbe Fehler wäre mit dem in #358 ergänzten Referee-Egress-Sidecar erneut
+aufgetreten: `deploy/roles/riftbreaker-server/defaults/main.yml` setzt
+`riftbreaker_referee_egress_container: riftbreaker-egress` (Prod-Name, global),
+und der Test-Deploy rendert daraus ein Compose-`container_name`. Zwei parallele
+`boot-test`-Läufe wären am `docker compose up` des Game-Servers kollidiert.
+
+**Nachher:** `deploy/test-vars.yml` überschreibt den Namen run-scoped
+(`riftbreaker-egress-test-{{ rbbattle_run_suffix }}`), und `boot-test.yml`
+entfernt den Container in beiden Cleanup-Steps explizit. Der Prod-Name
+`riftbreaker-egress` bleibt unberührt (er wird **nicht** mit aufgeräumt, sonst
+würde der Cleanup die Prod-Instanz treffen).
 
 ## Kapazität (planet)
 
