@@ -1,0 +1,47 @@
+---
+# Rolle: image-retention (Issue #309) — installiert Skript + systemd-Timer,
+# der alte rb-dedicated/rb-headless-client-Tags entfernt. Das laufende Image
+# und der Rollback-Stand (N letzte Tags + aktueller Deploy-Tag) bleiben.
+#
+# Muster: deploy/roles/probe-timer/. Idempotent und --check-fest: es werden nur
+# Dateien gerendert und eine Unit aktiviert; das Skript laeuft nie waehrend des
+# Check-Laufs.
+
+- name: Retention-Skript installieren
+  copy:
+    src: "{{ playbook_dir }}/../scripts/docker_image_tag_retention.sh"
+    dest: "{{ image_retention_bin }}"
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: Logdatei sicherstellen
+  file:
+    path: "{{ image_retention_log }}"
+    state: touch
+    mode: "0644"
+    owner: root
+    group: root
+    modification_time: preserve
+    access_time: preserve
+
+- name: systemd-Service rendern
+  template:
+    src: rbmods-image-retention.service.j2
+    dest: "/etc/systemd/system/{{ image_retention_unit }}.service"
+    mode: "0644"
+  notify: restart rbmods-image-retention timer
+
+- name: systemd-Timer rendern
+  template:
+    src: rbmods-image-retention.timer.j2
+    dest: "/etc/systemd/system/{{ image_retention_unit }}.timer"
+    mode: "0644"
+  notify: restart rbmods-image-retention timer
+
+- name: Timer aktivieren und starten
+  systemd:
+    name: "{{ image_retention_unit }}.timer"
+    state: started
+    enabled: true
+    daemon_reload: true

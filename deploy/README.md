@@ -83,7 +83,7 @@ ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
 
 Reihenfolge der Rollen (site.yml): `mods-zip` → `dedicated-server-image` →
 `game-content` → `riftbreaker-server` → `tournament-server` →
-`website` → `probe-timer` → `host-hygiene`.
+`website` → `probe-timer` → `image-retention` → `host-hygiene`.
 
 **Vor** den Rollen (in den `pre_tasks`) prüft ein Preflight den freien Platz auf
 `/` (Disk-Space-Gate, Issue #310): zu wenig Platz → Abbruch **vor** Image-Build
