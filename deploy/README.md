@@ -366,17 +366,23 @@ re-run oder `force=true`.
 - [ ] Erster Merge auf `main`: Deploy-Lauf grün
 ## deploy-check (PR-Gate)
 
-[`.github/workflows/deploy-check.yml`](../.github/workflows/deploy-check.yml) ist
-seit Issue #306 in **zwei Required Checks** aufgeteilt:
+Das PR-Gate ist seit Issue #349 in **zwei Workflows** aufgeteilt; **required ist
+nur `deploy-check-local`**:
 
-- **`deploy-check-local`** (GitHub-Hosted-Runner, `ubuntu-latest`) prüft rein
+- [`deploy-check-local.yml`](../.github/workflows/deploy-check-local.yml)
+  (**Required Check**, GitHub-Hosted-Runner, `ubuntu-latest`) prüft rein
   lokal: `yamllint` über `deploy/`, Playbook-`--syntax-check` für `site.yml` +
   `deploy-prod.yml` (prod-Playbook, Issue #328), Compose-Templates rendern
   (`check-render.yml`) und jedes gerenderte Compose-File durch
-  `docker compose config`. Kein Host-/SSH-Zugriff, keine Secrets.
-- **`deploy-check`** (self-hosted Runner, planet) fährt den echten Host-Check
-  read-only gegen planet: `ansible-playbook --check --diff`
-  (`--tags server,website`).
+  `docker compose config`. Kein Host-/SSH-Zugriff, keine Secrets. Läuft damit
+  immer, auch wenn der planet-Runner gerade nicht erreichbar ist.
+- [`deploy-check.yml`](../.github/workflows/deploy-check.yml)
+  (self-hosted Runner, planet) fährt den echten Host-Check read-only gegen
+  planet: `ansible-playbook --check --diff` (`--tags server,website`). Seit
+  Issue #349 ist dieser Lauf **informational** (nicht required): ein transienter
+  `startup_failure` des planet-Runners reißt den lokalen Required-Check nicht
+  mehr mit, die Rückmeldung („Image fehlt / Container-Name belegt / Pfad
+  falsch") bleibt aber sichtbar.
 
 Das **Vault wird nie entschlüsselt**: für den Lauf wird ein Dummy-Vault in ein
 temporäres Inventar kopiert. Nur PRs aus diesem Repo (keine Forks).

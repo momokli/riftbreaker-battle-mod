@@ -53,10 +53,10 @@ jobs:
           fi
 
       - uses: actions/checkout@v4
-        if: steps.gate.outputs.skip != true
+        if: steps.gate.outputs.skip != 'true'
 
       - name: Tooling prüfen (Venv vom Host-Setup, Issue #318)
-        if: steps.gate.outputs.skip != true
+        if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           # Kein nicht-atomares Setup mehr im Job (Issue #318): das Ansible-Venv
@@ -72,16 +72,16 @@ jobs:
           "$VENV/bin/ansible" --version
 
       - name: SSH-Voraussetzung prüfen (runner -> root@planet)
-        if: steps.gate.outputs.skip != true
+        if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
-          if ! ssh -o BatchMode=yes -o ConnectTimeout=10 planet id -u >/dev/null 2>&1; then
+          if ! ssh -o BatchMode=yes -o ConnectTimeout=10 planet 'id -u' >/dev/null 2>&1; then
             echo "::error::deploy-check braucht SSH-Zugriff runner@planet -> root@planet (Alias planet). Einrichtung: deploy/README.md, Abschnitt deploy-check (PR-Gate)."
             exit 1
           fi
 
       - name: Ansible --check --diff gegen planet (read-only, kein Vault)
-        if: steps.gate.outputs.skip != true
+        if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           # Vault wird NIE entschlüsselt: ein Dummy-Vault in ein temporäres
@@ -89,7 +89,7 @@ jobs:
           # gelesen). Der Lauf ist --check (Host wird nie verändert).
           INV="$(mktemp -d)/inventory"
           cp -r deploy/inventory "$INV"
-          cat > "$INV/host_vars/planet/vault.yml" <<EOF
+          cat > "$INV/host_vars/planet/vault.yml" <<'EOF'
           ---
           riftbreaker_server_password: check-dummy
           vault_solo_basic_auth_hash: ""

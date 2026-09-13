@@ -54,7 +54,7 @@ jobs:
           fi
 
       - uses: actions/checkout@v4
-        if: steps.gate.outputs.skip != true
+        if: steps.gate.outputs.skip != 'true'
 
       # Statischer Wiring-Check + Provider-Tests (Issue #337, vormals #238):
       # prueft den AKTUELLEN, gate-losen deploy.yml-Vertrag (push auf main,
@@ -64,7 +64,7 @@ jobs:
       # wiederkommt (#238/#327), entscheidet dieser Check nicht. Read-only,
       # keine Secrets, keine Prod-Aktion.
       - name: Deploy-Wiring + Provider-Tests
-        if: steps.gate.outputs.skip != true
+        if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           python3 tools/deploy-gate/check_deploy_wiring.py
@@ -79,7 +79,7 @@ jobs:
       # bleibt bewusst lokal. Nur der self-hosted `deploy-check`-Job bezieht
       # das Venv vom Host-Setup (.github/runner/setup.sh).
       - name: Tooling bereitstellen (ansible-core + yamllint)
-        if: steps.gate.outputs.skip != true
+        if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           VENV="$HOME/.local/ansible-deploy-check"
@@ -93,7 +93,7 @@ jobs:
           "$VENV/bin/yamllint" --version
 
       - name: YAML-Lint (deploy/)
-        if: steps.gate.outputs.skip != true
+        if: steps.gate.outputs.skip != 'true'
         run: yamllint -c .yamllint deploy/
 
       # Playbook-Syntax aller Inventar-Playbooks (Issue #328/#329): deckt das
@@ -101,7 +101,7 @@ jobs:
       # Check läuft. --syntax-check parst nur, verbindet NICHT und entschlüsselt
       # das Vault nicht (gegen deploy/inventory verifiziert).
       - name: Playbook-Syntax (site.yml + deploy-prod.yml)
-        if: steps.gate.outputs.skip != true
+        if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           ansible-playbook -i deploy/inventory deploy/site.yml --syntax-check
@@ -113,11 +113,11 @@ jobs:
       # wenig Platz MUSS der Lauf rot abbrechen (fail_msg "PLATZ-GATE"); der
       # Positiv-Fall + die Konfigurierbarkeit der Schwelle laufen ebenfalls.
       - name: "Disk-Space-Gate Selbsttest (Issue #310)"
-        if: steps.gate.outputs.skip != true
+        if: steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/disk-gate/run.sh
 
       - name: Compose-Templates rendern + `docker compose config`
-        if: steps.gate.outputs.skip != true
+        if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           RENDER_DIR="$(mktemp -d)"
