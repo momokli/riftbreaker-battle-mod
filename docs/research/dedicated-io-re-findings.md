@@ -238,3 +238,13 @@ Architektur: `dispatch_exec` legt das Kommando nur in einen Spinlock-Puffer
 Live bestätigt (Build 2.0.58485): `debug_dom_pause`/`debug_dom_resume`/
 `debug_dom_manager_spawn_wave_level` → `ok:true`, kein Crash; pause friert
 `time_to_next` ein, resume taut auf, spawn_wave spawnt Kreaturen.
+
+## Control-Workflow (STOP/START von außen, manuell)
+
+Join (ohne HQ): DOM steht in `wait` (suspended) — nichts passiert; der Mod hält
+den Wellen-Spawn bis zur HQ-Platzierung (`RBB.commenced`). Für volle Kontrolle:
+
+- **STOP/freeze:** `debug_dom_pause` (friert DOM-Timer ein). Achtung: die
+  HUD-Mission-Flow `MissionService:ActivateMissionFlow`/`time_max` friert
+  dabei NICHT mit ein (kein `deactivate_mission_flow`-Command registriert).
+- **START:** `debug_dom_resume` + `debug_dom_manager_spawn_wave_level N`.
