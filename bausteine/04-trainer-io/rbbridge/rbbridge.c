@@ -1755,6 +1755,129 @@ static void dispatch_get_state(HANDLE hPipe)
  * mit einem error-Event beantwortet - der Client soll Feedback bekommen,
  * das Spiel darf sich nie daran stoeren.
  */
+/*
+ * add_resource (Write-PoC, Issue #373): aendert carbonium DIREKT ueber
+ * PlayerService::AddResourceAmount(unsigned int, UtfString const&, float,
+ * bool) - RVA 0xF1E3D0 (Build 2.0.58485) - der C++-Write-Pfad OHNE
+ * Lua/Console (ein Hop weniger als exec -> ConsoleService -> Lua -> C++).
+ *
+ * RE-Befunde (tools/re/disasm.py + llvm-pdbutil, siehe
+ * docs/research/io-write-poc.md):
+ *   B1  AddResourceAmount = RVA 0xF1E3D0 (Signatur/Disasm bestaetigt).
+ *   B2  Negativ erlaubt: entry.value += amount; negatives Ergebnis wird
+ *       auf 0 geklemmt (Disasm 0x1802d6890).
+ *   B3  Einheiten: der float wird intern skaliert
+ *         basket_delta = (int64)( (float)scale * amount )
+ *       scale = .data-global bei RVA 0x4794210 (Laufzeitwert wird gelesen,
+ *       statischer Initialwert 0x03bde828). Basket = int64-Fixed-Point
+ *       x10^6 (READ-bewiesen). => raw = N * 1e6 ; amount = raw / scale.
+ *   B4  UtfString-Layout: data@+8 (SSO wenn capacity@+0x20 <= 15),
+ *       size@+0x18, capacity@+0x20; Offset 0 wird NICHT gelesen. Wir bauen
+ *       eine SSO-Instanz "carbonium" auf dem Stack.
+ *   B5  playerId = 0 (Spieler 1); das bool (Stack-Arg) wird an den
+ *       Broadcast/HUD-Sync durchgereicht (true = sichtbar machen).
+ *   B6  Thread-Safety: Aufruf im Pipe-Thread (wie ExecuteCommand); offen,
+ *       Live-Test steht noch aus (gleiche Risiko-Klasse wie exec).
+ *
+ * Aufrufkonvention (MS x64): this=RCX, playerId=RDX, name=R8, amount=XMM3,
+ * flag=[rsp+0x28]. MinGW-x64 (ms_abi Default) deckt die Deklaration ab.
+ */
+static void dispatch_add_resource(HANDLE hPipe, const char *amount_str)
+{
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    const char *via = NULL;
+    const unsigned char *execfn = NULL;
+
+    if (!resolve_module(&base, &size, &via, &execfn)) {
+        send_line(hPipe, "{\"event\":\"add_resource_result\",\"ok\":false,"
+                         "\"reason\":\"no_module\"}");
+        return;
+    }
+
+    float amount = 0.0f;
+    if (sscanf(amount_str, "%f", &amount) != 1) {
+        send_line(hPipe, "{\"event\":\"add_resource_result\",\"ok\":false,"
+                         "\"reason\":\"bad_amount\"}");
+        return;
+    }
+
+    /* PlayerService-Instanz per vftable-Scan (RVA 0x2e8e910, wie get_state). */
+    const unsigned char *vftable = base + 0x2e8e910;
+    const uint64_t needle = (uint64_t)(uintptr_t)vftable;
+    unsigned char *ps = NULL;
+    uintptr_t addr = 0;
+    for (;;) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
+            break;
+        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
+        if (next <= addr)
+            break;
+        addr = next;
+        if (!is_readable_region(&mi))
+            continue;
+        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
+        size_t nq = mi.RegionSize / sizeof(uint64_t);
+        for (size_t i = 0; i < nq; i++) {
+            if (q[i] == needle) {
+                ps = (unsigned char *)&q[i];
+                break;
+            }
+        }
+        if (ps)
+            break;
+    }
+
+    if (!ps) {
+        send_line(hPipe, "{\"event\":\"add_resource_result\",\"ok\":false,"
+                         "\"reason\":\"no_playerservice\"}");
+        return;
+    }
+
+    /* scale-Globale (RVA 0x4794210) lesen; 0 -> Fallback 1e6. */
+    uint64_t scale64 = 0;
+    safe_read_u64(base + 0x4794210, &scale64);
+    uint32_t scale = (uint32_t)scale64;
+    if (scale == 0)
+        scale = 1000000u;
+
+    /* Carbonium-Betrag -> int64-Fixed-Point x10^6 -> float fuer den Call. */
+    double raw_dbl = (double)amount * 1000000.0;
+    int64_t raw = (int64_t)raw_dbl;
+    float amount_float = (float)raw / (float)scale;
+
+    /* UtfString "carbonium" als SSO-Instanz auf dem Stack (B4): 40 Byte,
+     * [0]=unused, [8]=inline-buffer(16B), [0x18]=size, [0x20]=capacity. */
+    unsigned char name[40];
+    memset(name, 0, sizeof(name));
+    memcpy(name + 8, "carbonium", 10); /* 9 Zeichen + NUL */
+    {
+        uint64_t sz = 9, cap = 0xf; /* cap <= 15 -> SSO, data = name + 8 */
+        memcpy(name + 0x18, &sz, sizeof(sz));
+        memcpy(name + 0x20, &cap, sizeof(cap));
+    }
+
+    /* bool PlayerService::AddResourceAmount(this, playerId, name, amount,
+     * flag) */
+    typedef unsigned char (__fastcall *add_resource_fn)(void *, unsigned int,
+                                                        const void *, float,
+                                                        unsigned char);
+    add_resource_fn fn = (add_resource_fn)(uintptr_t)(base + 0xF1E3D0);
+
+    unsigned char ret = fn(ps, 0, (const void *)name, amount_float, 1);
+
+    dbg("add_resource: amount='%s' raw=%lld scale=%u amount_float=%.6f ret=%u",
+        amount_str, (long long)raw, (unsigned)scale, (double)amount_float,
+        (unsigned)ret);
+
+    send_line(hPipe,
+              "{\"event\":\"add_resource_result\",\"ok\":true,"
+              "\"amount\":\"%s\",\"raw\":%lld,\"scale\":%u,\"ret\":%s}",
+              amount_str, (long long)raw, (unsigned)scale,
+              ret ? "true" : "false");
+}
+
 static void handle_line(HANDLE hPipe, const char *line)
 {
     char cmd[64] = "";
@@ -1797,6 +1920,17 @@ static void handle_line(HANDLE hPipe, const char *line)
 
     if (strcmp(cmd, "get_state") == 0) {
         dispatch_get_state(hPipe);
+        return;
+    }
+
+    if (strcmp(cmd, "add_resource") == 0) {
+        char amount[64] = "";
+        if (!json_get_string(line, "amount", amount, sizeof(amount))) {
+            send_line(hPipe,
+                      "{\"event\":\"error\",\"error\":\"add_resource_ohne_amount\"}");
+            return;
+        }
+        dispatch_add_resource(hPipe, amount);
         return;
     }
 

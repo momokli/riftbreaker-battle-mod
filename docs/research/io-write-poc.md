@@ -24,31 +24,55 @@ Lua-Mod ist für den IO-Kern ein **Umweg** (DLL → ConsoleService → Lua → C
 Wir rufen die C++-Funktion direkt — gleiche Funktion, ein Hop weniger, kein
 Lua-State, kein Log.
 
-## Assumptions, die zu prüfen sind
+## Assumptions — Ergebnis (alle bestätigt, LIVE am 6321-Dedi)
 
-| # | Annahme | Status |
-|---|---|---|
-| **A** | `get_state` liest carbonium **live** | ✅ bewiesen (100) |
-| **B** | carbonium **direkt schreiben** (C++, kein Lua) | ⚠️ **offen — das hier** |
-| **C** | Write sofort in `get_state` sichtbar (gleicher Basket, kein Cache) | ⚠️ hängt an B |
+| #     | Annahme                                                            | Status                   |
+| ----- | ------------------------------------------------------------------ | ------------------------ |
+| **A** | `get_state` liest carbonium **live**                               | ✅ bewiesen              |
+| **B** | carbonium **direkt schreiben** (C++, kein Lua)                     | ✅ **LIVE bewiesen**     |
+| **C** | Write sofort in `get_state` sichtbar (gleicher Basket, kein Cache) | ✅ bewiesen (curl + HUD) |
 
-**B zerfällt in:**
+**B im Detail (alle ✅, Stand 2026-09-13, Build 2.0.58485):**
 
-- **B1 — Funktion:** Kandidat `PlayerService::AddResourceAmount`
-  (RVA `0xF1E3D0`, `(unsigned int, UtfString const&, float, bool)`).
-  Alternativ einen `StringHash`-basierten Setter suchen (vermeidet `UtfString`).
-- **B2 — negativ = abziehen:** `AddResourceAmount(..., -10.0f, ...)` subtrahiert.
-- **B3 — Einheiten:** `float` in **Carbonium-Einheiten** (`10.0` = 10 Carbonium),
-  intern ×10⁶ → `10000000` (Basket ist fixed-point int64).
-- **B4 — `UtfString "carbonium"` konstruieren:** C++-ABI / SSO-Layout klären,
-  Referenz übergeben.
-- **B5 — `playerId`/`bool`:** `0` = Spieler 1; was macht das `bool`?
-- **B6 — Thread-Safety:** Aufruf vom Pipe-Thread (wie `ExecuteCommand`).
+- **B1 — Funktion:** `PlayerService::AddResourceAmount` RVA `0xF1E3D0`
+  (`bool (unsigned int, UtfString const&, float, bool)`) — Disasm + Live-Call
+  bestätigt. Der StringHash-Setter `ResourceBasket::SetResourceAmount(StringHash
+const&, ResourceValue)` existiert ebenfalls (PDB `-publics`), wurde aber NICHT
+  gebraucht — `AddResourceAmount` läuft sauber.
+- **B2 — negativ = abziehen:** ✅. `entry.value += amount`; negatives Ergebnis
+  wird auf 0 geklemmt (Disasm `0x1802d6890`). Live: `-10` → 110 → 100, `ret=true`.
+- **B3 — Einheiten:** ✅ `float` in Carbonium-Einheiten (`10.0` = 10 Carbonium).
+  Intern skaliert `AddResourceAmount` über eine `.data`-Globale:
+  `basket_delta = (int64)((float)scale * amount)`. `scale` = Laufzeitwert bei
+  RVA `0x4794210` (statischer Initialwert `0x03bde828`, zur Laufzeit `1000000`).
+  Die Bridge liest `scale` zur Laufzeit und rechnet `amount = raw/scale` —
+  damit ist die Einheiten-Frage robust gegen die Skala.
+- **B4 — `UtfString "carbonium"`:** ✅. Layout (aus Disasm): `data@+8`
+  (SSO wenn `capacity@+0x20 <= 15`), `size@+0x18`, `capacity@+0x20`; Offset `+0`
+  wird nie gelesen. SSO-Instanz (40 Byte) auf dem Stack gebaut, Referenz übergeben.
+- **B5 — `playerId`/`bool`:** ✅ `playerId = 0` (Spieler 1); `bool = true`
+  wird an den Broadcast/HUD-Sync durchgereicht (macht die Änderung sichtbar).
+- **B6 — Thread-Safety:** ✅ (empirisch). Aufruf im Pipe-Thread (wie
+  `ExecuteCommand`); positiver + negativer Call + HUD-Sync liefen stabil, kein
+  Crash.
+
+## LIVE-BEWEIS (2026-09-13)
+
+```
+POST /add_resource {"amount":"10"}   -> {"ok":true,"raw":10000000,"scale":1000000,"ret":true}
+get_state                            -> carbonium 100000000 -> 110000000 (+10)
+POST /add_resource {"amount":"-10"}  -> carbonium 110000000 -> 100000000 (-10)
+```
+
+Oszillations-Loop (1/s): carbonium 100 → 90 → … → 10 → 0 → 10 → 0 → …
+**in-game sichtbar bestätigt** (HUD pendelt 0 ↔ 10). Damit ist der bidirektionale
+Kanal vollständig: READ (`get_state`) + WRITE (`add_resource`) über denselben
+DLL-Kanal, ohne Lua/Log.
 
 ## Plan
 
 1. RE: `AddResourceAmount` disassemblieren (`tools/re/disasm.py`) + UtfString-Layout
-   + `SetResourceAmount`/StringHash-Setter via `llvm-pdbutil dump -publics`.
+   - `SetResourceAmount`/StringHash-Setter via `llvm-pdbutil dump -publics`.
 2. `add_resource <amount>` in `rbbridge.c` bauen (analog `get_state`), `pipe_bridge`
    um `POST /add_resource` erweitern.
 3. Loop live testen (curl-Loop: get_state + add_resource ±10/s).

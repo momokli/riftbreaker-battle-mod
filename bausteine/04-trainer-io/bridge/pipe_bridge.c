@@ -728,6 +728,59 @@ static void handle_get_state(SOCKET c)
     http_respond(c, 200, "OK", line);
 }
 
+/* POST /add_resource: fuehrt {"cmd":"add_resource","amount":"..."} auf der
+ * Pipe aus und liefert die add_resource_result-Zeile (symmetrisch zu /exec).
+ * amount ist ein JSON-STRING (z.B. {"amount":"-10"}), analog zu /exec. */
+static void handle_add_resource(SOCKET c, const char *body)
+{
+    char amount[64] = "";
+    char line[READ_BUF];
+    char payload[LINE_MAX];
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+    HANDLE h;
+
+    if (!json_get_string(body, "amount", amount, sizeof(amount))) {
+        blog("POST /add_resource ohne amount -> invalid_request");
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_request\"}");
+        return;
+    }
+
+    h = pipe_connect(2500);
+    if (h == INVALID_HANDLE_VALUE) {
+        blog("POST /add_resource: Pipe nicht erreichbar -> pipe_unavailable");
+        http_respond(c, 503, "Service Unavailable",
+                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+        return;
+    }
+
+    {
+        char esc[64 * 2];
+        json_escape(amount, esc, sizeof(esc));
+        snprintf(payload, sizeof(payload),
+                 "{\"cmd\":\"add_resource\",\"amount\":\"%s\"}\n", esc);
+    }
+
+    if (!pipe_write_all(h, payload)) {
+        CloseHandle(h);
+        http_respond(c, 500, "Internal Server Error",
+                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
+        return;
+    }
+
+    {
+        int rc = pipe_wait_line(h, "add_resource_result", NULL, timeout_ms,
+                                line, sizeof(line));
+        CloseHandle(h);
+        if (rc != 0) {
+            http_respond(c, 500, "Internal Server Error",
+                         "{\"ok\":false,\"reason\":\"timeout\"}");
+            return;
+        }
+    }
+    http_respond(c, 200, "OK", line);
+}
+
 static void handle_client(SOCKET c)
 {
     char *req = malloc(REQ_MAX + 1);
@@ -810,6 +863,16 @@ static void handle_client(SOCKET c)
             handle_probe(c);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/get_state") == 0) {
             handle_get_state(c);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/add_resource") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_add_resource(c, b);
+            free(b);
         } else {
             http_respond(c, 404, "Not Found",
                          "{\"ok\":false,\"reason\":\"not_found\"}");
