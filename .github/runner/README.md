@@ -17,7 +17,7 @@ MinGW) waren nirgends als Code versioniert.
 
 | Datei | Zweck |
 | --- | --- |
-| [`setup.sh`](setup.sh) | Idempotentes Setup: MinGW-w64, ccache, zip installieren; ccache als Compiler-Wrapper registrieren; Node/npm/Python verifizieren. |
+| [`setup.sh`](setup.sh) | Idempotentes, race-freies Setup: MinGW-w64, ccache, zip installieren; ccache als Compiler-Wrapper registrieren; Ansible-Venv (ansible-core + yamllint) und Rust-Toolchain provisionieren; Node/npm/Python verifizieren. |
 | [`README.md`](README.md) | Diese Doku (Reproduktion, Caches, offene Punkte). |
 
 ## Setup auf frischem Host (< 10 min)
@@ -34,6 +34,13 @@ ls -l /opt/ccache-rbbattle/bin
 
 `setup.sh` ist idempotent und kann beliebig oft laufen. Es entfernt bewusst
 **keine** sudoers-Regeln und macht keine Mount-/Runner-Registrierungs-Änderungen.
+
+Seit Issue #318 provisioniert es zusätzlich das **Ansible-Venv** und die
+**Rust-Toolchain** (unter `flock`, atomar) im `$HOME` des Runner-Users. Die
+planet-Jobs `boot-test`/`deploy-check` erzeugen diese Toolchains nicht mehr
+selbst, sondern verifizieren sie nur — zwei parallele Läufe können so nicht mehr
+im geteilten `$HOME` racen. Hintergrund, Audit und Kapazitätswerte:
+[`docs/ci-parallel-safety.md`](../../docs/ci-parallel-safety.md).
 
 ## Caches (warme Builds)
 
