@@ -1437,6 +1437,117 @@ static void dispatch_exec(HANDLE hPipe, const char *command)
               escaped);
 }
 
+/* Liest ein QWORD von addr, nur wenn die Region committet+lesbar ist.
+ * Rueckgabe 1 = gelesen, 0 = nicht lesbar (out bleibt unveraendert). */
+static int safe_read_u64(const void *addr, uint64_t *out) {
+  MEMORY_BASIC_INFORMATION mi;
+  if (!VirtualQuery(addr, &mi, sizeof(mi)))
+    return 0;
+  if (!is_readable_region(&mi))
+    return 0;
+  if ((uintptr_t)addr + sizeof(uint64_t) >
+      (uintptr_t)mi.BaseAddress + mi.RegionSize)
+    return 0;
+  memcpy(out, addr, sizeof(uint64_t));
+  return 1;
+}
+
+/* Dumpft n QWORDS ab addr als Hex-Array (eine JSON-Zeile). Sichere Reads:
+ * nicht-lesbare Woerter werden als null ausgegeben (kein Crash). */
+static void dump_qwords(HANDLE hPipe, const char *label, const void *addr,
+                        size_t n) {
+  char buf[RESP_BUF_SIZE];
+  size_t off = 0;
+  int w = snprintf(buf + off, sizeof(buf) - off,
+                   "{\"event\":\"probe_dump\",\"label\":\"%s\","
+                   "\"addr\":\"0x%llx\",\"qwords\":[",
+                   label, (unsigned long long)(uintptr_t)addr);
+  if (w < 0)
+    return;
+  off += (size_t)w;
+
+  for (size_t i = 0; i < n; i++) {
+    uint64_t v = 0;
+    safe_read_u64((const unsigned char *)addr + i * 8, &v);
+    if (off + 32 >= sizeof(buf))
+      break;
+    w = snprintf(buf + off, sizeof(buf) - off, "%s\"0x%llx\"", i ? "," : "",
+                 (unsigned long long)v);
+    if (w < 0)
+      return;
+    off += (size_t)w;
+  }
+  snprintf(buf + off, sizeof(buf) - off, "]}");
+  send_line(hPipe, "%s", buf);
+}
+
+/* Probe (RE #363): PlayerService-Kette live dumpen, um die Account-Struktur
+ * zu bestaetigen. Gibt Pointer + Speicher-Fenster als JSON aus. */
+static void probe_resources(HANDLE hPipe) {
+  const unsigned char *base = NULL;
+  size_t size = 0;
+  const char *via = NULL;
+  const unsigned char *execfn = NULL;
+
+  if (!resolve_module(&base, &size, &via, &execfn)) {
+    send_line(hPipe, "{\"event\":\"probe\",\"error\":\"no_module\"}");
+    return;
+  }
+
+  /* PlayerService-vftable RVA 0x2e8e910 (RE #363, build-konsistent). */
+  const unsigned char *vftable = base + 0x2e8e910;
+  const uint64_t needle = (uint64_t)(uintptr_t)vftable;
+  unsigned char *ps = NULL;
+  uintptr_t addr = 0;
+
+  for (;;) {
+    MEMORY_BASIC_INFORMATION mi;
+    if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
+      break;
+    uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
+    if (next <= addr)
+      break;
+    addr = next;
+    if (!is_readable_region(&mi))
+      continue;
+    const uint64_t *q = (const uint64_t *)mi.BaseAddress;
+    size_t nq = mi.RegionSize / sizeof(uint64_t);
+    for (size_t i = 0; i < nq; i++) {
+      if (q[i] == needle) {
+        ps = (unsigned char *)&q[i];
+        break;
+      }
+    }
+    if (ps)
+      break;
+  }
+
+  if (!ps) {
+    send_line(hPipe, "{\"event\":\"probe\",\"error\":\"no_playerservice\"}");
+    return;
+  }
+
+  uint64_t resource_system = 0;
+  safe_read_u64(ps + 8, &resource_system);
+  /* Container ist EMBEDDED bei resource_system+0x30 (lea, kein Deref) -
+   * im Disasm 0x180c60050 / 0x180f1e700 belegt. */
+  uint64_t container = resource_system ? resource_system + 0x30 : 0;
+
+  send_line(hPipe,
+            "{\"event\":\"probe\",\"playerservice\":\"0x%llx\","
+            "\"resource_system\":\"0x%llx\",\"container\":\"0x%llx\"}",
+            (unsigned long long)(uintptr_t)ps,
+            (unsigned long long)resource_system, (unsigned long long)container);
+
+  dump_qwords(hPipe, "playerservice", ps, 24);
+  if (resource_system)
+    dump_qwords(hPipe, "resource_system",
+                (const void *)(uintptr_t)resource_system, 24);
+  if (container)
+    dump_qwords(hPipe, "container", (const void *)(uintptr_t)container, 24);
+}
+
+
 /*
  * Verteilt eine empfangene Protokollzeile (ohne \n).
  * Unbekanntes/Nicht-JSON wird geloggt und (nur bei JSON-artigen Zeilen)
@@ -1475,6 +1586,11 @@ static void handle_line(HANDLE hPipe, const char *line)
             return;
         }
         dispatch_exec(hPipe, command);
+        return;
+    }
+
+    if (strcmp(cmd, "probe") == 0) {
+        probe_resources(hPipe);
         return;
     }
 
