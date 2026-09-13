@@ -1,0 +1,134 @@
+name: Deploy Check (local)
+
+# Rein lokaler Merge-Gate-Check (Issue #209/#306/#349): läuft planetfrei auf
+# einem GitHub-Hosted-Runner und bleibt damit IMMER grün. Ein planet-bedingter
+# `startup_failure` des Schwester-Workflows `deploy-check.yml` kann diesen
+# Required-Check nicht mehr mitreißen (Issue #349).
+#
+# Prüft:
+#   * yamllint über deploy/
+#   * Playbook-Syntax (site.yml + deploy-prod.yml, Issue #328/#329)
+#   * Deploy-Wiring + Provider-Unit-Tests (Issue #337)
+#   * Disk-Space-Gate-Selbsttest (Issue #310)
+#   * Compose-Templates rendern + `docker compose config`
+#
+# Der echte Host-Check (`ansible --check --diff` gegen planet) lebt weiter in
+# deploy-check.yml und ist nur noch informational (nicht required).
+
+# WICHTIG: PR-Trigger bewusst OHNE paths-Filter — ein pfad-gefilterter
+# Required-Check, der auf einem PR nicht startet, hinterlässt den Context
+# dauerhaft als „Expected". Läuft daher auf allen PRs (ohne deploy/-Bezug
+# trivial grün). Nur der push-Trigger bleibt pfad-gefiltert.
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - deploy/**
+      - tools/deploy-gate/**
+      - .github/workflows/deploy.yml
+      - .github/workflows/deploy-check.yml
+      - .github/workflows/deploy-check-local.yml
+  workflow_dispatch:
+
+# Least privilege: nur lesen.
+permissions:
+  contents: read
+
+jobs:
+  deploy-check-local:
+    # Rein lokale Checks (yamllint + Compose-Render + `docker compose config`)
+    # auf einem GitHub-Hosted-Runner — entlastet den planet-Runner (Issue #306).
+    name: deploy-check-local
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Fork-PR erkennen (Gate nur für Repo-eigene PRs)
+        id: gate
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ] \
+             && [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+            echo "Fork-PR — deploy-check-local wird übersprungen (nur Repo-eigene PRs)."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.skip != 'true'
+
+      # Statischer Wiring-Check + Provider-Tests (Issue #337, vormals #238):
+      # prueft den AKTUELLEN, gate-losen deploy.yml-Vertrag (push auf main,
+      # workflow_dispatch, SSH-Deploy-Step, permissions contents: read,
+      # concurrency cd-dev) plus die Provider-Unit-Tests (inkl. Negativ-Semantik).
+      # Das #238-Park-Gate ist mit e8f7783 bewusst aus deploy.yml entfernt; ob es
+      # wiederkommt (#238/#327), entscheidet dieser Check nicht. Read-only,
+      # keine Secrets, keine Prod-Aktion.
+      - name: Deploy-Wiring + Provider-Tests
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          python3 tools/deploy-gate/check_deploy_wiring.py
+          (
+            cd tools/deploy-gate
+            python3 -m unittest test_deploy_gate -v
+          )
+
+      # Hinweis (Issue #318): Dieser Job läuft auf einem GitHub-Hosted-Runner
+      # (frischer, ephemärer VM je Lauf) — $HOME ist NICHT zwischen Jobs
+      # geteilt, daher ist die einmalige Venv-Erstellung hier race-frei und
+      # bleibt bewusst lokal. Nur der self-hosted `deploy-check`-Job bezieht
+      # das Venv vom Host-Setup (.github/runner/setup.sh).
+      - name: Tooling bereitstellen (ansible-core + yamllint)
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          VENV="$HOME/.local/ansible-deploy-check"
+          if [ ! -x "$VENV/bin/ansible-playbook" ]; then
+            python3 -m venv "$VENV"
+            "$VENV/bin/pip" install --disable-pip-version-check \
+              "ansible-core==2.19.*" "yamllint==1.35.1"
+          fi
+          echo "$VENV/bin" >> "$GITHUB_PATH"
+          "$VENV/bin/ansible" --version
+          "$VENV/bin/yamllint" --version
+
+      - name: YAML-Lint (deploy/)
+        if: steps.gate.outputs.skip != 'true'
+        run: yamllint -c .yamllint deploy/
+
+      # Playbook-Syntax aller Inventar-Playbooks (Issue #328/#329): deckt das
+      # prod-Playbook deploy-prod.yml (+ prod-vars.yml) ab, das sonst in keinem
+      # Check läuft. --syntax-check parst nur, verbindet NICHT und entschlüsselt
+      # das Vault nicht (gegen deploy/inventory verifiziert).
+      - name: Playbook-Syntax (site.yml + deploy-prod.yml)
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          ansible-playbook -i deploy/inventory deploy/site.yml --syntax-check
+          ansible-playbook -i deploy/inventory deploy/deploy-prod.yml \
+            -e @deploy/prod-vars.yml --syntax-check
+
+      # Disk-Space-Gate Selbsttest (Issue #310): hermetisch (synthetische
+      # Mount-Facts, localhost) — prüft die ECHTE Preflight-Task-Datei. Bei zu
+      # wenig Platz MUSS der Lauf rot abbrechen (fail_msg "PLATZ-GATE"); der
+      # Positiv-Fall + die Konfigurierbarkeit der Schwelle laufen ebenfalls.
+      - name: "Disk-Space-Gate Selbsttest (Issue #310)"
+        if: steps.gate.outputs.skip != 'true'
+        run: bash deploy/tests/disk-gate/run.sh
+
+      - name: Compose-Templates rendern + `docker compose config`
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          RENDER_DIR="$(mktemp -d)"
+          RBBATTLE_RENDER_DIR="$RENDER_DIR" ansible-playbook deploy/check-render.yml
+          shopt -s nullglob
+          files=("$RENDER_DIR"/*.yml)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::Keine gerenderten Compose-Dateien gefunden."
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            echo "== docker compose config $(basename "$f") =="
+            docker compose -f "$f" config >/dev/null
+          done

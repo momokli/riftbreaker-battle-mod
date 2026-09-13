@@ -1,51 +1,35 @@
-name: Deploy Check
+name: Deploy Check (planet)
 
-# Merge-Gate, das den Deploy wirklich vorhersagt (Issue #209).
+# Echter Host-Check (Issue #209): `ansible-playbook --check --diff` gegen
+# planet, read-only, Vault wird NIE entschlüsselt. Läuft auf dem self-hosted
+# planet-Runner.
 #
-# Aufteilung (Issue #306): rein lokale Checks (yamllint über deploy/,
-# Playbook-Syntax, Compose-Templates rendern + `docker compose config`) laufen
-# auf einem GitHub-Hosted-Runner (ubuntu-latest) im Job `deploy-check-local` und
-# entlasten damit den planet-Runner. Nur der echte Host-Check
-# (`ansible-playbook --check --diff` gegen planet, read-only, Vault wird NIE
-# entschlüsselt) bleibt im Job `deploy-check` auf dem self-hosted Runner.
+# Seit Issue #349 ist dieser Check NON-BLOCKING: der lokale Required-Check ist
+# in einen eigenen Workflow (deploy-check-local.yml, ubuntu-latest) ausgelagert,
+# damit ein transienter `startup_failure` des planet-Runners nicht mehr den
+# Required-Context blockiert. Dieser Lauf bleibt als informationale Rückmeldung
+# („Image fehlt / Container-Name belegt / Pfad falsch") bestehen.
 #
-#   deploy-check-local (GH):  yamllint über deploy/, `--syntax-check` für
-#                             site.yml + deploy-prod.yml (prod-Playbook #328),
-#                             Compose-Templates rendern, jedes gerenderte
-#                             Compose-File durch `docker compose config`.
-#   deploy-check (planet):    ansible --check --diff gegen planet für den
-#                             Container-Stack (dedicated-server-image +
-#                             riftbreaker-server) und die Website-Rolle.
-#
-# Ziel: die Fehlerklasse „Image fehlt / Container-Name belegt / Pfad falsch"
-# wird im PR sichtbar, nicht erst nach dem Merge.
-#
-# Nur für PRs aus DIESEM Repo (keine Forks): der `deploy-check`-Lauf führt
-# PR-Code auf planet aus. Fork-PRs überspringen die Schritte (die Jobs bleiben
-# grün, damit der Required-Check „deploy-check" nicht als pending hängt).
+# Nur für PRs aus DIESEM Repo (keine Forks): der Lauf führt PR-Code auf planet
+# aus. Fork-PRs überspringen die Schritte (der Job bleibt grün).
 #
 # Voraussetzung (host-seitig, einmalig; siehe deploy/README.md):
 #   * Runner-User `runner` hat SSH-Zugriff als root auf planet (Alias `planet`).
 # Das Vault bleibt root-only und wird hier nicht gelesen — für den Check wird
 # ein Dummy-Vault in ein temporäres Inventar kopiert.
 
-# WICHTIG: Der PR-Trigger hat bewusst KEINEN paths-Filter — `deploy-check` ist
-# ein Required Status Check auf main; ein pfad-gefilterter Workflow, der auf
-# einem PR gar nicht startet, hinterlässt den Check dauerhaft als „Expected".
-# Der Job läuft daher auf allen PRs (bei PRs ohne deploy/-Bezug trivial grün).
-# Nur der push-Trigger bleibt pfad-gefiltert.
+# Kein paths-Filter auf PR (Check läuft auf allen PRs); nur push ist
+# pfad-gefiltert — deckungsgleich mit deploy-check-local.yml.
 on:
   pull_request:
   push:
     branches: [main]
     paths:
-      - 'deploy/**'
-      # Der Wiring-Check unten prueft deploy.yml + tools/deploy-gate: Aenderungen
-      # dort muessen den Check auf main ausloesen, sonst bleibt eine Divergenz wie
-      # in #337 (Checkout/Inputs/Gate-Step entfernt, Check blieb unbemerkt) still.
-      - 'tools/deploy-gate/**'
-      - '.github/workflows/deploy.yml'
-      - '.github/workflows/deploy-check.yml'
+      - deploy/**
+      - tools/deploy-gate/**
+      - .github/workflows/deploy.yml
+      - .github/workflows/deploy-check.yml
+      - .github/workflows/deploy-check-local.yml
   workflow_dispatch:
 
 # Least privilege: nur lesen.
@@ -53,105 +37,7 @@ permissions:
   contents: read
 
 jobs:
-  deploy-check-local:
-    # Rein lokale Checks (yamllint + Compose-Render + `docker compose config`)
-    # auf einem GitHub-Hosted-Runner — entlastet den planet-Runner (Issue #306).
-    name: deploy-check-local
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Fork-PR erkennen (Gate nur für Repo-eigene PRs)
-        id: gate
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" = "pull_request" ] \
-             && [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
-            echo "Fork-PR — deploy-check-local wird übersprungen (nur Repo-eigene PRs)."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - uses: actions/checkout@v4
-        if: steps.gate.outputs.skip != 'true'
-
-      # Statischer Wiring-Check + Provider-Tests (Issue #337, vormals #238):
-      # prueft den AKTUELLEN, gate-losen deploy.yml-Vertrag (push auf main,
-      # workflow_dispatch, SSH-Deploy-Step, permissions contents: read,
-      # concurrency cd-dev) plus die Provider-Unit-Tests (inkl. Negativ-Semantik).
-      # Das #238-Park-Gate ist mit e8f7783 bewusst aus deploy.yml entfernt; ob es
-      # wiederkommt (#238/#327), entscheidet dieser Check nicht. Read-only,
-      # keine Secrets, keine Prod-Aktion.
-      - name: Deploy-Wiring + Provider-Tests
-        if: steps.gate.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          python3 tools/deploy-gate/check_deploy_wiring.py
-          (
-            cd tools/deploy-gate
-            python3 -m unittest test_deploy_gate -v
-          )
-
-      # Hinweis (Issue #318): Dieser Job läuft auf einem GitHub-Hosted-Runner
-      # (frischer, ephemärer VM je Lauf) — $HOME ist NICHT zwischen Jobs
-      # geteilt, daher ist die einmalige Venv-Erstellung hier race-frei und
-      # bleibt bewusst lokal. Nur der self-hosted `deploy-check`-Job bezieht
-      # das Venv vom Host-Setup (.github/runner/setup.sh).
-      - name: Tooling bereitstellen (ansible-core + yamllint)
-        if: steps.gate.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          VENV="$HOME/.local/ansible-deploy-check"
-          if [ ! -x "$VENV/bin/ansible-playbook" ]; then
-            python3 -m venv "$VENV"
-            "$VENV/bin/pip" install --disable-pip-version-check \
-              "ansible-core==2.19.*" "yamllint==1.35.1"
-          fi
-          echo "$VENV/bin" >> "$GITHUB_PATH"
-          "$VENV/bin/ansible" --version
-          "$VENV/bin/yamllint" --version
-
-      - name: YAML-Lint (deploy/)
-        if: steps.gate.outputs.skip != 'true'
-        run: yamllint -c .yamllint deploy/
-
-      # Playbook-Syntax aller Inventar-Playbooks (Issue #328/#329): deckt das
-      # prod-Playbook deploy-prod.yml (+ prod-vars.yml) ab, das sonst in keinem
-      # Check läuft. --syntax-check parst nur, verbindet NICHT und entschlüsselt
-      # das Vault nicht (gegen deploy/inventory verifiziert).
-      - name: Playbook-Syntax (site.yml + deploy-prod.yml)
-        if: steps.gate.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          ansible-playbook -i deploy/inventory deploy/site.yml --syntax-check
-          ansible-playbook -i deploy/inventory deploy/deploy-prod.yml \
-            -e @deploy/prod-vars.yml --syntax-check
-
-      # Disk-Space-Gate Selbsttest (Issue #310): hermetisch (synthetische
-      # Mount-Facts, localhost) — prüft die ECHTE Preflight-Task-Datei. Bei zu
-      # wenig Platz MUSS der Lauf rot abbrechen (fail_msg "PLATZ-GATE"); der
-      # Positiv-Fall + die Konfigurierbarkeit der Schwelle laufen ebenfalls.
-      - name: "Disk-Space-Gate Selbsttest (Issue #310)"
-        if: steps.gate.outputs.skip != 'true'
-        run: bash deploy/tests/disk-gate/run.sh
-
-      - name: Compose-Templates rendern + `docker compose config`
-        if: steps.gate.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          RENDER_DIR="$(mktemp -d)"
-          RBBATTLE_RENDER_DIR="$RENDER_DIR" ansible-playbook deploy/check-render.yml
-          shopt -s nullglob
-          files=("$RENDER_DIR"/*.yml)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "::error::Keine gerenderten Compose-Dateien gefunden."
-            exit 1
-          fi
-          for f in "${files[@]}"; do
-            echo "== docker compose config $(basename "$f") =="
-            docker compose -f "$f" config >/dev/null
-          done
-
   deploy-check:
-    # Dieser Job-Name IST der Required-Check-Context in der Branch Protection.
     name: deploy-check
     runs-on: [self-hosted, planet]
     timeout-minutes: 15
