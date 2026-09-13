@@ -1481,6 +1481,47 @@ static void dump_qwords(HANDLE hPipe, const char *label, const void *addr,
   send_line(hPipe, "%s", buf);
 }
 
+/* Scannt lesbare Regionen nach einem 32-bit-Wert (z.B. carbonium-Hash
+ * 0x659cc791) und dumpft Treffer + den Wert bei +8 (ResourceValue). */
+static void scan_hash(HANDLE hPipe, uint32_t needle, int max_hits) {
+  uintptr_t addr = 0;
+  int hits = 0;
+
+  for (;;) {
+    MEMORY_BASIC_INFORMATION mi;
+    if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
+      break;
+    uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
+    if (next <= addr)
+      break;
+    addr = next;
+    if (!is_readable_region(&mi))
+      continue;
+
+    const uint32_t *p = (const uint32_t *)mi.BaseAddress;
+    size_t n = mi.RegionSize / sizeof(uint32_t);
+    for (size_t i = 0; i < n; i++) {
+      if (p[i] == needle) {
+        const unsigned char *e = (const unsigned char *)&p[i];
+        uint64_t val = 0;
+        safe_read_u64(e + 8, &val);
+        uint64_t prev = 0, nxt = 0;
+        safe_read_u64(e - 0x10, &prev);
+        safe_read_u64(e + 0x10, &nxt);
+        send_line(hPipe,
+                  "{\"event\":\"scan_hit\",\"hash\":\"0x%08x\","
+                  "\"addr\":\"0x%08x\",\"value\":%llu,"
+                  "\"prev\":%llu,\"next\":%llu}",
+                  needle, (unsigned)(uintptr_t)e,
+                  (unsigned long long)val,
+                  (unsigned long long)prev, (unsigned long long)nxt);
+        if (++hits >= max_hits)
+          return;
+      }
+    }
+  }
+}
+
 /* Probe (RE #363): PlayerService-Kette live dumpen, um die Account-Struktur
  * zu bestaetigen. Gibt Pointer + Speicher-Fenster als JSON aus. */
 static void probe_resources(HANDLE hPipe) {
@@ -1545,6 +1586,9 @@ static void probe_resources(HANDLE hPipe) {
                 (const void *)(uintptr_t)resource_system, 24);
   if (container)
     dump_qwords(hPipe, "container", (const void *)(uintptr_t)container, 24);
+
+  /* carbonium-Hash scannen: findet die Basket-Entries direkt. */
+  scan_hash(hPipe, 0x659cc791, 24);
 }
 
 
