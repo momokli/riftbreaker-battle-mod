@@ -87,9 +87,18 @@ bei 6 IDs** — je neue ID ~**1,56 GB unique** (`docker system df -v`).
      — auch gestoppte Container),
    - der **aktuelle Deploy-Tag** (`RB_PROTECTED_TAGS` = `dedicated_server_image`),
    - die **letzten 2 Rollback-Tags** (`image_retention_rollback_tags`).
-4. Pro **von einem Container benutzter Image-ID** überlebt immer mindestens ein
-   Tag — ein benutztes Image wird nie untagged oder löschbar. Vor jedem `rmi` prüft
-   ein letzter Guard die Container-Referenzen erneut.
+4. Pro Kandidat prüft ein Guard vor jedem `rmi` per
+   `docker ps -aq --filter ancestor=<repo>:<tag>`, ob ein (auch gestoppter)
+   Container dieses Image benutzt → dann bleibt der Tag erhalten; ein benutztes
+   Image wird nie untagged oder löschbar. Der Filter löst die Referenz zur
+   Image-ID auf und greift daher **auch**, wenn ein Container aus einer nackten
+   Image-ID gestartet wurde (`Config.Image` ist dann die kurze ID, kein
+   `repo:tag`). Zusätzlich prüft der Guard die exakte `Config.Image`-Gleichheit.
+
+> **Hinweis:** `RB_ROLLBACK_TAGS` zählt **Tags**, nicht distinkte Image-IDs.
+> Trägt eine ID mehrere Tags, können nach dem Lauf weniger als N verschiedene
+> Images als Rollback übrig bleiben — dafür ist jedes benutzte Image garantiert
+> getaggt.
 
 **Rollback geht nach dem Cleanup noch:** die letzten 2 Tags bleiben als
 vollständige Images vorhanden und sind mit `docker image inspect` prüfbar.
@@ -99,8 +108,10 @@ vollständige Images vorhanden und sind mit `docker image inspect` prüfbar.
 Das Skript kann ohne Änderung zeigen, was es täte:
 
 ```bash
-# Auf planet, read-only: nichts wird entfernt.
-sudo RB_IMAGE_RETENTION_LOG=/dev/stdout /usr/local/bin/rbmods-image-retention.sh --dry-run
+# Auf planet, read-only: nichts wird entfernt. Die Zeilen erscheinen auf
+# stdout; RB_IMAGE_RETENTION_LOG nur setzen, wenn zusaetzlich in eine DATEI
+# geschrieben werden soll (kein /dev/stdout — `>>` scheitert ohne regulaere Datei).
+sudo /usr/local/bin/rbmods-image-retention.sh --dry-run
 
 # Zähler vorher/nachher:
 docker image ls rb-dedicated | wc -l

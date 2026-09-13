@@ -17,12 +17,21 @@
 # Alles aeltere wird per `docker rmi <repo>:<tag>` entfernt.
 #
 # Sicherheitsleitplanken:
-#   * Pro von einem Container benutzter Image-ID bleibt IMMER mindestens ein
-#     Tag erhalten -> ein benutztes Image wird nie untagged/loeschbar.
-#   * Ein letzter Guard prueft vor jedem `rmi` erneut, ob ein (auch gestoppter)
-#     Container genau diesen Tag referenziert.
+#   * Vor jedem `rmi` prueft ein Guard per `docker ps -aq --filter ancestor=<ref>`,
+#     ob ein (auch gestoppter) Container dieses Image benutzt -> dann bleibt der
+#     Tag erhalten; ein benutztes Image wird nie untagged/loeschbar. Der Filter
+#     loest die Referenz zur Image-ID auf und greift daher AUCH, wenn ein
+#     Container aus einer nackten Image-ID gestartet wurde (Config.Image ist
+#     dann die kurze ID, kein `repo:tag`) — die reine Config.Image-Gleichheit
+#     versagt dort.
+#   * Ein letzter Guard prueft zusaetzlich vor jedem `rmi`, ob ein (auch
+#     gestoppter) Container genau diesen Tag als Config.Image referenziert.
 #   * Ohne Docker / ohne Tags = No-Op (Exit 0). Idempotent: ein zweiter Lauf
 #     entfernt nichts mehr.
+#
+# Hinweis: RB_ROLLBACK_TAGS zaehlt TAGS, nicht distinkte Image-IDs. Traegt eine
+# ID mehrere Tags, koennen nach dem Lauf weniger als N verschiedene Images als
+# Rollback uebrig bleiben (dafuer ist jedes benutzte Image garantiert getaggt).
 #
 # Reihenfolge: `docker image ls <repo>` listet neueste zuerst (Docker-Default)
 # — die "letzten N" Rollback-Tags sind damit die N obersten Kandidaten.
@@ -109,10 +118,10 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 0
 fi
 
-# Container-Sichten EINMAL sammeln (read-only): Referenz (Config.Image) und
-# Image-ID je Container, auch gestoppte (docker ps -a).
+# Container-Referenzen (Config.Image) EINMAL sammeln (read-only), auch
+# gestoppte (docker ps -a). Die Image-ID-Sicht (`{{.ImageID}}`) gibt es in
+# Docker 27.3.1 nicht; der Benutzungs-Check laeuft per ancestor-Filter.
 mapfile -t CONTAINER_IMAGE_REFS < <(docker ps -a --format '{{.Image}}' 2>/dev/null || true)
-mapfile -t CONTAINER_IMAGE_IDS < <(docker ps -a --format '{{.ImageID}}' 2>/dev/null || true)
 
 TOTAL_REMOVED=0
 
@@ -123,14 +132,11 @@ for repo in "${REPOS[@]}"; do
   mapfile -t rows < <(docker image ls --format '{{.Tag}}|{{.ID}}' "$repo" 2>/dev/null || true)
 
   ALL_TAGS=()
-  declare -A TAG_ID=()
   for row in "${rows[@]}"; do
     tag="${row%%|*}"
-    id="${row#*|}"
     [ -n "$tag" ] || continue
     [ "$tag" = "<none>" ] && continue
     ALL_TAGS+=("$tag")
-    TAG_ID["$tag"]="$id"
   done
 
   if [ "${#ALL_TAGS[@]}" -eq 0 ]; then
@@ -153,26 +159,13 @@ for repo in "${REPOS[@]}"; do
     esac
   done
 
-  # Image-IDs, die ein Container benutzt (auch gestoppt).
-  declare -A IN_USE_ID=()
-  for id in "${CONTAINER_IMAGE_IDS[@]}"; do
-    [ -n "$id" ] && IN_USE_ID["$id"]=1
-  done
-
-  # (c) pro benutzter Image-ID mindestens EINEN Tag retten: das Image darf
-  #     nicht untagged werden. Neuester Tag zuerst -> erster Treffer gewinnt.
-  declare -A ID_HAS_PROTECTED=()
-  for tag in "${!IS_PROTECTED[@]}"; do
-    id="${TAG_ID[$tag]:-}"
-    [ -n "$id" ] && ID_HAS_PROTECTED["$id"]=1
-  done
-  for tag in "${ALL_TAGS[@]}"; do
-    id="${TAG_ID[$tag]}"
-    if [ -n "${IN_USE_ID[$id]:-}" ] && [ -z "${ID_HAS_PROTECTED[$id]:-}" ]; then
-      IS_PROTECTED["$tag"]=1
-      ID_HAS_PROTECTED["$id"]=1
-    fi
-  done
+  # (c) "pro benutzter Image-ID mindestens einen Tag retten" ist NICHT mehr
+  #     ueber eine Container-Image-ID-Sicht umgesetzt (das Template-Feld
+  #     `{{.ImageID}}` existiert in Docker 27.3.1 nicht und liefert nur einen
+  #     verschluckten Fehler). Stattdessen prueft der Guard im Entfernen-Loop
+  #     je Kandidat `docker ps -aq --filter ancestor=<ref>` (siehe unten) — das
+  #     loest die Referenz zur Image-ID auf und deckt auch den Fall "Container
+  #     aus nackter Image-ID gestartet" ab.
 
   # --- Kandidaten (nicht geschuetztes), neueste zuerst ----------------------
   OTHERS=()
@@ -192,11 +185,20 @@ for repo in "${REPOS[@]}"; do
 
   for tag in "${REMOVE[@]}"; do
     ref="${repo}:${tag}"
-    # Letzter Guard direkt vor dem Entfernen: referenziert ein (auch
-    # gestoppter) Container genau diesen Tag? Dann nicht anfassen.
+    # Guard 1 (Config.Image-Gleichheit) direkt vor dem Entfernen: referenziert
+    # ein (auch gestoppter) Container genau diesen Tag? Dann nicht anfassen.
     if [ "${#CONTAINER_IMAGE_REFS[@]}" -gt 0 ] \
        && printf '%s\n' "${CONTAINER_IMAGE_REFS[@]}" | grep -Fxq "$ref"; then
       log "behalte (von Container referenziert): $ref"
+      continue
+    fi
+    # Guard 2 (ancestor-Filter): benutzt ein (auch gestoppter) Container dieses Image?
+    # `--filter ancestor=<ref>` loest die Referenz zur Image-ID auf und greift
+    # damit auch, wenn ein Container aus einer nackten Image-ID gestartet wurde
+    # (Config.Image = kurze ID) — so bleibt pro benutzter Image-ID mindestens
+    # ein Tag erhalten (kein Untag).
+    if [ -n "$(docker ps -aq --filter "ancestor=${ref}" 2>/dev/null || true)" ]; then
+      log "behalte (Image in Benutzung): $ref"
       continue
     fi
     if [ "$DRY_RUN" = 1 ]; then
