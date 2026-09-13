@@ -593,6 +593,103 @@ static void handle_exec(SOCKET c, const char *body)
 }
 
 /* Liest einen Request (Header + Body) und beantwortet ihn. */
+
+/* POST /probe: fuehrt {"cmd":"probe"} auf der Pipe aus und sammelt alle
+ * Antwortzeilen (event: probe + probe_dump*) als events-Array ein. */
+static void handle_probe(SOCKET c)
+{
+    char results[RESP_MAX];
+    size_t off = 0;
+    int nlines = 0;
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+    HANDLE h = pipe_connect(2500);
+
+    if (h == INVALID_HANDLE_VALUE) {
+        blog("POST /probe: Pipe nicht erreichbar -> pipe_unavailable");
+        http_respond(c, 503, "Service Unavailable",
+                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+        return;
+    }
+
+    if (!pipe_write_all(h, "{\"cmd\":\"probe\"}\n")) {
+        CloseHandle(h);
+        http_respond(c, 500, "Internal Server Error",
+                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
+        return;
+    }
+
+    {
+        char buf[READ_BUF];
+        size_t n = 0;
+        DWORD deadline = GetTickCount() + (DWORD)timeout_ms;
+        int got_probe = 0;
+
+        off += (size_t)snprintf(results + off, sizeof(results) - off, "[");
+        for (;;) {
+            DWORD avail = 0;
+            if (!PeekNamedPipe(h, NULL, 0, NULL, &avail, NULL))
+                break;
+            if (avail > 0) {
+                char chunk[4096];
+                DWORD rd = 0;
+                DWORD want = avail < (DWORD)sizeof(chunk) ? avail : (DWORD)sizeof(chunk);
+                if (!ReadFile(h, chunk, want, &rd, NULL) || rd == 0)
+                    break;
+                if (n + rd > sizeof(buf) - 1)
+                    n = 0;
+                memcpy(buf + n, chunk, rd);
+                n += rd;
+                {
+                    size_t start = 0;
+                    size_t i;
+                    for (i = 0; i < n; i++) {
+                        if (buf[i] == '\n') {
+                            char *line = buf + start;
+                            size_t len;
+                            char ev[64] = "";
+                            buf[i] = '\0';
+                            len = strlen(line);
+                            while (len > 0 && line[len - 1] == '\r')
+                                line[--len] = '\0';
+                            if (json_get_string(line, "event", ev, sizeof(ev)) &&
+                                (strcmp(ev, "probe") == 0 ||
+                                 strcmp(ev, "probe_dump") == 0 ||
+                                 strcmp(ev, "error") == 0)) {
+                                if (strcmp(ev, "probe") == 0)
+                                    got_probe = 1;
+                                if (off + len + 4 < sizeof(results)) {
+                                    off += (size_t)snprintf(
+                                        results + off, sizeof(results) - off,
+                                        "%s%s", nlines ? "," : "", line);
+                                    nlines++;
+                                }
+                            }
+                            start = i + 1;
+                        }
+                    }
+                    if (start > 0) {
+                        memmove(buf, buf + start, n - start);
+                        n -= start;
+                    }
+                }
+            } else if (got_probe) {
+                break;
+            }
+            if (deadline_passed(deadline))
+                break;
+            Sleep(10);
+        }
+        off += (size_t)snprintf(results + off, sizeof(results) - off, "]");
+    }
+    CloseHandle(h);
+
+    {
+        char resp[RESP_MAX];
+        snprintf(resp, sizeof(resp), "{\"ok\":true,\"events\":%s}", results);
+        http_respond(c, 200, "OK", resp);
+    }
+}
+
 static void handle_client(SOCKET c)
 {
     char *req = malloc(REQ_MAX + 1);
@@ -671,6 +768,8 @@ static void handle_client(SOCKET c)
             b[body_len] = '\0';
             handle_exec(c, b);
             free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/probe") == 0) {
+            handle_probe(c);
         } else {
             http_respond(c, 404, "Not Found",
                          "{\"ok\":false,\"reason\":\"not_found\"}");
