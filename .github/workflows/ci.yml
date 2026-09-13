@@ -66,6 +66,9 @@ jobs:
       - name: Unit-Test Session-Recorder (Issue #280)
         working-directory: tools/session-recorder
         run: python3 -m unittest test_session_recorder -v
+      - name: Unit-Test Referee-Egress (Issue #358)
+        working-directory: tools/referee-egress
+        run: python3 -m unittest test_referee_egress -v
       - name: Lua Static Tests (fengari + luaparse, Issue #28)
         working-directory: tests/lua-static
         run: npm ci && npm test
