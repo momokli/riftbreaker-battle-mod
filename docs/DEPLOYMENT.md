@@ -243,13 +243,20 @@ forced command (`deploy/deploy-ssh.sh`) validiert die SHA, macht
 (enges sudoers). Kein Token, kein Polling. Installation/Migration:
 `deploy/README.md` → „CD: SSH-Deploy".
 
-Topologie (Momo-Entscheidung, 2026-09-10): **EIN** Server auf `:6321` statt
-Steam-/Non-Steam-Dualität; ein Direct-IP-Server (`disable_steam "1"`) deckt
-beide Stores ab. Der **Tag→prod-Kanal ist on hold** (vorerst gestrichen):
+Topologie (Stand Issue #328): **zwei** Instanzen, ein Dedi-Port. **DEV** läuft
+rolling auf `:6321` (dieser CD-Workflow, `deploy/site.yml`); **PROD** ist eine
+koexistierende zweite Instanz auf `:6322`, öffentlich erreichbar über den
+**Satellite-Relay** (eigene IPv4, inbound `:6321` → DNAT → planet `:6322`;
+`deploy/deploy-prod.yml` + `prod-vars.yml`). Ein Direct-IP-Server
+(`disable_steam "1"`) deckt beide Stores ab; der Client ist effektiv auf Port
+`:6321` hardgewired, daher der zweite öffentliche Zugang über eine zweite
+**Adresse** (den Satellite) statt eines zweiten Ports.
+
+Der **Tag→prod-Kanal ist weiterhin nicht verdrahtet** (Follow-up):
 `tags: ['v*']` sind seit Issue #209 **reine Marker** (kein Tag-Trigger, keine
-GitHub-Releases, keine prod-Umgebung im Workflow). Reaktiviert wird der Kanal,
-sobald ein **zweites Deploy-Target** existiert — aktuell gibt es genau EINEN
-Server (planet, :6321). Veröffentlichter Download ist der deployte Stand
+GitHub-Releases, keine prod-Umgebung im Workflow). Das zweite Deploy-Target
+existiert seit #328 (`deploy-prod.yml`) — der Tag-Trigger darauf wird als eigenes
+Folge-Issue angeschlossen. Veröffentlichter Download ist der deployte Stand
 `https://rift.projectmellon.de/mods/rbbattle.zip`.
 
 Der HTTP-Hook ist seit 2026-09-11 durch den SSH-Deploy abgelöst (Issue #235);

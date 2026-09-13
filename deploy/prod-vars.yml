@@ -1,0 +1,32 @@
+---
+# Prod-Instanz-Overrides (Issue #328) — zweiter Dedicated-Server auf planet,
+# öffentlich erreichbar über den Satellite-Relay (satellite:6321 -> planet:6322).
+#
+# Analog deploy/test-vars.yml (Boot-Test-Instanz). Wird nur von
+# deploy/deploy-prod.yml via -e @deploy/prod-vars.yml benutzt.
+#
+# Prod läuft KOEXISTIEREND mit dev (main, :6321): eigene Container-/Port-/
+# Pfad-/Volume-Namen, kein Clash. Das Einfrieren auf einen Git-Tag
+# (Tag-Deployment) ist Follow-up — hier wird der Image-Tag wie dev aus dem
+# Checkout-SHA abgeleitet.
+
+# Eigene Container-/Port-Namen (dev = 6321 bleibt unberührt).
+riftbreaker_server_container: riftbreaker-dedicated-prod
+riftbreaker_server_port_udp: 6322
+
+# Eigener Game-Stand + Mod (wird im Tag-Workflow, Follow-up, eingefroren).
+riftbreaker_game_dir: /srv/rbgame-prod
+riftbreaker_mod_dir: /srv/rbgame-prod/mods/rbbattle
+riftbreaker_backup_dir: /srv/rbgame-prod-backups
+riftbreaker_deploy_dir: /opt/rbmods/compose/riftbreaker-dedicated-prod
+riftbreaker_config_dir: /opt/rbmods/compose/riftbreaker-dedicated-prod/config
+
+# Eigene persistente Volumes (Wine-Prefix + Saves).
+riftbreaker_wine_volume: rb-wine-prod
+riftbreaker_saves_volume: rb-saves-prod
+
+# IO-Bridge isoliert von dev (9001) — sonst Kollision auf 127.0.0.1.
+riftbreaker_bridge_port: 9002
+
+# Content kommt per Sync aus dem kanonischen Cache (wie dev).
+riftbreaker_content_mode: sync

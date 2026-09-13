@@ -3,15 +3,16 @@ name: Deploy Check
 # Merge-Gate, das den Deploy wirklich vorhersagt (Issue #209).
 #
 # Aufteilung (Issue #306): rein lokale Checks (yamllint über deploy/,
-# Compose-Templates rendern + `docker compose config`) laufen auf einem
-# GitHub-Hosted-Runner (ubuntu-latest) im Job `deploy-check-local` und
+# Playbook-Syntax, Compose-Templates rendern + `docker compose config`) laufen
+# auf einem GitHub-Hosted-Runner (ubuntu-latest) im Job `deploy-check-local` und
 # entlasten damit den planet-Runner. Nur der echte Host-Check
 # (`ansible-playbook --check --diff` gegen planet, read-only, Vault wird NIE
 # entschlüsselt) bleibt im Job `deploy-check` auf dem self-hosted Runner.
 #
-#   deploy-check-local (GH):  yamllint über deploy/, Compose-Templates rendern,
-#                             jedes gerenderte Compose-File durch
-#                             `docker compose config`.
+#   deploy-check-local (GH):  yamllint über deploy/, `--syntax-check` für
+#                             site.yml + deploy-prod.yml (prod-Playbook #328),
+#                             Compose-Templates rendern, jedes gerenderte
+#                             Compose-File durch `docker compose config`.
 #   deploy-check (planet):    ansible --check --diff gegen planet für den
 #                             Container-Stack (dedicated-server-image +
 #                             riftbreaker-server) und die Website-Rolle.
@@ -111,6 +112,18 @@ jobs:
       - name: YAML-Lint (deploy/)
         if: steps.gate.outputs.skip != 'true'
         run: yamllint -c .yamllint deploy/
+
+      # Playbook-Syntax aller Inventar-Playbooks (Issue #328/#329): deckt das
+      # prod-Playbook deploy-prod.yml (+ prod-vars.yml) ab, das sonst in keinem
+      # Check läuft. --syntax-check parst nur, verbindet NICHT und entschlüsselt
+      # das Vault nicht (gegen deploy/inventory verifiziert).
+      - name: Playbook-Syntax (site.yml + deploy-prod.yml)
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          ansible-playbook -i deploy/inventory deploy/site.yml --syntax-check
+          ansible-playbook -i deploy/inventory deploy/deploy-prod.yml \
+            -e @deploy/prod-vars.yml --syntax-check
 
       # Disk-Space-Gate Selbsttest (Issue #310): hermetisch (synthetische
       # Mount-Facts, localhost) — prüft die ECHTE Preflight-Task-Datei. Bei zu
