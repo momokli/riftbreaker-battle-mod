@@ -5,7 +5,8 @@ Jeder Baustein kapselt **genau eine** Fähigkeit aus dem gemergten Spike/Trainer
 jede Komponente einzeln validieren, bevor sie in den finalen Mod einfließt.
 
 > Herkunft: Bausteine sind **abgeleitet** aus `mod/` (Spike: Skeleton + Experimente
-> A/B/C) und `trainer/` (Harness v0), nicht neu erfunden. Abweichungen sind nur
+> A/B/C) und dem Trainer-Harness v0 (C-Quellen kanonisch in
+> `bausteine/04-trainer-io/`), nicht neu erfunden. Abweichungen sind nur
 > Kürzungen/Isolation, keine neuen API-Aufrufe.
 
 ## Index

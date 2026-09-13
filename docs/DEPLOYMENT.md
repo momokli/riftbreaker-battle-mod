@@ -16,6 +16,7 @@
 | Website | planet | statics + **eigener** Caddy (`rift-caddy`, plain HTTP) hinter `mellon-caddy` | 443 → 127.0.0.1:8787 | Landing `/` · `/connectivity.html` · `/solo.html` · `/status.json` · Proxy `/tournament/*` → tournament-server |
 | Mod-Download | planet | statics (Caddy) | 443 | `rbbattle.zip` (Paketierung + md5-Parität) |
 | rbmods-probe.timer | planet | systemd | — | Connectivity-Checks alle 2 Min → `status.json` |
+| rbmods-host-hygiene.timer | planet | systemd | — | wöchentlich dangling Docker-Images aufräumen (`docker image prune`, **kein** `-a`; Issue #308) |
 | rbbridge | in Mod-Containern | Prozess | — | Command-Injection (`exec_cmd_client`, Argument IMMER als EIN gequotierter String) |
 
 ## Kanonische Landing
@@ -55,6 +56,11 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
    „Website-Pfad“ unten.
 7. **probe-timer** — systemd-Timer für `scripts/probe_servers.sh` →
    `status.json`.
+8. **host-hygiene** — wöchentlicher systemd-Timer (Issue #308): entfernt
+   dangling Docker-Images (`docker image prune`, **kein** `-a`; der getaggte
+   Rollback-Stand bleibt erhalten). Installiert `scripts/host_hygiene.sh` +
+   Unit/Timer; automatische Variante der manuellen Aufräum-Befehle in
+   [`SERVER_SIZING.md`](SERVER_SIZING.md).
 
 Grundsätze:
 
@@ -62,6 +68,8 @@ Grundsätze:
 - **Deploy nur via Playbook** —
   `ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass`.
 - **Rollback** = vorherige `rbbattle.zip` / vorheriges Binary wieder einspielen.
+  Für ein **Image**-Rollback bleibt das getaggte `rb-dedicated:<alte-sha>`
+  erhalten — die Rolle `host-hygiene` entfernt nur dangling Images (#308).
 
 ## Website-Pfad — eigener Rift-Caddy + EIN Host-Eintrag (Issue #322)
 
@@ -185,6 +193,43 @@ python3 tools/mods-guard/check_mods_dir.py /srv/rbgame/mods
 ```
 
 Siehe [`tools/mods-guard/`](../tools/mods-guard/README.md).
+
+## Disk-Space-Gate — Deploy-Bremse vor voller Platte (Issue #310)
+
+planet baut, sichert und deployt auf **derselben Platte** (`/dev/md2`, 904 GB),
+die der Stack vollschreibt. Läuft sie voll, kann sich der Deploy **nicht mehr
+selbst herausrollen**: Image-Build, Zip-Kopie und Backup-Tarball brauchen selbst
+Platz. Deshalb prüft ein **Preflight** den freien Platz auf `/` **bevor**
+`dedicated-server-image` baut und **bevor** der Mod-Backup-Tarball entsteht.
+
+- **Task:** `deploy/roles/riftbreaker-server/tasks/disk-preflight.yml` —
+  `assert` auf den Fact `ansible_mounts` (read-only → `--check`-fest, ändert
+  nichts).
+- **Aufruf:** als `include_role … tasks_from: disk-preflight` in den
+  `pre_tasks` von `deploy/site.yml` **und** `deploy/test-deploy.yml` — also
+  **vor** den Rollen (nicht innerhalb der Rolle, die erst nach dem Image-Build
+  läuft). Läuft damit auch unter `--tags server,website` (deploy-check).
+- **Schwelle konfigurierbar:** `riftbreaker_disk_min_free_gb` (Default **10** GB),
+  Mount via `riftbreaker_disk_mount` (Default `/`). Allein übersteuern, z. B.
+  `-e riftbreaker_disk_min_free_gb=20`.
+- **Abbruch:** mit klarer `fail_msg` (nennt geforderten **und** tatsächlichen
+  freien Platz + nächsten Schritt: erst aufräumen, siehe #301, dann erneut
+  deployen).
+
+Das Gate ist ein **Not-Aus**, kein Ersatz fürs Aufräumen: erst Sichtbarkeit
+(`disk_pct` in `status.json`), dann Gate, plus Timer/Automatik — beides gehört
+zusammen (#301).
+
+**Selbsttest (hermetisch, ohne Host/Prod-Zugriff):**
+
+```bash
+bash deploy/tests/disk-gate/run.sh
+```
+
+Er injiziert synthetische `ansible_mounts` (100 GB frei → läuft durch, 1 GB frei
+→ Abbruch mit `PLATZ-GATE`, Schwelle 0 → durch) und ruft die **echte**
+Preflight-Task-Datei auf. Läuft zusätzlich in `deploy-check-local` auf dem
+GitHub-Hosted-Runner.
 
 ## Continuous Deploy (CD) — Issue #91
 

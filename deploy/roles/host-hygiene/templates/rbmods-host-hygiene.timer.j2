@@ -1,0 +1,11 @@
+[Unit]
+Description=RIFT BATTLE Host-Hygiene ({{ host_hygiene_oncalendar }}, Issue #308)
+
+[Timer]
+OnCalendar={{ host_hygiene_oncalendar }}
+Persistent=true
+RandomizedDelaySec=30min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

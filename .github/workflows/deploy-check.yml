@@ -125,6 +125,14 @@ jobs:
           ansible-playbook -i deploy/inventory deploy/deploy-prod.yml \
             -e @deploy/prod-vars.yml --syntax-check
 
+      # Disk-Space-Gate Selbsttest (Issue #310): hermetisch (synthetische
+      # Mount-Facts, localhost) — prüft die ECHTE Preflight-Task-Datei. Bei zu
+      # wenig Platz MUSS der Lauf rot abbrechen (fail_msg "PLATZ-GATE"); der
+      # Positiv-Fall + die Konfigurierbarkeit der Schwelle laufen ebenfalls.
+      - name: "Disk-Space-Gate Selbsttest (Issue #310)"
+        if: steps.gate.outputs.skip != 'true'
+        run: bash deploy/tests/disk-gate/run.sh
+
       - name: Compose-Templates rendern + `docker compose config`
         if: steps.gate.outputs.skip != 'true'
         run: |
