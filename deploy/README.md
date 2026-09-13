@@ -79,7 +79,7 @@ ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
 
 Reihenfolge der Rollen (site.yml): `mods-zip` → `dedicated-server-image` →
 `game-content` → `riftbreaker-server` → `tournament-server` →
-`website` → `probe-timer` → `image-retention`.
+`website` → `probe-timer` → `image-retention` → `host-hygiene`.
 
 ### From-zero (ein Kommando, Issue #209)
 
@@ -362,6 +362,7 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 | `website` | statics + eigener Caddy | `site/*` → Docroot, eigener `rift-caddy` (plain HTTP: Statics + `/tournament/*`-Proxy) + EIN Eintrag im geteilten Host-Caddy (Issue #322) |
 | `mods-zip` | — | Paketierung + md5-Paritäts-Check (hart) |
 | `probe-timer` | systemd | `probe_servers.sh` alle 2 Min → `status.json` |
+| `host-hygiene` | systemd | wöchentlicher Timer: entfernt **dangling** Docker-Images (`docker image prune`, **kein** `-a`; Issue #308) |
 
 ## Struktur
 
@@ -382,7 +383,8 @@ deploy/
     ├── tournament-server/         # systemd
     ├── website/                   # statics + eigener rift-caddy (Issue #322)
     ├── mods-zip/                  # Paketierung + md5-Parität
-    └── probe-timer/               # systemd-Timer
+    ├── probe-timer/               # systemd-Timer
+    └── host-hygiene/              # systemd-Timer (dangling Images, #308)
 ```
 
 ## Sicherheit
@@ -421,12 +423,55 @@ Nur das Mod zurückdrehen (ohne Image/Content):
 Das vorherige `tournament-server`-Binary bzw. die vorherige `rbbattle.zip`
 (git-History) zurückkopieren und erneut deployen.
 
+**Image-Rollback-Stand:** Ein Image-Rollback braucht das **getaggte** Image
+der alten Revision (`rb-dedicated:<alte-sha>`). Die Rolle `host-hygiene`
+entfernt **nur dangling (ungetaggte)** Images — getaggte Rollback-Stände
+bleiben also liegen. Solange der Tag existiert, ist ein Rollback ohne Neu-Build
+möglich.
+
+## Host-Hygiene — dangling Docker-Images (Issue #308)
+
+Auf `planet` sammeln sich ungetaggte (`<none>`) Docker-Layer an (Messung
+2026-09-12: 351 Stück / 88,9 GB). Die Rolle `host-hygiene` räumt sie
+automatisch auf:
+
+```bash
+docker image prune          # = dangling only, KEIN -a
+```
+
+- **Automatik statt Handarbeit:** systemd-Timer `rbmods-host-hygiene.timer`
+  (wöchentlich, `Persistent=true` — holt verpasste Läufe nach Reboot nach),
+  Unit + Skript werden vom Playbook installiert. Das Skript
+  (`scripts/host_hygiene.sh`) protokolliert Vorher/Nachher-Zähler ins Journal.
+- **⚠️ Niemals `docker image prune -a`:** `-a` entfernt **alle** Images ohne
+  laufenden Container — inklusive des getaggten Rollback-Stands
+  `rb-dedicated:<alte-sha>`. Ohne den ist der nächste kaputte Deploy nicht mehr
+  zurückrollbar.
+- **Wirkung host-weit:** dangling Images entstehen in allen Stacks auf planet
+  (nicht nur im Mod-Stack); der Prune wirkt deshalb absichtlich host-weit.
+  Abgestimmt mit der Host-Infra (momokli/planet-media#8).
+- **Wie lange bleiben dangling Images liegen?** Bis zum nächsten Timer-Lauf,
+  also bis zu ~7 Tage (wöchentlicher Takt). Getaggte Images sind davon nicht
+  betroffen.
+
+Manuell prüfen (read-only):
+
+```bash
+docker system df -v                                   # was ist dangling/tagged/in use
+docker images -f dangling=true -q | wc -l             # Anzahl dangling
+journalctl -u rbmods-host-hygiene.timer -n 20         # letzter Timer-Lauf
+```
+
+Der **Einmal-Lauf** über die bereits liegenden ~88,9 GB ist ein
+Operator-Schritt (nicht Teil des Deploys): auf planet `docker image prune`
+ausführen, danach `df -h /` zum Messen.
+
 ## Logs
 
 | Ort | Was |
 |---|---|
 | `gh run view <id> --log` | CD-Job-Log (der `ssh`-Step streamt das ganze ansible-Log) |
-| `journalctl -u tournament-server`, `-u rbmods-probe.timer` | systemd-Rollen |
+| `journalctl -u tournament-server`, `-u rbmods-probe.timer`, `-u rbmods-host-hygiene.timer` | systemd-Rollen |
 | `docker logs riftbreaker-dedicated` | Container-Logs (Wine/Server) |
 | `git -C /opt/rbbattle-deploy/repo log --oneline -3` | zuletzt deployte SHA |
 
@@ -436,7 +481,7 @@ Das vorherige `tournament-server`-Binary bzw. die vorherige `rbbattle.zip`
 Spiel-Content (Steam-App 4114030), Compose-Rendering + Containerstart der
 Server-Rollen, Mod-Auslieferung + Restart, Website-Statics + eigener
 `rift-caddy` (Statics + `/tournament/*`-Proxy) + EIN Host-Caddy-Eintrag,
-systemd-Unit/Timer (tournament/probe), md5-Parität des Mod-Zips.
+systemd-Unit/Timer (tournament/probe/hygiene), md5-Parität des Mod-Zips.
 
 **Nicht owned (bewusst host-seitig/manuell):** Vault-Passwort
 (`/etc/rbbattle-deploy/vault.pass`, root-only), SSH-Zugang + forced command des

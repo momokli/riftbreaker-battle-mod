@@ -21,6 +21,8 @@
 #   8. probe-timer          systemd-Timer → status.json
 #   9. image-retention      systemd-Timer → alte Mod-Image-Tags aufräumen
 #                           (Rollback-Stand + laufendes Image bleiben, #309)
+#  10. host-hygiene         systemd-Timer → dangling Docker-Images aufräumen
+#                           (`docker image prune`, KEIN `-a`; Issue #308)
 #
 # Tags erlauben einen gezielten Lauf (z. B. `--tags server` im PR-Gate
 # deploy-check) ohne die übrigen Rollen anzufassen.
@@ -68,4 +70,5 @@
     - role: probe-timer
       tags: [probe]
     - role: image-retention
+    - role: host-hygiene
       tags: [hygiene]

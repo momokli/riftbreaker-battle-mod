@@ -17,6 +17,7 @@
 | Mod-Download | planet | statics (Caddy) | 443 | `rbbattle.zip` (Paketierung + md5-Parität) |
 | rbmods-probe.timer | planet | systemd | — | Connectivity-Checks alle 2 Min → `status.json` |
 | rbmods-image-retention.timer | planet | systemd | — | Alte Mod-Image-Tags aufräumen (Rollback-Stand + laufendes Image bleiben) |
+| rbmods-host-hygiene.timer | planet | systemd | — | wöchentlich dangling Docker-Images aufräumen (`docker image prune`, **kein** `-a`; Issue #308) |
 | rbbridge | in Mod-Containern | Prozess | — | Command-Injection (`exec_cmd_client`, Argument IMMER als EIN gequotierter String) |
 
 ## Kanonische Landing
@@ -60,6 +61,11 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
    `scripts/docker_image_tag_retention.sh`: entfernt alte
    `rb-dedicated`/`rb-headless-client`-Tags, behält das laufende Image und den
    Rollback-Stand (Issue #309, siehe unten).
+9. **host-hygiene** — wöchentlicher systemd-Timer (Issue #308): entfernt
+   dangling Docker-Images (`docker image prune`, **kein** `-a`; der getaggte
+   Rollback-Stand bleibt erhalten). Installiert `scripts/host_hygiene.sh` +
+   Unit/Timer; automatische Variante der manuellen Aufräum-Befehle in
+   [`SERVER_SIZING.md`](SERVER_SIZING.md).
 
 Grundsätze:
 
@@ -67,6 +73,8 @@ Grundsätze:
 - **Deploy nur via Playbook** —
   `ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass`.
 - **Rollback** = vorherige `rbbattle.zip` / vorheriges Binary wieder einspielen.
+  Für ein **Image**-Rollback bleibt das getaggte `rb-dedicated:<alte-sha>`
+  erhalten — die Rolle `host-hygiene` entfernt nur dangling Images (#308).
 
 ## Image-Tag-Retention (Issue #309)
 

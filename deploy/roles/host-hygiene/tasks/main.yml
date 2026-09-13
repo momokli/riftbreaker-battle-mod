@@ -1,0 +1,47 @@
+---
+# Rolle: host-hygiene (Issue #308) — automatische, konservative Docker-
+# Image-Hygiene auf planet als systemd-Timer (Muster: Rolle probe-timer).
+#
+# Was der Timer tut (Skript scripts/host_hygiene.sh):
+#   * dangling Images (ungetaggte <none>-Layer) entfernen:
+#     `docker image prune -f` — ausdrücklich OHNE `-a`. `-a` würde alle Images
+#     ohne laufenden Container entfernen, inklusive des getaggten
+#     Rollback-Stands `rb-dedicated:<alte-sha>`.
+#   * Vorher/Nachher-Zähler ins Journal schreiben (getaggte Mod-Images müssen
+#     gleich bleiben) und laut scheitern, falls sich die Menge ändert.
+#
+# Wiederkehr: Timer mit `Persistent=true` (holt verpasste Läufe nach Reboot
+# nach) und `enabled: true` (übersteht Reboots) — reboot-/timer-fest.
+#
+# Abgrenzung (NICHT in diesem Issue): Tag-Retention der Mod-Images (#309),
+# Host-Logs/Journal (#301), Backup-/Stray-Retention (#312),
+# Deploy-Disk-Gate (#310).
+
+- name: Hygiene-Skript installieren
+  copy:
+    src: "{{ playbook_dir }}/../scripts/host_hygiene.sh"
+    dest: "{{ host_hygiene_bin }}"
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: systemd-Service rendern
+  template:
+    src: rbmods-host-hygiene.service.j2
+    dest: "/etc/systemd/system/{{ host_hygiene_unit }}.service"
+    mode: "0644"
+  notify: restart rbmods-host-hygiene timer
+
+- name: systemd-Timer rendern
+  template:
+    src: rbmods-host-hygiene.timer.j2
+    dest: "/etc/systemd/system/{{ host_hygiene_unit }}.timer"
+    mode: "0644"
+  notify: restart rbmods-host-hygiene timer
+
+- name: Timer aktivieren und starten
+  systemd:
+    name: "{{ host_hygiene_unit }}.timer"
+    state: started
+    enabled: true
+    daemon_reload: true

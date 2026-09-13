@@ -22,14 +22,14 @@ verbinden und starten. Der komplette Weg von hier bis zum 4v4-Release steht in
 
 - **Feasibility verifiziert** — Mod-API vorhanden, Grenzen bekannt (Details: [docs/findings.md](docs/findings.md))
 - **Spike gebaut** — Mod-Skeleton + Experimente A (Wave-Spawn), B (Custom-UI-Popup), C (Log-Bridge + Console-Command) in `mod/`; In-Game-Test ausstehend ([mod/README.md](mod/README.md))
-- **Trainer-Harness v0 (Grundgerüst)** — Injector + In-Game-Bridge-DLL + RE-Scan-Tools, siehe [trainer/README.md](trainer/README.md)
+- **Trainer-Harness v0 (Grundgerüst)** — Injector + In-Game-Bridge-DLL + RE-Scan-Tools, C-Quellen in [bausteine/04-trainer-io/](bausteine/04-trainer-io/README.md); Protokoll/RE-Tooling in [trainer/README.md](trainer/README.md)
 
 ## Komponenten
 
 | Komponente | Ort | Aufgabe |
 |---|---|---|
 | **Lua-Mod** | `mod/` (Spike) | gesamte Spiellogik im Spiel (Wellen, Punkte, Defense, HUD) — Spike-Skeleton mit Experimenten A/B/C |
-| **Trainer / Harness** | `trainer/` (Harness v0) | I/O-Gateway zwischen Spiel und Netz: DLL-Injection + Named Pipe + RE-Scan-Tools (Windows-first) |
+| **Trainer / Harness** | `bausteine/04-trainer-io/` (C-Quellen), `trainer/` (Protokoll + RE-Tooling) | I/O-Gateway zwischen Spiel und Netz: DLL-Injection + Named Pipe + RE-Scan-Tools (Windows-first) |
 | **Bausteine** | `bausteine/` | eigenständig testbare Komponenten aus Mod + Trainer (Index: [bausteine/README.md](bausteine/README.md)) |
 | **Relay-Server** | `server/` (geplant) | Matchmaking + Event-Routing (Node) |
 
@@ -62,7 +62,7 @@ Lua-Mod selbst ist Workshop-tauglich (siehe [docs/workshop.md](docs/workshop.md)
 riftbreaker-battle-mod/
 ├── bausteine/ # eigenständig testbare Komponenten (00–04, Index: bausteine/README.md)
 ├── mod/       # Lua-Mod (Spike: Skeleton + Experimente A/B/C, Install siehe mod/README.md)
-├── trainer/   # Sidecar/Trainer (Harness v0: Injector + DLL + RE-Scan-Tools)
+├── trainer/   # Sidecar/Trainer (Protokoll + RE-Scan-Tools; C-Quellen in bausteine/04-trainer-io/)
 ├── server/    # Relay-Server (geplant, Node)
 ├── scripts/   # Tooling (package_mod.sh: Mod-ZIP bauen)
 ├── docs/      # Konzept, Findings, Workshop-Anleitung (+ index.html = Verweis auf site/)
