@@ -5,10 +5,13 @@ Vor jedem Server-Deploy die aktuelle Spielerzahl ermitteln und entscheiden:
 alle disconnected sind.** Updates kommen so immer erst **nach** dem Game, nie
 mitten im Match.
 
-Eigenständiges, testbares Modul. Seit Issue #238 ist die Parkierungs-Stufe als
-Pre-Gate in [`.github/workflows/deploy.yml`](../../.github/workflows/deploy.yml)
-verdrahtet (Push auf `main` → parken bis 0 Spieler → SSH-Deploy). Dieselbe
-Stufe lässt sich in weitere Pipelines (z. B. prod) vorschalten.
+Eigenständiges, testbares Modul. Das Gate-Modul bleibt als Library bestehen,
+ist aber **nicht** mehr in
+[`.github/workflows/deploy.yml`](../../.github/workflows/deploy.yml) verdrahtet:
+mit `e8f7783` wurde die #238-Park-Verdrahtung bewusst entfernt, die CD deployt
+sofort bei jedem Merge auf `main`. Ob das Gate wieder eingeführt wird
+(#238/#327), ist offen. Dieselbe Stufe lässt sich jederzeit in weitere
+Pipelines (z. B. prod) vorschalten.
 
 ## Funktionsweise
 
@@ -107,23 +110,25 @@ Env-Variable. Exit-Codes: `0` = belastbar, `1` = kein verwertbares Signal,
   nichts hängt unbegrenzt. `0`/unset = unbegrenzt.
 - **Park-Zustand sichtbar**: jeder Re-Check loggt `geparkt (n Spieler online)`.
 
-## Wiring in CD (`deploy.yml`, Issue #238)
+## Wiring in CD (`deploy.yml`)
 
-- **Gate-Step VOR dem SSH-Deploy**: `deploy_gate.py --count-cmd "python3
-  tools/deploy-gate/player_count.py" --interval 30`; Exit 2 ⇒ Step rot ⇒ kein
-  Deploy. Der SSH-Step bleibt der **letzte** Step.
-- **`workflow_dispatch`**: Input `force` (boolean, Default `false`) → `--force`;
-  Input `timeout` (Sekunden, leer = Default) → `RBM_TIMEOUT_S` (Default 1800,
-  `timeout-minutes: 60`).
-- **Concurrency** bleibt `cd-dev` / `cancel-in-progress: false`: der geparkte
-  Lauf hält den Slot, genau **ein** Deploy bei 0 Spielern läuft atomar.
-- **Merge-Gate**: `deploy-check.yml` führt `check_deploy_wiring.py`
-  (Gate vor SSH, Checkout, `force`/`timeout`, `player_count.py`) + die
-  Unit-Tests inkl. Negativ-Semantik aus — roter Check bei kaputtem Wiring.
-- **Troubleshooting**: parkt der Lauf direkt nach einem Server-Restart ohne
-  `PauseGame`-Zeile, ist der Provider unsicher → Park bis Timeout (bewusst,
-  nie blind deployen). Ausweg: Workflow **re-run** oder Dispatch `force=true`.
-  Timeout-Fail ist rot (fail loud), der Deploy findet **nicht** statt.
+Der CD-Workflow ist **gate-los** (seit `e8f7783`): `push` auf `main` deployed
+sofort per SSH (`ssh ... rbd`); `workflow_dispatch` erlaubt einen manuellen
+Re-Deploy ohne Inputs. Der Gate-/Provider-Code (`deploy_gate.py`,
+`player_count.py`) bleibt als getestete Library erhalten, ist aber **nicht**
+mehr in `deploy.yml` verdrahtet. Ob das Gate wieder eingeführt wird
+(#238/#327), ist offen und wird hier nicht entschieden.
+
+- **Merge-Gate**: `deploy-check.yml` führt `check_deploy_wiring.py` aus — es
+  prüft nur noch den aktuellen gate-losen Vertrag (`push` auf `main`,
+  `workflow_dispatch`, SSH-Deploy-Step) — plus die Unit-Tests des Moduls.
+  Änderungen an `.github/workflows/deploy.yml` oder `tools/deploy-gate/**`
+  lösen den Check auf `main` aus.
+- **Provider-Troubleshooting** (gilt für manuell vorgeschaltete Läufe): parkt
+  ein Lauf direkt nach einem Server-Restart ohne `PauseGame`-Zeile, ist der
+  Provider unsicher → Park bis Timeout (bewusst, nie blind deployen). Ausweg:
+  Workflow **re-run** oder Dispatch mit `--force`.
+- **Concurrency** bleibt `cd-dev` / `cancel-in-progress: false`.
 
 ## Tests
 
@@ -134,6 +139,7 @@ python3 -m unittest test_deploy_gate -v
 
 Abgedeckt: `0 → deploy`, `n>0 → parken`, `force → sofort`, `unknown → parken`,
 `timeout → TIMEOUT` (deterministisch über Fake-Clock/-Sleep), Provider-Parsing,
-der Log-Provider `player_count.py` (Fixtures, CLI-Subprozess) und die
-Negativ-Semantik (online/unbekannt ⇒ nie `DEPLOY`).
+der Log-Provider `player_count.py` (Fixtures, CLI-Subprozess), die
+Negativ-Semantik (online/unbekannt ⇒ nie `DEPLOY`) und der Wire-Contract-Check
+`check_deploy_wiring.py` gegen die echte `deploy.yml` (#337).
 Läuft auch in CI (`ci.yml`, Job `test`, und `deploy-check.yml`).
