@@ -31,6 +31,17 @@ nicht kippt (kein Reordering). 4xx wird verworfen. Ohne Spiel testbar:
 `python3 -m unittest test_referee` (Event-In → Event-Out, Poll-Command →
 Pipe-Dispatch, Fehlerpfade).
 
+Der **Log-Tail-Sidecar** (`tools/referee-egress/referee_egress.py`, #358) ist der
+zweite, für den Dedicated-Server deployte Egress-Feeder: er tailt denselben
+`exor_logs.txt` im Wine-Volume (read-only) und postet das deckungsgleiche
+Mapping (`map_referee_event`) an `POST /referee/event`. Statt den `relay.py`-
+Host-Kanal zu verdrahten, läuft er als Sidecar im Compose-Projekt der Rolle
+`riftbreaker-server` (`deploy/roles/riftbreaker-server/templates/docker-compose.yml.j2`)
+und erreicht den Tournament-Server über `host.docker.internal` (host-gateway). Er
+ist **rein Egress** (kein Poll/Dispatch); der Ingress bleibt die Pipe-Bridge
+(#265). Betrieb, Contract und `--from-end`/Replay-Verhalten:
+[`tools/referee-egress/README.md`](../tools/referee-egress/README.md).
+
 ## Rollen
 
 | Seite | Verantwortung |
@@ -125,8 +136,10 @@ GO-spezifischen `/state`-Broadcast-Status (bewusst, R3).
   emittiert der Mod nur `event=commence status=pending|ok` (Setup-/HQ-Placement-
   Phase, `mod/lua/rbbattle_autoexec.lua:~2321`); er sendet **kein** `ready`
   (`event=map_ready` feuert nur beim Map-Load) und es gibt keinen Modul-Reload.
-  Der Executor→Referee-Transport des Live-Loops (#265) ist noch nicht verdrahtet
-  und mappt `commence` **nicht** auf das Referee-Event `{"type":"ready"}`.
+  Der Egress-Transport ist für den Dedicated-Server inzwischen deployt (Log-Tail-
+  Sidecar, s. o., #358), aber weder er noch der `relay.py`-Pfad mappt `commence`
+  auf das Referee-Event `{"type":"ready"}` — der Live-Loop-Rückkanal (#265) deckt
+  nur `ready`/`wave_done`/`hq_destroyed` ab.
   Folge: Der Referee bleibt nach `hq_destroyed` in `restart_pending` und gibt für
   die neue Runde **kein** `rb_wave 1` aus — die Session-Boundary ist damit nur
   **mod-seitig** geschlossen (`event=match_end` → `event=reset` →

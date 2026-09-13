@@ -81,6 +81,13 @@ rustup_home: /home/runner/.rustup
 riftbreaker_sessions_container: "riftbreaker-sessions-test-{{ rbbattle_run_suffix }}"
 riftbreaker_sessions_dir: "/srv/rbmods-sessions-test-{{ rbbattle_run_suffix }}"
 
+# Referee-Egress-Sidecar (Issue #358) ebenfalls je Lauf eindeutig: er hat wie der
+# Session-Sidecar einen globalen Compose-`container_name`. Ohne Suffix kollidieren
+# zwei parallele boot-tests am `docker compose up` des Game-Servers (exakt die
+# Klasse aus #307/#318: "container name ... already in use"). Prod bleibt beim
+# Default-Namen `riftbreaker-egress` (defaults/main.yml).
+riftbreaker_referee_egress_container: "riftbreaker-egress-test-{{ rbbattle_run_suffix }}"
+
 # Disk-Space-Gate (Issue #310): Mindest-freier-Platz auf / vor Image-Build und
 # Mod-Backup. Der Boot-Test fährt denselben Preflight wie Prod (Default 10 GB).
 # Für einen bewussten Negativ-Lauf hier hochsetzen, z. B. 999999 (= garantiert
