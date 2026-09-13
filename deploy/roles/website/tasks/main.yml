@@ -140,20 +140,33 @@
 # Geteilter Host-Caddy: genau EIN Eintrag. Alte manuelle Rift-Definition und
 # die verwaiste Snippet-Import-Zeile zuerst entfernen (sonst kollidiert die
 # Domain bzw. schlägt der Glob-Import ins leere Verzeichnis fehl).
+#
+# Reload deterministisch + fehlersichtbar (Issue #355): Der Reload hing zuvor
+# NUR als Handler am `changed` der Datei-Tasks. Ein beim ersten Deploy
+# fehlgeschlagener Reload wurde dadurch bei jedem weiteren (idempotenten) Lauf
+# nie erneut versucht — der Deploy meldete still `ok`, während die live-Config
+# veraltet blieb (#322: /tournament/health 404 trotz korrektem Caddyfile auf
+# Disk). Deshalb prueft jetzt JEDER Lauf die LIVE-Config ueber die Admin-API und
+# reloadet, sobald der Domain-Eintrag dort fehlt; validate/reload und der
+# Post-Check brechen den Deploy bei Fehlschlag ab (kein stilles `ok`).
+#
+# Der Reload dialt `localhost:2019`; damit er den RICHTIGEN Prozess trifft,
+# darf kein zweiter host-net-Container diesen Port belegen — deshalb bekommt der
+# rift-caddy in seinem Caddyfile `admin off` (siehe rift-caddy.Caddyfile.j2).
 # ---------------------------------------------------------------------------
 - name: Alten manuell gepflegten Rift-Block aus dem Host-Caddyfile entfernen
   replace:
     path: "{{ website_host_caddyfile_path }}"
     regexp: '(?ms)^# BEGIN RIFT PROJECTMELLON MODS.*?^# END RIFT PROJECTMELLON MODS\n?'
     replace: ''
-  notify: reload host caddy
+  register: host_caddy_old_block
 
 - name: Verwaiste Snippet-Import-Zeile aus dem Host-Caddyfile entfernen
   lineinfile:
     path: "{{ website_host_caddyfile_path }}"
     line: "import /etc/caddy/Caddyfile.d/*"
     state: absent
-  notify: reload host caddy
+  register: host_caddy_import
 
 - name: Host-Caddy-Eintrag sicherstellen (genau EIN Block)
   blockinfile:
@@ -166,4 +179,50 @@
       {{ website_domain }} {
           reverse_proxy 127.0.0.1:{{ rift_caddy_port }}
       }
-  notify: reload host caddy
+  register: host_caddy_block
+
+# LIVE-Config des Host-Caddys ueber die Admin-API lesen (nur 127.0.0.1 im
+# Container). Grundlage fuer die Reload-Entscheidung unten.
+- name: Host-Caddy — LIVE-Config ueber die Admin-API lesen
+  command: docker exec {{ website_host_caddy_container }} wget -qO- http://localhost:2019/config/
+  register: host_caddy_live
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+# Reload nur, wenn noetig: Datei geaendert ODER die LIVE-Config fuehrt den
+# Domain-Eintrag (noch) nicht — Letzteres faengt einen frueher fehlgeschlagenen
+# Reload ab, ohne die idempotenten Folge-Deploys mit einem Blind-Reload zu
+# belasten.
+- name: Host-Caddy — Reload erforderlich? (Datei geaendert ODER Eintrag fehlt live)
+  set_fact:
+    host_caddy_needs_reload: >-
+      {{ (host_caddy_old_block is changed)
+         or (host_caddy_import is changed)
+         or (host_caddy_block is changed)
+         or ((host_caddy_live.rc | default(1) | int) != 0)
+         or (website_domain not in (host_caddy_live.stdout | default(''))) }}
+  when: not ansible_check_mode
+
+- name: Host-Caddy — Config validieren (vor dem Reload)
+  command: docker exec {{ website_host_caddy_container }} caddy validate --config /etc/caddy/Caddyfile
+  changed_when: false
+  when: not ansible_check_mode and (host_caddy_needs_reload | default(false) | bool)
+
+# Bewusst KEIN `failed_when: false`/`ignore_errors`: ein non-zero rc bricht den
+# Deploy ab (kein stilles `ok`).
+- name: Host-Caddy — reload (rc != 0 bricht den Deploy ab)
+  command: docker exec {{ website_host_caddy_container }} caddy reload --config /etc/caddy/Caddyfile
+  changed_when: true
+  when: not ansible_check_mode and (host_caddy_needs_reload | default(false) | bool)
+
+# Post-Check: nach dem Reload MUSS der Eintrag live sein. Fehlt er (oder war die
+# Admin-API nicht lesbar), schlaegt der Deploy hier sichtbar fehl.
+- name: Host-Caddy — Reload wirksam? (Domain muss JETZT live sein)
+  command: docker exec {{ website_host_caddy_container }} wget -qO- http://localhost:2019/config/
+  register: host_caddy_live_after
+  changed_when: false
+  failed_when: >-
+    (host_caddy_live_after.rc | default(1) | int) != 0
+    or (website_domain not in (host_caddy_live_after.stdout | default('')))
+  when: not ansible_check_mode and (host_caddy_needs_reload | default(false) | bool)

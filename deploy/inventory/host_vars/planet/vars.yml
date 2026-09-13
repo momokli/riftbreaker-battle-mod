@@ -47,7 +47,10 @@ website_mods_dir: "{{ website_docroot }}/mods"
 
 # Eigener Rift-Caddy (Container, network_mode host, plain HTTP). Lauscht
 # ausschliesslich auf 127.0.0.1:{{ rift_caddy_port }} (der Host-Caddy proxyt
-# dorthin); TLS terminiert weiterhin der Host-Caddy.
+# dorthin); TLS terminiert weiterhin der Host-Caddy. Wichtig (Issue #355): der
+# Caddyfile-Template setzt `admin off`, damit der Container NICHT den Default-
+# Admin-Port 127.0.0.1:2019 belegt (dort lauscht die Admin-API des geteilten
+# Host-Caddys — sonst kollidiert `caddy reload` und landet beim falschen Prozess).
 rift_caddy_container: rift-caddy
 rift_caddy_image: caddy:2
 rift_caddy_port: 8787
