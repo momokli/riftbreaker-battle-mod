@@ -1482,10 +1482,11 @@ static void dump_qwords(HANDLE hPipe, const char *label, const void *addr,
 }
 
 /* Scannt lesbare Regionen nach einem 32-bit-Wert (z.B. carbonium-Hash
- * 0x659cc791) und dumpft Treffer + den Wert bei +8 (ResourceValue). */
+ * 0x659cc791) und dumpft Treffer + den 8-Byte-Wert bei +8 (ResourceValue). */
 static void scan_hash(HANDLE hPipe, uint32_t needle, int max_hits) {
   uintptr_t addr = 0;
   int hits = 0;
+  unsigned long long regions = 0, bytes = 0;
 
   for (;;) {
     MEMORY_BASIC_INFORMATION mi;
@@ -1497,6 +1498,8 @@ static void scan_hash(HANDLE hPipe, uint32_t needle, int max_hits) {
     addr = next;
     if (!is_readable_region(&mi))
       continue;
+    regions++;
+    bytes += mi.RegionSize;
 
     const uint32_t *p = (const uint32_t *)mi.BaseAddress;
     size_t n = mi.RegionSize / sizeof(uint32_t);
@@ -1505,21 +1508,25 @@ static void scan_hash(HANDLE hPipe, uint32_t needle, int max_hits) {
         const unsigned char *e = (const unsigned char *)&p[i];
         uint64_t val = 0;
         safe_read_u64(e + 8, &val);
-        uint64_t prev = 0, nxt = 0;
-        safe_read_u64(e - 0x10, &prev);
-        safe_read_u64(e + 0x10, &nxt);
         send_line(hPipe,
                   "{\"event\":\"scan_hit\",\"hash\":\"0x%08x\","
-                  "\"addr\":\"0x%08x\",\"value\":%llu,"
-                  "\"prev\":%llu,\"next\":%llu}",
-                  needle, (unsigned)(uintptr_t)e,
-                  (unsigned long long)val,
-                  (unsigned long long)prev, (unsigned long long)nxt);
-        if (++hits >= max_hits)
+                  "\"addr\":\"0x%llx\",\"value\":%llu,\"value_hex\":\"0x%llx\"}",
+                  needle, (unsigned long long)(uintptr_t)e,
+                  (unsigned long long)val, (unsigned long long)val);
+        if (++hits >= max_hits) {
+          send_line(hPipe,
+                    "{\"event\":\"scan_done\",\"hits\":%d,\"regions\":%llu,"
+                    "\"bytes\":%llu}",
+                    hits, regions, bytes);
           return;
+        }
       }
     }
   }
+  send_line(hPipe,
+            "{\"event\":\"scan_done\",\"hits\":%d,\"regions\":%llu,"
+            "\"bytes\":%llu}",
+            hits, regions, bytes);
 }
 
 /* Probe (RE #363): PlayerService-Kette live dumpen, um die Account-Struktur
