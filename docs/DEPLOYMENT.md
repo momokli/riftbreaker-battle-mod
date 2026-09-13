@@ -16,6 +16,7 @@
 | Website | planet | statics + **eigener** Caddy (`rift-caddy`, plain HTTP) hinter `mellon-caddy` | 443 → 127.0.0.1:8787 | Landing `/` · `/connectivity.html` · `/solo.html` · `/status.json` · Proxy `/tournament/*` → tournament-server |
 | Mod-Download | planet | statics (Caddy) | 443 | `rbbattle.zip` (Paketierung + md5-Parität) |
 | rbmods-probe.timer | planet | systemd | — | Connectivity-Checks alle 2 Min → `status.json` |
+| rbmods-image-retention.timer | planet | systemd | — | Alte Mod-Image-Tags aufräumen (Rollback-Stand + laufendes Image bleiben) |
 | rbbridge | in Mod-Containern | Prozess | — | Command-Injection (`exec_cmd_client`, Argument IMMER als EIN gequotierter String) |
 
 ## Kanonische Landing
@@ -55,6 +56,10 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
    „Website-Pfad“ unten.
 7. **probe-timer** — systemd-Timer für `scripts/probe_servers.sh` →
    `status.json`.
+8. **image-retention** — systemd-Timer für
+   `scripts/docker_image_tag_retention.sh`: entfernt alte
+   `rb-dedicated`/`rb-headless-client`-Tags, behält das laufende Image und den
+   Rollback-Stand (Issue #309, siehe unten).
 
 Grundsätze:
 
@@ -62,6 +67,59 @@ Grundsätze:
 - **Deploy nur via Playbook** —
   `ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass`.
 - **Rollback** = vorherige `rbbattle.zip` / vorheriges Binary wieder einspielen.
+
+## Image-Tag-Retention (Issue #309)
+
+**Problem:** Der CD-Build taggt jedes Mal neu (`rb-dedicated:<deploy-sha>`),
+entfernt aber nie alte Tags. Live-Messung auf planet (2026-09-12):
+`rb-dedicated` **63 Tags bei 12 Image-IDs**, `rb-headless-client` **46 Tags
+bei 6 IDs** — je neue ID ~**1,56 GB unique** (`docker system df -v`).
+
+**Lebenszyklus eines Tags:**
+
+1. Ein Deploy baut/verwendet `rb-dedicated:<deploy-sha>` und pinnt genau diesen
+   Tag im gerenderten Compose (kein `latest`).
+2. Der Timer `rbmods-image-retention.timer` läuft **täglich** und entfernt
+   ältere Tags per `docker rmi <repo>:<tag>` — **nicht** per
+   `docker image prune -a` (das würde den Rollback-Stand mitnehmen).
+3. Es bleiben je Repo erhalten:
+   - **jeder Tag, den ein Container als `Config.Image` trägt** (laufendes Image
+     — auch gestoppte Container),
+   - der **aktuelle Deploy-Tag** (`RB_PROTECTED_TAGS` = `dedicated_server_image`),
+   - die **letzten 2 Rollback-Tags** (`image_retention_rollback_tags`).
+4. Pro **von einem Container benutzter Image-ID** überlebt immer mindestens ein
+   Tag — ein benutztes Image wird nie untagged oder löschbar. Vor jedem `rmi` prüft
+   ein letzter Guard die Container-Referenzen erneut.
+
+**Rollback geht nach dem Cleanup noch:** die letzten 2 Tags bleiben als
+vollständige Images vorhanden und sind mit `docker image inspect` prüfbar.
+
+### Dry-Run / Verifikation
+
+Das Skript kann ohne Änderung zeigen, was es täte:
+
+```bash
+# Auf planet, read-only: nichts wird entfernt.
+sudo RB_IMAGE_RETENTION_LOG=/dev/stdout /usr/local/bin/rbmods-image-retention.sh --dry-run
+
+# Zähler vorher/nachher:
+docker image ls rb-dedicated | wc -l
+```
+
+Der manuelle Lauf einer Timer-Runde (nach dem Dry-Run-Blick):
+
+```bash
+sudo systemctl start rbmods-image-retention.service
+journalctl -u rbmods-image-retention.service -n 40 --no-pager
+```
+
+Details zu den Schaltern (`--keep N`, `--repo NAME`, ENV-Variablen):
+`scripts/docker_image_tag_retention.sh --help`. Der hermetische
+Red/Green-Test (kein Docker nötig) liegt in
+`tests/shell/image-retention.test.sh` und läuft in CI (`lint.yml`).
+
+**Nicht in diesem Issue:** ungetaggte Dangling-Layer (→ #308) und weniger Müll
+erzeugen (→ #247, reproduzierbare Builds in GHCR).
 
 ## Website-Pfad — eigener Rift-Caddy + EIN Host-Eintrag (Issue #322)
 

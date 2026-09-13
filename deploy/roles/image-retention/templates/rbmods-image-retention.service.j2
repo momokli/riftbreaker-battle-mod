@@ -1,0 +1,14 @@
+[Unit]
+Description=RIFT BATTLE Image-Tag-Retention (rb-dedicated/rb-headless-client)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Laufendes Image (Container-Referenz) und aktueller Deploy-Tag (aus dem
+# gerenderten Compose) werden nie entfernt; N Rollback-Tags bleiben.
+Environment="RB_IMAGE_REPOS={{ image_retention_repos }}"
+Environment=RB_ROLLBACK_TAGS={{ image_retention_rollback_tags }}
+Environment="RB_PROTECTED_TAGS={{ dedicated_server_image | default('') }}"
+Environment=RB_IMAGE_RETENTION_LOG={{ image_retention_log }}
+ExecStart={{ image_retention_bin }}

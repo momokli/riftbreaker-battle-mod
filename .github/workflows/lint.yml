@@ -43,6 +43,11 @@ jobs:
       # false). Braucht kein Docker (Fake-docker).
       - name: Probe-Honesty (Fake-Docker, planetfrei)
         run: tests/shell/probe-servers.test.sh
+      # Red/Green-Beweis der Image-Tag-Retention (Issue #309): laufendes Image
+      # + N Rollback-Tags bleiben, nur aeltere Tags gehen. Braucht kein Docker
+      # (Fake-docker + Szenario-Dateien).
+      - name: Image-Tag-Retention (Fake-Docker, planetfrei)
+        run: tests/shell/image-retention.test.sh
 
   python-lint:
     name: Python-Lint (ruff + compileall)

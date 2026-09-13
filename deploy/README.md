@@ -79,7 +79,7 @@ ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
 
 Reihenfolge der Rollen (site.yml): `mods-zip` → `dedicated-server-image` →
 `game-content` → `riftbreaker-server` → `tournament-server` →
-`website` → `probe-timer`.
+`website` → `probe-timer` → `image-retention`.
 
 ### From-zero (ein Kommando, Issue #209)
 
