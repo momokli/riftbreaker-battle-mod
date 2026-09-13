@@ -656,6 +656,8 @@ static void handle_probe(SOCKET c)
                                  strcmp(ev, "probe_dump") == 0 ||
                                  strcmp(ev, "scan_hit") == 0 ||
                                  strcmp(ev, "scan_done") == 0 ||
+                                 strcmp(ev, "account") == 0 ||
+                                 strcmp(ev, "basket_entry") == 0 ||
                                  strcmp(ev, "error") == 0)) {
                                 if (strcmp(ev, "scan_done") == 0)
                                     got_scan_done = 1;
