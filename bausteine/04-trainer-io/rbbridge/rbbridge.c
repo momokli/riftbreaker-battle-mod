@@ -1697,6 +1697,127 @@ static int64_t read_resource_max(const unsigned char *base,
     return (int64_t)((double)f * (double)scale);
 }
 
+/* ====================================================================== */
+/* DOM/Voll-State-Egress (Issue #376): thread-sichere Variante via Game-       */
+/* Thread-Hook.                                                               */
+/*                                                                          */
+/* Erkenntnis aus dem ersten Entwurf: Lua NICHT vom pipe thread anfassen -   */
+/* das crasht den Server (LUA CRASH "attempt to call a nil value", winedbg). */
+/* Deshalb: der Mod (rbbattle_autoexec.lua) wrappt dom_mananger:Update auf   */
+/* dem GAME thread, baut dort den kompletten State als JSON-String und ruft  */
+/* die hier registrierte C-Funktion _G.rbbridge_capture_state(json) auf.     */
+/* Diese cached den String (spinlock-guarded); dispatch_get_state (pipe      */
+/* thread) liest nur den Cache - kein Lua-Zugriff mehr vom pipe thread.      */
+/*                                                                          */
+/* RE (Build 2.0.58485, verifiziert, s. .agents/skills/riftbreaker-re):      */
+/*   World::GetSystem<LuaSystem>()   RVA 0x194EDA0  (this=World*)            */
+/*   LuaSystem + 0x200 = Exor::Lua* ; Lua + 0x10 = lua_State*                 */
+/*   lua_pushcclosure 0x290CBE0   lua_setfield  0x290D260                      */
+/*   lua_tolstring    0x290D6D0   LUA_GLOBALSINDEX = -10002 (0xFFFFD8EE)      */
+/* ====================================================================== */
+
+typedef int (__fastcall *rbbridge_lua_cfunction)(void *L);
+typedef void (__fastcall *rbbridge_lua_pushcclosure_fn)(void *L,
+                                                        rbbridge_lua_cfunction fn,
+                                                        int n);
+typedef void (__fastcall *rbbridge_lua_setfield_fn)(void *L, int idx,
+                                                    const char *k);
+typedef const char *(__fastcall *rbbridge_lua_tolstring_fn)(void *L, int idx,
+                                                            size_t *len);
+
+#define RBBRIDGE_LUA_PUSHCCLOSURE_RVA 0x290CBE0u
+#define RBBRIDGE_LUA_SETFIELD_RVA     0x290D260u
+#define RBBRIDGE_LUA_TOLSTRING_RVA    0x290D6D0u
+#define RBBRIDGE_LUA_GLOBALSINDEX     (-10002)
+#define RBBRIDGE_LUAGRAPHNODE_VFTABLE_RVA 0x2F46D70u
+#define RBBRIDGE_LUAGRAPHNODE_OBJECT_OFF  0x20u
+
+/* DOM-Snapshot (game thread schreibt, pipe thread liest). Spinlock schuetzt
+ * den String-Puffer gegen zerrissene Reads. */
+static const unsigned char *g_dom_base = NULL;
+static char g_dom_state_buf[RESP_BUF_SIZE];
+static volatile LONG g_dom_state_lock = 0;
+static volatile LONG g_dom_capture_registered = 0;
+
+/* Vom Mod (game thread) pro Frame aufgerufen: rbbridge_capture_state(json). */
+static int rbbridge_capture_state(void *L)
+{
+    if (!g_dom_base)
+        return 0;
+    rbbridge_lua_tolstring_fn tolstring =
+        (rbbridge_lua_tolstring_fn)(uintptr_t)(g_dom_base +
+                                               RBBRIDGE_LUA_TOLSTRING_RVA);
+    size_t len = 0;
+    const char *s = tolstring(L, 1, &len);
+    if (!s || len == 0)
+        return 0;
+    if (len > RESP_BUF_SIZE - 1)
+        len = RESP_BUF_SIZE - 1;
+
+    while (InterlockedExchange(&g_dom_state_lock, 1) != 0)
+        ;
+    memcpy(g_dom_state_buf, s, len);
+    g_dom_state_buf[len] = '\0';
+    InterlockedExchange(&g_dom_state_lock, 0);
+    return 0;
+}
+
+/* lua_State* via LuaGraphNode-Instanz: vftable-Scan + [0x20] luabind-object
+ * (reine Memory-Reads). NICHT World::GetSystem<LuaSystem>() - das liest die
+ * System-Map des World und ract beim Boot mit dem game thread (page fault in
+ * World::GetSystem(TypeHash), s. Issue #376). */
+static void *resolve_lua_state(const unsigned char *base)
+{
+    const uint64_t needle =
+        (uint64_t)(uintptr_t)(base + RBBRIDGE_LUAGRAPHNODE_VFTABLE_RVA);
+    uintptr_t addr = 0;
+
+    for (;;) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
+            break;
+        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
+        if (next <= addr)
+            break;
+        addr = next;
+        if (!is_readable_region(&mi))
+            continue;
+
+        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
+        size_t nq = mi.RegionSize / sizeof(uint64_t);
+        for (size_t i = 0; i < nq; i++) {
+            if (q[i] != needle)
+                continue;
+            const unsigned char *inst = (const unsigned char *)&q[i];
+            uint64_t L = 0;
+            if (safe_read_u64(inst + RBBRIDGE_LUAGRAPHNODE_OBJECT_OFF, &L) && L)
+                return (void *)(uintptr_t)L;
+        }
+    }
+    return NULL;
+}
+
+/* Registriert _G.rbbridge_capture_state einmalig (lazy, retry bis ok). */
+static void register_dom_capture(const unsigned char *base)
+{
+    if (g_dom_capture_registered)
+        return;
+    void *L = resolve_lua_state(base);
+    if (!L)
+        return;
+    rbbridge_lua_pushcclosure_fn pushcclosure =
+        (rbbridge_lua_pushcclosure_fn)(uintptr_t)(base +
+                                                  RBBRIDGE_LUA_PUSHCCLOSURE_RVA);
+    rbbridge_lua_setfield_fn setfield =
+        (rbbridge_lua_setfield_fn)(uintptr_t)(base +
+                                              RBBRIDGE_LUA_SETFIELD_RVA);
+    g_dom_base = base;
+    pushcclosure(L, rbbridge_capture_state, 0);
+    setfield(L, RBBRIDGE_LUA_GLOBALSINDEX, "rbbridge_capture_state");
+    g_dom_capture_registered = 1;
+    dbg("register_dom_capture: _G.rbbridge_capture_state registriert (L=%p)", L);
+}
+
 static void dispatch_get_state(HANDLE hPipe)
 {
     const unsigned char *base = NULL;
@@ -1752,6 +1873,9 @@ static void dispatch_get_state(HANDLE hPipe)
         return;
     }
 
+    /* #376: DOM-Capture (game thread -> Cache) einmalig registrieren. */
+    register_dom_capture(base);
+
     void *(*gpa)(void *, unsigned int) =
         (void *(*)(void *, unsigned int))(uintptr_t)(base + 0xC60050);
     void *account = gpa((void *)(uintptr_t)world, 0);
@@ -1797,11 +1921,22 @@ static void dispatch_get_state(HANDLE hPipe)
 
     int64_t carbonium_max = read_resource_max(base, account, 0x659cc791);
 
+    /* DOM/Voll-State aus dem Cache (game thread schreibt; spinlock-guarded). */
+    char state_json[RESP_BUF_SIZE];
+    while (InterlockedExchange(&g_dom_state_lock, 1) != 0)
+        ;
+    memcpy(state_json, g_dom_state_buf, sizeof(state_json));
+    InterlockedExchange(&g_dom_state_lock, 0);
+    state_json[sizeof(state_json) - 1] = '\0';
+    if (state_json[0] == '\0')
+        strcpy(state_json, "null");
+
     send_line(hPipe,
               "{\"event\":\"get_state_result\",\"ok\":true,"
-              "\"carbonium\":%llu,\"carbonium_max\":%lld,\"resources\":%s}",
+              "\"carbonium\":%llu,\"carbonium_max\":%lld,\"resources\":%s,"
+              "\"state\":%s}",
               (unsigned long long)carbonium, (long long)carbonium_max,
-              resources);
+              resources, state_json);
 }
 
 
