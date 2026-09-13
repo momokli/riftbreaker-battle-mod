@@ -886,9 +886,16 @@ local function BuildStateJson(self)
     numf("round", RBB.round)
     strf("mode", RBB.mode)
     boolf("commenced", RBB.commenced)
-    if RBB.hq then
-        numf("hq_hp", RBB.hq.hp)
-        boolf("hq_dead", RBB.hq.dead)
+    -- HQ: actual game health via HealthService (NOT the mod abstraction
+    -- RBB.hq.hp/dead, which is the tournament win-condition counter).
+    local hqEntity = (RBB.hq and RBB.hq.entity) or nil
+    if hqEntity == nil and FindService and FindService.FindEntityByType then
+        pcall(function() hqEntity = FindService:FindEntityByType("headquarters") end)
+    end
+    if hqEntity ~= nil and hqEntity ~= INVALID_ID then
+        svc("hq_hp", function() return HealthService:GetHealth(hqEntity) end)
+        svc("hq_hp_max", function() return HealthService:GetMaxHealth(hqEntity) end)
+        svc("hq_dead", function() return not HealthService:IsAlive(hqEntity) end)
     end
 
     return "{" .. table.concat(f, ",") .. "}"

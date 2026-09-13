@@ -215,3 +215,26 @@ Live bestätigt (Build 2.0.58485): `wave=1`, `dom_state="wait"`, `time_to_next=5
   im DOM-Snapshot — der fehlende „echte" Next-Wave-Countdown.
 - Typed Control-Commands (`pause_dom`/`resume_dom`/`spawn_wave`/`end_game`/…)
   als Wrapper über bestätigte `exec`-Strings.
+
+## Phase D: WRITE path — Game-Thread-Kommando-Marshalling (LIVE #376)
+
+`ConsoleService::ExecuteCommand` (`0x1C0BEF0`) dispatcht den Command-Handler
+**inline auf dem Thread des Aufrufers** — ein Lua-Kommando vom Pipe-Thread
+crasht den Server (gleiche Klasse wie der READ-Crash). Fix: Kommandos auf den
+Game-Thread marshalen.
+
+- `ConsoleService::Update(float)` RVA `0x1C1FBA0` — läuft jede Frame auf dem
+  Game-Thread (unabhängig von DOM-Suspension).
+- `LuaGraphNode::Update` RVA `0x1BAA140` — prüft `[this+0xF1]` (suspended) und
+  kehrt bei suspended sofort zurück → der Mod-Hook `dom_mananger:Update` läuft
+  NICHT, solange die DOM suspended ist (darum reicht der Mod-Hook für den
+  WRITE-Pfad nicht).
+
+Architektur: `dispatch_exec` legt das Kommando nur in einen Spinlock-Puffer
+(`g_pending_cmd`); ein vtable-Detour auf `ConsoleService::Update` (Slot-Scan auf
+`base + 0x1C1FBA0` + `VirtualProtect`) drained den Puffer und ruft
+`ExecuteCommand` auf dem Game-Thread auf, dann chained er zum Original-`Update`.
+
+Live bestätigt (Build 2.0.58485): `debug_dom_pause`/`debug_dom_resume`/
+`debug_dom_manager_spawn_wave_level` → `ok:true`, kein Crash; pause friert
+`time_to_next` ein, resume taut auf, spawn_wave spawnt Kreaturen.
