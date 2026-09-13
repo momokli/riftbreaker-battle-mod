@@ -5,7 +5,7 @@
 > Abnahme-Entscheidung trifft der menschliche Test.**
 > **Bezug:** Release-Plan [#319](https://github.com/momokli/riftbreaker-battle-mod/issues/319)
 > (Welle 3 → `v1.0.0`), Core-IO-Gate [#289](https://github.com/momokli/riftbreaker-battle-mod/issues/289),
-> Milestone [„v1 — Multiplayer mit Injection“](https://github.com/momokli/riftbreaker-battle-mod/milestone/8).
+> Milestone [`1.0`](https://github.com/momokli/riftbreaker-battle-mod/milestone/8).
 
 ## 0. Zweck
 
@@ -42,7 +42,8 @@ Ergebnis signiert wird.
 - **Runde 2 / Round-Reset ist Core-Game-Loop und zwingend Muss** (M8).
 - **Telemetry (Session-Mitschnitt + Metriken, #280) ist Core-Dev-Feature von
   1.0 und zwingend Muss** (M10).
-- Der Website-Proxy (#322, Preflight P4) **muss vor dem Test gefixt sein**.
+- Der Website-Proxy (#322, Preflight P4) ist **erledigt**: PR #326 (eigener
+  `rift-caddy`) am 2026-09-12 gemergt, P4 **grün** (2026-09-13).
 
 ### 0.2 1.0-Voraussetzungen (Release-Blocker)
 
@@ -51,7 +52,7 @@ Teil des 1.0-Presets, nicht „nice to have“:
 
 | Voraussetzung | Issue/PR | Nachweis |
 |---|---|---|
-| Website liefert `/tournament/*` (ein Host-Caddy-Eintrag, eigener Rift-Caddy) | **#322** (agent-fähig, `triage:implement`), Preflight P4 | `/tournament/health` → `200` |
+| Website liefert `/tournament/*` (ein Host-Caddy-Eintrag, eigener Rift-Caddy) | **#322** ✅ PR #326 (gemergt 2026-09-12), Preflight P4 | `/tournament/health` → `200` (2026-09-13 ✅) |
 | Runde 2 / Round-Reset | **#281** (PR #285), M8 | Reset + saubere Runde 2 |
 | Telemetry / Session-Mitschnitt | **#280** (PR #283), M10 | Session-Artefakt liegt vor |
 | Welle 1–3 abgearbeitet | **#319** | Release-Plan abgehakt |
@@ -117,21 +118,28 @@ Preflight-Punkt ist selbst ein 1.0-Blocker.
 
 | # | Prüfung | Kommando | Erwartung |
 |---|---|---|---|
-| P1 | Download == deployter Stand | `bash scripts/mod_version.sh` · `curl -sI https://rift.projectmellon.de/mods/rbbattle.zip` · `ssh planet 'md5sum /srv/rbmods-site/mods/rbbattle.zip'` | drei Werte identisch |
+| P1 | Download == deployter Stand (**zwei** Vergleiche, s. Hinweis) | **a)** `ssh planet 'md5sum /srv/rbmods-site/mods/rbbattle.zip'` == Vergleichs-md5 des Kandidaten-Zips (**b)** `bash scripts/mod_version.sh` == `version=` in der deployten `event=mod_load`-Zeile (P5) | **a)** zwei md5 **identisch**; **b)** zwei Versionen **identisch** |
 | P2 | Dedicated-Server gesund | `ssh planet 'docker ps --filter name=riftbreaker-dedicated --format "{{.Status}}"'` | `Up … (healthy)`, **kein** Restart-Loop |
 | P3 | Tournament/Referee erreichbar | `ssh planet 'curl -s http://127.0.0.1:8081/health'` | `{"ok":true,"phase":"lobby"}` |
-| P4 | Web-UI **inkl. API-Pfad** erreichbar — **hart: #322 muss gefixt sein** | `curl -s -o /dev/null -w '%{http_code}\n' https://rift.projectmellon.de/solo.html` **und** `curl -s -o /dev/null -w '%{http_code}\n' https://rift.projectmellon.de/tournament/health` | `200` **und** `200` |
-| P5 | Log-Ernte möglich | `ssh planet 'docker exec riftbreaker-dedicated cat /root/exor_logs.txt \| grep -a RBBATTLE \| tail -5'` | `[RBBATTLE] event=mod_load version=<V> status=ok` |
+| P4 | Web-UI **inkl. API-Pfad** erreichbar — #322 ✅ (PR #326 gemergt, `rift-caddy` läuft) | `curl -s -o /dev/null -w '%{http_code}\n' https://rift.projectmellon.de/solo.html` **und** `curl -s -o /dev/null -w '%{http_code}\n' https://rift.projectmellon.de/tournament/health` | `200` **und** `200` |
+| P5 | Log-Ernte möglich (kanonisch: `docker logs`, s. §8) | `ssh planet 'docker logs riftbreaker-dedicated 2>&1 \| grep -a RBBATTLE \| tail -5'` | `[RBBATTLE] event=mod_load version=<V> status=ok` |
 | P6 | Bridge/Relay erreicht das Spiel | `ssh planet 'curl -s http://127.0.0.1:9001/health'` | `{"ok":true,"pipe":true}` |
 | P7 | Spieler-Kanal frei | `:6321` ohne fremde Spieler; Server für den Test reserviert | ja |
 
-> **Ist-Stand beim Anlegen dieses Dokuments (2026-09-12, read-only geprüft):**
-> P1/P2/P3/P5/P6 **grün** (deployte Mod-Version `0.34.3`, Container healthy,
-> Referee `lobby`, Bridge `pipe:true`). **P4 offen:** `https://rift.projectmellon.de/tournament/health`
-> liefert **404** — die laufende Caddy-Konfiguration enthält **keinen**
-> `/tournament/*`-Proxy (Details siehe Abschnitt 9 „Bekannte Lücken“). Bis das
-> **Entscheidung Momo:** P4 ist **vor** dem 1.0-Test zu fixen (#322), nicht per
-> Workaround zu umgehen.
+> **P1-Hinweis:** Die drei Kommandos aus dem Entwurf liefern **verschiedene
+> Werttypen** (Version · HTTP-ETag · md5) und sind daher **nicht** direkt
+> vergleichbar. Geprüft werden deshalb **zwei getrennte** Paritäten:
+> **(a)** md5 des ausgelieferten/auszuliefernden Zips == md5 der Datei auf dem
+> Server; **(b)** Mod-Version aus dem Manifest == Version in der real
+> deployten `event=mod_load`-Logzeile. Der ETag-Header (`curl -sI …`) ist
+> **kein** md5 und taugt nicht als Vergleichswert.
+
+> **Ist-Stand (read-only geprüft 2026-09-13):** P1–P6 **grün** — deployte
+> Mod-Version `0.34.3`, Container healthy, Referee `lobby`, Bridge `pipe:true`,
+> **P4 erledigt:** `https://rift.projectmellon.de/tournament/health` → `200`
+> `{"ok":true,"phase":"lobby"}` (PR #326 am 2026-09-12 gemergt, `rift-caddy`
+> läuft). Der datierte Snapshot vom 2026-09-12 (Abschnitt 9) bleibt als Chronik
+> erhalten; die **heute** gültigen Vorbedingungen stehen in dieser Zeile.
 
 ---
 
@@ -210,8 +218,9 @@ kommt. Alle Log-Kommandos siehe Anhang (Abschnitt 8).
 
 - **Vorgehen:** Kommando **von außen** auf den laufenden Prozess:
   `POST /exec {"command":"rb_status"}` an die Bridge.
-- **Erwartung:** Antwort `{"ok":true,…}` **und** im **Game-Log** steht der ausgelöste
-  Effekt (`event=status …`). `ok:true` ohne Effekt-Zeile = **rot** (#288-Fall).
+- **Erwartung:** Antwort `{"ok":true,"results":[{"command":"rb_status","ok":true}]}`
+  **und** im **Game-Log** steht der ausgelöste Effekt (`event=status …`).
+  `ok:true` ohne Effekt-Zeile = **rot** (#288-Fall).
 - **Beweis:** `/exec`-Antwort + zugehörige `event=status`-Zeile.
 
 ### S5 — Server-Wave sichtbar (**C4-spawn, der Kern**) → M5, S3
@@ -228,6 +237,12 @@ kommt. Alle Log-Kommandos siehe Anhang (Abschnitt 8).
 - **Beweis:** Referee-Antwort **+** Log-Zeile **+** Screenshot der sichtbaren Welle.
 - **Hinweis:** Punkte 1–3 sind automatisiert (C4-reached); **Punkt 4 ist der
   eigentliche 1.0-Beweis** und nur manuell zu erbringen.
+- **Security-Hinweis (#298):** `POST /wave`, `/rematch`, `/report` sind über den
+  Public-Proxy **unauthentifiziert** erreichbar. Die §8-Kommandos laufen über
+  `ssh`/`127.0.0.1`; der Web-Knopf-Pfad in diesem Szenario geht aber über die
+  **öffentliche** URL. Für den Test den Zugang absichern (Basic-Auth am
+  Rift-Caddy oder Netz-Sperre) oder den scharfen Public-Pfad bewusst
+  akzeptieren, bis #298 gefixt ist.
 
 ### S6 — Egress/State (C3) → M6
 
@@ -332,12 +347,16 @@ ssh planet 'curl -s http://127.0.0.1:8081/health'
 curl -s -o /dev/null -w 'solo.html %{http_code}\n'  https://rift.projectmellon.de/solo.html
 curl -s -o /dev/null -w 'api       %{http_code}\n'  https://rift.projectmellon.de/tournament/health
 
-# --- P5 Log (kanonisch: exor_logs.txt im Container, NICHT docker logs) -----
-ssh planet 'docker exec riftbreaker-dedicated cat /root/exor_logs.txt \
-  | grep -a RBBATTLE | tail -30'
+# --- P5 Log (kanonisch: `docker logs`; Entrypoint tailt exor_logs.txt -> stdout) ---
+# Kanonisch ist der Container-Stdout: der Entrypoint des Community-Images tailt
+# exor_logs.txt nach stdout, daher stehen alle [RBBATTLE]-Zeilen in `docker logs`.
+# (Das alte Image bis #241 hatte exor_logs.txt unter /root — das existiert nicht mehr.)
+ssh planet 'docker logs riftbreaker-dedicated 2>&1 | grep -a RBBATTLE | tail -30'
 # gezielt:
-ssh planet 'docker exec riftbreaker-dedicated cat /root/exor_logs.txt | grep -a "event=wave"'
-ssh planet 'docker exec riftbreaker-dedicated cat /root/exor_logs.txt | grep -a "event=hq_dead\\|event=match_end"'
+ssh planet 'docker logs riftbreaker-dedicated 2>&1 | grep -a "event=wave" | tail -5'
+ssh planet 'docker logs riftbreaker-dedicated 2>&1 | grep -a "event=hq_dead\|event=match_end" | tail -5'
+# optional die Datei selbst (Wine-Documents-Pfad, NICHT /root/exor_logs.txt):
+ssh planet 'tail -30 "/srv/riftbreaker/data/wine/drive_c/users/steamuser/Documents/The Riftbreaker/exor_logs.txt"'
 
 # --- P6 Bridge -------------------------------------------------------------
 ssh planet 'curl -s http://127.0.0.1:9001/health'          # {"ok":true,"pipe":true}
@@ -384,7 +403,8 @@ python3 tests/core-io/core_io_probe.py --remote "ssh planet" \
 ```
 
 **Rote Flaggen (jede einzelne = Fund):**
-`event=wave … status=no_player` · `status=no_border_spawners` ·
+`event=wave … status=no_player` · `status=no_border_spawners` · `status=no_spawns`
+(`spawned=0`) · `status=no_position` · `status=invalid_level` ·
 `handler_errors` / `event_unreadable` · `event=mod_load` **doppelt oder fälschlich** ·
 `ok:true` ohne Effekt-Zeile · UI-„OK“ bei unklarer `/wave`-Antwort.
 
@@ -394,21 +414,18 @@ python3 tests/core-io/core_io_probe.py --remote "ssh planet" \
 
 Diese Punkte sind **belegt** und beeinflussen den Testablauf:
 
-1. **`/tournament/*`-Proxy der Website ist nicht aktiv (P4) — muss gefixt sein.**
-   `https://rift.projectmellon.de/tournament/health` → **404**. Ursache
-   (read-only geprüft 2026-09-12): Das laufende Caddy-Snippet
-   (`/etc/caddy/Caddyfile.d/rbmods.caddy` im Container) **fehlt** — das
-   Host-Verzeichnis `/home/momo/Caddyfile.d` ist **nicht** in den
-   `mellon-caddy`-Container gemountet, und die laufende Konfiguration
-   (`/config/caddy/autosave.json`) enthält **null** Treffer für „tournament“.
-   `solo.html` lädt, seine API-Aufrufe (`apiBase=/tournament`) laufen aber ins 404.
-   **Entscheidung Momo:** #322 wird gefixt — **nicht** per Workaround umgangen.
-   **Richtung des Fixes:** der Riftbreaker-Stack bekommt einen **eigenen Caddy**
-   (eigener Container, plain HTTP, reines Durchreichen von Statics + `/tournament/*`),
-   damit der Deploy-Host-Caddy nur **EINEN** Eintrag braucht
-   (`rift.projectmellon.de → reverse_proxy 127.0.0.1:<rift-caddy>`). Die
-   Rift-Routen liegen dann komplett im Rift-Stack; der geteilte Caddy wird nicht
-   mehr pro Snippet gemountet/verändert.
+1. **`/tournament/*`-Proxy der Website — ✅ erledigt (P4 grün).**
+   Ursprünglich (read-only geprüft 2026-09-12) lieferte
+   `https://rift.projectmellon.de/tournament/health` **404**: Das laufende
+   Caddy-Snippet fehlte im `mellon-caddy`-Container. Der Fix (#322, PR #326, am
+   2026-09-12 gemergt) hat dem Riftbreaker-Stack einen **eigenen `rift-caddy`**
+   gegeben (eigener Container, plain HTTP, reines Durchreichen von Statics +
+   `/tournament/*`), sodass der Deploy-Host-Caddy nur **EINEN** Eintrag braucht
+   (`rift.projectmellon.de → reverse_proxy 127.0.0.1:<rift-caddy>`).
+   **Ist-Stand (2026-09-13):** `rift-caddy` läuft;
+   `https://rift.projectmellon.de/tournament/health` → **`200`**
+   `{"ok":true,"phase":"lobby"}`, `/tournament/state` → **`200`**, `solo.html` → `200`.
+   P4 ist damit **grün**; ein 1.0-Blocker ist das nicht mehr.
 2. **C4-spawn ist headless nicht beweisbar** → deshalb ist S5/M5 der
    entscheidende manuelle Beweis (`tests/core-io/README.md`).
 3. **Egress bis in den Referee ist nur teilweise belegt:** Auf dem
@@ -500,8 +517,8 @@ Diese Punkte sind **belegt** und beeinflussen den Testablauf:
 1. **Scope:** 1.0 ist **solo** (ein Dedicated-Server + Tournament-Referee);
    Game-State + Control **müssen von extern** kommen. 1v1 nicht Teil von 1.0.
 2. **Round-Reset (#281):** Core-Game-Loop → **Muss** (M8).
-3. **Website-Proxy (#322):** **muss gefixt sein**; Fix über eigenen Caddy
-   (ein Host-Caddy-Eintrag).
+3. **Website-Proxy (#322):** ✅ erledigt — PR #326 gemergt (2026-09-12),
+   eigener `rift-caddy`, P4 **grün** (2026-09-13).
 4. **Telemetry (#280):** Core-Dev-Feature 1.0 → **Muss** (M10).
 5. **Beweisformat:** **Momos „happy“** + Traceability (Commit/Mod/md5/Deploy).
 6. **Stabilität/Dauerlauf (S10):** **„note for later“** — nicht 1.0-relevant,
@@ -509,8 +526,10 @@ Diese Punkte sind **belegt** und beeinflussen den Testablauf:
 
 **Noch offen:**
 
-1. **Timing:** Test **nach** dem #322-Fix + nach Welle 2/3 aus #319, dann Tag
-   `v1.0.0` — oder erst taggen und dann testen?
-2. **Freigabe #322:** Bau ich den eigenen Rift-Caddy (+ ein Host-Eintrag) jetzt?
+1. **Timing:** Test nach Welle 2/3 aus #319, dann Tag `v1.0.0` — oder erst
+   taggen und dann testen? (Der frühere P4/#322-Vorbehalt ist entfallen.)
+2. **Security (#298):** Der Tournament-API-Pfad ist öffentlich unauthentifiziert
+   erreichbar (`POST /wave`/`/rematch`/`/report`) — vor dem Test absichern
+   (Basic-Auth/Netz-Sperre) oder bewusst akzeptieren?
 
 Refs #319, Refs #320, Refs #289, Refs #266, Refs #267, Refs #281, Refs #280, Refs #298
