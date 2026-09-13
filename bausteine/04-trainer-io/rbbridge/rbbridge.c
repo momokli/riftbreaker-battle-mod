@@ -1452,6 +1452,20 @@ static int safe_read_u64(const void *addr, uint64_t *out) {
   return 1;
 }
 
+/* Liest ein DWORD von addr, nur wenn die Region committet+lesbar ist. */
+static int safe_read_u32(const void *addr, uint32_t *out) {
+  MEMORY_BASIC_INFORMATION mi;
+  if (!VirtualQuery(addr, &mi, sizeof(mi)))
+    return 0;
+  if (!is_readable_region(&mi))
+    return 0;
+  if ((uintptr_t)addr + sizeof(uint32_t) >
+      (uintptr_t)mi.BaseAddress + mi.RegionSize)
+    return 0;
+  memcpy(out, addr, sizeof(uint32_t));
+  return 1;
+}
+
 /* Dumpft n QWORDS ab addr als Hex-Array (eine JSON-Zeile). Sichere Reads:
  * nicht-lesbare Woerter werden als null ausgegeben (kein Crash). */
 static void dump_qwords(HANDLE hPipe, const char *label, const void *addr,
@@ -1643,6 +1657,46 @@ static void probe_resources(HANDLE hPipe) {
 
 /* get_state (Issue #363/#365): liest den Account-Basket und liefert EINE
  * get_state_result-Zeile (sauber, symmetrisch zu exec_result). */
+/*
+ * Liest die max/capacity einer Ressource (int64-Fixed-Point x10^6).
+ * Quelle (RE #370): ResourceAccount+0x20 ist eine Hash-Map (StringHash ->
+ * float max in Display-Einheiten). Lookup via 0x18028ac00(container, &out,
+ * &hash); Treffer: node = out[0], float max bei node+0xc. Der Wert wird mit
+ * der scale-Globale (RVA 0x4794210, zur Laufzeit 1e6) in Fixed-Point
+ * umgerechnet: max = (int64)(scale * max_float).
+ * Rueckgabe: max (>=0) oder -1 bei keinem Fund/Lesefehler.
+ */
+static int64_t read_resource_max(const unsigned char *base,
+                                 const void *account, uint32_t hash)
+{
+    typedef void (__fastcall *account_lookup_fn)(void *, void *,
+                                                 const uint32_t *);
+    account_lookup_fn lookup =
+        (account_lookup_fn)(uintptr_t)(base + 0x28ac00);
+
+    uint64_t out[4] = {0, 0, 0, 0};
+    lookup((void *)((const unsigned char *)account + 0x20), (void *)out,
+           &hash);
+
+    uint64_t node = out[0];
+    if (!node)
+        return -1;
+
+    uint32_t bits = 0;
+    if (!safe_read_u32((const unsigned char *)(uintptr_t)node + 0xc, &bits))
+        return -1;
+
+    uint64_t scale64 = 0;
+    safe_read_u64(base + 0x4794210, &scale64);
+    uint32_t scale = (uint32_t)scale64;
+    if (scale == 0)
+        scale = 1000000u;
+
+    float f;
+    memcpy(&f, &bits, sizeof(f));
+    return (int64_t)((double)f * (double)scale);
+}
+
 static void dispatch_get_state(HANDLE hPipe)
 {
     const unsigned char *base = NULL;
@@ -1741,10 +1795,13 @@ static void dispatch_get_state(HANDLE hPipe)
     }
     snprintf(resources + roff, sizeof(resources) - roff, "]");
 
+    int64_t carbonium_max = read_resource_max(base, account, 0x659cc791);
+
     send_line(hPipe,
               "{\"event\":\"get_state_result\",\"ok\":true,"
-              "\"carbonium\":%llu,\"resources\":%s}",
-              (unsigned long long)carbonium, resources);
+              "\"carbonium\":%llu,\"carbonium_max\":%lld,\"resources\":%s}",
+              (unsigned long long)carbonium, (long long)carbonium_max,
+              resources);
 }
 
 
