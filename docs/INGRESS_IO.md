@@ -69,6 +69,7 @@ Wine sieht den Container-Root als `Z:` → die DLL liegt als
 | `deploy/roles/riftbreaker-server/templates/docker-compose.yml.j2` | Mount `/opt/rbtools:ro`, Port `127.0.0.1:9001:9001` |
 | `deploy/roles/riftbreaker-server/defaults/main.yml` | `riftbreaker_bridge_port` |
 | `tools/dedicated-server/scripts/entrypoint.sh` | Injection-Supervisor + Bridge-Start |
+| `tools/referee-egress/referee_egress.py` | Egress-Sidecar (`exor_logs.txt` → `POST /referee/event`, #358) |
 
 ## Bridge-Protokoll (HTTP)
 
@@ -185,6 +186,14 @@ nur im `serve_client`-Heartbeat (Dauer-Verbindung), waehrend die Bridge pro
 Request verbindet. Der Live-Log zeigt entsprechend **kein** `score_update`.
 Das ist kein Regressions-, sondern ein fehlendes Feature → **#13**.
 Gepinnt in `tests/e2e-vollkette/kern-io-pfad.test.js` („EGRESS …").
+
+Unabhängig davon existiert seit #358 ein **Egress-Sidecar** für den
+Dedicated-Server: `tools/referee-egress/referee_egress.py` tailt denselben
+`exor_logs.txt` (Wine-Volume, ro) und postet `ready`/`wave_done`/`hq_destroyed`
+an `POST /referee/event` (Details/Compose:
+[`tools/referee-egress/README.md`](../tools/referee-egress/README.md)). Er nutzt
+den `host-gateway`-Pfad, nicht die Bridge — der exec-Kanal (#265) bleibt
+Egress-frei wie oben beschrieben.
 
 ## Live-Belege (planet, 2026-09-12)
 

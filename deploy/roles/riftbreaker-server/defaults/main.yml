@@ -82,6 +82,19 @@ riftbreaker_sessions_dir: /srv/rbmods-sessions
 riftbreaker_sessions_script: "{{ riftbreaker_deploy_dir }}/session_recorder.py"
 riftbreaker_sessions_script_src: "{{ playbook_dir }}/../tools/session-recorder/session_recorder.py"
 
+# --- Referee-Egress (Issue #358/#268) ----------------------------------------
+# Tailt den Lua-Log im Wine-Volume (read-only) und postet die Referee-Events
+# (ready/wave_done/hq_destroyed) an POST /referee/event des Tournament-Servers.
+# Der Tournament-Server bindet 0.0.0.0:{{ tournament_port }} auf dem Host — aus
+# dem Sidecar (Bridge-Netz) via host.docker.internal (host-gateway) erreichbar.
+riftbreaker_referee_egress_container: riftbreaker-egress
+# Standard-Python-Image (stdlib-only Feeder) — kein eigenes Image-Build noetig.
+riftbreaker_referee_egress_image: "python:3.12-slim"
+riftbreaker_referee_egress_script: "{{ riftbreaker_deploy_dir }}/referee_egress.py"
+riftbreaker_referee_egress_script_src: "{{ playbook_dir }}/../tools/referee-egress/referee_egress.py"
+riftbreaker_referee_egress_server: "http://host.docker.internal:{{ tournament_port | default(8081) }}"
+riftbreaker_referee_egress_world: A
+
 # --- Disk-Space-Gate (Issue #310) --------------------------------------------
 # Mindest-freier Platz auf {{ riftbreaker_disk_mount }} VOR Image-Build und
 # Mod-Backup-Tarball. Der Preflight (tasks/disk-preflight.yml) wird aus den

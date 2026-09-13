@@ -168,13 +168,15 @@ jobs:
           # (Issue #307), daher räumt dieser Lauf NUR seine eigenen Reste weg.
           C="riftbreaker-dedicated-test-${RBBATTLE_RUN_ID}"
           S="riftbreaker-sessions-test-${RBBATTLE_RUN_ID}"
+          E="riftbreaker-egress-test-${RBBATTLE_RUN_ID}"
           P="rb-test-${RBBATTLE_RUN_ID}"
           D="/opt/rbbattle-deploy/test/rb-${RBBATTLE_RUN_ID}"
           U="tournament-server-test-${RBBATTLE_RUN_ID}"
           ssh planet "docker compose -p '${P}' -f '${D}/docker-compose.yml' down --remove-orphans -v 2>/dev/null || true"
           ssh planet "docker rm -f '${C}' 2>/dev/null || true"
-          # Session-Sidecar hat einen globalen container_name -> explizit (Issue #318).
+          # Sidecars haben einen globalen container_name -> explizit (Issue #318, #358).
           ssh planet "docker rm -f '${S}' 2>/dev/null || true"
+          ssh planet "docker rm -f '${E}' 2>/dev/null || true"
           ssh planet "docker network rm '${P}_default' 2>/dev/null || true"
           # Named Volumes zusaetzlich explizit (Fallback, falls `compose down -v`
           # nicht greift — Compose-File nach fruehem Abbruch fehlt, Review-F3).
@@ -243,6 +245,7 @@ jobs:
         run: |
           C="riftbreaker-dedicated-test-${RBBATTLE_RUN_ID}"
           S="riftbreaker-sessions-test-${RBBATTLE_RUN_ID}"
+          E="riftbreaker-egress-test-${RBBATTLE_RUN_ID}"
           P="rb-test-${RBBATTLE_RUN_ID}"
           D="/opt/rbbattle-deploy/test/rb-${RBBATTLE_RUN_ID}"
           U="tournament-server-test-${RBBATTLE_RUN_ID}"
@@ -250,8 +253,9 @@ jobs:
           # falls das Compose-File (z. B. nach frühem Abbruch) nicht existiert.
           ssh planet "docker compose -p '${P}' -f '${D}/docker-compose.yml' down --remove-orphans -v 2>/dev/null || true"
           ssh planet "docker rm -f '${C}' 2>/dev/null || true"
-          # Session-Sidecar hat einen globalen container_name -> explizit (Issue #318).
+          # Sidecars haben einen globalen container_name -> explizit (Issue #318, #358).
           ssh planet "docker rm -f '${S}' 2>/dev/null || true"
+          ssh planet "docker rm -f '${E}' 2>/dev/null || true"
           ssh planet "docker network rm '${P}_default' 2>/dev/null || true"
           # `down -v` raeumt die Named Volumes nur, wenn das Compose-File noch
           # existiert. Im Fallback-Zweig (File fehlt nach fruehem Abbruch) blieben
