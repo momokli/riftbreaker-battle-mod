@@ -121,12 +121,19 @@ Was Platten füllt, sind die **Rolling-CD-Images**:
 - Mit **reproduzierbaren Builds (#247)** werden weitere Tags praktisch
   kostenlos (`0 B unique`), weil identische Layer geteilt werden.
 
-Aufräumen (prüfen, was reclaimable ist, dann gezielt entfernen):
+Aufräumen (prüfen, was reclaimable ist, dann gezielt entfernen) — läuft auf
+planet **automatisch** über die Rolle `host-hygiene` (wöchentlicher
+systemd-Timer, Issue #308; Details: `deploy/README.md`). Manuell nur zum
+Nachsehen / für einen Einmal-Lauf:
 
 ```bash
 docker system df -v                 # was belegt wie viel, was ist shared/unique
-docker image prune -a --filter 'until=168h'   # vorher df -v lesen, nicht blind
+docker image prune                  # dangling only — KEIN -a (Rollback-Stand!)
 ```
+
+⚠️ **Nicht** `docker image prune -a`: `-a` entfernt alle Images ohne laufenden
+Container und damit auch den getaggten Rollback-Stand `rb-dedicated:<alte-sha>`.
+Die Automatik nutzt bewusst nur `docker image prune` (dangling).
 
 ### Host-Hygiene (unabhängig vom Stack)
 
