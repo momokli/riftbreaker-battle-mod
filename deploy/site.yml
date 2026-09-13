@@ -19,6 +19,8 @@
 #   6. tournament-server    systemd (Rust/axum)
 #   7. website              statics + eigener rift-caddy (inkl. /tournament/*-Proxy)
 #   8. probe-timer          systemd-Timer → status.json
+#   9. host-hygiene         systemd-Timer → dangling Docker-Images aufräumen
+#                           (`docker image prune`, KEIN `-a`; Issue #308)
 #
 # Tags erlauben einen gezielten Lauf (z. B. `--tags server` im PR-Gate
 # deploy-check) ohne die übrigen Rollen anzufassen.
@@ -78,3 +80,5 @@
       tags: [website]
     - role: probe-timer
       tags: [probe]
+    - role: host-hygiene
+      tags: [hygiene]
