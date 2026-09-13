@@ -152,11 +152,14 @@ jobs:
           # Container/Netz/Unit stehen lassen. Namen sind je Lauf eindeutig
           # (Issue #307), daher räumt dieser Lauf NUR seine eigenen Reste weg.
           C="riftbreaker-dedicated-test-${RBBATTLE_RUN_ID}"
+          S="riftbreaker-sessions-test-${RBBATTLE_RUN_ID}"
           P="rb-test-${RBBATTLE_RUN_ID}"
           D="/opt/rbbattle-deploy/test/rb-${RBBATTLE_RUN_ID}"
           U="tournament-server-test-${RBBATTLE_RUN_ID}"
           ssh planet "docker compose -p '${P}' -f '${D}/docker-compose.yml' down --remove-orphans -v 2>/dev/null || true"
           ssh planet "docker rm -f '${C}' 2>/dev/null || true"
+          # Session-Sidecar hat einen globalen container_name -> explizit (Issue #318).
+          ssh planet "docker rm -f '${S}' 2>/dev/null || true"
           ssh planet "docker network rm '${P}_default' 2>/dev/null || true"
           # Named Volumes zusaetzlich explizit (Fallback, falls `compose down -v`
           # nicht greift — Compose-File nach fruehem Abbruch fehlt, Review-F3).
@@ -224,6 +227,7 @@ jobs:
         if: always() && needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           C="riftbreaker-dedicated-test-${RBBATTLE_RUN_ID}"
+          S="riftbreaker-sessions-test-${RBBATTLE_RUN_ID}"
           P="rb-test-${RBBATTLE_RUN_ID}"
           D="/opt/rbbattle-deploy/test/rb-${RBBATTLE_RUN_ID}"
           U="tournament-server-test-${RBBATTLE_RUN_ID}"
@@ -231,6 +235,8 @@ jobs:
           # falls das Compose-File (z. B. nach frühem Abbruch) nicht existiert.
           ssh planet "docker compose -p '${P}' -f '${D}/docker-compose.yml' down --remove-orphans -v 2>/dev/null || true"
           ssh planet "docker rm -f '${C}' 2>/dev/null || true"
+          # Session-Sidecar hat einen globalen container_name -> explizit (Issue #318).
+          ssh planet "docker rm -f '${S}' 2>/dev/null || true"
           ssh planet "docker network rm '${P}_default' 2>/dev/null || true"
           # `down -v` raeumt die Named Volumes nur, wenn das Compose-File noch
           # existiert. Im Fallback-Zweig (File fehlt nach fruehem Abbruch) blieben
@@ -244,9 +250,11 @@ jobs:
           ssh planet "systemctl daemon-reload 2>/dev/null || true"
           # Je Lauf eindeutige Host-Pfade entfernen (sonst akkumulieren pro Lauf
           # ~664 MB Game-Content + Mods/Deploy-Artefakte + Build-Kontext F2).
-          ssh planet "rm -rf '${D}' '/srv/rbgame-test-${RBBATTLE_RUN_ID}' '/srv/rbgame-test-${RBBATTLE_RUN_ID}-backups' '/opt/rbbattle-deploy/test/mods-${RBBATTLE_RUN_ID}' '/opt/rbbattle-deploy/test/dedicated-server-${RBBATTLE_RUN_ID}' '/opt/rbmods/tournament-server-test-${RBBATTLE_RUN_ID}' 2>/dev/null || true"
+          ssh planet "rm -rf '${D}' '/srv/rbgame-test-${RBBATTLE_RUN_ID}' '/srv/rbgame-test-${RBBATTLE_RUN_ID}-backups' '/opt/rbbattle-deploy/test/mods-${RBBATTLE_RUN_ID}' '/opt/rbbattle-deploy/test/dedicated-server-${RBBATTLE_RUN_ID}' '/opt/rbmods/tournament-server-test-${RBBATTLE_RUN_ID}' '/srv/rbmods-sessions-test-${RBBATTLE_RUN_ID}' 2>/dev/null || true"
           # Altlasten des ALTEN, festen Test-Schemas (vor #307): dessen Cleanup
           # zielte auf feste Namen, die diese run-scoped Logik nie mehr anfasst.
           # Idempotent + gefahrlos (reine Test-Pfade, kein Prod-Overlap), daher
-          # einmalig hier mit abgeraeumt (Review-F4).
-          ssh planet "rm -rf '/srv/rbgame-test' '/srv/rbgame-test-backups' '/opt/rbmods/tournament-server-test' 2>/dev/null || true"
+          # einmalig hier mit abgeraeumt (Review-F4). Der Session-Sidecar war bis
+          # #318 auch fest benannt (riftbreaker-sessions-test) — mit entfernen.
+          ssh planet "docker rm -f 'riftbreaker-sessions-test' 2>/dev/null || true"
+          ssh planet "rm -rf '/srv/rbgame-test' '/srv/rbgame-test-backups' '/opt/rbmods/tournament-server-test' '/srv/rbmods-sessions-test' 2>/dev/null || true"

@@ -36,7 +36,7 @@ Issue #304.
 |---|---|---|---|
 | `test` (`ci.yml`) | Ports ephemer bzw. `freePort()`; Temps via `mktemp`/`TemporaryDirectory`; npm-Store + ccache über `actions/cache` (concurrency-safe) | ✅ | Random-Ports in den E2E-Skripten, `mktemp -d` |
 | `build` (`ci.yml`) | `dist/` im eigenen `_work`; ccache-Wrapper in `/opt` (concurrency-safe) | ✅ | je Instanz eigenes `_work` |
-| `boot-test` (`boot-test.yml`) | Container/Netz/Volumes/Unit/Host-Pfade/Ports je Lauf über `github.run_id` | ✅ | run-scoped Namen + Cleanup (#307/#317) |
+| `boot-test` (`boot-test.yml`) | Container/Netz/Volumes/Unit/Host-Pfade/Ports je Lauf über `github.run_id` | ✅ nach Fix | #307/#317 + #318 (Session-Sidecar) |
 | `deploy-check` (`deploy-check.yml`, planet) | read-only `ansible --check`; Ansible-Venv | ✅ nach Fix | vorher nicht-atomares Venv-Setup |
 | `deploy-dev` (`deploy.yml`) | serialisiert durch `concurrency: cd-dev`; kein Shared-Setup | ✅ | eine Deploy-Spur |
 | `deploy-check-local` (`deploy-check.yml`) | GitHub-hosted, frische VM je Job | ✅ | kein geteiltes `$HOME` |
@@ -44,7 +44,9 @@ Issue #304.
 Alle übrigen Jobs (`tournament-test`, `lint`, `pr-quality`, …) laufen auf
 `ubuntu-latest` und sind nicht betroffen.
 
-## Rest-Lücke + Fix: nicht-atomares Toolchain-Setup (behoben)
+## Rest-Lücken + Fix
+
+### A) Nicht-atomares Toolchain-Setup (behoben)
 
 Vorher erzeugten `boot-test` und `deploy-check` (planet) ihr Ansible-Venv selbst:
 
@@ -69,6 +71,27 @@ Analog installierte `boot-test` die Rust-Toolchain per `curl | sh` in
   im Job.
 - `deploy-check-local` (GitHub-hosted) erzeugt sein Venv weiter lokal
   (ephemärer VM, kein geteiltes `$HOME`).
+
+### B) Fester Container-Name des Session-Sidecars (behoben)
+
+Beim Nachweis (zwei parallel dispatchte `boot-test`-Läufe) kollidierte der
+Session-Recorder-Sidecar aus Issue #280:
+
+```
+Error response from daemon: Conflict. The container name
+"/riftbreaker-sessions-test" is already in use by container "024982fdf1c6".
+```
+
+`deploy/test-vars.yml` setzte `riftbreaker_sessions_container:
+riftbreaker-sessions-test` und `riftbreaker_sessions_dir:
+/srv/rbmods-sessions-test` **ohne** `rbbattle_run_suffix` — alle übrigen
+Test-Ressourcen sind seit #307/#317 run-scoped, der (später ergänzte) Sidecar
+wurde übersehen. Ein Compose-`container_name` ist global, daher kollidieren zwei
+Läufe trotz getrennter Compose-Projekte.
+
+**Nachher:** Sidecar-Name und -Verzeichnis laufen mit `rbbattle_run_suffix`; der
+Teardown in `boot-test.yml` entfernt beides zusätzlich explizit (inkl. der
+festen Altlast `riftbreaker-sessions-test` / `/srv/rbmods-sessions-test`).
 
 ## Kapazität (planet)
 
