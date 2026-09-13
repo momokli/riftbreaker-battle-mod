@@ -80,3 +80,10 @@ rustup_home: /home/runner/.rustup
 # `rbbattle_run_suffix` (die Prod-Isolation selbst kam mit Issue #280).
 riftbreaker_sessions_container: "riftbreaker-sessions-test-{{ rbbattle_run_suffix }}"
 riftbreaker_sessions_dir: "/srv/rbmods-sessions-test-{{ rbbattle_run_suffix }}"
+
+# Disk-Space-Gate (Issue #310): Mindest-freier-Platz auf / vor Image-Build und
+# Mod-Backup. Der Boot-Test fährt denselben Preflight wie Prod (Default 10 GB).
+# Für einen bewussten Negativ-Lauf hier hochsetzen, z. B. 999999 (= garantiert
+# Abbruch). Der hermetische Selbsttest deckt den Negativ-Fall ohne Host ab:
+#   bash deploy/tests/disk-gate/run.sh
+riftbreaker_disk_min_free_gb: 10
