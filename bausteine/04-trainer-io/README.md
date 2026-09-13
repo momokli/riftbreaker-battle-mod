@@ -28,19 +28,20 @@ zwei Wege, den Kanal zu testen: **Test 0** startet dieselbe Pipe-Server-
 Logik als normale `rbbridge_standalone.exe` — ganz **ohne Injection**;
 **Test 1** ist der bisherige Injection-Test (notepad.exe + injector.exe).
 
-**Richtung (kanonisch):** `bausteine/04-trainer-io/` ist die kanonische
+**Richtung (kanonisch):** `bausteine/04-trainer-io/` ist die **einzige**
 Build-/Distributions-Quelle — `scripts/package_bausteine.sh` und der
 Build-Job in `.github/workflows/ci.yml` bauen **ausschließlich** hieraus.
-`trainer/injector/` und `trainer/rbbridge/` sind der **gespiegelte
-Legacy-Klon** (byte-identisch gehalten, MD5-gleich). `pipe_client.py` +
-dieses README gibt es nur hier.
+Der frühere byte-identische Spiegel unter `trainer/injector/` +
+`trainer/rbbridge/` wurde mit Issue #299 entfernt (`trainer/` enthält nur
+noch Protokoll und RE-Tooling). `pipe_client.py` + dieses README gibt es
+nur hier.
 
 ## Inhalt
 
 ```
-injector/injector.c      <- kanonisch (injector.exe, x64, Windows; Spiegel: trainer/injector/)
+injector/injector.c      <- kanonisch (injector.exe, x64, Windows)
 rbbridge/rbbridge.c      <- kanonisch (baut rbbridge.dll UND
-                            rbbridge_standalone.exe, x64, Windows; Spiegel: trainer/rbbridge/)
+                            rbbridge_standalone.exe, x64, Windows)
 bridge/pipe_bridge.c     <- NEU (Issue #265): baut pipe_bridge.exe — HTTP(9001)->Pipe-Bridge
                             (x64, Windows; Win32 + ws2_32; nur in dieser Quelle, kein Spiegel)
 pipe_client.py           <- Test-Client (Python 3, Windows, nur Standardbibliothek)
@@ -207,8 +208,8 @@ injizieren (os.open blockiert, bis der Pipe-Server existiert).
 
 ## Status
 
-- [x] rbbridge.c/injector.c kanonisch in `bausteine/04-trainer-io/`; `trainer/` byte-identisch gespiegelt (MD5)
-- [x] rbbridge.c Dual-Mode-Umbau (DLL + Standalone-EXE), Spiegel gesynct
+- [x] rbbridge.c/injector.c einzige Quelle in `bausteine/04-trainer-io/` (Spiegel unter `trainer/` mit Issue #299 entfernt)
+- [x] rbbridge.c Dual-Mode-Umbau (DLL + Standalone-EXE aus einer Quelle)
 - [x] exec-Dispatch per AOB-Signatur/RTTI (statt fester RVAs) + Cache
 - [x] Host-Test `rbbridge_hosttest.c` (scan_bytes + RTTI-Resolver, synthetischer PE-Puffer)
 - [x] Cross-Build (x86_64-w64-mingw32-gcc): rbbridge.dll + rbbridge_standalone.exe kompilieren

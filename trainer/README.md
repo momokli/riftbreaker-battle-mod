@@ -5,6 +5,11 @@
 > RE-Phase. Alles RE-abhängige ist im Code als `TODO(RE)` / `FIXME(RE)`
 > markiert — siehe [Offene RE-Punkte](#offene-re-punkte).
 
+> **Die C-Quellen (`rbbridge.c`, `injector.c`) liegen kanonisch in
+> [`bausteine/04-trainer-io/`](../bausteine/04-trainer-io/); hier liegen nur
+> Protokoll (`protocol.md`) und RE-Tooling (`scan/`).** Hier gibt es bewusst
+> keine Kopie mehr (Issue #299).
+
 ## Architektur (Trainer-only)
 
 **Die Trainer-DLL ist das einzige I/O-Gateway zwischen Spielprozess und
@@ -47,8 +52,8 @@ Außenwelt.** Der Lua-Mod bleibt reine Spiellogik — er darf (Findings:
 
 | Komponente | Inhalt | Aufgabe |
 |---|---|---|
-| `injector/injector.c` | `injector.exe` (x64, Windows) | DLL zur Laufzeit in den Spielprozess laden (Remote-`LoadLibraryW`); Ziel per PID oder Prozessname |
-| `rbbridge/rbbridge.c` | `rbbridge.dll` + `rbbridge_standalone.exe` (x64, Windows) | In-Game-Gateway: Named-Pipe-Server `\\.\pipe\rbbattle`, line-delimited JSON v0; `exec`-Dispatch löst `ConsoleService::ExecuteCommand` per AOB-Signatur/RTTI auf (statt fester RVAs) und führt sie aus; `score_update`-State-Snapshot (send_state-Egress, Issue #13). **Dual-Mode:** eine Quelle baut per `-DRBBRIDGE_STANDALONE` zusätzlich eine Standalone-EXE mit identischem Protokoll (Test ohne Injection, Baustein 04 Test 0). **Hinweis:** kanonische Build-/Distributions-Quelle ist `bausteine/04-trainer-io/`; `trainer/rbbridge/rbbridge.c` ist der byte-identische Spiegel (Legacy-Klon) |
+| `bausteine/04-trainer-io/injector/injector.c` | `injector.exe` (x64, Windows) | DLL zur Laufzeit in den Spielprozess laden (Remote-`LoadLibraryW`); Ziel per PID oder Prozessname |
+| `bausteine/04-trainer-io/rbbridge/rbbridge.c` | `rbbridge.dll` + `rbbridge_standalone.exe` (x64, Windows) | In-Game-Gateway: Named-Pipe-Server `\\.\pipe\rbbattle`, line-delimited JSON v0; `exec`-Dispatch löst `ConsoleService::ExecuteCommand` per AOB-Signatur/RTTI auf (statt fester RVAs) und führt sie aus; `score_update`-State-Snapshot (send_state-Egress, Issue #13). **Dual-Mode:** eine Quelle baut per `-DRBBRIDGE_STANDALONE` zusätzlich eine Standalone-EXE mit identischem Protokoll (Test ohne Injection, Baustein 04 Test 0) |
 | `scan/` | Python + pymem | RE-Phase: Prozess-/Modul-Info (`scan_find.py`), interaktiver Wert-Scan (`scan_values.py`) → `offsets.json` |
 | `protocol.md` | Spezifikation | Event-Schema v0 (Spiel ⇄ Server) |
 
@@ -59,28 +64,31 @@ müssen x64 sein**.
 
 ### Option A — MinGW-w64
 
+Die Quellen liegen kanonisch unter `bausteine/04-trainer-io/` (vom Repo-Root
+aus aufrufen).
+
 ```bat
 :: rbbridge.dll (Injection)
-x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -shared -o rbbridge.dll rbbridge.c
+x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -shared -o rbbridge.dll bausteine/04-trainer-io/rbbridge/rbbridge.c
 
 :: rbbridge_standalone.exe (gleiche Quelle, kein Injection noetig)
-x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe rbbridge.c
+x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe bausteine/04-trainer-io/rbbridge/rbbridge.c
 
 :: injector.exe
-x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe injector.c
+x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe bausteine/04-trainer-io/injector/injector.c
 ```
 
 ### Option B — MSVC (Visual Studio Build Tools / Developer Prompt)
 
 ```bat
 :: rbbridge.dll
-cl /nologo /O2 /W3 /LD rbbridge.c /Fe:rbbridge.dll
+cl /nologo /O2 /W3 /LD bausteine/04-trainer-io/rbbridge/rbbridge.c /Fe:rbbridge.dll
 
 :: rbbridge_standalone.exe
-cl /nologo /O2 /W3 /DRBBRIDGE_STANDALONE rbbridge.c /Fe:rbbridge_standalone.exe
+cl /nologo /O2 /W3 /DRBBRIDGE_STANDALONE bausteine/04-trainer-io/rbbridge/rbbridge.c /Fe:rbbridge_standalone.exe
 
 :: injector.exe  (shell32.lib nur wegen CommandLineToArgvW)
-cl /nologo /O2 /W3 injector.c shell32.lib /Fe:injector.exe
+cl /nologo /O2 /W3 bausteine/04-trainer-io/injector/injector.c shell32.lib /Fe:injector.exe
 ```
 
 ## Nutzung
