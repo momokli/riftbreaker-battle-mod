@@ -94,3 +94,29 @@ dumpt bei einem Live-Restart Speicher-Fenster um `resource_system` + `container`
   byte-identisch (77.885.440 / 252.334.080).
 - Tooling: `llvm-pdbutil` / `llvm-readobj` (mac + planet), Disasm via
   `/opt/rb-re/venv` (pefile + capstone) + `/tmp/disasm.py` auf planet.
+
+## Symbol-Auflösung + Korrekturen (2026-09-13)
+
+`llvm-pdbutil dump -publics` gegen die Mac-PDB liefert die exakten Namen:
+
+| RVA | Symbol (demangled) |
+|---|---|
+| `0xC60050` | `ResourceAccount* Riftbreaker::GetPlayerAccount(Exor::World*, unsigned int)` |
+| `0x2D3520` | `Optional<pair<StringHash, ResourceValue>> ResourceBasket::GetResourceAmount(StringHash const&) const` |
+| `0xF1E3D0` | `bool PlayerService::AddResourceAmount(unsigned int, UtfString const&, float, bool)` |
+| `0xF28060` | `Vector<UtfString> PlayerService::GetGlobalResourcesList(unsigned int)` |
+| `0xF1E700` | `UnitService::AnimBoneForwardToTargetEntity` (Animation — NICHT Ressource!) |
+| `0xEF4AC0` | `Ecs::GetComponents` (nicht der Container-Lookup) |
+
+Konsequenzen:
+
+- `[PlayerService+8]` ist ein **`World*`**, kein „Resource-System". Der Account-Zugriff
+  ist `GetPlayerAccount(World*, playerId)` → `ResourceAccount*`; der Container liegt
+  bei `World+0x30` (bestätigt über `lea rcx,[rdi+0x30]` in `GetPlayerAccount`).
+- **Werte sind `float`** (`AddResourceAmount` nimmt `float`). `ResourceValue` ist ein
+  8-Byte-Struct, vermutlich `{float current, float max}` — „100 von 350" = `{100.0f, 350.0f}`.
+- Der Basket ist **StringHash-keyed** (`GetResourceAmount(StringHash)`), also muss
+  carbonium `0x659cc791` im Basket stecken. Dass der Scan ihn nicht fand, liegt am
+  **pipe_bridge-Race** (später Treffer geht verloren), nicht am Key-Format.
+- Frühere Annahme „Container-Lookup = 0xEF4AC0" war falsch (das ist `Ecs::GetComponents`);
+  der echte Lookup läuft über `0x180C26E50`/`0x181DD06F0` (aus `GetPlayerAccount`).
