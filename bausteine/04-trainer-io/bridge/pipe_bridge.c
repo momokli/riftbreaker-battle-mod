@@ -622,7 +622,7 @@ static void handle_probe(SOCKET c)
         char buf[READ_BUF];
         size_t n = 0;
         DWORD deadline = GetTickCount() + (DWORD)timeout_ms;
-        int got_probe = 0;
+        int got_scan_done = 0;
 
         off += (size_t)snprintf(results + off, sizeof(results) - off, "[");
         for (;;) {
@@ -655,9 +655,10 @@ static void handle_probe(SOCKET c)
                                 (strcmp(ev, "probe") == 0 ||
                                  strcmp(ev, "probe_dump") == 0 ||
                                  strcmp(ev, "scan_hit") == 0 ||
+                                 strcmp(ev, "scan_done") == 0 ||
                                  strcmp(ev, "error") == 0)) {
-                                if (strcmp(ev, "probe") == 0)
-                                    got_probe = 1;
+                                if (strcmp(ev, "scan_done") == 0)
+                                    got_scan_done = 1;
                                 if (off + len + 4 < sizeof(results)) {
                                     off += (size_t)snprintf(
                                         results + off, sizeof(results) - off,
@@ -673,7 +674,7 @@ static void handle_probe(SOCKET c)
                         n -= start;
                     }
                 }
-            } else if (got_probe) {
+            } else if (got_scan_done) {
                 break;
             }
             if (deadline_passed(deadline))
