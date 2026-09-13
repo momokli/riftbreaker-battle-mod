@@ -66,6 +66,11 @@
     dest: "{{ riftbreaker_sessions_script }}"
     remote_src: true
     mode: "0644"
+  # Im --check (deploy-check gegen eine noch nicht deployte Instanz, Issue #290)
+  # legt der vorige `file`-Task das Deploy-Verzeichnis nicht an; ein
+  # `remote_src`-Copy ohne Zielverzeichnis bricht hart ab (im echten Deploy
+  # existiert es). Read-only-Gate: hier ueberspringen, Rest weiter pruefen.
+  when: not ansible_check_mode
   notify: restart riftbreaker-server
 
 - name: config.cfg rendern (Passwort aus Vault, 0644 fuer steamuser-lesbar)
@@ -252,7 +257,11 @@
         src: "{{ mods_zip_dest }}"
         dest: "{{ riftbreaker_mod_dir }}"
         remote_src: true
-      when: riftbreaker_mod_update_needed
+      # `unarchive` (remote_src) braucht ein existierendes Zielverzeichnis; im
+      # --check einer frischen Instanz legt der vorige `file`-Task es nicht an.
+      when:
+        - riftbreaker_mod_update_needed
+        - not ansible_check_mode
 
     # Der Marker ist die Änderungs-Erkennung; sein Schreiben notifyt den
     # Restart-Handler (Mod-Änderung -> Container wirklich neu starten). Der
