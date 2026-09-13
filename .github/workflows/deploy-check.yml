@@ -90,6 +90,11 @@ jobs:
             python3 -m unittest test_deploy_gate -v
           )
 
+      # Hinweis (Issue #318): Dieser Job läuft auf einem GitHub-Hosted-Runner
+      # (frischer, ephemärer VM je Lauf) — $HOME ist NICHT zwischen Jobs
+      # geteilt, daher ist die einmalige Venv-Erstellung hier race-frei und
+      # bleibt bewusst lokal. Nur der self-hosted `deploy-check`-Job bezieht
+      # das Venv vom Host-Setup (.github/runner/setup.sh).
       - name: Tooling bereitstellen (ansible-core + yamllint)
         if: steps.gate.outputs.skip != 'true'
         run: |
@@ -148,15 +153,18 @@ jobs:
       - uses: actions/checkout@v4
         if: steps.gate.outputs.skip != 'true'
 
-      - name: Tooling bereitstellen (ansible-core)
+      - name: Tooling prüfen (Venv vom Host-Setup, Issue #318)
         if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
+          # Kein nicht-atomares Setup mehr im Job (Issue #318): das Ansible-Venv
+          # wird einmalig vom Host-Setup provisioniert (.github/runner/setup.sh)
+          # und hier nur verifiziert. Zwei gleichzeitige planet-Jobs würden sonst
+          # im gemeinsamen $HOME des Runner-Users um dasselbe Venv racen.
           VENV="$HOME/.local/ansible-deploy-check"
           if [ ! -x "$VENV/bin/ansible-playbook" ]; then
-            python3 -m venv "$VENV"
-            "$VENV/bin/pip" install --disable-pip-version-check \
-              "ansible-core==2.19.*"
+            echo "::error::Ansible-Venv fehlt ($VENV). Einmalig auf dem Runner-Host: bash .github/runner/setup.sh (siehe .github/runner/README.md, docs/ci-parallel-safety.md)."
+            exit 1
           fi
           echo "$VENV/bin" >> "$GITHUB_PATH"
           "$VENV/bin/ansible" --version
