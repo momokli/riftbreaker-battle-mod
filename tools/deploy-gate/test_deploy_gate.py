@@ -18,6 +18,12 @@ Ergaenzt (Issue #238) um PlayerCountTest: den Log-Provider player_count.py
 (Spieler online / unbekannt -> PARK, wait_until_empty() nie DEPLOY bei Timeout).
 Laeuft ueber den bestehenden CI-Step (ci.yml, Job test) - keine ci.yml-Aenderung.
 
+Ergaenzt (Issue #337) um WireContractTest: prueft den AKTUELLEN, gate-losen
+deploy.yml-Vertrag ueber check_deploy_wiring.check_wiring() (push auf main,
+workflow_dispatch, SSH-Deploy-Step). Das #238-Park-Gate ist mit e8f7783
+bewusst aus deploy.yml entfernt; die Frage "Gate wieder einfuehren?"
+(#238/#327) ist offen - der Check verbietet das Gate nicht.
+
 Nur Standardbibliothek (unittest, os, sys, subprocess, tempfile).
 
 Aufruf: python3 -m unittest test_deploy_gate -v   (aus diesem Verzeichnis)
@@ -30,11 +36,14 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import check_deploy_wiring  # noqa: E402
 import deploy_gate  # noqa: E402
 import player_count  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLAYER_COUNT = os.path.join(HERE, "player_count.py")
+REPO_ROOT = os.path.dirname(os.path.dirname(HERE))
+DEPLOY_WORKFLOW = os.path.join(REPO_ROOT, ".github", "workflows", "deploy.yml")
 
 
 class FakeClock:
@@ -268,6 +277,45 @@ class NegativeSemanticsTest(unittest.TestCase):
         result, _ = self._wait(self._provider([UNKNOWN]), timeout=90.0)
         self.assertEqual(result, (deploy_gate.TIMEOUT, "unbekannt"))
         self.assertNotEqual(result[0], deploy_gate.DEPLOY)
+
+
+# --- WireContractTest (Issue #337): gate-loser deploy.yml-Vertrag -------------
+
+
+class WireContractTest(unittest.TestCase):
+    """Der reale deploy.yml-Vertrag ist gate-los und bleibt konsistent (#337)."""
+
+    def test_real_deploy_workflow_passes(self):
+        self.assertTrue(os.path.isfile(DEPLOY_WORKFLOW), DEPLOY_WORKFLOW)
+        self.assertEqual(check_deploy_wiring.check_wiring(DEPLOY_WORKFLOW), [])
+
+    def test_push_without_main_is_reported(self):
+        problems = self._wiring(
+            "on:\n  push:\n    branches: [dev]\n  workflow_dispatch:\n"
+        )
+        self.assertTrue(any("main" in problem for problem in problems))
+
+    def test_missing_ssh_step_is_reported(self):
+        problems = self._wiring(
+            "on:\n  push:\n    branches: [main]\n  workflow_dispatch:\n"
+        )
+        self.assertTrue(any("SSH" in problem for problem in problems))
+
+    def test_missing_dispatch_is_reported(self):
+        problems = self._wiring(
+            "on:\n  push:\n    branches: [main]\n"
+            "jobs:\n  d:\n    steps:\n      - run: ssh rbd x\n"
+        )
+        self.assertTrue(
+            any("workflow_dispatch" in problem for problem in problems)
+        )
+
+    def _wiring(self, workflow_text):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "deploy.yml")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(workflow_text)
+            return check_deploy_wiring.check_wiring(path)
 
 
 if __name__ == "__main__":

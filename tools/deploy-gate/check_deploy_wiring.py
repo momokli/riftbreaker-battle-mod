@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-check_deploy_wiring.py - statischer Wiring-Contract-Check fuer deploy.yml (#238).
+check_deploy_wiring.py - statischer Wiring-Contract-Check fuer deploy.yml.
 
 Prueft textbasiert (stdlib, KEIN PyYAML - keine zusaetzliche Runner-Abhaengigkeit),
-dass die Deploy-Parkierung (Issue #238) im CD-Workflow korrekt verdrahtet ist:
+dass der gate-lose CD-Workflow seine minimale Struktur behaelt:
 
-  1. Checkout-Step vorhanden (actions/checkout) - sonst liegt tools/deploy-gate
-     gar nicht auf dem Runner.
-  2. workflow_dispatch-Trigger mit Inputs `force` + `timeout`.
-  3. Gate-Step (deploy_gate.py) liegt VOR dem SSH-Deploy-Step (ssh ... rbd).
-  4. Der Gate-Step ruft den Provider player_count.py auf.
+  1. push-Trigger auf `main` (CD bei jedem Merge auf main).
+  2. workflow_dispatch-Trigger vorhanden (manueller Re-Deploy; KEINE Inputs).
+  3. SSH-Deploy-Step vorhanden (`ssh ... rbd`) - die Deploy-Mechanik.
+
+Hinweis: Die frueher hier gepruefte #238-Park-Verdrahtung (Checkout-Step,
+`force`/`timeout`-Inputs, deploy_gate.py-Gate-Step, player_count.py) wurde mit
+e8f7783 BEWUSST aus deploy.yml entfernt. Ob das Gate wieder eingefuehrt wird
+(#238/#327), ist offen und wird von diesem Check NICHT entschieden.
 
 Exit-Codes:
   0 = alle Invarianten erfuellt
@@ -45,6 +48,23 @@ def _index_of(lines, predicate):
     return None
 
 
+def _indent(line):
+    return len(line) - len(line.lstrip(" "))
+
+
+def _block_end(lines, start_idx):
+    """Erster Index nach dem Block ab start_idx (Zeile mit gleicher/geringerer
+    Einrueckung; Leer- und Kommentarzeilen zaehlen nicht als Blockende)."""
+    base = _indent(lines[start_idx])
+    for idx in range(start_idx + 1, len(lines)):
+        line = lines[idx]
+        if not line.strip() or _is_comment(line):
+            continue
+        if _indent(line) <= base:
+            return idx
+    return len(lines)
+
+
 def check_wiring(path=DEFAULT_WORKFLOW):
     """Liefert eine Liste fehlender Invarianten (leer = alles ok)."""
     problems = []
@@ -54,36 +74,24 @@ def check_wiring(path=DEFAULT_WORKFLOW):
     except OSError as exc:
         return ["Workflow nicht lesbar (%s): %s" % (path, exc)]
 
-    # 1. Checkout-Step (sonst fehlen tools/deploy-gate/* auf dem Runner).
-    if not any("actions/checkout" in line for line in lines):
-        problems.append("Checkout-Step fehlt (actions/checkout).")
-
-    # 2. workflow_dispatch-Trigger mit Inputs force + timeout.
-    has_dispatch = any(re.match(r"\s*workflow_dispatch\s*:", line) for line in lines)
-    if not has_dispatch:
-        problems.append("workflow_dispatch-Trigger fehlt.")
+    # 1. push-Trigger auf main (CD bei jedem Merge auf main).
+    push_idx = _index_of(lines, lambda line: re.match(r"\s*push\s*:", line))
+    if push_idx is None:
+        problems.append("push-Trigger fehlt.")
     else:
-        if not any(re.match(r"^\s{2,}force\s*:", line) for line in lines):
-            problems.append("workflow_dispatch Input 'force' fehlt.")
-        if not any(re.match(r"^\s{2,}timeout\s*:", line) for line in lines):
-            problems.append("workflow_dispatch Input 'timeout' fehlt.")
+        push_block = lines[push_idx:_block_end(lines, push_idx)]
+        if not any(
+            re.search(r"\bbranches\b.*\bmain\b", line) for line in push_block
+        ):
+            problems.append("push-Trigger ohne 'branches: [main]'.")
 
-    # 3. Gate-Step liegt VOR dem SSH-Deploy-Step.
-    gate_idx = _index_of(lines, lambda line: "deploy_gate.py" in line)
-    ssh_idx = _index_of(lines, lambda line: SSH_LINE.search(line) is not None)
-    if gate_idx is None:
-        problems.append("Gate-Step fehlt (kein Aufruf von deploy_gate.py).")
-    if ssh_idx is None:
+    # 2. workflow_dispatch-Trigger (manueller Re-Deploy; keine Inputs).
+    if not any(re.match(r"\s*workflow_dispatch\s*:", line) for line in lines):
+        problems.append("workflow_dispatch-Trigger fehlt.")
+
+    # 3. SSH-Deploy-Step - die Deploy-Mechanik (`ssh ... rbd`).
+    if _index_of(lines, lambda line: SSH_LINE.search(line) is not None) is None:
         problems.append("SSH-Deploy-Step fehlt (kein 'ssh ... rbd').")
-    if gate_idx is not None and ssh_idx is not None and gate_idx >= ssh_idx:
-        problems.append("Gate-Step liegt nicht VOR dem SSH-Deploy-Step.")
-
-    # 4. Der Gate-Step ruft den Provider player_count.py auf.
-    if gate_idx is not None:
-        end = ssh_idx if ssh_idx is not None else len(lines)
-        gate_block = lines[gate_idx:end]
-        if not any("player_count.py" in line for line in gate_block):
-            problems.append("Gate-Step ruft player_count.py nicht auf.")
 
     return problems
 
