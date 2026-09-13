@@ -18,7 +18,9 @@
 #   RB_HYGIENE_IMAGE_REPOS   Repo-Präfixe für den Vorher/Nachher-Nachweis
 #   RB_HYGIENE_DRY_RUN       1 = nur anzeigen, nichts löschen
 # ============================================================
-set -u
+# `pipefail` sorgt dafür, dass ein fehlgeschlagenes `docker image ls` in der
+# Zähl-Pipeline nicht stillschweigend als "0" durchgeht (Review-Blocker 2).
+set -uo pipefail
 
 REPOS="${RB_HYGIENE_IMAGE_REPOS:-rb-dedicated rb-headless-client}"
 DRY_RUN="${RB_HYGIENE_DRY_RUN:-0}"
@@ -43,7 +45,12 @@ tagged_count(){
   printf '%s' "$total"
 }
 
-DANGLING_BEFORE="$(docker image ls -f dangling=true -q 2>/dev/null | wc -l | tr -d ' ')"
+# Dangling-Images zählen. Mit `pipefail` schlägt die Pipeline fehl, wenn
+# `docker image ls` fehlschlägt — sonst würde ein Daemon-Hänger als "0"
+# durchgehen und ein stiller No-op als Erfolg gemeldet.
+count_dangling(){ docker image ls -f dangling=true -q 2>/dev/null | wc -l | tr -d ' '; }
+
+DANGLING_BEFORE="$(count_dangling)" || { log "FEHLER: 'docker image ls' (dangling) fehlgeschlagen — Zustand unklar, Abbruch"; exit 1; }
 TAGGED_BEFORE="$(tagged_count)"
 log "vorher: ${DANGLING_BEFORE} dangling, ${TAGGED_BEFORE} getaggte Mod-Images (${REPOS// /, })"
 
@@ -51,10 +58,17 @@ if [ "$DRY_RUN" = "1" ]; then
   log "DRY-RUN: wuerde 'docker image prune -f' ausfuehren (dangling only, kein -a)"
 else
   log "docker image prune -f (dangling only, kein -a)"
-  docker image prune -f
+  # Rückgabecode prüfen: ein fehlgeschlagener Prune darf NICHT als "ok"
+  # durchgehen — sonst meldet der Timer Erfolg, obwohl nichts freigegeben wurde.
+  PRUNE_RC=0
+  docker image prune -f || PRUNE_RC=$?
+  if [ "$PRUNE_RC" -ne 0 ]; then
+    log "FEHLER: docker image prune fehlgeschlagen (rc=${PRUNE_RC}) — nichts aufgeraeumt"
+    exit 1
+  fi
 fi
 
-DANGLING_AFTER="$(docker image ls -f dangling=true -q 2>/dev/null | wc -l | tr -d ' ')"
+DANGLING_AFTER="$(count_dangling)" || { log "FEHLER: 'docker image ls' (dangling) nach dem Prune fehlgeschlagen — Abbruch"; exit 1; }
 TAGGED_AFTER="$(tagged_count)"
 log "nachher: ${DANGLING_AFTER} dangling, ${TAGGED_AFTER} getaggte Mod-Images"
 
