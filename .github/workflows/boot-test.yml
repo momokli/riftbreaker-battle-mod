@@ -23,12 +23,13 @@ name: Boot-Test
 # scripts/, dieses Workflow-File) geändert wurde. Doku-/Metadaten-PRs ziehen den
 # Gate damit nicht mehr.
 #
-# Keine globale `concurrency`-Group mehr (Issue #303): GitHubs Concurrency
-# verdrängt wartende Läufe statt sie zu reihen — bei mehreren offenen PRs blieb
-# der Required-Check so offen. Issue #307 entkoppelt zusätzlich alle festen
-# Ressourcen (Container-/Unit-Namen, Compose-Projekt/-Netz, Named Volumes,
-# Host-Pfade, Tournament-Port) je Lauf über `github.run_id`, sodass parallel
-# laufende boot-tests nicht kollidieren (Vorbereitung für #304 Scale-out).
+# Concurrency (Issue #352): eine Job-Ebene-`concurrency`-Group auf `boot-test`
+# (cancel-in-progress:false) reiht die planet-Cold-Boots EIN statt sie parallel
+# zu fahren — parallele Boots ueberlasteten planet (Bridge 503/Timeout). Anders
+# als die in #303 entfernte GLOBALE Group bleibt der Required-Check damit
+# sauber: wartende Läufe bleiben „queued" statt verdrängt. Issue #307 entkoppelt
+# zusätzlich alle festen Ressourcen (Container-/Unit-Namen, Compose-Projekt/-Netz,
+# Named Volumes, Host-Pfade, Tournament-Port) je Lauf über `github.run_id`.
 
 on:
   pull_request:
@@ -66,7 +67,7 @@ jobs:
           # sonst fälschlich grün). Doku-PRs landen hier auf relevant=false.
           CHANGED="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || true)"
           if printf '%s\n' "$CHANGED" \
-             | grep -Eq '^(mod/|deploy/|tools/dedicated-server/|scripts/|\.github/workflows/boot-test\.yml)'; then
+             | grep -Eq '^(mod/|deploy/|tools/dedicated-server/|scripts/(build_rbbridge_tools|package_bausteine|package_mod|mod_version)\.sh|\.github/workflows/boot-test\.yml)'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "relevant=false" >> "$GITHUB_OUTPUT"
@@ -77,6 +78,13 @@ jobs:
     needs: changes
     runs-on: [self-hosted, planet]
     timeout-minutes: 25
+    # Serialisiert die teuren planet-Cold-Boots: nur EIN Dedicated-Server
+    # gleichzeitig, sonst ueberlastet der parallele Boot die Bridge/Tournament
+    # (503/Timeout, Issue #352). cancel-in-progress:false => warten statt
+    # verdrängen (behebt das Issue-#303-Problem des offenen Required-Checks).
+    concurrency:
+      group: boot-test
+      cancel-in-progress: false
     steps:
       - name: Keine relevanten Pfade — Boot-Test übersprungen (Gate bleibt grün)
         if: needs.changes.outputs.relevant != 'true'
