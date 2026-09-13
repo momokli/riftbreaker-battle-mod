@@ -122,14 +122,16 @@ mehr in `deploy.yml` verdrahtet. Ob das Gate wieder eingeführt wird
 - **Merge-Gate**: `deploy-check.yml` führt `check_deploy_wiring.py` aus — es
   prüft nur noch den aktuellen gate-losen Vertrag (`push` auf `main`,
   `workflow_dispatch`, SSH-Deploy-Step, `permissions: contents: read`,
-  `concurrency: cd-dev`) — plus die Unit-Tests des Moduls. Änderungen an
+  `concurrency: cd-deploy`) — plus die Unit-Tests des Moduls. Änderungen an
   `.github/workflows/deploy.yml` oder `tools/deploy-gate/**` lösen den Check
   auf `main` aus.
 - **Provider-Troubleshooting** (gilt für manuell vorgeschaltete Läufe): parkt
   ein Lauf direkt nach einem Server-Restart ohne `PauseGame`-Zeile, ist der
   Provider unsicher → Park bis Timeout (bewusst, nie blind deployen). Ausweg:
   Workflow **re-run** oder Dispatch mit `--force`.
-- **Concurrency** bleibt `cd-dev` / `cancel-in-progress: false`.
+- **Concurrency** bleibt `cd-deploy` / `cancel-in-progress: false` — eine
+gemeinsame Gruppe mit `deploy-release.yml` (Issue #290), weil beide denselben
+Host-Checkout und dieselbe Instanz-Datei teilen.
 
 ## Tests
 

@@ -38,8 +38,11 @@ permissions:
 
 # Rolling Deploy auf die DEV-Instanz: niemals parallel, ein laufender Lauf
 # wird nicht abgebrochen (der Stand muss atomar bleiben).
+# Gemeinsame Concurrency-Gruppe mit deploy-release.yml (Issue #290): beide
+# Workflows teilen Host-Checkout (/opt/rbbattle-deploy/repo) und Instanz-Datei
+# (/opt/rbbattle-deploy/instance) — eine Gruppe serialisiert sie.
 concurrency:
-  group: cd-dev
+  group: cd-deploy
   cancel-in-progress: false
 
 jobs:

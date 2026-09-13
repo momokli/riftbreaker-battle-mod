@@ -10,7 +10,7 @@ dass der gate-lose CD-Workflow seine minimale Struktur behaelt:
   2. workflow_dispatch-Trigger vorhanden (manueller Re-Deploy; keine Inputs).
   3. SSH-Deploy-Step vorhanden (`ssh ... rbd`) - die Deploy-Mechanik.
   4. `permissions: contents: read` unveraendert (Least privilege).
-  5. `concurrency: group: cd-dev` unveraendert (kein paralleler Deploy).
+  5. `concurrency: group: cd-deploy` unveraendert (kein paralleler Deploy).
 
 Historisch (Issue #238): Die frueher hier gepruefte Park-Verdrahtung
 (actions/checkout, `force`/`timeout`-Inputs, `deploy_gate.py`-Gate-Step,
@@ -43,7 +43,7 @@ DISPATCH_KEY = re.compile(r"\s*workflow_dispatch\s*:")
 PERMISSIONS_KEY = re.compile(r"\s*permissions\s*:")
 CONTENTS_READ = re.compile(r"\s+contents\s*:\s*read\s*$")
 CONCURRENCY_KEY = re.compile(r"\s*concurrency\s*:")
-CONCURRENCY_GROUP_CD = re.compile(r"\s+group\s*:\s*[\"']?cd-dev[\"']?\s*$")
+CONCURRENCY_GROUP_CD = re.compile(r"\s+group\s*:\s*[\"']?cd-deploy[\"']?\s*$")
 
 
 def _is_comment(line):
@@ -114,10 +114,11 @@ def check_wiring(path=DEFAULT_WORKFLOW):
             "permissions 'contents: read' fehlt (Least privilege)."
         )
 
-    # 5. concurrency: group: cd-dev (kein paralleler Deploy).
+    # 5. concurrency: group: cd-deploy (kein paralleler Deploy; gemeinsame
+    #    Gruppe mit deploy-release.yml, Issue #290).
     conc = _block(lines, CONCURRENCY_KEY)
     if conc is None or not any(CONCURRENCY_GROUP_CD.match(line) for line in conc):
-        problems.append("concurrency-Gruppe 'cd-dev' fehlt.")
+        problems.append("concurrency-Gruppe 'cd-deploy' fehlt.")
 
     return problems
 

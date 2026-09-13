@@ -21,7 +21,7 @@ Laeuft ueber den bestehenden CI-Step (ci.yml, Job test) - keine ci.yml-Aenderung
 Ergaenzt (Issue #337) um WireContractTest: prueft den AKTUELLEN, gate-losen
 deploy.yml-Vertrag ueber check_deploy_wiring.check_wiring() (push auf main,
 workflow_dispatch, SSH-Deploy-Step, permissions contents: read, concurrency
-cd-dev). Die #238-Park-Verdrahtung wurde mit e8f7783 bewusst entfernt; die
+cd-deploy). Die #238-Park-Verdrahtung wurde mit e8f7783 bewusst entfernt; die
 Frage "Gate wieder einfuehren?" (#238/#327) ist offen - der Check verbietet
 das Gate nicht.
 
@@ -291,7 +291,7 @@ GOOD_WORKFLOW = (
     "permissions:\n"
     "  contents: read\n"
     "concurrency:\n"
-    "  group: cd-dev\n"
+    "  group: cd-deploy\n"
     "  cancel-in-progress: false\n"
     "jobs:\n"
     "  deploy-dev:\n"
@@ -329,7 +329,7 @@ class WireContractTest(unittest.TestCase):
         self.assertTrue(any("permissions" in problem for problem in problems))
 
     def test_concurrency_group_change_is_reported(self):
-        problems = self._wiring(GOOD_WORKFLOW.replace("group: cd-dev", "group: cd-other"))
+        problems = self._wiring(GOOD_WORKFLOW.replace("group: cd-deploy", "group: cd-other"))
         self.assertTrue(any("concurrency" in problem for problem in problems))
 
     def _wiring(self, workflow_text):

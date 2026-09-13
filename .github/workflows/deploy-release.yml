@@ -24,8 +24,14 @@ on:
 permissions:
   contents: read
 
+# Gemeinsame Concurrency-Gruppe mit deploy.yml (Issue #290): beide Workflows
+# nutzen denselben Host-Checkout (/opt/rbbattle-deploy/repo) UND dieselbe
+# Instanz-Datei (/opt/rbbattle-deploy/instance). Getrennte Gruppen (cd-release
+# vs. cd-dev) könnten bei mehr als einem Runner / Queue-Peeling parallel laufen
+# und Checkout bzw. Instanz-Datei racen -> es würde die falsche Instanz
+# deployt. EINE Gruppe serialisiert beide Workflows.
 concurrency:
-  group: cd-release
+  group: cd-deploy
   cancel-in-progress: false
 
 jobs:
@@ -39,27 +45,34 @@ jobs:
     steps:
       - name: Tag auflösen (Tag → SHA)
         id: tag
+        env:
+          # Input NUR über env (NIE `${{ inputs.tag }}` direkt in `run:`) —
+          # verhindert Command-Injection auf dem self-hosted Prod-Runner.
+          TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          tag="${{ inputs.tag }}"
-          case "$tag" in
-            v[0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo "::error::Erwartet einen Tag der Form vX.Y.Z, bekam: $tag"; exit 1 ;;
-          esac
-          sha="$(git ls-remote https://github.com/${GITHUB_REPOSITORY}.git \
-                  "refs/tags/${tag}^{}" | awk '{print $1}')"
+          # Echter Muster-Check (kein Shell-Glob): genau v<ziffern>.<ziffern>.<ziffern>.
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Erwartet einen Tag der Form vX.Y.Z, bekam: $TAG"
+            exit 1
+          fi
+          sha="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" \
+                  "refs/tags/${TAG}^{}" | awk '{print $1}')"
           if [ -z "$sha" ]; then
-            sha="$(git ls-remote https://github.com/${GITHUB_REPOSITORY}.git \
-                    "refs/tags/${tag}" | awk '{print $1}')"
+            sha="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" \
+                    "refs/tags/${TAG}" | awk '{print $1}')"
           fi
           if [ -z "$sha" ]; then
-            echo "::error::Tag ${tag} existiert nicht (oder ist kein Tag-Objekt)."
+            echo "::error::Tag ${TAG} existiert nicht (oder ist kein Tag-Objekt)."
             exit 1
           fi
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "Tag ${tag} -> ${sha}"
+          echo "Tag ${TAG} -> ${sha}"
 
       - name: Deploy per SSH (deploy-User, forced command, Instanz release)
+        env:
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ steps.tag.outputs.sha }}
         run: |
           set -euo pipefail
-          ssh -o BatchMode=yes rbd "${{ steps.tag.outputs.sha }} refs/tags/${{ inputs.tag }} release"
+          ssh -o BatchMode=yes rbd "$SHA refs/tags/$TAG release"

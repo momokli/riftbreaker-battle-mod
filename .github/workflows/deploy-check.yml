@@ -76,7 +76,7 @@ jobs:
       # Statischer Wiring-Check + Provider-Tests (Issue #337, vormals #238):
       # prueft den AKTUELLEN, gate-losen deploy.yml-Vertrag (push auf main,
       # workflow_dispatch, SSH-Deploy-Step, permissions contents: read,
-      # concurrency cd-dev) plus die Provider-Unit-Tests (inkl. Negativ-Semantik).
+      # concurrency cd-deploy) plus die Provider-Unit-Tests (inkl. Negativ-Semantik).
       # Das #238-Park-Gate ist mit e8f7783 bewusst aus deploy.yml entfernt; ob es
       # wiederkommt (#238/#327), entscheidet dieser Check nicht. Read-only,
       # keine Secrets, keine Prod-Aktion.
