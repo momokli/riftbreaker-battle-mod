@@ -1594,8 +1594,50 @@ static void probe_resources(HANDLE hPipe) {
   if (container)
     dump_qwords(hPipe, "container", (const void *)(uintptr_t)container, 24);
 
-  /* carbonium-Hash scannen: findet die Basket-Entries direkt. */
+  /* carbonium-Hash scannen (Cross-Check). */
   scan_hash(hPipe, 0x659cc791, 24);
+
+  /* Account-Basket deterministisch dumpen: GetPlayerAccount(World*, 0) ->
+   * ResourceAccount*; account[+8] = sortiertes (StringHash, ResourceValue)-
+   * Array, account[+0x10] = Count (Disasm 0x2E04A0). */
+  {
+    uint64_t world = 0;
+    safe_read_u64(ps + 8, &world);
+    if (world) {
+      void *(*gpa)(void *, unsigned int) =
+          (void *(*)(void *, unsigned int))(uintptr_t)(base + 0xC60050);
+      void *account = gpa((void *)(uintptr_t)world, 0);
+      if (account) {
+        uint64_t arr = 0, count = 0;
+        safe_read_u64((unsigned char *)account + 8, &arr);
+        safe_read_u64((unsigned char *)account + 0x10, &count);
+        send_line(hPipe,
+                  "{\"event\":\"account\",\"account\":\"0x%llx\","
+                  "\"array\":\"0x%llx\",\"count\":%llu}",
+                  (unsigned long long)(uintptr_t)account,
+                  (unsigned long long)arr, (unsigned long long)count);
+        if (arr && count && count < 256) {
+          for (unsigned long long i = 0; i < count; i++) {
+            const unsigned char *e = (const unsigned char *)(uintptr_t)arr +
+                                     i * 16;
+            uint64_t hv = 0, v = 0;
+            safe_read_u64(e, &hv);
+            safe_read_u64(e + 8, &v);
+            send_line(hPipe,
+                      "{\"event\":\"basket_entry\",\"i\":%llu,"
+                      "\"hash\":\"0x%08x\",\"value_hex\":\"0x%llx\","
+                      "\"value\":%llu}",
+                      i, (unsigned int)hv, (unsigned long long)v,
+                      (unsigned long long)v);
+          }
+        }
+      } else {
+        send_line(hPipe, "{\"event\":\"account\",\"error\":\"no_account\"}");
+      }
+    } else {
+      send_line(hPipe, "{\"event\":\"account\",\"error\":\"no_world\"}");
+    }
+  }
 }
 
 
