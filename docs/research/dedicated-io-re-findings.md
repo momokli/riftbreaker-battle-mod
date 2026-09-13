@@ -147,3 +147,16 @@ PlayerService → [+8] = World*
   → account[+0x10] = Count
 ```
 Rest noch offen: max/capacity („/300") liegt separat, nicht im Basket.
+
+## Phase A: get_state (sauber, symmetrisch zu exec) — LIVE
+
+`POST /get_state` (pipe_bridge) → `{"cmd":"get_state"}` → `dispatch_get_state` →
+**eine** `get_state_result`-Zeile. Symmetrisch zu `/exec` → `exec_result`.
+
+Live bestätigt (Spieler online, HQ gebaut):
+- carbonium `0x659cc791`: 300 → 100 (HQ kostet 200)
+- steel `0x0d01a504`: 300 → 100 (HQ kostet auch 200 steel)
+- `0xa4c40a93`: 4.000.000 → 7.000.000 (steigt beim Bauen — Produktion/Energie)
+
+Damit ist der bidirektionale Kanal **baugleich**: IN (`exec`) / OUT (`get_state`)
+über denselben Pfad, dieselbe Request/Response-Form, denselben `handle_line`-Dispatch.
