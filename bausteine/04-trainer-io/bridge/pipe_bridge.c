@@ -694,6 +694,40 @@ static void handle_probe(SOCKET c)
     }
 }
 
+/* POST /get_state: fuehrt {"cmd":"get_state"} aus und liefert die eine
+ * get_state_result-Zeile als HTTP-Body (symmetrisch zu /exec). */
+static void handle_get_state(SOCKET c)
+{
+    char line[READ_BUF];
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+    HANDLE h = pipe_connect(2500);
+
+    if (h == INVALID_HANDLE_VALUE) {
+        blog("POST /get_state: Pipe nicht erreichbar -> pipe_unavailable");
+        http_respond(c, 503, "Service Unavailable",
+                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+        return;
+    }
+
+    if (!pipe_write_all(h, "{\"cmd\":\"get_state\"}\n")) {
+        CloseHandle(h);
+        http_respond(c, 500, "Internal Server Error",
+                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
+        return;
+    }
+
+    int rc = pipe_wait_line(h, "get_state_result", NULL, timeout_ms,
+                            line, sizeof(line));
+    CloseHandle(h);
+
+    if (rc != 0) {
+        http_respond(c, 500, "Internal Server Error",
+                     "{\"ok\":false,\"reason\":\"timeout\"}");
+        return;
+    }
+    http_respond(c, 200, "OK", line);
+}
+
 static void handle_client(SOCKET c)
 {
     char *req = malloc(REQ_MAX + 1);
@@ -774,6 +808,8 @@ static void handle_client(SOCKET c)
             free(b);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/probe") == 0) {
             handle_probe(c);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/get_state") == 0) {
+            handle_get_state(c);
         } else {
             http_respond(c, 404, "Not Found",
                          "{\"ok\":false,\"reason\":\"not_found\"}");

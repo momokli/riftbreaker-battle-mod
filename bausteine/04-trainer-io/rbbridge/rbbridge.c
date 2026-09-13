@@ -1641,8 +1641,116 @@ static void probe_resources(HANDLE hPipe) {
 }
 
 
+/* get_state (Issue #363/#365): liest den Account-Basket und liefert EINE
+ * get_state_result-Zeile (sauber, symmetrisch zu exec_result). */
+static void dispatch_get_state(HANDLE hPipe)
+{
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    const char *via = NULL;
+    const unsigned char *execfn = NULL;
+
+    if (!resolve_module(&base, &size, &via, &execfn)) {
+        send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
+                         "\"reason\":\"no_module\"}");
+        return;
+    }
+
+    /* PlayerService-vftable RVA 0x2e8e910 (RE #363/#365). */
+    const unsigned char *vftable = base + 0x2e8e910;
+    const uint64_t needle = (uint64_t)(uintptr_t)vftable;
+    unsigned char *ps = NULL;
+    uintptr_t addr = 0;
+
+    for (;;) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
+            break;
+        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
+        if (next <= addr)
+            break;
+        addr = next;
+        if (!is_readable_region(&mi))
+            continue;
+        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
+        size_t nq = mi.RegionSize / sizeof(uint64_t);
+        for (size_t i = 0; i < nq; i++) {
+            if (q[i] == needle) {
+                ps = (unsigned char *)&q[i];
+                break;
+            }
+        }
+        if (ps)
+            break;
+    }
+
+    if (!ps) {
+        send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
+                         "\"reason\":\"no_playerservice\"}");
+        return;
+    }
+
+    uint64_t world = 0;
+    safe_read_u64(ps + 8, &world);
+    if (!world) {
+        send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
+                         "\"reason\":\"no_world\"}");
+        return;
+    }
+
+    void *(*gpa)(void *, unsigned int) =
+        (void *(*)(void *, unsigned int))(uintptr_t)(base + 0xC60050);
+    void *account = gpa((void *)(uintptr_t)world, 0);
+    if (!account) {
+        send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
+                         "\"reason\":\"no_account\"}");
+        return;
+    }
+
+    uint64_t arr = 0, count = 0;
+    safe_read_u64((unsigned char *)account + 8, &arr);
+    safe_read_u64((unsigned char *)account + 0x10, &count);
+
+    uint64_t carbonium = 0;
+    char resources[RESP_BUF_SIZE];
+    size_t roff = 0;
+    int nres = 0;
+    int w = snprintf(resources + roff, sizeof(resources) - roff, "[");
+    if (w > 0)
+        roff += (size_t)w;
+
+    if (arr && count && count < 256) {
+        for (uint64_t i = 0; i < count; i++) {
+            const unsigned char *e = (const unsigned char *)(uintptr_t)arr +
+                                     i * 16;
+            uint64_t hv = 0, v = 0;
+            safe_read_u64(e, &hv);
+            safe_read_u64(e + 8, &v);
+            uint32_t h = (uint32_t)hv;
+            if (h == 0x659cc791)
+                carbonium = v;
+            if (roff + 64 < sizeof(resources)) {
+                w = snprintf(resources + roff, sizeof(resources) - roff,
+                             "%s{\"hash\":\"0x%08x\",\"value\":%llu}",
+                             nres ? "," : "", h, (unsigned long long)v);
+                if (w > 0)
+                    roff += (size_t)w;
+                nres++;
+            }
+        }
+    }
+    snprintf(resources + roff, sizeof(resources) - roff, "]");
+
+    send_line(hPipe,
+              "{\"event\":\"get_state_result\",\"ok\":true,"
+              "\"carbonium\":%llu,\"resources\":%s}",
+              (unsigned long long)carbonium, resources);
+}
+
+
 /*
- * Verteilt eine empfangene Protokollzeile (ohne \n).
+ * Verteilt eine empfangene Protokollzeile (ohne 
+).
  * Unbekanntes/Nicht-JSON wird geloggt und (nur bei JSON-artigen Zeilen)
  * mit einem error-Event beantwortet - der Client soll Feedback bekommen,
  * das Spiel darf sich nie daran stoeren.
@@ -1684,6 +1792,11 @@ static void handle_line(HANDLE hPipe, const char *line)
 
     if (strcmp(cmd, "probe") == 0) {
         probe_resources(hPipe);
+        return;
+    }
+
+    if (strcmp(cmd, "get_state") == 0) {
+        dispatch_get_state(hPipe);
         return;
     }
 
