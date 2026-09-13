@@ -182,3 +182,36 @@ Quelle: Disasm der Capacity-Prüfung in `PlayerService::AddResourceAmount`
 
 Implementiert in `read_resource_max()` (rbbridge.c); `get_state` liefert
 `carbonium_max`. Live validiert: Speicher bauen → max 300 → 350.
+
+## Phase C: Wave-Counter + time-to-next + full state egress — LIVE (#376)
+
+`dom_mananger` (Lua class `dom_mananger -> event_manager -> LuaGraphNode`) hält:
+
+- `currentDifficultyLevel` (1..9) = der **Wave-Counter**.
+- `spawner` (StateMachine) + state-abhängige Timer: `cooldownTimer`/`idleTimer`/
+  `waitForSpawnTimer`/`sleepSafeTimer`; `time_to_next` = max davon (ceil),
+  `wait` = `GetDurationLimit()-GetDuration()` (fixed 5s).
+- `difficultyIncrease` (StateMachine) + `time_to_next_difficulty` (Restzeit).
+
+**Thread-safety (der Kern des #376-Fixes):** Lua NICHT vom pipe thread anfassen
+(crasht). Deshalb: Mod wrappt `dom_mananger:Update` auf dem game thread und ruft
+`_G.rbbridge_capture_state(json)`; die DLL cached den String (spinlock),
+`get_state` liest nur den Cache.
+
+**Resolver:** `lua_State*` NICHT über `World::GetSystem<LuaSystem>()` (`0x194EDA0`)
+holen — das page-faultet beim Boot (`World::GetSystem(TypeHash)`), weil die
+System-Map des World noch aufgebaut wird. Stattdessen Memory-Read: vftable-Scan
+auf `LuaGraphNode` (`base + 0x2F46D70`) + `[+0x20]` luabind-object → `lua_State*`.
+Reine `VirtualQuery` + `safe_read_u64`, kein World-Zugriff.
+
+Live bestätigt (Build 2.0.58485): `wave=1`, `dom_state="wait"`, `time_to_next=5`
+(fixed wait), `time_to_next_difficulty=200`, `players=1`, volle Service-Getter
+(Mission/Biome/Warmup/etc.) — kein Crash, pipe stabil (`/health` →
+`{"ok":true,"pipe":true}`).
+
+**Noch offen (nächste Schritte):**
+
+- HUD „next wave in X" = `MissionService:ActivateMissionFlow` (`time_max`), NICHT
+  im DOM-Snapshot — der fehlende „echte" Next-Wave-Countdown.
+- Typed Control-Commands (`pause_dom`/`resume_dom`/`spawn_wave`/`end_game`/…)
+  als Wrapper über bestätigte `exec`-Strings.
