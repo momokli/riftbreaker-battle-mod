@@ -1,0 +1,33 @@
+---
+# Hermetischer Selbsttest des Disk-Space-Gates (Issue #310).
+#
+# Läuft LOKAL auf dem Control-Node/CI-Runner: keine Host-Facts, kein SSH,
+# keine Prod-Aktion. Stattdessen werden synthetische `ansible_mounts` injiziert
+# und die ECHTE Preflight-Task-Datei der Rolle aufgerufen — geprüft wird also
+# genau der Code, der auch im Deploy läuft (kein Nachbau).
+#
+# Aufruf über run.sh:
+#   ansible-playbook deploy/tests/disk-gate/main.yml -e disk_gate_test=pass
+#   ansible-playbook deploy/tests/disk-gate/main.yml -e disk_gate_test=fail
+#
+# Erwartung: pass -> exit 0 · fail -> exit != 0 mit "PLATZ-GATE" im Output.
+- name: "Disk-Gate Selbsttest (synthetische Mount-Facts, Issue #310)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    # Defaults der Rolle (hier explizit, damit der Test ohne Rollen-Defaults
+    # laeuft — die Preflight-Datei liest genau diese Variablen).
+    riftbreaker_disk_mount: "/"
+    riftbreaker_disk_min_free_gb: 10
+    # pass: 100 GB frei (>= 10 GB) · fail: 1 GB frei (< 10 GB)
+    disk_gate_test: pass
+    ansible_mounts:
+      - mount: "/"
+        size_total: "{{ 200 * 1073741824 }}"
+        size_available: "{{ (100 * 1073741824) if disk_gate_test == 'pass' else 1073741824 }}"
+
+  tasks:
+    - name: Preflight-Task der Rolle ausführen (echter Deploy-Code)
+      include_tasks: "{{ playbook_dir }}/../../roles/riftbreaker-server/tasks/disk-preflight.yml"

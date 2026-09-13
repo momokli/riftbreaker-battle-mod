@@ -1,0 +1,37 @@
+---
+# Disk-Space-Gate (Issue #310) — bricht den Deploy ab, BEVOR Image-Build und
+# Backup-Tarball Platz verbrauchen. Ein halbfertiger Deploy auf einer vollen
+# Platte ist der schlimmste Zustand: planet baut/sichert/deployt auf derselben
+# Platte, die der Stack vollschreibt — dann kann man sich nicht mehr
+# herausdeployen.
+#
+# Aufruf: NICHT aus der Rolle selbst (die läuft erst NACH
+# dedicated-server-image), sondern als Preflight aus den Playbooks, die vor den
+# Rollen laufen (deploy/site.yml, deploy/test-deploy.yml):
+#   include_role: {name: riftbreaker-server, tasks_from: disk-preflight}
+#
+# Read-only (Fact ansible_mounts) → läuft im --check unverändert und ändert
+# nichts. Schwelle konfigurierbar über riftbreaker_disk_min_free_gb (Default 10)
+# und riftbreaker_disk_mount (Default "/"), siehe defaults/main.yml.
+
+- name: "Disk-Gate — freien Platz auf {{ riftbreaker_disk_mount }} prüfen (vor Image-Build/Backup, #310)"
+  vars:
+    riftbreaker_disk_threshold_bytes: "{{ (riftbreaker_disk_min_free_gb | float) * 1073741824 }}"
+    riftbreaker_disk_avail_bytes: >-
+      {{ ((ansible_mounts | default([]))
+          | selectattr('mount', 'equalto', riftbreaker_disk_mount)
+          | map(attribute='size_available')
+          | list | first) | default(0) | int }}
+  assert:
+    that:
+      - riftbreaker_disk_avail_bytes | float >= riftbreaker_disk_threshold_bytes | float
+    fail_msg: >-
+      PLATZ-GATE: nur {{ (riftbreaker_disk_avail_bytes | float / 1073741824) | round(1) }} GB
+      frei auf {{ riftbreaker_disk_mount }} ({{ inventory_hostname }}) — gefordert sind
+      {{ riftbreaker_disk_min_free_gb }} GB. Deploy abgebrochen, BEVOR Image-Build und
+      Backup-Tarball Platz verbrauchen (der halbfertige Deploy auf voller Platte ist der
+      schlimmste Zustand). Naechster Schritt: erst aufraeumen (Docker-Images/Logs/Backups,
+      siehe Issue #301), dann erneut deployen.
+    success_msg: >-
+      Platz-Gate OK: {{ (riftbreaker_disk_avail_bytes | float / 1073741824) | round(1) }} GB
+      frei auf {{ riftbreaker_disk_mount }} (>= {{ riftbreaker_disk_min_free_gb }} GB).
