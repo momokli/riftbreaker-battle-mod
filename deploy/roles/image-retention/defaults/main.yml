@@ -1,0 +1,20 @@
+---
+# Defaults der Rolle image-retention (Issue #309): systemd-Timer, der alte
+# Mod-Image-Tags per scripts/docker_image_tag_retention.sh entfernt — ohne das
+# laufende Image und ohne den Rollback-Stand zu verlieren.
+#
+# Muster: deploy/roles/probe-timer/ (Skript + *.service.j2 + *.timer.j2).
+image_retention_unit: rbmods-image-retention
+image_retention_bin: /usr/local/bin/rbmods-image-retention.sh
+image_retention_log: /var/log/rbmods-image-retention.log
+
+# Zu pflegende Image-Repositories (ohne Registry-Praefix, nur lokale Tags).
+image_retention_repos: "rb-dedicated rb-headless-client"
+
+# Anzahl gehaltener Rollback-Tags je Repo — ZUSAETZLICH zum laufenden Image
+# und zum aktuellen Deploy-Tag. Konservativ: 2.
+image_retention_rollback_tags: 2
+
+# Takt des Timers (systemd OnCalendar). Taeglich reicht: die Tag-Flut entsteht
+# durch Merges, nicht stundengenau.
+image_retention_on_calendar: daily

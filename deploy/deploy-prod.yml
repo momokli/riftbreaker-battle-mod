@@ -1,0 +1,46 @@
+---
+# Prod-Instanz + Satellite-Relay (Issue #328) — zweiter Dedicated-Server
+# (planet, :6322) öffentlich erreichbar über den Satellite-Relay
+# (satellite:6321 -> :6322). Löst das clientseitig hardgewirete Port-6321-
+# Problem über eine zweite öffentliche IPv4 (den Satellite) statt eines
+# zweiten Ports.
+#
+# Aufruf (analog deploy/test-deploy.yml, Vault nötig für Server-Passwort):
+#   ansible-playbook -i deploy/inventory deploy/deploy-prod.yml \
+#     -e @deploy/prod-vars.yml --vault-password-file <vault.pass>
+#
+# Tag-Deployment (v* -> prod, main -> dev rolling) + DNS-Split sind Follow-up.
+# Hier wird der Image-Tag wie dev aus dem Checkout-SHA abgeleitet.
+
+- name: RIFT BATTLE — Prod-Instanz (planet :6322)
+  hosts: planet
+  become: true
+
+  pre_tasks:
+    - name: Deploy-SHA für den Image-Tag ermitteln
+      command: git -c safe.directory=* -C {{ playbook_dir }}/.. rev-parse --short=12 HEAD
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      changed_when: false
+      register: rbbattle_prod_sha
+      tags: always
+
+    - name: Image-Tag (Deploy-SHA) als Fact setzen
+      set_fact:
+        deploy_image_tag: "{{ rbbattle_prod_sha.stdout | trim }}"
+      tags: always
+
+  roles:
+    - role: mods-zip
+    - role: dedicated-server-image
+    - role: game-content
+    - role: rbtools
+    - role: riftbreaker-server
+
+- name: RIFT BATTLE — Satellite-Relay (satellite)
+  hosts: satellite
+  become: true
+
+  roles:
+    - role: satellite-relay

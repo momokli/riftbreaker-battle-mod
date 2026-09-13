@@ -1,4 +1,4 @@
-# deploy/ — Ansible-Deployment (planet)
+# deploy/ — Ansible-Deployment (planet + satellite)
 
 Ziel-Stack + Betriebsregeln: [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md) ·
 Host-Anforderungen (CPU/RAM/Storage je Szenario):
@@ -11,7 +11,11 @@ die forced command führt genau dieses Playbook aus.
 ## Voraussetzungen
 
 - `ansible` (core ≥ 2.19) auf dem Control-Node (dem Rechner, von dem du deployst; beim CD ist das planet selbst, als root — siehe CD-Abschnitt).
-- SSH mesh-first: Alias `planet` in `~/.ssh/config` (Tailscale), `root`-Login.
+- SSH mesh-first: Aliase `planet` (dev-/prod-Dedi) **und** `satellite`
+  (Relay-Host) in `~/.ssh/config` (Tailscale), jeweils `root`-Login. Wie `planet`
+  ist `satellite` ein Mesh-Alias — SSH **niemals** über die Public-IP
+  (`65.21.181.48` ist nur für den öffentlichen UDP-Port). Ohne den Alias läuft
+  `deploy/deploy-prod.yml` (`hosts: satellite`) ins Leere.
 - Auf planet: Docker + `docker compose`, `systemd`,
   Caddy als geteilter Container `mellon-caddy` (Host-Gateway) — der Rift-Stack
   betreibt zusätzlich einen eigenen, schlanken `rift-caddy` (Image `caddy:2`,
@@ -79,7 +83,12 @@ ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
 
 Reihenfolge der Rollen (site.yml): `mods-zip` → `dedicated-server-image` →
 `game-content` → `riftbreaker-server` → `tournament-server` →
-`website` → `probe-timer` → `host-hygiene`.
+`website` → `probe-timer` → `image-retention` → `host-hygiene`.
+
+**Vor** den Rollen (in den `pre_tasks`) prüft ein Preflight den freien Platz auf
+`/` (Disk-Space-Gate, Issue #310): zu wenig Platz → Abbruch **vor** Image-Build
+und Backup-Tarball. Schwelle `riftbreaker_disk_min_free_gb` (Default 10 GB),
+Details in [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md#disk-space-gate--deploy-bremse-vor-voller-platte-issue-310).
 
 ### From-zero (ein Kommando, Issue #209)
 
@@ -119,6 +128,36 @@ Was das Playbook selbst besitzt:
   Mod-Update wirkungslos (Compose startet einen unveränderten Container nicht
   neu) — Ziel: „Merge → Mod ist auf :6321 wirklich geladen".
 
+### Prod-Instanz + Satellite-Relay (Issue #328)
+
+Zweite, **koexistierende** Instanz auf planet (`:6322`) plus der Relay-Host
+`satellite`, der als „IP-Lender" den client-seitig hardgewireten Port `6321`
+per DNAT auf die prod-Instanz übersetzt:
+
+```bash
+# Vault-Passwort nötig (Server-Passwort), analog site.yml:
+ansible-playbook -i deploy/inventory deploy/deploy-prod.yml \
+  -e @deploy/prod-vars.yml --ask-vault-pass
+```
+
+- `deploy/deploy-prod.yml`: Play 1 = prod-Stack auf `planet` (`mods-zip` →
+  `dedicated-server-image` → `game-content` → `rbtools` → `riftbreaker-server`),
+  Play 2 = Rolle `satellite-relay` auf `satellite`.
+- `deploy/prod-vars.yml`: Overrides der prod-Instanz (eigene Container-/Port-/
+  Pfad-/Volume-Namen, IO-Bridge `9002`), damit sie nicht mit dev (`:6321`)
+  kollidiert. Das Einfrieren auf einen Git-Tag ist Follow-up.
+- Rolle `satellite-relay`: reboot-fester UDP-DNAT auf dem Satellite (inbound
+  `satellite_relay_port` → `satellite_relay_target_host:target_port`) via
+  iptables-PREROUTING + MASQUERADE, persistiert über eine systemd-Oneshot-Unit;
+  nur Core-Module.
+- **Einzige Quelle der `satellite_relay_*`-Werte** sind die Rollen-Defaults
+  (`roles/satellite-relay/defaults/main.yml`) — bewusst **keine**
+  `host_vars/satellite/`, damit keine Precedence-Falle entsteht (host_vars
+  würde die Defaults still überschreiben). Die Rolle läuft nur gegen `satellite`.
+
+Der Relay ergänzt den dev-Stack; `deploy/site.yml` (CD) bleibt unverändert der
+dev-Rollout.
+
 ### Vault
 
 Wie bisher: Server-Passwort nur in `deploy/inventory/host_vars/planet/vault.yml`
@@ -129,14 +168,26 @@ unter `/etc/rbbattle-deploy/vault.pass`. **Nie** im Repo/Log.
 
 Nach jedem Merge auf `main` rollt der Workflow
 [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) den aktuellen
-Mod-Stand automatisch auf den Solo-DEV-Server aus (planet, Port 6321).
+Mod-Stand automatisch auf den Solo-**DEV**-Server aus (planet, Port 6321).
 
-Topologie (Issue #91, 2026-09-10): **EIN** Server auf `:6321` statt
-Steam-/Non-Steam-Dualität (Direct-IP, `disable_steam "1"` deckt beide Stores ab).
-Der **Tag→prod-Kanal ist on hold** (vorerst gestrichen): reaktiviert, sobald
-ein **zweites Deploy-Target** existiert — aktuell gibt es genau EINEN Server
-(planet, :6321). Der Workflow kennt bewusst keinen Tag-Trigger und keine
-prod-Umgebung.
+Topologie (Issue #328): **zwei** Instanzen, ein Dedi-Port.
+
+- **DEV** (planet, `:6321`): rolling, von diesem CD-Workflow deployt
+  (`deploy/site.yml`, Werte aus `inventory/host_vars/planet/`).
+- **PROD** (planet, `:6322`): koexistierende zweite Instanz
+  (`riftbreaker-dedicated-prod`), öffentlich erreichbar über den
+  **Satellite-Relay** (eigene IPv4, inbound `:6321` → DNAT → planet `:6322`).
+  Deploy separat per [`deploy-prod.yml`](deploy-prod.yml) +
+  [`prod-vars.yml`](prod-vars.yml). Der Client ist effektiv auf Port `6321`
+  hardgewired — der zweite öffentliche Zugang läuft deshalb über eine zweite
+  **Adresse** (den Satellite), nicht über einen zweiten Port.
+
+Der **Tag→prod-Kanal ist weiterhin nicht verdrahtet** (Follow-up): der
+CD-Workflow kennt keinen Tag-Trigger und keine prod-Umgebung; `tags: ['v*']`
+bleiben Marker. Das frühere Argument „erst wenn ein zweites Deploy-Target
+existiert" ist aber erledigt — das zweite Target (`deploy-prod.yml`, planet
+`:6322` via Satellite-Relay) existiert seit Issue #328; der Tag-Trigger darauf
+wird als eigenes Folge-Issue angeschlossen.
 
 ## CD: SSH-Deploy (dedizierter deploy-User)
 
@@ -319,7 +370,8 @@ re-run oder `force=true`.
 seit Issue #306 in **zwei Required Checks** aufgeteilt:
 
 - **`deploy-check-local`** (GitHub-Hosted-Runner, `ubuntu-latest`) prüft rein
-  lokal: `yamllint` über `deploy/`, Compose-Templates rendern
+  lokal: `yamllint` über `deploy/`, Playbook-`--syntax-check` für `site.yml` +
+  `deploy-prod.yml` (prod-Playbook, Issue #328), Compose-Templates rendern
   (`check-render.yml`) und jedes gerenderte Compose-File durch
   `docker compose config`. Kein Host-/SSH-Zugriff, keine Secrets.
 - **`deploy-check`** (self-hosted Runner, planet) fährt den echten Host-Check
@@ -358,6 +410,7 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 | `dedicated-server-image` | docker | baut `rb-dedicated:<deploy-sha>` auf planet (Laufzeit :6321) |
 | `game-content` | steamcmd/sync | Dedicated-Server-Content (App 4114030) nach `riftbreaker_game_dir` (idempotent, fail loud) |
 | `riftbreaker-server` | docker | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation |
+| `satellite-relay` | iptables + systemd | UDP-DNAT-Relay auf `satellite`: inbound `:6321` → planet prod `:6322` (reboot-fest; Rollen-Defaults = einzige Wertquelle) |
 | `tournament-server` | systemd | Rust/axum Referee + Web-UI. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt) |
 | `website` | statics + eigener Caddy | `site/*` → Docroot, eigener `rift-caddy` (plain HTTP: Statics + `/tournament/*`-Proxy) + EIN Eintrag im geteilten Host-Caddy (Issue #322) |
 | `mods-zip` | — | Paketierung + md5-Paritäts-Check (hart) |
@@ -368,11 +421,14 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 
 ```text
 deploy/
-├── site.yml                       # Haupt-Playbook (pre_tasks + Rollenreihenfolge)
+├── site.yml                       # Haupt-Playbook dev (pre_tasks + Rollenreihenfolge)
+├── deploy-prod.yml                # Prod-Instanz (planet :6322) + Satellite-Relay
+├── prod-vars.yml                  # Overrides der prod-Instanz (dev-kokexistierend)
+├── test-deploy.yml / test-vars.yml # Boot-Test-Instanz (CI)
 ├── check-render.yml               # deploy-check-local: rendert Compose-Templates lokal
 ├── deploy-ssh.sh                  # CD: forced command für den deploy-User (SSH)
 ├── inventory/
-│   ├── hosts.yml                  # Host "planet" (mesh-first, Tailscale)
+│   ├── hosts.yml                  # Hosts "planet" (dev/prod) + "satellite" (Relay, mesh-first)
 │   └── host_vars/planet/
 │       ├── vars.yml               # nicht-geheime Konfiguration
 │       └── vault.yml              # Geheimnis (ansible-vault verschlüsselt)
@@ -380,6 +436,7 @@ deploy/
     ├── dedicated-server-image/    # baut rb-dedicated:<sha>
     ├── game-content/              # Steam-Content (App 4114030) deklarativ
     ├── riftbreaker-server/        # docker 6321 (+ Restart-Handler)
+    ├── satellite-relay/           # UDP-DNAT-Relay (planet prod :6322 via satellite)
     ├── tournament-server/         # systemd
     ├── website/                   # statics + eigener rift-caddy (Issue #322)
     ├── mods-zip/                  # Paketierung + md5-Parität
@@ -394,7 +451,8 @@ deploy/
 - Compose-/Vault-Dateien mit Passwort: restriktive Rechte am Ziel
   (Compose-Datei `0600`, sie enthält das Server-Passwort im `command`).
 - Kein Deploy ohne Freigabe; nichts manuell am produktiven Server.
-- SSH ausschließlich mesh-first über den `planet`-Alias (Tailscale).
+- SSH ausschließlich mesh-first über die Aliase `planet` und `satellite`
+  (Tailscale) — nie über Public-IPs.
 - **SSH-Deploy:** der Runner-Key darf im `authorized_keys` des deploy-Users
   NUR die forced command ausführen (`from="127.0.0.1"`, kein PTY, kein
   Port-/Agent-Forwarding); die SHA wird im Skript strikt validiert und nie in

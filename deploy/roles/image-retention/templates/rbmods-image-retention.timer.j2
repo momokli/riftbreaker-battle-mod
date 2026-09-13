@@ -1,0 +1,10 @@
+[Unit]
+Description=RIFT BATTLE Image-Tag-Retention ({{ image_retention_on_calendar }})
+
+[Timer]
+OnCalendar={{ image_retention_on_calendar }}
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

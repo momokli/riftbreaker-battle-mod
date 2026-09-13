@@ -91,6 +91,16 @@ probe_endpoints_file: /usr/local/etc/rbmods-probe.endpoints
 probe_interval_min: 2
 probe_server_ip: 65.21.27.234
 
+# --- Image-Tag-Retention (systemd, scripts/docker_image_tag_retention.sh) ----
+# Issue #309: alter rb-dedicated/rb-headless-client-Tags aufräumen, aber das
+# laufende Image + N Rollback-Tags behalten. Wirksame Werte stehen in den
+# Rollen-Defaults (deploy/roles/image-retention/defaults/main.yml):
+#   image_retention_repos         "rb-dedicated rb-headless-client"
+#   image_retention_rollback_tags 2
+#   image_retention_on_calendar   daily
+# Der aktuelle Deploy-Tag (dedicated_server_image = rb-dedicated:<deploy-sha>)
+# wird dem Service als RB_PROTECTED_TAGS uebergeben und nie entfernt.
+
 # Game-Content ist auf planet bereits provisioniert (664 MB in /srv/rbgame).
 # SteamCMD-Modus haengt am "apt install lib32gcc-s1" -> sync als No-Op.
 riftbreaker_content_mode: sync

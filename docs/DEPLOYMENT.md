@@ -16,6 +16,7 @@
 | Website | planet | statics + **eigener** Caddy (`rift-caddy`, plain HTTP) hinter `mellon-caddy` | 443 → 127.0.0.1:8787 | Landing `/` · `/connectivity.html` · `/solo.html` · `/status.json` · Proxy `/tournament/*` → tournament-server |
 | Mod-Download | planet | statics (Caddy) | 443 | `rbbattle.zip` (Paketierung + md5-Parität) |
 | rbmods-probe.timer | planet | systemd | — | Connectivity-Checks alle 2 Min → `status.json` |
+| rbmods-image-retention.timer | planet | systemd | — | Alte Mod-Image-Tags aufräumen (Rollback-Stand + laufendes Image bleiben) |
 | rbmods-host-hygiene.timer | planet | systemd | — | wöchentlich dangling Docker-Images aufräumen (`docker image prune`, **kein** `-a`; Issue #308) |
 | rbbridge | in Mod-Containern | Prozess | — | Command-Injection (`exec_cmd_client`, Argument IMMER als EIN gequotierter String) |
 
@@ -56,7 +57,11 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
    „Website-Pfad“ unten.
 7. **probe-timer** — systemd-Timer für `scripts/probe_servers.sh` →
    `status.json`.
-8. **host-hygiene** — wöchentlicher systemd-Timer (Issue #308): entfernt
+8. **image-retention** — systemd-Timer für
+   `scripts/docker_image_tag_retention.sh`: entfernt alte
+   `rb-dedicated`/`rb-headless-client`-Tags, behält das laufende Image und den
+   Rollback-Stand (Issue #309, siehe unten).
+9. **host-hygiene** — wöchentlicher systemd-Timer (Issue #308): entfernt
    dangling Docker-Images (`docker image prune`, **kein** `-a`; der getaggte
    Rollback-Stand bleibt erhalten). Installiert `scripts/host_hygiene.sh` +
    Unit/Timer; automatische Variante der manuellen Aufräum-Befehle in
@@ -70,6 +75,70 @@ Grundsätze:
 - **Rollback** = vorherige `rbbattle.zip` / vorheriges Binary wieder einspielen.
   Für ein **Image**-Rollback bleibt das getaggte `rb-dedicated:<alte-sha>`
   erhalten — die Rolle `host-hygiene` entfernt nur dangling Images (#308).
+
+## Image-Tag-Retention (Issue #309)
+
+**Problem:** Der CD-Build taggt jedes Mal neu (`rb-dedicated:<deploy-sha>`),
+entfernt aber nie alte Tags. Live-Messung auf planet (2026-09-12):
+`rb-dedicated` **63 Tags bei 12 Image-IDs**, `rb-headless-client` **46 Tags
+bei 6 IDs** — je neue ID ~**1,56 GB unique** (`docker system df -v`).
+
+**Lebenszyklus eines Tags:**
+
+1. Ein Deploy baut/verwendet `rb-dedicated:<deploy-sha>` und pinnt genau diesen
+   Tag im gerenderten Compose (kein `latest`).
+2. Der Timer `rbmods-image-retention.timer` läuft **täglich** und entfernt
+   ältere Tags per `docker rmi <repo>:<tag>` — **nicht** per
+   `docker image prune -a` (das würde den Rollback-Stand mitnehmen).
+3. Es bleiben je Repo erhalten:
+   - **jeder Tag, den ein Container als `Config.Image` trägt** (laufendes Image
+     — auch gestoppte Container),
+   - der **aktuelle Deploy-Tag** (`RB_PROTECTED_TAGS` = `dedicated_server_image`),
+   - die **letzten 2 Rollback-Tags** (`image_retention_rollback_tags`).
+4. Pro Kandidat prüft ein Guard vor jedem `rmi` per
+   `docker ps -aq --filter ancestor=<repo>:<tag>`, ob ein (auch gestoppter)
+   Container dieses Image benutzt → dann bleibt der Tag erhalten; ein benutztes
+   Image wird nie untagged oder löschbar. Der Filter löst die Referenz zur
+   Image-ID auf und greift daher **auch**, wenn ein Container aus einer nackten
+   Image-ID gestartet wurde (`Config.Image` ist dann die kurze ID, kein
+   `repo:tag`). Zusätzlich prüft der Guard die exakte `Config.Image`-Gleichheit.
+
+> **Hinweis:** `RB_ROLLBACK_TAGS` zählt **Tags**, nicht distinkte Image-IDs.
+> Trägt eine ID mehrere Tags, können nach dem Lauf weniger als N verschiedene
+> Images als Rollback übrig bleiben — dafür ist jedes benutzte Image garantiert
+> getaggt.
+
+**Rollback geht nach dem Cleanup noch:** die letzten 2 Tags bleiben als
+vollständige Images vorhanden und sind mit `docker image inspect` prüfbar.
+
+### Dry-Run / Verifikation
+
+Das Skript kann ohne Änderung zeigen, was es täte:
+
+```bash
+# Auf planet, read-only: nichts wird entfernt. Die Zeilen erscheinen auf
+# stdout; RB_IMAGE_RETENTION_LOG nur setzen, wenn zusaetzlich in eine DATEI
+# geschrieben werden soll (kein /dev/stdout — `>>` scheitert ohne regulaere Datei).
+sudo /usr/local/bin/rbmods-image-retention.sh --dry-run
+
+# Zähler vorher/nachher:
+docker image ls rb-dedicated | wc -l
+```
+
+Der manuelle Lauf einer Timer-Runde (nach dem Dry-Run-Blick):
+
+```bash
+sudo systemctl start rbmods-image-retention.service
+journalctl -u rbmods-image-retention.service -n 40 --no-pager
+```
+
+Details zu den Schaltern (`--keep N`, `--repo NAME`, ENV-Variablen):
+`scripts/docker_image_tag_retention.sh --help`. Der hermetische
+Red/Green-Test (kein Docker nötig) liegt in
+`tests/shell/image-retention.test.sh` und läuft in CI (`lint.yml`).
+
+**Nicht in diesem Issue:** ungetaggte Dangling-Layer (→ #308) und weniger Müll
+erzeugen (→ #247, reproduzierbare Builds in GHCR).
 
 ## Website-Pfad — eigener Rift-Caddy + EIN Host-Eintrag (Issue #322)
 
@@ -194,6 +263,43 @@ python3 tools/mods-guard/check_mods_dir.py /srv/rbgame/mods
 
 Siehe [`tools/mods-guard/`](../tools/mods-guard/README.md).
 
+## Disk-Space-Gate — Deploy-Bremse vor voller Platte (Issue #310)
+
+planet baut, sichert und deployt auf **derselben Platte** (`/dev/md2`, 904 GB),
+die der Stack vollschreibt. Läuft sie voll, kann sich der Deploy **nicht mehr
+selbst herausrollen**: Image-Build, Zip-Kopie und Backup-Tarball brauchen selbst
+Platz. Deshalb prüft ein **Preflight** den freien Platz auf `/` **bevor**
+`dedicated-server-image` baut und **bevor** der Mod-Backup-Tarball entsteht.
+
+- **Task:** `deploy/roles/riftbreaker-server/tasks/disk-preflight.yml` —
+  `assert` auf den Fact `ansible_mounts` (read-only → `--check`-fest, ändert
+  nichts).
+- **Aufruf:** als `include_role … tasks_from: disk-preflight` in den
+  `pre_tasks` von `deploy/site.yml` **und** `deploy/test-deploy.yml` — also
+  **vor** den Rollen (nicht innerhalb der Rolle, die erst nach dem Image-Build
+  läuft). Läuft damit auch unter `--tags server,website` (deploy-check).
+- **Schwelle konfigurierbar:** `riftbreaker_disk_min_free_gb` (Default **10** GB),
+  Mount via `riftbreaker_disk_mount` (Default `/`). Allein übersteuern, z. B.
+  `-e riftbreaker_disk_min_free_gb=20`.
+- **Abbruch:** mit klarer `fail_msg` (nennt geforderten **und** tatsächlichen
+  freien Platz + nächsten Schritt: erst aufräumen, siehe #301, dann erneut
+  deployen).
+
+Das Gate ist ein **Not-Aus**, kein Ersatz fürs Aufräumen: erst Sichtbarkeit
+(`disk_pct` in `status.json`), dann Gate, plus Timer/Automatik — beides gehört
+zusammen (#301).
+
+**Selbsttest (hermetisch, ohne Host/Prod-Zugriff):**
+
+```bash
+bash deploy/tests/disk-gate/run.sh
+```
+
+Er injiziert synthetische `ansible_mounts` (100 GB frei → läuft durch, 1 GB frei
+→ Abbruch mit `PLATZ-GATE`, Schwelle 0 → durch) und ruft die **echte**
+Preflight-Task-Datei auf. Läuft zusätzlich in `deploy-check-local` auf dem
+GitHub-Hosted-Runner.
+
 ## Continuous Deploy (CD) — Issue #91
 
 Nach jedem Merge auf `main` deployt
@@ -206,13 +312,20 @@ forced command (`deploy/deploy-ssh.sh`) validiert die SHA, macht
 (enges sudoers). Kein Token, kein Polling. Installation/Migration:
 `deploy/README.md` → „CD: SSH-Deploy".
 
-Topologie (Momo-Entscheidung, 2026-09-10): **EIN** Server auf `:6321` statt
-Steam-/Non-Steam-Dualität; ein Direct-IP-Server (`disable_steam "1"`) deckt
-beide Stores ab. Der **Tag→prod-Kanal ist on hold** (vorerst gestrichen):
+Topologie (Stand Issue #328): **zwei** Instanzen, ein Dedi-Port. **DEV** läuft
+rolling auf `:6321` (dieser CD-Workflow, `deploy/site.yml`); **PROD** ist eine
+koexistierende zweite Instanz auf `:6322`, öffentlich erreichbar über den
+**Satellite-Relay** (eigene IPv4, inbound `:6321` → DNAT → planet `:6322`;
+`deploy/deploy-prod.yml` + `prod-vars.yml`). Ein Direct-IP-Server
+(`disable_steam "1"`) deckt beide Stores ab; der Client ist effektiv auf Port
+`:6321` hardgewired, daher der zweite öffentliche Zugang über eine zweite
+**Adresse** (den Satellite) statt eines zweiten Ports.
+
+Der **Tag→prod-Kanal ist weiterhin nicht verdrahtet** (Follow-up):
 `tags: ['v*']` sind seit Issue #209 **reine Marker** (kein Tag-Trigger, keine
-GitHub-Releases, keine prod-Umgebung im Workflow). Reaktiviert wird der Kanal,
-sobald ein **zweites Deploy-Target** existiert — aktuell gibt es genau EINEN
-Server (planet, :6321). Veröffentlichter Download ist der deployte Stand
+GitHub-Releases, keine prod-Umgebung im Workflow). Das zweite Deploy-Target
+existiert seit #328 (`deploy-prod.yml`) — der Tag-Trigger darauf wird als eigenes
+Folge-Issue angeschlossen. Veröffentlichter Download ist der deployte Stand
 `https://rift.projectmellon.de/mods/rbbattle.zip`.
 
 Der HTTP-Hook ist seit 2026-09-11 durch den SSH-Deploy abgelöst (Issue #235);

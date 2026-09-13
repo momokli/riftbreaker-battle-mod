@@ -43,6 +43,12 @@ jobs:
       # false). Braucht kein Docker (Fake-docker).
       - name: Probe-Honesty (Fake-Docker, planetfrei)
         run: tests/shell/probe-servers.test.sh
+      # Red/Green-Beweis der Image-Tag-Retention (Issue #309): laufendes Image
+      # + N Rollback-Tags bleiben, nur aeltere Tags gehen. Braucht kein Docker
+      # (Fake-docker + Szenario-Dateien).
+      - name: Image-Tag-Retention (Fake-Docker, planetfrei)
+        run: tests/shell/image-retention.test.sh
+
       # Red/Green-Beweis der Host-Hygiene-Invarianten (Issue #308, Review-Blocker
       # PR #342): prune IMMER ohne -a, DRY-RUN löscht nichts, geänderte getaggte
       # Menge => Exit 1, fehlgeschlagener prune => Exit 1. Braucht kein Docker

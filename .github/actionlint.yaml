@@ -4,3 +4,15 @@ self-hosted-runner:
   # "label 'planet' is unknown" und der lint.yml-actionlint-Job wird rot.
   labels:
     - planet
+
+paths:
+  # actionlint kennt den `concurrency.queue`-Key noch nicht (offen:
+  # https://github.com/rhysd/actionlint/issues/654), obwohl er gültige
+  # GitHub-Actions-Syntax ist (Doku:
+  # https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+  # Ohne diesen Ignore meldet actionlint 'unexpected key "queue"' und der
+  # Required-Check "actionlint (Workflow-YAML)" wird rot. Gefiltert wird NUR
+  # diese eine exakte Meldung; alle übrigen Checks des Files bleiben aktiv.
+  .github/workflows/boot-test.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
