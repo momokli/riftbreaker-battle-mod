@@ -73,6 +73,10 @@ tournament_install_dir: "/opt/rbmods/tournament-server-test-{{ rbbattle_run_suff
 cargo_home: /home/runner/.cargo
 rustup_home: /home/runner/.rustup
 
-# Session-Mitschnitt isoliert von Prod (eigener Container-Name + Ausgabeverzeichnis, Issue #280).
-riftbreaker_sessions_container: riftbreaker-sessions-test
-riftbreaker_sessions_dir: /srv/rbmods-sessions-test
+# Session-Mitschnitt isoliert von Prod UND je Lauf eindeutig (Issue #318): der
+# Sidecar gehört zum selben Compose-Projekt, hat aber einen globalen
+# `container_name` — fest benannt kollidiert er bei zwei parallelen boot-tests
+# ("container name ... already in use"). Daher wie alle übrigen Ressourcen mit
+# `rbbattle_run_suffix` (die Prod-Isolation selbst kam mit Issue #280).
+riftbreaker_sessions_container: "riftbreaker-sessions-test-{{ rbbattle_run_suffix }}"
+riftbreaker_sessions_dir: "/srv/rbmods-sessions-test-{{ rbbattle_run_suffix }}"
