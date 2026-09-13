@@ -48,6 +48,19 @@
         deploy_image_tag: "{{ rbbattle_deploy_sha.stdout | trim }}"
       tags: always
 
+    # Disk-Space-Gate (#310): MUSS VOR `dedicated-server-image` (Image-Build)
+    # und VOR dem Mod-Backup laufen — ein Deploy auf voller Platte kann sich
+    # nicht mehr selbst herausdeployen (Build/Zip-Backup brauchen selbst Platz).
+    # Deshalb hier in den pre_tasks (vor den Rollen) und nicht in der Rolle, die
+    # erst NACH dem Image-Build dran ist. Read-only (Fact ansible_mounts) →
+    # `--check`-fest. `tags: always`, damit es auch unter `--tags server,website`
+    # (deploy-check) greift.
+    - name: "Disk-Gate — freien Platz VOR Image-Build/Backup prüfen (#310)"
+      include_role:
+        name: riftbreaker-server
+        tasks_from: disk-preflight
+      tags: always
+
   roles:
     - role: mods-zip
       tags: [content]

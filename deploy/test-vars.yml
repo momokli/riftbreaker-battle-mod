@@ -76,3 +76,10 @@ rustup_home: /home/runner/.rustup
 # Session-Mitschnitt isoliert von Prod (eigener Container-Name + Ausgabeverzeichnis, Issue #280).
 riftbreaker_sessions_container: riftbreaker-sessions-test
 riftbreaker_sessions_dir: /srv/rbmods-sessions-test
+
+# Disk-Space-Gate (Issue #310): Mindest-freier-Platz auf / vor Image-Build und
+# Mod-Backup. Der Boot-Test fährt denselben Preflight wie Prod (Default 10 GB).
+# Für einen bewussten Negativ-Lauf hier hochsetzen, z. B. 999999 (= garantiert
+# Abbruch). Der hermetische Selbsttest deckt den Negativ-Fall ohne Host ab:
+#   bash deploy/tests/disk-gate/run.sh
+riftbreaker_disk_min_free_gb: 10
