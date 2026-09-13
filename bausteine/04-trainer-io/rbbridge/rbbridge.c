@@ -1375,6 +1375,103 @@ static int resolve_console_service(console_exec_fn *out_fn, void **out_inst)
 #ifndef RBBRIDGE_HOSTTEST
 
 /* ------------------------------------------------------------------ */
+/* Game-Thread-Kommando-Marshalling (#376 WRITE-Pfad)                  */
+/*                                                                     */
+/* Lua-Kommandos duerfen NICHT vom Pipe-Thread laufen (crasht, s.      */
+/* SKILL riftbreaker-re). Deshalb legt dispatch_exec das Kommando nur  */
+/* in einen Spinlock-Puffer; der Detour auf ConsoleService::Update     */
+/* (laeuft jede Frame auf dem Game-Thread) drained den Puffer und ruft */
+/* ExecuteCommand dort auf.                                            */
+/* ------------------------------------------------------------------ */
+
+#define RBBRIDGE_CONSOLE_UPDATE_RVA 0x1C1FBA0u
+
+typedef void (__fastcall *console_update_fn)(void *self, float dt);
+
+static int safe_read_u64(const void *addr, uint64_t *out);
+
+static console_update_fn g_original_update = NULL;
+static volatile LONG g_update_hooked = 0;
+
+#define RBBRIDGE_PENDING_CMD_MAX 512
+static char g_pending_cmd[RBBRIDGE_PENDING_CMD_MAX];
+static volatile LONG g_pending_cmd_lock = 0;
+static volatile LONG g_pending_cmd_present = 0;
+
+/* Game-Thread: ein ausstehendes Kommando ausfuehren. */
+static void drain_pending_commands(void)
+{
+    if (!g_console_cache.valid || !g_console_cache.fn ||
+        !g_console_cache.instance)
+        return;
+
+    int present = 0;
+    char cmd[RBBRIDGE_PENDING_CMD_MAX];
+
+    while (InterlockedExchange(&g_pending_cmd_lock, 1) != 0)
+        ;
+    present = g_pending_cmd_present;
+    if (present) {
+        memcpy(cmd, g_pending_cmd, sizeof(cmd));
+        g_pending_cmd_present = 0;
+    }
+    InterlockedExchange(&g_pending_cmd_lock, 0);
+
+    if (present) {
+        console_exec_fn fn = (console_exec_fn)(uintptr_t)g_console_cache.fn;
+        dbg("drain_pending_commands: fuehre '%s' aus (Game-Thread)", cmd);
+        fn(g_console_cache.instance, cmd);
+    }
+}
+
+/* Detour fuer ConsoleService::Update(float): laeuft auf dem Game-Thread. */
+static void __fastcall detour_console_update(void *self, float dt)
+{
+    drain_pending_commands();
+    if (g_original_update)
+        g_original_update(self, dt);
+}
+
+/* Patched den vtable-Slot von ConsoleService::Update auf den Detour. */
+static int install_update_hook(void)
+{
+    if (g_update_hooked)
+        return 1;
+    if (!g_console_cache.valid || !g_console_cache.vftable ||
+        !g_console_cache.module_base)
+        return 0;
+
+    const unsigned char *vftable = g_console_cache.vftable;
+    uint64_t target =
+        (uint64_t)(uintptr_t)(g_console_cache.module_base +
+                              RBBRIDGE_CONSOLE_UPDATE_RVA);
+
+    for (int i = 0; i < 128; i++) {
+        uint64_t entry = 0;
+        if (!safe_read_u64(vftable + (size_t)i * 8, &entry))
+            break;
+        if (entry != target)
+            continue;
+
+        DWORD old = 0;
+        if (!VirtualProtect((void *)(vftable + (size_t)i * 8), 8,
+                            PAGE_READWRITE, &old))
+            return 0;
+        g_original_update = (console_update_fn)(uintptr_t)entry;
+        *(uint64_t *)(vftable + (size_t)i * 8) =
+            (uint64_t)(uintptr_t)&detour_console_update;
+        VirtualProtect((void *)(vftable + (size_t)i * 8), 8, old, &old);
+        g_update_hooked = 1;
+        dbg("install_update_hook: Slot %d gepatcht (orig=%p)", i,
+            (void *)g_original_update);
+        return 1;
+    }
+    dbg("install_update_hook: Update-Slot nicht gefunden (target=%p)",
+        (void *)(uintptr_t)target);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* Dispatch: Ingress-Kommandos                                         */
 /* ------------------------------------------------------------------ */
 
@@ -1426,14 +1523,29 @@ static void dispatch_exec(HANDLE hPipe, const char *command)
         return;
     }
 
-    dbg("dispatch_exec: command='%s' -> ExecuteCommand(inst=%p, fn=%p)",
-        command, instance, (void *)fn);
-    fn(instance, command); /* x64: this=RCX, cmd=RDX */
+    if (!install_update_hook()) {
+        dbg("dispatch_exec: Update-Hook nicht installierbar, KEIN Aufruf");
+        send_line(hPipe,
+                  "{\"event\":\"exec_result\",\"ok\":false,"
+                  "\"command\":\"%s\",\"reason\":"
+                  "\"update_hook_not_installed\"}",
+                  escaped);
+        return;
+    }
 
-    dbg("dispatch_exec: command='%s' -> zurueckgekehrt (ok)", command);
+    /* Kommando nur in den Puffer; Game-Thread fuehrt es im Update-Hook aus
+     * (Lua darf nicht vom Pipe-Thread laufen, #376). */
+    while (InterlockedExchange(&g_pending_cmd_lock, 1) != 0)
+        ;
+    strncpy(g_pending_cmd, command, sizeof(g_pending_cmd) - 1);
+    g_pending_cmd[sizeof(g_pending_cmd) - 1] = '\0';
+    g_pending_cmd_present = 1;
+    InterlockedExchange(&g_pending_cmd_lock, 0);
+
+    dbg("dispatch_exec: command='%s' -> in Pending-Buffer (async)", command);
     send_line(hPipe,
               "{\"event\":\"exec_result\",\"ok\":true,"
-              "\"command\":\"%s\"}",
+              "\"command\":\"%s\",\"async\":true}",
               escaped);
 }
 

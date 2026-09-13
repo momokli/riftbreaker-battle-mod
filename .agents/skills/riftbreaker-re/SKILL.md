@@ -147,6 +147,36 @@ Known gap: the HUD "next wave in X" (`MissionService:ActivateMissionFlow`,
 `time_max`) is NOT in this snapshot yet — `time_to_next` is the DOM spawner
 timer, not the HUD mission-flow countdown.
 
+### WRITE path (LIVE #376 — game-thread command marshaling via vtable detour)
+
+`ConsoleService::ExecuteCommand` dispatches the command handler **inline on the
+caller's thread** (disasm-verified) — a Lua command on the pipe thread crashes
+the server (same class as the read crash). Fix: marshal commands to the game
+thread.
+
+RVAs (build 2.0.58485):
+
+| symbol | RVA | meaning |
+|---|---|---|
+| `ConsoleService::ExecuteCommand(char const*)` | `0x1C0BEF0` | dispatches inline (NOT thread-safe) |
+| `ConsoleService::Update(float)` | `0x1C1FBA0` | game-thread per-frame update (always runs) |
+| `LuaGraphNode::Update(float)` | `0x1BAA140` | checks `[this+0xF1]` (suspended); returns early when suspended |
+
+Architecture:
+- `dispatch_exec` (pipe thread) writes the command into a spinlock buffer
+  (`g_pending_cmd`), never calls `ExecuteCommand`.
+- `install_update_hook()` scans the `ConsoleService` vtable for
+  `base + 0x1C1FBA0` and patches that slot to `detour_console_update`
+  (VirtualProtect).
+- The detour drains the buffer and calls `ExecuteCommand` on the **game thread**
+  each frame, then chains to the original `Update`.
+
+Live-verified: `debug_dom_pause`/`debug_dom_resume`/`debug_dom_manager_spawn_wave_level`
+all return `ok:true` without crashing; pause freezes `time_to_next`, resume
+unfreezes, spawn_wave spawns creatures. The mod's `dom_mananger:Update` hook
+does NOT run while the DOM is suspended (`LuaGraphNode::Update` skips), so the
+detour on an always-running function is required for "resume from pause".
+
 ## Live test workflow (planet)
 
 1. **Build** (mingw): `x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -Wl,--no-insert-timestamp -shared -o rbbridge.dll rbbridge.c`
