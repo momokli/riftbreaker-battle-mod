@@ -65,4 +65,22 @@ riftbreaker_mod_log_cmd: "docker logs {{ riftbreaker_server_container }}"
 # (riftbreaker_bridge_port) variiert je Instanz (Issue #290).
 riftbreaker_rbtools_dir: "{{ rbtools_dir | default('/opt/rbmods/rbtools') }}"
 riftbreaker_bridge_port: 9001
+# Container-seitiger Bridge-Port (pipe_bridge.exe). Bleibt IMMER 9001; nur der
+# Host-Port (riftbreaker_bridge_port) variiert je Instanz. Getrennt, damit
+# Test-Vars den Host-Port isolieren koennen, ohne die Bridge im Container auf
+# einen anderen Port zu zwingen (Issue #289: genau dieser Mismatch machte die
+# Test-Bridge unreachable).
 riftbreaker_bridge_container_port: 9001
+
+# --- Session-Mitschnitt (Issue #280) -----------------------------------------
+# Tailt den Lua-Log im Wine-Volume (read-only) und schreibt pro Session JSONL auf
+# den Host-Bind-Mount. Kein Netzzugriff, keine Spiel-Aenderung. Die Session-ID
+# vergibt der Recorder (commence/match_end als Grenzen).
+riftbreaker_sessions_container: riftbreaker-sessions
+# Standard-Python-Image (stdlib-only Recorder) — kein eigenes Image-Build noetig.
+riftbreaker_sessions_image: "python:3.12-slim"
+# Host-Verzeichnis der JSONL-Protokolle (bind-mount -> /data/sessions im Sidecar).
+riftbreaker_sessions_dir: /srv/rbmods-sessions
+# Recorder-Script auf dem Host (bind-mount ro in den Sidecar).
+riftbreaker_sessions_script: "{{ riftbreaker_deploy_dir }}/session_recorder.py"
+riftbreaker_sessions_script_src: "{{ playbook_dir }}/../tools/session-recorder/session_recorder.py"

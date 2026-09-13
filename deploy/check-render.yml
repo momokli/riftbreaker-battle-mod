@@ -19,6 +19,7 @@
     # Rollen-Defaults liefern die Compose-Command-Listen (keine Host-Vars) —
     # VOR dem Instanz-Profil laden, damit das Profil sie übersteuert.
     - roles/riftbreaker-server/defaults/main.yml
+    - roles/website/defaults/main.yml
     - "instances/{{ riftbreaker_instance | default('release') }}.yml"
 
   vars:
@@ -42,3 +43,9 @@
         src: roles/riftbreaker-server/templates/docker-compose.yml.j2
         dest: "{{ render_dir }}/riftbreaker-server-{{ render_instance }}.yml"
         mode: "0600"
+
+    - name: rift-caddy Compose rendern (Issue 322)
+      template:
+        src: roles/website/templates/docker-compose.yml.j2
+        dest: "{{ render_dir }}/rift-caddy.yml"
+        mode: "0644"

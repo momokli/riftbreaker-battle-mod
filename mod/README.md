@@ -20,9 +20,11 @@ v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
   + Wellenstart (HQ-Erkennung über `HourEvent`-Tick und manuellen Fallback `rb_hq entity <id>`).
 - *AFK-Timeout* (#231): kein unbegrenztes Warten mehr — ab der Schwelle `RBB.afkCfg.afkHourTicks`
   ohne platziertes HQ endet das Match automatisch als AFK (`event=afk_timeout` →
-  `event=match_end reason=afk_no_hq`, gleicher Restart-Flow wie echte HQ-Zerstörung, aber **ohne**
-  `event=hq_dead` — der Solo-Feed matcht darauf fest den Text „HQ destroyed“, was für AFK
-  irreführend wäre; PR-Review #232 R2). Default `afkHourTicks = 0` (**deaktiviert**), da die
+  `event=match_end reason=afk_no_hq`, **ohne** `event=hq_dead` — der Solo-Feed matcht darauf fest den Text
+  „HQ destroyed“, was für AFK irreführend wäre; PR-Review #232 R2). Ein AFK-Ende wird
+  **nicht** automatisch resettet (der scharfe AFK-Zähler würde die frische Setup-Phase sonst
+  sofort wieder beenden → Restart-Schleife, #281); ein Operator kann per `rb_reset` explizit
+  zurücksetzen. Default `afkHourTicks = 0` (**deaktiviert**), da die
   reale `HourEvent`-Frequenz unbestätigt ist (`docs/research/api-deep-dive.md`) — ein scharfer
   Platzhalter hätte main sonst mit einem möglichen Auto-Loss beim ersten Tick ausgeliefert
   (PR-Review #232 B2). Erst nach Live-Kalibrierung, wie viele Ticks ca. 1 Minute Wanduhrzeit
@@ -304,9 +306,11 @@ v0.2.0-single (Fusion Baustein 00 + 01). Kein Workshop-Release, keine Garantie.
   Kreatur) statt am Spieler-Mech — **kein Spieler nötig** (Server-only-tauglich).
   DOM-Naturwellen bleiben unangetastet (Basis-Druck). Fallback auf den alten
   Mech-Ring nur, wenn eine Welt keine Rand-Spawner hat.
-- **Issue #23:** DOM-Wellen-Vorbereitung auf **300 s** gedeckelt
+- **Issue #23:** DOM-Wellen-Vorbereitung zunächst auf **300 s** gedeckelt
   (prepareSpawnTime 420→300, 5-Min-Wellen) + Setup-Log (`difficulty`,
-  `creatures_difficulty`). Difficulty/Map-Größe/Seed werden beim Server-Start
+  `creatures_difficulty`). Seit #41/#278 kappt der Mod stattdessen auf das aktive
+  Wellen-Preset (A=480 s / B=240 s, **senkt nur**) und loggt `interval_cfg`/
+  `interval_eff`. Difficulty/Map-Größe/Seed werden beim Server-Start
   gesetzt (C++, kein Lua-Weg) — Ablauf: `docs/DUEL_SETUP.md`.
 - Neuer Command-Alias **`rb_send`** (gleiche Logik wie `rb_wave`).
 - Konzept-Doku: `docs/SEND_HOOK.md` (Wellen-Hook-Strategie), `docs/SYNC_START.md`
@@ -353,12 +357,27 @@ und Workshop-Mods tun (Quelle: fandom „Basic Modding Guide“, Ordner
 - mod.io: `C:\Users\Public\mod.io\3951\mods\<modid>\`
 
 ### macOS (Steam)
-- Install-Pfad: `~/Library/Application Support/Steam/steamapps/common/Riftbreaker/`
-- Dort analog `mods/rbbattle/` anlegen (Ordner ggf. neu erstellen).
-- ⚠️ Offiziell heißt es „Steam **und** GamePass **PC** können modden“ —
-  **ungetestet auf macOS**, in-game prüfen (siehe FINDINGS). Steam-Ordner muss
-  nicht zwingend „common“ heißen — Pfad über Steam → Verwalten → Lokale Dateien
-  anzeigen lassen.
+
+⚠️ **Keine native macOS-Version** — The Riftbreaker (Steam-App 780310) ist
+laut Steam-API **Windows-only** (`appdetails` → `platforms: { windows: true,
+mac: false, linux: false }`) und laut Steam-Systemanforderungen nur für
+Windows 8.1/10 gelistet. Der Pfad
+`~/Library/Application Support/Steam/steamapps/common/Riftbreaker/` existiert
+für dieses Spiel daher **nie** — Steam für macOS installiert keine
+Windows-only-Titel (und „GamePass PC“ ist ebenfalls Windows-only).
+
+**Mac-Routen (alle Windows-Kompatibilität, keine native Version):**
+- **Game Porting Toolkit / CrossOver / Whisky** (alle Wine-basiert) oder
+  **Parallels** (Windows-VM). In beiden Fällen gilt die **Windows-Installation**
+  oben — der Mod-Ordner liegt im Wine-/VM-`drive_c`
+  (z. B. `<Bottle>/drive_c/Program Files (x86)/Steam/steamapps/common/Riftbreaker/mods/rbbattle/`),
+  **nicht** unter `~/Library/Application Support/Steam/...`.
+- **Offener Punkt (braucht Mac-Test durch Momo/Matheo):** ob die Mod unter
+  GPTK/CrossOver/Whisky lädt und die Konsole
+  (`enable_developer_console` in `Conf/initial_config_win` im Wine-`Documents`-Ordner)
+  greift, ist **nicht verifiziert** (siehe `docs/research/macos-mod-support.md`).
+  Der Trainer (Named Pipe / DLL-Injection) ist unter macOS zusätzlich durch
+  SIP + Hardened Runtime erschwert (siehe `docs/concept.md`).
 
 ### Update per Tool (empfohlen)
 
@@ -398,6 +417,7 @@ python3 tools/mod-updater/mod_update.py update
 | `rb_mode sp\|sp_op\|duel` | Modus-Umschaltung: `sp` = Solo **Normal** (Default, echter Spielfluss, sendet an die eigene nächste Welle), `sp_op` = Solo **OP** (Test/Cheats: hoher Startpool + schneller Rundentakt), `duel` = 1v1 (Stub, folgt später) |
 | `rb_status` | Zeigt `mode`, `runde`, `pool`, die `queue` und den `boost` (für die nächste Welle) — die Kontrollanzeige des Testmodus |
 | `rb_hq` / `rb_hq leak [dmg]` / `rb_hq entity <id>` / `rb_hq reset` | Win-Condition-Status + Dev-Werkzeuge (#28): HQ-HP zeigen, manuellen Leak anwenden, HQ-Entity zuordnen, Zustand zurücksetzen (Muster `rb_economy reset`). Die HQ-Entity wird seit #144 zusätzlich automatisch versucht zu binden (`HqAutoDetectEntity`, bei `PlayerInitializedEvent`/jedem `rb_wave`); `rb_hq entity <id>` bleibt der manuelle Fallback, falls die Auto-Erkennung nichts findet. `reset` setzt auch den AFK-Timeout-Zähler und die Setup-Phase (`commenced`/`setupAnnounced`) zurück (#231) |
+| `rb_reset [reason]` | **Round-Reset auf 0 nach Niederlage (#281):** setzt Runde + Wave-Timer auf 0, Economy-Pool (+DB) auf 0, leert Send-Queue/Boost/Reveal und geht in die **HQ-Placement-Phase** zurück (Waves gehalten bis ein neues HQ steht). Wird vom Referee per IO-Kanal gepusht (`TOURNAMENT_REFEREE_RESTART_CMD=rb_reset`, nach `event=hq_dead`) oder als Operator-Kommando aufgerufen. **Idempotent:** genau EIN Reset pro Niederlage (`status=skip reason=not_pending` ohne offene Niederlage); echte HQ-Zerstoerung wird zusaetzlich autonom am naechsten `HourEvent`-Tick resettet |
 | `rb_hud` | **Reveal-HUD (#27):** HUD-Standardfelder — Runde, Countdown, eigener Pool, HQ-HP beider Teams + Reveal-Zustand (`reveal=hidden\|revealed`). Gegner-Built/incoming/HQ sind vor Wellenstart `hidden` |
 | `rb_reveal <built_opp> <hq_opp> [incoming]` | **Gegner-Injektion (#27):** die Bridge injiziert die vom Server aufgedeckten Gegner-Werte (Built-Value, HQ-HP, eingehende Send-Komposition) → Reveal beider Teams komplett |
 | `rb_round_start [n]` | **Build-Phase (#27):** verbirgt den Reveal wieder (Bridge-Signal „round steigt“); `<n>` nur informativ |
@@ -409,10 +429,13 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 ```
 [RBBATTLE] skeleton ok
-[RBBATTLE] event=mod_load version=0.34.3 status=ok mode=sp anchor=border_spawner_groups timer_cap=300 econ_source=none econ_pool=0
+[RBBATTLE] event=mod_load version=0.34.3 status=ok mode=sp anchor=border_spawner_groups timer_cap=480 preset=A econ_source=none econ_pool=0
 [RBBATTLE] event=economy_db status=new db=rbbattle_economy      ← erste Runde
 [RBBATTLE] event=economy_source source=resource_obtained status=active   ← erste lesbare Ernte
 [RBBATTLE] event=economy_farm source=resource_obtained resource=carbonium amount=100 value=100 farmed=100 built=100
+[RBBATTLE] event=economy_source source=account status=seed resources=13   ← nur bei accountEnabled = true: Konto-Quelle liest ein, bucht bewusst nichts (#242)
+[RBBATTLE] event=economy_source source=account status=active              ← nur bei accountEnabled = true: Konto-Tracking aktiv (ersetzt das pauschale Tick-Einkommen)
+[RBBATTLE] event=economy_farm source=account resource=carbonium amount=250 value=250 farmed=250 built=250   ← nur bei accountEnabled = true: Zuwachs seit letztem Tick (#242)
 [RBBATTLE] event=convert resource=carbonium amount=100 value=100 pool=100 status=ok irreversible=1
 [RBBATTLE] event=buy_wave unit=brabit tier=t1 count=1 price=100 total=100 pool=0 queue=1 status=ok   ← Kauf-Hook (#25)
 [RBBATTLE] event=boost status=ok pct=25 total_pct=25 price=200 pool=1800 buys=1   ← Send-Boost Kauf (#39)
@@ -422,8 +445,8 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 [RBBATTLE] event=richtwert_sample_types level=4 total=8 types=artigian:3,baxmoth:2,brabit:3   ← Typ-Verteilung der neu gespawnten Kreaturen (#213-Folgefrage: proportionaler %-Boost pro Typ statt Fuellkreatur)
 [RBBATTLE] event=wave_hook patch status=ok                       ← Send-Queue-Hook aktiv (#42/#25)
 [RBBATTLE] event=boost patch status=ok                           ← Boost-Chokepoint-Hook aktiv (#39)
-[RBBATTLE] event=dom_timer patch status=ok cap=300        ← nach PlayerInitializedEvent
-[RBBATTLE] event=setup difficulty=hard creatures_difficulty=5 timer_cap=300
+[RBBATTLE] event=dom_timer patch status=ok cap=480        ← nach PlayerInitializedEvent
+[RBBATTLE] event=setup difficulty=hard creatures_difficulty=5 timer_cap=480 preset=A interval_cfg=480 interval_eff=420 strength_pct=100 base_difficulty=normal   ← #278: interval_cfg = Preset-Ziel, interval_eff = wirksamer DOM-Timer
 [RBBATTLE] event=round round=1 status=start mode=sp pool=0 queue=1   ← natürlicher Wellenstart
 [RBBATTLE] event=reveal round=1 status=revealed built_own=3000 built_opp=hidden send_own=units/ground/brabit:2 incoming=hidden   ← Wellenstart-Reveal (#27)
 [RBBATTLE] event=send_queue round=1 status=done spawned=1 value=100 anchor=border   ← Send-Queue ausgeliefert (Boost)
@@ -432,6 +455,7 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 [RBBATTLE] event=wave_spawners count=16 groups=4          ← Pool der Rand-Spawner
 [RBBATTLE] event=spawn ok blueprint=units/ground/baxmoth entity=12345 anchor=spawn_enemy_border_west/...
 [RBBATTLE] event=wave level=3 status=done spawned=8 skipped=0 anchor=border spawners=16
+[RBBATTLE] event=wave level=3 status=no_spawns spawned=0 skipped=0 anchor=border anchors=16   ← Anker da, aber KEINE Kreatur entstanden (#288: ehrlicher Status statt status=done)
 [RBBATTLE] event=hq_autodetect status=ok group=headquarters entity=54321   ← automatische HQ-Bindung (#144, unverifizierter Gruppen-Name)
 [RBBATTLE] event=hq_autodetect status=not_found candidates=headquarters hint=rb_hq_entity   ← kein Treffer -> manueller Fallback noetig (#144)
 [RBBATTLE] event=hq_leak status=skip reason=no_hq_entity   ← Leak inaktiv ohne gebundene HQ-Entity (#143, Fix zu #28)
@@ -448,8 +472,9 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 [RBBATTLE] event=hud_ui status=closed result=button_yes action=quick_send unit=brabit count=1   ← Klick auf „Ja“ sendet (#99)
 [RBBATTLE] event=hq_dead status=match_end hp=0             ← HQ-Tod (HP ≤ 0)
 [RBBATTLE] event=match_end reason=hq_destroyed              ← seit #217 ohne winner=opponent (Sieger folgt aus dem Tournament-Server-State)
+[RBBATTLE] event=reset round=0 status=ok reason=hour_tick count=1   ← Round-Reset auf 0 nach Niederlage: Setup-/HQ-Placement-Phase, Economy 0, Wave-Timer 0 (#281)
 [RBBATTLE] event=afk_timeout status=match_end ticks=1 threshold=1   ← Setup-Phase-Schwelle erreicht (nach Live-Kalibrierung, Default 0=deaktiviert), kein HQ platziert (#231)
-[RBBATTLE] event=match_end reason=afk_no_hq                 ← AFK-Match-Ende, gleicher Restart-Flow wie echte HQ-Zerstoerung, aber OHNE event=hq_dead (#231)
+[RBBATTLE] event=match_end reason=afk_no_hq                 ← AFK-Match-Ende OHNE event=hq_dead (#231); NICHT auto-resettet (keine Restart-Schleife, #281) -- Operator: rb_reset
 ```
 
 (Die genaue Zahl `count=` hängt von der Karte/Map-Size ab — Issue-Erwartung 16.)
@@ -458,20 +483,37 @@ Erwartete Log-Zeilen in `exor_logs.txt` bei Kartenerstellung:
 
 Der Tournament-Server ist die autoritative Event-/State-Quelle (Wellen-Takt,
 HQ-Tod → Restart, Runden-Zähler); die Lua ist **Executor**: sie führt
-Commands aus (`rb_wave N`, `restart`) und meldet die obigen Events nach oben.
+Commands aus (`rb_wave N`, `rb_reset`) und meldet die obigen Events nach oben.
 Der Referee konsumiert dafür genau diese Zeilen:
 
 | Event-Zeile (Lua) | Referee-Event (`POST /referee/event`) |
 |---|---|
 | `event=wave level=N status=done` | `{"world":"A","type":"wave_done","level":N}` |
 | `event=hq_dead status=match_end` | `{"world":"A","type":"hq_destroyed"}` |
-| (Modul geladen / nach Restart) | `{"world":"A","type":"ready"}` |
+| (Modul geladen) | `{"world":"A","type":"ready"}` |
 
-Der Referee antwortet mit Commands (`rb_wave <level+1>` bzw. `restart`). Das
+> **Referee-`ready` nach Reset: OFFEN (Live-Loop, #281/#265).** Nach dem
+> in-game Reset emittiert der Mod nur `event=commence status=pending hint=place_hq`
+> — **kein** `ready` (und keinen Modul-Reload). Der `commence`→`ready`-Mapping
+> des Relays ist noch nicht verdrahtet; der Referee bleibt bis dahin in
+> `restart_pending` und gibt für die neue Runde **kein** `rb_wave 1` aus. Details:
+> [`docs/REFEREE.md`](../docs/REFEREE.md) → „Offene Punkte“.
+
+Der Referee antwortet mit Commands (`rb_wave <level+1>` bzw. `rb_reset`). Das
 aktuell noch in der Lua liegende Runden-/Match-Regime (natürlicher
 Wellen-Timer als Rundentakt) wird erst mit laufendem Spiel in einem eigenen
 Schritt entfernt (Stufe 2, Player-Test OFFEN) — Details:
-[`docs/REFEREE.md`](../docs/REFEREE.md).
+[`docs/REFEREE.md`](../docs/REFEREE.md). Der Transport (Log-Zeile →
+`POST /referee/event`, `GET /referee/poll` → Pipe) liegt im Relay:
+`bausteine/07-relay/relay.py` (`RBB_REFEREE=1`, ohne Spiel getestet in
+`test_referee.py`).
+
+> **Falsch-Gruen (#288):** `exec_result.ok=true` aus dem Exec-Kanal belegt nur,
+> dass `ConsoleService::ExecuteCommand` lief — **nicht**, dass gespawnt wurde.
+> Spawn-Beweis ist die Log-Zeile `event=wave … status=done` (nur bei
+> `spawned>0`, sonst `status=no_spawns`) bzw. live der Player-Test.
+> Gate/Analyse: [`docs/INGRESS_IO.md`](../docs/INGRESS_IO.md)
+> → „Kernpfad-Gate ohne Player (#288)“.
 
 ## FINDINGS-Tabelle (Stand Recherche — In-Game-Test des Umbaus offen)
 
@@ -480,7 +522,7 @@ Schritt entfernt (Stufe 2, Player-Test OFFEN) — Details:
 | 1 | Mod-Layout / Einstiegspunkt | Ordner `<game>/mods/<name>/` spiegelt Content-Root; `lua/*_autoexec.lua` läuft bei Map-Erstellung, Zugriff auf alle Services + `RegisterGlobalEventHandler` | exorstudios-Wiki (autoexec.md); lilly1987/Riftbreaker-mods; fandom Basic Modding Guide |
 | 2 | Wave-Spawn zur Laufzeit | ✅ `EntityService:SpawnEntity(blueprint, x, y, z, team)` — exakt die Implementierung von EXORs eigenem `debug_spawn_entity` (`lua/commands/cheat.lua`); Blueprints `units/ground/*` gegen `entities/units/ground/*.ent` der Spieldaten verifiziert | OriginalPacksData (PonomarevDmitry/RiftbreakersMods); fandom Console commands |
 | 3 | Rand-Spawner finden | ✅ `FindService:FindEntitiesByGroup(group)` — dieselbe API, mit der `dom_manager` (`RandomizeSpawnPoint`) Naturwellen-Anker wählt; Gruppen `spawn_enemy_border_{west,east,north,south}`, Entities werden von `mission_base:SelectWaveSpawnPoints` aus `logic/spawn_enemy`-Entities gruppiert | lua-src 2.0.58485 (`dom_manager.lua`, `mission_base.lua`, `find_utils.lua`) |
-| 4 | 5-Min-Timer (#23) | ✅ `dom_mananger:GetPrepareSpawnTime()` liefert rules-Wert (Survival hard/normal: 420); Mod wrappt die Klassen-Methode auf max. 300 s (idempotent, pcall) | lua-src (`dom_survival_*_rules_hard.lua`, `dom_manager.lua:1135`) |
+| 4 | Wellen-Takt-Cap (#23/#41/#278) | ✅ `dom_mananger:GetPrepareSpawnTime()` liefert den rules-Wert (Survival hard/normal: 420); Mod wrappt die Klassen-Methode auf max. das Preset-Intervall (A=480 / B=240, **senkt nur, hebt nie** → wirksamer Wert für Preset A bleibt 420; Setup-Log trennt `interval_cfg`/`interval_eff`) | lua-src (`dom_survival_*_rules_hard.lua`, `dom_manager.lua:1135`) |
 | 5 | Custom Console Commands | ✅ `ConsoleService:RegisterCommand(name, cb)` — offiziell dokumentiert **und** von EXOR selbst so genutzt (cheat.lua: `debug_spawn_entity` …) | exorstudios-Wiki accessing-keyboard-hotkeys.md; fandom Mod service: ConsoleService; OriginalPacksData lua/commands/cheat.lua |
 | 6 | Logging | ✅ `LogService:Log(...)` → `exor_logs.txt`; `ConsoleService:Write(...)` → In-Game-Konsole | exorstudios-Wiki debugging-using-lua-services.md |
 | 7 | Team-Semantik | Team-String `""` = „Blueprint-Standard“ (EXOR-Cheat nutzt `""`; Spieler-Buildings wie Feinde spawnen korrekt). Team-Ids: Player=1 (Log `GetTeamId` → 1). `"no_team"` existiert für Marker. Für echte Duell-Teams später verifizieren | OriginalPacksData (cheat.lua, wave_ground.lua) |
@@ -491,7 +533,7 @@ Duell-Karte (Log `event=wave_spawners count=`); (2) Wirksamkeit des
 Klassen-Monkey-Patch im echten Autoexec-Environment (Log `event=dom_timer
 patch status=ok` = Indiz; Bestätigung über Wellenabstand/`debug_dom_manager 1`);
 (3) exakte Feind-Team-Zuordnung bei `SpawnEntity` mit `""` (Blueprint-Standard
-erwartet, s. #7); (4) macOS-Mod-Support ungeklärt.
+erwartet, s. #7); (4) macOS-Mod-Support: **keine native macOS-Version** (Steam-App 780310 `mac:false`) — nur Wine-basiertes GPTK/CrossOver/Whisky oder Windows-VM (Parallels); Mac-Test offen.
 (5) **Win-Condition (#28):** `EnteredTriggerEvent`-Feuerung und das
 Trigger-Zone-Asset ums HQ sind nicht belegt (Repo-Recherche hat kein
 Trigger-Event, s. api-deep-dive.md) — Handler ist pcall-gesichert registriert,
@@ -535,11 +577,24 @@ Farm→Convert→Kauf → built_own=3000; Wellenstart → event=reveal mit
 send_own=brabit:2; rb_reveal → built_opp/incoming/hq_opp; rb_hud beide Teams;
 rb_round_start → reveal=hidden; 2. Wellenstart). In-Game-Test
 steht aus (Operator, Prod).
-- **Economy-Fallback dokumentiert:** Der Mod hat keinen verifizierten Zugriff
-  aufs Spieler-Ressourcen-Konto (api-deep-dive.md §1); Value kommt aus
-  Ernte-Events (Getter-Ladder). Sind die Events nicht lesbar, schaltet die
-  Quelle nach 3 Fehlern dauerhaft auf HourEvent-Tick um (Log
-  `event=economy_source source=tick status=fallback reason=handler_errors`).
+- **Economy-Quellen (Reihenfolge, #24/#242):** Zuerst die Ernte-Events
+  (Getter-Ladder). Sind sie nicht lesbar, schaltet die Quelle nach 3 Fehlern
+  dauerhaft um (Log `event=economy_source source=tick status=fallback
+  reason=handler_errors`) — genau das ist der **live bestätigte** Fall (#242:
+  `ResourceObtainedEvent` trägt Entity + Ressourcen-*Name*, aber gar keinen
+  Betrag). Seit #242 **kann** davor der **Konto-Snapshot-Diff** greifen (`RBB.economyCfg.accountEnabled`, **Default aus** — siehe unten): im
+  HourEvent-Tick wird je Ressource `PlayerService:GetResourceAmount(0, name)`
+  gelesen und die **Differenz** zum letzten Tick gebucht
+  (`event=economy_farm source=account …`). Der erste Tick seedet nur
+  (`status=seed`) — der Startbestand ist nicht gefarmt; sinkende Stände
+  (Bauen) buchen nichts, ziehen den Snapshot aber nach. Ist die Konto-API
+  nicht lesbar, bleibt es beim pauschalen HourEvent-Tick wie bisher.
+  **Default aus, bewusst** (gleiches Muster wie `afkHourTicks = 0`, #231/#232):
+  dass `GetResourceAmount` im Mod-Kontext den erwarteten Wert liefert, ist
+  RE-seitig belegt, aber **in-game nicht ausgeführt**. Auf `true` setzen,
+  sobald ein Spieler `event=economy_farm source=account` mit plausiblen
+  Werten im Log bestätigt hat. Bis dahin verhält sich die Economy exakt
+  wie vor #242.
 - Balance-Zahlen (Faktoren, Tick-Wert) sind Platzhalter — zentrale Tabelle
   `RBB.economyCfg` am Economy-Block (Tuning: Issue #33).
 - Alle fremden API-Aufrufe sind `pcall`-gesichert: fehlt eine Funktion, kommt

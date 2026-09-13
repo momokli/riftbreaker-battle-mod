@@ -20,6 +20,9 @@ name: Deploy (CD)
 # gestreamt, exit code = Ergebnis — kein Token, kein Polling. Setup:
 # deploy/README.md → „CD: SSH-Deploy".
 #
+# (2026-09-13) Deploy-Gate ("parken bis 0 Spieler online") ENTFERNT:
+# deployt sofort bei jedem Merge auf main, ohne auf leeren Server zu warten.
+#
 # Hinweis: Bis die host-seitige Wrapper-/sudoers-Installation den Instanz-Token
 # übernimmt (deploy/README.md → „Multi-Instanz-Deploy"), ignoriert der Wrapper
 # das dritte Feld und deployt weiterhin `release` — der Workflow ist damit
@@ -28,6 +31,7 @@ name: Deploy (CD)
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -42,7 +46,7 @@ jobs:
   deploy-dev:
     name: Deploy Dev (planet :6322)
     runs-on: [self-hosted, planet]
-    timeout-minutes: 30
+    timeout-minutes: 60
     environment:
       name: dev
       url: https://rift.projectmellon.de/solo.html

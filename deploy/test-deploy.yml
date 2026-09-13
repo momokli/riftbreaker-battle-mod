@@ -1,8 +1,8 @@
 ---
 # Pre-Merge-Boot-Test (CI/CD-Plan F1): baut Image + tournament-server und
-# bootet EINEN Game-Server (Test-Port 6323) + den tournament-server
-# (Test-Port 8091) — isoliert von Prod UND von den Release-/DEV-Instanzen
-# (eigene Ports/Namen/Pfade via deploy/test-vars.yml). Es geht nur um
+# bootet EINEN Game-Server + den tournament-server — isoliert von Prod UND von
+# den Release-/DEV-Instanzen (je Lauf eindeutige Namen/Pfade/Ports via
+# deploy/test-vars.yml + rbbattle_run_suffix, Issue #307). Es geht nur um
 # „baut + bootet". Kein website/probe (DNS egal).
 # Verifikation + Teardown: .github/workflows/boot-test.yml.
 #
@@ -14,7 +14,9 @@
 #
 # Aufruf (Workflow, Dummy-Vault — kein Secret nötig):
 #   ansible-playbook -i <tmp-inventory-mit-Dummy-Vault> deploy/test-deploy.yml \
-#     -e @deploy/test-vars.yml
+#     -e @deploy/test-vars.yml \
+#     -e rbbattle_run_suffix="${{ github.run_id }}" \
+#     -e tournament_port="<aus run_id abgeleitet>"
 
 - name: RIFT BATTLE — Pre-Merge-Boot-Test (Test-Ports)
   hosts: planet

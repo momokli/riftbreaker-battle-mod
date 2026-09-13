@@ -1,6 +1,8 @@
 # deploy/ — Ansible-Deployment (planet)
 
-Ziel-Stack + Betriebsregeln: [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md).
+Ziel-Stack + Betriebsregeln: [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md) ·
+Host-Anforderungen (CPU/RAM/Storage je Szenario):
+[`docs/SERVER_SIZING.md`](../docs/SERVER_SIZING.md).
 **Deploy NUR über dieses Playbook** — kein manuelles Gedudel. Seit 2026-09-11
 läuft der CD (main→dev) per **SSH über einen dedizierten deploy-User** auf
 planet (Abschnitt [„CD: SSH-Deploy"](#cd-ssh-deploy-dedizierter-deploy-user));
@@ -11,7 +13,9 @@ die forced command führt genau dieses Playbook aus.
 - `ansible` (core ≥ 2.19) auf dem Control-Node (dem Rechner, von dem du deployst; beim CD ist das planet selbst, als root — siehe CD-Abschnitt).
 - SSH mesh-first: Alias `planet` in `~/.ssh/config` (Tailscale), `root`-Login.
 - Auf planet: Docker + `docker compose`, `systemd`,
-  Caddy als Container `mellon-caddy`.
+  Caddy als geteilter Container `mellon-caddy` (Host-Gateway) — der Rift-Stack
+  betreibt zusätzlich einen eigenen, schlanken `rift-caddy` (Image `caddy:2`,
+  Issue #322).
 - Auf dem Control-Node: `zip` **oder** `python3` (für
   `scripts/package_bausteine.sh` — die Paketierung läuft dort, nicht im
   Playbook-Ziel; siehe Rolle `mods-zip`, `delegate_to: localhost`; beim CD
@@ -64,7 +68,7 @@ ansible-vault edit deploy/inventory/host_vars/planet/vault.yml
 ```
 
 Ist der Hash leer/nicht gesetzt, bleibt `/solo` bewusst **ungeschützt**
-(graceful Default) — der Deploy bricht nicht ab. Das Caddy-Snippet routet
+(graceful Default) — der Deploy bricht nicht ab. Der eigene `rift-caddy` routet
 `/solo` außerdem auf `/solo.html`.
 
 ## Deploy
@@ -325,6 +329,28 @@ git -C /opt/rbbattle-deploy/repo log --oneline -3
 `deploy/deploy-ssh.sh` aktualisieren (bei Änderungen):
 `sudo install -m 0755 deploy/deploy-ssh.sh /opt/rbbattle-deploy/deploy-ssh.sh`.
 
+### Park, Force & Timeout (Issue #238)
+
+Seit 2026-09-12 parkt der CD-Lauf **vor** dem SSH-Deploy, bis **0 Spieler
+online** sind (Gate-Step in `deploy.yml`, Provider
+`tools/deploy-gate/player_count.py`, Quelle = Container-Log). Der geparkte
+Zustand steht im Job-Log (`deploy-gate: geparkt (n Spieler online)`) und in der
+Step-Summary („geparkt, n Spieler online, warte auf 0").
+
+- **Force (Sofort-Deploy):** Actions → „Deploy (CD)" → **Run workflow** auf
+  `main` mit `force=true` — deployt unabhängig von der Spielerzahl.
+- **Timeout:** Park-Deadline ist per Default 1800 s (30 min; Job
+  `timeout-minutes: 60`), überschreibbar über den Dispatch-Input `timeout`.
+  Läuft die Deadline ab, wird der Step **rot** und es findet **kein** Deploy
+  statt (fail loud, nichts hängt unbegrenzt).
+- **Re-run:** Bei Timeout/Failure den Workflow **re-run** (oder Dispatch mit
+  `force=true`).
+
+**Troubleshooting:** Parkt der Lauf direkt nach einem Server-Restart, obwohl
+niemand spielt, fehlt im Log noch die `PauseGame`-Zeile → der Provider ist
+bewusst konservativ unsicher und parkt bis Timeout (nie blind deployen). Ausweg:
+re-run oder `force=true`.
+
 ### Migrations-Checkliste
 
 - [ ] `deploy`-User + Verzeichnisse + Checkout (Schritt 1)
@@ -340,17 +366,24 @@ git -C /opt/rbbattle-deploy/repo log --oneline -3
 ## deploy-check (PR-Gate)
 
 [`.github/workflows/deploy-check.yml`](../.github/workflows/deploy-check.yml) ist
-der Required Check `deploy-check` und läuft auf dem planet-Runner. Er prüft
-read-only gegen planet: `yamllint` über `deploy/`, `docker compose config` für
-jede gerenderte Compose-Datei und `ansible-playbook --check --diff`
-(`--tags server,website`). Das **Vault wird nie entschlüsselt**: für den Lauf
-wird ein Dummy-Vault in ein temporäres Inventar kopiert. Nur PRs aus diesem
-Repo (keine Forks).
+seit Issue #306 in **zwei Required Checks** aufgeteilt:
+
+- **`deploy-check-local`** (GitHub-Hosted-Runner, `ubuntu-latest`) prüft rein
+  lokal: `yamllint` über `deploy/`, Compose-Templates rendern
+  (`check-render.yml`) und jedes gerenderte Compose-File durch
+  `docker compose config`. Kein Host-/SSH-Zugriff, keine Secrets.
+- **`deploy-check`** (self-hosted Runner, planet) fährt den echten Host-Check
+  read-only gegen planet: `ansible-playbook --check --diff`
+  (`--tags server,website`).
+
+Das **Vault wird nie entschlüsselt**: für den Lauf wird ein Dummy-Vault in ein
+temporäres Inventar kopiert. Nur PRs aus diesem Repo (keine Forks).
 
 Host-Voraussetzungen (einmalig, **nicht** im Repo — Secrets bleiben host-seitig):
 
 ```bash
-# 1) Ansible + yamllint im Runner-Home (macht der Workflow selbst, idempotent).
+# 1) Ansible im Runner-Home (deploy-check, planet; macht der Workflow selbst,
+#    idempotent). yamllint nur für deploy-check-local auf dem GH-Runner.
 # 2) SSH-Brücke runner@planet -> root@planet über den Alias `planet`:
 sudo -u runner ssh-keygen -t ed25519 -N '' -f /home/runner/.ssh/id_rb_deploy
 sudo -u runner cat /home/runner/.ssh/id_rb_deploy.pub \
@@ -374,9 +407,9 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 |---|---|---|
 | `dedicated-server-image` | docker | baut `rb-dedicated:<deploy-sha>` auf planet (Wine-Laufzeit, EIN Image für alle Instanzen) |
 | `game-content` | steamcmd/sync | Dedicated-Server-Content (App 4114030) nach `riftbreaker_game_dir` der Instanz (idempotent, fail loud) |
-| `riftbreaker-server` | docker | Dedicated-Server der Instanz (Port/Name/Pfade aus dem Profil), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) |
+| `riftbreaker-server` | docker | Dedicated-Server der Instanz (Port/Name/Pfade aus dem Profil), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation |
 | `tournament-server` | systemd | Rust/axum Referee + Web-UI der Instanz. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt) |
-| `website` | statics + Caddy | `site/*` → Docroot, Caddy-Snippet + `/tournament/*`-Proxy |
+| `website` | statics + Caddy | `site/*` → Docroot, eigener `rift-caddy` (plain HTTP: Statics + `/tournament/*`-Proxy) + EIN Eintrag im geteilten Host-Caddy (Issue #322) |
 | `mods-zip` | — | Paketierung + md5-Paritäts-Check (hart) |
 | `probe-timer` | systemd | `probe_servers.sh` alle 2 Min → `status.json` |
 
@@ -386,7 +419,7 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 deploy/
 ├── site.yml                       # Playbook EINER Instanz (Profil via -e riftbreaker_instance)
 ├── fleet.yml                      # alle Instanzen (release + dev) in einem Lauf
-├── check-render.yml               # deploy-check: rendert Compose-Templates lokal
+├── check-render.yml               # deploy-check-local: rendert Compose-Templates lokal
 ├── deploy-ssh.sh                  # CD: forced command für den deploy-User (SSH, Instanz-Token)
 ├── test-deploy.yml                # Pre-Merge-Boot-Test (Test-Ports)
 ├── test-vars.yml                  # Boot-Test-Overrides (Ports/Namen/Pfade)
@@ -403,7 +436,7 @@ deploy/
     ├── game-content/              # Steam-Content (App 4114030) deklarativ
     ├── riftbreaker-server/        # docker (Port/Name/Pfade je Instanz)
     ├── tournament-server/         # systemd
-    ├── website/                   # statics + Caddy
+    ├── website/                   # statics + eigener rift-caddy (Issue #322)
     ├── mods-zip/                  # Paketierung + md5-Parität
     └── probe-timer/               # systemd-Timer
 ```
@@ -458,15 +491,16 @@ Das vorherige `tournament-server`-Binary bzw. die vorherige `rbbattle.zip`
 
 **Owned von der Pipeline (`deploy/`):** Laufzeit-Image (`rb-dedicated:<sha>`),
 Spiel-Content (Steam-App 4114030), Compose-Rendering + Containerstart der
-Server-Rollen, Mod-Auslieferung + Restart, Website-Statics + Caddy-Snippet,
-Caddy-Import-Zeile, systemd-Unit/Timer (tournament/probe), md5-Parität des
-Mod-Zips.
+Server-Rollen, Mod-Auslieferung + Restart, Website-Statics + eigener
+`rift-caddy` (Statics + `/tournament/*`-Proxy) + EIN Host-Caddy-Eintrag,
+systemd-Unit/Timer (tournament/probe), md5-Parität des Mod-Zips.
 
 **Nicht owned (bewusst host-seitig/manuell):** Vault-Passwort
 (`/etc/rbbattle-deploy/vault.pass`, root-only), SSH-Zugang + forced command des
 deploy-Users (siehe CD-Abschnitt), der Actions-Runner + seine Dependencies
 (`.github/runner/setup.sh`), der SSH-Zugang des Runners für `deploy-check`,
-Caddy-Container selbst (`mellon-caddy`), DNS/TLS.
+der geteilte Host-Caddy-Container selbst (`mellon-caddy` — die Rolle schreibt
+nur den einen Rift-Eintrag und validiert/reloadet; DNS/TLS bleiben host-seitig).
 
 ## Mod-Backups & mods/-Guard (Issue #212)
 

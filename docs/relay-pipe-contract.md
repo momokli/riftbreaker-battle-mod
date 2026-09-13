@@ -63,6 +63,14 @@ fixiert die Parameter, die der Relay einhält.
   es wird nur geloggt (`dispatch result report failed ...`). Ohne
   `RBB_MATCH_ID` wird nicht gemeldet (wie beim Event-Post).
 
+- **Referee-Rückkanal (Issue #268).** Mit `RBB_REFEREE=1` fährt der Relay
+  zusätzlich den autoritativen Referee-Pfad: `[RBBATTLE]`-Events →
+  `POST {server}/referee/event` (`wave_done`/`hq_destroyed`/`ready`) und
+  `GET {server}/referee/poll?world=<W>` → Commands (`rb_wave N`, `restart`) auf
+  dieselbe Pipe. Der `cmd_id` ist hier der gemeinsame Dedup-Schlüssel von Push
+  (#267) und Poll: ein per Push zugestellter Command wird über den Poll nicht
+  erneut dispatcht. Kein `RBB_MATCH_ID` nötig.
+
 ## Test ohne Windows
 
 Linux: FIFO als Named-Pipe-Ersatz (`RBB_PIPE_PATH` auf einen FIFO-Pfad) für

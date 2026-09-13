@@ -15,15 +15,24 @@ services:
       # Rig-Rezept: Sync-Primitive AUS (sonst Crash im Boost-Thread vor dem bind()).
       WINEESYNC: "0"
       WINEFSYNC: "0"
-      # Trainer-I/O-Bridge (Issue #265): pipe_bridge.exe lauscht im Container
-      # auf {{ riftbreaker_bridge_container_port }} (konstant fuer alle Instanzen);
-      # der Host published nur 127.0.0.1:{{ riftbreaker_bridge_port }} (HOST-Port,
-      # je Instanz; konsistent mit tournament_bridge_a_url).
+      # Trainer-I/O-Bridge (Issue #265): pipe_bridge.exe lauscht IM Container auf
+      # {{ riftbreaker_bridge_container_port }} (immer 9001); der Host publiziert
+      # nur 127.0.0.1:{{ riftbreaker_bridge_port }} (konsistent mit
+      # tournament_bridge_a_url). Container-/Host-Port sind getrennt (Issue #289):
+      # Test-Vars verschieben nur den HOST-Port (Isolation, je Lauf eindeutig
+      # seit Issue #307), der Container-Port bleibt 9001.
       RBB_BRIDGE_BIND: "0.0.0.0"
       RBB_BRIDGE_PORT: "{{ riftbreaker_bridge_container_port }}"
     ports:
+{% if riftbreaker_server_port_udp | default('') %}
       - "{{ riftbreaker_server_port_udp }}:6321/udp"
       - "{{ riftbreaker_server_port_udp }}:6321/tcp"
+{% else %}
+      # Kein fester Game-Host-Port (Issue #307): ephemerer Publish nur auf
+      # 127.0.0.1 — der Game-Server bindet 6321 weiter IM Container.
+      - "127.0.0.1::6321/udp"
+      - "127.0.0.1::6321/tcp"
+{% endif %}
       - "127.0.0.1:{{ riftbreaker_bridge_port }}:{{ riftbreaker_bridge_container_port }}"
     volumes:
       - "{{ riftbreaker_game_dir }}:/opt/riftbreaker"
@@ -33,6 +42,30 @@ services:
       # Trainer-I/O-Tools (Issue #265, von Rolle rbtools gestagt). Read-only:
       # entrypoint injiziert Z:\opt\rbtools\rbbridge.dll und startet pipe_bridge.exe.
       - "{{ riftbreaker_rbtools_dir }}:/opt/rbtools:ro"
+
+  # Session-Mitschnitt (Issue #280): tailt den Lua-Log im Wine-Volume (ro) und
+  # schreibt pro Session eine JSONL nach {{ riftbreaker_sessions_dir }} auf dem
+  # Host. Kein Port, kein Netzzugriff; toleriert Container-Restarts (Cursor).
+  {{ riftbreaker_sessions_container }}:
+    image: "{{ riftbreaker_sessions_image }}"
+    container_name: {{ riftbreaker_sessions_container }}
+    restart: unless-stopped
+    depends_on:
+      - {{ riftbreaker_server_container }}
+    volumes:
+      # Quelle: derselbe Wine-Prefix wie der Server (nur lesend).
+      - "{{ riftbreaker_wine_volume }}:/data/.wine:ro"
+      # Ziel: Host-Bind-Mount (query-bar via tail/grep/jq).
+      - "{{ riftbreaker_sessions_dir }}:/data/sessions"
+      - "{{ riftbreaker_sessions_script }}:/app/session_recorder.py:ro"
+    command:
+      - python3
+      - -u
+      - /app/session_recorder.py
+      - --wine-prefix
+      - /data/.wine
+      - --out-dir
+      - /data/sessions
 
 volumes:
   {{ riftbreaker_wine_volume }}:

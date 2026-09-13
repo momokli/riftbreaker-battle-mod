@@ -1,25 +1,78 @@
 ---
 # Boot-Test-Overrides (CI/CD-Plan F1): Test-Instanz ISOLIERT von Prod —
-# eigene Ports, Container-/Unit-Namen, Pfade. Wird nur vom Pre-Merge-
-# Boot-Test benutzt (deploy/test-deploy.yml via -e @deploy/test-vars.yml).
-# Die Prod-Ports der laufenden Instanzen (release 6321/8081/9001, dev
-# 6322/8082/9004) bleiben unberührt (Test: 6323/8091/9003).
-riftbreaker_server_container: riftbreaker-dedicated-test
-riftbreaker_server_port_udp: 6323
-# IO-Bridge-Port isoliert von Prod (9001) — sonst kollidiert der Test-Container
-# mit dem Prod-Container auf 127.0.0.1:9001 (Issue #265/#272).
+# eigene Namen, Pfade und Ports, je Lauf eindeutig via `rbbattle_run_suffix`
+# (github.run_id). Damit können zwei boot-tests parallel laufen, ohne dass
+# feste Host-Ports/-Namen kollidieren (Issue #307). Prod-Ports
+# 6321/9001/8081 bleiben unberührt.
+#
+# Aufruf im Workflow (Dummy-Vault, kein Secret):
+#   ansible-playbook -i <tmp-inventory> deploy/test-deploy.yml \
+#     -e @deploy/test-vars.yml \
+#     -e rbbattle_run_suffix="${{ github.run_id }}" \
+#     -e tournament_port="<aus run_id abgeleitet>"
+#
+# `rbbattle_run_suffix` wird von CI mit github.run_id überschrieben; der
+# Fallback "local" gilt nur für manuelle Einzelläufe (dort ist nichts parallel).
+
+rbbattle_run_suffix: local
+
+# --- Game-Server (Dedicated) -------------------------------------------------
+riftbreaker_server_container: "riftbreaker-dedicated-test-{{ rbbattle_run_suffix }}"
+# Compose-Projekt/-Netz je Lauf eindeutig (Docker-Netzname = <projekt>_default).
+riftbreaker_compose_project: "rb-test-{{ rbbattle_run_suffix }}"
+# Kein fester Game-Host-Port (Issue #307): leer => das Compose-Template
+# publiziert 6321 nur ephemer (127.0.0.1::6321). Der Game-Server bindet 6321
+# weiter IM Container (per-Container-Namespace, vom entrypoint geprüft).
+# Die Bridge hingegen IST jetzt load-bearing (Core-IO-Gate, Issue #289) und wird
+# immer publiziert: Container-Port 9001, Host-Port je Lauf eindeutig. CI
+# überschreibt riftbreaker_bridge_port; 9003 ist der Fallback für manuelle
+# Einzelläufe.
+riftbreaker_server_port_udp: ""
 riftbreaker_bridge_port: 9003
-riftbreaker_game_dir: /srv/rbgame-test
-riftbreaker_backup_dir: /srv/rbgame-test-backups
-riftbreaker_deploy_dir: /opt/rbbattle-deploy/test/rb
+
+# Host-Pfade je Lauf eindeutig (Issue #307). Werden im Teardown wieder entfernt.
+riftbreaker_game_dir: "/srv/rbgame-test-{{ rbbattle_run_suffix }}"
+# Der Mod-Ordner MUSS relativ zum (eindeutigen) Game-Dir liegen — sonst würde
+# der Singular-Fallback auf das Prod-Pfad /srv/rbgame/mods/rbbattle greifen.
+riftbreaker_mod_dir: "{{ riftbreaker_game_dir }}/mods/rbbattle"
+riftbreaker_backup_dir: "{{ riftbreaker_game_dir }}-backups"
+riftbreaker_deploy_dir: "/opt/rbbattle-deploy/test/rb-{{ rbbattle_run_suffix }}"
+website_mods_dir: "/opt/rbbattle-deploy/test/mods-{{ rbbattle_run_suffix }}"
+# Der Build-Kontext (tools/dedicated-server) wurde bisher in einen festen Pfad
+# (/opt/rbmods/dedicated-server) synchronisiert. Bei zwei parallelen Läufen
+# schreiben beide in dasselbe Verzeichnis, während `docker build` daraus liest
+# → Race (halb geschriebene Files). Das ist genau die Kollisionsklasse aus
+# #307/Review-F2 und unterläuft die #304-Vorbereitung. Daher je Lauf eindeutig;
+# wird im Teardown mit entfernt.
+dedicated_server_context_dir: "/opt/rbbattle-deploy/test/dedicated-server-{{ rbbattle_run_suffix }}"
+
+# Named Volumes je Lauf (Docker-Volumes sind global -> eindeutig nötig).
+riftbreaker_wine_volume: "rb-test-wine-{{ rbbattle_run_suffix }}"
+riftbreaker_saves_volume: "rb-test-saves-{{ rbbattle_run_suffix }}"
+
 riftbreaker_content_mode: sync
 riftbreaker_content_cache_dir: /srv/riftbreaker/data/server
-website_mods_dir: /opt/rbbattle-deploy/test/mods
-tournament_unit: tournament-server-test
-tournament_port: 8091
+
+# --- Tournament-Server (systemd) --------------------------------------------
+tournament_unit: "tournament-server-test-{{ rbbattle_run_suffix }}"
+# Je Lauf eindeutiger Port (kein fester 8091 mehr). Deterministic aus dem
+# Suffix: Bereich 10000–29999 liegt unterhalb der ephemeren Linux-Range
+# (32768+) und oberhalb Prod (6321/8081/9001–9003). CI überschreibt den Wert
+# zusätzlich mit `-e tournament_port` (gleiche Formel, siehe boot-test.yml),
+# damit curl- und Deploy-Port garantiert identisch sind.
+tournament_port: "{{ 10000 + ((rbbattle_run_suffix | int) % 20000) }}"
+# Der Tournament-Server erreicht die Bridge über A_URL (Core-IO-Gate C4,
+# Issue #289). CI überschreibt mit dem je Lauf eindeutigen Bridge-Port;
+# 9003 ist der Fallback für manuelle Einzelläufe.
 tournament_bridge_a_url: "http://127.0.0.1:9003/exec"
-tournament_install_dir: /opt/rbmods/tournament-server-test
+tournament_bridge_b_url: ""
+tournament_install_dir: "/opt/rbmods/tournament-server-test-{{ rbbattle_run_suffix }}"
+
 # Toolchain des RUNNER-Users (localhost-Builds laufen im Boot-Test als
 # `runner`, nicht als root):
 cargo_home: /home/runner/.cargo
 rustup_home: /home/runner/.rustup
+
+# Session-Mitschnitt isoliert von Prod (eigener Container-Name + Ausgabeverzeichnis, Issue #280).
+riftbreaker_sessions_container: riftbreaker-sessions-test
+riftbreaker_sessions_dir: /srv/rbmods-sessions-test

@@ -2,7 +2,7 @@
 #
 # E2E-Prototyp Baustein 07/08 — Strecke Spiel-Log → Relay → Server → Web-UI
 #
-# Startet den Tournament-Server (06, Port 8765), simuliert Spiel-Log-Zeilen
+# Startet den Tournament-Server (06, zufälliger freier Port), simuliert Spiel-Log-Zeilen
 # ([RBBATTLE] key=value, wie der Lua-Mod sie schreibt), startet den Relay (07)
 # dagegen und prueft die ganze Strecke:
 #
@@ -21,7 +21,42 @@ cd "$(dirname "$0")" || exit
 
 SERVER_JS="../06-tournament-server/server.js"
 RELAY_PY="relay.py"
-PORT=8765
+# Freien Test-Port ermitteln (Issue #324).
+#
+# Frueher: PORT=$(( (RANDOM % 20000) + 20000 )) — wuerfeln und hoffen. Das
+# scheitert auf einem beschaeftigten Host reproduzierbar mit EADDRINUSE, weil
+# der Bereich 20000-39999 zu 36 % im EPHEMERAL-Bereich des Kernels liegt
+# (/proc/sys/net/ipv4/ip_local_port_range, Default 32768-60999). Dort vergibt
+# der Kernel laufend Quell-Ports fuer AUSGEHENDE Verbindungen; ein listen() auf
+# so einen Port faellt um. Beobachtet: 33556 und 33898 — beide ephemeral.
+#
+# Jetzt: unterhalb des Ephemeral-Bereichs wuerfeln UND den Port als frei
+# nachweisen.
+rb_pick_free_port() {
+  local p lo hi
+  lo=20000
+  hi=32767
+  # Obergrenze aus dem Kernel ableiten, falls der Host anders konfiguriert ist.
+  if [ -r /proc/sys/net/ipv4/ip_local_port_range ]; then
+    local eph
+    eph=$(awk '{print $1}' /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null)
+    case "$eph" in
+      ''|*[!0-9]*) ;;
+      *) [ "$eph" -gt "$lo" ] && hi=$((eph - 1)) ;;
+    esac
+  fi
+  for _ in $(seq 1 50); do
+    p=$(( (RANDOM % (hi - lo + 1)) + lo ))
+    # Erfolgreicher Connect = jemand lauscht dort bereits -> naechster Versuch.
+    if ! (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; then
+      printf '%s\n' "$p"
+      return 0
+    fi
+  done
+  return 1
+}
+
+PORT=$(rb_pick_free_port) || { echo "FAIL: kein freier Test-Port gefunden"; exit 1; }
 URL="http://127.0.0.1:$PORT"
 
 OK=0

@@ -72,7 +72,7 @@ python3 bridge/telegram_feed.py --self-test   # Syntax-/Unit-Check ohne Netz
 Der Server ist das Gehirn, die in-game Lua reiner **Executor**. Der Referee
 (`src/referee.rs`) konsumiert Spiel-Events (`POST /referee/event`:
 `ready`/`wave_done`/`hq_destroyed`) und gibt daraus Commands aus (`rb_wave N`,
-`restart`) — deterministisch, ohne Uhr/I/O, damit ohne Spieler testbar
+`rb_reset`) — deterministisch, ohne Uhr/I/O, damit ohne Spieler testbar
 (Event-In → Command-Out). Abholen: `GET /referee/poll?world=A`. Die Wellen
 ruhen nach `hq_destroyed` bis zum nächsten `ready`; Duplikate sind idempotent.
 
@@ -81,7 +81,7 @@ ruhen nach `hq_destroyed` bis zum nächsten `ready`; Duplikate sind idempotent.
 curl -s -X POST localhost:8080/referee/event -d '{"world":"A","type":"ready"}'
 # wave_done → rb_wave 2
 curl -s -X POST localhost:8080/referee/event -d '{"world":"A","type":"wave_done","level":1}'
-# hq_destroyed → restart (Runde +1)
+# hq_destroyed → rb_reset (in-game Round-Reset auf 0, #281)
 curl -s -X POST localhost:8080/referee/event -d '{"world":"A","type":"hq_destroyed"}'
 # echtes Spiel-Event (Mod-Log, #267): HQ-Tod → Referee-Restart-Push an RBBRIDGE_<W>_URL
 curl -s -X POST localhost:8080/report -d '{"world":"A","event":"hq_dead"}'
@@ -89,7 +89,7 @@ curl -s -X POST localhost:8080/report -d '{"world":"A","event":"hq_dead"}'
 
 Der Server akzeptiert das Mod-Log-Event `hq_dead` (Aliase `hq_destroy`/
 `hq_destroyed`) über `POST /report` und **pusht** den resultierenden
-`restart`-Command (inkl. `cmd_id`) an die Bridge der Welt (IO-Kanal, analog GO).
+`rb_reset`-Command (inkl. `cmd_id`) an die Bridge der Welt (IO-Kanal, analog GO).
 Erfolgreich gepushte Commands werden aus der Referee-Outbox genommen → der
 `/referee/poll`-Pfad liefert denselben Restart **nicht** doppelt (Push *oder*
 Poll); ohne `RBBRIDGE_*_URL` bzw. bei Push-Fehler übernimmt der Poll (`ok:null`,

@@ -9,8 +9,9 @@
 //!   danach je abgeschlossener Welle die nächste (`rb_wave <level>`). Das
 //!   Wellen-Level vergibt der Server (monoton, pro Welt) — die Lua zählt
 //!   keine Runden mehr mit.
-//! * **HQ-Tod:** `hq_destroyed` → `restart` + Runde hochzählen; die Wellen
-//!   ruhen, bis der Executor nach dem Neustart wieder `ready` meldet.
+//! * **HQ-Tod:** `hq_destroyed` → `rb_reset` (in-game Round-Reset, #281) +
+//!   Runde hochzählen; die Wellen ruhen, bis der Executor nach dem Reset wieder
+//!   `ready` meldet.
 //!
 //! Der Modul ist **deterministisch**: keine Uhr, kein Zufall, kein I/O —
 //! gleiche Event-Folge ⇒ gleiche Command-Folge. Genau darum ist der
@@ -30,7 +31,9 @@ use std::collections::VecDeque;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GameEventKind {
-    /// Executor ist bereit (Map geladen bzw. nach `restart` wieder oben).
+    /// Executor ist bereit (Map geladen bzw. nach `rb_reset` wieder oben;
+    /// das `commence`→`ready`-Mapping des Relays ist Teil des Live-Loops #265,
+    /// s. `docs/REFEREE.md` „Offene Punkte“).
     Ready,
     /// Eine Wellen-Spawnung ist abgeschlossen (`event=wave level=N status=done`).
     WaveDone,
@@ -52,7 +55,7 @@ pub struct GameEvent {
 pub struct Command {
     /// Ziel-Welt (die Spiel-Instanz, die den Command ausführt).
     pub world: World,
-    /// Auszuführender Konsolen-Command (z. B. `rb_wave 3`, `restart`).
+    /// Auszuführender Konsolen-Command (z. B. `rb_wave 3`, `rb_reset`).
     pub command: String,
     /// Server-seitige Command-ID (Dedup-Schlüssel für das Relay, Issue #60).
     pub cmd_id: u64,
@@ -67,15 +70,19 @@ pub struct RefereeConfig {
     /// Obergrenze für das Wellen-Level; `0` = unbegrenzt. Ab dem Deckel gibt
     /// der Referee keine weitere Welle aus (Warten auf HQ-Tod/Reset).
     pub max_wave: u32,
-    /// Command, den der Executor beim HQ-Tod ausführt (Neustart des Spiels).
+    /// Command, den der Executor beim HQ-Tod ausführt (in-game Round-Reset des
+    /// Mods, #281).
     pub restart_cmd: String,
 }
 
 impl Default for RefereeConfig {
+    /// Muss dem Env-Default in `main.rs` (`TOURNAMENT_REFEREE_RESTART_CMD`,
+    /// seit #281 `rb_reset`) entsprechen — sonst laufen Tests/`Default` und
+    /// produktiver `main`-Pfad auseinander (#281 Review-Finding 2).
     fn default() -> Self {
         RefereeConfig {
             max_wave: 0,
-            restart_cmd: "restart".to_string(),
+            restart_cmd: "rb_reset".to_string(),
         }
     }
 }
@@ -85,7 +92,7 @@ impl Default for RefereeConfig {
 struct WorldReferee {
     /// Executor läuft (hat `ready` gemeldet, noch kein HQ-Tod).
     running: bool,
-    /// `restart` ausgegeben, wartet auf erneutes `ready`.
+    /// `rb_reset` ausgegeben, wartet auf erneutes `ready`.
     restart_pending: bool,
     /// Level der aktuell offenen Welle (`None` = keine Welle in Arbeit).
     waves_in_flight: Option<u32>,
@@ -305,6 +312,13 @@ mod tests {
     }
 
     #[test]
+    fn default_restart_cmd_matches_production_env_default() {
+        // #281: `RefereeConfig::default()` (Test/`Default`) und der Env-Default
+        // in `main.rs` (`TOURNAMENT_REFEREE_RESTART_CMD`) müssen identisch sein.
+        assert_eq!(RefereeConfig::default().restart_cmd, "rb_reset");
+    }
+
+    #[test]
     fn ready_triggers_first_wave() {
         let mut r = Referee::new(RefereeConfig::default());
         let cmds = r.on_event(ready(World::A));
@@ -363,7 +377,7 @@ mod tests {
         r.on_event(ready(World::A)); // rb_wave 1
         let cmds = r.on_event(hq_destroyed(World::A));
         assert_eq!(cmds.len(), 1);
-        assert_eq!(cmds[0].command, "restart");
+        assert_eq!(cmds[0].command, "rb_reset");
         assert_eq!(cmds[0].reason, "hq_destroyed round=1");
         let v = r.world_view(World::A);
         assert!(!v.running);

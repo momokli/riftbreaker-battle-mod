@@ -103,13 +103,18 @@
 --
 -- Log-Zeilen (externes Parsing, Praefix [RBBATTLE]):
 --   event=mod_load version=0.34.3 status=ok mode=sp econ_source=.. econ_pool=.. hq_hp=.. hq_dead=..
---   event=wave level=N status=start|done spawned=.. skipped=.. anchor=border|mission|mech
+--   event=wave level=N status=start|done|no_player|no_spawns spawned=.. skipped=.. anchor=border|mission|mech
+--     (#288: status=done nur bei spawned>0 — exec_result ok:true beweist keine Spawns)
 --   event=spawn ok|failed|skip ... anchor=<gruppe>/<id>            (je Kreatur)
 --   event=wave_spawners count=N                                    (Pool-Groesse)
---   event=dom_timer patch status=ok|skip|no_class cap=300          (#23)
---   event=setup difficulty=<name> creatures_difficulty=<n>         (bei Map-Ready)
+--   event=dom_timer patch status=ok|skip|no_class cap=480           (#23/#41)
+--   event=setup difficulty=<name> creatures_difficulty=<n> timer_cap=.. preset=..
+--     interval_cfg=.. interval_eff=.. strength_pct=.. base_difficulty=..  (#23/#41/#278)
+--     interval_cfg = Preset-Ziel, interval_eff = tatsaechlich wirksamer DOM-Timer
 --   event=economy_db status=new|resume|unavailable pool=.. farmed=..      (#24)
 --   event=economy_source source=resource_obtained|resource_change|tick    (#24)
+--   event=economy_source source=account status=seed|active|unavailable    (#242)
+--     (Konto-Snapshot-Diff; status=seed = erster Tick, bucht bewusst nichts)
 --   event=economy_farm source=.. resource=.. amount=.. value=.. farmed=.. (#24)
 --   event=convert resource=.. amount=.. value=.. pool=.. irreversible=1   (#24)
 --   event=economy_show / economy_reset                                    (#24)
@@ -129,9 +134,13 @@
 --   event=hq_hp hp=.. dead=..                                              (#28)
 --   event=hq_dead status=match_end hp=0                                    (#28)
 --   event=match_end reason=hq_destroyed                                    (#28)
+--   event=reset round=0 status=ok|skip reason=.. count=..                 (#281)
+--     (Niederlage -> Round-Reset auf 0: Setup-/HQ-Placement-Phase, Economy
+--      0, Wave-Timer 0; genau EIN Reset pro Niederlage, kein Restart-Loop)
 --   (hq_dead) -> in-game Annonce "GAME OVER — HQ destroyed"; Solo-Feed     (#157)
 --   klinkt auf event=hq_dead ein: Telegram Topic 312 + genau EIN            (#157)
---   docker restart pro Match-Ende (Cooldown-Guard, kein Flapping).          (#157)
+--   docker restart pro Match-Ende (Fallback; Primaer seit #281: in-game    (#157)
+--   Round-Reset `rb_reset` auf 0 -- Setup-/HQ-Placement-Phase, Econ 0).    (#281)
 --   event=hq_respawn status=unmatched entity=..                            (#28)
 --   event=hq_zone status=.. entity=.. hp=.. dead=..                        (#28)
 --   event=hq_status / hq_reset / hq_entity                                 (#28)
@@ -364,6 +373,7 @@ local BoostSummary
 local CommenceGame
 local AnnounceSetupPhase
 local HqOnDestroyed
+local RoundReset
 
 -- Vorwaertsdeklaration fuer die HQ-HP-Kurve (#33): Definition folgt im
 -- Win-Condition-Block (braucht RBB.hqCfg); aufgerufen wird sie in
@@ -675,8 +685,17 @@ local function SpawnWave(level)
         end
     end
 
-    Log("event=wave level=%d status=done spawned=%d skipped=%d anchor=%s anchors=%d",
-        level, spawned, skipped, anchorMode, anchorCount)
+    -- #288: status=done nur, wenn wirklich Kreaturen entstanden sind. Der
+    -- Exec-Kanal (exec_result ok:true) belegt nur, dass ExecuteCommand lief —
+    -- NICHT, dass gespawnt wurde. Bei 0 Spawns trotz vorhandener Anker ist das
+    -- eine eigene, ehrliche Statuszeile (kein Falsch-Gruen im Log).
+    if spawned > 0 then
+        Log("event=wave level=%d status=done spawned=%d skipped=%d anchor=%s anchors=%d",
+            level, spawned, skipped, anchorMode, anchorCount)
+    else
+        Log("event=wave level=%d status=no_spawns spawned=0 skipped=%d anchor=%s anchors=%d",
+            level, skipped, anchorMode, anchorCount)
+    end
     WriteConsole("rb_wave level %d: %d Kreaturen gespawnt (%d uebersprungen), Anker: %s",
                  level, spawned, skipped, anchorMode)
     return spawned > 0
@@ -735,6 +754,27 @@ local function PatchDomTimer()
     return true
 end
 
+-- #278: Effektive DOM-Vorbereitungszeit (Sekunden) fuer Log/HUD. Liest die
+-- (gepatchte) Klasse dom_mananger:GetPrepareSpawnTime — also den echten, vom
+-- Spiel genutzten Wert inklusive #23-Deckel — und faellt auf den Preset-Cap
+-- zurueck, wenn die API (noch) fehlt. Wichtig: der #23-Deckel senkt nur, hebt
+-- nie. Preset A (480) kann gegen einen kleineren rules-Wert (normal/hard: 420)
+-- daher NICHT erzwungen werden -> das Setup-Log unterscheidet deshalb
+-- interval_cfg (Preset-Ziel) und interval_eff (wirksamer Timer).
+local function DomPrepareSpawnTime()
+    local dom = nil
+    if type(_G) == "table" then dom = rawget(_G, "dom_mananger") end
+    -- #217/#278: zur Laufzeit ist dom_mananger userdata (Spielklasse), kein
+    -- Lua-table -> beide Typen zulassen, sonst faellt das Log auf den Cap zurueck.
+    local dType = type(dom)
+    if (dType == "table" or dType == "userdata")
+        and type(dom.GetPrepareSpawnTime) == "function" then
+        local ok, v = pcall(dom.GetPrepareSpawnTime, dom)
+        if ok and type(v) == "number" then return math.floor(v) end
+    end
+    return nil
+end
+
 -- Setup-/Difficulty-Log (bei Map-Ready): Beleg fuer #23-Teil "Schwierigkeit
 -- hard" aus Sicht des laufenden Servers. Gesetzt wird die Difficulty beim
 -- Server-/Welt-Start (C++/GameServerOptions, s. docs/DUEL_SETUP.md).
@@ -760,9 +800,13 @@ local function LogMapSetupInfo()
     end
 
     local preset = ActiveWavePreset()
-    Log("event=setup difficulty=%s creatures_difficulty=%s timer_cap=%d preset=%s interval=%d strength_pct=%d base_difficulty=%s",
+    -- #278: der effektive Timer ist der rules-Wert (normal/hard: 420), vom
+    -- #23-Deckel nur nach UNTEN begrenzt — nicht zwingend preset.intervalS.
+    -- Beide Werte loggen (cfg = Preset-Ziel, eff = tatsaechlich wirksam).
+    local intervalEff = DomPrepareSpawnTime() or RBB.waveIntervalCapS
+    Log("event=setup difficulty=%s creatures_difficulty=%s timer_cap=%d preset=%s interval_cfg=%d interval_eff=%d strength_pct=%d base_difficulty=%s",
         difficulty, creatureDifficulty, RBB.waveIntervalCapS,
-        preset.id, preset.intervalS, preset.strengthPct, RBB.wavePresets.baseDifficulty)
+        preset.id, preset.intervalS, intervalEff, preset.strengthPct, RBB.wavePresets.baseDifficulty)
 end
 
 local function OnPlayerInitialized()
@@ -886,13 +930,41 @@ RBB.economyCfg = {
     -- wird (Handler-Fehler = API dieser Event-Klasse unbrauchbar).
     maxSourceErrors = 3,
 
+    -- #242 Konto-Quelle: echtes Farm-Tracking ueber den Ressourcen-Kontostand
+    -- statt ueber die (live als unlesbar bestaetigte) Event-Payload. Gelesen
+    -- wird im bestehenden HourEvent-Tick, gebucht wird die DIFFERENZ zum
+    -- letzten Snapshot. Details/Belege: Issue #242.
+    --
+    -- DEFAULT AUS, bewusst (gleiches Muster wie afkHourTicks = 0 in #231/#232):
+    -- dass PlayerService:GetResourceAmount im Mod-/Duel-Kontext liefert, ist
+    -- RE-seitig belegt, aber NICHT in-game ausgefuehrt. Dazu kommt ein
+    -- ungeklaerter Befund: auf diesem Branch fiel das Core-IO-Gate zweimal mit
+    -- C2 'pipe_unavailable' aus, waehrend ein Branch ohne diese Aenderung
+    -- dasselbe Gate zweimal bestand (PR #296). Eine Kausalitaet ist nicht
+    -- belegt -- aber solange sie nicht ausgeschlossen ist, wird hier nichts
+    -- scharf geschaltet. Auf true setzen, sobald ein Spieler bestaetigt hat,
+    -- dass 'event=economy_farm source=account' mit plausiblen Werten kommt.
+    accountEnabled = false,
+    accountPlayerId = 0,     -- wie GetPlayerControlledEnt(0) im Rest der Mod
+    -- Bewusst eine feste, geordnete Liste statt pairs(resourceFactors): die
+    -- Iterationsreihenfolge von Lua-Tabellen ist nicht definiert, und die
+    -- Log-Reihenfolge soll reproduzierbar sein.
+    accountResources = {
+        "carbonium", "steel", "cobalt", "palladium", "titanium",
+        "uranium_ore", "morphium", "flammable_gas", "geothermal",
+        "mud", "magma", "sludge", "water",
+    },
+    -- Ticks ohne EINE lesbare Ressource, bevor die Konto-Quelle aufgegeben
+    -- wird (dann bleibt es beim Tick-Fallback wie bisher).
+    maxAccountErrors = 3,
+
     -- Obergrenze je Convert-Aufruf (Schutz vor Tippfehlern / Endlos-Args).
     maxConvertAmount = 100000,
 }
 
 -- Laufzeit-Zustand + Persistenz-Spiegel (Global-Database "rbbattle_economy").
 RBB.economy = {
-    source  = "none",        -- none | resource_obtained | resource_change | tick
+    source  = "none",        -- none | resource_obtained | resource_change | tick | account
     pool    = 0,             -- Send-Waehrung (persistiert, Spar-Pool)
     farmed  = 0,             -- Value aus Farmen, kumuliert (persistiert)
     converted = 0,           -- Value in Send-Waehrung gewandelt (persistiert)
@@ -901,6 +973,12 @@ RBB.economy = {
     sourceErrors = 0,        -- Fehler der aktiven/geprueften Event-Quelle
     eventLocked = false,     -- true: eine Event-Quelle ist aktiv gesperrt
     sourceTried = {},        -- Quelle -> true (bereits gescheitert)
+    -- #242 Konto-Quelle: Ressource -> zuletzt gelesener Kontostand. Bewusst
+    -- NICHT persistiert — nach einem Map-/Mod-Load ist der Kontostand ein
+    -- anderer, der erste Tick muss neu einlesen (sonst wuerde die Differenz
+    -- zum alten Spielstand als "gefarmt" gebucht).
+    accountSnapshot = nil,   -- nil = noch nie gelesen (erster Tick seedet nur)
+    accountErrors = 0,       -- Ticks ohne eine einzige lesbare Ressource
     db = nil,                -- Global-Database (nil = nicht verfuegbar)
     dbOk = false,
 }
@@ -1131,10 +1209,112 @@ local function OnResourceChangeEvent(evt)
     HandleFarmEvent(evt, "resource_change")
 end
 
+-- ---------------------------------------------------------------------------
+-- #242 Konto-Quelle: Snapshot-Diff statt Event-Payload.
+--
+-- Die Resource-Event-API ist live als unlesbar bestaetigt (Issue #242:
+-- ResourceObtainedEvent traegt ueberhaupt keinen Betrag, nur Entity+Resource).
+-- Der Kontostand ist dagegen direkt lesbar. Deshalb: im HourEvent-Tick je
+-- Ressource den Stand lesen und die DIFFERENZ zum letzten Tick buchen.
+--
+-- Warum nur positive Deltas: ein sinkender Kontostand ist Verbrauch (Bauen),
+-- kein negativer Farm-Ertrag. Der Snapshot zieht trotzdem nach, sonst wuerde
+-- Wiederaufbauen doppelt als Farm zaehlen.
+-- ---------------------------------------------------------------------------
+
+-- Kontostand einer Ressource oder nil (API nicht vorhanden/nicht lesbar).
+local function TryAccountAmount(name)
+    local ok, amount = pcall(function()
+        return PlayerService:GetResourceAmount(RBB.economyCfg.accountPlayerId, name)
+    end)
+    if not ok or amount == nil then return nil end
+    local n = tonumber(amount)
+    if n == nil then return nil end
+    return n
+end
+
+-- Ein Konto-Tick. Rueckgabe: true = Konto-Quelle ist nutzbar (auch wenn in
+-- diesem Tick nichts gefarmt wurde), false = nicht lesbar, Aufrufer faellt
+-- auf das Tick-Einkommen zurueck.
+local function EconomyAccountTick()
+    local e = RBB.economy
+    local cfg = RBB.economyCfg
+
+    if not cfg.accountEnabled then return false end
+    if e.sourceTried["account"] then return false end
+
+    local snapshot = e.accountSnapshot
+    local seeding = (snapshot == nil)
+    local fresh = {}
+    local readable = 0
+
+    for _, name in ipairs(cfg.accountResources) do
+        local amount = TryAccountAmount(name)
+        if amount ~= nil then
+            readable = readable + 1
+            fresh[name] = amount
+            if not seeding then
+                local previous = snapshot[name]
+                if previous ~= nil and amount > previous then
+                    EconomyBookFarm("account", name, amount - previous)
+                end
+            end
+        end
+    end
+
+    if readable == 0 then
+        -- Keine einzige Ressource lesbar: wie die Event-Quellen begrenzt oft
+        -- versuchen, dann dauerhaft aufgeben (kein pcall-Geknatter je Tick).
+        e.accountErrors = e.accountErrors + 1
+        if e.accountErrors >= cfg.maxAccountErrors then
+            e.sourceTried["account"] = true
+            Log("event=economy_source source=account status=unavailable reason=no_readable_resource ticks=%d",
+                e.accountErrors)
+            -- War die Konto-Quelle bereits gesperrt (sie lief also schon) und
+            -- faellt jetzt aus, MUSS die Sperre auf tick umgelegt werden —
+            -- sonst zahlt weder Konto noch Tick, und die Economy stuende still.
+            if e.eventLocked and e.source == "account" then
+                e.source = "tick"
+                Log("event=economy_source source=tick status=fallback reason=account_lost")
+            end
+        end
+        return false
+    end
+
+    e.accountSnapshot = fresh
+
+    if seeding then
+        -- Erster Tick bucht bewusst NICHTS: der Startbestand ist nicht gefarmt.
+        Log("event=economy_source source=account status=seed resources=%d", readable)
+        -- Die Quelle ist damit belegt nutzbar -> sperren, sonst liefe das
+        -- pauschale Tick-Einkommen neben dem echten Tracking weiter. Das gilt
+        -- auch, wenn vorher schon auf "tick" gesperrt wurde: echtes Tracking
+        -- loest den Platzhalter ab (der Aufrufer laesst nur tick/account
+        -- ueberhaupt bis hierher durch).
+        e.source = "account"
+        e.eventLocked = true
+        Log("event=economy_source source=account status=active")
+    end
+
+    return true
+end
+
 -- Fallback-Quelle: HourEvent zahlt pauschal, solange keine Event-Quelle
 -- aktiv gesperrt ist (auto) oder die Quelle dauerhaft auf tick gefallen ist.
 local function OnHourEventEconomy(evt)
     local e = RBB.economy
+
+    -- #242: echtes Konto-Tracking hat Vorrang vor dem pauschalen Tick.
+    -- Auch dann, wenn bereits auf "tick" gesperrt wurde: der Tick ist ein
+    -- Platzhalter-Einkommen, keine verifizierte Quelle — und im live
+    -- bestaetigten Ablauf (#242) feuern die unlesbaren Resource-Events oft
+    -- VOR dem ersten HourEvent, sperren also auf tick, bevor das Konto
+    -- ueberhaupt einmal gelesen wurde. Nur eine echte, lesbare Event-Quelle
+    -- (resource_obtained/resource_change) hat Vorrang.
+    if (not e.eventLocked) or e.source == "account" or e.source == "tick" then
+        if EconomyAccountTick() then return end
+    end
+
     if e.eventLocked then
         if e.source == "tick" then
             EconomyBookFarm("tick", "hour_tick", RBB.economyCfg.valuePerHourTick)
@@ -1344,14 +1524,7 @@ end
 
 -- Countdown bis zur naechsten Welle: DOM-Prepare-Zeit (gekappt), Fallback cap.
 local function RevealCountdown()
-    local t = RBB.waveIntervalCapS
-    local dom = nil
-    if type(_G) == "table" then dom = rawget(_G, "dom_mananger") end
-    if type(dom) == "table" and type(dom.GetPrepareSpawnTime) == "function" then
-        local ok, v = pcall(dom.GetPrepareSpawnTime, dom)
-        if ok and type(v) == "number" then t = math.floor(v) end
-    end
-    return t
+    return DomPrepareSpawnTime() or RBB.waveIntervalCapS
 end
 
 -- Vor Wellenstart: beide Werte verbergen (Start einer neuen Build-Phase).
@@ -2168,6 +2341,13 @@ end)
 -- und stoesst den Commence an (Muster Retry-Punkte PatchDomTimer).
 local function OnHourEvent(evt)
     OnHourEventEconomy(evt)
+    -- #281: ausstehenden Round-Reset nach Niederlage ausfuehren (genau einmal;
+    -- danach kein pending mehr -> keine Schleife). Tick-Pfad = In-Game-Reset
+    -- ohne externen Trigger (nur echte HQ-Zerstoerung, s. `RBB.reset.auto`);
+    -- der Referee kann per `rb_reset` immer sofort ausloesen.
+    if RBB.reset.pending and RBB.reset.auto then
+        RoundReset("hour_tick", true)
+    end
     HqAutoDetectEntity()
     -- #231: AFK-Timeout -- solange kein HQ platziert ist (Setup-Phase, #158)
     -- und das Match noch nicht beendet ist, zaehlt jeder Tick mit. Ab
@@ -2372,8 +2552,9 @@ end
 -- HQ-Tod: Match-Ende melden (Sieg = Gegenseite; der Server setzt winner).
 -- #157: in-game End-Announce + Feed-Signal. Der Solo-Feed (tools/solo-feed)
 -- klinkt auf `event=hq_dead` ein -> Telegram Topic 312 + genau EIN docker
--- restart pro Match-Ende (Cooldown-Guard liegt im Feed; der Mod hat keinen
--- eigenen I/O-Kanal und kann den Prozess nicht selbst neu starten).
+-- restart pro Match-Ende (Cooldown-Guard liegt im Feed). Seit #281 ist der
+-- in-game Round-Reset (`rb_reset`, s. u.) der Primaerpfad; der docker restart
+-- bleibt grober Fallback fuer Umgebungen ohne den in-game Reset.
 -- Idempotent: der Guard hier (RBB.hq.dead) feuert das Ende nur genau einmal.
 -- `reason` erlaubt andere Match-Ende-Ausloeser (z.B. #231 AFK-Timeout), ohne
 -- die Restart-/Idempotenz-Logik zu duplizieren. Default = echte HQ-Zerstoerung.
@@ -2388,12 +2569,104 @@ HqOnDestroyed = function(reason, gameOverMsg)
     if RBB.hq.dead then return end
     RBB.hq.dead = true
     RBB.hq.hp = 0
+    -- #281: Niederlage erkannt -> Reset auf 0 schaerfen. Genau EIN Reset pro
+    -- Niederlage; ausgefuehrt vom naechsten HourEvent-Tick (in-game, nur bei
+    -- echter HQ-Zerstoerung -- s. `auto`) ODER vom Referee-Command `rb_reset`
+    -- ueber den IO-Kanal (#267).
+    RBB.reset.pending = true
+    -- `auto` = true nur bei echter HQ-Zerstoerung (reason nil): dann fuehrt der
+    -- Tick den Reset selbsttaetig aus. Ein AFK-Ende (reason "afk_no_hq") wird
+    -- NICHT auto-ausgefuehrt, sonst wuerde der noch scharfe AFK-Zaehler die
+    -- frische Setup-Phase sofort wieder beenden -> Restart-Schleife.
+    RBB.reset.auto = (reason == nil)
     if reason == nil then
         Log("event=hq_dead status=match_end hp=0")
     end
     Log("event=match_end reason=%s", reason or "hq_destroyed")
     WriteConsole(gameOverMsg or "GAME OVER — HQ destroyed")
-    WriteConsole("Match end — restarting game in 5 seconds...")
+    WriteConsole("Match end — round resets on next tick")
+end
+
+-- ============================================================================
+-- #281 Niederlage -> deterministischer Round-Reset auf 0
+--
+-- Ziel: nach `match_end reason=hq_destroyed` geht die Runde deterministisch +
+-- idempotent auf 0 zurueck: Setup-/HQ-Placement-Phase, Economy-Pool 0,
+-- Runden-/Wave-Timer 0. Genau EIN Reset pro Niederlage, keine Restart-Schleife.
+--
+-- Trigger (ein Kern `RoundReset`, zwei Wege):
+--   1. In-game (bevorzugt): `HqOnDestroyed` schaerft den Reset (`pending`); der
+--      naechste HourEvent-Tick fuehrt ihn aus (die Lua hat keine Uhr, HourEvent
+--      ist der einzige Tick -- Muster #231/#24).
+--   2. IO-Kanal (#265/#267): der Referee pusht `TOURNAMENT_REFEREE_RESTART_CMD`
+--      (Default `rb_reset`) an die Bridge -> ConsoleService -> `rb_reset`.
+-- Container-Restart (tools/solo-feed) bleibt dokumentierter grober Fallback.
+--
+-- Idempotenz/kein Loop: `RoundReset` arbeitet nur, solange ein Reset aussteht
+-- (`RBB.reset.pending`), setzt das Flag und zaehlt `count` hoch; Folgeaufrufe
+-- sind `status=skip` (kein zweiter Reset). Nach dem Reset ist `RBB.hq.entity`
+-- nil -> die Leak-Erkennung ist bis zur naechsten HQ-Platzierung inaktiv
+-- (kein sofortiger zweiter HQ-Tod).
+-- ============================================================================
+
+-- Reset-Zustand: `pending` schaerft genau EINE Niederlage; `count` zaehlt die
+-- ausgefuehrten Resets (Beleg "genau ein Reset pro Niederlage").
+RBB.reset = {
+    pending = false,
+    auto    = false, -- true: Tick-Pfad darf autonom ausfuehren (echte HQ-Zerstoerung)
+    count   = 0,
+}
+
+-- Fuehrt den ausstehenden Reset aus und liefert true, sonst false. `silent`
+-- unterdrueckt das Skip-Log (Tick-Pfad -> sonst eine Zeile pro Tick).
+RoundReset = function(reason, silent)
+    if not RBB.reset.pending then
+        if not silent then
+            Log("event=reset status=skip reason=not_pending")
+        end
+        return false
+    end
+    RBB.reset.pending = false
+    RBB.reset.count = RBB.reset.count + 1
+
+    -- Runde + Wave-Timer auf 0; Setup-/HQ-Placement-Phase neu.
+    RBB.round = 0
+    RBB.commenced = false
+    RBB.setupAnnounced = false
+    RBB.commenceHeldLogged = false
+    RBB.setupHourTicks = 0
+    RBB.waveIntervalCapS = ActiveWavePreset().intervalS
+
+    -- HQ frisch: HP=Start, nicht tot, Entity wird neu erkannt (#144).
+    -- `entity=nil` => Leak-Erkennung bleibt inaktiv, bis ein neues HQ steht
+    -- (kein sofortiger zweiter HQ-Tod -> keine Restart-Schleife).
+    RBB.hq.hp = RBB.hqCfg.hqHpStart
+    RBB.hq.dead = false
+    RBB.hq.entity = nil
+    RBB.hq.unmatchedLogged = false
+    RBB.hq.unarmedLeakLogged = false
+    RBB.hq.filteredLeakLogged = false
+    RBB.hq.autodetectFailLogged = false
+
+    -- Economy-Pool 0 (+ DB) + Send-Queue/Boost/Reveal leeren.
+    ResetEconomy()
+    RBB.sendQueue.units = {}
+    RBB.sendQueue.count = 0
+    RBB.sendQueue.value = 0
+    RBB.boost.pct = 0
+    RBB.boost.buys = 0
+    RevealReset()
+    RBB.reveal.round = 0
+
+    PatchDomTimer() -- Timer-Cap nach Reset erneut sichern (idempotent)
+
+    Log("event=reset round=0 status=ok reason=%s count=%d",
+        reason or "manual", RBB.reset.count)
+    WriteConsole("Round reset — place your headquarter to commence")
+    -- Session-Boundary: die alte Session endete mit `match_end` (s. o.), die
+    -- neue startet hier sichtbar als Setup-Phase (commence pending/place_hq).
+    AnnounceSetupPhase()
+    return true
 end
 
 -- Leak: eine Kreatur hat die HQ-Zone erreicht -> HQ-HP sinkt. Reine Logik
@@ -2527,6 +2800,8 @@ local function CmdHq(args)
         RBB.hq.hp = RBB.hqCfg.hqHpStart
         RBB.hq.entity = nil
         RBB.hq.dead = false
+        RBB.reset.pending = false -- #281: Dev-Reset loescht einen offenen Round-Reset
+        RBB.reset.auto = false
         RBB.hq.unmatchedLogged = false
         RBB.hq.unarmedLeakLogged = false
         RBB.hq.filteredLeakLogged = false
@@ -2571,6 +2846,20 @@ end
 pcall(function()
     ConsoleService:RegisterCommand("rb_hq", function(args)
         CmdHq(args)
+    end)
+end)
+
+-- #281: Round-Reset auf 0 nach Niederlage. In-game-Lua-Reset (bevorzugt),
+-- aufrufbar per IO-Kanal (`TOURNAMENT_REFEREE_RESTART_CMD=rb_reset`, vom
+-- Referee nach `hq_dead` gepusht) oder als Operator-/Dev-Kommando.
+-- Idempotent: genau EIN Reset pro Niederlage.
+pcall(function()
+    ConsoleService:RegisterCommand("rb_reset", function(args)
+        local reason = nil
+        if args ~= nil and #args >= 1 then reason = tostring(args[1]) end
+        if not RoundReset(reason or "command") then
+            WriteConsole("rb_reset: kein Reset offen (bereits zurueckgesetzt)")
+        end
     end)
 end)
 
