@@ -41,3 +41,27 @@
         src: roles/website/templates/docker-compose.yml.j2
         dest: "{{ render_dir }}/rift-caddy.yml"
         mode: "0644"
+
+    # Regression-Guard Issue #355: rift-caddy MUSS `admin off` setzen. Sonst
+    # belegt der host-net-Container Caddys Default-Admin-Port 127.0.0.1:2019 und
+    # kollidiert mit der Admin-API des geteilten Host-Caddys (mellon-caddy):
+    # `docker exec mellon-caddy caddy reload` dialt localhost:2019 und landet
+    # dann per Kernel-Load-Balancing mal beim rift-caddy (plain `caddy:2`, OHNE
+    # cloudflare-DNS-Provider) → HTTP 400
+    # "unknown module: dns.providers.cloudflare".
+    - name: rift-caddy Caddyfile rendern (Issue 355)
+      template:
+        src: roles/website/templates/rift-caddy.Caddyfile.j2
+        dest: "{{ render_dir }}/rift-caddy.Caddyfile"
+        mode: "0644"
+
+    - name: rift-caddy — Admin-Endpunkt MUSS aus sein (Issue 355)
+      assert:
+        that:
+          - "'admin off' in (lookup('file', render_dir ~ '/rift-caddy.Caddyfile'))"
+        fail_msg: >-
+          rift-caddy.Caddyfile.j2 enthaelt kein `admin off`. Der rift-caddy
+          laeuft im host-Netz und wuerde sonst den Admin-Port 127.0.0.1:2019
+          belegen und mit der Admin-API des geteilten Host-Caddys kollidieren
+          (Reload → HTTP 400 unknown module dns.providers.cloudflare, Issue #355).
+        success_msg: "rift-caddy Admin-Port aus (admin off) — keine Kollision mit dem Host-Caddy."

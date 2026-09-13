@@ -6,6 +6,20 @@
 # der geteilte Host-Caddy ({{ website_host_caddy_container }}), der hierher
 # proxyt. Deshalb kein Hostname im Site-Label (der Host-Caddy reicht den
 # Original-Host durch) und kein ACME.
+#
+# Global: Admin-Endpunkt AUS (Issue #355). rift-caddy laeuft mit
+# network_mode host; Caddy belegt sonst per Default 127.0.0.1:2019 — exakt den
+# Port, den die Admin-API des geteilten Host-Caddys
+# ({{ website_host_caddy_container }}) nutzt. Dann landete ein
+# `docker exec {{ website_host_caddy_container }} caddy reload`
+# (dialt localhost:2019) per Kernel-Load-Balancing mal bei DIESEM plain
+# `caddy:2` (ohne cloudflare-DNS-Provider) → HTTP 400
+# "unknown module: dns.providers.cloudflare". Ohne Admin-Port keine Kollision;
+# dieser Container wird ohnehin per Container-Recreate geladen, nie per reload.
+{
+	admin off
+}
+
 :{{ rift_caddy_port }} {
 	bind 127.0.0.1
 	root * {{ rift_caddy_site_root }}

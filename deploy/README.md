@@ -412,10 +412,28 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 | `riftbreaker-server` | docker | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation |
 | `satellite-relay` | iptables + systemd | UDP-DNAT-Relay auf `satellite`: inbound `:6321` → planet prod `:6322` (reboot-fest; Rollen-Defaults = einzige Wertquelle) |
 | `tournament-server` | systemd | Rust/axum Referee + Web-UI. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt) |
-| `website` | statics + eigener Caddy | `site/*` → Docroot, eigener `rift-caddy` (plain HTTP: Statics + `/tournament/*`-Proxy) + EIN Eintrag im geteilten Host-Caddy (Issue #322) |
+| `website` | statics + eigener Caddy | `site/*` → Docroot, eigener `rift-caddy` (plain HTTP: Statics + `/tournament/*`-Proxy) + EIN Eintrag im geteilten Host-Caddy (Issue #322); Host-Caddy-Reload deterministisch + fehlersichtbar, `rift-caddy` mit `admin off` (Issue #355) |
 | `mods-zip` | — | Paketierung + md5-Paritäts-Check (hart) |
 | `probe-timer` | systemd | `probe_servers.sh` alle 2 Min → `status.json` |
 | `host-hygiene` | systemd | wöchentlicher Timer: entfernt **dangling** Docker-Images (`docker image prune`, **kein** `-a`; Issue #308) |
+
+## Host-Caddy-Reload (Issue #355)
+
+Der Deploy schreibt genau EINEN Eintrag in `/home/momo/Caddyfile` und lädt den
+geteilten Host-Caddy (`mellon-caddy`) per `docker exec … caddy validate` +
+`caddy reload`. Zwei Details halten den Lauf deterministisch und sichtbar:
+
+- **Admin-Port gehört exklusiv dem Host-Caddy.** `caddy reload` dialt
+  `localhost:2019`. Der eigene `rift-caddy` läuft im `network_mode: host` und
+  setzt deshalb `admin off` (siehe `rift-caddy.Caddyfile.j2`). Sonst belegen
+  zwei Prozesse `127.0.0.1:2019`; das Kernel-Load-Balancing schickt den Reload
+  dann mal an den plain `caddy:2` (ohne cloudflare-DNS-Provider) → HTTP 400
+  `unknown module: dns.providers.cloudflare`.
+- **Kein stilles `ok`.** Der Reload hängt nicht mehr allein am `changed` der
+  Caddyfile-Tasks: jeder Lauf liest die LIVE-Config aus der Admin-API und
+  reloadet, wenn der Domain-Eintrag dort fehlt (fängt einen früher
+  fehlgeschlagenen Reload ab). Schlägt `validate`/`reload` fehl oder fehlt der
+  Eintrag danach, bricht der Deploy ab.
 
 ## Struktur
 
@@ -546,7 +564,9 @@ systemd-Unit/Timer (tournament/probe/hygiene), md5-Parität des Mod-Zips.
 deploy-Users (siehe CD-Abschnitt), der Actions-Runner + seine Dependencies
 (`.github/runner/setup.sh`), der SSH-Zugang des Runners für `deploy-check`,
 der geteilte Host-Caddy-Container selbst (`mellon-caddy` — die Rolle schreibt
-nur den einen Rift-Eintrag und validiert/reloadet; DNS/TLS bleiben host-seitig).
+nur den einen Rift-Eintrag und reloadet ihn sichtbar fehlschlagend; DNS/TLS
+bleiben host-seitig). Damit dessen Admin-Port `127.0.0.1:2019` exklusiv bleibt,
+hält der `rift-caddy` seinen Admin-Port aus (`admin off`, Issue #355).
 
 ## Mod-Backups & mods/-Guard (Issue #212)
 
