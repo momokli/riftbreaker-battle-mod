@@ -146,7 +146,7 @@ PlayerService → [+8] = World*
   → account[+8] = sortiertes (StringHash u32, ResourceValue int64) Array
   → account[+0x10] = Count
 ```
-Rest noch offen: max/capacity („/300") liegt separat, nicht im Basket.
+Rest noch offen war: max/capacity („/300") — gelöst, siehe „Phase B“ unten.
 
 ## Phase A: get_state (sauber, symmetrisch zu exec) — LIVE
 
@@ -160,3 +160,25 @@ Live bestätigt (Spieler online, HQ gebaut):
 
 Damit ist der bidirektionale Kanal **baugleich**: IN (`exec`) / OUT (`get_state`)
 über denselben Pfad, dieselbe Request/Response-Form, denselben `handle_line`-Dispatch.
+
+## Phase B: carbonium_max (capacity) lesen — LIVE (#370)
+
+Das Capacity-/Max-Feld pro Ressource liegt in einer **separaten Hash-Map** im
+`ResourceAccount` (nicht im Basket):
+
+```
+ResourceAccount + 0x20 = UnorderedMap<StringHash, float max>  (Display-Einheiten)
+  Lookup: 0x18028ac00(container, &out, &hash)  -> out[0] = node*
+  node   : [+0] = next, [+8] = StringHash(u32), [+0xc] = float max
+  max_fixed = (int64)(scale * max_float)
+             scale = .data-Globale RVA 0x4794210 (zur Laufzeit 1e6,
+                     gleiche Konstante wie in AddResourceAmount)
+```
+
+Quelle: Disasm der Capacity-Prüfung in `PlayerService::AddResourceAmount`
+(RVA `0xF1E3D0`) → `CanAffordExpense` (`0x2D0930`) → `0x1802ccf90`:
+`(current + delta) <= (int)(scale * max_float)`; die Lookup-Funktion ist
+`0x18028ac00` (bucket/chain, `movss xmm6, [node+0xc]`).
+
+Implementiert in `read_resource_max()` (rbbridge.c); `get_state` liefert
+`carbonium_max`. Live validiert: Speicher bauen → max 300 → 350.
