@@ -1,0 +1,54 @@
+---
+# Rolle: satellite-relay (Issue #328) — reboot-fester UDP-DNAT-Relay auf dem
+# Satellite. Stellt sicher:
+#   1. ip_forward aktiv (persistent via sysctl.d).
+#   2. UFW inbound {{ satellite_relay_port }}/udp offen.
+#   3. UFW route/forward zu {{ satellite_relay_target_host }}:{{ satellite_relay_target_port }}.
+#   4. iptables-DNAT + MASQUERADE (idempotent, via systemd-Oneshot boot-fest).
+
+- name: ip_forward persistent (sysctl.d-Datei)
+  copy:
+    content: "net.ipv4.ip_forward = 1\n"
+    dest: /etc/sysctl.d/99-rbbattle-satellite-relay.conf
+    mode: "0644"
+
+- name: ip_forward sofort aktivieren
+  command: sysctl -w net.ipv4.ip_forward=1
+  changed_when: false
+
+- name: UFW inbound {{ satellite_relay_port }}/udp öffnen
+  command: ufw allow {{ satellite_relay_port }}/udp
+  changed_when: false
+
+- name: UFW route allow (forward) zu {{ satellite_relay_target_host }}:{{ satellite_relay_target_port }}
+  command: >-
+    ufw route allow in on {{ satellite_relay_interface }}
+    out on {{ satellite_relay_interface }}
+    to {{ satellite_relay_target_host }} port {{ satellite_relay_target_port }} proto udp
+  changed_when: false
+
+- name: Relay-Script rendern (DNAT + MASQUERADE, idempotent)
+  template:
+    src: rbbattle-satellite-relay.sh.j2
+    dest: /usr/local/bin/rbbattle-satellite-relay.sh
+    mode: "0755"
+
+- name: systemd-Unit rendern (Oneshot, boot-fest)
+  template:
+    src: rbbattle-satellite-relay.service.j2
+    dest: /etc/systemd/system/rbbattle-satellite-relay.service
+    mode: "0644"
+
+- name: Relay-Regeln jetzt anwenden
+  command: /usr/local/bin/rbbattle-satellite-relay.sh
+  changed_when: false
+
+- name: systemd daemon-reload + Unit aktivieren/starten
+  systemd:
+    name: rbbattle-satellite-relay.service
+    daemon_reload: true
+    enabled: true
+    state: started
+  # Check-Mode: die Unit-Datei wird im Check-Mode nicht geschrieben ->
+  # state:started findet den Service nicht. Daher in --check überspringen.
+  when: not ansible_check_mode
