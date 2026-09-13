@@ -39,7 +39,7 @@ Issue #304.
 | `boot-test` (`boot-test.yml`) | Container/Netz/Volumes/Unit/Host-Pfade/Ports je Lauf über `github.run_id` | ✅ nach Fix | #307/#317 + #318 (Session-Sidecar) |
 | `deploy-check` (`deploy-check.yml`, planet) | read-only `ansible --check`; Ansible-Venv | ✅ nach Fix | vorher nicht-atomares Venv-Setup |
 | `deploy-dev` (`deploy.yml`) | serialisiert durch `concurrency: cd-dev`; kein Shared-Setup | ✅ | eine Deploy-Spur |
-| `deploy-check-local` (`deploy-check.yml`) | GitHub-hosted, frische VM je Job | ✅ | kein geteiltes `$HOME` |
+| `deploy-check-local` (`deploy-check-local.yml`) | GitHub-hosted, frische VM je Job | ✅ | kein geteiltes `$HOME` |
 
 Alle übrigen Jobs (`tournament-test`, `lint`, `pr-quality`, …) laufen auf
 `ubuntu-latest` und sind nicht betroffen.

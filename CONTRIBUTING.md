@@ -22,7 +22,7 @@ Quality-Gates in diesem Repo. Sprache: Deutsch oder Englisch — beides ist ok.
 - **Nicht an ungeclaimten Issues arbeiten** — erst `!claim`.
 - **PR immer mit Issue verlinkt** (`Closes #N` schließt automatisch, `Refs #N` referenziert nur) — Pflicht, sonst schlägt das Issue-Referenz-Gate fehl.
 - **Definition of Done**
-  - CI grün: **lint + pr-quality + ci + deploy-check**.
+  - CI grün: **lint + pr-quality + ci + deploy-check-local** (Required; `deploy-check` auf planet läuft informational und blockiert nicht).
   - Neuer Code hat Tests.
   - Keine Debug-Reste, keine Credentials/Secrets im Diff.
 - **Commit-Konvention:** [Conventional Commits](https://www.conventionalcommits.org/)
@@ -105,7 +105,8 @@ Neben Menschen arbeiten AI-Agents am Repo. Die verbindlichen Regeln stehen in
 | [`lint.yml`](.github/workflows/lint.yml) | shellcheck, ruff, actionlint |
 | [`ci.yml`](.github/workflows/ci.yml) | Tests (Bausteine/E2E/Lua-static) + Build + Package |
 | [`boot-test.yml`](.github/workflows/boot-test.yml) | Pre-Merge-Boot **+ Core-IO-Gate (Issue #289)**: baut/bootet den Test-Stack und fährt C1–C4 (Ingress-Effekt-Invariante, Egress, Server-Auftrag) |
-| [`deploy-check.yml`](.github/workflows/deploy-check.yml) | Deploy-Vorhersage, zwei Required Checks (Issue #306): `deploy-check-local` auf dem GH-Runner (`yamllint` + Compose-Render + `docker compose config`) und `deploy-check` auf dem planet-Runner (`ansible --check --diff`) |
+| [`deploy-check-local.yml`](.github/workflows/deploy-check-local.yml) | Deploy-Vorhersage (Required Check, Issue #349): GH-Runner, `yamllint` + Playbook-Syntax + Compose-Render + `docker compose config` |
+| [`deploy-check.yml`](.github/workflows/deploy-check.yml) | Echter Host-Check auf dem planet-Runner (`ansible --check --diff`), seit Issue #349 **informational** (nicht required) — ein transientes `startup_failure` des planet-Runners blockiert so den lokalen Required-Check nicht mehr |
 | [`pr-quality.yml`](.github/workflows/pr-quality.yml) | Conventional-Commit-PR-Titel (hart) + Issue-Referenz (hart) |
 | [`followup-issues.yml`](.github/workflows/followup-issues.yml) | Follow-up-Issues beim Schließen von Issues (Label `follow-up`) |
 

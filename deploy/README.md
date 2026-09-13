@@ -366,17 +366,23 @@ re-run oder `force=true`.
 - [ ] Erster Merge auf `main`: Deploy-Lauf grün
 ## deploy-check (PR-Gate)
 
-[`.github/workflows/deploy-check.yml`](../.github/workflows/deploy-check.yml) ist
-seit Issue #306 in **zwei Required Checks** aufgeteilt:
+Das PR-Gate ist seit Issue #349 in **zwei Workflows** aufgeteilt; **required ist
+nur `deploy-check-local`**:
 
-- **`deploy-check-local`** (GitHub-Hosted-Runner, `ubuntu-latest`) prüft rein
+- [`deploy-check-local.yml`](../.github/workflows/deploy-check-local.yml)
+  (**Required Check**, GitHub-Hosted-Runner, `ubuntu-latest`) prüft rein
   lokal: `yamllint` über `deploy/`, Playbook-`--syntax-check` für `site.yml` +
   `deploy-prod.yml` (prod-Playbook, Issue #328), Compose-Templates rendern
   (`check-render.yml`) und jedes gerenderte Compose-File durch
-  `docker compose config`. Kein Host-/SSH-Zugriff, keine Secrets.
-- **`deploy-check`** (self-hosted Runner, planet) fährt den echten Host-Check
-  read-only gegen planet: `ansible-playbook --check --diff`
-  (`--tags server,website`).
+  `docker compose config`. Kein Host-/SSH-Zugriff, keine Secrets. Läuft damit
+  immer, auch wenn der planet-Runner gerade nicht erreichbar ist.
+- [`deploy-check.yml`](../.github/workflows/deploy-check.yml)
+  (self-hosted Runner, planet) fährt den echten Host-Check read-only gegen
+  planet: `ansible-playbook --check --diff` (`--tags server,website`). Seit
+  Issue #349 ist dieser Lauf **informational** (nicht required): ein transienter
+  `startup_failure` des planet-Runners reißt den lokalen Required-Check nicht
+  mehr mit, die Rückmeldung („Image fehlt / Container-Name belegt / Pfad
+  falsch") bleibt aber sichtbar.
 
 Das **Vault wird nie entschlüsselt**: für den Lauf wird ein Dummy-Vault in ein
 temporäres Inventar kopiert. Nur PRs aus diesem Repo (keine Forks).
@@ -412,10 +418,28 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 | `riftbreaker-server` | docker | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation |
 | `satellite-relay` | iptables + systemd | UDP-DNAT-Relay auf `satellite`: inbound `:6321` → planet prod `:6322` (reboot-fest; Rollen-Defaults = einzige Wertquelle) |
 | `tournament-server` | systemd | Rust/axum Referee + Web-UI. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt) |
-| `website` | statics + eigener Caddy | `site/*` → Docroot, eigener `rift-caddy` (plain HTTP: Statics + `/tournament/*`-Proxy) + EIN Eintrag im geteilten Host-Caddy (Issue #322) |
+| `website` | statics + eigener Caddy | `site/*` → Docroot, eigener `rift-caddy` (plain HTTP: Statics + `/tournament/*`-Proxy) + EIN Eintrag im geteilten Host-Caddy (Issue #322); Host-Caddy-Reload deterministisch + fehlersichtbar, `rift-caddy` mit `admin off` (Issue #355) |
 | `mods-zip` | — | Paketierung + md5-Paritäts-Check (hart) |
 | `probe-timer` | systemd | `probe_servers.sh` alle 2 Min → `status.json` |
 | `host-hygiene` | systemd | wöchentlicher Timer: entfernt **dangling** Docker-Images (`docker image prune`, **kein** `-a`; Issue #308) |
+
+## Host-Caddy-Reload (Issue #355)
+
+Der Deploy schreibt genau EINEN Eintrag in `/home/momo/Caddyfile` und lädt den
+geteilten Host-Caddy (`mellon-caddy`) per `docker exec … caddy validate` +
+`caddy reload`. Zwei Details halten den Lauf deterministisch und sichtbar:
+
+- **Admin-Port gehört exklusiv dem Host-Caddy.** `caddy reload` dialt
+  `localhost:2019`. Der eigene `rift-caddy` läuft im `network_mode: host` und
+  setzt deshalb `admin off` (siehe `rift-caddy.Caddyfile.j2`). Sonst belegen
+  zwei Prozesse `127.0.0.1:2019`; das Kernel-Load-Balancing schickt den Reload
+  dann mal an den plain `caddy:2` (ohne cloudflare-DNS-Provider) → HTTP 400
+  `unknown module: dns.providers.cloudflare`.
+- **Kein stilles `ok`.** Der Reload hängt nicht mehr allein am `changed` der
+  Caddyfile-Tasks: jeder Lauf liest die LIVE-Config aus der Admin-API und
+  reloadet, wenn der Domain-Eintrag dort fehlt (fängt einen früher
+  fehlgeschlagenen Reload ab). Schlägt `validate`/`reload` fehl oder fehlt der
+  Eintrag danach, bricht der Deploy ab.
 
 ## Struktur
 
@@ -546,7 +570,9 @@ systemd-Unit/Timer (tournament/probe/hygiene), md5-Parität des Mod-Zips.
 deploy-Users (siehe CD-Abschnitt), der Actions-Runner + seine Dependencies
 (`.github/runner/setup.sh`), der SSH-Zugang des Runners für `deploy-check`,
 der geteilte Host-Caddy-Container selbst (`mellon-caddy` — die Rolle schreibt
-nur den einen Rift-Eintrag und validiert/reloadet; DNS/TLS bleiben host-seitig).
+nur den einen Rift-Eintrag und reloadet ihn sichtbar fehlschlagend; DNS/TLS
+bleiben host-seitig). Damit dessen Admin-Port `127.0.0.1:2019` exklusiv bleibt,
+hält der `rift-caddy` seinen Admin-Port aus (`admin off`, Issue #355).
 
 ## Mod-Backups & mods/-Guard (Issue #212)
 
