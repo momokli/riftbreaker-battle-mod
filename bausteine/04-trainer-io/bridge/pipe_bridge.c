@@ -654,6 +654,7 @@ static void handle_probe(SOCKET c)
                             if (json_get_string(line, "event", ev, sizeof(ev)) &&
                                 (strcmp(ev, "probe") == 0 ||
                                  strcmp(ev, "probe_dump") == 0 ||
+                                 strcmp(ev, "scan_hit") == 0 ||
                                  strcmp(ev, "error") == 0)) {
                                 if (strcmp(ev, "probe") == 0)
                                     got_probe = 1;
