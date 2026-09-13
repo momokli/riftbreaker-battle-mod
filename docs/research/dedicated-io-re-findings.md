@@ -120,3 +120,30 @@ Konsequenzen:
   **pipe_bridge-Race** (später Treffer geht verloren), nicht am Key-Format.
 - Frühere Annahme „Container-Lookup = 0xEF4AC0" war falsch (das ist `Ecs::GetComponents`);
   der echte Lookup läuft über `0x180C26E50`/`0x181DD06F0` (aus `GetPlayerAccount`).
+
+## LIVE-BESTÄTIGT (2026-09-13): carbonium gelesen = 300.0
+
+Account-Basket-Dump via `GetPlayerAccount(World*, 0)` (Function-Call aus der DLL,
+Account[+8]=Array, [+0x10]=Count, 16-B-Entries) liefert live:
+
+| Hash | Ressource | Wert (fixed-point) |
+|---|---|---|
+| `0x0d01a504` | steel | 300000000 |
+| `0x1b9f8256` | titanium | 0 |
+| `0x659cc791` | **carbonium** | **300000000 = 300.0** |
+| `0x666d2128` | palladium | 0 |
+| `0x6ddeafbe` | uranium | 0 |
+| `0x9c6fc222` | cobalt | 0 |
+
+**Value-Format = int64 Fixed-Point, Skala 10^6** (`300.0` → `300000000`). Die
+`ResourceValue` (8 Byte) ist also ein skaliertes int64, KEIN float/double — deshalb
+sahen die rohen Scan-QWORDs „riesig" aus.
+
+Vollständiger Lese-Pfad (deterministisch, im `probe` implementiert):
+```
+PlayerService → [+8] = World*
+  → GetPlayerAccount(World*, 0) = RVA 0xC60050 → ResourceAccount*
+  → account[+8] = sortiertes (StringHash u32, ResourceValue int64) Array
+  → account[+0x10] = Count
+```
+Rest noch offen: max/capacity („/300") liegt separat, nicht im Basket.
