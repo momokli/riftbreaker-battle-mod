@@ -24,12 +24,15 @@ name: Boot-Test
 # Gate damit nicht mehr.
 #
 # Concurrency (Issue #352): eine Job-Ebene-`concurrency`-Group auf `boot-test`
-# (cancel-in-progress:false) reiht die planet-Cold-Boots EIN statt sie parallel
-# zu fahren — parallele Boots ueberlasteten planet (Bridge 503/Timeout). Anders
-# als die in #303 entfernte GLOBALE Group bleibt der Required-Check damit
-# sauber: wartende Läufe bleiben „queued" statt verdrängt. Issue #307 entkoppelt
-# zusätzlich alle festen Ressourcen (Container-/Unit-Namen, Compose-Projekt/-Netz,
-# Named Volumes, Host-Pfade, Tournament-Port) je Lauf über `github.run_id`.
+# serialisiert die planet-Cold-Boots — parallele Boots ueberlasteten planet
+# (Bridge 503/Timeout). `cancel-in-progress: false` laesst den laufenden Job zu
+# Ende laufen. `queue: max` laesst bis zu 100 wartende Laeufe pending bleiben:
+# der GitHub-Default `queue: single` wuerde bei jedem neuen Lauf den aelteren
+# pending-Lauf verdrängen/canceln — genau das #303-Symptom eines auf `cancelled`
+# blockierten Required-Checks. Re-Run ist erst bei Queue-Ueberlauf (>100
+# wartende) noetig. Issue #307 entkoppelt zusätzlich alle festen Ressourcen
+# (Container-/Unit-Namen, Compose-Projekt/-Netz, Named Volumes, Host-Pfade,
+# Tournament-Port) je Lauf über `github.run_id`.
 
 on:
   pull_request:
@@ -80,11 +83,15 @@ jobs:
     timeout-minutes: 25
     # Serialisiert die teuren planet-Cold-Boots: nur EIN Dedicated-Server
     # gleichzeitig, sonst ueberlastet der parallele Boot die Bridge/Tournament
-    # (503/Timeout, Issue #352). cancel-in-progress:false => warten statt
-    # verdrängen (behebt das Issue-#303-Problem des offenen Required-Checks).
+    # (503/Timeout, Issue #352). cancel-in-progress:false laesst den laufenden
+    # Job zu Ende laufen; queue:max haelt bis zu 100 wartende Laeufe pending
+    # statt sie zu verdrängen (Default queue:single wuerde pending-Laeufe
+    # canceln und den Required-Check auf cancelled blockieren, #303). Re-Run
+    # erst bei Queue-Ueberlauf (>100 wartende) noetig.
     concurrency:
       group: boot-test
       cancel-in-progress: false
+      queue: max
     steps:
       - name: Keine relevanten Pfade — Boot-Test übersprungen (Gate bleibt grün)
         if: needs.changes.outputs.relevant != 'true'
