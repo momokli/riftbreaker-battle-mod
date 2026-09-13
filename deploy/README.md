@@ -93,6 +93,11 @@ Reihenfolge der Rollen (site.yml): `mods-zip` → `dedicated-server-image` →
 `game-content` → `rbtools` → `riftbreaker-server` → `tournament-server` →
 `website` → `probe-timer` → `host-hygiene`.
 
+**Vor** den Rollen (in den `pre_tasks`) prüft ein Preflight den freien Platz auf
+`/` (Disk-Space-Gate, Issue #310): zu wenig Platz → Abbruch **vor** Image-Build
+und Backup-Tarball. Schwelle `riftbreaker_disk_min_free_gb` (Default 10 GB),
+Details in [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md#disk-space-gate--deploy-bremse-vor-voller-platte-issue-310).
+
 ### From-zero (ein Kommando, Issue #209)
 
 `deploy/` ist die **einzige Quelle der Wahrheit**: Auf einem frischen Host

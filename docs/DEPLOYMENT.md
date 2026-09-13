@@ -243,6 +243,43 @@ python3 tools/mods-guard/check_mods_dir.py /srv/rbgame/mods
 
 Siehe [`tools/mods-guard/`](../tools/mods-guard/README.md).
 
+## Disk-Space-Gate — Deploy-Bremse vor voller Platte (Issue #310)
+
+planet baut, sichert und deployt auf **derselben Platte** (`/dev/md2`, 904 GB),
+die der Stack vollschreibt. Läuft sie voll, kann sich der Deploy **nicht mehr
+selbst herausrollen**: Image-Build, Zip-Kopie und Backup-Tarball brauchen selbst
+Platz. Deshalb prüft ein **Preflight** den freien Platz auf `/` **bevor**
+`dedicated-server-image` baut und **bevor** der Mod-Backup-Tarball entsteht.
+
+- **Task:** `deploy/roles/riftbreaker-server/tasks/disk-preflight.yml` —
+  `assert` auf den Fact `ansible_mounts` (read-only → `--check`-fest, ändert
+  nichts).
+- **Aufruf:** als `include_role … tasks_from: disk-preflight` in den
+  `pre_tasks` von `deploy/site.yml` **und** `deploy/test-deploy.yml` — also
+  **vor** den Rollen (nicht innerhalb der Rolle, die erst nach dem Image-Build
+  läuft). Läuft damit auch unter `--tags server,website` (deploy-check).
+- **Schwelle konfigurierbar:** `riftbreaker_disk_min_free_gb` (Default **10** GB),
+  Mount via `riftbreaker_disk_mount` (Default `/`). Allein übersteuern, z. B.
+  `-e riftbreaker_disk_min_free_gb=20`.
+- **Abbruch:** mit klarer `fail_msg` (nennt geforderten **und** tatsächlichen
+  freien Platz + nächsten Schritt: erst aufräumen, siehe #301, dann erneut
+  deployen).
+
+Das Gate ist ein **Not-Aus**, kein Ersatz fürs Aufräumen: erst Sichtbarkeit
+(`disk_pct` in `status.json`), dann Gate, plus Timer/Automatik — beides gehört
+zusammen (#301).
+
+**Selbsttest (hermetisch, ohne Host/Prod-Zugriff):**
+
+```bash
+bash deploy/tests/disk-gate/run.sh
+```
+
+Er injiziert synthetische `ansible_mounts` (100 GB frei → läuft durch, 1 GB frei
+→ Abbruch mit `PLATZ-GATE`, Schwelle 0 → durch) und ruft die **echte**
+Preflight-Task-Datei auf. Läuft zusätzlich in `deploy-check-local` auf dem
+GitHub-Hosted-Runner.
+
 ## Continuous Deploy (CD) — Issue #91
 
 Nach jedem Merge auf `main` deployt

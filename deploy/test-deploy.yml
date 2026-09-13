@@ -39,6 +39,15 @@
       set_fact:
         deploy_image_tag: "{{ rbbattle_test_sha.stdout | trim }}"
 
+    # Disk-Space-Gate (#310) — derselbe Preflight wie in deploy/site.yml, damit
+    # der Boot-Test denselben Abbruch-Pfad fährt (Schwelle via test-vars.yml
+    # überschreibbar). Vor dedicated-server-image, also vor dem Image-Build.
+    - name: "Disk-Gate — freien Platz VOR Image-Build/Backup prüfen (#310)"
+      include_role:
+        name: riftbreaker-server
+        tasks_from: disk-preflight
+      tags: always
+
   roles:
     - role: mods-zip
     - role: dedicated-server-image

@@ -84,3 +84,11 @@ riftbreaker_sessions_dir: /srv/rbmods-sessions
 # Recorder-Script auf dem Host (bind-mount ro in den Sidecar).
 riftbreaker_sessions_script: "{{ riftbreaker_deploy_dir }}/session_recorder.py"
 riftbreaker_sessions_script_src: "{{ playbook_dir }}/../tools/session-recorder/session_recorder.py"
+
+# --- Disk-Space-Gate (Issue #310) --------------------------------------------
+# Mindest-freier Platz auf {{ riftbreaker_disk_mount }} VOR Image-Build und
+# Mod-Backup-Tarball. Der Preflight (tasks/disk-preflight.yml) wird aus den
+# pre_tasks von site.yml/test-deploy.yml aufgerufen — also VOR den Rollen, damit
+# der Abbruch vor dedicated-server-image greift. Schwelle konfigurierbar.
+riftbreaker_disk_mount: "/"
+riftbreaker_disk_min_free_gb: 10
