@@ -754,6 +754,47 @@ static const unsigned char RBBRIDGE_EXEC_SIG_MASK[] = {
     0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF
 };
 
+/*
+ * Byte-Signatur des ActivateMissionFlow-Prologs (Issue #385, Build
+ * 2.0.58485). 33 Bytes, im .text eindeutig (Gegenprobe planet 2026-09-15:
+ * genau 1 Treffer). Sie entspricht dem Database*-Overload von
+ * `Riftbreaker::MissionService::ActivateMissionFlow` (RVA 0xF93280) - die
+ * RVA ist NUR Verifikations-Notiz, die Laufzeitadresse kommt ausschliesslich
+ * aus diesem AOB-Scan (KEINE feste Adresse).
+ *
+ * Prolog-Disasm (tools/re/disasm.py, planet):
+ *   48 89 5C 24 08   mov  [rsp+8], rbx
+ *   48 89 6C 24 18   mov  [rsp+0x18], rbp
+ *   48 89 74 24 20   mov  [rsp+0x20], rsi
+ *   57               push rdi
+ *   48 83 EC 50      sub  rsp,0x50
+ *   49 8B E9         mov  rbp,r9        ; a2 (logicFile)
+ *   49 8B F0         mov  rsi,r8        ; a1 (name)
+ *   48 8B FA         mov  rdi,rdx       ; hidden ret (UtfString out)
+ *   48 8B 59 08      mov  rbx,[rcx+8]   ; this -> World*
+ * Kein rel32-Displacement im Prolog -> keine Wildcard-Maske noetig.
+ */
+static const unsigned char RBBRIDGE_ACTIVATE_SIG[] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x18,
+    0x48, 0x89, 0x74, 0x24, 0x20, 0x57, 0x48, 0x83, 0xEC, 0x50,
+    0x49, 0x8B, 0xE9, 0x49, 0x8B, 0xF0, 0x48, 0x8B, 0xFA, 0x48,
+    0x8B, 0x59, 0x08
+};
+
+/* RE-Befunde #385 (Build 2.0.58485) - feste RVAs NUR fuer die kleinen
+ * Helfer (analog zu den bestehenden PlayerService-RVAs in get_state);
+ * ActivateMissionFlow selbst wird per AOB aufgeloest (RBBRIDGE_ACTIVATE_SIG).
+ *
+ * Aufrufkonvention des Database*-Overloads (MSVC x64, verifiziert am
+ * Disasm von 0xF93280): this=RCX, hidden-ret-UtfString*=RDX, name=R8,
+ * logicFile=R9, mode=[rsp+0x20], data=[rsp+0x28]. Der 3-Arg-Overload
+ * (RVA 0xF93130) ist nur ein Shim, der den Workhorse mit data=NULL ruft -
+ * NULL ist also ein vom Spiel selbst benutzter, gueltiger Database-Wert. */
+#define RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE 0x2e962a0u /* ??_7MissionService@Riftbreaker@@6B@ */
+#define RBBRIDGE_RVA_UTFSTRING_CTOR         0x3ae1e0u  /* UtfString(char const*) */
+#define RBBRIDGE_RVA_UTFSTRING_DTOR         0x26f1f0u  /* ~UtfString() */
+#define RBBRIDGE_RVA_ISGRAPHACTIVE          0xf9e1f0u  /* bool MissionService::IsGraphActive(UtfString const&) */
+
 /* x64-Aufrufkonvention: this=RCX, cmd=RDX - __fastcall ist auf x64 der
  * Standard (das Schluesselwort dokumentiert die Konvention nur). */
 #ifdef RBBRIDGE_HOSTTEST
@@ -1707,6 +1748,253 @@ static int64_t read_resource_max(const unsigned char *base,
 }
 
 
+/* ------------------------------------------------------------------ */
+/* MissionService / ActivateMissionFlow (Issue #385)                   */
+/*                                                                    */
+/* Reines C++-Primitiv (kein Lua):                                     */
+/*   MissionService::ActivateMissionFlow(UtfString const& name,        */
+/*       UtfString const& logicFile, UtfString const& mode,            */
+/*       Database* data)                                              */
+/* startet einen Mission-Flow (Welle). Service-Instanz per vftable-     */
+/* Scan (RVA 0x2E962A0), Funktion per AOB-Signatur (RBBRIDGE_ACTIVATE_ */
+/* SIG - KEINE feste Adresse). Die UtfString-Argumente werden ueber den */
+/* Spiel-eigenen Ctor (RVA 0x3AE1E0) gebaut - NICHT von Hand (SSO fasst */
+/* nur 15 Zeichen; Logic-Pfade sind laenger -> Heap-Allokation durch    */
+/* den Ctor). `data` bleibt NULL (#386 liefert das Database*-Objekt     */
+/* nach); der 3-Arg-Overload des Spiels ruft den Workhorse selbst mit   */
+/* NULL.                                                               */
+/*                                                                    */
+/* Thread-Modell (#378): native C++-Reads/Writes sind thread-agnostisch;*/
+/* der Aufruf laeuft auf dem Pipe-Thread und enthaelt KEIN lua_*.       */
+/* ------------------------------------------------------------------ */
+
+/* Scannt den eigenen Adressraum (nur MEM_COMMIT + lesbar, kein PAGE_GUARD)
+ * nach einem 8-Byte-alignierten QWORD == needle. Reine Leseoperation, kein
+ * Aufruf; Rueckgabe = Fundstelle (erstes Vorkommen) oder NULL. */
+static unsigned char *scan_qword_instance(uint64_t needle)
+{
+    uintptr_t addr = 0;
+    for (;;) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
+            break;
+        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
+        if (next <= addr)
+            break;
+        addr = next;
+        if (!is_readable_region(&mi))
+            continue;
+        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
+        size_t nq = mi.RegionSize / sizeof(uint64_t);
+        for (size_t i = 0; i < nq; i++) {
+            if (q[i] == needle)
+                return (unsigned char *)&q[i];
+        }
+    }
+    return NULL;
+}
+
+/* Baut eine Exor::UtfString-Instanz (40 Byte) aus einem C-String ueber den
+ * Spiel-eigenen Ctor (RVA 0x3AE1E0). Layout (Disasm): +0x00 = Allocator-
+ * Proxy, +0x08 = SSO-Puffer/Heap-Ptr, +0x18 = size, +0x20 = capacity. */
+typedef void *(__fastcall *utfstring_ctor_fn)(void *self, const char *s);
+typedef void (__fastcall *utfstring_dtor_fn)(void *self);
+
+static void build_utfstring(const unsigned char *base, const char *s,
+                            unsigned char out[40])
+{
+    memset(out, 0, 40);
+    utfstring_ctor_fn ctor =
+        (utfstring_ctor_fn)(uintptr_t)(base + RBBRIDGE_RVA_UTFSTRING_CTOR);
+    ctor((void *)out, s);
+}
+
+static void destroy_utfstring(const unsigned char *base, unsigned char out[40])
+{
+    utfstring_dtor_fn dtor =
+        (utfstring_dtor_fn)(uintptr_t)(base + RBBRIDGE_RVA_UTFSTRING_DTOR);
+    dtor((void *)out);
+}
+
+/* Kopiert den Inhalt einer UtfString-Instanz als C-String nach buf.
+ * data@+8 (SSO) bzw. *(us+8) (Heap, capacity > 15), size@+0x18.
+ * Rueckgabe 1 = ok. */
+static int utfstring_to_cstr(const unsigned char *us, char *buf, size_t n)
+{
+    uint64_t size = 0, cap = 0, ptr = 0;
+    MEMORY_BASIC_INFORMATION mi;
+    const unsigned char *data;
+
+    if (n == 0)
+        return 0;
+    buf[0] = '\0';
+    if (!safe_read_u64(us + 0x18, &size) || !safe_read_u64(us + 0x20, &cap))
+        return 0;
+    data = us + 8;
+    if (cap > 0xf) {
+        if (!safe_read_u64(us + 8, &ptr) || !ptr)
+            return 0;
+        data = (const unsigned char *)(uintptr_t)ptr;
+    }
+    if (size >= n)
+        size = n - 1;
+    if (!VirtualQuery(data, &mi, sizeof(mi)) || !is_readable_region(&mi))
+        return 0;
+    if (data + size > (const unsigned char *)mi.BaseAddress + mi.RegionSize)
+        return 0;
+    if (size)
+        memcpy(buf, data, (size_t)size);
+    buf[size] = '\0';
+    return 1;
+}
+
+/* Minimales JSON-Escaping fuer String-Werte (Quote/Backslash/Steuerzeichen);
+ * der Flow-Name stammt aus dem Spiel. */
+static void json_escape_into(const char *in, char *out, size_t n)
+{
+    size_t o = 0;
+    if (n == 0)
+        return;
+    for (size_t i = 0; in && in[i] && o + 7 < n; i++) {
+        unsigned char c = (unsigned char)in[i];
+        if (c == '"' || c == '\\') {
+            out[o++] = '\\';
+            out[o++] = (char)c;
+        } else if (c < 0x20) {
+            o += (size_t)snprintf(out + o, n - o, "\\u%04x", c);
+        } else {
+            out[o++] = (char)c;
+        }
+    }
+    out[o] = '\0';
+}
+
+/* Letzter per activate_mission_flow gestarteter Flow (Flow-ID des Spiels);
+ * dient dem Read-Feld in get_state. Zugriff nur auf dem (einzigen)
+ * Pipe-Server-Thread -> kein Lock noetig. */
+static char g_last_flow[192];
+
+/*
+ * activate_mission_flow (Write #385): startet einen Mission-Flow direkt
+ * ueber den C++-Workhorse (AOB-aufgeloest). Events:
+ *   {"event":"activate_mission_flow_result","ok":true,"flow":"<id>"}
+ *   {"event":"activate_mission_flow_result","ok":false,"reason":"..."}
+ */
+static void dispatch_activate_mission_flow(HANDLE hPipe, const char *logic,
+                                           const char *mode)
+{
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    const char *via = NULL;
+    const unsigned char *execfn = NULL;
+    const unsigned char *fn = NULL;
+    unsigned char *ms;
+    unsigned char u_name[40], u_logic[40], u_mode[40], ret[40];
+    char flow[192] = "";
+    char esc[192 * 2];
+
+    typedef void *(__fastcall *activate_fn)(void *self, void *retbuf,
+                                            const void *name,
+                                            const void *logicFile,
+                                            const void *mode, const void *data);
+    activate_fn act;
+
+    if (!logic || !logic[0]) {
+        send_line(hPipe, "{\"event\":\"activate_mission_flow_result\","
+                         "\"ok\":false,\"reason\":\"missing_logic\"}");
+        return;
+    }
+
+    if (!resolve_module(&base, &size, &via, &execfn)) {
+        send_line(hPipe, "{\"event\":\"activate_mission_flow_result\","
+                         "\"ok\":false,\"reason\":\"no_module\"}");
+        return;
+    }
+
+    /* Funktion per AOB-Signatur (kein festes RVA) im Modulabbild. */
+    fn = scan_bytes(base, size, RBBRIDGE_ACTIVATE_SIG,
+                    sizeof(RBBRIDGE_ACTIVATE_SIG));
+    if (!fn) {
+        dbg("activate_mission_flow: AOB-Signatur nicht gefunden");
+        send_line(hPipe, "{\"event\":\"activate_mission_flow_result\","
+                         "\"ok\":false,\"reason\":\"no_activate_signature\"}");
+        return;
+    }
+
+    /* MissionService-Instanz per vftable-Scan (RVA 0x2E962A0). */
+    ms = scan_qword_instance(
+        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE));
+    if (!ms) {
+        send_line(hPipe, "{\"event\":\"activate_mission_flow_result\","
+                         "\"ok\":false,\"reason\":\"no_missionservice\"}");
+        return;
+    }
+
+    /* Argumente: name="" (wie dom_mananger:SpawnWave), logicFile, mode. */
+    build_utfstring(base, "", u_name);
+    build_utfstring(base, logic, u_logic);
+    build_utfstring(base, (mode && mode[0]) ? mode : "default", u_mode);
+    memset(ret, 0, sizeof(ret));
+
+    act = (activate_fn)(uintptr_t)fn;
+
+    /* data = NULL (siehe Kopfkommentar; #386 liefert das Database*-Objekt). */
+    act((void *)ms, ret, u_name, u_logic, u_mode, NULL);
+
+    utfstring_to_cstr(ret, flow, sizeof(flow));
+
+    /* Ergebnis-UtfString + Argumente wieder freigeben (Ctor-Heap). */
+    destroy_utfstring(base, ret);
+    destroy_utfstring(base, u_mode);
+    destroy_utfstring(base, u_logic);
+    destroy_utfstring(base, u_name);
+
+    /* Flow-ID fuer das Read-Feld in get_state merken. */
+    {
+        size_t i = 0;
+        for (; flow[i] && i + 1 < sizeof(g_last_flow); i++)
+            g_last_flow[i] = flow[i];
+        g_last_flow[i] = '\0';
+    }
+
+    json_escape_into(flow, esc, sizeof(esc));
+
+    dbg("activate_mission_flow: logic='%s' mode='%s' fn_rva=%08lx ms=%p "
+        "flow='%s'",
+        logic, (mode && mode[0]) ? mode : "default",
+        (unsigned long)(uintptr_t)(fn - base), (void *)ms, flow);
+
+    send_line(hPipe,
+              "{\"event\":\"activate_mission_flow_result\",\"ok\":true,"
+              "\"flow\":\"%s\"}",
+              esc);
+}
+
+/* Mission-Flow-Read fuer get_state: 1 wenn `flow` laut
+ * MissionService::IsGraphActive(UtfString const&) aktiv ist, sonst 0.
+ * Kein Flow gemerkt / kein Service -> 0 (graceful). */
+static int mission_flow_active(const unsigned char *base, const char *flow)
+{
+    unsigned char *ms;
+    unsigned char u[40];
+    typedef unsigned char (__fastcall *is_active_fn)(void *, const void *);
+    is_active_fn is_active;
+    unsigned char r;
+
+    if (!flow || !flow[0])
+        return 0;
+    ms = scan_qword_instance(
+        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE));
+    if (!ms)
+        return 0;
+
+    build_utfstring(base, flow, u);
+    is_active = (is_active_fn)(uintptr_t)(base + RBBRIDGE_RVA_ISGRAPHACTIVE);
+    r = is_active((void *)ms, (const void *)u);
+    destroy_utfstring(base, u);
+    return r ? 1 : 0;
+}
+
 static void dispatch_get_state(HANDLE hPipe)
 {
     const unsigned char *base = NULL;
@@ -1719,6 +2007,12 @@ static void dispatch_get_state(HANDLE hPipe)
                          "\"reason\":\"no_module\"}");
         return;
     }
+
+    /* Mission-Flow (Read #385): haengt NICHT am Spieler-Account, ist also
+     * auch ohne geladene Welt lesbar (Flow-ID + IsGraphActive). */
+    char flow_esc[192 * 2];
+    int flow_active = mission_flow_active(base, g_last_flow);
+    json_escape_into(g_last_flow, flow_esc, sizeof(flow_esc));
 
     /* PlayerService-vftable RVA 0x2e8e910 (RE #363/#365). */
     const unsigned char *vftable = base + 0x2e8e910;
@@ -1750,7 +2044,10 @@ static void dispatch_get_state(HANDLE hPipe)
 
     if (!ps) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
-                         "\"reason\":\"no_playerservice\"}");
+                         "\"reason\":\"no_playerservice\","
+                         "\"mission_flow\":\"%s\","
+                         "\"mission_flow_active\":%s}",
+                  flow_esc, flow_active ? "true" : "false");
         return;
     }
 
@@ -1758,7 +2055,10 @@ static void dispatch_get_state(HANDLE hPipe)
     safe_read_u64(ps + 8, &world);
     if (!world) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
-                         "\"reason\":\"no_world\"}");
+                         "\"reason\":\"no_world\","
+                         "\"mission_flow\":\"%s\","
+                         "\"mission_flow_active\":%s}",
+                  flow_esc, flow_active ? "true" : "false");
         return;
     }
 
@@ -1767,7 +2067,10 @@ static void dispatch_get_state(HANDLE hPipe)
     void *account = gpa((void *)(uintptr_t)world, 0);
     if (!account) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
-                         "\"reason\":\"no_account\"}");
+                         "\"reason\":\"no_account\","
+                         "\"mission_flow\":\"%s\","
+                         "\"mission_flow_active\":%s}",
+                  flow_esc, flow_active ? "true" : "false");
         return;
     }
 
@@ -1820,10 +2123,11 @@ static void dispatch_get_state(HANDLE hPipe)
     send_line(hPipe,
               "{\"event\":\"get_state_result\",\"ok\":true,"
               "\"carbonium\":%llu,\"carbonium_max\":%lld,"
-              "\"ironium\":%llu,\"ironium_max\":%lld,\"resources\":%s}",
+              "\"ironium\":%llu,\"ironium_max\":%lld,\"resources\":%s,"
+              "\"mission_flow\":\"%s\",\"mission_flow_active\":%s}",
               (unsigned long long)carbonium, (long long)carbonium_max,
               (unsigned long long)ironium, (long long)ironium_max,
-              resources);
+              resources, flow_esc, flow_active ? "true" : "false");
 }
 
 
@@ -2011,6 +2315,24 @@ static void handle_line(HANDLE hPipe, const char *line)
         /* resource ist optional (Default carbonium, Backward-Compat). */
         json_get_string(line, "resource", resource, sizeof(resource));
         dispatch_add_resource(hPipe, resource, amount);
+        return;
+    }
+
+    /* activate_mission_flow (Write #385): startet einen Mission-Flow (Welle)
+     * direkt per C++ (kein Lua/Console). `logic` = Logic-File-Name (z. B.
+     * "logic/dom/attack_level_1_entry.logic"), `mode` optional (Default
+     * "default"). */
+    if (strcmp(cmd, "activate_mission_flow") == 0) {
+        char logic[256] = "";
+        char mode[64] = "default";
+        if (!json_get_string(line, "logic", logic, sizeof(logic)) ||
+            !logic[0]) {
+            send_line(hPipe, "{\"event\":\"activate_mission_flow_result\","
+                             "\"ok\":false,\"reason\":\"missing_logic\"}");
+            return;
+        }
+        json_get_string(line, "mode", mode, sizeof(mode));
+        dispatch_activate_mission_flow(hPipe, logic, mode);
         return;
     }
 

@@ -16,11 +16,12 @@
  *   GET  /             -> Web-UI (cockpit.html, nur C++-Direktfunktionen)
  *   POST /get_state    -> carbonium/max/resources/HQ (C++)
  *   POST /add_resource -> carbonium direkt aendern (C++)
+ *   POST /activate_mission_flow -> Mission-Flow/Welle starten (C++, #385)
  *   POST /probe        -> Memory-Dump (PlayerService-Kette)
  *   sonst              -> 404 {"ok":false,"reason":"not_found"}
  *
  * Protokoll auf der Pipe (v0, siehe bausteine/04-trainer-io/README.md):
- *   Kommandos: ping, probe, get_state, add_resource.
+ *   Kommandos: ping, probe, get_state, add_resource, activate_mission_flow.
  *   Line-delimited JSON, max. 8 KiB pro Zeile (LINE_MAX).
  *
  * Umgebung:
@@ -627,6 +628,69 @@ static void handle_add_resource(SOCKET c, const char *body)
     http_respond(c, 200, "OK", line);
 }
 
+/* POST /activate_mission_flow: fuehrt
+ * {"cmd":"activate_mission_flow","logic":"...","mode":"..."} auf der
+ * Pipe aus (WRITE, Issue #385) und liefert die
+ * activate_mission_flow_result-Zeile. `logic` ist ein Mission-Flow-Logic-File
+ * (z. B. "logic/dom/attack_level_1_entry.logic"), `mode` optional
+ * (Default "default"). */
+static void handle_activate_mission_flow(SOCKET c, const char *body)
+{
+    char logic[256] = "";
+    char mode[64] = "default";
+    char line[READ_BUF];
+    char payload[LINE_MAX];
+    char esc_logic[256 * 2];
+    char esc_mode[64 * 2];
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+    HANDLE h;
+
+    if (!json_get_string(body, "logic", logic, sizeof(logic)) || !logic[0]) {
+        blog("POST /activate_mission_flow ohne logic -> invalid_request");
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_request\"}");
+        return;
+    }
+    json_get_string(body, "mode", mode, sizeof(mode));
+    if (!mode[0])
+        snprintf(mode, sizeof(mode), "default");
+
+    h = pipe_connect(2500);
+    if (h == INVALID_HANDLE_VALUE) {
+        blog("POST /activate_mission_flow: Pipe nicht erreichbar -> "
+             "pipe_unavailable");
+        http_respond(c, 503, "Service Unavailable",
+                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+        return;
+    }
+
+    json_escape(logic, esc_logic, sizeof(esc_logic));
+    json_escape(mode, esc_mode, sizeof(esc_mode));
+    snprintf(payload, sizeof(payload),
+             "{\"cmd\":\"activate_mission_flow\",\"logic\":\"%s\","
+             "\"mode\":\"%s\"}\n",
+             esc_logic, esc_mode);
+
+    if (!pipe_write_all(h, payload)) {
+        CloseHandle(h);
+        http_respond(c, 500, "Internal Server Error",
+                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
+        return;
+    }
+
+    {
+        int rc = pipe_wait_line(h, "activate_mission_flow_result", NULL,
+                                timeout_ms, line, sizeof(line));
+        CloseHandle(h);
+        if (rc != 0) {
+            http_respond(c, 500, "Internal Server Error",
+                         "{\"ok\":false,\"reason\":\"timeout\"}");
+            return;
+        }
+    }
+    http_respond(c, 200, "OK", line);
+}
+
 static void handle_client(SOCKET c)
 {
     char *req = malloc(REQ_MAX + 1);
@@ -708,6 +772,16 @@ static void handle_client(SOCKET c)
             memcpy(b, body, (size_t)body_len);
             b[body_len] = '\0';
             handle_add_resource(c, b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/activate_mission_flow") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_activate_mission_flow(c, b);
             free(b);
         } else if (strcmp(method, "GET") == 0 &&
                    (strcmp(path, "/") == 0 ||
