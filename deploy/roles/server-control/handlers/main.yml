@@ -4,3 +4,12 @@
     name: "{{ server_control_unit }}"
     state: restarted
     daemon_reload: true
+  register: server_control_handler
+  # Wie im Task: beim allerersten Deploy kennt systemd den Service noch nicht
+  # (die Unit wird im --check nicht geschrieben). Der PR-Gate-Lauf
+  # (`--check --tags server,website`) würde sonst am Handler abbrechen. Nur
+  # genau dieser eine Fall im Check-Modus wird toleriert.
+  failed_when: >-
+    server_control_handler is failed and not
+    (ansible_check_mode | bool and
+     'Could not find the requested service' in (server_control_handler.msg | default('')))
