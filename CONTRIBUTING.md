@@ -123,7 +123,7 @@ Damit Reviews auf Inhalt statt Format konzentrieren, läuft statisches Linting i
 `lint.yml`. Entscheidungen:
 
 - **shellcheck** über die First-Party-Skripte (`scripts/*.sh`,
-  `bausteine/*/test_e2e*.sh`, `bausteine/07-relay/fake-log.sh`,
+  `tests/shell/*.sh`, `bausteine/07-relay/fake-log.sh`,
   `tools/headless-client/*.sh`) — ohne `continue-on-error`.
 - **ruff** (`E`/`F`, siehe [`ruff.toml`](ruff.toml)) plus `python3 -m compileall` als
   Syntax-Fallback. Kein `--exit-zero`.

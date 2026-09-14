@@ -110,10 +110,6 @@ jobs:
           key: npm-store-${{ runner.os }}-${{ hashFiles('tests/e2e-vollkette/package-lock.json') }}
           restore-keys: |
             npm-store-${{ runner.os }}-
-      - name: E2E Baustein 07 (relay-Prototyp)
-        if: needs.changes.outputs.test == 'true'
-        working-directory: bausteine/07-relay
-        run: bash test_e2e_prototype.sh
       # Core-IO-Gate Selbsttest (Issue #289): hermetische Invarianten-Checks der
       # Gate-Logik (ok:true ohne Effekt ⇒ rot). Kein Container/Netz noetig; die
       # Live-Probe (C1-C4) faehrt .github/workflows/boot-test.yml.

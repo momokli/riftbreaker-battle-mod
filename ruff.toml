@@ -7,3 +7,8 @@ line-length = 120
 
 [lint]
 select = ["E", "F"]
+
+# tools/re/ sind einmalige RE-Helfer (apply_*.py) mit langen eingebetteten
+# Lua-/Patch-String-Literalen — E501 dort bewusst ignorieren (kein Produktivcode).
+[lint.per-file-ignores]
+"tools/re/*.py" = ["E501"]
