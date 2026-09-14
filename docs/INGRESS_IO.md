@@ -156,11 +156,9 @@ Ingress-Kanal (`rb_wave 3` kommt an) ist intakt; der Fehler ist die
 **Falsch-Gruen-Semantik** von `exec_result` plus die nie getestete
 Anker-Aufloesung (`FindService == nil`, kein Spieler).
 
-Eine Testebene sichert den Kernpfad **ohne Spieler** ab (CI-faehig):
-
-| Test | Deckt ab |
-|---|---|
-| `tests/e2e-vollkette/kern-io-pfad.test.js` | Pipe-Roundtrip `exec → exec_result ok:true` (echter `relay.py` + FIFO-Responder), graceful `ok:false reason=console_service_not_found` (kein Crash), Egress-Verifikation |
+Eine Testebene sicherte den Kernpfad **ohne Spieler** ab (CI-faehig); der
+exec-basierte `kern-io-pfad.test.js` wurde mit dem exec-Entfernen (PR #405)
+entfernt — die C++-direkte Bruecke wird ueber `boot-test` (Wine) validiert.
 
 Damit ist `exec_result.ok:true ⟹ spawned>0` **nicht** mehr ungeprueft: der
 Spawn-Beweis ist das Game-Log `event=wave level=N status=done` (nur bei
@@ -185,7 +183,6 @@ kann nicht aus dem Spiel heraus. `rbbridge` `send_state` existiert, laeuft aber
 nur im `serve_client`-Heartbeat (Dauer-Verbindung), waehrend die Bridge pro
 Request verbindet. Der Live-Log zeigt entsprechend **kein** `score_update`.
 Das ist kein Regressions-, sondern ein fehlendes Feature → **#13**.
-Gepinnt in `tests/e2e-vollkette/kern-io-pfad.test.js` („EGRESS …").
 
 Unabhängig davon existiert seit #358 ein **Egress-Sidecar** für den
 Dedicated-Server: `tools/referee-egress/referee_egress.py` tailt denselben

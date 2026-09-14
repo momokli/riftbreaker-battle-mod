@@ -86,7 +86,7 @@ jobs:
           fi
 
   test:
-    name: Test (Bausteine 06 + 07 E2E)
+    name: Test (Unit-Tests + rbbridge host-test)
     needs: changes
     runs-on: [self-hosted, planet]
     steps:
@@ -107,7 +107,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.npm
-          key: npm-store-${{ runner.os }}-${{ hashFiles('tests/e2e-vollkette/package-lock.json') }}
+          key: npm-store-${{ runner.os }}-${{ hashFiles('tests/rbbridge-hosttest/package-lock.json') }}
           restore-keys: |
             npm-store-${{ runner.os }}-
       - name: Unit-Test Relay-Pipe-Dispatch (Issue #60)
@@ -142,7 +142,7 @@ jobs:
         run: python3 -m unittest test_referee_egress -v
       - name: rbbridge host-test (Issue #243)
         if: needs.changes.outputs.test == 'true'
-        working-directory: tests/e2e-vollkette
+        working-directory: tests/rbbridge-hosttest
         run: npm ci && npm test
 
   build:

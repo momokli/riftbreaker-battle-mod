@@ -20,7 +20,7 @@ Ist kein Host-C-Compiler vorhanden, wird der Test **sichtbar übersprungen**
 ## Aufruf
 
 ```bash
-cd tests/e2e-vollkette
+cd tests/rbbridge-hosttest
 npm ci        # keine externen Deps mehr (nur node:test)
 npm test      # = node --test
 ```

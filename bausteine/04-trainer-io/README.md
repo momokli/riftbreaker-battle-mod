@@ -20,7 +20,7 @@ per AOB-Signatur (`.text`) und die `ConsoleService`-Instanz per RTTI-Walk
 
 **Was ist belegt?** Host-seitig: die Auflösung, die Fehlerbehandlung und der
 Cache sind statisch + im Host-Test `rbbridge_hosttest.c` (synthetischer
-PE-Puffer, `tests/e2e-vollkette`) abgesichert. **Live-Beweis fehlt noch:** dass
+PE-Puffer, `tests/rbbridge-hosttest`) abgesichert. **Live-Beweis fehlt noch:** dass
 der Aufruf im laufenden Spiel wirklich die Welle spawnt (siehe Status/OFFEN).
 
 Seit dem Dual-Mode-Umbau (DLL + Standalone-EXE aus einer Quelle) gibt es
@@ -174,7 +174,7 @@ Pipe: `python pipe_client.py --selftest`.
     ```
     (kein Crash — bei Nicht-Fund wird die `ExecuteCommand`-fn nie aufgerufen)
 - Host-Test der Auflösung (ohne Windows/Spielprozess, synthetischer PE-Puffer):
-  `cd tests/e2e-vollkette && npm ci && npm test`
+  `cd tests/rbbridge-hosttest && npm ci && npm test`
   → `rbbridge host-test: scan_bytes + RTTI-Resolver`
 - Logs zur Kontrolle (beide Varianten, gleiche Datei):
   - Datei: `%TEMP%\rbbridge.log` (abschaltbar: `RBBRIDGE_LOG=0`),

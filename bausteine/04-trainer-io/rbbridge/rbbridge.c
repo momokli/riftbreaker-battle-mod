@@ -57,7 +57,7 @@
 
 #ifdef RBBRIDGE_HOSTTEST
 /*
- * Host-Test-Build (tests/e2e-vollkette, KEIN Windows noetig):
+ * Host-Test-Build (tests/rbbridge-hosttest, KEIN Windows noetig):
  *   -DRBBRIDGE_HOSTTEST kompiliert AUSSCHLIESSLICH die reinen Scan-/RTTI-
  *   Funktionen (scan_bytes/scan_u32/scan_u64/resolve_console_vftable/
  *   resolve_console_service) gegen einen SYNTHETISCHEN PE-artigen Puffer.

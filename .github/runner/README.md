@@ -44,9 +44,9 @@ im geteilten `$HOME` racen. Hintergrund, Audit und Kapazitätswerte:
 
 ## Caches (warme Builds)
 
-- **npm-Store** (`actions/cache`, Pfad `~/.npm`): `tests/e2e-vollkette` zieht
-  `fengari` + `luaparse`; `npm ci` zieht die Pakete aus dem Store statt aus dem
-  Netz. Key basiert auf dem `package-lock.json`-Hash.
+- **npm-Store** (`actions/cache`, Pfad `~/.npm`): `tests/rbbridge-hosttest` hat
+  keine externen Deps mehr (nur `node:test`); der Cache-Eintrag bleibt als
+  No-op auf Basis des `package-lock.json`-Hash.
 - **ccache** (`actions/cache`, Pfad `~/.cache/ccache`): der MinGW-C++-Build
   (rbbridge.dll/injector.exe/rbbridge_standalone.exe) wird über den
   ccache-Wrapper (`/opt/ccache-rbbattle/bin`) kompiliert; Key basiert auf den
