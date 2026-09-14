@@ -2141,6 +2141,31 @@ static int resolve_dom_instance_scan(void)
                 L &&
                 safe_read_u32(inst + RBBRIDGE_LUAGRAPHNODE_REF_OFF, &ref32) &&
                 (int)ref32 >= 0) {
+                /* Verifizieren: es gibt mehrere LuaGraphNode-Instanzen
+                 * (dom_mananger -> event_manager -> LuaGraphNode, gleiche
+                 * vftable). Nur dom_mananger hat currentDifficultyLevel als
+                 * number auf dem self-table. */
+                {
+                    rbbridge_lua_gettop_fn v_gettop = (rbbridge_lua_gettop_fn)(uintptr_t)(
+                        base + RBBRIDGE_LUA_GETTOP_RVA);
+                    rbbridge_lua_rawgeti_fn v_rawgeti = (rbbridge_lua_rawgeti_fn)(uintptr_t)(
+                        base + RBBRIDGE_LUA_RAWGETI_RVA);
+                    rbbridge_lua_getfield_fn v_getfield = (rbbridge_lua_getfield_fn)(uintptr_t)(
+                        base + RBBRIDGE_LUA_GETFIELD_RVA);
+                    rbbridge_lua_type_fn v_type = (rbbridge_lua_type_fn)(uintptr_t)(
+                        base + RBBRIDGE_LUA_TYPE_RVA);
+                    rbbridge_lua_settop_fn v_settop = (rbbridge_lua_settop_fn)(uintptr_t)(
+                        base + RBBRIDGE_LUA_SETTOP_RVA);
+                    void *Lcand = (void *)(uintptr_t)L;
+                    int top = v_gettop(Lcand);
+                    v_rawgeti(Lcand, RBBRIDGE_LUA_REGISTRYINDEX, (int)ref32);
+                    v_getfield(Lcand, -1, "currentDifficultyLevel");
+                    int is_dom = (v_type(Lcand, -1) == RBBRIDGE_LUA_TNUMBER);
+                    v_settop(Lcand, top);
+                    if (!is_dom)
+                        continue; /* naechster LuaGraphNode-Kandidat */
+                }
+
                 g_dom_base = base;
                 g_dom_instance = (void *)(uintptr_t)inst;
                 g_dom_lua = (void *)(uintptr_t)L;
