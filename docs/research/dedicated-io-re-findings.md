@@ -248,3 +248,11 @@ den Wellen-Spawn bis zur HQ-Platzierung (`RBB.commenced`). Für volle Kontrolle:
   HUD-Mission-Flow `MissionService:ActivateMissionFlow`/`time_max` friert
   dabei NICHT mit ein (kein `deactivate_mission_flow`-Command registriert).
 - **START:** `debug_dom_resume` + `debug_dom_manager_spawn_wave_level N`.
+
+## Mission-Flow-Payload (`Database*`) — Issue #386
+
+Der 4. Parameter von `MissionService::ActivateMissionFlow` (#385) ist ein
+`Exor::Database*` — auflösbar über den **C++-only Overload** RVA `0xF93280`
+(kein luabind/Lua). Klassen-Layout (Größe `0x60`, kein vftable), AOB-Signaturen,
+RTTI-Kette des `MissionService` und das Disasm `0xF93280 → 0x33A7E0` sind in
+`docs/research/database-object-re-findings.md` belegt.
