@@ -378,6 +378,20 @@ int main(void)
               "basket_lookup: out == NULL -> nur Existenz-Check");
     }
 
+    /* -------------------------------------------------------------- */
+    /* resource_internal_name (#421): Anzeigename -> interner Name      */
+    /* -------------------------------------------------------------- */
+    check(strcmp(resource_internal_name("ironium"), "steel") == 0,
+          "resource_internal_name: ironium -> steel");
+    check(strcmp(resource_internal_name("carbonium"), "carbonium") == 0,
+          "resource_internal_name: carbonium -> carbonium");
+    check(strcmp(resource_internal_name("mythium"), "carbonium") == 0,
+          "resource_internal_name: unbekannt -> carbonium");
+    check(strcmp(resource_internal_name(""), "carbonium") == 0,
+          "resource_internal_name: leer -> carbonium");
+    check(strcmp(resource_internal_name(NULL), "carbonium") == 0,
+          "resource_internal_name: NULL -> carbonium");
+
     free(img);
 
     printf("HOSTTEST_PASS=%d HOSTTEST_FAIL=%d\n", g_pass, g_fail);

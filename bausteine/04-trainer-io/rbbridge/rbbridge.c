@@ -440,6 +440,22 @@ static int basket_lookup_value(const unsigned char *arr, uint64_t count,
     return 0;
 }
 
+/* Mappt den ANZEIGEnamen einer Ressource auf ihren INTERNEN Namen, den
+ * PlayerService::AddResourceAmount ueber den StringHash aufloest. Ironium
+ * ist der Anzeigename der internen Ressource "steel" (cheat.lua: On
+ * "ironium" -> "steel"; docs/research/resource-hash-map.md #371).
+ * Unbekannt/leer -> "carbonium" (Backward-Compat: alte Clients senden kein
+ * `resource`-Feld). Reine Funktion ohne Spielprozess -> host-testbar
+ * (tests/rbbridge-hosttest, analog basket_lookup_value). */
+static const char *resource_internal_name(const char *display)
+{
+    if (!display || !display[0])
+        return "carbonium";
+    if (strcmp(display, "ironium") == 0)
+        return "steel";
+    return "carbonium";
+}
+
 #ifndef RBBRIDGE_HOSTTEST
 /* Datei-Log: 1 = %TEMP%\rbbridge.log mitschreiben (Default an; abschalten
  * mit Umgebungsvariable RBBRIDGE_LOG=0). DebugView geht immer. */
@@ -1819,10 +1835,13 @@ static void dispatch_get_state(HANDLE hPipe)
  * das Spiel darf sich nie daran stoeren.
  */
 /*
- * add_resource (Write-PoC, Issue #373): aendert carbonium DIREKT ueber
+ * add_resource (Write-PoC, Issue #373; Ressourcen-Auswahl Issue #421):
+ * aendert eine Ressource DIREKT ueber
  * PlayerService::AddResourceAmount(unsigned int, UtfString const&, float,
  * bool) - RVA 0xF1E3D0 (Build 2.0.58485) - der C++-Write-Pfad OHNE
  * Lua/Console (ein Hop weniger als exec -> ConsoleService -> Lua -> C++).
+ * Der Anzeigename (z. B. "ironium") wird per resource_internal_name() auf den
+ * internen Namen ("steel") gemappt; Default carbonium.
  *
  * RE-Befunde (tools/re/disasm.py + llvm-pdbutil, siehe
  * docs/research/io-write-poc.md):
@@ -1836,7 +1855,7 @@ static void dispatch_get_state(HANDLE hPipe)
  *       x10^6 (READ-bewiesen). => raw = N * 1e6 ; amount = raw / scale.
  *   B4  UtfString-Layout: data@+8 (SSO wenn capacity@+0x20 <= 15),
  *       size@+0x18, capacity@+0x20; Offset 0 wird NICHT gelesen. Wir bauen
- *       eine SSO-Instanz "carbonium" auf dem Stack.
+ *       eine SSO-Instanz des internen Ressourcennamens auf dem Stack.
  *   B5  playerId = 0 (Spieler 1); das bool (Stack-Arg) wird an den
  *       Broadcast/HUD-Sync durchgereicht (true = sichtbar machen).
  *   B6  Thread-Safety: Aufruf im Pipe-Thread (wie ExecuteCommand); offen,
@@ -1845,7 +1864,8 @@ static void dispatch_get_state(HANDLE hPipe)
  * Aufrufkonvention (MS x64): this=RCX, playerId=RDX, name=R8, amount=XMM3,
  * flag=[rsp+0x28]. MinGW-x64 (ms_abi Default) deckt die Deklaration ab.
  */
-static void dispatch_add_resource(HANDLE hPipe, const char *amount_str)
+static void dispatch_add_resource(HANDLE hPipe, const char *resource_str,
+                                  const char *amount_str)
 {
     const unsigned char *base = NULL;
     size_t size = 0;
@@ -1905,18 +1925,22 @@ static void dispatch_add_resource(HANDLE hPipe, const char *amount_str)
     if (scale == 0)
         scale = 1000000u;
 
-    /* Carbonium-Betrag -> int64-Fixed-Point x10^6 -> float fuer den Call. */
+    /* Betrag -> int64-Fixed-Point x10^6 -> float fuer den Call. */
     double raw_dbl = (double)amount * 1000000.0;
     int64_t raw = (int64_t)raw_dbl;
     float amount_float = (float)raw / (float)scale;
 
-    /* UtfString "carbonium" als SSO-Instanz auf dem Stack (B4): 40 Byte,
-     * [0]=unused, [8]=inline-buffer(16B), [0x18]=size, [0x20]=capacity. */
+    /* Interner Ressourcenname (Anzeigename -> intern, z. B. ironium->steel;
+     * Default carbonium). UtfString als SSO-Instanz auf dem Stack (B4):
+     * 40 Byte, [0]=unused, [8]=inline-buffer(16B), [0x18]=size,
+     * [0x20]=capacity. SSO fasst <= 15 Zeichen; beide Namen passen. */
+    const char *internal = resource_internal_name(resource_str);
+    size_t nlen = strlen(internal);
     unsigned char name[40];
     memset(name, 0, sizeof(name));
-    memcpy(name + 8, "carbonium", 10); /* 9 Zeichen + NUL */
+    memcpy(name + 8, internal, nlen + 1); /* + NUL */
     {
-        uint64_t sz = 9, cap = 0xf; /* cap <= 15 -> SSO, data = name + 8 */
+        uint64_t sz = nlen, cap = 0xf; /* cap <= 15 -> SSO, data = name + 8 */
         memcpy(name + 0x18, &sz, sizeof(sz));
         memcpy(name + 0x20, &cap, sizeof(cap));
     }
@@ -1930,9 +1954,10 @@ static void dispatch_add_resource(HANDLE hPipe, const char *amount_str)
 
     unsigned char ret = fn(ps, 0, (const void *)name, amount_float, 1);
 
-    dbg("add_resource: amount='%s' raw=%lld scale=%u amount_float=%.6f ret=%u",
-        amount_str, (long long)raw, (unsigned)scale, (double)amount_float,
-        (unsigned)ret);
+    dbg("add_resource: resource='%s' internal='%s' amount='%s' raw=%lld "
+        "scale=%u amount_float=%.6f ret=%u",
+        resource_str ? resource_str : "", internal, amount_str, (long long)raw,
+        (unsigned)scale, (double)amount_float, (unsigned)ret);
 
     send_line(hPipe,
               "{\"event\":\"add_resource_result\",\"ok\":true,"
@@ -1976,13 +2001,16 @@ static void handle_line(HANDLE hPipe, const char *line)
     }
 
     if (strcmp(cmd, "add_resource") == 0) {
+        char resource[64] = "";
         char amount[64] = "";
         if (!json_get_string(line, "amount", amount, sizeof(amount))) {
             send_line(hPipe,
                       "{\"event\":\"error\",\"error\":\"add_resource_ohne_amount\"}");
             return;
         }
-        dispatch_add_resource(hPipe, amount);
+        /* resource ist optional (Default carbonium, Backward-Compat). */
+        json_get_string(line, "resource", resource, sizeof(resource));
+        dispatch_add_resource(hPipe, resource, amount);
         return;
     }
 

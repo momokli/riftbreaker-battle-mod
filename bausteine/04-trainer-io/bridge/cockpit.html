@@ -3,7 +3,7 @@
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>carbonium</title>
+        <title>resources</title>
         <style>
             :root {
                 color-scheme: dark;
@@ -20,7 +20,8 @@
                 margin: 0;
                 padding: 1.5rem;
             }
-            h1 {
+            h1,
+            h2 {
                 font-size: 1.1rem;
                 margin: 0 0 1rem;
             }
@@ -56,9 +57,10 @@
         </style>
     </head>
     <body>
-        <h1>carbonium</h1>
+        <h1>resources</h1>
 
         <section>
+            <h2>carbonium</h2>
             <div class="row">
                 <span class="dim">now</span>
                 <span id="carbonium" class="val">—</span>
@@ -70,14 +72,27 @@
                 <button id="add">+ add</button>
                 <button id="sub">− subtract</button>
             </div>
-            <div id="out" class="err"></div>
         </section>
+
+        <section>
+            <h2>ironium</h2>
+            <div class="row">
+                <span class="dim">now</span>
+                <span id="ironium" class="val">—</span>
+                <span class="dim">/ max</span>
+                <span id="ironium_max" class="val">—</span>
+            </div>
+            <div class="row">
+                <input id="ironium_amount" size="10" value="10" />
+                <button id="ironium_add">+ add</button>
+                <button id="ironium_sub">− subtract</button>
+            </div>
+        </section>
+
+        <div id="out" class="err"></div>
 
         <script>
             (function () {
-                var $ = function (id) {
-                    return document.getElementById(id);
-                };
                 var $ = function (id) {
                     return document.getElementById(id);
                 };
@@ -100,15 +115,21 @@
                         var s = await post("get_state");
                         $("carbonium").textContent = fmt(s.carbonium);
                         $("carbonium_max").textContent = fmt(s.carbonium_max);
+                        $("ironium").textContent = fmt(s.ironium);
+                        $("ironium_max").textContent = fmt(s.ironium_max);
                         $("out").textContent = "";
                     } catch (e) {
                         $("out").textContent = "ERR " + e.message;
                     }
                 }
 
-                async function addResource(amount) {
+                async function addResource(resource, amount) {
                     try {
-                        var r = await post("add_resource", { amount: String(amount) });
+                        var body = { amount: String(amount) };
+                        if (resource) {
+                            body.resource = resource;
+                        }
+                        var r = await post("add_resource", body);
                         $("out").textContent = r && r.ok ? "" : JSON.stringify(r);
                         refresh();
                     } catch (e) {
@@ -117,11 +138,18 @@
                 }
 
                 $("add").onclick = function () {
-                    addResource($("amount").value);
+                    addResource(null, $("amount").value);
                 };
                 $("sub").onclick = function () {
                     var a = parseFloat($("amount").value) || 0;
-                    addResource(-a);
+                    addResource(null, -a);
+                };
+                $("ironium_add").onclick = function () {
+                    addResource("ironium", $("ironium_amount").value);
+                };
+                $("ironium_sub").onclick = function () {
+                    var a = parseFloat($("ironium_amount").value) || 0;
+                    addResource("ironium", -a);
                 };
 
                 refresh();
