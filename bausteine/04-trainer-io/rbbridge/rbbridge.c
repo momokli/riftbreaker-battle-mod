@@ -1425,6 +1425,7 @@ static void *g_mission_service = NULL;
 static int resolve_dom_instance_scan(void);
 static void *resolve_service_instance_by_rva(const unsigned char *base,
                                              uint32_t vftable_rva);
+static int world_ready(void);
 
 /* Vftable-Scan nach einem Service-Singleton (instance[0] == base + rva). */
 static void *resolve_service_instance_by_rva(const unsigned char *base,
@@ -1466,6 +1467,10 @@ static void drain_pending_typed_commands(void)
     InterlockedExchange(&g_pending_cmd_lock, 0);
 
     if (cmd == RBBRIDGE_TYPED_NONE)
+        return;
+
+    /* World-Readiness: ohne gueltigen World* keine nativen WRITEs. */
+    if (!world_ready())
         return;
 
     const unsigned char *base = NULL;
@@ -1990,6 +1995,14 @@ static int read_hq_health(const unsigned char *base, float *hp, float *hpmax)
         !world)
         return 0;
 
+    /* FindService[+0x08] ist ebenfalls der World*; FindEntityByType
+     * dereferenziert ihn intern. */
+    uint64_t find_world = 0;
+    if (!safe_read_u64((const unsigned char *)g_find_service + 0x08,
+                       &find_world) ||
+        !find_world)
+        return 0;
+
     find_entity_by_type_fn find_entity = (find_entity_by_type_fn)(uintptr_t)(
         base + RBBRIDGE_FIND_ENTITY_BY_TYPE_RVA);
     uint32_t entity = find_entity(g_find_service, "headquarters");
@@ -2004,6 +2017,30 @@ static int read_hq_health(const unsigned char *base, float *hp, float *hpmax)
     *hpmax = get_max(g_health_service, entity);
     return 1;
 }
+
+/* World-Readiness-Signal: HealthService[+0x08] muss einen gueltigen World*
+ * haben. Solange der NULL ist, duerfen weder lua_* noch Service-Methoden
+ * laufen (sie dereferenzieren intern World+0x.. -> Page-Fault). */
+static int world_ready(void)
+{
+    uint64_t world = 0;
+    if (!g_health_service) {
+        const unsigned char *base = NULL;
+        size_t size = 0;
+        const char *via = NULL;
+        const unsigned char *execfn = NULL;
+        if (!resolve_module(&base, &size, &via, &execfn))
+            return 0;
+        g_health_service = resolve_service_instance_by_rva(
+            base, RBBRIDGE_HEALTH_SERVICE_VFTABLE_RVA);
+    }
+    if (!g_health_service ||
+        !safe_read_u64((const unsigned char *)g_health_service + 0x08, &world) ||
+        !world)
+        return 0;
+    return 1;
+}
+
 
 
 /* ====================================================================== */
@@ -2523,6 +2560,10 @@ static int dom_global_string(void *L, const char *svc, const char *method,
 static void capture_dom_state_game_thread(void)
 {
     if (!resolve_dom_instance() || !g_dom_lua)
+        return;
+
+    /* World-Readiness: ohne gueltigen World* keine lua_* bzw. Service-Calls. */
+    if (!world_ready())
         return;
 
     void *L = g_dom_lua;
