@@ -5,7 +5,7 @@ Quality-Gates in diesem Repo. Sprache: Deutsch oder Englisch — beides ist ok.
 
 ## Workflow (Issue → PR)
 
-1. **Issue aufmachen** — nutze die Vorlagen *Bug*, *Feature* oder *Spike*
+1. **Issue aufmachen** — nutze die Vorlagen _Bug_, _Feature_ oder _Spike_
    (`.github/ISSUE_TEMPLATE/`).
 2. **Claimen** — schreibe einen Kommentar mit genau `!claim`. Der Bot weist dir das
    Issue zu, setzt das Label `claimed` und bestätigt. Ein Issue hat **immer nur einen
@@ -100,15 +100,15 @@ Neben Menschen arbeiten AI-Agents am Repo. Die verbindlichen Regeln stehen in
 
 ### Quality-Gates (CI)
 
-| Workflow | Zweck |
-|---|---|
-| [`lint.yml`](.github/workflows/lint.yml) | shellcheck, ruff, actionlint |
-| [`ci.yml`](.github/workflows/ci.yml) | Tests (Bausteine/E2E/Lua-static) + Build + Package |
-| [`boot-test.yml`](.github/workflows/boot-test.yml) | Pre-Merge-Boot **+ Core-IO-Gate (Issue #289)**: baut/bootet den Test-Stack und fährt C1–C4 (Ingress-Effekt-Invariante, Egress, Server-Auftrag) |
-| [`deploy-check-local.yml`](.github/workflows/deploy-check-local.yml) | Deploy-Vorhersage (Required Check, Issue #349): GH-Runner, `yamllint` + Playbook-Syntax + Compose-Render + `docker compose config` |
-| [`deploy-check.yml`](.github/workflows/deploy-check.yml) | Echter Host-Check auf dem planet-Runner (`ansible --check --diff`), seit Issue #349 **informational** (nicht required) — ein transientes `startup_failure` des planet-Runners blockiert so den lokalen Required-Check nicht mehr |
-| [`pr-quality.yml`](.github/workflows/pr-quality.yml) | Conventional-Commit-PR-Titel (hart) + Issue-Referenz (hart) |
-| [`followup-issues.yml`](.github/workflows/followup-issues.yml) | Follow-up-Issues beim Schließen von Issues (Label `follow-up`) |
+| Workflow                                                             | Zweck                                                                                                                                                                                                                            |
+| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`lint.yml`](.github/workflows/lint.yml)                             | shellcheck, ruff, actionlint                                                                                                                                                                                                     |
+| [`ci.yml`](.github/workflows/ci.yml)                                 | Tests (Bausteine/E2E/Bridge) + Build + Package                                                                                                                                                                                   |
+| [`boot-test.yml`](.github/workflows/boot-test.yml)                   | Pre-Merge-Boot **+ Core-IO-Gate (Issue #289)**: baut/bootet den Test-Stack und fährt C1–C4 (Ingress-Effekt-Invariante, Egress, Server-Auftrag)                                                                                   |
+| [`deploy-check-local.yml`](.github/workflows/deploy-check-local.yml) | Deploy-Vorhersage (Required Check, Issue #349): GH-Runner, `yamllint` + Playbook-Syntax + Compose-Render + `docker compose config`                                                                                               |
+| [`deploy-check.yml`](.github/workflows/deploy-check.yml)             | Echter Host-Check auf dem planet-Runner (`ansible --check --diff`), seit Issue #349 **informational** (nicht required) — ein transientes `startup_failure` des planet-Runners blockiert so den lokalen Required-Check nicht mehr |
+| [`pr-quality.yml`](.github/workflows/pr-quality.yml)                 | Conventional-Commit-PR-Titel (hart) + Issue-Referenz (hart)                                                                                                                                                                      |
+| [`followup-issues.yml`](.github/workflows/followup-issues.yml)       | Follow-up-Issues beim Schließen von Issues (Label `follow-up`)                                                                                                                                                                   |
 
 ### Fortschritt
 
@@ -130,8 +130,8 @@ Damit Reviews auf Inhalt statt Format konzentrieren, läuft statisches Linting i
 - **actionlint** über alle Workflows, mit `-shellcheck=` (die unveränderte `ci.yml`
   soll nicht durch Shell-Lints ihrer `run`-Blöcke rot werden).
 - **luacheck bewusst nicht aktiv:** Die Riftbreaker-Mod-API-Globals sind offline nicht
-  auflösbar → False Positives. Lua wird stattdessen über `tests/lua-static` (fengari +
-  luaparse) geprüft.
+  auflösbar → False Positives. Der Player-Mod ist bewusst green-field (nur HUD/Display);
+  die Business-Logik liegt im Backend (`rbbridge.dll` + Rust).
 - **Einzelfall-Ausnahmen** immer inline begründen: `# shellcheck disable=SCxxxx` bzw.
   `# noqa: <code>`.
 

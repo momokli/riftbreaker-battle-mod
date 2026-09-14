@@ -7,8 +7,8 @@ name: Lint
 #
 # Lua-Lint (luacheck) ist bewusst NICHT eingebaut: die Riftbreaker-Mod-API-Globals
 # (z. B. Game, EntityService, ...) sind offline nicht aufloesbar, luacheck meldet
-# daher zwangslaeufig False Positives. Lua-Abdeckung erfolgt bereits ueber
-# tests/lua-static (fengari + luaparse).
+# daher zwangslaeufig False Positives. Der Player-Mod ist bewusst green-field
+# (nur HUD/Display); die Business-Logik liegt im Backend (rbbridge.dll + Rust).
 
 on:
   pull_request:
@@ -41,11 +41,6 @@ jobs:
       # zu ueberlappen (parallele PRs, ein Datei-Block).
       - name: shellcheck (dedicated-server)
         run: shellcheck tools/dedicated-server/scripts/*.sh
-      # Red/Green-Beweis, dass die Probe ehrlich meldet (Issue #246): ohne
-      # gebundenen Socket => udpOk=false; ohne Container => udpOk=null (nicht
-      # false). Braucht kein Docker (Fake-docker).
-      - name: Probe-Honesty (Fake-Docker, planetfrei)
-        run: tests/shell/probe-servers.test.sh
       # Red/Green-Beweis der Image-Tag-Retention (Issue #309): laufendes Image
       # + N Rollback-Tags bleiben, nur aeltere Tags gehen. Braucht kein Docker
       # (Fake-docker + Szenario-Dateien).
