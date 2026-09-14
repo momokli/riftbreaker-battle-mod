@@ -50,13 +50,13 @@ Ergebnis signiert wird.
 Diese Punkte müssen **vor** dem Play-Test erledigt und deployt sein — sie sind
 Teil des 1.0-Presets, nicht „nice to have“:
 
-| Voraussetzung | Issue/PR | Nachweis |
-|---|---|---|
+| Voraussetzung                                                                | Issue/PR                                               | Nachweis                                     |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------ | -------------------------------------------- |
 | Website liefert `/tournament/*` (ein Host-Caddy-Eintrag, eigener Rift-Caddy) | **#322** ✅ PR #326 (gemergt 2026-09-12), Preflight P4 | `/tournament/health` → `200` (2026-09-13 ✅) |
-| Runde 2 / Round-Reset | **#281** (PR #285), M8 | Reset + saubere Runde 2 |
-| Telemetry / Session-Mitschnitt | **#280** (PR #283), M10 | Session-Artefakt liegt vor |
-| Welle 1–3 abgearbeitet | **#319** | Release-Plan abgehakt |
-| Deployter Stand == Commit | — | Traceability-Block (Abschnitt 10) |
+| Runde 2 / Round-Reset                                                        | **#281** (PR #285), M8                                 | Reset + saubere Runde 2                      |
+| Telemetry / Session-Mitschnitt                                               | **#280** (PR #283), M10                                | Session-Artefakt liegt vor                   |
+| Welle 1–3 abgearbeitet                                                       | **#319**                                               | Release-Plan abgehakt                        |
+| Deployter Stand == Commit                                                    | —                                                      | Traceability-Block (Abschnitt 10)            |
 
 ### 0.3 Abnahme-Regel: **ein Milestone = ein Play-Test**
 
@@ -86,28 +86,28 @@ Teil des 1.0-Presets, nicht „nice to have“:
 
 ### 1.1 Versionsstempel (beim Test ausfüllen)
 
-| Feld | Wert |
-|---|---|
-| Tag / Kandidat | `v1.0.0` |
-| Commit (SHA) | `<ausfüllen>` |
-| Mod-Version (`mod/*.manifest` → `version`) | `<ausfüllen>` |
-| `rbbattle.zip` md5 (lokal == deployt == Download-URL) | `<ausfüllen>` |
+| Feld                                                                            | Wert          |
+| ------------------------------------------------------------------------------- | ------------- |
+| Tag / Kandidat                                                                  | `v1.0.0`      |
+| Commit (SHA)                                                                    | `<ausfüllen>` |
+| Mod-Version (`mod/*.manifest` → `version`)                                      | `<ausfüllen>` |
+| `rbbattle.zip` md5 (lokal == deployt == Download-URL)                           | `<ausfüllen>` |
 | Deployter Mod-Stand (`riftbreaker-dedicated`, `/opt/riftbreaker/mods/rbbattle`) | `<ausfüllen>` |
-| Tournament-Server (Binary-/Commit-Stand) | `<ausfüllen>` |
-| Website-Stand (`solo.html`) | `<ausfüllen>` |
-| Datum / Uhrzeit (UTC) / Testdauer | `<ausfüllen>` |
-| Tester | Momo |
-| Mitspieler (falls 1v1) | Matheo |
+| Tournament-Server (Binary-/Commit-Stand)                                        | `<ausfüllen>` |
+| Website-Stand (`solo.html`)                                                     | `<ausfüllen>` |
+| Datum / Uhrzeit (UTC) / Testdauer                                               | `<ausfüllen>` |
+| Tester                                                                          | Momo          |
+| Mitspieler (falls 1v1)                                                          | Matheo        |
 
 ---
 
 ## 2. Rollen
 
-| Rolle | Wer | Aufgabe |
-|---|---|---|
-| **Tester** | Momo | Führt Szenarien aus, urteilt Muss/Soll, signiert das Protokoll. |
-| **Mitspieler** | Matheo | Für 1.0 **nicht** nötig (solo); 1v1 ist Post-1.0. |
-| **Operator/Beobachter** | Agent | Deploy, Log-Ernte, Beweismittel, Funde als Issues anlegen. |
+| Rolle                   | Wer    | Aufgabe                                                         |
+| ----------------------- | ------ | --------------------------------------------------------------- |
+| **Tester**              | Momo   | Führt Szenarien aus, urteilt Muss/Soll, signiert das Protokoll. |
+| **Mitspieler**          | Matheo | Für 1.0 **nicht** nötig (solo); 1v1 ist Post-1.0.               |
+| **Operator/Beobachter** | Agent  | Deploy, Log-Ernte, Beweismittel, Funde als Issues anlegen.      |
 
 ---
 
@@ -116,15 +116,15 @@ Teil des 1.0-Presets, nicht „nice to have“:
 Ohne diese Punkte ist der Test nicht aussagekräftig. Ein fehlgeschlagener
 Preflight-Punkt ist selbst ein 1.0-Blocker.
 
-| # | Prüfung | Kommando | Erwartung |
-|---|---|---|---|
-| P1 | Download == deployter Stand (**zwei** Vergleiche, s. Hinweis) | **a)** `ssh planet 'md5sum /srv/rbmods-site/mods/rbbattle.zip'` == Vergleichs-md5 des Kandidaten-Zips (**b)** `bash scripts/mod_version.sh` == `version=` in der deployten `event=mod_load`-Zeile (P5) | **a)** zwei md5 **identisch**; **b)** zwei Versionen **identisch** |
-| P2 | Dedicated-Server gesund | `ssh planet 'docker ps --filter name=riftbreaker-dedicated --format "{{.Status}}"'` | `Up … (healthy)`, **kein** Restart-Loop |
-| P3 | Tournament/Referee erreichbar | `ssh planet 'curl -s http://127.0.0.1:8081/health'` | `{"ok":true,"phase":"lobby"}` |
-| P4 | Web-UI **inkl. API-Pfad** erreichbar — #322 ✅ (PR #326 gemergt, `rift-caddy` läuft) | `curl -s -o /dev/null -w '%{http_code}\n' https://rift.projectmellon.de/solo.html` **und** `curl -s -o /dev/null -w '%{http_code}\n' https://rift.projectmellon.de/tournament/health` | `200` **und** `200` |
-| P5 | Log-Ernte möglich (kanonisch: `docker logs`, s. §8) | `ssh planet 'docker logs riftbreaker-dedicated 2>&1 \| grep -a RBBATTLE \| tail -5'` | `[RBBATTLE] event=mod_load version=<V> status=ok` |
-| P6 | Bridge/Relay erreicht das Spiel | `ssh planet 'curl -s http://127.0.0.1:9001/health'` | `{"ok":true,"pipe":true}` |
-| P7 | Spieler-Kanal frei | `:6321` ohne fremde Spieler; Server für den Test reserviert | ja |
+| #   | Prüfung                                                                              | Kommando                                                                                                                                                                                               | Erwartung                                                          |
+| --- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| P1  | Download == deployter Stand (**zwei** Vergleiche, s. Hinweis)                        | **a)** `ssh planet 'md5sum /srv/rbmods-site/mods/rbbattle.zip'` == Vergleichs-md5 des Kandidaten-Zips (**b)** `bash scripts/mod_version.sh` == `version=` in der deployten `event=mod_load`-Zeile (P5) | **a)** zwei md5 **identisch**; **b)** zwei Versionen **identisch** |
+| P2  | Dedicated-Server gesund                                                              | `ssh planet 'docker ps --filter name=riftbreaker-dedicated --format "{{.Status}}"'`                                                                                                                    | `Up … (healthy)`, **kein** Restart-Loop                            |
+| P3  | Tournament/Referee erreichbar                                                        | `ssh planet 'curl -s http://127.0.0.1:8081/health'`                                                                                                                                                    | `{"ok":true,"phase":"lobby"}`                                      |
+| P4  | Web-UI **inkl. API-Pfad** erreichbar — #322 ✅ (PR #326 gemergt, `rift-caddy` läuft) | `curl -s -o /dev/null -w '%{http_code}\n' https://rift.projectmellon.de/solo.html` **und** `curl -s -o /dev/null -w '%{http_code}\n' https://rift.projectmellon.de/tournament/health`                  | `200` **und** `200`                                                |
+| P5  | Log-Ernte möglich (kanonisch: `docker logs`, s. §8)                                  | `ssh planet 'docker logs riftbreaker-dedicated 2>&1 \| grep -a RBBATTLE \| tail -5'`                                                                                                                   | `[RBBATTLE] event=mod_load version=<V> status=ok`                  |
+| P6  | Bridge/Relay erreicht das Spiel                                                      | `ssh planet 'curl -s http://127.0.0.1:9001/health'`                                                                                                                                                    | `{"ok":true,"pipe":true}`                                          |
+| P7  | Spieler-Kanal frei                                                                   | `:6321` ohne fremde Spieler; Server für den Test reserviert                                                                                                                                            | ja                                                                 |
 
 > **P1-Hinweis:** Die drei Kommandos aus dem Entwurf liefern **verschiedene
 > Werttypen** (Version · HTTP-ETag · md5) und sind daher **nicht** direkt
@@ -147,18 +147,18 @@ Preflight-Punkt ist selbst ein 1.0-Blocker.
 
 **Alle M-Kriterien müssen grün sein, sonst ist `v1.0.0` nicht bestätigt.**
 
-| # | Kriterium | Szenario | Beweis |
-|---|---|---|---|
-| M1 | **Boot/Host:** Server startet aus dem Kaltstart, Mod lädt **genau einmal** in erwarteter Version, keine `handler_errors`/`event_unreadable` | S1 | `docker ps` + Log: genau **eine** `event=mod_load … status=ok`-Zeile | 
-| M2 | **Connect:** Spieler verbindet sich ohne „different set of mods“ | S2 | Spiel lädt, Log `event=mod_load` im Client, keine Lobby-Ablehnung |
-| M3 | **Commence:** HQ platzieren → Setup-Phase endet, Wellen-Progress startet | S3 | `event=commence status=ok`, danach `event=setup`/`event=wave` |
-| M4 | **Ingress-Invariante:** `ok:true` **⟹** nachweisbarer Effekt im Game-Log (kein Falsch-Grün) | S4 | `/exec` → `{"ok":true}` **und** `event=status …` im Log |
-| M5 | **Server-Wave sichtbar (Kern!):** Vom Server/Web-Knopf ausgelöster Spawn erzeugt Kreaturen, die der Spieler **sieht** | S5 | Log `event=wave level=3 status=done spawned>0` **und** Sicht-Check Momo |
-| M6 | **Egress/State:** Der Referee kennt den laufenden Spielzustand (Score/Wave/HQ) | S6 | `GET /state` zeigt plausible Werte; Feed-Einträge |
-| M7 | **HQ-Tod erkannt:** In-Game-HQ-Verlust endet das Match nachvollziehbar | S7 | `event=hq_dead status=match_end` + `event=match_end reason=hq_destroyed`, `/state` `phase=finished` |
-| M8 | **Runde 2 spielbar (Core-Game-Loop, bestätigt):** Nach Niederlage Reset auf 0 und eine neue Runde startet sauber | S8 | Log `rb_reset`/Round-Reset + HQ wieder 100, Wave-Zähler zurück |
-| M9 | **Fehlerverhalten:** Toter Kanal/Timeout gibt eine klare Fehlermeldung statt Hänger oder Falsch-Erfolg | S9 | `/wave` mit gestoppter Bridge → Fehlerantwort ≤ ~3 s, **kein** `ok:true` |
-| M10 | **Telemetry (Core-Dev, bestätigt):** Jede Spiel-Session wird persistent mitgeschnitten (Metriken), zuordenbar zu Match/Session | S13 | Session-Artefakt (Log/Metrik-Datei) liegt vor + Pfad dokumentiert |
+| #   | Kriterium                                                                                                                                   | Szenario | Beweis                                                                                              |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------- |
+| M1  | **Boot/Host:** Server startet aus dem Kaltstart, Mod lädt **genau einmal** in erwarteter Version, keine `handler_errors`/`event_unreadable` | S1       | `docker ps` + Log: genau **eine** `event=mod_load … status=ok`-Zeile                                |
+| M2  | **Connect:** Spieler verbindet sich ohne „different set of mods“                                                                            | S2       | Spiel lädt, Log `event=mod_load` im Client, keine Lobby-Ablehnung                                   |
+| M3  | **Commence:** HQ platzieren → Setup-Phase endet, Wellen-Progress startet                                                                    | S3       | `event=commence status=ok`, danach `event=setup`/`event=wave`                                       |
+| M4  | **Ingress-Invariante:** `ok:true` **⟹** nachweisbarer Effekt im Game-Log (kein Falsch-Grün)                                                 | S4       | `/exec` → `{"ok":true}` **und** `event=status …` im Log                                             |
+| M5  | **Server-Wave sichtbar (Kern!):** Vom Server/Web-Knopf ausgelöster Spawn erzeugt Kreaturen, die der Spieler **sieht**                       | S5       | Log `event=wave level=3 status=done spawned>0` **und** Sicht-Check Momo                             |
+| M6  | **Egress/State:** Der Referee kennt den laufenden Spielzustand (Score/Wave/HQ)                                                              | S6       | `GET /state` zeigt plausible Werte; Feed-Einträge                                                   |
+| M7  | **HQ-Tod erkannt:** In-Game-HQ-Verlust endet das Match nachvollziehbar                                                                      | S7       | `event=hq_dead status=match_end` + `event=match_end reason=hq_destroyed`, `/state` `phase=finished` |
+| M8  | **Runde 2 spielbar (Core-Game-Loop, bestätigt):** Nach Niederlage Reset auf 0 und eine neue Runde startet sauber                            | S8       | Log `rb_reset`/Round-Reset + HQ wieder 100, Wave-Zähler zurück                                      |
+| M9  | **Fehlerverhalten:** Toter Kanal/Timeout gibt eine klare Fehlermeldung statt Hänger oder Falsch-Erfolg                                      | S9       | `/wave` mit gestoppter Bridge → Fehlerantwort ≤ ~3 s, **kein** `ok:true`                            |
+| M10 | **Telemetry (Core-Dev, bestätigt):** Jede Spiel-Session wird persistent mitgeschnitten (Metriken), zuordenbar zu Match/Session              | S13      | Session-Artefakt (Log/Metrik-Datei) liegt vor + Pfad dokumentiert                                   |
 
 ---
 
@@ -167,13 +167,13 @@ Preflight-Punkt ist selbst ein 1.0-Blocker.
 Diese Punkte werden dokumentiert und fließen in Follow-ups — sie blockieren
 `v1.0.0` **nicht**.
 
-| # | Kriterium | Szenario |
-|---|---|---|
-| S1 | Economy-Loop spielbar: farmen → `rb_convert` → Boost/Reveal fühlt sich rund an | S12 |
-| S2 | HUD/Click-HUD bedienbar (`rb_hud_ui`, `rb_quick`, `rb_quick_step`) | S12 |
-| S3 | Latenz „Knopfdruck → sichtbarer Spawn“ < ~2 s | S5 |
-| S4 | Balance-Feedback festgehalten (Wellen-Gefühl, HQ-HP-Kurve, Preise) | S12 |
-| S5 | Stabilität/Dauerlauf — **„note for later“ (Momo): nicht 1.0-relevant**, ist bereits proven und zeigt sich im Spiel | S10 |
+| #   | Kriterium                                                                                                          | Szenario |
+| --- | ------------------------------------------------------------------------------------------------------------------ | -------- |
+| S1  | Economy-Loop spielbar: farmen → `rb_convert` → Boost/Reveal fühlt sich rund an                                     | S12      |
+| S2  | HUD/Click-HUD bedienbar (`rb_hud_ui`, `rb_quick`, `rb_quick_step`)                                                 | S12      |
+| S3  | Latenz „Knopfdruck → sichtbarer Spawn“ < ~2 s                                                                      | S5       |
+| S4  | Balance-Feedback festgehalten (Wellen-Gefühl, HQ-HP-Kurve, Preise)                                                 | S12      |
+| S5  | Stabilität/Dauerlauf — **„note for later“ (Momo): nicht 1.0-relevant**, ist bereits proven und zeigt sich im Spiel | S10      |
 
 ---
 
@@ -384,8 +384,7 @@ ssh planet 'curl -s -X POST http://127.0.0.1:8081/rematch \
 # --- Automatisches Gate (read-only, zusätzlicher Beleg) --------------------
 python3 tests/core-io/core_io_probe.py --remote "ssh planet" \
   --container riftbreaker-dedicated \
-  --bridge-url http://127.0.0.1:9001/exec \
-  --tournament-url http://127.0.0.1:8081 --skip-wave
+  --bridge-url http://127.0.0.1:9001/exec
 ```
 
 **Erwartete Logzeilen (Mod, `mod/lua/rbbattle_autoexec.lua`):**
@@ -443,35 +442,35 @@ Diese Punkte sind **belegt** und beeinflussen den Testablauf:
 
 ### Muss-Kriterien
 
-| # | Ergebnis (`pass`/`fail`/`n/a`) | Beweis (Logzeile/URL/Screenshot) | Notiz |
-|---|---|---|---|
-| M1 | | | |
-| M2 | | | |
-| M3 | | | |
-| M4 | | | |
-| M5 | | | |
-| M6 | | | |
-| M7 | | | |
-| M8 | | | |
-| M9 | | | |
-| M10 | | | |
+| #   | Ergebnis (`pass`/`fail`/`n/a`) | Beweis (Logzeile/URL/Screenshot) | Notiz |
+| --- | ------------------------------ | -------------------------------- | ----- |
+| M1  |                                |                                  |       |
+| M2  |                                |                                  |       |
+| M3  |                                |                                  |       |
+| M4  |                                |                                  |       |
+| M5  |                                |                                  |       |
+| M6  |                                |                                  |       |
+| M7  |                                |                                  |       |
+| M8  |                                |                                  |       |
+| M9  |                                |                                  |       |
+| M10 |                                |                                  |       |
 
 ### Soll-Beobachtungen
 
-| # | Beobachtung | Follow-up-Issue |
-|---|---|---|
-| S1 | | |
-| S2 | | |
-| S3 | | |
-| S4 | | |
-| S5 (S10/Dauerlauf) | | |
-| S5 | | |
+| #                  | Beobachtung | Follow-up-Issue |
+| ------------------ | ----------- | --------------- |
+| S1                 |             |                 |
+| S2                 |             |                 |
+| S3                 |             |                 |
+| S4                 |             |                 |
+| S5 (S10/Dauerlauf) |             |                 |
+| S5                 |             |                 |
 
 ### Funde / Störungen
 
 | Fund | Schwere | Issue |
-|---|---|---|
-| | | |
+| ---- | ------- | ----- |
+|      |         |       |
 
 ### Beweisformat (von Momo bestätigt)
 
@@ -488,7 +487,7 @@ Diese Punkte sind **belegt** und beeinflussen den Testablauf:
 - [ ] Muss-Kriterien offen / nicht happy → **Baseline nicht bestätigt**; Funde als
       Issues, nächster Kandidat (`v1.0.1`).
 
-**Sign-off (Tester):** Momo  __________________  **Datum:** ____________
+**Sign-off (Tester):** Momo ********\_\_******** **Datum:** ****\_\_\_\_****
 
 **Angehängte Traceability:** Commit `____________` · Mod `________` ·
 `rbbattle.zip` md5 `____________` · Deployter Stand `____________`
