@@ -1,0 +1,7 @@
+RIFT BATTLE — placeholder mod download.
+
+This is NOT a real mod archive. It is a stand-in so the route
+`/mod.zip` resolves to something until the real packaged mod
+(`rbbattle.zip`) is wired in.
+
+Real artifact: produced by the `mods-zip` ansible role.

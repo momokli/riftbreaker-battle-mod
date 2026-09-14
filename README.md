@@ -5,7 +5,7 @@
 [![Latest Release](https://img.shields.io/github/v/release/momokli/riftbreaker-battle-mod)](https://github.com/momokli/riftbreaker-battle-mod/releases)
 [![Open Issues](https://img.shields.io/github/issues/momokli/riftbreaker-battle-mod)](https://github.com/momokli/riftbreaker-battle-mod/issues)
 
-Ein **Biter-Battles-artiger Runden-Duell-Modus** für *The Rift Breaker* (EXOR Studios) — Kollaborations-Repo für Konzept, Findings und später den Code.
+Ein **Biter-Battles-artiger Runden-Duell-Modus** für _The Rift Breaker_ (EXOR Studios) — Kollaborations-Repo für Konzept, Findings und später den Code.
 
 ## Ziel
 
@@ -13,10 +13,10 @@ Runden-Duell 1v1: Beide Spieler spielen eine eigene Rift-Breaker-Partie. Pro Run
 
 ## Aktuelles Ziel: Solo-MVP
 
-Nächster Meilenstein ist der **Solo-Modus** — allein gegen sich selbst spielen,
-über [rift.projectmellon.de/solo.html](https://rift.projectmellon.de/solo.html)
-verbinden und starten. Der komplette Weg von hier bis zum 4v4-Release steht in
-[ROADMAP.md](ROADMAP.md).
+Nächster Meilenstein ist der **Solo-Modus** — allein gegen sich selbst spielen.
+Der Operator-Zugang läuft über das Cockpit
+[cockpit.rift.projectmellon.de/contract/](https://cockpit.rift.projectmellon.de/contract/).
+Der komplette Weg von hier bis zum 4v4-Release steht in [ROADMAP.md](ROADMAP.md).
 
 ## Status
 
@@ -26,12 +26,12 @@ verbinden und starten. Der komplette Weg von hier bis zum 4v4-Release steht in
 
 ## Komponenten
 
-| Komponente | Ort | Aufgabe |
-|---|---|---|
-| **Lua-Mod** | `mod/` (Spike) | gesamte Spiellogik im Spiel (Wellen, Punkte, Defense, HUD) — Spike-Skeleton mit Experimenten A/B/C |
-| **Trainer / Harness** | `bausteine/04-trainer-io/` (C-Quellen), `trainer/` (Protokoll + RE-Tooling) | I/O-Gateway zwischen Spiel und Netz: DLL-Injection + Named Pipe + RE-Scan-Tools (Windows-first) |
-| **Bausteine** | `bausteine/` | eigenständig testbare Komponenten aus Mod + Trainer (Index: [bausteine/README.md](bausteine/README.md)) |
-| **Relay-Server** | `server/` (geplant) | Matchmaking + Event-Routing (Node) |
+| Komponente            | Ort                                                                         | Aufgabe                                                                                                 |
+| --------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| **Lua-Mod**           | `mod/` (Spike)                                                              | gesamte Spiellogik im Spiel (Wellen, Punkte, Defense, HUD) — Spike-Skeleton mit Experimenten A/B/C      |
+| **Trainer / Harness** | `bausteine/04-trainer-io/` (C-Quellen), `trainer/` (Protokoll + RE-Tooling) | I/O-Gateway zwischen Spiel und Netz: DLL-Injection + Named Pipe + RE-Scan-Tools (Windows-first)         |
+| **Bausteine**         | `bausteine/`                                                                | eigenständig testbare Komponenten aus Mod + Trainer (Index: [bausteine/README.md](bausteine/README.md)) |
+| **Relay-Server**      | `server/` (geplant)                                                         | Matchmaking + Event-Routing (Node)                                                                      |
 
 Architektur & Design: [docs/concept.md](docs/concept.md) · Install & Spike-Test: [mod/README.md](mod/README.md)
 
@@ -43,10 +43,6 @@ Architektur & Design: [docs/concept.md](docs/concept.md) · Install & Spike-Test
   rbbridge-DLL + `pipe_client.py`, ohne Spiel testbar via notepad.exe).
 - **[scripts/package_mod.sh](scripts/package_mod.sh)** — packt den Mod-Ordner
   (`mod/`) als ZIP nach `dist/` für manuelle Verteilung/Tests.
-- **[site/index.html](site/index.html)** — kanonische Landing (GitHub Pages:
-  <https://momokli.github.io/riftbreaker-battle-mod/>, Quelle Branch `main`
-  Pfad `/site` via GitHub Actions). `docs/index.html` ist nur noch ein
-  Verweis auf die Landing (keine eigenen Download-/Versions-Links).
 - **[docs/workshop.md](docs/workshop.md)** — Steam-Workshop-Anleitung
   (AppID 780310, SteamCMD, friends-only). **Nur der Lua-Mod, nie der Trainer.**
 
@@ -65,7 +61,7 @@ riftbreaker-battle-mod/
 ├── trainer/   # Sidecar/Trainer (Protokoll + RE-Scan-Tools; C-Quellen in bausteine/04-trainer-io/)
 ├── server/    # Relay-Server (geplant, Node)
 ├── scripts/   # Tooling (package_mod.sh: Mod-ZIP bauen)
-├── docs/      # Konzept, Findings, Workshop-Anleitung (+ index.html = Verweis auf site/)
+├── docs/      # Konzept, Findings, Workshop-Anleitung
 └── README.md
 ```
 

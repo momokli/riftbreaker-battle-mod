@@ -2,7 +2,7 @@
 # Defaults der Rolle host-hygiene (systemd-Timer, Issue #308).
 # Konservative Docker-Image-Hygiene auf planet: entfernt NUR dangling
 # (ungetaggte) Images — `docker image prune`, ausdrücklich KEIN `-a`.
-# Muster der Rolle: probe-timer (`*.service.j2` + `*.timer.j2`).
+# Muster: systemd-Skript + *.service.j2 + *.timer.j2.
 host_hygiene_unit: rbmods-host-hygiene
 host_hygiene_bin: /usr/local/bin/rbmods-host-hygiene.sh
 

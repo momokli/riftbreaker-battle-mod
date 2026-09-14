@@ -49,32 +49,6 @@ Für den CD-Betrieb liegt das Vault-Passwort ausschließlich auf planet
 (`/etc/rbbattle-deploy/vault.pass`, root-only) — **nie** als GitHub-Secret,
 nie im Repo, nie in Logs.
 
-## Solo-Page-Zugangsschutz (`/solo`, Issue #159)
-
-Die Operator-Match-Page `/solo` ([site/solo.html](../site/solo.html)) wird per
-**Caddy basic_auth** geschützt. Der Passwort-**Hash** liegt ausschließlich im
-Vault — **kein Wert im Repo, in Logs oder PRs**; dokumentiert ist nur der Name.
-
-- **Variablenname (dokumentiert, ohne Wert):** `vault_solo_basic_auth_hash`
-  (Vault, bcrypt) → nicht-geheime Referenz `solo_basic_auth_hash` in
-  `inventory/host_vars/planet/vars.yml`.
-- **Benutzer:** `solo_basic_auth_user` (Default `operator`).
-- **ENV-Variablenname (Betreiber setzt den Wert host-seitig, nie im Repo):**
-  `SOLO_BASIC_AUTH_HASH`.
-
-Hash erzeugen und in den Vault übernehmen (**Wert nie ausgeben/committen**):
-
-```bash
-# bcrypt-Hash im Caddy-Container erzeugen; Ausgabe direkt in den Vault übernehmen:
-docker exec -i mellon-caddy caddy hash-password
-ansible-vault edit deploy/inventory/host_vars/planet/vault.yml
-#    → vault_solo_basic_auth_hash: <bcrypt-hash>
-```
-
-Ist der Hash leer/nicht gesetzt, bleibt `/solo` bewusst **ungeschützt**
-(graceful Default) — der Deploy bricht nicht ab. Der eigene `rift-caddy` routet
-`/solo` außerdem auf `/solo.html`.
-
 ## Deploy
 
 ```bash
@@ -83,7 +57,7 @@ ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
 
 Reihenfolge der Rollen (site.yml): `mods-zip` → `dedicated-server-image` →
 `game-content` → `riftbreaker-server` → `tournament-server` →
-`website` → `probe-timer` → `image-retention` → `host-hygiene`.
+`website` → `image-retention` → `host-hygiene`.
 
 **Vor** den Rollen (in den `pre_tasks`) prüft ein Preflight den freien Platz auf
 `/` (Disk-Space-Gate, Issue #310): zu wenig Platz → Abbruch **vor** Image-Build
@@ -364,6 +338,7 @@ re-run oder `force=true`.
 - [ ] Alter Hook dekommissioniert: `systemctl disable --now rbbattle-deploy-hook` + Unit-Datei entfernt
 - [x] GitHub: `DEPLOY_TOKEN`-Secret gelöscht (obsolet)
 - [ ] Erster Merge auf `main`: Deploy-Lauf grün
+
 ## deploy-check (PR-Gate)
 
 Das PR-Gate ist seit Issue #349 in **zwei Workflows** aufgeteilt; **required ist
@@ -411,17 +386,16 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 
 ## Rollen
 
-| Rolle | Typ | Was |
-|---|---|---|
-| `dedicated-server-image` | docker | baut `rb-dedicated:<deploy-sha>` auf planet (Laufzeit :6321) |
-| `game-content` | steamcmd/sync | Dedicated-Server-Content (App 4114030) nach `riftbreaker_game_dir` (idempotent, fail loud) |
-| `riftbreaker-server` | docker | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation |
-| `satellite-relay` | iptables + systemd | UDP-DNAT-Relay auf `satellite`: inbound `:6321` → planet prod `:6322` (reboot-fest; Rollen-Defaults = einzige Wertquelle) |
-| `tournament-server` | systemd | Rust/axum Referee + Web-UI. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt) |
-| `website` | statics + eigener Caddy | `site/*` → Docroot, eigener `rift-caddy` (plain HTTP: Statics + `/tournament/*`-Proxy) + EIN Eintrag im geteilten Host-Caddy (Issue #322); Host-Caddy-Reload deterministisch + fehlersichtbar, `rift-caddy` mit `admin off` (Issue #355) |
-| `mods-zip` | — | Paketierung + md5-Paritäts-Check (hart) |
-| `probe-timer` | systemd | `probe_servers.sh` alle 2 Min → `status.json` |
-| `host-hygiene` | systemd | wöchentlicher Timer: entfernt **dangling** Docker-Images (`docker image prune`, **kein** `-a`; Issue #308) |
+| Rolle                    | Typ                | Was                                                                                                                                                                                                                                      |
+| ------------------------ | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dedicated-server-image` | docker             | baut `rb-dedicated:<deploy-sha>` auf planet (Laufzeit :6321)                                                                                                                                                                             |
+| `game-content`           | steamcmd/sync      | Dedicated-Server-Content (App 4114030) nach `riftbreaker_game_dir` (idempotent, fail loud)                                                                                                                                               |
+| `riftbreaker-server`     | docker             | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation                                                                                                  |
+| `satellite-relay`        | iptables + systemd | UDP-DNAT-Relay auf `satellite`: inbound `:6321` → planet prod `:6322` (reboot-fest; Rollen-Defaults = einzige Wertquelle)                                                                                                                |
+| `tournament-server`      | systemd            | Rust/axum Referee + Web-UI. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt)                                             |
+| `website`                | eigener Caddy      | eigener `rift-caddy` (plain HTTP: Landing + `/mod.zip` + Cockpit `/contract/*` + `/tournament/*`) + ZWEI Einträge im geteilten Host-Caddy (Issue #322); Host-Caddy-Reload deterministisch + fehlersichtbar, `rift-caddy` mit `admin off` (Issue #355) |
+| `mods-zip`               | —                  | Paketierung + md5-Paritäts-Check (hart)                                                                                                                                                                                                  |
+| `host-hygiene`           | systemd            | wöchentlicher Timer: entfernt **dangling** Docker-Images (`docker image prune`, **kein** `-a`; Issue #308)                                                                                                                               |
 
 ## Host-Caddy-Reload (Issue #355)
 
@@ -462,9 +436,8 @@ deploy/
     ├── riftbreaker-server/        # docker 6321 (+ Restart-Handler)
     ├── satellite-relay/           # UDP-DNAT-Relay (planet prod :6322 via satellite)
     ├── tournament-server/         # systemd
-    ├── website/                   # statics + eigener rift-caddy (Issue #322)
+    ├── website/                   # eigener rift-caddy: Landing + Cockpit (Issue #322)
     ├── mods-zip/                  # Paketierung + md5-Parität
-    ├── probe-timer/               # systemd-Timer
     └── host-hygiene/              # systemd-Timer (dangling Images, #308)
 ```
 
@@ -550,20 +523,19 @@ ausführen, danach `df -h /` zum Messen.
 
 ## Logs
 
-| Ort | Was |
-|---|---|
-| `gh run view <id> --log` | CD-Job-Log (der `ssh`-Step streamt das ganze ansible-Log) |
-| `journalctl -u tournament-server`, `-u rbmods-probe.timer`, `-u rbmods-host-hygiene.timer` | systemd-Rollen |
-| `docker logs riftbreaker-dedicated` | Container-Logs (Wine/Server) |
-| `git -C /opt/rbbattle-deploy/repo log --oneline -3` | zuletzt deployte SHA |
+| Ort                                                               | Was                                                       |
+| ----------------------------------------------------------------- | --------------------------------------------------------- |
+| `gh run view <id> --log`                                          | CD-Job-Log (der `ssh`-Step streamt das ganze ansible-Log) |
+| `journalctl -u tournament-server`, `-u rbmods-host-hygiene.timer` | systemd-Rollen                                            |
+| `docker logs riftbreaker-dedicated`                               | Container-Logs (Wine/Server)                              |
+| `git -C /opt/rbbattle-deploy/repo log --oneline -3`               | zuletzt deployte SHA                                      |
 
 ## Was CI/CD besitzt (und was nicht)
 
 **Owned von der Pipeline (`deploy/`):** Laufzeit-Image (`rb-dedicated:<sha>`),
 Spiel-Content (Steam-App 4114030), Compose-Rendering + Containerstart der
-Server-Rollen, Mod-Auslieferung + Restart, Website-Statics + eigener
-`rift-caddy` (Statics + `/tournament/*`-Proxy) + EIN Host-Caddy-Eintrag,
-systemd-Unit/Timer (tournament/probe/hygiene), md5-Parität des Mod-Zips.
+Server-Rollen, Mod-Auslieferung + Restart, eigener `rift-caddy` (Landing + `/mod.zip` + Cockpit `/contract/*` + `/tournament/*`) + ZWEI Host-Caddy-Einträge,
+systemd-Unit/Timer (tournament/hygiene), md5-Parität des Mod-Zips.
 
 **Nicht owned (bewusst host-seitig/manuell):** Vault-Passwort
 (`/etc/rbbattle-deploy/vault.pass`, root-only), SSH-Zugang + forced command des

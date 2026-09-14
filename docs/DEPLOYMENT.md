@@ -8,27 +8,15 @@
 
 ## Ziel-Stack (was IMMER betrieben wird)
 
-| Komponente | Host | Container/Unit | Port | Zweck |
-|---|---|---|---|---|
-| riftbreaker-dedicated | planet | docker (wine) | 6321/udp | Dev-SP-Server: 1v1 „vs sich selbst" (SP-Mode; rbbattle-Mod + rbbridge) |
-| tournament-server | planet | systemd (Rust/axum, `tournament/`) | 8081 | Turnier 1v1: Lobby/Ready/GO/Wave-Routing/Score (2 Welten) |
-| test-Instanzen | planet | docker, on-demand | frei | Test-Server aller Art (Mod-Tests, Balance, Experimente) |
-| Website | planet | statics + **eigener** Caddy (`rift-caddy`, plain HTTP) hinter `mellon-caddy` | 443 → 127.0.0.1:8787 | Landing `/` · `/connectivity.html` · `/solo.html` · `/status.json` · Proxy `/tournament/*` → tournament-server |
-| Mod-Download | planet | statics (Caddy) | 443 | `rbbattle.zip` (Paketierung + md5-Parität) |
-| rbmods-probe.timer | planet | systemd | — | Connectivity-Checks alle 2 Min → `status.json` |
-| rbmods-image-retention.timer | planet | systemd | — | Alte Mod-Image-Tags aufräumen (Rollback-Stand + laufendes Image bleiben) |
-| rbmods-host-hygiene.timer | planet | systemd | — | wöchentlich dangling Docker-Images aufräumen (`docker image prune`, **kein** `-a`; Issue #308) |
-| rbbridge | in Mod-Containern | Prozess | — | Command-Injection (`exec_cmd_client`, Argument IMMER als EIN gequotierter String) |
-
-## Kanonische Landing
-
-- **`site/` ist die einzige kanonische Landing** (GitHub Pages via
-  `pages.yml`, Source-Pfad `site`, kein Build-Schritt). Der Download läuft über
-  den **deployten Stand** `https://rift.projectmellon.de/mods/rbbattle.zip`
-  (Caddy, vom Deploy atomar ausgetauscht). GitHub-Tags (`v*`) sind seit
-  Issue #209 **reine Marker** — keine GitHub-Releases, keine Release-Artefakte.
-- `docs/index.html` ist **keine zweite Landing** mehr: ein dünner
-  Verweis/Redirect auf die Landing, ohne eigene Download-/Versions-Links.
+| Komponente                       | Host              | Container/Unit                                                     | Port                 | Zweck                                                                                          |
+| -------------------------------- | ----------------- | ------------------------------------------------------------------ | -------------------- | ---------------------------------------------------------------------------------------------- |
+| riftbreaker-dedicated            | planet            | docker (wine)                                                      | 6321/udp             | Dev-SP-Server: 1v1 „vs sich selbst" (SP-Mode; rbbattle-Mod + rbbridge)                         |
+| tournament-server                | planet            | systemd (Rust/axum, `tournament/`)                                 | 8081                 | Turnier 1v1: Lobby/Ready/GO/Wave-Routing/Score (2 Welten)                                      |
+| test-Instanzen                   | planet            | docker, on-demand                                                  | frei                 | Test-Server aller Art (Mod-Tests, Balance, Experimente)                                        |
+| Operator-Cockpit + Tournament-UI | planet            | **eigener** Caddy (`rift-caddy`, plain HTTP) hinter `mellon-caddy` | 443 → 127.0.0.1:8787 | `/contract/*` → IO-Bridge (basic_auth) · `/tournament/*` → tournament-server                   |
+| rbmods-image-retention.timer     | planet            | systemd                                                            | —                    | Alte Mod-Image-Tags aufräumen (Rollback-Stand + laufendes Image bleiben)                       |
+| rbmods-host-hygiene.timer        | planet            | systemd                                                            | —                    | wöchentlich dangling Docker-Images aufräumen (`docker image prune`, **kein** `-a`; Issue #308) |
+| rbbridge                         | in Mod-Containern | Prozess                                                            | —                    | Command-Injection (`exec_cmd_client`, Argument IMMER als EIN gequotierter String)              |
 
 ## Deployment-Plan (Ansible, inventory `planet`)
 
@@ -51,17 +39,14 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
    in `<game>/mods/rbbattle`; Restart-Handler bei Mod-/Config-Änderung.
 5. **tournament-server** — systemd-Unit, Env-Konfig (`RBBRIDGE_A_URL`/
    `RBBRIDGE_B_URL`), Binary + Web-UI aus `tournament/`.
-6. **website** — statische Dateien (`site/*`) nach Docroot, eigener
-   **`rift-caddy`** (plain HTTP: Statics + `/tournament/*`-Proxy) und **EIN**
-   Eintrag im geteilten Host-Caddy (`mellon-caddy`) für die Domain. Details:
-   „Website-Pfad“ unten.
-7. **probe-timer** — systemd-Timer für `scripts/probe_servers.sh` →
-   `status.json`.
-8. **image-retention** — systemd-Timer für
+6. **website** — eigener **`rift-caddy`** (plain HTTP: Landing + `/mod.zip` +
+   Cockpit `/contract/*` + `/tournament/*`) und **ZWEI** Einträge im geteilten
+   Host-Caddy (`mellon-caddy`, Landing- + Cockpit-Domain). Details: „Website-Pfad“ unten.
+7. **image-retention** — systemd-Timer für
    `scripts/docker_image_tag_retention.sh`: entfernt alte
    `rb-dedicated`/`rb-headless-client`-Tags, behält das laufende Image und den
    Rollback-Stand (Issue #309, siehe unten).
-9. **host-hygiene** — wöchentlicher systemd-Timer (Issue #308): entfernt
+8. **host-hygiene** — wöchentlicher systemd-Timer (Issue #308): entfernt
    dangling Docker-Images (`docker image prune`, **kein** `-a`; der getaggte
    Rollback-Stand bleibt erhalten). Installiert `scripts/host_hygiene.sh` +
    Unit/Timer; automatische Variante der manuellen Aufräum-Befehle in
@@ -140,44 +125,47 @@ Red/Green-Test (kein Docker nötig) liegt in
 **Nicht in diesem Issue:** ungetaggte Dangling-Layer (→ #308) und weniger Müll
 erzeugen (→ #247, reproduzierbare Builds in GHCR).
 
-## Website-Pfad — eigener Rift-Caddy + EIN Host-Eintrag (Issue #322)
+## Website-Pfad — eigener Rift-Caddy + ZWEI Host-Einträge (Landing + Cockpit, Issue #322)
 
-Die öffentliche Web-UI (`solo.html`, `/wave`-Knopf, Live-Log) nutzt
-`apiBase = "/tournament"` (gleicher Origin). Der `/tournament/*`-Proxy läuft
-**nicht** mehr als Snippet im geteilten Host-Caddy, sondern in einem **eigenen
-Rift-Caddy**:
+Pro Environment („Twin“) betreibt der Rift-Stack einen **eigenen `rift-caddy`**
+(plain HTTP, `network_mode: host`), der ZWEI Hostnames bedient — die statische
+**Landing** (+ `/mod.zip`) und das **Operator-Cockpit** (`/contract/*` →
+IO-Bridge, `/tournament/*` → tournament-server):
 
 ```text
-rift.projectmellon.de → Host-Caddy (mellon-caddy, hostet viele Domains)
-                         └─ reverse_proxy 127.0.0.1:8787
-                              └─ rift-caddy (eigener Container, plain HTTP, net=host)
-                                   ├─ file_server  /srv/site   (Statics, /solo, /mods)
-                                   └─ handle_path /tournament/* → 127.0.0.1:8081
+www.<env>.projectmellon.de    ┐
+cockpit.<env>.projectmellon.de┤→ Host-Caddy (mellon-caddy, hostet viele Domains)
+                              │     └─ reverse_proxy 127.0.0.1:<rift_caddy_port> (je Domain)
+                              └──────────────┘
+                                   └─ rift-caddy (eigener Container, plain HTTP, net=host)
+                                        ├─ file_server (Landing + /mod.zip)
+                                        ├─ handle_path /contract/*   → 127.0.0.1:<bridge> (basic_auth)
+                                        └─ handle_path /tournament/* → 127.0.0.1:8081
 ```
 
 Eigenschaften:
 
-- **Genau EIN** Eintrag im geteilten Host-Caddy (`rift.projectmellon.de` →
-  `reverse_proxy 127.0.0.1:8787`), idempotent via `blockinfile`
-  (Marker `RIFT PROJECTMELLON (managed by deploy/roles/website)`). Kein
-  `Caddyfile.d`-Mount, keine Snippet-Import-Zeile mehr. Die frühere, manuell
-  gepflegte Rift-Blöcke/Import-Zeile entfernt die Rolle (kein Parallel-Block).
+- **Genau ZWEI** Einträge im geteilten Host-Caddy (`landing_domain` +
+  `cockpit_domain` → `reverse_proxy 127.0.0.1:<rift_caddy_port>`), idempotent
+  via `blockinfile` (per-Domain-Marker `managed by deploy/roles/website`). Kein
+  `Caddyfile.d`-Mount, keine Snippet-Import-Zeile mehr. Verwaiste
+  `operator.*`-/manuelle Rift-Blöcke entfernt die Rolle (kein Parallel-Block).
 - **rift-caddy** ist ein eigener Container (`caddy:2`, `network_mode: host`) und
-  lauscht ausschließlich auf `127.0.0.1:8787`. TLS terminiert weiterhin der
-  Host-Caddy.
-- `/solo` und `/solo.html` sind erreichbar (`rewrite /solo /solo.html`); der
-  optionale basic_auth-Schutz (Issue #159) bleibt (nur wenn
-  `vault_solo_basic_auth_hash` gesetzt ist).
-- `/mods/*` (Zip-Download + Browse, Upload via dufs) bleibt unverändert.
-- Variablen: `deploy/inventory/host_vars/planet/vars.yml` (`rift_caddy_*`,
-  `website_host_caddyfile_*`); Umsetzung: `deploy/roles/website/`.
+  lauscht ausschließlich auf `127.0.0.1:<rift_caddy_port>`. TLS terminiert
+  weiterhin der Host-Caddy.
+- `/contract/*` wird auf die IO-Bridge (`riftbreaker_bridge_port`) proxyt und
+  per `basic_auth` (operator) geschützt; `/tournament/*` geht unverändert an den
+  tournament-server.
+- Variablen: `deploy/inventory/host_vars/planet/vars.yml` (dev) bzw.
+  `deploy/prod-vars.yml` (prod) — `landing_domain`, `cockpit_domain`,
+  `rift_caddy_*`, `riftbreaker_bridge_port`; Umsetzung: `deploy/roles/website/`.
 
 Akzeptanz-Beleg (Play-Test-Preflight **P4**, `docs/PLAYTEST_1.0.md`):
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' https://rift.projectmellon.de/tournament/health   # 200
-curl -s -o /dev/null -w '%{http_code}\n' https://rift.projectmellon.de/solo.html          # 200
-curl -s -o /dev/null -w '%{http_code}\n' https://rift.projectmellon.de/mods/rbbattle.zip   # 200
+curl -s -o /dev/null -w '%{http_code}\n' https://www.drift.projectmellon.de/                     # 200 (Landing)
+curl -s -o /dev/null -w '%{http_code}\n' https://cockpit.drift.projectmellon.de/tournament/health # 200 (Cockpit)
+curl -s -o /dev/null -w '%{http_code}\n' https://www.rift.projectmellon.de/                      # 200 (Landing)
 ```
 
 ## Mod-Backups & mods/-Guard (Issue #212)
@@ -214,7 +202,7 @@ Nach Entfernen des Ordners aus `mods/` + Container-Restart:
 3. **Post-Deploy-Verifikation** — **zweistufig** (Issue #226), weil der
    Dedicated Server im Idle (siehe „Log-Quelle & Timing" unten) **keinen**
    Lua-Log schreibt:
-   1. **Artefakt-Check (hart, idle-sicher):** Manifest-Version *und*
+   1. **Artefakt-Check (hart, idle-sicher):** Manifest-Version _und_
       `RBB.version` im deployten Lua-Stand unter `{{ riftbreaker_mod_dir }}`
       müssen exakt der erwarteten Version (`mod_version` aus dem Mod-Manifest)
       entsprechen. Das ist der maßgebliche Gate.
@@ -243,7 +231,7 @@ Runtime-Log:
 
 - **Altes Image (bis #241):** `docker logs` enthielt nur die zwei
   `run-server.sh`-Wrapper-Zeilen (`[run-server] starte Xvfb …` / `[run-server]
-  starte: wine bin/DedicatedServer.exe …`) und **nie** eine `mod_load`-Zeile;
+starte: wine bin/DedicatedServer.exe …`) und **nie** eine `mod_load`-Zeile;
   der Log lag im Container-Writable-Layer unter `/root/exor_logs.txt`
   (Wine-`Documents -> /root`) und war nur per `docker exec ... cat` erreichbar.
 - **Timing (weiterhin relevant):** Der Log entsteht erst, wenn der Server eine
@@ -285,9 +273,8 @@ Platz. Deshalb prüft ein **Preflight** den freien Platz auf `/` **bevor**
   freien Platz + nächsten Schritt: erst aufräumen, siehe #301, dann erneut
   deployen).
 
-Das Gate ist ein **Not-Aus**, kein Ersatz fürs Aufräumen: erst Sichtbarkeit
-(`disk_pct` in `status.json`), dann Gate, plus Timer/Automatik — beides gehört
-zusammen (#301).
+Das Gate ist ein **Not-Aus**, kein Ersatz fürs Aufräumen: erst Sichtbarkeit,
+dann Gate, plus Timer/Automatik — beides gehört zusammen (#301).
 
 **Selbsttest (hermetisch, ohne Host/Prod-Zugriff):**
 
@@ -325,8 +312,7 @@ Der **Tag→prod-Kanal ist weiterhin nicht verdrahtet** (Follow-up):
 `tags: ['v*']` sind seit Issue #209 **reine Marker** (kein Tag-Trigger, keine
 GitHub-Releases, keine prod-Umgebung im Workflow). Das zweite Deploy-Target
 existiert seit #328 (`deploy-prod.yml`) — der Tag-Trigger darauf wird als eigenes
-Folge-Issue angeschlossen. Veröffentlichter Download ist der deployte Stand
-`https://rift.projectmellon.de/mods/rbbattle.zip`.
+Folge-Issue angeschlossen.
 
 Der HTTP-Hook ist seit 2026-09-11 durch den SSH-Deploy abgelöst (Issue #235);
 das `DEPLOY_TOKEN`-Secret im Environment `dev` wurde gelöscht — **es gibt kein

@@ -1,6 +1,6 @@
 ---
 # Rolle: host-hygiene (Issue #308) — automatische, konservative Docker-
-# Image-Hygiene auf planet als systemd-Timer (Muster: Rolle probe-timer).
+# Image-Hygiene auf planet als systemd-Timer.
 #
 # Was der Timer tut (Skript scripts/host_hygiene.sh):
 #   * dangling Images (ungetaggte <none>-Layer) entfernen:

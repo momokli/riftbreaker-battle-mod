@@ -1,17 +1,19 @@
 ---
-# Defaults der Rolle website (statics + eigener rift-caddy + EIN Host-Eintrag).
+# Defaults der Rolle website (eigener rift-caddy + ZWEI Host-Eintraege: Landing + Cockpit).
 #
 # Issue #322: Der Riftbreaker-Stack hat einen EIGENEN Caddy-Container
-# (`rift-caddy`, plain HTTP, reines Durchreichen) für Statics + den
-# `/tournament/*`-Proxy. Der geteilte Host-Caddy (`mellon-caddy`) bekommt genau
-# EINEN Eintrag (`rift.projectmellon.de` → reverse_proxy 127.0.0.1:<port>) —
+# (`rift-caddy`, plain HTTP, reines Durchreichen) für die statische Landing
+# (+ /mod.zip) und die /tournament/*-/contract/*-Proxies. Der geteilte
+# Host-Caddy (`mellon-caddy`) bekommt genau ZWEI Eintraege
+# (`landing_domain` + `cockpit_domain` → reverse_proxy 127.0.0.1:<port>) —
 # kein `Caddyfile.d`-Mount, keine Snippet-Import-Zeile mehr.
 #
-# Die planet-spezifischen Werte (Domain, Pfade, Ports, Container-Namen) stehen in
-# deploy/inventory/host_vars/planet/vars.yml; diese Defaults liefern nur
+# Die planet-spezifischen Werte (Domains, Pfade, Ports, Container-Namen) stehen
+# in deploy/inventory/host_vars/planet/vars.yml; diese Defaults liefern nur
 # generische Fallbacks, damit Templates auch ohne Host-Vars renderbar sind.
 
-website_domain: rift.projectmellon.de
+landing_domain: www.rift.projectmellon.de
+cockpit_domain: cockpit.rift.projectmellon.de
 website_docroot: /srv/rbmods-site
 website_mods_dir: "{{ website_docroot }}/mods"
 
@@ -23,7 +25,6 @@ rift_caddy_deploy_dir: /opt/rbmods/compose/rift-caddy
 rift_caddy_data_dir: "{{ rift_caddy_deploy_dir }}/data"
 rift_caddy_config_dir: "{{ rift_caddy_deploy_dir }}/config"
 rift_caddy_site_root: /srv/site
-website_upload_port: 8322
 
 # /contract (Bridge-Kontrollpanel): basic_auth-Schutz (operator). bcrypt-Hash
 # von "zukka"; als Default unkritisch, kein Vault nötig.
