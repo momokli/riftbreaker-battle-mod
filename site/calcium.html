@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RIFT BATTLE — Kalzium-Dashboard</title>
+<meta name="description" content="Baby-Step-Dashboard (Issue #383): zeigt live den Kalzium-Stand des laufenden Dedi-Servers.">
+<meta name="theme-color" content="#05070a">
+<!-- Bridge-API-Basis (Issue #383): Basis-URL der pipe_bridge (Trainer-only-Kanal,
+     #363/#365); das Widget pollt POST <base>/get_state. Relativ = gleicher
+     Origin, ueber den Caddy-Proxy /bridge/* (nicht direkt Port 9001/9002). -->
+<meta name="rb-bridge-api" content="/bridge">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2 28 9v14L16 30 4 23V9z' fill='none' stroke='%233fd0d4' stroke-width='3'/%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#05070a; --panel:#0a1018; --line:#16222f;
+  --txt:#9fb4c0; --dim:#5d7183; --bright:#e8f2f7;
+  --acc:#3fd0d4; --warn:#ff6b5e;
+  --mono:ui-monospace,"Cascadia Mono","JetBrains Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;min-height:100vh;background:var(--bg);color:var(--txt);
+  font:15px/1.6 var(--mono);
+  display:flex;align-items:center;justify-content:center;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+}
+main{
+  border:1px solid var(--line);background:var(--panel);
+  border-radius:10px;padding:40px 56px;text-align:center;
+  min-width:280px;
+}
+.label{color:var(--dim);font-size:12.5px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:14px}
+#value{
+  color:var(--bright);font-size:56px;font-weight:700;letter-spacing:.02em;
+  font-variant-numeric:tabular-nums;
+}
+#value.stale{color:var(--warn)}
+#sub{color:var(--dim);font-size:12px;margin-top:14px;min-height:1.4em}
+a.back{display:inline-block;margin-top:22px;color:var(--dim);font-size:12px;text-decoration:none;border-bottom:1px dotted rgba(63,208,212,.45)}
+a.back:hover{color:var(--acc)}
+</style>
+</head>
+<body>
+<main>
+  <div class="label">Kalzium</div>
+  <div id="value">—</div>
+  <div id="sub">verbinde…</div>
+  <a class="back" href="index.html">← rift-battle</a>
+</main>
+<script src="calcium-widget.js"></script>
+<script>
+(function () {
+  "use strict";
+  var valueEl = document.getElementById("value");
+  var subEl = document.getElementById("sub");
+
+  function render(state) {
+    if (state.ok) {
+      valueEl.textContent = String(state.value);
+      valueEl.classList.remove("stale");
+      subEl.textContent = "";
+    } else {
+      valueEl.textContent = "—";
+      valueEl.classList.add("stale");
+      subEl.textContent = state.sub || "nicht verfügbar";
+    }
+  }
+
+  RBCalciumWidget.createWidget({
+    apiBase: RBCalciumWidget.resolveApiBase(document),
+    render: render,
+  }).start();
+})();
+</script>
+</body>
+</html>
