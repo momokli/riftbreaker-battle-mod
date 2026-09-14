@@ -18,10 +18,17 @@ name: Deploy Check (planet)
 # Das Vault bleibt root-only und wird hier nicht gelesen — für den Check wird
 # ein Dummy-Vault in ein temporäres Inventar kopiert.
 
-# Kein paths-Filter auf PR (Check läuft auf allen PRs); nur push ist
-# pfad-gefiltert — deckungsgleich mit deploy-check-local.yml.
+# Path-Filter (#393): der planet-Check läuft nur noch bei deploy-relevanten
+# Aenderungen (PR wie push) — er ist non-blocking, deploy-check-local bleibt
+# der Required-Gate.
 on:
   pull_request:
+    paths:
+      - deploy/**
+      - tools/deploy-gate/**
+      - .github/workflows/deploy.yml
+      - .github/workflows/deploy-check.yml
+      - .github/workflows/deploy-check-local.yml
   push:
     branches: [main]
     paths:

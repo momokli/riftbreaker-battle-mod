@@ -1,7 +1,8 @@
 name: Lint
 
-# Statische Checks (shellcheck, ruff, actionlint) als Ergaenzung zu ci.yml
-# (Tests/Build). ci.yml bleibt unveraendert; dieser Workflow ist eigenstaendig.
+# Statische Checks (shellcheck, ruff, actionlint) als EIN Required-Check (#393).
+# Konsolidiert aus drei Jobs in einen (shellcheck + python-lint + actionlint),
+# damit die Branch-Protection statt drei Einzel-Checks nur noch "Lint" verlangt.
 # Least privilege: nur contents:read.
 #
 # Lua-Lint (luacheck) ist bewusst NICHT eingebaut: die Riftbreaker-Mod-API-Globals
@@ -18,11 +19,13 @@ permissions:
   contents: read
 
 jobs:
-  shellcheck:
-    name: shellcheck (First-Party-Skripte)
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # --- shellcheck ---
       - name: shellcheck installieren
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: shellcheck
@@ -35,7 +38,7 @@ jobs:
             tools/headless-client/*.sh
       # Dedicated-Server-Image-Scripts (Issue #241). Eigener Schritt statt
       # Einreihen in die Liste oben, um den Hunk von #254 (tests/shell) nicht
-      # zu überlappen (parallele PRs, ein Datei-Block).
+      # zu ueberlappen (parallele PRs, ein Datei-Block).
       - name: shellcheck (dedicated-server)
         run: shellcheck tools/dedicated-server/scripts/*.sh
       # Red/Green-Beweis, dass die Probe ehrlich meldet (Issue #246): ohne
@@ -48,24 +51,17 @@ jobs:
       # (Fake-docker + Szenario-Dateien).
       - name: Image-Tag-Retention (Fake-Docker, planetfrei)
         run: tests/shell/image-retention.test.sh
-
-      # Red/Green-Beweis der Host-Hygiene-Invarianten (Issue #308, Review-Blocker
-      # PR #342): prune IMMER ohne -a, DRY-RUN löscht nichts, geänderte getaggte
-      # Menge => Exit 1, fehlgeschlagener prune => Exit 1. Braucht kein Docker
-      # (Fake-docker).
+      # Red/Green-Beweis der Host-Hygiene-Invarianten (Issue #308): prune IMMER
+      # ohne -a, DRY-RUN loescht nichts, geaenderte getaggte Menge => Exit 1.
       - name: Host-Hygiene-Invarianten (Fake-Docker, planetfrei)
         run: tests/shell/host-hygiene.test.sh
 
-  python-lint:
-    name: Python-Lint (ruff + compileall)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+      # --- python ---
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
       # Syntax-Fallback zuerst: faengt Parse-Fehler auch dann, wenn die
-      # ruff-Installation scheitert — der Job faellt so nie still durch.
+      # ruff-Installation scheitert — der Schritt faellt so nie still durch.
       - name: Python-Syntax (compileall)
         run: python3 -m compileall -q scripts trainer bausteine tournament tools
       - name: ruff installieren (gepinnt)
@@ -74,11 +70,7 @@ jobs:
       - name: ruff check
         run: ruff check .
 
-  actionlint:
-    name: actionlint (Workflow-YAML)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+      # --- actionlint ---
       - name: actionlint installieren (gepinnt)
         run: |
           curl -sSL -o actionlint.tar.gz \
