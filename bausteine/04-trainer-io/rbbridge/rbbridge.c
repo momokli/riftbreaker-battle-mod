@@ -1398,6 +1398,115 @@ static char g_pending_cmd[RBBRIDGE_PENDING_CMD_MAX];
 static volatile LONG g_pending_cmd_lock = 0;
 static volatile LONG g_pending_cmd_present = 0;
 
+/* Typed native WRITE commands (#378): Puffer + Drain. Der Detour fuehrt sie
+ * auf dem Game-Thread aus (kein ExecuteCommand->Lua). */
+typedef enum {
+    RBBRIDGE_TYPED_NONE = 0,
+    RBBRIDGE_TYPED_PAUSE_DOM,
+    RBBRIDGE_TYPED_RESUME_DOM,
+    RBBRIDGE_TYPED_END_GAME,
+} rbbridge_typed_cmd_t;
+
+#define RBBRIDGE_LUAGRAPHNODE_SET_SUSPENDED_RVA 0x1BA6CB0u
+#define RBBRIDGE_MISSION_SERVICE_VFTABLE_RVA    0x2E962A0u
+#define RBBRIDGE_MISSION_FINISH_RVA             0xF9A190u
+#define RBBRIDGE_MISSION_STATUS_WIN             0
+
+typedef void (__fastcall *lua_graphnode_set_suspended_fn)(void *self,
+                                                          char suspended);
+typedef void (__fastcall *mission_finish_fn)(void *self, int status);
+
+static volatile LONG g_pending_typed = RBBRIDGE_TYPED_NONE;
+
+/* Game-Thread-only Caches fuer native WRITE (kein Lock noetig). */
+static void *g_dom_instance = NULL;
+static void *g_mission_service = NULL;
+
+static int resolve_dom_instance_scan(void);
+static void *resolve_service_instance_by_rva(const unsigned char *base,
+                                             uint32_t vftable_rva);
+
+/* Vftable-Scan nach einem Service-Singleton (instance[0] == base + rva). */
+static void *resolve_service_instance_by_rva(const unsigned char *base,
+                                             uint32_t vftable_rva)
+{
+    uint64_t needle = (uint64_t)(uintptr_t)(base + vftable_rva);
+    uintptr_t addr = 0;
+
+    for (;;) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
+            break;
+        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
+        if (next <= addr)
+            break;
+        addr = next;
+        if (!is_readable_region(&mi))
+            continue;
+
+        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
+        size_t nq = mi.RegionSize / sizeof(uint64_t);
+        for (size_t i = 0; i < nq; i++) {
+            if (q[i] == needle)
+                return (void *)&q[i];
+        }
+    }
+    return NULL;
+}
+
+/* Game-Thread: typisierte native Kommandos ausfuehren. */
+static void drain_pending_typed_commands(void)
+{
+    int cmd = 0;
+    while (InterlockedExchange(&g_pending_cmd_lock, 1) != 0)
+        ;
+    cmd = g_pending_typed;
+    if (cmd != RBBRIDGE_TYPED_NONE)
+        g_pending_typed = RBBRIDGE_TYPED_NONE;
+    InterlockedExchange(&g_pending_cmd_lock, 0);
+
+    if (cmd == RBBRIDGE_TYPED_NONE)
+        return;
+
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    const char *via = NULL;
+    const unsigned char *execfn = NULL;
+    if (!resolve_module(&base, &size, &via, &execfn))
+        return;
+
+    switch (cmd) {
+    case RBBRIDGE_TYPED_PAUSE_DOM:
+    case RBBRIDGE_TYPED_RESUME_DOM: {
+        if (!resolve_dom_instance_scan() || !g_dom_instance)
+            return;
+        lua_graphnode_set_suspended_fn fn =
+            (lua_graphnode_set_suspended_fn)(uintptr_t)(
+                base + RBBRIDGE_LUAGRAPHNODE_SET_SUSPENDED_RVA);
+        fn(g_dom_instance, (cmd == RBBRIDGE_TYPED_PAUSE_DOM) ? 1 : 0);
+        dbg("drain_pending_typed: %s (inst=%p)",
+            (cmd == RBBRIDGE_TYPED_PAUSE_DOM) ? "pause_dom" : "resume_dom",
+            g_dom_instance);
+        break;
+    }
+    case RBBRIDGE_TYPED_END_GAME: {
+        if (!g_mission_service)
+            g_mission_service = resolve_service_instance_by_rva(
+                base, RBBRIDGE_MISSION_SERVICE_VFTABLE_RVA);
+        if (!g_mission_service)
+            return;
+        mission_finish_fn fn =
+            (mission_finish_fn)(uintptr_t)(base + RBBRIDGE_MISSION_FINISH_RVA);
+        fn(g_mission_service, RBBRIDGE_MISSION_STATUS_WIN);
+        dbg("drain_pending_typed: end_game (MissionService=%p)",
+            g_mission_service);
+        break;
+    }
+    default:
+        break;
+    }
+}
+
 /* Game-Thread: ein ausstehendes Kommando ausfuehren. */
 static void drain_pending_commands(void)
 {
@@ -1431,6 +1540,7 @@ static void capture_dom_state_game_thread(void);
 
 static void __fastcall detour_console_update(void *self, float dt)
 {
+    drain_pending_typed_commands();
     drain_pending_commands();
     capture_dom_state_game_thread();
     if (g_original_update)
@@ -1534,6 +1644,27 @@ static void dispatch_exec(HANDLE hPipe, const char *command)
                   "{\"event\":\"exec_result\",\"ok\":false,"
                   "\"command\":\"%s\",\"reason\":"
                   "\"update_hook_not_installed\"}",
+                  escaped);
+        return;
+    }
+
+    int typed = RBBRIDGE_TYPED_NONE;
+    if (strcmp(command, "pause_dom") == 0)
+        typed = RBBRIDGE_TYPED_PAUSE_DOM;
+    else if (strcmp(command, "resume_dom") == 0)
+        typed = RBBRIDGE_TYPED_RESUME_DOM;
+    else if (strcmp(command, "end_game") == 0)
+        typed = RBBRIDGE_TYPED_END_GAME;
+
+    if (typed != RBBRIDGE_TYPED_NONE) {
+        while (InterlockedExchange(&g_pending_cmd_lock, 1) != 0)
+            ;
+        g_pending_typed = typed;
+        InterlockedExchange(&g_pending_cmd_lock, 0);
+        dbg("dispatch_exec: typed=%d -> Pending (async, Game-Thread)", typed);
+        send_line(hPipe,
+                  "{\"event\":\"exec_result\",\"ok\":true,"
+                  "\"command\":\"%s\",\"async\":true}",
                   escaped);
         return;
     }
@@ -1910,15 +2041,10 @@ static volatile LONG g_dom_state_lock = 0;
 /* Loest die dom_mananger-Instanz (LuaGraphNode) auf: vftable-Scan + [0x20]
  * luabind-object {lua_State*, int registry-ref}. Reine Memory-Reads, einmal
  * gecached. Rueckgabe 1 = ok, 0 = noch nicht aufloesbar. */
-static int resolve_dom_instance(void)
+static int resolve_dom_instance_scan(void)
 {
     if (g_dom_cache_valid)
         return 1;
-
-    uint64_t now = GetTickCount64();
-    if (now < g_dom_next_resolve_tick)
-        return 0;
-    g_dom_next_resolve_tick = now + 1000; /* hoechstens 1x/Sekunde scannen */
 
     const unsigned char *base = NULL;
     size_t size = 0;
@@ -1955,6 +2081,7 @@ static int resolve_dom_instance(void)
                 safe_read_u32(inst + RBBRIDGE_LUAGRAPHNODE_REF_OFF, &ref32) &&
                 (int)ref32 >= 0) {
                 g_dom_base = base;
+                g_dom_instance = (void *)(uintptr_t)inst;
                 g_dom_lua = (void *)(uintptr_t)L;
                 g_dom_ref = (int)ref32;
                 g_lua.rawgeti = (rbbridge_lua_rawgeti_fn)(uintptr_t)(
@@ -1991,6 +2118,18 @@ static int resolve_dom_instance(void)
         }
     }
     return 0;
+}
+
+/* Throttleder Wrapper fuer den READ-Pfad (1x/Sekunde scannen waehrend Boot). */
+static int resolve_dom_instance(void)
+{
+    if (g_dom_cache_valid)
+        return 1;
+    uint64_t now = GetTickCount64();
+    if (now < g_dom_next_resolve_tick)
+        return 0;
+    g_dom_next_resolve_tick = now + 1000; /* hoechstens 1x/Sekunde scannen */
+    return resolve_dom_instance_scan();
 }
 
 /* ---------- Minimaler JSON-Builder (flache Felder, wie BuildStateJson) ---- */
