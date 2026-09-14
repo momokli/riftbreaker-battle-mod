@@ -77,6 +77,17 @@
 /* Logging                                                             */
 /* ------------------------------------------------------------------ */
 
+/* Session-ID (Server-Boot) + Zeitstempel fuer Traceability (#392). */
+static char g_session_id[32] = "boot";
+
+static void init_session_id(void)
+{
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    snprintf(g_session_id, sizeof(g_session_id), "%04d%02d%02d-%02d%02d%02d",
+             st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+}
+
 static void blog(const char *fmt, ...)
 {
     char buf[1024];
@@ -84,8 +95,32 @@ static void blog(const char *fmt, ...)
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    printf("[%s] %s\n", BRIDGE_NAME, buf);
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    printf("[%02d:%02d:%02d.%03d] [%s] %s\n",
+           st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+           BRIDGE_NAME, buf);
     fflush(stdout);
+}
+
+/* HTTP-Request mit vollem (trunkiertem, saniertem) Body loggen — damit ein
+ * WebUI-Klick (z. B. POST /add_resource {"amount":"10"}) nachvollziehbar ist. */
+static void log_request(const char *method, const char *path,
+                        const char *body, int body_len)
+{
+    char b[160];
+    int n = body_len;
+    if (n < 0)
+        n = 0;
+    if (n > 140)
+        n = 140;
+    if (n > 0)
+        memcpy(b, body, n);
+    b[n] = '\0';
+    for (int i = 0; i < n; i++)
+        if (b[i] == '\n' || b[i] == '\r' || b[i] == '\t')
+            b[i] = ' ';
+    blog("%s %s body=%s", method, path, n > 0 ? b : "-");
 }
 
 /* ------------------------------------------------------------------ */
@@ -1025,7 +1060,7 @@ static void handle_client(SOCKET c)
             return;
         }
 
-        blog("%s %s (body %d B)", method, path, body_len);
+        log_request(method, path, body, body_len);
 
         if (strcmp(method, "GET") == 0 && strcmp(path, "/health") == 0) {
             handle_health(c);
@@ -1073,6 +1108,9 @@ static void handle_client(SOCKET c)
 
 static int mode_server(void)
 {
+    init_session_id();
+    blog("session start %s", g_session_id);
+
     const char *bind_addr = env_str("RBB_BRIDGE_BIND", DEFAULT_BIND);
     int port = env_int("RBB_BRIDGE_PORT", DEFAULT_PORT);
     WSADATA wsa;
