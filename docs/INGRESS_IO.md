@@ -152,6 +152,35 @@ erfolgreich`, `[pipe_bridge] HTTP-Bridge lauscht auf 0.0.0.0:9001`.
 **Nur mit Player (OFFEN, Momo/Matheo):** „die Welle spawnt sichtbar". Nicht als
 erledigt markieren.
 
+## Native Kommandos: `restart_map` (#423)
+
+`restart_map` ist **kein** `exec`-String, sondern ein first-class natives
+Pipe-Kommando: die Engine behandelt es als natives C++-Konsolenkommando
+(GameplayState; RE-Beleg `docs/findings.md`), nicht als Lua-Mod-Command.
+
+```
+HTTP  POST /exec {"command":"restart_map"}          (cockpit, /contract/)
+POST /exec {"command":"restart_map 4242"}      (optionaler Seed)
+  │
+  ▼  pipe_bridge.c: native_cmd_payload()
+Pipe  {"cmd":"restart_map"[,"seed":4242]}
+  ▲  {"event":"restart_map_result","ok":true,"command":"restart_map",
+  │              "async":true[,"seed":4242]}
+HTTP  200 {"ok":true,"results":[{"command":"restart_map","ok":true}]}
+```
+
+- Der Relay (`relay.py`) bildet denselben Kommandostring genauso ab; alles
+  andere bleibt `{"cmd":"exec",…}`.
+- Auf der Pipe: `{"cmd":"restart_map"}` → `restart_map_result`; ohne
+  aufloesbares `ConsoleService` → `ok:false reason=console_service_not_found`
+  (graceful, kein Aufruf, kein Crash).
+- **Ohne Player pruefbar** (CI): Pipe-Roundtrip + `ok:true`, Seed-Form,
+  graceful `ok:false` — `tests/e2e-vollkette/kern-io-pfad.test.js`,
+  `bausteine/07-relay/test_dispatch.py`.
+- **Nur mit Player (OFFEN):** „Map regeneriert sichtbar, Spieler bleibt
+  verbunden" (Seed via `r_show_map_info` belegen). Nicht als erledigt
+  markieren.
+
 ## Kernpfad-Gate ohne Player (Issue #288)
 
 Der Live-Befund aus #288: `POST /wave` liefert `exec_result.ok=true`, aber im

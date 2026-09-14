@@ -462,6 +462,40 @@ static int pipe_wait_line(HANDLE h, const char *event, const char *command,
     }
 }
 
+/* Native rbbridge-Pipe-Kommandos (#423). `restart_map` ist ein natives
+ * Engine-Konsolenkommando; statt {"cmd":"exec","command":"restart_map"}
+ * schreibt die Bridge {"cmd":"restart_map"[,"seed":N]} und erwartet
+ * {"event":"restart_map_result",...}. Reine String-Logik (kein I/O).
+ * Liefert 1 = nativer Payload (in payload_out), 0 = exec-Pfad. */
+static int native_cmd_payload(const char *command, char *payload_out,
+                              size_t payload_sz)
+{
+    const char *p = command;
+    unsigned long long seed = 0;
+    int digits = 0;
+
+    if (!command || strncmp(command, "restart_map", 11) != 0)
+        return 0;
+    p += 11;
+    if (*p == '\0') {
+        snprintf(payload_out, payload_sz, "{\"cmd\":\"restart_map\"}\n");
+        return 1;
+    }
+    if (*p != ' ')
+        return 0; /* unbekanntes Kommando mit gleichem Praefix -> exec */
+    p++;
+    while (*p >= '0' && *p <= '9' && digits < 10) {
+        seed = seed * 10ull + (unsigned long long)(*p - '0');
+        p++;
+        digits++;
+    }
+    if (digits == 0 || *p != '\0')
+        return 0; /* kein sauberer Seed -> exec-Pfad (rbbridge: invalid_seed) */
+    snprintf(payload_out, payload_sz, "{\"cmd\":\"restart_map\",\"seed\":%llu}\n",
+             seed);
+    return 1;
+}
+
 /* Ein Kommando ausfuehren: exec-Zeile schreiben, auf exec_result warten.
  * Rueckgabe 0 = Ergebnis da (*ok/reason gesetzt), 1 = Timeout, -1 = Pipe-Fehler. */
 static int pipe_exec_one(HANDLE h, const char *command, int cmd_id,
@@ -472,14 +506,23 @@ static int pipe_exec_one(HANDLE h, const char *command, int cmd_id,
     char line[READ_BUF];
     int rc;
 
-    json_escape(command, esc, sizeof(esc));
-    snprintf(payload, sizeof(payload),
-             "{\"cmd\":\"exec\",\"command\":\"%s\",\"cmd_id\":%d}\n", esc, cmd_id);
-
-    if (!pipe_write_all(h, payload))
-        return -1;
-
-    rc = pipe_wait_line(h, "exec_result", command, timeout_ms, line, sizeof(line));
+    /* Native Kommandos (#423): restart_map (+ optionaler Seed) geht als
+     * {"cmd":"restart_map"} auf die Pipe; rbbridge antwortet mit
+     * restart_map_result und echot command="restart_map" (ohne Seed). */
+    if (native_cmd_payload(command, payload, sizeof(payload))) {
+        if (!pipe_write_all(h, payload))
+            return -1;
+        rc = pipe_wait_line(h, "restart_map_result", "restart_map",
+                            timeout_ms, line, sizeof(line));
+    } else {
+        json_escape(command, esc, sizeof(esc));
+        snprintf(payload, sizeof(payload),
+                 "{\"cmd\":\"exec\",\"command\":\"%s\",\"cmd_id\":%d}\n",
+                 esc, cmd_id);
+        if (!pipe_write_all(h, payload))
+            return -1;
+        rc = pipe_wait_line(h, "exec_result", command, timeout_ms, line, sizeof(line));
+    }
     if (rc != 0)
         return rc;
 
@@ -589,6 +632,8 @@ static const char CONTRACT_HTML[] =
     "    <h2>game</h2>\n"
     "    <div class=\"row\">\n"
     "      <button id=\"end_game\" class=\"danger\">end game</button>\n"
+    "      <input id=\"seed\" size=\"10\" placeholder=\"seed (opt)\" spellcheck=\"false\">\n"
+    "      <button id=\"restart_map\">re-roll map</button>\n"
     "      <input id=\"cmd\" size=\"24\" placeholder=\"custom command\" spellcheck=\"false\">\n"
     "      <button id=\"exec\">exec</button>\n"
     "    </div>\n"
@@ -662,6 +707,17 @@ static const char CONTRACT_HTML[] =
     "  $('exec').onclick = async function () {\n"
     "    var c = $('cmd').value.trim();\n"
     "    if (!c) return;\n"
+    "    try {\n"
+    "      var r = await post('exec', { command: c });\n"
+    "      $('exec_out').textContent = JSON.stringify(r);\n"
+    "      refresh();\n"
+    "    } catch (e) { $('exec_out').textContent = 'ERR ' + e.message; }\n"
+    "  };\n"
+    "  $('restart_map').onclick = async function () {\n"
+    "    var s = $('seed').value.trim();\n"
+    "    var c = s ? ('restart_map ' + s) : 'restart_map';\n"
+    "    if (!window.confirm('Re-roll map mit ' + c + '? Die aktuelle Map wird neu generiert.')) return;\n"
+    "    $('exec_out').textContent = 'sending ' + c + ' ...';\n"
     "    try {\n"
     "      var r = await post('exec', { command: c });\n"
     "      $('exec_out').textContent = JSON.stringify(r);\n"

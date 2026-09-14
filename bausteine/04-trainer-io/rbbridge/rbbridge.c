@@ -25,6 +25,9 @@
  *                (dispatch_exec ruft seit RE-Stand 2.0.58485 die echte
  *                 ConsoleService::ExecuteCommand() im Spielprozess auf,
  *                 siehe Abschnitt "ConsoleService-Anbindung" unten)
+ *                {"cmd":"restart_map"[,"seed":N]}  -> dispatch_restart_map()
+ *                 (natives Engine-Konsolenkommando + optionaler Seed,
+ *                  Game-Thread-Marshalling, siehe #423)
  *       Egress : {"event":"score_update","score":...,"resources":{...},
  *                "wave":...} (periodischer State-Snapshot, Issue #13,
  *                alle 5 s solange ein Client verbunden ist)
@@ -514,6 +517,51 @@ static int json_get_string(const char *json, const char *key,
             }
             out[n] = '\0';
             return *q == '"'; /* sauber geschlossen? */
+        }
+        p += key_len;
+    }
+    return 0;
+}
+
+/*
+ * json_get_uint: findet "key":<digits> oder "key":"<digits>".
+ * Rueckgabe 1 = geparst (out = Ziffernfolge), 0 = Key nicht vorhanden,
+ * -1 = Key vorhanden, aber kein nicht-negativer Integer (ungueltig).
+ * Fuer den optionalen restart_map-Seed (#423): fehlend ist ok, Unsinn nicht.
+ */
+static int json_get_uint(const char *json, const char *key,
+                         char *out, size_t out_sz)
+{
+    if (!json || !key || !out || out_sz == 0)
+        return 0;
+
+    size_t key_len = strlen(key);
+    const char *p = json;
+
+    while ((p = strstr(p, key)) != NULL) {
+        if (p != json && p[-1] == '"' && p[key_len] == '"') {
+            const char *q = p + key_len + 1;
+            while (*q == ' ' || *q == '\t')
+                q++;
+            if (*q != ':')
+                return -1;
+            q++;
+            while (*q == ' ' || *q == '\t')
+                q++;
+            int quoted = 0;
+            if (*q == '"') { /* toleriere "12" */
+                quoted = 1;
+                q++;
+            }
+            size_t n = 0;
+            while (*q >= '0' && *q <= '9' && n + 1 < out_sz)
+                out[n++] = *q++;
+            out[n] = '\0';
+            if (n == 0)
+                return -1;
+            if (quoted && *q != '"')
+                return -1;
+            return 1;
         }
         p += key_len;
     }
@@ -1536,6 +1584,7 @@ typedef enum {
     RBBRIDGE_TYPED_PAUSE_DOM,
     RBBRIDGE_TYPED_RESUME_DOM,
     RBBRIDGE_TYPED_END_GAME,
+    RBBRIDGE_TYPED_RESTART_MAP,
 } rbbridge_typed_cmd_t;
 
 #define RBBRIDGE_LUAGRAPHNODE_SET_SUSPENDED_RVA 0x1BA6CB0u
@@ -1548,6 +1597,12 @@ typedef void (__fastcall *lua_graphnode_set_suspended_fn)(void *self,
 typedef void (__fastcall *mission_finish_fn)(void *self, int status);
 
 static volatile LONG g_pending_typed = RBBRIDGE_TYPED_NONE;
+
+/* restart_map (#423): optionaler Seed, der VOR dem Re-Roll gesetzt wird.
+ * seed_valid=1 -> erst "map_generator_seed <seed>", dann "restart_map".
+ * Beide Zugriffe laufen unter g_pending_cmd_lock (wie g_pending_typed). */
+static char g_pending_restart_seed[24] = "";
+static volatile LONG g_pending_restart_seed_valid = 0;
 
 /* Game-Thread-only Caches fuer native WRITE (kein Lock noetig). */
 static void *g_dom_instance = NULL;
@@ -1590,11 +1645,21 @@ static void *resolve_service_instance_by_rva(const unsigned char *base,
 static void drain_pending_typed_commands(void)
 {
     int cmd = 0;
+    int seed_valid = 0;
+    char seed[24] = "";
     while (InterlockedExchange(&g_pending_cmd_lock, 1) != 0)
         ;
     cmd = g_pending_typed;
     if (cmd != RBBRIDGE_TYPED_NONE)
         g_pending_typed = RBBRIDGE_TYPED_NONE;
+    if (cmd == RBBRIDGE_TYPED_RESTART_MAP) {
+        seed_valid = g_pending_restart_seed_valid;
+        if (seed_valid) {
+            memcpy(seed, g_pending_restart_seed, sizeof(seed));
+            seed[sizeof(seed) - 1] = '\0';
+        }
+        g_pending_restart_seed_valid = 0;
+    }
     InterlockedExchange(&g_pending_cmd_lock, 0);
 
     if (cmd == RBBRIDGE_TYPED_NONE)
@@ -1646,6 +1711,27 @@ static void drain_pending_typed_commands(void)
         fn(g_mission_service, RBBRIDGE_MISSION_STATUS_WIN);
         dbg("drain_pending_typed: end_game (MissionService=%p)",
             g_mission_service);
+        break;
+    }
+    case RBBRIDGE_TYPED_RESTART_MAP: {
+        /* restart_map ist ein NATIVES Engine-Konsolenkommando (GameplayState,
+         * RE #423) - KEIN Lua-Mod-Command. Deshalb reicht der Aufruf ueber
+         * ConsoleService::ExecuteCommand, ausgefuehrt auf dem Game-Thread
+         * (der Update-Detour selbst laeuft dort, s. #376). Optional zuerst
+         * den Seed setzen: map_generator_seed ist ebenfalls native. */
+        if (!g_console_cache.valid || !g_console_cache.fn ||
+            !g_console_cache.instance)
+            return;
+        console_exec_fn cfn = (console_exec_fn)(uintptr_t)g_console_cache.fn;
+        if (seed_valid) {
+            char seed_cmd[48];
+            snprintf(seed_cmd, sizeof(seed_cmd), "map_generator_seed %s",
+                     seed);
+            cfn(g_console_cache.instance, seed_cmd);
+            dbg("drain_pending_typed: map_generator_seed %s", seed);
+        }
+        cfn(g_console_cache.instance, "restart_map");
+        dbg("drain_pending_typed: restart_map (Game-Thread)");
         break;
     }
     default:
@@ -1828,6 +1914,85 @@ static void dispatch_exec(HANDLE hPipe, const char *command)
               "{\"event\":\"exec_result\",\"ok\":true,"
               "\"command\":\"%s\",\"async\":true}",
               escaped);
+}
+
+/*
+ * {"cmd":"restart_map"[,"seed":N]}
+ *
+ * Re-Roll der AKTUELLEN Map OHNE Server-/Container-Neustart; die Spieler
+ * bleiben verbunden (Plane A, verschieden vom Container-Restart).
+ *
+ * RE-Stand (#423): `restart_map` ist ein NATIVES C++-Konsolenkommando
+ * (String-Tabelle der Spiel-DLL direkt neben load_save/change_map/save_game
+ * aus GameplayState.cpp; in KEINEM der Lua-Packs vorhanden) - also kein
+ * Lua-Mod-Command und kein Game-Thread-Marshalling ueber die Lua-Queue.
+ * `map_generator_seed <n>` setzt den Seed (ebenfalls native; aus den
+ * Lua-Packs als Konsolencommand referenziert), `r_show_map_info` zeigt ihn.
+ *
+ * Da beide nativ sind, laeuft der Aufruf ueber ConsoleService::ExecuteCommand
+ * - aber NUR auf dem Game-Thread: hier wird nur das Pending-Kommando gesetzt,
+ * der Update-Detour fuehrt es aus (wie der WRITE-Pfad #376). Die Aufloesung
+ * erfolgt per Byte-Signatur (resolve_console_service) - KEINE feste Adresse.
+ *
+ * Antwort bei Erfolg: {"event":"restart_map_result","ok":true,
+ *                       "command":"restart_map","async":true[,"seed":N]}
+ * Nicht aufloesbar -> ok:false mit reason (graceful, KEIN Aufruf, kein Crash).
+ */
+static void dispatch_restart_map(HANDLE hPipe, const char *seed)
+{
+    console_exec_fn fn = NULL;
+    void *instance = NULL;
+    int seed_valid = (seed != NULL && seed[0] != '\0');
+
+    if (!resolve_console_service(&fn, &instance)) {
+        dbg("dispatch_restart_map: ConsoleService/ExecuteCommand nicht "
+            "aufloesbar, KEIN Aufruf");
+        send_line(hPipe,
+                  "{\"event\":\"restart_map_result\",\"ok\":false,"
+                  "\"command\":\"restart_map\",\"reason\":"
+                  "\"console_service_not_found\"}");
+        return;
+    }
+    if (!install_update_hook()) {
+        dbg("dispatch_restart_map: Update-Hook nicht installierbar, KEIN "
+            "Aufruf");
+        send_line(hPipe,
+                  "{\"event\":\"restart_map_result\",\"ok\":false,"
+                  "\"command\":\"restart_map\",\"reason\":"
+                  "\"update_hook_not_installed\"}");
+        return;
+    }
+    (void)fn;
+    (void)instance;
+
+    while (InterlockedExchange(&g_pending_cmd_lock, 1) != 0)
+        ;
+    if (seed_valid) {
+        strncpy(g_pending_restart_seed, seed,
+                sizeof(g_pending_restart_seed) - 1);
+        g_pending_restart_seed[sizeof(g_pending_restart_seed) - 1] = '\0';
+        g_pending_restart_seed_valid = 1;
+    } else {
+        g_pending_restart_seed_valid = 0;
+    }
+    g_pending_typed = RBBRIDGE_TYPED_RESTART_MAP;
+    InterlockedExchange(&g_pending_cmd_lock, 0);
+
+    if (seed_valid) {
+        char esc_seed[32];
+        json_escape(seed, esc_seed, sizeof(esc_seed));
+        dbg("dispatch_restart_map: seed=%s -> Pending (Game-Thread)", seed);
+        send_line(hPipe,
+                  "{\"event\":\"restart_map_result\",\"ok\":true,"
+                  "\"command\":\"restart_map\",\"seed\":%s,"
+                  "\"async\":true}",
+                  esc_seed);
+    } else {
+        dbg("dispatch_restart_map: -> Pending (Game-Thread)");
+        send_line(hPipe,
+                  "{\"event\":\"restart_map_result\",\"ok\":true,"
+                  "\"command\":\"restart_map\",\"async\":true}");
+    }
 }
 
 /* Liest ein QWORD von addr, nur wenn die Region committet+lesbar ist.
@@ -3174,6 +3339,18 @@ static void handle_line(HANDLE hPipe, const char *line)
             return;
         }
         dispatch_add_resource(hPipe, amount);
+        return;
+    }
+
+    if (strcmp(cmd, "restart_map") == 0) {
+        char seed[24] = "";
+        int sr = json_get_uint(line, "seed", seed, sizeof(seed));
+        if (sr < 0) {
+            send_line(hPipe,
+                      "{\"event\":\"error\",\"error\":\"invalid_seed\"}");
+            return;
+        }
+        dispatch_restart_map(hPipe, sr == 1 ? seed : NULL);
         return;
     }
 

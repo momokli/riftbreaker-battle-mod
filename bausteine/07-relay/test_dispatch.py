@@ -331,5 +331,76 @@ class DispatchResultReportTest(unittest.TestCase):
         self.assertTrue(any('report failed' in m for m in logged), logged)
 
 
+class NativeCommandTest(unittest.TestCase):
+    """Native Pipe-Kommandos (#423): restart_map (+ optionaler Seed).
+
+    Ohne Spieler pruefbar: die Abbildung des dispatchten Kommandostrings auf
+    die native Pipe-Zeile ist reine Logik. Live-Beleg (Map regeneriert
+    sichtbar, Spieler bleibt verbunden) ist Sache des Player-Tests.
+    """
+
+    def test_bare_restart_map_is_native(self):
+        self.assertEqual(relay.native_pipe_payload('restart_map'),
+                         {'cmd': 'restart_map'})
+
+    def test_restart_map_with_seed_is_native(self):
+        self.assertEqual(relay.native_pipe_payload('restart_map 12345'),
+                         {'cmd': 'restart_map', 'seed': 12345})
+
+    def test_other_commands_stay_exec(self):
+        for cmd in ('rb_wave 3', 'end_game', 'restart_maps',
+                    'restart_map abc', 'restart_map 1 2', '', None, 42):
+            self.assertIsNone(relay.native_pipe_payload(cmd), repr(cmd))
+
+    def test_exec_line_payload_routes_native_vs_exec(self):
+        self.assertEqual(relay.exec_line_payload('restart_map', 7),
+                         {'cmd': 'restart_map'})
+        self.assertEqual(relay.exec_line_payload('restart_map 99', 7),
+                         {'cmd': 'restart_map', 'seed': 99})
+        # Nicht-native Kommandos behalten den exec-Vertrag inkl. cmd_id.
+        self.assertEqual(relay.exec_line_payload('rb_wave 3', 7),
+                         {'cmd': 'exec', 'command': 'rb_wave 3', 'cmd_id': 7})
+
+    def test_result_match_command_uses_echoed_name(self):
+        # rbbridge echot bei nativ nur den Kommandonamen, nicht den Seed.
+        self.assertEqual(relay.result_match_command('restart_map'), 'restart_map')
+        self.assertEqual(relay.result_match_command('restart_map 4242'),
+                         'restart_map')
+        self.assertEqual(relay.result_match_command('rb_wave 3'), 'rb_wave 3')
+
+    def test_send_exec_writes_native_line_to_fifo(self):
+        d = tempfile.mkdtemp(prefix='rb423-pipe-')
+        fifo = os.path.join(d, 'fake_pipe')
+        try:
+            os.mkfifo(fifo)
+            fd = os.open(fifo, os.O_RDWR)
+            try:
+                pc = relay.PipeClient(fifo, timeout_s=2.0)
+                pc.send_exec('restart_map 4242', 7)
+                line = os.read(fd, 4096).decode('utf-8').split('\n')[0]
+                self.assertEqual(json.loads(line),
+                                 {'cmd': 'restart_map', 'seed': 4242})
+            finally:
+                os.close(fd)
+        finally:
+            os.unlink(fifo)
+            os.rmdir(d)
+
+    def test_read_result_matches_restart_map_result(self):
+        r_fd, w_fd = os.pipe()
+        try:
+            reply = json.dumps({'event': 'restart_map_result',
+                                'command': 'restart_map', 'ok': True,
+                                'async': True}) + '\n'
+            os.write(w_fd, reply.encode('utf-8'))
+            pc = relay.PipeClient('/unused', timeout_s=2.0)
+            msg = pc._read_result(r_fd, 'restart_map', time.time() + 2.0)
+            self.assertEqual(msg.get('event'), 'restart_map_result')
+            self.assertTrue(msg.get('ok'))
+        finally:
+            os.close(r_fd)
+            os.close(w_fd)
+
+
 if __name__ == '__main__':
     unittest.main()
