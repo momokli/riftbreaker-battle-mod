@@ -90,21 +90,17 @@
         </section>
 
         <section>
-            <h2>mission flow (wave)</h2>
+            <h2>mission flow</h2>
             <div class="row">
-                <span class="dim">flow</span>
-                <span id="mission_flow" class="val">—</span>
-                <span class="dim">active</span>
-                <span id="mission_flow_active" class="val">—</span>
+                <span class="dim">name</span>
+                <span id="mf_name" class="val">—</span>
+                <span class="dim">spawn_point</span>
+                <span id="mf_spawn_point" class="val">—</span>
             </div>
             <div class="row">
-                <input
-                    id="flow_logic"
-                    size="42"
-                    value="logic/dom/attack_level_1_entry.logic"
-                />
-                <input id="flow_mode" size="10" value="default" />
-                <button id="flow_start">start wave</button>
+                <input id="mf_name_in" size="16" placeholder="flow name" />
+                <input id="mf_spawn_in" size="16" placeholder="spawn_point" />
+                <button id="mf_activate">▶ activate</button>
             </div>
         </section>
 
@@ -136,11 +132,11 @@
                         $("carbonium_max").textContent = fmt(s.carbonium_max);
                         $("ironium").textContent = fmt(s.ironium);
                         $("ironium_max").textContent = fmt(s.ironium_max);
-                        $("mission_flow").textContent = s.mission_flow || "—";
-                        $("mission_flow_active").textContent =
-                            s.mission_flow_active === undefined
-                                ? "—"
-                                : String(s.mission_flow_active);
+                        var mf = s.mission_flow;
+                        $("mf_name").textContent = mf ? fmt(mf.name) : "—";
+                        $("mf_spawn_point").textContent = mf
+                            ? fmt(mf.spawn_point)
+                            : "—";
                         $("out").textContent = "";
                     } catch (e) {
                         $("out").textContent = "ERR " + e.message;
@@ -176,22 +172,21 @@
                     addResource("ironium", -a);
                 };
 
-                async function startMissionFlow() {
+                async function activateMissionFlow() {
                     try {
                         var r = await post("activate_mission_flow", {
-                            logic: $("flow_logic").value,
-                            mode: $("flow_mode").value,
+                            name: $("mf_name_in").value,
+                            spawn_point: $("mf_spawn_in").value,
                         });
-                        $("out").textContent = r && r.ok ? "" : JSON.stringify(r);
+                        $("out").textContent =
+                            r && r.ok ? "" : JSON.stringify(r);
                         refresh();
                     } catch (e) {
                         $("out").textContent = "ERR " + e.message;
                     }
                 }
 
-                $("flow_start").onclick = function () {
-                    startMissionFlow();
-                };
+                $("mf_activate").onclick = activateMissionFlow;
 
                 refresh();
                 setInterval(refresh, 3000);
