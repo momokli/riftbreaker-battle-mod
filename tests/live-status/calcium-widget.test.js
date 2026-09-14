@@ -1,9 +1,9 @@
 'use strict';
 
-// Kalzium-Dashboard-Widget (Issue #383) — Tests.
+// Carbonium-Dashboard-Widget (Issue #383) — Tests.
 //
 //  1. Unit: deriveCalcium() leitet aus POST /get_state die Anzeige-Zeile ab
-//     ("Kalzium: N" bzw. "Kalzium: —" bei ok:false/nicht erreichbar).
+//     ("Carbonium: N" bzw. "Carbonium: —" bei ok:false/nicht erreichbar).
 //  2. Statisch: site/calcium.html verdrahtet das Widget (Meta, Container, Script).
 //  3. HTTP-Mock: createWidget() pollt einen Mock-Server (Fixture /get_state)
 //     und degradiert defensiv zu "—", sobald die Bridge Fehler liefert.
@@ -38,7 +38,7 @@ test('deriveCalcium: ok:true mit Fixed-Point-Wert (300.0 carbonium)', () => {
   const r = deriveCalcium(getStateOk(300 * FIXED_POINT_SCALE));
   assert.strictEqual(r.ok, true);
   assert.strictEqual(r.value, 300);
-  assert.strictEqual(r.line, 'Kalzium: 300');
+  assert.strictEqual(r.line, 'Carbonium: 300');
 });
 
 test('deriveCalcium: rundet auf ganze Zahl', () => {
@@ -46,24 +46,24 @@ test('deriveCalcium: rundet auf ganze Zahl', () => {
   assert.strictEqual(r.value, 300);
 });
 
-test('deriveCalcium: ok:false (z. B. pipe_unavailable) → "Kalzium: —"', () => {
+test('deriveCalcium: ok:false (z. B. pipe_unavailable) → "Carbonium: —"', () => {
   const r = deriveCalcium({ ok: false, reason: 'pipe_unavailable' });
   assert.strictEqual(r.ok, false);
-  assert.strictEqual(r.line, 'Kalzium: —');
+  assert.strictEqual(r.line, 'Carbonium: —');
   assert.strictEqual(r.sub, 'pipe_unavailable');
 });
 
-test('deriveCalcium: no_account (kein Spieler online) → "Kalzium: —"', () => {
+test('deriveCalcium: no_account (kein Spieler online) → "Carbonium: —"', () => {
   const r = deriveCalcium({ ok: false, reason: 'no_account' });
   assert.strictEqual(r.ok, false);
   assert.strictEqual(r.sub, 'no_account');
 });
 
-test('deriveCalcium: fehlendes/ungueltiges carbonium-Feld → "Kalzium: —"', () => {
+test('deriveCalcium: fehlendes/ungueltiges carbonium-Feld → "Carbonium: —"', () => {
   for (const bad of [null, undefined, {}, { ok: true }, { ok: true, carbonium: 'x' }, 'y']) {
     const r = deriveCalcium(bad);
     assert.strictEqual(r.ok, false, `input=${JSON.stringify(bad)}`);
-    assert.strictEqual(r.line, 'Kalzium: —');
+    assert.strictEqual(r.line, 'Carbonium: —');
   }
 });
 
@@ -82,7 +82,7 @@ test('resolveApiBase: Meta-Tag hat Vorrang, sonst Default "/bridge"', () => {
 // 2) Statisch: Verdrahtung in site/calcium.html
 // ---------------------------------------------------------------------------
 
-test('site/calcium.html verdrahtet das Kalzium-Widget', () => {
+test('site/calcium.html verdrahtet das Carbonium-Widget', () => {
   const html = fs.readFileSync(CALCIUM_HTML, 'utf8');
   assert.ok(html.includes('meta name="rb-bridge-api"'), 'Meta-Tag für Bridge-API-Basis vorhanden');
   assert.ok(html.includes('id="value"'), 'Wert-Container vorhanden');
@@ -128,19 +128,19 @@ test('createWidget: Fixture /get_state → korrekte Zahl, danach ok:false → "�
   try {
     await widget.refresh();
     assert.strictEqual(last.ok, true);
-    assert.strictEqual(last.line, 'Kalzium: 300');
+    assert.strictEqual(last.line, 'Carbonium: 300');
 
     mode = 'down';
     await widget.refresh();
     assert.strictEqual(last.ok, false);
-    assert.strictEqual(last.line, 'Kalzium: —');
+    assert.strictEqual(last.line, 'Carbonium: —');
   } finally {
     widget.stop();
     await new Promise((r) => srv.close(r));
   }
 });
 
-test('createWidget: Netzwerkfehler (Connection refused) → "Kalzium: —"', async () => {
+test('createWidget: Netzwerkfehler (Connection refused) → "Carbonium: —"', async () => {
   const srv = await startServer(() => {});
   const port = srv.address().port;
   await new Promise((r) => srv.close(r));
@@ -154,7 +154,7 @@ test('createWidget: Netzwerkfehler (Connection refused) → "Kalzium: —"', asy
   try {
     await widget.refresh();
     assert.strictEqual(last.ok, false);
-    assert.strictEqual(last.line, 'Kalzium: —');
+    assert.strictEqual(last.line, 'Carbonium: —');
   } finally {
     widget.stop();
   }

@@ -1,8 +1,9 @@
 /*!
- * RIFT BATTLE — Kalzium-Dashboard-Widget (Issue #383, Baby-Step zu #363/#377)
+ * RIFT BATTLE — Carbonium-Dashboard-Widget (Issue #383, Baby-Step zu #363/#377)
  * ============================================================
- * Zeigt NUR den aktuellen Kalzium-Stand (= "carbonium" im Spiel, #40) als
- * Zahl. Quelle: POST /get_state auf der pipe_bridge (Trainer-only-Kanal,
+ * Zeigt NUR den aktuellen Carbonium-Stand (Ressource "carbonium" im Spiel,
+ * #40 — im Mod auch als Send-Waehrungs-Alias "calcium" bekannt) als Zahl.
+ * Quelle: POST /get_state auf der pipe_bridge (Trainer-only-Kanal,
  * #363/#365) — bewusst KEIN Log-Tailing (siehe #363: "Log bleibt nur
  * Telemetry"). Der Bridge-Wert ist ein int64-Fixed-Point ×10^6
  * (b93061f/57208db auf feature/363-dedicated-io-interface), Anzeige-Wert
@@ -39,13 +40,13 @@
     return {
       ok: false,
       value: null,
-      line: "Kalzium: —",
+      line: "Carbonium: —",
       sub: reason || "Bridge nicht erreichbar",
     };
   }
 
   /**
-   * POST /get_state → Kalzium-Anzeige. Defensiv: fehlendes/kaputtes
+   * POST /get_state → Carbonium-Anzeige. Defensiv: fehlendes/kaputtes
    * carbonium-Feld oder ok:false fuehren zu "—" statt zu einem Fehler
    * (die Bridge antwortet ok:false z.B. bei "pipe_unavailable"/"no_account",
    * solange kein Spieler online/verbunden ist — kein Fake-Wert).
@@ -61,7 +62,7 @@
     return {
       ok: true,
       value: value,
-      line: "Kalzium: " + value,
+      line: "Carbonium: " + value,
       sub: null,
     };
   }
