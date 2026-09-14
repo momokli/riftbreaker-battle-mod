@@ -87,6 +87,5 @@ Puffern je Richtung tritt das nicht auf). Deshalb:
   `bausteine/07-relay/test_dispatch.py` (`ReadResultTest`) — echte getrennte
   Enden, keine Selbst-Lese-Falle.
 - End-to-End (Timeout-Verhalten, kein Haenger): FIFO in
-  `bausteine/07-relay/test_e2e_prototype.sh` und
-  `tests/e2e-vollkette/vollkette.test.js` — dort ohne Responder, geprüft wird
+  `bausteine/07-relay/test_dispatch.py` — dort ohne Responder, geprüft wird
   `dispatch result cmd_id=... status=timeout`.

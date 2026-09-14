@@ -19,8 +19,7 @@ Verifiziert **2026-09-08** über zwei unabhängige Quellen:
 | Steam Store API (`store.steampowered.com/api/appdetails?appids=780310`) | `"name": "The Riftbreaker"`, `"steam_appid": 780310` |
 | SteamDB via Kagi-Suche (`steamdb.info/app/780310/`) | The Riftbreaker |
 
-Zusätzlicher interner Beleg: der Workshop-Content-Pfad in `mod/README.md`
-(`...\steamapps\workshop\content\780310\<modid>\`) nutzt dieselbe AppID.
+Der Workshop-Content-Pfad (`...\steamapps\workshop\content\780310\<modid>\`) nutzt dieselbe AppID.
 
 ---
 
@@ -92,7 +91,7 @@ steamcmd +login <steamaccount> +workshop_build_item D:\rbbattle_workshop\worksho
       keine DLL, kein `pipe_client.py`, kein `scan/`)
 - [ ] `visibility` korrekt gesetzt (Test: `1`)
 - [ ] `appid` = `780310` (The Riftbreaker)
-- [ ] Mod vorher lokal getestet (`mod/README.md`, Bausteine 00–03)
+- [ ] Mod vorher lokal getestet
 - [ ] Game-Update seit letztem Test? → API-Änderungen prüfen
       (`docs/findings.md`)
 

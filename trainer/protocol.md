@@ -54,14 +54,13 @@ Wahrheitsquelle, Events sind nur Benachrichtigungen.
   (`pong`/`score_update`/…) auf derselben Verbindung werden übersprungen.
   Bleibt die Antwort innerhalb `RBB_PIPE_TIMEOUT_S` aus, ist das kein Fehler
   (das Kommando wurde bereits geschrieben) — nur ein Log-Hinweis (`dispatch
-  result cmd_id=... status=timeout`). Details/Timeout-Phasen:
+result cmd_id=... status=timeout`). Details/Timeout-Phasen:
   `docs/relay-pipe-contract.md`.
 - **Ergebnis an den Server gemeldet (Issue #89):** Der Relay meldet das
   Dispatch-Ergebnis zusaetzlich best-effort als `POST /event` mit
   `event.type=exec_result` (`command`, `cmd_id`, `ok`,
   `status=ok|error|timeout`, optional `reason`) an den Tournament-Server;
-  der protokolliert es und broadcastet es per SSE an die Web-UI
-  (`bausteine/06-tournament-server/README.md`).
+  der protokolliert es und broadcastet es per SSE an die Web-UI.
 - Strukturierte Server→Spiel-Events (unten) werden später entweder über
   `exec`-Wrapper (`command="rbbattle_event <json>"`, vom Lua-Mod registriert)
   oder direkt über eine RE-gefundene Aufrufstelle zugestellt — Entscheidung
@@ -76,14 +75,14 @@ werden ignoriert (vorwärtskompatibel). Alle Events sind benachrichtigend
 
 ### game → server (Spiel meldet an Server)
 
-| Event | Bedeutung | Kernfelder | Beispiel |
-|---|---|---|---|
-| `score_update` | Punktestand/Ressourcen geändert (oder periodisch) | `score`, `resources{}`, `wave` | siehe unten |
-| `wave_sent` | Spieler hat eine Welle zum Gegner geschickt (Punkte ausgegeben) | `level`, `cost`, `score_left` | siehe unten |
-| `wave_received` | Gegner-Welle ist in der eigenen Partie angekommen & gespawnt | `level`, `from` | siehe unten |
-| `round_start` | Eigene Runde beginnt (Spiel-Seite bestätigt / startet Phase) | `round`, `phase` | siehe unten |
-| `round_end` | Eigene Runde ist vorbei (ausgewertet) | `round`, `score`, `survived` | siehe unten |
-| `match_end` | Partie entschieden | `winner`, `reason`, `final_score` | siehe unten |
+| Event           | Bedeutung                                                       | Kernfelder                        | Beispiel    |
+| --------------- | --------------------------------------------------------------- | --------------------------------- | ----------- |
+| `score_update`  | Punktestand/Ressourcen geändert (oder periodisch)               | `score`, `resources{}`, `wave`    | siehe unten |
+| `wave_sent`     | Spieler hat eine Welle zum Gegner geschickt (Punkte ausgegeben) | `level`, `cost`, `score_left`     | siehe unten |
+| `wave_received` | Gegner-Welle ist in der eigenen Partie angekommen & gespawnt    | `level`, `from`                   | siehe unten |
+| `round_start`   | Eigene Runde beginnt (Spiel-Seite bestätigt / startet Phase)    | `round`, `phase`                  | siehe unten |
+| `round_end`     | Eigene Runde ist vorbei (ausgewertet)                           | `round`, `score`, `survived`      | siehe unten |
+| `match_end`     | Partie entschieden                                              | `winner`, `reason`, `final_score` | siehe unten |
 
 ```json
 {"event":"score_update","t":882341,"score":1240,"resources":{"iron":320,"carbon":80},"wave":4}
@@ -96,12 +95,12 @@ werden ignoriert (vorwärtskompatibel). Alle Events sind benachrichtigend
 
 ### server → game (Server steuert Spiel)
 
-| Event | Bedeutung | Kernfelder | Beispiel |
-|---|---|---|---|
-| `round_start` | Runde N beginnt jetzt (Planungsphase) | `round`, `duration_s`, `phase` | siehe unten |
-| `incoming_wave` | Gegner hat Welle geschickt — im Spiel spawnen | `level`, `from`, `delay_s` | siehe unten |
-| `round_end` | Runde N ist abgeschlossen, Server wertet aus | `round`, `summary{}` | siehe unten |
-| `match_end` | Partie beendet (Sieg/Niederlage) | `winner`, `reason` | siehe unten |
+| Event           | Bedeutung                                     | Kernfelder                     | Beispiel    |
+| --------------- | --------------------------------------------- | ------------------------------ | ----------- |
+| `round_start`   | Runde N beginnt jetzt (Planungsphase)         | `round`, `duration_s`, `phase` | siehe unten |
+| `incoming_wave` | Gegner hat Welle geschickt — im Spiel spawnen | `level`, `from`, `delay_s`     | siehe unten |
+| `round_end`     | Runde N ist abgeschlossen, Server wertet aus  | `round`, `summary{}`           | siehe unten |
+| `match_end`     | Partie beendet (Sieg/Niederlage)              | `winner`, `reason`             | siehe unten |
 
 ```json
 {"event":"round_start","t":900000,"round":2,"duration_s":90,"phase":"planning"}
@@ -112,12 +111,12 @@ werden ignoriert (vorwärtskompatibel). Alle Events sind benachrichtigend
 
 ## Wer erzeugt was im Spiel (Verdrahtung, teils RE)
 
-| Event | Erzeuger im Spiel | Stand im Harness |
-|---|---|---|
-| `pong`, `exec_result`, `score_update`, `error` | `rbbridge.c` (Pipe-Server) | ✅ implementiert |
-| `score_update`, `wave_received`, `round_*`, `match_end` | **TODO(RE):** Werte/Adressen per `scan/` finden bzw. Events aus Lua-Signalen (`[RBBATTLE] event=...` Log-Prefix im Mod, Experiment C) ableiten | offen (Struktur in `send_state()` verdrahtet, Werte Default bis RE) |
-| `wave_sent` | Lua-Mod beim Kauf der Welle (meldet über `exec`-Kanal / künftigen Event-Pfad) | offen (Mod folgt aus Spike) |
-| `round_start`, `incoming_wave`, `round_end`, `match_end` (Server→Spiel) | Empfang in DLL → Zustellung an Spiel/Lua | ✅ `dispatch_exec` implementiert: `ConsoleService::ExecuteCommand` per AOB-Signatur + RTTI/vftable aufgelöst (keine festen RVAs); Lua-seitig registriert der Mod `rb_wave <level>` bereits (Spike). Offen nur Live-Beweis (#252) |
+| Event                                                                   | Erzeuger im Spiel                                                                                                                              | Stand im Harness                                                                                                                                                                                                                 |
+| ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pong`, `exec_result`, `score_update`, `error`                          | `rbbridge.c` (Pipe-Server)                                                                                                                     | ✅ implementiert                                                                                                                                                                                                                 |
+| `score_update`, `wave_received`, `round_*`, `match_end`                 | **TODO(RE):** Werte/Adressen per `scan/` finden bzw. Events aus Lua-Signalen (`[RBBATTLE] event=...` Log-Prefix im Mod, Experiment C) ableiten | offen (Struktur in `send_state()` verdrahtet, Werte Default bis RE)                                                                                                                                                              |
+| `wave_sent`                                                             | Lua-Mod beim Kauf der Welle (meldet über `exec`-Kanal / künftigen Event-Pfad)                                                                  | offen (Mod folgt aus Spike)                                                                                                                                                                                                      |
+| `round_start`, `incoming_wave`, `round_end`, `match_end` (Server→Spiel) | Empfang in DLL → Zustellung an Spiel/Lua                                                                                                       | ✅ `dispatch_exec` implementiert: `ConsoleService::ExecuteCommand` per AOB-Signatur + RTTI/vftable aufgelöst (keine festen RVAs); Lua-seitig registriert der Mod `rb_wave <level>` bereits (Spike). Offen nur Live-Beweis (#252) |
 
 ## Client-Verhalten (Empfehlung für späteren Pipe-Client/Server-Bridge)
 

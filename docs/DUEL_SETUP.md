@@ -112,4 +112,4 @@ bleibt als letzter Ausweg offen.
   `utils/rules_utils.lua` (GetRulesForDifficulty)
 - `lan:/home/momo/rb-game/LOBBY_RESEARCH.md` (C++-Startkette, GameServerOptions,
   cfg-Variablen, headless-Argumente)
-- Repo: docs/GAME_DESIGN.md „Setup“, Issue #23
+- Repo: Issue #23

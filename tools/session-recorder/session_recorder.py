@@ -42,7 +42,7 @@ RE_MARKER = re.compile(r"\[\s*RBBATTLE\s*\]\s*(?P<rest>.*)$")
 RE_EVENT = re.compile(r"\bevent=(?P<event>\S+)")
 RE_FIELD = re.compile(r"\b(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<val>[^\s\"]+)")
 RE_INT = re.compile(r"^-?\d+$")
-# Player-JOIN-Signatur (Muster tools/solo-feed/feed.py, #157).
+# Player-JOIN-Signatur (#157).
 RE_JOIN_CREATE = re.compile(r"OnNetPlayerCreateRequest\s+'[^']*':'([^']+)'")
 RE_JOIN_PLAYER = re.compile(r"ServerGameplayState: Player '[^']*':'([^']+)'")
 

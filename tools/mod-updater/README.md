@@ -46,8 +46,7 @@ Exit-Codes: `0` = ok / aktuell, `1` = Fehler, `2` = `status --check` mit Update.
 
 Der Mods-Ordner ist der Ordner `mods` innerhalb der Spielinstallation
 (`<SteamLibrary>/steamapps/common/Riftbreaker/mods`); die Mod selbst landet als
-`rbbattle/` darin — genau die Struktur, die `mod/README.md` → „Installation“
-beschreibt.
+`rbbattle/` darin.
 
 ## Tests
 

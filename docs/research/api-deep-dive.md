@@ -141,8 +141,7 @@ Map-/Session-Reload ist ein **destruktiver Eingriff** auf dem Live-Dedi und
 bleibt bis zur Freigabe offen (AGENTS: restart = Freigabe nötig; Spieler-Check
 vorher). Der defensive Fallback (AC3) bleibt umgesetzt: `EconomySave` bei jeder
 Änderung + `EconomyCheckpoint()` an der Rundengrenze
-(`event=economy_checkpoint`), statisch getestet in
-`tests/lua-static/persistence.test.js`.
+(`event=economy_checkpoint`).
 
 ---
 
