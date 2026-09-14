@@ -19,18 +19,9 @@ name: Deploy Check (planet)
 # ein Dummy-Vault in ein temporäres Inventar kopiert.
 
 # Path-Filter (#393): der planet-Check läuft nur noch bei deploy-relevanten
-# Aenderungen (PR wie push) — er ist non-blocking, deploy-check-local bleibt
-# der Required-Gate.
+# PR-Aenderungen — er ist non-blocking, deploy-check-local bleibt der Required-Gate.
 on:
   pull_request:
-    paths:
-      - deploy/**
-      - tools/deploy-gate/**
-      - .github/workflows/deploy.yml
-      - .github/workflows/deploy-check.yml
-      - .github/workflows/deploy-check-local.yml
-  push:
-    branches: [main]
     paths:
       - deploy/**
       - tools/deploy-gate/**

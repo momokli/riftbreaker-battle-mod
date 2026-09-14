@@ -18,17 +18,9 @@ name: Deploy Check (local)
 # WICHTIG: PR-Trigger bewusst OHNE paths-Filter — ein pfad-gefilterter
 # Required-Check, der auf einem PR nicht startet, hinterlässt den Context
 # dauerhaft als „Expected". Läuft daher auf allen PRs (ohne deploy/-Bezug
-# trivial grün). Nur der push-Trigger bleibt pfad-gefiltert.
+# trivial grün). Kein push-Trigger: der Check ist ein reiner PR-Gate.
 on:
   pull_request:
-  push:
-    branches: [main]
-    paths:
-      - deploy/**
-      - tools/deploy-gate/**
-      - .github/workflows/deploy.yml
-      - .github/workflows/deploy-check.yml
-      - .github/workflows/deploy-check-local.yml
   workflow_dispatch:
 
 # Least privilege: nur lesen.

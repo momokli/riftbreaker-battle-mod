@@ -156,12 +156,16 @@ Topologie (Issue #328): **zwei** Instanzen, ein Dedi-Port.
   hardgewired — der zweite öffentliche Zugang läuft deshalb über eine zweite
   **Adresse** (den Satellite), nicht über einen zweiten Port.
 
-Der **Tag→prod-Kanal ist weiterhin nicht verdrahtet** (Follow-up): der
-CD-Workflow kennt keinen Tag-Trigger und keine prod-Umgebung; `tags: ['v*']`
-bleiben Marker. Das frühere Argument „erst wenn ein zweites Deploy-Target
-existiert" ist aber erledigt — das zweite Target (`deploy-prod.yml`, planet
-`:6322` via Satellite-Relay) existiert seit Issue #328; der Tag-Trigger darauf
-wird als eigenes Folge-Issue angeschlossen.
+Der **Tag→prod-Kanal ist verdrahtet**: ein Tag-Push `v*` rollt
+`deploy/deploy-prod.yml` (+ `-e @deploy/prod-vars.yml`) auf prod aus. Der
+forced command reicht den `<ref>` per Marker-Datei an den root-Wrapper, der
+`main` → `site.yml` (dev) und `refs/tags/v*` → `deploy-prod.yml` (prod)
+dispatched (siehe [„CD: SSH-Deploy"](#cd-ssh-deploy-dedizierter-deploy-user)).
+
+```text
+push auf main          → deploy-dev  (site.yml,          dev  :6321)
+push auf Tag v*        → deploy-prod (deploy-prod.yml,   prod :6322 via Satellite)
+```
 
 ## CD: SSH-Deploy (dedizierter deploy-User)
 
@@ -170,12 +174,15 @@ deploy-User** (ersetzt den früheren HTTP-Hook aus #91 — kein Token, kein
 Polling, Ergebnis-Streaming direkt im Job-Log):
 
 ```text
-push auf main
+push auf main / push auf Tag v*
   → GitHub-Actions-Job auf dem self-hosted Runner (planet)
   → ssh rbd "<sha> <ref>"                     [Runner-Key, User deploy]
   → forced command /opt/rbbattle-deploy/deploy-ssh.sh (läuft als deploy):
        SHA validieren → git fetch + Hard-Checkout im Checkout
-       → sudo -n /usr/local/bin/rbbattle-deploy (ansible-playbook als root)
+       → <ref> in Marker-Datei /opt/rbbattle-deploy/.deploy-ref schreiben
+       → sudo -n /usr/local/bin/rbbattle-deploy (ansible-playbook als root):
+            refs/heads/main → site.yml        (dev)
+            refs/tags/v*    → deploy-prod.yml (prod)
   → exit code = Deploy-Ergebnis (kein Polling, kein Secret)
 ```
 
@@ -236,16 +243,29 @@ läuft durchgehend non-root (forced command + git-Checkout als deploy).
 sudo python3 -m venv /opt/rb-ansible
 sudo /opt/rb-ansible/bin/pip install --disable-pip-version-check "ansible-core==2.19.*"
 
-# b) Root-Wrapper (führt das Playbook im Checkout aus; ignoriert Argumente):
+# b) Root-Wrapper (führt das Playbook im Checkout aus; dispatched dev/prod
+#    anhand der Marker-Datei /opt/rbbattle-deploy/.deploy-ref, die der forced
+#    command vorher geschrieben hat — main -> site.yml, Tag v* -> deploy-prod.yml):
 sudo tee /usr/local/bin/rbbattle-deploy >/dev/null <<'WRAPPER'
 #!/bin/sh
 set -eu
 export HOME=/opt/rbbattle-deploy
 export ANSIBLE_CONFIG=/etc/rbbattle-deploy/ansible.cfg
 cd /opt/rbbattle-deploy/repo
-exec /opt/rb-ansible/bin/ansible-playbook \
-  -i deploy/inventory deploy/site.yml \
-  --vault-password-file /etc/rbbattle-deploy/vault.pass
+ref="$(cat /opt/rbbattle-deploy/.deploy-ref 2>/dev/null || true)"
+case "$ref" in
+  refs/tags/v*)
+    exec /opt/rb-ansible/bin/ansible-playbook \
+      -i deploy/inventory deploy/deploy-prod.yml \
+      -e @deploy/prod-vars.yml \
+      --vault-password-file /etc/rbbattle-deploy/vault.pass
+    ;;
+  *)
+    exec /opt/rb-ansible/bin/ansible-playbook \
+      -i deploy/inventory deploy/site.yml \
+      --vault-password-file /etc/rbbattle-deploy/vault.pass
+    ;;
+esac
 WRAPPER
 sudo chown root:root /usr/local/bin/rbbattle-deploy
 sudo chmod 0755 /usr/local/bin/rbbattle-deploy
@@ -386,16 +406,16 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 
 ## Rollen
 
-| Rolle                    | Typ                | Was                                                                                                                                                                                                                                      |
-| ------------------------ | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dedicated-server-image` | docker             | baut `rb-dedicated:<deploy-sha>` auf planet (Laufzeit :6321)                                                                                                                                                                             |
-| `game-content`           | steamcmd/sync      | Dedicated-Server-Content (App 4114030) nach `riftbreaker_game_dir` (idempotent, fail loud)                                                                                                                                               |
-| `riftbreaker-server`     | docker             | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation                                                                                                  |
-| `satellite-relay`        | iptables + systemd | UDP-DNAT-Relay auf `satellite`: inbound `:6321` → planet prod `:6322` (reboot-fest; Rollen-Defaults = einzige Wertquelle)                                                                                                                |
-| `tournament-server`      | systemd            | Rust/axum Referee + Web-UI. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt)                                             |
+| Rolle                    | Typ                | Was                                                                                                                                                                                                                                                   |
+| ------------------------ | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dedicated-server-image` | docker             | baut `rb-dedicated:<deploy-sha>` auf planet (Laufzeit :6321)                                                                                                                                                                                          |
+| `game-content`           | steamcmd/sync      | Dedicated-Server-Content (App 4114030) nach `riftbreaker_game_dir` (idempotent, fail loud)                                                                                                                                                            |
+| `riftbreaker-server`     | docker             | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation                                                                                                               |
+| `satellite-relay`        | iptables + systemd | UDP-DNAT-Relay auf `satellite`: inbound `:6321` → planet prod `:6322` (reboot-fest; Rollen-Defaults = einzige Wertquelle)                                                                                                                             |
+| `tournament-server`      | systemd            | Rust/axum Referee + Web-UI. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt)                                                          |
 | `website`                | eigener Caddy      | eigener `rift-caddy` (plain HTTP: Landing + `/mod.zip` + Cockpit `/contract/*` + `/tournament/*`) + ZWEI Einträge im geteilten Host-Caddy (Issue #322); Host-Caddy-Reload deterministisch + fehlersichtbar, `rift-caddy` mit `admin off` (Issue #355) |
-| `mods-zip`               | —                  | Paketierung + md5-Paritäts-Check (hart)                                                                                                                                                                                                  |
-| `host-hygiene`           | systemd            | wöchentlicher Timer: entfernt **dangling** Docker-Images (`docker image prune`, **kein** `-a`; Issue #308)                                                                                                                               |
+| `mods-zip`               | —                  | Paketierung + md5-Paritäts-Check (hart)                                                                                                                                                                                                               |
+| `host-hygiene`           | systemd            | wöchentlicher Timer: entfernt **dangling** Docker-Images (`docker image prune`, **kein** `-a`; Issue #308)                                                                                                                                            |
 
 ## Host-Caddy-Reload (Issue #355)
 
