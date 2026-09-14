@@ -14,6 +14,22 @@ Ressourcen sind im `ResourceAccount`/`ResourceBasket` über den **FNV-1a-32-Bit-
 
 Die Implementierung wurde gegen die sechs bereits live-bekannten Hashes verifiziert (alle treffen exakt, siehe Tabelle). Kandidatennamen stammen aus den `GameplayResourceDef`-Blöcken der Spiel-Daten (`scripts/resources/*.resource` in den Daten-Packs unter `extracted/base/packs/*_data.zip`, Quelle `planet:/home/momo/rb-game/`); das `id`-Feld ist der Name, der gehasht wird. DLC-Packs (`extracted/DLCs/*`) liefern **keine** zusätzlichen Ressourcennamen.
 
+## Pack-Zugriff (zip64)
+
+**Für Packs > 4 GB `tools/re/rbpack.py` benutzen, nicht `unzip`.** Info-ZIPs
+`unzip` findet im Haupt-Pack `00_win_data.zip` (~7.7 GB, zip64) das Central
+Directory nicht („start of central directory not found; zipfile corrupt“).
+Pythons stdlib `zipfile` (der Motor von `rbpack.py`) liest dasselbe Pack
+problemlos: 67628 Member, Central Directory in < 1 s.
+
+```bash
+python3 tools/re/rbpack.py list scripts/resources/                # Namen filtern
+python3 tools/re/rbpack.py cat  scripts/resources/iron.resource   # Inhalt -> stdout
+python3 tools/re/rbpack.py grep 'id\s+"steel"' --in scripts/resources/
+```
+
+Details: [`tools/re/README.md`](../../tools/re/README.md).
+
 ## Ergebnis
 
 Alle 13 beobachteten Einträge des Account-Baskets sind zugeordnet — **kein Hash bleibt offen**. `resources[]` in `get_state` ist ein Roh-Dump dieses Baskets (Account-Array: 16-Byte-Einträge `{u32 StringHash, i64 ResourceValue}`).
