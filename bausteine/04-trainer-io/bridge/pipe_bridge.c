@@ -17,11 +17,13 @@
  *   POST /get_state    -> carbonium/max/resources/HQ (C++)
  *   POST /add_resource -> carbonium direkt aendern (C++)
  *   POST /activate_mission_flow -> Mission-Flow/Welle starten (C++, #385)
+ *   POST /deactivate_mission_flow -> Mission-Flow/Welle beenden (C++, #389)
  *   POST /probe        -> Memory-Dump (PlayerService-Kette)
  *   sonst              -> 404 {"ok":false,"reason":"not_found"}
  *
  * Protokoll auf der Pipe (v0, siehe bausteine/04-trainer-io/README.md):
- *   Kommandos: ping, probe, get_state, add_resource, activate_mission_flow.
+ *   Kommandos: ping, probe, get_state, add_resource, activate_mission_flow,
+ *   deactivate_mission_flow.
  *   Line-delimited JSON, max. 8 KiB pro Zeile (LINE_MAX).
  *
  * Umgebung:
@@ -691,6 +693,58 @@ static void handle_activate_mission_flow(SOCKET c, const char *body)
     http_respond(c, 200, "OK", line);
 }
 
+/* POST /deactivate_mission_flow: fuehrt
+ * {"cmd":"deactivate_mission_flow","flow":"..."} auf der Pipe aus (WRITE,
+ * Issue #389) und liefert die deactivate_mission_flow_result-Zeile.
+ * `flow` ist die Flow-ID aus activate_mission_flow; fehlt sie, beendet die
+ * Bridge den zuletzt gestarteten Flow (rbbridge-Default). Graceful: ohne
+ * Bruecke/signatur antwortet die DLL mit ok:false, kein Crash. */
+static void handle_deactivate_mission_flow(SOCKET c, const char *body)
+{
+    char flow[192] = "";
+    char line[READ_BUF];
+    char payload[LINE_MAX];
+    char esc_flow[192 * 2];
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+    HANDLE h;
+
+    /* `flow` ist optional: leer -> rbbridge nimmt g_last_flow. */
+    json_get_string(body, "flow", flow, sizeof(flow));
+
+    h = pipe_connect(2500);
+    if (h == INVALID_HANDLE_VALUE) {
+        blog("POST /deactivate_mission_flow: Pipe nicht erreichbar -> "
+             "pipe_unavailable");
+        http_respond(c, 503, "Service Unavailable",
+                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+        return;
+    }
+
+    json_escape(flow, esc_flow, sizeof(esc_flow));
+    snprintf(payload, sizeof(payload),
+             "{\"cmd\":\"deactivate_mission_flow\",\"flow\":\"%s\"}\n",
+             esc_flow);
+
+    if (!pipe_write_all(h, payload)) {
+        CloseHandle(h);
+        http_respond(c, 500, "Internal Server Error",
+                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
+        return;
+    }
+
+    {
+        int rc = pipe_wait_line(h, "deactivate_mission_flow_result", NULL,
+                                timeout_ms, line, sizeof(line));
+        CloseHandle(h);
+        if (rc != 0) {
+            http_respond(c, 500, "Internal Server Error",
+                         "{\"ok\":false,\"reason\":\"timeout\"}");
+            return;
+        }
+    }
+    http_respond(c, 200, "OK", line);
+}
+
 static void handle_client(SOCKET c)
 {
     char *req = malloc(REQ_MAX + 1);
@@ -782,6 +836,16 @@ static void handle_client(SOCKET c)
             memcpy(b, body, (size_t)body_len);
             b[body_len] = '\0';
             handle_activate_mission_flow(c, b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/deactivate_mission_flow") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_deactivate_mission_flow(c, b);
             free(b);
         } else if (strcmp(method, "GET") == 0 &&
                    (strcmp(path, "/") == 0 ||

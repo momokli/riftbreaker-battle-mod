@@ -52,6 +52,7 @@ static void check(int cond, const char *msg)
 
 #define SIG_OFF     0x1100 /* ExecuteCommand-Signatur in .text        */
 #define ACT_SIG_OFF 0x1300 /* ActivateMissionFlow-Signatur in .text   */
+#define DEACT_SIG_OFF 0x1340 /* DeactivateMissionFlow-Signatur (#389)  */
 #define NAME_OFF    0x1400 /* RTTI-Namensstring                       */
 #define COL_OFF     0x1500 /* CompleteObjectLocator                   */
 #define VFT_REF_OFF 0x15F8 /* QWORD == base+COL_OFF (vftable-8)       */
@@ -101,6 +102,8 @@ static unsigned char *build_image(int with_sig, int with_rtti, int valid_col,
         memcpy(img + SIG_OFF, RBBRIDGE_EXEC_SIG, sizeof(RBBRIDGE_EXEC_SIG));
         memcpy(img + ACT_SIG_OFF, RBBRIDGE_ACTIVATE_SIG,
                sizeof(RBBRIDGE_ACTIVATE_SIG));
+        memcpy(img + DEACT_SIG_OFF, RBBRIDGE_DEACTIVATE_SIG,
+               sizeof(RBBRIDGE_DEACTIVATE_SIG));
     }
 
     if (with_rtti) {
@@ -195,6 +198,72 @@ int main(void)
                          sizeof(RBBRIDGE_ACTIVATE_SIG)) == NULL,
               "ActivateMissionFlow-AOB: abweichendes Byte -> kein Treffer");
         free(img3);
+    }
+
+
+    /* -------------------------------------------------------------- */
+    /* DeactivateMissionFlow-AOB (Issue #389)                          */
+    /* -------------------------------------------------------------- */
+    ht_set_module(img, IMG_SIZE);
+    check(scan_bytes_mask(img + TEXT_RVA, TEXT_VSIZE,
+                          RBBRIDGE_DEACTIVATE_SIG,
+                          RBBRIDGE_DEACTIVATE_SIG_MASK,
+                          sizeof(RBBRIDGE_DEACTIVATE_SIG)) ==
+              img + DEACT_SIG_OFF,
+          "DeactivateMissionFlow-AOB (Maske) im .text gefunden (#389)");
+    {
+        /* Prolog-identische IsGraphActive-Form (cmp eax,1 / sete al statt
+         * add rsp,0x30): darf NICHT treffen -> Diskriminator-Byte 87. */
+        unsigned char *img4 = build_image(1, 1, 1, 1, 1);
+        img4[DEACT_SIG_OFF + 87] = 0x83; /* cmp eax,1 */
+        img4[DEACT_SIG_OFF + 88] = 0xF8;
+        img4[DEACT_SIG_OFF + 89] = 0x01;
+        ht_set_module(img4, IMG_SIZE);
+        check(scan_bytes_mask(img4 + TEXT_RVA, TEXT_VSIZE,
+                              RBBRIDGE_DEACTIVATE_SIG,
+                              RBBRIDGE_DEACTIVATE_SIG_MASK,
+                              sizeof(RBBRIDGE_DEACTIVATE_SIG)) == NULL,
+              "Deactivate-AOB: IsGraphActive-Form (cmp eax,1) -> kein Treffer");
+        free(img4);
+    }
+    {
+        unsigned char *img5 = build_image(1, 1, 1, 1, 1);
+        img5[DEACT_SIG_OFF + 5] ^= 0xFF; /* Prolog-Byte abweichend */
+        ht_set_module(img5, IMG_SIZE);
+        check(scan_bytes_mask(img5 + TEXT_RVA, TEXT_VSIZE,
+                              RBBRIDGE_DEACTIVATE_SIG,
+                              RBBRIDGE_DEACTIVATE_SIG_MASK,
+                              sizeof(RBBRIDGE_DEACTIVATE_SIG)) == NULL,
+              "Deactivate-AOB: abweichendes Prolog-Byte -> kein Treffer");
+        free(img5);
+    }
+    {
+        /* rel32-Wildcards: kaputte CALL-Operanden werden toleriert. */
+        unsigned char *img6 = build_image(1, 1, 1, 1, 1);
+        img6[DEACT_SIG_OFF + 18] ^= 0xFF; /* call-1 rel32 */
+        img6[DEACT_SIG_OFF + 26] ^= 0xFF; /* call-2 rel32 */
+        img6[DEACT_SIG_OFF + 37] ^= 0xFF; /* call-3 rel32 */
+        img6[DEACT_SIG_OFF + 78] ^= 0xFF; /* call-4 rel32 */
+        ht_set_module(img6, IMG_SIZE);
+        check(scan_bytes_mask(img6 + TEXT_RVA, TEXT_VSIZE,
+                              RBBRIDGE_DEACTIVATE_SIG,
+                              RBBRIDGE_DEACTIVATE_SIG_MASK,
+                              sizeof(RBBRIDGE_DEACTIVATE_SIG)) ==
+                  img6 + DEACT_SIG_OFF,
+              "Deactivate-AOB: rel32-Abweichung (Maske) toleriert");
+        free(img6);
+    }
+    {
+        /* E8-Opcode bleibt Pflicht (nur Operanden sind maskiert). */
+        unsigned char *img7 = build_image(1, 1, 1, 1, 1);
+        img7[DEACT_SIG_OFF + 17] ^= 0xFF; /* E8 -> AA */
+        ht_set_module(img7, IMG_SIZE);
+        check(scan_bytes_mask(img7 + TEXT_RVA, TEXT_VSIZE,
+                              RBBRIDGE_DEACTIVATE_SIG,
+                              RBBRIDGE_DEACTIVATE_SIG_MASK,
+                              sizeof(RBBRIDGE_DEACTIVATE_SIG)) == NULL,
+              "Deactivate-AOB: E8-Opcode bleibt Pflicht");
+        free(img7);
     }
 
     /* -------------------------------------------------------------- */
