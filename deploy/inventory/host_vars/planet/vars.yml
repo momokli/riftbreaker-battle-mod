@@ -32,16 +32,19 @@ tournament_port: 8081
 tournament_bridge_a_url: "http://127.0.0.1:9001/exec"
 tournament_bridge_b_url: "http://127.0.0.1:9002/exec"
 
-# --- Website (statics + eigener rift-caddy + EIN Host-Caddy-Eintrag) ---------
+# --- Website (Landing + Cockpit, eigener rift-caddy) -------------------------
 # Architektur (Issue #322): Der Riftbreaker-Stack betreibt einen EIGENEN,
 # schlanken Caddy-Container (`rift-caddy`, plain HTTP, reines Durchreichen):
-#   * Statics aus dem Docroot (inkl. /solo, /mods) und
-#   * /tournament/*  →  reverse_proxy an den tournament-server.
+#   * landing_domain (www.drift.projectmellon.de) → file_server (Landing + /mod.zip)
+#   * cockpit_domain (cockpit.drift.projectmellon.de) →
+#       * /contract/*  → reverse_proxy an die IO-Bridge (Operator-Cockpit) und
+#       * /tournament/* → reverse_proxy an den tournament-server.
 # Der GETEILTE Deploy-Host-Caddy (`mellon-caddy`, hostet viele fremde Domains)
-# bekommt GENAU EINEN Eintrag: operator.drift.projectmellon.de →
+# bekommt GENAU ZWEI Einträge (je Domain einen, per-Domain-Marker) →
 # reverse_proxy 127.0.0.1:{{ rift_caddy_port }} — kein Caddyfile.d-Snippet-Mount
 # mehr, kein Eingriff in fremde Sites.
-website_domain: operator.drift.projectmellon.de
+landing_domain: www.drift.projectmellon.de
+cockpit_domain: cockpit.drift.projectmellon.de
 website_docroot: /srv/rbmods-site
 website_mods_dir: "{{ website_docroot }}/mods"
 
@@ -59,40 +62,19 @@ rift_caddy_data_dir: "{{ rift_caddy_deploy_dir }}/data"
 rift_caddy_config_dir: "{{ rift_caddy_deploy_dir }}/config"
 # Docroot IM Container (read-only Bind-Mount von website_docroot).
 rift_caddy_site_root: /srv/site
-# /mods/upload* → dufs (unveraendert aus dem bisherigen Host-Block uebernommen).
-website_upload_port: 8322
 
-# Geteilter Host-Caddy: genau EIN Eintrag fuer die Domain (idempotent, kein
-# Snippet-Import). Die alte, manuell gepflegte Rift-Block-/Import-Zeile wird von
-# der Rolle entfernt (siehe deploy/roles/website/tasks/main.yml).
+# Geteilter Host-Caddy: genau ZWEI Einträge (je Domain einen, idempotent, kein
+# Snippet-Import). Die alte, manuell gepflegte Rift-Block-/Import-Zeile und
+# verwaiste operator.*-Einträge werden von der Rolle entfernt (siehe
+# deploy/roles/website/tasks/main.yml).
 website_host_caddy_container: mellon-caddy
 website_host_caddyfile_path: /home/momo/Caddyfile
 website_host_caddyfile_owner: momo
 website_host_caddyfile_group: momo
 
-# --- Solo-Match-Page /solo — Zugangsschutz (Issue #159) ----------------------
-# Passwortschutz für /solo via Caddy basic_auth. Der bcrypt-Hash liegt NUR im
-# Vault (vault_solo_basic_auth_hash) bzw. host-seitig gesetzt — der Name ist
-# dokumentiert, der Wert NIE im Repo/Logs/PR.
-# Fehlt/leer => /solo bleibt ungeschützt (graceful Default).
-solo_basic_auth_user: operator
-solo_basic_auth_hash: "{{ vault_solo_basic_auth_hash | default('') }}"
-
 # --- Mods-Zip (Paketierung + md5-Parität) ------------------------------------
 mods_zip_name: rbbattle.zip
 mods_zip_dest: "{{ website_mods_dir }}/{{ mods_zip_name }}"
-# Download-Parität (S1): öffentliche URL, die nach JEDEM Deploy gegen den
-# deployten Stand geprüft wird (md5 muss exakt übereinstimmen).
-mods_download_url: "https://{{ website_domain }}/mods/{{ mods_zip_name }}"
-mods_download_tmp: /tmp/rbbattle-download-check.zip
-
-# --- Probe-Timer (systemd, scripts/probe_servers.sh) -------------------------
-probe_bin: /usr/local/bin/rbmods-probe.sh
-probe_out: "{{ website_docroot }}/status.json"
-probe_site_url: "https://{{ website_domain }}"
-probe_endpoints_file: /usr/local/etc/rbmods-probe.endpoints
-probe_interval_min: 2
-probe_server_ip: 65.21.27.234
 
 # --- Image-Tag-Retention (systemd, scripts/docker_image_tag_retention.sh) ----
 # Issue #309: alter rb-dedicated/rb-headless-client-Tags aufräumen, aber das

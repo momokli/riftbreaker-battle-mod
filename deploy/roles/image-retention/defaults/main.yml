@@ -3,7 +3,7 @@
 # Mod-Image-Tags per scripts/docker_image_tag_retention.sh entfernt — ohne das
 # laufende Image und ohne den Rollback-Stand zu verlieren.
 #
-# Muster: deploy/roles/probe-timer/ (Skript + *.service.j2 + *.timer.j2).
+# Muster: systemd-Skript + *.service.j2 + *.timer.j2.
 image_retention_unit: rbmods-image-retention
 image_retention_bin: /usr/local/bin/rbmods-image-retention.sh
 image_retention_log: /var/log/rbmods-image-retention.log

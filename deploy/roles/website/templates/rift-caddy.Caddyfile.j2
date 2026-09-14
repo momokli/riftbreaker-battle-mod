@@ -1,12 +1,15 @@
 # Verwaltet von deploy/ role "website" (Jinja) — NICHT manuell editieren.
 #
-# Eigener, schlanker Caddy NUR für {{ website_domain }}: Statics aus dem
-# Docroot, /tournament/*-Proxy an den tournament-server und /contract/*-Proxy
-# (Operator-Cockpit) an die IO-Bridge. Plain HTTP, lauscht ausschliesslich auf
-# 127.0.0.1:{{ rift_caddy_port }} — TLS terminiert weiterhin der geteilte
-# Host-Caddy ({{ website_host_caddy_container }}), der hierher proxyt. Deshalb
-# kein Hostname im Site-Label (der Host-Caddy reicht den Original-Host durch)
-# und kein ACME.
+# Eigener, schlanker Caddy fuer ZWEI Hostnames:
+#   * {{ landing_domain }} — statische Landing + /mod.zip (file_server)
+#   * {{ cockpit_domain }} — Operator-Cockpit (/contract/* an die IO-Bridge,
+#     /tournament/* an den tournament-server)
+# Plain HTTP, lauscht ausschliesslich auf 127.0.0.1:{{ rift_caddy_port }} —
+# TLS terminiert weiterhin der geteilte Host-Caddy
+# ({{ website_host_caddy_container }}), der hierher proxyt. Deshalb kein ACME.
+# Die Hostnamen stehen in den Site-Labels (Host-Header-Routing), NICHT als
+# oeffentliche Listen-Adresse: `bind 127.0.0.1` + expliziter Port halten alles
+# intern.
 #
 # Global: Admin-Endpunkt AUS (Issue #355). rift-caddy laeuft mit
 # network_mode host; Caddy belegt sonst per Default 127.0.0.1:2019 — exakt den
@@ -21,32 +24,16 @@
 	admin off
 }
 
-:{{ rift_caddy_port }} {
+http://{{ landing_domain }}:{{ rift_caddy_port }} {
 	bind 127.0.0.1
 	root * {{ rift_caddy_site_root }}
 	encode gzip
+	file_server
+}
 
-	# /mods: Mod-Distribution (unveraendert): Zip-Download + Browse, Upload via dufs.
-	redir /mods /mods/
-	handle /mods/upload* {
-		reverse_proxy 127.0.0.1:{{ website_upload_port }}
-	}
-	handle_path /mods/* {
-		root * {{ rift_caddy_site_root }}/mods
-		file_server browse
-	}
-
-	# /solo (Operator-Match-Page, Issue #159) ohne Datei-Endung erreichbar.
-	# Der Operator-Zugangsschutz (basic_auth) ist nur aktiv, wenn
-	# solo_basic_auth_hash gesetzt ist (bcrypt-Hash NUR aus Vault/Operator-ENV).
-	rewrite /solo /solo.html
-	@solo path /solo /solo.html
-	handle @solo {
-		{% if solo_basic_auth_hash %}basic_auth {
-			{{ solo_basic_auth_user | default('operator') }} {{ solo_basic_auth_hash }}
-		}
-		{% endif %}file_server
-	}
+http://{{ cockpit_domain }}:{{ rift_caddy_port }} {
+	bind 127.0.0.1
+	encode gzip
 
 	# /contract: Bridge-Kontrollpanel (pipe_bridge.exe, eingebettetes
 	# contract.html). Reverse-Proxy auf die IO-Bridge; Zugangsschutz via
@@ -63,10 +50,5 @@
 	# /tournament/* — Präfix wird gestrippt.
 	handle_path /tournament/* {
 		reverse_proxy 127.0.0.1:{{ tournament_port }}
-	}
-
-	# Statics (Landing, /solo.html, /status.json, …).
-	handle {
-		file_server
 	}
 }

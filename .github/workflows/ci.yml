@@ -167,10 +167,6 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         working-directory: tests/e2e-vollkette
         run: npm ci && npm test
-      - name: Landing Live-Status-Widget (Issue #30)
-        if: needs.changes.outputs.test == 'true'
-        working-directory: tests/live-status
-        run: node --test
 
   build:
     name: Build + Package (rbbridge.dll/exe, dist/*.zip)

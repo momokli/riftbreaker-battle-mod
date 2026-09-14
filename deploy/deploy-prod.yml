@@ -10,11 +10,11 @@
 #     -e @deploy/prod-vars.yml --vault-password-file <vault.pass>
 #
 # Twin-Topologie + Tag→prod: prod ist jetzt ein vollwertiger Zwilling von dev
-# (site.yml) — inkl. `website`-Rolle (Operator-Cockpit auf
-# operator.rift.projectmellon.de, eigener rift-caddy-prod :8788, Bridge :9002).
-# Der CD-Workflow (.github/workflows/deploy.yml) fährt dieses Playbook bei
-# Tag-Push (v* -> prod). Der Image-Tag wird weiterhin aus dem Checkout-SHA
-# (Tag-Commit) abgeleitet.
+# (site.yml) — inkl. `website`-Rolle (Landing www.rift.projectmellon.de +
+# Cockpit cockpit.rift.projectmellon.de, eigener rift-caddy-prod :8788,
+# Bridge :9002). Der CD-Workflow (.github/workflows/deploy.yml) fährt dieses
+# Playbook bei Tag-Push (v* -> prod). Der Image-Tag wird weiterhin aus dem
+# Checkout-SHA (Tag-Commit) abgeleitet.
 
 - name: RIFT BATTLE — Prod-Instanz (planet :6322)
   hosts: planet

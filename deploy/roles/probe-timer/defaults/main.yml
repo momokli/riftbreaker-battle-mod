@@ -1,3 +1,0 @@
----
-# Defaults der Rolle probe-timer (systemd, scripts/probe_servers.sh).
-probe_unit: rbmods-probe

@@ -1,23 +1,27 @@
 ---
-# Rolle: website — statische Dateien (site/*) nach Docroot + eigener
-# Rift-Caddy-Container (Statics, /solo, /mods, /tournament/*, /contract/*) +
-# EIN Eintrag im geteilten Host-Caddy. Idempotent. Die Rolle ist
-# per-Environment als "Twin" parametriert: {{ website_domain }},
+# Rolle: website — eigener Rift-Caddy-Container (Landing: file_server +
+# /mod.zip; Cockpit: /contract/* + /tournament/*) + ZWEI Einträge im geteilten
+# Host-Caddy. Idempotent. Die Rolle ist per-Environment als "Twin"
+# parametriert: {{ landing_domain }}, {{ cockpit_domain }},
 # {{ rift_caddy_container }} und {{ rift_caddy_port }} kommen aus den Env-Vars
 # (dev und prod je eigener Container/Port/Domain).
 #
 # Architektur (Issue #322):
-#   {{ website_domain }} → Host-Caddy (mellon-caddy)
-#                            └─ reverse_proxy 127.0.0.1:{{ rift_caddy_port }}
-#                                  └─ rift-caddy (eigener Container, plain HTTP)
-#                                       ├─ file_server  {{ rift_caddy_site_root }}
-#                                       ├─ handle_path /tournament/* → 127.0.0.1:{{ tournament_port }}
-#                                       └─ handle_path /contract/*  → 127.0.0.1:{{ riftbreaker_bridge_port }}
+#   {{ landing_domain }} → Host-Caddy (mellon-caddy)
+#                           └─ reverse_proxy 127.0.0.1:{{ rift_caddy_port }}
+#                                 └─ rift-caddy (eigener Container, plain HTTP)
+#                                      └─ file_server {{ rift_caddy_site_root }} (Landing + /mod.zip)
+#   {{ cockpit_domain }} → Host-Caddy (mellon-caddy)
+#                           └─ reverse_proxy 127.0.0.1:{{ rift_caddy_port }}
+#                                 └─ rift-caddy (eigener Container, plain HTTP)
+#                                      ├─ handle_path /tournament/* → 127.0.0.1:{{ tournament_port }}
+#                                      └─ handle_path /contract/*  → 127.0.0.1:{{ riftbreaker_bridge_port }}
 #
-# Der geteilte Host-Caddy bekommt GENAU EINEN (idempotenten) Eintrag — kein
+# Der geteilte Host-Caddy bekommt GENAU ZWEI (idempotente) Einträge — je
+# Domain einen (per-Domain-Marker, damit dev und prod nicht kollidieren) — kein
 # Caddyfile.d-Mount, keine Import-Zeile mehr. Die frühere, manuell gepflegte
-# Rift-Block- und Import-Zeile wird entfernt, damit Caddyfile und Rolle
-# übereinstimmen (kein Parallel-Block).
+# Rift-Block- und Import-Zeile sowie verwaiste operator.*-Einträge werden
+# entfernt, damit Caddyfile und Rolle übereinstimmen (kein Parallel-Block).
 
 - name: Docroot sicherstellen
   file:
@@ -31,49 +35,11 @@
     state: directory
     mode: "0755"
 
-- name: Statische Seiten deployen (site/*)
+- name: Statische Landing deployen (site/*)
   copy:
     src: "{{ playbook_dir }}/../site/"
     dest: "{{ website_docroot }}"
     mode: "0644"
-
-# ---------------------------------------------------------------------------
-# S1: Download-Parität — die öffentliche Download-URL muss EXAKT das deployte
-# Zip liefern, sonst laden Spieler einen anderen Stand als der Server fährt
-# („different set of mods"). Nur im echten Deploy (nie im --check-Gate).
-# ---------------------------------------------------------------------------
-- name: Download-Parität — öffentliche URL nach /tmp laden
-  command: curl -sS --fail --max-time 60 -o {{ mods_download_tmp }} {{ mods_download_url }}
-  register: download_curl
-  changed_when: false
-  failed_when: false
-  when: not ansible_check_mode
-
-- name: Download-Parität — md5 des Downloads ermitteln
-  stat:
-    path: "{{ mods_download_tmp }}"
-    checksum_algorithm: md5
-  register: download_zip_stat
-  when: not ansible_check_mode
-
-- name: Download-Parität — md5 des deployten Zips ermitteln
-  stat:
-    path: "{{ mods_zip_dest }}"
-    checksum_algorithm: md5
-  register: mods_zip_local
-  when: not ansible_check_mode
-
-- name: Download-Parität — hart prüfen (md5(URL) == md5(deployt))
-  assert:
-    that:
-      - download_curl.rc == 0
-      - download_zip_stat.stat.exists
-      - download_zip_stat.stat.checksum == mods_zip_local.stat.checksum
-    fail_msg: >-
-      DOWNLOAD-PARITÄT FEHLGESCHLAGEN: {{ mods_download_url }} liefert nicht
-      das deployte rbbattle.zip ({{ mods_zip_dest }}) — md5 weicht ab oder URL
-      nicht erreichbar. Download-Kanal und Server-Stand driften auseinander.
-  when: not ansible_check_mode
 
 # ---------------------------------------------------------------------------
 # Eigener Rift-Caddy (Issue #322): Container + Config im Rift-Stack. Zuert
@@ -132,6 +98,8 @@
 - name: Rift-Caddy erreichbar? (lokaler Health über 127.0.0.1)
   uri:
     url: "http://127.0.0.1:{{ rift_caddy_port }}/tournament/health"
+    headers:
+      Host: "{{ cockpit_domain }}"
     status_code: 200
   register: rift_caddy_health
   retries: 5
@@ -141,9 +109,10 @@
   when: not ansible_check_mode
 
 # ---------------------------------------------------------------------------
-# Geteilter Host-Caddy: genau EIN Eintrag. Alte manuelle Rift-Definition und
-# die verwaiste Snippet-Import-Zeile zuerst entfernen (sonst kollidiert die
-# Domain bzw. schlägt der Glob-Import ins leere Verzeichnis fehl).
+# Geteilter Host-Caddy: genau ZWEI Einträge (Landing + Cockpit). Alte manuelle
+# Rift-Definition, verwaiste operator.*-Einträge und die Snippet-Import-Zeile
+# zuerst entfernen (sonst kollidiert die Domain bzw. schlägt der Glob-Import
+# ins leere Verzeichnis fehl).
 #
 # Reload deterministisch + fehlersichtbar (Issue #355): Der Reload hing zuvor
 # NUR als Handler am `changed` der Datei-Tasks. Ein beim ersten Deploy
@@ -172,22 +141,46 @@
     state: absent
   register: host_caddy_import
 
-# Nur der HTTP-Domain-Eintrag ({{ website_domain }}) wird hier geroutet. Der
-# Game-Server-Host läuft ausschliesslich über UDP (riftbreaker_server_port_udp,
-# dev 6321 / prod 6322) und bekommt KEINEN Caddy-/HTTP-Eintrag — der Host-Caddy
-# reicht nur Operator-Cockpit/Statics (/contract, /solo, /mods, …) durch.
-- name: Host-Caddy-Eintrag sicherstellen (genau EIN Block)
+# Zwei HTTP-Domain-Einträge ({{ landing_domain }} + {{ cockpit_domain }})
+# werden hier geroutet. Der Game-Server-Host läuft ausschliesslich über UDP
+# (riftbreaker_server_port_udp, dev 6321 / prod 6322) und bekommt KEINEN
+# Caddy-/HTTP-Eintrag — der Host-Caddy reicht nur Landing und Operator-Cockpit
+# (/contract, /tournament) durch.
+#
+# Verwaiste operator.*-Einträge aus der vorherigen Cockpit-only-Verdrahtung
+# entfernen (einmalige Migration; idempotent, wenn bereits weg).
+- name: Alten operator.*-Host-Caddy-Eintrag entfernen (vor Umbenennung)
+  replace:
+    path: "{{ website_host_caddyfile_path }}"
+    regexp: '(?ms)^# BEGIN RIFT operator\.(?:drift|rift)\.projectmellon\.de \(managed by deploy/roles/website\).*?^# END RIFT operator\.(?:drift|rift)\.projectmellon\.de \(managed by deploy/roles/website\)\n?'
+    replace: ""
+  register: host_caddy_operator_cleanup
+
+- name: Host-Caddy-Eintrag sicherstellen (Landing)
   blockinfile:
     path: "{{ website_host_caddyfile_path }}"
-    marker: "# {mark} RIFT {{ website_domain }} (managed by deploy/roles/website)"
+    marker: "# {mark} RIFT {{ landing_domain }} (managed by deploy/roles/website)"
     owner: "{{ website_host_caddyfile_owner }}"
     group: "{{ website_host_caddyfile_group }}"
     mode: "0644"
     block: |
-      {{ website_domain }} {
+      {{ landing_domain }} {
           reverse_proxy 127.0.0.1:{{ rift_caddy_port }}
       }
-  register: host_caddy_block
+  register: host_caddy_landing_block
+
+- name: Host-Caddy-Eintrag sicherstellen (Cockpit)
+  blockinfile:
+    path: "{{ website_host_caddyfile_path }}"
+    marker: "# {mark} RIFT {{ cockpit_domain }} (managed by deploy/roles/website)"
+    owner: "{{ website_host_caddyfile_owner }}"
+    group: "{{ website_host_caddyfile_group }}"
+    mode: "0644"
+    block: |
+      {{ cockpit_domain }} {
+          reverse_proxy 127.0.0.1:{{ rift_caddy_port }}
+      }
+  register: host_caddy_cockpit_block
 
 # LIVE-Config des Host-Caddys ueber die Admin-API lesen (nur 127.0.0.1 im
 # Container). Grundlage fuer die Reload-Entscheidung unten.
@@ -207,9 +200,12 @@
     host_caddy_needs_reload: >-
       {{ (host_caddy_old_block is changed)
          or (host_caddy_import is changed)
-         or (host_caddy_block is changed)
+         or (host_caddy_operator_cleanup is changed)
+         or (host_caddy_landing_block is changed)
+         or (host_caddy_cockpit_block is changed)
          or ((host_caddy_live.rc | default(1) | int) != 0)
-         or (website_domain not in (host_caddy_live.stdout | default(''))) }}
+         or (landing_domain not in (host_caddy_live.stdout | default('')))
+         or (cockpit_domain not in (host_caddy_live.stdout | default(''))) }}
   when: not ansible_check_mode
 
 - name: Host-Caddy — Config validieren (vor dem Reload)
@@ -226,11 +222,12 @@
 
 # Post-Check: nach dem Reload MUSS der Eintrag live sein. Fehlt er (oder war die
 # Admin-API nicht lesbar), schlaegt der Deploy hier sichtbar fehl.
-- name: Host-Caddy — Reload wirksam? (Domain muss JETZT live sein)
+- name: Host-Caddy — Reload wirksam? (Domains müssen JETZT live sein)
   command: docker exec {{ website_host_caddy_container }} wget -qO- http://localhost:2019/config/
   register: host_caddy_live_after
   changed_when: false
   failed_when: >-
     (host_caddy_live_after.rc | default(1) | int) != 0
-    or (website_domain not in (host_caddy_live_after.stdout | default('')))
+    or (landing_domain not in (host_caddy_live_after.stdout | default('')))
+    or (cockpit_domain not in (host_caddy_live_after.stdout | default('')))
   when: not ansible_check_mode and (host_caddy_needs_reload | default(false) | bool)

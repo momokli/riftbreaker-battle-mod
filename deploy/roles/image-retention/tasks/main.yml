@@ -3,7 +3,7 @@
 # der alte rb-dedicated/rb-headless-client-Tags entfernt. Das laufende Image
 # und der Rollback-Stand (N letzte Tags + aktueller Deploy-Tag) bleiben.
 #
-# Muster: deploy/roles/probe-timer/. Idempotent und --check-fest: es werden nur
+# Idempotent und --check-fest: es werden nur
 # Dateien gerendert und eine Unit aktiviert; das Skript laeuft nie waehrend des
 # Check-Laufs.
 
