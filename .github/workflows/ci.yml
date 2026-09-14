@@ -136,6 +136,12 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         working-directory: tools/session-recorder
         run: python3 -m unittest test_session_recorder -v
+      # Pack-Reader (Issue #416): zip64-sichere Game-Pack-Leser, hermetisch
+      # (synthetische Zips im tmpdir, kein Game-Daten-Zugriff).
+      - name: Unit-Test Pack-Reader (Issue #416)
+        if: needs.changes.outputs.test == 'true'
+        working-directory: tools/re
+        run: python3 -m unittest test_rbpack -v
       - name: Unit-Test Referee-Egress (Issue #358)
         if: needs.changes.outputs.test == 'true'
         working-directory: tools/referee-egress
