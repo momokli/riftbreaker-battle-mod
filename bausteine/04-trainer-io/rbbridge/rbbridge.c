@@ -417,6 +417,16 @@ static void dbg(const char *fmt, ...)
 #else
     OutputDebugStringA(buf);
 
+    /* Konsolen-/docker-Log (#392): gleicher Stream wie das Spiel (stderr ->
+     * docker), mit Zeitstempel fuer Korrelation mit bridge + exor_logs. */
+    {
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        fprintf(stderr, "[%02d:%02d:%02d.%03d] [rbbridge] %s\n",
+                st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, buf);
+        fflush(stderr);
+    }
+
     if (!g_file_log)
         return;
 
