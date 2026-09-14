@@ -1,5 +1,5 @@
 {
-  "name": "rbbattle-e2e-vollkette",
+  "name": "rbbridge-hosttest",
   "version": "1.0.0",
   "private": true,
   "description": "rbbridge host-test: kompiliert die Scan-/RTTI-Funktionen aus rbbridge.c gegen einen synthetischen PE-Puffer (kein Windows/Spiel).",
