@@ -68,5 +68,4 @@ riftbreaker-battle-mod/
 ## Mitmachen
 
 Beiträge willkommen! Workflow, Claim-System (`!claim` im Issue-Kommentar) und
-Quality-Gates stehen in [CONTRIBUTING.md](CONTRIBUTING.md); den Projektfortschritt
-zeigt [docs/PROGRESS.md](docs/PROGRESS.md).
+Quality-Gates stehen in [CONTRIBUTING.md](CONTRIBUTING.md).

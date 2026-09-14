@@ -113,8 +113,6 @@ Neben Menschen arbeiten AI-Agents am Repo. Die verbindlichen Regeln stehen in
 ### Fortschritt
 
 - **Milestones** pro Release (`RIFT BATTLE v1`, später `vX.Y.Z`) — offene vs. erledigte Issues.
-- **[docs/PROGRESS.md](docs/PROGRESS.md)** — wöchentlich automatisch generiert
-  (`progress.yml`) aus offenen Issues/PRs, letzten Releases und CI-Status.
 - **Badges** im [README](README.md): CI-Status, Lint, letztes Release, offene Issues.
 
 ## Lint-Baseline
