@@ -16,7 +16,7 @@
  *   GET  /             -> Web-UI (cockpit.html, nur C++-Direktfunktionen)
  *   POST /get_state    -> carbonium/max/resources/HQ (C++)
  *   POST /add_resource -> carbonium direkt aendern (C++)
- *   POST /activate_mission_flow -> Mission-Flow/Welle starten (C++, #385)
+ *   POST /activate_mission_flow -> Mission-Flow starten (C++, Database*-Payload)
  *   POST /probe        -> Memory-Dump (PlayerService-Kette)
  *   sonst              -> 404 {"ok":false,"reason":"not_found"}
  *
@@ -628,32 +628,22 @@ static void handle_add_resource(SOCKET c, const char *body)
     http_respond(c, 200, "OK", line);
 }
 
-/* POST /activate_mission_flow: fuehrt
- * {"cmd":"activate_mission_flow","logic":"...","mode":"..."} auf der
- * Pipe aus (WRITE, Issue #385) und liefert die
- * activate_mission_flow_result-Zeile. `logic` ist ein Mission-Flow-Logic-File
- * (z. B. "logic/dom/attack_level_1_entry.logic"), `mode` optional
- * (Default "default"). */
+/* POST /activate_mission_flow: fuehrt {"cmd":"activate_mission_flow",
+ * "name":"...","spawn_point":"..."} auf der Pipe aus und liefert die eine
+ * activate_result-Zeile (ok:true|false) als HTTP-Body. Beide Felder sind
+ * optionale JSON-Strings (fehlend = leer). Der Payload-/Aufrufpfad liegt im
+ * rbbridge (Database-Builder + MissionService::ActivateMissionFlow). */
 static void handle_activate_mission_flow(SOCKET c, const char *body)
 {
-    char logic[256] = "";
-    char mode[64] = "default";
+    char name[128] = "";
+    char spawn[128] = "";
     char line[READ_BUF];
     char payload[LINE_MAX];
-    char esc_logic[256 * 2];
-    char esc_mode[64 * 2];
     int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
     HANDLE h;
 
-    if (!json_get_string(body, "logic", logic, sizeof(logic)) || !logic[0]) {
-        blog("POST /activate_mission_flow ohne logic -> invalid_request");
-        http_respond(c, 400, "Bad Request",
-                     "{\"ok\":false,\"reason\":\"invalid_request\"}");
-        return;
-    }
-    json_get_string(body, "mode", mode, sizeof(mode));
-    if (!mode[0])
-        snprintf(mode, sizeof(mode), "default");
+    json_get_string(body, "name", name, sizeof(name));
+    json_get_string(body, "spawn_point", spawn, sizeof(spawn));
 
     h = pipe_connect(2500);
     if (h == INVALID_HANDLE_VALUE) {
@@ -664,12 +654,15 @@ static void handle_activate_mission_flow(SOCKET c, const char *body)
         return;
     }
 
-    json_escape(logic, esc_logic, sizeof(esc_logic));
-    json_escape(mode, esc_mode, sizeof(esc_mode));
-    snprintf(payload, sizeof(payload),
-             "{\"cmd\":\"activate_mission_flow\",\"logic\":\"%s\","
-             "\"mode\":\"%s\"}\n",
-             esc_logic, esc_mode);
+    {
+        char esc[128 * 2];
+        char spc[128 * 2];
+        json_escape(name, esc, sizeof(esc));
+        json_escape(spawn, spc, sizeof(spc));
+        snprintf(payload, sizeof(payload),
+                 "{\"cmd\":\"activate_mission_flow\",\"name\":\"%s\","
+                 "\"spawn_point\":\"%s\"}\n", esc, spc);
+    }
 
     if (!pipe_write_all(h, payload)) {
         CloseHandle(h);
@@ -679,8 +672,8 @@ static void handle_activate_mission_flow(SOCKET c, const char *body)
     }
 
     {
-        int rc = pipe_wait_line(h, "activate_mission_flow_result", NULL,
-                                timeout_ms, line, sizeof(line));
+        int rc = pipe_wait_line(h, "activate_result", NULL, timeout_ms,
+                                line, sizeof(line));
         CloseHandle(h);
         if (rc != 0) {
             http_respond(c, 500, "Internal Server Error",
@@ -773,7 +766,8 @@ static void handle_client(SOCKET c)
             b[body_len] = '\0';
             handle_add_resource(c, b);
             free(b);
-        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/activate_mission_flow") == 0) {
+        } else if (strcmp(method, "POST") == 0 &&
+                   strcmp(path, "/activate_mission_flow") == 0) {
             char *b = malloc((size_t)body_len + 1);
             if (!b) {
                 free(req);
