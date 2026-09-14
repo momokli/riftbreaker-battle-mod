@@ -77,13 +77,11 @@
 (function () {
   var $ = function (id) { return document.getElementById(id); };
 
-  function api() {
-    var v = $('url').value.trim();
-    return v ? v : location.origin;
-  }
-
   function baseUrl() {
-    return api();
+    var v = $('url').value.trim();
+    if (v) return v.replace(/\/+$/, '') + '/';
+    // Page's own directory, so it also works behind a path prefix (/contract/).
+    return new URL('.', location.href).href;
   }
 
   function setConn(s) { $('conn').textContent = s; }
@@ -99,7 +97,7 @@
 
   async function refresh() {
     try {
-      var s = await post('/get_state');
+      var s = await post('get_state');
       $('raw').textContent = JSON.stringify(s, null, 2);
       $('carbonium').textContent = (typeof s.carbonium === 'number') ? s.carbonium.toLocaleString() : String(s.carbonium);
       $('carbonium_max').textContent = (typeof s.carbonium_max === 'number') ? s.carbonium_max.toLocaleString() : String(s.carbonium_max);
@@ -115,7 +113,7 @@
 
   async function addResource(amount) {
     try {
-      var r = await post('/add_resource', { amount: String(amount) });
+      var r = await post('add_resource', { amount: String(amount) });
       $('exec_out').textContent = JSON.stringify(r);
       refresh();
     } catch (e) {
@@ -131,7 +129,7 @@
   };
   $('end_game').onclick = async function () {
     try {
-      var r = await post('/exec', { command: 'end_game' });
+      var r = await post('exec', { command: 'end_game' });
       $('exec_out').textContent = JSON.stringify(r);
       refresh();
     } catch (e) { $('exec_out').textContent = 'ERR ' + e.message; }
@@ -140,17 +138,14 @@
     var c = $('cmd').value.trim();
     if (!c) return;
     try {
-      var r = await post('/exec', { command: c });
+      var r = await post('exec', { command: c });
       $('exec_out').textContent = JSON.stringify(r);
       refresh();
     } catch (e) { $('exec_out').textContent = 'ERR ' + e.message; }
   };
 
-  if (location.protocol !== 'file:') {
-    $('url').value = location.origin;
-  } else {
-    $('url').value = 'http://127.0.0.1:9001';
-  }
+  // Empty = relative to this page (works at the bridge root AND under /contract/).
+  $('url').value = '';
 
   refresh();
 })();
