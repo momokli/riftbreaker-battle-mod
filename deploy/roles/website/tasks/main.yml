@@ -182,6 +182,19 @@
       }
   register: host_caddy_cockpit_block
 
+# In-place-Sync (Host-Caddy-Reload, Issue #322/#355): Ansibles blockinfile/replace/lineinfile schreiben
+# atomar (temp + rename) und brechen damit den SINGLE-FILE-Bind-Mount des
+# geteilten Host-Caddys ({{ website_host_caddy_container }}): der Container zeigt
+# weiter auf den ALTEN Inode, `caddy reload` liest dann eine veraltete Datei.
+# `cat > ` (kein unlink) schreibt in den bestehenden Inode und hält den Mount
+# aktuell. Ohne diesen Sync schlägt der Post-Check „Reload wirksam?“ still fehl.
+- name: Host-Caddy — Caddyfile in-place in den Container syncen (Bind-Mount)
+  shell: >-
+    docker exec -i {{ website_host_caddy_container }} sh -c 'cat > /etc/caddy/Caddyfile'
+    < {{ website_host_caddyfile_path }}
+  changed_when: false
+  when: not ansible_check_mode
+
 # LIVE-Config des Host-Caddys ueber die Admin-API lesen (nur 127.0.0.1 im
 # Container). Grundlage fuer die Reload-Entscheidung unten.
 - name: Host-Caddy — LIVE-Config ueber die Admin-API lesen
