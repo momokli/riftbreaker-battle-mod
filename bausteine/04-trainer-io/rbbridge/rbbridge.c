@@ -1073,6 +1073,7 @@ static int resolve_module(const unsigned char **out_base, size_t *out_size,
  * .text-Bereich (Code-Section) der Modulabbildung.
  * Rueckgabe 1 = ok, 0 = nicht gefunden.
  */
+#ifdef RBBRIDGE_HOSTTEST
 static int text_range(const unsigned char *base,
                       const unsigned char **out, size_t *out_len)
 {
@@ -1089,6 +1090,7 @@ static int text_range(const unsigned char *base,
     }
     return 0;
 }
+#endif /* RBBRIDGE_HOSTTEST */
 
 /*
  * Plausibilitaets-Check fuer einen vftable-Kandidaten (Risiko "First hit =
