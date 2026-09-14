@@ -1371,33 +1371,6 @@ static int resolve_console_service(console_exec_fn *out_fn, void **out_inst)
 
 #ifndef RBBRIDGE_HOSTTEST
 
-/* Vftable-Scan nach einem Service-Singleton (instance[0] == base + rva). */
-static void *resolve_service_instance_by_rva(const unsigned char *base,
-                                             uint32_t vftable_rva)
-{
-    uint64_t needle = (uint64_t)(uintptr_t)(base + vftable_rva);
-    uintptr_t addr = 0;
-
-    for (;;) {
-        MEMORY_BASIC_INFORMATION mi;
-        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
-            break;
-        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
-        if (next <= addr)
-            break;
-        addr = next;
-        if (!is_readable_region(&mi))
-            continue;
-
-        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
-        size_t nq = mi.RegionSize / sizeof(uint64_t);
-        for (size_t i = 0; i < nq; i++) {
-            if (q[i] == needle)
-                return (void *)&q[i];
-        }
-    }
-    return NULL;
-}
 
 /* Liest ein QWORD von addr, nur wenn die Region committet+lesbar ist.
  * Rueckgabe 1 = gelesen, 0 = nicht lesbar (out bleibt unveraendert). */
@@ -1659,66 +1632,6 @@ static int64_t read_resource_max(const unsigned char *base,
     return (int64_t)((double)f * (double)scale);
 }
 
-/* HQ health via pure C++ (no lua_*): FindService::FindEntityByName ->
- * HealthService::GetHealth/GetMaxHealth (lesen HealthComponent[+0x00]/[+0x04]).
- * Die HealthService-Methoden kapseln exakt dieselbe Offset-Kette (World+0x30
- * ECS-Store -> lookup -> HealthComponent), ohne das komplexe TypeAny-out-Arg
- * des rohen lookups nachbauen zu muessen. */
-#define RBBRIDGE_FIND_SERVICE_VFTABLE_RVA    0x2E94C98u
-#define RBBRIDGE_HEALTH_SERVICE_VFTABLE_RVA  0x2E95760u
-#define RBBRIDGE_FIND_ENTITY_BY_NAME_RVA     0x1C0DF60u
-#define RBBRIDGE_HEALTH_GET_HEALTH_RVA       0xF9BBB0u
-#define RBBRIDGE_HEALTH_GET_MAX_HEALTH_RVA   0xF9C360u
-#define RBBRIDGE_INVALID_ENTITY_ID           0xFFFFFFFFu
-
-typedef uint32_t (__fastcall *find_entity_by_name_fn)(void *self,
-                                                      const char *name);
-typedef float (__fastcall *health_get_float_fn)(void *self, uint32_t entityId);
-
-static void *g_find_service = NULL;
-static void *g_health_service = NULL;
-
-static int read_hq_health(const unsigned char *base, float *hp, float *hpmax)
-{
-    if (!g_find_service)
-        g_find_service = resolve_service_instance_by_rva(
-            base, RBBRIDGE_FIND_SERVICE_VFTABLE_RVA);
-    if (!g_health_service)
-        g_health_service = resolve_service_instance_by_rva(
-            base, RBBRIDGE_HEALTH_SERVICE_VFTABLE_RVA);
-    if (!g_find_service || !g_health_service)
-        return 0;
-
-    /* Boot-Guard: HealthService[+0x08] ist der World*; solange der NULL
-     * ist, wuerde GetHealth/GetMaxHealth intern auf NULL+0x30 lesen. */
-    uint64_t world = 0;
-    if (!safe_read_u64((const unsigned char *)g_health_service + 0x08,
-                       &world) ||
-        !world)
-        return 0;
-
-    /* FindService[+0x08] ist ebenfalls der World*; FindEntityByName
-     * dereferenziert ihn intern. */
-    uint64_t find_world = 0;
-    if (!safe_read_u64((const unsigned char *)g_find_service + 0x08,
-                       &find_world) ||
-        !find_world)
-        return 0;
-
-    find_entity_by_name_fn find_entity = (find_entity_by_name_fn)(uintptr_t)(
-        base + RBBRIDGE_FIND_ENTITY_BY_NAME_RVA);
-    uint32_t entity = find_entity(g_find_service, "headquarters");
-    if (entity == RBBRIDGE_INVALID_ENTITY_ID)
-        return 0;
-
-    health_get_float_fn get_health = (health_get_float_fn)(uintptr_t)(
-        base + RBBRIDGE_HEALTH_GET_HEALTH_RVA);
-    health_get_float_fn get_max = (health_get_float_fn)(uintptr_t)(
-        base + RBBRIDGE_HEALTH_GET_MAX_HEALTH_RVA);
-    *hp = get_health(g_health_service, entity);
-    *hpmax = get_max(g_health_service, entity);
-    return 1;
-}
 
 static void dispatch_get_state(HANDLE hPipe)
 {
@@ -1820,30 +1733,16 @@ static void dispatch_get_state(HANDLE hPipe)
 
     int64_t carbonium_max = read_resource_max(base, account, 0x659cc791);
 
-    /* HQ (pure C++: FindService -> Entity -> HealthService). Read-only. */
-    float hq_hp = 0.0f, hq_hp_max = 0.0f;
-    int hq_ok = read_hq_health(base, &hq_hp, &hq_hp_max);
-    char hq_json[160];
-    if (hq_ok)
-        snprintf(hq_json, sizeof(hq_json),
-                 "\"hq_hp\":%.2f,\"hq_hp_max\":%.2f,\"hq_dead\":%s,",
-                 (double)hq_hp, (double)hq_hp_max,
-                 hq_hp <= 0.0f ? "true" : "false");
-    else
-        snprintf(hq_json, sizeof(hq_json),
-                 "\"hq_hp\":null,\"hq_hp_max\":null,\"hq_dead\":null,");
-
     send_line(hPipe,
               "{\"event\":\"get_state_result\",\"ok\":true,"
-              "\"carbonium\":%llu,\"carbonium_max\":%lld,\"resources\":%s,"
-              "%s}",
+              "\"carbonium\":%llu,\"carbonium_max\":%lld,\"resources\":%s}",
               (unsigned long long)carbonium, (long long)carbonium_max,
-              resources, hq_json);
+              resources);
 }
 
 
 /*
- * Verteilt eine empfangene Protokollzeile (ohne 
+ * Verteilt eine empfangene Protokollzeile (ohne
 ).
  * Unbekanntes/Nicht-JSON wird geloggt und (nur bei JSON-artigen Zeilen)
  * mit einem error-Event beantwortet - der Client soll Feedback bekommen,
