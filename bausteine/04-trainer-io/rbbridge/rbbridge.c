@@ -2812,6 +2812,19 @@ static void dispatch_get_state(HANDLE hPipe)
 
     int64_t carbonium_max = read_resource_max(base, account, 0x659cc791);
 
+    /* HQ (pure C++: FindService -> Entity -> HealthService). Read-only. */
+    float hq_hp = 0.0f, hq_hp_max = 0.0f;
+    int hq_ok = read_hq_health(base, &hq_hp, &hq_hp_max);
+    char hq_json[160];
+    if (hq_ok)
+        snprintf(hq_json, sizeof(hq_json),
+                 "\"hq_hp\":%.2f,\"hq_hp_max\":%.2f,\"hq_dead\":%s,",
+                 (double)hq_hp, (double)hq_hp_max,
+                 hq_hp <= 0.0f ? "true" : "false");
+    else
+        snprintf(hq_json, sizeof(hq_json),
+                 "\"hq_hp\":null,\"hq_hp_max\":null,\"hq_dead\":null,");
+
     /* DOM/Voll-State aus dem Cache (game thread schreibt; spinlock-guarded). */
     char state_json[RESP_BUF_SIZE];
     while (InterlockedExchange(&g_dom_state_lock, 1) != 0)
@@ -2825,9 +2838,10 @@ static void dispatch_get_state(HANDLE hPipe)
     send_line(hPipe,
               "{\"event\":\"get_state_result\",\"ok\":true,"
               "\"carbonium\":%llu,\"carbonium_max\":%lld,\"resources\":%s,"
+              "%s"
               "\"state\":%s}",
               (unsigned long long)carbonium, (long long)carbonium_max,
-              resources, state_json);
+              resources, hq_json, state_json);
 }
 
 

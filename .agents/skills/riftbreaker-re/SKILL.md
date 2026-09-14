@@ -147,35 +147,51 @@ Known gap: the HUD "next wave in X" (`MissionService:ActivateMissionFlow`,
 `time_max`) is NOT in this snapshot yet — `time_to_next` is the DOM spawner
 timer, not the HUD mission-flow countdown.
 
-### WRITE path (LIVE #376 — game-thread command marshaling via vtable detour)
+### Thread model (CORRECTED #378 — read before any Lua work)
+
+The dedicated server runs game logic across a **worker-thread pool**
+(`Exor::TaskWorldExecutor::SubmitSystemTasks`). The Lua VM runs on ONE thread
+(the "Lua/main thread"). These are DIFFERENT threads.
+
+- `ConsoleService::Update(float)` (`0x1C1FBA0`) → **worker thread**.
+- `LuaGraphNode::Update(float)` (`0x1BAA140`) → **worker thread**.
+- ⇒ **any `lua_*` call inside a C++ vftable detour on those functions is UNSAFE**
+  and crashes (confirmed #378: 0x30/0x110 NULL-deref + garbage-pointer page
+  faults during boot, no player connected).
+
+The ONLY safe place to touch the Lua stack is the **Lua/main thread**. The only
+reliable trigger there is a **Lua hook**: the PLAYERMOD wraps
+`dom_mananger:Update` (Lua method → Lua/main thread) and calls a DLL-registered
+C function. That is the working `a0bdbf3` architecture — use it for Lua reads,
+NOT a C++ detour.
+
+### WRITE path (#376 — native + exec commands)
 
 `ConsoleService::ExecuteCommand` dispatches the command handler **inline on the
 caller's thread** (disasm-verified) — a Lua command on the pipe thread crashes
-the server (same class as the read crash). Fix: marshal commands to the game
-thread.
+the server (same class as the read crash).
 
 RVAs (build 2.0.58485):
 
 | symbol | RVA | meaning |
 |---|---|---|
 | `ConsoleService::ExecuteCommand(char const*)` | `0x1C0BEF0` | dispatches inline (NOT thread-safe) |
-| `ConsoleService::Update(float)` | `0x1C1FBA0` | game-thread per-frame update (always runs) |
-| `LuaGraphNode::Update(float)` | `0x1BAA140` | checks `[this+0xF1]` (suspended); returns early when suspended |
+| `ConsoleService::Update(float)` | `0x1C1FBA0` | **worker-thread** update (TaskWorldExecutor); NOT safe for lua_* |
+| `LuaGraphNode::SetSuspended(bool)` | `0x1BA6CB0` | pure C++ flag write (`[this+0xF1]`); safe from any thread |
+| `MissionService::FinishCurrentMission(int)` | `0xF9A190` | pure C++ (needs resolved MissionService + World) |
+| `LuaGraphNode::Update(float)` | `0x1BAA140` | **worker-thread** update; `[this+0xF1]` suspend check, returns early when suspended |
 
-Architecture:
+Architecture (native WRITE is thread-agnostic, Lua is NOT):
 - `dispatch_exec` (pipe thread) writes the command into a spinlock buffer
   (`g_pending_cmd`), never calls `ExecuteCommand`.
 - `install_update_hook()` scans the `ConsoleService` vtable for
   `base + 0x1C1FBA0` and patches that slot to `detour_console_update`
   (VirtualProtect).
-- The detour drains the buffer and calls `ExecuteCommand` on the **game thread**
-  each frame, then chains to the original `Update`.
-
-Live-verified: `debug_dom_pause`/`debug_dom_resume`/`debug_dom_manager_spawn_wave_level`
-all return `ok:true` without crashing; pause freezes `time_to_next`, resume
-unfreezes, spawn_wave spawns creatures. The mod's `dom_mananger:Update` hook
-does NOT run while the DOM is suspended (`LuaGraphNode::Update` skips), so the
-detour on an always-running function is required for "resume from pause".
+- Native WRITE (`pause_dom`/`resume_dom` via `SetSuspended`, `end_game` via
+  `FinishCurrentMission`) is pure C++ — safe from any thread once
+  `g_dom_instance`/`g_mission_service` are resolved.
+- Lua READS and Lua-based `ExecuteCommand` must run on the **Lua/main thread**
+  via a Lua hook (see "Full state egress" above), NOT via these detours.
 
 ## Live test workflow (planet)
 
@@ -217,16 +233,16 @@ docker restart riftbreaker-dedicated`. Injection runs at boot (~2-3 min).
   in committed readable memory is (essentially) a real instance; false positives
   are negligible. For Lua reads, still skip sentinel refs (`0xFFFFFFFF`/-2) and
   NULL `lua_State*`.
-- **CONFIRMED CRASH (Issue #376):** reading Lua fields directly from the pipe
-  thread (`lua_rawgeti`/`lua_getfield`/`lua_settop` on the game's `lua_State*`)
-  is NOT thread-safe. It corrupts the Lua stack while the game thread runs Lua,
-  and crashes the DedicatedServer (`winedbg --auto`, `LUA CRASH: attempt to call
-a nil value` in `survival_jungle.lua`). The values read _correctly_ for many
-  samples before the crash, so the bug is concurrency, not the offsets.
-  **Fix:** marshal the read to the game thread (e.g. a per-frame Lua hook that
-  writes the values into a thread-safe C++ global, which the pipe thread then
-  reads), or capture via the Lua mod + a registered C++ accessor. Do NOT do
-  raw `lua_*` stack ops on the pipe thread.
+- **CONFIRMED CRASH (Issue #376):** reading Lua fields from any non-Lua thread
+  (pipe thread OR worker thread) is NOT thread-safe. It corrupts the Lua stack
+  and crashes the DedicatedServer (NULL+0x30/0x110 deref or a garbage-pointer
+  page fault). The values can read _correctly_ for many samples first, so the
+  bug is concurrency, not the offsets.
+  **Key correction (#378):** `ConsoleService::Update` and `LuaGraphNode::Update`
+  run on a WORKER thread (`TaskWorldExecutor`), NOT the game/main thread — so a
+  C++ vftable detour on either is ALSO unsafe for `lua_*`. The only safe trigger
+  is the Lua/main thread: PLAYERMOD wraps `dom_mananger:Update` and calls a
+  DLL-registered C function. Do NOT do raw `lua_*` stack ops off the Lua thread.
 
 ## References
 
