@@ -210,6 +210,18 @@ class ServerControlTestCase(BaseFixture):
         with self.assertRaises(sc.ConfigUnavailable):
             sc.ServerControl(cfg).config({"difficulty": "hard"})
 
+    def test_undefined_variable_maps_to_config_unavailable(self):
+        try:
+            import jinja2  # noqa: F401
+        except ImportError:
+            self.skipTest("jinja2 nicht installiert (Fallback wirft nicht)")
+        template_path = os.path.join(self.tmp, "undefined.cfg.j2")
+        with open(template_path, "w", encoding="utf-8") as handle:
+            handle.write('set x "{{ never_defined }}"\n')
+        cfg = dict(self.cfg, config_template=template_path)
+        with self.assertRaises(sc.ConfigUnavailable):
+            sc.ServerControl(cfg).config({"difficulty": "hard"})
+
     def test_config_no_restart_when_disabled(self):
         sc.ServerControl(self.cfg).config({"difficulty": "coop_normal"}, restart=False)
         self.assertEqual(self.docker_calls(), [])
@@ -288,6 +300,30 @@ class HttpLayerTestCase(BaseFixture):
     def test_401_with_wrong_token(self):
         status, _body = self.request("/server/status", token="nope")
         self.assertEqual(status, 401)
+
+    def test_401_with_non_ascii_bearer(self):
+        # Non-ASCII-Bearer darf NIE eine Exception ausloesen (frueher:
+        # TypeError in hmac.compare_digest -> RemoteDisconnected statt 401).
+        status, body = self.request("/server/status", token="\u00fcn\u00efcode")
+        self.assertEqual(status, 401)
+        self.assertEqual(body["error"], "unauthorized")
+
+    def test_non_ascii_bearer_with_non_ascii_token(self):
+        # Verschaeft: ein Token mit Non-ASCII-Zeichen muss weiter funktionieren.
+        cfg = dict(self.cfg, token="t\u00f6ken-\u00fcber")
+        httpd = sc.build_server(cfg)
+        port = httpd.server_address[1]
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        try:
+            req = urllib.request.Request("http://127.0.0.1:%d/server/status" % port)
+            req.add_header("Authorization", "Bearer t\u00f6ken-\u00fcber")
+            with urllib.request.urlopen(req, timeout=10) as response:
+                self.assertEqual(response.status, 200)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
 
     def test_status_ok_with_token(self):
         status, body = self.request("/server/status")

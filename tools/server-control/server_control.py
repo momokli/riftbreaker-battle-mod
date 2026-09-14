@@ -133,7 +133,14 @@ def render_template(template_text: str, variables: Dict[str, Any]) -> str:
         return render_fallback(template_text, variables)
 
     env = jinja2.Environment(undefined=jinja2.StrictUndefined, autoescape=False)
-    return env.from_string(template_text).render(**variables)
+    try:
+        return env.from_string(template_text).render(**variables)
+    except jinja2.UndefinedError as exc:
+        # Vorlage referenziert eine Variable, die in config-vars.json fehlt ->
+        # 503 config_unavailable statt generischem 500 internal_error.
+        raise ConfigUnavailable(
+            "config.cfg-Vorlage referenziert unbekannte Variable: %s" % exc
+        )
 
 
 def validate_config_value(field: str, value: Any) -> str:
@@ -364,7 +371,12 @@ class Handler(BaseHTTPRequestHandler):
         prefix = "Bearer "
         if not header.startswith(prefix):
             return False
-        return hmac.compare_digest(header[len(prefix):].strip(), self.token)
+        # Bytes vergleichen: ``hmac.compare_digest`` wirft bei ``str`` mit
+        # non-ASCII ``TypeError``. Ein non-ASCII-Bearer (oder ein Token mit
+        # Sonderzeichen) darf NIE eine Exception ausloesen, sondern nur 401.
+        provided = header[len(prefix):].strip().encode("utf-8")
+        expected = self.token.encode("utf-8")
+        return hmac.compare_digest(provided, expected)
 
     def _read_json(self) -> Dict[str, Any]:
         length = int(self.headers.get("Content-Length") or 0)
@@ -393,11 +405,13 @@ class Handler(BaseHTTPRequestHandler):
         path = split.path.rstrip("/") or "/"
         query = parse_qs(split.query)
 
-        if not self._authorized():
-            self._send_json(401, {"error": "unauthorized"}, {"WWW-Authenticate": "Bearer"})
-            return
-
         try:
+            # Auth IM try-Block: so bricht der Handler an dieser Stelle nie
+            # ohne Antwort ab (jeder Fehler wird als JSON-Response beantwortet).
+            if not self._authorized():
+                self._send_json(401, {"error": "unauthorized"}, {"WWW-Authenticate": "Bearer"})
+                return
+
             if method == "GET" and path == "/server/status":
                 self._send_json(200, self.control.status())
             elif method == "GET" and path == "/server/logs":
