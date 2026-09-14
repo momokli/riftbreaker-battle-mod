@@ -11,6 +11,11 @@ riftbreaker_mod_dir: "{{ riftbreaker_game_dir }}/mods/rbbattle"
 # jeden Backup-Ordner mit *.manifest als zweite Mod (Befund 2026-09-10,
 # Issue #212; Guard + Verifikation in der Rolle).
 riftbreaker_backup_dir: "{{ riftbreaker_game_dir }}-backups"
+# Bridge-Binaries (rbtools) isoliert von prod — prod überschreibt via
+# deploy/prod-vars.yml auf /opt/rbmods/rbtools-rift (Root cause #409: sonst
+# teilen sich beide Stacks den einen Mount /opt/rbmods/rbtools).
+rbtools_dir: /opt/rbmods/rbtools-drift
+rbtools_staging_dir: /opt/rbmods/rbtools-staging-drift
 # Laufzeit-Image (Rolle dedicated-server-image, Issue #241, Community-Rezept).
 # Tag = Deploy-SHA aus site.yml (pre_tasks) — KEIN `latest`; das Image existiert
 # garantiert, bevor der Container startet.

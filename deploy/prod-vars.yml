@@ -28,6 +28,12 @@ riftbreaker_saves_volume: rb-saves-prod
 # IO-Bridge isoliert von dev (9001) — sonst Kollision auf 127.0.0.1.
 riftbreaker_bridge_port: 9002
 
+# Bridge-Binaries (rbtools) isoliert von dev — sonst laden prod UND dev aus dem
+# gemeinsamen /opt/rbmods/rbtools (Root cause #409: prod lief nach dem Refactor
+# auf neuen Binaries statt auf dem eingefrorenen Tag-Stand).
+rbtools_dir: /opt/rbmods/rbtools-rift
+rbtools_staging_dir: /opt/rbmods/rbtools-staging-rift
+
 # Sidecars (Session-Recorder + Referee-Egress) isoliert von dev — die festen
 # container_name-Werte (riftbreaker-sessions/-egress) würden sonst mit dem
 # dev-Stack kollidieren. Eigener Sessions-Dir, damit die JSONL getrennt bleiben.
