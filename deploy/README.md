@@ -178,9 +178,9 @@ push auf main / push auf Tag v*
   → GitHub-Actions-Job auf dem self-hosted Runner (planet)
   → ssh rbd "<sha> <ref>"                     [Runner-Key, User deploy]
   → forced command /opt/rbbattle-deploy/deploy-ssh.sh (läuft als deploy):
-       SHA validieren → git fetch + Hard-Checkout im Checkout
-       → <ref> in Marker-Datei /opt/rbbattle-deploy/.deploy-ref schreiben
-       → sudo -n /usr/local/bin/rbbattle-deploy (ansible-playbook als root):
+       SHA validieren → <sha>/<ref> in Marker-Dateien schreiben
+       → sudo -n /usr/local/bin/rbbattle-deploy (als root):
+            git fetch + Hard-Checkout (als root) → chown -R deploy:deploy
             refs/heads/main → site.yml        (dev)
             refs/tags/v*    → deploy-prod.yml (prod)
   → exit code = Deploy-Ergebnis (kein Polling, kein Secret)
@@ -234,9 +234,9 @@ sudo -u runner ssh -o BatchMode=yes rbd \
 
 Das Playbook läuft mit `become: true` und braucht root. Root gibt es
 ausschließlich über das enge sudoers-Snippet unten — NOPASSWD **nur** für den
-root-owned Wrapper `/usr/local/bin/rbbattle-deploy` (ohne Argumente), der das
-`ansible-playbook` aus dem gepinnten venv ausführt. Der deploy-User selbst
-läuft durchgehend non-root (forced command + git-Checkout als deploy).
+root-owned Wrapper `/usr/local/bin/rbbattle-deploy` (ohne Argumente), der den
+git-Checkout (als root) + `ansible-playbook` aus dem gepinnten venv ausführt.
+Der deploy-User läuft nur für Validierung + Marker-Schreiben non-root.
 
 ```bash
 # a) Ansible root-owned installieren (gepinnt; deploy darf nicht schreiben):
@@ -251,7 +251,16 @@ sudo tee /usr/local/bin/rbbattle-deploy >/dev/null <<'WRAPPER'
 set -eu
 export HOME=/opt/rbbattle-deploy
 export ANSIBLE_CONFIG=/etc/rbbattle-deploy/ansible.cfg
+
+# Checkout als root + danach Ownership normalisieren: Agent-/RE-Arbeit legt
+# auf planet teils root-owned Dateien ab; liefe der Checkout als deploy,
+# schlüge er mit "unable to unlink ... Permission denied" fehl.
+sha="$(cat /opt/rbbattle-deploy/.deploy-sha 2>/dev/null || true)"
 cd /opt/rbbattle-deploy/repo
+git fetch --prune --quiet origin
+git checkout --force "$sha" >/dev/null
+chown -R deploy:deploy /opt/rbbattle-deploy/repo
+
 ref="$(cat /opt/rbbattle-deploy/.deploy-ref 2>/dev/null || true)"
 case "$ref" in
   refs/tags/v*)
