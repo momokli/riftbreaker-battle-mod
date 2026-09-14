@@ -22,7 +22,7 @@
  *   - Line-delimited-JSON-Protokoll v0 (siehe trainer/protocol.md):
  *       Ingress: {"cmd":"ping"}          -> {"event":"pong"}
  *                {"cmd":"probe"}         -> Memory-Dump (PlayerService-Kette)
- *                {"cmd":"get_state"}     -> carbonium/max/resources/HQ (C++)
+ *                {"cmd":"get_state"}     -> carbonium/ironium/max/resources (C++)
  *                {"cmd":"add_resource"}  -> carbonium direkt aendern (C++)
  *       Egress : {"event":"score_update","score":...,"resources":{...},
  *                "wave":...} (periodischer State-Snapshot, Issue #13,
@@ -344,6 +344,21 @@ static BOOL ht_CloseHandle(HANDLE h) { (void)h; return 1; }
 static HMODULE ht_LoadLibraryA(const char *name) { (void)name; return NULL; }
 #define LoadLibraryA ht_LoadLibraryA
 
+/* safe_read_* im Host-Test: der Testpuffer ist immer gueltig, also direktes
+ * memcpy (kein VirtualQuery). So laesst sich die reine Basket-Lookup-Logik
+ * (basket_lookup_value) ohne Spielprozess testen. */
+static int safe_read_u64(const void *addr, uint64_t *out)
+{
+    memcpy(out, addr, sizeof(uint64_t));
+    return 1;
+}
+
+static int safe_read_u32(const void *addr, uint32_t *out)
+{
+    memcpy(out, addr, sizeof(uint32_t));
+    return 1;
+}
+
 #else /* !RBBRIDGE_HOSTTEST: echter Windows-Build */
 
 #ifndef _WIN32_WINNT
@@ -383,6 +398,47 @@ static HMODULE ht_LoadLibraryA(const char *name) { (void)name; return NULL; }
 #define RESP_BUF_SIZE     4096 /* max. Laenge einer Antwortzeile         */
 #define HEARTBEAT_MS      5000 /* Intervall des State-Platzhalter-Events */
 #define POLL_MS           100  /* Serviceloop-Takt (nur bei Client)      */
+
+/* Ressourcen-StringHashes (FNV-1a-32 des INTERNEN Ressourcennamens).
+ * Ironium ist der Anzeigename der internen Ressource "steel"
+ * (cheat.lua: On "ironium" -> "steel"; Asset-Namen ironium_*; siehe
+ * docs/research/resource-hash-map.md #371). FNV-1a("ironium")=0x91de9d9c
+ * ist KEIN Basket-Key. */
+#define RBBRIDGE_HASH_CARBONIUM 0x659cc791u
+#define RBBRIDGE_HASH_IRONIUM   0x0d01a504u /* intern: "steel" */
+
+/* Forward-Decl: echte Definition im Windows-Build (weiter unten),
+ * Host-Test-Shim im RBBRIDGE_HOSTTEST-Block oben. */
+static int safe_read_u64(const void *addr, uint64_t *out);
+static int safe_read_u32(const void *addr, uint32_t *out);
+
+/* Liest den ResourceValue (int64-Fixed-Point x10^6) zu `hash` aus einem
+ * Account-Basket-Array ({u32 StringHash, i64 ResourceValue} * count, 16 B
+ * je Eintrag). Reine Lookup-Logik ohne Spielprozess -> host-testbar
+ * (tests/rbbridge-hosttest). Rueckgabe 1 = gefunden (out gesetzt),
+ * 0 = nicht gefunden / unlesbar. Kein Crash bei Nicht-Fund. */
+static int basket_lookup_value(const unsigned char *arr, uint64_t count,
+                               uint32_t hash, uint64_t *out)
+{
+    if (!arr || count == 0 || count > 1024)
+        return 0;
+
+    for (uint64_t i = 0; i < count; i++) {
+        const unsigned char *e = arr + i * 16;
+        uint32_t h = 0;
+        uint64_t v = 0;
+        if (!safe_read_u32(e, &h))
+            continue;
+        if (h != hash)
+            continue;
+        if (!safe_read_u64(e + 8, &v))
+            return 0;
+        if (out)
+            *out = v;
+        return 1;
+    }
+    return 0;
+}
 
 #ifndef RBBRIDGE_HOSTTEST
 /* Datei-Log: 1 = %TEMP%\rbbridge.log mitschreiben (Default an; abschalten
@@ -1590,8 +1646,10 @@ static void probe_resources(HANDLE hPipe) {
 }
 
 
-/* get_state (Issue #363/#365): liest den Account-Basket und liefert EINE
- * get_state_result-Zeile (carbonium/max/resources/HQ, pure C++). */
+/* get_state (Issue #363/#365, Ironium #401): liest den Account-Basket und
+ * liefert EINE get_state_result-Zeile (carbonium/ironium/max/resources,
+ * pure C++). Ironium ist der Anzeigename der internen Ressource "steel"
+ * (Hash 0x0d01a504, siehe RBBRIDGE_HASH_IRONIUM). */
 /*
  * Liest die max/capacity einer Ressource (int64-Fixed-Point x10^6).
  * Quelle (RE #370): ResourceAccount+0x20 ist eine Hash-Map (StringHash ->
@@ -1701,7 +1759,16 @@ static void dispatch_get_state(HANDLE hPipe)
     safe_read_u64((unsigned char *)account + 8, &arr);
     safe_read_u64((unsigned char *)account + 0x10, &count);
 
+    /* Basket-Werte per reiner Lookup-Logik (host-getestet: basket_lookup_value).
+     * Nicht gefunden -> 0, identisch zum bisherigen carbonium-Verhalten
+     * (graceful, kein Crash). Ironium = interne Ressource "steel". */
     uint64_t carbonium = 0;
+    uint64_t ironium = 0;
+    basket_lookup_value((const unsigned char *)(uintptr_t)arr, count,
+                        RBBRIDGE_HASH_CARBONIUM, &carbonium);
+    basket_lookup_value((const unsigned char *)(uintptr_t)arr, count,
+                        RBBRIDGE_HASH_IRONIUM, &ironium);
+
     char resources[RESP_BUF_SIZE];
     size_t roff = 0;
     int nres = 0;
@@ -1717,8 +1784,6 @@ static void dispatch_get_state(HANDLE hPipe)
             safe_read_u64(e, &hv);
             safe_read_u64(e + 8, &v);
             uint32_t h = (uint32_t)hv;
-            if (h == 0x659cc791)
-                carbonium = v;
             if (roff + 64 < sizeof(resources)) {
                 w = snprintf(resources + roff, sizeof(resources) - roff,
                              "%s{\"hash\":\"0x%08x\",\"value\":%llu}",
@@ -1731,12 +1796,17 @@ static void dispatch_get_state(HANDLE hPipe)
     }
     snprintf(resources + roff, sizeof(resources) - roff, "]");
 
-    int64_t carbonium_max = read_resource_max(base, account, 0x659cc791);
+    int64_t carbonium_max = read_resource_max(base, account,
+                                              RBBRIDGE_HASH_CARBONIUM);
+    int64_t ironium_max = read_resource_max(base, account,
+                                            RBBRIDGE_HASH_IRONIUM);
 
     send_line(hPipe,
               "{\"event\":\"get_state_result\",\"ok\":true,"
-              "\"carbonium\":%llu,\"carbonium_max\":%lld,\"resources\":%s}",
+              "\"carbonium\":%llu,\"carbonium_max\":%lld,"
+              "\"ironium\":%llu,\"ironium_max\":%lld,\"resources\":%s}",
               (unsigned long long)carbonium, (long long)carbonium_max,
+              (unsigned long long)ironium, (long long)ironium_max,
               resources);
 }
 

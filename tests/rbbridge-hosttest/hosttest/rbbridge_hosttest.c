@@ -336,6 +336,48 @@ int main(void)
     g_console_cache.valid = 0;
     free(imgd);
 
+    /* -------------------------------------------------------------- */
+    /* basket_lookup_value (#401): reine Account-Basket-Lookup-Logik    */
+    /* -------------------------------------------------------------- */
+    /* Synthetischer Basket: 16-B-Entries {u32 StringHash, i64 Value}. */
+    {
+        static unsigned char basket[3 * 16];
+        memset(basket, 0, sizeof(basket));
+        uint32_t h0 = 0x659cc791u; /* carbonium */
+        uint32_t h1 = 0x0d01a504u; /* ironium (intern "steel") */
+        uint32_t h2 = 0x1b9f8256u; /* titanium */
+        uint64_t v0 = 300000000ull, v1 = 50000000ull, v2 = 0ull;
+        memcpy(basket + 0,  &h0, 4); memcpy(basket + 8,  &v0, 8);
+        memcpy(basket + 16, &h1, 4); memcpy(basket + 24, &v1, 8);
+        memcpy(basket + 32, &h2, 4); memcpy(basket + 40, &v2, 8);
+
+        uint64_t out = 0;
+        check(basket_lookup_value(basket, 3, h0, &out) == 1 && out == v0,
+              "basket_lookup: carbonium-Wert gefunden (v0)");
+        out = 0;
+        check(basket_lookup_value(basket, 3, h1, &out) == 1 && out == v1,
+              "basket_lookup: ironium-Wert gefunden (v1 = steel)");
+        out = 123;
+        check(basket_lookup_value(basket, 3, h2, &out) == 1 && out == v2,
+              "basket_lookup: titanium == 0 -> gefunden (v2)");
+
+        /* Nicht-Fund ist graceful: 0 zurueck, out unangetastet. */
+        out = 424242;
+        check(basket_lookup_value(basket, 3, 0xdeadbeefu, &out) == 0
+              && out == 424242,
+              "basket_lookup: unbekannter Hash -> 0, out unangetastet");
+        /* Randfaelle: NULL/leer/zu gross -> 0, kein Crash. */
+        check(basket_lookup_value(NULL, 3, h1, &out) == 0,
+              "basket_lookup: arr == NULL -> 0");
+        check(basket_lookup_value(basket, 0, h1, &out) == 0,
+              "basket_lookup: count == 0 -> 0");
+        check(basket_lookup_value(basket, 1025, h1, &out) == 0,
+              "basket_lookup: count > 1024 -> 0 (defensiv)");
+        /* out == NULL ist erlaubt (nur Existenz-Check). */
+        check(basket_lookup_value(basket, 3, h1, NULL) == 1,
+              "basket_lookup: out == NULL -> nur Existenz-Check");
+    }
+
     free(img);
 
     printf("HOSTTEST_PASS=%d HOSTTEST_FAIL=%d\n", g_pass, g_fail);
