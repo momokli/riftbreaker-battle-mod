@@ -9,11 +9,8 @@
 --   git show 3c4c524:mod/lua/rbbattle_autoexec.lua
 -- ============================================================================
 
+-- UI-State (kein Game-Flow-State — Game-Flow/Runde/Mode lebt im Backend, #378).
 local RBB = {}
-RBB.round = 0
-RBB.mode = "sp"
-RBB.commenced = false
-RBB.hq = nil
 
 -- Log-/Konsole-Helfer: Praefix [RBBATTLE] fuer externes Parsen.
 local LOG_TAG = "[RBBATTLE]"
