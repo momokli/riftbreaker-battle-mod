@@ -15,6 +15,9 @@
     # Rollen-Defaults liefern die Compose-Command-Listen (keine Host-Vars).
     - roles/riftbreaker-server/defaults/main.yml
     - roles/website/defaults/main.yml
+    # server-control: liefert server_control_port fuer den /server/*-Proxy im
+    # rift-caddy-Caddyfile (Issue #424).
+    - roles/server-control/defaults/main.yml
 
   vars:
     # Dummy-Werte nur fürs Rendern (kein Secret).

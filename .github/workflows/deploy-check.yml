@@ -100,6 +100,9 @@ jobs:
           ---
           riftbreaker_server_password: check-dummy
           vault_solo_basic_auth_hash: ""
+          # Server-Control (Issue #424): Bearer-Token PFLICHT. Dummy-Wert — der
+          # --check entschluesselt nie das echte Vault.
+          vault_server_control_token: check-dummy-token
           EOF
           # --tags server,website: der Container-Stack + Website. Content-/
           # Tournament-Rollen brauchen Build-Artefakte (dist/, Rust-Binary) und

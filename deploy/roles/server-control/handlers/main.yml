@@ -1,0 +1,6 @@
+---
+- name: restart server-control
+  systemd:
+    name: "{{ server_control_unit }}"
+    state: restarted
+    daemon_reload: true
