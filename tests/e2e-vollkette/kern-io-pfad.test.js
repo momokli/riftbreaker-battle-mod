@@ -189,11 +189,13 @@ test("Graceful Fail (ohne Spieler): exec_result ok:false -> status=error, kein C
 // 4) EGRESS-Verifikation (statisch): offene Flanke, KEINE Regression (#13)
 // ---------------------------------------------------------------------------
 
-test("EGRESS: pipe_bridge ist reiner exec-Kanal, kein State-Forwarding (OFFEN #13)", () => {
+test("EGRESS: pipe_bridge ist reiner C++-Direkt-Kanal, kein State-Forwarding (OFFEN #13)", () => {
   const b = fs.readFileSync(PIPE_BRIDGE_C, "utf8");
-  // Nur zwei Lese-Ereignisse werden gesucht; alles andere wird verworfen.
-  assert.ok(b.includes('pipe_wait_line(h, "exec_result"'), "liest exec_result");
+  // C++-Direkt-Reads/-Writes werden gelesen; exec ist raus.
+  assert.ok(b.includes('pipe_wait_line(h, "get_state_result"'), "liest get_state_result");
+  assert.ok(b.includes('pipe_wait_line(h, "add_resource_result"'), "liest add_resource_result");
   assert.ok(b.includes('pipe_wait_line(h, "pong"'), "liest pong");
+  assert.ok(!b.includes("exec_result"), "kein exec_result mehr (exec raus)");
   // Kein HTTP-Client / kein Report-Endpoint -> score_update kann nicht raus.
   const lower = b.toLowerCase();
   assert.ok(
@@ -202,7 +204,7 @@ test("EGRESS: pipe_bridge ist reiner exec-Kanal, kein State-Forwarding (OFFEN #1
   );
   assert.ok(
     !b.includes("score_update"),
-    "pipe_bridge kennt score_update gar nicht (reiner exec-Kanal)",
+    "pipe_bridge kennt score_update gar nicht (reiner C++-Direkt-Kanal)",
   );
   // Gegenprobe rbbridge: send_state existiert, laeuft aber nur in serve_client
   // (Heartbeat waehrend einer Dauer-Verbindung) — die pipe_bridge verbindet
