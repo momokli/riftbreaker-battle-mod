@@ -564,11 +564,15 @@ static void handle_get_state(SOCKET c)
     http_respond(c, 200, "OK", line);
 }
 
-/* POST /add_resource: fuehrt {"cmd":"add_resource","amount":"..."} auf der
- * Pipe aus und liefert die add_resource_result-Zeile.
- * amount ist ein JSON-STRING (z.B. {"amount":"-10"}). */
+/* POST /add_resource: fuehrt {"cmd":"add_resource","resource":"...",
+ * "amount":"..."} auf der Pipe aus und liefert die add_resource_result-Zeile.
+ * amount ist ein JSON-STRING (z.B. {"amount":"-10"}).
+ * resource ist optional (Default carbonium, Backward-Compat: alte Clients
+ * senden nur amount); der Anzeigename wird vom rbbridge auf den internen
+ * Namen gemappt (z. B. ironium -> steel). */
 static void handle_add_resource(SOCKET c, const char *body)
 {
+    char resource[64] = "";
     char amount[64] = "";
     char line[READ_BUF];
     char payload[LINE_MAX];
@@ -581,6 +585,8 @@ static void handle_add_resource(SOCKET c, const char *body)
                      "{\"ok\":false,\"reason\":\"invalid_request\"}");
         return;
     }
+    /* resource ist optional (Default carbonium, Backward-Compat). */
+    json_get_string(body, "resource", resource, sizeof(resource));
 
     h = pipe_connect(2500);
     if (h == INVALID_HANDLE_VALUE) {
@@ -592,9 +598,13 @@ static void handle_add_resource(SOCKET c, const char *body)
 
     {
         char esc[64 * 2];
+        char resc[64 * 2];
         json_escape(amount, esc, sizeof(esc));
+        json_escape(resource, resc, sizeof(resc));
         snprintf(payload, sizeof(payload),
-                 "{\"cmd\":\"add_resource\",\"amount\":\"%s\"}\n", esc);
+                 "{\"cmd\":\"add_resource\",\"resource\":\"%s\","
+                 "\"amount\":\"%s\"}\n",
+                 resc, esc);
     }
 
     if (!pipe_write_all(h, payload)) {
