@@ -1873,6 +1873,7 @@ typedef void (__fastcall *rbbridge_lua_pushnumber_fn)(void *L, double n);
 #define RBBRIDGE_LUA_TSTRING        4
 #define RBBRIDGE_LUA_TTABLE         5
 #define RBBRIDGE_LUA_TUSERDATA      7
+#define RBBRIDGE_LUA_TFUNCTION      6
 #define RBBRIDGE_LUAGRAPHNODE_VFTABLE_RVA 0x2F46D70u
 #define RBBRIDGE_LUAGRAPHNODE_OBJECT_OFF  0x20u
 #define RBBRIDGE_LUAGRAPHNODE_REF_OFF     0x28u
@@ -2091,18 +2092,22 @@ static int dom_call_method_str(void *L, int ref, const char *name,
     dom_push_self(L, ref);
     g_lua.getfield(L, -1, name);
     int obj = g_lua.gettop(L);
-    g_lua.getfield(L, obj, method);
-    g_lua.pushvalue(L, obj);
-    if (g_lua.call(L, 1, 1, 0) == 0 &&
-        g_lua.type(L, -1) == RBBRIDGE_LUA_TSTRING) {
-        size_t len = 0;
-        const char *s = g_lua.tolstring(L, -1, &len);
-        if (s && len > 0) {
-            if (len >= out_sz)
-                len = out_sz - 1;
-            memcpy(out, s, len);
-            out[len] = '\0';
-            ok = 1;
+    if (g_lua.type(L, obj) != RBBRIDGE_LUA_TNIL) {
+        g_lua.getfield(L, obj, method);
+        if (g_lua.type(L, -1) == RBBRIDGE_LUA_TFUNCTION) {
+            g_lua.pushvalue(L, obj);
+            if (g_lua.call(L, 1, 1, 0) == 0 &&
+                g_lua.type(L, -1) == RBBRIDGE_LUA_TSTRING) {
+                size_t len = 0;
+                const char *s = g_lua.tolstring(L, -1, &len);
+                if (s && len > 0) {
+                    if (len >= out_sz)
+                        len = out_sz - 1;
+                    memcpy(out, s, len);
+                    out[len] = '\0';
+                    ok = 1;
+                }
+            }
         }
     }
     g_lua.settop(L, top);
@@ -2114,48 +2119,56 @@ static int dom_state_remaining(void *L, int ref, const char *field,
                                const char *state_name, double *out)
 {
     int top = g_lua.gettop(L);
+    int sm;
+    int st;
+    double lim = 0.0, dur = 0.0;
+
     dom_push_self(L, ref);
     g_lua.getfield(L, -1, field);
-    int sm = g_lua.gettop(L);
+    sm = g_lua.gettop(L);
+    if (g_lua.type(L, sm) == RBBRIDGE_LUA_TNIL)
+        goto done;
 
     /* s = sm:GetState(state_name) */
     g_lua.getfield(L, sm, "GetState");
+    if (g_lua.type(L, -1) != RBBRIDGE_LUA_TFUNCTION)
+        goto done;
     g_lua.pushvalue(L, sm);
     g_lua.pushstring(L, state_name);
-    if (g_lua.call(L, 2, 1, 0) != 0) {
-        g_lua.settop(L, top);
-        return 0;
-    }
-    int st = g_lua.gettop(L);
-    int t = g_lua.type(L, st);
-    if (t != RBBRIDGE_LUA_TTABLE && t != RBBRIDGE_LUA_TUSERDATA) {
-        g_lua.settop(L, top);
-        return 0;
-    }
+    if (g_lua.call(L, 2, 1, 0) != 0)
+        goto done;
+    st = g_lua.gettop(L);
+    if (g_lua.type(L, st) != RBBRIDGE_LUA_TTABLE &&
+        g_lua.type(L, st) != RBBRIDGE_LUA_TUSERDATA)
+        goto done;
 
     /* lim = s:GetDurationLimit() */
     g_lua.getfield(L, st, "GetDurationLimit");
+    if (g_lua.type(L, -1) != RBBRIDGE_LUA_TFUNCTION)
+        goto done;
     g_lua.pushvalue(L, st);
     if (g_lua.call(L, 1, 1, 0) != 0 ||
-        g_lua.type(L, -1) != RBBRIDGE_LUA_TNUMBER) {
-        g_lua.settop(L, top);
-        return 0;
-    }
-    double lim = g_lua.tonumber(L, -1);
+        g_lua.type(L, -1) != RBBRIDGE_LUA_TNUMBER)
+        goto done;
+    lim = g_lua.tonumber(L, -1);
     g_lua.settop(L, st);
 
     /* dur = s:GetDuration() */
     g_lua.getfield(L, st, "GetDuration");
+    if (g_lua.type(L, -1) != RBBRIDGE_LUA_TFUNCTION)
+        goto done;
     g_lua.pushvalue(L, st);
     if (g_lua.call(L, 1, 1, 0) != 0 ||
-        g_lua.type(L, -1) != RBBRIDGE_LUA_TNUMBER) {
-        g_lua.settop(L, top);
-        return 0;
-    }
-    double dur = g_lua.tonumber(L, -1);
+        g_lua.type(L, -1) != RBBRIDGE_LUA_TNUMBER)
+        goto done;
+    dur = g_lua.tonumber(L, -1);
     *out = lim - dur;
     g_lua.settop(L, top);
     return 1;
+
+done:
+    g_lua.settop(L, top);
+    return 0;
 }
 
 static double dom_ceil(double x)
@@ -2203,24 +2216,33 @@ static int dom_self_method_number(void *L, int ref, const char *method,
     int ok = 0;
     dom_push_self(L, ref);
     int s = g_lua.gettop(L);
-    g_lua.getfield(L, s, method);
-    g_lua.pushvalue(L, s);
-    if (g_lua.call(L, 1, 1, 0) == 0 &&
-        g_lua.type(L, -1) == RBBRIDGE_LUA_TNUMBER) {
-        *out = g_lua.tonumber(L, -1);
-        ok = 1;
+    if (g_lua.type(L, s) != RBBRIDGE_LUA_TNIL) {
+        g_lua.getfield(L, s, method);
+        if (g_lua.type(L, -1) == RBBRIDGE_LUA_TFUNCTION) {
+            g_lua.pushvalue(L, s);
+            if (g_lua.call(L, 1, 1, 0) == 0 &&
+                g_lua.type(L, -1) == RBBRIDGE_LUA_TNUMBER) {
+                *out = g_lua.tonumber(L, -1);
+                ok = 1;
+            }
+        }
     }
     g_lua.settop(L, top);
     return ok;
 }
 
 /* _G[svc]:method() aufrufen (0 Argumente); Ergebnis-Typ zurueckgeben.
- * Laesst das Ergebnis auf dem Stack (Aufrufer raeumt per settop ab). */
+ * Laesst das Ergebnis auf dem Stack (Aufrufer raeumt per settop ab).
+ * nil-sicher: fehlendes Service-Objekt oder fehlende Methode -> -1. */
 static int dom_global_call(void *L, const char *svc, const char *method)
 {
     g_lua.getfield(L, RBBRIDGE_LUA_GLOBALSINDEX, svc);
     int s = g_lua.gettop(L);
+    if (g_lua.type(L, s) == RBBRIDGE_LUA_TNIL)
+        return -1;
     g_lua.getfield(L, s, method);
+    if (g_lua.type(L, -1) != RBBRIDGE_LUA_TFUNCTION)
+        return -1;
     g_lua.pushvalue(L, s);
     if (g_lua.call(L, 1, 1, 0) != 0)
         return -1;
@@ -2293,7 +2315,11 @@ static int dom_global_number_arg_str(void *L, const char *svc,
     int ok = 0;
     g_lua.getfield(L, RBBRIDGE_LUA_GLOBALSINDEX, svc);
     int s = g_lua.gettop(L);
+    if (g_lua.type(L, s) == RBBRIDGE_LUA_TNIL)
+        goto done;
     g_lua.getfield(L, s, method);
+    if (g_lua.type(L, -1) != RBBRIDGE_LUA_TFUNCTION)
+        goto done;
     g_lua.pushvalue(L, s);
     g_lua.pushstring(L, arg);
     if (g_lua.call(L, 2, 1, 0) == 0 &&
@@ -2301,6 +2327,7 @@ static int dom_global_number_arg_str(void *L, const char *svc,
         *out = g_lua.tonumber(L, -1);
         ok = 1;
     }
+done:
     g_lua.settop(L, top);
     return ok;
 }
@@ -2313,7 +2340,11 @@ static int dom_global_number_arg(void *L, const char *svc, const char *method,
     int ok = 0;
     g_lua.getfield(L, RBBRIDGE_LUA_GLOBALSINDEX, svc);
     int s = g_lua.gettop(L);
+    if (g_lua.type(L, s) == RBBRIDGE_LUA_TNIL)
+        goto done;
     g_lua.getfield(L, s, method);
+    if (g_lua.type(L, -1) != RBBRIDGE_LUA_TFUNCTION)
+        goto done;
     g_lua.pushvalue(L, s);
     g_lua.pushnumber(L, arg);
     if (g_lua.call(L, 2, 1, 0) == 0 &&
@@ -2321,6 +2352,7 @@ static int dom_global_number_arg(void *L, const char *svc, const char *method,
         *out = g_lua.tonumber(L, -1);
         ok = 1;
     }
+done:
     g_lua.settop(L, top);
     return ok;
 }
@@ -2333,7 +2365,11 @@ static int dom_global_bool_arg(void *L, const char *svc, const char *method,
     int ok = 0;
     g_lua.getfield(L, RBBRIDGE_LUA_GLOBALSINDEX, svc);
     int s = g_lua.gettop(L);
+    if (g_lua.type(L, s) == RBBRIDGE_LUA_TNIL)
+        goto done;
     g_lua.getfield(L, s, method);
+    if (g_lua.type(L, -1) != RBBRIDGE_LUA_TFUNCTION)
+        goto done;
     g_lua.pushvalue(L, s);
     g_lua.pushnumber(L, arg);
     if (g_lua.call(L, 2, 1, 0) == 0 &&
@@ -2341,6 +2377,7 @@ static int dom_global_bool_arg(void *L, const char *svc, const char *method,
         *out = g_lua.toboolean(L, -1);
         ok = 1;
     }
+done:
     g_lua.settop(L, top);
     return ok;
 }
@@ -2348,7 +2385,7 @@ static int dom_global_bool_arg(void *L, const char *svc, const char *method,
 /* Game-Thread (im ConsoleService::Update-Detour): DOM-State lesen + cachen. */
 static void capture_dom_state_game_thread(void)
 {
-    if (!resolve_dom_instance())
+    if (!resolve_dom_instance() || !g_dom_lua)
         return;
 
     void *L = g_dom_lua;
