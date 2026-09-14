@@ -28,6 +28,11 @@ riftbreaker_saves_volume: rb-saves-prod
 # IO-Bridge isoliert von dev (9001) — sonst Kollision auf 127.0.0.1.
 riftbreaker_bridge_port: 9002
 
+# Bridge-Binaries (rbtools) isoliert von dev — sonst laden prod UND dev aus dem
+# gemeinsamen /opt/rbmods/rbtools (Root cause #409).
+rbtools_dir: /opt/rbmods/rbtools-rift
+rbtools_staging_dir: /opt/rbmods/rbtools-staging-rift
+
 # Sidecars (Session-Recorder + Referee-Egress) isoliert von dev — die festen
 # container_name-Werte (riftbreaker-sessions/-egress) würden sonst mit dem
 # dev-Stack kollidieren. Eigener Sessions-Dir, damit die JSONL getrennt bleiben.
@@ -37,6 +42,15 @@ riftbreaker_sessions_dir: /srv/rbmods-sessions-prod
 
 # Content kommt per Sync aus dem kanonischen Cache (wie dev).
 riftbreaker_content_mode: sync
+
+# --- Tournament-Server (Referee + Web-UI, eigener Port/Unit/Install) ---------
+# Prod-Zwilling: isoliert von dev (8081) auf 8082; bridge A/B zeigen auf die
+# eigene prod-Bridge :9002 (kein Cross-Reference auf dev).
+tournament_install_dir: /opt/rbmods/tournament-server-prod
+tournament_unit: tournament-server-prod
+tournament_port: 8082
+tournament_bridge_a_url: "http://127.0.0.1:9002/exec"
+tournament_bridge_b_url: "http://127.0.0.1:9002/exec"
 
 # --- Website (Landing + Cockpit, eigener Caddy) -----------------------------
 # Prod-Zwilling von dev: eigene Landing (www.rift.projectmellon.de) + eigenes
