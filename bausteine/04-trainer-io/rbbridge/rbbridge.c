@@ -1393,13 +1393,6 @@ static int safe_read_u64(const void *addr, uint64_t *out);
 static console_update_fn g_original_update = NULL;
 static volatile LONG g_update_hooked = 0;
 
-/* LuaGraphNode::Update (Lua/Game-Thread) — EINZIG sicherer Ort fuer
- * lua_*-Reads. ConsoleService::Update laeuft auf einem Worker-Thread
- * (TaskWorldExecutor) und ist fuer lua_* NICHT sicher (#378). */
-static console_update_fn g_original_lgn_update = NULL;
-static volatile LONG g_lgn_update_hooked = 0;
-static uint64_t g_lgn_next_read_tick = 0;
-
 #define RBBRIDGE_PENDING_CMD_MAX 512
 static char g_pending_cmd[RBBRIDGE_PENDING_CMD_MAX];
 static volatile LONG g_pending_cmd_lock = 0;
@@ -1415,7 +1408,6 @@ typedef enum {
 } rbbridge_typed_cmd_t;
 
 #define RBBRIDGE_LUAGRAPHNODE_SET_SUSPENDED_RVA 0x1BA6CB0u
-#define RBBRIDGE_LUAGRAPHNODE_UPDATE_RVA        0x1BAA140u
 #define RBBRIDGE_MISSION_SERVICE_VFTABLE_RVA    0x2E962A0u
 #define RBBRIDGE_MISSION_FINISH_RVA             0xF9A190u
 #define RBBRIDGE_MISSION_STATUS_WIN             0
@@ -1560,13 +1552,9 @@ static void drain_pending_commands(void)
  * Neben dem WRITE-Pfad (pending commands) wird hier auch der DOM-State
  * gelesen und gecached (READ-Pfad, Issue #378). */
 static void capture_dom_state_game_thread(void);
-static void install_lgn_update_hook(void);
-static void __fastcall detour_lgn_update(void *self, float dt);
 
 static void __fastcall detour_console_update(void *self, float dt)
 {
-    /* READ laeuft jetzt im LuaGraphNode::Update-Detour (Lua-Thread). */
-    install_lgn_update_hook();
     drain_pending_typed_commands();
     drain_pending_commands();
     if (g_original_update)
@@ -2715,75 +2703,6 @@ static void capture_dom_state_game_thread(void)
     InterlockedExchange(&g_dom_state_lock, 0);
 }
 
-/* ----------------------------------------------------------------------------
- * READ-Pfad auf dem LUA/Game-Thread (#378).
- *
- * ConsoleService::Update laeuft auf einem Worker-Thread (TaskWorldExecutor::
- * SubmitSystemTasks); lua_*-Calls dort korrumpieren den Lua-Stack und fuehren
- * zum 0x30/0x110-NULL-Deref-Crash. LuaGraphNode::Update laeuft dagegen auf dem
- * Lua/Game-Thread (wie dom_mananger:Update im Mod-Hook) — der sichere Ort.
- * Wir patchen den LuaGraphNode-vftable-Update-Slot und lesen nur fuer die
- * dom_mananger-Instanz (this == g_dom_instance), gethrottlet auf 2 Hz.
- * ------------------------------------------------------------------------- */
-static void __fastcall detour_lgn_update(void *self, float dt)
-{
-    if (!g_dom_cache_valid)
-        resolve_dom_instance(); /* throttled scan; lua_* nur hier (Lua-Thread) */
-
-    if (g_dom_cache_valid && self == g_dom_instance) {
-        uint64_t now = GetTickCount64();
-        if (now >= g_lgn_next_read_tick) {
-            g_lgn_next_read_tick = now + 500; /* 2 Hz reicht fuer 2s-Poll */
-            capture_dom_state_game_thread();
-        }
-    }
-
-    if (g_original_lgn_update)
-        g_original_lgn_update(self, dt);
-}
-
-static int install_lgn_update_hook(void)
-{
-    if (g_lgn_update_hooked)
-        return 1;
-
-    const unsigned char *base = NULL;
-    size_t size = 0;
-    const char *via = NULL;
-    const unsigned char *execfn = NULL;
-    if (!resolve_module(&base, &size, &via, &execfn))
-        return 0;
-
-    const unsigned char *vftable = base + RBBRIDGE_LUAGRAPHNODE_VFTABLE_RVA;
-    uint64_t target =
-        (uint64_t)(uintptr_t)(base + RBBRIDGE_LUAGRAPHNODE_UPDATE_RVA);
-
-    for (int i = 0; i < 128; i++) {
-        uint64_t entry = 0;
-        if (!safe_read_u64(vftable + (size_t)i * 8, &entry))
-            break;
-        if (entry != target)
-            continue;
-        DWORD old = 0;
-        if (!VirtualProtect((void *)(vftable + (size_t)i * 8), 8,
-                            PAGE_READWRITE, &old))
-            return 0;
-        g_original_lgn_update = (console_update_fn)(uintptr_t)entry;
-        *(uint64_t *)(vftable + (size_t)i * 8) =
-            (uint64_t)(uintptr_t)&detour_lgn_update;
-        VirtualProtect((void *)(vftable + (size_t)i * 8), 8, old, &old);
-        g_lgn_update_hooked = 1;
-        dbg("install_lgn_update_hook: Slot %d gepatcht (orig=%p)", i,
-            (void *)g_original_lgn_update);
-        return 1;
-    }
-    dbg("install_lgn_update_hook: Update-Slot nicht gefunden (target=%p)",
-        (void *)(uintptr_t)target);
-    return 0;
-}
-
-
-
 static void dispatch_get_state(HANDLE hPipe)
 {
     const unsigned char *base = NULL;
@@ -2846,7 +2765,6 @@ static void dispatch_get_state(HANDLE hPipe)
         void *cinst = NULL;
         if (resolve_console_service(&cfn, &cinst))
             install_update_hook();
-        install_lgn_update_hook();
     }
 
     void *(*gpa)(void *, unsigned int) =
