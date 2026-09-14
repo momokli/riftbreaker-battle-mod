@@ -13,7 +13,7 @@
 | riftbreaker-dedicated | planet | docker (wine) | 6321/udp | Dev-SP-Server: 1v1 „vs sich selbst" (SP-Mode; rbbattle-Mod + rbbridge) |
 | tournament-server | planet | systemd (Rust/axum, `tournament/`) | 8081 | Turnier 1v1: Lobby/Ready/GO/Wave-Routing/Score (2 Welten) |
 | test-Instanzen | planet | docker, on-demand | frei | Test-Server aller Art (Mod-Tests, Balance, Experimente) |
-| Website | planet | statics + **eigener** Caddy (`rift-caddy`, plain HTTP) hinter `mellon-caddy` | 443 → 127.0.0.1:8787 | Landing `/` · `/connectivity.html` · `/solo.html` · `/status.json` · Proxy `/tournament/*` → tournament-server |
+| Website | planet | statics + **eigener** Caddy (`rift-caddy`, plain HTTP) hinter `mellon-caddy` | 443 → 127.0.0.1:8787 | Landing `/` · `/connectivity.html` · `/solo.html` · `/calcium.html` · `/status.json` · Proxy `/tournament/*` → tournament-server · Proxy `/bridge/get_state` (NUR diese eine Route, kein `/bridge/*`) → pipe_bridge |
 | Mod-Download | planet | statics (Caddy) | 443 | `rbbattle.zip` (Paketierung + md5-Parität) |
 | rbmods-probe.timer | planet | systemd | — | Connectivity-Checks alle 2 Min → `status.json` |
 | rbmods-image-retention.timer | planet | systemd | — | Alte Mod-Image-Tags aufräumen (Rollback-Stand + laufendes Image bleiben) |
@@ -169,6 +169,14 @@ Eigenschaften:
   optionale basic_auth-Schutz (Issue #159) bleibt (nur wenn
   `vault_solo_basic_auth_hash` gesetzt ist).
 - `/mods/*` (Zip-Download + Browse, Upload via dufs) bleibt unverändert.
+- `/bridge/get_state` (Issue #383): **einzelne** Proxy-Route auf die
+  `pipe_bridge` (Trainer-only-Kanal, #265/#363), `POST`, für das
+  Carbonium-Dashboard (`/calcium.html`). Bewusst **kein** `/bridge/*` —
+  die Bridge hat keine Auth (Klasse #298), ein offen proxytes
+  `/bridge/exec` bzw. `/bridge/add_resource` wäre ein ungeschützter
+  Schreibzugang ins laufende Spiel. Exakter Path-Match + `uri strip_prefix
+  /bridge` in `rift-caddy.Caddyfile.j2`; alles andere unter `/bridge/`
+  fällt auf den statischen `file_server` (404).
 - Variablen: `deploy/inventory/host_vars/planet/vars.yml` (`rift_caddy_*`,
   `website_host_caddyfile_*`); Umsetzung: `deploy/roles/website/`.
 
