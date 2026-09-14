@@ -476,6 +476,191 @@ static void http_respond(SOCKET c, int code, const char *status, const char *bod
         send(c, body, blen, 0);
 }
 
+/* Text-basierte Kontrollpanel-Seite (contract.html). Wird unter GET / ausgeliefert;
+ * die Seite redet per fetch() mit /get_state, /add_resource und /exec (same-origin). */
+static const char CONTRACT_HTML[] =
+    "<!doctype html>\n"
+    "<html lang=\"en\">\n"
+    "<head>\n"
+    "<meta charset=\"utf-8\">\n"
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+    "<title>rbbridge contract</title>\n"
+    "<style>\n"
+    "  :root { color-scheme: dark; }\n"
+    "  body { background:#0a0f0a; color:#9fef9f; font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; margin:0; padding:1.25rem; }\n"
+    "  h1 { font-size:1rem; margin:0 0 .75rem; }\n"
+    "  a { color:#7fdfff; }\n"
+    "  section { border:1px solid #2a3a2a; border-radius:4px; padding:.75rem 1rem; margin-bottom:.75rem; max-width:52rem; }\n"
+    "  h2 { font-size:.85rem; margin:.25rem 0 .5rem; border-bottom:1px solid #2a3a2a; padding-bottom:.25rem; color:#cfeecf; }\n"
+    "  .row { display:flex; flex-wrap:wrap; gap:.4rem; align-items:center; }\n"
+    "  .val { color:#fff; }\n"
+    "  .dim { color:#5f8f5f; }\n"
+    "  input, button { background:#0f1a0f; color:#9fef9f; border:1px solid #3a5a3a; border-radius:3px; font:inherit; padding:.3rem .55rem; }\n"
+    "  button:hover { background:#1a2a1a; cursor:pointer; }\n"
+    "  button.danger { border-color:#a03a3a; color:#ef9f9f; }\n"
+    "  pre { background:#060a06; border:1px solid #1a2a1a; padding:.6rem; max-height:40vh; overflow:auto; white-space:pre-wrap; }\n"
+    "  .err { color:#ef9f9f; }\n"
+    "</style>\n"
+    "</head>\n"
+    "<body>\n"
+    "  <h1>rbbridge <span class=\"dim\">contract</span></h1>\n"
+    "\n"
+    "  <section>\n"
+    "    <h2>bridge</h2>\n"
+    "    <div class=\"row\">\n"
+    "      <span class=\"dim\">url</span>\n"
+    "      <input id=\"url\" size=\"34\" spellcheck=\"false\">\n"
+    "      <button id=\"refresh\">refresh</button>\n"
+    "      <span id=\"conn\" class=\"dim\"></span>\n"
+    "    </div>\n"
+    "  </section>\n"
+    "\n"
+    "  <section>\n"
+    "    <h2>carbonium</h2>\n"
+    "    <div class=\"row\">\n"
+    "      <span class=\"dim\">now</span>\n"
+    "      <span id=\"carbonium\" class=\"val\">—</span>\n"
+    "      <span class=\"dim\">/ max</span>\n"
+    "      <span id=\"carbonium_max\" class=\"val\">—</span>\n"
+    "    </div>\n"
+    "    <div class=\"row\" style=\"margin-top:.5rem\">\n"
+    "      <input id=\"amount\" size=\"10\" value=\"10\">\n"
+    "      <button id=\"add\">+ add</button>\n"
+    "      <button id=\"sub\">− subtract</button>\n"
+    "    </div>\n"
+    "  </section>\n"
+    "\n"
+    "  <section>\n"
+    "    <h2>HQ</h2>\n"
+    "    <div class=\"row\">\n"
+    "      <span class=\"dim\">hp</span>\n"
+    "      <span id=\"hq_hp\" class=\"val\">—</span>\n"
+    "      <span class=\"dim\">/ max</span>\n"
+    "      <span id=\"hq_hp_max\" class=\"val\">—</span>\n"
+    "      <span class=\"dim\">dead</span>\n"
+    "      <span id=\"hq_dead\" class=\"val\">—</span>\n"
+    "    </div>\n"
+    "  </section>\n"
+    "\n"
+    "  <section>\n"
+    "    <h2>game</h2>\n"
+    "    <div class=\"row\">\n"
+    "      <button id=\"end_game\" class=\"danger\">end game</button>\n"
+    "      <input id=\"cmd\" size=\"24\" placeholder=\"custom command\" spellcheck=\"false\">\n"
+    "      <button id=\"exec\">exec</button>\n"
+    "    </div>\n"
+    "    <div id=\"exec_out\" class=\"dim\" style=\"margin-top:.5rem\"></div>\n"
+    "  </section>\n"
+    "\n"
+    "  <pre id=\"raw\" class=\"dim\">loading…</pre>\n"
+    "\n"
+    "<script>\n"
+    "(function () {\n"
+    "  var $ = function (id) { return document.getElementById(id); };\n"
+    "\n"
+    "  function api() {\n"
+    "    var v = $('url').value.trim();\n"
+    "    return v ? v : location.origin;\n"
+    "  }\n"
+    "\n"
+    "  function baseUrl() {\n"
+    "    return api();\n"
+    "  }\n"
+    "\n"
+    "  function setConn(s) { $('conn').textContent = s; }\n"
+    "\n"
+    "  async function post(path, body) {\n"
+    "    var res = await fetch(baseUrl() + path, {\n"
+    "      method: 'POST',\n"
+    "      headers: { 'content-type': 'application/json' },\n"
+    "      body: body === undefined ? '{}' : JSON.stringify(body)\n"
+    "    });\n"
+    "    return res.json();\n"
+    "  }\n"
+    "\n"
+    "  async function refresh() {\n"
+    "    try {\n"
+    "      var s = await post('/get_state');\n"
+    "      $('raw').textContent = JSON.stringify(s, null, 2);\n"
+    "      $('carbonium').textContent = (typeof s.carbonium === 'number') ? s.carbonium.toLocaleString() : String(s.carbonium);\n"
+    "      $('carbonium_max').textContent = (typeof s.carbonium_max === 'number') ? s.carbonium_max.toLocaleString() : String(s.carbonium_max);\n"
+    "      $('hq_hp').textContent = (s.hq_hp === null || s.hq_hp === undefined) ? '—' : s.hq_hp;\n"
+    "      $('hq_hp_max').textContent = (s.hq_hp_max === null || s.hq_hp_max === undefined) ? '—' : s.hq_hp_max;\n"
+    "      $('hq_dead').textContent = (s.hq_dead === null || s.hq_dead === undefined) ? '—' : String(s.hq_dead);\n"
+    "      setConn('ok');\n"
+    "    } catch (e) {\n"
+    "      setConn('ERR ' + e.message);\n"
+    "      $('raw').textContent = String(e);\n"
+    "    }\n"
+    "  }\n"
+    "\n"
+    "  async function addResource(amount) {\n"
+    "    try {\n"
+    "      var r = await post('/add_resource', { amount: String(amount) });\n"
+    "      $('exec_out').textContent = JSON.stringify(r);\n"
+    "      refresh();\n"
+    "    } catch (e) {\n"
+    "      $('exec_out').textContent = 'ERR ' + e.message;\n"
+    "    }\n"
+    "  }\n"
+    "\n"
+    "  $('refresh').onclick = refresh;\n"
+    "  $('add').onclick = function () { addResource($('amount').value); };\n"
+    "  $('sub').onclick = function () {\n"
+    "    var a = parseFloat($('amount').value) || 0;\n"
+    "    addResource(-a);\n"
+    "  };\n"
+    "  $('end_game').onclick = async function () {\n"
+    "    try {\n"
+    "      var r = await post('/exec', { command: 'end_game' });\n"
+    "      $('exec_out').textContent = JSON.stringify(r);\n"
+    "      refresh();\n"
+    "    } catch (e) { $('exec_out').textContent = 'ERR ' + e.message; }\n"
+    "  };\n"
+    "  $('exec').onclick = async function () {\n"
+    "    var c = $('cmd').value.trim();\n"
+    "    if (!c) return;\n"
+    "    try {\n"
+    "      var r = await post('/exec', { command: c });\n"
+    "      $('exec_out').textContent = JSON.stringify(r);\n"
+    "      refresh();\n"
+    "    } catch (e) { $('exec_out').textContent = 'ERR ' + e.message; }\n"
+    "  };\n"
+    "\n"
+    "  if (location.protocol !== 'file:') {\n"
+    "    $('url').value = location.origin;\n"
+    "  } else {\n"
+    "    $('url').value = 'http://127.0.0.1:9001';\n"
+    "  }\n"
+    "\n"
+    "  refresh();\n"
+    "})();\n"
+    "</script>\n"
+    "</body>\n"
+    "</html>\n";
+
+static void http_respond_html(SOCKET c, int code, const char *status,
+                              const char *body)
+{
+    char hdr[512];
+    int blen = (int)strlen(body);
+    int n = snprintf(hdr, sizeof(hdr),
+                     "HTTP/1.1 %d %s\r\n"
+                     "Content-Type: text/html; charset=utf-8\r\n"
+                     "Content-Length: %d\r\n"
+                     "Connection: close\r\n\r\n",
+                     code, status, blen);
+    send(c, hdr, n, 0);
+    if (blen > 0)
+        send(c, body, blen, 0);
+}
+
+static void handle_index(SOCKET c)
+{
+    http_respond_html(c, 200, "OK", CONTRACT_HTML);
+}
+
+
 /* Case-insensitive Suche nach <needle> in <hay> (fuer HTTP-Header). */
 static const char *find_icase(const char *hay, const char *needle)
 {
@@ -873,6 +1058,11 @@ static void handle_client(SOCKET c)
             b[body_len] = '\0';
             handle_add_resource(c, b);
             free(b);
+        } else if (strcmp(method, "GET") == 0 &&
+                   (strcmp(path, "/") == 0 ||
+                    strcmp(path, "/index.html") == 0 ||
+                    strcmp(path, "/contract.html") == 0)) {
+            handle_index(c);
         } else {
             http_respond(c, 404, "Not Found",
                          "{\"ok\":false,\"reason\":\"not_found\"}");
