@@ -206,10 +206,43 @@ static int json_get_string(const char *json, const char *key,
     return 0;
 }
 
+/* json_get_number: findet "key":<zahl> ODER "key":"<zahl>" und liefert
+ * 1 bei erfolgreichem Parse. Nutzt strtod; akzeptiert Integer und Float.
+ * Dieselbe Minimal-Logik wie json_get_string, nur ohne Quotes-Pflicht. */
+static int json_get_number(const char *json, const char *key, double *out)
+{
+    if (!json || !key || !out)
+        return 0;
 
+    size_t key_len = strlen(key);
+    const char *p = json;
 
-/* ------------------------------------------------------------------ */
-/* Named-Pipe-Client (\\.\pipe\rbbattle)                                */
+    while ((p = strstr(p, key)) != NULL) {
+        if (p != json && p[-1] == '"' && p[key_len] == '"') {
+            const char *q = p + key_len + 1;
+            while (*q == ' ' || *q == '\t')
+                q++;
+            if (*q != ':')
+                return 0;
+            q++;
+            while (*q == ' ' || *q == '\t')
+                q++;
+            if (*q == '"') /* auch als String geschickt: akzeptieren */
+                q++;
+            {
+                char *end = NULL;
+                double v = strtod(q, &end);
+                if (end == q)
+                    return 0; /* kein Zahlbeginn */
+                *out = v;
+                return 1;
+            }
+        }
+        p += key_len;
+    }
+    return 0;
+}
+
 /* ------------------------------------------------------------------ */
 
 /* Wandelt GetTickCount-Werte wrap-sicher in "Deadline erreicht". */
@@ -691,6 +724,76 @@ static void handle_activate_mission_flow(SOCKET c, const char *body)
     http_respond(c, 200, "OK", line);
 }
 
+/* POST /creatures_difficulty: CampaignService-Kreaturen-Basis-Difficulty
+ * (Read/Write, Issue #388) ueber die Pipe. Body:
+ *   {"op":"set|increase|decrease","value":2.5}
+ * Liefert die creatures_difficulty_result-Zeile der Bridge. */
+static void handle_creatures_difficulty(SOCKET c, const char *body)
+{
+    char op[32] = "";
+    char line[READ_BUF];
+    char payload[LINE_MAX];
+    char esc_op[32 * 2];
+    double value = 0.0;
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+    HANDLE h;
+
+    if (!json_get_string(body, "op", op, sizeof(op)) || !op[0]) {
+        blog("POST /creatures_difficulty ohne op -> invalid_request");
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_request\"}");
+        return;
+    }
+    if (strcmp(op, "set") != 0 && strcmp(op, "increase") != 0 &&
+        strcmp(op, "decrease") != 0) {
+        blog("POST /creatures_difficulty: unbekanntes op '%s'", op);
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_op\"}");
+        return;
+    }
+    if (!json_get_number(body, "value", &value)) {
+        blog("POST /creatures_difficulty ohne value -> invalid_request");
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_request\"}");
+        return;
+    }
+
+    h = pipe_connect(2500);
+    if (h == INVALID_HANDLE_VALUE) {
+        blog("POST /creatures_difficulty: Pipe nicht erreichbar -> "
+             "pipe_unavailable");
+        http_respond(c, 503, "Service Unavailable",
+                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+        return;
+    }
+
+    json_escape(op, esc_op, sizeof(esc_op));
+    /* value als String (rbbridge json_get_string unterstuetzt nur Strings). */
+    snprintf(payload, sizeof(payload),
+             "{\"cmd\":\"creatures_difficulty\",\"op\":\"%s\","
+             "\"value\":\"%.6f\"}\n",
+             esc_op, value);
+
+    if (!pipe_write_all(h, payload)) {
+        CloseHandle(h);
+        http_respond(c, 500, "Internal Server Error",
+                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
+        return;
+    }
+
+    {
+        int rc = pipe_wait_line(h, "creatures_difficulty_result", NULL,
+                                timeout_ms, line, sizeof(line));
+        CloseHandle(h);
+        if (rc != 0) {
+            http_respond(c, 500, "Internal Server Error",
+                         "{\"ok\":false,\"reason\":\"timeout\"}");
+            return;
+        }
+    }
+    http_respond(c, 200, "OK", line);
+}
+
 static void handle_client(SOCKET c)
 {
     char *req = malloc(REQ_MAX + 1);
@@ -782,6 +885,16 @@ static void handle_client(SOCKET c)
             memcpy(b, body, (size_t)body_len);
             b[body_len] = '\0';
             handle_activate_mission_flow(c, b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/creatures_difficulty") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_creatures_difficulty(c, b);
             free(b);
         } else if (strcmp(method, "GET") == 0 &&
                    (strcmp(path, "/") == 0 ||

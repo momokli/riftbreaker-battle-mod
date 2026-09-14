@@ -225,6 +225,71 @@ POST /get_state
 Kein Crash; die `no_account`-Antworten (`Welt laedt noch`) liefern die
 Mission-Flow-Felder mit (Read haengt nicht am Spieler-Account).
 
+## #388 — `CampaignService` Creatures-Base-Difficulty (Read + Write)
+
+Low-level C++ primitive for the campaign difficulty (creature scaling).
+Found by `llvm-pdbutil dump -publics` (PDB, build 2.0.58485) + disasm on
+planet (2026-09-15). **No Lua, no Console.**
+
+### Symbols / RVAs
+
+| demangled symbol | PDB `addr` | RVA | notes |
+| --- | --- | --- | --- |
+| `??_7CampaignService@Riftbreaker@@6B@` | `0002:1024832` (.rdata) | `0x2E9C340` | vftable — only used for **instance** resolution |
+| `Riftbreaker::CampaignService::GetCreaturesBaseDifficulty(void)` | `0001:16820704` | `0x100B9E0` | `float` return (XMM0) |
+| `Riftbreaker::CampaignService::SetCreaturesBaseDifficulty(float)` | `0001:16900352` | `0x101F100` | absolute set |
+| `Riftbreaker::CampaignService::IncreaseCreaturesBaseDifficulty(float)` | `0001:16844976` | `0x10118B0` | delta `+=` |
+| `Riftbreaker::CampaignService::DecreaseCreaturesBaseDifficulty(float)` | `0001:16806272` | `0x1008180` | delta `-=` |
+
+All four are **public non-virtual** members (mangled `QEAA…`), i.e. they are
+called **directly** (`call rel32`), NOT through the vftable. The vftable is
+only needed to locate the `CampaignService` instance via the QWORD scan.
+
+> ⚠️ The issue text names `RevertCreaturesBaseDifficulty` — **no such symbol
+exists** in the binary. The actual pair is `Decrease…` (delta) +
+`Set…` (absolute). Both are implemented.
+
+### Layout (from the disasm of all four)
+
+```
+CampaignService (vftable RVA 0x2E9C340)
+  + 0x10  -> ptr to the campaign-params object
+              + 0x584 = float creatures_base_difficulty
+```
+
+### Call convention (MSVC x64)
+
+`this`=RCX, the `float` argument in **XMM1** (integer slot 0 is taken by
+`this`; FP args are numbered independently), return value in XMM0. Pure C++
+-> **thread-agnostic** (#378): safe from the pipe thread, no `lua_*`.
+
+### AOB signatures (planet-verified unique in `.text`, exactly 1 hit each)
+
+```
+Get  48 8B 41 10 F3 0F 10 80 84 05 00 00 C3
+Set  48 8B 41 10 F3 0F 11 88 84 05 00 00 C3
+Inc  48 8B 41 10 F3 0F 58 88 84 05 00 00 F3 0F 11 88 84 05 00 00 C3
+Dec  48 8B 41 10 F3 0F 10 80 84 05 00 00 F3 0F 5C C1 F3 0F 11 80 84 05 00 00 C3
+```
+
+Runtime addresses come **only** from these AOB scans (`RBBRIDGE_DIFF_*_SIG` in
+`rbbridge.c`); the RVAs above are verification notes. No rel32 operands in the
+prologues -> no wildcard mask needed.
+
+### Bridge / UI
+
+- `rbbridge.c`: `dispatch_creatures_difficulty()` (ops `set|increase|decrease`),
+  pipe cmd `creatures_difficulty`; `get_state` adds
+  `creatures_base_difficulty` (number or `null`).
+- `pipe_bridge.c`: `POST /creatures_difficulty` `{op,value}` -> bridges to the
+  pipe (`value` sent as string).
+- `cockpit.html`: section *creatures base difficulty* (read + set/increase/
+  decrease buttons).
+
+Graceful failure: missing module / signature / instance -> `ok:false`, **no**
+call is made. `resolve_campaign_service()` additionally requires
+`this+0x10` to be readable before any method is invoked.
+
 ## References
 
 - `docs/research/dedicated-io-re-findings.md` (read path, `World::GetSystem`,
