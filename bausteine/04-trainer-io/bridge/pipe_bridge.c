@@ -5,29 +5,22 @@
  * Rolle (Architektur, docs/INGRESS_IO.md):
  *   Der Wine-Named-Pipe \\.\pipe\rbbattle der injizierten rbbridge.dll ist
  *   ein Wine-internes Objekt: er ist NUR aus einem Windows-Prozess derselben
- *   Wine-Session erreichbar. Der Tournament-Server (nativ, Linux) pusht aber
- *   auf RBBRIDGE_A_URL=http://127.0.0.1:9001/exec. Diese kleine Wine-x64-
- *   Konsole schliesst die Luecke: sie ist der HTTP-Endpunkt auf
- *   127.0.0.1:9001 und uebersetzt jeden POST /exec in exec-Zeilen auf die
- *   Pipe. Kein Fremd-Dep, nur Win32 (Winsock) - laeuft unter Wine.
+ *   Wine-Session erreichbar. Diese kleine Wine-x64-Konsole schliesst die
+ *   Luecke: sie ist der HTTP-Endpunkt auf 127.0.0.1:9001 und uebersetzt
+ *   POST-Anfragen in Pipe-Kommandos (get_state / add_resource / probe).
+ *   Kein Fremd-Dep, nur Win32 (Winsock) - laeuft unter Wine.
  *
  * Endpunkte (HTTP/1.1, Antwort immer application/json, Connection: close):
- *   GET  /health -> 200 {"ok":true,"pipe":<bool>}
- *                   (<pipe> = Pipe-Verbindung moeglich, kurzer Probe-Connect)
- *   POST /exec   -> 200 {"ok":<bool>,"results":[{"command":C,"ok":bool
- *                        [,"reason":"..."]}, ...]}
- *                   Body-Varianten (ODER):
- *                     {"command":"rb_wave 3"}
- *                     {"match_id":"...","round":3,"commands":["rb_wave 3"]}
- *                   Pipe nicht erreichbar -> 503
- *                   {"ok":false,"reason":"pipe_unavailable"}
- *   sonst        -> 404 {"ok":false,"reason":"not_found"}
+ *   GET  /health       -> 200 {"ok":true,"pipe":<bool>}
+ *                         (<pipe> = Pipe-Verbindung moeglich, Probe-Connect)
+ *   GET  /             -> Web-UI (cockpit.html, nur C++-Direktfunktionen)
+ *   POST /get_state    -> carbonium/max/resources/HQ (C++)
+ *   POST /add_resource -> carbonium direkt aendern (C++)
+ *   POST /probe        -> Memory-Dump (PlayerService-Kette)
+ *   sonst              -> 404 {"ok":false,"reason":"not_found"}
  *
  * Protokoll auf der Pipe (v0, siehe bausteine/04-trainer-io/README.md):
- *   -> {"cmd":"exec","command":C,"cmd_id":N}\n
- *   <- {"event":"exec_result","command":C,"ok":bool[,"reason":"..."]}
- *   Ein Antwort-Timeout ist KEIN Schreibfehler: das Kommando wurde gesendet,
- *   das Ergebnis traegt dann ok:false + reason "timeout".
+ *   Kommandos: ping, probe, get_state, add_resource.
  *   Line-delimited JSON, max. 8 KiB pro Zeile (LINE_MAX).
  *
  * Umgebung:
@@ -39,7 +32,6 @@
  * Modi:
  *   pipe_bridge.exe                 HTTP-Server (Dauerbetrieb, docker log)
  *   pipe_bridge.exe --ping          Pipe-Smoke: ping -> pong, Exit 0/1
- *   pipe_bridge.exe --once "<cmd>"  ein Kommando; druckt die exec_result-Zeile
  *   pipe_bridge.exe --help          Usage
  *
  * Build (x64):
@@ -70,8 +62,6 @@
 #define REQ_MAX              (64 * 1024)   /* max. HTTP-Request (inkl. Body)  */
 #define RESP_MAX             (64 * 1024)   /* max. HTTP-Body                  */
 #define CMD_MAX              512
-#define MAX_CMDS             16
-#define REASON_MAX           256
 
 /* ------------------------------------------------------------------ */
 /* Logging                                                             */
@@ -215,114 +205,7 @@ static int json_get_string(const char *json, const char *key,
     return 0;
 }
 
-/* json_get_bool: findet "key":true|false. Liefert 1 und setzt out. */
-static int json_get_bool(const char *json, const char *key, int *out)
-{
-    if (!json || !key || !out)
-        return 0;
 
-    size_t key_len = strlen(key);
-    const char *p = json;
-
-    while ((p = strstr(p, key)) != NULL) {
-        if (p != json && p[-1] == '"' && p[key_len] == '"') {
-            const char *q = p + key_len + 1;
-            while (*q == ' ' || *q == '\t')
-                q++;
-            if (*q != ':')
-                return 0;
-            q++;
-            while (*q == ' ' || *q == '\t')
-                q++;
-            if (strncmp(q, "true", 4) == 0) {
-                *out = 1;
-                return 1;
-            }
-            if (strncmp(q, "false", 5) == 0) {
-                *out = 0;
-                return 1;
-            }
-            return 0;
-        }
-        p += key_len;
-    }
-    return 0;
-}
-
-/* json_get_string_array: liest "key":["a","b",...] in items[] (je CMD_MAX).
- * Liefert die Anzahl der Elemente (max. max_items), 0 wenn das Array fehlt
- * oder leer ist. Minimal-String-Entpackung wie json_get_string. */
-static int json_get_string_array(const char *json, const char *key,
-                                 char items[][CMD_MAX], int max_items)
-{
-    if (!json || !key || !items || max_items <= 0)
-        return 0;
-
-    size_t key_len = strlen(key);
-    const char *p = json;
-
-    while ((p = strstr(p, key)) != NULL) {
-        if (p != json && p[-1] == '"' && p[key_len] == '"') {
-            const char *q = p + key_len + 1;
-            while (*q == ' ' || *q == '\t')
-                q++;
-            if (*q != ':')
-                return 0;
-            q++;
-            while (*q == ' ' || *q == '\t')
-                q++;
-            if (*q != '[')
-                return 0;
-            q++;
-
-            int n = 0;
-            for (;;) {
-                while (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n')
-                    q++;
-                if (*q == ']' || *q == '\0')
-                    break;
-                if (*q == ',') {
-                    q++;
-                    continue;
-                }
-                if (*q != '"')
-                    break; /* nur Strings */
-                q++;
-                {
-                    size_t w = 0;
-                    char *dst = items[n];
-                    while (*q && *q != '"' && w + 1 < CMD_MAX) {
-                        if (*q == '\\' && q[1]) {
-                            q++;
-                            if (*q == 'n')
-                                dst[w++] = '\n';
-                            else if (*q == 't')
-                                dst[w++] = '\t';
-                            else
-                                dst[w++] = *q;
-                        } else {
-                            dst[w++] = *q;
-                        }
-                        q++;
-                    }
-                    dst[w] = '\0';
-                }
-                if (*q == '"')
-                    q++;
-                n++;
-                if (n >= max_items) {
-                    /* Rest (falls vorhanden) ignorieren, aber kein Overflow */
-                    while (*q && *q != ']')
-                        q++;
-                    break;
-                }
-            }
-            return n;
-        }
-        p += key_len;
-    }
-    return 0;
-}
 
 /* ------------------------------------------------------------------ */
 /* Named-Pipe-Client (\\.\pipe\rbbattle)                                */
@@ -338,8 +221,8 @@ static int deadline_passed(DWORD deadline)
  * ERROR_PIPE_BUSY (Server da, aber Instanz belegt) als auch bei
  * ERROR_FILE_NOT_FOUND weiterprobiert: rbbridge baut zwischen zwei Clients
  * eine NEUE Pipe-Instanz auf, so dass ein direkter Folge-Connect transient
- * FILE_NOT_FOUND liefert (live belegt: /health ok, direkt danach /exec ->
- * 503 pipe_unavailable, danach wieder ok). Jeder andere Fehler gibt sofort
+ * FILE_NOT_FOUND liefert (live belegt: /health ok, direkt danach ein
+ * Folgeaufruf -> 503 pipe_unavailable, danach wieder ok). Jeder andere Fehler gibt sofort
  * INVALID_HANDLE_VALUE zurueck. INVALID_HANDLE_VALUE = nicht erreichbar. */
 static HANDLE pipe_connect(int timeout_ms)
 {
@@ -462,35 +345,6 @@ static int pipe_wait_line(HANDLE h, const char *event, const char *command,
     }
 }
 
-/* Ein Kommando ausfuehren: exec-Zeile schreiben, auf exec_result warten.
- * Rueckgabe 0 = Ergebnis da (*ok/reason gesetzt), 1 = Timeout, -1 = Pipe-Fehler. */
-static int pipe_exec_one(HANDLE h, const char *command, int cmd_id,
-                         int timeout_ms, int *ok, char *reason, size_t reason_sz)
-{
-    char esc[CMD_MAX * 2];
-    char payload[LINE_MAX];
-    char line[READ_BUF];
-    int rc;
-
-    json_escape(command, esc, sizeof(esc));
-    snprintf(payload, sizeof(payload),
-             "{\"cmd\":\"exec\",\"command\":\"%s\",\"cmd_id\":%d}\n", esc, cmd_id);
-
-    if (!pipe_write_all(h, payload))
-        return -1;
-
-    rc = pipe_wait_line(h, "exec_result", command, timeout_ms, line, sizeof(line));
-    if (rc != 0)
-        return rc;
-
-    *ok = 0;
-    json_get_bool(line, "ok", ok);
-    if (reason && reason_sz) {
-        reason[0] = '\0';
-        json_get_string(line, "reason", reason, reason_sz);
-    }
-    return 0;
-}
 
 /* ------------------------------------------------------------------ */
 /* HTTP                                                                */
@@ -511,163 +365,9 @@ static void http_respond(SOCKET c, int code, const char *status, const char *bod
         send(c, body, blen, 0);
 }
 
-/* Text-basierte Kontrollpanel-Seite (contract.html). Wird unter GET / ausgeliefert;
- * die Seite redet per fetch() mit /get_state, /add_resource und /exec (same-origin). */
-static const char CONTRACT_HTML[] =
-    "<!doctype html>\n"
-    "<html lang=\"en\">\n"
-    "<head>\n"
-    "<meta charset=\"utf-8\">\n"
-    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
-    "<title>rbbridge contract</title>\n"
-    "<style>\n"
-    "  :root { color-scheme: dark; }\n"
-    "  body { background:#0a0f0a; color:#9fef9f; font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; margin:0; padding:1.25rem; }\n"
-    "  h1 { font-size:1rem; margin:0 0 .75rem; }\n"
-    "  a { color:#7fdfff; }\n"
-    "  section { border:1px solid #2a3a2a; border-radius:4px; padding:.75rem 1rem; margin-bottom:.75rem; max-width:52rem; }\n"
-    "  h2 { font-size:.85rem; margin:.25rem 0 .5rem; border-bottom:1px solid #2a3a2a; padding-bottom:.25rem; color:#cfeecf; }\n"
-    "  .row { display:flex; flex-wrap:wrap; gap:.4rem; align-items:center; }\n"
-    "  .val { color:#fff; }\n"
-    "  .dim { color:#5f8f5f; }\n"
-    "  input, button { background:#0f1a0f; color:#9fef9f; border:1px solid #3a5a3a; border-radius:3px; font:inherit; padding:.3rem .55rem; }\n"
-    "  button:hover { background:#1a2a1a; cursor:pointer; }\n"
-    "  button.danger { border-color:#a03a3a; color:#ef9f9f; }\n"
-    "  pre { background:#060a06; border:1px solid #1a2a1a; padding:.6rem; max-height:40vh; overflow:auto; white-space:pre-wrap; }\n"
-    "  .err { color:#ef9f9f; }\n"
-    "</style>\n"
-    "</head>\n"
-    "<body>\n"
-    "  <h1>rbbridge <span class=\"dim\">contract</span></h1>\n"
-    "\n"
-    "  <section>\n"
-    "    <h2>bridge</h2>\n"
-    "    <div class=\"row\">\n"
-    "      <span class=\"dim\">url</span>\n"
-    "      <input id=\"url\" size=\"34\" spellcheck=\"false\">\n"
-    "      <button id=\"refresh\">refresh</button>\n"
-    "      <span id=\"conn\" class=\"dim\"></span>\n"
-    "    </div>\n"
-    "  </section>\n"
-    "\n"
-    "  <section>\n"
-    "    <h2>carbonium</h2>\n"
-    "    <div class=\"row\">\n"
-    "      <span class=\"dim\">now</span>\n"
-    "      <span id=\"carbonium\" class=\"val\">—</span>\n"
-    "      <span class=\"dim\">/ max</span>\n"
-    "      <span id=\"carbonium_max\" class=\"val\">—</span>\n"
-    "    </div>\n"
-    "    <div class=\"row\" style=\"margin-top:.5rem\">\n"
-    "      <input id=\"amount\" size=\"10\" value=\"10\">\n"
-    "      <button id=\"add\">+ add</button>\n"
-    "      <button id=\"sub\">− subtract</button>\n"
-    "    </div>\n"
-    "  </section>\n"
-    "\n"
-    "  <section>\n"
-    "    <h2>HQ</h2>\n"
-    "    <div class=\"row\">\n"
-    "      <span class=\"dim\">hp</span>\n"
-    "      <span id=\"hq_hp\" class=\"val\">—</span>\n"
-    "      <span class=\"dim\">/ max</span>\n"
-    "      <span id=\"hq_hp_max\" class=\"val\">—</span>\n"
-    "      <span class=\"dim\">dead</span>\n"
-    "      <span id=\"hq_dead\" class=\"val\">—</span>\n"
-    "    </div>\n"
-    "  </section>\n"
-    "\n"
-    "  <section>\n"
-    "    <h2>game</h2>\n"
-    "    <div class=\"row\">\n"
-    "      <button id=\"end_game\" class=\"danger\">end game</button>\n"
-    "      <input id=\"cmd\" size=\"24\" placeholder=\"custom command\" spellcheck=\"false\">\n"
-    "      <button id=\"exec\">exec</button>\n"
-    "    </div>\n"
-    "    <div id=\"exec_out\" class=\"dim\" style=\"margin-top:.5rem\"></div>\n"
-    "  </section>\n"
-    "\n"
-    "  <pre id=\"raw\" class=\"dim\">loading…</pre>\n"
-    "\n"
-    "<script>\n"
-    "(function () {\n"
-    "  var $ = function (id) { return document.getElementById(id); };\n"
-    "\n"
-    "  function baseUrl() {\n"
-    "    var v = $('url').value.trim();\n"
-    "    if (v) return v.replace(/\\/+$/, '') + '/';\n"
-    "    // Page's own directory, so it also works behind a path prefix (/contract/).\n"
-    "    return new URL('.', location.href).href;\n"
-    "  }\n"
-    "\n"
-    "  function setConn(s) { $('conn').textContent = s; }\n"
-    "\n"
-    "  async function post(path, body) {\n"
-    "    var res = await fetch(baseUrl() + path, {\n"
-    "      method: 'POST',\n"
-    "      headers: { 'content-type': 'application/json' },\n"
-    "      body: body === undefined ? '{}' : JSON.stringify(body)\n"
-    "    });\n"
-    "    return res.json();\n"
-    "  }\n"
-    "\n"
-    "  async function refresh() {\n"
-    "    try {\n"
-    "      var s = await post('get_state');\n"
-    "      $('raw').textContent = JSON.stringify(s, null, 2);\n"
-    "      $('carbonium').textContent = (typeof s.carbonium === 'number') ? s.carbonium.toLocaleString() : String(s.carbonium);\n"
-    "      $('carbonium_max').textContent = (typeof s.carbonium_max === 'number') ? s.carbonium_max.toLocaleString() : String(s.carbonium_max);\n"
-    "      $('hq_hp').textContent = (s.hq_hp === null || s.hq_hp === undefined) ? '—' : s.hq_hp;\n"
-    "      $('hq_hp_max').textContent = (s.hq_hp_max === null || s.hq_hp_max === undefined) ? '—' : s.hq_hp_max;\n"
-    "      $('hq_dead').textContent = (s.hq_dead === null || s.hq_dead === undefined) ? '—' : String(s.hq_dead);\n"
-    "      setConn('ok');\n"
-    "    } catch (e) {\n"
-    "      setConn('ERR ' + e.message);\n"
-    "      $('raw').textContent = String(e);\n"
-    "    }\n"
-    "  }\n"
-    "\n"
-    "  async function addResource(amount) {\n"
-    "    try {\n"
-    "      var r = await post('add_resource', { amount: String(amount) });\n"
-    "      $('exec_out').textContent = JSON.stringify(r);\n"
-    "      refresh();\n"
-    "    } catch (e) {\n"
-    "      $('exec_out').textContent = 'ERR ' + e.message;\n"
-    "    }\n"
-    "  }\n"
-    "\n"
-    "  $('refresh').onclick = refresh;\n"
-    "  $('add').onclick = function () { addResource($('amount').value); };\n"
-    "  $('sub').onclick = function () {\n"
-    "    var a = parseFloat($('amount').value) || 0;\n"
-    "    addResource(-a);\n"
-    "  };\n"
-    "  $('end_game').onclick = async function () {\n"
-    "    try {\n"
-    "      var r = await post('exec', { command: 'end_game' });\n"
-    "      $('exec_out').textContent = JSON.stringify(r);\n"
-    "      refresh();\n"
-    "    } catch (e) { $('exec_out').textContent = 'ERR ' + e.message; }\n"
-    "  };\n"
-    "  $('exec').onclick = async function () {\n"
-    "    var c = $('cmd').value.trim();\n"
-    "    if (!c) return;\n"
-    "    try {\n"
-    "      var r = await post('exec', { command: c });\n"
-    "      $('exec_out').textContent = JSON.stringify(r);\n"
-    "      refresh();\n"
-    "    } catch (e) { $('exec_out').textContent = 'ERR ' + e.message; }\n"
-    "  };\n"
-    "\n"
-    "  // Empty = relative to this page (works at the bridge root AND under /contract/).\n"
-    "  $('url').value = '';\n"
-    "\n"
-    "  refresh();\n"
-    "})();\n"
-    "</script>\n"
-    "</body>\n"
-    "</html>\n";
+/* Text-basierte Kontrollpanel-Seite (cockpit.html). Wird unter GET / ausgeliefert;
+ * die Seite redet per fetch() mit /get_state und /add_resource (same-origin). */
+#include "cockpit_html.inc"
 
 static void http_respond_html(SOCKET c, int code, const char *status,
                               const char *body)
@@ -687,7 +387,7 @@ static void http_respond_html(SOCKET c, int code, const char *status,
 
 static void handle_index(SOCKET c)
 {
-    http_respond_html(c, 200, "OK", CONTRACT_HTML);
+    http_respond_html(c, 200, "OK", COCKPIT_HTML);
 }
 
 
@@ -727,85 +427,6 @@ static void handle_health(SOCKET c)
     http_respond(c, 200, "OK", body);
 }
 
-static void handle_exec(SOCKET c, const char *body)
-{
-    char cmds[MAX_CMDS][CMD_MAX];
-    int ncmds = 0;
-    char one[CMD_MAX];
-    char results[RESP_MAX];
-    char resp[RESP_MAX];
-    size_t off = 0;
-    int all_ok = 1;
-    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
-    HANDLE h;
-    int i;
-
-    ncmds = json_get_string_array(body, "commands", cmds, MAX_CMDS);
-    if (ncmds == 0) {
-        if (json_get_string(body, "command", one, sizeof(one))) {
-            strncpy(cmds[0], one, CMD_MAX - 1);
-            cmds[0][CMD_MAX - 1] = '\0';
-            ncmds = 1;
-        }
-    }
-    if (ncmds == 0) {
-        blog("POST /exec ohne commands/command -> invalid_request");
-        http_respond(c, 400, "Bad Request",
-                     "{\"ok\":false,\"reason\":\"invalid_request\"}");
-        return;
-    }
-
-    /* Breiteres Fenster als /health: deckt den transienten Instanz-Neuaufbau
-     * von rbbridge zwischen zwei Clients ab (~2.5 s). */
-    h = pipe_connect(2500);
-    if (h == INVALID_HANDLE_VALUE) {
-        blog("POST /exec: Pipe %s nicht erreichbar -> pipe_unavailable",
-             env_str("RBB_BRIDGE_PIPE", DEFAULT_PIPE_NAME));
-        http_respond(c, 503, "Service Unavailable",
-                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
-        return;
-    }
-
-    off += (size_t)snprintf(results + off, sizeof(results) - off, "[");
-    for (i = 0; i < ncmds; i++) {
-        int ok = 0;
-        char reason[REASON_MAX] = "";
-        char esc[CMD_MAX * 2];
-        int rc = pipe_exec_one(h, cmds[i], i, timeout_ms, &ok, reason,
-                               sizeof(reason));
-        if (rc == 1) {
-            ok = 0;
-            strncpy(reason, "timeout", sizeof(reason) - 1);
-        } else if (rc < 0) {
-            ok = 0;
-            strncpy(reason, "pipe_error", sizeof(reason) - 1);
-        }
-        if (!ok)
-            all_ok = 0;
-
-        json_escape(cmds[i], esc, sizeof(esc));
-        off += (size_t)snprintf(results + off, sizeof(results) - off,
-                                "%s{\"command\":\"%s\",\"ok\":%s",
-                                i ? "," : "", esc, ok ? "true" : "false");
-        if (!ok && reason[0]) {
-            char ersc[REASON_MAX * 2];
-            json_escape(reason, ersc, sizeof(ersc));
-            off += (size_t)snprintf(results + off, sizeof(results) - off,
-                                    ",\"reason\":\"%s\"", ersc);
-        }
-        off += (size_t)snprintf(results + off, sizeof(results) - off, "}");
-
-        blog("exec cmd_id=%d command='%s' -> ok=%s%s%s", i, cmds[i],
-             ok ? "true" : "false", reason[0] ? " reason=" : "",
-             reason[0] ? reason : "");
-    }
-    off += (size_t)snprintf(results + off, sizeof(results) - off, "]");
-    CloseHandle(h);
-
-    snprintf(resp, sizeof(resp), "{\"ok\":%s,\"results\":%s}",
-             all_ok ? "true" : "false", results);
-    http_respond(c, 200, "OK", resp);
-}
 
 /* Liest einen Request (Header + Body) und beantwortet ihn. */
 
@@ -910,7 +531,7 @@ static void handle_probe(SOCKET c)
 }
 
 /* POST /get_state: fuehrt {"cmd":"get_state"} aus und liefert die eine
- * get_state_result-Zeile als HTTP-Body (symmetrisch zu /exec). */
+ * get_state_result-Zeile als HTTP-Body. */
 static void handle_get_state(SOCKET c)
 {
     char line[READ_BUF];
@@ -944,8 +565,8 @@ static void handle_get_state(SOCKET c)
 }
 
 /* POST /add_resource: fuehrt {"cmd":"add_resource","amount":"..."} auf der
- * Pipe aus und liefert die add_resource_result-Zeile (symmetrisch zu /exec).
- * amount ist ein JSON-STRING (z.B. {"amount":"-10"}), analog zu /exec. */
+ * Pipe aus und liefert die add_resource_result-Zeile.
+ * amount ist ein JSON-STRING (z.B. {"amount":"-10"}). */
 static void handle_add_resource(SOCKET c, const char *body)
 {
     char amount[64] = "";
@@ -1064,16 +685,6 @@ static void handle_client(SOCKET c)
 
         if (strcmp(method, "GET") == 0 && strcmp(path, "/health") == 0) {
             handle_health(c);
-        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/exec") == 0) {
-            char *b = malloc((size_t)body_len + 1);
-            if (!b) {
-                free(req);
-                return;
-            }
-            memcpy(b, body, (size_t)body_len);
-            b[body_len] = '\0';
-            handle_exec(c, b);
-            free(b);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/probe") == 0) {
             handle_probe(c);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/get_state") == 0) {
@@ -1090,8 +701,7 @@ static void handle_client(SOCKET c)
             free(b);
         } else if (strcmp(method, "GET") == 0 &&
                    (strcmp(path, "/") == 0 ||
-                    strcmp(path, "/index.html") == 0 ||
-                    strcmp(path, "/contract.html") == 0)) {
+                    strcmp(path, "/index.html") == 0)) {
             handle_index(c);
         } else {
             http_respond(c, 404, "Not Found",
@@ -1177,7 +787,7 @@ static int mode_server(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* --ping / --once                                                      */
+/* --ping                                                                */
 /* ------------------------------------------------------------------ */
 
 static int mode_ping(void)
@@ -1211,39 +821,6 @@ static int mode_ping(void)
     }
 }
 
-static int mode_once(const char *command)
-{
-    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
-    int ok = 0;
-    char reason[REASON_MAX] = "";
-    HANDLE h = pipe_connect(timeout_ms);
-    int rc;
-
-    if (h == INVALID_HANDLE_VALUE) {
-        blog("--once: pipe_unavailable");
-        return 1;
-    }
-    rc = pipe_exec_one(h, command, 1, timeout_ms, &ok, reason, sizeof(reason));
-    CloseHandle(h);
-
-    if (rc == 0) {
-        /* Eine exec_result-Zeile auf stdout (maschinenlesbar). */
-        char esc[CMD_MAX * 2];
-        char ersc[REASON_MAX * 2];
-        json_escape(command, esc, sizeof(esc));
-        json_escape(reason, ersc, sizeof(ersc));
-        printf("{\"event\":\"exec_result\",\"command\":\"%s\",\"ok\":%s%s%s}\n",
-               esc, ok ? "true" : "false", reason[0] ? ",\"reason\":\"" : "",
-               reason[0] ? ersc : "");
-        fflush(stdout);
-        return ok ? 0 : 1;
-    }
-    if (rc == 1)
-        blog("--once: timeout nach %d ms", timeout_ms);
-    else
-        blog("--once: Pipe-Fehler");
-    return 1;
-}
 
 static void usage(void)
 {
@@ -1252,12 +829,11 @@ static void usage(void)
            "Aufruf:\n"
            "  %s                    HTTP-Server (Default 0.0.0.0:9001)\n"
            "  %s --ping             Pipe-Smoke-Test (ping -> pong), Exit 0/1\n"
-           "  %s --once \"<cmd>\"     ein Kommando, druckt die exec_result-Zeile\n"
            "  %s --help             diese Hilfe\n"
            "\n"
            "Umgebung: RBB_BRIDGE_BIND, RBB_BRIDGE_PORT, RBB_BRIDGE_PIPE,\n"
            "          RBB_BRIDGE_TIMEOUT_MS\n",
-           BRIDGE_NAME, BRIDGE_NAME, BRIDGE_NAME, BRIDGE_NAME, BRIDGE_NAME);
+           BRIDGE_NAME, BRIDGE_NAME, BRIDGE_NAME, BRIDGE_NAME);
 }
 
 int main(int argc, char **argv)
@@ -1268,12 +844,5 @@ int main(int argc, char **argv)
     }
     if (argc >= 2 && strcmp(argv[1], "--ping") == 0)
         return mode_ping();
-    if (argc >= 2 && strcmp(argv[1], "--once") == 0) {
-        if (argc < 3) {
-            blog("--once braucht ein Kommando");
-            return 2;
-        }
-        return mode_once(argv[2]);
-    }
     return mode_server();
 }
