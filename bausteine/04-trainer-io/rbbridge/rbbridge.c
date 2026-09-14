@@ -384,6 +384,7 @@ static int safe_read_u32(const void *addr, uint32_t *out)
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -528,10 +529,11 @@ static void dbg(const char *fmt, ...)
 #endif /* !RBBRIDGE_HOSTTEST */
 }
 
-#ifndef RBBRIDGE_HOSTTEST
-
 /* ------------------------------------------------------------------ */
 /* Minimal-JSON-Helfer (nur fuer das flache v0-Format noetig)          */
+/*                                                                    */
+/* Reines C (kein Win32) -> im Host-Test (RBBRIDGE_HOSTTEST) mit-      */
+/* kompiliert, damit der echte Dispatch (handle_line) host-testbar ist.*/
 /* ------------------------------------------------------------------ */
 
 /*
@@ -590,6 +592,8 @@ static int json_get_string(const char *json, const char *key,
     }
     return 0;
 }
+
+#ifndef RBBRIDGE_HOSTTEST
 
 /* ------------------------------------------------------------------ */
 /* Antworten auf die Pipe schreiben                                    */
@@ -1743,6 +1747,176 @@ static int activate_result_json(char *out, size_t out_sz, int ok,
                     "\"reason\":\"%s\"}", reason ? reason : "unknown");
 }
 
+#ifdef RBBRIDGE_HOSTTEST
+/* Host-Test-Shim fuer send_line(): faengt die Dispatch-Antwort in einen
+ * Puffer statt sie auf eine Win32-Pipe zu schreiben. Damit ist der ECHTE
+ * Dispatch (dispatch_activate_mission_flow, ok:false-Pfade) host-testbar;
+ * der Windows-Build nutzt unveraendert send_line() weiter unten. */
+static char g_ht_last_reply[4096];
+static int  g_ht_send_calls = 0;
+static int send_line(HANDLE hPipe, const char *fmt, ...)
+{
+    va_list ap;
+    (void)hPipe;
+    va_start(ap, fmt);
+    vsnprintf(g_ht_last_reply, sizeof(g_ht_last_reply), fmt, ap);
+    va_end(ap);
+    g_ht_send_calls++;
+    return 1;
+}
+#endif /* RBBRIDGE_HOSTTEST */
+
+/*
+ * #386: Mission-Flow-Payload-Zustand + Write/Read-Endpoint.
+ *
+ * g_mission_payload_db  = zuletzt gebautes/geparktes Exor::Database* (0x60).
+ *   Es wird bewusst NICHT freigegeben: der Mission-Flow-Kern reicht den
+ *   Zeiger durch (Lifetime bis Flow-Ende, Plan-Risiko #4). Jeder neue
+ *   Activate baut ein frisches Objekt; das alte bleibt geparkt (kein free).
+ * Thread-Regel (#386): Mutation (ActivateMissionFlow) gehoert auf den
+ *   Game-Thread. Der Marshal-Detour (#376) ist in diesem Branch nicht
+ *   vorhanden -> guarded Direktaufruf aus dem Pipe-Thread; als Live-Risiko
+ *   markiert (Story 8). Nicht-Fund an JEDER Stufe -> ok:false, kein Aufruf.
+ */
+static void *g_mission_payload_db = NULL;
+static int   g_mission_flow_valid = 0;
+static char  g_mission_name[128] = "";
+static char  g_mission_spawn[128] = "";
+
+/* ABI des Ziel-Overloads ActivateMissionFlow(UtfString const&, UtfString,
+ * UtfString, Database*) mit UtfString-Rueckgabe (sret in RDX). Aus dem
+ * Disasm belegt (docs/research/database-object-re-findings.md): RCX=this,
+ * RDX=sret, R8/R9=arg1/arg2, Stack=arg3/arg4(=Database*). */
+typedef void (*amf_call_fn)(void *self, void *ret, const void *a1,
+                            const void *a2, const void *a3, void *db);
+
+/* POST /activate_mission_flow: baut das Database-Payload und ruft
+ * MissionService::ActivateMissionFlow("", name, "default", db) auf. */
+static void dispatch_activate_mission_flow(HANDLE hPipe, const char *name,
+                                           const char *spawn_point)
+{
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    const char *via = NULL;
+    const unsigned char *execfn = NULL;
+    char out[1024];
+
+    if (!resolve_module(&base, &size, &via, &execfn)) {
+        activate_result_json(out, sizeof(out), 0, "no_module", NULL, NULL);
+        send_line(hPipe, "%s", out);
+        return;
+    }
+
+    const void *amf = resolve_amf_fn(base, size);
+    const void *ctor = resolve_db_ctor_fn(base, size);
+    const void *setstr = resolve_db_setstring_fn(base, size);
+    if (!amf || !ctor || !setstr) {
+        dbg("activate_mission_flow: AOB fehlt (amf=%p ctor=%p setstring=%p)",
+            (void *)amf, (void *)ctor, (void *)setstr);
+        activate_result_json(out, sizeof(out), 0, "no_signature", NULL, NULL);
+        send_line(hPipe, "%s", out);
+        return;
+    }
+
+    void *inst = NULL;
+    const unsigned char *vftable = NULL;
+    if (!resolve_mission_service(&vftable, &inst) || !inst) {
+        activate_result_json(out, sizeof(out), 0, "no_mission_service",
+                             NULL, NULL);
+        send_line(hPipe, "%s", out);
+        return;
+    }
+
+    void *db = malloc(0x60);
+    if (!db) {
+        activate_result_json(out, sizeof(out), 0, "alloc_failed", NULL, NULL);
+        send_line(hPipe, "%s", out);
+        return;
+    }
+    memset(db, 0, 0x60);
+    database_init(db, (db_ctor_fn)(uintptr_t)ctor);
+    database_set_string(db, (db_setstring_fn)(uintptr_t)setstr, "spawn_point",
+                        spawn_point ? spawn_point : "");
+    database_set_string(db, (db_setstring_fn)(uintptr_t)setstr, "name",
+                        name ? name : "");
+
+    {
+        amf_call_fn fn = (amf_call_fn)(uintptr_t)amf;
+        unsigned char ret[40], a1[40], a2[40], a3[40];
+        utfstring_fill(a1, sizeof(a1), "");
+        utfstring_fill(a2, sizeof(a2), name ? name : "");
+        utfstring_fill(a3, sizeof(a3), "default");
+        memset(ret, 0, sizeof(ret));
+        fn(inst, ret, a1, a2, a3, db);
+    }
+
+    g_mission_payload_db = db;
+    g_mission_flow_valid = 1;
+    copy_cstr(g_mission_name, sizeof(g_mission_name), name ? name : "");
+    copy_cstr(g_mission_spawn, sizeof(g_mission_spawn),
+              spawn_point ? spawn_point : "");
+
+    dbg("activate_mission_flow: name='%s' spawn_point='%s' db=%p inst=%p",
+        g_mission_name, g_mission_spawn, db, inst);
+
+    /* Erfolgreicher (guarded) Aufruf - die Sichtbarkeit im Spiel ist der
+     * Live-Check (Story 8, nur mit Player). */
+    activate_result_json(out, sizeof(out), 1, NULL, g_mission_name,
+                         g_mission_spawn);
+    send_line(hPipe, "%s", out);
+}
+
+/* Read-Leg: mission_flow{name,spawn_point}. Primaer per C++-Accessor
+ * Database::GetString auf dem geparkten Payload (belegt den Accessor-Pfad);
+ * schlaegt der Read fehl, fallen die zuletzt gesetzten Felder ein. Kein
+ * Payload -> null. Nie ein Crash. */
+static void mission_flow_json(char *out, size_t out_sz)
+{
+    char name[256] = "", spawn[256] = "";
+    char en[512], es[512];
+    int read_ok = 0;
+
+    if (!g_mission_flow_valid || !g_mission_payload_db) {
+        snprintf(out, out_sz, "null");
+        return;
+    }
+
+    {
+        const unsigned char *base = NULL;
+        size_t size = 0;
+        const char *via = NULL;
+        const unsigned char *execfn = NULL;
+        if (resolve_module(&base, &size, &via, &execfn)) {
+            const void *gs = resolve_db_getstring_fn(base, size);
+            if (gs) {
+                typedef const void *(*db_getstring_fn)(void *, const void *);
+                db_getstring_fn fn = (db_getstring_fn)(uintptr_t)gs;
+                unsigned char key[40];
+                const void *v;
+                utfstring_fill(key, sizeof(key), "name");
+                v = fn(g_mission_payload_db, key);
+                if (v && utfstring_read(v, name, sizeof(name)))
+                    read_ok = 1;
+                utfstring_fill(key, sizeof(key), "spawn_point");
+                v = fn(g_mission_payload_db, key);
+                if (v && utfstring_read(v, spawn, sizeof(spawn)))
+                    read_ok = 1;
+            }
+            /* GetStringKeys wird ebenfalls per AOB aufgeloest (Vollstaendig-
+             * keit der Kette); die Feld-Anzeige nutzt GetString. */
+            (void)resolve_db_getkeys_fn(base, size);
+        }
+    }
+
+    if (!read_ok) {
+        copy_cstr(name, sizeof(name), g_mission_name);
+        copy_cstr(spawn, sizeof(spawn), g_mission_spawn);
+    }
+    json_escape_into(en, sizeof(en), name);
+    json_escape_into(es, sizeof(es), spawn);
+    snprintf(out, out_sz, "{\"name\":\"%s\",\"spawn_point\":\"%s\"}", en, es);
+}
+
 /*
  * Findet die ConsoleService-Instanz: 8-Byte-alignierter QWORD == vftable
  * im eigenen Adressraum (VirtualQuery-Schleife, nur lesbare Regionen).
@@ -2452,157 +2626,6 @@ static void dispatch_add_resource(HANDLE hPipe, const char *resource_str,
               ret ? "true" : "false");
 }
 
-
-/*
- * #386: Mission-Flow-Payload-Zustand + Write/Read-Endpoint.
- *
- * g_mission_payload_db  = zuletzt gebautes/geparktes Exor::Database* (0x60).
- *   Es wird bewusst NICHT freigegeben: der Mission-Flow-Kern reicht den
- *   Zeiger durch (Lifetime bis Flow-Ende, Plan-Risiko #4). Jeder neue
- *   Activate baut ein frisches Objekt; das alte bleibt geparkt (kein free).
- * Thread-Regel (#386): Mutation (ActivateMissionFlow) gehoert auf den
- *   Game-Thread. Der Marshal-Detour (#376) ist in diesem Branch nicht
- *   vorhanden -> guarded Direktaufruf aus dem Pipe-Thread; als Live-Risiko
- *   markiert (Story 8). Nicht-Fund an JEDER Stufe -> ok:false, kein Aufruf.
- */
-static void *g_mission_payload_db = NULL;
-static int   g_mission_flow_valid = 0;
-static char  g_mission_name[128] = "";
-static char  g_mission_spawn[128] = "";
-
-/* ABI des Ziel-Overloads ActivateMissionFlow(UtfString const&, UtfString,
- * UtfString, Database*) mit UtfString-Rueckgabe (sret in RDX). Aus dem
- * Disasm belegt (docs/research/database-object-re-findings.md): RCX=this,
- * RDX=sret, R8/R9=arg1/arg2, Stack=arg3/arg4(=Database*). */
-typedef void (*amf_call_fn)(void *self, void *ret, const void *a1,
-                            const void *a2, const void *a3, void *db);
-
-/* POST /activate_mission_flow: baut das Database-Payload und ruft
- * MissionService::ActivateMissionFlow("", name, "default", db) auf. */
-static void dispatch_activate_mission_flow(HANDLE hPipe, const char *name,
-                                           const char *spawn_point)
-{
-    const unsigned char *base = NULL;
-    size_t size = 0;
-    const char *via = NULL;
-    const unsigned char *execfn = NULL;
-    char out[1024];
-
-    if (!resolve_module(&base, &size, &via, &execfn)) {
-        activate_result_json(out, sizeof(out), 0, "no_module", NULL, NULL);
-        send_line(hPipe, "%s", out);
-        return;
-    }
-
-    const void *amf = resolve_amf_fn(base, size);
-    const void *ctor = resolve_db_ctor_fn(base, size);
-    const void *setstr = resolve_db_setstring_fn(base, size);
-    if (!amf || !ctor || !setstr) {
-        dbg("activate_mission_flow: AOB fehlt (amf=%p ctor=%p setstring=%p)",
-            (void *)amf, (void *)ctor, (void *)setstr);
-        activate_result_json(out, sizeof(out), 0, "no_signature", NULL, NULL);
-        send_line(hPipe, "%s", out);
-        return;
-    }
-
-    void *inst = NULL;
-    const unsigned char *vftable = NULL;
-    if (!resolve_mission_service(&vftable, &inst) || !inst) {
-        activate_result_json(out, sizeof(out), 0, "no_mission_service",
-                             NULL, NULL);
-        send_line(hPipe, "%s", out);
-        return;
-    }
-
-    void *db = malloc(0x60);
-    if (!db) {
-        activate_result_json(out, sizeof(out), 0, "alloc_failed", NULL, NULL);
-        send_line(hPipe, "%s", out);
-        return;
-    }
-    memset(db, 0, 0x60);
-    database_init(db, (db_ctor_fn)(uintptr_t)ctor);
-    database_set_string(db, (db_setstring_fn)(uintptr_t)setstr, "spawn_point",
-                        spawn_point ? spawn_point : "");
-    database_set_string(db, (db_setstring_fn)(uintptr_t)setstr, "name",
-                        name ? name : "");
-
-    {
-        amf_call_fn fn = (amf_call_fn)(uintptr_t)amf;
-        unsigned char ret[40], a1[40], a2[40], a3[40];
-        utfstring_fill(a1, sizeof(a1), "");
-        utfstring_fill(a2, sizeof(a2), name ? name : "");
-        utfstring_fill(a3, sizeof(a3), "default");
-        memset(ret, 0, sizeof(ret));
-        fn(inst, ret, a1, a2, a3, db);
-    }
-
-    g_mission_payload_db = db;
-    g_mission_flow_valid = 1;
-    copy_cstr(g_mission_name, sizeof(g_mission_name), name ? name : "");
-    copy_cstr(g_mission_spawn, sizeof(g_mission_spawn),
-              spawn_point ? spawn_point : "");
-
-    dbg("activate_mission_flow: name='%s' spawn_point='%s' db=%p inst=%p",
-        g_mission_name, g_mission_spawn, db, inst);
-
-    /* Erfolgreicher (guarded) Aufruf - die Sichtbarkeit im Spiel ist der
-     * Live-Check (Story 8, nur mit Player). */
-    activate_result_json(out, sizeof(out), 1, NULL, g_mission_name,
-                         g_mission_spawn);
-    send_line(hPipe, "%s", out);
-}
-
-/* Read-Leg: mission_flow{name,spawn_point}. Primaer per C++-Accessor
- * Database::GetString auf dem geparkten Payload (belegt den Accessor-Pfad);
- * schlaegt der Read fehl, fallen die zuletzt gesetzten Felder ein. Kein
- * Payload -> null. Nie ein Crash. */
-static void mission_flow_json(char *out, size_t out_sz)
-{
-    char name[256] = "", spawn[256] = "";
-    char en[512], es[512];
-    int read_ok = 0;
-
-    if (!g_mission_flow_valid || !g_mission_payload_db) {
-        snprintf(out, out_sz, "null");
-        return;
-    }
-
-    {
-        const unsigned char *base = NULL;
-        size_t size = 0;
-        const char *via = NULL;
-        const unsigned char *execfn = NULL;
-        if (resolve_module(&base, &size, &via, &execfn)) {
-            const void *gs = resolve_db_getstring_fn(base, size);
-            if (gs) {
-                typedef const void *(*db_getstring_fn)(void *, const void *);
-                db_getstring_fn fn = (db_getstring_fn)(uintptr_t)gs;
-                unsigned char key[40];
-                const void *v;
-                utfstring_fill(key, sizeof(key), "name");
-                v = fn(g_mission_payload_db, key);
-                if (v && utfstring_read(v, name, sizeof(name)))
-                    read_ok = 1;
-                utfstring_fill(key, sizeof(key), "spawn_point");
-                v = fn(g_mission_payload_db, key);
-                if (v && utfstring_read(v, spawn, sizeof(spawn)))
-                    read_ok = 1;
-            }
-            /* GetStringKeys wird ebenfalls per AOB aufgeloest (Vollstaendig-
-             * keit der Kette); die Feld-Anzeige nutzt GetString. */
-            (void)resolve_db_getkeys_fn(base, size);
-        }
-    }
-
-    if (!read_ok) {
-        copy_cstr(name, sizeof(name), g_mission_name);
-        copy_cstr(spawn, sizeof(spawn), g_mission_spawn);
-    }
-    json_escape_into(en, sizeof(en), name);
-    json_escape_into(es, sizeof(es), spawn);
-    snprintf(out, out_sz, "{\"name\":\"%s\",\"spawn_point\":\"%s\"}", en, es);
-}
 
 static void handle_line(HANDLE hPipe, const char *line)
 {

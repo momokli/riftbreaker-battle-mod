@@ -633,6 +633,109 @@ int main(void)
               "#386 activate_result: JSON-Escape im Namen");
     }
 
+    /* -------------------------------------------------------------- */
+    /* #386: JSON-Ingress-Parser json_get_string (handle_line-Routing). */
+    /* -------------------------------------------------------------- */
+    {
+        char v[64];
+        check(json_get_string("{\"cmd\":\"get_state\"}", "cmd", v,
+                              sizeof(v)) == 1 && strcmp(v, "get_state") == 0,
+              "#386 json_get_string: cmd extrahiert");
+        check(json_get_string(
+                  "{\"cmd\":\"activate_mission_flow\",\"name\":\"m1\","
+                  "\"spawn_point\":\"s2\"}",
+                  "spawn_point", v, sizeof(v)) == 1 && strcmp(v, "s2") == 0,
+              "#386 json_get_string: spawn_point extrahiert");
+        check(json_get_string("{\"foo\":\"bar\"}", "cmd", v,
+                              sizeof(v)) == 0,
+              "#386 json_get_string: fehlender Key -> 0");
+        check(json_get_string("{\"cmd\":123}", "cmd", v, sizeof(v)) == 0,
+              "#386 json_get_string: Nicht-String-Wert -> 0");
+        check(json_get_string(NULL, "cmd", v, sizeof(v)) == 0,
+              "#386 json_get_string: NULL -> 0 (kein Crash)");
+        check(json_get_string("{\"cmd\":\"a\\\\b\"}", "cmd", v,
+                              sizeof(v)) == 1 && strcmp(v, "a\\b") == 0,
+              "#386 json_get_string: Backslash-Escape aufgeloest");
+    }
+
+    /* -------------------------------------------------------------- */
+    /* #386 S5 Read-Leg-Form: mission_flow_json (null / Fallback / Escape) */
+    /* -------------------------------------------------------------- */
+    {
+        char mf[1024];
+
+        /* 1) kein Payload geparkt -> ehrliches "null", kein Crash. */
+        ht_set_module(NULL, 0);
+        g_mission_flow_valid = 0;
+        g_mission_payload_db = NULL;
+        mission_flow_json(mf, sizeof(mf));
+        check(strcmp(mf, "null") == 0,
+              "#386 mission_flow_json: kein Payload -> null");
+
+        /* 2) Payload geparkt, aber GetString-AOB fehlt -> Fallback auf die
+         *    zuletzt gesetzten Felder (Accessor nicht aufloesbar). */
+        unsigned char *mfmi = build_mission_image(1, 1, 1, 1, 1, 1, 1, 0);
+        ht_set_module(mfmi, IMG_SIZE);
+        g_mission_payload_db = (void *)mfmi; /* wird ohne AOB nicht gerufen */
+        g_mission_flow_valid = 1;
+        copy_cstr(g_mission_name, sizeof(g_mission_name), "flowB");
+        copy_cstr(g_mission_spawn, sizeof(g_mission_spawn), "spawn-9");
+        mission_flow_json(mf, sizeof(mf));
+        check(strstr(mf, "\"name\":\"flowB\"") != NULL &&
+              strstr(mf, "\"spawn_point\":\"spawn-9\"") != NULL,
+              "#386 mission_flow_json: Fallback-Felder (AOB fehlt)");
+
+        /* 3) Einbettung: Sonderzeichen in den Feldern werden JSON-escaped. */
+        copy_cstr(g_mission_name, sizeof(g_mission_name), "a\"b\\c");
+        mission_flow_json(mf, sizeof(mf));
+        check(strstr(mf, "\\\"") != NULL && strstr(mf, "\\\\") != NULL,
+              "#386 mission_flow_json: JSON-Escape der Felder");
+
+        free(mfmi);
+        g_mission_flow_valid = 0;
+        g_mission_payload_db = NULL;
+        ht_set_module(NULL, 0);
+    }
+
+    /* -------------------------------------------------------------- */
+    /* #386 S4 Dispatch ok:false-Pfade (echter dispatch_activate_...).  */
+    /* -------------------------------------------------------------- */
+    {
+        unsigned char *dmi;
+        g_ht_last_reply[0] = '\0';
+        g_ht_send_calls = 0;
+
+        /* 1) kein Modul -> ok:false/no_module, kein Aufruf. */
+        ht_set_module(NULL, 0);
+        dispatch_activate_mission_flow((HANDLE)0, "n", "s");
+        check(g_ht_send_calls == 1 &&
+              strstr(g_ht_last_reply, "\"ok\":false") != NULL &&
+              strstr(g_ht_last_reply, "\"reason\":\"no_module\"") != NULL,
+              "#386 dispatch: kein Modul -> ok:false/no_module");
+
+        /* 2) Modul ohne ActivateMissionFlow-AOB -> no_signature. */
+        dmi = build_mission_image(1, 1, 1, 1, 0, 0, 0, 0);
+        ht_set_module(dmi, IMG_SIZE);
+        dispatch_activate_mission_flow((HANDLE)0, "n", "s");
+        check(strstr(g_ht_last_reply, "\"reason\":\"no_signature\"") != NULL,
+              "#386 dispatch: AOB fehlt -> ok:false/no_signature");
+        free(dmi);
+
+        /* 3) Signatur+Builder da, aber kein MissionService -> graceful. */
+        dmi = build_mission_image(0, 0, 0, 0, 1, 1, 1, 0);
+        ht_set_module(dmi, IMG_SIZE);
+        dispatch_activate_mission_flow((HANDLE)0, "n", "s");
+        check(strstr(g_ht_last_reply,
+                     "\"reason\":\"no_mission_service\"") != NULL,
+              "#386 dispatch: kein MissionService -> ok:false/no_service");
+        free(dmi);
+
+        /* Kein ok:false-Pfad darf den Payload parken. */
+        check(g_mission_flow_valid == 0,
+              "#386 dispatch: ok:false parkt keinen Payload (kein Aufruf)");
+        ht_set_module(NULL, 0);
+    }
+
     free(img);
 
     printf("HOSTTEST_PASS=%d HOSTTEST_FAIL=%d\n", g_pass, g_fail);
