@@ -59,6 +59,14 @@ static void check(int cond, const char *msg)
 #define INST_OFF    0x1700 /* QWORD == base+VFT_OFF (Instanz)         */
 #define PAT_OFF     0x1800 /* freies Byte-Muster fuer scan_bytes      */
 
+/* #386: Mission-Flow-Payload (eigene Offsets, kollisionsfrei zu #243). */
+#define MNAME_OFF   0x1480 /* RTTI-Name MissionService                */
+#define AMF_OFF     0x1200 /* ActivateMissionFlow(...,Database*)-Sig  */
+#define CTOR_OFF    0x1300 /* Database::Database()-Sig                */
+#define SETSTR_OFF  0x1340 /* Database::SetString-Sig                */
+#define GETSTR_OFF  0x1380 /* Database::GetString-Sig                */
+#define GETKEYS_OFF 0x13C0 /* Database::GetStringKeys-Sig            */
+
 static void wr32(unsigned char *p, uint32_t v) { memcpy(p, &v, 4); }
 static void wr64(unsigned char *p, uint64_t v) { memcpy(p, &v, 8); }
 
@@ -122,6 +130,72 @@ static unsigned char *build_image(int with_sig, int with_rtti, int valid_col,
         wr64(img + INST_OFF, (uint64_t)(uintptr_t)(img + VFT_OFF));
 
     return img;
+}
+
+/*
+ * #386: synthetisches Image fuer den Mission-Flow-Payload-Pfad. Wie
+ * build_image(), aber mit MissionService-RTTI + den AOB-Signaturen des
+ * Database-Pfads im .text (siehe Offsets oben).
+ */
+static unsigned char *build_mission_image(int with_mission_rtti, int valid_col,
+                                          int with_vftable_ref, int with_instance,
+                                          int with_amf, int with_ctor,
+                                          int with_setstr, int with_getstr)
+{
+    unsigned char *img = build_image(0, 0, 0, 0, 0); /* PE-Geruest ohne Console */
+    if (!img)
+        return NULL;
+
+    if (with_amf)
+        memcpy(img + AMF_OFF, RBBRIDGE_AMF_SIG, sizeof(RBBRIDGE_AMF_SIG));
+    if (with_ctor)
+        memcpy(img + CTOR_OFF, RBBRIDGE_DB_CTOR_SIG,
+               sizeof(RBBRIDGE_DB_CTOR_SIG));
+    if (with_setstr)
+        memcpy(img + SETSTR_OFF, RBBRIDGE_DB_SETSTRING_SIG,
+               sizeof(RBBRIDGE_DB_SETSTRING_SIG));
+    if (with_getstr)
+        memcpy(img + GETSTR_OFF, RBBRIDGE_DB_GETSTRING_SIG,
+               sizeof(RBBRIDGE_DB_GETSTRING_SIG));
+
+    if (with_mission_rtti) {
+        memcpy(img + MNAME_OFF, RBBRIDGE_MISSION_RTTI_NAME,
+               sizeof(RBBRIDGE_MISSION_RTTI_NAME));
+        uint32_t td_rva = (uint32_t)(MNAME_OFF - 0x10);
+        if (with_vftable_ref) {
+            wr32(img + COL_OFF, valid_col ? 1u : 0u);
+            wr32(img + COL_OFF + 0xC, td_rva);
+            wr32(img + COL_OFF + 0x14, COL_OFF);
+            wr64(img + VFT_REF_OFF, (uint64_t)(uintptr_t)(img + COL_OFF));
+            wr64(img + VFT_OFF, (uint64_t)(uintptr_t)(img + AMF_OFF));
+        }
+    }
+    if (with_instance)
+        wr64(img + INST_OFF, (uint64_t)(uintptr_t)(img + VFT_OFF));
+
+    return img;
+}
+
+/* Stub-Funktionen fuer den Database-Builder (Aufruf-Mitschnitt). */
+static int g_stub_ctor_calls = 0;
+static int g_stub_set_calls = 0;
+static char g_stub_key[64];
+static char g_stub_val[64];
+
+static void stub_ctor(void *db)
+{
+    g_stub_ctor_calls++;
+    (void)db;
+}
+
+static void stub_setstring(void *db, const void *k, const void *v)
+{
+    g_stub_set_calls++;
+    (void)db;
+    if (!utfstring_read(k, g_stub_key, sizeof(g_stub_key)))
+        g_stub_key[0] = '\0';
+    if (!utfstring_read(v, g_stub_val, sizeof(g_stub_val)))
+        g_stub_val[0] = '\0';
 }
 
 int main(void)
@@ -412,6 +486,152 @@ int main(void)
           "resource_internal_name: leer -> carbonium");
     check(strcmp(resource_internal_name(NULL), "carbonium") == 0,
           "resource_internal_name: NULL -> carbonium");
+
+    /* ============================================================== */
+    /* #386: Mission-Flow-Payload (Database*)                          */
+    /* ============================================================== */
+
+    /* RTTI-Walk MissionService: positiv + Negativfaelle. */
+    ht_set_module(NULL, 0);
+    {
+        unsigned char *mi = build_mission_image(1, 1, 1, 1, 1, 1, 1, 1);
+        ht_set_module(mi, IMG_SIZE);
+        check(resolve_mission_vftable(mi, IMG_SIZE) == mi + VFT_OFF,
+              "#386 vftable: Mission-RTTI->TD->COL->vftable");
+
+        const unsigned char *mv = NULL;
+        void *minst = NULL;
+        check(resolve_mission_service(&mv, &minst) == 1 &&
+              minst == (void *)(mi + INST_OFF),
+              "#386 resolve_mission_service: vftable+Instanz");
+
+        /* AOB-Resolver (positiv). */
+        check(resolve_amf_fn(mi, IMG_SIZE) == mi + AMF_OFF,
+              "#386 AOB: ActivateMissionFlow(Database*) gefunden");
+        check(resolve_db_ctor_fn(mi, IMG_SIZE) == mi + CTOR_OFF,
+              "#386 AOB: Database::Database() gefunden");
+        check(resolve_db_setstring_fn(mi, IMG_SIZE) == mi + SETSTR_OFF,
+              "#386 AOB: Database::SetString gefunden");
+        check(resolve_db_getstring_fn(mi, IMG_SIZE) == mi + GETSTR_OFF,
+              "#386 AOB: Database::GetString gefunden");
+        memcpy(mi + GETKEYS_OFF, RBBRIDGE_DB_GETKEYS_SIG,
+               sizeof(RBBRIDGE_DB_GETKEYS_SIG));
+        check(resolve_db_getkeys_fn(mi, IMG_SIZE) == mi + GETKEYS_OFF,
+              "#386 AOB: Database::GetStringKeys gefunden");
+
+        /* Wildcard: rel32 des AMF-CALLs darf abweichen. */
+        mi[AMF_OFF + 34] ^= 0xFF;
+        mi[AMF_OFF + 35] ^= 0xFF;
+        check(resolve_amf_fn(mi, IMG_SIZE) == mi + AMF_OFF,
+              "#386 AOB: AMF rel32-Wildcard toleriert");
+        free(mi);
+    }
+
+    /* Negativ: RTTI-Name fehlt / COL ungueltig / Instanz fehlt. */
+    {
+        unsigned char *mi = build_mission_image(0, 1, 1, 1, 1, 1, 1, 1);
+        ht_set_module(mi, IMG_SIZE);
+        check(resolve_mission_vftable(mi, IMG_SIZE) == NULL,
+              "#386 vftable-Negativ: Mission-RTTI fehlt -> NULL");
+        free(mi);
+    }
+    {
+        unsigned char *mi = build_mission_image(1, 0, 1, 1, 1, 1, 1, 1);
+        ht_set_module(mi, IMG_SIZE);
+        check(resolve_mission_vftable(mi, IMG_SIZE) == NULL,
+              "#386 vftable-Negativ: COL.signature != 1 -> NULL");
+        free(mi);
+    }
+    {
+        unsigned char *mi = build_mission_image(1, 1, 1, 0, 1, 1, 1, 1);
+        ht_set_module(mi, IMG_SIZE);
+        const unsigned char *mv = NULL;
+        void *minst = NULL;
+        check(resolve_mission_service(&mv, &minst) == 0,
+              "#386 resolve_mission_service: Instanz fehlt -> 0 (kein Aufruf)");
+        free(mi);
+    }
+    {
+        unsigned char *mi = build_mission_image(0, 0, 0, 0, 0, 0, 0, 0);
+        ht_set_module(mi, IMG_SIZE);
+        check(resolve_amf_fn(mi, IMG_SIZE) == NULL &&
+              resolve_db_ctor_fn(mi, IMG_SIZE) == NULL &&
+              resolve_db_setstring_fn(mi, IMG_SIZE) == NULL,
+              "#386 AOB-Negativ: keine Signatur -> NULL");
+        free(mi);
+    }
+    ht_set_module(NULL, 0);
+    check(resolve_mission_service(NULL, NULL) == 0 ||
+          resolve_mission_service(&(const unsigned char *){0}, NULL) == 0,
+          "#386 resolve_mission_service: kein Modul -> 0");
+
+    /* UtfString SSO: fill/read-Roundtrip + Kuerzung > 15 Zeichen. */
+    {
+        unsigned char u[40];
+        char got[64];
+        utfstring_fill(u, sizeof(u), "spawn_point");
+        check(utfstring_read(u, got, sizeof(got)) == 1 &&
+              strcmp(got, "spawn_point") == 0,
+              "#386 utfstring: fill/read-Roundtrip");
+        utfstring_fill(u, sizeof(u), "");
+        check(utfstring_read(u, got, sizeof(got)) == 1 && got[0] == '\0',
+              "#386 utfstring: leerer String");
+        utfstring_fill(u, sizeof(u), "12345678901234567890");
+        check(utfstring_read(u, got, sizeof(got)) == 1 && strlen(got) == 15,
+              "#386 utfstring: >15 Zeichen defensiv gekuerzt");
+        check(utfstring_read(NULL, got, sizeof(got)) == 0,
+              "#386 utfstring: NULL -> 0 (kein Crash)");
+    }
+
+    /* Database-Builder mit Stub-Fn-Ptrs. */
+    {
+        unsigned char db[0x60];
+        memset(db, 0, sizeof(db));
+        g_stub_ctor_calls = 0;
+        g_stub_set_calls = 0;
+        database_init(db, stub_ctor);
+        database_set_string(db, stub_setstring, "spawn_point", "42");
+        database_set_string(db, stub_setstring, "name", "m1");
+        check(g_stub_ctor_calls == 1, "#386 builder: Ctor genau 1x gerufen");
+        check(g_stub_set_calls == 2, "#386 builder: SetString 2x gerufen");
+        check(strcmp(g_stub_key, "name") == 0 &&
+              strcmp(g_stub_val, "m1") == 0,
+              "#386 builder: letzter SetString(key,value) korrekt");
+        database_init(NULL, stub_ctor);
+        database_set_string(db, NULL, "k", "v");
+        check(g_stub_ctor_calls == 1 && g_stub_set_calls == 2,
+              "#386 builder: NULL-Fn wird uebersprungen (kein Crash)");
+    }
+
+    /* copy_cstr: Kopie + Truncation. */
+    {
+        char cbuf[8];
+        copy_cstr(cbuf, sizeof(cbuf), "abc");
+        check(strcmp(cbuf, "abc") == 0, "#386 copy_cstr: Kopie");
+        copy_cstr(cbuf, sizeof(cbuf), "0123456789");
+        check(strlen(cbuf) == 7, "#386 copy_cstr: Truncation auf dst_sz-1");
+        copy_cstr(cbuf, sizeof(cbuf), NULL);
+        check(cbuf[0] == '\0', "#386 copy_cstr: NULL -> leer");
+    }
+
+    /* activate_result-JSON (Pipe-Roundtrip-Form ok:true/ok:false). */
+    {
+        char j[1024];
+        activate_result_json(j, sizeof(j), 1, NULL, "flowA", "spawn-7");
+        check(strstr(j, "\"event\":\"activate_result\"") != NULL &&
+              strstr(j, "\"ok\":true") != NULL &&
+              strstr(j, "\"name\":\"flowA\"") != NULL &&
+              strstr(j, "\"spawn_point\":\"spawn-7\"") != NULL,
+              "#386 activate_result: ok:true mit name/spawn_point");
+        activate_result_json(j, sizeof(j), 0, "no_mission_service", NULL, NULL);
+        check(strstr(j, "\"ok\":false") != NULL &&
+              strstr(j, "\"reason\":\"no_mission_service\"") != NULL,
+              "#386 activate_result: ok:false mit reason");
+        /* Escaping: Anfuehrungszeichen im Namen wird escaped. */
+        activate_result_json(j, sizeof(j), 1, NULL, "a\"b", NULL);
+        check(strstr(j, "\\\"") != NULL,
+              "#386 activate_result: JSON-Escape im Namen");
+    }
 
     free(img);
 

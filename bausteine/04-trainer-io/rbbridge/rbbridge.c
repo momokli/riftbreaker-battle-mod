@@ -795,6 +795,77 @@ static const unsigned char RBBRIDGE_ACTIVATE_SIG[] = {
 #define RBBRIDGE_RVA_UTFSTRING_DTOR         0x26f1f0u  /* ~UtfString() */
 #define RBBRIDGE_RVA_ISGRAPHACTIVE          0xf9e1f0u  /* bool MissionService::IsGraphActive(UtfString const&) */
 
+/* MSVC-RTTI-Name der MissionService-Klasse (mit NUL-Terminator). */
+static const char RBBRIDGE_MISSION_RTTI_NAME[] = ".?AVMissionService@Riftbreaker@@";
+
+/*
+ * AOB-Signaturen des Database*-Payload-Pfads (Issue #386, Build 2.0.58485).
+ * Keine feste RVA im Laufzeitpfad: alle Adressen werden aus diesen
+ * Byte-Signaturen im .text (Fallback: ganzes Abbild) aufgeloest. Die
+ * rel32-Operanden der jeweiligen E8-CALLs sind per Byte-Maske (0x00 =
+ * Wildcard) maskiert, nur die E8-Opcodes bleiben fest - Build-gebunden wie
+ * RBBRIDGE_EXEC_SIG und bei einem Engine-Update gegen die .text-Gegenprobe
+ * nachzuziehen.
+ *
+ *   RBBRIDGE_AMF_SIG          MissionService::ActivateMissionFlow(...,Database*)
+ *                             Prolog 0xF93280 (E8 @ Index 33 maskiert).
+ *   RBBRIDGE_DB_CTOR_SIG      Exor::Database::Database() 0x2C6550
+ *                             (E8 @ Index 23 maskiert).
+ *   RBBRIDGE_DB_SETSTRING_SIG Database::SetString 0x25956B0 (exakt, kein Call
+ *                             im Prefix).
+ *   RBBRIDGE_DB_GETSTRING_SIG Database::GetString 0x2591FD0
+ *                             (E8 @ Index 12 maskiert).
+ *   RBBRIDGE_DB_GETKEYS_SIG   Database::GetStringKeys 0x2592060 (exakt).
+ */
+static const unsigned char RBBRIDGE_AMF_SIG[] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x18,
+    0x48, 0x89, 0x74, 0x24, 0x20, 0x57, 0x48, 0x83, 0xEC, 0x50,
+    0x49, 0x8B, 0xE9, 0x49, 0x8B, 0xF0, 0x48, 0x8B, 0xFA, 0x48,
+    0x8B, 0x59, 0x08, 0xE8, 0x1A, 0x0B, 0x5E, 0x01
+};
+static const unsigned char RBBRIDGE_AMF_SIG_MASK[] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00
+};
+
+static const unsigned char RBBRIDGE_DB_CTOR_SIG[] = {
+    0x48, 0x89, 0x5C, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20,
+    0x48, 0x89, 0x4C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20,
+    0x48, 0x8B, 0xF9, 0xE8, 0x74, 0x79, 0x27, 0x02
+};
+static const unsigned char RBBRIDGE_DB_CTOR_SIG_MASK[] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00
+};
+
+static const unsigned char RBBRIDGE_DB_SETSTRING_SIG[] = {
+    0x4C, 0x89, 0x44, 0x24, 0x18, 0x53, 0x48, 0x83, 0xEC, 0x30,
+    0x49, 0x8B, 0xD8, 0x48, 0x8B, 0x42, 0x18, 0x48, 0x83, 0xC2,
+    0x08, 0x48, 0x83, 0x7A, 0x18, 0x0F
+};
+
+static const unsigned char RBBRIDGE_DB_GETSTRING_SIG[] = {
+    0x40, 0x53, 0x48, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00, 0x48,
+    0x8B, 0xDA, 0xE8, 0xFF, 0x82, 0xFF, 0xFF, 0x48, 0x85, 0xC0,
+    0x74, 0x09, 0x48, 0x81, 0xC4, 0x80, 0x00, 0x00, 0x00, 0x5B,
+    0xC3
+};
+static const unsigned char RBBRIDGE_DB_GETSTRING_SIG_MASK[] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF
+};
+
+static const unsigned char RBBRIDGE_DB_GETKEYS_SIG[] = {
+    0x48, 0x89, 0x54, 0x24, 0x10, 0x53, 0x55, 0x56, 0x57, 0x41,
+    0x56, 0x48, 0x83, 0xEC, 0x50, 0x48, 0x8B, 0xFA, 0x4C, 0x8B,
+    0xF1, 0x33, 0xF6, 0x89, 0x74, 0x24, 0x30
+};
+
 /* x64-Aufrufkonvention: this=RCX, cmd=RDX - __fastcall ist auf x64 der
  * Standard (das Schluesselwort dokumentiert die Konvention nur). */
 #ifdef RBBRIDGE_HOSTTEST
@@ -1306,6 +1377,372 @@ static const unsigned char *resolve_console_vftable(const unsigned char *base,
     return NULL;
 }
 
+/* ------------------------------------------------------------------ */
+/* #386: Database*-Payload-Pfad (Mission-Flow) - Resolver + Builder    */
+/*                                                                    */
+/* Alle Adressen werden per AOB-Signatur aufgeloest (RBBRIDGE_AMF_SIG,  */
+/* RBBRIDGE_DB_*), NIE als feste RVA aufgerufen. Nicht-Fund an JEDER    */
+/* Stufe -> 0/NULL + dbg(), kein Aufruf (kein SEH unter MinGW-x64).     */
+/* ------------------------------------------------------------------ */
+
+/* Sucht eine Byte-Signatur bevorzugt in der .text-Section, sonst im
+ * gesamten Abbild (maskierter Scan; mask == NULL bedeutet exakt).
+ * Rueckgabe 1 = Section gefunden (out/out_len gesetzt). */
+static int text_section_range(const unsigned char *base, size_t size,
+                              const unsigned char **out, size_t *out_len)
+{
+    if (!base || size < sizeof(IMAGE_DOS_HEADER))
+        return 0;
+    const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)base;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+        return 0;
+    uint32_t e_lfanew = (uint32_t)dos->e_lfanew;
+    if ((size_t)e_lfanew > size ||
+        size - (size_t)e_lfanew < sizeof(IMAGE_NT_HEADERS))
+        return 0;
+    const IMAGE_NT_HEADERS *nt =
+        (const IMAGE_NT_HEADERS *)(base + e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE)
+        return 0;
+    const IMAGE_SECTION_HEADER *sec = IMAGE_FIRST_SECTION(nt);
+    for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; i++, sec++) {
+        if (memcmp(sec->Name, ".text", 5) == 0) {
+            size_t va = (size_t)sec->VirtualAddress;
+            size_t vs = (size_t)sec->Misc.VirtualSize;
+            if (va > size || vs > size - va)
+                return 0;
+            *out = base + va;
+            *out_len = vs;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* AOB-Scan: .text zuerst, sonst ganzes Abbild. NULL = nicht gefunden. */
+static const unsigned char *scan_code_sig(const unsigned char *base,
+                                          size_t size,
+                                          const unsigned char *sig,
+                                          const unsigned char *mask,
+                                          size_t sig_len)
+{
+    const unsigned char *text = NULL;
+    size_t text_len = 0;
+    const unsigned char *hit = NULL;
+    if (text_section_range(base, size, &text, &text_len))
+        hit = scan_bytes_mask(text, text_len, sig, mask, sig_len);
+    if (!hit)
+        hit = scan_bytes_mask(base, size, sig, mask, sig_len);
+    dbg("scan_code_sig: sig_len=%lu hit=%p (rva=%08lx)",
+        (unsigned long)sig_len, (void *)hit,
+        (unsigned long)(hit ? (uintptr_t)(hit - base) : 0));
+    return hit;
+}
+
+static const void *resolve_amf_fn(const unsigned char *base, size_t size)
+{
+    return (const void *)scan_code_sig(base, size, RBBRIDGE_AMF_SIG,
+                                       RBBRIDGE_AMF_SIG_MASK,
+                                       sizeof(RBBRIDGE_AMF_SIG));
+}
+
+static const void *resolve_db_ctor_fn(const unsigned char *base, size_t size)
+{
+    return (const void *)scan_code_sig(base, size, RBBRIDGE_DB_CTOR_SIG,
+                                       RBBRIDGE_DB_CTOR_SIG_MASK,
+                                       sizeof(RBBRIDGE_DB_CTOR_SIG));
+}
+
+static const void *resolve_db_setstring_fn(const unsigned char *base,
+                                           size_t size)
+{
+    return (const void *)scan_code_sig(base, size, RBBRIDGE_DB_SETSTRING_SIG,
+                                       NULL, sizeof(RBBRIDGE_DB_SETSTRING_SIG));
+}
+
+static const void *resolve_db_getstring_fn(const unsigned char *base,
+                                           size_t size)
+{
+    return (const void *)scan_code_sig(base, size, RBBRIDGE_DB_GETSTRING_SIG,
+                                       RBBRIDGE_DB_GETSTRING_SIG_MASK,
+                                       sizeof(RBBRIDGE_DB_GETSTRING_SIG));
+}
+
+static const void *resolve_db_getkeys_fn(const unsigned char *base, size_t size)
+{
+    return (const void *)scan_code_sig(base, size, RBBRIDGE_DB_GETKEYS_SIG,
+                                       NULL, sizeof(RBBRIDGE_DB_GETKEYS_SIG));
+}
+
+/* Findet die Instanz zu einer vftable: 8-Byte-aligniertes QWORD == vftable
+ * in committeter, lesbarer Region ohne PAGE_GUARD. Erster Treffer = this. */
+static void *scan_instance_by_vftable(const unsigned char *vftable)
+{
+    uint64_t needle = (uint64_t)(uintptr_t)vftable;
+    void *instance = NULL;
+    uintptr_t addr = 0;
+
+    for (;;) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
+            break;
+        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
+        if (next <= addr)
+            break;
+        addr = next;
+        if (!is_readable_region(&mi))
+            continue;
+        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
+        size_t nq = mi.RegionSize / sizeof(uint64_t);
+        for (size_t i = 0; i < nq; i++) {
+            if (q[i] == needle) {
+                instance = (void *)&q[i];
+                break;
+            }
+        }
+        if (instance)
+            break;
+    }
+    return instance;
+}
+
+/* RTTI-Walk MissionService: Name -> TD(-0x10) -> COL(+0xC pTD, +0x14 pSelf)
+ * -> vftable = Fund+8. Rueckgabe vftable oder NULL. */
+static const unsigned char *resolve_mission_vftable(const unsigned char *base,
+                                                    size_t size)
+{
+    const unsigned char *name = scan_bytes(
+        base, size, (const unsigned char *)RBBRIDGE_MISSION_RTTI_NAME,
+        sizeof(RBBRIDGE_MISSION_RTTI_NAME));
+    if (!name) {
+        dbg("resolve_mission_vftable: RTTI-Name '%s' nicht gefunden",
+            RBBRIDGE_MISSION_RTTI_NAME);
+        return NULL;
+    }
+
+    const unsigned char *td = name - 0x10; /* TypeDescriptor-Beginn */
+    uint32_t td_rva = (uint32_t)(uintptr_t)(td - base);
+
+    const unsigned char *p = base;
+    for (;;) {
+        const unsigned char *hit = scan_u32(p, (size_t)((base + size) - p),
+                                            td_rva);
+        if (!hit)
+            break;
+        const unsigned char *col = hit - 0xC;
+        uint32_t col_rva = (uint32_t)(uintptr_t)(col - base);
+        uint32_t sig = 0, pself = 0;
+        memcpy(&sig, col, sizeof(sig));            /* COL.signature   */
+        memcpy(&pself, col + 0x14, sizeof(pself)); /* COL.pSelf (RVA) */
+        if (sig == 1 && pself == col_rva) {
+            const unsigned char *ref = scan_u64(
+                base, size, (uint64_t)(uintptr_t)(base + col_rva));
+            if (!ref) {
+                dbg("resolve_mission_vftable: COL(rva=%08lx) gefunden, aber "
+                    "kein vftable-Zeiger", (unsigned long)col_rva);
+                return NULL;
+            }
+            const unsigned char *vftable = ref + 8;
+            dbg("resolve_mission_vftable: TD(rva=%08lx) COL(rva=%08lx) "
+                "vftable(rva=%08lx)",
+                (unsigned long)td_rva, (unsigned long)col_rva,
+                (unsigned long)(uintptr_t)(vftable - base));
+            return vftable;
+        }
+        p = hit + 1; /* falscher COL-Kandidat -> weiter suchen */
+    }
+
+    dbg("resolve_mission_vftable: kein gueltiger COL fuer TD(rva=%08lx)",
+        (unsigned long)td_rva);
+    return NULL;
+}
+
+/* MissionService-Anbindung: vftable (RTTI) + Instanz (QWORD-Scan).
+ * Rueckgabe 1 = ok (out_vftable/out_inst gesetzt), 0 = nicht gefunden
+ * (dann NICHT aufrufen). */
+static int resolve_mission_service(const unsigned char **out_vftable,
+                                   void **out_inst)
+{
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    const char *via = NULL;
+    const unsigned char *execfn = NULL;
+
+    if (!resolve_module(&base, &size, &via, &execfn))
+        return 0;
+
+    const unsigned char *vftable = resolve_mission_vftable(base, size);
+    if (!vftable)
+        return 0;
+
+    void *inst = scan_instance_by_vftable(vftable);
+    if (!inst) {
+        dbg("resolve_mission_service: keine Instanz fuer vftable(rva=%08lx)",
+            (unsigned long)(uintptr_t)(vftable - base));
+        return 0;
+    }
+
+    dbg("resolve_mission_service: base=%p vftable(rva=%08lx) instance=%p",
+        (void *)base, (unsigned long)(uintptr_t)(vftable - base), inst);
+    *out_vftable = vftable;
+    *out_inst = inst;
+    return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* #386: UtfString + Database-Builder (host-testbar, pures C++)        */
+/*                                                                    */
+/* UtfString-SSO-Layout (B4, docs/research/io-write-poc.md):           */
+/*   [0]=unused, [8]=inline-data, [0x18]=size, [0x20]=capacity(<=0xF). */
+/* ------------------------------------------------------------------ */
+
+static void utfstring_fill(unsigned char *buf, size_t buf_sz, const char *s)
+{
+    if (!buf || buf_sz < 40)
+        return;
+    if (!s)
+        s = "";
+    size_t n = strlen(s);
+    if (n > 15)
+        n = 15; /* SSO fasst <= 15 Zeichen; laenger defensiv kuerzen */
+    memset(buf, 0, 40);
+    memcpy(buf + 8, s, n);
+    buf[8 + n] = '\0';
+    {
+        uint64_t sz = (uint64_t)n, cap = 0xF;
+        memcpy(buf + 0x18, &sz, sizeof(sz));
+        memcpy(buf + 0x20, &cap, sizeof(cap));
+    }
+}
+
+/* Liest einen UtfString defensiv nach out (SSO inline, sonst Heap-Ptr via
+ * safe_read_u64). Rueckgabe 1 = gelesen, 0 = nicht lesbar. */
+static int utfstring_read(const void *utf, char *out, size_t out_sz)
+{
+    if (!utf || !out || out_sz == 0)
+        return 0;
+    const unsigned char *u = (const unsigned char *)utf;
+    uint64_t sz = 0, cap = 0;
+    if (!safe_read_u64(u + 0x18, &sz))
+        return 0;
+    if (!safe_read_u64(u + 0x20, &cap))
+        return 0;
+    const unsigned char *data;
+    if (cap > 0xF) {
+        uint64_t ptr = 0;
+        if (!safe_read_u64(u + 8, &ptr) || !ptr)
+            return 0;
+        data = (const unsigned char *)(uintptr_t)ptr;
+    } else {
+        data = u + 8;
+    }
+    if (sz >= out_sz)
+        sz = out_sz - 1;
+    for (uint64_t i = 0; i < sz;) {
+        uint64_t q = 0;
+        if (!safe_read_u64(data + i, &q))
+            return 0;
+        for (int b = 0; b < 8 && i < sz; b++, i++)
+            out[i] = (char)((q >> (8 * b)) & 0xFF);
+    }
+    out[sz] = '\0';
+    return 1;
+}
+
+/* ABI des Database-Payload-Pfads (MS-x64, aus dem Disasm belegt):
+ *   SetString(RCX=this, RDX=&key, R8=&value)
+ *   Database::Database()(RCX=this)
+ * Beide UtfString-Argumente werden als Zeiger uebergeben. */
+typedef void (*db_ctor_fn)(void *self);
+typedef void (*db_setstring_fn)(void *self, const void *key, const void *value);
+
+/* Ruft den Default-Ctor auf ein bereits allokiertes 0x60-Byte-Objekt. */
+static void database_init(void *db, db_ctor_fn ctor)
+{
+    if (db && ctor)
+        ctor(db);
+}
+
+/* SetString(key, value) mit SSO-UtfStrings auf dem Stack. */
+static void database_set_string(void *db, db_setstring_fn setstr,
+                                const char *key, const char *value)
+{
+    unsigned char k[40], v[40];
+    if (!db || !setstr)
+        return;
+    utfstring_fill(k, sizeof(k), key);
+    utfstring_fill(v, sizeof(v), value);
+    setstr(db, k, v);
+}
+
+/* ------------------------------------------------------------------ */
+/* #386: JSON-Helfer (auch im Host-Test genutzt)                       */
+/* ------------------------------------------------------------------ */
+
+static void json_escape_into(char *dst, size_t dst_sz, const char *src)
+{
+    size_t o = 0;
+    if (!dst || dst_sz == 0)
+        return;
+    if (!src)
+        src = "";
+    for (; *src; src++) {
+        unsigned char c = (unsigned char)*src;
+        if (c == '"' || c == '\\') {
+            if (o + 2 >= dst_sz)
+                break;
+            dst[o++] = '\\';
+            dst[o++] = (char)c;
+        } else if (c == '\n') {
+            if (o + 2 >= dst_sz)
+                break;
+            dst[o++] = '\\';
+            dst[o++] = 'n';
+        } else if (c == '\r') {
+            if (o + 2 >= dst_sz)
+                break;
+            dst[o++] = '\\';
+            dst[o++] = 'r';
+        } else if (c >= 0x20) {
+            if (o + 1 >= dst_sz)
+                break;
+            dst[o++] = (char)c;
+        }
+    }
+    dst[o] = '\0';
+}
+
+static void copy_cstr(char *dst, size_t dst_sz, const char *src)
+{
+    size_t i = 0;
+    if (!dst || dst_sz == 0)
+        return;
+    if (!src)
+        src = "";
+    for (; src[i] && i + 1 < dst_sz; i++)
+        dst[i] = src[i];
+    dst[i] = '\0';
+}
+
+/* Baut die activate_result-Zeile (ok:true mit name/spawn_point, ok:false
+ * mit reason). Reine Funktion -> host-testbar (Pipe-Roundtrip-Form). */
+static int activate_result_json(char *out, size_t out_sz, int ok,
+                                const char *reason, const char *name,
+                                const char *spawn)
+{
+    if (ok) {
+        char en[256], es[256];
+        json_escape_into(en, sizeof(en), name);
+        json_escape_into(es, sizeof(es), spawn);
+        return snprintf(out, out_sz,
+                        "{\"event\":\"activate_result\",\"ok\":true,"
+                        "\"name\":\"%s\",\"spawn_point\":\"%s\"}", en, es);
+    }
+    return snprintf(out, out_sz,
+                    "{\"event\":\"activate_result\",\"ok\":false,"
+                    "\"reason\":\"%s\"}", reason ? reason : "unknown");
+}
+
 /*
  * Findet die ConsoleService-Instanz: 8-Byte-alignierter QWORD == vftable
  * im eigenen Adressraum (VirtualQuery-Schleife, nur lesbare Regionen).
@@ -1748,253 +2185,6 @@ static int64_t read_resource_max(const unsigned char *base,
 }
 
 
-/* ------------------------------------------------------------------ */
-/* MissionService / ActivateMissionFlow (Issue #385)                   */
-/*                                                                    */
-/* Reines C++-Primitiv (kein Lua):                                     */
-/*   MissionService::ActivateMissionFlow(UtfString const& name,        */
-/*       UtfString const& logicFile, UtfString const& mode,            */
-/*       Database* data)                                              */
-/* startet einen Mission-Flow (Welle). Service-Instanz per vftable-     */
-/* Scan (RVA 0x2E962A0), Funktion per AOB-Signatur (RBBRIDGE_ACTIVATE_ */
-/* SIG - KEINE feste Adresse). Die UtfString-Argumente werden ueber den */
-/* Spiel-eigenen Ctor (RVA 0x3AE1E0) gebaut - NICHT von Hand (SSO fasst */
-/* nur 15 Zeichen; Logic-Pfade sind laenger -> Heap-Allokation durch    */
-/* den Ctor). `data` bleibt NULL (#386 liefert das Database*-Objekt     */
-/* nach); der 3-Arg-Overload des Spiels ruft den Workhorse selbst mit   */
-/* NULL.                                                               */
-/*                                                                    */
-/* Thread-Modell (#378): native C++-Reads/Writes sind thread-agnostisch;*/
-/* der Aufruf laeuft auf dem Pipe-Thread und enthaelt KEIN lua_*.       */
-/* ------------------------------------------------------------------ */
-
-/* Scannt den eigenen Adressraum (nur MEM_COMMIT + lesbar, kein PAGE_GUARD)
- * nach einem 8-Byte-alignierten QWORD == needle. Reine Leseoperation, kein
- * Aufruf; Rueckgabe = Fundstelle (erstes Vorkommen) oder NULL. */
-static unsigned char *scan_qword_instance(uint64_t needle)
-{
-    uintptr_t addr = 0;
-    for (;;) {
-        MEMORY_BASIC_INFORMATION mi;
-        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
-            break;
-        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
-        if (next <= addr)
-            break;
-        addr = next;
-        if (!is_readable_region(&mi))
-            continue;
-        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
-        size_t nq = mi.RegionSize / sizeof(uint64_t);
-        for (size_t i = 0; i < nq; i++) {
-            if (q[i] == needle)
-                return (unsigned char *)&q[i];
-        }
-    }
-    return NULL;
-}
-
-/* Baut eine Exor::UtfString-Instanz (40 Byte) aus einem C-String ueber den
- * Spiel-eigenen Ctor (RVA 0x3AE1E0). Layout (Disasm): +0x00 = Allocator-
- * Proxy, +0x08 = SSO-Puffer/Heap-Ptr, +0x18 = size, +0x20 = capacity. */
-typedef void *(__fastcall *utfstring_ctor_fn)(void *self, const char *s);
-typedef void (__fastcall *utfstring_dtor_fn)(void *self);
-
-static void build_utfstring(const unsigned char *base, const char *s,
-                            unsigned char out[40])
-{
-    memset(out, 0, 40);
-    utfstring_ctor_fn ctor =
-        (utfstring_ctor_fn)(uintptr_t)(base + RBBRIDGE_RVA_UTFSTRING_CTOR);
-    ctor((void *)out, s);
-}
-
-static void destroy_utfstring(const unsigned char *base, unsigned char out[40])
-{
-    utfstring_dtor_fn dtor =
-        (utfstring_dtor_fn)(uintptr_t)(base + RBBRIDGE_RVA_UTFSTRING_DTOR);
-    dtor((void *)out);
-}
-
-/* Kopiert den Inhalt einer UtfString-Instanz als C-String nach buf.
- * data@+8 (SSO) bzw. *(us+8) (Heap, capacity > 15), size@+0x18.
- * Rueckgabe 1 = ok. */
-static int utfstring_to_cstr(const unsigned char *us, char *buf, size_t n)
-{
-    uint64_t size = 0, cap = 0, ptr = 0;
-    MEMORY_BASIC_INFORMATION mi;
-    const unsigned char *data;
-
-    if (n == 0)
-        return 0;
-    buf[0] = '\0';
-    if (!safe_read_u64(us + 0x18, &size) || !safe_read_u64(us + 0x20, &cap))
-        return 0;
-    data = us + 8;
-    if (cap > 0xf) {
-        if (!safe_read_u64(us + 8, &ptr) || !ptr)
-            return 0;
-        data = (const unsigned char *)(uintptr_t)ptr;
-    }
-    if (size >= n)
-        size = n - 1;
-    if (!VirtualQuery(data, &mi, sizeof(mi)) || !is_readable_region(&mi))
-        return 0;
-    if (data + size > (const unsigned char *)mi.BaseAddress + mi.RegionSize)
-        return 0;
-    if (size)
-        memcpy(buf, data, (size_t)size);
-    buf[size] = '\0';
-    return 1;
-}
-
-/* Minimales JSON-Escaping fuer String-Werte (Quote/Backslash/Steuerzeichen);
- * der Flow-Name stammt aus dem Spiel. */
-static void json_escape_into(const char *in, char *out, size_t n)
-{
-    size_t o = 0;
-    if (n == 0)
-        return;
-    for (size_t i = 0; in && in[i] && o + 7 < n; i++) {
-        unsigned char c = (unsigned char)in[i];
-        if (c == '"' || c == '\\') {
-            out[o++] = '\\';
-            out[o++] = (char)c;
-        } else if (c < 0x20) {
-            o += (size_t)snprintf(out + o, n - o, "\\u%04x", c);
-        } else {
-            out[o++] = (char)c;
-        }
-    }
-    out[o] = '\0';
-}
-
-/* Letzter per activate_mission_flow gestarteter Flow (Flow-ID des Spiels);
- * dient dem Read-Feld in get_state. Zugriff nur auf dem (einzigen)
- * Pipe-Server-Thread -> kein Lock noetig. */
-static char g_last_flow[192];
-
-/*
- * activate_mission_flow (Write #385): startet einen Mission-Flow direkt
- * ueber den C++-Workhorse (AOB-aufgeloest). Events:
- *   {"event":"activate_mission_flow_result","ok":true,"flow":"<id>"}
- *   {"event":"activate_mission_flow_result","ok":false,"reason":"..."}
- */
-static void dispatch_activate_mission_flow(HANDLE hPipe, const char *logic,
-                                           const char *mode)
-{
-    const unsigned char *base = NULL;
-    size_t size = 0;
-    const char *via = NULL;
-    const unsigned char *execfn = NULL;
-    const unsigned char *fn = NULL;
-    unsigned char *ms;
-    unsigned char u_name[40], u_logic[40], u_mode[40], ret[40];
-    char flow[192] = "";
-    char esc[192 * 2];
-
-    typedef void *(__fastcall *activate_fn)(void *self, void *retbuf,
-                                            const void *name,
-                                            const void *logicFile,
-                                            const void *mode, const void *data);
-    activate_fn act;
-
-    if (!logic || !logic[0]) {
-        send_line(hPipe, "{\"event\":\"activate_mission_flow_result\","
-                         "\"ok\":false,\"reason\":\"missing_logic\"}");
-        return;
-    }
-
-    if (!resolve_module(&base, &size, &via, &execfn)) {
-        send_line(hPipe, "{\"event\":\"activate_mission_flow_result\","
-                         "\"ok\":false,\"reason\":\"no_module\"}");
-        return;
-    }
-
-    /* Funktion per AOB-Signatur (kein festes RVA) im Modulabbild. */
-    fn = scan_bytes(base, size, RBBRIDGE_ACTIVATE_SIG,
-                    sizeof(RBBRIDGE_ACTIVATE_SIG));
-    if (!fn) {
-        dbg("activate_mission_flow: AOB-Signatur nicht gefunden");
-        send_line(hPipe, "{\"event\":\"activate_mission_flow_result\","
-                         "\"ok\":false,\"reason\":\"no_activate_signature\"}");
-        return;
-    }
-
-    /* MissionService-Instanz per vftable-Scan (RVA 0x2E962A0). */
-    ms = scan_qword_instance(
-        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE));
-    if (!ms) {
-        send_line(hPipe, "{\"event\":\"activate_mission_flow_result\","
-                         "\"ok\":false,\"reason\":\"no_missionservice\"}");
-        return;
-    }
-
-    /* Argumente: name="" (wie dom_mananger:SpawnWave), logicFile, mode. */
-    build_utfstring(base, "", u_name);
-    build_utfstring(base, logic, u_logic);
-    build_utfstring(base, (mode && mode[0]) ? mode : "default", u_mode);
-    memset(ret, 0, sizeof(ret));
-
-    act = (activate_fn)(uintptr_t)fn;
-
-    /* data = NULL (siehe Kopfkommentar; #386 liefert das Database*-Objekt). */
-    act((void *)ms, ret, u_name, u_logic, u_mode, NULL);
-
-    utfstring_to_cstr(ret, flow, sizeof(flow));
-
-    /* Ergebnis-UtfString + Argumente wieder freigeben (Ctor-Heap). */
-    destroy_utfstring(base, ret);
-    destroy_utfstring(base, u_mode);
-    destroy_utfstring(base, u_logic);
-    destroy_utfstring(base, u_name);
-
-    /* Flow-ID fuer das Read-Feld in get_state merken. */
-    {
-        size_t i = 0;
-        for (; flow[i] && i + 1 < sizeof(g_last_flow); i++)
-            g_last_flow[i] = flow[i];
-        g_last_flow[i] = '\0';
-    }
-
-    json_escape_into(flow, esc, sizeof(esc));
-
-    dbg("activate_mission_flow: logic='%s' mode='%s' fn_rva=%08lx ms=%p "
-        "flow='%s'",
-        logic, (mode && mode[0]) ? mode : "default",
-        (unsigned long)(uintptr_t)(fn - base), (void *)ms, flow);
-
-    send_line(hPipe,
-              "{\"event\":\"activate_mission_flow_result\",\"ok\":true,"
-              "\"flow\":\"%s\"}",
-              esc);
-}
-
-/* Mission-Flow-Read fuer get_state: 1 wenn `flow` laut
- * MissionService::IsGraphActive(UtfString const&) aktiv ist, sonst 0.
- * Kein Flow gemerkt / kein Service -> 0 (graceful). */
-static int mission_flow_active(const unsigned char *base, const char *flow)
-{
-    unsigned char *ms;
-    unsigned char u[40];
-    typedef unsigned char (__fastcall *is_active_fn)(void *, const void *);
-    is_active_fn is_active;
-    unsigned char r;
-
-    if (!flow || !flow[0])
-        return 0;
-    ms = scan_qword_instance(
-        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE));
-    if (!ms)
-        return 0;
-
-    build_utfstring(base, flow, u);
-    is_active = (is_active_fn)(uintptr_t)(base + RBBRIDGE_RVA_ISGRAPHACTIVE);
-    r = is_active((void *)ms, (const void *)u);
-    destroy_utfstring(base, u);
-    return r ? 1 : 0;
-}
-
 static void dispatch_get_state(HANDLE hPipe)
 {
     const unsigned char *base = NULL;
@@ -2007,12 +2197,6 @@ static void dispatch_get_state(HANDLE hPipe)
                          "\"reason\":\"no_module\"}");
         return;
     }
-
-    /* Mission-Flow (Read #385): haengt NICHT am Spieler-Account, ist also
-     * auch ohne geladene Welt lesbar (Flow-ID + IsGraphActive). */
-    char flow_esc[192 * 2];
-    int flow_active = mission_flow_active(base, g_last_flow);
-    json_escape_into(g_last_flow, flow_esc, sizeof(flow_esc));
 
     /* PlayerService-vftable RVA 0x2e8e910 (RE #363/#365). */
     const unsigned char *vftable = base + 0x2e8e910;
@@ -2044,10 +2228,7 @@ static void dispatch_get_state(HANDLE hPipe)
 
     if (!ps) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
-                         "\"reason\":\"no_playerservice\","
-                         "\"mission_flow\":\"%s\","
-                         "\"mission_flow_active\":%s}",
-                  flow_esc, flow_active ? "true" : "false");
+                         "\"reason\":\"no_playerservice\"}");
         return;
     }
 
@@ -2055,10 +2236,7 @@ static void dispatch_get_state(HANDLE hPipe)
     safe_read_u64(ps + 8, &world);
     if (!world) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
-                         "\"reason\":\"no_world\","
-                         "\"mission_flow\":\"%s\","
-                         "\"mission_flow_active\":%s}",
-                  flow_esc, flow_active ? "true" : "false");
+                         "\"reason\":\"no_world\"}");
         return;
     }
 
@@ -2067,10 +2245,7 @@ static void dispatch_get_state(HANDLE hPipe)
     void *account = gpa((void *)(uintptr_t)world, 0);
     if (!account) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
-                         "\"reason\":\"no_account\","
-                         "\"mission_flow\":\"%s\","
-                         "\"mission_flow_active\":%s}",
-                  flow_esc, flow_active ? "true" : "false");
+                         "\"reason\":\"no_account\"}");
         return;
     }
 
@@ -2123,11 +2298,10 @@ static void dispatch_get_state(HANDLE hPipe)
     send_line(hPipe,
               "{\"event\":\"get_state_result\",\"ok\":true,"
               "\"carbonium\":%llu,\"carbonium_max\":%lld,"
-              "\"ironium\":%llu,\"ironium_max\":%lld,\"resources\":%s,"
-              "\"mission_flow\":\"%s\",\"mission_flow_active\":%s}",
+              "\"ironium\":%llu,\"ironium_max\":%lld,\"resources\":%s}",
               (unsigned long long)carbonium, (long long)carbonium_max,
               (unsigned long long)ironium, (long long)ironium_max,
-              resources, flow_esc, flow_active ? "true" : "false");
+              resources);
 }
 
 
@@ -2315,24 +2489,6 @@ static void handle_line(HANDLE hPipe, const char *line)
         /* resource ist optional (Default carbonium, Backward-Compat). */
         json_get_string(line, "resource", resource, sizeof(resource));
         dispatch_add_resource(hPipe, resource, amount);
-        return;
-    }
-
-    /* activate_mission_flow (Write #385): startet einen Mission-Flow (Welle)
-     * direkt per C++ (kein Lua/Console). `logic` = Logic-File-Name (z. B.
-     * "logic/dom/attack_level_1_entry.logic"), `mode` optional (Default
-     * "default"). */
-    if (strcmp(cmd, "activate_mission_flow") == 0) {
-        char logic[256] = "";
-        char mode[64] = "default";
-        if (!json_get_string(line, "logic", logic, sizeof(logic)) ||
-            !logic[0]) {
-            send_line(hPipe, "{\"event\":\"activate_mission_flow_result\","
-                             "\"ok\":false,\"reason\":\"missing_logic\"}");
-            return;
-        }
-        json_get_string(line, "mode", mode, sizeof(mode));
-        dispatch_activate_mission_flow(hPipe, logic, mode);
         return;
     }
 
