@@ -20,11 +20,10 @@
  * Was der Harness schon kann:
  *   - Named-Pipe-Server "\\.\pipe\rbbattle" (ein Client zur Zeit, v0)
  *   - Line-delimited-JSON-Protokoll v0 (siehe trainer/protocol.md):
- *       Ingress: {"cmd":"ping"}                      -> {"event":"pong"}
- *                {"cmd":"exec","command":"rb_wave 3"}-> dispatch_exec()
- *                (dispatch_exec ruft seit RE-Stand 2.0.58485 die echte
- *                 ConsoleService::ExecuteCommand() im Spielprozess auf,
- *                 siehe Abschnitt "ConsoleService-Anbindung" unten)
+ *       Ingress: {"cmd":"ping"}          -> {"event":"pong"}
+ *                {"cmd":"probe"}         -> Memory-Dump (PlayerService-Kette)
+ *                {"cmd":"get_state"}     -> carbonium/max/resources/HQ (C++)
+ *                {"cmd":"add_resource"}  -> carbonium direkt aendern (C++)
  *       Egress : {"event":"score_update","score":...,"resources":{...},
  *                "wave":...} (periodischer State-Snapshot, Issue #13,
  *                alle 5 s solange ein Client verbunden ist)
@@ -518,26 +517,6 @@ static int json_get_string(const char *json, const char *key,
         p += key_len;
     }
     return 0;
-}
-
-/*
- * Kopiert einen String JSON-sicher (escaped \ und ") nach out.
- * Minimale Variante; reicht fuer Kommando-Echos im v0-Protokoll.
- */
-static void json_escape(const char *in, char *out, size_t out_sz)
-{
-    size_t n = 0;
-    for (const char *p = in; *p && n + 1 < out_sz; p++) {
-        if (*p == '\\' || *p == '"') {
-            if (n + 2 < out_sz) {
-                out[n++] = '\\';
-                out[n++] = *p;
-            }
-        } else {
-            out[n++] = *p;
-        }
-    }
-    out[n] = '\0';
 }
 
 /* ------------------------------------------------------------------ */
@@ -1121,6 +1100,7 @@ static int text_range(const unsigned char *base,
  * wird der Kandidat verworfen (kein Aufruf, Fehler-Event).
  * Rueckgabe 1 = plausibel, 0 = verwerfen.
  */
+#ifdef RBBRIDGE_HOSTTEST
 static int looks_like_vftable(const unsigned char *vftable,
                               const unsigned char *execfn,
                               const unsigned char *base, size_t size,
@@ -1152,6 +1132,7 @@ static int looks_like_vftable(const unsigned char *vftable,
     }
     return 1;
 }
+#endif /* RBBRIDGE_HOSTTEST */
 
 /*
  * Findet die ConsoleService-vftable per RTTI-Walk (siehe Kopfkommentar).
@@ -1218,6 +1199,7 @@ static const unsigned char *resolve_console_vftable(const unsigned char *base,
  * Rueckgabe: this oder NULL - der Aufrufer MUSS NULL als "nicht
  * verfuegbar" behandeln (Fehler-Event statt Crash).
  */
+#ifdef RBBRIDGE_HOSTTEST
 static void *resolve_console_instance(const unsigned char *vftable)
 {
     uint64_t needle = (uint64_t)(uintptr_t)vftable;
@@ -1253,6 +1235,7 @@ static void *resolve_console_instance(const unsigned char *vftable)
         (void *)vftable, hits, instance);
     return instance;
 }
+#endif /* RBBRIDGE_HOSTTEST */
 
 /*
  * Einmal aufgeloeste ConsoleService-Anbindung (Risiko: Voll-Scan des
@@ -1268,6 +1251,7 @@ static void *resolve_console_instance(const unsigned char *vftable)
  * Verbindung zur Zeit) -> kein Lock noetig; waere der Dispatch
  * multithreaded, muesste der Cache synchronisiert werden (offen).
  */
+#ifdef RBBRIDGE_HOSTTEST
 typedef struct {
     int                  valid;
     const unsigned char *module_base;
@@ -1381,61 +1365,9 @@ static int resolve_console_service(console_exec_fn *out_fn, void **out_inst)
     *out_inst = instance;
     return 1;
 }
+#endif /* RBBRIDGE_HOSTTEST */
 
 #ifndef RBBRIDGE_HOSTTEST
-
-/* ------------------------------------------------------------------ */
-/* Game-Thread-Kommando-Marshalling (#376 WRITE-Pfad)                  */
-/*                                                                     */
-/* Lua-Kommandos duerfen NICHT vom Pipe-Thread laufen (crasht, s.      */
-/* SKILL riftbreaker-re). Deshalb legt dispatch_exec das Kommando nur  */
-/* in einen Spinlock-Puffer; der Detour auf ConsoleService::Update     */
-/* (laeuft jede Frame auf dem Game-Thread) drained den Puffer und ruft */
-/* ExecuteCommand dort auf.                                            */
-/* ------------------------------------------------------------------ */
-
-#define RBBRIDGE_CONSOLE_UPDATE_RVA 0x1C1FBA0u
-
-typedef void (__fastcall *console_update_fn)(void *self, float dt);
-
-static int safe_read_u64(const void *addr, uint64_t *out);
-
-static console_update_fn g_original_update = NULL;
-static volatile LONG g_update_hooked = 0;
-
-#define RBBRIDGE_PENDING_CMD_MAX 512
-static char g_pending_cmd[RBBRIDGE_PENDING_CMD_MAX];
-static volatile LONG g_pending_cmd_lock = 0;
-static volatile LONG g_pending_cmd_present = 0;
-
-/* Typed native WRITE commands (#378): Puffer + Drain. Der Detour fuehrt sie
- * auf dem Game-Thread aus (kein ExecuteCommand->Lua). */
-typedef enum {
-    RBBRIDGE_TYPED_NONE = 0,
-    RBBRIDGE_TYPED_PAUSE_DOM,
-    RBBRIDGE_TYPED_RESUME_DOM,
-    RBBRIDGE_TYPED_END_GAME,
-} rbbridge_typed_cmd_t;
-
-#define RBBRIDGE_LUAGRAPHNODE_SET_SUSPENDED_RVA 0x1BA6CB0u
-#define RBBRIDGE_MISSION_SERVICE_VFTABLE_RVA    0x2E962A0u
-#define RBBRIDGE_MISSION_FINISH_RVA             0xF9A190u
-#define RBBRIDGE_MISSION_STATUS_WIN             0
-
-typedef void (__fastcall *lua_graphnode_set_suspended_fn)(void *self,
-                                                          char suspended);
-typedef void (__fastcall *mission_finish_fn)(void *self, int status);
-
-static volatile LONG g_pending_typed = RBBRIDGE_TYPED_NONE;
-
-/* Game-Thread-only Caches fuer native WRITE (kein Lock noetig). */
-static void *g_dom_instance = NULL;
-static void *g_mission_service = NULL;
-
-static int resolve_dom_instance_scan(void);
-static void *resolve_service_instance_by_rva(const unsigned char *base,
-                                             uint32_t vftable_rva);
-static int world_ready(void);
 
 /* Vftable-Scan nach einem Service-Singleton (instance[0] == base + rva). */
 static void *resolve_service_instance_by_rva(const unsigned char *base,
@@ -1463,250 +1395,6 @@ static void *resolve_service_instance_by_rva(const unsigned char *base,
         }
     }
     return NULL;
-}
-
-/* Game-Thread: typisierte native Kommandos ausfuehren. */
-static void drain_pending_typed_commands(void)
-{
-    int cmd = 0;
-    while (InterlockedExchange(&g_pending_cmd_lock, 1) != 0)
-        ;
-    cmd = g_pending_typed;
-    if (cmd != RBBRIDGE_TYPED_NONE)
-        g_pending_typed = RBBRIDGE_TYPED_NONE;
-    InterlockedExchange(&g_pending_cmd_lock, 0);
-
-    if (cmd == RBBRIDGE_TYPED_NONE)
-        return;
-
-    /* World-Readiness: ohne gueltigen World* keine nativen WRITEs. */
-    if (!world_ready())
-        return;
-
-    const unsigned char *base = NULL;
-    size_t size = 0;
-    const char *via = NULL;
-    const unsigned char *execfn = NULL;
-    if (!resolve_module(&base, &size, &via, &execfn))
-        return;
-
-    switch (cmd) {
-    case RBBRIDGE_TYPED_PAUSE_DOM:
-    case RBBRIDGE_TYPED_RESUME_DOM: {
-        /* g_dom_instance wird auf dem Lua/Game-Thread aufgeloest
-         * (lua_*-Ops). Hier (Worker-Thread) NUR den gecachten Pointer
-         * lesen — kein lua_*. */
-        if (!g_dom_instance)
-            return;
-        lua_graphnode_set_suspended_fn fn =
-            (lua_graphnode_set_suspended_fn)(uintptr_t)(
-                base + RBBRIDGE_LUAGRAPHNODE_SET_SUSPENDED_RVA);
-        fn(g_dom_instance, (cmd == RBBRIDGE_TYPED_PAUSE_DOM) ? 1 : 0);
-        dbg("drain_pending_typed: %s (inst=%p)",
-            (cmd == RBBRIDGE_TYPED_PAUSE_DOM) ? "pause_dom" : "resume_dom",
-            g_dom_instance);
-        break;
-    }
-    case RBBRIDGE_TYPED_END_GAME: {
-        uint64_t world = 0;
-        if (!g_mission_service)
-            g_mission_service = resolve_service_instance_by_rva(
-                base, RBBRIDGE_MISSION_SERVICE_VFTABLE_RVA);
-        if (!g_mission_service)
-            return;
-        /* Boot-Guard: MissionService[+0x08] = World*; NULL ->
-         * FinishCurrentMission wuerde intern NULL dereferenzieren. */
-        if (!safe_read_u64((const unsigned char *)g_mission_service + 0x08,
-                           &world) ||
-            !world)
-            return;
-        mission_finish_fn fn =
-            (mission_finish_fn)(uintptr_t)(base + RBBRIDGE_MISSION_FINISH_RVA);
-        fn(g_mission_service, RBBRIDGE_MISSION_STATUS_WIN);
-        dbg("drain_pending_typed: end_game (MissionService=%p)",
-            g_mission_service);
-        break;
-    }
-    default:
-        break;
-    }
-}
-
-/* Game-Thread: ein ausstehendes Kommando ausfuehren. */
-static void drain_pending_commands(void)
-{
-    if (!g_console_cache.valid || !g_console_cache.fn ||
-        !g_console_cache.instance)
-        return;
-
-    int present = 0;
-    char cmd[RBBRIDGE_PENDING_CMD_MAX];
-
-    while (InterlockedExchange(&g_pending_cmd_lock, 1) != 0)
-        ;
-    present = g_pending_cmd_present;
-    if (present) {
-        memcpy(cmd, g_pending_cmd, sizeof(cmd));
-        g_pending_cmd_present = 0;
-    }
-    InterlockedExchange(&g_pending_cmd_lock, 0);
-
-    if (present) {
-        console_exec_fn fn = (console_exec_fn)(uintptr_t)g_console_cache.fn;
-        dbg("drain_pending_commands: fuehre '%s' aus (Game-Thread)", cmd);
-        fn(g_console_cache.instance, cmd);
-    }
-}
-
-/* Detour fuer ConsoleService::Update(float): laeuft auf dem Game-Thread.
- * Neben dem WRITE-Pfad (pending commands) wird hier auch der DOM-State
- * gelesen und gecached (READ-Pfad, Issue #378). */
-static void capture_dom_state_game_thread(void);
-
-static void __fastcall detour_console_update(void *self, float dt)
-{
-    drain_pending_typed_commands();
-    drain_pending_commands();
-    if (g_original_update)
-        g_original_update(self, dt);
-}
-
-/* Patched den vtable-Slot von ConsoleService::Update auf den Detour. */
-static int install_update_hook(void)
-{
-    if (g_update_hooked)
-        return 1;
-    if (!g_console_cache.valid || !g_console_cache.vftable ||
-        !g_console_cache.module_base)
-        return 0;
-
-    const unsigned char *vftable = g_console_cache.vftable;
-    uint64_t target =
-        (uint64_t)(uintptr_t)(g_console_cache.module_base +
-                              RBBRIDGE_CONSOLE_UPDATE_RVA);
-
-    for (int i = 0; i < 128; i++) {
-        uint64_t entry = 0;
-        if (!safe_read_u64(vftable + (size_t)i * 8, &entry))
-            break;
-        if (entry != target)
-            continue;
-
-        DWORD old = 0;
-        if (!VirtualProtect((void *)(vftable + (size_t)i * 8), 8,
-                            PAGE_READWRITE, &old))
-            return 0;
-        g_original_update = (console_update_fn)(uintptr_t)entry;
-        *(uint64_t *)(vftable + (size_t)i * 8) =
-            (uint64_t)(uintptr_t)&detour_console_update;
-        VirtualProtect((void *)(vftable + (size_t)i * 8), 8, old, &old);
-        g_update_hooked = 1;
-        dbg("install_update_hook: Slot %d gepatcht (orig=%p)", i,
-            (void *)g_original_update);
-        return 1;
-    }
-    dbg("install_update_hook: Update-Slot nicht gefunden (target=%p)",
-        (void *)(uintptr_t)target);
-    return 0;
-}
-
-/* ------------------------------------------------------------------ */
-/* Dispatch: Ingress-Kommandos                                         */
-/* ------------------------------------------------------------------ */
-
-/*
- * {"cmd":"exec","command":"rb_wave 3"}
- *
- * Fuehrt das Kommando im Spiel aus - aequivalent zu
- *   ConsoleService::ExecuteCommand("rb_wave 3")
- * aus der Lua-Perspektive (der Lua-Mod registriert rb_wave, siehe
- * mod/lua/rbbattle_autoexec.lua im Spike-Branch).
- *
- * RE-Stand (Build 2.0.58485, GOG == Dedi, verifiziert 2026-09-09):
- *   - Adressen: resolve_console_service() loest ExecuteCommand per
- *     Byte-Signatur (Modul-.text) und die ConsoleService-Instanz per
- *     RTTI-Walk (vftable) + Adressraum-Scan auf - KEINE festen RVAs,
- *     damit ASLR-/Update-fest (Details im Kopfkommentar oben).
- *   - Aufruf: console_exec_fn(inst, command), direkt im Pipe-Thread.
- *     pcall-artige Absicherung gibt es unter MinGW-x64 in C nicht (kein
- *     __try/__except; nur MSVC kann das) - die Absicherung ist der
- *     Signatur-/Instanz-Check: ohne gueltige Aufloesung wird NICHT
- *     aufgerufen, sondern ein Fehler-Event gesendet.
- *
- * OFFENES RISIKO (Thread-Marshalling, nicht host-seitig entscheidbar):
- *   fn(instance, command) laeuft im Pipe-Thread, NICHT auf dem Main-/
- *   Spiel-Thread. Ob ConsoleService::ExecuteCommand thread-safe ist bzw.
- *   auf den Spiel-Thread gemarshalled werden MUSS, ist nicht belegt und
- *   wird erst der Live-Test (Spielprozess, #252) zeigen. Bis dahin gilt:
- *   kein Beweis fuer Threadsicherheit - nicht als erledigt betrachten.
- *   Der Aufruf selbst ist gegen Nicht-Fund abgesichert (Fehler-Event),
- *   gegen einen Fehl-Fund nur teilweise (siehe looks_like_vftable).
- *
- * Antwort bei Erfolg: {"event":"exec_result","ok":true,"command":"..."}
- */
-static void dispatch_exec(HANDLE hPipe, const char *command)
-{
-    char escaped[RESP_BUF_SIZE];
-    json_escape(command, escaped, sizeof(escaped));
-
-    console_exec_fn fn = NULL;
-    void *instance = NULL;
-    if (!resolve_console_service(&fn, &instance)) {
-        dbg("dispatch_exec: command='%s' -> ConsoleService/ExecuteCommand "
-            "nicht aufloesbar, KEIN Aufruf", command);
-        send_line(hPipe,
-                  "{\"event\":\"exec_result\",\"ok\":false,"
-                  "\"command\":\"%s\",\"reason\":"
-                  "\"console_service_not_found\"}",
-                  escaped);
-        return;
-    }
-
-    if (!install_update_hook()) {
-        dbg("dispatch_exec: Update-Hook nicht installierbar, KEIN Aufruf");
-        send_line(hPipe,
-                  "{\"event\":\"exec_result\",\"ok\":false,"
-                  "\"command\":\"%s\",\"reason\":"
-                  "\"update_hook_not_installed\"}",
-                  escaped);
-        return;
-    }
-
-    int typed = RBBRIDGE_TYPED_NONE;
-    if (strcmp(command, "pause_dom") == 0)
-        typed = RBBRIDGE_TYPED_PAUSE_DOM;
-    else if (strcmp(command, "resume_dom") == 0)
-        typed = RBBRIDGE_TYPED_RESUME_DOM;
-    else if (strcmp(command, "end_game") == 0)
-        typed = RBBRIDGE_TYPED_END_GAME;
-
-    if (typed != RBBRIDGE_TYPED_NONE) {
-        while (InterlockedExchange(&g_pending_cmd_lock, 1) != 0)
-            ;
-        g_pending_typed = typed;
-        InterlockedExchange(&g_pending_cmd_lock, 0);
-        dbg("dispatch_exec: typed=%d -> Pending (async, Game-Thread)", typed);
-        send_line(hPipe,
-                  "{\"event\":\"exec_result\",\"ok\":true,"
-                  "\"command\":\"%s\",\"async\":true}",
-                  escaped);
-        return;
-    }
-
-    /* Kommando nur in den Puffer; Game-Thread fuehrt es im Update-Hook aus
-     * (Lua darf nicht vom Pipe-Thread laufen, #376). */
-    while (InterlockedExchange(&g_pending_cmd_lock, 1) != 0)
-        ;
-    strncpy(g_pending_cmd, command, sizeof(g_pending_cmd) - 1);
-    g_pending_cmd[sizeof(g_pending_cmd) - 1] = '\0';
-    g_pending_cmd_present = 1;
-    InterlockedExchange(&g_pending_cmd_lock, 0);
-
-    dbg("dispatch_exec: command='%s' -> in Pending-Buffer (async)", command);
-    send_line(hPipe,
-              "{\"event\":\"exec_result\",\"ok\":true,"
-              "\"command\":\"%s\",\"async\":true}",
-              escaped);
 }
 
 /* Liest ein QWORD von addr, nur wenn die Region committet+lesbar ist.
@@ -1928,7 +1616,7 @@ static void probe_resources(HANDLE hPipe) {
 
 
 /* get_state (Issue #363/#365): liest den Account-Basket und liefert EINE
- * get_state_result-Zeile (sauber, symmetrisch zu exec_result). */
+ * get_state_result-Zeile (carbonium/max/resources/HQ, pure C++). */
 /*
  * Liest die max/capacity einer Ressource (int64-Fixed-Point x10^6).
  * Quelle (RE #370): ResourceAccount+0x20 ist eine Hash-Map (StringHash ->
@@ -2030,689 +1718,6 @@ static int read_hq_health(const unsigned char *base, float *hp, float *hpmax)
     return 1;
 }
 
-/* World-Readiness-Signal: HealthService[+0x08] muss einen gueltigen World*
- * haben. Solange der NULL ist, duerfen weder lua_* noch Service-Methoden
- * laufen (sie dereferenzieren intern World+0x.. -> Page-Fault). */
-static int world_ready(void)
-{
-    uint64_t world = 0;
-    if (!g_health_service) {
-        const unsigned char *base = NULL;
-        size_t size = 0;
-        const char *via = NULL;
-        const unsigned char *execfn = NULL;
-        if (!resolve_module(&base, &size, &via, &execfn))
-            return 0;
-        g_health_service = resolve_service_instance_by_rva(
-            base, RBBRIDGE_HEALTH_SERVICE_VFTABLE_RVA);
-    }
-    if (!g_health_service ||
-        !safe_read_u64((const unsigned char *)g_health_service + 0x08, &world) ||
-        !world)
-        return 0;
-    return 1;
-}
-
-
-
-/* ====================================================================== */
-/* DOM/Voll-State-Egress (Issue #378): C++-Direkt-Read auf dem Game-Thread.    */
-/*                                                                             */
-/* Der Detour auf ConsoleService::Update (install_update_hook) laeuft jede     */
-/* Frame auf dem GAME thread. Hier wird die dom_mananger-Instanz               */
-/* (LuaGraphNode, vftable RVA 0x2F46D70) aufgeloest, das Lua-self-table via    */
-/* lua C API gelesen und ein JSON-Snapshot (Spiegel von BuildStateJson)        */
-/* gebaut. Der String wird spinlock-guarded in g_dom_state_buf gecached;       */
-/* dispatch_get_state (pipe thread) liest nur den Cache.                       */
-/*                                                                             */
-/* KEIN Lua-Zugriff vom pipe thread (crasht, s. SKILL riftbreaker-re).         */
-/*                                                                             */
-/* RE (Build 2.0.58485, verifiziert):                                          */
-/*   LuaGraphNode vftable 0x2F46D70, +0x20 = luabind::object{lua_State*, ref} */
-/*   lua_rawgeti 0x290CFA0  lua_getfield 0x290C550  lua_tonumber 0x290D790     */
-/*   lua_settop 0x290D4D0  lua_gettop 0x290C710  lua_pushvalue 0x290CF20       */
-/*   lua_tolstring 0x290D6D0  lua_toboolean 0x290D600  lua_objlen 0x290CA10    */
-/*   lua_pcall 0x290CAC0  lua_type 0x290D880  lua_pushstring 0x290CE40         */
-/*   LUA_REGISTRYINDEX = -10000; LUA_GLOBALSINDEX = -10002                     */
-/* ====================================================================== */
-
-typedef void (__fastcall *rbbridge_lua_rawgeti_fn)(void *L, int idx, int n);
-typedef void (__fastcall *rbbridge_lua_getfield_fn)(void *L, int idx,
-                                                    const char *k);
-typedef double (__fastcall *rbbridge_lua_tonumber_fn)(void *L, int idx);
-typedef void (__fastcall *rbbridge_lua_settop_fn)(void *L, int idx);
-typedef int (__fastcall *rbbridge_lua_gettop_fn)(void *L);
-typedef void (__fastcall *rbbridge_lua_pushvalue_fn)(void *L, int idx);
-typedef const char *(__fastcall *rbbridge_lua_tolstring_fn)(void *L, int idx,
-                                                            size_t *len);
-typedef int (__fastcall *rbbridge_lua_toboolean_fn)(void *L, int idx);
-typedef size_t (__fastcall *rbbridge_lua_objlen_fn)(void *L, int idx);
-typedef int (__fastcall *rbbridge_lua_pcall_fn)(void *L, int nargs, int nresults,
-                                                int errfunc);
-typedef int (__fastcall *rbbridge_lua_type_fn)(void *L, int idx);
-typedef void (__fastcall *rbbridge_lua_pushstring_fn)(void *L, const char *s);
-typedef void (__fastcall *rbbridge_lua_pushnumber_fn)(void *L, double n);
-
-#define RBBRIDGE_LUA_RAWGETI_RVA    0x290CFA0u
-#define RBBRIDGE_LUA_GETFIELD_RVA   0x290C550u
-#define RBBRIDGE_LUA_TONUMBER_RVA   0x290D790u
-#define RBBRIDGE_LUA_SETTOP_RVA     0x290D4D0u
-#define RBBRIDGE_LUA_GETTOP_RVA     0x290C710u
-#define RBBRIDGE_LUA_PUSHVALUE_RVA  0x290CF20u
-#define RBBRIDGE_LUA_TOLSTRING_RVA  0x290D6D0u
-#define RBBRIDGE_LUA_TOBOOLEAN_RVA  0x290D600u
-#define RBBRIDGE_LUA_OBJLEN_RVA     0x290CA10u
-#define RBBRIDGE_LUA_PCALL_RVA      0x290CAC0u
-#define RBBRIDGE_LUA_TYPE_RVA       0x290D880u
-#define RBBRIDGE_LUA_PUSHSTRING_RVA 0x290CE40u
-#define RBBRIDGE_LUA_PUSHNUMBER_RVA 0x290CE20u
-#define RBBRIDGE_LUA_REGISTRYINDEX  (-10000)
-#define RBBRIDGE_LUA_GLOBALSINDEX   (-10002)
-#define RBBRIDGE_LUA_TNIL           0
-#define RBBRIDGE_LUA_TBOOLEAN       1
-#define RBBRIDGE_LUA_TNUMBER        3
-#define RBBRIDGE_LUA_TSTRING        4
-#define RBBRIDGE_LUA_TTABLE         5
-#define RBBRIDGE_LUA_TUSERDATA      7
-#define RBBRIDGE_LUA_TFUNCTION      6
-#define RBBRIDGE_LUAGRAPHNODE_VFTABLE_RVA 0x2F46D70u
-#define RBBRIDGE_LUAGRAPHNODE_OBJECT_OFF  0x20u
-#define RBBRIDGE_LUAGRAPHNODE_REF_OFF     0x28u
-
-/* Aufgeloeste lua_* C-API-Funktionszeiger (einmalig, game thread). */
-typedef struct {
-    rbbridge_lua_rawgeti_fn    rawgeti;
-    rbbridge_lua_getfield_fn   getfield;
-    rbbridge_lua_tonumber_fn   tonumber;
-    rbbridge_lua_settop_fn     settop;
-    rbbridge_lua_gettop_fn     gettop;
-    rbbridge_lua_pushvalue_fn  pushvalue;
-    rbbridge_lua_tolstring_fn  tolstring;
-    rbbridge_lua_toboolean_fn  toboolean;
-    rbbridge_lua_objlen_fn     objlen;
-    rbbridge_lua_pcall_fn      call;
-    rbbridge_lua_type_fn       type;
-    rbbridge_lua_pushstring_fn pushstring;
-    rbbridge_lua_pushnumber_fn pushnumber;
-} dom_lua_api_t;
-
-static dom_lua_api_t g_lua;
-
-/* DOM-Instanz-Cache + Snapshot (game thread schreibt, pipe thread liest). */
-static const unsigned char *g_dom_base = NULL;
-static void *g_dom_lua = NULL;
-static int g_dom_ref = -1;
-static volatile LONG g_dom_cache_valid = 0;
-static uint64_t g_dom_next_resolve_tick = 0;
-
-static char g_dom_state_buf[RESP_BUF_SIZE];
-static volatile LONG g_dom_state_lock = 0;
-
-/* Loest die dom_mananger-Instanz (LuaGraphNode) auf: vftable-Scan + [0x20]
- * luabind-object {lua_State*, int registry-ref}. Reine Memory-Reads, einmal
- * gecached. Rueckgabe 1 = ok, 0 = noch nicht aufloesbar. */
-static int resolve_dom_instance_scan(void)
-{
-    if (g_dom_cache_valid)
-        return 1;
-
-    const unsigned char *base = NULL;
-    size_t size = 0;
-    const char *via = NULL;
-    const unsigned char *execfn = NULL;
-    if (!resolve_module(&base, &size, &via, &execfn))
-        return 0;
-
-    const uint64_t needle =
-        (uint64_t)(uintptr_t)(base + RBBRIDGE_LUAGRAPHNODE_VFTABLE_RVA);
-    uintptr_t addr = 0;
-
-    for (;;) {
-        MEMORY_BASIC_INFORMATION mi;
-        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
-            break;
-        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
-        if (next <= addr)
-            break;
-        addr = next;
-        if (!is_readable_region(&mi))
-            continue;
-
-        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
-        size_t nq = mi.RegionSize / sizeof(uint64_t);
-        for (size_t i = 0; i < nq; i++) {
-            if (q[i] != needle)
-                continue;
-            const unsigned char *inst = (const unsigned char *)&q[i];
-            uint64_t L = 0;
-            uint32_t ref32 = 0;
-            if (safe_read_u64(inst + RBBRIDGE_LUAGRAPHNODE_OBJECT_OFF, &L) &&
-                L &&
-                safe_read_u32(inst + RBBRIDGE_LUAGRAPHNODE_REF_OFF, &ref32) &&
-                (int)ref32 >= 0) {
-                /* Verifizieren: es gibt mehrere LuaGraphNode-Instanzen
-                 * (dom_mananger -> event_manager -> LuaGraphNode, gleiche
-                 * vftable). Nur dom_mananger hat currentDifficultyLevel als
-                 * number auf dem self-table. */
-                {
-                    rbbridge_lua_gettop_fn v_gettop = (rbbridge_lua_gettop_fn)(uintptr_t)(
-                        base + RBBRIDGE_LUA_GETTOP_RVA);
-                    rbbridge_lua_rawgeti_fn v_rawgeti = (rbbridge_lua_rawgeti_fn)(uintptr_t)(
-                        base + RBBRIDGE_LUA_RAWGETI_RVA);
-                    rbbridge_lua_getfield_fn v_getfield = (rbbridge_lua_getfield_fn)(uintptr_t)(
-                        base + RBBRIDGE_LUA_GETFIELD_RVA);
-                    rbbridge_lua_type_fn v_type = (rbbridge_lua_type_fn)(uintptr_t)(
-                        base + RBBRIDGE_LUA_TYPE_RVA);
-                    rbbridge_lua_settop_fn v_settop = (rbbridge_lua_settop_fn)(uintptr_t)(
-                        base + RBBRIDGE_LUA_SETTOP_RVA);
-                    void *Lcand = (void *)(uintptr_t)L;
-                    int top = v_gettop(Lcand);
-                    v_rawgeti(Lcand, RBBRIDGE_LUA_REGISTRYINDEX, (int)ref32);
-                    v_getfield(Lcand, -1, "currentDifficultyLevel");
-                    int is_dom = (v_type(Lcand, -1) == RBBRIDGE_LUA_TNUMBER);
-                    v_settop(Lcand, top);
-                    if (!is_dom)
-                        continue; /* naechster LuaGraphNode-Kandidat */
-                }
-
-                g_dom_base = base;
-                g_dom_instance = (void *)(uintptr_t)inst;
-                g_dom_lua = (void *)(uintptr_t)L;
-                g_dom_ref = (int)ref32;
-                g_lua.rawgeti = (rbbridge_lua_rawgeti_fn)(uintptr_t)(
-                    base + RBBRIDGE_LUA_RAWGETI_RVA);
-                g_lua.getfield = (rbbridge_lua_getfield_fn)(uintptr_t)(
-                    base + RBBRIDGE_LUA_GETFIELD_RVA);
-                g_lua.tonumber = (rbbridge_lua_tonumber_fn)(uintptr_t)(
-                    base + RBBRIDGE_LUA_TONUMBER_RVA);
-                g_lua.settop = (rbbridge_lua_settop_fn)(uintptr_t)(
-                    base + RBBRIDGE_LUA_SETTOP_RVA);
-                g_lua.gettop = (rbbridge_lua_gettop_fn)(uintptr_t)(
-                    base + RBBRIDGE_LUA_GETTOP_RVA);
-                g_lua.pushvalue = (rbbridge_lua_pushvalue_fn)(uintptr_t)(
-                    base + RBBRIDGE_LUA_PUSHVALUE_RVA);
-                g_lua.tolstring = (rbbridge_lua_tolstring_fn)(uintptr_t)(
-                    base + RBBRIDGE_LUA_TOLSTRING_RVA);
-                g_lua.toboolean = (rbbridge_lua_toboolean_fn)(uintptr_t)(
-                    base + RBBRIDGE_LUA_TOBOOLEAN_RVA);
-                g_lua.objlen = (rbbridge_lua_objlen_fn)(uintptr_t)(
-                    base + RBBRIDGE_LUA_OBJLEN_RVA);
-                g_lua.call = (rbbridge_lua_pcall_fn)(uintptr_t)(
-                    base + RBBRIDGE_LUA_PCALL_RVA);
-                g_lua.type = (rbbridge_lua_type_fn)(uintptr_t)(
-                    base + RBBRIDGE_LUA_TYPE_RVA);
-                g_lua.pushstring = (rbbridge_lua_pushstring_fn)(uintptr_t)(
-                    base + RBBRIDGE_LUA_PUSHSTRING_RVA);
-                g_lua.pushnumber = (rbbridge_lua_pushnumber_fn)(uintptr_t)(
-                    base + RBBRIDGE_LUA_PUSHNUMBER_RVA);
-                g_dom_cache_valid = 1;
-                dbg("resolve_dom_instance: L=%p ref=%d", (void *)(uintptr_t)L,
-                    (int)ref32);
-                return 1;
-            }
-        }
-    }
-    return 0;
-}
-
-/* Throttleder Wrapper fuer den READ-Pfad (1x/Sekunde scannen waehrend Boot). */
-static int resolve_dom_instance(void)
-{
-    if (g_dom_cache_valid)
-        return 1;
-    uint64_t now = GetTickCount64();
-    if (now < g_dom_next_resolve_tick)
-        return 0;
-    g_dom_next_resolve_tick = now + 1000; /* hoechstens 1x/Sekunde scannen */
-    return resolve_dom_instance_scan();
-}
-
-/* ---------- Minimaler JSON-Builder (flache Felder, wie BuildStateJson) ---- */
-
-typedef struct {
-    char *buf;
-    size_t cap;
-    size_t len;
-    int first;
-} json_buf_t;
-
-static void jb_add(json_buf_t *jb, const char *s)
-{
-    size_t sl = strlen(s);
-    if (jb->len + sl >= jb->cap)
-        return;
-    memcpy(jb->buf + jb->len, s, sl);
-    jb->len += sl;
-}
-
-static void jb_pair(json_buf_t *jb, const char *pair)
-{
-    if (!jb->first)
-        jb_add(jb, ",");
-    jb->first = 0;
-    jb_add(jb, pair);
-}
-
-static void jb_num(json_buf_t *jb, const char *key, double v)
-{
-    char pair[96];
-    snprintf(pair, sizeof(pair), "\"%s\":%.14g", key, v);
-    jb_pair(jb, pair);
-}
-
-static void jb_bool(json_buf_t *jb, const char *key, int v)
-{
-    char pair[96];
-    snprintf(pair, sizeof(pair), "\"%s\":%s", key, v ? "true" : "false");
-    jb_pair(jb, pair);
-}
-
-static void jb_str(json_buf_t *jb, const char *key, const char *v)
-{
-    char pair[160];
-    snprintf(pair, sizeof(pair), "\"%s\":\"%s\"", key, v);
-    jb_pair(jb, pair);
-}
-
-/* ---------- Lua-Feld-Reader (nur auf dem Game-Thread!) -------------------- */
-
-static void dom_push_self(void *L, int ref)
-{
-    g_lua.rawgeti(L, RBBRIDGE_LUA_REGISTRYINDEX, ref);
-}
-
-static int dom_read_number(void *L, int ref, const char *name, double *out)
-{
-    int top = g_lua.gettop(L);
-    dom_push_self(L, ref);
-    g_lua.getfield(L, -1, name);
-    int ok = (g_lua.type(L, -1) == RBBRIDGE_LUA_TNUMBER);
-    if (ok)
-        *out = g_lua.tonumber(L, -1);
-    g_lua.settop(L, top);
-    return ok;
-}
-
-static int dom_read_bool(void *L, int ref, const char *name, int *out)
-{
-    int top = g_lua.gettop(L);
-    dom_push_self(L, ref);
-    g_lua.getfield(L, -1, name);
-    int ok = (g_lua.type(L, -1) == RBBRIDGE_LUA_TBOOLEAN);
-    if (ok)
-        *out = g_lua.toboolean(L, -1);
-    g_lua.settop(L, top);
-    return ok;
-}
-
-static int dom_read_table_len(void *L, int ref, const char *name, size_t *out)
-{
-    int top = g_lua.gettop(L);
-    dom_push_self(L, ref);
-    g_lua.getfield(L, -1, name);
-    int ok = (g_lua.type(L, -1) == RBBRIDGE_LUA_TTABLE);
-    if (ok)
-        *out = g_lua.objlen(L, -1);
-    g_lua.settop(L, top);
-    return ok;
-}
-
-/* self[name]:method() -> String (State-Name). Rueckgabe 1 = String gelesen. */
-static int dom_call_method_str(void *L, int ref, const char *name,
-                               const char *method, char *out, size_t out_sz)
-{
-    int top = g_lua.gettop(L);
-    int ok = 0;
-    dom_push_self(L, ref);
-    g_lua.getfield(L, -1, name);
-    int obj = g_lua.gettop(L);
-    if (g_lua.type(L, obj) != RBBRIDGE_LUA_TNIL) {
-        g_lua.getfield(L, obj, method);
-        if (g_lua.type(L, -1) == RBBRIDGE_LUA_TFUNCTION) {
-            g_lua.pushvalue(L, obj);
-            if (g_lua.call(L, 1, 1, 0) == 0 &&
-                g_lua.type(L, -1) == RBBRIDGE_LUA_TSTRING) {
-                size_t len = 0;
-                const char *s = g_lua.tolstring(L, -1, &len);
-                if (s && len > 0) {
-                    if (len >= out_sz)
-                        len = out_sz - 1;
-                    memcpy(out, s, len);
-                    out[len] = '\0';
-                    ok = 1;
-                }
-            }
-        }
-    }
-    g_lua.settop(L, top);
-    return ok;
-}
-
-/* rbStateRemaining: self[field]:GetState(name) -> GetDurationLimit-GetDuration. */
-static int dom_state_remaining(void *L, int ref, const char *field,
-                               const char *state_name, double *out)
-{
-    int top = g_lua.gettop(L);
-    int sm;
-    int st;
-    double lim = 0.0, dur = 0.0;
-
-    dom_push_self(L, ref);
-    g_lua.getfield(L, -1, field);
-    sm = g_lua.gettop(L);
-    if (g_lua.type(L, sm) == RBBRIDGE_LUA_TNIL)
-        goto done;
-
-    /* s = sm:GetState(state_name) */
-    g_lua.getfield(L, sm, "GetState");
-    if (g_lua.type(L, -1) != RBBRIDGE_LUA_TFUNCTION)
-        goto done;
-    g_lua.pushvalue(L, sm);
-    g_lua.pushstring(L, state_name);
-    if (g_lua.call(L, 2, 1, 0) != 0)
-        goto done;
-    st = g_lua.gettop(L);
-    if (g_lua.type(L, st) != RBBRIDGE_LUA_TTABLE &&
-        g_lua.type(L, st) != RBBRIDGE_LUA_TUSERDATA)
-        goto done;
-
-    /* lim = s:GetDurationLimit() */
-    g_lua.getfield(L, st, "GetDurationLimit");
-    if (g_lua.type(L, -1) != RBBRIDGE_LUA_TFUNCTION)
-        goto done;
-    g_lua.pushvalue(L, st);
-    if (g_lua.call(L, 1, 1, 0) != 0 ||
-        g_lua.type(L, -1) != RBBRIDGE_LUA_TNUMBER)
-        goto done;
-    lim = g_lua.tonumber(L, -1);
-    g_lua.settop(L, st);
-
-    /* dur = s:GetDuration() */
-    g_lua.getfield(L, st, "GetDuration");
-    if (g_lua.type(L, -1) != RBBRIDGE_LUA_TFUNCTION)
-        goto done;
-    g_lua.pushvalue(L, st);
-    if (g_lua.call(L, 1, 1, 0) != 0 ||
-        g_lua.type(L, -1) != RBBRIDGE_LUA_TNUMBER)
-        goto done;
-    dur = g_lua.tonumber(L, -1);
-    *out = lim - dur;
-    g_lua.settop(L, top);
-    return 1;
-
-done:
-    g_lua.settop(L, top);
-    return 0;
-}
-
-static double dom_ceil(double x)
-{
-    double i = (double)(long long)x;
-    if (x > i)
-        return i + 1.0;
-    return i;
-}
-
-/* DomTimeToNext: state-abhaengiger Countdown (Spiegel der Mod-Logik). */
-static double dom_time_to_next(void *L, int ref)
-{
-    char state[64];
-    state[0] = '\0';
-    if (!dom_call_method_str(L, ref, "spawner", "GetCurrentState", state,
-                             sizeof(state)))
-        return 0.0;
-
-    double t = 0.0;
-    if (strcmp(state, "cooldown_after_spawn") == 0) {
-        if (!dom_read_number(L, ref, "cooldownTimer", &t))
-            t = 0.0;
-    } else if (strcmp(state, "prepare_spawn") == 0) {
-        if (!dom_read_number(L, ref, "waitForSpawnTimer", &t))
-            t = 0.0;
-    } else if (strcmp(state, "idle") == 0) {
-        if (!dom_read_number(L, ref, "idleTimer", &t))
-            t = 0.0;
-    } else if (strcmp(state, "sleep") == 0) {
-        if (!dom_read_number(L, ref, "sleepSafeTimer", &t))
-            t = 0.0;
-    } else if (strcmp(state, "wait") == 0) {
-        if (!dom_state_remaining(L, ref, "spawner", "wait", &t))
-            t = 0.0;
-    }
-    return t;
-}
-
-/* self:method() -> Number (z.B. players = self:GetPlayersCounter()). */
-static int dom_self_method_number(void *L, int ref, const char *method,
-                                  double *out)
-{
-    int top = g_lua.gettop(L);
-    int ok = 0;
-    dom_push_self(L, ref);
-    int s = g_lua.gettop(L);
-    if (g_lua.type(L, s) != RBBRIDGE_LUA_TNIL) {
-        g_lua.getfield(L, s, method);
-        if (g_lua.type(L, -1) == RBBRIDGE_LUA_TFUNCTION) {
-            g_lua.pushvalue(L, s);
-            if (g_lua.call(L, 1, 1, 0) == 0 &&
-                g_lua.type(L, -1) == RBBRIDGE_LUA_TNUMBER) {
-                *out = g_lua.tonumber(L, -1);
-                ok = 1;
-            }
-        }
-    }
-    g_lua.settop(L, top);
-    return ok;
-}
-
-/* _G[svc]:method() aufrufen (0 Argumente); Ergebnis-Typ zurueckgeben.
- * Laesst das Ergebnis auf dem Stack (Aufrufer raeumt per settop ab).
- * nil-sicher: fehlendes Service-Objekt oder fehlende Methode -> -1. */
-static int dom_global_call(void *L, const char *svc, const char *method)
-{
-    g_lua.getfield(L, RBBRIDGE_LUA_GLOBALSINDEX, svc);
-    int s = g_lua.gettop(L);
-    if (g_lua.type(L, s) == RBBRIDGE_LUA_TNIL)
-        return -1;
-    g_lua.getfield(L, s, method);
-    if (g_lua.type(L, -1) != RBBRIDGE_LUA_TFUNCTION)
-        return -1;
-    g_lua.pushvalue(L, s);
-    if (g_lua.call(L, 1, 1, 0) != 0)
-        return -1;
-    return g_lua.type(L, -1);
-}
-
-static int dom_global_number(void *L, const char *svc, const char *method,
-                             double *out)
-{
-    int top = g_lua.gettop(L);
-    int t = dom_global_call(L, svc, method);
-    int ok = (t == RBBRIDGE_LUA_TNUMBER);
-    if (ok)
-        *out = g_lua.tonumber(L, -1);
-    g_lua.settop(L, top);
-    return ok;
-}
-
-static int dom_global_bool(void *L, const char *svc, const char *method,
-                           int *out)
-{
-    int top = g_lua.gettop(L);
-    int t = dom_global_call(L, svc, method);
-    int ok = (t == RBBRIDGE_LUA_TBOOLEAN);
-    if (ok)
-        *out = g_lua.toboolean(L, -1);
-    g_lua.settop(L, top);
-    return ok;
-}
-
-static int dom_global_string(void *L, const char *svc, const char *method,
-                             char *out, size_t out_sz)
-{
-    int top = g_lua.gettop(L);
-    int t = dom_global_call(L, svc, method);
-    int ok = 0;
-    if (t == RBBRIDGE_LUA_TSTRING) {
-        size_t len = 0;
-        const char *s = g_lua.tolstring(L, -1, &len);
-        if (s && len > 0) {
-            if (len >= out_sz)
-                len = out_sz - 1;
-            memcpy(out, s, len);
-            out[len] = '\0';
-            ok = 1;
-        }
-    }
-    g_lua.settop(L, top);
-    return ok;
-}
-
-/* Game-Thread (im ConsoleService::Update-Detour): DOM-State lesen + cachen. */
-static void capture_dom_state_game_thread(void)
-{
-    if (!resolve_dom_instance() || !g_dom_lua)
-        return;
-
-    /* World-Readiness: ohne gueltigen World* keine lua_* bzw. Service-Calls. */
-    if (!world_ready())
-        return;
-
-    void *L = g_dom_lua;
-    int ref = g_dom_ref;
-
-    char buf[RESP_BUF_SIZE];
-    json_buf_t jb;
-    jb.buf = buf;
-    jb.cap = sizeof(buf);
-    jb.len = 0;
-    jb.first = 1;
-    jb_add(&jb, "{");
-
-    double d = 0.0;
-    int b = 0;
-    size_t n = 0;
-    char s[128];
-
-    /* DOM-Schwierigkeit */
-    if (dom_read_number(L, ref, "currentDifficultyLevel", &d))
-        jb_num(&jb, "wave", d);
-    if (dom_read_number(L, ref, "maxDifficultyLevel", &d))
-        jb_num(&jb, "max_wave", d);
-    if (dom_read_number(L, ref, "freezedDifficultyLevel", &d))
-        jb_num(&jb, "frozen_wave", d);
-
-    /* Spawner (Wellen-Zyklus) */
-    s[0] = '\0';
-    if (dom_call_method_str(L, ref, "spawner", "GetCurrentState", s, sizeof(s)))
-        jb_str(&jb, "dom_state", s);
-    jb_num(&jb, "time_to_next", dom_ceil(dom_time_to_next(L, ref)));
-    if (dom_read_number(L, ref, "cooldownTimer", &d))
-        jb_num(&jb, "cooldown_timer", d);
-    if (dom_read_number(L, ref, "idleTimer", &d))
-        jb_num(&jb, "idle_timer", d);
-    if (dom_read_number(L, ref, "waitForSpawnTimer", &d))
-        jb_num(&jb, "prepare_timer", d);
-    if (dom_read_number(L, ref, "sleepSafeTimer", &d))
-        jb_num(&jb, "sleep_timer", d);
-
-    /* HQ */
-    s[0] = '\0';
-    if (dom_call_method_str(L, ref, "upgradeHQ", "GetCurrentState", s, sizeof(s)))
-        jb_str(&jb, "hq_state", s);
-    if (dom_read_number(L, ref, "hqAttackSafeTimer", &d))
-        jb_num(&jb, "hq_attack_timer", d);
-
-    /* Schwierigkeits-Progression */
-    s[0] = '\0';
-    if (dom_call_method_str(L, ref, "difficultyIncrease", "GetCurrentState", s,
-                            sizeof(s)))
-        jb_str(&jb, "difficulty_state", s);
-    if (dom_state_remaining(L, ref, "difficultyIncrease", "difficulty_increase",
-                            &d))
-        jb_num(&jb, "time_to_next_difficulty", d);
-
-    /* Flags */
-    if (dom_read_bool(L, ref, "pauseAttacks", &b))
-        jb_bool(&jb, "pause_attacks", b);
-    if (dom_read_bool(L, ref, "cancelTheAttack", &b))
-        jb_bool(&jb, "cancel_attack", b);
-    if (dom_read_bool(L, ref, "spawnBoss", &b))
-        jb_bool(&jb, "spawn_boss", b);
-    if (dom_read_number(L, ref, "extraAttacks", &d))
-        jb_num(&jb, "extra_attacks", d);
-
-    /* Zaehler */
-    if (dom_read_table_len(L, ref, "spawnedAttacks", &n))
-        jb_num(&jb, "spawned_attacks", (double)n);
-    if (dom_read_table_len(L, ref, "preparedAttacks", &n))
-        jb_num(&jb, "prepared_attacks", (double)n);
-
-    /* Event/Objective (event_manager) */
-    if (dom_read_number(L, ref, "currentEventLevel", &d))
-        jb_num(&jb, "event_level", d);
-    if (dom_read_number(L, ref, "eventManagerTimer", &d))
-        jb_num(&jb, "event_timer", d);
-    if (dom_read_table_len(L, ref, "objectiveActiveList", &n))
-        jb_num(&jb, "active_objectives", (double)n);
-    {
-        double obj_last = 0.0, obj_between = 0.0, ev_timer = 0.0;
-        if (dom_read_number(L, ref, "objectiveLastSpawnTime", &obj_last) &&
-            dom_read_number(L, ref, "objectiveCurrentTimeBetweenNext",
-                            &obj_between) &&
-            dom_read_number(L, ref, "eventManagerTimer", &ev_timer))
-            jb_num(&jb, "time_to_next_objective",
-                   obj_last + obj_between - ev_timer);
-    }
-
-    /* Services (Globale Service-Objekte via _G). */
-    if (dom_self_method_number(L, ref, "GetPlayersCounter", &d))
-        jb_num(&jb, "players", d);
-    if (dom_global_number(L, "CampaignService", "GetCreaturesBaseDifficulty", &d))
-        jb_num(&jb, "creatures_difficulty", d);
-    s[0] = '\0';
-    if (dom_global_string(L, "DifficultyService", "GetCurrentDifficultyName", s,
-                          sizeof(s)))
-        jb_str(&jb, "difficulty_name", s);
-    s[0] = '\0';
-    if (dom_global_string(L, "DifficultyService", "GetWaveStrength", s, sizeof(s)))
-        jb_str(&jb, "wave_strength", s);
-    if (dom_global_bool(L, "DifficultyService", "AreWavesDisabled", &b))
-        jb_bool(&jb, "waves_disabled", b);
-    s[0] = '\0';
-    if (dom_global_string(L, "MissionService", "GetCurrentMissionName", s,
-                          sizeof(s)))
-        jb_str(&jb, "mission_name", s);
-    s[0] = '\0';
-    if (dom_global_string(L, "MissionService", "GetCurrentBiomeName", s,
-                          sizeof(s)))
-        jb_str(&jb, "biome", s);
-    if (dom_global_number(L, "DifficultyService", "GetMissionDuration", &d))
-        jb_num(&jb, "mission_duration", d);
-    if (dom_global_number(L, "DifficultyService", "GetWarmupDuration", &d))
-        jb_num(&jb, "warmup_duration", d);
-    if (dom_global_bool(L, "DifficultyService", "IsMissionInfinite", &b))
-        jb_bool(&jb, "mission_infinite", b);
-
-    /* HQ (pure C++ offset: FindService -> Entity -> HealthComponent). */
-    {
-        float hp = 0.0f, hpmax = 0.0f;
-        if (read_hq_health(g_dom_base, &hp, &hpmax)) {
-            jb_num(&jb, "hq_hp", (double)hp);
-            jb_num(&jb, "hq_hp_max", (double)hpmax);
-            jb_bool(&jb, "hq_dead", hp <= 0.0f);
-        }
-    }
-
-    jb_add(&jb, "}");
-    buf[jb.len] = '\0';
-
-    while (InterlockedExchange(&g_dom_state_lock, 1) != 0)
-        ;
-    memcpy(g_dom_state_buf, buf, jb.len + 1);
-    InterlockedExchange(&g_dom_state_lock, 0);
-}
-
 static void dispatch_get_state(HANDLE hPipe)
 {
     const unsigned char *base = NULL;
@@ -2766,15 +1771,6 @@ static void dispatch_get_state(HANDLE hPipe)
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
                          "\"reason\":\"no_world\"}");
         return;
-    }
-
-    /* #378: C++-Egress — Update-Detour installieren, damit der Game-Thread
-     * den DOM-State liest und in den Cache schreibt. */
-    {
-        console_exec_fn cfn = NULL;
-        void *cinst = NULL;
-        if (resolve_console_service(&cfn, &cinst))
-            install_update_hook();
     }
 
     void *(*gpa)(void *, unsigned int) =
@@ -2835,23 +1831,12 @@ static void dispatch_get_state(HANDLE hPipe)
         snprintf(hq_json, sizeof(hq_json),
                  "\"hq_hp\":null,\"hq_hp_max\":null,\"hq_dead\":null,");
 
-    /* DOM/Voll-State aus dem Cache (game thread schreibt; spinlock-guarded). */
-    char state_json[RESP_BUF_SIZE];
-    while (InterlockedExchange(&g_dom_state_lock, 1) != 0)
-        ;
-    memcpy(state_json, g_dom_state_buf, sizeof(state_json));
-    InterlockedExchange(&g_dom_state_lock, 0);
-    state_json[sizeof(state_json) - 1] = '\0';
-    if (state_json[0] == '\0')
-        strcpy(state_json, "null");
-
     send_line(hPipe,
               "{\"event\":\"get_state_result\",\"ok\":true,"
               "\"carbonium\":%llu,\"carbonium_max\":%lld,\"resources\":%s,"
-              "%s"
-              "\"state\":%s}",
+              "%s}",
               (unsigned long long)carbonium, (long long)carbonium_max,
-              resources, hq_json, state_json);
+              resources, hq_json);
 }
 
 
@@ -2988,7 +1973,6 @@ static void dispatch_add_resource(HANDLE hPipe, const char *amount_str)
 static void handle_line(HANDLE hPipe, const char *line)
 {
     char cmd[64] = "";
-    char command[512] = "";
 
     if (!json_get_string(line, "cmd", cmd, sizeof(cmd))) {
         /* kein "cmd"-Key: falls es wie JSON aussieht -> error-Event,
@@ -3007,16 +1991,6 @@ static void handle_line(HANDLE hPipe, const char *line)
                       (unsigned long long)GetTickCount64()) == 0) {
             dbg("handle_line: ping -> pong");
         }
-        return;
-    }
-
-    if (strcmp(cmd, "exec") == 0) {
-        if (!json_get_string(line, "command", command, sizeof(command))) {
-            send_line(hPipe,
-                      "{\"event\":\"error\",\"error\":\"exec_ohne_command\"}");
-            return;
-        }
-        dispatch_exec(hPipe, command);
         return;
     }
 
