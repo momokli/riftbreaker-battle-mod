@@ -15,7 +15,7 @@ decimal), and `tools/re/disasm.py` for layout. Lua paths cross-checked against
 
 | state field | C++ object | offset / RVA | read method | notes |
 |---|---|---|---|---|
-| HQ health (current HP) | `HealthComponent` (ECS) | `comp[+0x00]` (float) | `HealthService::GetHealth(id)` RVA `0xF9BBB0` | id via `FindService::FindEntityByType("headquarters")` |
+| HQ health (current HP) | `HealthComponent` (ECS) | `comp[+0x00]` (float) | `HealthService::GetHealth(id)` RVA `0xF9BBB0` | id via `FindService::FindEntityByName("headquarters")` |
 | HQ health (max HP) | `HealthComponent` (ECS) | `comp[+0x04]` (float) | `HealthService::GetMaxHealth(id)` RVA `0xF9C360` | same component |
 | HQ alive / dead | `HealthComponent` (ECS) | `comp[+0x00]` (float) | `HealthService::IsAlive(id)` RVA `0xF9E130` | returns `current > 0.0f` |
 | HQ health % | `HealthComponent` (ECS) | `comp[+0x00]/comp[+0x04]` | `HealthService::GetHealthInPercentage(id)` RVA `0xF9BC20` | `current/max` |
@@ -29,8 +29,13 @@ decimal), and `tools/re/disasm.py` for layout. Lua paths cross-checked against
 
 ## 1. HQ health (solid — full chain recovered)
 
-Lua path: `FindService:FindEntityByType("headquarters")` -> entity id, then
+Lua path: `FindService:FindEntityByName("headquarters")` -> entity id, then
 `HealthService:GetHealth(hqEntity)` / `GetMaxHealth` / `IsAlive`.
+
+> **Name, not type.** The game scripts resolve the HQ by **name**
+> (`FindEntityByName`), not by type. `FindEntityByType("headquarters")`
+> returns the wrong entity (or `INVALID_ID`), which is why the bridge
+> reported a hard-coded-looking `100`/`alive`. See the entity-id note below.
 
 ### Object graph
 
@@ -85,9 +90,14 @@ store is the same one `GetPlayerAccount(World*, ...)` reads through).
   `PlayerService`): `HealthService` vftable RVA `0x2E95760`,
   `FindService` vftable RVA `0x2E94C98`. (`PlayerService` vftable
   `0x2E8E910` is the known-good reference.)
-- **Entity id:** `FindService::FindEntityByType(char const*)` RVA `0x1C0E420`
-  returns the first entity of the given type; `0xFFFFFFFF` when none (matches
-  `INVALID_ID`). (Namespace note: `FindService` is `Exor::FindService`;
+- **Entity id:** `FindService::FindEntityByName(char const*)` RVA `0x1C0DF60`
+  returns the entity whose **name** matches; `0xFFFFFFFF` when none (matches
+  `INVALID_ID`). It FNV-hashes the name (`0x1000193`, seed `0x811c9dc5`) and
+  looks it up in the name map at `*(FindService+0x10) + 0x18`
+  (`UnorderedMap<StringHash, …>`, lookup RVA `0x28AC00`) — a genuinely
+  different path from `FindEntityByType(char const*)` RVA `0x1C0E420`, which
+  does a type lookup (and returns the wrong entity for `"headquarters"`).
+  (Namespace note: `FindService` is `Exor::FindService`;
   `HealthService`/`PlayerService` are `Riftbreaker::…`.)
 - **Component pointer:** either call `HealthService::GetHealth/GetMaxHealth/
   IsAlive` directly (C++ call, not `lua_*`), or reproduce the lookup:
@@ -211,7 +221,7 @@ fields. This is a hard constraint, not a missing symbol.
 
 | field | how |
 |---|---|
-| HQ hp / max / alive | `HealthService::GetHealth/MaxHealth/IsAlive` + `FindEntityByType` (or raw `HealthComponent` deref) |
+| HQ hp / max / alive | `HealthService::GetHealth/MaxHealth/IsAlive` + `FindEntityByName` (or raw `HealthComponent` deref) |
 | carbonium / carbonium_max / resources | existing carbonium path (#363/#365/#370) |
 | `dom_state` | `StateMachine` + `GetCurrentStateName` (#376) |
 
@@ -234,6 +244,7 @@ fields. This is a hard constraint, not a missing symbol.
 | `HealthService::IsAlive(uint)` | `0xF9E130` |
 | `HealthService::GetHealthInPercentage(uint)` | `0xF9BC20` |
 | `HealthService` vftable | `0x2E95760` |
+| `FindService::FindEntityByName(char const*)` | `0x1C0DF60` |
 | `FindService::FindEntityByType(char const*)` | `0x1C0E420` |
 | `FindService` vftable | `0x2E94C98` |
 | `PlayerService::GetConnectedPlayers()` | `0xF27960` |
