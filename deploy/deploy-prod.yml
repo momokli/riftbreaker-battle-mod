@@ -9,8 +9,12 @@
 #   ansible-playbook -i deploy/inventory deploy/deploy-prod.yml \
 #     -e @deploy/prod-vars.yml --vault-password-file <vault.pass>
 #
-# Tag-Deployment (v* -> prod, main -> dev rolling) + DNS-Split sind Follow-up.
-# Hier wird der Image-Tag wie dev aus dem Checkout-SHA abgeleitet.
+# Twin-Topologie + Tag→prod: prod ist jetzt ein vollwertiger Zwilling von dev
+# (site.yml) — inkl. `website`-Rolle (Operator-Cockpit auf
+# operator.rift.projectmellon.de, eigener rift-caddy-prod :8788, Bridge :9002).
+# Der CD-Workflow (.github/workflows/deploy.yml) fährt dieses Playbook bei
+# Tag-Push (v* -> prod). Der Image-Tag wird weiterhin aus dem Checkout-SHA
+# (Tag-Commit) abgeleitet.
 
 - name: RIFT BATTLE — Prod-Instanz (planet :6322)
   hosts: planet
@@ -37,6 +41,8 @@
     - role: game-content
     - role: rbtools
     - role: riftbreaker-server
+    - role: website
+      tags: [website]
 
 - name: RIFT BATTLE — Satellite-Relay (satellite)
   hosts: satellite

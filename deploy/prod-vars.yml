@@ -30,3 +30,14 @@ riftbreaker_bridge_port: 9002
 
 # Content kommt per Sync aus dem kanonischen Cache (wie dev).
 riftbreaker_content_mode: sync
+
+# --- Website (Operator-Cockpit, eigener Caddy) -------------------------------
+# Prod-Zwilling von dev: eigenes Operator-Cockpit auf
+# operator.rift.projectmellon.de, eigener rift-caddy-prod-Container (plain
+# HTTP) auf 127.0.0.1:8788 — isoliert von dev (rift-caddy :8787). Der geteilte
+# Host-Caddy proxyt die prod-Domain dorthin; die Bridge :9002 (oben) liefert
+# das /contract/*-Panel.
+website_domain: operator.rift.projectmellon.de
+rift_caddy_container: rift-caddy-prod
+rift_caddy_port: 8788
+rift_caddy_deploy_dir: /opt/rbmods/compose/rift-caddy-prod

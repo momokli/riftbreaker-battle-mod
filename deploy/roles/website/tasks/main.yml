@@ -1,14 +1,18 @@
 ---
 # Rolle: website — statische Dateien (site/*) nach Docroot + eigener
-# Rift-Caddy-Container (Statics + /tournament/*-Proxy) + EIN Eintrag im
-# geteilten Host-Caddy. Idempotent.
+# Rift-Caddy-Container (Statics, /solo, /mods, /tournament/*, /contract/*) +
+# EIN Eintrag im geteilten Host-Caddy. Idempotent. Die Rolle ist
+# per-Environment als "Twin" parametriert: {{ website_domain }},
+# {{ rift_caddy_container }} und {{ rift_caddy_port }} kommen aus den Env-Vars
+# (dev und prod je eigener Container/Port/Domain).
 #
 # Architektur (Issue #322):
-#   rift.projectmellon.de → Host-Caddy (mellon-caddy)
+#   {{ website_domain }} → Host-Caddy (mellon-caddy)
 #                            └─ reverse_proxy 127.0.0.1:{{ rift_caddy_port }}
 #                                  └─ rift-caddy (eigener Container, plain HTTP)
 #                                       ├─ file_server  {{ rift_caddy_site_root }}
-#                                       └─ handle_path /tournament/* → 127.0.0.1:{{ tournament_port }}
+#                                       ├─ handle_path /tournament/* → 127.0.0.1:{{ tournament_port }}
+#                                       └─ handle_path /contract/*  → 127.0.0.1:{{ riftbreaker_bridge_port }}
 #
 # Der geteilte Host-Caddy bekommt GENAU EINEN (idempotenten) Eintrag — kein
 # Caddyfile.d-Mount, keine Import-Zeile mehr. Die frühere, manuell gepflegte
@@ -158,7 +162,7 @@
   replace:
     path: "{{ website_host_caddyfile_path }}"
     regexp: '(?ms)^# BEGIN RIFT PROJECTMELLON MODS.*?^# END RIFT PROJECTMELLON MODS\n?'
-    replace: ''
+    replace: ""
   register: host_caddy_old_block
 
 - name: Verwaiste Snippet-Import-Zeile aus dem Host-Caddyfile entfernen
@@ -168,10 +172,14 @@
     state: absent
   register: host_caddy_import
 
+# Nur der HTTP-Domain-Eintrag ({{ website_domain }}) wird hier geroutet. Der
+# Game-Server-Host läuft ausschliesslich über UDP (riftbreaker_server_port_udp,
+# dev 6321 / prod 6322) und bekommt KEINEN Caddy-/HTTP-Eintrag — der Host-Caddy
+# reicht nur Operator-Cockpit/Statics (/contract, /solo, /mods, …) durch.
 - name: Host-Caddy-Eintrag sicherstellen (genau EIN Block)
   blockinfile:
     path: "{{ website_host_caddyfile_path }}"
-    marker: "# {mark} RIFT PROJECTMELLON (managed by deploy/roles/website)"
+    marker: "# {mark} RIFT {{ website_domain }} (managed by deploy/roles/website)"
     owner: "{{ website_host_caddyfile_owner }}"
     group: "{{ website_host_caddyfile_group }}"
     mode: "0644"
