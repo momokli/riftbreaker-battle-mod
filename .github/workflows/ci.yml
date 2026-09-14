@@ -100,8 +100,8 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         with:
           node-version: 20
-      # Warmer npm-Store (Issue #153): npm ci zieht fengari/luaparse aus dem
-      # Cache statt aus dem Netz. Key basiert auf dem package-lock.json.
+      # Warmer npm-Store (Issue #153): npm ci zieht aus dem Cache statt aus
+      # dem Netz. Key basiert auf dem package-lock.json.
       - name: npm-Dependency-Cache (actions/cache)
         if: needs.changes.outputs.test == 'true'
         uses: actions/cache@v4
@@ -140,7 +140,7 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         working-directory: tools/referee-egress
         run: python3 -m unittest test_referee_egress -v
-      - name: Bridge-E2E (rbbridge hosttest + kern-io-pfad, Issue #243/#288)
+      - name: rbbridge host-test (Issue #243)
         if: needs.changes.outputs.test == 'true'
         working-directory: tests/e2e-vollkette
         run: npm ci && npm test
