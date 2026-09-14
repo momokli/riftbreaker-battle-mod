@@ -38,10 +38,10 @@ tournament_bridge_b_url: "http://127.0.0.1:9002/exec"
 #   * Statics aus dem Docroot (inkl. /solo, /mods) und
 #   * /tournament/*  →  reverse_proxy an den tournament-server.
 # Der GETEILTE Deploy-Host-Caddy (`mellon-caddy`, hostet viele fremde Domains)
-# bekommt GENAU EINEN Eintrag: rift.projectmellon.de →
+# bekommt GENAU EINEN Eintrag: operator.drift.projectmellon.de →
 # reverse_proxy 127.0.0.1:{{ rift_caddy_port }} — kein Caddyfile.d-Snippet-Mount
 # mehr, kein Eingriff in fremde Sites.
-website_domain: rift.projectmellon.de
+website_domain: operator.drift.projectmellon.de
 website_docroot: /srv/rbmods-site
 website_mods_dir: "{{ website_docroot }}/mods"
 

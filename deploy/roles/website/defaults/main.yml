@@ -25,6 +25,10 @@ rift_caddy_config_dir: "{{ rift_caddy_deploy_dir }}/config"
 rift_caddy_site_root: /srv/site
 website_upload_port: 8322
 
+# /contract (Bridge-Kontrollpanel): basic_auth-Schutz (operator). bcrypt-Hash
+# von "zukka"; als Default unkritisch, kein Vault nötig.
+contract_basic_auth_hash: "$2a$14$TSQCK7adF/aDuDzaRGY8wum3034v2huWYk9g9JPRCggLDugyHyZVm"
+
 # Geteilter Host-Caddy.
 website_host_caddy_container: mellon-caddy
 website_host_caddyfile_path: /home/momo/Caddyfile

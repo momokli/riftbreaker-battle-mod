@@ -1,11 +1,12 @@
 # Verwaltet von deploy/ role "website" (Jinja) — NICHT manuell editieren.
 #
 # Eigener, schlanker Caddy NUR für {{ website_domain }}: Statics aus dem
-# Docroot + /tournament/*-Proxy an den tournament-server. Plain HTTP, lauscht
-# ausschliesslich auf 127.0.0.1:{{ rift_caddy_port }} — TLS terminiert weiterhin
-# der geteilte Host-Caddy ({{ website_host_caddy_container }}), der hierher
-# proxyt. Deshalb kein Hostname im Site-Label (der Host-Caddy reicht den
-# Original-Host durch) und kein ACME.
+# Docroot, /tournament/*-Proxy an den tournament-server und /contract/*-Proxy
+# (Operator-Cockpit) an die IO-Bridge. Plain HTTP, lauscht ausschliesslich auf
+# 127.0.0.1:{{ rift_caddy_port }} — TLS terminiert weiterhin der geteilte
+# Host-Caddy ({{ website_host_caddy_container }}), der hierher proxyt. Deshalb
+# kein Hostname im Site-Label (der Host-Caddy reicht den Original-Host durch)
+# und kein ACME.
 #
 # Global: Admin-Endpunkt AUS (Issue #355). rift-caddy laeuft mit
 # network_mode host; Caddy belegt sonst per Default 127.0.0.1:2019 — exakt den
@@ -45,6 +46,17 @@
 			{{ solo_basic_auth_user | default('operator') }} {{ solo_basic_auth_hash }}
 		}
 		{% endif %}file_server
+	}
+
+	# /contract: Bridge-Kontrollpanel (pipe_bridge.exe, eingebettetes
+	# contract.html). Reverse-Proxy auf die IO-Bridge; Zugangsschutz via
+	# basic_auth (operator).
+	redir /contract /contract/
+	handle_path /contract/* {
+		basic_auth {
+			operator {{ contract_basic_auth_hash }}
+		}
+		reverse_proxy 127.0.0.1:{{ riftbreaker_bridge_port }}
 	}
 
 	# Tournament-Server (Web-UI + API, z. B. der /wave-Knopf) unter

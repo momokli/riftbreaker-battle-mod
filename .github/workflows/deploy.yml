@@ -1,36 +1,59 @@
 name: Deploy (CD)
 
-# Continuous Deployment: jeder Merge auf main rollt den aktuellen Mod-Stand
-# automatisch auf den Solo-DEV-Server (planet, Port 6321) aus.
+# Continuous Deployment: jeder Merge auf main rollt DEV aus (planet :6321,
+# Operator-Cockpit operator.drift.projectmellon.de); jeder Tag-Push `v*` rollt
+# PROD aus (planet :6322 via Satellite-Relay, Operator-Cockpit
+# operator.rift.projectmellon.de, deploy/deploy-prod.yml).
 #
-# Topologie (Issue #91): EIN Server auf :6321, disable_steam "1"; kein Tag→prod-Kanal.
-# Deploy-Mechanik: SSH als deploy-User (`ssh rbd "<sha> <ref>"`), forced command macht
-# git fetch + Hard-Checkout + Playbook.
+# Deploy-Mechanik: SSH als deploy-User (`ssh rbd "<sha> <ref>"`), forced command
+# macht git fetch + Hard-Checkout + Playbook. Der Remote-forced-command wählt
+# dev vs prod anhand von <ref> (branch `main` -> dev, tag `v*` -> prod).
 #
 # (2026-09-13) Deploy-Gate ("parken bis 0 Spieler online") ENTFERNT:
-# deployt sofort bei jedem Merge auf main, ohne auf leeren Server zu warten.
+# deployt sofort bei jedem Merge/Tag, ohne auf leeren Server zu warten.
 
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
   contents: read
-
-concurrency:
-  group: cd-dev
-  cancel-in-progress: false
 
 jobs:
   deploy-dev:
     name: Deploy Dev (planet :6321)
     runs-on: [self-hosted, planet]
     timeout-minutes: 60
+    if: startsWith(github.ref, 'refs/heads/')
+    concurrency:
+      group: cd-dev
+      cancel-in-progress: false
     environment:
       name: dev
-      url: https://rift.projectmellon.de/solo.html
+      url: https://operator.drift.projectmellon.de/contract/
     steps:
+      - name: Deploy per SSH (deploy-User, forced command)
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes rbd "${GITHUB_SHA} ${GITHUB_REF}"
+
+  deploy-prod:
+    name: Deploy Prod (planet :6322)
+    runs-on: [self-hosted, planet]
+    timeout-minutes: 60
+    if: startsWith(github.ref, 'refs/tags/v')
+    concurrency:
+      group: cd-prod
+      cancel-in-progress: false
+    environment:
+      name: prod
+      url: https://operator.rift.projectmellon.de/contract/
+    steps:
+      # Prod fährt deploy/deploy-prod.yml (+ -e @deploy/prod-vars.yml). Der
+      # Remote-forced-command unterscheidet dev/prod anhand von <ref>
+      # (branch `main` -> dev, tag `v*` -> prod) — gleiche SSH-Mechanik wie dev.
       - name: Deploy per SSH (deploy-User, forced command)
         run: |
           set -euo pipefail
