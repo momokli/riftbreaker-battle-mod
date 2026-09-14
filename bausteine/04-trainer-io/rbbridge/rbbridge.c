@@ -867,6 +867,35 @@ static const unsigned char RBBRIDGE_DIFF_DEC_SIG[] = {
 
 #define RBBRIDGE_RVA_CAMPAIGNSERVICE_VFTABLE 0x2e9c340u /* ??_7CampaignService@Riftbreaker@@6B@ */
 
+/* Zerlegt den Funktionskoerper einer der vier Tiny-Difficulty-Funktionen in
+ * die beiden Layout-Offsets:
+ *   48 8B 41 <disp8>                mov   rax,[rcx+disp8]   ; this_deref
+ *   F3 0F <op> <modrm> <disp32>     movss/addss [rax+disp32] / xmm..,[rax+disp32]
+ *   C3                              ret
+ * Rueckgabe 1 = erwartete Form. Damit sind die Layout-Offsets NICHT fest
+ * verdrahtet, sondern stammen aus dem per AOB aufgeloesten Funktionskoerper
+ * (build-robust: ein geaendertes Layout aendert die Bytes und wird erkannt).
+ * Steht bewusst AUSSERHALB des #ifndef-RBBRIDGE_HOSTTEST-Blocks, damit der
+ * Host-Test den Decoder direkt pruefen kann (Review PR #433). */
+static int diff_decode(const unsigned char *fn, uint32_t *this_deref,
+                       int32_t *field_off)
+{
+    if (!fn || !this_deref || !field_off)
+        return 0;
+    if (fn[0] != 0x48 || fn[1] != 0x8B || fn[2] != 0x41)
+        return 0; /* mov rax,[rcx+disp8] */
+    if (fn[4] != 0xF3 || fn[5] != 0x0F)
+        return 0;
+    /* 0x10 movss-load, 0x11 movss-store, 0x58 addss, 0x5C subss */
+    if (fn[6] != 0x10 && fn[6] != 0x11 && fn[6] != 0x58 && fn[6] != 0x5C)
+        return 0;
+    if (fn[7] != 0x80 && fn[7] != 0x88)
+        return 0;
+    *this_deref = (uint32_t)fn[3];
+    memcpy(field_off, fn + 8, sizeof(*field_off));
+    return 1;
+}
+
 /* x64-Aufrufkonvention: this=RCX, cmd=RDX - __fastcall ist auf x64 der
  * Standard (das Schluesselwort dokumentiert die Konvention nur). */
 #ifdef RBBRIDGE_HOSTTEST
@@ -2099,35 +2128,6 @@ static int mission_flow_active(const unsigned char *base, const char *flow)
 #define RBBRIDGE_NOINLINE __attribute__((noinline))
 #endif
 
-/* Zerlegt den Funktionskoerper einer der vier Tiny-Difficulty-Funktionen in
- * die beiden Layout-Offsets:
- *   48 8B 41 <disp8>                mov   rax,[rcx+disp8]   ; this_deref
- *   F3 0F <op> <modrm> <disp32>     movss/addss [rax+disp32] / xmm..,[rax+disp32]
- *   C3                              ret
- * Rueckgabe 1 = erwartete Form. Damit sind die Layout-Offsets NICHT fest
- * verdrahtet, sondern stammen aus dem per AOB aufgeloesten Funktionskoerper
- * (build-robust: ein geaendertes Layout aendert die Bytes und wird erkannt). */
-static int diff_decode(const unsigned char *fn, uint32_t *this_deref,
-                       int32_t *field_off)
-{
-    if (!fn || !this_deref || !field_off)
-        return 0;
-    if (fn[0] != 0x48 || fn[1] != 0x8B || fn[2] != 0x41)
-        return 0; /* mov rax,[rcx+disp8] */
-    if (fn[4] != 0xF3 || fn[5] != 0x0F)
-        return 0;
-    /* 0x10 movss-load, 0x11 movss-store, 0x58 addss, 0x5C subss */
-    if (fn[6] != 0x10 && fn[6] != 0x11 && fn[6] != 0x58 && fn[6] != 0x5C)
-        return 0;
-    if (fn[7] != 0x80 && fn[7] != 0x88)
-        return 0;
-    *this_deref = (uint32_t)fn[3];
-    memcpy(field_off, fn + 8, sizeof(*field_off));
-    return 1;
-}
-
-/* Gecachte Auflösung (vgl. g_console_cache): Modulbasis/-groesse + Instanz
- * werden revalidiert, ein Wechsel der Modulbasis erzwingt einen Neu-Scan. */
 typedef struct {
     int valid;
     const unsigned char *module_base;
@@ -2135,6 +2135,10 @@ typedef struct {
     unsigned char *cs; /* CampaignService-Instanz */
     uint32_t this_deref;
     int32_t field_off;
+    /* Fundstellen der vier Funktionen: erlaubt die Re-Validierung der
+     * Funktionskoerper (Layout-Hotpatch bei gleicher Modulbasis) ohne
+     * kompletten Neu-Scan (Review-Hinweis PR #433). */
+    const unsigned char *fget, *fset, *finc, *fdec;
 } campaign_diff_cache_t;
 
 static campaign_diff_cache_t g_campdiff_cache;
@@ -2157,8 +2161,22 @@ static RBBRIDGE_NOINLINE int resolve_campaign_diff(const unsigned char *base,
     if (!base || size == 0 || !out_cs || !out_this_deref || !out_field_off)
         return 0;
 
+    /* Cache-Treffer nur, wenn Modulbasis/-groesse, Instanz-vftable UND die
+     * vier Funktionskoerper unveraendert sind. Letzteres faengt einen
+     * Layout-Hotpatch (gleiche Modulbasis, geaenderte Prologe) ab, ohne den
+     * teuren vollen AOB-Scan zu wiederholen. */
     if (g_campdiff_cache.valid && g_campdiff_cache.module_base == base &&
         g_campdiff_cache.module_size == size && g_campdiff_cache.cs &&
+        g_campdiff_cache.fget && g_campdiff_cache.fset &&
+        g_campdiff_cache.finc && g_campdiff_cache.fdec &&
+        memcmp(g_campdiff_cache.fget, RBBRIDGE_DIFF_GET_SIG,
+               sizeof(RBBRIDGE_DIFF_GET_SIG)) == 0 &&
+        memcmp(g_campdiff_cache.fset, RBBRIDGE_DIFF_SET_SIG,
+               sizeof(RBBRIDGE_DIFF_SET_SIG)) == 0 &&
+        memcmp(g_campdiff_cache.finc, RBBRIDGE_DIFF_INC_SIG,
+               sizeof(RBBRIDGE_DIFF_INC_SIG)) == 0 &&
+        memcmp(g_campdiff_cache.fdec, RBBRIDGE_DIFF_DEC_SIG,
+               sizeof(RBBRIDGE_DIFF_DEC_SIG)) == 0 &&
         safe_read_u64(g_campdiff_cache.cs, &inner) &&
         inner == (uint64_t)(uintptr_t)(base +
                                        RBBRIDGE_RVA_CAMPAIGNSERVICE_VFTABLE)) {
@@ -2205,6 +2223,10 @@ static RBBRIDGE_NOINLINE int resolve_campaign_diff(const unsigned char *base,
     g_campdiff_cache.cs = cs;
     g_campdiff_cache.this_deref = td_get;
     g_campdiff_cache.field_off = off_get;
+    g_campdiff_cache.fget = fget;
+    g_campdiff_cache.fset = fset;
+    g_campdiff_cache.finc = finc;
+    g_campdiff_cache.fdec = fdec;
 
     *out_cs = cs;
     *out_this_deref = td_get;
@@ -2229,11 +2251,24 @@ static int safe_read_f32(const void *addr, float *out)
     return 1;
 }
 
-/* Schreibt float nur in committed+lesbare Region (Seite kurz RW schalten). */
+/* IEEE-Endlichkeitspruefung ohne libm/math.h (mingw exponiert `isfinite`
+ * nicht unter der Default-std). NaN: v-v != 0; +/-Inf: v-v = NaN != 0. */
+static int float_is_finite(float v)
+{
+    volatile float d = v - v;
+    return d == 0.0f;
+}
+
+/* Schreibt float nur in committed+lesbare Region (Seite kurz RW schalten).
+ * PAGE_READWRITE genuegt fuer einen reinen Datenschreibzugriff - PAGE_EXECUTE
+ * waere unnoetig und wuerde die Angriffsflaeche fuer Anti-Cheat/AV vergroessern
+ * (Review-Hinweis PR #433). Der alte Schutz wird in einer EIGENEN Variablen
+ * festgehalten (nicht als Out-Param wiederverwendet). */
 static int safe_write_f32(void *addr, float v)
 {
     MEMORY_BASIC_INFORMATION mi;
-    DWORD old = 0;
+    DWORD old_protect = 0;
+    DWORD ignored = 0;
     if (!addr)
         return 0;
     if (!VirtualQuery(addr, &mi, sizeof(mi)))
@@ -2243,10 +2278,12 @@ static int safe_write_f32(void *addr, float v)
     if ((uintptr_t)addr + sizeof(float) >
         (uintptr_t)mi.BaseAddress + mi.RegionSize)
         return 0;
-    if (!VirtualProtect(addr, sizeof(float), PAGE_EXECUTE_READWRITE, &old))
+    if (!VirtualProtect(addr, sizeof(float), PAGE_READWRITE, &old_protect))
         return 0;
     memcpy(addr, &v, sizeof(v));
-    VirtualProtect(addr, sizeof(float), old, &old);
+    /* Restore mit separater Out-Variable (der alte Schutz bleibt erhalten). */
+    if (!VirtualProtect(addr, sizeof(float), old_protect, &ignored))
+        return 0;
     return 1;
 }
 
@@ -2397,11 +2434,14 @@ static void dispatch_get_state(HANDLE hPipe)
 
     /* Creatures-Base-Difficulty (Read #388): haengt an der
      * CampaignService-Instanz, NICHT am Spieler-Account - also auch ohne
-     * geladene Welt lesbar. Nicht aufloesbar -> null (graceful). */
+     * geladene Welt lesbar. Nicht aufloesbar -> null (graceful).
+     * NaN/Inf wuerden als `nan`/`inf` kein gueltiges JSON ergeben -> null
+     * (Review-Hinweis PR #433). */
     char diff_field[48];
     {
         float cbd = 0.0f;
-        if (creatures_difficulty_read(base, size, &cbd))
+        if (creatures_difficulty_read(base, size, &cbd) &&
+            float_is_finite(cbd))
             snprintf(diff_field, sizeof(diff_field), "%.4f", (double)cbd);
         else
             snprintf(diff_field, sizeof(diff_field), "null");

@@ -250,6 +250,48 @@ int main(void)
         free(img4);
     }
 
+    /* -------------------------------------------------------------- */
+    /* diff_decode (Layout-Offsets aus dem Funktionskoerper)           */
+    /* -------------------------------------------------------------- */
+    /* Alle vier Prologe muessen denselben this-deref (0x10) und dasselbe
+     * Feld-Offset (0x584) dekodieren. */
+    {
+        uint32_t td = 0;
+        int32_t fo = 0;
+        check(diff_decode(RBBRIDGE_DIFF_GET_SIG, &td, &fo) && td == 0x10 &&
+                  fo == 0x584,
+              "diff_decode: Get -> this_deref 0x10 / field 0x584");
+        check(diff_decode(RBBRIDGE_DIFF_SET_SIG, &td, &fo) && td == 0x10 &&
+                  fo == 0x584,
+              "diff_decode: Set -> this_deref 0x10 / field 0x584");
+        check(diff_decode(RBBRIDGE_DIFF_INC_SIG, &td, &fo) && td == 0x10 &&
+                  fo == 0x584,
+              "diff_decode: Increase -> this_deref 0x10 / field 0x584");
+        check(diff_decode(RBBRIDGE_DIFF_DEC_SIG, &td, &fo) && td == 0x10 &&
+                  fo == 0x584,
+              "diff_decode: Decrease -> this_deref 0x10 / field 0x584");
+
+        /* Ein geaendertes Layout aendert die Bytes -> Decoder lehnt ab
+         * (statt ein falsches Offset zu liefern). */
+        unsigned char body[sizeof(RBBRIDGE_DIFF_GET_SIG)];
+        memcpy(body, RBBRIDGE_DIFF_GET_SIG, sizeof(body));
+        body[2] = 0x42; /* nicht mehr `mov rax,[rcx+disp8]` */
+        check(!diff_decode(body, &td, &fo),
+              "diff_decode: fremder Prolog -> 0");
+        memcpy(body, RBBRIDGE_DIFF_GET_SIG, sizeof(body));
+        body[6] = 0x99; /* unbekannter SSE-Opcode */
+        check(!diff_decode(body, &td, &fo),
+              "diff_decode: unbekannter Opcode -> 0");
+        memcpy(body, RBBRIDGE_DIFF_GET_SIG, sizeof(body));
+        body[7] = 0x90; /* kein movss-ModRM */
+        check(!diff_decode(body, &td, &fo),
+              "diff_decode: unbekanntes ModRM -> 0");
+        check(!diff_decode(NULL, &td, &fo) &&
+                  !diff_decode(RBBRIDGE_DIFF_GET_SIG, NULL, &fo) &&
+                  !diff_decode(RBBRIDGE_DIFF_GET_SIG, &td, NULL),
+              "diff_decode: NULL-Argumente -> 0");
+    }
+
 
     /* -------------------------------------------------------------- */
     /* resolve_console_vftable                                         */

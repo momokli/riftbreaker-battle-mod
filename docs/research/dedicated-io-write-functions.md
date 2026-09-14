@@ -287,8 +287,10 @@ prologues -> no wildcard mask needed.
   decrease buttons).
 
 Graceful failure: missing module / signature / instance -> `ok:false`, **no**
-call is made. `resolve_campaign_service()` additionally requires
-`this+0x10` to be readable before any method is invoked.
+call is made. `resolve_campaign_diff()` additionally requires
+`this+0x10` to be readable before any method is invoked. Its cache is
+re-validated against module base/size, the instance vftable **and** the four
+function prologues (layout hot-patch at unchanged module base -> re-scan).
 
 ## References
 

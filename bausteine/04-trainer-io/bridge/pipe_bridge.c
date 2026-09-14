@@ -222,21 +222,23 @@ static int json_get_number(const char *json, const char *key, double *out)
             const char *q = p + key_len + 1;
             while (*q == ' ' || *q == '\t')
                 q++;
-            if (*q != ':')
-                return 0;
-            q++;
-            while (*q == ' ' || *q == '\t')
+            if (*q == ':') {
                 q++;
-            if (*q == '"') /* auch als String geschickt: akzeptieren */
-                q++;
-            {
-                char *end = NULL;
-                double v = strtod(q, &end);
-                if (end == q)
-                    return 0; /* kein Zahlbeginn */
-                *out = v;
-                return 1;
+                while (*q == ' ' || *q == '\t')
+                    q++;
+                if (*q == '"') /* auch als String geschickt: akzeptieren */
+                    q++;
+                {
+                    char *end = NULL;
+                    double v = strtod(q, &end);
+                    if (end == q)
+                        return 0; /* Zahlbeginn erwartet, hier keiner */
+                    *out = v;
+                    return 1;
+                }
             }
+            /* Key-Vorkommen ohne ':' ist kein Treffer - WEITER suchen
+             * (statt sofort abzubrechen; Review-Hinweis PR #433). */
         }
         p += key_len;
     }
