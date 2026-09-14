@@ -28,6 +28,13 @@ riftbreaker_saves_volume: rb-saves-prod
 # IO-Bridge isoliert von dev (9001) — sonst Kollision auf 127.0.0.1.
 riftbreaker_bridge_port: 9002
 
+# Sidecars (Session-Recorder + Referee-Egress) isoliert von dev — die festen
+# container_name-Werte (riftbreaker-sessions/-egress) würden sonst mit dem
+# dev-Stack kollidieren. Eigener Sessions-Dir, damit die JSONL getrennt bleiben.
+riftbreaker_sessions_container: riftbreaker-sessions-prod
+riftbreaker_referee_egress_container: riftbreaker-egress-prod
+riftbreaker_sessions_dir: /srv/rbmods-sessions-prod
+
 # Content kommt per Sync aus dem kanonischen Cache (wie dev).
 riftbreaker_content_mode: sync
 
