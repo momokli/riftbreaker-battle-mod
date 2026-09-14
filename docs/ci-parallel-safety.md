@@ -34,7 +34,7 @@ Issue #304.
 
 | Job (Workflow) | Geteilte Ressource | Parallel-sicher? | Beleg |
 |---|---|---|---|
-| `test` (`ci.yml`) | Ports ephemer bzw. `freePort()`; Temps via `mktemp`/`TemporaryDirectory`; npm-Store + ccache über `actions/cache` (concurrency-safe) | ✅ | Random-Ports in den E2E-Skripten, `mktemp -d` |
+| `test` (`ci.yml`) | Ports ephemer bzw. `freePort()`; Temps via `mktemp`/`TemporaryDirectory`; npm-Store + ccache über `actions/cache` (concurrency-safe) | ✅ | Random-Ports + Temp-Dirs (`mktemp`/`TemporaryDirectory`/`mkdtemp`) in Unit-Tests + rbbridge host-test |
 | `build` (`ci.yml`) | `dist/` im eigenen `_work`; ccache-Wrapper in `/opt` (concurrency-safe) | ✅ | je Instanz eigenes `_work` |
 | `boot-test` (`boot-test.yml`) | Container/Netz/Volumes/Unit/Host-Pfade/Ports je Lauf über `github.run_id` | ✅ nach Fix | #307/#317 + #318 (Session-Sidecar) + #358 (Egress-Sidecar) |
 | `deploy-check` (`deploy-check.yml`, planet) | read-only `ansible --check`; Ansible-Venv | ✅ nach Fix | vorher nicht-atomares Venv-Setup |
