@@ -38,6 +38,15 @@ riftbreaker_sessions_dir: /srv/rbmods-sessions-prod
 # Content kommt per Sync aus dem kanonischen Cache (wie dev).
 riftbreaker_content_mode: sync
 
+# --- Tournament-Server (Referee + Web-UI, eigener Port/Unit/Install) ---------
+# Prod-Zwilling: isoliert von dev (8081) auf 8082; bridge A zeigt auf die eigene
+# prod-Bridge :9002 (kein Cross-Reference auf dev).
+tournament_install_dir: /opt/rbmods/tournament-server-prod
+tournament_unit: tournament-server-prod
+tournament_port: 8082
+tournament_bridge_a_url: "http://127.0.0.1:9002/exec"
+tournament_bridge_b_url: "http://127.0.0.1:9002/exec"
+
 # --- Website (Landing + Cockpit, eigener Caddy) -----------------------------
 # Prod-Zwilling von dev: eigene Landing (www.rift.projectmellon.de) + eigenes
 # Operator-Cockpit (cockpit.rift.projectmellon.de), eigener rift-caddy-prod-
