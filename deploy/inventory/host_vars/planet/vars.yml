@@ -30,7 +30,7 @@ tournament_install_dir: /opt/rbmods/tournament-server
 tournament_unit: tournament-server
 tournament_port: 8081
 tournament_bridge_a_url: "http://127.0.0.1:9001/exec"
-tournament_bridge_b_url: "http://127.0.0.1:9002/exec"
+tournament_bridge_b_url: "http://127.0.0.1:9001/exec"
 
 # --- Website (Landing + Cockpit, eigener rift-caddy) -------------------------
 # Architektur (Issue #322): Der Riftbreaker-Stack betreibt einen EIGENEN,

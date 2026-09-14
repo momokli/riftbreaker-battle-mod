@@ -41,6 +41,7 @@
     - role: game-content
     - role: rbtools
     - role: riftbreaker-server
+    - role: tournament-server
     - role: website
       tags: [website]
 
