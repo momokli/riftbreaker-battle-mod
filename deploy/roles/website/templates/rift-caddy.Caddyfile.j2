@@ -2,7 +2,7 @@
 #
 # Eigener, schlanker Caddy fuer ZWEI Hostnames:
 #   * {{ landing_domain }} — statische Landing + /mod.zip (file_server)
-#   * {{ cockpit_domain }} — Operator-Cockpit (/contract/* an die IO-Bridge,
+#   * {{ cockpit_domain }} — Operator-Cockpit (Root an die IO-Bridge,
 #     /tournament/* an den tournament-server)
 # Plain HTTP, lauscht ausschliesslich auf 127.0.0.1:{{ rift_caddy_port }} —
 # TLS terminiert weiterhin der geteilte Host-Caddy
@@ -35,20 +35,16 @@ http://{{ cockpit_domain }}:{{ rift_caddy_port }} {
 	bind 127.0.0.1
 	encode gzip
 
-	# /contract: Bridge-Kontrollpanel (pipe_bridge.exe, eingebettetes
-	# contract.html). Reverse-Proxy auf die IO-Bridge; Zugangsschutz via
-	# basic_auth (operator).
-	redir /contract /contract/
-	handle_path /contract/* {
+	# Tournament-Server (Web-UI + API) unter /tournament/* (Präfix strippen).
+	handle_path /tournament/* {
+		reverse_proxy 127.0.0.1:{{ tournament_port }}
+	}
+
+	# Operator-Cockpit (pipe_bridge.exe, eingebettetes cockpit.html) am Root.
+	handle / {
 		basic_auth {
 			operator {{ contract_basic_auth_hash }}
 		}
 		reverse_proxy 127.0.0.1:{{ riftbreaker_bridge_port }}
-	}
-
-	# Tournament-Server (Web-UI + API, z. B. der /wave-Knopf) unter
-	# /tournament/* — Präfix wird gestrippt.
-	handle_path /tournament/* {
-		reverse_proxy 127.0.0.1:{{ tournament_port }}
 	}
 }
