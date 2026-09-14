@@ -10,6 +10,7 @@
 -- ============================================================================
 
 local RBB = {}
+RBB.version = "0.34.3"
 RBB.round = 0
 RBB.mode = "sp"
 RBB.commenced = false
