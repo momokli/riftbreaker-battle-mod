@@ -89,6 +89,36 @@
             </div>
         </section>
 
+        <section>
+            <h2>server control (plane B)</h2>
+            <div class="row">
+                <span class="dim">state</span>
+                <span id="server_state" class="val">—</span>
+                <span class="dim">health</span>
+                <span id="server_health" class="val">—</span>
+                <span class="dim">uptime</span>
+                <span id="server_uptime" class="val">—</span>
+                <span class="dim">started</span>
+                <span id="server_started_at" class="val">—</span>
+            </div>
+            <div class="row">
+                <span class="dim">logs (tail)</span>
+                <input id="server_logs_tail" size="6" value="50" />
+                <button id="server_logs_refresh">refresh logs</button>
+            </div>
+            <div class="row">
+                <pre id="server_logs" class="val">—</pre>
+            </div>
+            <div class="row">
+                <button id="server_restart">Restart server</button>
+                <button id="server_start">Start</button>
+                <button id="server_stop">Stop</button>
+            </div>
+            <div class="row">
+                <span id="server_control_msg" class="err"></span>
+            </div>
+        </section>
+
         <div id="out" class="err"></div>
 
         <script>
@@ -154,6 +184,148 @@
 
                 refresh();
                 setInterval(refresh, 3000);
+
+                // --- server-control panel (testable) ---
+                function createServerControlPanel(deps) {
+                    var fetchFn = deps.fetch;
+                    var doc = deps.document;
+                    var DASH = "—";
+                    var STATUS_IDS = [
+                        "server_state",
+                        "server_health",
+                        "server_uptime",
+                        "server_started_at",
+                    ];
+                    var LOG_ID = "server_logs";
+                    var MSG_ID = "server_control_msg";
+
+                    function el(id) {
+                        return doc ? doc.getElementById(id) : null;
+                    }
+
+                    function setText(id, value) {
+                        var node = el(id);
+                        if (!node) return;
+                        node.textContent =
+                            value === undefined || value === null || value === ""
+                                ? DASH
+                                : String(value);
+                    }
+
+                    function dashAll() {
+                        for (var i = 0; i < STATUS_IDS.length; i++) {
+                            setText(STATUS_IDS[i], DASH);
+                        }
+                        setText(LOG_ID, DASH);
+                    }
+
+                    function msg(text) {
+                        var node = el(MSG_ID);
+                        if (node) node.textContent = text || "";
+                    }
+
+                    async function getJson(path) {
+                        var res = await fetchFn(path, { method: "GET" });
+                        if (!res || !res.ok) {
+                            throw new Error("HTTP " + (res && res.status));
+                        }
+                        return res.json();
+                    }
+
+                    async function refreshStatus() {
+                        try {
+                            var s = await getJson("/server/status");
+                            setText("server_state", s && s.state);
+                            setText("server_health", s && s.health);
+                            setText("server_uptime", s && s.uptime);
+                            setText("server_started_at", s && s.started_at);
+                            msg("");
+                        } catch (e) {
+                            dashAll();
+                            msg("server status unavailable");
+                        }
+                    }
+
+                    function tailCount() {
+                        var node = el("server_logs_tail");
+                        var n = node ? parseInt(node.value, 10) : NaN;
+                        if (!isFinite(n) || n <= 0) n = 50;
+                        if (n > 5000) n = 5000;
+                        return n;
+                    }
+
+                    async function refreshLogs() {
+                        try {
+                            var n = tailCount();
+                            var data = await getJson("/server/logs?tail=" + n);
+                            var lines = data && data.lines;
+                            if (!lines || !lines.length) {
+                                setText(LOG_ID, DASH);
+                                return;
+                            }
+                            setText(LOG_ID, lines.join("\n"));
+                            msg("");
+                        } catch (e) {
+                            setText(LOG_ID, DASH);
+                            msg("server logs unavailable");
+                        }
+                    }
+
+                    async function control(action) {
+                        if (
+                            action !== "restart" &&
+                            action !== "start" &&
+                            action !== "stop"
+                        ) {
+                            return;
+                        }
+                        try {
+                            var res = await fetchFn("/server/" + action, {
+                                method: "POST",
+                                headers: { "content-type": "application/json" },
+                                body: "{}",
+                            });
+                            if (!res || !res.ok) {
+                                throw new Error("HTTP " + (res && res.status));
+                            }
+                            msg("server " + action + " requested");
+                        } catch (e) {
+                            msg("server " + action + " failed");
+                        }
+                        await refreshStatus();
+                        await refreshLogs();
+                    }
+
+                    return {
+                        refreshStatus: refreshStatus,
+                        refreshLogs: refreshLogs,
+                        control: control,
+                    };
+                }
+                // --- end server-control panel ---
+
+                var serverPanel = createServerControlPanel({
+                    fetch: window.fetch.bind(window),
+                    document: document,
+                    location: location,
+                });
+
+                $("server_restart").onclick = function () {
+                    serverPanel.control("restart");
+                };
+                $("server_start").onclick = function () {
+                    serverPanel.control("start");
+                };
+                $("server_stop").onclick = function () {
+                    serverPanel.control("stop");
+                };
+                $("server_logs_refresh").onclick = function () {
+                    serverPanel.refreshLogs();
+                };
+
+                serverPanel.refreshStatus();
+                serverPanel.refreshLogs();
+                setInterval(serverPanel.refreshStatus, 5000);
             })();
         </script>
     </body>
