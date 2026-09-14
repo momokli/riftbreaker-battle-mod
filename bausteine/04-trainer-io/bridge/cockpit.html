@@ -1,128 +1,132 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>rbbridge contract</title>
-<style>
-  :root { color-scheme: dark; }
-  body { background:#0a0f0a; color:#9fef9f; font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; margin:0; padding:1.25rem; }
-  h1 { font-size:1rem; margin:0 0 .75rem; }
-  a { color:#7fdfff; }
-  section { border:1px solid #2a3a2a; border-radius:4px; padding:.75rem 1rem; margin-bottom:.75rem; max-width:52rem; }
-  h2 { font-size:.85rem; margin:.25rem 0 .5rem; border-bottom:1px solid #2a3a2a; padding-bottom:.25rem; color:#cfeecf; }
-  .row { display:flex; flex-wrap:wrap; gap:.4rem; align-items:center; }
-  .val { color:#fff; }
-  .dim { color:#5f8f5f; }
-  input, button { background:#0f1a0f; color:#9fef9f; border:1px solid #3a5a3a; border-radius:3px; font:inherit; padding:.3rem .55rem; }
-  button:hover { background:#1a2a1a; cursor:pointer; }
-  button.danger { border-color:#a03a3a; color:#ef9f9f; }
-  pre { background:#060a06; border:1px solid #1a2a1a; padding:.6rem; max-height:40vh; overflow:auto; white-space:pre-wrap; }
-  .err { color:#ef9f9f; }
-</style>
-</head>
-<body>
-  <h1>rbbridge <span class="dim">contract</span></h1>
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>carbonium</title>
+        <style>
+            :root {
+                color-scheme: dark;
+            }
+            body {
+                background: #0a0f0a;
+                color: #9fef9f;
+                font:
+                    16px/1.5 ui-monospace,
+                    SFMono-Regular,
+                    Menlo,
+                    Consolas,
+                    monospace;
+                margin: 0;
+                padding: 1.5rem;
+            }
+            h1 {
+                font-size: 1.1rem;
+                margin: 0 0 1rem;
+            }
+            .row {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.6rem;
+                align-items: center;
+                margin-bottom: 0.6rem;
+            }
+            .val {
+                color: #fff;
+            }
+            .dim {
+                color: #5f8f5f;
+            }
+            input,
+            button {
+                background: #0f1a0f;
+                color: #9fef9f;
+                border: 1px solid #3a5a3a;
+                border-radius: 3px;
+                font: inherit;
+                padding: 0.35rem 0.6rem;
+            }
+            button:hover {
+                background: #1a2a1a;
+                cursor: pointer;
+            }
+            .err {
+                color: #ef9f9f;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>carbonium</h1>
 
-  <section>
-    <h2>bridge</h2>
-    <div class="row">
-      <span class="dim">url</span>
-      <input id="url" size="34" spellcheck="false">
-      <button id="refresh">refresh</button>
-      <span id="conn" class="dim"></span>
-    </div>
-  </section>
+        <section>
+            <div class="row">
+                <span class="dim">now</span>
+                <span id="carbonium" class="val">—</span>
+                <span class="dim">/ max</span>
+                <span id="carbonium_max" class="val">—</span>
+            </div>
+            <div class="row">
+                <input id="amount" size="10" value="10" />
+                <button id="add">+ add</button>
+                <button id="sub">− subtract</button>
+            </div>
+            <div id="out" class="err"></div>
+        </section>
 
-  <section>
-    <h2>carbonium</h2>
-    <div class="row">
-      <span class="dim">now</span>
-      <span id="carbonium" class="val">—</span>
-      <span class="dim">/ max</span>
-      <span id="carbonium_max" class="val">—</span>
-    </div>
-    <div class="row" style="margin-top:.5rem">
-      <input id="amount" size="10" value="10">
-      <button id="add">+ add</button>
-      <button id="sub">− subtract</button>
-    </div>
-    <div id="out" class="dim" style="margin-top:.5rem"></div>
-  </section>
+        <script>
+            (function () {
+                var $ = function (id) {
+                    return document.getElementById(id);
+                };
+                var $ = function (id) {
+                    return document.getElementById(id);
+                };
 
-  <section>
-    <h2>HQ</h2>
-    <div class="row">
-      <span class="dim">hp</span>
-      <span id="hq_hp" class="val">—</span>
-      <span class="dim">/ max</span>
-      <span id="hq_hp_max" class="val">—</span>
-      <span class="dim">dead</span>
-      <span id="hq_dead" class="val">—</span>
-    </div>
-  </section>
+                async function post(path, body) {
+                    var res = await fetch(path, {
+                        method: "POST",
+                        headers: { "content-type": "application/json" },
+                        body: body === undefined ? "{}" : JSON.stringify(body),
+                    });
+                    return res.json();
+                }
 
-  <pre id="raw" class="dim">loading…</pre>
+                function fmt(v) {
+                    return typeof v === "number" ? v.toLocaleString() : String(v);
+                }
 
-<script>
-(function () {
-  var $ = function (id) { return document.getElementById(id); };
+                async function refresh() {
+                    try {
+                        var s = await post("get_state");
+                        $("carbonium").textContent = fmt(s.carbonium);
+                        $("carbonium_max").textContent = fmt(s.carbonium_max);
+                        $("out").textContent = "";
+                    } catch (e) {
+                        $("out").textContent = "ERR " + e.message;
+                    }
+                }
 
-  function baseUrl() {
-    var v = $('url').value.trim();
-    if (v) return v.replace(/\/+$/, '') + '/';
-    // Page's own directory, so it also works behind a path prefix (/contract/).
-    return new URL('.', location.href).href;
-  }
+                async function addResource(amount) {
+                    try {
+                        var r = await post("add_resource", { amount: String(amount) });
+                        $("out").textContent = r && r.ok ? "" : JSON.stringify(r);
+                        refresh();
+                    } catch (e) {
+                        $("out").textContent = "ERR " + e.message;
+                    }
+                }
 
-  function setConn(s) { $('conn').textContent = s; }
+                $("add").onclick = function () {
+                    addResource($("amount").value);
+                };
+                $("sub").onclick = function () {
+                    var a = parseFloat($("amount").value) || 0;
+                    addResource(-a);
+                };
 
-  async function post(path, body) {
-    var res = await fetch(baseUrl() + path, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: body === undefined ? '{}' : JSON.stringify(body)
-    });
-    return res.json();
-  }
-
-  async function refresh() {
-    try {
-      var s = await post('get_state');
-      $('raw').textContent = JSON.stringify(s, null, 2);
-      $('carbonium').textContent = (typeof s.carbonium === 'number') ? s.carbonium.toLocaleString() : String(s.carbonium);
-      $('carbonium_max').textContent = (typeof s.carbonium_max === 'number') ? s.carbonium_max.toLocaleString() : String(s.carbonium_max);
-      $('hq_hp').textContent = (s.hq_hp === null || s.hq_hp === undefined) ? '—' : s.hq_hp;
-      $('hq_hp_max').textContent = (s.hq_hp_max === null || s.hq_hp_max === undefined) ? '—' : s.hq_hp_max;
-      $('hq_dead').textContent = (s.hq_dead === null || s.hq_dead === undefined) ? '—' : String(s.hq_dead);
-      setConn('ok');
-    } catch (e) {
-      setConn('ERR ' + e.message);
-      $('raw').textContent = String(e);
-    }
-  }
-
-  async function addResource(amount) {
-    try {
-      var r = await post('add_resource', { amount: String(amount) });
-      $('out').textContent = JSON.stringify(r);
-      refresh();
-    } catch (e) {
-      $('out').textContent = 'ERR ' + e.message;
-    }
-  }
-
-  $('refresh').onclick = refresh;
-  $('add').onclick = function () { addResource($('amount').value); };
-  $('sub').onclick = function () {
-    var a = parseFloat($('amount').value) || 0;
-    addResource(-a);
-  };
-  // Empty = relative to this page (works at the bridge root AND under /contract/).
-  $('url').value = '';
-
-  refresh();
-})();
-</script>
-</body>
+                refresh();
+                setInterval(refresh, 3000);
+            })();
+        </script>
+    </body>
 </html>
