@@ -218,9 +218,11 @@ docker restart riftbreaker-dedicated`. Injection runs at boot (~2-3 min).
 
 ## Pitfalls
 
-- **`.c` files: NEVER edit via editor/write_file** (clang-format collapse). Use
-  `git checkout -- <file>` then a Python `str.replace` script that does
-  `io.open(path,"w",newline="\n").write(...)`. See `io-re-session-handoff.md`.
+- **Editing `.c`/`.html` via edit_file/write_file can auto-format** (clang-format
+  on `.c`, prettier on `.html`) IF the Zed language servers are on. If a diff
+  shows unexpected reflow, turn OFF the Zed language servers, then
+  `git checkout -- <file>` and re-apply via a Python `str.replace` script that
+  does `io.open(path,"w",newline="\n").write(...)`. See `io-re-session-handoff.md`.
 - `_G.dom_mananger` is the **class** (method table), not the instance — its
   fields are `nil`. The instance comes from method dispatch (`self`) or, from
   C++, via the vftable scan + `LuaGraphNode+0x20` luabind object.
