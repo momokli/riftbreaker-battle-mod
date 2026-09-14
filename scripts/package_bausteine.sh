@@ -110,6 +110,11 @@ build_04_binaries() { # <builddir> — kompiliert die 4 Windows-x64-Binaries
 BUILD_DIR="$OUT_DIR/.build-04"
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
+
+# Web-UI (single source) -> C-String-Include generieren (pipe_bridge.c
+# braucht cockpit_html.inc beim Compile).
+python3 "$ROOT/scripts/gen_cockpit_html.py"
+
 if [ "$TOOLCHAIN" = "none" ]; then
     rm -rf "$BUILD_DIR"
     echo "[package_bausteine] 04: weder x86_64-w64-mingw32-gcc noch zig verfuegbar -> Quell-Zip"
