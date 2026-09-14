@@ -1490,10 +1490,17 @@ static void drain_pending_typed_commands(void)
         break;
     }
     case RBBRIDGE_TYPED_END_GAME: {
+        uint64_t world = 0;
         if (!g_mission_service)
             g_mission_service = resolve_service_instance_by_rva(
                 base, RBBRIDGE_MISSION_SERVICE_VFTABLE_RVA);
         if (!g_mission_service)
+            return;
+        /* Boot-Guard: MissionService[+0x08] = World*; NULL ->
+         * FinishCurrentMission wuerde intern NULL dereferenzieren. */
+        if (!safe_read_u64((const unsigned char *)g_mission_service + 0x08,
+                           &world) ||
+            !world)
             return;
         mission_finish_fn fn =
             (mission_finish_fn)(uintptr_t)(base + RBBRIDGE_MISSION_FINISH_RVA);
@@ -1973,6 +1980,14 @@ static int read_hq_health(const unsigned char *base, float *hp, float *hpmax)
         g_health_service = resolve_service_instance_by_rva(
             base, RBBRIDGE_HEALTH_SERVICE_VFTABLE_RVA);
     if (!g_find_service || !g_health_service)
+        return 0;
+
+    /* Boot-Guard: HealthService[+0x08] ist der World*; solange der NULL
+     * ist, wuerde GetHealth/GetMaxHealth intern auf NULL+0x30 lesen. */
+    uint64_t world = 0;
+    if (!safe_read_u64((const unsigned char *)g_health_service + 0x08,
+                       &world) ||
+        !world)
         return 0;
 
     find_entity_by_type_fn find_entity = (find_entity_by_type_fn)(uintptr_t)(
