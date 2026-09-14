@@ -325,3 +325,34 @@ Statisch geprüft (publics):
    Klassen eine eigene Wrapper-vftable mit überschriebenem `GetTypeName`
    installiert — wird im Live-Probe (planet) verifiziert; bei Nicht-Treffer
    degradiert der Resolver graceful (`ok:false`, kein Crash).
+
+### Live-Probe (planet, Build 2.0.58485) — Marker-Hypothesen widerlegt
+
+Probe-DLL (`probe_dom_nodes`, TEMP) in `rbbridge.dll` via
+`/opt/rbmods/rbtools-drift/rbbridge.dll` + `docker restart riftbreaker-dedicated`,
+Abruf über `POST http://127.0.0.1:9001/probe`.
+
+Scan-Kriterium: Objekt, dessen Qword[0] in das Modul-Image zeigt **und** dessen
+vtable-Slot 7 == `LuaGraphNode::Update` (`base+0x1BAA140`) ist.
+
+| Messung | Ergebnis |
+|---|---|
+| Familien-Instanzen | **109** (mehr als ein DOM/Event-Manager) |
+| vtables | `0x2F46D70` (LuaGraphNode) und `0x2F46F38` (LuaGraphNodeSelector) |
+| `GetTypeName()` (Slot 1) | `"LuaGraphNode"` **für alle** Instanzen (per-Class-Override, aber nur C++-Klassen) |
+| `GetTypeHash()` (Slot 2) | nur **zwei** Werte: `0xde5d72b3` = FNV1a("LuaGraphNode"), `0xde… ` / `0xc7919a42` = FNV1a("LuaGraphNodeSelector") |
+| Member-Strings `+0x08/+0x50/+0x100/+0x120` | leer (1 Treffer = Garbage) |
+| luabind-Object `+0x20` | `lua_State*` konstant, `int ref` pro Instanz verschieden (1912…3479) |
+
+**Schlussfolgerung (widerlegt die Task-Annahme):** es gibt **keinen** C++-only
+Marker (keine eigene `??_7`/`??_R0`-vftable, kein Layout-Unterschied, kein
+eingebetteter Klassenname), der `dom_mananger` von `event_manager` trennt.
+`dom_mananger`/`event_manager` sind **pure Lua-Klassen**; die C++-Objekte sind
+`LuaGraphNode`- bzw. `LuaGraphNodeSelector`-Instanzen. `GetTypeHash()` ist ein
+**C++-Klassen**-Hash (FNV-1a des C++-Namens), **nicht** ein Lua-Klassen-Hash —
+für Lua-abgeleitete Klassen liefert er den Basis-Hash.
+
+Die Klassen-Identität lebt ausschließlich im Lua-Table, auf den nur das
+luabind-Object (`+0x20` = {`lua_State*` @+0, `int ref` @+8}) zeigt. Ein reiner
+C++-Read dieser Identität erfordert einen rohen Lua-Table-/Metatable-Walk
+(Lua-5.1-Fork-Interna), der **nicht** Teil dieses Reverts ist.
