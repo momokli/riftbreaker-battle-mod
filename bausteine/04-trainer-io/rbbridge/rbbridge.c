@@ -1969,20 +1969,20 @@ static int64_t read_resource_max(const unsigned char *base,
     return (int64_t)((double)f * (double)scale);
 }
 
-/* HQ health via pure C++ (no lua_*): FindService::FindEntityByType ->
+/* HQ health via pure C++ (no lua_*): FindService::FindEntityByName ->
  * HealthService::GetHealth/GetMaxHealth (lesen HealthComponent[+0x00]/[+0x04]).
  * Die HealthService-Methoden kapseln exakt dieselbe Offset-Kette (World+0x30
  * ECS-Store -> lookup -> HealthComponent), ohne das komplexe TypeAny-out-Arg
  * des rohen lookups nachbauen zu muessen. */
 #define RBBRIDGE_FIND_SERVICE_VFTABLE_RVA    0x2E94C98u
 #define RBBRIDGE_HEALTH_SERVICE_VFTABLE_RVA  0x2E95760u
-#define RBBRIDGE_FIND_ENTITY_BY_TYPE_RVA     0x1C0E420u
+#define RBBRIDGE_FIND_ENTITY_BY_NAME_RVA     0x1C0DF60u
 #define RBBRIDGE_HEALTH_GET_HEALTH_RVA       0xF9BBB0u
 #define RBBRIDGE_HEALTH_GET_MAX_HEALTH_RVA   0xF9C360u
 #define RBBRIDGE_INVALID_ENTITY_ID           0xFFFFFFFFu
 
-typedef uint32_t (__fastcall *find_entity_by_type_fn)(void *self,
-                                                      const char *type);
+typedef uint32_t (__fastcall *find_entity_by_name_fn)(void *self,
+                                                      const char *name);
 typedef float (__fastcall *health_get_float_fn)(void *self, uint32_t entityId);
 
 static void *g_find_service = NULL;
@@ -2007,7 +2007,7 @@ static int read_hq_health(const unsigned char *base, float *hp, float *hpmax)
         !world)
         return 0;
 
-    /* FindService[+0x08] ist ebenfalls der World*; FindEntityByType
+    /* FindService[+0x08] ist ebenfalls der World*; FindEntityByName
      * dereferenziert ihn intern. */
     uint64_t find_world = 0;
     if (!safe_read_u64((const unsigned char *)g_find_service + 0x08,
@@ -2015,8 +2015,8 @@ static int read_hq_health(const unsigned char *base, float *hp, float *hpmax)
         !find_world)
         return 0;
 
-    find_entity_by_type_fn find_entity = (find_entity_by_type_fn)(uintptr_t)(
-        base + RBBRIDGE_FIND_ENTITY_BY_TYPE_RVA);
+    find_entity_by_name_fn find_entity = (find_entity_by_name_fn)(uintptr_t)(
+        base + RBBRIDGE_FIND_ENTITY_BY_NAME_RVA);
     uint32_t entity = find_entity(g_find_service, "headquarters");
     if (entity == RBBRIDGE_INVALID_ENTITY_ID)
         return 0;
