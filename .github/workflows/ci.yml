@@ -2,6 +2,20 @@ name: CI
 
 # Tests + Build/Package. Läuft für alle Pull Requests und auf Push nach main.
 #
+# Path-Gating (Issue #393): die teuren planet-Jobs (`test`, `build`) sind
+# Required-Checks und laufen deshalb IMMER (damit der Context nie als
+# "Expected" hängen bleibt), überspringen aber ihre Arbeit, wenn kein
+# relevanter Pfad geändert wurde. Der vorgelagerte, billige `changes`-Job
+# (ubuntu-latest) bestimmt die relevanten Pfade per git diff — dasselbe Muster
+# wie in boot-test.yml. `tournament-test` ist KEIN Required-Check und wird
+# deshalb über `if:` komplett übersprungen, wenn keine Rust-Quellen betroffen
+# sind.
+#
+# Relevanz-Kategorien:
+#   test        bausteine/, mod/, tests/, tools/, scripts/ (statische/Unit-Tests)
+#   build       Bausteine 00-06 + mod/ + Packaging-Skripte (dist/*.zip, rbbridge.dll)
+#   tournament  tournament/src + Cargo.toml/Cargo.lock (cargo test)
+#
 # Tags (`v*`) sind reine Marker (Issue #209): dieser Workflow hat KEINEN
 # Tag-Trigger und legt KEINE GitHub-Releases mehr an. Der Download läuft über
 # den deployten Stand (https://rift.projectmellon.de/mods/rbbattle.zip).
@@ -14,17 +28,82 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Test (Bausteine 06 + 07 E2E)
-    runs-on: [self-hosted, planet]
+  changes:
+    name: Relevante Pfade (CI)
+    runs-on: ubuntu-latest
+    outputs:
+      test: ${{ steps.decide.outputs.test }}
+      build: ${{ steps.decide.outputs.build }}
+      tournament: ${{ steps.decide.outputs.tournament }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Relevante Pfade bestimmen
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+          # PR: base..head; Push nach main: before..after. Bei Diff-Problemen
+          # over-inclusive laufen lassen (nie fälschlich skippen -> Required-
+          # Check bliebe sonst fälschlich grün).
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            CHANGED="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || true)"
+          else
+            CHANGED="$(git diff --name-only "$BEFORE_SHA" "$AFTER_SHA" 2>/dev/null || true)"
+          fi
+          if [ -z "$CHANGED" ]; then
+            echo "test=true" >> "$GITHUB_OUTPUT"
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "tournament=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if printf '%s\n' "$CHANGED" \
+             | grep -Eq '^(bausteine/|mod/|tests/|tools/|scripts/|\.github/workflows/ci\.yml)'; then
+            echo "test=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "test=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if printf '%s\n' "$CHANGED" \
+             | grep -Eq '^(bausteine/00-mod-skeleton/|bausteine/01-wave-spawn/|bausteine/02-custom-ui/|bausteine/03-log-bridge/|bausteine/04-trainer-io/|bausteine/05-economy-loop/|bausteine/06-tournament-server/|mod/|scripts/(package_bausteine|mod_version)\.sh|\.github/workflows/ci\.yml)'; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if printf '%s\n' "$CHANGED" \
+             | grep -Eq '^(tournament/src/|tournament/Cargo\.toml|tournament/Cargo\.lock)'; then
+            echo "tournament=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tournament=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    name: Test (Bausteine 06 + 07 E2E)
+    needs: changes
+    runs-on: [self-hosted, planet]
+    steps:
+      - name: Keine relevanten Pfade — Tests übersprungen (Gate bleibt grün)
+        if: needs.changes.outputs.test != 'true'
+        run: echo "Keine test-relevanten Pfade geändert — kein Testlauf nötig."
+
+      - uses: actions/checkout@v4
+        if: needs.changes.outputs.test == 'true'
       - uses: actions/setup-node@v4
+        if: needs.changes.outputs.test == 'true'
         with:
           node-version: 20
       # Warmer npm-Store (Issue #153): npm ci zieht fengari/luaparse aus dem
       # Cache statt aus dem Netz. Key basiert auf beiden package-lock.json.
       - name: npm-Dependency-Cache (actions/cache)
+        if: needs.changes.outputs.test == 'true'
         uses: actions/cache@v4
         with:
           path: ~/.npm
@@ -32,64 +111,84 @@ jobs:
           restore-keys: |
             npm-store-${{ runner.os }}-
       - name: E2E Baustein 06 (tournament-server)
+        if: needs.changes.outputs.test == 'true'
         working-directory: bausteine/06-tournament-server
         run: bash test_e2e.sh
       - name: E2E Baustein 07 (relay-Prototyp)
+        if: needs.changes.outputs.test == 'true'
         working-directory: bausteine/07-relay
         run: bash test_e2e_prototype.sh
       # Core-IO-Gate Selbsttest (Issue #289): hermetische Invarianten-Checks der
       # Gate-Logik (ok:true ohne Effekt ⇒ rot). Kein Container/Netz noetig; die
       # Live-Probe (C1-C4) faehrt .github/workflows/boot-test.yml.
       - name: Core-IO-Gate Selbsttest (Invariante, Issue #289)
+        if: needs.changes.outputs.test == 'true'
         working-directory: tests/core-io
         run: python3 -m unittest test_invariant -v
       - name: Unit-Test Relay-Pipe-Dispatch (Issue #60)
+        if: needs.changes.outputs.test == 'true'
         working-directory: bausteine/07-relay
         run: python3 -m unittest test_dispatch -v
       # Referee-Rueckkanal (#268): Event-In/Uebersetzung + Fehlerpfade
       # (URLError/5xx -> requeue in Reihenfolge, 4xx -> verwerfen).
       - name: Unit-Test Referee-Rueckkanal (Issue #268)
+        if: needs.changes.outputs.test == 'true'
         working-directory: bausteine/07-relay
         run: python3 -m unittest test_referee -v
       - name: Unit-Test Deploy-Gate (Issue #118)
+        if: needs.changes.outputs.test == 'true'
         working-directory: tools/deploy-gate
         run: python3 -m unittest test_deploy_gate -v
       - name: Unit-Test Solo-Feed (Issue #157)
+        if: needs.changes.outputs.test == 'true'
         working-directory: tools/solo-feed
         run: python3 -m unittest test_feed -v
       - name: Unit-Test Mod-Updater (Issue #120)
+        if: needs.changes.outputs.test == 'true'
         working-directory: tools/mod-updater
         run: python3 -m unittest test_mod_update -v
       - name: Unit-Test Mods-Guard (Issue #212)
+        if: needs.changes.outputs.test == 'true'
         working-directory: tools/mods-guard
         run: python3 -m unittest test_check_mods_dir -v
       - name: Unit-Test Session-Recorder (Issue #280)
+        if: needs.changes.outputs.test == 'true'
         working-directory: tools/session-recorder
         run: python3 -m unittest test_session_recorder -v
       - name: Unit-Test Referee-Egress (Issue #358)
+        if: needs.changes.outputs.test == 'true'
         working-directory: tools/referee-egress
         run: python3 -m unittest test_referee_egress -v
       - name: Lua Static Tests (fengari + luaparse, Issue #28)
+        if: needs.changes.outputs.test == 'true'
         working-directory: tests/lua-static
         run: npm ci && npm test
       - name: Vollketten-E2E (Issue #11: rb_wave 3 Web-UI → Server → Relay → rbbridge → Mod)
+        if: needs.changes.outputs.test == 'true'
         working-directory: tests/e2e-vollkette
         run: npm ci && npm test
       - name: Landing Live-Status-Widget (Issue #30)
+        if: needs.changes.outputs.test == 'true'
         working-directory: tests/live-status
         run: node --test
 
   build:
     name: Build + Package (rbbridge.dll/exe, dist/*.zip)
-    needs: test
+    needs: [changes, test]
     runs-on: [self-hosted, planet]
     steps:
+      - name: Keine relevanten Pfade — Build übersprungen (Gate bleibt grün)
+        if: needs.changes.outputs.build != 'true'
+        run: echo "Keine build-relevanten Pfade geändert — kein Build/Package nötig."
+
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.build == 'true'
       # MinGW-w64 ist jetzt vorab auf dem Runner-Host installiert
       # (.github/runner/setup.sh, Issue #153) — kein per-Job-sudo-apt-get mehr.
       # Der Cross-Compiler muss auf dem Host vorhanden sein; sonst fällt
       # package_bausteine.sh auf das Quell-Zip für Baustein 04 zurück.
       - name: ccache-Cache (MinGW-C++-Build rbbridge)
+        if: needs.changes.outputs.build == 'true'
         uses: actions/cache@v4
         with:
           path: ~/.cache/ccache
@@ -97,6 +196,7 @@ jobs:
           restore-keys: |
             ccache-rbbridge-${{ runner.os }}-
       - name: Baustein-04-Binaries kompilieren + alle Zips bauen
+        if: needs.changes.outputs.build == 'true'
         run: |
           # ccache-Wrapper aus setup.sh aktivieren, falls vorhanden; sonst
           # direkter MinGW-Build (graceful degradation, kein Hard-Fail).
@@ -108,6 +208,7 @@ jobs:
           fi
           bash scripts/package_bausteine.sh
       - name: Artefakte hochladen (dist/*.zip + Mod-Updater)
+        if: needs.changes.outputs.build == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: bausteine-zips
@@ -120,6 +221,8 @@ jobs:
 
   tournament-test:
     name: Test tournament-server (Rust)
+    needs: changes
+    if: needs.changes.outputs.tournament == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
