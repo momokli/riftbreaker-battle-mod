@@ -75,6 +75,9 @@ for f in "$RBBRIDGE_SRC" "$INJECTOR_SRC" "$BRIDGE_SRC"; do
     fi
 done
 
+# --- Web-UI (single source) -> C-String-Include generieren ---------
+python3 "$ROOT/scripts/gen_cockpit_html.py"
+
 # --- Bauen ------------------------------------------------------------------
 (cd "$OUT_DIR" \
     && cc -O2 -Wall -Wextra ${LD_REPRO[@]+"${LD_REPRO[@]}"} -shared -o rbbridge.dll "$RBBRIDGE_SRC" \

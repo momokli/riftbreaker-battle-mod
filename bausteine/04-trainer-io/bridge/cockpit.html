@@ -47,6 +47,7 @@
       <button id="add">+ add</button>
       <button id="sub">− subtract</button>
     </div>
+    <div id="out" class="dim" style="margin-top:.5rem"></div>
   </section>
 
   <section>
@@ -59,16 +60,6 @@
       <span class="dim">dead</span>
       <span id="hq_dead" class="val">—</span>
     </div>
-  </section>
-
-  <section>
-    <h2>game</h2>
-    <div class="row">
-      <button id="end_game" class="danger">end game</button>
-      <input id="cmd" size="24" placeholder="custom command" spellcheck="false">
-      <button id="exec">exec</button>
-    </div>
-    <div id="exec_out" class="dim" style="margin-top:.5rem"></div>
   </section>
 
   <pre id="raw" class="dim">loading…</pre>
@@ -114,10 +105,10 @@
   async function addResource(amount) {
     try {
       var r = await post('add_resource', { amount: String(amount) });
-      $('exec_out').textContent = JSON.stringify(r);
+      $('out').textContent = JSON.stringify(r);
       refresh();
     } catch (e) {
-      $('exec_out').textContent = 'ERR ' + e.message;
+      $('out').textContent = 'ERR ' + e.message;
     }
   }
 
@@ -127,23 +118,6 @@
     var a = parseFloat($('amount').value) || 0;
     addResource(-a);
   };
-  $('end_game').onclick = async function () {
-    try {
-      var r = await post('exec', { command: 'end_game' });
-      $('exec_out').textContent = JSON.stringify(r);
-      refresh();
-    } catch (e) { $('exec_out').textContent = 'ERR ' + e.message; }
-  };
-  $('exec').onclick = async function () {
-    var c = $('cmd').value.trim();
-    if (!c) return;
-    try {
-      var r = await post('exec', { command: c });
-      $('exec_out').textContent = JSON.stringify(r);
-      refresh();
-    } catch (e) { $('exec_out').textContent = 'ERR ' + e.message; }
-  };
-
   // Empty = relative to this page (works at the bridge root AND under /contract/).
   $('url').value = '';
 
