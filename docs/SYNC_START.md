@@ -80,4 +80,4 @@ Ziel (Issue #22): Beide Welten booten pausiert; erst wenn beide Spieler
   DumpDomData Z. ~640, Debug-Overlay Z. 228)
 - `lan:/home/momo/rb-game/LOBBY_RESEARCH.md` (2026-09-09): native Commands,
   cfg_-Variablen, DLL-Strings, RCON/Transport
-- Repo: Issue #22/#18, docs/GAME_DESIGN.md „Setup/Start“, docs/DUEL_SETUP.md
+- Repo: Issue #22/#18, docs/DUEL_SETUP.md

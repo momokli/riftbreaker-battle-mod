@@ -127,4 +127,4 @@ eigene Extra-Waves zu spawnen — Entscheidung fällt in Issue #25.
   `commands/debug.lua`, `missions/mission_base.lua`, `missions/survival/v2/dom_survival_*_rules_*`,
   `utils/find_utils.lua`
 - `lan:/home/momo/rb-game/LUA_RESEARCH.md`, `LOBBY_RESEARCH.md` (2026-09-09)
-- Repo: Issue #26/#25/#27/#12/#18, docs/GAME_DESIGN.md („Wellen-Routing“)
+- Repo: Issue #26/#25/#27/#12/#18

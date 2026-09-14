@@ -48,7 +48,6 @@ Matheos Prototyp-Repo (<https://github.com/BestToasty/riftbreaker_mod>, Stand 07
 
 `mod/` enthält Skeleton + Experimente A (Wave-Spawn), B (Custom-UI-Popup) und
 C (Log-Bridge `[RBBATTLE] event=...` + Konsolen-Command `rb_wave <level>`).
-Installation & FINDINGS-Tabelle: [`mod/README.md`](../mod/README.md).
 In-Game-Test: ausstehend (Momo).
 
 Zusätzlich aus Matheos Prototyp (In-Game-Test 07.09.2026, Fortsetzung der Nummerierung):

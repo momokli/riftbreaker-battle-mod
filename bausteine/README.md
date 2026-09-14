@@ -19,9 +19,7 @@ jede Komponente einzeln validieren, bevor sie in den finalen Mod einfließt.
 | [03-log-bridge](03-log-bridge/) | **Diagnose-only, kein Architekturpfad.** Outbound-Pfad Lua → `LogService:Log` → `exor_logs.txt`; Live-Parser `tail_events.py` | Code fertig — In-Game-Test offen | Installieren, Karte laden, `rb_bridge_test`, `tail_events.py` beobachten |
 | [04-trainer-io](04-trainer-io/) | Injector + rbbridge-DLL: Named Pipe `\\.\pipe\rbbattle`, `ping`/`exec` | Code fertig — **ohne Spiel testbar** (notepad.exe) | DLL bauen, in notepad.exe injizieren, `pipe_client.py` starten |
 | [05-economy-loop](05-economy-loop/) | Economy-Kreis: Punkte verdienen (`EntityKilledEvent`/`HourEvent`-Dual-Mode) + ausgeben (`rb_buy_wave`, Kosten 10/25/50, Spawn aus Baustein 01), Konto in Global-Database (`rb_points`/`rb_status`); Recherche: `docs/research/api-deep-dive.md` | Code fertig — In-Game-Test offen | Installieren, Survival-Karte laden, `rb_points`, `rb_buy_wave 1..3`, Kills, Log prüfen |
-| [06-tournament-server](06-tournament-server/) | Zentraler Tournament-Server (node:http, In-Memory) + Mock-Client: Register/Match, Event-Routing per Outbox/Polling, Runden-Lifecycle (round_end/match_end), Scoreboard | Code fertig — **ohne Spiel testbar** (nur Node.js) | `bash test_e2e.sh` (2 Mock-Clients, 2 Runden) |
-| [07-relay](07-relay/) | Relay-Brücke: tailt `exor_logs.txt` ([RBBATTLE]-Zeilen), liefert Events per `POST /event` beim 06-Server ein (In-Memory-Queue, Backoff-Retry), Poll-Loop dispt `exec_command` (v0: loggt „dispatch pending“, echtes `dispatch_exec` via Pipe/rbbridge folgt) | untested — Prototyp-Harness lokal grün, In-Game-Test offen | `bash 07-relay/test_e2e_prototype.sh` (Server + Relay + Fake-Log, 26 Assertions) |
-| [08-web-ui](06-tournament-server/web/) | Control-Dashboard im Terminal-Stil (vom 06-Server aus `web/` statisch serviert): PLAYERS + EVENT FEED (live via SSE `/stream`) + CONTROLS (`rb_wave`/`rb_points`/`rb_buy_wave` … als `exec_command`), localStorage, vanilla JS | untested — Prototyp-Harness lokal grün, In-Game-Test offen | 06-Server starten → `http://localhost:8080` öffnen, `bash 07-relay/test_e2e_prototype.sh` |
+| [07-relay](07-relay/) | Relay-Brücke: tailt `exor_logs.txt` ([RBBATTLE]-Zeilen), liefert Events per `POST /event` ein, Poll-Loop dispatcht `exec_command` via Pipe/rbbridge | untested — Unit-Tests grün | `python3 -m unittest test_dispatch test_referee` |
 
 ## Spieltest-Status (muss Momo in-game bestätigen)
 
@@ -31,16 +29,14 @@ jede Komponente einzeln validieren, bevor sie in den finalen Mod einfließt.
 - [ ] 03: `rb_bridge_test` erzeugt parsebare `event=bridge_test`-Zeilen
 - [ ] 05: `rb_buy_wave 1..3` zieht Punkte ab und spawnt Wellen; Kills geben Punkte (auto→kill), sonst `hour_tick`-Fallback
 
-## Lokaler Teststatus (Server/Relay/UI — läuft ohne Spiel)
+## Lokaler Teststatus (Server/Relay — läuft ohne Spiel)
 
-- [x] 06: `bash test_e2e.sh` grün (2 Runden, Routing, Scoreboard, Error-Kontrakt) — node v24
-- [x] 07+08-Prototyp: `bash 07-relay/test_e2e_prototype.sh` grün (26 Assertions: Strecke Spiel-Log → Relay → Server → SSE-Stream/Web-UI → `exec_command` als „dispatch pending“)
+- [x] 07-relay: `python3 -m unittest test_dispatch test_referee` grün (Relay-Dispatch + Referee-Rückkanal)
 
 ## Konventionen
 
 - **Installation jeder Mod-Bausteins:** Unterordner `<baustein>/rbbattle_XX_*/`
-  (Name = Mod-Name) nach `<game>/mods/` kopieren — Layout und Details siehe
-  `mod/README.md` bzw. README des Bausteins.
+  (Name = Mod-Name) nach `<game>/mods/` kopieren.
 - **Log-Pfad:** `<Documents>\The Riftbreaker\exor_logs.txt`, alle Mod-Zeilen mit
   Präfix `[RBBATTLE]` → von `03-log-bridge/tail_events.py` live parsebar.
 - **Kein Datei-I/O im Lua-Mod** (`io.*` crasht das Spiel, s. `docs/findings.md`).

@@ -230,8 +230,7 @@ class DispatchResultReportTest(unittest.TestCase):
     """Dispatch-Ergebnis an den Server melden (Issue #89, AC aus #73).
 
     `http_json` wird gestubbt - hier wird der Relay-Pfad geprueft, nicht das
-    Netz. Der Server-Teil (Event-Typ akzeptieren) steht in
-    bausteine/06-tournament-server/test_e2e.sh.
+    Netz.
     """
 
     def _cfg(self):

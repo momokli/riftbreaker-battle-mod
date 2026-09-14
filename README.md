@@ -11,18 +11,20 @@ Ein **Biter-Battles-artiger Runden-Duell-Modus** für _The Rift Breaker_ (EXOR S
 
 Runden-Duell 1v1: Beide Spieler spielen eine eigene Rift-Breaker-Partie. Pro Runde Punkte ansparen (Ressourcen, Kills), um damit **Kreaturen-Wellen zum Gegner zu schicken** oder die **eigene Defense auszubauen**. Gewonnen hat, wer die gegnerische Basis zerstört — oder am Ende die meisten Punkte hat.
 
-## Aktuelles Ziel: Solo-MVP
+## Aktueller Stand
 
-Nächster Meilenstein ist der **Solo-Modus** — allein gegen sich selbst spielen.
 Der Operator-Zugang läuft über das Cockpit
-[cockpit.rift.projectmellon.de/contract/](https://cockpit.rift.projectmellon.de/contract/).
-Der komplette Weg von hier bis zum 4v4-Release steht in [ROADMAP.md](ROADMAP.md).
+[cockpit.rift.projectmellon.de/contract/](https://cockpit.rift.projectmellon.de/contract/)
+(prod) bzw. [cockpit.drift.projectmellon.de/contract/](https://cockpit.drift.projectmellon.de/contract/)
+(dev). Die Spiellogik liegt im Backend (rbbridge.dll C++ + Rust), der Lua-Mod ist
+nur noch die Player-HUD-Schicht.
 
 ## Status
 
 - **Feasibility verifiziert** — Mod-API vorhanden, Grenzen bekannt (Details: [docs/findings.md](docs/findings.md))
-- **Spike gebaut** — Mod-Skeleton + Experimente A (Wave-Spawn), B (Custom-UI-Popup), C (Log-Bridge + Console-Command) in `mod/`; In-Game-Test ausstehend ([mod/README.md](mod/README.md))
-- **Trainer-Harness v0 (Grundgerüst)** — Injector + In-Game-Bridge-DLL + RE-Scan-Tools, C-Quellen in [bausteine/04-trainer-io/](bausteine/04-trainer-io/README.md); Protokoll/RE-Tooling in [trainer/README.md](trainer/README.md)
+- **SERVERMOD (C++)** — State-Egress + WRITE liegen in `rbbridge.dll` (`bausteine/04-trainer-io/`)
+- **PLAYERMOD (Lua)** — reine HUD-/Display-Schicht (`mod/lua/rbbattle_autoexec.lua`)
+- **Trainer-Harness** — Injector + In-Game-Bridge-DLL + RE-Scan-Tools, C-Quellen in [bausteine/04-trainer-io/](bausteine/04-trainer-io/README.md); Protokoll/RE-Tooling in [trainer/README.md](trainer/README.md)
 
 ## Komponenten
 
@@ -33,7 +35,7 @@ Der komplette Weg von hier bis zum 4v4-Release steht in [ROADMAP.md](ROADMAP.md)
 | **Bausteine**         | `bausteine/`                                                                | eigenständig testbare Komponenten aus Mod + Trainer (Index: [bausteine/README.md](bausteine/README.md)) |
 | **Relay-Server**      | `server/` (geplant)                                                         | Matchmaking + Event-Routing (Node)                                                                      |
 
-Architektur & Design: [docs/concept.md](docs/concept.md) · Install & Spike-Test: [mod/README.md](mod/README.md)
+Architektur & Design: [docs/concept.md](docs/concept.md)
 
 ## Bausteine & Verteilung
 
@@ -57,7 +59,7 @@ Lua-Mod selbst ist Workshop-tauglich (siehe [docs/workshop.md](docs/workshop.md)
 ```
 riftbreaker-battle-mod/
 ├── bausteine/ # eigenständig testbare Komponenten (00–04, Index: bausteine/README.md)
-├── mod/       # Lua-Mod (Spike: Skeleton + Experimente A/B/C, Install siehe mod/README.md)
+├── mod/       # Lua-PLAYERMOD (nur HUD/Display; SERVERMOD = rbbridge.dll)
 ├── trainer/   # Sidecar/Trainer (Protokoll + RE-Scan-Tools; C-Quellen in bausteine/04-trainer-io/)
 ├── server/    # Relay-Server (geplant, Node)
 ├── scripts/   # Tooling (package_mod.sh: Mod-ZIP bauen)

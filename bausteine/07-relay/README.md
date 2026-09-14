@@ -19,17 +19,17 @@ Nur Standardbibliothek (Python 3.7+), kein pip-Paket.
 
 ## Konfiguration (Umgebungsvariablen)
 
-| Variable | Bedeutung | Default |
-|---|---|---|
-| `RBB_LOG_PATH` | Pfad zur `exor_logs.txt` (oder `--log <pfad>`) | `%USERPROFILE%\Documents\The Riftbreaker\exor_logs.txt` |
-| `RBB_PLAYER_ID` | Spieler-/Instanz-ID (Register + Poll) | **Pflicht**, sonst Exit 2 |
-| `RBB_MATCH_ID` | Match-ID für `POST /event` | leer → Events werden nicht gepostet (Log-Hinweis) |
-| `RBB_SERVER` | Basis-URL des Tournament-Servers | `http://127.0.0.1:8080` |
-| `RBB_POLL_S` | Poll-Intervall | `1.0` |
-| `RBB_PIPE_PATH` | rbbridge-Named-Pipe | `\\.\pipe\rbbattle` (wie `rbbridge.c` `PIPE_NAME_A`) |
-| `RBB_PIPE_TIMEOUT_S` | Timeout Pipe-Connect/Write (s) | `5.0` |
-| `RBB_REFEREE` | `"1"` aktiviert den Referee-Rückkanal (#268): `[RBBATTLE]`-Events → `POST /referee/event`, `GET /referee/poll` → Commands auf die Pipe | aus |
-| `RBB_WORLD` | Welt des Referee-Rückkanals (`A`/`B`) | `A` |
+| Variable             | Bedeutung                                                                                                                              | Default                                                 |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `RBB_LOG_PATH`       | Pfad zur `exor_logs.txt` (oder `--log <pfad>`)                                                                                         | `%USERPROFILE%\Documents\The Riftbreaker\exor_logs.txt` |
+| `RBB_PLAYER_ID`      | Spieler-/Instanz-ID (Register + Poll)                                                                                                  | **Pflicht**, sonst Exit 2                               |
+| `RBB_MATCH_ID`       | Match-ID für `POST /event`                                                                                                             | leer → Events werden nicht gepostet (Log-Hinweis)       |
+| `RBB_SERVER`         | Basis-URL des Tournament-Servers                                                                                                       | `http://127.0.0.1:8080`                                 |
+| `RBB_POLL_S`         | Poll-Intervall                                                                                                                         | `1.0`                                                   |
+| `RBB_PIPE_PATH`      | rbbridge-Named-Pipe                                                                                                                    | `\\.\pipe\rbbattle` (wie `rbbridge.c` `PIPE_NAME_A`)    |
+| `RBB_PIPE_TIMEOUT_S` | Timeout Pipe-Connect/Write (s)                                                                                                         | `5.0`                                                   |
+| `RBB_REFEREE`        | `"1"` aktiviert den Referee-Rückkanal (#268): `[RBBATTLE]`-Events → `POST /referee/event`, `GET /referee/poll` → Commands auf die Pipe | aus                                                     |
+| `RBB_WORLD`          | Welt des Referee-Rückkanals (`A`/`B`)                                                                                                  | `A`                                                     |
 
 ## Start
 
@@ -47,7 +47,7 @@ Strg+C beendet sauber; Log-Rotation wird erkannt.
 
 ## Wie testen ohne Spiel
 
-1. Server starten: `node bausteine/06-tournament-server/server.js` (Port 8080).
+1. Tournament-Server starten (Rust `tournament/`, Port 8081).
 2. Spieler + Match anlegen:
    ```bash
    curl -s -X POST localhost:8080/register -d '{"player_id":"player_a"}'
@@ -85,7 +85,8 @@ Strg+C beendet sauber; Log-Rotation wird erkannt.
    ausführt, deterministisch er selbst, nie ein externer Reader (bei einer
    echten Windows-Named-Pipe mit getrennten Puffern je Richtung tritt das
    nicht auf). Details: `docs/relay-pipe-contract.md`.
-6. Kompletter Durchstich inkl. Assertions: `bash test_e2e_prototype.sh` (Baustein 07, s. u.)
+6. Kompletter Durchstich inkl. Assertions entfällt (Node-Prototyp entfernt);
+   Dispatch-Verhalten ist über die Unit-Tests unten abgedeckt.
 
 Unit-Tests des Pipe-Dispatchs (Erfolg / Pipe-fehlt / Ack-Pfad / exec_result-
 Antwort, ohne Spiel, FIFO bzw. `os.pipe()` als Named-Pipe-Ersatz):

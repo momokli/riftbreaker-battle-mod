@@ -12,8 +12,7 @@ Skeleton + Wave-Spawn + Shop/Queue + Economy + Win-Condition + Reveal-HUD).
 
 - **Immer aktuellste Version:**
   `https://rift.projectmellon.de/mods/rbbattle.zip` (der deployte `main`-Stand)
-- Beide Spieler laden **denselben** Zip und entpacken ihn in den Mods-Ordner
-  (genauer Pfad: `mod/README.md` → „Installation“).
+- Beide Spieler laden **denselben** Zip und entpacken ihn in den Mods-Ordner.
 
 ## 2. Gleicher Stand auf beiden Seiten
 

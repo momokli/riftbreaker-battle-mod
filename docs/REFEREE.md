@@ -146,7 +146,7 @@ GO-spezifischen `/state`-Broadcast-Status (bewusst, R3).
   `event=commence`), nicht referee-seitig. In-game läuft die Welle weiter, weil
   der Server-Takt (Stufe 2) bewusst noch offen ist. Für den geschlossenen
   Live-Loop muss der Relay/Executor `commence` (`status=pending|ok`) auf
-  `{"world":"W","type":"ready"}` mappen (Teil von #265, s. `mod/README.md`).
+  `{"world":"W","type":"ready"}` mappen (Teil von #265).
 * **Wellen-Takt ist Event-getaktet, nicht zeitgetaktet (v1).** Der Referee gibt
   die nächste Welle erst nach dem `wave_done` der vorigen aus — kein
   Server-Timer, keine Uhr. Das hält die Logik deterministisch und ohne Player
@@ -155,9 +155,7 @@ GO-spezifischen `/state`-Broadcast-Status (bewusst, R3).
 * **`rb_reset`-Command ist konfigurierbar (`TOURNAMENT_REFEREE_RESTART_CMD`).**
   Der Server pusht nach `hq_destroyed` den in-game Round-Reset des Mods
   (Default `rb_reset`): der Mod setzt Runde/Wave-Timer auf 0, leert die Economy
-  und geht in die HQ-Placement-Phase (in-game Lua, #281). Der frühere grobe
-  Fallback (`docker restart` in `tools/solo-feed/`) bleibt für Umgebungen ohne
-  den in-game Reset dokumentiert. Die **Live-Zustellung** über die echte Pipe
+  und geht in die HQ-Placement-Phase (in-game Lua, #281). Die **Live-Zustellung** über die echte Pipe
   (Restart-Command kommt im laufenden Spiel an) klärt der Player-Test.
 * **Kein MatchState-`FINISHED` beim HQ-Tod, Antwort ohne `match_over` (B2, #267).**
   `POST /report event=hq_dead` fasst **nur** den Referee an (`rb_reset`, Runde +1

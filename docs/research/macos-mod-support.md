@@ -2,8 +2,7 @@
 
 Stand: 12.09.2026. Reine Recherche/statische Verifikation — **kein** Mac-Test
 durchgeführt, **kein** In-Game-Beleg. Dieses Dokument ist **nicht** als
-„macOS funktioniert“ zu werten; der Warnhinweis in `mod/README.md` bleibt
-bestehen.
+„macOS funktioniert“ zu werten.
 
 ## Schlussfolgerung
 
@@ -66,9 +65,8 @@ Plattform-Verfügbarkeit).
 
 ## Empfehlung
 
-- **Doku korrigieren** (dieses Ergebnis): `mod/README.md` (macOS-Abschnitt) und
-  `docs/findings.md` von „ungetestet auf macOS“ auf „keine native
-  macOS-Version; nur Wine/VM“ umstellen (PR `Refs #208`).
+- **Doku korrigieren** (dieses Ergebnis): `docs/findings.md` von „ungetestet auf
+  macOS“ auf „keine native macOS-Version; nur Wine/VM“ umstellen (PR `Refs #208`).
 - **Warnhinweis NICHT entfernen** (kein Erfolg verifiziert).
 - **Mac-Test** (GPTK/CrossOver/Whisky/Parallels) als separaten, expliziten
   Test-Punkt bei Momo/Matheo nachziehen — nicht hier als „erledigt“ markieren.

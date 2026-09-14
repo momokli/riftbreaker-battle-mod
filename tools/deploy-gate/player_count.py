@@ -4,7 +4,7 @@
 player_count.py - Spielerzahl-Provider aus dem Dedicated-Server-Log (Issue #238).
 
 Ermittelt die aktuelle Spielerzahl des Riftbreaker-Dedicated-Servers aus dem
-Container-Log (dieselbe Quelle wie tools/solo-feed/feed.py) und schreibt genau
+Container-Log und schreibt genau
 EINE Ganzzahl >= 0 auf stdout:
 
   0     = Server leer (letztes Signal PauseGame, kein Join danach) -> Deploy frei.
@@ -52,7 +52,6 @@ RESUME = "resume"
 # Join-Signal (Spieler erzeugt/verbunden).
 JOIN = "join"
 
-# Join-Muster identisch zu tools/solo-feed/feed.py (dieselben Log-Zeilen).
 RE_JOIN_CREATE = re.compile(r"OnNetPlayerCreateRequest\s+'[^']*':'([^']+)'")
 RE_JOIN_PLAYER = re.compile(r"ServerGameplayState: Player '[^']*':'([^']+)'")
 

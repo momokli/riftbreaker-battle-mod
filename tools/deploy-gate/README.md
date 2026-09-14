@@ -58,8 +58,7 @@ python3 tools/deploy-gate/deploy_gate.py \
 
 ## Spielerzahl-Provider (`player_count.py`, Issue #238)
 
-Die verbindliche Quelle ist das **Dedicated-Server-Container-Log** (dieselbe
-Quelle wie `tools/solo-feed/feed.py`). Der Solo-DEV-Server läuft mit
+Die verbindliche Quelle ist das **Dedicated-Server-Container-Log**. Der Solo-DEV-Server läuft mit
 `disable_steam=1` (+ `cli=1`): **kein** Steam-Query, kein RCON konfiguriert —
 deshalb wird das Log ausgewertet statt abgefragt.
 
