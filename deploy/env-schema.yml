@@ -37,8 +37,8 @@ per_env:
   riftbreaker_saves_volume: [prod, test]
   riftbreaker_bridge_port: [prod, test]
   # --- Trainer-I/O-Tools (rbtools) -----------------------------------------
-  rbtools_dir: [prod]
-  rbtools_staging_dir: [prod]
+  rbtools_dir: [prod, test]
+  rbtools_staging_dir: [prod, test]
   # --- Sidecars (Session-Recorder + Referee-Egress) ------------------------
   riftbreaker_sessions_container: [prod, test]
   riftbreaker_referee_egress_container: [prod, test]
@@ -55,9 +55,16 @@ per_env:
   rift_caddy_container: [prod]
   rift_caddy_port: [prod]
   rift_caddy_deploy_dir: [prod]
+  rift_caddy_data_dir: [prod]
+  rift_caddy_config_dir: [prod]
+  # --- Website-Pfade explizit je Env (Issue #483, US3) ---------------------
+  website_docroot: [prod, test]
+  website_mods_dir: [prod, test]
+  # mods_zip_dest wird nur von prod explizit gesetzt; test leitet es (ueber das
+  # isolierte website_mods_dir) aus host_vars ab und bleibt dadurch distinct.
+  mods_zip_dest: [prod]
   # --- Boot-Test (nur test) -------------------------------------------------
   dedicated_server_context_dir: [test]
-  website_mods_dir: [test]
 
 shared:
   riftbreaker_content_mode: "Content wird in allen Envs per Sync aus dem kanonischen Cache geholt — gleicher Modus, kein Env-Zustand (#483)."

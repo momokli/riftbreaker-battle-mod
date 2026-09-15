@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Hermetischer Selbsttest des Env-Isolations-Gates (Issue #483, US2).
+# Hermetischer Selbsttest des Env-Isolations-Gates (Issue #483, US2 + US3).
 #
-# Prüft die ECHTE Task-Datei deploy/tasks/env-assert.yml gegen ein Fixture-Repo:
-#   Positiv: vollstaendig klassifizierte Vars -> Lauf läuft durch (rc=0).
-#   Negativ: ein per_env-Key aus prod-vars.yml entfernt -> Lauf bricht ab
+# Prüft die ECHTE Task-Datei deploy/tasks/env-assert.yml gegen ein Fixture-Repo
+# und mit den echten Var-Dateien:
+#   Positiv: vollstaendig klassifizierte Vars + distinct per-env-Pfade
+#            (dev/prod/test) -> Lauf läuft durch (rc=0).
+#   Negativ: ein per_env-Key aus der prod-Kopie entfernt -> Lauf bricht ab
 #            (auch unter --check) und nennt den Marker ENV-ISOLATION-GATE.
 #
 # Kein Host, kein SSH, kein Vault, keine Prod-Aktion. Läuft in
@@ -22,14 +24,14 @@ cp "$repo/deploy/env-schema.yml" "$fixture/deploy/"
 cp "$repo/deploy/prod-vars.yml" "$repo/deploy/test-vars.yml" "$fixture/deploy/"
 cp "$repo/deploy/inventory/host_vars/planet/vars.yml" "$fixture/deploy/inventory/host_vars/planet/"
 
-echo "== Positiv: Fixture vollstaendig klassifiziert -> muss durchlaufen =="
-ansible-playbook "$play" -e test_env=prod -e test_root="$fixture"
+echo "== Positiv: Fixture vollstaendig + Pfade distinct -> muss durchlaufen =="
+ansible-playbook "$play" -e test_root="$fixture"
 
 echo "== Negativ: per_env-Key aus prod-Kopie entfernt -> muss abbrechen =="
 grep -v '^riftbreaker_game_dir:' "$fixture/deploy/prod-vars.yml" > "$fixture/deploy/prod-vars.tmp"
 mv "$fixture/deploy/prod-vars.tmp" "$fixture/deploy/prod-vars.yml"
 set +e
-out="$(ansible-playbook "$play" --check -e test_env=prod -e test_root="$fixture" 2>&1)"
+out="$(ansible-playbook "$play" --check -e test_root="$fixture" 2>&1)"
 rc=$?
 set -e
 printf '%s\n' "$out"

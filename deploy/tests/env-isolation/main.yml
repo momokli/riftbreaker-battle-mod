@@ -1,21 +1,61 @@
 ---
-# Hermetischer Negativ-Test des Env-Isolations-Gates (Issue #483, US2).
+# Hermetischer Selbsttest des Env-Isolations-Gates (Issue #483, US2 + US3).
 #
 # Läuft LOKAL auf dem Control-Node/CI-Runner: kein Host, kein Vault, keine
 # Prod-Aktion. Bindet die ECHTE Task-Datei deploy/tasks/env-assert.yml ein
-# (kein Nachbau) und richtet den Audit gegen ein Fixture-Repo (`test_root`).
+# (kein Nachbau) und fährt drei Plays (dev/prod/test):
+#   * Schema-Audit gegen das Fixture-Repo `test_root` (US2),
+#   * Distinctness-Assert der per-env-Pfade gegen den dev-Basiswert (US3),
+#     mit den ECHTEN Var-Dateien (host_vars + prod-/test-vars.yml).
 #
 # run.sh fährt:
-#   Positiv: Fixture vollstaendig klassifiziert -> Lauf MUSS durchlaufen (rc=0).
+#   Positiv: Fixture vollstaendig klassifiziert -> alle Plays MUESSEN durchlaufen.
 #   Negativ: ein `per_env`-Key aus der prod-Kopie entfernt -> Lauf MUSS
 #            abbrechen (auch unter --check) und `ENV-ISOLATION-GATE` nennen.
-- name: "Env-Isolation Selbsttest (Issue #483, US2)"
+- name: "Env-Isolation Selbsttest — dev (Issue #483)"
   hosts: localhost
   connection: local
   gather_facts: false
 
+  vars_files:
+    - "{{ playbook_dir }}/../../inventory/host_vars/planet/vars.yml"
+
   vars:
-    rift_env: "{{ test_env }}"
+    rift_env: dev
+    rift_env_isolation_root: "{{ test_root }}"
+
+  tasks:
+    - name: Env-Isolation-Gate ausfuehren (echte Task-Datei)
+      include_tasks: "{{ playbook_dir }}/../../tasks/env-assert.yml"
+
+- name: "Env-Isolation Selbsttest — prod (Issue #483, US2/US3)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - "{{ playbook_dir }}/../../inventory/host_vars/planet/vars.yml"
+    - "{{ playbook_dir }}/../../prod-vars.yml"
+
+  vars:
+    rift_env: prod
+    rift_env_isolation_root: "{{ test_root }}"
+
+  tasks:
+    - name: Env-Isolation-Gate ausfuehren (echte Task-Datei)
+      include_tasks: "{{ playbook_dir }}/../../tasks/env-assert.yml"
+
+- name: "Env-Isolation Selbsttest — test (Issue #483, US2/US3)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - "{{ playbook_dir }}/../../inventory/host_vars/planet/vars.yml"
+    - "{{ playbook_dir }}/../../test-vars.yml"
+
+  vars:
+    rift_env: test
     rift_env_isolation_root: "{{ test_root }}"
 
   tasks:
