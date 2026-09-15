@@ -65,6 +65,14 @@ rift_caddy_container: rift-caddy-prod
 rift_caddy_port: 8788
 rift_caddy_deploy_dir: /opt/rbmods/compose/rift-caddy-prod
 
+# --- Crash-Collector (Prod-Zwilling, Issue #481) ----------------------------
+# Eigene Unit + eigenes Bundle-Verzeichnis, damit "prod ist stabil" BELEGBAR
+# ist (Marker im prod-Log -> Bundle unter crashes-prod, getrennt von dev).
+# Der Container ist explizit der prod-Container (Default der Rolle waere
+# ohnehin riftbreaker_server_container = riftbreaker-dedicated-prod).
+crash_collector_unit: rbmods-crash-collector-prod
+crash_collector_dir: /opt/rbmods/crashes-prod
+crash_collector_container: riftbreaker-dedicated-prod
 # --- Docroot/Mods/Caddy-Daten explizit prod (Issue #483, US3) ----------------
 # ADDITIV, ohne Rename der dev-Pfade: dev mountet /srv/rbmods-site — Live-
 # Befund #1 (beide Caddys teilten denselben docroot, prod schrieb in dev). prod

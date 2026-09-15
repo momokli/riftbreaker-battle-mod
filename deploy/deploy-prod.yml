@@ -70,6 +70,11 @@
     - role: tournament-server
     - role: website
       tags: [website]
+    # Prod-Zwilling des Crash-Collectors (Issue #481): eigene Unit + eigenes
+    # Bundle-Dir (crash_collector_* in prod-vars.yml) — Crashes auf prod sind
+    # damit sichtbar statt nur "keine Marker im dev-Log".
+    - role: crash-collector
+      tags: [crash]
 
 - name: RIFT BATTLE — Satellite-Relay (satellite)
   hosts: satellite

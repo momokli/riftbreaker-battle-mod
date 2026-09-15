@@ -24,6 +24,7 @@ Environment=RB_CRASH_WAIT_SECS={{ crash_collector_wait_secs }}
 Environment=RB_CRASH_RETRY_SLEEP={{ crash_collector_retry_sleep }}
 Environment=RB_CRASH_PRUNE_WINE={{ crash_collector_prune_wine }}
 Environment=RB_CRASH_PYTHON={{ crash_collector_python }}
+Environment=RB_CRASH_MINIDUMP_PY={{ crash_collector_helper }}
 ExecStart={{ crash_collector_bin }}
 Restart=always
 RestartSec=5

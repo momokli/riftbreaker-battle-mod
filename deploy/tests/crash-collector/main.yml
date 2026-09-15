@@ -17,6 +17,7 @@
     # Rollen-Defaults hier explizit (der Test laeuft ohne Rollen-Defaults).
     crash_collector_unit: rbmods-crash-collector
     crash_collector_bin: /usr/local/bin/rbmods-crash-collector.sh
+    crash_collector_helper: /usr/local/bin/rbmods-minidump-meta.py
     crash_collector_container: riftbreaker-dedicated
     crash_collector_dir: /opt/rbmods/crashes
     crash_collector_crashinfo: "/data/.wine/drive_c/users/steamuser/Documents/The Riftbreaker/crash_info"
@@ -52,10 +53,12 @@
           - ("RB_CRASH_CONTAINER=" ~ crash_collector_container) in unit
           - ("RB_CRASH_DIR=" ~ crash_collector_dir) in unit
           - ("RB_CRASH_RETENTION=" ~ crash_collector_retention) in unit
+          - ("RB_CRASH_MINIDUMP_PY=" ~ crash_collector_helper) in unit
           - "'Restart=always' in unit"
           - "'Type=simple' in unit"
           - "'Requires=docker.service' in unit"
         fail_msg: >-
           Gerenderte systemd-Unit verletzt eine Invariante (ExecStart,
-          RB_CRASH_*-Env, Restart=always, Type=simple oder Requires=docker.service).
-        success_msg: "Unit-Render ok (ExecStart + Env + Restart + Docker-Requires)."
+          RB_CRASH_*-Env inkl. RB_CRASH_MINIDUMP_PY, Restart=always,
+          Type=simple oder Requires=docker.service).
+        success_msg: "Unit-Render ok (ExecStart + Env + Parser + Restart + Docker)."
