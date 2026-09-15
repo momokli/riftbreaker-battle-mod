@@ -14,6 +14,9 @@
     rift_env_path_migrations:
       - {old: "{{ test_base }}/old-game", new: "{{ test_base }}/new/game"}
       - {old: "{{ test_base }}/old-rbtools", new: "{{ test_base }}/new/rbtools"}
+      # Verschachteltes Paar (Befund #496-Review): dirname(new) ist zugleich
+      # `new` des vorherigen Paars — darf den mv-Guard nicht aushebeln.
+      - {old: "{{ test_base }}/old-staging", new: "{{ test_base }}/new/rbtools/.staging"}
       # Alt UND Neu vorhanden -> kein mv, nur Warnung (mehrdeutig).
       - {old: "{{ test_base }}/both-old", new: "{{ test_base }}/both-new"}
 

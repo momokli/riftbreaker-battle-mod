@@ -89,7 +89,7 @@
       riftbreaker_backup_dir: /srv/rift-dev/backups
       riftbreaker_deploy_dir: /opt/rbmods/compose/rift-dev/riftbreaker
       riftbreaker_sessions_dir: /srv/rift-dev/sessions
-      riftbreaker_compose_project: rift-dev
+      riftbreaker_compose_project: riftbreaker-dedicated
       rbtools_dir: /opt/rbmods/rbtools/dev
       rbtools_staging_dir: /opt/rbmods/rbtools/dev/.staging
       rift_caddy_deploy_dir: /opt/rbmods/compose/rift-dev/caddy

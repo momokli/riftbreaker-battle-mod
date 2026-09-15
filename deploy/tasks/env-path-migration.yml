@@ -53,12 +53,16 @@
 
 - name: "Env-Pfad-Migration — Ziel-Elternverzeichnis anlegen (#483)"
   file:
-    path: "{{ item.new | dirname }}"
+    path: "{{ item }}"
     state: directory
     mode: "0755"
-  loop: "{{ rift_env_path_migrations }}"
+  # Nur Top-Level-Eltern anlegen. Bei verschachtelten Paaren (z. B.
+  # rbtools/<env> und rbtools/<env>/.staging) ist dirname(new) des einen
+  # Paars gleichzeitig new des anderen — wuerde man das vorab anlegen,
+  # griffe der `not ... exists`-Guard beim mv nicht (stiller No-Op).
+  loop: "{{ (rift_env_path_migrations | map(attribute='new') | map('dirname') | unique) | difference(rift_env_path_migrations | map(attribute='new')) }}"
   loop_control:
-    label: "{{ item.new | dirname }}"
+    label: "{{ item }}"
 
 - name: "Env-Pfad-Migration — alten Pfad pruefen (#483)"
   stat:

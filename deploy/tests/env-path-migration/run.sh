@@ -28,9 +28,10 @@ base="$(mktemp -d)"
 trap 'rm -rf "$base"' EXIT
 
 # Alt-Pfade mit Inhalt (mv-Nachweis: Inhalt muss am NEUEN Pfad liegen).
-mkdir -p "$base/old-game" "$base/old-rbtools" "$base/both-old" "$base/both-new"
+mkdir -p "$base/old-game" "$base/old-rbtools" "$base/both-old" "$base/both-new" "$base/old-staging"
 printf 'game-content' > "$base/old-game/marker.txt"
 printf 'bin' > "$base/old-rbtools/rbbridge.dll"
+printf 'staging' > "$base/old-staging/rbbridge.dll"
 
 echo "== Lauf 1: mv + Symlink =="
 ansible-playbook "$play" -e "test_base=$base"
@@ -42,6 +43,12 @@ ansible-playbook "$play" -e "test_base=$base"
 [ ! -e "$base/old-game/marker.txt" ] || true   # Altpfad liest ueber den Symlink den neuen Inhalt
 [ -e "$base/old-game/marker.txt" ] || fail "Symlink-Uebergang kaputt (Altpfad liest neuen Inhalt nicht)"
 [ -L "$base/old-rbtools" ] || fail "alter rbtools-Pfad ist kein Symlink"
+# Verschachteltes Paar (Befund #496-Review): new/rbtools/.staging unterhalb von
+# new/rbtools — der Parent darf NICHT vorab angelegt werden (sonst mv-No-Op).
+[ -d "$base/new/rbtools/.staging" ] || fail "verschachtelter neuer Pfad new/rbtools/.staging fehlt"
+[ -e "$base/new/rbtools/.staging/rbbridge.dll" ] || fail "mv hat den verschachtelten Inhalt nicht mitgenommen"
+[ -L "$base/old-staging" ] || fail "alter staging-Pfad ist kein Symlink"
+[ "$(readlink "$base/old-staging")" = "$base/new/rbtools/.staging" ] || fail "staging-Symlink zeigt falsch"
 
 echo "== Mehrdeutig: Alt UND Neu vorhanden -> kein mv =="
 [ -d "$base/both-old" ] || fail "mehrdeutiger Alt-Pfad wurde faelschlich verschoben"

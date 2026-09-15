@@ -526,7 +526,7 @@ bei Lücke ab (Marker `ENV-ISOLATION-GATE`), aufgerufen aus
 | `riftbreaker_backup_dir` | `/srv/rift-dev/backups` | `/srv/rift-prod/backups` | `/srv/rift-test-<run>/backups` |
 | `riftbreaker_sessions_dir` | `/srv/rift-dev/sessions` | `/srv/rift-prod/sessions` | `/srv/rift-test-<run>/sessions` |
 | `riftbreaker_deploy_dir` | `/opt/rbmods/compose/rift-dev/riftbreaker` | `/opt/rbmods/compose/rift-prod/riftbreaker` | `/opt/rbmods/compose/rift-test-<run>/riftbreaker` |
-| `riftbreaker_compose_project` | `rift-dev` | `rift-prod` | `rb-test-<run>` |
+| `riftbreaker_compose_project` | `riftbreaker-dedicated` | `riftbreaker-dedicated-prod` | `rb-test-<run>` |
 | `rbtools_dir` | `/opt/rbmods/rbtools/dev` | `/opt/rbmods/rbtools/prod` | `/opt/rbmods/rbtools/test-<run>` |
 | `rbtools_staging_dir` | `<rbtools_dir>/.staging` | `<rbtools_dir>/.staging` | `<rbtools_dir>/.staging` |
 | `website_docroot` | `/srv/rbmods-site` | `/srv/rbmods-site-prod` | `/srv/rbmods-site-test-<run>` |
