@@ -79,8 +79,8 @@ chmod +x "${BIN}/docker"
 # Standard-Logstream: ein CRASH mit Modulbasis davor.
 cat >"${TMP}/crash.log" <<EOF
 [09:40:50.520] [rbbridge] module_range: via=getmodulehandle base=00006ffff6da0000 size=78778368 execfn=0000000000000000
-[08:37:25.292] [critical] CrashHandlerWin32.cpp:103 - 
- CRASH: 
+[08:37:25.292] [critical] CrashHandlerWin32.cpp:103 -
+ CRASH:
 (filename not available):0 - (function-name not available)
 EOF
 
@@ -139,7 +139,7 @@ C1="${TMP}/c1"
 run_case "$C1" "${TMP}/crash.log" "${FAKE_ROOT}${CRASHINFO}/${UUID}.dmp"
 assert_eq "CRASH -> rc=0" "0" "$RC"
 
-mapfile -t BUNDLES < <(find "${C1}/crashes" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+mapfile -t BUNDLES < <(find "${C1}/crashes" -mindepth 1 -maxdepth 1 -type d | sed 's|.*/||')
 assert_eq "genau ein Bundle" "1" "${#BUNDLES[@]}"
 B="${BUNDLES[0]:-}"
 assert_eq "Bundle-Name ist <ts>-<uuid>" "${B: -36}" "$UUID"
@@ -170,7 +170,7 @@ fi
 C2="${TMP}/c2"
 run_case "$C2" "${TMP}/pf.log" "${FAKE_ROOT}${CRASHINFO}/${UUID}.dmp"
 assert_eq "page fault -> rc=0" "0" "$RC"
-mapfile -t B2 < <(find "${C2}/crashes" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+mapfile -t B2 < <(find "${C2}/crashes" -mindepth 1 -maxdepth 1 -type d | sed 's|.*/||')
 assert_eq "page fault -> genau ein Bundle" "1" "${#B2[@]}"
 if [ "${#B2[@]}" -eq 1 ]; then
   row="$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d['crash_marker'],d['fault_address'],d['module_base'])" "${C2}/crashes/${B2[0]}/meta.json")"

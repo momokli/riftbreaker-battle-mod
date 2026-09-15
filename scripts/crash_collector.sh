@@ -131,7 +131,9 @@ bundle_exists() {
 # --- Retention ----------------------------------------------------------------
 retention_prune() {
   local dirs=() n
-  mapfile -t dirs < <(find "$CRASH_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort)
+  # Portabel: kein `find -printf` (GNU-only) — BSD/macOS-find kennt es nicht
+  # und lieferte dort eine leere Liste (Retention griff nicht, Test rot).
+  mapfile -t dirs < <(find "$CRASH_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sed 's|.*/||' | sort)
   n=${#dirs[@]}
   while [ "$n" -gt "$RETENTION" ]; do
     log "Retention: entferne altes Bundle ${dirs[0]}"
