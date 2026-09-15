@@ -186,7 +186,11 @@ class RealRepoContractTest(unittest.TestCase):
     def test_mod_log_carries_mod_load_identity(self):
         text = self._read("mod/lua/rbbattle_autoexec.lua")
         self.assertIn("event=mod_load", text)
-        self.assertIn("DeployEnv", text)
+        # #499: ref wird beim BUILD gebacken (Platzhalter im Repo, ersetzt in
+        # package_bausteine.sh) — kein Laufzeit-DeployEnv mehr.
+        self.assertIn("RBB.ref", text)
+        self.assertIn("RBB_BUILD_REF", text)
+        self.assertIn("ref=%s", text)
 
 
 class CliTest(unittest.TestCase):

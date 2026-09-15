@@ -136,9 +136,35 @@ fi
 # Einzel-Mod (Issue #16): der fusionierte Mod mod/ als rbbattle.zip —
 # Primär-Download. Content-Root = mod/ (lua/ + <GUID>.manifest + README.md an
 # der Zip-Wurzel), genau wie er nach <game>/mods/rbbattle/ gehoert.
+#
+# Build-Identitaet (Issue #499): vor dem Zippen wird der Platzhalter
+# RBB_BUILD_REF in der ausgelieferten Lua durch den echten Commit/Tag ersetzt
+# (Env RBB_BUILD_REF, sonst `git rev-parse HEAD`). In einen tmp-Staging-Bereich
+# kopieren, dort substituieren, dann zippen - KEINE In-Place-Aenderung an
+# mod/lua/rbbattle_autoexec.lua, damit der Build das Working-Tree nicht
+# verschmutzt.
 SRCMOD="$ROOT/mod"
+BUILD_REF="${RBB_BUILD_REF:-}"
+if [ -z "$BUILD_REF" ]; then
+    BUILD_REF="$(git rev-parse HEAD)"
+fi
+STAGE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/rbbattle-staging.XXXXXX")"
+trap 'rm -rf "$STAGE_DIR"' EXIT
+cp -R "$SRCMOD/." "$STAGE_DIR/"
+python3 - "$STAGE_DIR/lua/rbbattle_autoexec.lua" "$BUILD_REF" <<'PYEOF'
+import sys
+path, ref = sys.argv[1], sys.argv[2]
+with open(path, "r", encoding="utf-8") as f:
+    content = f.read()
+needle = 'RBB.ref = "RBB_BUILD_REF"'
+if needle not in content:
+    sys.exit("FEHLER: Platzhalter %s nicht gefunden in %s" % (needle, path))
+content = content.replace(needle, 'RBB.ref = "%s"' % ref)
+with open(path, "w", encoding="utf-8") as f:
+    f.write(content)
+PYEOF
 outmod="$OUT_DIR/rbbattle.zip"
-zip_content_root "$SRCMOD" "$outmod"
+zip_content_root "$STAGE_DIR" "$outmod"
 echo "NAME=rbbattle.zip ZIP=$outmod"
 
 # Einzel-Mod versioniert (Issue #119): die Mod-Version kommt aus den
