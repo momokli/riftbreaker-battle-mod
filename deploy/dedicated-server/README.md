@@ -46,7 +46,7 @@ das `watch_server_port()` im Entrypoint für den UDP-6321-Check braucht.
 ## Build
 
 ```bash
-docker build -t rb-dedicated tools/dedicated-server
+docker build -t rb-dedicated deploy/dedicated-server
 ```
 
 Der Entrypoint erwartet beim Start `config.cfg` unter `/data/config/config.cfg`

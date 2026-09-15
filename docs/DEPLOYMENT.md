@@ -23,11 +23,11 @@
 
 Rollen in `deploy/roles/` (Details: `deploy/README.md`):
 
-1. **mods-zip** — Mod aus `client-mod/` paketieren (`scripts/package_bausteine.sh`),
+1. **mods-zip** — Mod aus `client-mod/` paketieren (`scripts/package.sh`),
    `rbbattle.zip` nach planet; **md5-Paritäts-Check (Zip == Prod) hart als
    Fehlschlag**.
 2. **dedicated-server-image** — baut `rb-dedicated:<deploy-sha>` IM
-   Playbook auf planet aus `tools/dedicated-server` (Wine-Laufzeit
+   Playbook auf planet aus `deploy/dedicated-server` (Wine-Laufzeit
    für :6321, Community-Rezept; Docker-Layer-Cache → billig/idempotent). Das
    gerenderte Compose pinnt exakt diesen Tag (kein `latest`).
 3. **game-content** — Dedicated-Server-Content (Steam-App 4114030) deklarativ
@@ -301,7 +301,7 @@ Nach Entfernen des Ordners aus `mods/` + Container-Restart:
 
 **Update (Issue #245, Community-Rezept #241):** Seit dem Umstieg auf das
 Community-Dedicated-Server-Image ist die Quelle wieder **`docker logs`** —
-`tools/dedicated-server/scripts/entrypoint.sh` (`follow_server_logs`) tailt
+`deploy/dedicated-server/scripts/entrypoint.sh` (`follow_server_logs`) tailt
 `exor_logs.txt` selbst nach stdout, daher landen `[RBBATTLE] event=...`-Zeilen
 jetzt in `docker logs {{ riftbreaker_server_container }}`. `riftbreaker_mod_log_cmd`
 in der Rolle spiegelt das. Der Rest dieses Abschnitts (Befund planet
@@ -445,7 +445,7 @@ Bis zur CD (#91) wurde die Mod auf :6321 manuell eingespielt:
 
 ```bash
 # 1) Mod-Zip aus Repo main bauen (Content-Root = client-mod/):
-bash scripts/package_bausteine.sh          # → dist/rbbattle.zip
+bash scripts/package.sh          # → dist/rbbattle.zip
 
 # 2) Auf planet kopieren + md5-Parität (lokal == remote):
 scp dist/rbbattle.zip planet:/tmp/rbbattle.zip

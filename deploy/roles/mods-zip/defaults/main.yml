@@ -1,6 +1,6 @@
 ---
 # Defaults der Rolle mods-zip (Paketierung + md5-Parität).
-# Paketierung läuft auf dem Control-Node (scripts/package_bausteine.sh),
+# Paketierung läuft auf dem Control-Node (scripts/package.sh),
 # das Zip wird nach planet kopiert und die md5-Parität hart geprüft.
 
 # Deploy-Identitaet (Issue #483, US4): ZUSÄTZLICHES, env-getaggtes Zip.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# package_bausteine.sh — zippt JEDEN Baustein einzeln nach dist/.
+# package.sh — baut + packt die 1.0-Komponenten (server/ + client-mod/) nach dist/.
 #
 #   server/ (rbbridge):
 #     - ist x86_64-w64-mingw32-gcc auf dem PATH: kompiliert rbbridge.dll +
@@ -15,7 +15,7 @@
 # (maschinenlesbar fuer Release-Upload).
 #
 # Abhaengigkeit: zip ODER python3 (Fallback, nur Standardbibliothek);
-# optional x86_64-w64-mingw32-gcc oder zig (fuer den 04-Binary-Build).
+# optional x86_64-w64-mingw32-gcc oder zig (fuer den server-Binary-Build).
 # ============================================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -48,40 +48,40 @@ PYEOF
         exit 1
     fi
     mv "$tmp" "$out"
-    echo "[package_bausteine] OK: $out"
+    echo "[package] OK: $out"
 }
 
 # server/ (rbbridge): Compile mit mingw-gcc oder zig; sonst Quell-Zip.
 # Inhalt des Binary-Zips: injector.exe + rbbridge.dll + rbbridge_standalone.exe
 # + pipe_bridge.exe (Issue #265; alle aus dem aktuellen Quellstand;
 # standalone via -DRBBRIDGE_STANDALONE).
-SRC04="$ROOT/server"
+SERVER_SRC="$ROOT/server"
 TOOLCHAIN="none"
 if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
     TOOLCHAIN="mingw"
 elif command -v zig >/dev/null 2>&1 || [ -n "${ZIG:-}" ]; then
     TOOLCHAIN="zig"
 fi
-build_04_binaries() { # <builddir> — kompiliert die 4 Windows-x64-Binaries
+build_server_binaries() { # <builddir> — kompiliert die 4 Windows-x64-Binaries
     local bd="$1"
     if [ "$TOOLCHAIN" = "mingw" ]; then
-        echo "[package_bausteine] 04: x86_64-w64-mingw32-gcc gefunden -> Build (Windows x64)"
+        echo "[package] server: x86_64-w64-mingw32-gcc gefunden -> Build (Windows x64)"
         (cd "$bd" \
-            && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -shared -o rbbridge.dll "$SRC04/dll/rbbridge.c" \
-            && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe "$SRC04/injector/injector.c" \
-            && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe "$SRC04/dll/rbbridge.c" \
-            && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o pipe_bridge.exe "$SRC04/pipe-bridge/pipe_bridge.c" -lws2_32)
+            && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -shared -o rbbridge.dll "$SERVER_SRC/dll/rbbridge.c" \
+            && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe "$SERVER_SRC/injector/injector.c" \
+            && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe "$SERVER_SRC/dll/rbbridge.c" \
+            && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o pipe_bridge.exe "$SERVER_SRC/pipe-bridge/pipe_bridge.c" -lws2_32)
     else
         local zigc="${ZIG:-zig}"
-        echo "[package_bausteine] 04: kein mingw-gcc, aber zig -> Build (zig cc, x86_64-windows-gnu)"
+        echo "[package] server: kein mingw-gcc, aber zig -> Build (zig cc, x86_64-windows-gnu)"
         (cd "$bd" \
-            && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -shared -o rbbridge.dll "$SRC04/dll/rbbridge.c" \
-            && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -o injector.exe "$SRC04/injector/injector.c" \
-            && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe "$SRC04/dll/rbbridge.c" \
-            && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -o pipe_bridge.exe "$SRC04/pipe-bridge/pipe_bridge.c" -lws2_32)
+            && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -shared -o rbbridge.dll "$SERVER_SRC/dll/rbbridge.c" \
+            && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -o injector.exe "$SERVER_SRC/injector/injector.c" \
+            && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe "$SERVER_SRC/dll/rbbridge.c" \
+            && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -o pipe_bridge.exe "$SERVER_SRC/pipe-bridge/pipe_bridge.c" -lws2_32)
     fi
 }
-BUILD_DIR="$OUT_DIR/.build-04"
+BUILD_DIR="$OUT_DIR/.build-server"
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
@@ -91,19 +91,19 @@ python3 "$ROOT/scripts/gen_cockpit_html.py"
 
 if [ "$TOOLCHAIN" = "none" ]; then
     rm -rf "$BUILD_DIR"
-    echo "[package_bausteine] 04: weder x86_64-w64-mingw32-gcc noch zig verfuegbar -> Quell-Zip"
-    out04="$OUT_DIR/rbb-rbbridge-src.zip"
-    zip_content_root "$SRC04" "$out04"
-    echo "NAME=rbb-rbbridge-src.zip ZIP=$out04"
-elif build_04_binaries "$BUILD_DIR"; then
+    echo "[package] server: weder x86_64-w64-mingw32-gcc noch zig verfuegbar -> Quell-Zip"
+    out_server="$OUT_DIR/rbb-rbbridge-src.zip"
+    zip_content_root "$SERVER_SRC" "$out_server"
+    echo "NAME=rbb-rbbridge-src.zip ZIP=$out_server"
+elif build_server_binaries "$BUILD_DIR"; then
     # nur die 4 Binaries ins Zip (keine .pdb/.lib-Artefakte von zig)
     rm -f "$BUILD_DIR"/*.pdb "$BUILD_DIR"/*.lib "$BUILD_DIR"/*.o
-    out04="$OUT_DIR/rbb-rbbridge.zip"
-    zip_content_root "$BUILD_DIR" "$out04"
+    out_server="$OUT_DIR/rbb-rbbridge.zip"
+    zip_content_root "$BUILD_DIR" "$out_server"
     rm -rf "$BUILD_DIR"
-    echo "NAME=rbb-rbbridge.zip ZIP=$out04"
+    echo "NAME=rbb-rbbridge.zip ZIP=$out_server"
 else
-    echo "FEHLER: 04-Build (TOOLCHAIN=$TOOLCHAIN) fehlgeschlagen." >&2
+    echo "FEHLER: server-Build (TOOLCHAIN=$TOOLCHAIN) fehlgeschlagen." >&2
     exit 1
 fi
 
@@ -127,4 +127,4 @@ echo "NAME=rbbattle-v$MOD_VERSION.zip ZIP=$outmod_ver"
 echo "MOD_VERSION=$MOD_VERSION"
 
 n_zip=$(find "$OUT_DIR" -maxdepth 1 -name 'rbb-*.zip' | wc -l)
-echo "[package_bausteine] fertig: ${n_zip} Baustein-Zip(s) + rbbattle.zip in $OUT_DIR"
+echo "[package] fertig: ${n_zip} Komponente-Zip(s) + rbbattle.zip in $OUT_DIR"

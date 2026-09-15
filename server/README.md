@@ -29,7 +29,7 @@ Logik als normale `rbbridge_standalone.exe` — ganz **ohne Injection**;
 **Test 1** ist der bisherige Injection-Test (notepad.exe + injector.exe).
 
 **Richtung (kanonisch):** `server/` ist die **einzige**
-Build-/Distributions-Quelle — `scripts/package_bausteine.sh` und der
+Build-/Distributions-Quelle — `scripts/package.sh` und der
 Build-Job in `.github/workflows/ci.yml` bauen **ausschließlich** hieraus.
 Der frühere byte-identische Spiegel unter `server/injector/` +
 `server/rbbridge/` wurde mit Issue #299 entfernt (`server/` enthält nur

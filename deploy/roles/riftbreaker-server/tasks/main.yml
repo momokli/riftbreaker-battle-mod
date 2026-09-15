@@ -338,7 +338,7 @@
     #   B) Runtime-Log-Check (best effort): der Wine-Prefix liegt in einem
     #      benannten Volume (nicht auf dem Host), der Lua-Log ist daher nur
     #      über den Container erreichbar. Das aktuelle Rezept (Issue #241,
-    #      tools/dedicated-server/scripts/entrypoint.sh: follow_server_logs)
+    #      deploy/dedicated-server/scripts/entrypoint.sh: follow_server_logs)
     #      tailt exor_logs.txt selbst nach stdout — `docker logs` enthält die
     #      `[RBBATTLE] event=...`-Zeilen also wieder (anders als beim alten
     #      Wine-Client-Image, das nur die run-server.sh-Wrapper-Zeilen zeigte).

@@ -57,7 +57,7 @@ riftbreaker_mods_guard_autofix: true
 #
 # Community-Rezept (Issue #241): der Wine-Prefix liegt im benannten Volume
 # {{ riftbreaker_wine_volume }}, nicht auf dem Host — der Lua-Log ist daher nur
-# über den Container erreichbar. `tools/dedicated-server/scripts/entrypoint.sh`
+# über den Container erreichbar. `deploy/dedicated-server/scripts/entrypoint.sh`
 # (follow_server_logs) tailt exor_logs.txt selbst nach stdout, daher reicht
 # hier `docker logs` (anders als beim alten Wine-Client-Image, wo `docker logs`
 # nur die run-server.sh-Wrapper-Zeilen zeigte und `docker exec ... cat

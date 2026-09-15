@@ -21,7 +21,7 @@ die forced command führt genau dieses Playbook aus.
   betreibt zusätzlich einen eigenen, schlanken `rift-caddy` (Image `caddy:2`,
   Issue #322).
 - Auf dem Control-Node: `zip` **oder** `python3` (für
-  `scripts/package_bausteine.sh` — die Paketierung läuft dort, nicht im
+  `scripts/package.sh` — die Paketierung läuft dort, nicht im
   Playbook-Ziel; siehe Rolle `mods-zip`, `delegate_to: localhost`; beim CD
   ist der Control-Node planet selbst).
 
@@ -79,7 +79,7 @@ Was das Playbook selbst besitzt:
 
 - **Laufzeit-Image** (`dedicated-server-image`): baut
   `rb-dedicated:<deploy-sha>` auf dem Zielhost aus
-  `tools/dedicated-server` (Wine-Laufzeit für :6321, Community-Rezept). Der Tag ist der
+  `deploy/dedicated-server` (Wine-Laufzeit für :6321, Community-Rezept). Der Tag ist der
   Deploy-SHA der ausgecheckten Revision; das gerenderte `docker-compose.yml`
   referenziert **exakt** diesen Tag (kein `latest`). Der Tag im Namen macht den
   Lauf trivially idempotent: unveränderter Stand → Image existiert → kein Build;

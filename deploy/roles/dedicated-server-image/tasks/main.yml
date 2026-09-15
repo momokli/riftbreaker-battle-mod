@@ -12,9 +12,9 @@
     state: directory
     mode: "0755"
 
-- name: Build-Kontext synchronisieren (tools/dedicated-server)
+- name: Build-Kontext synchronisieren (deploy/dedicated-server)
   copy:
-    src: "{{ playbook_dir }}/../tools/dedicated-server/"
+    src: "{{ playbook_dir }}/../deploy/dedicated-server/"
     dest: "{{ dedicated_server_context_dir }}/"
     mode: preserve
     directory_mode: "0755"
