@@ -1,7 +1,7 @@
 ---
 # Defaults der Rolle rbtools (Issue #265).
 #
-# Die Rolle baut die Windows-x64-Trainer-I/O-Tools (rbbridge.dll, injector.exe,
+# Die Rolle baut die Windows-x64-Server-I/O-Tools (rbbridge.dll, injector.exe,
 # rbbridge_standalone.exe, pipe_bridge.exe) auf dem Zielhost (MinGW-w64) und
 # legt sie nach {{ rbtools_dir }}. Von dort werden sie vom Compose der Rolle
 # riftbreaker-server read-only nach /opt/rbtools in den Container gemountet.

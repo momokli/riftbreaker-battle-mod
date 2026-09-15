@@ -45,7 +45,7 @@ per_env:
   riftbreaker_wine_volume: [prod, test]
   riftbreaker_saves_volume: [prod, test]
   riftbreaker_bridge_port: [prod, test]
-  # --- Trainer-I/O-Tools (rbtools) -----------------------------------------
+  # --- Server-I/O-Tools (rbtools) -----------------------------------------
   rbtools_dir: [prod, test]
   rbtools_staging_dir: [prod, test]
   # --- Sidecars (Session-Recorder + Referee-Egress) ------------------------

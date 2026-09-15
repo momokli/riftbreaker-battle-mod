@@ -3,7 +3,7 @@
 Lebendes Dokument: hält bisherige Annahmen (mit Status) und den aktuell
 verifizierten Stand fest. Vertiefungen: Design/Architektur in
 [`docs/concept.md`](concept.md), Engine-Fakten in
-[`docs/findings.md`](findings.md), Trainer-Protokoll in
+[`docs/findings.md`](findings.md), Server-Protokoll in
 [`server/protocol.md`](../server/protocol.md).
 
 ## Stand 2026-09-09 (verifiziert)
@@ -14,7 +14,7 @@ Kernannahmen der Turnier-Infra von der Doku in die Praxis überführt:
 1. **Vollkette bewiesen:** Bridge (`rbbridge`, injiziert) →
    `ConsoleService::ExecuteCommand` → Lua-Mod → Spawn. Produktiv-Lauf:
    `event=wave level=3 status=done spawned=8 skipped=0` (16:32). Der
-   Ingress-Pfad der Trainer-only-Architektur ist real — `dispatch_exec` ist
+   Ingress-Pfad der Server-only-Architektur ist real — `dispatch_exec` ist
    kein `TODO(RE)` mehr.
 2. **Kein Client nötig für den Game-Loop:** `debug_spawn_fake_client` erzeugt
    serverseitig einen synthetischen Player `'0'` mit Mech

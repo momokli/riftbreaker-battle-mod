@@ -1,5 +1,5 @@
 /*
- * injector.c - minimaler DLL-Injector fuer den Rift-Breaker-Trainer (Harness).
+ * injector.c - minimaler DLL-Injector fuer den Rift-Breaker-Server (Harness).
  *
  * Zweck:
  *   Laedt eine DLL (rbbridge.dll) zur Laufzeit in einen laufenden Prozess -

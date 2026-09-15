@@ -1,5 +1,5 @@
 ---
-# Rolle: rbtools (Issue #265) — baut die Trainer-I/O-Windows-Tools auf dem
+# Rolle: rbtools (Issue #265) — baut die Server-I/O-Windows-Tools auf dem
 # Zielhost und staged sie an den Mount-Punkt fuer den dedicated-server-Container.
 #
 # Ablauf: Build-Script (scripts/build_rbbridge_tools.sh, baut rbbridge.dll +

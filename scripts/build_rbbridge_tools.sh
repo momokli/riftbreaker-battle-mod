@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# build_rbbridge_tools.sh — baut die Windows-x64-Tools des Trainer-I/O-Kanals
+# build_rbbridge_tools.sh — baut die Windows-x64-Tools des Server-I/O-Kanals
 # (Baustein 04, Issue #265) in ein Staging-Verzeichnis.
 #
 # Baut aus server/ (kanonische Quelle):

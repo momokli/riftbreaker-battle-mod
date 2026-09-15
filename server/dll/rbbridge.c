@@ -1,9 +1,9 @@
 /*
- * rbbridge.c - In-Game-Bridge fuer den Rift-Breaker-Trainer (Harness),
- *              dual: Trainer-DLL ODER Standalone-EXE.
+ * rbbridge.c - In-Game-Bridge fuer den Rift-Breaker-Server (Harness),
+ *              dual: Server-DLL ODER Standalone-EXE.
  *
  * Rolle (Architektur, siehe server/README.md):
- *   Die Trainer-DLL ist das EINZIGE I/O-Gateway zwischen Spielprozess und
+ *   Die Server-DLL ist das EINZIGE I/O-Gateway zwischen Spielprozess und
  *   Aussenwelt (Tournament-Server). Der Lua-Mod bleibt reine Spiellogik.
  *   Diese DLL wird per Injector zur Laufzeit geladen (keine Datei-Engine-
  *   Eingriffe, Steam-kompatibel) und stellt einen Named-Pipe-Server bereit.
@@ -12,7 +12,7 @@
  *   Logik liegt in rbbridge_start() und wird von beiden gerufen:
  *     - rbbridge.dll (Default, per Injector in den Spielprozess laden)
  *     - rbbridge_standalone.exe (#define RBBRIDGE_STANDALONE): dieselbe
- *       Server-Logik als normales Programm, damit ist die Trainer-IO auf
+ *       Server-Logik als normales Programm, damit ist die Server-IO auf
  *       jedem Windows-Rechner OHNE Injection testbar (Baustein 04, Test 0).
  *   Protokollverhalten ist in beiden Varianten IDENTISCH; die Standalone-
  *   Variante druckt nur eine Hinweiszeile beim Start.
@@ -46,7 +46,7 @@
  *     unterstuetzter Fall: Ueblich ist Inject-once / unload beim Prozessende.
  *
  * Build (x64):
- *   1) Trainer-DLL (Injection):
+ *   1) Server-DLL (Injection):
  *      MinGW-w64 : x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -shared -o rbbridge.dll rbbridge.c
  *      MSVC      : cl /nologo /O2 /W3 /LD rbbridge.c /Fe:rbbridge.dll
  *   2) Standalone-EXE (kein Injection noetig, Testmodus):

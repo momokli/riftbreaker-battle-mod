@@ -8,8 +8,8 @@
 #
 # Inhalt des Zips: der komplette Mod-Ordner (client-mod/) - also das Lua-Mod mit
 # README - als Content-Root (lua/...), genau wie er nach
-# <game>/mods/<ModName>/ gehoert. NUR der Mod, NIE Trainer-/Server-Teile
-# (Trainer bleibt privat, siehe docs/workshop.md).
+# <game>/mods/<ModName>/ gehoert. NUR der Mod, NIE Server-/Server-Teile
+# (Server bleibt privat, siehe docs/workshop.md).
 #
 # Abhaengigkeit: zip ODER Python 3 (Fallback, nur Standardbibliothek) —
 # laeuft damit unter Linux/macOS/Git-Bash/WSL.

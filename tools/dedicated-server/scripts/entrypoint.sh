@@ -30,7 +30,7 @@ fi
 WINE_USER_DIR="${WINEPREFIX}/drive_c/users/${STEAM_USER}"
 WINE_SAVE_DIR="${WINE_USER_DIR}/AppData/LocalLow/The Riftbreaker - Dedicated Server/SaveGames"
 
-# --- Trainer-I/O-Bridge / Injection-Supervisor (Issue #265) -------------------
+# --- Server-I/O-Bridge / Injection-Supervisor (Issue #265) -------------------
 # Die Rolle rbtools stagt die Windows-Tools nach ${RBBRIDGE_TOOLS_DIR} (read-only
 # nach /opt/rbtools gemountet). Beim Start injiziert der Supervisor rbbridge.dll
 # in DedicatedServer.exe (Retry/Backoff) und startet danach pipe_bridge.exe
@@ -320,7 +320,7 @@ watch_server_startup &
 
 echo "[entrypoint] Deployed config: ${CONFIG_DEST}"
 
-# Trainer-I/O: Injection-Supervisor + HTTP-Bridge VOR dem Server-`exec` starten
+# Server-I/O: Injection-Supervisor + HTTP-Bridge VOR dem Server-`exec` starten
 # (die Subshell ueberlebt das exec).
 start_ingress_supervisor
 

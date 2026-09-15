@@ -64,7 +64,7 @@ riftbreaker_mods_guard_autofix: true
 # exor_logs.txt` nötig war).
 riftbreaker_mod_log_cmd: "docker logs {{ riftbreaker_server_container }}"
 
-# --- Trainer-I/O-Bridge (Issue #265) -----------------------------------------
+# --- Server-I/O-Bridge (Issue #265) -----------------------------------------
 # Die Rolle rbtools stagt die Windows-Tools (injector.exe/rbbridge.dll/
 # pipe_bridge.exe) nach {{ rbtools_dir }}; von dort read-only nach /opt/rbtools
 # im Container. Die Bridge (Wine-x64) nimmt HTTP auf 9001 an und uebersetzt

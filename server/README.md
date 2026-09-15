@@ -1,7 +1,7 @@
 # Baustein 04 — rbbridge (Injector + rbbridge-DLL + pipe_client)
 
 **Was es testet:** Den kompletten rbbridge-Kanal der Architektur
-(Trainer-only, s. `docs/concept.md`) — **ohne das Spiel**:
+(Server-only, s. `docs/concept.md`) — **ohne das Spiel**:
 1. `injector.exe` lädt `rbbridge.dll` zur Laufzeit in einen **beliebigen
    x64-Prozess** (Test: `notepad.exe`),
 2. die DLL startet den Named-Pipe-Server `\\.\pipe\rbbattle`,

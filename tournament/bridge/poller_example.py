@@ -4,7 +4,7 @@
 Jede Dedi-Welt (A und B) läuft diesen Poller neben der rbbridge/tools-Suite:
 Er fragt GET /state des Tournament-Servers ab und übersetzt Zustandswechsel in
 Game-Commands über die lokale exec-Schiene (rbbridge exec-Dispatch / den
-Pipe-Kanal des Trainers — siehe server/README.md, `exec_cmd_client` ist hier
+Pipe-Kanal des Servers — siehe server/README.md, `exec_cmd_client` ist hier
 der Platzhalter für den lokalen Command-Runner der jeweiligen Bridge).
 
 Reine Standardbibliothek (urllib) — keine Dependencies. Konfiguration via Env:
