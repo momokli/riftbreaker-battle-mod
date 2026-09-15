@@ -60,7 +60,7 @@ curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: applicatio
 ## Tests (ohne Docker, Netz oder Spiel)
 
 ```bash
-cd tools/server-control && python3 -m unittest test_server_control -v
+cd deploy/server-control && python3 -m unittest test_server_control -v
 ```
 
 Das Fake-`docker` wird über das Logfile `FAKE_DOCKER_LOG` beobachtet; die HTTP-Tests

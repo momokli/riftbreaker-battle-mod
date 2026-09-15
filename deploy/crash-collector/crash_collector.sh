@@ -9,7 +9,7 @@
 #     (`CRASH`, `page fault` — rhcrash/„Unhandled page fault" des Wine-Prozesses),
 #   * kopiert beim Crash die NEUESTEN `crash_info/<uuid>.{dmp,log,trace}` aus
 #     dem Wine-Volume (`docker cp`) nach `<crash_dir>/<ts>-<uuid>/`,
-#   * parst den Minidump minimal (`scripts/minidump_meta.py`, Issue #481) und
+#   * parst den Minidump minimal (`deploy/crash-collector/minidump_meta.py`, Issue #481) und
 #     uebernimmt Exception-Code/-Adresse, Modul, Modulbasis, RVA, Fault-Thread
 #     und Stack-RVAs — robuster als das Log-Zeilen-Fenster,
 #   * legt `context.log` (letzte N Container-Zeilen) + `meta.json`

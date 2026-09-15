@@ -1,4 +1,4 @@
-# tools/session-recorder — Persistenter Session-Mitschnitt (Issue #280)
+# deploy/session-recorder — Persistenter Session-Mitschnitt (Issue #280)
 
 Tailt den Lua-Log des Dedicated-Servers (`exor_logs.txt` im Wine-Prefix) und
 schreibt **jede** `[RBBATTLE] event=...`-Zeile als JSONL — **eine Datei pro
@@ -93,7 +93,7 @@ docker exec riftbreaker-sessions tail -n 20 /data/sessions/index.jsonl
 ## Tests (ohne Docker/Spiel — Test-Split „OHNE Player")
 
 ```bash
-cd tools/session-recorder
+cd deploy/session-recorder
 python3 -m unittest test_session_recorder -v
 ```
 

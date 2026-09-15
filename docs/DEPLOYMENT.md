@@ -44,12 +44,12 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
    Cockpit `/contract/*` + `/tournament/*`) und **ZWEI** Einträge im geteilten
    Host-Caddy (`mellon-caddy`, Landing- + Cockpit-Domain). Details: „Website-Pfad“ unten.
 7. **image-retention** — systemd-Timer für
-   `scripts/docker_image_tag_retention.sh`: entfernt alte
+   `deploy/image-retention/docker_image_tag_retention.sh`: entfernt alte
    `rb-dedicated`/`rb-headless-client`-Tags, behält das laufende Image und den
    Rollback-Stand (Issue #309, siehe unten).
 8. **host-hygiene** — wöchentlicher systemd-Timer (Issue #308): entfernt
    dangling Docker-Images (`docker image prune`, **kein** `-a`; der getaggte
-   Rollback-Stand bleibt erhalten). Installiert `scripts/host_hygiene.sh` +
+   Rollback-Stand bleibt erhalten). Installiert `deploy/host-hygiene/host_hygiene.sh` +
    Unit/Timer; automatische Variante der manuellen Aufräum-Befehle in
    [`SERVER_SIZING.md`](SERVER_SIZING.md).
 9. **crash-collector** — systemd-*Dauer*-Dienst (Issue #462/#481): beobachtet
@@ -78,7 +78,7 @@ Grundsätze:
 
 ## Crash-Bundles & meta.json (Issue #462/#481)
 
-Der Collector (`scripts/crash_collector.sh`, Unit `rbmods-crash-collector` bzw.
+Der Collector (`deploy/crash-collector/crash_collector.sh`, Unit `rbmods-crash-collector` bzw.
 `rbmods-crash-collector-prod`) legt je Crash ein Bundle
 `<crash_collector_dir>/<ts>-<uuid>/` an: `<uuid>.{dmp,log,trace}`,
 `context.log` (letzte N Container-Zeilen) und `meta.json`. Beide Skripte sind
@@ -102,7 +102,7 @@ Aus dem Minidump (#481) — `null`, wenn der Dump fehlt oder kaputt ist:
 Dump des Bundles; fehlt der Dump, aus der `module_range`-/`page fault`-Zeile
 **desselben** Bundles (`context.log`). Nie ein Wert aus einem anderen Boot.
 
-### Parser (`scripts/minidump_meta.py`)
+### Parser (`deploy/crash-collector/minidump_meta.py`)
 
 Nur stdlib (`struct`/`json`/`sys`/`os`) — keine Symbole, kein PDB, kein Netz.
 CLI: `minidump_meta.py [--json] <dmp>` -> JSON. Genutzte Streams:
@@ -187,7 +187,7 @@ journalctl -u rbmods-image-retention.service -n 40 --no-pager
 ```
 
 Details zu den Schaltern (`--keep N`, `--repo NAME`, ENV-Variablen):
-`scripts/docker_image_tag_retention.sh --help`. Der hermetische
+`deploy/image-retention/docker_image_tag_retention.sh --help`. Der hermetische
 Red/Green-Test (kein Docker nötig) liegt in
 `tests/shell/image-retention.test.sh` und läuft in CI (`lint.yml`).
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Unit-Tests fuer tools/session-recorder/session_recorder.py (Issue #280).
+"""Unit-Tests fuer deploy/session-recorder/session_recorder.py (Issue #280).
 
 Reine Logik- und Datei-Tests ohne Docker/Netz/Spiel. Aufruf:
-`python3 -m unittest test_session_recorder -v` aus tools/session-recorder/.
+`python3 -m unittest test_session_recorder -v` aus deploy/session-recorder/.
 
 Abgedeckt (Test-Split "OHNE Player"):
   * komplette Event-Kette landet im JSONL,

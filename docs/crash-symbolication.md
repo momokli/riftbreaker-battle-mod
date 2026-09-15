@@ -36,14 +36,14 @@ bleibt byte-identisch → kein Regress. Kein `dedicated-server-image`-Change.
 ## Aufbau
 
 ```
-tools/crash/symbolize.py     # Kern: Minidump -> RVAs -> Funktionsnamen (stdlib-only)
-scripts/crash_symbolize.sh   # CLI/Seam: Skip-Regeln, atomares Schreiben
-scripts/crash_collector.sh   # ruft die CLI nach write_meta (additiv)
+deploy/crash-collector/symbolize.py     # Kern: Minidump -> RVAs -> Funktionsnamen (stdlib-only)
+deploy/crash-collector/crash_symbolize.sh   # CLI/Seam: Skip-Regeln, atomares Schreiben
+deploy/crash-collector/crash_collector.sh   # ruft die CLI nach write_meta (additiv)
 deploy/roles/crash-collector # rollt CLI + Kern aus (KEINE PDB/DLL)
 tests/shell/crash-symbolize.test.sh  # planetfrei (synthetischer Dump + Fake-Symbolizer)
 ```
 
-### Kern (`tools/crash/symbolize.py`)
+### Kern (`deploy/crash-collector/symbolize.py`)
 
 1. Minidump-Streams parsen: **ModuleList (4)** → Basis/-Größe des Game-Moduls,
    **Exception (6)** → Fault-Adresse + AMD64-`Rip`, **ThreadList (3)** /
@@ -61,7 +61,7 @@ tests/shell/crash-symbolize.test.sh  # planetfrei (synthetischer Dump + Fake-Sym
 Exit-Codes: `0` ok · `2` Dump nicht parsebar · `3` kein Modul-Frame ·
 `4` Symbolizer-Aufruf fehlgeschlagen (kein Teilergebnis).
 
-### CLI (`scripts/crash_symbolize.sh <bundle-dir>`)
+### CLI (`deploy/crash-collector/crash_symbolize.sh <bundle-dir>`)
 
 Findet `<uuid>.dmp` selbst (oder `--dmp`), prüft die **Skip-Regeln** und schreibt
 atomar (Temp-Datei + `mv`). Jeder Skip/Fehler endet mit **rc=0** und loggt
@@ -97,7 +97,7 @@ Manuell (read-only, z. B. für Evidenz an bestehenden Bundles):
 ```bash
 RB_CRASH_PDB=/srv/rbgame/bin/riftbreaker_dll_win_release.pdb \
 RB_CRASH_DLL=/srv/rbgame/bin/riftbreaker_dll_win_release.dll \
-scripts/crash_symbolize.sh /opt/rbmods/crashes/<ts>-<uuid>
+deploy/crash-collector/crash_symbolize.sh /opt/rbmods/crashes/<ts>-<uuid>
 ```
 
 Automatisch: der Dienst `rbmods-crash-collector` symbolisiert jedes neue Bundle

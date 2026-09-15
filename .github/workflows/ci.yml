@@ -124,7 +124,7 @@ jobs:
         run: python3 -m unittest test_check_mods_dir -v
       - name: Unit-Test Session-Recorder (Issue #280)
         if: needs.changes.outputs.test == 'true'
-        working-directory: tools/session-recorder
+        working-directory: deploy/session-recorder
         run: python3 -m unittest test_session_recorder -v
       # Pack-Reader (Issue #416): zip64-sichere Game-Pack-Leser, hermetisch
       # (synthetische Zips im tmpdir, kein Game-Daten-Zugriff).
@@ -137,7 +137,7 @@ jobs:
       # Ephemeral-Port). Reiner Standardbibliothek-Code, daher kein npm ci.
       - name: Unit-Test Server-Control (Issue #459)
         if: needs.changes.outputs.test == 'true'
-        working-directory: tools/server-control
+        working-directory: deploy/server-control
         run: python3 -m unittest test_server_control -v
       - name: rbbridge host-test (Issue #243)
         if: needs.changes.outputs.test == 'true'

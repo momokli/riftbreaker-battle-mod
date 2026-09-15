@@ -3,7 +3,7 @@
 # tests/shell/crash-symbolize.test.sh
 # ------------------------------------------------------------
 # Planetfreier Red/Green-Test für die collector-seitige Symbolik (Issue #480):
-# nagelt `tools/crash/symbolize.py` + `scripts/crash_symbolize.sh` fest, ohne
+# nagelt `deploy/crash-collector/symbolize.py` + `deploy/crash-collector/crash_symbolize.sh` fest, ohne
 # planet, Docker, Spieler oder echtes llvm-18.
 #
 # Bausteine:
@@ -31,9 +31,9 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SYMBOLIZE_SH="${REPO_ROOT}/scripts/crash_symbolize.sh"
-SYMBOLIZE_PY="${REPO_ROOT}/tools/crash/symbolize.py"
-COLLECTOR="${REPO_ROOT}/scripts/crash_collector.sh"
+SYMBOLIZE_SH="${REPO_ROOT}/deploy/crash-collector/crash_symbolize.sh"
+SYMBOLIZE_PY="${REPO_ROOT}/deploy/crash-collector/symbolize.py"
+COLLECTOR="${REPO_ROOT}/deploy/crash-collector/crash_collector.sh"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

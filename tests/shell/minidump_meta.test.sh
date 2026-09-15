@@ -2,7 +2,7 @@
 # ============================================================
 # tests/shell/minidump_meta.test.sh
 # ------------------------------------------------------------
-# Planetfreier Red/Green-Test für scripts/minidump_meta.py (Issue #481).
+# Planetfreier Red/Green-Test für deploy/crash-collector/minidump_meta.py (Issue #481).
 #
 # Baut im tmpdir synthetische MDMP-Fixtures (Python, nur struct) und prüft
 # die Parser-Ausgabe — kein Docker, kein Wine, kein Netz, kein Game:
@@ -19,7 +19,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PARSER="${REPO_ROOT}/scripts/minidump_meta.py"
+PARSER="${REPO_ROOT}/deploy/crash-collector/minidump_meta.py"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
