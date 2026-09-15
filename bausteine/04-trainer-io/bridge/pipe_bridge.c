@@ -16,7 +16,8 @@
  *   GET  /             -> Web-UI (cockpit.html, nur C++-Direktfunktionen)
  *   POST /get_state    -> carbonium/max/resources/HQ (C++)
  *   POST /add_resource -> carbonium direkt aendern (C++)
- *   POST /activate_mission_flow -> Mission-Flow/Welle starten (C++, #385)
+ *   POST /activate_mission_flow -> Mission-Flow starten (C++, optionaler
+ *                                 Database*-Payload via spawn_point, #386)
  *   POST /deactivate_mission_flow -> Mission-Flow/Welle beenden (C++, #389)
  *   POST /probe        -> Memory-Dump (PlayerService-Kette)
  *   sonst              -> 404 {"ok":false,"reason":"not_found"}
@@ -677,10 +678,12 @@ static void handle_activate_mission_flow(SOCKET c, const char *body)
 {
     char logic[256] = "";
     char mode[64] = "default";
+    char spawn[128] = "";
     char line[READ_BUF];
     char payload[LINE_MAX];
     char esc_logic[256 * 2];
     char esc_mode[64 * 2];
+    char esc_spawn[128 * 2];
     int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
     HANDLE h;
 
@@ -693,6 +696,10 @@ static void handle_activate_mission_flow(SOCKET c, const char *body)
     json_get_string(body, "mode", mode, sizeof(mode));
     if (!mode[0])
         snprintf(mode, sizeof(mode), "default");
+    /* #386: optionaler spawn_point -> rbbridge baut ein Exor::Database-
+     * Payload (Default-Ctor + SetString, AOB-aufgeloest) und reicht es als
+     * `data` an den Mission-Flow durch. */
+    json_get_string(body, "spawn_point", spawn, sizeof(spawn));
 
     h = pipe_connect(2500);
     if (h == INVALID_HANDLE_VALUE) {
@@ -705,10 +712,11 @@ static void handle_activate_mission_flow(SOCKET c, const char *body)
 
     json_escape(logic, esc_logic, sizeof(esc_logic));
     json_escape(mode, esc_mode, sizeof(esc_mode));
+    json_escape(spawn, esc_spawn, sizeof(esc_spawn));
     snprintf(payload, sizeof(payload),
              "{\"cmd\":\"activate_mission_flow\",\"logic\":\"%s\","
-             "\"mode\":\"%s\"}\n",
-             esc_logic, esc_mode);
+             "\"mode\":\"%s\",\"spawn_point\":\"%s\"}\n",
+             esc_logic, esc_mode, esc_spawn);
 
     if (!pipe_write_all(h, payload)) {
         CloseHandle(h);
