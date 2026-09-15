@@ -16,7 +16,7 @@
 | Operator-Cockpit + Tournament-UI | planet            | **eigener** Caddy (`rift-caddy`, plain HTTP) hinter `mellon-caddy` | 443 → 127.0.0.1:8787 | `/contract/*` → IO-Bridge (basic_auth) · `/tournament/*` → tournament-server                   |
 | rbmods-image-retention.timer     | planet            | systemd                                                            | —                    | Alte Mod-Image-Tags aufräumen (Rollback-Stand + laufendes Image bleiben)                       |
 | rbmods-host-hygiene.timer        | planet            | systemd                                                            | —                    | wöchentlich dangling Docker-Images aufräumen (`docker image prune`, **kein** `-a`; Issue #308) |
-| rbmods-crash-collector           | planet            | systemd                                                            | —                    | Crash-Artefakte (Minidump + Trace + Log) sichern + Retention (Issue #462)                      |
+| rbmods-crash-collector           | planet            | systemd                                                            | —                    | Crash-Artefakte (Minidump + Trace + Log) sichern, Minidump parsen (Meta) + Retention (Issue #462/#481) |
 | rbbridge                         | in Mod-Containern | Prozess                                                            | —                    | Command-Injection (`exec_cmd_client`, Argument IMMER als EIN gequotierter String)              |
 
 ## Deployment-Plan (Ansible, inventory `planet`)
@@ -52,14 +52,20 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
    Rollback-Stand bleibt erhalten). Installiert `scripts/host_hygiene.sh` +
    Unit/Timer; automatische Variante der manuellen Aufräum-Befehle in
    [`SERVER_SIZING.md`](SERVER_SIZING.md).
-9. **crash-collector** — systemd-*Dauer*-Dienst (Issue #462): beobachtet
+9. **crash-collector** — systemd-*Dauer*-Dienst (Issue #462/#481): beobachtet
    `docker logs -f` des Dedicated-Servers auf Crash-Marker (`CRASH:`,
    `page fault`) und sichert das neueste `crash_info/<uuid>.{dmp,log,trace}`
    als Bundle nach `/opt/rbmods/crashes/<ts>-<uuid>/` — zusammen mit
-   `context.log` (letzte N Container-Zeilen) und `meta.json` (Image-Tag,
-   Git-SHA, Container-Uptime, Modulbasis aus der `module_range`-Zeile,
-   Fault-Adresse aus der `page fault`-Zeile). Retention (Default 20 Bundles)
-   begrenzt auch das crash_info-Wachstum im Wine-Volume (#462).
+   `context.log` (letzte N Container-Zeilen) und `meta.json`. Der Minidump wird
+   dabei von `rbmods-minidump-meta.py` minimal geparst (siehe „Crash-Bundles &
+   meta.json“ unten): Exception-Code/-Adresse, Modul, Modulbasis, Fault-RVA,
+   Fault-Thread und Stack-RVAs kommen aus dem Dump; fehlt/kaputt der Dump,
+   bleiben diese Felder `null` und `module_base`/`fault_address` fallen auf die
+   `module_range`-/`page fault`-Zeile DIESES Bundles zurück. Retention
+   (Default 20 Bundles) begrenzt auch das crash_info-Wachstum im Wine-Volume
+   (#462). Prod wird als **eigener Zwilling** mitbeobachtet (Unit
+   `rbmods-crash-collector-prod`, Bundle-Dir `/opt/rbmods/crashes-prod`,
+   Container `riftbreaker-dedicated-prod`, Issue #481).
 
 Grundsätze:
 
@@ -69,6 +75,60 @@ Grundsätze:
 - **Rollback** = vorherige `rbbattle.zip` / vorheriges Binary wieder einspielen.
   Für ein **Image**-Rollback bleibt das getaggte `rb-dedicated:<alte-sha>`
   erhalten — die Rolle `host-hygiene` entfernt nur dangling Images (#308).
+
+## Crash-Bundles & meta.json (Issue #462/#481)
+
+Der Collector (`scripts/crash_collector.sh`, Unit `rbmods-crash-collector` bzw.
+`rbmods-crash-collector-prod`) legt je Crash ein Bundle
+`<crash_collector_dir>/<ts>-<uuid>/` an: `<uuid>.{dmp,log,trace}`,
+`context.log` (letzte N Container-Zeilen) und `meta.json`. Beide Skripte sind
+planetfrei pruefbar — kein Docker, kein Wine, kein Netz:
+
+- `tests/shell/crash-collector.test.sh` — Bundle/Retention/Fallback (Fake-Docker)
+- `tests/shell/minidump_meta.test.sh` — Parser-Unit (synthetische MDMP-Fixtures)
+- `deploy/tests/crash-collector/run.sh` — Render der Unit (dev + prod)
+
+### meta.json-Felder
+
+Basis (Bestand): `collected_at`, `uuid`, `bundle`, `container`, `image`,
+`git_sha`, `container_started_at`, `container_uptime_seconds`, `crash_marker`,
+`crash_line`, `context_lines`, `files`.
+
+Aus dem Minidump (#481) — `null`, wenn der Dump fehlt oder kaputt ist:
+`exception_code`, `exception_address`, `module`, `module_base`, `fault_rva`,
+`fault_thread`, `stack_rvas`. Adressen/Offsets sind Hex-Strings **ohne** `0x`.
+
+**Same-Boot-Regel:** `module_base`/`fault_address` stammen bevorzugt aus dem
+Dump des Bundles; fehlt der Dump, aus der `module_range`-/`page fault`-Zeile
+**desselben** Bundles (`context.log`). Nie ein Wert aus einem anderen Boot.
+
+### Parser (`scripts/minidump_meta.py`)
+
+Nur stdlib (`struct`/`json`/`sys`/`os`) — keine Symbole, kein PDB, kein Netz.
+CLI: `minidump_meta.py [--json] <dmp>` -> JSON. Genutzte Streams:
+`Exception(6)`, `ModuleList(4)`, `ThreadList(3)`, `MemoryList(5)`;
+`Memory64List(9)` best-effort. Jeder Parsefehler (falsche Magic, truncated,
+fehlender Stream, RVA ausserhalb) -> `{"_ok": false, "reason": ...}` und
+**rc=0** (kein Traceback) — der Collector stirbt nie an einem kaputten Dump.
+
+Grenzen (bewusst, nicht geraten):
+
+- **Pointer-Breite 8 Byte** (64-bit Wine): ein 32-bit-Dump liefert falsche
+  Stack-Kandidaten — die Modulbasis-Breite wird nicht erkannt.
+- **`stack_rvas`**: nur gegen das **Fault-Modul** relativiert, dedupliziert,
+  aufsteigend, **Cap 32**; liegt der Stack nicht in der MemoryList, bleibt die
+  Liste leer (kein Fehler).
+- **RVA-Bounds** werden geprueft; out-of-bounds -> `_ok:false`.
+
+### prod-Instanz (#481)
+
+`deploy/prod-vars.yml`: `crash_collector_unit: rbmods-crash-collector-prod`,
+`crash_collector_dir: /opt/rbmods/crashes-prod`,
+`crash_collector_container: riftbreaker-dedicated-prod`; `deploy/deploy-prod.yml`
+bindet die Rolle `crash-collector` ein (Tag `crash`). Dev bleibt unveraendert
+(`rbmods-crash-collector`, `/opt/rbmods/crashes`) — kein Clash. Der Nachweis ist
+hermetisch (Render-Test + Fixture-Dumps); die echte prod-Beobachtung gilt erst
+nach einem prod-Deploy.
 
 ## Image-Tag-Retention (Issue #309)
 
