@@ -4,7 +4,7 @@
 Jede Dedi-Welt (A und B) läuft diesen Poller neben der rbbridge/tools-Suite:
 Er fragt GET /state des Tournament-Servers ab und übersetzt Zustandswechsel in
 Game-Commands über die lokale exec-Schiene (rbbridge exec-Dispatch / den
-Pipe-Kanal des Trainers — siehe trainer/README.md, `exec_cmd_client` ist hier
+Pipe-Kanal des Trainers — siehe server/README.md, `exec_cmd_client` ist hier
 der Platzhalter für den lokalen Command-Runner der jeweiligen Bridge).
 
 Reine Standardbibliothek (urllib) — keine Dependencies. Konfiguration via Env:
@@ -45,7 +45,7 @@ def run_game_command(cmd: str) -> None:
 
     v1-Platzhalter: Hier ruft die Bridge ihren Command-Runner auf
     (im Ziel-Setup z. B. exec_cmd_client <cmd> gegen die rbbridge-Named-Pipe
-    \\\\.\\pipe\\rbbattle — siehe trainer/protocol.md). Bewusst idempotente
+    \\\\.\\pipe\\rbbattle — siehe server/protocol.md). Bewusst idempotente
     Kommandos verwenden (GO/Unpause doppelt ist unkritisch).
 
     Quoting (Issue #18): `cmd` ist EIN String; beim Aufruf des Command-Runners

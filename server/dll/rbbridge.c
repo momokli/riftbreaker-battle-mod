@@ -2,7 +2,7 @@
  * rbbridge.c - In-Game-Bridge fuer den Rift-Breaker-Trainer (Harness),
  *              dual: Trainer-DLL ODER Standalone-EXE.
  *
- * Rolle (Architektur, siehe trainer/README.md):
+ * Rolle (Architektur, siehe server/README.md):
  *   Die Trainer-DLL ist das EINZIGE I/O-Gateway zwischen Spielprozess und
  *   Aussenwelt (Tournament-Server). Der Lua-Mod bleibt reine Spiellogik.
  *   Diese DLL wird per Injector zur Laufzeit geladen (keine Datei-Engine-
@@ -19,7 +19,7 @@
  *
  * Was der Harness schon kann:
  *   - Named-Pipe-Server "\\.\pipe\rbbattle" (ein Client zur Zeit, v0)
- *   - Line-delimited-JSON-Protokoll v0 (siehe trainer/protocol.md):
+ *   - Line-delimited-JSON-Protokoll v0 (siehe server/protocol.md):
  *       Ingress: {"cmd":"ping"}          -> {"event":"pong"}
  *                {"cmd":"probe"}         -> Memory-Dump (PlayerService-Kette)
  *                {"cmd":"get_state"}     -> carbonium/ironium/max/resources (C++)
@@ -642,7 +642,7 @@ static int send_line(HANDLE hPipe, const char *fmt, ...)
 /*
  * Spiel-State-Egress (Issue #13): periodischer State-Snapshot.
  *
- * send_state() emittiert score_update gemaeß trainer/protocol.md (Score,
+ * send_state() emittiert score_update gemaeß server/protocol.md (Score,
  * Ressourcen, aktuelle Wave). Die Struktur ist stabil und wird vom Server
  * (POST /report event=score_update) und der Web-UI konsumiert; die Werte
  * kommen aus read_game_state().
@@ -670,7 +670,7 @@ static void read_game_state(game_state_t *st)
 /*
  * send_state(): periodischer State-Snapshot (Egress, Issue #13).
  *
- * Emittiert score_update gemaeß trainer/protocol.md. Die Werte stammen aus
+ * Emittiert score_update gemaeß server/protocol.md. Die Werte stammen aus
  * read_game_state() (bis zur RE-Phase Defaults, alles 0).
  */
 static void send_state(HANDLE hPipe)

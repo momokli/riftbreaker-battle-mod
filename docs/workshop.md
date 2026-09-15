@@ -1,7 +1,7 @@
 # Steam-Workshop-Upload — Anleitung (nur Lua-Mod!)
 
-> ⚠️ **Grundregel: NUR der Lua-Mod (`mod/`, `bausteine/00–03`) geht in den
-> Workshop. Der Trainer (`trainer/`, `bausteine/rbbridge`) wird NIE
+> ⚠️ **Grundregel: NUR der Lua-Mod (`client-mod/`, `bausteine/00–03`) geht in den
+> Workshop. Der Trainer (`server/`, `server`) wird NIE
 > hochgeladen** — In-Process-Injection verstößt gegen die Plattform-Regeln
 > und bleibt private Distribution (Entscheidung 08.09.2026,
 > `docs/concept.md` → „Steam-Kompatibilität“).
@@ -36,7 +36,7 @@ Der Workshop-Content-Pfad (`...\steamapps\workshop\content\780310\<modid>\`) nut
    └── (keine Trainer-/DLL-/Python-Dateien!)
    ```
 
-   Vorbereiten per Repo-Skript oder manuellem Kopieren aus `mod/`:
+   Vorbereiten per Repo-Skript oder manuellem Kopieren aus `client-mod/`:
    ```bash
    scripts/package_mod.sh              # erzeugt dist/rbbattle-mod-<version>.zip
    ```
@@ -87,7 +87,7 @@ steamcmd +login <steamaccount> +workshop_build_item D:\rbbattle_workshop\worksho
 
 ## Vor jedem Upload prüfen (Checkliste)
 
-- [ ] Content-Ordner enthält **nur** Lua-Mod-Dateien (kein `trainer/`,
+- [ ] Content-Ordner enthält **nur** Lua-Mod-Dateien (kein `server/`,
       keine DLL, kein `pipe_client.py`, kein `scan/`)
 - [ ] `visibility` korrekt gesetzt (Test: `1`)
 - [ ] `appid` = `780310` (The Riftbreaker)
@@ -100,7 +100,7 @@ steamcmd +login <steamaccount> +workshop_build_item D:\rbbattle_workshop\worksho
 - Workshop-Regeln verbieten Prozess-Manipulation/Injection-Inhalte.
 - Der Trainer ist ein „für uns“-Tool (runtime-only Injection, kein
   Datei-Eingriff) — Distribution ausschließlich privat (z. B. direktes
-  ZIP von `trainer/` bzw. `bausteine/rbbridge/`), nie über Steam.
+  ZIP von `server/` bzw. `server/`), nie über Steam.
 - Der Lua-Mod bleibt dadurch ein normaler, update-fester Workshop-Mod.
 
 ## Referenzen

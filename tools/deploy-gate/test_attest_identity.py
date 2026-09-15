@@ -184,7 +184,7 @@ class RealRepoContractTest(unittest.TestCase):
         self.assertIn("mods_zip_env_name", text)
 
     def test_mod_log_carries_mod_load_identity(self):
-        text = self._read("mod/lua/rbbattle_autoexec.lua")
+        text = self._read("client-mod/lua/rbbattle_autoexec.lua")
         self.assertIn("event=mod_load", text)
         self.assertIn("DeployEnv", text)
 

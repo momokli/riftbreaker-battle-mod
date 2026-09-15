@@ -6,7 +6,7 @@
 --
 -- Business-Logik lag bis Commit 3c4c5249696c17c0eb2f535802168b9f57c9e9a3 hier
 -- und wurde entfernt (#378/#380). Wiederherstellbar via:
---   git show 3c4c524:mod/lua/rbbattle_autoexec.lua
+--   git show 3c4c524:client-mod/lua/rbbattle_autoexec.lua
 -- ============================================================================
 
 local RBB = {}

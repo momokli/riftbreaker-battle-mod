@@ -42,11 +42,11 @@ Matheos Prototyp-Repo (<https://github.com/BestToasty/riftbreaker_mod>, Stand 07
 - macOS-Mod-Support — **verifiziert: keine native macOS-Version** (Steam-App 780310 `mac:false`, nur Windows); Mod-Install nur über Wine-basiertes GPTK/CrossOver/Whisky oder Windows-VM (Parallels). In-Game-Test auf echtem Mac bleibt offen (`docs/research/macos-mod-support.md`).
 - Exakte Feind-Team-Zuordnung bei `SpawnEntity(..., "")` (Blueprint-Standard erwartet).
 - Popup-/HUD-Verhalten in realistischen Spielsituationen (Fokus, Mehrfach-Popups).
-- Bind-Persistenz der Konsole über Sessions hinweg (unschädlich, s. mod/README).
+- Bind-Persistenz der Konsole über Sessions hinweg (unschädlich, s. client-mod/README).
 
 ## Spike-Ergebnisse
 
-`mod/` enthält Skeleton + Experimente A (Wave-Spawn), B (Custom-UI-Popup) und
+`client-mod/` enthält Skeleton + Experimente A (Wave-Spawn), B (Custom-UI-Popup) und
 C (Log-Bridge `[RBBATTLE] event=...` + Konsolen-Command `rb_wave <level>`).
 In-Game-Test: ausstehend (Momo).
 

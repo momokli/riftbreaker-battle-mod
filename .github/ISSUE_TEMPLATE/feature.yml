@@ -40,7 +40,7 @@ body:
     id: bereich
     attributes:
       label: Betroffene Bausteine / Bereich
-      placeholder: z. B. bausteine/01-wave-spawn, site/, trainer/
+      placeholder: z. B. server/, cockpit/, client-mod/
     validations:
       required: false
 

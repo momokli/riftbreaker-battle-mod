@@ -30,7 +30,7 @@ fuer Named Pipes) - also Server zuerst starten oder das Skript einfach
 laufen lassen und dann starten/injizieren.
 
 Protokoll v0: eine JSON-Nachricht pro Zeile, UTF-8, '\n' abgeschlossen
-(siehe trainer/protocol.md bzw. README.md in diesem Ordner).
+(siehe server/protocol.md bzw. README.md in diesem Ordner).
 """
 
 import json

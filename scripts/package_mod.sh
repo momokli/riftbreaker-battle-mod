@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # ============================================================================
-# package_mod.sh — zippt den Mod-Ordner (mod/) fuer manuelle Verteilung/Tests.
+# package_mod.sh — zippt den Mod-Ordner (client-mod/) fuer manuelle Verteilung/Tests.
 #
 # Verwendung:
 #   scripts/package_mod.sh                 -> dist/rbbattle-mod-<version>.zip
 #   scripts/package_mod.sh v0.2.0          -> dist/rbbattle-mod-v0.2.0.zip
 #
-# Inhalt des Zips: der komplette Mod-Ordner (mod/) - also das Lua-Mod mit
+# Inhalt des Zips: der komplette Mod-Ordner (client-mod/) - also das Lua-Mod mit
 # README - als Content-Root (lua/...), genau wie er nach
 # <game>/mods/<ModName>/ gehoert. NUR der Mod, NIE Trainer-/Server-Teile
 # (Trainer bleibt privat, siehe docs/workshop.md).
@@ -19,7 +19,7 @@ cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
 VERSION="${1:-$(bash "$ROOT/scripts/mod_version.sh")}"
-SRC_DIR="$ROOT/mod"
+SRC_DIR="$ROOT/client-mod"
 OUT_DIR="$ROOT/dist"
 OUT_FILE="$OUT_DIR/rbbattle-mod-$VERSION.zip"
 TMP_ZIP="$OUT_DIR/.rbbattle-mod-$VERSION.zip.tmp"
@@ -34,8 +34,8 @@ rm -f "$TMP_ZIP"
 echo "[package_mod] Packe $SRC_DIR -> $OUT_FILE"
 
 if command -v zip >/dev/null 2>&1; then
-    # Von INNERHALB von mod/ zippen, damit das Zip die Content-Root ist
-    # (lua/..., README.md) und nicht den Ordner mod/ selbst enthaelt.
+    # Von INNERHALB von client-mod/ zippen, damit das Zip die Content-Root ist
+    # (lua/..., README.md) und nicht den Ordner client-mod/ selbst enthaelt.
     (cd "$SRC_DIR" && zip -r "$TMP_ZIP" . -x '*.DS_Store' >/dev/null)
 elif command -v python3 >/dev/null 2>&1; then
     # Fallback: gleiche Semantik (Content-Root, .DS_Store raus) via zipfile.

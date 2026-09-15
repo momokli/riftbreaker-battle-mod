@@ -4,7 +4,7 @@ Lebendes Dokument: hält bisherige Annahmen (mit Status) und den aktuell
 verifizierten Stand fest. Vertiefungen: Design/Architektur in
 [`docs/concept.md`](concept.md), Engine-Fakten in
 [`docs/findings.md`](findings.md), Trainer-Protokoll in
-[`trainer/protocol.md`](../trainer/protocol.md).
+[`server/protocol.md`](../server/protocol.md).
 
 ## Stand 2026-09-09 (verifiziert)
 
@@ -36,7 +36,7 @@ Kernannahmen der Turnier-Infra von der Doku in die Praxis überführt:
 - **Turnier-Infra = 2 Dedi-Instanzen + Bridge + Tournament-Server.** Jede
   Partie läuft als eigene Dedicated-Server-Instanz (Welt bootet selbst,
   Game-Loop ohne Client); die injizierte Bridge (`rbbridge`) ist der
-  Ingress-Kanal für Mod-Kommandos (`exec`-Kanal, `trainer/protocol.md`); der
+  Ingress-Kanal für Mod-Kommandos (`exec`-Kanal, `server/protocol.md`); der
   Tournament-Server (Baustein 06) orchestriert. Ein **Client ist nur noch zum
   aktiven Spielen** nötig (echter Gegner, UI-nahe Tests) — nicht für den
   Spielbetrieb.
@@ -58,8 +58,8 @@ Kernannahmen der Turnier-Infra von der Doku in die Praxis überführt:
 
 ## Historische Annahmen & Status
 
-Rekonstruiert aus `docs/concept.md`, `docs/findings.md`, `trainer/README.md`,
-`trainer/protocol.md` und Issue #7 (Stand jeweils vor 2026-09-09).
+Rekonstruiert aus `docs/concept.md`, `docs/findings.md`, `server/README.md`,
+`server/protocol.md` und Issue #7 (Stand jeweils vor 2026-09-09).
 
 | # | Annahme (vor 2026-09-09) | Status |
 |---|---|---|
