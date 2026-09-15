@@ -21,6 +21,7 @@ Quality-Gates in diesem Repo. Sprache: Deutsch oder Englisch — beides ist ok.
 - **Kein Direct-Push auf `main`.** Alles läuft über einen PR.
 - **Nicht an ungeclaimten Issues arbeiten** — erst `!claim`.
 - **PR immer mit Issue verlinkt** (`Closes #N` schließt automatisch, `Refs #N` referenziert nur) — Pflicht, sonst schlägt das Issue-Referenz-Gate fehl.
+- **Full-Chain-Disziplin** ([docs/FULL_CHAIN_RULE.md](docs/FULL_CHAIN_RULE.md), #394): Jedes v2-Contract-Item (#385–#391) liefert den **ganzen Weg** — Game-C++-Read/Write → `rbbridge.dll` → `pipe_bridge` HTTP → WebUI-Feld/Button. PR-Gate-Frage: **„Ist es an die Web-UI verdrahtet?“** Ein PR mit nur RE-Offset oder nur DLL-Read ist **nicht** fertig.
 - **Definition of Done**
   - CI grün: **lint + pr-quality + ci + deploy-check-local** (Required; `deploy-check` auf planet läuft informational und blockiert nicht).
   - Neuer Code hat Tests.

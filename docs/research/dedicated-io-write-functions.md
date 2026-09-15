@@ -6,6 +6,10 @@ the DLL can later add typed native WRITE commands that bypass
 issue #378 (the "pure C++ WRITE" of the read/write pair; the read half is
 already live via #363/#365/#370/#376).
 
+> Ein belegter Write-RVA ist **nicht** automatisch `proven`: Für v2-Contract-Items
+> zählt die volle Kette bis zum WebUI-Button — siehe
+> [FULL_CHAIN_RULE.md](../FULL_CHAIN_RULE.md) (#394/#378).
+
 Build: **2.0.58485** (GOG == Dedi, byte-identical). Tools: `llvm-pdbutil dump
 -publics` (stripped PDB, `S_PUB32` names+addresses only), `tools/re/disasm.py`.
 

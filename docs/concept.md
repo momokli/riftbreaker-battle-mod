@@ -47,6 +47,10 @@ Zwei parallele Spiel-Instanzen, gekoppelt über einen kleinen Relay-Server:
 
 Das Spiel ist **rundenbasiert** — es gibt keine Echtzeit-Anforderungen. Ein simples **Event-/Pull-Modell** (Zustand abfragen, Events durchreichen) reicht vollkommen; Latenz ist unkritisch.
 
+Ein Contract-Item gilt erst als *proven*, wenn es diese Kette **vollständig**
+durchläuft (Game-C++ → `rbbridge.dll` → `pipe_bridge` HTTP → WebUI). Die Regel
+und die PR-Gate-Frage stehen in [FULL_CHAIN_RULE.md](FULL_CHAIN_RULE.md) (#394/#378).
+
 ## Komponenten im Detail
 
 ### Lua-Mod (`mod/`)

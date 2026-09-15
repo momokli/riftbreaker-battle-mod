@@ -70,3 +70,7 @@ riftbreaker-battle-mod/
 Beiträge willkommen! Workflow, Claim-System (`!claim` im Issue-Kommentar) und
 Quality-Gates stehen in [CONTRIBUTING.md](CONTRIBUTING.md); den Projektfortschritt
 zeigt [docs/PROGRESS.md](docs/PROGRESS.md).
+
+Für v2-Contract-Items gilt die [Full-Chain-Disziplin](docs/FULL_CHAIN_RULE.md)
+(#394): ein Item ist erst `proven`, wenn es von der Game-C++-Ebene bis zum
+WebUI-Feld/Button verdrahtet ist.

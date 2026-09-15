@@ -6,6 +6,11 @@ laufenden Rift-Breaker-Dedicated-Server und wird dort ausgeführt?
 Ziel-AC (#265): `exec rb_wave 3` von außen → `exec_result ok:true` → Game-Log
 `event=wave`.
 
+> **Full-Chain-Disziplin:** Ingress (`/exec`) ist nur die halbe Kette. Ein
+> Contract-Item ist erst `proven`, wenn Read **und** Write bis zum WebUI-Feld/
+> Button geschlossen sind — siehe [FULL_CHAIN_RULE.md](FULL_CHAIN_RULE.md)
+> (#394/#378).
+
 ## Die Lücke (IST vor #265)
 
 - Der Mod `rbbattle` lädt headless, Map + Console-Kommandos sind registriert.

@@ -6,6 +6,10 @@ Notiz zum Transportvertrag zwischen dem Relay (`bausteine/07-relay/relay.py`,
 [trainer/protocol.md](../trainer/protocol.md) dokumentiert; dieser Abschnitt
 fixiert die Parameter, die der Relay einhält.
 
+> Ergänzend: [FULL_CHAIN_RULE.md](FULL_CHAIN_RULE.md) (#394) — der Pipe-Kanal ist
+> eine Stufe der v2-Kette; ein Contract-Item ist erst `proven`, wenn auch die
+> WebUI-Stufe (Read via `/get_state`, Write via `/add_resource` | `/exec`) steht.
+
 ## Transport
 
 | Aspekt | Wert |

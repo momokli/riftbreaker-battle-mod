@@ -5,6 +5,10 @@ Build **2.0.58485** (GOG == Dedi, byte-identical). Companion to
 `riftbreaker-re` skill. Scope: which game-state fields have a real C++
 representation reachable **without the Lua VM**, and which are **Lua-only**.
 
+> Ein hier belegter Read ist **nicht** automatisch `proven`: Für v2-Contract-Items
+> zählt die volle Kette bis zum WebUI-Feld — siehe
+> [FULL_CHAIN_RULE.md](../FULL_CHAIN_RULE.md) (#394/#378).
+
 Method: `llvm-pdbutil dump -publics` on the mac PDB (symbols only — the TPI/IPI
 type streams are empty), RVA conversion per the skill
 (`.text` `0001:` -> `0x1000` + decimal; `.rdata` `0002:` -> `0x2DA2000` +
