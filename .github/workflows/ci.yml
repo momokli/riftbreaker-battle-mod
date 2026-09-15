@@ -89,7 +89,7 @@ jobs:
           fi
 
           if printf '%s\n' "$CHANGED" \
-             | grep -Eq '^(server/|cockpit/|client-mod/|scripts/(package_bausteine|mod_version)\.sh|\.github/workflows/ci\.yml)'; then
+             | grep -Eq '^(server/|cockpit/|client-mod/|scripts/(package|mod_version)\.sh|\.github/workflows/ci\.yml)'; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
             echo "build=false" >> "$GITHUB_OUTPUT"
@@ -189,7 +189,7 @@ jobs:
       # MinGW-w64 ist jetzt vorab auf dem Runner-Host installiert
       # (.github/runner/setup.sh, Issue #153) — kein per-Job-sudo-apt-get mehr.
       # Der Cross-Compiler muss auf dem Host vorhanden sein; sonst fällt
-      # package_bausteine.sh auf das Quell-Zip für Baustein 04 zurück.
+      # package.sh auf das Quell-Zip für Baustein 04 zurück.
       - name: ccache-Cache (MinGW-C++-Build rbbridge)
         if: needs.changes.outputs.build == 'true'
         uses: actions/cache@v4
@@ -214,7 +214,7 @@ jobs:
           else
             echo "Hinweis: /opt/ccache-rbbattle/bin fehlt — .github/runner/setup.sh noch nicht ausgeführt; Build ohne ccache."
           fi
-          bash scripts/package_bausteine.sh
+          bash scripts/package.sh
       - name: Artefakte hochladen (dist/*.zip + Mod-Updater)
         if: needs.changes.outputs.build == 'true'
         uses: actions/upload-artifact@v4

@@ -38,7 +38,7 @@ jobs:
       # Einreihen in die Liste oben, um den Hunk von #254 (tests/shell) nicht
       # zu ueberlappen (parallele PRs, ein Datei-Block).
       - name: shellcheck (dedicated-server)
-        run: shellcheck tools/dedicated-server/scripts/*.sh
+        run: shellcheck deploy/dedicated-server/scripts/*.sh
       # Red/Green-Beweis der Image-Tag-Retention (Issue #309): laufendes Image
       # + N Rollback-Tags bleiben, nur aeltere Tags gehen. Braucht kein Docker
       # (Fake-docker + Szenario-Dateien).

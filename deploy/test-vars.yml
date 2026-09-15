@@ -50,7 +50,7 @@ website_docroot: "/srv/rbmods-site-test-{{ rbbattle_run_suffix }}"
 # erbt der Boot-Test den dev-Pfad (Live-Befund #3).
 rbtools_dir: "/opt/rbmods/rbtools/{{ rift_env }}-{{ rbbattle_run_suffix }}"
 rbtools_staging_dir: "{{ rbtools_dir }}/.staging"
-# Der Build-Kontext (tools/dedicated-server) wurde bisher in einen festen Pfad
+# Der Build-Kontext (deploy/dedicated-server) wurde bisher in einen festen Pfad
 # (/opt/rbmods/dedicated-server) synchronisiert. Bei zwei parallelen Läufen
 # schreiben beide in dasselbe Verzeichnis, während `docker build` daraus liest
 # → Race (halb geschriebene Files). Das ist genau die Kollisionsklasse aus
