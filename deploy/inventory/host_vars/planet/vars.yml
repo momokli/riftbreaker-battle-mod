@@ -32,7 +32,17 @@ riftbreaker_server_port_udp: 6321
 # ist im neuen Schema ueberall "riftbreaker" (/opt/rbmods/compose/rift-<env>/
 # riftbreaker) — die projekt-abgeleitete Kollision wird so vermieden und dev/
 # prod laufen als getrennte Compose-Projekte (kein Netz-/Container-Clash).
-riftbreaker_compose_project: "rift-{{ rift_env }}"
+#
+# Variante (a), Befund 2: HISTORISCHER Projektname BEIBEHALTEN. Compose
+# praefixt unbenannte Top-Level-Volumes mit dem Projektnamen
+# (<projekt>_<volume>) — live auf planet heisst das dev-Volume
+# `riftbreaker-dedicated_rb-wine` (+ `..._rb-saves`). Der Projektname ist
+# unabhaengig vom Compose-Verzeichnis; eine Umbenennung auf `rift-dev` wuerde
+# NEUE leere Volumes erzeugen und Wine-Prefix/Saves der laufenden Instanz
+# verwaisen lassen (die Host-Pfad-Migration deckt Docker-Ressourcen nicht ab).
+# Deshalb bleibt der Wert der historische Default (Basename des ALTEN
+# Deploy-Verzeichnisses /opt/rbmods/compose/riftbreaker-dedicated).
+riftbreaker_compose_project: "riftbreaker-dedicated"
 # Compose-/Config-/Sessions-Pfade im `<env>`-Schema.
 riftbreaker_deploy_dir: "/opt/rbmods/compose/rift-{{ rift_env }}/riftbreaker"
 riftbreaker_config_dir: "{{ riftbreaker_deploy_dir }}/config"

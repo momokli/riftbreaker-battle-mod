@@ -31,7 +31,11 @@ per_env:
   riftbreaker_server_port_udp: [prod, test]
   # Compose-Projekt JE Env explizit (Issue #483, Ziel B): im neuen
   # `<env>`-Schema ist der Compose-Verzeichnis-Basename ueberall "riftbreaker"
-  # -> ohne expliziten Projektnamen kollidierten dev und prod.
+  # -> ohne expliziten Projektnamen kollidierten dev und prod. Variante (a),
+  # Befund 2: der Wert bleibt der HISTORISCHE Projektname
+  # (dev `riftbreaker-dedicated`, prod `riftbreaker-dedicated-prod`), damit die
+  # projekt-praefixten Docker-Volumes der laufenden Instanzen weiter getroffen
+  # werden; test bleibt lauf-isoliert (`rb-test-<suffix>`).
   riftbreaker_compose_project: [dev, prod, test]
   riftbreaker_game_dir: [prod, test]
   riftbreaker_mod_dir: [prod, test]

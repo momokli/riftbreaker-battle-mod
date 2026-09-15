@@ -16,7 +16,14 @@ riftbreaker_server_port_udp: 6322
 # Compose-Projekt EXPLIZIT (Issue #483, Ziel B): der Verzeichnis-Basename ist im
 # neuen Schema ueberall "riftbreaker" — ohne diesen Wert kollidierten dev und
 # prod im Compose-Projektnamen/Netz.
-riftbreaker_compose_project: "rift-{{ rift_env }}"
+#
+# Variante (a), Befund 2: HISTORISCHER Projektname BEIBEHALTEN
+# (`riftbreaker-dedicated-prod` = Basename des ALTEN prod-Deploy-Verzeichnisses).
+# Compose praefixt unbenannte Volumes mit dem Projektnamen; live heisst das
+# prod-Volume `riftbreaker-dedicated-prod_rb-wine-prod` (+ `..._rb-saves-prod`).
+# Eine Umbenennung auf `rift-prod` erzeugte neue leere Volumes und verwaiste den
+# Wine-Prefix/die Saves der laufenden Instanz.
+riftbreaker_compose_project: "riftbreaker-dedicated-prod"
 
 # Eigener Game-Stand + Mod (wird im Tag-Workflow, Follow-up, eingefroren).
 # Pfad-Schema `<env>` (Issue #483, Ziel B): /srv/rift-<env>/game|backups.
