@@ -31,6 +31,7 @@ und die Seite nur scannt:
 | `Resources` | Carbonium + Ironium als *eine* ausgerichtete Tabelle (Wert / Max / Menge / `+` / `−`) |
 | `Mission Flow (Wave)` | Readouts (`flow`, `active`, `payload.spawn_point`) + Start- und Stop-Reihe |
 | `Creatures Base Difficulty` | Readout + `set` / `+ increase` / `− decrease` |
+| `Send Tracker (Carbonium)` | persistentes Send-Log (timestamp · resource · amount) + Summe/Anzahl, Filter, Quelle |
 | `Server Control (Plane B)` | Status-Strip, Lifecycle-Toolbar, Container-Log |
 
 Das **Container-Log** ist die einzige unbegrenzt wachsende, vertikal geformte
@@ -86,7 +87,30 @@ Pfade auf derselben Origin (Bearer-Injektion macht die Caddy-Route):
 Ist der Agent nicht erreichbar (HTTP !ok, Parse-Fehler), zeigt das Panel nur
 `—` und meldet den Fehler in einer eigenen Statuszeile — **ohne Reload**.
 
-### 3. Später (offen)
+### 3. Send-Signal — Send-Tracker (#527, offener Anschluss #526)
+
+Panel `send tracker (carbonium)`: das Cockpit bekommt eine **persistente**
+Send-Liste (timestamp + amount + resource) für den 1.0-Send-Loop (#517). Sie ist
+**nicht transient**: Einträge liegen unter dem `localStorage`-Key `rbb.send_log`
+und werden bei jedem Laden aus dem Store gelesen — ein Reload verliert sie
+nicht. Zusätzlich ist das Log **querybar**: das Filterfeld blendet
+Nicht-Treffer aus (Summe/Anzahl folgen dem Filter).
+
+Die **Quelle ist gekapselt und austauschbar**: `createSendTracker({source})`
+konsumiert nur ein Objekt mit `poll(cursor) -> {entries, cursor}`
+(`{timestamp, resource, amount}`). Der Default-Adapter
+`createBridgeSendSource()` ist **provisorisch** — er postet `get_send_log`
+(analog zu den übrigen IO-Kanal-Routen) und ist **nicht** als endgültiger
+Transport zu lesen: den legt der Spike [#526](https://github.com/momokli/riftbreaker-battle-mod/issues/526)
+fest. Fällt/wirft die Quelle, bleibt das persistente Log sichtbar und die
+Statuszeile meldet den Ausfall (kein Reload, kein Wurf).
+
+> **Offener Anschluss (bewusst):** Bis #526 entschieden ist, antwortet die
+> Bridge-Route `get_send_log` nicht; das Panel zeigt dann `—` und
+> `kein Send-Source-Adapter (#526)`. Anschluss = **nur** den Adapter tauschen
+> (`source`-Objekt), keine UI-Änderung.
+
+### 4. Später (offen)
 
 Denkbar sind weitere Quellen (z. B. eine Datenbank / weitere Dienste). Sie
 kommen als zusätzliche Konsum-Pfade dazu, ohne dass die UI selbst Logik
@@ -107,21 +131,26 @@ verhaltensneutral verschoben (dieser Baustein).
 
 ## Wie testen
 
-Das Panel `server control (plane B)` ist ohne Netzwerk/DOM testbar: der
-testbare Marker-Block wird aus `cockpit.html` extrahiert und in einem
-`vm`-Kontext ausgewertet (Fake-`fetch` + Fake-`document`):
+Die Panels `server control (plane B)` und `send tracker` sind ohne
+Netzwerk/DOM testbar: der jeweilige testbare Marker-Block wird aus
+`cockpit.html` extrahiert und in einem `vm`-Kontext ausgewertet (Fake-`fetch`,
+Fake-`document`, Fake-store/source):
 
 ```bash
 cd tests/server-control-panel && npm test
+cd tests/send-tracker && npm test
 ```
 
-Geprüft wird das defensive Contract: immer `—`, nie werfen, nie
-`location.reload`.
+Geprüft wird das defensive Contract (immer `—`, nie werfen, nie
+`location.reload`) und beim Send-Tracker zusätzlich Persistenz über den Store,
+Filter-Query, Adapter-Kapselung und idempotentes Merge.
 
 ## Status
 
 - [x] `cockpit.html` als eigener Baustein `08-control-ui` (#474, Schritt 1 — verhaltensneutral verschoben)
 - [x] Panel `server control (plane B)` (#422) + Node-Test `tests/server-control-panel`
 - [x] Qt-Stil-Layout: vier Gruppen, Log-Pane rechts, Statusleiste (#468)
+- [x] Send-Tracker-Panel: persistentes Send-Log + austauschbarer Quell-Adapter (#527); Node-Test `tests/send-tracker`
+- [ ] Send-Tracker an den finalen Transport anschließen (Adapter tauschen) — hängt an Spike #526
 - [ ] Schritt 2 (#474): Caddy serviert die UI statisch, proxyt nur die API-Pfade; `cockpit_html.inc` entfällt
 - [ ] Live-Daten des Plane-B-Panels brauchen gemergtes #424 (Agent + Caddy-Route `handle /server/*` + Bearer-Injektion)
