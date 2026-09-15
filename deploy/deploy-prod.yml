@@ -28,6 +28,9 @@
     # dev-Container. Kommt prod ein Agent hinzu (eigener Port/Unit/Token),
     # hier auf true setzen + server-control-Rolle aufnehmen.
     server_control_enabled: false
+    # Deploy-Identitaet (Issue #483, US1): DIESES Play ist prod. Play-Var, damit
+    # prod nicht den dev-Wert erbt; der Ref traegt zusaetzlich den Git-Tag.
+    rift_env: prod
 
   pre_tasks:
     - name: Deploy-SHA für den Image-Tag ermitteln
@@ -42,6 +45,13 @@
     - name: Image-Tag (Deploy-SHA) als Fact setzen
       set_fact:
         deploy_image_tag: "{{ rbbattle_prod_sha.stdout | trim }}"
+      tags: always
+
+    # Deploy-Identitaet (Issue #483, US1): prod-Ref = Git-Tag + Checkout-SHA.
+    - name: "Deploy-Identitaet erzeugen (Issue #483)"
+      include_tasks: "{{ playbook_dir }}/tasks/deploy-identity.yml"
+      vars:
+        rift_deploy_checkout: "{{ playbook_dir }}/.."
       tags: always
 
   roles:

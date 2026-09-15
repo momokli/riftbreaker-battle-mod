@@ -16,6 +16,11 @@
   hosts: planet
   become: true
 
+  vars:
+    # Deploy-Identitaet (Issue #483, US1): DIESES Play ist test. Play-Var, damit
+    # die Test-Instanz nicht den dev-Wert erbt.
+    rift_env: test
+
   pre_tasks:
     - name: Test-SHA für den Image-Tag ermitteln
       command: git -c safe.directory=* -C {{ playbook_dir }}/.. rev-parse --short=12 HEAD
@@ -28,6 +33,13 @@
     - name: Image-Tag (Test-SHA) als Fact setzen
       set_fact:
         deploy_image_tag: "{{ rbbattle_test_sha.stdout | trim }}"
+
+    # Deploy-Identitaet (Issue #483, US1): test-Ref = Checkout-SHA.
+    - name: "Deploy-Identitaet erzeugen (Issue #483)"
+      include_tasks: "{{ playbook_dir }}/tasks/deploy-identity.yml"
+      vars:
+        rift_deploy_checkout: "{{ playbook_dir }}/.."
+      tags: always
 
     # Disk-Space-Gate (#310) — derselbe Preflight wie in deploy/site.yml, damit
     # der Boot-Test denselben Abbruch-Pfad fährt (Schwelle via test-vars.yml
