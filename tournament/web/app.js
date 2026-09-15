@@ -199,6 +199,18 @@ async function poll() {
   }
 }
 
+/* Deploy-Identitaet (Issue #483, US4): Badge aus GET /health (env · ref). */
+async function loadIdentity() {
+  try {
+    const { status, data } = await api("GET", "/health");
+    if (status === 200 && data) {
+      const badge = $("envBadge");
+      badge.textContent = `${data.env || "unknown"} · ${data.ref || "unknown"}`;
+      badge.classList.remove("hidden");
+    }
+  } catch (_) { /* Badge bleibt verborgen */ }
+}
+
 async function doAction(act) {
   try {
     if (act === "registerA" || act === "registerB") {
@@ -267,6 +279,7 @@ function init() {
     if (saved) me = JSON.parse(saved);
   } catch (_) {}
   bindActions();
+  loadIdentity();
   poll();
   setInterval(poll, POLL_MS);
 }

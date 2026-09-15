@@ -41,6 +41,9 @@
     # damit die Verdrahtung eindeutig an DER Stelle steht, die die Rolle
     # enthaelt (Rollen-Defaults + host_vars sind niedriger praezedent).
     server_control_enabled: true
+    # Deploy-Identitaet (Issue #483, US1): DIESES Play ist dev. Play-Var, damit
+    # prod/test nicht den dev-Wert erben (dieselbe Praezedenz wie oben).
+    rift_env: dev
 
   pre_tasks:
     # Image-Tag = Deploy-SHA (kein `latest`). Läuft auch im --check
@@ -61,6 +64,22 @@
     - name: Image-Tag (Deploy-SHA) als Fact setzen
       set_fact:
         deploy_image_tag: "{{ rbbattle_deploy_sha.stdout | trim }}"
+      tags: always
+
+    # Deploy-Identitaet (Issue #483, US1): setzt rift_deploy_ref +
+    # rift_deploy_identity. `tags: always`, damit das Gate bei jedem Lauf greift.
+    - name: "Deploy-Identitaet erzeugen (Issue #483)"
+      include_tasks: "{{ playbook_dir }}/tasks/deploy-identity.yml"
+      vars:
+        rift_deploy_checkout: "{{ playbook_dir }}/.."
+      tags: always
+
+    # Fail-loud-Contract (Issue #483, US2): jede Env-Variable ist per-env oder
+    # shared (begruendet) — sonst bricht der Deploy ab (ENV-ISOLATION-GATE).
+    - name: "ENV-ISOLATION-GATE (Issue #483)"
+      include_tasks: "{{ playbook_dir }}/tasks/env-assert.yml"
+      vars:
+        rift_env_isolation_root: "{{ playbook_dir }}/.."
       tags: always
 
     # Disk-Space-Gate (#310): MUSS VOR `dedicated-server-image` (Image-Build)

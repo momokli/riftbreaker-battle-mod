@@ -73,3 +73,14 @@ rift_caddy_deploy_dir: /opt/rbmods/compose/rift-caddy-prod
 crash_collector_unit: rbmods-crash-collector-prod
 crash_collector_dir: /opt/rbmods/crashes-prod
 crash_collector_container: riftbreaker-dedicated-prod
+# --- Docroot/Mods/Caddy-Daten explizit prod (Issue #483, US3) ----------------
+# ADDITIV, ohne Rename der dev-Pfade: dev mountet /srv/rbmods-site — Live-
+# Befund #1 (beide Caddys teilten denselben docroot, prod schrieb in dev). prod
+# bekommt einen EIGENEN Docroot/Mods-Ort; mods_zip_dest folgt website_mods_dir.
+website_docroot: /srv/rbmods-site-prod
+website_mods_dir: "{{ website_docroot }}/mods"
+mods_zip_dest: "{{ website_mods_dir }}/{{ mods_zip_name }}"
+# Caddy-Daten/Config explizit prod (sonst erbt prod den dev-Pfad
+# {{ rift_caddy_deploy_dir }}/data|config unter /opt/rbmods/compose/rift-caddy).
+rift_caddy_data_dir: "{{ rift_caddy_deploy_dir }}/data"
+rift_caddy_config_dir: "{{ rift_caddy_deploy_dir }}/config"

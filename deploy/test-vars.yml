@@ -38,6 +38,15 @@ riftbreaker_mod_dir: "{{ riftbreaker_game_dir }}/mods/rbbattle"
 riftbreaker_backup_dir: "{{ riftbreaker_game_dir }}-backups"
 riftbreaker_deploy_dir: "/opt/rbbattle-deploy/test/rb-{{ rbbattle_run_suffix }}"
 website_mods_dir: "/opt/rbbattle-deploy/test/mods-{{ rbbattle_run_suffix }}"
+# Docroot je Lauf eindeutig (Issue #483, US3): sonst erbt der Boot-Test den
+# dev-Docroot /srv/rbmods-site (analog zur bestehenden website_mods_dir-
+# Isolation). Additiv, kein Rename der dev-Pfade.
+website_docroot: "/srv/rbmods-site-test-{{ rbbattle_run_suffix }}"
+# Trainer-I/O-Tools je Lauf isoliert (Issue #483, US3): ohne eigene Werte erbt
+# der Boot-Test den dev-Pfad /opt/rbmods/rbtools-drift bzw. den Rollen-Default
+# /opt/rbmods/rbtools (Live-Befund #3). Additiv, je Lauf eindeutig.
+rbtools_dir: "/opt/rbmods/rbtools-test-{{ rbbattle_run_suffix }}"
+rbtools_staging_dir: "/opt/rbmods/rbtools-staging-test-{{ rbbattle_run_suffix }}"
 # Der Build-Kontext (tools/dedicated-server) wurde bisher in einen festen Pfad
 # (/opt/rbmods/dedicated-server) synchronisiert. Bei zwei parallelen Läufen
 # schreiben beide in dasselbe Verzeichnis, während `docker build` daraus liest

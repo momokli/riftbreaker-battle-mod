@@ -499,3 +499,74 @@ Rollback: Backup-`tar.gz` aus `/srv/riftbreaker/backups/` nach
   idle-/boot-sichere Artefakt-Check (#226/#245) maßgeblich, nicht der
   Runtime-Log.
 - SSH mesh-first (Tailscale), nie über Public-IPs.
+
+
+## Environment-Isolation & Deploy-Identität (Issue #483)
+
+Jeder Deploy trägt **genau eine** Identität: `rift_env` (`dev`|`prod`|`test`) +
+`rift_deploy_ref` (dev/test = Checkout-SHA; prod = Git-Tag + SHA) →
+`rift_deploy_identity = "<env> · <ref>"`. Erzeugt wird sie in den `pre_tasks`
+(`deploy/tasks/deploy-identity.yml`); `rift_env` steht als **Play-Var** in
+`site.yml`/`deploy-prod.yml`/`test-deploy.yml` (Play-Vars schlagen
+Rollen-Defaults/host_vars — sonst erbt prod/test den dev-Wert).
+
+### Schema: Env → Pfade / Ports / Stand
+
+`deploy/env-schema.yml` klassifiziert **jede** Variable der Env-Override-Dateien
+als `per_env` (Umgebungs-spezifisch, MUSS explizit je Env stehen) oder `shared`
+(bewusst gleich, mit Begründung). `dev` hat keine Override-Datei — dev **ist**
+die Basis (`inventory/host_vars/planet/vars.yml`); genau diese Asymmetrie ist
+der Kern des Issues. Das Gate `tools/deploy-gate/check_env_isolation.py` bricht
+bei Lücke ab (Marker `ENV-ISOLATION-GATE`), aufgerufen aus
+`deploy/tasks/env-assert.yml` in den `pre_tasks` — **vor** den Rollen.
+
+| Achse | dev (Basis) | prod (`prod-vars.yml`) | test (`test-vars.yml`) |
+| --- | --- | --- | --- |
+| `website_docroot` | `/srv/rbmods-site` | `/srv/rbmods-site-prod` | `/srv/rbmods-site-test-<run>` |
+| `website_mods_dir` | `/srv/rbmods-site/mods` | `<docroot>/mods` | `/opt/rbbattle-deploy/test/mods-<run>` |
+| `mods_zip_dest` | `<mods_dir>/rbbattle.zip` | `<mods_dir>/rbbattle.zip` | (abgeleitet, isoliert) |
+| `riftbreaker_game_dir` | `/srv/rbgame` | `/srv/rbgame-prod` | `/srv/rbgame-test-<run>` |
+| `riftbreaker_deploy_dir` | `/opt/rbmods/compose/riftbreaker-dedicated` | `…-prod` | `/opt/rbbattle-deploy/test/rb-<run>` |
+| `riftbreaker_sessions_dir` | `/srv/rbmods-sessions` | `/srv/rbmods-sessions-prod` | `/srv/rbmods-sessions-test-<run>` |
+| `rbtools_dir` | `/opt/rbmods/rbtools-drift` | `/opt/rbmods/rbtools-rift` | `/opt/rbmods/rbtools-test-<run>` |
+| Game-Port (UDP) | 6321 | 6322 | ephemer (je Lauf) |
+| Bridge-Port | 9001 | 9002 | je Lauf (Fallback 9003) |
+| Tournament-Port | 8081 | 8082 | je Lauf |
+| rift-caddy | `rift-caddy` :8787 | `rift-caddy-prod` :8788 | — (kein website-Rolle im Boot-Test) |
+| Container-Env/Labels | `RBB_ENV=dev`/`RBB_REF=<sha>` | `prod`/`<tag>+<sha>` | `test`/`<sha>` |
+
+**Additiv, kein Rename:** die dev-Pfade bleiben unverändert; prod/test bekommen
+**eigene** Werte. `mods_zip_name: rbbattle.zip` + seine md5-Parität bleiben
+unverändert (zusätzlich entsteht `rbbattle-<env>-<ref>.zip`).
+
+`deploy/tasks/env-assert.yml` asserted zusätzlich, dass für `env != dev` jeder
+der obigen Pfade **vom dev-Basiswert abweicht** (Distinctness gegen explizite
+dev-Konstanten — Ansible kennt keine Variablen-Herkunft).
+
+### Identitäts-Surface-Vertrag (`<env> · <ref>`)
+
+| Surface | Feld / Ort | Wie sichtbar |
+| --- | --- | --- |
+| Landing (`website`) | `<meta name="rb-env">`/`rb-ref` + Badge | `deploy/roles/website/templates/index.html.j2` |
+| Tournament-API | `GET /health` → `env`,`ref` | `TOURNAMENT_ENV`/`TOURNAMENT_REF` (systemd-Unit) |
+| Tournament-UI | Header-Badge | `fetch(/health)` in `tournament/web/app.js` |
+| Server-Control | `GET /server/status` → `env`,`ref` | `SERVER_CONTROL_ENV`/`SERVER_CONTROL_REF` |
+| Session-Recorder | JSONL-Record `env`,`ref` | `RBB_ENV`/`RBB_REF` im Sidecar + CLI `--env/--ref` |
+| Referee-Egress | Event-Record `env`,`ref` | dito |
+| Container | Labels `RBB_ENV`/`RBB_REF` | `docker inspect` (ohne Log) |
+| Mod-Log | `event=mod_load … env=… ref=…` | `mod/lua/rbbattle_autoexec.lua` — **vorbereitet, im Live-Lauf nicht wirksam** (`env=unknown`, s. u.) |
+
+### Offene Punkte (bewusst NICHT in #483)
+
+- **Kein `-<env>`-Rename** der dev-Pfade (`/srv/rbgame`, `/srv/rbmods-site`,
+  `/opt/rbmods/rbtools-drift`) — Live-Eingriff auf prod; eigener PR mit
+  Rollback-Runbook.
+- **Kein host-seitiger Checkout-Umbau** (`/opt/rbbattle-deploy/repo-<env>` +
+  `.deploy-<env>.sha`/`-ref`) — forced-command/Wrapper sind nicht im Repo.
+- **Mod-Log-`env`/`ref` in-game** ist vorbereitet, aber im Live-Lauf **nicht
+  wirksam**: der (rot gelaufene) Boot-Test-Log zeigte trotz gesetztem
+  `RBB_ENV=test`/`RBB_REF=<sha>` `event=mod_load … env=unknown ref=unknown` —
+  die Riftbreaker-Lua-Sandbox liefert `os.getenv` offenbar nicht, der
+  defensive Fallback greift. NICHT als erledigte Surface führen. Verlässlicher
+  Kanal (Config/Datei statt Lua-`getenv`) ist Follow-up (Review-F2).
+- **Landing-Domain-Isolationsgrad** für Prod-Artefakte (`/mods/prod/…`) offen.

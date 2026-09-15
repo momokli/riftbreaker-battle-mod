@@ -17,6 +17,14 @@ cockpit_domain: cockpit.rift.projectmellon.de
 website_docroot: /srv/rbmods-site
 website_mods_dir: "{{ website_docroot }}/mods"
 
+# Deploy-Identitaet (Issue #483, US4): Fallbacks fuer Renderer/Tests, die ohne
+# die Plays laufen (check-render, Hermetik-Tests). Die echten Plays setzen
+# rift_env als Play-Var; rift_deploy_ref/rift_deploy_identity kommen aus
+# deploy/tasks/deploy-identity.yml (set_fact schlaegt diese Defaults).
+rift_env: unknown
+rift_deploy_ref: unknown
+rift_deploy_identity: "{{ rift_env }} · {{ rift_deploy_ref }}"
+
 # Eigener Rift-Caddy.
 rift_caddy_container: rift-caddy
 rift_caddy_image: caddy:2
