@@ -758,47 +758,20 @@ static const unsigned char RBBRIDGE_EXEC_SIG_MASK[] = {
     0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF
 };
 
-/*
- * Byte-Signatur des ActivateMissionFlow-Prologs (Issue #385, Build
- * 2.0.58485). 33 Bytes, im .text eindeutig (Gegenprobe planet 2026-09-15:
- * genau 1 Treffer). Sie entspricht dem Database*-Overload von
- * `Riftbreaker::MissionService::ActivateMissionFlow` (RVA 0xF93280) - die
- * RVA ist NUR Verifikations-Notiz, die Laufzeitadresse kommt ausschliesslich
- * aus diesem AOB-Scan (KEINE feste Adresse).
- *
- * Prolog-Disasm (tools/re/disasm.py, planet):
- *   48 89 5C 24 08   mov  [rsp+8], rbx
- *   48 89 6C 24 18   mov  [rsp+0x18], rbp
- *   48 89 74 24 20   mov  [rsp+0x20], rsi
- *   57               push rdi
- *   48 83 EC 50      sub  rsp,0x50
- *   49 8B E9         mov  rbp,r9        ; a2 (logicFile)
- *   49 8B F0         mov  rsi,r8        ; a1 (name)
- *   48 8B FA         mov  rdi,rdx       ; hidden ret (UtfString out)
- *   48 8B 59 08      mov  rbx,[rcx+8]   ; this -> World*
- * Kein rel32-Displacement im Prolog -> keine Wildcard-Maske noetig.
- */
-static const unsigned char RBBRIDGE_ACTIVATE_SIG[] = {
-    0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x18,
-    0x48, 0x89, 0x74, 0x24, 0x20, 0x57, 0x48, 0x83, 0xEC, 0x50,
-    0x49, 0x8B, 0xE9, 0x49, 0x8B, 0xF0, 0x48, 0x8B, 0xFA, 0x48,
-    0x8B, 0x59, 0x08
-};
-
-/* RE-Befunde #385 (Build 2.0.58485) - feste RVAs NUR fuer die kleinen
- * Helfer (analog zu den bestehenden PlayerService-RVAs in get_state);
- * ActivateMissionFlow selbst wird per AOB aufgeloest (RBBRIDGE_ACTIVATE_SIG).
+/* RE-Befunde #385/#386 (Build 2.0.58485).
  *
  * Aufrufkonvention des Database*-Overloads (MSVC x64, verifiziert am
- * Disasm von 0xF93280): this=RCX, hidden-ret-UtfString*=RDX, name=R8,
- * logicFile=R9, mode=[rsp+0x20], data=[rsp+0x28]. Der 3-Arg-Overload
- * (RVA 0xF93130) ist nur ein Shim, der den Workhorse mit data=NULL ruft -
- * NULL ist also ein vom Spiel selbst benutzter, gueltiger Database-Wert. */
-#define RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE 0x2e962a0u /* ??_7MissionService@Riftbreaker@@6B@ */
-#define RBBRIDGE_RVA_UTFSTRING_CTOR         0x3ae1e0u  /* UtfString(char const*) */
-#define RBBRIDGE_RVA_UTFSTRING_DTOR         0x26f1f0u  /* ~UtfString() */
-#define RBBRIDGE_RVA_ISGRAPHACTIVE          0xf9e1f0u  /* bool MissionService::IsGraphActive(UtfString const&) */
-
+ * Disasm von 0xF93280): Return-UtfString per sret in RDX, this=RCX,
+ * arg1 (UtfString)=R8, arg2 (UtfString)=R9, arg3 (UtfString)=[rsp+0x20],
+ * arg4 (Database* data)=[rsp+0x28]. R9 ist also NICHT `data` - `data` ist
+ * der 4. Parameter auf dem Stack. Der 3-Arg-Overload (RVA 0xF93130) ist
+ * nur ein Shim, der den Workhorse mit data=NULL ruft - NULL ist also ein
+ * vom Spiel selbst benutzter, gueltiger Database-Wert.
+ *
+ * #385 hatte hier seine eigene AOB `RBBRIDGE_ACTIVATE_SIG` (33-Byte-Prolog);
+ * sie ist ein strikter Praefix von RBBRIDGE_AMF_SIG (identische Funktion,
+ * gleiche RVA 0xF93280) und wurde daher als Doppel-Definition entfernt.
+ */
 /* MSVC-RTTI-Name der MissionService-Klasse (mit NUL-Terminator). */
 static const char RBBRIDGE_MISSION_RTTI_NAME[] = ".?AVMissionService@Riftbreaker@@";
 
@@ -819,7 +792,24 @@ static const char RBBRIDGE_MISSION_RTTI_NAME[] = ".?AVMissionService@Riftbreaker
  *                             im Prefix).
  *   RBBRIDGE_DB_GETSTRING_SIG Database::GetString 0x2591FD0
  *                             (E8 @ Index 12 maskiert).
- *   RBBRIDGE_DB_GETKEYS_SIG   Database::GetStringKeys 0x2592060 (exakt).
+ *
+ * AOB-Eindeutigkeit gegen .text (LIVE planet, Build 2.0.58485, 2026-09-15,
+ * pefile+capstone, .text = VA 0x1000 / vsize 0x2DA0A93):
+ *
+ *   AMF_SIG        n=1  @ 0xF93280
+ *   ACTIVATE_SIG   n=1  @ 0xF93280  (#385; 33-Byte-Prefix von AMF_SIG)
+ *   DB_SETSTRING   n=1  @ 0x25956B0
+ *   DB_GETSTRING   n=1  @ 0x2591FD0
+ *   DB_CTOR_SIG    n=159 (28 B) / 46 (rel32 maskiert) / 2 (voller 106-B-
+ *                  Body) -> NICHT eindeutig: der Body ist byte-identisch mit
+ *                  `??0EntityStatComponent@Riftbreaker@@QEAA@XZ` (0xDB7610),
+ *                  dafuer gibt es KEINE diskriminierende Byte-Folge. Der
+ *                  Ctor wird daher NICHT per Prolog-Scan aufgeloest, sondern
+ *                  ueber die `new 0x60`-Call-Site verankert
+ *                  (RBBRIDGE_NEWDB_SITE_SIG/-CALL_SIG, s. resolve_db_ctor_fn).
+ *   DB_GETKEYS_SIG n=3  @ 0x2591BB0/0x2591D80/0x2592060 -> NICHT eindeutig
+ *                  (drei strukturgleiche Schwestern) und ungenutzt ->
+ *                  entfernt.
  */
 static const unsigned char RBBRIDGE_AMF_SIG[] = {
     0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x18,
@@ -864,11 +854,6 @@ static const unsigned char RBBRIDGE_DB_GETSTRING_SIG_MASK[] = {
     0xFF
 };
 
-static const unsigned char RBBRIDGE_DB_GETKEYS_SIG[] = {
-    0x48, 0x89, 0x54, 0x24, 0x10, 0x53, 0x55, 0x56, 0x57, 0x41,
-    0x56, 0x48, 0x83, 0xEC, 0x50, 0x48, 0x8B, 0xFA, 0x4C, 0x8B,
-    0xF1, 0x33, 0xF6, 0x89, 0x74, 0x24, 0x30
-};
 
 /* x64-Aufrufkonvention: this=RCX, cmd=RDX - __fastcall ist auf x64 der
  * Standard (das Schluesselwort dokumentiert die Konvention nur). */
@@ -1450,11 +1435,79 @@ static const void *resolve_amf_fn(const unsigned char *base, size_t size)
                                        sizeof(RBBRIDGE_AMF_SIG));
 }
 
+/* Anker-Signaturen der `new Database`-Call-Site (MS-x64):
+ *   mov ecx,0x60            B9 60 00 00 00
+ *   call operator new       E8 <rel32>
+ *   ... 0x60 Byte Nullung ...
+ *   mov rcx,rax             48 8B C8
+ *   call Database::Database E8 <rel32>   <- Ziel = Ctor
+ * Rel32-Operanden sind build-gebunden und werden nie verglichen (Ziel wird
+ * zur Laufzeit aus dem rel32 berechnet). */
+static const unsigned char RBBRIDGE_NEWDB_SITE_SIG[] = {
+    0xB9, 0x60, 0x00, 0x00, 0x00, 0xE8
+};
+static const unsigned char RBBRIDGE_NEWDB_CALL_SIG[] = {
+    0x48, 0x8B, 0xC8, 0xE8
+};
+
+/* Loest Exor::Database::Database() NICHT per Prolog-Scan auf (der Body ist
+ * byte-identisch mit ??0EntityStatComponent@Riftbreaker@@QEAA@XZ, s.
+ * Kommentarblock oben), sondern ueber die `new 0x60`-Call-Site: das rel32-
+ * Ziel des zweiten E8 (nach `mov rcx,rax`) ist der Ctor. Mehr als ein
+ * unterschiedliches Ziel oder kein Treffer -> NULL (kein Aufruf). Der Fund
+ * wird gegen den Prolog (RBBRIDGE_DB_CTOR_SIG) gegengeprueft. */
 static const void *resolve_db_ctor_fn(const unsigned char *base, size_t size)
 {
-    return (const void *)scan_code_sig(base, size, RBBRIDGE_DB_CTOR_SIG,
-                                       RBBRIDGE_DB_CTOR_SIG_MASK,
-                                       sizeof(RBBRIDGE_DB_CTOR_SIG));
+    const unsigned char *end = base + size;
+    const unsigned char *p = base;
+    const void *found = NULL;
+    int sites = 0;
+
+    while (p && p < end) {
+        const unsigned char *site = scan_bytes(
+            p, (size_t)(end - p), RBBRIDGE_NEWDB_SITE_SIG,
+            sizeof(RBBRIDGE_NEWDB_SITE_SIG));
+        if (!site)
+            break;
+        sites++;
+        const unsigned char *q = site + sizeof(RBBRIDGE_NEWDB_SITE_SIG);
+        size_t win = (size_t)(end - q);
+        if (win > 0x40)
+            win = 0x40;
+        const unsigned char *call =
+            scan_bytes(q, win, RBBRIDGE_NEWDB_CALL_SIG,
+                       sizeof(RBBRIDGE_NEWDB_CALL_SIG));
+        if (call) {
+            const unsigned char *e8 = call + 3; /* E8-Opcode */
+            int32_t rel = 0;
+            memcpy(&rel, e8 + 1, sizeof(rel));
+            const unsigned char *tgt = e8 + 5 + rel; /* rel32 ist @ e8+1 */
+            if (tgt >= base && tgt < end) {
+                if (found && found != (const void *)tgt) {
+                    dbg("resolve_db_ctor_fn: mehrdeutig (%p vs %p) -> NULL",
+                        found, (const void *)tgt);
+                    return NULL;
+                }
+                found = (const void *)tgt;
+            }
+        }
+        p = site + 1;
+    }
+
+    if (!found) {
+        dbg("resolve_db_ctor_fn: keine new-0x60-Site -> NULL");
+        return NULL;
+    }
+    if (!sig_matches((const unsigned char *)found, RBBRIDGE_DB_CTOR_SIG,
+                     RBBRIDGE_DB_CTOR_SIG_MASK,
+                     sizeof(RBBRIDGE_DB_CTOR_SIG))) {
+        dbg("resolve_db_ctor_fn: Anker-Ziel %p passt nicht zum Prolog -> NULL",
+            found);
+        return NULL;
+    }
+    dbg("resolve_db_ctor_fn: %d Site(s), Ctor=%p (rva=%08lx)", sites, found,
+        (unsigned long)((const unsigned char *)found - base));
+    return found;
 }
 
 static const void *resolve_db_setstring_fn(const unsigned char *base,
@@ -1470,12 +1523,6 @@ static const void *resolve_db_getstring_fn(const unsigned char *base,
     return (const void *)scan_code_sig(base, size, RBBRIDGE_DB_GETSTRING_SIG,
                                        RBBRIDGE_DB_GETSTRING_SIG_MASK,
                                        sizeof(RBBRIDGE_DB_GETSTRING_SIG));
-}
-
-static const void *resolve_db_getkeys_fn(const unsigned char *base, size_t size)
-{
-    return (const void *)scan_code_sig(base, size, RBBRIDGE_DB_GETKEYS_SIG,
-                                       NULL, sizeof(RBBRIDGE_DB_GETKEYS_SIG));
 }
 
 /* Findet die Instanz zu einer vftable: 8-Byte-aligniertes QWORD == vftable
@@ -1874,7 +1921,7 @@ static void mission_flow_json(char *out, size_t out_sz)
 {
     char name[256] = "", spawn[256] = "";
     char en[512], es[512];
-    int read_ok = 0;
+    int name_ok = 0, spawn_ok = 0;
 
     if (!g_mission_flow_valid || !g_mission_payload_db) {
         snprintf(out, out_sz, "null");
@@ -1896,22 +1943,22 @@ static void mission_flow_json(char *out, size_t out_sz)
                 utfstring_fill(key, sizeof(key), "name");
                 v = fn(g_mission_payload_db, key);
                 if (v && utfstring_read(v, name, sizeof(name)))
-                    read_ok = 1;
+                    name_ok = 1;
                 utfstring_fill(key, sizeof(key), "spawn_point");
                 v = fn(g_mission_payload_db, key);
                 if (v && utfstring_read(v, spawn, sizeof(spawn)))
-                    read_ok = 1;
+                    spawn_ok = 1;
             }
-            /* GetStringKeys wird ebenfalls per AOB aufgeloest (Vollstaendig-
-             * keit der Kette); die Feld-Anzeige nutzt GetString. */
-            (void)resolve_db_getkeys_fn(base, size);
         }
     }
 
-    if (!read_ok) {
+    /* Fallback PRO FELD: schlaegt nur ein Read fehl, bleibt das andere
+     * Ergebnis erhalten (vorher kippte ein erfolgreicher name-Read das
+     * spawn_point-Fallback mit). */
+    if (!name_ok)
         copy_cstr(name, sizeof(name), g_mission_name);
+    if (!spawn_ok)
         copy_cstr(spawn, sizeof(spawn), g_mission_spawn);
-    }
     json_escape_into(en, sizeof(en), name);
     json_escape_into(es, sizeof(es), spawn);
     snprintf(out, out_sz, "{\"name\":\"%s\",\"spawn_point\":\"%s\"}", en, es);

@@ -51,7 +51,7 @@ static void check(int cond, const char *msg)
 #define TEXT_VSIZE  0x800
 
 #define SIG_OFF     0x1100 /* ExecuteCommand-Signatur in .text        */
-#define ACT_SIG_OFF 0x1300 /* ActivateMissionFlow-Signatur in .text   */
+#define ACT_SIG_OFF 0x1300 /* ActivateMissionFlow(Database*)-Sig      */
 #define NAME_OFF    0x1400 /* RTTI-Namensstring                       */
 #define COL_OFF     0x1500 /* CompleteObjectLocator                   */
 #define VFT_REF_OFF 0x15F8 /* QWORD == base+COL_OFF (vftable-8)       */
@@ -65,7 +65,7 @@ static void check(int cond, const char *msg)
 #define CTOR_OFF    0x1300 /* Database::Database()-Sig                */
 #define SETSTR_OFF  0x1340 /* Database::SetString-Sig                */
 #define GETSTR_OFF  0x1380 /* Database::GetString-Sig                */
-#define GETKEYS_OFF 0x13C0 /* Database::GetStringKeys-Sig            */
+#define ANCHOR_OFF  0x13C0 /* `new 0x60`-Call-Site (Ctor-Anker, #386) */
 
 static void wr32(unsigned char *p, uint32_t v) { memcpy(p, &v, 4); }
 static void wr64(unsigned char *p, uint64_t v) { memcpy(p, &v, 8); }
@@ -107,8 +107,8 @@ static unsigned char *build_image(int with_sig, int with_rtti, int valid_col,
 
     if (with_sig) {
         memcpy(img + SIG_OFF, RBBRIDGE_EXEC_SIG, sizeof(RBBRIDGE_EXEC_SIG));
-        memcpy(img + ACT_SIG_OFF, RBBRIDGE_ACTIVATE_SIG,
-               sizeof(RBBRIDGE_ACTIVATE_SIG));
+        memcpy(img + ACT_SIG_OFF, RBBRIDGE_AMF_SIG,
+               sizeof(RBBRIDGE_AMF_SIG));
     }
 
     if (with_rtti) {
@@ -148,9 +148,23 @@ static unsigned char *build_mission_image(int with_mission_rtti, int valid_col,
 
     if (with_amf)
         memcpy(img + AMF_OFF, RBBRIDGE_AMF_SIG, sizeof(RBBRIDGE_AMF_SIG));
-    if (with_ctor)
+    if (with_ctor) {
         memcpy(img + CTOR_OFF, RBBRIDGE_DB_CTOR_SIG,
                sizeof(RBBRIDGE_DB_CTOR_SIG));
+        /* `new Database`-Call-Site als Anker (DB_CTOR_SIG allein ist NICHT
+         * eindeutig - Byte-identischer Zwilling im echten .text):
+         *   mov ecx,0x60 / call <new> / mov rcx,rax / call <ctor> */
+        img[ANCHOR_OFF + 0] = 0xB9;
+        wr32(img + ANCHOR_OFF + 1, 0x60u);
+        img[ANCHOR_OFF + 5] = 0xE8;
+        wr32(img + ANCHOR_OFF + 6, (uint32_t)(int32_t)(SIG_OFF - (ANCHOR_OFF + 10)));
+        img[ANCHOR_OFF + 10] = 0x48;
+        img[ANCHOR_OFF + 11] = 0x8B;
+        img[ANCHOR_OFF + 12] = 0xC8;
+        img[ANCHOR_OFF + 13] = 0xE8;
+        wr32(img + ANCHOR_OFF + 14,
+             (uint32_t)(int32_t)(CTOR_OFF - (ANCHOR_OFF + 18)));
+    }
     if (with_setstr)
         memcpy(img + SETSTR_OFF, RBBRIDGE_DB_SETSTRING_SIG,
                sizeof(RBBRIDGE_DB_SETSTRING_SIG));
@@ -258,15 +272,15 @@ int main(void)
     /* ActivateMissionFlow-AOB (Issue #385)                            */
     /* -------------------------------------------------------------- */
     ht_set_module(img, IMG_SIZE);
-    check(scan_bytes(img + TEXT_RVA, TEXT_VSIZE, RBBRIDGE_ACTIVATE_SIG,
-                     sizeof(RBBRIDGE_ACTIVATE_SIG)) == img + ACT_SIG_OFF,
+    check(scan_bytes(img + TEXT_RVA, TEXT_VSIZE, RBBRIDGE_AMF_SIG,
+                     sizeof(RBBRIDGE_AMF_SIG)) == img + ACT_SIG_OFF,
           "ActivateMissionFlow-AOB im .text gefunden (#385)");
     {
         unsigned char *img3 = build_image(1, 1, 1, 1, 1);
         img3[ACT_SIG_OFF + 5] ^= 0xFF; /* Prolog-Byte abweichend */
         ht_set_module(img3, IMG_SIZE);
-        check(scan_bytes(img3 + TEXT_RVA, TEXT_VSIZE, RBBRIDGE_ACTIVATE_SIG,
-                         sizeof(RBBRIDGE_ACTIVATE_SIG)) == NULL,
+        check(scan_bytes(img3 + TEXT_RVA, TEXT_VSIZE, RBBRIDGE_AMF_SIG,
+                         sizeof(RBBRIDGE_AMF_SIG)) == NULL,
               "ActivateMissionFlow-AOB: abweichendes Byte -> kein Treffer");
         free(img3);
     }
@@ -514,10 +528,31 @@ int main(void)
               "#386 AOB: Database::SetString gefunden");
         check(resolve_db_getstring_fn(mi, IMG_SIZE) == mi + GETSTR_OFF,
               "#386 AOB: Database::GetString gefunden");
-        memcpy(mi + GETKEYS_OFF, RBBRIDGE_DB_GETKEYS_SIG,
-               sizeof(RBBRIDGE_DB_GETKEYS_SIG));
-        check(resolve_db_getkeys_fn(mi, IMG_SIZE) == mi + GETKEYS_OFF,
-              "#386 AOB: Database::GetStringKeys gefunden");
+
+        /* Anker-Mehrdeutigkeit: ein ZWEITER `new 0x60`-Call auf einen
+         * anderen, prolog-konformen Ctor -> NULL (kein Aufruf). Belegt den
+         * Zwillings-Schutz (DB_CTOR_SIG-Body ist im echten .text byte-
+         * identisch mit ??0EntityStatComponent@Riftbreaker@@). */
+        {
+            enum { AMB_SIG_OFF = 0x13A0, AMB_SITE_OFF = 0x13E0 };
+            memcpy(mi + AMB_SIG_OFF, RBBRIDGE_DB_CTOR_SIG,
+                   sizeof(RBBRIDGE_DB_CTOR_SIG));
+            mi[AMB_SITE_OFF + 0] = 0xB9;
+            wr32(mi + AMB_SITE_OFF + 1, 0x60u);
+            mi[AMB_SITE_OFF + 5] = 0xE8;
+            wr32(mi + AMB_SITE_OFF + 6,
+                 (uint32_t)(int32_t)(SIG_OFF - (AMB_SITE_OFF + 10)));
+            mi[AMB_SITE_OFF + 10] = 0x48;
+            mi[AMB_SITE_OFF + 11] = 0x8B;
+            mi[AMB_SITE_OFF + 12] = 0xC8;
+            mi[AMB_SITE_OFF + 13] = 0xE8;
+            wr32(mi + AMB_SITE_OFF + 14,
+                 (uint32_t)(int32_t)(AMB_SIG_OFF - (AMB_SITE_OFF + 18)));
+            check(resolve_db_ctor_fn(mi, IMG_SIZE) == NULL,
+                  "#386 Ctor-Anker: zwei Ziele -> NULL (kein falscher Aufruf)");
+            memset(mi + AMB_SIG_OFF, 0, sizeof(RBBRIDGE_DB_CTOR_SIG));
+            memset(mi + AMB_SITE_OFF, 0, 18);
+        }
 
         /* Wildcard: rel32 des AMF-CALLs darf abweichen. */
         mi[AMF_OFF + 34] ^= 0xFF;

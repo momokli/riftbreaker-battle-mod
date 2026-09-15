@@ -154,6 +154,44 @@ thread-agnostisch. Im Laufzeitpfad werden alle drei Adressen per **AOB**
 aufgelöst (`RBBRIDGE_DB_CTOR_SIG`, `RBBRIDGE_DB_SETSTRING_SIG`,
 `RBBRIDGE_AMF_SIG`), **nie** als feste RVA aufgerufen.
 
+## 2.2 AOB-Eindeutigkeit gegen `.text` (LIVE, planet, 2026-09-15)
+
+Gegenprobe jeder Laufzeit-Signatur gegen die echte `.text`
+(`/srv/rbgame/bin/riftbreaker_dll_win_release.dll`, Build 2.0.58485,
+`pefile`; `.text` VA `0x1000`, VirtualSize `0x2DA0A93`). Gezählt wird die
+Trefferzahl des maskierten Musters; rel32-Operanden der E8-Calls sind
+Wildcards.
+
+| Signatur | Länge | Treffer | RVAs |
+|---|---|---|---|
+| `RBBRIDGE_AMF_SIG` (ActivateMissionFlow, Database*) | 38 B | **1** | `0xF93280` |
+| `RBBRIDGE_DB_SETSTRING_SIG` (SetString) | 26 B | **1** | `0x25956B0` |
+| `RBBRIDGE_DB_GETSTRING_SIG` (GetString) | 31 B | **1** | `0x2591FD0` |
+| `RBBRIDGE_DB_CTOR_SIG` (Database::Database()) | 28 B | **159** | erster Treffer `0x26B9A0` (≠ Ctor) |
+| `RBBRIDGE_DB_CTOR_SIG` (rel32 maskiert, 48 B) | 48 B | **46** | u. a. `0x26BB40`, `0x2C6550` |
+| `RBBRIDGE_DB_CTOR_SIG` (voller 106-B-Body) | 106 B | **2** | `0x2C6550`, `0xDB7610` |
+| `RBBRIDGE_DB_GETKEYS_SIG` (GetStringKeys) | 27 B | **3** | `0x2591BB0`, `0x2591D80`, `0x2592060` |
+
+**Befund (Blocker für den naiven Prolog-Scan):** `Database::Database()`
+(`??0Database@Exor@@QEAA@XZ`, `0x2C6550`) ist **nicht** per AOB eindeutig.
+Der komplette 106-Byte-Body ist **byte-identisch** mit
+`??0EntityStatComponent@Riftbreaker@@QEAA@XZ` (`0xDB7610`) — PDB-verifiziert
+— und ~8 weitere `3×0x20`-Container-Ctors teilen den Prolog. Ein Prolog-Scan
+würde also (erster Treffer `0x26B9A0` = `??0CampaignMissionSaveInfo@…`) die
+**falsche Funktion** aufrufen.
+
+**Lösung — `new 0x60`-Call-Site als Anker** (statt Prolog):
+`mov ecx,0x60` (`B9 60 00 00 00`) → `call operator new` (`E8`) → 0x60-B-
+Nullung → `mov rcx,rax` (`48 8B C8`) → `call Database::Database()` (`E8`).
+Das rel32-Ziel des **zweiten** E8 ist der Ctor. Die auflösende Funktion
+(`resolve_db_ctor_fn`) nimmt das rel32-Ziel aller `new 0x60`-Sites, verlangt
+**genau ein** unterschiedliches Ziel (sonst `NULL`, kein Aufruf) und prüft es
+gegen den Prolog `RBBRIDGE_DB_CTOR_SIG` gegen. `GetStringKeys` ist ebenfalls
+nicht eindeutig (3 Schwestern) und wurde entfernt (unbenutzt).
+
+Die präzise, build-gebundene Nachprüfung ersetzt die frühere Annahme
+„Prolog-Signatur genügt" aus dem Review-Minor m2.
+
 ## 3. `MissionService`-Auflösung (RTTI-Kette)
 
 | Symbol | RVA |
