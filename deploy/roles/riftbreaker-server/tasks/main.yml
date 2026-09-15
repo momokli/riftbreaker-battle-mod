@@ -60,12 +60,53 @@
     state: directory
     mode: "0755"
 
+# ---------------------------------------------------------------------------
+# Check-Mode-Schutz der Schreibkette (Issue #483, Befund PR #496 /
+# deploy-check planet):
+# Das `<env>`-Pfad-Schema (Ziel B) legt ALLE Ziele dieser Rolle in
+# Verzeichnisse, die es auf einem Bestandshost erst NACH der Pfad-Migration
+# (deploy/tasks/env-path-migration.yml) gibt. Im `--check` darf der Host nicht
+# veraendert werden: die `file: state=directory`-Tasks oben bleiben dort
+# „would change" und legen NICHTS an. Der naechste `copy`/`template`-Aufruf
+# bricht dann hart ab („Destination directory … does not exist") — genau der
+# planet-Fail aus #496, obwohl die Rollen-Logik korrekt ist.
+# Deshalb: Schreibziele nur anfassen, wenn sie existieren ODER wir nicht im
+# Check-Mode sind. Der echte Deploy ist unveraendert (dort sind die
+# Verzeichnisse nach den `file`-Tasks garantiert da).
+# ---------------------------------------------------------------------------
+- name: "Schreibziele pruefen (Check-Mode-Schutz, #483)"
+  stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ riftbreaker_deploy_dir }}"
+    - "{{ riftbreaker_config_dir }}"
+  register: riftbreaker_write_dirs
+
+- name: "Sind die Schreibziele vorhanden? (#483)"
+  set_fact:
+    riftbreaker_write_dirs_ready: >-
+      {{ (riftbreaker_write_dirs.results
+          | map(attribute='stat') | map(attribute='exists')
+          | select | list | length) == (riftbreaker_write_dirs.results | length) }}
+
+- name: "Hinweis: Schreibziele fehlen (im --check erwartet, #483)"
+  debug:
+    msg: >-
+      Check-Mode: {{ riftbreaker_deploy_dir }} bzw. {{ riftbreaker_config_dir }}
+      existieren (noch) nicht — die Tasks, die dorthin schreiben, sind
+      uebersprungen. Im echten Deploy legt die Pfad-Migration sie an
+      (deploy/tasks/env-path-migration.yml).
+  when:
+    - ansible_check_mode
+    - not (riftbreaker_write_dirs_ready | bool)
+
 - name: "Session-Recorder-Script bereitstellen (Issue #280)"
   copy:
     src: "{{ riftbreaker_sessions_script_src }}"
     dest: "{{ riftbreaker_sessions_script }}"
     remote_src: true
     mode: "0644"
+  when: (not ansible_check_mode) or (riftbreaker_write_dirs_ready | bool)
   notify: restart riftbreaker-server
 
 - name: "Referee-Egress-Script bereitstellen (Issue #358/#268)"
@@ -74,6 +115,7 @@
     dest: "{{ riftbreaker_referee_egress_script }}"
     remote_src: true
     mode: "0644"
+  when: (not ansible_check_mode) or (riftbreaker_write_dirs_ready | bool)
   notify: restart riftbreaker-server
 
 - name: config.cfg rendern (Passwort aus Vault, 0644 fuer steamuser-lesbar)
@@ -81,6 +123,7 @@
     src: config.cfg.j2
     dest: "{{ riftbreaker_config_dir }}/config.cfg"
     mode: "0644"
+  when: (not ansible_check_mode) or (riftbreaker_write_dirs_ready | bool)
   notify: restart riftbreaker-server
 
 - name: docker-compose.yml rendern
@@ -88,6 +131,7 @@
     src: docker-compose.yml.j2
     dest: "{{ riftbreaker_deploy_dir }}/docker-compose.yml"
     mode: "0600"
+  when: (not ansible_check_mode) or (riftbreaker_write_dirs_ready | bool)
   notify: restart riftbreaker-server
 
 # ---------------------------------------------------------------------------
@@ -239,8 +283,16 @@
   register: riftbreaker_mod_backup
   changed_when: true
 
+# Check-Mode-Schutz (Issue #483, Befund PR #496): der Rollout kann im `--check`
+# nicht simuliert werden — `unarchive` verlangt ein REAL existierendes
+# Zielverzeichnis („Destination … is not a directory"), das im Check-Mode
+# gerade nicht angelegt wird. Auf einem Host mit neuem `<env>`-Pfad-Schema
+# (Mod-Ordner noch nicht migriert) lief der Block daher in den Abbruch. Im
+# echten Deploy unveraendert.
 - name: Mod ausrollen, Container starten und verifizieren (Rollback aus Backup)
-  when: riftbreaker_mod_update_needed or riftbreaker_guard_moved
+  when:
+    - riftbreaker_mod_update_needed or riftbreaker_guard_moved
+    - not ansible_check_mode
   block:
     - name: Alten Mod-Ordner entfernen
       file:

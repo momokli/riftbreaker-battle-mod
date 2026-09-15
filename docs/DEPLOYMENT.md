@@ -592,6 +592,20 @@ Vertrag (Migration in `pre_tasks` vor den Rollen) wird von
 `deploy/tests/env-path-migration/run.sh` via `ansible-playbook --list-tasks`
 geprüft (inkl. Negativ-Probe).
 
+**Check-Mode (`--check`):** auf einem Host, dessen Daten noch unter den ALTEN
+Pfaden liegen, existieren die neuen `<env>`-Verzeichnisse nicht — und im
+`--check` darf Ansible sie nicht anlegen (`file: state=directory` bleibt
+„would change"). Die Rollen, die in diese Verzeichnisse schreiben
+(`riftbreaker-server`: Session-Recorder-/Referee-Script, `config.cfg`,
+`docker-compose.yml`; `website`: `Caddyfile`, `docker-compose.yml`), hängen ihre
+Schreib-Tasks deshalb an die Bedingung „Ziel existiert ODER kein Check-Mode"
+und protokollieren den Übersprung als Hinweis. Ebenso ist der Mod-Rollout
+(`unarchive`) im `--check` geskippt — er verlangt ein real existierendes
+Zielverzeichnis. Der echte Deploy ist unverändert.
+Regressionstest: `deploy/tests/check-mode-paths/run.sh` (planet-frei, läuft in
+`deploy-check-local`; Negativ-Probe ohne den Schutz muss mit
+„Destination directory … does not exist" abbrechen).
+
 **Rollback (Schema):** neuen Pfad zurück nach alt `mv`en (`mv <neu>/* <alt>/`
 bzw. `mv <neu> <alt>` nach Entfernen des Symlinks) und `rift_env` in den
 Vars auf die alten Werte zurücksetzen. Die Daten liegen unverändert am neu

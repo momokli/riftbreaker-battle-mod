@@ -70,11 +70,40 @@
     - "{{ rift_caddy_data_dir }}"
     - "{{ rift_caddy_config_dir }}"
 
+# ---------------------------------------------------------------------------
+# Check-Mode-Schutz der Schreibkette (Issue #483, Befund PR #496): der
+# Rift-Caddy-Deploy-Pfad liegt im `<env>`-Schema
+# (/opt/rbmods/compose/rift-<env>/caddy) und damit auf einem Bestandshost in
+# einem Verzeichnis, das es erst NACH der Pfad-Migration gibt. Im `--check`
+# legt der `file`-Task oben nichts an (nur „would change"), der Template-Aufruf
+# wuerde hart abbrechen („Destination directory … does not exist"). Deshalb:
+# nur schreiben, wenn das Ziel existiert ODER wir nicht im Check-Mode sind.
+# ---------------------------------------------------------------------------
+- name: "Rift-Caddy Schreibziel pruefen (Check-Mode-Schutz, #483)"
+  stat:
+    path: "{{ rift_caddy_deploy_dir }}"
+  register: rift_caddy_write_dir
+
+- name: "Rift-Caddy Schreibziel vorhanden? (#483)"
+  set_fact:
+    rift_caddy_write_ready: "{{ rift_caddy_write_dir.stat.exists | default(false) | bool }}"
+
+- name: "Hinweis: Rift-Caddy Schreibziel fehlt (im --check erwartet, #483)"
+  debug:
+    msg: >-
+      Check-Mode: {{ rift_caddy_deploy_dir }} existiert (noch) nicht —
+      Caddyfile/docker-compose werden nicht geschrieben. Im echten Deploy legt
+      die Pfad-Migration das Verzeichnis an (deploy/tasks/env-path-migration.yml).
+  when:
+    - ansible_check_mode
+    - not (rift_caddy_write_ready | bool)
+
 - name: Rift-Caddy Caddyfile rendern
   template:
     src: rift-caddy.Caddyfile.j2
     dest: "{{ rift_caddy_deploy_dir }}/Caddyfile"
     mode: "0644"
+  when: (not ansible_check_mode) or (rift_caddy_write_ready | bool)
   register: rift_caddy_caddyfile
 
 - name: Rift-Caddy docker-compose.yml rendern
@@ -82,6 +111,7 @@
     src: docker-compose.yml.j2
     dest: "{{ rift_caddy_deploy_dir }}/docker-compose.yml"
     mode: "0644"
+  when: (not ansible_check_mode) or (rift_caddy_write_ready | bool)
   register: rift_caddy_compose
 
 # Re-Deploy-Fall (Review #326, Finding 1): `docker compose up -d` recreated einen
