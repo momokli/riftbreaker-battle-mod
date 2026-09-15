@@ -1046,8 +1046,9 @@ static const unsigned char RBBRIDGE_DIFF_DEC_SIG[] = {
 /* ------------------------------------------------------------------ */
 /* #476: Vanilla-Naturwellen "aus" — DifficultyService-Schalter        */
 /*                                                                    */
-/* Der Dedi startet im Vanilla-Survival-Preset; `dom_mananger` (Lua)   */
-/* zieht den Naturwellen-Takt aus der Difficulty:                      */
+/* Der Dedi startet im Vanilla-Survival-Preset; `dom_mananger` (Lua-Klasse,
+ * so im Spiel benannt; Datei `dom_manager.lua`) zieht den Naturwellen-Takt
+ * aus der Difficulty:                                                  */
 /*   self.pauseAttacks = DifficultyService:AreWavesDisabled()         */
 /*   + GetWaveStrength()=="sandbox" -> pauseAttacks = true            */
 /* Bei pauseAttacks=true laeuft der Spawner nur idle<->dummy_state und */
@@ -1074,8 +1075,10 @@ static const unsigned char RBBRIDGE_DIFF_DEC_SIG[] = {
 /* mission_infinite 1 -> `set difficulty "sandbox"` ist der deklarative */
 /* Boot-Schalter (deploy/roles/riftbreaker-server config.cfg.j2).       */
 /*                                                                    */
-/* Thread-Modell (#378): native Reads/Writes, KEIN lua_* — laeuft auf   */
-/* dem Pipe-Thread. Der System-Getter ist ein reiner Lookup.            */
+/* Thread-Modell (#378): native Reads/Writes, KEIN lua_* — laeuft auf  */
+/* dem Pipe-Thread. ANNAHME (#478): der Getter ist ein reiner Lookup   */
+/* (kein lua_*, kein Lock, keine Seiteneffekte); bei parallelem         */
+/* status+off im Live-Test auf Race/Crash achten.                      */
 /* Alle Adressen per AOB/RTTI, KEINE feste Adresse.                     */
 /* Steht AUSSERHALB des #ifndef-RBBRIDGE_HOSTTEST-Blocks, damit der     */
 /* Host-Test Signatur + op-Parser direkt pruefen kann.                  */
@@ -3135,7 +3138,8 @@ typedef void *(__fastcall *diffsys_get_fn)(void *world);
 
 /* Loest die Kette DifficultyService -> World -> System-Objekt auf. Alles
  * per RTTI/AOB; der Getter wird als reiner Lookup aufgerufen (native Read,
- * thread-agnostisch, KEIN lua_*). Rueckgabe 1 = auflösbar. */
+ * thread-agnostisch, KEIN lua_*, kein Lock — ANNAHME #478), Rueckgabe
+ * 1 = auflösbar. */
 static RBBRIDGE_NOINLINE int resolve_diffsys(const unsigned char *base,
                                              size_t size,
                                              void **out_inner)
@@ -3221,11 +3225,16 @@ static RBBRIDGE_NOINLINE int natural_waves_write(const unsigned char *base,
  * DifficultyService (KEIN Lua/Console); Thread-agnostisch (#378).
  * Events:
  *   {"event":"natural_waves_result","ok":true,"op":"status",
- *    "waves_disabled":true,"wave_strength":"sandbox",
+ *    "readback":"ok","waves_disabled":true,"wave_strength":"sandbox",
  *    "mission_infinite":true,"difficulty":"sandbox"}
- *   {"event":"natural_waves_result","ok":false,"reason":"..."}
+ *   {"event":"natural_waves_result","ok":true,"op":"off",
+ *    "written":true,"readback":"ok",...}
+ *   {"event":"natural_waves_result","ok":true,"op":"off",
+ *    "written":true,"readback":"failed"}  (Write ok, Readback-Fehler)
+ *   {"event":"natural_waves_result","ok":false,
+ *    "reason":"write_failed"|"not_resolvable"|"unknown_op"|"no_module"}
  * Graceful: fehlt Modul/RTTI/Getter/Instanz -> ok:false, es wird NICHTS
- * geschrieben.
+ * geschrieben. Write- und Read-Fehlerpfad getrennt (#478).
  */
 static RBBRIDGE_NOINLINE void dispatch_natural_waves(HANDLE hPipe,
                                                      const char *op)
@@ -3236,6 +3245,7 @@ static RBBRIDGE_NOINLINE void dispatch_natural_waves(HANDLE hPipe,
     const unsigned char *execfn = NULL;
     int o = natural_waves_op(op);
     int disabled = -1, infinite = -1, before = -1;
+    int written = 0;
     char strength[64] = "";
     char dname[64] = "";
     char esc_s[128];
@@ -3257,17 +3267,30 @@ static RBBRIDGE_NOINLINE void dispatch_natural_waves(HANDLE hPipe,
 
     if (o == 1 || o == 2) { /* off / on */
         if (!natural_waves_write(base, size, o == 1)) {
+            /* Write-Pfad getrennt vom Read-Pfad (#478): ein fehlgeschlagener
+             * Write heisst, dass NICHTS geschrieben wurde. */
             dbg("natural_waves: Schalter nicht aufloesbar (RTTI/AOB/Instanz)");
             send_line(hPipe,
                       "{\"event\":\"natural_waves_result\","
-                      "\"ok\":false,\"reason\":\"not_resolvable\"}");
+                      "\"ok\":false,\"reason\":\"write_failed\"}");
             return;
         }
+        written = 1;
     }
 
     if (!natural_waves_read(base, size, &disabled, &infinite,
                             strength, sizeof(strength),
                             dname, sizeof(dname))) {
+        /* Der Write hat gegriffen, der Readback nicht: getrennt melden,
+         * statt einen erfolgreichen Write als ok:false zu verkaufen (#478). */
+        if (written) {
+            send_line(hPipe,
+                      "{\"event\":\"natural_waves_result\",\"ok\":true,"
+                      "\"op\":\"%s\",\"written\":true,"
+                      "\"readback\":\"failed\"}",
+                      op && op[0] ? op : "status");
+            return;
+        }
         send_line(hPipe,
                   "{\"event\":\"natural_waves_result\","
                   "\"ok\":false,\"reason\":\"not_resolvable\"}");
@@ -3280,12 +3303,24 @@ static RBBRIDGE_NOINLINE void dispatch_natural_waves(HANDLE hPipe,
         "strength='%s' difficulty='%s'",
         op ? op : "status", before, disabled, infinite, strength, dname);
 
+    if (written) {
+        send_line(hPipe,
+                  "{\"event\":\"natural_waves_result\",\"ok\":true,"
+                  "\"op\":\"%s\",\"written\":true,\"readback\":\"ok\","
+                  "\"waves_disabled\":%s,\"wave_strength\":\"%s\","
+                  "\"mission_infinite\":%s,\"difficulty\":\"%s\"}",
+                  op && op[0] ? op : "status",
+                  disabled ? "true" : "false",
+                  esc_s,
+                  infinite ? "true" : "false",
+                  esc_d);
+        return;
+    }
     send_line(hPipe,
               "{\"event\":\"natural_waves_result\",\"ok\":true,"
-              "\"op\":\"%s\",\"waves_disabled\":%s,"
-              "\"wave_strength\":\"%s\",\"mission_infinite\":%s,"
-              "\"difficulty\":\"%s\"}",
-              op && op[0] ? op : "status",
+              "\"op\":\"status\",\"readback\":\"ok\","
+              "\"waves_disabled\":%s,\"wave_strength\":\"%s\","
+              "\"mission_infinite\":%s,\"difficulty\":\"%s\"}",
               disabled ? "true" : "false",
               esc_s,
               infinite ? "true" : "false",

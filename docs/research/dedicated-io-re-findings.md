@@ -254,6 +254,10 @@ den Wellen-Spawn bis zur HQ-Platzierung (`RBB.commenced`). Für volle Kontrolle:
 Ziel: den Schalter finden, der `dom_mananger` dauerhaft vom Naturwellen-Spawning
 abhält ("aus", nicht "freeze").
 
+> **Namens-Hinweis.** `dom_mananger` ist die **Lua-Klasse** (Eigen-Schreibweise
+> des Spiels, so auch `class 'dom_mananger' (event_manager)`); die **Datei**
+> heißt `dom_manager.lua`. Beide Schreibweisen sind beabsichtigt (Review #478).
+
 ### DifficultyService-Layout (Disasm, Build 2.0.58485, planet)
 
 ```
@@ -299,6 +303,16 @@ Suspendiert → `Update` kehrt sofort zurück (DOM-Timer stehen) → nur "Pause"
 Injection der neuen DLL + `set difficulty "sandbox"` + Restart: Injection ok
 (`rbbridge.dll geladen`, Pipe-Server läuft), aber der DedicatedServer crashte
 danach während der Map-Generierung (`CrashHandlerWin32`, `MapGenerator.cpp:976`),
-bevor ein `natural_waves`-Kommando ankam. Der dev-Stack hatte schon VOR der
-Änderung `winedbg`-Crashes; Ursache (Injection-Timing vs. Map-Gen) nicht
-abschließend geklärt → Live-Game-Wert offen (Player-/Operator-Test).
+bevor ein `natural_waves`-Kommando ankam.
+
+**Auswertung (Maintainer, PR #478):** Der Crash stammt **nicht** aus dieser
+Änderung — die injizierte DLL enthielt keinen `natural_waves`-Code (`strings`:
+0 Treffer), und beide Crash-Bundles zeigen dieselbe Instruktion
+`riftbreaker_dll_win_release.dll+0x275895` (`mov rdx,[r10]`, `r10 = 0x36`/`0x33`),
+erreicht über `dispatch_get_state` → `GetPlayerAccount(World*,0)` →
+`GetPlayerTeam` → `Exor::EcsContext::FindIt`: ein **Readiness**-Problem
+(`get_state`-Polling während der Map-Gen, `world != NULL` aber noch nicht fertig
+initialisiert). Fix läuft in #479 (Readiness-Gate). Der Live-Game-Wert des
+Naturwellen-Schalters ist damit weiterhin offen (Player-/Operator-Test), aber
+nicht durch diese DLL blockiert. Der Live-Default-Flip auf `planet` ist aus dem
+PR #478 de-scoped und landet separat.
