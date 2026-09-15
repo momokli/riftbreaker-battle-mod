@@ -8,12 +8,12 @@
 #     demselben basic_auth (operator); den Agent-Bearer injiziert Caddy
 #     (Issue #454).
 #
-# Issue #463: /server/* wird NUR gerendert, wenn das jeweilige Play den
+# Issue #463/#498: /server/* wird NUR gerendert, wenn das jeweilige Play den
 # server-control-Agenten auch deployt (server_control_enabled, Default false).
-# Sonst zeigt die Route auf 127.0.0.1:<server_control_port> — auf planet
-# lauscht dort der DEV-Agent, d.h. ein Klick auf "Restart server" im
-# Prod-Cockpit traefe den dev-Container (Regression aus #456). Prod deployt
-# (noch) keinen Agenten, also faellt die Route dort weg (fail-safe).
+# dev und prod deployen jetzt JE einen eigenen Agenten (dev 8092, prod 8093);
+# die Route zeigt daher immer auf 127.0.0.1:<server_control_port> des eigenen
+# Plays — ein Klick auf "Restart server" trifft NIE den fremden Container.
+# Ein Play ohne Agent laesst die Route weiterhin weg (fail-safe).
 # Plain HTTP, lauscht ausschliesslich auf 127.0.0.1:{{ rift_caddy_port }} —
 # TLS terminiert weiterhin der geteilte Host-Caddy
 # ({{ website_host_caddy_container }}), der hierher proxyt. Deshalb kein ACME.
@@ -58,10 +58,10 @@ http://{{ cockpit_domain }}:{{ rift_caddy_port }} {
 	# injiziert ihn hier; der Agent bindet ohnehin nur 127.0.0.1. Ohne Token
 	# (leerer Vault-Wert) entfaellt der header_up — ein literales `Bearer `
 	# wuerde der Agent ablehnen.
-	# Issue #463: nur rendern, wenn dieses Play den Agenten deployt
-	# (server_control_enabled). Prod tut das (noch) nicht — ohne diese Bedingung
-	# zeigte die Route auf 127.0.0.1:<server_control_port> und traefe dort den
-	# laufenden DEV-Agenten (dev-Container-Steuerung aus dem Prod-Cockpit).
+	# Issue #463/#498: nur rendern, wenn dieses Play den Agenten deployt
+	# (server_control_enabled). dev und prod deployen je einen eigenen Agenten —
+	# die Route zeigt auf 127.0.0.1:<server_control_port> des jeweiligen Plays
+	# (dev 8092, prod 8093), nie auf den fremden Agenten.
 {% if server_control_enabled | default(false) | bool %}	handle /server/* {
 		basic_auth {
 			operator {{ contract_basic_auth_hash }}
