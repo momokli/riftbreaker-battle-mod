@@ -102,12 +102,18 @@ class SessionRecorder:
     """Session-Zustandsmaschine + JSONL-Ausgabe (deterministisch testbar)."""
 
     def __init__(self, out_dir, log_names=None, player_events=True,
-                 clock=utc_now_iso, id_factory=default_session_id):
+                 clock=utc_now_iso, id_factory=default_session_id,
+                 env="unknown", ref="unknown"):
         self.out_dir = out_dir
         self.log_names = list(log_names or [])
         self.player_events = player_events
         self._clock = clock
         self._id_factory = id_factory
+        # Deploy-Identitaet (Issue #483, US4): dieselbe <env> · <ref> wie
+        # Landing/Tournament/Server-Control — je JSONL-Record mitgeschrieben,
+        # damit ein Mitschnitt eindeutig einer Env + einem Deploy zuordenbar ist.
+        self.env = env
+        self.ref = ref
         os.makedirs(out_dir, exist_ok=True)
         self._state_path = os.path.join(out_dir, STATE_FILE)
         self._state = {"active": None, "cursors": {}}
@@ -186,6 +192,8 @@ class SessionRecorder:
             "session_id": sid,
             "ts": active["started_ts"],
             "source_logs": self.log_names,
+            "env": self.env,
+            "ref": self.ref,
         })
         self._save_state()
         return active
@@ -218,6 +226,8 @@ class SessionRecorder:
             "event": rec["event"],
             "fields": fields,
             "raw": rec["raw"],
+            "env": self.env,
+            "ref": self.ref,
         })
 
     def finalize_session(self, reason="match_end"):
@@ -235,6 +245,8 @@ class SessionRecorder:
             "reason": reason,
             "started_ts": active["started_ts"],
             "event_count": active["event_count"],
+            "env": self.env,
+            "ref": self.ref,
         })
         summary = {
             "session_id": sid,
@@ -248,6 +260,8 @@ class SessionRecorder:
             "hq_dead": active["hq_dead"],
             "end_reason": reason,
             "jsonl": sid + ".jsonl",
+            "env": self.env,
+            "ref": self.ref,
         }
         with open(os.path.join(self.out_dir, sid + ".summary.json"), "w", encoding="utf-8") as fh:
             json.dump(summary, fh, ensure_ascii=False, indent=2, sort_keys=True)
@@ -362,9 +376,11 @@ def default_log_paths(wine_prefix, wine_user):
 
 
 def run(paths, out_dir, once=False, poll_interval=1.0, player_events=True, from_start=True,
-        stop_after=None, clock=utc_now_iso, id_factory=default_session_id, _sleep=time.sleep):
+        stop_after=None, clock=utc_now_iso, id_factory=default_session_id, _sleep=time.sleep,
+        env="unknown", ref="unknown"):
     recorder = SessionRecorder(out_dir, log_names=paths, player_events=player_events,
-                               clock=clock, id_factory=id_factory)
+                               clock=clock, id_factory=id_factory,
+                               env=env, ref=ref)
     tailer = LogTailer(recorder, paths, from_start=from_start)
     idle_rounds = 0
     try:
@@ -396,6 +412,13 @@ def build_parser():
     p.add_argument("--no-player-events", action="store_true", help="Player-JOIN-Zeilen nicht mitschneiden")
     p.add_argument("--once", action="store_true", help="Verfügbare Zeilen verarbeiten, dann beenden")
     p.add_argument("--poll-interval", type=float, default=1.0)
+    # Deploy-Identitaet (Issue #483, US4): je JSONL-Record mitgeschrieben. Die
+    # Compose-Templates setzen RBB_ENV/RBB_REF (Default) — die CLI-Flags
+    # ueberschreiben sie fuer manuelle Laeufe.
+    p.add_argument("--env", default=os.environ.get("RBB_ENV") or "unknown",
+                   help="Env der Deploy-Identitaet (Default: RBB_ENV oder unknown)")
+    p.add_argument("--ref", default=os.environ.get("RBB_REF") or "unknown",
+                   help="Ref der Deploy-Identitaet (Default: RBB_REF oder unknown)")
     return p
 
 
@@ -403,7 +426,8 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     paths = args.log or default_log_paths(args.wine_prefix, args.wine_user)
     run(paths, args.out_dir, once=args.once, poll_interval=args.poll_interval,
-        player_events=not args.no_player_events, from_start=not args.from_end)
+        player_events=not args.no_player_events, from_start=not args.from_end,
+        env=args.env, ref=args.ref)
     return 0
 
 

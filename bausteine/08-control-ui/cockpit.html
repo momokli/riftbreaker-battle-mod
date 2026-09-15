@@ -383,6 +383,11 @@
                 min-width: 0;
             }
 
+            .flow-note {
+                font-size: 11px;
+                color: var(--dim);
+            }
+
             /* Group C: Server Control (Plane B) */
             #panel-server {
                 display: flex;
@@ -636,6 +641,33 @@
                             </div>
                         </div>
                     </fieldset>
+
+                    <!-- D. NATURAL WAVES (VANILLA) -->
+                    <fieldset class="q-groupbox" id="panel-waves">
+                        <legend>Natural Waves (Vanilla)</legend>
+                        <div class="flow-container">
+                            <div class="flow-readouts">
+                                <div class="flow-prop">
+                                    <span class="prop-label">waves</span>
+                                    <span id="natural_waves_state" class="prop-val">—</span>
+                                </div>
+                                <div class="flow-prop">
+                                    <span class="prop-label">strength</span>
+                                    <span id="natural_waves_strength" class="prop-val">—</span>
+                                </div>
+                            </div>
+                            <div class="flow-action-row">
+                                <button id="nw_off" title="Setzt DifficultyService::AreWavesDisabled(); der Lua-Knoten liest pauseAttacks erst beim naechsten Mission-/Rules-Load" aria-label="Turn vanilla natural waves off (effective on next mission load)">off (next load)</button>
+                                <button id="nw_on" title="Loescht DifficultyService::AreWavesDisabled(); wirkt erst beim naechsten Mission-/Rules-Load" aria-label="Turn vanilla natural waves on (effective on next mission load)">on (next load)</button>
+                                <button id="nw_status" title="Liest den aktuellen Speicherwert (read-only)" aria-label="Refresh natural waves status">status</button>
+                            </div>
+                            <div class="flow-note">
+                                read = Live-Speicherwert; off/on wirken erst beim
+                                naechsten Mission-/Rules-Load (Boot-Schalter:
+                                `set difficulty "sandbox"`)
+                            </div>
+                        </div>
+                    </fieldset>
                 </div>
 
                 <div class="right-col">
@@ -837,6 +869,40 @@
                 };
                 $("cbd_dec").onclick = function () {
                     creaturesDifficulty("decrease");
+                };
+
+                async function naturalWaves(op) {
+                    try {
+                        var r = await post("natural_waves", { op: op });
+                        if (r && r.ok) {
+                            // Write gelungen, Readback fehlgeschlagen: den
+                            // Zustand nicht faelschlich anzeigen.
+                            if (r.readback === "failed") {
+                                $("out").textContent =
+                                    "written (op=" + op + "), readback failed";
+                                return;
+                            }
+                            $("natural_waves_state").textContent =
+                                r.waves_disabled ? "off" : "on";
+                            $("natural_waves_strength").textContent =
+                                r.wave_strength || "—";
+                            $("out").textContent = "";
+                        } else {
+                            $("out").textContent = JSON.stringify(r);
+                        }
+                    } catch (e) {
+                        $("out").textContent = "ERR " + e.message;
+                    }
+                }
+
+                $("nw_off").onclick = function () {
+                    naturalWaves("off");
+                };
+                $("nw_on").onclick = function () {
+                    naturalWaves("on");
+                };
+                $("nw_status").onclick = function () {
+                    naturalWaves("status");
                 };
 
                 refresh();

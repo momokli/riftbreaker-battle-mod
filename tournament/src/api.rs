@@ -55,6 +55,10 @@ pub struct Config {
     pub referee_restart_cmd: String,
     /// Verzeichnis der statischen Web-UI.
     pub web_dir: PathBuf,
+    /// Deploy-Identitaet (Issue #483, US4): Umgebung (dev|prod|test) + Ref
+    /// (Checkout-SHA bzw. Tag+SHA), sichtbar in `GET /health`.
+    pub env: String,
+    pub deploy_ref: String,
 }
 
 impl Config {
@@ -721,7 +725,14 @@ async fn state_get(AxumState(app): AxumState<AppState>) -> ApiResult<Json<Value>
 /// GET /health
 async fn health(AxumState(app): AxumState<AppState>) -> ApiResult<Json<Value>> {
     let phase = app.state.read().await.phase.as_str().to_string();
-    Ok(Json(json!({ "ok": true, "phase": phase })))
+    Ok(Json(json!({
+        "ok": true,
+        "phase": phase,
+        // Deploy-Identitaet (Issue #483, US4): dieselbe <env> · <ref> wie
+        // Landing, Server-Control und die Container-Labels.
+        "env": app.cfg.env,
+        "ref": app.cfg.deploy_ref,
+    })))
 }
 
 // ---- GO-Broadcast ----
@@ -817,6 +828,10 @@ mod tests {
             // `rb_reset` wie der produktive Env-Default aus `main.rs` (#281).
             referee_restart_cmd: "rb_reset".to_string(),
             web_dir: PathBuf::from("web"), // wird in Tests nicht gebraucht
+            // Deploy-Identitaet (Issue #483, US4): feste Test-Werte, damit der
+            // /health-Vertrag deterministisch pruefbar ist.
+            env: "test".to_string(),
+            deploy_ref: "deadbeef".to_string(),
         }
     }
 
@@ -1219,6 +1234,18 @@ mod tests {
             .unwrap()
             .iter()
             .any(|e| e["kind"] == "score"));
+    }
+
+    /// `/health` traegt die Deploy-Identitaet (Issue #483, US4).
+    #[tokio::test]
+    async fn health_reports_deploy_identity() {
+        let app = make_app(test_cfg()).await;
+        let (s, v) = call(&app, "GET", "/health", None).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["phase"], "lobby");
+        assert_eq!(v["env"], "test");
+        assert_eq!(v["ref"], "deadbeef");
     }
 
     /// Mock-HTTP-Endpoint: akzeptiert eine Verbindung, liefert Request-Text.

@@ -594,3 +594,47 @@ Die Rolle `riftbreaker-server`
 
 Regel, Befund und Kontrollwerkzeug (`tools/mods-guard/check_mods_dir.py`):
 [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md) → „Mod-Backups & mods/-Guard".
+
+
+## Environment-Isolation & Deploy-Identitaet (Issue #483)
+
+Jeder Deploy traegt genau eine Identitaet `<env> · <ref>`:
+
+| Baustein | Datei | Zweck |
+| --- | --- | --- |
+| Identitaet | `deploy/tasks/deploy-identity.yml` | setzt `rift_env`/`rift_deploy_ref`/`rift_deploy_identity` (in `pre_tasks` aller drei Plays) |
+| Schema | `deploy/env-schema.yml` | `per_env` (Pflicht je Env explizit) vs. `shared` (begruendet) |
+| Audit | `tools/deploy-gate/check_env_isolation.py` | stdlib-Audit (kein PyYAML); Marker `ENV-ISOLATION-GATE` |
+| Assert | `deploy/tasks/env-assert.yml` | Audit + Distinctness der per-env-Pfade; non-zero rc bricht den Deploy ab |
+| Tests | `deploy/tests/env-identity/`, `deploy/tests/env-isolation/`, `tools/deploy-gate/test_env_isolation.py` | hermetisch (kein Host, kein Vault) |
+
+`rift_env` ist bewusst eine **Play-Var** in `site.yml` (dev), `deploy-prod.yml`
+(prod) und `test-deploy.yml` (test): Play-Vars schlagen Rollen-Defaults und
+`host_vars` — sonst erbt prod/test still den dev-Wert (dieselbe Praezedenz wie
+`server_control_enabled`, #463). `dev` hat keine Override-Datei: dev **ist** die
+Basis (`inventory/host_vars/planet/vars.yml`).
+
+**Assert-Semantik (fail-loud):**
+- Eine Variable in `prod-vars.yml`/`test-vars.yml` ohne Schema-Eintrag → rot.
+- Ein `per_env`-Key, der in einer gelisteten Env-Datei fehlt → rot.
+- Ein `shared`-Eintrag ohne Begruendung → rot.
+- Fuer `env != dev` muss jeder per-env-Pfad (`website_docroot`,
+  `website_mods_dir`, `mods_zip_dest`, `riftbreaker_game_dir`,
+  `riftbreaker_deploy_dir`, `riftbreaker_sessions_dir`, `rbtools_dir`) vom
+  dev-Basiswert abweichen.
+
+Neue Env-Variable hinzufuegen: zuerst in `deploy/env-schema.yml` klassifizieren,
+dann in der Env-Datei setzen — sonst schlaegt das Gate fehl.
+
+### Offener Punkt: host-seitiges Marker-Namensschema
+
+Der host-seitige Checkout (`/opt/rbbattle-deploy/repo-…`) und der Wrapper
+(`/usr/local/bin/rbbattle-deploy`, `/opt/rbbattle-deploy/*`) sind **nicht** im
+Repo versioniert (forced-command des deploy-Users). Der vorgesehene, noch nicht
+umgesetzte Umbau trennt sie je Env:
+
+- Checkout: `/opt/rbbattle-deploy/repo-<env>` (dev|prod|test)
+- Marker: `.deploy-<env>.sha` (Checkout-SHA) und `.deploy-<env>.ref` (Tag+SHA)
+- Damit deployt jeder Lauf aus seinem eigenen Checkout statt alle aus einem
+  gemeinsamen — Ziel des Issues, aber **eigener PR mit Rollback-Runbook**
+  (Live-Eingriff auf prod). Bis dahin gilt: Host-Umbau = offen.

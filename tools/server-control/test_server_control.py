@@ -167,6 +167,18 @@ class ServerControlTestCase(BaseFixture):
         self.assertEqual(status["health"], "none")
         self.assertIsNone(status["uptime_seconds"])
 
+    def test_status_reports_deploy_identity(self):
+        # Issue #483, US4: env/ref kommen aus der Config in /server/status.
+        cfg = dict(self.cfg, env="prod", ref="abc123def456")
+        status = sc.ServerControl(cfg).status()
+        self.assertEqual(status["env"], "prod")
+        self.assertEqual(status["ref"], "abc123def456")
+
+    def test_status_defaults_identity_to_unknown(self):
+        status = sc.ServerControl(self.cfg).status()
+        self.assertEqual(status["env"], "unknown")
+        self.assertEqual(status["ref"], "unknown")
+
     def test_logs_tail_passed_through(self):
         result = sc.ServerControl(self.cfg).logs(42)
         self.assertEqual(result["tail"], 42)
@@ -243,6 +255,21 @@ class ServerControlTestCase(BaseFixture):
     def test_load_config_binds_localhost_by_default(self):
         cfg = sc.load_config({"SERVER_CONTROL_TOKEN": TOKEN, "SERVER_CONTROL_CONTAINER": CONTAINER})
         self.assertEqual(cfg["bind"], "127.0.0.1")
+
+    def test_load_config_reads_deploy_identity(self):
+        cfg = sc.load_config({
+            "SERVER_CONTROL_TOKEN": TOKEN,
+            "SERVER_CONTROL_CONTAINER": CONTAINER,
+            "SERVER_CONTROL_ENV": " test ",
+            "SERVER_CONTROL_REF": "sha-1",
+        })
+        self.assertEqual(cfg["env"], "test")
+        self.assertEqual(cfg["ref"], "sha-1")
+
+    def test_load_config_defaults_identity_to_unknown(self):
+        cfg = sc.load_config({"SERVER_CONTROL_TOKEN": TOKEN, "SERVER_CONTROL_CONTAINER": CONTAINER})
+        self.assertEqual(cfg["env"], "unknown")
+        self.assertEqual(cfg["ref"], "unknown")
 
     def test_render_fallback_without_jinja2(self):
         text = sc.render_fallback('set x "{{ missing }}"\nset y "{{ other | default(\'z\') }}"\n', {"other": "q"})
@@ -330,6 +357,25 @@ class HttpLayerTestCase(BaseFixture):
         self.assertEqual(status, 200)
         self.assertEqual(body["state"], "running")
         self.assertIn("uptime", body)
+
+    def test_status_identity_over_http(self):
+        # Issue #483, US4: /server/status traegt env/ref auch ueber HTTP.
+        cfg = dict(self.cfg, env="test", ref="sha-xyz")
+        httpd = sc.build_server(cfg)
+        port = httpd.server_address[1]
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        try:
+            req = urllib.request.Request("http://127.0.0.1:%d/server/status" % port)
+            req.add_header("Authorization", "Bearer " + TOKEN)
+            with urllib.request.urlopen(req, timeout=10) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+        self.assertEqual(body["env"], "test")
+        self.assertEqual(body["ref"], "sha-xyz")
 
     def test_logs_ok_with_token(self):
         status, body = self.request("/server/logs?tail=5")
