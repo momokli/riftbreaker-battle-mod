@@ -90,6 +90,36 @@
         </section>
 
         <section>
+            <h2>server control (plane B)</h2>
+            <div class="row">
+                <span class="dim">state</span>
+                <span id="server_state" class="val">—</span>
+                <span class="dim">health</span>
+                <span id="server_health" class="val">—</span>
+                <span class="dim">uptime</span>
+                <span id="server_uptime" class="val">—</span>
+                <span class="dim">started</span>
+                <span id="server_started_at" class="val">—</span>
+            </div>
+            <div class="row">
+                <span class="dim">logs (tail)</span>
+                <input id="server_logs_tail" size="6" value="50" />
+                <button id="server_logs_refresh">refresh logs</button>
+            </div>
+            <div class="row">
+                <pre id="server_logs" class="val">—</pre>
+            </div>
+            <div class="row">
+                <button id="server_restart">Restart server</button>
+                <button id="server_start">Start</button>
+                <button id="server_stop">Stop</button>
+            </div>
+            <div class="row">
+                <span id="server_control_msg" class="err"></span>
+            </div>
+        </section>
+
+        <section>
             <h2>mission flow (wave)</h2>
             <div class="row">
                 <span class="dim">flow</span>
@@ -106,6 +136,14 @@
                 <input id="flow_mode" size="10" value="default" />
                 <button id="flow_start">start wave</button>
             </div>
+            <div class="row">
+                <input
+                    id="flow_stop"
+                    size="42"
+                    placeholder="flow-id (leer = zuletzt gestarteter)"
+                />
+                <button id="flow_stop_btn">stop wave</button>
+            </div>
         </section>
 
         <section>
@@ -119,22 +157,6 @@
                 <button id="cbd_set">set</button>
                 <button id="cbd_inc">+ increase</button>
                 <button id="cbd_dec">− decrease</button>
-            </div>
-        </section>
-
-        <section>
-            <h2>dom (wave cycle)</h2>
-            <div class="row">
-                <span class="dim">last</span>
-                <span id="dom_status" class="val">—</span>
-            </div>
-            <div class="row">
-                <button id="dom_pause">DOM Pause</button>
-                <button id="dom_resume">DOM Resume</button>
-            </div>
-            <div class="row">
-                <span class="dim">ref (optional)</span>
-                <input id="dom_ref" size="14" placeholder="auto" />
             </div>
         </section>
 
@@ -228,6 +250,21 @@
                     startMissionFlow();
                 };
 
+                async function stopMissionFlow() {
+                    try {
+                        var body = {};
+                        var f = $("flow_stop").value;
+                        if (f) {
+                            body.flow = f;
+                        }
+                        var r = await post("deactivate_mission_flow", body);
+                        $("out").textContent = r && r.ok ? "" : JSON.stringify(r);
+                        refresh();
+                    } catch (e) {
+                        $("out").textContent = "ERR " + e.message;
+                    }
+                }
+
                 async function creaturesDifficulty(op) {
                     try {
                         var r = await post("creatures_difficulty", {
@@ -241,6 +278,10 @@
                     }
                 }
 
+                $("flow_stop_btn").onclick = function () {
+                    stopMissionFlow();
+                };
+
                 $("cbd_set").onclick = function () {
                     creaturesDifficulty("set");
                 };
@@ -251,57 +292,153 @@
                     creaturesDifficulty("decrease");
                 };
 
-                // #387: DOM Pause/Resume (Write) + Statusanzeige des letzten
-                // dom_control-Ergebnisses. ok:false wird bewusst NICHT
-                // versteckt (z. B. ambiguous_dom bleibt sichtbar).
-                function domStatus(r) {
-                    if (r && r.ok) {
-                        $("dom_status").textContent =
-                            (r.action || "?") +
-                            " ok (suspended=" +
-                            r.suspended +
-                            ", candidates=" +
-                            r.candidates +
-                            ")";
-                        $("dom_status").className = "val";
-                    } else {
-                        var reason = r && r.reason ? r.reason : JSON.stringify(r);
-                        var cand =
-                            r && r.candidates !== undefined
-                                ? " (candidates=" + r.candidates + ")"
-                                : "";
-                        $("dom_status").textContent =
-                            (r && r.action ? r.action + " " : "") +
-                            "FAIL: " +
-                            reason +
-                            cand;
-                        $("dom_status").className = "err";
-                    }
-                }
-
-                async function domControl(cmd) {
-                    try {
-                        var body = {};
-                        var ref = $("dom_ref").value.trim();
-                        if (ref) {
-                            body.ref = ref;
-                        }
-                        domStatus(await post(cmd, body));
-                    } catch (e) {
-                        $("dom_status").textContent = "ERR " + e.message;
-                        $("dom_status").className = "err";
-                    }
-                }
-
-                $("dom_pause").onclick = function () {
-                    domControl("pause_dom");
-                };
-                $("dom_resume").onclick = function () {
-                    domControl("resume_dom");
-                };
-
                 refresh();
                 setInterval(refresh, 3000);
+
+                // --- server-control panel (testable) ---
+                function createServerControlPanel(deps) {
+                    var fetchFn = deps.fetch;
+                    var doc = deps.document;
+                    var DASH = "—";
+                    var STATUS_IDS = [
+                        "server_state",
+                        "server_health",
+                        "server_uptime",
+                        "server_started_at",
+                    ];
+                    var LOG_ID = "server_logs";
+                    var MSG_ID = "server_control_msg";
+
+                    function el(id) {
+                        return doc ? doc.getElementById(id) : null;
+                    }
+
+                    function setText(id, value) {
+                        var node = el(id);
+                        if (!node) return;
+                        node.textContent =
+                            value === undefined || value === null || value === ""
+                                ? DASH
+                                : String(value);
+                    }
+
+                    function dashAll() {
+                        for (var i = 0; i < STATUS_IDS.length; i++) {
+                            setText(STATUS_IDS[i], DASH);
+                        }
+                        setText(LOG_ID, DASH);
+                    }
+
+                    function msg(text) {
+                        var node = el(MSG_ID);
+                        if (node) node.textContent = text || "";
+                    }
+
+                    async function getJson(path) {
+                        var res = await fetchFn(path, { method: "GET" });
+                        if (!res || !res.ok) {
+                            throw new Error("HTTP " + (res && res.status));
+                        }
+                        return res.json();
+                    }
+
+                    async function refreshStatus() {
+                        try {
+                            var s = await getJson("/server/status");
+                            setText("server_state", s && s.state);
+                            setText("server_health", s && s.health);
+                            setText("server_uptime", s && s.uptime);
+                            setText("server_started_at", s && s.started_at);
+                            msg("");
+                        } catch (e) {
+                            dashAll();
+                            msg("server status unavailable");
+                        }
+                    }
+
+                    function tailCount() {
+                        var node = el("server_logs_tail");
+                        var n = node ? parseInt(node.value, 10) : NaN;
+                        if (!isFinite(n) || n <= 0) n = 50;
+                        if (n > 5000) n = 5000;
+                        return n;
+                    }
+
+                    async function refreshLogs() {
+                        try {
+                            var n = tailCount();
+                            var data = await getJson("/server/logs?tail=" + n);
+                            var lines = data && data.lines;
+                            if (!lines || !lines.length) {
+                                setText(LOG_ID, DASH);
+                                return;
+                            }
+                            setText(LOG_ID, lines.join("\n"));
+                            msg("");
+                        } catch (e) {
+                            setText(LOG_ID, DASH);
+                            msg("server logs unavailable");
+                        }
+                    }
+
+                    async function control(action) {
+                        if (
+                            action !== "restart" &&
+                            action !== "start" &&
+                            action !== "stop"
+                        ) {
+                            return;
+                        }
+                        var failed = false;
+                        try {
+                            var res = await fetchFn("/server/" + action, {
+                                method: "POST",
+                                headers: { "content-type": "application/json" },
+                                body: "{}",
+                            });
+                            if (!res || !res.ok) {
+                                throw new Error("HTTP " + (res && res.status));
+                            }
+                        } catch (e) {
+                            failed = true;
+                        }
+                        // Poll first, then set the outcome message: the refresh
+                        // helpers clear/populate #server_control_msg, so setting it
+                        // afterwards keeps the user confirmation visible.
+                        await refreshStatus();
+                        await refreshLogs();
+                        msg("server " + action + (failed ? " failed" : " requested"));
+                    }
+
+                    return {
+                        refreshStatus: refreshStatus,
+                        refreshLogs: refreshLogs,
+                        control: control,
+                    };
+                }
+                // --- end server-control panel ---
+
+                var serverPanel = createServerControlPanel({
+                    fetch: window.fetch.bind(window),
+                    document: document,
+                });
+
+                $("server_restart").onclick = function () {
+                    serverPanel.control("restart");
+                };
+                $("server_start").onclick = function () {
+                    serverPanel.control("start");
+                };
+                $("server_stop").onclick = function () {
+                    serverPanel.control("stop");
+                };
+                $("server_logs_refresh").onclick = function () {
+                    serverPanel.refreshLogs();
+                };
+
+                serverPanel.refreshStatus();
+                serverPanel.refreshLogs();
+                setInterval(serverPanel.refreshStatus, 5000);
             })();
         </script>
     </body>

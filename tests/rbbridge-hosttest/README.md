@@ -12,11 +12,6 @@ Geprüft:
 - `resolve_console_service` (Signatur + vftable + Instanz + Cache)
 - `resolve_module` (Wine-robust, Stufe d `sigbase`, Negativfälle)
 - `pe_image_size` (defensive Grenzfälle)
-- **#387:** `RBBRIDGE_DOM_SIG`/`RBBRIDGE_SETSUSPEND_SIG` im synthetischen Image,
-  `resolve_dom_vtables`, `dom_apply_suspend` (eindeutig → ok + Flagwrite;
-  `ambiguous_dom` → `ok:false` ohne Flagwrite/Crash; `ref`-Filter;
-  Nicht-Fund-Pfade `no_dom_signature`/`no_setsuspended_signature`/
-  `no_dom_instance`/`no_module`)
 - Fehlerpfade (Modul/RTTI/Signatur/Instanz fehlt → `0`/`NULL`, kein Crash)
 
 Ist kein Host-C-Compiler vorhanden, wird der Test **sichtbar übersprungen**

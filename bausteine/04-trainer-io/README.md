@@ -56,6 +56,22 @@ exec-Zeilen auf `\\.\pipe\rbbattle` (der Wine-Named-Pipe ist nur aus Wine
 erreichbar). Details, Verdrahtung und Testanleitung: `docs/INGRESS_IO.md`.
 Alle vier Binaries baut `scripts/build_rbbridge_tools.sh <outdir>`.
 
+## Cockpit: Server-Control-Panel (Plane B, Issue #422)
+
+Die Cockpit-UI (`bridge/cockpit.html`) hat ein Panel `server control (plane B)`:
+Status (`state`/`health`/`uptime`/`started_at`), Logs (letzte N Zeilen) und die
+Buttons `Restart server`/`Start`/`Stop`. Datenquellen sind die Plane-B-Host-Agent-
+Routen `GET /server/status`, `GET /server/logs?tail=N` (N ≤ 5000) und
+`POST /server/{restart,start,stop}` (Body `{}`), relative Pfade auf derselben
+Origin. Ist der Agent nicht erreichbar (HTTP !ok, Parse-Fehler), zeigt das Panel
+nur "—", meldet den Fehler in einer eigenen kleinen Statuszeile und **laedt die
+Seite nie neu**; Status pollt alle ~5 s, Logs nur auf Knopf.
+
+**Live-Daten brauchen gemergtes #424** (Agent + Caddy-Route `handle /server/*`)
+und die Bearer-Injektion in der Caddy-Route (der Browser hat keinen Token -> sonst
+401 -> "—"). Der neue Node-Test `tests/server-control-panel` laeuft ohne Netzwerk
+und Dependencies (`cd tests/server-control-panel && npm test`).
+
 ## Build (Windows, x64)
 
 Voraussetzung: 64-bit-Toolchain — **Injector UND DLL müssen x64 sein**

@@ -3,6 +3,9 @@
 Neue Cockpit-Sektion *creatures base difficulty* (`cockpit.html`).
 
 - `01-cockpit-full.png` — ganze Cockpit-Seite inkl. der neuen Sektion.
+  Neu gerendert nach dem Base-Merge (`main`, inkl. #389 *stop wave* und
+  #422 *server control*), damit die Ganzseiten-Aufnahme den aktuellen
+  Seitenstand zeigt (Review-Hinweis PR #433).
 - `02-creatures-base-difficulty-section.png` — Ausschnitt der neuen Sektion
   (Read-Anzeige `now 1.5` + `set` / `+ increase` / `− decrease`).
 
