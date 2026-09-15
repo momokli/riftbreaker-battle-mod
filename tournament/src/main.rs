@@ -15,6 +15,8 @@
 //! | `TOURNAMENT_REFEREE_MAX_WAVE` | `0` | Wellen-Deckel des Referees (`0` = unbegrenzt, Issue #268) |
 //! | `TOURNAMENT_REFEREE_RESTART_CMD` | `rb_reset` | In-game Command des Referees bei HQ-Tod (Issue #268/#281; Mod-Kommando) |
 //! | `TOURNAMENT_WEB_DIR` | `<crate>/web` | Verzeichnis der statischen Web-UI |
+//! | `TOURNAMENT_ENV` | `unknown` | Umgebung der Deploy-Identitaet (`dev`\|`prod`\|`test`, Issue #483) |
+//! | `TOURNAMENT_REF` | `unknown` | Ref der Deploy-Identitaet (SHA/Tag, Issue #483) |
 //! | `RUST_LOG` | `info` | Log-Level (tracing) |
 //!
 //! Siehe `docs/TOURNAMENT_API.md` für das komplette Protokoll.
@@ -112,6 +114,11 @@ fn config_from_env() -> Result<Config, String> {
 
     let go_commands = parse_go_commands(&env_str("TOURNAMENT_GO_COMMANDS", "debug_dom_resume"));
 
+    // Deploy-Identitaet (Issue #483, US4): dieselbe <env> · <ref> wie Landing,
+    // Server-Control und die Container-Labels. Default "unknown" (kein Panic).
+    let env = env_str("TOURNAMENT_ENV", "unknown");
+    let deploy_ref = env_str("TOURNAMENT_REF", "unknown");
+
     Ok(Config {
         host,
         port,
@@ -123,6 +130,8 @@ fn config_from_env() -> Result<Config, String> {
         referee_max_wave,
         referee_restart_cmd,
         web_dir,
+        env,
+        deploy_ref,
     })
 }
 

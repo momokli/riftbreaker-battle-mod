@@ -16,7 +16,7 @@
 | Operator-Cockpit + Tournament-UI | planet            | **eigener** Caddy (`rift-caddy`, plain HTTP) hinter `mellon-caddy` | 443 → 127.0.0.1:8787 | `/contract/*` → IO-Bridge (basic_auth) · `/tournament/*` → tournament-server                   |
 | rbmods-image-retention.timer     | planet            | systemd                                                            | —                    | Alte Mod-Image-Tags aufräumen (Rollback-Stand + laufendes Image bleiben)                       |
 | rbmods-host-hygiene.timer        | planet            | systemd                                                            | —                    | wöchentlich dangling Docker-Images aufräumen (`docker image prune`, **kein** `-a`; Issue #308) |
-| rbmods-crash-collector           | planet            | systemd                                                            | —                    | Crash-Artefakte (Minidump + Trace + Log) sichern + Retention (Issue #462)                      |
+| rbmods-crash-collector           | planet            | systemd                                                            | —                    | Crash-Artefakte (Minidump + Trace + Log) sichern, Minidump parsen (Meta) + Retention (Issue #462/#481) |
 | rbbridge                         | in Mod-Containern | Prozess                                                            | —                    | Command-Injection (`exec_cmd_client`, Argument IMMER als EIN gequotierter String)              |
 
 ## Deployment-Plan (Ansible, inventory `planet`)
@@ -52,14 +52,20 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
    Rollback-Stand bleibt erhalten). Installiert `scripts/host_hygiene.sh` +
    Unit/Timer; automatische Variante der manuellen Aufräum-Befehle in
    [`SERVER_SIZING.md`](SERVER_SIZING.md).
-9. **crash-collector** — systemd-*Dauer*-Dienst (Issue #462): beobachtet
+9. **crash-collector** — systemd-*Dauer*-Dienst (Issue #462/#481): beobachtet
    `docker logs -f` des Dedicated-Servers auf Crash-Marker (`CRASH:`,
    `page fault`) und sichert das neueste `crash_info/<uuid>.{dmp,log,trace}`
    als Bundle nach `/opt/rbmods/crashes/<ts>-<uuid>/` — zusammen mit
-   `context.log` (letzte N Container-Zeilen) und `meta.json` (Image-Tag,
-   Git-SHA, Container-Uptime, Modulbasis aus der `module_range`-Zeile,
-   Fault-Adresse aus der `page fault`-Zeile). Retention (Default 20 Bundles)
-   begrenzt auch das crash_info-Wachstum im Wine-Volume (#462).
+   `context.log` (letzte N Container-Zeilen) und `meta.json`. Der Minidump wird
+   dabei von `rbmods-minidump-meta.py` minimal geparst (siehe „Crash-Bundles &
+   meta.json“ unten): Exception-Code/-Adresse, Modul, Modulbasis, Fault-RVA,
+   Fault-Thread und Stack-RVAs kommen aus dem Dump; fehlt/kaputt der Dump,
+   bleiben diese Felder `null` und `module_base`/`fault_address` fallen auf die
+   `module_range`-/`page fault`-Zeile DIESES Bundles zurück. Retention
+   (Default 20 Bundles) begrenzt auch das crash_info-Wachstum im Wine-Volume
+   (#462). Prod wird als **eigener Zwilling** mitbeobachtet (Unit
+   `rbmods-crash-collector-prod`, Bundle-Dir `/opt/rbmods/crashes-prod`,
+   Container `riftbreaker-dedicated-prod`, Issue #481).
 
 Grundsätze:
 
@@ -69,6 +75,60 @@ Grundsätze:
 - **Rollback** = vorherige `rbbattle.zip` / vorheriges Binary wieder einspielen.
   Für ein **Image**-Rollback bleibt das getaggte `rb-dedicated:<alte-sha>`
   erhalten — die Rolle `host-hygiene` entfernt nur dangling Images (#308).
+
+## Crash-Bundles & meta.json (Issue #462/#481)
+
+Der Collector (`scripts/crash_collector.sh`, Unit `rbmods-crash-collector` bzw.
+`rbmods-crash-collector-prod`) legt je Crash ein Bundle
+`<crash_collector_dir>/<ts>-<uuid>/` an: `<uuid>.{dmp,log,trace}`,
+`context.log` (letzte N Container-Zeilen) und `meta.json`. Beide Skripte sind
+planetfrei pruefbar — kein Docker, kein Wine, kein Netz:
+
+- `tests/shell/crash-collector.test.sh` — Bundle/Retention/Fallback (Fake-Docker)
+- `tests/shell/minidump_meta.test.sh` — Parser-Unit (synthetische MDMP-Fixtures)
+- `deploy/tests/crash-collector/run.sh` — Render der Unit (dev + prod)
+
+### meta.json-Felder
+
+Basis (Bestand): `collected_at`, `uuid`, `bundle`, `container`, `image`,
+`git_sha`, `container_started_at`, `container_uptime_seconds`, `crash_marker`,
+`crash_line`, `context_lines`, `files`.
+
+Aus dem Minidump (#481) — `null`, wenn der Dump fehlt oder kaputt ist:
+`exception_code`, `exception_address`, `module`, `module_base`, `fault_rva`,
+`fault_thread`, `stack_rvas`. Adressen/Offsets sind Hex-Strings **ohne** `0x`.
+
+**Same-Boot-Regel:** `module_base`/`fault_address` stammen bevorzugt aus dem
+Dump des Bundles; fehlt der Dump, aus der `module_range`-/`page fault`-Zeile
+**desselben** Bundles (`context.log`). Nie ein Wert aus einem anderen Boot.
+
+### Parser (`scripts/minidump_meta.py`)
+
+Nur stdlib (`struct`/`json`/`sys`/`os`) — keine Symbole, kein PDB, kein Netz.
+CLI: `minidump_meta.py [--json] <dmp>` -> JSON. Genutzte Streams:
+`Exception(6)`, `ModuleList(4)`, `ThreadList(3)`, `MemoryList(5)`;
+`Memory64List(9)` best-effort. Jeder Parsefehler (falsche Magic, truncated,
+fehlender Stream, RVA ausserhalb) -> `{"_ok": false, "reason": ...}` und
+**rc=0** (kein Traceback) — der Collector stirbt nie an einem kaputten Dump.
+
+Grenzen (bewusst, nicht geraten):
+
+- **Pointer-Breite 8 Byte** (64-bit Wine): ein 32-bit-Dump liefert falsche
+  Stack-Kandidaten — die Modulbasis-Breite wird nicht erkannt.
+- **`stack_rvas`**: nur gegen das **Fault-Modul** relativiert, dedupliziert,
+  aufsteigend, **Cap 32**; liegt der Stack nicht in der MemoryList, bleibt die
+  Liste leer (kein Fehler).
+- **RVA-Bounds** werden geprueft; out-of-bounds -> `_ok:false`.
+
+### prod-Instanz (#481)
+
+`deploy/prod-vars.yml`: `crash_collector_unit: rbmods-crash-collector-prod`,
+`crash_collector_dir: /opt/rbmods/crashes-prod`,
+`crash_collector_container: riftbreaker-dedicated-prod`; `deploy/deploy-prod.yml`
+bindet die Rolle `crash-collector` ein (Tag `crash`). Dev bleibt unveraendert
+(`rbmods-crash-collector`, `/opt/rbmods/crashes`) — kein Clash. Der Nachweis ist
+hermetisch (Render-Test + Fixture-Dumps); die echte prod-Beobachtung gilt erst
+nach einem prod-Deploy.
 
 ## Image-Tag-Retention (Issue #309)
 
@@ -439,3 +499,74 @@ Rollback: Backup-`tar.gz` aus `/srv/riftbreaker/backups/` nach
   idle-/boot-sichere Artefakt-Check (#226/#245) maßgeblich, nicht der
   Runtime-Log.
 - SSH mesh-first (Tailscale), nie über Public-IPs.
+
+
+## Environment-Isolation & Deploy-Identität (Issue #483)
+
+Jeder Deploy trägt **genau eine** Identität: `rift_env` (`dev`|`prod`|`test`) +
+`rift_deploy_ref` (dev/test = Checkout-SHA; prod = Git-Tag + SHA) →
+`rift_deploy_identity = "<env> · <ref>"`. Erzeugt wird sie in den `pre_tasks`
+(`deploy/tasks/deploy-identity.yml`); `rift_env` steht als **Play-Var** in
+`site.yml`/`deploy-prod.yml`/`test-deploy.yml` (Play-Vars schlagen
+Rollen-Defaults/host_vars — sonst erbt prod/test den dev-Wert).
+
+### Schema: Env → Pfade / Ports / Stand
+
+`deploy/env-schema.yml` klassifiziert **jede** Variable der Env-Override-Dateien
+als `per_env` (Umgebungs-spezifisch, MUSS explizit je Env stehen) oder `shared`
+(bewusst gleich, mit Begründung). `dev` hat keine Override-Datei — dev **ist**
+die Basis (`inventory/host_vars/planet/vars.yml`); genau diese Asymmetrie ist
+der Kern des Issues. Das Gate `tools/deploy-gate/check_env_isolation.py` bricht
+bei Lücke ab (Marker `ENV-ISOLATION-GATE`), aufgerufen aus
+`deploy/tasks/env-assert.yml` in den `pre_tasks` — **vor** den Rollen.
+
+| Achse | dev (Basis) | prod (`prod-vars.yml`) | test (`test-vars.yml`) |
+| --- | --- | --- | --- |
+| `website_docroot` | `/srv/rbmods-site` | `/srv/rbmods-site-prod` | `/srv/rbmods-site-test-<run>` |
+| `website_mods_dir` | `/srv/rbmods-site/mods` | `<docroot>/mods` | `/opt/rbbattle-deploy/test/mods-<run>` |
+| `mods_zip_dest` | `<mods_dir>/rbbattle.zip` | `<mods_dir>/rbbattle.zip` | (abgeleitet, isoliert) |
+| `riftbreaker_game_dir` | `/srv/rbgame` | `/srv/rbgame-prod` | `/srv/rbgame-test-<run>` |
+| `riftbreaker_deploy_dir` | `/opt/rbmods/compose/riftbreaker-dedicated` | `…-prod` | `/opt/rbbattle-deploy/test/rb-<run>` |
+| `riftbreaker_sessions_dir` | `/srv/rbmods-sessions` | `/srv/rbmods-sessions-prod` | `/srv/rbmods-sessions-test-<run>` |
+| `rbtools_dir` | `/opt/rbmods/rbtools-drift` | `/opt/rbmods/rbtools-rift` | `/opt/rbmods/rbtools-test-<run>` |
+| Game-Port (UDP) | 6321 | 6322 | ephemer (je Lauf) |
+| Bridge-Port | 9001 | 9002 | je Lauf (Fallback 9003) |
+| Tournament-Port | 8081 | 8082 | je Lauf |
+| rift-caddy | `rift-caddy` :8787 | `rift-caddy-prod` :8788 | — (kein website-Rolle im Boot-Test) |
+| Container-Env/Labels | `RBB_ENV=dev`/`RBB_REF=<sha>` | `prod`/`<tag>+<sha>` | `test`/`<sha>` |
+
+**Additiv, kein Rename:** die dev-Pfade bleiben unverändert; prod/test bekommen
+**eigene** Werte. `mods_zip_name: rbbattle.zip` + seine md5-Parität bleiben
+unverändert (zusätzlich entsteht `rbbattle-<env>-<ref>.zip`).
+
+`deploy/tasks/env-assert.yml` asserted zusätzlich, dass für `env != dev` jeder
+der obigen Pfade **vom dev-Basiswert abweicht** (Distinctness gegen explizite
+dev-Konstanten — Ansible kennt keine Variablen-Herkunft).
+
+### Identitäts-Surface-Vertrag (`<env> · <ref>`)
+
+| Surface | Feld / Ort | Wie sichtbar |
+| --- | --- | --- |
+| Landing (`website`) | `<meta name="rb-env">`/`rb-ref` + Badge | `deploy/roles/website/templates/index.html.j2` |
+| Tournament-API | `GET /health` → `env`,`ref` | `TOURNAMENT_ENV`/`TOURNAMENT_REF` (systemd-Unit) |
+| Tournament-UI | Header-Badge | `fetch(/health)` in `tournament/web/app.js` |
+| Server-Control | `GET /server/status` → `env`,`ref` | `SERVER_CONTROL_ENV`/`SERVER_CONTROL_REF` |
+| Session-Recorder | JSONL-Record `env`,`ref` | `RBB_ENV`/`RBB_REF` im Sidecar + CLI `--env/--ref` |
+| Referee-Egress | Event-Record `env`,`ref` | dito |
+| Container | Labels `RBB_ENV`/`RBB_REF` | `docker inspect` (ohne Log) |
+| Mod-Log | `event=mod_load … env=… ref=…` | `mod/lua/rbbattle_autoexec.lua` — **vorbereitet, im Live-Lauf nicht wirksam** (`env=unknown`, s. u.) |
+
+### Offene Punkte (bewusst NICHT in #483)
+
+- **Kein `-<env>`-Rename** der dev-Pfade (`/srv/rbgame`, `/srv/rbmods-site`,
+  `/opt/rbmods/rbtools-drift`) — Live-Eingriff auf prod; eigener PR mit
+  Rollback-Runbook.
+- **Kein host-seitiger Checkout-Umbau** (`/opt/rbbattle-deploy/repo-<env>` +
+  `.deploy-<env>.sha`/`-ref`) — forced-command/Wrapper sind nicht im Repo.
+- **Mod-Log-`env`/`ref` in-game** ist vorbereitet, aber im Live-Lauf **nicht
+  wirksam**: der (rot gelaufene) Boot-Test-Log zeigte trotz gesetztem
+  `RBB_ENV=test`/`RBB_REF=<sha>` `event=mod_load … env=unknown ref=unknown` —
+  die Riftbreaker-Lua-Sandbox liefert `os.getenv` offenbar nicht, der
+  defensive Fallback greift. NICHT als erledigte Surface führen. Verlässlicher
+  Kanal (Config/Datei statt Lua-`getenv`) ist Follow-up (Review-F2).
+- **Landing-Domain-Isolationsgrad** für Prod-Artefakte (`/mods/prod/…`) offen.

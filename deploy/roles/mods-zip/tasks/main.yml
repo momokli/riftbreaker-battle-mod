@@ -62,6 +62,17 @@
     owner: root
     group: root
 
+# Env-getaggtes Zip (Issue #483, US4): ZUSÄTZLICH, additiv. rbbattle.zip bleibt
+# der stabile, atomar ausgetauschte Download (md5-Parität unten unverändert) —
+# dieses Zip macht nur den Deploy-Stand (env<env>-ref) am Dateinamen sichtbar.
+- name: Env-getaggtes Mod-Zip (rbbattle-<env>-<ref>.zip) nach planet kopieren
+  copy:
+    src: "{{ playbook_dir }}/../dist/rbbattle.zip"
+    dest: "{{ mods_zip_env_dest }}"
+    mode: "0644"
+    owner: root
+    group: root
+
 - name: Remote md5 ermitteln (planet)
   stat:
     path: "{{ mods_zip_dest }}"

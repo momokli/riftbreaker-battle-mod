@@ -241,6 +241,10 @@ class ServerControl(object):
             "uptime": format_uptime(uptime_seconds),
             "uptime_seconds": int(uptime_seconds) if uptime_seconds is not None else None,
             "started_at": started_at or None,
+            # Deploy-Identitaet (Issue #483, US4): dieselbe <env> · <ref> wie
+            # Landing/Tournament/Container-Labels. Default "unknown".
+            "env": self.cfg.get("env") or "unknown",
+            "ref": self.cfg.get("ref") or "unknown",
         }
 
     # -- Logs --------------------------------------------------------------
@@ -494,6 +498,10 @@ def load_config(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         "config_path": env.get("SERVER_CONTROL_CONFIG_PATH") or "",
         "config_template": env.get("SERVER_CONTROL_CONFIG_TEMPLATE") or "",
         "config_vars": env.get("SERVER_CONTROL_CONFIG_VARS") or "",
+        # Deploy-Identitaet (Issue #483, US4): Read-only-Metadaten fuer
+        # /server/status. Kein Secret; Default "unknown" (kein Panic).
+        "env": (env.get("SERVER_CONTROL_ENV") or "unknown").strip(),
+        "ref": (env.get("SERVER_CONTROL_REF") or "unknown").strip(),
     }
 
 

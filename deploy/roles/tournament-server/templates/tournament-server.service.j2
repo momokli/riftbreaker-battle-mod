@@ -13,6 +13,9 @@ Environment=TOURNAMENT_AUTO_GO=true
 Environment=RBBRIDGE_A_URL={{ tournament_bridge_a_url }}
 Environment=RBBRIDGE_B_URL={{ tournament_bridge_b_url }}
 Environment=TOURNAMENT_WEB_DIR={{ tournament_install_dir }}/web
+# Deploy-Identitaet (Issue #483, US4): in GET /health sichtbar.
+Environment=TOURNAMENT_ENV={{ rift_env | default('unknown') }}
+Environment=TOURNAMENT_REF={{ rift_deploy_ref | default('unknown') }}
 Environment=RUST_LOG=info
 ExecStart={{ tournament_install_dir }}/tournament-server
 Restart=on-failure

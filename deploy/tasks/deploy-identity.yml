@@ -1,0 +1,81 @@
+---
+# deploy/tasks/deploy-identity.yml — erzeugt die Deploy-Identitaet je Play
+# (Issue #483, US1). Wird per include_tasks in den pre_tasks von site.yml
+# (dev), deploy-prod.yml (prod) und test-deploy.yml (test) eingebunden.
+#
+# `rift_env` MUSS dort als Play-Var stehen (dev|prod|test): Play-Vars schlagen
+# Rollen-Defaults + host_vars, sonst erbt prod/test den dev-Wert (dieselbe
+# Praezedenz-Falle wie `server_control_enabled`, Issue #463).
+#
+# Ergebnis:
+#   rift_deploy_ref       dev/test = Checkout-SHA (deploy_image_tag);
+#                         prod     = Git-Tag (git describe --tags --always)
+#                                    + Checkout-SHA
+#   rift_deploy_identity  "<env> · <ref>"   (Surface-Vertrag, US4)
+#
+# Read-only (check_mode: false), damit der Render-/Check-Gate denselben Stand
+# sieht.
+#
+# `rift_deploy_checkout` ist der Git-Checkout, gegen den `git describe` laeuft
+# (Default: Repo-Root ueber dem Playbook). Der hermetische US1-Test setzt ihn
+# auf ein Wegwerf-Repo mit Tag.
+
+- name: "Deploy-Identitaet — rift_env gesetzt (Play-Var)"
+  assert:
+    that:
+      - rift_env is defined
+      - rift_env in ['dev', 'prod', 'test']
+    fail_msg: >-
+      rift_env fehlt oder ist ungueltig (erwartet dev|prod|test). Es MUSS als
+      Play-Var im jeweiligen Playbook stehen (Play-Vars schlagen
+      Rollen-Defaults/host_vars) — sonst erbt prod/test den dev-Wert
+      (Issue #483).
+    success_msg: "rift_env={{ rift_env }} (Play-Var)."
+  tags: always
+
+# dev/test leiten den Ref direkt aus dem Checkout-SHA ab (deploy_image_tag,
+# bereits in den pre_tasks ermittelt). Nur prod braucht zusaetzlich den Git-Tag.
+- name: "Deploy-Ref — Git-Tag am Checkout ermitteln (nur prod)"
+  command: git -c safe.directory=* -C {{ rift_deploy_checkout }} describe --tags --always
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  register: rbbattle_deploy_describe
+  when: rift_env == 'prod'
+  tags: always
+
+- name: "Deploy-Ref zusammensetzen (rift_deploy_ref)"
+  set_fact:
+    rift_deploy_ref: >-
+      {{ _rbbattle_prod_ref if rift_env == 'prod' else deploy_image_tag }}
+  vars:
+    # Leerer/fehlender describe-Output (kein Tag, kein Git) faellt auf den
+    # Checkout-SHA zurueck — der Ref ist dann wenigstens nicht leer.
+    rbbattle_prod_tag: "{{ (rbbattle_deploy_describe.stdout | default('')) | trim }}"
+    _rbbattle_prod_ref: >-
+      {{ (rbbattle_prod_tag ~ '+' ~ deploy_image_tag)
+         if (rbbattle_prod_tag | length > 0 and rbbattle_prod_tag != deploy_image_tag)
+         else deploy_image_tag }}
+  tags: always
+
+- name: "Deploy-Identitaet setzen (rift_deploy_identity)"
+  set_fact:
+    rift_deploy_identity: "{{ rift_env }} · {{ rift_deploy_ref }}"
+  tags: always
+
+- name: "Deploy-Identitaet — fail-loud vorhanden"
+  assert:
+    that:
+      - rift_deploy_ref is defined
+      - rift_deploy_ref | length > 0
+      - rift_deploy_identity is defined
+      - rift_deploy_identity == (rift_env ~ ' · ' ~ rift_deploy_ref)
+      - (rift_env == 'prod') or (rift_deploy_ref == deploy_image_tag)
+    fail_msg: >-
+      rift_deploy_ref/rift_deploy_identity fehlen oder verletzen den Vertrag
+      (Issue #483, US1). dev/test muessen den Checkout-SHA (deploy_image_tag)
+      tragen, prod Tag+SHA; die Identitaet ist "<env> · <ref>".
+    success_msg: "Deploy-Identitaet={{ rift_deploy_identity }}."
+  tags: always

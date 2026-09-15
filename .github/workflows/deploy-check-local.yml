@@ -67,6 +67,21 @@ jobs:
             python3 -m unittest test_deploy_gate -v
           )
 
+      # Env-Isolation (Issue #483): statischer Schema-Audit (jede Variable ist
+      # per-env oder shared-begruendet) + Unit-Tests + hermetische Identitaets-
+      # und Gate-Laeufe. Rein lokal, kein Host, kein Vault, keine Prod-Aktion.
+      - name: Env-Isolation (Issue #483)
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          python3 tools/deploy-gate/check_env_isolation.py --env dev
+          (
+            cd tools/deploy-gate
+            python3 -m unittest test_env_isolation -v
+          )
+          bash deploy/tests/env-identity/run.sh
+          bash deploy/tests/env-isolation/run.sh
+
       # Hinweis (Issue #318): Dieser Job läuft auf einem GitHub-Hosted-Runner
       # (frischer, ephemärer VM je Lauf) — $HOME ist NICHT zwischen Jobs
       # geteilt, daher ist die einmalige Venv-Erstellung hier race-frei und
@@ -90,17 +105,19 @@ jobs:
         if: steps.gate.outputs.skip != 'true'
         run: yamllint -c .yamllint deploy/
 
-      # Playbook-Syntax aller Inventar-Playbooks (Issue #328/#329): deckt das
-      # prod-Playbook deploy-prod.yml (+ prod-vars.yml) ab, das sonst in keinem
-      # Check läuft. --syntax-check parst nur, verbindet NICHT und entschlüsselt
-      # das Vault nicht (gegen deploy/inventory verifiziert).
-      - name: Playbook-Syntax (site.yml + deploy-prod.yml)
+      # Playbook-Syntax aller Inventar-Playbooks (Issue #328/#329/#483): deckt
+      # das prod-Playbook deploy-prod.yml (+ prod-vars.yml) UND den Boot-Test
+      # test-deploy.yml (+ test-vars.yml) ab. --syntax-check parst nur, verbindet
+      # NICHT und entschlüsselt das Vault nicht.
+      - name: Playbook-Syntax (site.yml + deploy-prod.yml + test-deploy.yml)
         if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           ansible-playbook -i deploy/inventory deploy/site.yml --syntax-check
           ansible-playbook -i deploy/inventory deploy/deploy-prod.yml \
             -e @deploy/prod-vars.yml --syntax-check
+          ansible-playbook -i deploy/inventory deploy/test-deploy.yml \
+            -e @deploy/test-vars.yml --syntax-check
 
       # Disk-Space-Gate Selbsttest (Issue #310): hermetisch (synthetische
       # Mount-Facts, localhost) — prüft die ECHTE Preflight-Task-Datei. Bei zu
@@ -120,10 +137,10 @@ jobs:
         if: steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/server-control-auth/run.sh
 
-      # Crash-Collector unit-Render (Issue #462): rendert die ECHTE
-      # systemd-Unit-Vorlage der Rolle (ExecStart + RB_CRASH_*-Env +
-      # Restart=always + Requires=docker.service) und prueft die
-      # Konfigurierbarkeit der Retention. Lokal, kein Host.
+      # Crash-Collector unit-Render (Issue #462/#480): rendert die ECHTE
+      # systemd-Unit-Vorlage der Rolle (ExecStart + RB_CRASH_*-Env inkl. der
+      # Symbolik-Variablen aus #480 + Restart=always + Requires=docker.service)
+      # und prueft die Konfigurierbarkeit der Retention. Lokal, kein Host.
       - name: "Crash-Collector Unit-Render (Issue #462)"
         if: steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/crash-collector/run.sh

@@ -11,3 +11,10 @@ rustup_home: /opt/rbbattle-deploy/rustup
 cargo_home: /opt/rbbattle-deploy/cargo
 cargo_bin: "{{ cargo_home }}/bin/cargo"
 rustup_init_url: https://sh.rustup.rs
+
+# Deploy-Identitaet (Issue #483, US4): Fallback, damit die systemd-Vorlage auch
+# ohne die Plays renderbar bleibt. Die Plays setzen rift_env als Play-Var;
+# rift_deploy_ref/rift_deploy_identity kommen aus deploy/tasks/deploy-identity.yml
+# (set_fact schlaegt diese Defaults).
+rift_env: unknown
+rift_deploy_ref: unknown

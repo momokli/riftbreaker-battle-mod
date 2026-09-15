@@ -668,6 +668,100 @@ int main(void)
         check(buf[0] == '\0', "copy_cstr: NULL -> leerer String");
     }
 
+    /* -------------------------------------------------------------- */
+    /* natural_waves (#476): op-Parser + Signatur-Selbstkontrolle      */
+    /* -------------------------------------------------------------- */
+    {
+        check(natural_waves_op("status") == 0 &&
+                  natural_waves_op("") == 0 &&
+                  natural_waves_op(NULL) == 0,
+              "natural_waves_op: status/leer/NULL -> 0");
+        check(natural_waves_op("off") == 1,
+              "natural_waves_op: off -> 1");
+        check(natural_waves_op("on") == 2,
+              "natural_waves_op: on -> 2");
+        check(natural_waves_op("pause") == -1 &&
+                  natural_waves_op("suspend") == -1 &&
+                  natural_waves_op("OFF") == -1,
+              "natural_waves_op: unbekannt/Grossschreibung -> -1");
+
+        check(diffsys_sig_selfcheck() == 1,
+              "diffsys_sig_selfcheck: Laenge/Maske/Wildcards konsistent");
+
+        /* Aenderung an einem FESTEN Byte -> kein Treffer mehr. */
+        {
+            unsigned char body[sizeof(RBBRIDGE_DIFFSYS_GET_SIG)];
+            memcpy(body, RBBRIDGE_DIFFSYS_GET_SIG, sizeof(body));
+            body[17] = 0x00; /* TypeHash-Byte veraendert */
+            check(!sig_matches(body, RBBRIDGE_DIFFSYS_GET_SIG,
+                               RBBRIDGE_DIFFSYS_GET_SIG_MASK,
+                               sizeof(body)),
+                  "natural_waves-Sig: festes Byte geaendert -> kein Treffer");
+
+            /* Aenderung am E8-rel32-Wildcard -> Treffer bleibt. */
+            memcpy(body, RBBRIDGE_DIFFSYS_GET_SIG, sizeof(body));
+            body[24] = 0xAA;
+            check(sig_matches(body, RBBRIDGE_DIFFSYS_GET_SIG,
+                              RBBRIDGE_DIFFSYS_GET_SIG_MASK,
+                              sizeof(body)),
+                  "natural_waves-Sig: rel32-Wildcard toleriert");
+
+            /* E8-Opcode selbst ist Pflicht. */
+            memcpy(body, RBBRIDGE_DIFFSYS_GET_SIG, sizeof(body));
+            body[22] = 0x90;
+            check(!sig_matches(body, RBBRIDGE_DIFFSYS_GET_SIG,
+                               RBBRIDGE_DIFFSYS_GET_SIG_MASK,
+                               sizeof(body)),
+                  "natural_waves-Sig: E8-Opcode Pflicht -> kein Treffer");
+        }
+    }
+
+    /* #479: Readiness-Gate — reiner Log-Marker-Test (host-testbar)     */
+    /* -------------------------------------------------------------- */
+    {
+        /* Erfolgreicher Boot: NavigationGraph-Marker vorhanden. */
+        const char *ok_log =
+            "[12:40:33.501] [info] MapGenerator.cpp:828 - InstantiateMap took: 4846 ms\n"
+            "[12:40:34.154] [info] NavigationGraph.cpp:462 - "
+            "NavigationGraph::Generate - Graph generated in 0.595806 sec.\n";
+        check(rbbridge_log_is_ready(ok_log, strlen(ok_log)) == 1,
+              "readiness: erfolgreicher Boot (Graph generated) -> bereit");
+
+        /* Gecrashter Boot (#479): Crash VOR Map-Fertigstellung, kein Marker. */
+        const char *crash_log =
+            "[13:39:45.677] [info] MapGenerator.cpp:976 - ExecuteBuffers took: 48 ms\n"
+            "[13:39:46.763] [critical] CrashHandlerWin32.cpp:103 - CRASH\n";
+        check(rbbridge_log_is_ready(crash_log, strlen(crash_log)) == 0,
+              "readiness: Crash-Boot ohne Marker -> NICHT bereit");
+
+        /* Nur der MapGenerator-Marker (Fallback) genuegt ebenfalls. */
+        const char *map_only =
+            "[12:40:33.501] [info] MapGenerator.cpp:828 - InstantiateMap took: 4846 ms\n";
+        check(rbbridge_log_is_ready(map_only, strlen(map_only)) == 1,
+              "readiness: nur InstantiateMap-Marker -> bereit");
+
+        /* Leer/fehlend -> konservativ NICHT bereit. */
+        check(rbbridge_log_is_ready("", 0) == 0,
+              "readiness: leerer Puffer -> NICHT bereit");
+        check(rbbridge_log_is_ready(NULL, 100) == 0,
+              "readiness: NULL -> NICHT bereit");
+
+        /* Marker NICHT ueber die Puffergrenze hinaus suchen (kein Treffer
+         * bei abgeschnittenem Marker) -> kein Read-Overrun, 0. */
+        const char *partial =
+            "NavigationGraph::Generate - Graph gene";
+        check(rbbridge_log_is_ready(partial, strlen(partial)) == 0,
+              "readiness: abgeschnittener Marker -> NICHT bereit");
+
+        /* Substring-Helper: Ende exakt an der Puffergrenze. */
+        const char *tail = "xx Graph generated";
+        check(rbbridge_buf_contains(tail, strlen(tail),
+                                    "Graph generated") == 1,
+              "buf_contains: Treffer bis exakt Pufferende");
+        check(rbbridge_buf_contains(tail, 9, "Graph generated") == 0,
+              "buf_contains: Treffer hinter Pufferende ignoriert");
+    }
+
     free(img);
 
     printf("HOSTTEST_PASS=%d HOSTTEST_FAIL=%d\n", g_pass, g_fail);

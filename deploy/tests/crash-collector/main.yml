@@ -17,6 +17,7 @@
     # Rollen-Defaults hier explizit (der Test laeuft ohne Rollen-Defaults).
     crash_collector_unit: rbmods-crash-collector
     crash_collector_bin: /usr/local/bin/rbmods-crash-collector.sh
+    crash_collector_helper: /usr/local/bin/rbmods-minidump-meta.py
     crash_collector_container: riftbreaker-dedicated
     crash_collector_dir: /opt/rbmods/crashes
     crash_collector_crashinfo: "/data/.wine/drive_c/users/steamuser/Documents/The Riftbreaker/crash_info"
@@ -26,6 +27,13 @@
     crash_collector_retry_sleep: 5
     crash_collector_prune_wine: 1
     crash_collector_python: /usr/bin/python3
+    crash_collector_symbolize: true
+    crash_collector_symbolize_bin: /usr/local/bin/rbmods-crash-symbolize.sh
+    crash_collector_dll: /srv/rbgame/bin/riftbreaker_dll_win_release.dll
+    crash_collector_pdb: /srv/rbgame/bin/riftbreaker_dll_win_release.pdb
+    crash_collector_llvm_symbolizer: /usr/lib/llvm-18/bin/llvm-symbolizer
+    crash_collector_symbolize_tool: /usr/local/lib/rbmods/crash/symbolize.py
+    crash_collector_symbolize_timeout: 60
     render_dir: "{{ lookup('env', 'RB_CRASH_RENDER_DIR') | default('/tmp/rb-crash-collector-render', true) }}"
 
   tasks:
@@ -52,10 +60,19 @@
           - ("RB_CRASH_CONTAINER=" ~ crash_collector_container) in unit
           - ("RB_CRASH_DIR=" ~ crash_collector_dir) in unit
           - ("RB_CRASH_RETENTION=" ~ crash_collector_retention) in unit
+          - ("RB_CRASH_SYMBOLIZE=" ~ (crash_collector_symbolize | bool | int)) in unit
+          - ("RB_CRASH_SYMBOLIZE_BIN=" ~ crash_collector_symbolize_bin) in unit
+          - ("RB_CRASH_DLL=" ~ crash_collector_dll) in unit
+          - ("RB_CRASH_PDB=" ~ crash_collector_pdb) in unit
+          - ("RB_CRASH_LLVM_SYMBOLIZER=" ~ crash_collector_llvm_symbolizer) in unit
+          - ("RB_CRASH_SYMBOLIZE_TOOL=" ~ crash_collector_symbolize_tool) in unit
+          - ("RB_CRASH_SYMBOLIZE_TIMEOUT=" ~ crash_collector_symbolize_timeout) in unit
+          - ("RB_CRASH_MINIDUMP_PY=" ~ crash_collector_helper) in unit
           - "'Restart=always' in unit"
           - "'Type=simple' in unit"
           - "'Requires=docker.service' in unit"
         fail_msg: >-
           Gerenderte systemd-Unit verletzt eine Invariante (ExecStart,
-          RB_CRASH_*-Env, Restart=always, Type=simple oder Requires=docker.service).
-        success_msg: "Unit-Render ok (ExecStart + Env + Restart + Docker-Requires)."
+          RB_CRASH_*-Env inkl. Symbolik #480 + RB_CRASH_MINIDUMP_PY, Restart=always,
+          Type=simple oder Requires=docker.service).
+        success_msg: "Unit-Render ok (ExecStart + Env + Symbolik + Parser + Restart + Docker)."

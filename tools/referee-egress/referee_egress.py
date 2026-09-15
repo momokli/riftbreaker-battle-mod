@@ -98,11 +98,16 @@ def map_referee_event(event, fields, world="A"):
 class RefereeEgress:
     """Tailt eine Logdatei und postet Referee-Events (robust gegen Rotation)."""
 
-    def __init__(self, path, server, world="A", from_start=True):
+    def __init__(self, path, server, world="A", from_start=True,
+                 env="unknown", ref="unknown"):
         self.path = path
         self.server = server.rstrip("/")
         self.world = world
         self.from_start = from_start
+        # Deploy-Identitaet (Issue #483, US4): dieselbe <env> · <ref> wie
+        # Landing/Tournament/Server-Control — je gepostetem Event mitgeschickt.
+        self.env = env
+        self.ref = ref
         self._offset = 0 if from_start else self._size()
         self._pending = b""
 
@@ -179,6 +184,9 @@ class RefereeEgress:
             rev = map_referee_event(event, fields, self.world)
             if rev is None:
                 continue
+            # Deploy-Identitaet (Issue #483, US4): "je JSONL-/Event-Record". Die
+            # bestehenden Felder (world/type/level) bleiben unveraendert.
+            rev = dict(rev, env=self.env, ref=self.ref)
             log("egress: {} -> {}".format(event, rev))
             if self._deliver(rev):
                 delivered += 1
@@ -225,6 +233,12 @@ def build_parser():
         "--from-end", action="store_true", help="Beim ersten Start nur neue Zeilen lesen (Default: von Anfang an)"
     )
     p.add_argument("--once", action="store_true", help="Verfügbare Zeilen verarbeiten, dann beenden")
+    # Deploy-Identitaet (Issue #483, US4): je Referee-Event mitgeschickt. Die
+    # Compose-Templates setzen RBB_ENV/RBB_REF (Default).
+    p.add_argument("--env", default=os.environ.get("RBB_ENV") or "unknown",
+                   help="Env der Deploy-Identitaet (Default: RBB_ENV oder unknown)")
+    p.add_argument("--ref", default=os.environ.get("RBB_REF") or "unknown",
+                   help="Ref der Deploy-Identitaet (Default: RBB_REF oder unknown)")
     return p
 
 
@@ -235,8 +249,10 @@ def main(argv=None):
         print("[egress] Fehler: --world muss A oder B sein (ist: {!r}).".format(world), file=sys.stderr)
         return 2
     paths = args.log or default_log_paths(args.wine_prefix, args.wine_user)
-    feeders = [RefereeEgress(p, args.server, world=world, from_start=not args.from_end) for p in paths]
-    log("start: server={} world={} logs={}".format(args.server, world, paths))
+    feeders = [RefereeEgress(p, args.server, world=world, from_start=not args.from_end,
+                             env=args.env, ref=args.ref) for p in paths]
+    log("start: server={} world={} env={} ref={} logs={}".format(
+        args.server, world, args.env, args.ref, paths))
     if args.once:
         for f in feeders:
             f.run(once=True)

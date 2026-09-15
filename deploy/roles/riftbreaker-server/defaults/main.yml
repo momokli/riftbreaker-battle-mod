@@ -24,6 +24,19 @@ riftbreaker_server_broadcast_enabled: 1
 riftbreaker_server_pause_game_when_empty: 0
 riftbreaker_server_rcon_password: "{{ vault_server_rcon_password | default('') }}"
 
+# Schwierigkeits-Preset des Dedicated Servers. Bestimmt u. a. die "wave_strength"
+# und damit, ob der Vanilla-`dom_mananger` Naturwellen startet (Issue #476):
+#   * "sandbox"  -> wave_strength "sandbox": Naturwellen AUS, mission_infinite=1,
+#                    kein Sieg/Niederlage-Zwang -> "blank slate"/Free Play.
+#                    Beleg: scripts/difficulty/difficulties.difficulty (DifficultyDef
+#                    "sandbox": wave_strength "sandbox", mission_infinite 1,
+#                    mission_duration 0) + dom_manager.lua:149/156
+#                    (pauseAttacks = AreWavesDisabled() bzw. waveStrength=="sandbox").
+#   * "coop_normal" (Vanilla-Survival): Naturwellen AN.
+# Werte muessen zum Preset in difficulties.difficulty passen (coop_* fuer
+# mp_survival, sandbox/easy/normal/hard/brutal fuer SP/Open).
+riftbreaker_server_difficulty: coop_normal
+
 # Config-Zielpfad (wird als /data/config/config.cfg:ro in den Container gemountet).
 riftbreaker_config_dir: "{{ riftbreaker_deploy_dir }}/config"
 
@@ -102,3 +115,10 @@ riftbreaker_referee_egress_world: A
 # der Abbruch vor dedicated-server-image greift. Schwelle konfigurierbar.
 riftbreaker_disk_mount: "/"
 riftbreaker_disk_min_free_gb: 10
+
+# Deploy-Identitaet (Issue #483, US4): Fallback fuer die Compose-Vorlage, damit
+# sie auch ohne die Plays renderbar bleibt (check-render, Hermetik-Tests). Die
+# Plays setzen rift_env als Play-Var; rift_deploy_ref kommt aus
+# deploy/tasks/deploy-identity.yml (set_fact schlaegt diese Defaults).
+rift_env: unknown
+rift_deploy_ref: unknown

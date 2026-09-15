@@ -1,0 +1,86 @@
+---
+# deploy/tasks/env-assert.yml — Fail-loud-Contract der Env-Isolation
+# (Issue #483, US2). Laeuft in den pre_tasks VOR den Rollen (include_tasks aus
+# site.yml / deploy-prod.yml / test-deploy.yml), direkt nach deploy-identity.yml.
+#
+# Ruft den stdlib-Audit tools/deploy-gate/check_env_isolation.py auf: jede
+# Variable der Env-Override-Dateien muss `per_env` oder `shared (begruendet)`
+# sein; ein `per_env`-Key muss in jeder gelisteten Env-Datei explizit stehen.
+# Ein Verstoss bricht den Deploy ab (Marker `ENV-ISOLATION-GATE`).
+#
+# Read-only. `check_mode: false` + `failed_when: false` auf dem command, damit
+# der Abbruch unter `--check` genauso greift und der Marker in der fail_msg
+# sichtbar wird (kein stilles Durchrutschen eines manipulierten Stands).
+#
+# `rift_env_isolation_root` zeigt auf das Repo-Root (Default: ueber dem
+# playbook_dir). Der hermetische Negativ-Test setzt es auf ein Fixture-Repo.
+
+- name: "ENV-ISOLATION-GATE — Schema-Audit (Issue #483, US2)"
+  command: >-
+    python3 {{ rift_env_isolation_root | default(playbook_dir ~ '/..') }}/tools/deploy-gate/check_env_isolation.py
+    --repo-root {{ rift_env_isolation_root | default(playbook_dir ~ '/..') }}
+    --env {{ rift_env }}
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  register: env_isolation_audit
+  tags: always
+
+- name: "ENV-ISOLATION-GATE — Deploy bricht bei Schema-Verletzung ab (Issue #483, US2)"
+  fail:
+    msg: >-
+      ENV-ISOLATION-GATE (env={{ rift_env }}): Schema-Audit fehlgeschlagen
+      (rc={{ env_isolation_audit.rc }}). Eine Variable ist nicht als
+      per_env/shared klassifiziert ODER ein per_env-Key fehlt explizit in einer
+      Env-Datei — die Env wuerde sonst still den dev-Wert erben.
+      --- stdout ---
+      {{ env_isolation_audit.stdout | default('') }}
+      --- stderr ---
+      {{ env_isolation_audit.stderr | default('') }}
+  when: (env_isolation_audit.rc | default(1) | int) != 0
+  tags: always
+
+# --- Distinctness der per-env-Pfade (Issue #483, US3) -----------------------
+# Ansible trackt die Herkunft einer Variable nicht -> der Assert vergleicht die
+# WERTE gegen die bekannten dev-Basiswerte (explizit hier, Quelle
+# inventory/host_vars/planet/vars.yml). Fuer env != dev MUSS jeder gelistete
+# Pfad vom dev-Wert abweichen, sonst schreiben zwei Envs in denselben Ort
+# (Live-Befund #1: prod mountete den dev-Docroot). dev ist die Basis und wird
+# nicht geprueft.
+- name: "ENV-ISOLATION-GATE — per-env-Pfade vom dev-Basiswert abweichend (Issue #483, US3)"
+  assert:
+    that:
+      # lookup('vars', item) statt des internen `vars`-Dict (ansible-core
+      # 2.24 entfernt `vars[...]`); Semantik identisch (undefiniert -> undefined).
+      - lookup('vars', item) is defined
+      - (lookup('vars', item) | string) | length > 0
+      - (lookup('vars', item) | string) != (rift_env_dev_base[item] | string)
+    fail_msg: >-
+      ENV-ISOLATION-GATE (env={{ rift_env }}): '{{ item }}' erbt den
+      dev-Basiswert ('{{ rift_env_dev_base[item] }}'). Der Pfad muss je Env
+      explizit isoliert sein (Issue #483, US3) — sonst schreiben zwei Envs in
+      denselben Ort (Cross-Env-Schreibpfad).
+    success_msg: "{{ item }} isoliert ({{ lookup('vars', item) }} != dev-Basiswert)."
+  loop:
+    - website_docroot
+    - website_mods_dir
+    - mods_zip_dest
+    - riftbreaker_game_dir
+    - riftbreaker_deploy_dir
+    - riftbreaker_sessions_dir
+    - rbtools_dir
+  when: rift_env != 'dev'
+  vars:
+    # dev-Basiswerte (host_vars/planet). Bewusst als explizite Liste: Ansible
+    # kennt keine Variablen-Herkunft -> Vergleich gegen diese Konstanten.
+    rift_env_dev_base:
+      website_docroot: /srv/rbmods-site
+      website_mods_dir: /srv/rbmods-site/mods
+      mods_zip_dest: /srv/rbmods-site/mods/rbbattle.zip
+      riftbreaker_game_dir: /srv/rbgame
+      riftbreaker_deploy_dir: /opt/rbmods/compose/riftbreaker-dedicated
+      riftbreaker_sessions_dir: /srv/rbmods-sessions
+      rbtools_dir: /opt/rbmods/rbtools-drift
+  tags: always

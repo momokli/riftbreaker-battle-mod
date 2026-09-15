@@ -8,8 +8,11 @@
 # als auch das crash_info-Wachstum im Wine-Volume.
 #
 # Muster: host-hygiene (Skript + Unit + Handler). Abgrenzung (NICHT hier):
-# Symbolisierung des Dumps (#462 „Optional", eigenes Issue), Session-Logging
-# (#392), Session-Mitschnitt (#280).
+# Session-Logging (#392), Session-Mitschnitt (#280).
+#
+# Symbolik (Issue #480): die Rolle rollt ZUSAETZLICH den collector-seitigen
+# Symbolizer aus (CLI + Python-Kern) — AUSDRUECKLICH KEINE PDB/DLL (die
+# 252-MB-PDB bleibt ausserhalb des Images, siehe docs/crash-symbolication.md).
 
 - name: Zielverzeichnis fuer Crash-Bundles anlegen
   file:
@@ -21,6 +24,42 @@
   copy:
     src: "{{ crash_collector_script_src }}"
     dest: "{{ crash_collector_bin }}"
+    mode: "0755"
+    owner: root
+    group: root
+  notify: restart rbmods-crash-collector
+
+- name: Zielverzeichnis fuer den Symbolizer-Kern anlegen
+  file:
+    path: "{{ crash_collector_symbolize_tool_dir }}"
+    state: directory
+    mode: "0755"
+  when: crash_collector_symbolize | bool
+
+- name: Symbolizer-Kern installieren (stdlib-only Python)
+  copy:
+    src: "{{ crash_collector_symbolize_tool_src }}"
+    dest: "{{ crash_collector_symbolize_tool }}"
+    mode: "0644"
+    owner: root
+    group: root
+  when: crash_collector_symbolize | bool
+  notify: restart rbmods-crash-collector
+
+- name: Symbolizer-CLI installieren
+  copy:
+    src: "{{ crash_collector_symbolize_script_src }}"
+    dest: "{{ crash_collector_symbolize_bin }}"
+    mode: "0755"
+    owner: root
+    group: root
+  when: crash_collector_symbolize | bool
+  notify: restart rbmods-crash-collector
+
+- name: Minidump-Parser installieren (Issue #481)
+  copy:
+    src: "{{ crash_collector_helper_src }}"
+    dest: "{{ crash_collector_helper }}"
     mode: "0755"
     owner: root
     group: root
