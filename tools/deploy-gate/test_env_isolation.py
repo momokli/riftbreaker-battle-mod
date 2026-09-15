@@ -150,6 +150,60 @@ class RealRepoTest(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(REPO_ROOT, "deploy", "env-schema.yml")))
         self.assertEqual(cei.check(REPO_ROOT), [])
 
+    def test_real_schema_classifies_path_schema_vars(self):
+        # Issue #483, Ziel B: die neuen `<env>`-Pfadvariablen sind klassifiziert
+        # und der Compose-Projektname ist fuer ALLE Envs Pflicht (der Basename
+        # ist im neuen Schema ueberall "riftbreaker" -> sonst Kollision).
+        per_env, _shared, problems = cei.parse_schema(
+            os.path.join(REPO_ROOT, "deploy", "env-schema.yml")
+        )
+        self.assertEqual(problems, [])
+        for var in ("riftbreaker_game_dir", "riftbreaker_backup_dir",
+                    "riftbreaker_deploy_dir", "riftbreaker_sessions_dir",
+                    "rbtools_dir", "rbtools_staging_dir"):
+            self.assertIn(var, per_env, var)
+            self.assertIn("prod", per_env[var], var)
+            self.assertIn("test", per_env[var], var)
+        self.assertEqual(per_env.get("riftbreaker_compose_project"),
+                         ["dev", "prod", "test"])
+
+    def test_real_dev_basis_uses_env_schema(self):
+        # dev ist kein Sonderfall mehr: die Pfade leiten sich aus `rift_env` ab.
+        path = os.path.join(REPO_ROOT, "deploy", "inventory", "host_vars", "planet", "vars.yml")
+        with open(path, "r", encoding="utf-8") as handle:
+            text = handle.read()
+        for needle in ("/srv/rift-{{ rift_env }}/game",
+                       "/srv/rift-{{ rift_env }}/backups",
+                       "/srv/rift-{{ rift_env }}/sessions",
+                       "/opt/rbmods/compose/rift-{{ rift_env }}/riftbreaker",
+                       "/opt/rbmods/rbtools/{{ rift_env }}"):
+            self.assertIn(needle, text, needle)
+
+
+class DevPathsTest(unittest.TestCase):
+    # Minimale Fixtures: NUR der Compose-Projektname, damit keine anderen
+    # Variablen als "unclassified" durchschlagen.
+    SCHEMA_CP = "per_env:\n  riftbreaker_compose_project: [dev, prod, test]\n"
+    HOST_CP = "riftbreaker_compose_project: rift-dev\n"
+    PROD_CP = "riftbreaker_compose_project: rift-prod\n"
+    TEST_CP = "riftbreaker_compose_project: rb-test\n"
+
+    def test_missing_dev_compose_project_is_reported(self):
+        # per_env, das dev einschliesst: fehlt der Key in der dev-Basis
+        # (host_vars), MUSS das Gate rot werden (sonst Kollision dev/prod).
+        repo = FixtureRepo(schema=self.SCHEMA_CP, host="",
+                           prod=self.PROD_CP, test=self.TEST_CP)
+        self.addCleanup(repo.cleanup)
+        problems = cei.check(repo.root)
+        self.assertTrue(any("riftbreaker_compose_project" in p and "dev" in p
+                            for p in problems), problems)
+
+    def test_present_dev_compose_project_passes(self):
+        repo = FixtureRepo(schema=self.SCHEMA_CP, host=self.HOST_CP,
+                           prod=self.PROD_CP, test=self.TEST_CP)
+        self.addCleanup(repo.cleanup)
+        self.assertEqual(cei.check(repo.root), [])
+
 
 class CliTest(unittest.TestCase):
     def _run(self, root, extra=None):
