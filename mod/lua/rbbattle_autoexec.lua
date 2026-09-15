@@ -47,6 +47,26 @@ pcall(function()
     end)
 end)
 
--- Load-Marker für Boot-Test C1 + Deploy-Runtime-Check (kein Business-Logik,
+-- Lade-Marker für Boot-Test C1 + Deploy-Runtime-Check (kein Business-Logik,
 -- nur das Lebenszeichen, das die Pipeline erwartet).
-Log("event=mod_load version=%s status=ok", RBB.version)
+--
+-- Deploy-Identitaet (Issue #483, US4): env/ref aus dem Container-Env
+-- (RBB_ENV/RBB_REF, gesetzt vom Compose-Template). Bewusst defensiv: fehlt
+-- `os.getenv` in der Sandbox oder wirft der Aufruf, faellt der Wert auf
+-- "unknown" zurueck und die BESTEHENDEN Felder (version/status) bleiben
+-- unveraendert — der mod_load-Marker wird nie gebrochen.
+local function DeployEnv(name)
+    local ok, value = pcall(function()
+        if type(os) == "table" and type(os.getenv) == "function" then
+            return os.getenv(name)
+        end
+        return nil
+    end)
+    if ok and type(value) == "string" and value ~= "" then
+        return value
+    end
+    return "unknown"
+end
+
+Log("event=mod_load version=%s status=ok env=%s ref=%s",
+    RBB.version, DeployEnv("RBB_ENV"), DeployEnv("RBB_REF"))

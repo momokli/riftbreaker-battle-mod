@@ -15,6 +15,8 @@
     # Rollen-Defaults liefern die Compose-Command-Listen (keine Host-Vars).
     - roles/riftbreaker-server/defaults/main.yml
     - roles/website/defaults/main.yml
+    # mods-zip: liefert den env-getaggten Zip-Namen (Issue #483, US4).
+    - roles/mods-zip/defaults/main.yml
     # server-control: liefert server_control_port fuer den /server/*-Proxy im
     # rift-caddy-Caddyfile (Issue #424).
     - roles/server-control/defaults/main.yml
@@ -115,6 +117,20 @@
           REF nicht (Issue #483) — /server/status koennte die Identitaet nicht
           ausweisen.
         success_msg: "server-control EnvironmentFile traegt env/ref (Issue #483)."
+
+    # Env-getaggtes Mod-Zip (Issue #483, US4): der Dateiname traegt <env>-<ref>,
+    # waehrend der stabile Download rbbattle.zip + die md5-Paritaet unveraendert
+    # bleiben. Statischer Assert (kein Live-Deploy).
+    - name: Env-getaggter Zip-Name (Issue 483)
+      assert:
+        that:
+          - mods_zip_env_name == ('rbbattle-' ~ rift_env ~ '-' ~ rift_deploy_ref ~ '.zip')
+          - mods_zip_name == 'rbbattle.zip'
+          - mods_zip_env_dest == (website_mods_dir ~ '/' ~ mods_zip_env_name)
+        fail_msg: >-
+          Der env-getaggte Zip-Name verletzt den Vertrag `rbbattle-<env>-<ref>.zip`
+          (Issue #483) oder der stabile rbbattle.zip-Name wurde veraendert.
+        success_msg: "Env-getaggtes Zip: {{ mods_zip_env_name }} (rbbattle.zip unveraendert)."
 
     # Regression-Guard Issue #355: rift-caddy MUSS `admin off` setzen. Sonst
     # belegt der host-net-Container Caddys Default-Admin-Port 127.0.0.1:2019 und
