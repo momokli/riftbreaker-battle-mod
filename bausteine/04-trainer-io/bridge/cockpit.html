@@ -89,6 +89,25 @@
             </div>
         </section>
 
+        <section>
+            <h2>mission flow (wave)</h2>
+            <div class="row">
+                <span class="dim">flow</span>
+                <span id="mission_flow" class="val">—</span>
+                <span class="dim">active</span>
+                <span id="mission_flow_active" class="val">—</span>
+            </div>
+            <div class="row">
+                <input
+                    id="flow_logic"
+                    size="42"
+                    value="logic/dom/attack_level_1_entry.logic"
+                />
+                <input id="flow_mode" size="10" value="default" />
+                <button id="flow_start">start wave</button>
+            </div>
+        </section>
+
         <div id="out" class="err"></div>
 
         <script>
@@ -117,6 +136,11 @@
                         $("carbonium_max").textContent = fmt(s.carbonium_max);
                         $("ironium").textContent = fmt(s.ironium);
                         $("ironium_max").textContent = fmt(s.ironium_max);
+                        $("mission_flow").textContent = s.mission_flow || "—";
+                        $("mission_flow_active").textContent =
+                            s.mission_flow_active === undefined
+                                ? "—"
+                                : String(s.mission_flow_active);
                         $("out").textContent = "";
                     } catch (e) {
                         $("out").textContent = "ERR " + e.message;
@@ -150,6 +174,23 @@
                 $("ironium_sub").onclick = function () {
                     var a = parseFloat($("ironium_amount").value) || 0;
                     addResource("ironium", -a);
+                };
+
+                async function startMissionFlow() {
+                    try {
+                        var r = await post("activate_mission_flow", {
+                            logic: $("flow_logic").value,
+                            mode: $("flow_mode").value,
+                        });
+                        $("out").textContent = r && r.ok ? "" : JSON.stringify(r);
+                        refresh();
+                    } catch (e) {
+                        $("out").textContent = "ERR " + e.message;
+                    }
+                }
+
+                $("flow_start").onclick = function () {
+                    startMissionFlow();
                 };
 
                 refresh();
