@@ -4,7 +4,7 @@
 # Dedicated-Servers auf Crash-Marker und sichert das neueste
 # crash_info/<uuid>.{dmp,log,trace} als Bundle nach {{ crash_collector_dir }}.
 [Unit]
-Description=RIFT BATTLE Crash-Collector — Crash-Artefakte sichern (Issue #462)
+Description=RIFT BATTLE Crash-Collector — Crash-Artefakte sichern + symbolisieren (Issue #462/#480)
 Documentation=file:{{ crash_collector_bin }}
 After=network-online.target docker.service
 Wants=network-online.target
@@ -24,6 +24,14 @@ Environment=RB_CRASH_WAIT_SECS={{ crash_collector_wait_secs }}
 Environment=RB_CRASH_RETRY_SLEEP={{ crash_collector_retry_sleep }}
 Environment=RB_CRASH_PRUNE_WINE={{ crash_collector_prune_wine }}
 Environment=RB_CRASH_PYTHON={{ crash_collector_python }}
+# Symbolik (Issue #480): collector-seitig, PDB/DLL liegen bereits auf dem Host.
+Environment=RB_CRASH_SYMBOLIZE={{ crash_collector_symbolize | bool | int }}
+Environment="RB_CRASH_SYMBOLIZE_BIN={{ crash_collector_symbolize_bin }}"
+Environment="RB_CRASH_DLL={{ crash_collector_dll }}"
+Environment="RB_CRASH_PDB={{ crash_collector_pdb }}"
+Environment="RB_CRASH_LLVM_SYMBOLIZER={{ crash_collector_llvm_symbolizer }}"
+Environment="RB_CRASH_SYMBOLIZE_TOOL={{ crash_collector_symbolize_tool }}"
+Environment=RB_CRASH_SYMBOLIZE_TIMEOUT={{ crash_collector_symbolize_timeout }}
 ExecStart={{ crash_collector_bin }}
 Restart=always
 RestartSec=5
