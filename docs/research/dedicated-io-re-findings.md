@@ -385,3 +385,82 @@ untauglich — #378). Native Executor/CommandBuffer
 (`Exor::InOrderWorldExecutor`, `EcsCommandBuffer::ExecuteCommands` 0x1DD01B0)
 bleiben Option, sind aber **nicht nötig**: das Gate allein behebt die
 Crash-Ursache. Ein Detour bräuchte den Thread-Nachweis (Regel aus #479).
+
+## #512: verbundene Spielerzahl nativ (`players`) — nativ, mit-Player-Test offen
+
+**Frage:** Solo-/Koop-Erkennung ohne Lua. Lua-Pfad im Spiel:
+`dom_mananger:GetPlayersCounter()` == `#PlayerService:GetConnectedPlayers()`.
+
+**Befund:** Es gibt **kein** statisches "connected player count"-Feld. Die Zahl
+wird berechnet (Filter über den Spieler-Container) — ein reiner Offset-Read ist
+deshalb unmöglich; der einzige praktikable native Weg ist **ein Game-Call + ein
+Deref** (genau so, wie `dom_mananger:GetPlayersCounter()` es in Lua tut).
+
+### Aufgelöste Funktion (AOB, keine feste Adresse)
+
+`Riftbreaker::GetConnectedPlayers(Exor::World*)` — freie Funktion,
+RVA `0xC5EE70` (Build 2.0.58485; **nur Verifikations-Notiz**).
+
+```
+rcx = out-Vektor (hidden return ptr, MSVC-x64-Aggregat-Return)
+rdx = World*
+  48 8D 9A C0 00 00 00   lea rbx,[rdx+0xc0]    ; Sessions-Store (World+0xC0)
+  41 B8 B1 B8 7E 10      mov r8d,0x107eb8b1    ; TypeHash (ServerGameplaySessions)
+  Helper 0x1DF3F50 füllt `out` mit ALLEN Spieler-Ids,
+  Filter in-place auf "connected" via 0x1CF5AB0.
+Rückgabe-Typ: Exor::Vector<uint32,StlAllocatorProxy<uint32>>
+```
+
+### Vektor-Layout (drei unabhängige Disasm-Belege)
+
+| Beleg | Fundstelle |
+|---|---|
+| Erzeuger/Filter | `0xC5EE70` (`[r15+8]` = begin, `[r15+0x10]` = size) |
+| Konsument | `0x12B8386` (`lea rcx,[rbp+0x38]`, liest `[rbp+0x40]`/`[rbp+0x48]`) |
+| Destruktor | `0x26F340` (`[rcx+0x18]` = capacity, `[rcx]` = Allocator-Objekt) |
+
+```
+Exor::Vector<uint32> (+0x00 Allocator-Objekt*, +0x08 begin, +0x10 size, +0x18 capacity) = 0x20 B
+=> players = vec[+0x10]
+```
+
+### AOB statt RVA
+
+114-Byte-Signatur ab Funktions-Entry `RBBRIDGE_CONNPLAYERS_SIG`
+(`rbbridge.c`), im `.text` **eindeutig** (Gegenprobe planet 2026-09-15: genau
+1 Treffer @ RVA `0xC5EE70`). Wildcards: die drei `E8`-rel32 (buildabhängige
+Call-Ziele) und die drei rel8-Sprünge; die drei `E8`-Opcodes, die beiden
+`mov r8d,0x107eb8b1`-Anker und `lea rbx,[rdx+0xc0]` bleiben Pflicht.
+
+**Warum der Member-Wrapper `PlayerService::GetConnectedPlayers()` (RVA
+`0xF27960`) NICHT aufgelöst wird:** seine 30-Byte-Signatur matcht 5× (er teilt
+die Form mit `GetConnectedPlayersFromTeam`/`GetPlayersFromTeam` + 2 weiteren
+Geschwistern) — eine eindeutige AOB ist dort unmöglich. Deshalb wird die freie
+Impl direkt aufgelöst und mit dem bereits vorhandenen `World*` (aus
+`PlayerService[+0x08]`) aufgerufen.
+
+### Thread-Modell
+
+Reiner C++-Read, **kein `lua_*`** → thread-agnostisch; der Pipe-Thread ruft ihn
+direkt (analog `GetPlayerAccount`). Kein Vtable-Detour.
+
+### Aufräumen (kein Leak)
+
+Der Rückgabe-Vektor wird wie in `~Vector` (Disasm `0x26F340`) freigegeben:
+`cap = vec[+0x18]`; bei `cap != 0` → `vec[+0x00]->vtable[0x10](alloc,
+vec[+0x08], cap*4)`. **Keine Dtor-Symbolauflösung:** die Dtor-Bytes liegen
+dreifach byte-identisch im `.text` (3 Instanzen für 4-Byte-Elemente:
+`0x26F340`/`0x2B30F0`/`0x18906E0`) — eine AOB wäre nicht eindeutig. Der
+Deallocate-Aufruf über die Allocator-vtable des von der Engine selbst gesetzten
+Allocator-Objekts ist dagegen deterministisch und semantisch identisch.
+
+### Egress
+
+`get_state` liefert `"players":<n>` (Solo = 1, kein Spieler = 0) bzw.
+`"players":null`, wenn der AOB nicht auflösbar ist oder die Welt fehlt
+(graceful, kein Call). Cockpit: `Mission Flow (Wave)` → `players`.
+
+**Offener Punkt (Player-Test Momo/Matheo):** auf einem leeren Dedi ist der
+`get_state`-Pfad aktuell `no_account` (kein Spieler ⇒ kein geladenes Konto).
+Damit ist der Read nicht live verifizierbar, solange niemand verbunden ist;
+die Zahlen 0/1/2 bei 0/1/2 Spielern sind noch zu bestätigen.
