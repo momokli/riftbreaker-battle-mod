@@ -66,6 +66,7 @@
 #define REQ_MAX              (64 * 1024)   /* max. HTTP-Request (inkl. Body)  */
 #define RESP_MAX             (64 * 1024)   /* max. HTTP-Body                  */
 #define CMD_MAX              512
+#define IDENT_CAP            256           /* max. Laenge env/ref-Badge */
 
 /* ------------------------------------------------------------------ */
 /* Logging                                                             */
@@ -428,7 +429,36 @@ static void http_respond_html(SOCKET c, int code, const char *status,
 
 static void handle_index(SOCKET c)
 {
-    http_respond_html(c, 200, "OK", COCKPIT_HTML);
+    static const char placeholder[] = "__RBB_IDENTITY__";
+    const char *env = env_str("RBB_ENV", "unknown");
+    const char *ref = env_str("RBB_REF", "unknown");
+    const char *pos = strstr(COCKPIT_HTML, placeholder);
+
+    if (!pos) {
+        /* Platzhalter fehlt (z. B. veraltete .inc) -> Seite unveraendert. */
+        http_respond_html(c, 200, "OK", COCKPIT_HTML);
+        return;
+    }
+
+    char identity[IDENT_CAP];
+    snprintf(identity, sizeof(identity), "%s · %s", env, ref);
+
+    size_t prefix = (size_t)(pos - COCKPIT_HTML);
+    size_t ilen = strlen(identity);
+    size_t slen = strlen(pos + sizeof(placeholder) - 1);
+
+    /* COCKPIT_HTML ist const -> kein In-Place-Edit, sondern frischer Puffer. */
+    char *buf = malloc(strlen(COCKPIT_HTML) + IDENT_CAP + 1);
+    if (!buf) {
+        http_respond_html(c, 200, "OK", COCKPIT_HTML);
+        return;
+    }
+
+    memcpy(buf, COCKPIT_HTML, prefix);
+    memcpy(buf + prefix, identity, ilen);
+    memcpy(buf + prefix + ilen, pos + sizeof(placeholder) - 1, slen + 1);
+    http_respond_html(c, 200, "OK", buf);
+    free(buf);
 }
 
 
