@@ -3861,14 +3861,6 @@ static void dispatch_get_state(HANDLE hPipe)
     void *(*gpa)(void *, unsigned int) =
         (void *(*)(void *, unsigned int))(uintptr_t)(base + 0xC60050);
     void *account = gpa((void *)(uintptr_t)world, 0);
-
-    /* #512: Spielerzahl nativ lesen (hier ist die Welt gesetzt). */
-    {
-        int players = 0;
-        if (read_player_count(base, size, ps, &players))
-            snprintf(players_field, sizeof(players_field), "%d", players);
-    }
-
     if (!account) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
                          "\"reason\":\"no_account\","
@@ -3880,6 +3872,23 @@ static void dispatch_get_state(HANDLE hPipe)
                   flow_esc, flow_active ? "true" : "false", payload_field,
                   diff_field, players_field);
         return;
+    }
+
+    /* #512: Spielerzahl nativ lesen - BEWUSST erst NACH dem Account-Check.
+     *
+     * `Riftbreaker::GetConnectedPlayers` holt den Session-Pointer aus
+     * `World+0xC0` und ruft damit das Session-Praedikat (RVA 0x1CF5AB0 ->
+     * `cmp rax,[rcx+0x1e0]`). Ist die Welt noch nicht geladen, ist dieser
+     * Pointer NULL -> Page-Fault. LIVE belegt (#512, planet):
+     * `Unhandled page fault on read access to 0x1E0` at DLL+0x1CF5AD3
+     * (thread 025c) = genau `cmp rax,[rcx+0x1e0]` mit rcx=0. Der erfolgreiche
+     * Account-Lookup ist die live-bewiesene Vorbedingung "Welt wirklich da"
+     * (dieselbe wie fuer carbonium) und schuetzt den Aufruf. Ohne Account
+     * bleibt es bei `players:null` - ehrlich statt 0. */
+    {
+        int players = 0;
+        if (read_player_count(base, size, ps, &players))
+            snprintf(players_field, sizeof(players_field), "%d", players);
     }
 
     uint64_t arr = 0, count = 0;

@@ -456,11 +456,34 @@ Allocator-Objekts ist dagegen deterministisch und semantisch identisch.
 
 ### Egress
 
-`get_state` liefert `"players":<n>` (Solo = 1, kein Spieler = 0) bzw.
-`"players":null`, wenn der AOB nicht auflösbar ist oder die Welt fehlt
-(graceful, kein Call). Cockpit: `Mission Flow (Wave)` → `players`.
+`get_state` liefert `"players":<n>` (Solo = 1) bzw. `"players":null`, wenn der
+AOB nicht auflösbar ist **oder die Welt nicht live ist** (graceful, kein Call).
+Cockpit: `Mission Flow (Wave)` → `players`.
 
-**Offener Punkt (Player-Test Momo/Matheo):** auf einem leeren Dedi ist der
-`get_state`-Pfad aktuell `no_account` (kein Spieler ⇒ kein geladenes Konto).
-Damit ist der Read nicht live verifizierbar, solange niemand verbunden ist;
-die Zahlen 0/1/2 bei 0/1/2 Spielern sind noch zu bestätigen.
+### WICHTIG: Aufruf erst NACH dem Account-Check (LIVE-Crash #512)
+
+`Riftbreaker::GetConnectedPlayers` ist **nicht** safe auf einer noch nicht
+geladenen Welt: die Funktion holt den Session-Pointer aus `World+0xC0` und
+ruft damit das Session-Prädikat (RVA `0x1CF5AB0` → `cmp rax,[rcx+0x1e0]`). Ist
+der Store noch nicht da, ist der Pointer NULL → Page-Fault:
+
+```
+wine: Unhandled page fault on read access to 00000000000001E0
+      at address 00006FFFF8EC5AD3 (thread 025c)
+```
+
+`0x6FFFF8EC5AD3 - base(0x6FFFF71D0000)` = **DLL+0x1CF5AD3** = genau
+`cmp rax,[rcx+0x1e0]` mit `rcx = 0` (NULL-Session). Der Read läuft deshalb erst
+**nach** erfolgreichem `GetPlayerAccount` — dieselbe live-bewiesene Vorbedingung
+"Welt wirklich da" wie beim carbonium-Read.
+
+### Live-Stand (Build mit Fix)
+
+Der Fix wurde gegen die dev-Instanz (`riftbreaker-dedicated`, Port 9001)
+verifiziert: `get_state` liefert ohne Spieler `ok:false, reason:no_account` mit
+`"players":null`, die Pipe bleibt oben (**kein Crash**).
+
+**Offener Punkt (Player-Test Momo/Matheo):** Ein Dedicated-Server ohne
+verbundenen Spieler lädt kein Konto — der `players`-Read ist dann per Design
+`null`. Die Zahlen 0/1/2 bei 0/1/2 Spielern (Solo = 1) sind damit erst mit
+verbundenem Spieler bestätigbar und **nicht** live verifiziert.
