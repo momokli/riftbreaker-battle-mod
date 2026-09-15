@@ -63,7 +63,7 @@ exec-Zeilen auf die rbbridge-Named-Pipe:
 
 | Route (POST) | Zweck in der UI |
 |---|---|
-| `get_state` | Ressourcen (`carbonium`/`ironium` + Max), `mission_flow`, `mission_flow_active`, `mission_flow_payload.spawn_point`, `creatures_base_difficulty` |
+| `get_state` | Ressourcen (`carbonium`/`ironium` + Max), `mission_flow`, `mission_flow_active`, `mission_flow_payload.spawn_point`, `creatures_base_difficulty`, `hq_hp`/`hq_hp_max`/`hq_dead` (nativ C++, #511) |
 | `add_resource` | Ressourcen addieren/subtrahieren (`{amount, resource?}`) |
 | `activate_mission_flow` | Welle starten (`{logic, mode:"default"}`) |
 | `deactivate_mission_flow` | Welle stoppen (`flow-id`, leer = zuletzt gestarteter) |
@@ -72,6 +72,14 @@ exec-Zeilen auf die rbbridge-Named-Pipe:
 
 `GET /health` der Bridge gehört ebenfalls zur API-Fläche. Details und
 Verdrahtung: `docs/INGRESS_IO.md`, `bausteine/rbbridge/README.md`.
+
+**`hq_dead`-Semantik (#511).** `hq_dead` ist eine Interface-Konvention, kein
+Engine-Flag: `true` bedeutet `hq_hp <= 0` **oder** die HQ-Entity ist
+verschwunden, nachdem sie in dieser Session schon mit `hq_hp > 0` gelesen
+wurde (Entity-Verschwinden = zerstört). Vor dem ersten HQ-Leben liefert der
+Read `null` (unbekannt ≠ tot). Welche Abbildung die Engine tatsächlich nutzt
+(`hp == 0` vs. Entity-Entfernen), prüft der Player-Test — offener Punkt in
+Issue #511.
 
 ### 2. Server-Control-Agent — Plane B (#424)
 
