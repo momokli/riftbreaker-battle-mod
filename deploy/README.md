@@ -178,13 +178,24 @@ push auf main / push auf Tag v*
   → GitHub-Actions-Job auf dem self-hosted Runner (planet)
   → ssh rbd "<sha> <ref>"                     [Runner-Key, User deploy]
   → forced command /opt/rbbattle-deploy/deploy-ssh.sh (läuft als deploy):
-       SHA validieren → <sha>/<ref> in Marker-Dateien schreiben
+       SHA validieren → env aus <ref> ableiten (main→dev, Tag v*→prod)
+       → env-spezifische Marker .deploy-<env>.sha/-ref + .deploy-env schreiben
        → sudo -n /usr/local/bin/rbbattle-deploy (als root):
+            cd /opt/rbbattle-deploy/repo-<env> (eigener Checkout je Env)
             git fetch + Hard-Checkout (als root) → chown -R deploy:deploy
             refs/heads/main → site.yml        (dev)
             refs/tags/v*    → deploy-prod.yml (prod)
   → exit code = Deploy-Ergebnis (kein Polling, kein Secret)
 ```
+
+**Getrennte Checkouts (Issue #483):** dev und prod haben je einen EIGENEN
+Checkout (`repo-dev/`, `repo-prod/`) und eigene Ref/SHA-Marker
+(`.deploy-dev.*` / `.deploy-prod.*`). Ein dev-Lauf (`main`) und ein prod-Lauf
+(`Tag v*`) können so **parallel** laufen, ohne sich Ref/SHA zu überschreiben.
+Der Umstieg ist rückwärts-kompatibel: die alten, env-losen Marker
+(`.deploy-sha`/`.deploy-ref`) liest der Wrapper nur noch als **Fallback**,
+wenn `.deploy-env` fehlt — dann benutzt er weiter den bestehenden Checkout
+`repo/`. Nach der Einmal-Migration (s. Checkliste) ist jeder Lauf env-lokal.
 
 **Kein GitHub-Secret nötig** — Auth läuft über den SSH-Key des Runners
 (`~/.ssh/id_rb_deploy`), der auf planet im `authorized_keys` des deploy-Users
@@ -199,11 +210,13 @@ Voraussetzungen: root-Shell auf planet; das Repo ist öffentlich (anonymes
 `git fetch` genügt). `deploy/deploy-ssh.sh` ist die Quelle für Schritt 2.
 
 ```bash
-# 1) Service-User + Verzeichnisse + Checkout:
+# 1) Service-User + Verzeichnisse + getrennte Checkouts (je Env einer, Issue #483):
 sudo useradd --system --home /opt/rbbattle-deploy --shell /usr/sbin/nologin deploy
 sudo install -d -o deploy -g deploy -m 0750 /opt/rbbattle-deploy
 sudo -u deploy git clone https://github.com/momokli/riftbreaker-battle-mod.git \
-  /opt/rbbattle-deploy/repo
+  /opt/rbbattle-deploy/repo-dev
+sudo -u deploy git clone https://github.com/momokli/riftbreaker-battle-mod.git \
+  /opt/rbbattle-deploy/repo-prod
 
 # 2) forced-command-Skript installieren (root-owned, 0755):
 sudo install -m 0755 deploy/deploy-ssh.sh /opt/rbbattle-deploy/deploy-ssh.sh
@@ -227,7 +240,7 @@ SSHALIAS
 
 # 5) Smoke-Test (führt den ECHTEN Deploy aus; exit 0 = grün):
 sudo -u runner ssh -o BatchMode=yes rbd \
-  "$(git -C /opt/rbbattle-deploy/repo rev-parse origin/main) refs/heads/main"
+  "$(git -C /opt/rbbattle-deploy/repo-dev rev-parse origin/main) refs/heads/main"
 ```
 
 ### Root-Weg (Standard): Ansible `become` über eng begrenztes sudoers
@@ -243,39 +256,12 @@ Der deploy-User läuft nur für Validierung + Marker-Schreiben non-root.
 sudo python3 -m venv /opt/rb-ansible
 sudo /opt/rb-ansible/bin/pip install --disable-pip-version-check "ansible-core==2.19.*"
 
-# b) Root-Wrapper (führt das Playbook im Checkout aus; dispatched dev/prod
-#    anhand der Marker-Datei /opt/rbbattle-deploy/.deploy-ref, die der forced
-#    command vorher geschrieben hat — main -> site.yml, Tag v* -> deploy-prod.yml):
-sudo tee /usr/local/bin/rbbattle-deploy >/dev/null <<'WRAPPER'
-#!/bin/sh
-set -eu
-export HOME=/opt/rbbattle-deploy
-export ANSIBLE_CONFIG=/etc/rbbattle-deploy/ansible.cfg
-
-# Checkout als root + danach Ownership normalisieren: Agent-/RE-Arbeit legt
-# auf planet teils root-owned Dateien ab; liefe der Checkout als deploy,
-# schlüge er mit "unable to unlink ... Permission denied" fehl.
-sha="$(cat /opt/rbbattle-deploy/.deploy-sha 2>/dev/null || true)"
-cd /opt/rbbattle-deploy/repo
-git fetch --prune --quiet origin
-git checkout --force "$sha" >/dev/null
-chown -R deploy:deploy /opt/rbbattle-deploy/repo
-
-ref="$(cat /opt/rbbattle-deploy/.deploy-ref 2>/dev/null || true)"
-case "$ref" in
-  refs/tags/v*)
-    exec /opt/rb-ansible/bin/ansible-playbook \
-      -i deploy/inventory deploy/deploy-prod.yml \
-      -e @deploy/prod-vars.yml \
-      --vault-password-file /etc/rbbattle-deploy/vault.pass
-    ;;
-  *)
-    exec /opt/rb-ansible/bin/ansible-playbook \
-      -i deploy/inventory deploy/site.yml \
-      --vault-password-file /etc/rbbattle-deploy/vault.pass
-    ;;
-esac
-WRAPPER
+# b) Root-Wrapper installieren (kanonische Quelle im Repo:
+#    deploy/deploy-wrapper.sh). Er arbeitet je Env in
+#    /opt/rbbattle-deploy/repo-<env> und dispatched anhand der Env-Marker
+#    .deploy-<env>.* (.deploy-env = aktuelle Env), die der forced command
+#    vorher geschrieben hat — main -> site.yml, Tag v* -> deploy-prod.yml:
+sudo install -m 0755 deploy/deploy-wrapper.sh /usr/local/bin/rbbattle-deploy
 sudo chown root:root /usr/local/bin/rbbattle-deploy
 sudo chmod 0755 /usr/local/bin/rbbattle-deploy
 
@@ -328,12 +314,41 @@ im Wrapper; known_hosts unter `/opt/rbbattle-deploy/.ssh/`.
 ```bash
 # Deploy manuell anstoßen (exit code = Ergebnis; Ausgabe = ansible-Log):
 sudo -u runner ssh -o BatchMode=yes rbd "<sha> refs/heads/main"
-# Zuletzt deployte SHA:
-git -C /opt/rbbattle-deploy/repo log --oneline -3
+# Zuletzt deployte SHA (je Env eigener Checkout):
+git -C /opt/rbbattle-deploy/repo-dev  log --oneline -3
+git -C /opt/rbbattle-deploy/repo-prod log --oneline -3
 ```
 
 `deploy/deploy-ssh.sh` aktualisieren (bei Änderungen):
 `sudo install -m 0755 deploy/deploy-ssh.sh /opt/rbbattle-deploy/deploy-ssh.sh`.
+`deploy/deploy-wrapper.sh` (root-Wrapper) aktualisieren:
+`sudo install -m 0755 deploy/deploy-wrapper.sh /usr/local/bin/rbbattle-deploy`.
+
+### Migration: geteilter Checkout/Marker → `repo-<env>` (Issue #483)
+
+Einmalig auf planet (Wartungsfenster; der Umstieg ist rückwärts-kompatibel):
+
+1. **Checkouts trennen** — den bestehenden dev-Checkout verschieben und einen
+   prod-Zweig klonen (der Wrapper klont sonst beim ersten prod-Lauf selbst):
+   ```bash
+   sudo mv /opt/rbbattle-deploy/repo /opt/rbbattle-deploy/repo-dev
+   sudo -u deploy git clone https://github.com/momokli/riftbreaker-battle-mod.git \
+     /opt/rbbattle-deploy/repo-prod
+   ```
+2. **Marker migrieren** — den letzten Legacy-Stand als dev-Marker übernehmen
+   (prod entsteht mit dem ersten prod-Lauf neu):
+   ```bash
+   cd /opt/rbbattle-deploy
+   sudo sh -c 'cp -f .deploy-sha .deploy-dev.sha 2>/dev/null || true
+                cp -f .deploy-ref .deploy-dev.ref 2>/dev/null || true
+                printf dev > .deploy-env'
+   ```
+3. **forced command + Wrapper aktualisieren** (Schritte 2 + Root-Weg `b`)
+   und den Smoke-Test (dev) fahren.
+
+**Rollback:** `repo`-Checkout samt `.deploy-sha`/`.deploy-ref` und den alten
+forced-command/Wrapper zurückspielen — die Legacy-Marker/-Checkouts bleiben
+erhalten (der Wrapper liest sie als Fallback, wenn `.deploy-env` fehlt).
 
 ### Park, Force & Timeout (Issue #238)
 
@@ -363,6 +378,7 @@ re-run oder `force=true`.
 - [ ] forced command + `authorized_keys` (Schritte 2–3), Alias `rbd` (Schritt 4)
 - [ ] Smoke-Test grün (Schritt 5)
 - [ ] Root-Weg: Ansible (venv) + Wrapper + sudoers + `vault.pass` + Loopback-SSH
+- [ ] Checkout-/Marker-Migration auf `repo-<env>` (s. §„Migration“, Issue #483)
 - [ ] `vault.yml` verschlüsselt + befüllt (falls noch `CHANGE_ME`)
 - [ ] Alter Hook dekommissioniert: `systemctl disable --now rbbattle-deploy-hook` + Unit-Datei entfernt
 - [x] GitHub: `DEPLOY_TOKEN`-Secret gelöscht (obsolet)
