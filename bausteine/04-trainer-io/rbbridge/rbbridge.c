@@ -863,6 +863,98 @@ static const unsigned char RBBRIDGE_DEACTIVATE_SIG_MASK[] = {
     0xFF, 0xFF, 0xFF, 0xFF
 };
 
+/* ------------------------------------------------------------------ */
+/* #386: Exor::Database-Payload (Mission-Flow-Datenobjekt)             */
+/*                                                                    */
+/* `dom_mananger.data` ist ein Exor::Database und wird als `data`-      */
+/* Argument ([rsp+0x28], 4. Stack-Parameter) an                        */
+/* MissionService::ActivateMissionFlow (RBBRIDGE_ACTIVATE_SIG)          */
+/* durchgereicht. Database hat KEINE vftable (??_7Database@Exor@@6B@    */
+/* fehlt im Binary) und ist 0x60 Byte gross (3x 0x20 Container).       */
+/*                                                                    */
+/* Alle Adressen werden zur Laufzeit per AOB im Modulabbild gefunden   */
+/* (KEINE feste RVA im Aufrufpfad). rel32-Operanden sind per Maske     */
+/* (0x00 = Wildcard) entschaerft; nur die E8-Opcodes bleiben Pflicht.  */
+/*                                                                    */
+/* RE-Nachweis + Klassen-Layout:                                      */
+/*   docs/research/database-object-re-findings.md                     */
+/* Gegenprobe planet (Build 2.0.58485, 2026-09-15, disasm.py+capstone):*/
+/*   RBBRIDGE_DB_SETSTRING_SIG  1 Treffer @ RVA 0x25956B0              */
+/*   RBBRIDGE_DB_GETSTRING_SIG  1 Treffer @ RVA 0x2591FD0              */
+/*   RBBRIDGE_DB_CTOR_SIG       Body NICHT eindeutig (byte-identisch   */
+/*                              mit ??0EntityStatComponent@...), daher */
+/*                              Anker ueber `new 0x60`-Call-Site       */
+/*                              (RBBRIDGE_NEWDB_SITE_SIG/-CALL_SIG).   */
+/* ------------------------------------------------------------------ */
+
+/* Exor::Database::SetString - Prolog, exakt (kein rel32 im Prefix).
+ *   4C 89 44 24 18   mov  [rsp+0x18], r8
+ *   53               push rbx
+ *   48 83 EC 30      sub  rsp,0x30
+ *   49 8B D8         mov  rbx,r8
+ *   48 8B 42 18      mov  rax,[rdx+0x18]   ; key.size
+ *   48 83 C2 08      add  rdx,8
+ *   48 83 7A 18 0F   cmp  qword [rdx+0x18],0xf  ; SSO? */
+static const unsigned char RBBRIDGE_DB_SETSTRING_SIG[] = {
+    0x4C, 0x89, 0x44, 0x24, 0x18, 0x53, 0x48, 0x83, 0xEC, 0x30,
+    0x49, 0x8B, 0xD8, 0x48, 0x8B, 0x42, 0x18, 0x48, 0x83, 0xC2,
+    0x08, 0x48, 0x83, 0x7A, 0x18, 0x0F
+};
+
+/* Exor::Database::GetString - Prolog; rel32 der E8 @ Index 12 maskiert.
+ *   40 53                    push rbx
+ *   48 81 EC 80 00 00 00     sub  rsp,0x80
+ *   48 8B DA                 mov  rbx,rdx
+ *   E8 ..                    call <lookup>   (rel32 maskiert)
+ *   48 85 C0                 test rax,rax
+ *   74 09                    je   +9 */
+static const unsigned char RBBRIDGE_DB_GETSTRING_SIG[] = {
+    0x40, 0x53, 0x48, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00, 0x48,
+    0x8B, 0xDA, 0xE8, 0xFF, 0xFF, 0xFF, 0xFF, 0x48, 0x85, 0xC0,
+    0x74, 0x09, 0x48, 0x81, 0xC4, 0x80, 0x00, 0x00, 0x00, 0x5B,
+    0xC3
+};
+static const unsigned char RBBRIDGE_DB_GETSTRING_SIG_MASK[] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF
+};
+
+/* Exor::Database::Database() - Prolog (Gegenpruefung des Anker-Ziels);
+ * rel32 der E8 @ Index 23 maskiert.
+ *   48 89 5C 24 18   mov  [rsp+0x18], rbx
+ *   48 89 74 24 20   mov  [rsp+0x20], rsi
+ *   48 89 4C 24 08   mov  [rsp+8], rcx
+ *   57               push rdi
+ *   48 83 EC 20      sub  rsp,0x20
+ *   48 8B F9         mov  rdi,rcx
+ *   E8 ..            call <container ctor>   (rel32 maskiert) */
+static const unsigned char RBBRIDGE_DB_CTOR_SIG[] = {
+    0x48, 0x89, 0x5C, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20,
+    0x48, 0x89, 0x4C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20,
+    0x48, 0x8B, 0xF9, 0xE8, 0xFF, 0xFF, 0xFF, 0xFF
+};
+static const unsigned char RBBRIDGE_DB_CTOR_SIG_MASK[] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00
+};
+
+/* Anker der `new Database(0x60)`-Call-Site (MS-x64):
+ *   B9 60 00 00 00   mov  ecx,0x60
+ *   E8 ..            call operator new
+ *   48 8B C8         mov  rcx,rax
+ *   E8 ..            call Database::Database()   <- Ziel = Ctor
+ * Die rel32-Operanden sind build-gebunden und werden nie verglichen; das
+ * Ctor-Ziel wird zur Laufzeit aus dem zweiten rel32 berechnet. */
+static const unsigned char RBBRIDGE_NEWDB_SITE_SIG[] = {
+    0xB9, 0x60, 0x00, 0x00, 0x00, 0xE8
+};
+static const unsigned char RBBRIDGE_NEWDB_CALL_SIG[] = {
+    0x48, 0x8B, 0xC8, 0xE8
+};
+
 /* RE-Befunde #385 (Build 2.0.58485) - feste RVAs NUR fuer die kleinen
  * Helfer (analog zu den bestehenden PlayerService-RVAs in get_state);
  * ActivateMissionFlow selbst wird per AOB aufgeloest (RBBRIDGE_ACTIVATE_SIG).
@@ -1667,6 +1759,156 @@ static int resolve_console_service(console_exec_fn *out_fn, void **out_inst)
 }
 #endif /* RBBRIDGE_HOSTTEST */
 
+/* ------------------------------------------------------------------ */
+/* #386: Database-Payload - Resolver + Builder                         */
+/*                                                                    */
+/* Alle Adressen werden aus dem Modulabbild aufgeloest (AOB), NIE als   */
+/* feste RVA aufgerufen. Nicht-Fund an JEDER Stufe -> NULL + dbg(),     */
+/* kein Aufruf (kein SEH unter MinGW-x64).                             */
+/* ------------------------------------------------------------------ */
+
+/* .text-Bereich des Modulabbilds; 1 = ok. Reine Header-Auswertung, kein
+ * Zugriff auf den Spielprozess. */
+static int rbbridge_text_range(const unsigned char *base, size_t size,
+                               const unsigned char **out, size_t *out_len)
+{
+    const IMAGE_DOS_HEADER *dos;
+    const IMAGE_NT_HEADERS *nt;
+    const IMAGE_SECTION_HEADER *sec;
+
+    if (!base || size < sizeof(IMAGE_DOS_HEADER))
+        return 0;
+    dos = (const IMAGE_DOS_HEADER *)base;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+        return 0;
+    if ((size_t)dos->e_lfanew > size ||
+        size - (size_t)dos->e_lfanew < sizeof(IMAGE_NT_HEADERS))
+        return 0;
+    nt = (const IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE)
+        return 0;
+    sec = IMAGE_FIRST_SECTION(nt);
+    for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; i++, sec++) {
+        if (memcmp(sec->Name, ".text", 5) == 0) {
+            size_t va = (size_t)sec->VirtualAddress;
+            size_t vs = (size_t)sec->Misc.VirtualSize;
+            if (va > size || vs > size - va)
+                return 0;
+            *out = base + va;
+            *out_len = vs;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Signatur-Scan: .text zuerst, sonst ganzes Abbild (maskiert; NULL = exakt).
+ * .text-first entschaerft kurze Signaturen gegen .rdata-Zufallstreffer. */
+static const unsigned char *scan_text_first(const unsigned char *base,
+                                            size_t size,
+                                            const unsigned char *sig,
+                                            const unsigned char *mask,
+                                            size_t sig_len)
+{
+    const unsigned char *text = NULL;
+    size_t text_len = 0;
+    const unsigned char *hit = NULL;
+
+    if (rbbridge_text_range(base, size, &text, &text_len))
+        hit = scan_bytes_mask(text, text_len, sig, mask, sig_len);
+    if (!hit)
+        hit = scan_bytes_mask(base, size, sig, mask, sig_len);
+    return hit;
+}
+
+static const void *resolve_db_setstring_fn(const unsigned char *base,
+                                           size_t size)
+{
+    return (const void *)scan_text_first(base, size,
+                                         RBBRIDGE_DB_SETSTRING_SIG, NULL,
+                                         sizeof(RBBRIDGE_DB_SETSTRING_SIG));
+}
+
+static const void *resolve_db_getstring_fn(const unsigned char *base,
+                                           size_t size)
+{
+    return (const void *)scan_text_first(base, size,
+                                         RBBRIDGE_DB_GETSTRING_SIG,
+                                         RBBRIDGE_DB_GETSTRING_SIG_MASK,
+                                         sizeof(RBBRIDGE_DB_GETSTRING_SIG));
+}
+
+/* Loest Exor::Database::Database() NICHT per Prolog-Scan auf (der Body ist
+ * nicht eindeutig), sondern ueber die `new 0x60`-Call-Site: das rel32-Ziel
+ * des zweiten E8 (nach `mov rcx,rax`) ist der Ctor. Mehr als ein
+ * unterschiedliches Ziel oder kein Treffer -> NULL (kein Aufruf). Der Fund
+ * wird gegen den Prolog (RBBRIDGE_DB_CTOR_SIG) gegengeprueft. */
+static const void *resolve_db_ctor_fn(const unsigned char *base, size_t size)
+{
+    const unsigned char *end = base + size;
+    const unsigned char *p = base;
+    const void *found = NULL;
+    int sites = 0;
+
+    while (p && p < end) {
+        const unsigned char *site =
+            scan_bytes(p, (size_t)(end - p), RBBRIDGE_NEWDB_SITE_SIG,
+                       sizeof(RBBRIDGE_NEWDB_SITE_SIG));
+        if (!site)
+            break;
+        sites++;
+        const unsigned char *q = site + sizeof(RBBRIDGE_NEWDB_SITE_SIG);
+        size_t win = (size_t)(end - q);
+        if (win > 0x40)
+            win = 0x40;
+        const unsigned char *call =
+            scan_bytes(q, win, RBBRIDGE_NEWDB_CALL_SIG,
+                       sizeof(RBBRIDGE_NEWDB_CALL_SIG));
+        if (call) {
+            const unsigned char *e8 = call + 3; /* E8-Opcode */
+            int32_t rel = 0;
+            memcpy(&rel, e8 + 1, sizeof(rel));
+            const unsigned char *tgt = e8 + 5 + rel; /* rel32 @ e8+1 */
+            if (tgt >= base && tgt < end) {
+                if (found && found != (const void *)tgt) {
+                    dbg("resolve_db_ctor_fn: mehrdeutig (%p vs %p) -> NULL",
+                        found, (const void *)tgt);
+                    return NULL;
+                }
+                found = (const void *)tgt;
+            }
+        }
+        p = site + 1;
+    }
+
+    if (!found) {
+        dbg("resolve_db_ctor_fn: keine new-0x60-Site -> NULL");
+        return NULL;
+    }
+    if (!sig_matches((const unsigned char *)found, RBBRIDGE_DB_CTOR_SIG,
+                     RBBRIDGE_DB_CTOR_SIG_MASK,
+                     sizeof(RBBRIDGE_DB_CTOR_SIG))) {
+        dbg("resolve_db_ctor_fn: Anker-Ziel %p passt nicht zum Prolog -> NULL",
+            found);
+        return NULL;
+    }
+    dbg("resolve_db_ctor_fn: %d Site(s), Ctor=%p (rva=%08lx)", sites, found,
+        (unsigned long)((const unsigned char *)found - base));
+    return found;
+}
+
+/* Kopiert einen C-String mit harter Schranke (immer NUL-terminiert). */
+static void copy_cstr(char *dst, size_t n, const char *src)
+{
+    size_t i = 0;
+    if (!dst || n == 0)
+        return;
+    if (src) {
+        for (; src[i] && i + 1 < n; i++)
+            dst[i] = src[i];
+    }
+    dst[i] = '\0';
+}
 #ifndef RBBRIDGE_HOSTTEST
 
 
@@ -2054,19 +2296,89 @@ static void json_escape_into(const char *in, char *out, size_t n)
     out[o] = '\0';
 }
 
+/* Database-ABI (MSVC x64, aus dem Disasm):
+ *   Database::Database()                       this=RCX
+ *   Database::SetString(UtfString const& key,
+ *                       UtfString const& value) this=RCX, key=RDX, val=R8
+ *   Database::GetString(UtfString const& key)   this=RCX, key=RDX -> ut*/
+typedef void (__fastcall *db_ctor_fn)(void *self);
+typedef void (__fastcall *db_setstring_fn)(void *self, const void *key,
+                                           const void *value);
+typedef const void *(__fastcall *db_getstring_fn)(void *self,
+                                                  const void *key);
+
+/* Baut ein frisches 0x60-Byte-Database-Objekt (Default-Ctor + SetString).
+ * Fehlt eine Adresse -> NULL (kein Aufruf). Das Objekt wird bewusst NICHT
+ * freigegeben: der Mission-Flow-Kern reicht den Zeiger durch (Lifetime bis
+ * Flow-Ende). Rueckgabe = Objekt oder NULL. */
+static void *build_database_payload(const unsigned char *base,
+                                    const void *ctor, const void *setstr,
+                                    const char *key, const char *value)
+{
+    unsigned char *db;
+    unsigned char k[40], v[40];
+
+    if (!base || !ctor || !setstr)
+        return NULL;
+    db = (unsigned char *)malloc(0x60);
+    if (!db)
+        return NULL;
+    memset(db, 0, 0x60);
+    ((db_ctor_fn)(uintptr_t)ctor)((void *)db);
+    build_utfstring(base, key, k);
+    build_utfstring(base, value ? value : "", v);
+    ((db_setstring_fn)(uintptr_t)setstr)((void *)db, (const void *)k,
+                                         (const void *)v);
+    destroy_utfstring(base, v);
+    destroy_utfstring(base, k);
+    return db;
+}
+
+/* Liest ein Feld aus dem geparkten Database-Objekt via Database::GetString.
+ * Rueckgabe 1 = ok. Nie ein Crash (utfstring_to_cstr prueft die Region). */
+static int database_get_string(const unsigned char *base, const void *db,
+                               const void *getstr, const char *key,
+                               char *out, size_t out_sz)
+{
+    unsigned char k[40];
+    const void *v;
+
+    if (!base || !db || !getstr || !out || out_sz == 0)
+        return 0;
+    out[0] = '\0';
+    build_utfstring(base, key, k);
+    v = ((db_getstring_fn)(uintptr_t)getstr)((void *)db, (const void *)k);
+    destroy_utfstring(base, k);
+    if (!v)
+        return 0;
+    return utfstring_to_cstr((const unsigned char *)v, out, out_sz);
+}
+
 /* Letzter per activate_mission_flow gestarteter Flow (Flow-ID des Spiels);
  * dient dem Read-Feld in get_state. Zugriff nur auf dem (einzigen)
  * Pipe-Server-Thread -> kein Lock noetig. */
 static char g_last_flow[192];
 
+/* #386: zuletzt gebautes Exor::Database-Payload (Mission-Flow `data`) und
+ * der darin gesetzte spawn_point. Geparkt fuer die Read-Leg in get_state;
+ * absichtlich NICHT freigegeben (Lifetime bis Flow-Ende). Zugriff nur auf
+ * dem (einzigen) Pipe-Server-Thread -> kein Lock noetig. */
+static void *g_mission_payload_db = NULL;
+static char g_mission_spawn[128] = "";
+
 /*
- * activate_mission_flow (Write #385): startet einen Mission-Flow direkt
- * ueber den C++-Workhorse (AOB-aufgeloest). Events:
- *   {"event":"activate_mission_flow_result","ok":true,"flow":"<id>"}
+ * activate_mission_flow (Write #385/#386): startet einen Mission-Flow
+ * direkt ueber den C++-Workhorse (AOB-aufgeloest). Ist `spawn_point`
+ * gesetzt, wird zusaetzlich ein Exor::Database-Payload (#386) gebaut
+ * (Default-Ctor + SetString("spawn_point", ...), beide AOB-aufgeloest)
+ * und als `data`-Argument ([rsp+0x28]) durchgereicht. Events:
+ *   {"event":"activate_mission_flow_result","ok":true,"flow":"<id>",
+ *    "spawn_point":"<sp>"}
  *   {"event":"activate_mission_flow_result","ok":false,"reason":"..."}
  */
 static void dispatch_activate_mission_flow(HANDLE hPipe, const char *logic,
-                                           const char *mode)
+                                           const char *mode,
+                                           const char *spawn_point)
 {
     const unsigned char *base = NULL;
     size_t size = 0;
@@ -2077,6 +2389,9 @@ static void dispatch_activate_mission_flow(HANDLE hPipe, const char *logic,
     unsigned char u_name[40], u_logic[40], u_mode[40], ret[40];
     char flow[192] = "";
     char esc[192 * 2];
+    char esc_sp[128 * 2];
+    void *payload = NULL;
+    int want_payload = (spawn_point && spawn_point[0]) ? 1 : 0;
 
     typedef void *(__fastcall *activate_fn)(void *self, void *retbuf,
                                             const void *name,
@@ -2125,6 +2440,30 @@ static void dispatch_activate_mission_flow(HANDLE hPipe, const char *logic,
         return;
     }
 
+    /* #386: Database-Payload nur bei gesetztem spawn_point bauen; die
+     * Adressen kommen aus AOB-Signaturen (KEIN festes RVA). Nicht-Fund ->
+     * ok:false, KEIN Aufruf. */
+    if (want_payload) {
+        const void *db_ctor = resolve_db_ctor_fn(base, size);
+        const void *db_setstr = resolve_db_setstring_fn(base, size);
+        if (!db_ctor || !db_setstr) {
+            dbg("activate_mission_flow: DB-Signatur fehlt (ctor=%p setstr=%p)",
+                db_ctor, db_setstr);
+            send_line(hPipe,
+                      "{\"event\":\"activate_mission_flow_result\","
+                      "\"ok\":false,\"reason\":\"no_database_signature\"}");
+            return;
+        }
+        payload = build_database_payload(base, db_ctor, db_setstr,
+                                         "spawn_point", spawn_point);
+        if (!payload) {
+            send_line(hPipe,
+                      "{\"event\":\"activate_mission_flow_result\","
+                      "\"ok\":false,\"reason\":\"payload_alloc_failed\"}");
+            return;
+        }
+    }
+
     /* Argumente: name="" (wie dom_mananger:SpawnWave), logicFile, mode. */
     build_utfstring(base, "", u_name);
     build_utfstring(base, logic, u_logic);
@@ -2133,8 +2472,8 @@ static void dispatch_activate_mission_flow(HANDLE hPipe, const char *logic,
 
     act = (activate_fn)(uintptr_t)fn;
 
-    /* data = NULL (siehe Kopfkommentar; #386 liefert das Database*-Objekt). */
-    act((void *)ms, ret, u_name, u_logic, u_mode, NULL);
+    /* data = Database-Payload (#386) oder NULL (#385-Default). */
+    act((void *)ms, ret, u_name, u_logic, u_mode, payload);
 
     utfstring_to_cstr(ret, flow, sizeof(flow));
 
@@ -2152,17 +2491,23 @@ static void dispatch_activate_mission_flow(HANDLE hPipe, const char *logic,
         g_last_flow[i] = '\0';
     }
 
-    json_escape_into(flow, esc, sizeof(esc));
+    if (payload) {
+        g_mission_payload_db = payload;
+        copy_cstr(g_mission_spawn, sizeof(g_mission_spawn), spawn_point);
+    }
 
-    dbg("activate_mission_flow: logic='%s' mode='%s' fn_rva=%08lx ms=%p "
-        "flow='%s'",
-        logic, (mode && mode[0]) ? mode : "default",
-        (unsigned long)(uintptr_t)(fn - base), (void *)ms, flow);
+    json_escape_into(flow, esc, sizeof(esc));
+    json_escape_into(g_mission_spawn, esc_sp, sizeof(esc_sp));
+
+    dbg("activate_mission_flow: logic='%s' mode='%s' spawn_point='%s' "
+        "fn_rva=%08lx ms=%p payload=%p flow='%s'",
+        logic, (mode && mode[0]) ? mode : "default", g_mission_spawn,
+        (unsigned long)(uintptr_t)(fn - base), (void *)ms, payload, flow);
 
     send_line(hPipe,
               "{\"event\":\"activate_mission_flow_result\",\"ok\":true,"
-              "\"flow\":\"%s\"}",
-              esc);
+              "\"flow\":\"%s\",\"spawn_point\":\"%s\"}",
+              esc, esc_sp);
 }
 
 /* Mission-Flow-Read fuer get_state: 1 wenn `flow` laut
@@ -2617,6 +2962,32 @@ static void dispatch_get_state(HANDLE hPipe)
             snprintf(diff_field, sizeof(diff_field), "null");
     }
 
+    /* Mission-Flow-Payload (Read #386): zuletzt gebautes Exor::Database-
+     * Objekt; spawn_point via Database::GetString (AOB-aufgeloest),
+     * Fallback = zuletzt gesetzter Wert. Nie ein Crash; kein Payload und
+     * kein gemerkter Wert -> null. */
+    char payload_field[320];
+    {
+        char sp[128] = "";
+        int sp_ok = 0;
+        if (g_mission_payload_db) {
+            const void *gs = resolve_db_getstring_fn(base, size);
+            if (gs)
+                sp_ok = database_get_string(base, g_mission_payload_db, gs,
+                                            "spawn_point", sp, sizeof(sp));
+        }
+        if (!sp_ok)
+            copy_cstr(sp, sizeof(sp), g_mission_spawn);
+        if (!g_mission_payload_db && !sp[0]) {
+            snprintf(payload_field, sizeof(payload_field), "null");
+        } else {
+            char esp[128 * 2];
+            json_escape_into(sp, esp, sizeof(esp));
+            snprintf(payload_field, sizeof(payload_field),
+                     "{\"spawn_point\":\"%s\"}", esp);
+        }
+    }
+
     /* PlayerService-vftable RVA 0x2e8e910 (RE #363/#365). */
     const unsigned char *vftable = base + 0x2e8e910;
     const uint64_t needle = (uint64_t)(uintptr_t)vftable;
@@ -2650,8 +3021,10 @@ static void dispatch_get_state(HANDLE hPipe)
                          "\"reason\":\"no_playerservice\","
                          "\"mission_flow\":\"%s\","
                          "\"mission_flow_active\":%s,"
+                         "\"mission_flow_payload\":%s,"
                          "\"creatures_base_difficulty\":%s}",
-                  flow_esc, flow_active ? "true" : "false", diff_field);
+                  flow_esc, flow_active ? "true" : "false", payload_field,
+                  diff_field);
         return;
     }
 
@@ -2662,8 +3035,10 @@ static void dispatch_get_state(HANDLE hPipe)
                          "\"reason\":\"no_world\","
                          "\"mission_flow\":\"%s\","
                          "\"mission_flow_active\":%s,"
+                         "\"mission_flow_payload\":%s,"
                          "\"creatures_base_difficulty\":%s}",
-                  flow_esc, flow_active ? "true" : "false", diff_field);
+                  flow_esc, flow_active ? "true" : "false", payload_field,
+                  diff_field);
         return;
     }
 
@@ -2675,8 +3050,10 @@ static void dispatch_get_state(HANDLE hPipe)
                          "\"reason\":\"no_account\","
                          "\"mission_flow\":\"%s\","
                          "\"mission_flow_active\":%s,"
+                         "\"mission_flow_payload\":%s,"
                          "\"creatures_base_difficulty\":%s}",
-                  flow_esc, flow_active ? "true" : "false", diff_field);
+                  flow_esc, flow_active ? "true" : "false", payload_field,
+                  diff_field);
         return;
     }
 
@@ -2731,11 +3108,12 @@ static void dispatch_get_state(HANDLE hPipe)
               "\"carbonium\":%llu,\"carbonium_max\":%lld,"
               "\"ironium\":%llu,\"ironium_max\":%lld,\"resources\":%s,"
               "\"mission_flow\":\"%s\",\"mission_flow_active\":%s,"
+              "\"mission_flow_payload\":%s,"
               "\"creatures_base_difficulty\":%s}",
               (unsigned long long)carbonium, (long long)carbonium_max,
               (unsigned long long)ironium, (long long)ironium_max,
               resources, flow_esc, flow_active ? "true" : "false",
-              diff_field);
+              payload_field, diff_field);
 }
 
 
@@ -2933,6 +3311,7 @@ static void handle_line(HANDLE hPipe, const char *line)
     if (strcmp(cmd, "activate_mission_flow") == 0) {
         char logic[256] = "";
         char mode[64] = "default";
+        char spawn[128] = "";
         if (!json_get_string(line, "logic", logic, sizeof(logic)) ||
             !logic[0]) {
             send_line(hPipe, "{\"event\":\"activate_mission_flow_result\","
@@ -2940,7 +3319,9 @@ static void handle_line(HANDLE hPipe, const char *line)
             return;
         }
         json_get_string(line, "mode", mode, sizeof(mode));
-        dispatch_activate_mission_flow(hPipe, logic, mode);
+        /* #386: optionaler spawn_point -> Database-Payload. */
+        json_get_string(line, "spawn_point", spawn, sizeof(spawn));
+        dispatch_activate_mission_flow(hPipe, logic, mode, spawn);
         return;
     }
 

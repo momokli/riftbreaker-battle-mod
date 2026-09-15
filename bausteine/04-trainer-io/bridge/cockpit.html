@@ -126,6 +126,8 @@
                 <span id="mission_flow" class="val">—</span>
                 <span class="dim">active</span>
                 <span id="mission_flow_active" class="val">—</span>
+                <span class="dim">payload.spawn_point</span>
+                <span id="mission_flow_spawn" class="val">—</span>
             </div>
             <div class="row">
                 <input
@@ -139,6 +141,12 @@
                     value="default"
                     readonly
                     title="fest auf 'default' (#447): jeder andere Modus killt die DLL-Pipe"
+                />
+                <input
+                    id="flow_spawn"
+                    size="14"
+                    placeholder="spawn_point (#386)"
+                    title="optionaler Exor::Database-Payload (SetString \"spawn_point\")"
                 />
                 <button id="flow_start">start wave</button>
             </div>
@@ -199,6 +207,11 @@
                             s.mission_flow_active === undefined
                                 ? "—"
                                 : String(s.mission_flow_active);
+                        var mfp = s.mission_flow_payload;
+                        $("mission_flow_spawn").textContent = mfp &&
+                            mfp.spawn_point !== undefined
+                                ? String(mfp.spawn_point)
+                                : "—";
                         $("creatures_base_difficulty").textContent =
                             s.creatures_base_difficulty === undefined ||
                             s.creatures_base_difficulty === null
@@ -247,6 +260,9 @@
                             // erwartet das so (eigenes Lua sendet nichts
                             // anderes); ein Freitext-Wert killte die Pipe.
                             mode: "default",
+                            // #386: optionaler Database-Payload. Leer = kein
+                            // Payload (Alt-Verhalten, data=NULL).
+                            spawn_point: $("flow_spawn").value,
                         });
                         $("out").textContent = r && r.ok ? "" : JSON.stringify(r);
                         refresh();

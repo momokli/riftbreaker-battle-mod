@@ -57,6 +57,10 @@ static void check(int cond, const char *msg)
 #define DDEC_SIG_OFF 0x11E0 /* CampaignService difficulty-Dec-Signatur  */
 #define ACT_SIG_OFF 0x1300 /* ActivateMissionFlow-Signatur in .text   */
 #define DEACT_SIG_OFF 0x1340 /* DeactivateMissionFlow-Signatur (#389)  */
+#define DBSS_SIG_OFF 0x1240 /* Database::SetString-Signatur (#386)     */
+#define DBGS_SIG_OFF 0x1260 /* Database::GetString-Signatur (#386)     */
+#define DBCTOR_OFF   0x1280 /* Database::Database()-Prolog (#386)      */
+#define NEWDB_OFF    0x12A0 /* `new Database`-Call-Site (#386)         */
 #define NAME_OFF    0x1400 /* RTTI-Namensstring                       */
 #define COL_OFF     0x1500 /* CompleteObjectLocator                   */
 #define VFT_REF_OFF 0x15F8 /* QWORD == base+COL_OFF (vftable-8)       */
@@ -116,6 +120,25 @@ static unsigned char *build_image(int with_sig, int with_rtti, int valid_col,
                sizeof(RBBRIDGE_ACTIVATE_SIG));
         memcpy(img + DEACT_SIG_OFF, RBBRIDGE_DEACTIVATE_SIG,
                sizeof(RBBRIDGE_DEACTIVATE_SIG));
+        /* #386: Database-Payload-Anker (SetString/GetString-Prolog + die
+         * `new 0x60`-Call-Site, deren zweiter E8 auf den Ctor-Prolog zeigt). */
+        memcpy(img + DBSS_SIG_OFF, RBBRIDGE_DB_SETSTRING_SIG,
+               sizeof(RBBRIDGE_DB_SETSTRING_SIG));
+        memcpy(img + DBGS_SIG_OFF, RBBRIDGE_DB_GETSTRING_SIG,
+               sizeof(RBBRIDGE_DB_GETSTRING_SIG));
+        memcpy(img + DBCTOR_OFF, RBBRIDGE_DB_CTOR_SIG,
+               sizeof(RBBRIDGE_DB_CTOR_SIG));
+        memcpy(img + NEWDB_OFF, RBBRIDGE_NEWDB_SITE_SIG,
+               sizeof(RBBRIDGE_NEWDB_SITE_SIG));
+        {
+            unsigned char *cs = img + NEWDB_OFF + 0x20;
+            int32_t rel;
+            memcpy(cs, RBBRIDGE_NEWDB_CALL_SIG,
+                   sizeof(RBBRIDGE_NEWDB_CALL_SIG));
+            /* Ziel = e8 + 5 + rel32; e8 = cs+3 -> Basis cs+8. */
+            rel = (int32_t)((img + DBCTOR_OFF) - (cs + 8));
+            memcpy(cs + 4, &rel, sizeof(rel));
+        }
     }
 
     if (with_rtti) {
@@ -597,6 +620,53 @@ int main(void)
           "mission_flow_mode_ok: \"Default\" -> abgelehnt (case-sensitiv)");
     check(mission_flow_mode_ok("default ") == 0,
           "mission_flow_mode_ok: \"default \" -> abgelehnt (kein Trim)");
+
+    /* -------------------------------------------------------------- */
+    /* #386: Database-Payload-Resolver + Builder (AOB, kein Lua)        */
+    /* -------------------------------------------------------------- */
+    /* Frisches Image: das Haupt-`img` ist an dieser Stelle nicht mehr
+     * garantiert in einer lesbaren Region (die frueheren Tests haben den
+     * Scan-Puffer weiterverwendet). */
+    {
+        unsigned char *imgdb = build_image(1, 1, 1, 1, 1);
+        ht_set_module(imgdb, IMG_SIZE);
+        check(resolve_db_setstring_fn(imgdb, IMG_SIZE) == imgdb + DBSS_SIG_OFF,
+              "resolve_db_setstring_fn: findet SetString-Signatur");
+        check(resolve_db_getstring_fn(imgdb, IMG_SIZE) == imgdb + DBGS_SIG_OFF,
+              "resolve_db_getstring_fn: findet GetString-Signatur");
+        check(resolve_db_ctor_fn(imgdb, IMG_SIZE) == imgdb + DBCTOR_OFF,
+              "resolve_db_ctor_fn: new-0x60-Anker -> Ctor-Prolog");
+        free(imgdb);
+    }
+
+    /* Negativfaelle: ohne Signatur/Site -> NULL (kein Aufruf). */
+    {
+        unsigned char *img2 = build_image(0, 0, 0, 0, 0);
+        ht_set_module(img2, IMG_SIZE);
+        check(resolve_db_setstring_fn(img2, IMG_SIZE) == NULL,
+              "resolve_db_setstring_fn: ohne Signatur -> NULL");
+        check(resolve_db_getstring_fn(img2, IMG_SIZE) == NULL,
+              "resolve_db_getstring_fn: ohne Signatur -> NULL");
+        check(resolve_db_ctor_fn(img2, IMG_SIZE) == NULL,
+              "resolve_db_ctor_fn: ohne Site -> NULL");
+        free(img2);
+    }
+
+    /* build_database_payload / database_get_string liegen bewusst im
+     * Nicht-Host-Block (sie rufen Spiel-Ctor/SetString/GetString); ihre
+     * NULL-Guards sind dort Compile-Zeit-konstant. Der Host-Test deckt den
+     * AOB-Auflösungspfad ab (oben) - der Builder-Aufruf selbst braucht das
+     * echte Modul (Live-Test planet). */
+
+    /* copy_cstr: harte Schranke, immer NUL-terminiert. */
+    {
+        char buf[8];
+        copy_cstr(buf, sizeof(buf), "abcdefghij");
+        check(strcmp(buf, "abcdefg") == 0,
+              "copy_cstr: kuerzt auf n-1 + NUL");
+        copy_cstr(buf, sizeof(buf), NULL);
+        check(buf[0] == '\0', "copy_cstr: NULL -> leerer String");
+    }
 
     free(img);
 

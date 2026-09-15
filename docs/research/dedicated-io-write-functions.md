@@ -169,10 +169,12 @@ documented fallback / for resolving `MissionSystem` (which is NOT a Lua singleto
    `LuaEntityObject::CreateStateMachine` (`0x1B3AE50`) by elimination (no
    `LuaGraphNode::CreateStateMachine` symbol exists), but the exact base-class
    inheritance (`LuaGraphNode -> LuaEntityObject`) was not RTTI-verified.
-5. **`self.data` (the `Exor::Database*` for `ActivateMissionFlow`)**: a pure C++
-   "start wave" also needs the dom-manager's `data` Database (and, for a timed
-   HUD wave, `data:SetFloat("time_max", …)`). Its C++ field offset on
-   `dom_mananger` is not yet mapped (today the Lua mod sets it on the game thread).
+5. **`self.data` (`Exor::Database*` fuer `ActivateMissionFlow`)**: seit #386
+   koennen wir das Payload-Objekt **selbst bauen** (`malloc(0x60)` + Default-Ctor
+   + `SetString`, AOB-aufgeloest) und als `data` durchreichen. Der konkrete
+   `data`-Feld-**Offset** auf `dom_mananger` bleibt ungemappt (nicht noetig:
+   wir bauen ein eigenes Objekt); `SetFloat("time_max", ...)` ist ebenfalls
+   noch nicht verdrahtet (siehe Punkt 6).
 6. **HUD "next wave in X" countdown** is the mission-flow `time_max` (set via
    `data:SetFloat("time_max", …)` in Lua) — a native `ActivateMissionFlow` without
    setting `time_max` spawns the wave but shows no HUD timer.
@@ -232,6 +234,44 @@ POST /get_state
 
 Kein Crash; die `no_account`-Antworten (`Welt laedt noch`) liefern die
 Mission-Flow-Felder mit (Read haengt nicht am Spieler-Account).
+
+## #386 — `Exor::Database*`-Payload (AOB, C++-only)
+
+Umgesetzt in `rbbridge.c` (kein Lua/Console): `activate_mission_flow` baut bei
+ gesetztem `spawn_point` ein eigenes `Exor::Database` (0x60 B, **kein**
+vftable) und reicht es als 4. Stack-Parameter (`data`, `[rsp+0x28]`) an
+`MissionService::ActivateMissionFlow` durch. Ohne `spawn_point` bleibt
+`data=NULL` (exakt #385-Verhalten).
+
+`Exor::Database`-Layout (Disasm, Build 2.0.58485): 0x60 B = 3x 0x20 Container;
+kein vftable. Methoden: Default-Ctor `0x2C6550`, `SetString(UtfString const&,
+UtfString const&)` `0x25956B0`, `GetString(UtfString const&)` -> `UtfString const&`
+`0x2591FD0`. Details + Klassen-Layout:
+`docs/research/database-object-re-findings.md`.
+
+**AOB-Signaturen** (planet 2026-09-15, `.text`-first; rel32 der E8-Calls per
+Maske entschaerft):
+
+| Signatur | Bytes | Treffer im `.text` |
+| --- | --- | --- |
+| `RBBRIDGE_DB_SETSTRING_SIG` | `4C 89 44 24 18 53 48 83 EC 30 49 8B D8 48 8B 42 18 48 83 C2 08 48 83 7A 18 0F` | 1 (`0x25956B0`) |
+| `RBBRIDGE_DB_GETSTRING_SIG` | `40 53 48 81 EC 80 00 00 00 48 8B DA E8 ?? ?? ?? ?? 48 85 C0 74 09 48 81 C4 80 00 00 00 5B C3` | 1 (`0x2591FD0`) |
+| `RBBRIDGE_DB_CTOR_SIG` | `48 89 5C 24 18 48 89 74 24 20 48 89 4C 24 08 57 48 83 EC 20 48 8B F9 E8 ?? ?? ?? ??` | **258** (nicht eindeutig!) |
+
+**Ctor-Anker statt Prolog-Scan:** der `Database::Database()`-Body ist
+byte-identisch mit `??0EntityStatComponent@Riftbreaker@@QEAA@XZ` u. a. Darum
+loest `resolve_db_ctor_fn` den Ctor ueber die `new 0x60`-Call-Site auf
+(`B9 60 00 00 00 E8 ..` … `48 8B C8 E8 <rel32>`), verlangt **genau ein**
+unterschiedliches Ziel und prueft es gegen den Prolog gegen; sonst `NULL`
+(kein Aufruf).
+
+**Read-Leg:** `get_state` liefert `mission_flow_payload{spawn_point}` aus dem
+geparkten Objekt via `Database::GetString`; bei Nicht-Fund faellt das Feld auf
+`null` bzw. den zuletzt gesetzten Wert zurueck — nie ein Crash.
+
+**Live-Status:** Der Aufruf laeuft (wie #385) im Pipe-Thread (`guarded
+Direktaufruf`); ob das Spiel den Payload sichtbar uebernimmt, ist nur mit
+Player pruefbar (offener Punkt).
 
 ## #388 — `CampaignService` Creatures-Base-Difficulty (Read + Write)
 
