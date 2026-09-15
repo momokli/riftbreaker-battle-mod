@@ -28,7 +28,11 @@ riftbreaker_server_port_udp: 6321
 # Stand (verifiziert 2026-09-11).
 riftbreaker_server_campaign: mp_survival/mp_survival
 riftbreaker_server_mission: survival/jungle
-riftbreaker_server_difficulty: coop_normal
+# "sandbox" = Blank-Slate/Free-Play (Issue #476): wave_strength "sandbox" ->
+# Vanilla-dom_mananger pausiert die Naturwellen (pauseAttacks), mission_infinite.
+# Beleg: scripts/difficulty/difficulties.difficulty (DifficultyDef "sandbox") +
+# dom_manager.lua:149/156. Zurueck auf "coop_normal" = Vanilla-Naturwellen an.
+riftbreaker_server_difficulty: sandbox
 
 # --- Tournament-Server (systemd, Rust/axum aus tournament/) ------------------
 tournament_install_dir: /opt/rbmods/tournament-server

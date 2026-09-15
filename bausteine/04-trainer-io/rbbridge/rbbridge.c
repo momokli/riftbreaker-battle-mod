@@ -1043,6 +1043,110 @@ static const unsigned char RBBRIDGE_DIFF_DEC_SIG[] = {
 
 #define RBBRIDGE_RVA_CAMPAIGNSERVICE_VFTABLE 0x2e9c340u /* ??_7CampaignService@Riftbreaker@@6B@ */
 
+/* ------------------------------------------------------------------ */
+/* #476: Vanilla-Naturwellen "aus" — DifficultyService-Schalter        */
+/*                                                                    */
+/* Der Dedi startet im Vanilla-Survival-Preset; `dom_mananger` (Lua)   */
+/* zieht den Naturwellen-Takt aus der Difficulty:                      */
+/*   self.pauseAttacks = DifficultyService:AreWavesDisabled()         */
+/*   + GetWaveStrength()=="sandbox" -> pauseAttacks = true            */
+/* Bei pauseAttacks=true laeuft der Spawner nur idle<->dummy_state und */
+/* ruft NIE PrepareWave/Streaming -> 0 Naturwellen (das ist "aus",     */
+/* kein Freeze).                                                       */
+/*                                                                    */
+/* Kette (Disasm Build 2.0.58485, planet 2026-09-15):                  */
+/*   DifficultyService (RTTI .?AVDifficultyService@Riftbreaker@@)      */
+/*     +0x08 = Exor::World*                                            */
+/*   World-System (TypeHash 0x221d7af2, Getter per AOB-Signatur) haelt:*/
+/*     +0x08  = difficulty name UtfString                              */
+/*     +0x118 = wave_strength UtfString                                */
+/*     +0x1B9 = mission_infinite bool                                  */
+/*     +0x1BA = waves_disabled bool  <- AreWavesDisabled() liefert das */
+/*                                                                    */
+/* Abgrenzung SetSuspended: LuaGraphNode::SetSuspended(bool) ist         */
+/* `mov byte [rcx+0xF1],dl; ret` (RVA 0x1BA6CB0) und LuaGraphNode::     */
+/* Update kehrt bei [this+0xF1]!=0 SOFORT zurueck -> das ist EINFRIEREN */
+/* (Pause), nicht "aus". Deshalb steuert dieses Primitiv den echten      */
+/* Difficulty-Schalter (AreWavesDisabled).                             */
+/*                                                                    */
+/* #476-RE: DifficultyDef "sandbox" in scripts/difficulty/             */
+/* difficulties.difficulty setzt wave_strength "sandbox" +             */
+/* mission_infinite 1 -> `set difficulty "sandbox"` ist der deklarative */
+/* Boot-Schalter (deploy/roles/riftbreaker-server config.cfg.j2).       */
+/*                                                                    */
+/* Thread-Modell (#378): native Reads/Writes, KEIN lua_* — laeuft auf   */
+/* dem Pipe-Thread. Der System-Getter ist ein reiner Lookup.            */
+/* Alle Adressen per AOB/RTTI, KEINE feste Adresse.                     */
+/* Steht AUSSERHALB des #ifndef-RBBRIDGE_HOSTTEST-Blocks, damit der     */
+/* Host-Test Signatur + op-Parser direkt pruefen kann.                  */
+/* ------------------------------------------------------------------ */
+
+/* MSVC-RTTI-Name der DifficultyService-Klasse (mit NUL-Terminator). */
+static const char RBBRIDGE_DIFFSVC_RTTI[] = ".?AVDifficultyService@Riftbreaker@@";
+
+/* Feld-Offsets im World-System-Objekt (aus dem Disasm, Build 2.0.58485). */
+#define RBBRIDGE_DIFFSYS_OFF_NAME          0x08u   /* UtfString          */
+#define RBBRIDGE_DIFFSYS_OFF_WAVESTRENGTH  0x118u  /* UtfString          */
+#define RBBRIDGE_DIFFSYS_OFF_INFINITE      0x1B9u  /* bool               */
+#define RBBRIDGE_DIFFSYS_OFF_WAVESDISABLED 0x1BAu  /* bool (der Schalter)*/
+
+/* Byte-Signatur des World-System-Getters (RVA 0xC5F4A0 = reine Notiz):
+ *   48 83 EC 48            sub  rsp,0x48
+ *   48 81 C1 C0 00 00 00   add  rcx,0xC0
+ *   48 8D 54 24 20         lea  rdx,[rsp+0x20]
+ *   41 B8 F2 7A 1D 22      mov  r8d,0x221d7af2    ; TypeHash (build-stabil)
+ *   E8 ..                  call <lookup>           (rel32 maskiert)
+ * Nur die rel32-Bytes des E8 sind Wildcards; der Opcode bleibt Pflicht. */
+static const unsigned char RBBRIDGE_DIFFSYS_GET_SIG[] = {
+    0x48, 0x83, 0xEC, 0x48,
+    0x48, 0x81, 0xC1, 0xC0, 0x00, 0x00, 0x00,
+    0x48, 0x8D, 0x54, 0x24, 0x20,
+    0x41, 0xB8, 0xF2, 0x7A, 0x1D, 0x22,
+    0xE8, 0xFF, 0xFF, 0xFF, 0xFF
+};
+static const unsigned char RBBRIDGE_DIFFSYS_GET_SIG_MASK[] = {
+    0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0x00, 0x00, 0x00, 0x00
+};
+
+/* ops des natural_waves-Kommandos. 0=status, 1=off, 2=on, -1=ungueltig.
+ * Steht ausserhalb des Hosttest-Guards -> direkt host-testbar. */
+static int natural_waves_op(const char *op)
+{
+    if (!op || op[0] == '\0' || strcmp(op, "status") == 0)
+        return 0; /* Default = status */
+    if (strcmp(op, "off") == 0)
+        return 1;
+    if (strcmp(op, "on") == 0)
+        return 2;
+    return -1;
+}
+
+/* Selbstkonsistenz der Signatur (Laenge == Maske, Wildcard nur am E8-rel32),
+ * damit ein versehentlicher Edit nicht still eine zu lockere Signatur baut. */
+static int diffsys_sig_selfcheck(void)
+{
+    size_t n = sizeof(RBBRIDGE_DIFFSYS_GET_SIG);
+    if (n != sizeof(RBBRIDGE_DIFFSYS_GET_SIG_MASK))
+        return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char m = RBBRIDGE_DIFFSYS_GET_SIG_MASK[i];
+        int rel32 = (i >= 23 && i <= 26);
+        if (rel32) {
+            if (m != 0x00)
+                return 0;
+        } else if (m != 0xFF) {
+            return 0;
+        }
+    }
+    /* E8-Opcode der CALL-Anweisung muss exakt bleiben. */
+    return RBBRIDGE_DIFFSYS_GET_SIG[22] == 0xE8 &&
+           RBBRIDGE_DIFFSYS_GET_SIG_MASK[22] == 0xFF;
+}
+
 /* Zerlegt den Funktionskoerper einer der vier Tiny-Difficulty-Funktionen in
  * die beiden Layout-Offsets:
  *   48 8B 41 <disp8>                mov   rax,[rcx+disp8]   ; this_deref
@@ -2942,6 +3046,252 @@ static void dispatch_deactivate_mission_flow(HANDLE hPipe, const char *flow)
               esc);
 }
 
+/* ------------------------------------------------------------------ */
+/* #476: natural_waves (Read+Write) — DifficultyService-Schalter        */
+/* ------------------------------------------------------------------ */
+
+/* Byte lesen/schreiben, nur in committed+lesbarer Region (kein Crash auf
+ * Fremdspeicher). Analog zu safe_read_u32/safe_write_f32. */
+static int safe_read_u8(const void *addr, unsigned char *out)
+{
+    MEMORY_BASIC_INFORMATION mi;
+    if (!addr || !out)
+        return 0;
+    if (!VirtualQuery(addr, &mi, sizeof(mi)))
+        return 0;
+    if (!is_readable_region(&mi))
+        return 0;
+    if ((uintptr_t)addr + 1 > (uintptr_t)mi.BaseAddress + mi.RegionSize)
+        return 0;
+    memcpy(out, addr, 1);
+    return 1;
+}
+
+static int safe_write_u8(void *addr, unsigned char v)
+{
+    MEMORY_BASIC_INFORMATION mi;
+    DWORD old_protect = 0;
+    DWORD ignored = 0;
+    if (!addr)
+        return 0;
+    if (!VirtualQuery(addr, &mi, sizeof(mi)))
+        return 0;
+    if (!is_readable_region(&mi))
+        return 0;
+    if ((uintptr_t)addr + 1 > (uintptr_t)mi.BaseAddress + mi.RegionSize)
+        return 0;
+    if (!VirtualProtect(addr, 1, PAGE_READWRITE, &old_protect))
+        return 0;
+    memcpy(addr, &v, 1);
+    if (!VirtualProtect(addr, 1, old_protect, &ignored))
+        return 0;
+    return 1;
+}
+
+/* Findet eine Klasse-vftable per RTTI-Walk (MSVC RTTI). Identische Technik
+ * wie resolve_console_vftable, aber mit uebergebenem Klassennamen. */
+static const unsigned char *resolve_rtti_vftable(const unsigned char *base,
+                                                 size_t size,
+                                                 const char *rtti_name)
+{
+    const unsigned char *name;
+    const unsigned char *td;
+    const unsigned char *p;
+    uint32_t td_rva;
+
+    if (!base || !size || !rtti_name)
+        return NULL;
+    name = scan_bytes(base, size, (const unsigned char *)rtti_name,
+                      strlen(rtti_name) + 1);
+    if (!name)
+        return NULL;
+    td = name - 0x10; /* TypeDescriptor-Beginn */
+    td_rva = (uint32_t)(uintptr_t)(td - base);
+
+    p = base;
+    for (;;) {
+        const unsigned char *hit = scan_u32(p, (size_t)((base + size) - p),
+                                             td_rva);
+        if (!hit)
+            break;
+        const unsigned char *col = hit - 0xC;
+        uint32_t col_rva = (uint32_t)(uintptr_t)(col - base);
+        uint32_t sig = 0, pself = 0;
+        memcpy(&sig, col, sizeof(sig));
+        memcpy(&pself, col + 0x14, sizeof(pself));
+        if (sig == 1 && pself == col_rva) {
+            const unsigned char *ref = scan_u64(
+                base, size, (uint64_t)(uintptr_t)(base + col_rva));
+            if (!ref)
+                return NULL;
+            return ref + 8;
+        }
+        p = hit + 1;
+    }
+    return NULL;
+}
+
+typedef void *(__fastcall *diffsys_get_fn)(void *world);
+
+/* Loest die Kette DifficultyService -> World -> System-Objekt auf. Alles
+ * per RTTI/AOB; der Getter wird als reiner Lookup aufgerufen (native Read,
+ * thread-agnostisch, KEIN lua_*). Rueckgabe 1 = auflösbar. */
+static RBBRIDGE_NOINLINE int resolve_diffsys(const unsigned char *base,
+                                             size_t size,
+                                             void **out_inner)
+{
+    const unsigned char *vt;
+    const unsigned char *fn;
+    unsigned char *svc;
+    uint64_t world = 0;
+    void *inner;
+
+    if (out_inner)
+        *out_inner = NULL;
+    if (!diffsys_sig_selfcheck())
+        return 0; /* Signatur/Maske inkonsistent -> nicht scannen */
+    vt = resolve_rtti_vftable(base, size, RBBRIDGE_DIFFSVC_RTTI);
+    if (!vt)
+        return 0;
+    svc = scan_qword_instance((uint64_t)(uintptr_t)vt);
+    if (!svc)
+        return 0;
+    if (!safe_read_u64(svc + 8, &world) || !world)
+        return 0;
+    fn = scan_bytes_mask(base, size, RBBRIDGE_DIFFSYS_GET_SIG,
+                         RBBRIDGE_DIFFSYS_GET_SIG_MASK,
+                         sizeof(RBBRIDGE_DIFFSYS_GET_SIG));
+    if (!fn)
+        return 0;
+    inner = ((diffsys_get_fn)(uintptr_t)fn)((void *)(uintptr_t)world);
+    if (!inner)
+        return 0;
+    if (out_inner)
+        *out_inner = inner;
+    return 1;
+}
+
+/* Liest den Wellen-Schalter-Zustand (graceful: 0 = nicht auflösbar). */
+static int natural_waves_read(const unsigned char *base, size_t size,
+                              int *out_disabled, int *out_infinite,
+                              char *strength, size_t sn,
+                              char *dname, size_t dn)
+{
+    void *inner = NULL;
+    unsigned char b = 0;
+
+    if (!resolve_diffsys(base, size, &inner) || !inner)
+        return 0;
+    if (out_disabled) {
+        if (!safe_read_u8((unsigned char *)inner +
+                          RBBRIDGE_DIFFSYS_OFF_WAVESDISABLED, &b))
+            return 0;
+        *out_disabled = b ? 1 : 0;
+    }
+    if (out_infinite) {
+        if (!safe_read_u8((unsigned char *)inner +
+                          RBBRIDGE_DIFFSYS_OFF_INFINITE, &b))
+            return 0;
+        *out_infinite = b ? 1 : 0;
+    }
+    if (strength && sn)
+        utfstring_to_cstr((const unsigned char *)inner +
+                          RBBRIDGE_DIFFSYS_OFF_WAVESTRENGTH, strength, sn);
+    if (dname && dn)
+        utfstring_to_cstr((const unsigned char *)inner +
+                          RBBRIDGE_DIFFSYS_OFF_NAME, dname, dn);
+    return 1;
+}
+
+/* Schreibt den Schalter, den AreWavesDisabled() liest (natives Flag).
+ * 1 = geschrieben. */
+static RBBRIDGE_NOINLINE int natural_waves_write(const unsigned char *base,
+                                                 size_t size, int disabled)
+{
+    void *inner = NULL;
+    if (!resolve_diffsys(base, size, &inner) || !inner)
+        return 0;
+    return safe_write_u8((unsigned char *)inner +
+                         RBBRIDGE_DIFFSYS_OFF_WAVESDISABLED,
+                         (unsigned char)(disabled ? 1 : 0));
+}
+
+/*
+ * natural_waves: op = status|off|on. Native Reads/Writes ueber die
+ * DifficultyService (KEIN Lua/Console); Thread-agnostisch (#378).
+ * Events:
+ *   {"event":"natural_waves_result","ok":true,"op":"status",
+ *    "waves_disabled":true,"wave_strength":"sandbox",
+ *    "mission_infinite":true,"difficulty":"sandbox"}
+ *   {"event":"natural_waves_result","ok":false,"reason":"..."}
+ * Graceful: fehlt Modul/RTTI/Getter/Instanz -> ok:false, es wird NICHTS
+ * geschrieben.
+ */
+static RBBRIDGE_NOINLINE void dispatch_natural_waves(HANDLE hPipe,
+                                                     const char *op)
+{
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    const char *via = NULL;
+    const unsigned char *execfn = NULL;
+    int o = natural_waves_op(op);
+    int disabled = -1, infinite = -1, before = -1;
+    char strength[64] = "";
+    char dname[64] = "";
+    char esc_s[128];
+    char esc_d[128];
+
+    if (o < 0) {
+        send_line(hPipe, "{\"event\":\"natural_waves_result\","
+                         "\"ok\":false,\"reason\":\"unknown_op\"}");
+        return;
+    }
+    if (!resolve_module(&base, &size, &via, &execfn)) {
+        send_line(hPipe, "{\"event\":\"natural_waves_result\","
+                         "\"ok\":false,\"reason\":\"no_module\"}");
+        return;
+    }
+
+    /* Vorher-Zustand lesen (fuer den Bericht; auch bei op=off/on). */
+    natural_waves_read(base, size, &before, NULL, NULL, 0, NULL, 0);
+
+    if (o == 1 || o == 2) { /* off / on */
+        if (!natural_waves_write(base, size, o == 1)) {
+            dbg("natural_waves: Schalter nicht aufloesbar (RTTI/AOB/Instanz)");
+            send_line(hPipe,
+                      "{\"event\":\"natural_waves_result\","
+                      "\"ok\":false,\"reason\":\"not_resolvable\"}");
+            return;
+        }
+    }
+
+    if (!natural_waves_read(base, size, &disabled, &infinite,
+                            strength, sizeof(strength),
+                            dname, sizeof(dname))) {
+        send_line(hPipe,
+                  "{\"event\":\"natural_waves_result\","
+                  "\"ok\":false,\"reason\":\"not_resolvable\"}");
+        return;
+    }
+
+    json_escape_into(strength, esc_s, sizeof(esc_s));
+    json_escape_into(dname, esc_d, sizeof(esc_d));
+    dbg("natural_waves: op='%s' before=%d disabled=%d infinite=%d "
+        "strength='%s' difficulty='%s'",
+        op ? op : "status", before, disabled, infinite, strength, dname);
+
+    send_line(hPipe,
+              "{\"event\":\"natural_waves_result\",\"ok\":true,"
+              "\"op\":\"%s\",\"waves_disabled\":%s,"
+              "\"wave_strength\":\"%s\",\"mission_infinite\":%s,"
+              "\"difficulty\":\"%s\"}",
+              op && op[0] ? op : "status",
+              disabled ? "true" : "false",
+              esc_s,
+              infinite ? "true" : "false",
+              esc_d);
+}
+
 static void dispatch_get_state(HANDLE hPipe)
 {
     const unsigned char *base = NULL;
@@ -3357,6 +3707,16 @@ static void handle_line(HANDLE hPipe, const char *line)
             return;
         }
         dispatch_creatures_difficulty(hPipe, op, strtod(value, NULL));
+        return;
+    }
+
+    /* natural_waves (Read/Write #476): steuert den Vanilla-Naturwellen-
+     * Schalter (DifficultyService::AreWavesDisabled, natives C++-Flag).
+     * `op` = status|off|on (Default status). */
+    if (strcmp(cmd, "natural_waves") == 0) {
+        char op[32] = "status";
+        json_get_string(line, "op", op, sizeof(op));
+        dispatch_natural_waves(hPipe, op);
         return;
     }
 

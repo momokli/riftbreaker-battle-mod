@@ -668,6 +668,54 @@ int main(void)
         check(buf[0] == '\0', "copy_cstr: NULL -> leerer String");
     }
 
+    /* -------------------------------------------------------------- */
+    /* natural_waves (#476): op-Parser + Signatur-Selbstkontrolle      */
+    /* -------------------------------------------------------------- */
+    {
+        check(natural_waves_op("status") == 0 &&
+                  natural_waves_op("") == 0 &&
+                  natural_waves_op(NULL) == 0,
+              "natural_waves_op: status/leer/NULL -> 0");
+        check(natural_waves_op("off") == 1,
+              "natural_waves_op: off -> 1");
+        check(natural_waves_op("on") == 2,
+              "natural_waves_op: on -> 2");
+        check(natural_waves_op("pause") == -1 &&
+                  natural_waves_op("suspend") == -1 &&
+                  natural_waves_op("OFF") == -1,
+              "natural_waves_op: unbekannt/Grossschreibung -> -1");
+
+        check(diffsys_sig_selfcheck() == 1,
+              "diffsys_sig_selfcheck: Laenge/Maske/Wildcards konsistent");
+
+        /* Aenderung an einem FESTEN Byte -> kein Treffer mehr. */
+        {
+            unsigned char body[sizeof(RBBRIDGE_DIFFSYS_GET_SIG)];
+            memcpy(body, RBBRIDGE_DIFFSYS_GET_SIG, sizeof(body));
+            body[17] = 0x00; /* TypeHash-Byte veraendert */
+            check(!sig_matches(body, RBBRIDGE_DIFFSYS_GET_SIG,
+                               RBBRIDGE_DIFFSYS_GET_SIG_MASK,
+                               sizeof(body)),
+                  "natural_waves-Sig: festes Byte geaendert -> kein Treffer");
+
+            /* Aenderung am E8-rel32-Wildcard -> Treffer bleibt. */
+            memcpy(body, RBBRIDGE_DIFFSYS_GET_SIG, sizeof(body));
+            body[24] = 0xAA;
+            check(sig_matches(body, RBBRIDGE_DIFFSYS_GET_SIG,
+                              RBBRIDGE_DIFFSYS_GET_SIG_MASK,
+                              sizeof(body)),
+                  "natural_waves-Sig: rel32-Wildcard toleriert");
+
+            /* E8-Opcode selbst ist Pflicht. */
+            memcpy(body, RBBRIDGE_DIFFSYS_GET_SIG, sizeof(body));
+            body[22] = 0x90;
+            check(!sig_matches(body, RBBRIDGE_DIFFSYS_GET_SIG,
+                               RBBRIDGE_DIFFSYS_GET_SIG_MASK,
+                               sizeof(body)),
+                  "natural_waves-Sig: E8-Opcode Pflicht -> kein Treffer");
+        }
+    }
+
     free(img);
 
     printf("HOSTTEST_PASS=%d HOSTTEST_FAIL=%d\n", g_pass, g_fail);

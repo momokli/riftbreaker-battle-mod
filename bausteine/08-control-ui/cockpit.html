@@ -636,6 +636,28 @@
                             </div>
                         </div>
                     </fieldset>
+
+                    <!-- D. NATURAL WAVES (VANILLA) -->
+                    <fieldset class="q-groupbox" id="panel-waves">
+                        <legend>Natural Waves (Vanilla)</legend>
+                        <div class="flow-container">
+                            <div class="flow-readouts">
+                                <div class="flow-prop">
+                                    <span class="prop-label">waves</span>
+                                    <span id="natural_waves_state" class="prop-val">—</span>
+                                </div>
+                                <div class="flow-prop">
+                                    <span class="prop-label">strength</span>
+                                    <span id="natural_waves_strength" class="prop-val">—</span>
+                                </div>
+                            </div>
+                            <div class="flow-action-row">
+                                <button id="nw_off" aria-label="Turn vanilla natural waves off">off</button>
+                                <button id="nw_on" aria-label="Turn vanilla natural waves on">on</button>
+                                <button id="nw_status" aria-label="Refresh natural waves status">status</button>
+                            </div>
+                        </div>
+                    </fieldset>
                 </div>
 
                 <div class="right-col">
@@ -837,6 +859,33 @@
                 };
                 $("cbd_dec").onclick = function () {
                     creaturesDifficulty("decrease");
+                };
+
+                async function naturalWaves(op) {
+                    try {
+                        var r = await post("natural_waves", { op: op });
+                        if (r && r.ok) {
+                            $("natural_waves_state").textContent =
+                                r.waves_disabled ? "off" : "on";
+                            $("natural_waves_strength").textContent =
+                                r.wave_strength || "—";
+                            $("out").textContent = "";
+                        } else {
+                            $("out").textContent = JSON.stringify(r);
+                        }
+                    } catch (e) {
+                        $("out").textContent = "ERR " + e.message;
+                    }
+                }
+
+                $("nw_off").onclick = function () {
+                    naturalWaves("off");
+                };
+                $("nw_on").onclick = function () {
+                    naturalWaves("on");
+                };
+                $("nw_status").onclick = function () {
+                    naturalWaves("status");
                 };
 
                 refresh();
