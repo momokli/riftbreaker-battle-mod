@@ -118,36 +118,6 @@ services:
       - --world
       - "{{ riftbreaker_referee_egress_world }}"
 
-  # Buy-Order-Bridge (PoC #518): tailt denselben Lua-Log (ro) und postet
-  # `event=buy_order` an POST /buy_order des Tournament-Servers.
-  {{ riftbreaker_buy_order_bridge_container }}:
-    image: "{{ riftbreaker_buy_order_bridge_image }}"
-    container_name: {{ riftbreaker_buy_order_bridge_container }}
-    restart: unless-stopped
-    depends_on:
-      - {{ riftbreaker_server_container }}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    labels:
-      RBB_ENV: "{{ rift_env }}"
-      RBB_REF: "{{ rift_deploy_ref }}"
-    environment:
-      # Deploy-Identitaet (Issue #483, US4): je Start-Logzeile mitgeschrieben.
-      RBB_ENV: "{{ rift_env }}"
-      RBB_REF: "{{ rift_deploy_ref }}"
-    volumes:
-      # Quelle: derselbe Wine-Prefix wie der Server (nur lesend).
-      - "{{ riftbreaker_wine_volume }}:/data/.wine:ro"
-      - "{{ riftbreaker_buy_order_bridge_script }}:/app/buy_order_bridge.py:ro"
-    command:
-      - python3
-      - -u
-      - /app/buy_order_bridge.py
-      - --wine-prefix
-      - /data/.wine
-      - --url
-      - "{{ riftbreaker_buy_order_bridge_server }}"
-
 volumes:
   {{ riftbreaker_wine_volume }}:
   {{ riftbreaker_saves_volume }}:

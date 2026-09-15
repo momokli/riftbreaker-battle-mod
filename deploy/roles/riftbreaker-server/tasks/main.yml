@@ -118,15 +118,6 @@
   when: (not ansible_check_mode) or (riftbreaker_write_dirs_ready | bool)
   notify: restart riftbreaker-server
 
-- name: "Buy-Order-Bridge-Script bereitstellen (PoC #518)"
-  copy:
-    src: "{{ riftbreaker_buy_order_bridge_script_src }}"
-    dest: "{{ riftbreaker_buy_order_bridge_script }}"
-    remote_src: true
-    mode: "0644"
-  when: (not ansible_check_mode) or (riftbreaker_write_dirs_ready | bool)
-  notify: restart riftbreaker-server
-
 - name: config.cfg rendern (Passwort aus Vault, 0644 fuer steamuser-lesbar)
   template:
     src: config.cfg.j2
@@ -367,7 +358,7 @@
       # `--include`: nur die Mod-Manifeste lesen, sonst würden README/Docs mit
       # `version "…"`-Zeilen mitgelesen. Ein einzelner Befehl, keine Pipe.
       command:
-        cmd: 'grep -rhoE --include=''*.manifest'' ''^[[:space:]]*version[[:space:]]*"[^"]+"'' {{ riftbreaker_mod_dir }}'
+        cmd: "grep -rhoE --include='*.manifest' '^[[:space:]]*version[[:space:]]*\"[^\"]+\"' {{ riftbreaker_mod_dir }}"
       register: rbbattle_deploy_manifest_version_raw
       changed_when: false
       failed_when: false
@@ -375,7 +366,7 @@
 
     - name: "Verifikation — RBB.version im deployten Lua lesen"
       command:
-        cmd: 'grep -rhoE --include=''*.lua'' ''RBB[.]version[[:space:]]*=[[:space:]]*"[^"]+"'' {{ riftbreaker_mod_dir }}'
+        cmd: "grep -rhoE --include='*.lua' 'RBB[.]version[[:space:]]*=[[:space:]]*\"[^\"]+\"' {{ riftbreaker_mod_dir }}"
       register: rbbattle_deploy_lua_version_raw
       changed_when: false
       failed_when: false

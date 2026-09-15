@@ -108,17 +108,6 @@ riftbreaker_referee_egress_script_src: "{{ playbook_dir }}/../tools/referee-egre
 riftbreaker_referee_egress_server: "http://host.docker.internal:{{ tournament_port | default(8081) }}"
 riftbreaker_referee_egress_world: A
 
-# --- Buy-Order-Bridge (PoC #518) --------------------------------------------
-# Tailt denselben Lua-Log im Wine-Volume (read-only) und postet
-# `event=buy_order` an POST /buy_order des Tournament-Servers (reine Queue,
-# keine autoritative Wirkung). Analog referee-egress, eigener Sidecar.
-riftbreaker_buy_order_bridge_container: riftbreaker-buy-order-bridge
-# Standard-Python-Image (stdlib-only Feeder) — kein eigenes Image-Build noetig.
-riftbreaker_buy_order_bridge_image: "python:3.12-slim"
-riftbreaker_buy_order_bridge_script: "{{ riftbreaker_deploy_dir }}/buy_order_bridge.py"
-riftbreaker_buy_order_bridge_script_src: "{{ playbook_dir }}/../tools/buy-order-bridge/buy_order_bridge.py"
-riftbreaker_buy_order_bridge_server: "http://host.docker.internal:{{ tournament_port | default(8081) }}"
-
 # --- Disk-Space-Gate (Issue #310) --------------------------------------------
 # Mindest-freier Platz auf {{ riftbreaker_disk_mount }} VOR Image-Build und
 # Mod-Backup-Tarball. Der Preflight (tasks/disk-preflight.yml) wird aus den
