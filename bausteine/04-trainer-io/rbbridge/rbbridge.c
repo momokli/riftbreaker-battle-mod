@@ -456,6 +456,20 @@ static const char *resource_internal_name(const char *display)
     return "carbonium";
 }
 
+/* Prueft den `mode`-Parameter von activate_mission_flow. Das Spiel erwartet
+ * als 3. Argument IMMER "default" (genau das uebergibt die spieleigene Lua);
+ * ein anderer Wert (z. B. "hard") hat auf dem Dev-Server die DLL-Pipe
+ * dauerhaft gekillt (#447). Leer/fehlend -> "default" (Backward-Compat: alte
+ * Clients senden kein `mode`-Feld). Reine Funktion ohne Spielprozess ->
+ * host-testbar (tests/rbbridge-hosttest, analog resource_internal_name).
+ * Rueckgabe: 1 = erlaubt ("default" oder leer), 0 = ablehnen. */
+static int mission_flow_mode_ok(const char *mode)
+{
+    if (!mode || !mode[0])
+        return 1;
+    return strcmp(mode, "default") == 0;
+}
+
 #ifndef RBBRIDGE_HOSTTEST
 /* Datei-Log: 1 = %TEMP%\rbbridge.log mitschreiben (Default an; abschalten
  * mit Umgebungsvariable RBBRIDGE_LOG=0). DebugView geht immer. */
@@ -1975,6 +1989,16 @@ static void dispatch_activate_mission_flow(HANDLE hPipe, const char *logic,
         return;
     }
 
+    /* #447: nur "default" ans Spiel reichen — ein anderer Modus killt die
+     * DLL-Pipe dauerhaft (siehe mission_flow_mode_ok). */
+    if (!mission_flow_mode_ok(mode)) {
+        dbg("activate_mission_flow: mode '%s' abgelehnt (nur 'default')",
+            mode ? mode : "");
+        send_line(hPipe, "{\"event\":\"activate_mission_flow_result\","
+                         "\"ok\":false,\"reason\":\"bad_mode\"}");
+        return;
+    }
+
     if (!resolve_module(&base, &size, &via, &execfn)) {
         send_line(hPipe, "{\"event\":\"activate_mission_flow_result\","
                          "\"ok\":false,\"reason\":\"no_module\"}");
@@ -2467,7 +2491,7 @@ static void handle_line(HANDLE hPipe, const char *line)
     /* activate_mission_flow (Write #385): startet einen Mission-Flow (Welle)
      * direkt per C++ (kein Lua/Console). `logic` = Logic-File-Name (z. B.
      * "logic/dom/attack_level_1_entry.logic"), `mode` optional (Default
-     * "default"). */
+     * "default"); andere Modi werden abgelehnt (#447). */
     if (strcmp(cmd, "activate_mission_flow") == 0) {
         char logic[256] = "";
         char mode[64] = "default";

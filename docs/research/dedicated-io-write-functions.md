@@ -197,6 +197,14 @@ RVA), die Service-Instanz aus dem vftable-Scan.
 ein Shim, der den Workhorse mit `data=NULL` ruft — NULL ist also ein vom Spiel
 selbst benutzter, gueltiger `Database*`-Wert (→ #385 ohne #386 nutzbar).
 
+**`mode` ist immer `"default"`** (#447): das Spiel-eigene Lua uebergibt als
+3. Argument ausschliesslich `"default"`; ein anderer Wert (z. B. `"hard"`)
+killt die DLL-Pipe dauerhaft (`/health` → `pipe:false`, danach jedes
+`get_state` → `pipe_unavailable`, Container bleibt healthy). `rbbridge`
+lehnt Nicht-`default` daher mit
+`{"event":"activate_mission_flow_result","ok":false,"reason":"bad_mode"}` ab
+(`mission_flow_mode_ok`, host-getestet), das Cockpit sendet fest `"default"`.
+
 **Helfer-RVAs** (klein, fest — wie die PlayerService-RVAs):
 
 | Symbol | RVA |
