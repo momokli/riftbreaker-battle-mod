@@ -1,0 +1,61 @@
+---
+# Hermetischer Render-Selbsttest der Rolle crash-collector (Issue #462).
+#
+# Läuft LOKAL auf dem Control-Node/CI-Runner: keine Host-Facts, kein SSH,
+# kein Docker, kein Vault, keine Prod-Aktion. Gerendert wird die ECHTE
+# systemd-Unit-Vorlage der Rolle (kein Nachbau) mit Dummy-Werten; geprüft
+# werden die Invarianten der Unit.
+#
+# Aufruf über run.sh (oder direkt):
+#   RB_CRASH_RENDER_DIR=$(mktemp -d) ansible-playbook deploy/tests/crash-collector/main.yml
+- name: "Crash-Collector Unit-Render (Issue #462)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    # Rollen-Defaults hier explizit (der Test laeuft ohne Rollen-Defaults).
+    crash_collector_unit: rbmods-crash-collector
+    crash_collector_bin: /usr/local/bin/rbmods-crash-collector.sh
+    crash_collector_container: riftbreaker-dedicated
+    crash_collector_dir: /opt/rbmods/crashes
+    crash_collector_crashinfo: "/data/.wine/drive_c/users/steamuser/Documents/The Riftbreaker/crash_info"
+    crash_collector_context_lines: 200
+    crash_collector_retention: "{{ test_retention | default(20) }}"
+    crash_collector_wait_secs: 30
+    crash_collector_retry_sleep: 5
+    crash_collector_prune_wine: 1
+    crash_collector_python: /usr/bin/python3
+    render_dir: "{{ lookup('env', 'RB_CRASH_RENDER_DIR') | default('/tmp/rb-crash-collector-render', true) }}"
+
+  tasks:
+    - name: Render-Verzeichnis sicherstellen
+      file:
+        path: "{{ render_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: systemd-Unit rendern (echte Rollen-Vorlage)
+      template:
+        src: "{{ playbook_dir }}/../../roles/crash-collector/templates/rbmods-crash-collector.service.j2"
+        dest: "{{ render_dir }}/rbmods-crash-collector.service"
+        mode: "0644"
+
+    - name: Gerenderte Unit laden
+      set_fact:
+        unit: "{{ lookup('file', render_dir ~ '/rbmods-crash-collector.service') }}"
+
+    - name: Unit-Invarianten pruefen (ExecStart + Env + Restart + Docker)
+      assert:
+        that:
+          - ("ExecStart=" ~ crash_collector_bin) in unit
+          - ("RB_CRASH_CONTAINER=" ~ crash_collector_container) in unit
+          - ("RB_CRASH_DIR=" ~ crash_collector_dir) in unit
+          - ("RB_CRASH_RETENTION=" ~ crash_collector_retention) in unit
+          - "'Restart=always' in unit"
+          - "'Type=simple' in unit"
+          - "'Requires=docker.service' in unit"
+        fail_msg: >-
+          Gerenderte systemd-Unit verletzt eine Invariante (ExecStart,
+          RB_CRASH_*-Env, Restart=always, Type=simple oder Requires=docker.service).
+        success_msg: "Unit-Render ok (ExecStart + Env + Restart + Docker-Requires)."

@@ -25,6 +25,8 @@
 #                           (Rollback-Stand + laufendes Image bleiben, #309)
 #  10. host-hygiene         systemd-Timer → dangling Docker-Images aufräumen
 #                           (`docker image prune`, KEIN `-a`; Issue #308)
+#  11. crash-collector      systemd-Dienst → Crash-Artefakte (Minidump +
+#                           Trace + Log) sichern + Retention (Issue #462)
 #
 # Tags erlauben einen gezielten Lauf (z. B. `--tags server` im PR-Gate
 # deploy-check) ohne die übrigen Rollen anzufassen.
@@ -87,3 +89,5 @@
     - role: image-retention
     - role: host-hygiene
       tags: [hygiene]
+    - role: crash-collector
+      tags: [crash]

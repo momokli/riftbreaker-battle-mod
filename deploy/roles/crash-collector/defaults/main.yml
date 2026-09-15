@@ -1,0 +1,41 @@
+---
+# Defaults der Rolle crash-collector (systemd-Dauerdienst, Issue #462).
+#
+# Kleiner Host-Collector: beobachtet `docker logs -f` des Dedicated-Servers auf
+# Crash-Marker und sichert die Crash-Artefakte (Minidump + Trace + Log) aus dem
+# Wine-Volume persistiert nach {{ crash_collector_dir }} — inkl. Kontext,
+# Meta und Retention. Muster: host-hygiene (Skript + Unit), hier als
+# Dauer-Service (Type=simple) statt Timer.
+
+# systemd-Unit + installiertes Skript.
+crash_collector_unit: rbmods-crash-collector
+crash_collector_bin: /usr/local/bin/rbmods-crash-collector.sh
+crash_collector_script_src: "{{ playbook_dir }}/../scripts/crash_collector.sh"
+
+# Zielverzeichnis der Bundles (ein Unterordner je Crash: <ts>-<uuid>).
+crash_collector_dir: /opt/rbmods/crashes
+
+# Beobachteter Container (derselbe wie server-control/riftbreaker-server —
+# kein zweiter Name, der auseinanderlaufen kann).
+crash_collector_container: "{{ riftbreaker_server_container }}"
+
+# crash_info-Pfad IM Container (Wine-Prefix im benannten Volume rb-wine).
+crash_collector_crashinfo: "/data/.wine/drive_c/users/steamuser/Documents/The Riftbreaker/crash_info"
+
+# context.log: letzte N Container-Zeilen zum Crash-Zeitpunkt.
+crash_collector_context_lines: 200
+
+# Retention: so viele Bundles bleiben liegen; aeltere crash_info-Dateien im
+# Wine-Volume werden ebenfalls auf diese Anzahl gekuerzt (#462: unbegrenztes
+# Wachstum, Befund 39 Dateien).
+crash_collector_retention: 20
+
+# Wartezeit auf die Dump-Datei nach dem Marker / Reconnect-Pause des Streams.
+crash_collector_wait_secs: 30
+crash_collector_retry_sleep: 5
+
+# 1 = crash_info im Container auf die Retention kuerzen.
+crash_collector_prune_wine: 1
+
+# Python fuer das meta.json-Rendering (json-Escaping; auf planet vorhanden).
+crash_collector_python: /usr/bin/python3

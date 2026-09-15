@@ -49,6 +49,11 @@ jobs:
       # ohne -a, DRY-RUN loescht nichts, geaenderte getaggte Menge => Exit 1.
       - name: Host-Hygiene-Invarianten (Fake-Docker, planetfrei)
         run: tests/shell/host-hygiene.test.sh
+      # Red/Green-Beweis der Crash-Collector-Logik (Issue #462): Marker-Erkennung
+      # (CRASH:/page fault), Bundle <ts>-<uuid> + context.log/meta.json,
+      # Retention + Idempotenz, graceful non-crash. Fake-Docker, planetfrei.
+      - name: Crash-Collector-Logik (Fake-Docker, planetfrei)
+        run: tests/shell/crash-collector.test.sh
 
       # --- python ---
       - uses: actions/setup-python@v5
