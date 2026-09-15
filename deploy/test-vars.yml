@@ -98,7 +98,6 @@ riftbreaker_sessions_dir: "/srv/rift-{{ rift_env }}-{{ rbbattle_run_suffix }}/se
 # zwei parallele boot-tests am `docker compose up` des Game-Servers (exakt die
 # Klasse aus #307/#318: "container name ... already in use"). Prod bleibt beim
 # Default-Namen `riftbreaker-egress` (defaults/main.yml).
-riftbreaker_referee_egress_container: "riftbreaker-egress-test-{{ rbbattle_run_suffix }}"
 
 # Disk-Space-Gate (Issue #310): Mindest-freier-Platz auf / vor Image-Build und
 # Mod-Backup. Der Boot-Test fährt denselben Preflight wie Prod (Default 10 GB).

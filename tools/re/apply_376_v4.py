@@ -15,7 +15,7 @@ import sys
 # C side
 # ============================================================================
 
-C_PATH = "bausteine/rbbridge/dll/rbbridge.c"
+C_PATH = "server/dll/rbbridge.c"
 
 C_HELPER = r"""/* ====================================================================== */
 /* DOM/Voll-State-Egress (Issue #376): thread-sichere Variante via Game-       */
@@ -190,7 +190,7 @@ def apply_c():
 # Mod side
 # ============================================================================
 
-M_PATH = "mod/lua/rbbattle_autoexec.lua"
+M_PATH = "client-mod/lua/rbbattle_autoexec.lua"
 
 M_INSERT_AFTER = """    RBB.domTimerPatched = true
     return true

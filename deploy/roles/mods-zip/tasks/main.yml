@@ -1,7 +1,7 @@
 ---
 # Rolle: mods-zip — Mod paketieren + md5-Paritäts-Check (hart).
 # 1) Paketierung auf dem Control-Node (repo checkout, scripts/package_bausteine.sh)
-#    → dist/rbbattle.zip (Content-Root = mod/).
+#    → dist/rbbattle.zip (Content-Root = client-mod/).
 # 2) Zip nach planet kopieren.
 # 3) md5(Zip lokal) == md5(Zip planet) — sonst harter Abbruch.
 

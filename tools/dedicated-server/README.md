@@ -59,7 +59,7 @@ Trainerkommando-Kanal (GO/Wave vom Tournament-Server) braucht er:
 
 1. **Die Tools** (`injector.exe`, `rbbridge.dll`, `pipe_bridge.exe`) unter
    `/opt/rbtools` — vom Deploy als read-only Volume gemountet. Gebaut werden sie
-   auf dem Zielhost aus `bausteine/rbbridge/`
+   auf dem Zielhost aus `server/`
    (`scripts/build_rbbridge_tools.sh`, Rolle `rbtools`).
 2. **Injection + Bridge** — der Entrypoint startet vor dem Server-`exec` einen
    Supervisor: eigenes `Xvfb :99` (Readiness per Socket, `xdpyinfo` fehlt im

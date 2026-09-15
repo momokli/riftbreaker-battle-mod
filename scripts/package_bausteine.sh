@@ -2,12 +2,7 @@
 # ============================================================================
 # package_bausteine.sh — zippt JEDEN Baustein einzeln nach dist/.
 #
-#   Bausteine 00-03 + 05: der Mod-Ordner (bausteine/<nr>-*/<modordner>) als
-#   Content-Root -> rbb-00-mod-skeleton.zip, rbb-01-wave-spawn.zip,
-#   rbb-02-custom-ui.zip, rbb-03-log-bridge.zip, rbb-05-economy-loop.zip
-#   (lua/... an der Zip-Wurzel, genau wie nach <game>/mods/<ModName>/ gehoert).
-#
-#   Baustein 04 (rbbridge):
+#   server/ (rbbridge):
 #     - ist x86_64-w64-mingw32-gcc auf dem PATH: kompiliert rbbridge.dll +
 #       injector.exe + rbbridge_standalone.exe (Windows x64, #ifdef
 #       RBBRIDGE_STANDALONE) + pipe_bridge.exe (HTTP(9001)->Pipe-Bridge,
@@ -56,32 +51,11 @@ PYEOF
     echo "[package_bausteine] OK: $out"
 }
 
-# Mod-Bausteine 00-03 + 05: "<zipname>|<modordner-relativ>"
-BAUSTEINE=(
-    "rbb-00-mod-skeleton|bausteine/00-mod-skeleton/rbbattle_00_skeleton"
-    "rbb-01-wave-spawn|bausteine/01-wave-spawn/rbbattle_01_wavespawn"
-    "rbb-02-custom-ui|bausteine/02-custom-ui/rbbattle_02_customui"
-    "rbb-03-log-bridge|bausteine/03-log-bridge/rbbattle_03_logbridge"
-    "rbb-05-economy-loop|bausteine/05-economy-loop/rbbattle_05_economy"
-)
-
-for entry in "${BAUSTEINE[@]}"; do
-    name="${entry%%|*}"
-    srcdir="${entry#*|}"
-    if [ ! -d "$ROOT/$srcdir" ]; then
-        echo "FEHLER: Mod-Ordner '$ROOT/$srcdir' nicht gefunden." >&2
-        exit 1
-    fi
-    out="$OUT_DIR/$name.zip"
-    zip_content_root "$ROOT/$srcdir" "$out"
-    echo "NAME=$name.zip ZIP=$out"
-done
-
-# Baustein 04: rbbridge (Compile mit mingw-gcc oder zig; sonst Quell-Zip).
+# server/ (rbbridge): Compile mit mingw-gcc oder zig; sonst Quell-Zip.
 # Inhalt des Binary-Zips: injector.exe + rbbridge.dll + rbbridge_standalone.exe
 # + pipe_bridge.exe (Issue #265; alle aus dem aktuellen Quellstand;
 # standalone via -DRBBRIDGE_STANDALONE).
-SRC04="$ROOT/bausteine/rbbridge"
+SRC04="$ROOT/server"
 TOOLCHAIN="none"
 if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
     TOOLCHAIN="mingw"
@@ -134,17 +108,17 @@ else
     exit 1
 fi
 
-# Einzel-Mod (Issue #16): der fusionierte Mod mod/ als rbbattle.zip —
-# Primär-Download. Content-Root = mod/ (lua/ + <GUID>.manifest + README.md an
+# Einzel-Mod (Issue #16): der fusionierte Mod client-mod/ als rbbattle.zip —
+# Primär-Download. Content-Root = client-mod/ (lua/ + <GUID>.manifest + README.md an
 # der Zip-Wurzel), genau wie er nach <game>/mods/rbbattle/ gehoert.
 #
 # Build-Identitaet (Issue #499): vor dem Zippen wird der Platzhalter
 # RBB_BUILD_REF in der ausgelieferten Lua durch den echten Commit/Tag ersetzt
 # (Env RBB_BUILD_REF, sonst `git rev-parse HEAD`). In einen tmp-Staging-Bereich
 # kopieren, dort substituieren, dann zippen - KEINE In-Place-Aenderung an
-# mod/lua/rbbattle_autoexec.lua, damit der Build das Working-Tree nicht
+# client-mod/lua/rbbattle_autoexec.lua, damit der Build das Working-Tree nicht
 # verschmutzt.
-SRCMOD="$ROOT/mod"
+SRCMOD="$ROOT/client-mod"
 BUILD_REF="${RBB_BUILD_REF:-}"
 if [ -z "$BUILD_REF" ]; then
     BUILD_REF="$(git rev-parse HEAD)"
@@ -169,7 +143,7 @@ zip_content_root "$STAGE_DIR" "$outmod"
 echo "NAME=rbbattle.zip ZIP=$outmod"
 
 # Einzel-Mod versioniert (Issue #119): die Mod-Version kommt aus den
-# Mod-Metadaten (mod/<GUID>.manifest, Feld `version`), nicht aus Git-SHA oder
+# Mod-Metadaten (client-mod/<GUID>.manifest, Feld `version`), nicht aus Git-SHA oder
 # Datum. rbbattle-v<version>.zip ist der kanonische, versionierte Download;
 # rbbattle.zip bleibt der stabile Alias für die Deploy-Kette (md5-Parität +
 # Server-Extraktion), damit Download-Link und Server-Stand nie auseinanderlaufen.

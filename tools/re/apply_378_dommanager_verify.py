@@ -15,7 +15,7 @@ Die .c-Datei wird NUR hier editiert (io.open(..., newline="\n")).
 import io
 import sys
 
-PATH = "bausteine/rbbridge/dll/rbbridge.c"
+PATH = "server/dll/rbbridge.c"
 
 OLD = "                (int)ref32 >= 0) {\n                g_dom_base = base;\n"
 

@@ -23,7 +23,7 @@
 
 Rollen in `deploy/roles/` (Details: `deploy/README.md`):
 
-1. **mods-zip** — Mod aus `mod/` paketieren (`scripts/package_bausteine.sh`),
+1. **mods-zip** — Mod aus `client-mod/` paketieren (`scripts/package_bausteine.sh`),
    `rbbattle.zip` nach planet; **md5-Paritäts-Check (Zip == Prod) hart als
    Fehlschlag**.
 2. **dedicated-server-image** — baut `rb-dedicated:<deploy-sha>` IM
@@ -444,7 +444,7 @@ unter `/opt/rbmods/compose/…`.
 Bis zur CD (#91) wurde die Mod auf :6321 manuell eingespielt:
 
 ```bash
-# 1) Mod-Zip aus Repo main bauen (Content-Root = mod/):
+# 1) Mod-Zip aus Repo main bauen (Content-Root = client-mod/):
 bash scripts/package_bausteine.sh          # → dist/rbbattle.zip
 
 # 2) Auf planet kopieren + md5-Parität (lokal == remote):
@@ -628,7 +628,7 @@ Fallback gelesen.
 | Session-Recorder | JSONL-Record `env`,`ref` | `RBB_ENV`/`RBB_REF` im Sidecar + CLI `--env/--ref` |
 | Referee-Egress | Event-Record `env`,`ref` | dito |
 | Container | Labels `RBB_ENV`/`RBB_REF` | `docker inspect` (ohne Log) |
-| Mod-Log | `event=mod_load … env=… ref=…` | `mod/lua/rbbattle_autoexec.lua` — **vorbereitet, im Live-Lauf nicht wirksam** (`env=unknown`, s. u.) |
+| Mod-Log | `event=mod_load … env=… ref=…` | `client-mod/lua/rbbattle_autoexec.lua` — **vorbereitet, im Live-Lauf nicht wirksam** (`env=unknown`, s. u.) |
 
 ### SOC-Attestation nach Deploy (Issue #504)
 

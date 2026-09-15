@@ -15,7 +15,7 @@ Editor/write_file (clang-format-Kollaps).
 import io
 import sys
 
-PATH = "bausteine/rbbridge/dll/rbbridge.c"
+PATH = "server/dll/rbbridge.c"
 
 # ---------------------------------------------------------------------------
 # 1) Detour: READ-Pfad ergaenzen (Forward-Decl + Aufruf).

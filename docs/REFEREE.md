@@ -134,7 +134,7 @@ GO-spezifischen `/state`-Broadcast-Status (bewusst, R3).
 
 * **Referee-`ready` nach Reset: OFFEN (Live-Loop).** Nach dem in-game Reset
   emittiert der Mod nur `event=commence status=pending|ok` (Setup-/HQ-Placement-
-  Phase, `mod/lua/rbbattle_autoexec.lua:~2321`); er sendet **kein** `ready`
+  Phase, `client-mod/lua/rbbattle_autoexec.lua:~2321`); er sendet **kein** `ready`
   (`event=map_ready` feuert nur beim Map-Load) und es gibt keinen Modul-Reload.
   Der Egress-Transport ist für den Dedicated-Server inzwischen deployt (Log-Tail-
   Sidecar, s. o., #358), aber weder er noch der `relay.py`-Pfad mappt `commence`

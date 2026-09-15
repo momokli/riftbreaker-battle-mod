@@ -56,14 +56,14 @@ Wine sieht den Container-Root als `Z:` → die DLL liegt als
 `Z:\opt\riftbreaker\bin\DedicatedServer.exe`.
 
 **Kein Binary im Image/Repo:** gebaut wird zur Deploy-Zeit aus dem Checkout
-(`bausteine/rbbridge/` ist die kanonische Quelle), gestagt über die Rolle
+(`server/` ist die kanonische Quelle), gestagt über die Rolle
 `rbtools`, read-only nach `/opt/rbtools` gemountet.
 
 ## Dateien
 
 | Datei                                                             | Rolle                                                          |
 | ----------------------------------------------------------------- | -------------------------------------------------------------- |
-| `bausteine/rbbridge/pipe-bridge/pipe_bridge.c`                    | HTTP(9001)→Pipe-Bridge (Quelle, x64)                           |
+| `server/pipe-bridge/pipe_bridge.c`                    | HTTP(9001)→Pipe-Bridge (Quelle, x64)                           |
 | `scripts/build_rbbridge_tools.sh`                                 | baut alle 4 Binaries in ein Staging-Dir                        |
 | `deploy/roles/rbtools/{defaults,tasks}`                           | Build + Stage nach `/opt/rbmods/rbtools`                       |
 | `deploy/roles/riftbreaker-server/templates/docker-compose.yml.j2` | Mount `/opt/rbtools:ro`, Port `127.0.0.1:9001:9001`            |

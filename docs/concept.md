@@ -49,11 +49,11 @@ Das Spiel ist **rundenbasiert** — es gibt keine Echtzeit-Anforderungen. Ein si
 
 ## Komponenten im Detail
 
-### Lua-Mod (`mod/`)
+### Lua-Mod (`client-mod/`)
 
 Enthält **nur die Spiellogik** (Wellen spawnen, Punkte verwalten, Defense bauen, HUD) — **kein eigener I/O-Kanal** (Trainer-only, s. u.). Registriert Console-Commands (z. B. `rb_wave`) als Eingabe-API für die Trainer-DLL. Läuft komplett auf der offiziellen Mod-API ohne externe Zugriffe und bleibt damit **update-fest** und **Steam-Workshop-tauglich** — Game-Updates können dem Mod nur dann schaden, wenn sie die API selbst ändern (unwahrscheinlich, da offiziell).
 
-### Trainer / Sidecar (`trainer/`, Windows-first)
+### Trainer / Sidecar (`server/`, Windows-first)
 
 Die **einzige I/O-Schicht** zwischen Spiel und Netz (Trainer-only, Entscheidung 08.09.2026). Ein externer **Injector** hängt die **Trainer-DLL** zur Laufzeit in den Spielprozess (runtime-only Injection); die DLL öffnet eine **Named Pipe** (z. B. `\\.\pipe\rbbattle`) zum lokalen Relay-Client. Zwei Aufgaben:
 
@@ -115,8 +115,8 @@ Pro Spieler läuft genau eine solche Instanz (A, B, … N); alle Relay-Clients h
 
 ### Bausteine
 
-- **Lua-Mod (`mod/`):** **Nur** Spiellogik — Wellen, Punkte, Defense, HUD. Registriert Console-Commands (z. B. `rb_wave`) als Eingabe-API für die DLL. Keine externen Zugriffe → bleibt ein normaler, **Steam-Workshop-tauglicher** Mod.
-- **Trainer-DLL (`trainer/`, Windows-first):** das **einzige I/O-Gateway** zwischen Spiel und Außenwelt. Ein **Injector** (externes Tool) hängt die DLL zur Laufzeit in den Spielprozess; die DLL öffnet eine **Named Pipe** (z. B. `\\.\pipe\rbbattle`) zum lokalen Relay-Client.
+- **Lua-Mod (`client-mod/`):** **Nur** Spiellogik — Wellen, Punkte, Defense, HUD. Registriert Console-Commands (z. B. `rb_wave`) als Eingabe-API für die DLL. Keine externen Zugriffe → bleibt ein normaler, **Steam-Workshop-tauglicher** Mod.
+- **Trainer-DLL (`server/`, Windows-first):** das **einzige I/O-Gateway** zwischen Spiel und Außenwelt. Ein **Injector** (externes Tool) hängt die DLL zur Laufzeit in den Spielprozess; die DLL öffnet eine **Named Pipe** (z. B. `\\.\pipe\rbbattle`) zum lokalen Relay-Client.
   - **Ingress:** Server → Relay-Client → Pipe → DLL führt Mod-Command aus bzw. ruft eine Spielfunktion auf (z. B. Wave-Trigger).
   - **Egress:** DLL liest Game-State (Memory) bzw. fängt Events ab → Pipe → Relay-Client → Server.
 - **Relay-Client / Sidecar:** lokaler Prozess neben der Spiel-Instanz; verbindet Named Pipe und Server.

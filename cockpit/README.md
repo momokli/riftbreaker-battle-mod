@@ -71,7 +71,7 @@ exec-Zeilen auf die rbbridge-Named-Pipe:
 | `probe` | Bridge-/Pipe-Erreichbarkeit (API-Fläche der Bridge) |
 
 `GET /health` der Bridge gehört ebenfalls zur API-Fläche. Details und
-Verdrahtung: `docs/INGRESS_IO.md`, `bausteine/rbbridge/README.md`.
+Verdrahtung: `docs/INGRESS_IO.md`, `server/README.md`.
 
 **`hq_dead`-Semantik (#511).** `hq_dead` ist eine Interface-Konvention, kein
 Engine-Flag: `true` bedeutet `hq_hp <= 0` **oder** die HQ-Entity ist
@@ -128,7 +128,7 @@ bekommt.
 
 Die UI wird **noch** in `pipe_bridge.exe` eingebettet: `scripts/gen_cockpit_html.py`
 liest diese Datei und erzeugt `cockpit_html.inc` im Bridge-Ordner
-(`bausteine/rbbridge/pipe-bridge/`, Build-Artefakt, gitignored, direkt neben
+(`server/pipe-bridge/`, Build-Artefakt, gitignored, direkt neben
 `pipe_bridge.c`), das die Bridge unter `GET /` ausliefert. **Einzige Quelle**
 bleibt `cockpit.html` hier — es gibt keine handgepflegte Kopie.
 

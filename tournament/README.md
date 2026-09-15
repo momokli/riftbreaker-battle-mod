@@ -111,7 +111,7 @@ Der Dienst ist die Server-Seite der Turnier-Architektur; Baustein 06
 (`bausteine/06-tournament-server`) war der Node-Prototyp dafür — diese
 Implementierung ist der echte Rust-Dienst mit Rift-Battle-Semantik
 (2 Welten, HQ-HP, Reveal, Rematch). rbbridge auf den Dedi-Servern
-(`bausteine/rbbridge/`)
+(`server/`)
 pollen `GET /state` und führen Kommandos via exec-Kanal aus; der Lua-Mod/
 RE-Layer meldet Wellenstart und HQ-HP über `POST /report`
 (send_state-Egress, Issue #13 — konzeptionell übernommen).

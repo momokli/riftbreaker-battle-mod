@@ -28,11 +28,11 @@ zwei Wege, den Kanal zu testen: **Test 0** startet dieselbe Pipe-Server-
 Logik als normale `rbbridge_standalone.exe` — ganz **ohne Injection**;
 **Test 1** ist der bisherige Injection-Test (notepad.exe + injector.exe).
 
-**Richtung (kanonisch):** `bausteine/rbbridge/` ist die **einzige**
+**Richtung (kanonisch):** `server/` ist die **einzige**
 Build-/Distributions-Quelle — `scripts/package_bausteine.sh` und der
 Build-Job in `.github/workflows/ci.yml` bauen **ausschließlich** hieraus.
-Der frühere byte-identische Spiegel unter `trainer/injector/` +
-`trainer/rbbridge/` wurde mit Issue #299 entfernt (`trainer/` enthält nur
+Der frühere byte-identische Spiegel unter `server/injector/` +
+`server/rbbridge/` wurde mit Issue #299 entfernt (`server/` enthält nur
 noch Protokoll und RE-Tooling). `pipe_client.py` + dieses README gibt es
 nur hier.
 
@@ -59,8 +59,8 @@ Alle vier Binaries baut `scripts/build_rbbridge_tools.sh <outdir>`.
 ## Cockpit: Server-Control-Panel (Plane B, Issue #422)
 
 Die Cockpit-UI liegt seit #474 (Schritt 1) als eigener Baustein in
-`bausteine/08-control-ui/cockpit.html` — sie ist ein **Konsument** dieses
-IO-Kanals, kein Teil davon (Details: `bausteine/08-control-ui/README.md`).
+`cockpit/cockpit.html` — sie ist ein **Konsument** dieses
+IO-Kanals, kein Teil davon (Details: `cockpit/README.md`).
 
 Ihr Panel `server control (plane B)` hat Status (`state`/`health`/`uptime`/
 `started_at`), Logs (letzte N Zeilen) und die Buttons `Restart server`/`Start`/
@@ -249,7 +249,7 @@ injizieren (os.open blockiert, bis der Pipe-Server existiert).
 
 ## Status
 
-- [x] rbbridge.c/injector.c einzige Quelle in `bausteine/rbbridge/` (Spiegel unter `trainer/` mit Issue #299 entfernt)
+- [x] rbbridge.c/injector.c einzige Quelle in `server/` (Spiegel unter `server/` mit Issue #299 entfernt)
 - [x] rbbridge.c Dual-Mode-Umbau (DLL + Standalone-EXE aus einer Quelle)
 - [x] exec-Dispatch per AOB-Signatur/RTTI (statt fester RVAs) + Cache
 - [x] Host-Test `rbbridge_hosttest.c` (scan_bytes + RTTI-Resolver, synthetischer PE-Puffer)
