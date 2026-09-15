@@ -133,7 +133,13 @@
                     size="42"
                     value="logic/dom/attack_level_1_entry.logic"
                 />
-                <input id="flow_mode" size="10" value="default" />
+                <input
+                    id="flow_mode"
+                    size="10"
+                    value="default"
+                    readonly
+                    title="fest auf 'default' (#447): jeder andere Modus killt die DLL-Pipe"
+                />
                 <button id="flow_start">start wave</button>
             </div>
             <div class="row">
@@ -237,7 +243,10 @@
                     try {
                         var r = await post("activate_mission_flow", {
                             logic: $("flow_logic").value,
-                            mode: $("flow_mode").value,
+                            // #447: mode ist fest "default" — das Spiel
+                            // erwartet das so (eigenes Lua sendet nichts
+                            // anderes); ein Freitext-Wert killte die Pipe.
+                            mode: "default",
                         });
                         $("out").textContent = r && r.ok ? "" : JSON.stringify(r);
                         refresh();
