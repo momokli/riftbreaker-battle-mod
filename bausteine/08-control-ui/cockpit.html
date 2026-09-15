@@ -3,178 +3,700 @@
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>resources</title>
+        <title>RIFT BATTLE — OPERATOR COCKPIT</title>
         <style>
             :root {
                 color-scheme: dark;
+                --win: #2a2d31;
+                --panel: #31353a;
+                --base: #1f2225;
+                --line: #454a50;
+                --text: #dfe3e6;
+                --dim: #8b949b;
+                --accent: #3fd0d4;
+                --good: #5cc47c;
+                --warn: #d6b04a;
+                --bad: #e05252;
+                --btn-hover: #3c4248;
+                --btn-active: #25282c;
+                --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
             }
-            body {
-                background: #0a0f0a;
-                color: #9fef9f;
-                font:
-                    16px/1.5 ui-monospace,
-                    SFMono-Regular,
-                    Menlo,
-                    Consolas,
-                    monospace;
+
+            *, *::before, *::after {
+                box-sizing: border-box;
+            }
+
+            html, body {
+                height: 100%;
                 margin: 0;
-                padding: 1.5rem;
+                padding: 0;
+                background-color: var(--win);
+                color: var(--text);
+                font-family: var(--font-ui);
+                font-size: 13px;
+                line-height: 1.4;
+                overflow: hidden;
+                -webkit-font-smoothing: antialiased;
             }
-            h1,
-            h2 {
-                font-size: 1.1rem;
-                margin: 0 0 1rem;
+
+            /* Scrollbar styling */
+            * {
+                scrollbar-width: thin;
+                scrollbar-color: var(--line) var(--base);
             }
-            .row {
-                display: flex;
-                flex-wrap: wrap;
-                gap: 0.6rem;
-                align-items: center;
-                margin-bottom: 0.6rem;
+            *::-webkit-scrollbar {
+                width: 8px;
+                height: 8px;
             }
-            .val {
-                color: #fff;
+            *::-webkit-scrollbar-track {
+                background: var(--base);
             }
-            .dim {
-                color: #5f8f5f;
-            }
-            input,
-            button {
-                background: #0f1a0f;
-                color: #9fef9f;
-                border: 1px solid #3a5a3a;
+            *::-webkit-scrollbar-thumb {
+                background: var(--line);
                 border-radius: 3px;
-                font: inherit;
-                padding: 0.35rem 0.6rem;
+            }
+            *::-webkit-scrollbar-thumb:hover {
+                background: var(--dim);
+            }
+
+            /* Main Layout */
+            #app-root {
+                display: flex;
+                flex-direction: column;
+                height: 100vh;
+                width: 100vw;
+                overflow: hidden;
+            }
+
+            /* Top Chrome Header */
+            header.app-header {
+                flex: 0 0 28px;
+                background: #232629;
+                border-bottom: 1px solid var(--line);
+                display: flex;
+                align-items: center;
+                padding: 0 12px;
+                font-family: var(--font-mono);
+                font-size: 11px;
+                font-weight: 600;
+                letter-spacing: 0.08em;
+                color: var(--dim);
+                user-select: none;
+            }
+            header.app-header .title-badge {
+                color: var(--accent);
+                margin-right: 8px;
+            }
+
+            /* Workspace Grid */
+            main.workspace {
+                flex: 1 1 auto;
+                display: grid;
+                padding: 8px;
+                gap: 8px;
+                overflow: hidden;
+                /* Default 980-1399px: two columns */
+                grid-template-columns: minmax(360px, 480px) minmax(400px, 1fr);
+                grid-template-rows: 1fr;
+            }
+
+            .left-col {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                overflow-y: auto;
+                min-width: 0;
+            }
+
+            .right-col {
+                display: flex;
+                flex-direction: column;
+                min-width: 0;
+                height: 100%;
+                overflow: hidden;
+            }
+
+            /* >= 1400px: three columns */
+            @media (min-width: 1400px) {
+                main.workspace {
+                    grid-template-columns: minmax(360px, 400px) minmax(440px, 560px) minmax(420px, 1fr);
+                    grid-template-rows: auto 1fr;
+                }
+                .left-col {
+                    display: contents;
+                }
+                #panel-resources {
+                    grid-column: 1;
+                    grid-row: 1;
+                    align-self: start;
+                }
+                #panel-creatures {
+                    grid-column: 1;
+                    grid-row: 2;
+                    align-self: start;
+                }
+                #panel-mission {
+                    grid-column: 2;
+                    grid-row: 1;
+                    align-self: start;
+                }
+                .right-col {
+                    grid-column: 3;
+                    grid-row: 1 / span 2;
+                    min-height: 0;
+                }
+            }
+
+            /* < 980px: single column */
+            @media (max-width: 979px) {
+                html, body {
+                    overflow-y: auto;
+                }
+                #app-root {
+                    height: auto;
+                    min-height: 100vh;
+                    overflow: visible;
+                }
+                main.workspace {
+                    display: flex;
+                    flex-direction: column;
+                    height: auto;
+                    overflow: visible;
+                }
+                .left-col {
+                    overflow: visible;
+                }
+                .right-col {
+                    height: auto;
+                    overflow: visible;
+                }
+                #panel-server {
+                    height: auto !important;
+                }
+                .log-scroll-area {
+                    height: 340px !important;
+                    max-height: 40vh;
+                }
+            }
+
+            /* QGroupBox emulation */
+            fieldset.q-groupbox {
+                margin: 0;
+                padding: 10px 10px 8px 10px;
+                border: 1px solid var(--line);
+                border-radius: 3px;
+                background: var(--panel);
+                position: relative;
+                min-width: 0;
+            }
+
+            fieldset.q-groupbox legend {
+                padding: 0 5px;
+                font-family: var(--font-ui);
+                font-size: 10.5px;
+                font-weight: 700;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                color: var(--dim);
+                margin-left: 4px;
+            }
+
+            /* Form Controls */
+            input, button {
+                font-family: inherit;
+                font-size: 12px;
+                height: 25px;
+                border-radius: 3px;
+                border: 1px solid var(--line);
+                background: var(--base);
+                color: var(--text);
+                padding: 0 6px;
+                outline: none;
+                transition: background-color 100ms ease, border-color 100ms ease;
+            }
+
+            input:focus, button:focus {
+                border-color: var(--accent);
+                box-shadow: 0 0 0 1px var(--accent);
+            }
+
+            input.mono, .mono {
+                font-family: var(--font-mono);
+                font-variant-numeric: tabular-nums;
+            }
+
+            input[readonly] {
+                background: #25282c;
+                color: var(--dim);
+                border-color: #383c42;
+                cursor: default;
+            }
+            input[readonly]:focus {
+                border-color: #383c42;
+                box-shadow: none;
+            }
+
+            button {
+                background: #363b41;
+                border: 1px solid #4a5058;
+                color: var(--text);
+                cursor: pointer;
+                font-weight: 500;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                white-space: nowrap;
+                user-select: none;
             }
             button:hover {
-                background: #1a2a1a;
-                cursor: pointer;
+                background: var(--btn-hover);
+                border-color: #586069;
             }
-            .err {
-                color: #ef9f9f;
+            button:active {
+                background: var(--btn-active);
+                border-color: #3d4349;
+            }
+            button:disabled {
+                opacity: 0.4;
+                cursor: not-allowed;
+            }
+
+            button.btn-primary {
+                border-color: #27888c;
+                background: #23585c;
+                color: #e5fbfb;
+            }
+            button.btn-primary:hover {
+                background: #2c6f74;
+                border-color: var(--accent);
+            }
+
+            button.btn-danger {
+                border-color: #7a3232;
+                background: #4a2424;
+                color: #fcebeb;
+            }
+            button.btn-danger:hover {
+                background: #5e2e2e;
+                border-color: var(--bad);
+            }
+
+            /* Group A: Resources */
+            .resource-table {
+                display: grid;
+                grid-template-columns: 86px minmax(50px, 1fr) 14px minmax(50px, 1fr) 52px 28px 28px;
+                gap: 6px 6px;
+                align-items: center;
+            }
+
+            .res-label {
+                font-family: var(--font-mono);
+                font-size: 12px;
+                font-weight: 600;
+                color: var(--text);
+                letter-spacing: 0.02em;
+            }
+
+            .res-val {
+                font-family: var(--font-mono);
+                font-size: 13px;
+                font-variant-numeric: tabular-nums;
+                font-weight: 600;
+                color: #ffffff;
+                text-align: right;
+                min-width: 48px;
+            }
+
+            .res-sep {
+                color: var(--dim);
+                text-align: center;
+                user-select: none;
+            }
+
+            .res-max {
+                font-family: var(--font-mono);
+                font-size: 12px;
+                font-variant-numeric: tabular-nums;
+                color: var(--dim);
+                text-align: left;
+                min-width: 48px;
+            }
+
+            .res-input {
+                width: 100%;
+                text-align: right;
+            }
+
+            .btn-stepper {
+                width: 25px;
+                height: 25px;
+                padding: 0;
+                font-size: 13px;
+                font-family: var(--font-mono);
+            }
+
+            /* Group B: Mission Flow */
+            .flow-container {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+            }
+
+            .flow-readouts {
+                display: flex;
+                gap: 16px;
+                background: var(--base);
+                padding: 6px 8px;
+                border-radius: 3px;
+                border: 1px solid #2d3137;
+            }
+
+            .flow-prop {
+                display: flex;
+                align-items: baseline;
+                gap: 6px;
+            }
+            .prop-label {
+                font-size: 11px;
+                color: var(--dim);
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                user-select: none;
+            }
+            .prop-val {
+                font-family: var(--font-mono);
+                font-size: 12.5px;
+                font-weight: 600;
+                color: #ffffff;
+                font-variant-numeric: tabular-nums;
+            }
+
+            .flow-action-row {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px;
+                align-items: center;
+            }
+
+            .flow-action-row input {
+                min-width: 0;
+            }
+
+            /* Group C: Server Control (Plane B) */
+            #panel-server {
+                display: flex;
+                flex-direction: column;
+                height: 100%;
+                min-height: 0;
+            }
+
+            .server-group-content {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                flex: 1 1 auto;
+                min-height: 0;
+            }
+
+            .server-status-strip {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 12px 18px;
+                background: var(--base);
+                padding: 6px 8px;
+                border-radius: 3px;
+                border: 1px solid #2d3137;
+            }
+
+            .status-pair {
+                display: inline-flex;
+                align-items: baseline;
+                gap: 5px;
+                white-space: nowrap;
+            }
+
+            .server-toolbar {
+                display: flex;
+                gap: 6px;
+                align-items: center;
+            }
+
+            .server-logs-container {
+                display: flex;
+                flex-direction: column;
+                flex: 1 1 auto;
+                min-height: 0;
+                gap: 6px;
+            }
+
+            .logs-header-bar {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+
+            .log-scroll-area {
+                flex: 1 1 auto;
+                min-height: 140px;
+                background: var(--base);
+                border: 1px solid var(--line);
+                border-radius: 3px;
+                position: relative;
+                display: flex;
+                overflow: hidden;
+            }
+
+            #server_logs {
+                flex: 1 1 auto;
+                margin: 0;
+                padding: 6px 8px;
+                font-family: var(--font-mono);
+                font-size: 11.5px;
+                line-height: 1.38;
+                color: #cdd3da;
+                white-space: pre;
+                overflow: auto;
+                height: 100%;
+                width: 100%;
+            }
+
+            /* Group D: Status Bar */
+            footer.status-bar {
+                flex: 0 0 24px;
+                height: 24px;
+                background: #232629;
+                border-top: 1px solid var(--line);
+                display: grid;
+                grid-template-columns: 1fr 1px 1fr;
+                align-items: center;
+                padding: 0 10px;
+                font-family: var(--font-mono);
+                font-size: 11px;
+                user-select: none;
+            }
+
+            .sb-separator {
+                width: 1px;
+                height: 14px;
+                background: var(--line);
+            }
+
+            .sb-cell {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                line-height: 24px;
+            }
+
+            .sb-cell.left {
+                padding-right: 8px;
+            }
+
+            .sb-cell.right {
+                padding-left: 8px;
+                text-align: right;
+            }
+
+            #out {
+                color: var(--bad);
+            }
+
+            #server_control_msg {
+                color: var(--dim);
+            }
+
+            @media (prefers-reduced-motion: reduce) {
+                *, *::before, *::after {
+                    transition: none !important;
+                }
             }
         </style>
     </head>
     <body>
-        <h1>resources</h1>
+        <div id="app-root">
+            <header class="app-header">
+                <span class="title-badge">◆</span> RIFT BATTLE — OPERATOR COCKPIT
+            </header>
 
-        <section>
-            <h2>carbonium</h2>
-            <div class="row">
-                <span class="dim">now</span>
-                <span id="carbonium" class="val">—</span>
-                <span class="dim">/ max</span>
-                <span id="carbonium_max" class="val">—</span>
-            </div>
-            <div class="row">
-                <input id="amount" size="10" value="10" />
-                <button id="add">+ add</button>
-                <button id="sub">− subtract</button>
-            </div>
-        </section>
+            <main class="workspace">
+                <div class="left-col">
+                    <!-- A. RESOURCES -->
+                    <fieldset class="q-groupbox" id="panel-resources">
+                        <legend>Resources</legend>
+                        <div class="resource-table">
+                            <!-- Carbonium Row -->
+                            <label for="amount" class="res-label">carbonium</label>
+                            <span id="carbonium" class="res-val" title="current">—</span>
+                            <span class="res-sep">/</span>
+                            <span id="carbonium_max" class="res-max" title="max">—</span>
+                            <input id="amount" class="mono res-input" size="5" value="10" aria-label="Carbonium transfer amount" />
+                            <button id="add" class="btn-stepper" title="+ Add Carbonium" aria-label="+ Add Carbonium">+</button>
+                            <button id="sub" class="btn-stepper" title="− Subtract Carbonium" aria-label="− Subtract Carbonium">−</button>
 
-        <section>
-            <h2>ironium</h2>
-            <div class="row">
-                <span class="dim">now</span>
-                <span id="ironium" class="val">—</span>
-                <span class="dim">/ max</span>
-                <span id="ironium_max" class="val">—</span>
-            </div>
-            <div class="row">
-                <input id="ironium_amount" size="10" value="10" />
-                <button id="ironium_add">+ add</button>
-                <button id="ironium_sub">− subtract</button>
-            </div>
-        </section>
+                            <!-- Ironium Row -->
+                            <label for="ironium_amount" class="res-label">ironium</label>
+                            <span id="ironium" class="res-val" title="current">—</span>
+                            <span class="res-sep">/</span>
+                            <span id="ironium_max" class="res-max" title="max">—</span>
+                            <input id="ironium_amount" class="mono res-input" size="5" value="10" aria-label="Ironium transfer amount" />
+                            <button id="ironium_add" class="btn-stepper" title="+ Add Ironium" aria-label="+ Add Ironium">+</button>
+                            <button id="ironium_sub" class="btn-stepper" title="− Subtract Ironium" aria-label="− Subtract Ironium">−</button>
+                        </div>
+                    </fieldset>
 
-        <section>
-            <h2>server control (plane B)</h2>
-            <div class="row">
-                <span class="dim">state</span>
-                <span id="server_state" class="val">—</span>
-                <span class="dim">health</span>
-                <span id="server_health" class="val">—</span>
-                <span class="dim">uptime</span>
-                <span id="server_uptime" class="val">—</span>
-                <span class="dim">started</span>
-                <span id="server_started_at" class="val">—</span>
-            </div>
-            <div class="row">
-                <span class="dim">logs (tail)</span>
-                <input id="server_logs_tail" size="6" value="50" />
-                <button id="server_logs_refresh">refresh logs</button>
-            </div>
-            <div class="row">
-                <pre id="server_logs" class="val">—</pre>
-            </div>
-            <div class="row">
-                <button id="server_restart">Restart server</button>
-                <button id="server_start">Start</button>
-                <button id="server_stop">Stop</button>
-            </div>
-            <div class="row">
-                <span id="server_control_msg" class="err"></span>
-            </div>
-        </section>
+                    <!-- B. MISSION FLOW (WAVE) -->
+                    <fieldset class="q-groupbox" id="panel-mission">
+                        <legend>Mission Flow (Wave)</legend>
+                        <div class="flow-container">
+                            <!-- Row 1: Observe -->
+                            <div class="flow-readouts">
+                                <div class="flow-prop">
+                                    <span class="prop-label">flow</span>
+                                    <span id="mission_flow" class="prop-val">—</span>
+                                </div>
+                                <div class="flow-prop">
+                                    <span class="prop-label">active</span>
+                                    <span id="mission_flow_active" class="prop-val">—</span>
+                                </div>
+                                <div class="flow-prop">
+                                    <span class="prop-label">payload.spawn_point</span>
+                                    <span id="mission_flow_spawn" class="prop-val">—</span>
+                                </div>
+                            </div>
 
-        <section>
-            <h2>mission flow (wave)</h2>
-            <div class="row">
-                <span class="dim">flow</span>
-                <span id="mission_flow" class="val">—</span>
-                <span class="dim">active</span>
-                <span id="mission_flow_active" class="val">—</span>
-                <span class="dim">payload.spawn_point</span>
-                <span id="mission_flow_spawn" class="val">—</span>
-            </div>
-            <div class="row">
-                <input
-                    id="flow_logic"
-                    size="42"
-                    value="logic/dom/attack_level_1_entry.logic"
-                />
-                <input
-                    id="flow_mode"
-                    size="10"
-                    value="default"
-                    readonly
-                    title="fest auf 'default' (#447): jeder andere Modus killt die DLL-Pipe"
-                />
-                <input
-                    id="flow_spawn"
-                    size="14"
-                    placeholder="spawn_point (#386)"
-                    title="optionaler Exor::Database-Payload (SetString \"spawn_point\")"
-                />
-                <button id="flow_start">start wave</button>
-            </div>
-            <div class="row">
-                <input
-                    id="flow_stop"
-                    size="42"
-                    placeholder="flow-id (leer = zuletzt gestarteter)"
-                />
-                <button id="flow_stop_btn">stop wave</button>
-            </div>
-        </section>
+                            <!-- Row 2: Act (Start wave) -->
+                            <div class="flow-action-row">
+                                <input
+                                    id="flow_logic"
+                                    class="mono"
+                                    style="flex: 1 1 auto;"
+                                    value="logic/dom/attack_level_1_entry.logic"
+                                    aria-label="Mission flow logic entry path"
+                                    title="Mission logic entry path"
+                                />
+                                <input
+                                    id="flow_mode"
+                                    class="mono"
+                                    size="8"
+                                    value="default"
+                                    readonly
+                                    title="fest auf 'default' (#447): jeder andere Modus killt die DLL-Pipe"
+                                    aria-label="Mission flow mode (locked to default)"
+                                />
+                                <input
+                                    id="flow_spawn"
+                                    class="mono"
+                                    size="14"
+                                    placeholder="spawn_point (#386)"
+                                    title="optionaler Exor::Database-Payload (SetString &quot;spawn_point&quot;)"
+                                    aria-label="Optional database payload spawn_point"
+                                />
+                                <button id="flow_start" class="btn-primary">start wave</button>
+                            </div>
 
-        <section>
-            <h2>creatures base difficulty</h2>
-            <div class="row">
-                <span class="dim">now</span>
-                <span id="creatures_base_difficulty" class="val">—</span>
-            </div>
-            <div class="row">
-                <input id="cbd_value" size="10" value="1" />
-                <button id="cbd_set">set</button>
-                <button id="cbd_inc">+ increase</button>
-                <button id="cbd_dec">− decrease</button>
-            </div>
-        </section>
+                            <!-- Row 3: Act (Stop wave) -->
+                            <div class="flow-action-row">
+                                <input
+                                    id="flow_stop"
+                                    class="mono"
+                                    style="flex: 1 1 auto;"
+                                    placeholder="flow-id (empty = most recently started)"
+                                    aria-label="Flow ID to stop"
+                                />
+                                <button id="flow_stop_btn">stop wave</button>
+                            </div>
+                        </div>
+                    </fieldset>
 
-        <div id="out" class="err"></div>
+                    <!-- C. CREATURES BASE DIFFICULTY -->
+                    <fieldset class="q-groupbox" id="panel-creatures">
+                        <legend>Creatures Base Difficulty</legend>
+                        <div class="flow-container">
+                            <!-- Row 1: Observe -->
+                            <div class="flow-readouts">
+                                <div class="flow-prop">
+                                    <span class="prop-label">now</span>
+                                    <span id="creatures_base_difficulty" class="prop-val">—</span>
+                                </div>
+                            </div>
+
+                            <!-- Row 2: Act (set / increase / decrease) -->
+                            <div class="flow-action-row">
+                                <input
+                                    id="cbd_value"
+                                    class="mono"
+                                    size="10"
+                                    value="1"
+                                    aria-label="Creatures base difficulty value"
+                                />
+                                <button id="cbd_set" aria-label="Set creatures base difficulty">set</button>
+                                <button id="cbd_inc" aria-label="Increase creatures base difficulty">+ increase</button>
+                                <button id="cbd_dec" aria-label="Decrease creatures base difficulty">− decrease</button>
+                            </div>
+                        </div>
+                    </fieldset>
+                </div>
+
+                <div class="right-col">
+                    <!-- C. SERVER CONTROL (PLANE B) -->
+                    <fieldset class="q-groupbox" id="panel-server">
+                        <legend>Server Control (Plane B)</legend>
+                        <div class="server-group-content">
+                            <!-- Status Strip -->
+                            <div class="server-status-strip">
+                                <div class="status-pair">
+                                    <span class="prop-label">state</span>
+                                    <span id="server_state" class="prop-val">—</span>
+                                </div>
+                                <div class="status-pair">
+                                    <span class="prop-label">health</span>
+                                    <span id="server_health" class="prop-val">—</span>
+                                </div>
+                                <div class="status-pair">
+                                    <span class="prop-label">uptime</span>
+                                    <span id="server_uptime" class="prop-val">—</span>
+                                </div>
+                                <div class="status-pair">
+                                    <span class="prop-label">started</span>
+                                    <span id="server_started_at" class="prop-val">—</span>
+                                </div>
+                            </div>
+
+                            <!-- Qt-toolbar Action Bar -->
+                            <div class="server-toolbar">
+                                <button id="server_restart" class="btn-primary">Restart server</button>
+                                <button id="server_start">Start</button>
+                                <button id="server_stop" class="btn-danger">Stop</button>
+                            </div>
+
+                            <!-- Log Viewer with independent scroll container -->
+                            <div class="server-logs-container">
+                                <div class="logs-header-bar">
+                                    <label for="server_logs_tail" class="prop-label">logs (tail)</label>
+                                    <input id="server_logs_tail" class="mono" size="6" style="width: 55px; text-align: right;" value="50" aria-label="Log lines tail count" />
+                                    <button id="server_logs_refresh">refresh logs</button>
+                                </div>
+                                <div class="log-scroll-area">
+                                    <pre id="server_logs">—</pre>
+                                </div>
+                            </div>
+                        </div>
+                    </fieldset>
+                </div>
+            </main>
+
+            <!-- D. STATUS BAR -->
+            <footer class="status-bar">
+                <div class="sb-cell left">
+                    <span id="out" aria-live="polite"></span>
+                </div>
+                <div class="sb-separator" aria-hidden="true"></div>
+                <div class="sb-cell right">
+                    <span id="server_control_msg" aria-live="polite"></span>
+                </div>
+            </footer>
+        </div>
 
         <script>
             (function () {
