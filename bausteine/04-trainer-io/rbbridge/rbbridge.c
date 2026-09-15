@@ -793,8 +793,8 @@ static const unsigned char RBBRIDGE_ACTIVATE_SIG[] = {
  * `MissionService::IsGraphActive(UtfString const&)` (RVA 0xF9E1F0); beide
  * teilen Prolog + Argument-Marshalling. Unterschied erst am Ende: IsGraph-
  * Active kehrt mit `cmp eax,1 / sete al` (bool) zurueck, DeactivateMission-
- * Flow mit `add rsp,0x30` (void). Deshalb laeuft die Signatur bis Byte 87
- * (dort `48` = `add rsp,0x30` vs `83` = `cmp eax,1`) und noch 5 Byte darueber.
+ * Flow mit `add rsp,0x30` (void). Deshalb laeuft die Signatur exakt 88 Bytes
+ * bis zum letzten Byte 87 (`0x48` = `add rsp,0x30` vs `0x83` = `cmp eax,1`).
  * Die vier E8-CALL-rel32 sind NICHT gepinnt (buildabhaengig) -> Wildcard-
  * Maske (analog RBBRIDGE_EXEC_SIG_MASK); die E8-Opcodes bleiben Pflicht.
  *
@@ -2140,7 +2140,6 @@ static void dispatch_deactivate_mission_flow(HANDLE hPipe, const char *flow)
               "\"flow\":\"%s\"}",
               esc);
 }
-
 
 static void dispatch_get_state(HANDLE hPipe)
 {
