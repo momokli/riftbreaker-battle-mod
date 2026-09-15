@@ -17,10 +17,15 @@ Build: **2.0.58485** (GOG == Dedi, byte-identical). Tools: `llvm-pdbutil dump
 - **`UtfString`** = `Exor::UtfString<char, Exor::utf_traits<char>, ...>`
   (SSO, data at `+8`, size at `+0x18`, capacity at `+0x20`; see
   `io-write-poc.md`).
-- **Thread-safety:** every mutator below touches game state and MUST run on the
-  **game thread**. Marshal through the existing `ConsoleService::Update`
-  vtable-detour (`0x1C1FBA0`) exactly like the current `debug_dom_*` commands —
-  never call these from the pipe thread. (The exception is
+- **Thread-safety:** every mutator below touches game state and **should** run on
+  the **game thread**. There is **no marshal in `main`** — no `g_pending_cmd`, no
+  `ConsoleService::Update` vtable-detour, no `exec`/`lua_*` in `rbbridge.c` (all
+  removed with the C++-direct-only refactor, #387/#446). Today the bridge calls
+  these mutators **inline on the pipe thread** (guarded direct call), which is an
+  open live risk — see **[dedicated-io-thread-model.md](dedicated-io-thread-model.md)**
+  (thread model, readiness gate #479, crash evidence #436). Note the **#378
+  correction**: `ConsoleService::Update` (`0x1C1FBA0`) is a **worker** thread —
+  fine for pure C++ reads/writes, but **unusable for `lua_*`**. (The exception is
   `PlayerService::AddResourceAmount` `0xF1E3D0`, empirically pipe-thread-safe,
   but that is not a service-mutator in the DOM/mission sense.)
 

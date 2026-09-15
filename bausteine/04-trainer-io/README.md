@@ -215,10 +215,12 @@ injizieren (os.open blockiert, bis der Pipe-Server existiert).
 
 ## Risiken & offene Punkte
 
-- **Thread-Marshalling (OFFEN):** `fn(instance, command)` läuft im Pipe-Thread,
-  nicht auf dem Main-/Spiel-Thread. Ob `ConsoleService::ExecuteCommand`
-  thread-safe ist bzw. auf den Spiel-Thread gemarshalled werden muss, ist
-  **nicht belegt** — Live-Test (#252). Nicht als erledigt betrachten.
+- **Thread-Modell (Ist-Stand `main`):** alle Game-Calls der Bridge laufen
+  **inline im Pipe-Thread** — es gibt **keinen** Marshal (`exec`/`lua_*` und der
+  frühere `ConsoleService::Update`-Detour sind mit dem C++-direct-only-Umbau
+  entfernt, #387/#446). Das ist ein **offenes Live-Risiko** (Crash #436,
+  Readiness #479: `ok:false, reason:"world_not_ready"` bis die Welt fertig ist).
+  Single Source of Truth: `docs/research/dedicated-io-thread-model.md`.
 - **Fehl-Fund der Instanz (teilweise abgesichert, offen):** die „first hit =
   this“-Heuristik ist durch den vftable-Plausibilitätscheck
   (`looks_like_vftable`: vftable im Modul-Image, erste Referenz zeigt ins
