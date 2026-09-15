@@ -28,18 +28,40 @@ Alle Routen liegen unter `/server/*` und verlangen **immer** `Authorization: Bea
 ## Netz- und Auth-Topologie
 
 ```
-Internet ──► Host-Caddy (mellon-caddy) ──► rift-caddy (127.0.0.1:8787, plain HTTP)
-                                              └─ handle /server/* ──► 127.0.0.1:8092 (Agent)
+Browser ──► Host-Caddy (mellon-caddy) ──► rift-caddy (127.0.0.1:8787, plain HTTP)
+             (Basic-Auth: operator)          └─ handle /server/* ──► 127.0.0.1:8092 (Agent)
+                                                basic_auth (operator, gleicher Realm
+                                                wie der Cockpit-Root)
+                                                bei gesetztem Token:
+                                                header_up Authorization "Bearer <token>"
 ```
 
 * Der Agent bindet **ausschließlich** `127.0.0.1` (`server_control_bind`).
-* Der `rift-caddy` reicht `/server/*` **unverändert** durch (kein `handle_path`
-  — der Agent bedient seine Routen mit Präfix).
-* Der Bearer-Token wird **im Agenten** geprüft (`hmac.compare_digest`), nicht im
-  Caddy — deshalb ist die Prüfung auch beim Direktzugriff auf den Port wirksam.
+* Der `rift-caddy` reicht `/server/*` **pfadmäßig** unverändert durch (kein
+  `handle_path` — der Agent bedient seine Routen mit Präfix). Auth-mäßig ist die
+  Route seit #454 **keine** Durchreiche mehr: der Caddy schützt sie selbst.
+* **Zwei Auth-Schichten (Issue #454, Fix #456):** Der Browser authentifiziert
+  sich am Caddy per **Operator-Basic-Auth** — dieselben Credentials und derselbe
+  Realm wie der Cockpit-Root, der Browser schickt sie also auch auf `/server/*`
+  automatisch mit. Den **Bearer** des Agenten kann ein Browser nicht senden;
+  ihn setzt der Caddy serverseitig via
+  `header_up Authorization "Bearer {{ server_control_token }}"`. Der Token liegt
+  damit nur im Caddy-/Host-Netz — nie im Browser, nie im Panel-JS.
+* Ist **kein** Token konfiguriert (`server_control_token` leer), rendert die
+  Rolle den `header_up` gar nicht erst: ein literales `Bearer ` lehnt der Agent
+  ab. Die Basic-Auth bleibt, der Agent antwortet 401 (fail-closed).
+* Der Bearer-Token wird **zusätzlich im Agenten** geprüft
+  (`hmac.compare_digest`) — deshalb ist die Prüfung auch beim Direktzugriff auf
+  den Port wirksam (fail-closed, auch wenn Caddy fällt).
 * Ohne konfigurierten Token startet der Dienst **nicht** (fail-closed, Exit 2)
   und die Ansible-Rolle bricht mit klarer Meldung ab. Es gibt keinen offenen
   Restart-Endpunkt.
+* Der Bearer kommt aus `vault_server_control_token`; die `website`-Rolle liest
+  denselben Vault-Wert wie die `server-control`-Rolle (`server_control_token`,
+  Default leer → der Agent antwortet 401, es öffnet sich nie ein Zugang).
+* Test/Beleg ohne Spieler: `deploy/tests/server-control-auth/run.sh` (Caddy +
+  Mock-Agent, prüft 401-Challenge ohne Credentials, 200 mit Operator-Auth und
+  den vom Caddy injizierten Bearer).
 
 ## Konfiguration
 

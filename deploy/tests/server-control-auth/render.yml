@@ -1,0 +1,30 @@
+---
+# Rendert NUR die echte rift-caddy.Caddyfile.j2 (Rolle website) mit den
+# Test-Ports/Test-Token des Auth-Tests (deploy/tests/server-control-auth/run.sh).
+#
+# Bewusst das PRODUKTIONS-Template — kein nachgebauter Auszug: getestet wird
+# genau die Verdrahtung, die auf planet live geht (Issue #454).
+#
+# Die Testwerte kommen als extra-vars (`-e`) aus run.sh und gewinnen damit
+# gegen die Rollen-Defaults aus vars_files (Ansible-Praezedenz), das Template
+# selbst bleibt unveraendert.
+- name: rift-caddy Caddyfile fuer den /server/*-Auth-Test rendern
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - "{{ playbook_dir }}/../../roles/website/defaults/main.yml"
+
+  tasks:
+    - name: Test-Renderverzeichnis sicherstellen
+      file:
+        path: "{{ test_render_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: rift-caddy Caddyfile rendern (PRODUKTIONS-Template)
+      template:
+        src: "{{ playbook_dir }}/../../roles/website/templates/rift-caddy.Caddyfile.j2"
+        dest: "{{ test_render_dir }}/Caddyfile"
+        mode: "0644"
