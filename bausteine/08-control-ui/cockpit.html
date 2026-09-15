@@ -154,6 +154,11 @@
                     grid-row: 1;
                     align-self: start;
                 }
+                #panel-send-tracker {
+                    grid-column: 1;
+                    grid-row: 3;
+                    align-self: start;
+                }
                 .right-col {
                     grid-column: 3;
                     grid-row: 1 / span 2;
@@ -415,6 +420,12 @@
             }
 
             /* Group C: Server Control (Plane B) */
+            /* Send tracker (#527): persistentes Send-Log (timestamp+amount).
+               Feste Hoehe, damit ein wachsendes Log keine Bedienelemente schiebt. */
+            .send-log-area {
+                height: 170px;
+            }
+
             #panel-server {
                 display: flex;
                 flex-direction: column;
@@ -577,7 +588,46 @@
                         </div>
                     </fieldset>
 
-                    <!-- B. MISSION FLOW (WAVE) -->
+                    <!-- B. SEND TRACKER (1.0-Send-Loop, #527) -->
+                    <fieldset class="q-groupbox" id="panel-send-tracker">
+                        <legend>Send Tracker (Carbonium)</legend>
+                        <div class="flow-container">
+                            <div class="server-status-strip">
+                                <div class="status-pair">
+                                    <span class="prop-label">total</span>
+                                    <span id="send_total" class="prop-val">—</span>
+                                </div>
+                                <div class="status-pair">
+                                    <span class="prop-label">count</span>
+                                    <span id="send_count" class="prop-val">—</span>
+                                </div>
+                                <div class="status-pair">
+                                    <span class="prop-label">source</span>
+                                    <span id="send_source" class="prop-val">—</span>
+                                </div>
+                            </div>
+                            <div class="flow-action-row">
+                                <input
+                                    id="send_query"
+                                    class="mono flow-grow"
+                                    placeholder="filter (resource / amount)"
+                                    aria-label="Send-Log filtern"
+                                />
+                                <button id="send_refresh" aria-label="Send-Log aktualisieren">refresh</button>
+                            </div>
+                            <div class="log-scroll-area send-log-area">
+                                <pre id="send_log">—</pre>
+                            </div>
+                            <div class="flow-note">
+                                persistentes Send-Log (timestamp + amount). Die
+                                Quelle haengt an einem austauschbaren Adapter —
+                                der finale Transport folgt aus #526.
+                                <span id="send_tracker_msg" aria-live="polite"></span>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <!-- C. MISSION FLOW (WAVE) -->
                     <fieldset class="q-groupbox" id="panel-mission">
                         <legend>Mission Flow (Wave)</legend>
                         <div class="flow-container">
@@ -639,7 +689,7 @@
                         </div>
                     </fieldset>
 
-                    <!-- B2. MATCH END (#519) — nativer C++-Write -->
+                    <!-- C2. MATCH END (#519) — nativer C++-Write -->
                     <fieldset class="q-groupbox" id="panel-endgame">
                         <legend>Match End (Win/Lose)</legend>
                         <div class="flow-container">
@@ -660,7 +710,7 @@
                         </div>
                     </fieldset>
 
-                    <!-- C. CREATURES BASE DIFFICULTY -->
+                    <!-- D. CREATURES BASE DIFFICULTY -->
                     <fieldset class="q-groupbox" id="panel-creatures">
                         <legend>Creatures Base Difficulty</legend>
                         <div class="flow-container">
@@ -688,7 +738,28 @@
                         </div>
                     </fieldset>
 
-                    <!-- D. NATURAL WAVES (VANILLA) -->
+                    <!-- E. HQ HEALTH (#511) — nativer C++-Read -->
+                    <fieldset class="q-groupbox" id="panel-hq">
+                        <legend>HQ Health</legend>
+                        <div class="flow-container">
+                            <div class="flow-readouts">
+                                <div class="flow-prop">
+                                    <span class="prop-label">hp</span>
+                                    <span id="hq_hp" class="prop-val">—</span>
+                                </div>
+                                <div class="flow-prop">
+                                    <span class="prop-label">hp_max</span>
+                                    <span id="hq_hp_max" class="prop-val">—</span>
+                                </div>
+                                <div class="flow-prop">
+                                    <span class="prop-label">dead</span>
+                                    <span id="hq_dead" class="prop-val">—</span>
+                                </div>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <!-- F. NATURAL WAVES (VANILLA) -->
                     <fieldset class="q-groupbox" id="panel-waves">
                         <legend>Natural Waves (Vanilla)</legend>
                         <div class="flow-container">
@@ -717,7 +788,7 @@
                 </div>
 
                 <div class="right-col">
-                    <!-- C. SERVER CONTROL (PLANE B) -->
+                    <!-- G. SERVER CONTROL (PLANE B) -->
                     <fieldset class="q-groupbox" id="panel-server">
                         <legend>Server Control (Plane B)</legend>
                         <div class="server-group-content">
@@ -764,7 +835,7 @@
                 </div>
             </main>
 
-            <!-- D. STATUS BAR -->
+            <!-- H. STATUS BAR -->
             <footer class="status-bar">
                 <div class="sb-cell left">
                     <span id="out" aria-live="polite"></span>
@@ -822,6 +893,18 @@
                             s.creatures_base_difficulty === null
                                 ? "—"
                                 : String(s.creatures_base_difficulty);
+                        $("hq_hp").textContent =
+                            s.hq_hp === undefined || s.hq_hp === null
+                                ? "—"
+                                : fmt(s.hq_hp);
+                        $("hq_hp_max").textContent =
+                            s.hq_hp_max === undefined || s.hq_hp_max === null
+                                ? "—"
+                                : fmt(s.hq_hp_max);
+                        $("hq_dead").textContent =
+                            s.hq_dead === undefined || s.hq_dead === null
+                                ? "—"
+                                : String(s.hq_dead);
                         $("out").textContent = "";
                     } catch (e) {
                         $("out").textContent = "ERR " + e.message;
@@ -975,6 +1058,313 @@
 
                 refresh();
                 setInterval(refresh, 3000);
+
+                // --- send tracker (testable) ---
+                // Persistente Send-Liste (#527, 1.0-Send-Loop #517).
+                //
+                // Die QUELLE ist bewusst hinter `source` gekapselt und damit
+                // austauschbar: der Transport des Send-Signals (HUD-Button ->
+                // Web-UI) ist Gegenstand des Spikes #526 und hier NICHT
+                // endgueltig festgeschrieben. `createBridgeSendSource` ist nur
+                // der provisorische Default (Bridge-Route, analog zu den
+                // uebrigen IO-Kanal-Routen). #526 legt den finalen Pfad fest;
+                // dann wird ausschliesslich dieser Adapter getauscht.
+                function createLocalStorageStore(key, storage) {
+                    var mem = [];
+                    function backing() {
+                        if (storage) return storage;
+                        try {
+                            return typeof localStorage !== "undefined"
+                                ? localStorage
+                                : null;
+                        } catch (e) {
+                            return null;
+                        }
+                    }
+                    return {
+                        persistent: function () {
+                            return !!backing();
+                        },
+                        load: function () {
+                            var s = backing();
+                            if (!s) return mem.slice();
+                            try {
+                                var raw = s.getItem(key);
+                                if (!raw) return mem.slice();
+                                var parsed = JSON.parse(raw);
+                                return Array.isArray(parsed) ? parsed : [];
+                            } catch (e) {
+                                return mem.slice();
+                            }
+                        },
+                        save: function (entries) {
+                            mem = entries.slice();
+                            var s = backing();
+                            if (!s) return;
+                            try {
+                                s.setItem(key, JSON.stringify(mem));
+                            } catch (e) {
+                                // Quota/Privacy-Mode: In-Memory bleibt gueltig.
+                            }
+                        },
+                    };
+                }
+
+                function createBridgeSendSource(fetchFn, route) {
+                    var ROUTE = route || "get_send_log";
+                    return {
+                        name: "bridge:" + ROUTE,
+                        poll: async function (cursor) {
+                            var body =
+                                cursor === undefined || cursor === null
+                                    ? {}
+                                    : { since: cursor };
+                            var res = await fetchFn(ROUTE, {
+                                method: "POST",
+                                headers: { "content-type": "application/json" },
+                                body: JSON.stringify(body),
+                            });
+                            if (!res || !res.ok) {
+                                throw new Error("HTTP " + (res && res.status));
+                            }
+                            var data = await res.json();
+                            return {
+                                entries: (data && data.entries) || [],
+                                cursor:
+                                    data && data.cursor !== undefined
+                                        ? data.cursor
+                                        : cursor,
+                            };
+                        },
+                    };
+                }
+
+                function createSendTracker(deps) {
+                    var doc = deps.document;
+                    var DASH = "—";
+                    var LOG_ID = "send_log";
+                    var TOTAL_ID = "send_total";
+                    var COUNT_ID = "send_count";
+                    var SOURCE_ID = "send_source";
+                    var QUERY_ID = "send_query";
+                    var MSG_ID = "send_tracker_msg";
+                    var store = deps.store || createLocalStorageStore("rbb.send_log");
+                    var source = deps.source || null;
+                    var cursor =
+                        deps.cursor === undefined ? null : deps.cursor;
+                    var entries = normalize(deps.entries || store.load());
+
+                    function el(id) {
+                        return doc ? doc.getElementById(id) : null;
+                    }
+
+                    function setText(id, value) {
+                        var node = el(id);
+                        if (!node) return;
+                        node.textContent =
+                            value === undefined || value === null || value === ""
+                                ? DASH
+                                : String(value);
+                    }
+
+                    function msg(text) {
+                        setText(MSG_ID, text || "");
+                    }
+
+                    // Nur valide Eintraege (timestamp + amount) uebernehmen;
+                    // alles andere wird verworfen statt zu werfen.
+                    function normalize(list) {
+                        var out = [];
+                        if (!Array.isArray(list)) return out;
+                        for (var i = 0; i < list.length; i++) {
+                            var e = list[i];
+                            if (!e || typeof e !== "object") continue;
+                            var amount = Number(e.amount);
+                            if (!isFinite(amount)) continue;
+                            if (e.timestamp === undefined || e.timestamp === null) {
+                                continue;
+                            }
+                            out.push({
+                                timestamp: e.timestamp,
+                                resource: e.resource || "carbonium",
+                                amount: amount,
+                            });
+                        }
+                        return out.sort(byTimestamp);
+                    }
+
+                    function byTimestamp(a, b) {
+                        var ta = Number(a.timestamp);
+                        var tb = Number(b.timestamp);
+                        if (isFinite(ta) && isFinite(tb) && ta !== tb) {
+                            return ta - tb;
+                        }
+                        return String(a.timestamp) < String(b.timestamp) ? -1 : 1;
+                    }
+
+                    function keyOf(e) {
+                        return e.timestamp + "|" + e.resource + "|" + e.amount;
+                    }
+
+                    // Neues anhaengen, Dubletten (gleiche ts/resource/amount)
+                    // verwerfen -> idempotent bei wiederholtem Poll.
+                    function merge(base, incoming) {
+                        var seen = {};
+                        var out = [];
+                        var all = base.concat(incoming);
+                        for (var i = 0; i < all.length; i++) {
+                            var k = keyOf(all[i]);
+                            if (seen[k]) continue;
+                            seen[k] = true;
+                            out.push(all[i]);
+                        }
+                        return out.sort(byTimestamp);
+                    }
+
+                    function fmtTs(ts) {
+                        var n = Number(ts);
+                        if (isFinite(n) && n > 0) {
+                            // Sekunden- vs. Millisekunden-Epoche robust deuten.
+                            var d = new Date(n < 1e12 ? n * 1000 : n);
+                            if (!isNaN(d.getTime())) {
+                                return d.toISOString().replace("T", " ").slice(0, 19);
+                            }
+                        }
+                        return String(ts);
+                    }
+
+                    function fmtEntry(e) {
+                        var sign = e.amount >= 0 ? "+" : "";
+                        return (
+                            fmtTs(e.timestamp) +
+                            "  " +
+                            e.resource +
+                            "  " +
+                            sign +
+                            e.amount
+                        );
+                    }
+
+                    function query() {
+                        var node = el(QUERY_ID);
+                        return node && typeof node.value === "string"
+                            ? node.value.trim().toLowerCase()
+                            : "";
+                    }
+
+                    function filtered() {
+                        var q = query();
+                        if (!q) return entries.slice();
+                        var out = [];
+                        for (var i = 0; i < entries.length; i++) {
+                            if (fmtEntry(entries[i]).toLowerCase().indexOf(q) !== -1) {
+                                out.push(entries[i]);
+                            }
+                        }
+                        return out;
+                    }
+
+                    function render() {
+                        var rows = filtered();
+                        if (!rows.length) {
+                            setText(LOG_ID, DASH);
+                        } else {
+                            var lines = [];
+                            for (var i = 0; i < rows.length; i++) {
+                                lines.push(fmtEntry(rows[i]));
+                            }
+                            setText(LOG_ID, lines.join("\n"));
+                        }
+                        var total = 0;
+                        for (var j = 0; j < rows.length; j++) {
+                            total += rows[j].amount;
+                        }
+                        setText(TOTAL_ID, rows.length ? String(total) : DASH);
+                        setText(COUNT_ID, String(rows.length));
+                        setText(
+                            SOURCE_ID,
+                            source && source.name ? source.name : "kein Adapter (#526)",
+                        );
+                        return rows;
+                    }
+
+                    // Persistentes Log: bei Reload aus dem Store, nicht transient.
+                    function poll() {
+                        if (!source || typeof source.poll !== "function") {
+                            msg("kein Send-Source-Adapter (#526)");
+                            render();
+                            return Promise.resolve({ entries: entries, added: 0 });
+                        }
+                        return source.poll(cursor).then(
+                            function (res) {
+                                var incoming = normalize(
+                                    res && res.entries ? res.entries : [],
+                                );
+                                var added = 0;
+                                if (incoming.length) {
+                                    var before = entries.length;
+                                    entries = merge(entries, incoming);
+                                    added = entries.length - before;
+                                    cursor =
+                                        res && res.cursor !== undefined
+                                            ? res.cursor
+                                            : cursor;
+                                    store.save(entries);
+                                } else if (res && res.cursor !== undefined) {
+                                    cursor = res.cursor;
+                                }
+                                msg("");
+                                render();
+                                return { entries: entries, added: added };
+                            },
+                            function (e) {
+                                // Defensiv: Anzeige bleibt (persistente Eintraege),
+                                // Fehler nur als Meldung.
+                                msg("send source unavailable");
+                                render();
+                                return {
+                                    entries: entries,
+                                    added: 0,
+                                    error: String((e && e.message) || e),
+                                };
+                            },
+                        );
+                    }
+
+                    return {
+                        render: render,
+                        poll: poll,
+                        entries: function () {
+                            return entries.slice();
+                        },
+                        total: function () {
+                            var rows = filtered();
+                            var t = 0;
+                            for (var i = 0; i < rows.length; i++) t += rows[i].amount;
+                            return t;
+                        },
+                        add: function (entry) {
+                            entries = merge(entries, normalize([entry]));
+                            store.save(entries);
+                            return render();
+                        },
+                    };
+                }
+                // --- end send tracker ---
+
+                var sendTracker = createSendTracker({
+                    document: document,
+                    store: createLocalStorageStore("rbb.send_log"),
+                    source: createBridgeSendSource(window.fetch.bind(window)),
+                });
+                $("send_refresh").onclick = function () {
+                    sendTracker.poll();
+                };
+                $("send_query").oninput = function () {
+                    sendTracker.render();
+                };
+                sendTracker.render();
+                setInterval(sendTracker.poll, 10000);
 
                 // --- server-control panel (testable) ---
                 function createServerControlPanel(deps) {

@@ -181,6 +181,13 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         working-directory: tests/server-control-panel
         run: npm test
+      # Send-Tracker (#527): persistente Send-Liste (timestamp+amount) +
+      # austauschbarer Quell-Adapter (offener Anschluss #526). Extrahierter
+      # Marker-Block aus cockpit.html, kein Netzwerk/DOM. Keine Dependencies.
+      - name: Unit-Test Send-Tracker (Issue #527)
+        if: needs.changes.outputs.test == 'true'
+        working-directory: tests/send-tracker
+        run: npm test
 
   build:
     name: Build + Package (rbbridge.dll/exe, dist/*.zip)
