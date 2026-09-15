@@ -20,6 +20,7 @@ jede Komponente einzeln validieren, bevor sie in den finalen Mod einfließt.
 | [04-trainer-io](04-trainer-io/) | Injector + rbbridge-DLL: Named Pipe `\\.\pipe\rbbattle`, `ping`/`exec` | Code fertig — **ohne Spiel testbar** (notepad.exe) | DLL bauen, in notepad.exe injizieren, `pipe_client.py` starten |
 | [05-economy-loop](05-economy-loop/) | Economy-Kreis: Punkte verdienen (`EntityKilledEvent`/`HourEvent`-Dual-Mode) + ausgeben (`rb_buy_wave`, Kosten 10/25/50, Spawn aus Baustein 01), Konto in Global-Database (`rb_points`/`rb_status`); Recherche: `docs/research/api-deep-dive.md` | Code fertig — In-Game-Test offen | Installieren, Survival-Karte laden, `rb_points`, `rb_buy_wave 1..3`, Kills, Log prüfen |
 | [07-relay](07-relay/) | Relay-Brücke: tailt `exor_logs.txt` ([RBBATTLE]-Zeilen), liefert Events per `POST /event` ein, Poll-Loop dispatcht `exec_command` via Pipe/rbbridge | untested — Unit-Tests grün | `python3 -m unittest test_dispatch test_referee` |
+| [08-control-ui](08-control-ui/) | Operator-Cockpit (`cockpit.html`): **manuelles Backend** — konsumiert 04 (`pipe_bridge`: `get_state`/`add_resource`/`activate_mission_flow`/`deactivate_mission_flow`/`probe`) + Plane-B-Agent (`/server/*`, #424) | Code fertig — Unit-Test grün (Panel) | `cd tests/server-control-panel && npm test` |
 
 ## Spieltest-Status (muss Momo in-game bestätigen)
 
@@ -32,6 +33,7 @@ jede Komponente einzeln validieren, bevor sie in den finalen Mod einfließt.
 ## Lokaler Teststatus (Server/Relay — läuft ohne Spiel)
 
 - [x] 07-relay: `python3 -m unittest test_dispatch test_referee` grün (Relay-Dispatch + Referee-Rückkanal)
+- [x] 08-control-ui: `cd tests/server-control-panel && npm test` grün (Panel `server control (plane B)`, defensives Contract)
 
 ## Konventionen
 

@@ -72,7 +72,7 @@ jobs:
           fi
 
           if printf '%s\n' "$CHANGED" \
-             | grep -Eq '^(bausteine/00-mod-skeleton/|bausteine/01-wave-spawn/|bausteine/02-custom-ui/|bausteine/03-log-bridge/|bausteine/04-trainer-io/|bausteine/05-economy-loop/|mod/|scripts/(package_bausteine|mod_version)\.sh|\.github/workflows/ci\.yml)'; then
+             | grep -Eq '^(bausteine/00-mod-skeleton/|bausteine/01-wave-spawn/|bausteine/02-custom-ui/|bausteine/03-log-bridge/|bausteine/04-trainer-io/|bausteine/05-economy-loop/|bausteine/08-control-ui/|mod/|scripts/(package_bausteine|mod_version)\.sh|\.github/workflows/ci\.yml)'; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
             echo "build=false" >> "$GITHUB_OUTPUT"
