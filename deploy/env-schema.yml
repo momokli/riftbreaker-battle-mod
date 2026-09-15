@@ -57,6 +57,11 @@ per_env:
   crash_collector_unit: [prod]
   crash_collector_dir: [prod]
   crash_collector_container: [prod]
+  # --- Server-Control (Prod-Zwilling, Issue #498) --------------------------
+  server_control_unit: [prod]
+  server_control_port: [prod]
+  server_control_install_dir: [prod]
+  server_control_env_file: [prod]
   # --- Tournament-Server ----------------------------------------------------
   tournament_install_dir: [prod, test]
   tournament_unit: [prod, test]
@@ -101,7 +106,6 @@ shared:
   website_host_caddyfile_group: "Gruppe des geteilten Host-Caddyfiles (momo) — Host-Konstante, kein Env-Zustand."
   mods_zip_name: "Zip-Dateiname rbbattle.zip ist historisch fix (md5-Paritaet/Download-Link); Env-Trennung erfolgt ueber das abweichende mods_zip_dest."
   rift_caddy_site_root: "Docroot IM Caddy-Container (/srv/site) — container-interner Pfad, unabhaengig vom Host-Mount je Env."
-  server_control_port: "Nur der dev-Host-Agent bindet 8092; prod rendert die /server/*-Route nicht (#463) — kein Env-Konflikt."
   riftbreaker_server_campaign: "Bis #476 gemeinsam (Game-Settings koppeln heute dev/prod) — Kopplung ist bewusst/dokumentiert, kein stilles Erben."
   riftbreaker_server_mission: "Bis #476 gemeinsam (Game-Settings koppeln heute dev/prod) — wie campaign."
   riftbreaker_server_difficulty: "Bis #476 gemeinsam (Game-Settings koppeln heute dev/prod) — wie campaign."

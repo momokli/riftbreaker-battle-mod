@@ -9,18 +9,20 @@
 #
 #   dev  (server_control_enabled=true, wie site.yml)  -> handle /server/* MUSS
 #        gerendert sein und auf server_control_port (host_vars: 8092) zeigen.
-#   prod (server_control_enabled=false, wie deploy-prod.yml + prod-vars.yml)
-#        -> handle /server/* darf NICHT gerendert sein; das Cockpit-Root und
-#        /tournament/* bleiben erhalten.
+#   prod (server_control_enabled=true, wie deploy-prod.yml + prod-vars.yml)
+#        -> handle /server/* MUSS gerendert sein und auf server_control_port
+#        (prod-vars: 8093) zeigen — NIE auf den dev-Port 8092.
+#   fail-safe (server_control_enabled=false) -> handle /server/* darf NICHT
+#        gerendert sein; das Cockpit-Root und /tournament/* bleiben erhalten.
 #
 # vars_files sind bewusst so geordnet, dass die host_vars die Rollen-Defaults
 # ÜBERSCHREIBEN (host_vars zuletzt) — das entspricht der echten Ansible-
 # Präzedenz (Rollen-Defaults < host_vars) und ist der Grund, weshalb das Flag
 # als Play-Var in site.yml/deploy-prod.yml steht, nicht in den host_vars.
 #
-# Zusätzlich wird die Ursache festgenagelt: prod deployt keinen Agenten
-# (deploy-prod.yml ohne Role server-control) und schaltet die Route ab —
-# dev deployt ihn und schaltet sie ein.
+# Zusätzlich wird die Ursache festgenagelt: dev UND prod deployen je einen
+# eigenen Agenten (deploy-prod.yml MIT Role server-control, Issue #498) —
+# jede Route zeigt nur auf den eigenen Port (8092 bzw. 8093).
 #
 # Aufruf über run.sh (oder direkt):
 #   RB_ROUTE_RENDER_DIR=$(mktemp -d) ansible-playbook deploy/tests/server-control-route/main.yml \
@@ -75,16 +77,18 @@
           (auf planet den DEV-Agenten) — genau der Bug aus #463.
         success_msg: "/server/*-Route passt zur Erwartung (expect_route={{ expect_route }})."
 
-    - name: "Route zeigt (nur) auf den eigenen Agent-Port"
+    - name: "Route zeigt (nur) auf den eigenen Agent-Port (kein Cross-Env)"
       assert:
         that:
           - (("127.0.0.1:" ~ (server_control_port | string)) in caddyfile) == (expect_route | bool)
-          - ("127.0.0.1:8092" in caddyfile) == (expect_route | bool)
+          # dev haelt 8092; jede andere Env (prod 8093) darf die Route NIE auf
+          # den dev-Port zeigen (sonst Restart aus dem prod-Cockpit auf dev).
+          - ((server_control_port | int) == 8092) or ("127.0.0.1:8092" not in caddyfile)
         fail_msg: >-
           Die /server/*-Route zeigt nicht auf den eigenen Agent-Port
           (server_control_port={{ server_control_port }}), bzw. rendert den
-          DEV-Port 8092, obwohl die Route aus sein muss.
-        success_msg: "/server/*-Route zeigt genau auf 127.0.0.1:{{ server_control_port }} (dev 8092)."
+          DEV-Port 8092 obwohl server_control_port davon abweicht (Cross-Env).
+        success_msg: "/server/*-Route zeigt genau auf 127.0.0.1:{{ server_control_port }} (kein Cross-Env)."
 
     # Auch bei abgeschalteter Route darf der Rest des Cockpits NICHT fehlen.
     - name: "Cockpit-Root + /tournament bleiben erhalten"
@@ -97,18 +101,17 @@
           /tournament/* — das Gating darf nur die /server/*-Route betreffen.
         success_msg: "Cockpit-Root und /tournament/* unveraendert vorhanden."
 
-    # Ursache festnageln: die Route haengt an der Rolle. dev deployt sie und
-    # schaltet das Flag im Play an, prod nicht.
-    - name: "Ursache: prod ohne server-control-Rolle/Route, dev mit (Issue #463)"
+    # Ursache festnageln: die Route haengt an der Rolle. dev UND prod deployen
+    # je einen eigenen Agenten und schalten das Flag im Play an (Issue #498).
+    - name: "Ursache: dev + prod je eigener Agent + Route (Issue #498)"
       assert:
         that:
           - "'- role: server-control' in (lookup('file', playbook_dir ~ '/../../site.yml'))"
           - "'server_control_enabled: true' in (lookup('file', playbook_dir ~ '/../../site.yml'))"
-          - "'- role: server-control' not in (lookup('file', playbook_dir ~ '/../../deploy-prod.yml'))"
-          - "'server_control_enabled: false' in (lookup('file', playbook_dir ~ '/../../deploy-prod.yml'))"
+          - "'- role: server-control' in (lookup('file', playbook_dir ~ '/../../deploy-prod.yml'))"
+          - "'server_control_enabled: true' in (lookup('file', playbook_dir ~ '/../../deploy-prod.yml'))"
         fail_msg: >-
-          Die Rollen-/Flag-Verdrahtung passt nicht zur Route: dev muss den
-          server-control-Agenten deployen und server_control_enabled=true
-          setzen, prod darf ihn nicht deployen und muss das Flag auf false
-          setzen.
-        success_msg: "prod ohne Agent/Route, dev mit Agent/Route — Ursache und Fix passen zusammen."
+          Die Rollen-/Flag-Verdrahtung passt nicht zur Route: dev UND prod
+          muessen je einen server-control-Agenten deployen und
+          server_control_enabled=true setzen (Issue #498).
+        success_msg: "dev + prod je mit Agent/Route — Ursache und Fix passen zusammen."

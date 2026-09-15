@@ -67,6 +67,16 @@ tournament_port: 8082
 tournament_bridge_a_url: "http://127.0.0.1:9002/exec"
 tournament_bridge_b_url: "http://127.0.0.1:9002/exec"
 
+# --- Server-Control (Prod-Zwilling des Host-Agenten, Issue #498) ------------
+# Eigener Agent auf 8093 (dev bleibt 8092), eigene Unit/Install/Env-Datei —
+# steuert den prod-Container (riftbreaker_server_container oben =
+# riftbreaker-dedicated-prod). Das Token kommt aus dem Vault
+# (vault_server_control_prod_token, gesetzt in deploy/deploy-prod.yml).
+server_control_unit: server-control-prod
+server_control_port: 8093
+server_control_install_dir: /opt/rbmods/server-control-prod
+server_control_env_file: /etc/rbmods/server-control-prod.env
+
 # --- Website (Landing + Cockpit, eigener Caddy) -----------------------------
 # Prod-Zwilling von dev: eigene Landing (www.rift.projectmellon.de) + eigenes
 # Operator-Cockpit (cockpit.rift.projectmellon.de), eigener rift-caddy-prod-
