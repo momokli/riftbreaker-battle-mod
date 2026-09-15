@@ -8,7 +8,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..', '..');
 const BRIDGE_DIR = path.join(ROOT, 'bausteine', '04-trainer-io', 'bridge');
@@ -49,6 +51,35 @@ test('#387: cockpit.html bietet DOM Pause/Resume (Write) + Status (Read)', () =>
     cockpit.includes('FAIL:') && cockpit.includes('r.reason'),
     'ok:false/reason wird nicht angezeigt',
   );
+});
+
+// Substring-Matching allein ist blind für Syntaxfehler (z. B. ein überzähliges
+// "};" in der DOM-Verdrahtung). Deshalb den <script>-Block extrahieren und mit
+// `node --check` tatsächlich parsen — genau dieser Fehler wird damit rot.
+test('#387: cockpit.html <script>-Block ist syntaktisch gültiges JavaScript', () => {
+  const blocks = [...cockpit.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(
+    (m) => m[1],
+  );
+  assert.ok(blocks.length > 0, 'kein <script>-Block in cockpit.html gefunden');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cockpit-script-'));
+  try {
+    blocks.forEach((src, i) => {
+      const file = path.join(tmp, `block-${i}.js`);
+      fs.writeFileSync(file, src);
+      const res = spawnSync(process.execPath, ['--check', file], {
+        encoding: 'utf8',
+      });
+      assert.strictEqual(
+        res.status,
+        0,
+        `cockpit.html <script>-Block ${i} ist kein gültiges JS:\n${
+          res.stderr || res.stdout
+        }`,
+      );
+    });
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test('#387: generiertes cockpit_html.inc ist synchron zu cockpit.html', (t) => {
