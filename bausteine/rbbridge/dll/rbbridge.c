@@ -2181,9 +2181,17 @@ static int set_suspended_sig_selfcheck(void)
         return 0;
     if (memcmp(RBBRIDGE_SET_SUSPENDED_SIG, expect, sizeof(expect)) != 0)
         return 0;
-    /* +0xF1 im Displacement der mov-Anweisung? */
-    if (RBBRIDGE_SET_SUSPENDED_SIG[2] != (unsigned char)(RBBRIDGE_LUAGRAPHNODE_SUSPENDED_OFF & 0xFF))
-        return 0;
+    /* Displacement der mov-Anweisung (4 B, little-endian) == Flag-Offset
+     * +0xF1? Vollbreite Pruefung (nicht nur das Low-Byte), damit die
+     * Layout-Konstante wirklich an die Signatur gebunden ist. */
+    {
+        uint32_t disp = (uint32_t)RBBRIDGE_SET_SUSPENDED_SIG[2]
+                      | ((uint32_t)RBBRIDGE_SET_SUSPENDED_SIG[3] << 8)
+                      | ((uint32_t)RBBRIDGE_SET_SUSPENDED_SIG[4] << 16)
+                      | ((uint32_t)RBBRIDGE_SET_SUSPENDED_SIG[5] << 24);
+        if (disp != RBBRIDGE_LUAGRAPHNODE_SUSPENDED_OFF)
+            return 0;
+    }
     /* TypeHash der DOM-Klasse == FNV-1a ihres Skriptpfads? */
     if (rbbridge_fnv1a32(RBBRIDGE_DOM_SCRIPT) != RBBRIDGE_DOM_SCRIPT_HASH)
         return 0;
