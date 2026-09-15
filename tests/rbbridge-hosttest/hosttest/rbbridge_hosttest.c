@@ -762,6 +762,85 @@ int main(void)
               "buf_contains: Treffer hinter Pufferende ignoriert");
     }
 
+    /* ---- #516 nativer Round-Reset: reine Decoder/Finder ---- */
+    {
+        const unsigned char body[8] = {0xC6, 0x81, 0x2A, 0x05, 0x00, 0x00,
+                                       0x01, 0xC3};
+        const unsigned char bad1[8] = {0xC6, 0x81, 0x2A, 0x05, 0x00, 0x00,
+                                       0x00, 0xC3}; /* imm != 1 */
+        const unsigned char bad2[8] = {0xC7, 0x81, 0x2A, 0x05, 0x00, 0x00,
+                                       0x01, 0xC3}; /* opcode */
+        const unsigned char zero[8] = {0xC6, 0x81, 0x00, 0x00, 0x00, 0x00,
+                                       0x01, 0xC3};
+        uint32_t off = 0;
+
+        check(restart_decode(body, &off) == 1 && off == 0x52Au,
+              "#516 restart_decode: mov byte [rcx+0x52a],1 -> off 0x52a");
+        check(restart_decode(bad1, &off) == 0,
+              "#516 restart_decode: falsches imm -> 0");
+        check(restart_decode(bad2, &off) == 0,
+              "#516 restart_decode: falscher Opcode -> 0");
+        check(restart_decode(NULL, &off) == 0,
+              "#516 restart_decode: NULL -> 0 (kein Crash)");
+        check(restart_decode(zero, &off) == 0,
+              "#516 restart_decode: Offset 0 -> 0 (verworfen)");
+
+        {
+            unsigned char cons[30] = {
+                0x41, 0x80, 0xBE, 0x2A, 0x05, 0x00, 0x00, 0x00, 0x74, 0x14,
+                0x49, 0x8B, 0x06, 0x49, 0x8B, 0xCE, 0xFF, 0x90, 0x90, 0x00,
+                0x00, 0x00, 0x41, 0xC6, 0x86, 0x2A, 0x05, 0x00, 0x00, 0x00
+            };
+            uint32_t slot = 0;
+            check(restart_decode_consumer(cons, &off, &slot) == 1 &&
+                      off == 0x52Au && slot == 0x90u,
+                  "#516 restart_decode_consumer: off 0x52a + slot 0x90");
+            cons[25] = 0x2B; /* 2. disp32 abweichend -> inkonsistent */
+            check(restart_decode_consumer(cons, &off, &slot) == 0,
+                  "#516 restart_decode_consumer: disp32 ungleich -> 0");
+            check(restart_decode_consumer(NULL, &off, &slot) == 0,
+                  "#516 restart_decode_consumer: NULL -> 0 (kein Crash)");
+        }
+
+        {
+            unsigned char buf[0x200];
+            uintptr_t fnv = 0x11223344u;
+            uintptr_t out[4] = {0, 0, 0, 0};
+            uintptr_t vt2 = 0;
+            memset(buf, 0, sizeof(buf));
+            memcpy(buf + 0x40 + 0x20, &fnv, sizeof(fnv)); /* vtable @0x40 */
+            memcpy(buf + 0x100 + 0x20, &fnv, sizeof(fnv)); /* vtable @0x100 */
+            vt2 = (uintptr_t)(buf + 0x100);
+            check(restart_find_vtables(buf, sizeof(buf), fnv, out, 4) == 2 &&
+                      out[0] == (uintptr_t)(buf + 0x40) && out[1] == vt2,
+                  "#516 restart_find_vtables: 2 vtables abgeleitet");
+            check(restart_find_vtables(buf, sizeof(buf), fnv, out, 1) == 1 &&
+                      out[0] == (uintptr_t)(buf + 0x40),
+                  "#516 restart_find_vtables: out_cap begrenzt");
+            check(restart_find_vtables(buf, sizeof(buf), 0xDEADBEEFu, out,
+                                       4) == 0,
+                  "#516 restart_find_vtables: kein Treffer -> 0");
+            check(restart_find_vtables(NULL, sizeof(buf), fnv, out, 4) == 0,
+                  "#516 restart_find_vtables: NULL -> 0 (kein Crash)");
+        }
+
+        {
+            unsigned char txt[64];
+            memset(txt, 0x90, sizeof(txt));
+            memcpy(txt + 0x00, "\xC6\x81\x11\x00\x00\x00\x01\xC3", 8);
+            memcpy(txt + 0x10, "\xC6\x81\x2A\x05\x00\x00\x01\xC3", 8);
+            check(restart_find_setter(txt, sizeof(txt), 0x52Au) == txt + 0x10,
+                  "#516 restart_find_setter: passender Offset gewaehlt");
+            check(restart_find_setter(txt, sizeof(txt), 0x11u) == txt + 0x00,
+                  "#516 restart_find_setter: erster Kandidat bei 0x11");
+            check(restart_find_setter(txt, sizeof(txt), 0x99u) == NULL,
+                  "#516 restart_find_setter: kein passender -> NULL "
+                  "(graceful)");
+            check(restart_find_setter(NULL, sizeof(txt), 0x52Au) == NULL,
+                  "#516 restart_find_setter: NULL -> NULL (kein Crash)");
+        }
+    }
+
     free(img);
 
     printf("HOSTTEST_PASS=%d HOSTTEST_FAIL=%d\n", g_pass, g_fail);
