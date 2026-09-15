@@ -199,24 +199,6 @@ async function poll() {
   }
 }
 
-async function pollBuyOrders() {
-  try {
-    const { status, data } = await api("GET", "/buy_orders");
-    if (status !== 200) throw new Error("HTTP " + status);
-    const orders = (data && data.orders) || [];
-    $("buyOrderCount").textContent = orders.length ? `(${orders.length})` : "";
-    if (!orders.length) {
-      $("buyOrders").innerHTML = "&gt; keine Buy-Orders …";
-      return;
-    }
-    $("buyOrders").innerHTML = orders
-      .map((o) => `#${o.seq} ${o.world} · ${o.amount} ${o.resource} → ${o.item}`)
-      .join("\n");
-  } catch (e) {
-    $("buyOrders").innerHTML = "&gt; Buy-Orders nicht erreichbar: " + e.message;
-  }
-}
-
 /* Deploy-Identitaet (Issue #483, US4): Badge aus GET /health (env · ref). */
 async function loadIdentity() {
   try {
@@ -299,9 +281,7 @@ function init() {
   bindActions();
   loadIdentity();
   poll();
-  pollBuyOrders();
   setInterval(poll, POLL_MS);
-  setInterval(pollBuyOrders, POLL_MS);
 }
 
 init();
