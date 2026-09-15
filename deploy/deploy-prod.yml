@@ -61,6 +61,15 @@
         rift_env_isolation_root: "{{ playbook_dir }}/.."
       tags: always
 
+    # Env-Pfad-Migration (Issue #483, Ziel B): idempotenter `mv` + Symlink-
+    # Uebergang Alt->Neu VOR den Rollen. Der Tag-CD (v* -> deploy-prod.yml)
+    # deployt sonst die NEUEN prod-Pfade ohne migrierten Stand (Alt-Pfade
+    # /srv/rbgame-prod, /opt/rbmods/compose/riftbreaker-dedicated-prod, ...
+    # bleiben verwaist). Idempotent -> no-op nach dem ersten Lauf.
+    - name: "Env-Pfad-Migration (#483)"
+      include_tasks: "{{ playbook_dir }}/tasks/env-path-migration.yml"
+      tags: always
+
   roles:
     - role: mods-zip
     - role: dedicated-server-image

@@ -11,8 +11,9 @@
 # Beim erneuten Lauf ist der alte Pfad ein Symlink auf den neuen -> no-op
 # (idempotent).
 #
-# Kein Live-Eingriff durch das Repo: die Ausfuehrung passiert im Wartungsfenster
-# ueber deploy/migrate-env-paths.yml. Runbook + Rollback: docs/DEPLOYMENT.md.
+# Kein Live-Eingriff durch das Repo: die Ausfuehrung passiert im regulaeren
+# Deploy (pre_tasks von site.yml/deploy-prod.yml) oder gezielt ueber
+# deploy/migrate-env-paths.yml. Runbook + Rollback: docs/DEPLOYMENT.md.
 #
 # Die Paarliste kommt aus der env-keyed Map unten (`rift_env_path_migration_map`)
 # und ist fuer den hermetischen Test ueber die Var `rift_env_path_migrations`

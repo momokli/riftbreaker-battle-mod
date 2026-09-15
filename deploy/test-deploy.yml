@@ -48,6 +48,15 @@
         rift_env_isolation_root: "{{ playbook_dir }}/.."
       tags: always
 
+    # Env-Pfad-Migration (Issue #483, Ziel B): DERSELBE Wiring-Vertrag wie in
+    # site.yml/deploy-prod.yml. Fuer test ist die Paarliste leer
+    # (rift_env_path_migration_map.test = []) -> der Lauf ist ein no-op (kein
+    # persistenter Alt-Pfad; der Boot-Test raeumt selbst auf). Bewusst NICHT
+    # ausgelassen: ein Schema fuer alle Plays.
+    - name: "Env-Pfad-Migration (#483)"
+      include_tasks: "{{ playbook_dir }}/tasks/env-path-migration.yml"
+      tags: always
+
     # Disk-Space-Gate (#310) — derselbe Preflight wie in deploy/site.yml, damit
     # der Boot-Test denselben Abbruch-Pfad fährt (Schwelle via test-vars.yml
     # überschreibbar). Vor dedicated-server-image, also vor dem Image-Build.

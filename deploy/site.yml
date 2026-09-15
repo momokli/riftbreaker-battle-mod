@@ -82,6 +82,19 @@
         rift_env_isolation_root: "{{ playbook_dir }}/.."
       tags: always
 
+    # Env-Pfad-Migration (Issue #483, Ziel B): idempotenter `mv` + Symlink-
+    # Uebergang Alt->Neu MUSS VOR den Rollen laufen. Der CD ist automatisch
+    # (push -> site.yml): ohne diese Einbindung deployt der naechste Lauf die
+    # NEUEN Pfade OHNE migrierten Stand — /srv/rift-dev/game fehlt, game-content
+    # kopiert 664MB aus dem Cache statt `mv` (#301), Alt-Pfade (/srv/rbgame,
+    # /opt/rbmods/rbtools-drift, ...) bleiben verwaist. Idempotent: nach dem
+    # ersten Lauf ist Alt ein Symlink -> no-op; test (Map leer) ist ein no-op.
+    # `tags: always`, damit der deploy-check (`--tags server,website`) denselben
+    # Vertrag sieht.
+    - name: "Env-Pfad-Migration (#483)"
+      include_tasks: "{{ playbook_dir }}/tasks/env-path-migration.yml"
+      tags: always
+
     # Disk-Space-Gate (#310): MUSS VOR `dedicated-server-image` (Image-Build)
     # und VOR dem Mod-Backup laufen — ein Deploy auf voller Platte kann sich
     # nicht mehr selbst herausdeployen (Build/Zip-Backup brauchen selbst Platz).
