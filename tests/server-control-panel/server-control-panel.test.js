@@ -21,8 +21,7 @@ const COCKPIT = path.join(
   "..",
   "..",
   "bausteine",
-  "04-trainer-io",
-  "bridge",
+  "08-control-ui",
   "cockpit.html",
 );
 const BEGIN = "// --- server-control panel (testable) ---";

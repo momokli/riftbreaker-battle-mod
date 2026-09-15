@@ -58,19 +58,28 @@ Alle vier Binaries baut `scripts/build_rbbridge_tools.sh <outdir>`.
 
 ## Cockpit: Server-Control-Panel (Plane B, Issue #422)
 
-Die Cockpit-UI (`bridge/cockpit.html`) hat ein Panel `server control (plane B)`:
-Status (`state`/`health`/`uptime`/`started_at`), Logs (letzte N Zeilen) und die
-Buttons `Restart server`/`Start`/`Stop`. Datenquellen sind die Plane-B-Host-Agent-
-Routen `GET /server/status`, `GET /server/logs?tail=N` (N ≤ 5000) und
-`POST /server/{restart,start,stop}` (Body `{}`), relative Pfade auf derselben
-Origin. Ist der Agent nicht erreichbar (HTTP !ok, Parse-Fehler), zeigt das Panel
-nur "—", meldet den Fehler in einer eigenen kleinen Statuszeile und **laedt die
-Seite nie neu**; Status pollt alle ~5 s, Logs nur auf Knopf.
+Die Cockpit-UI liegt seit #474 (Schritt 1) als eigener Baustein in
+`bausteine/08-control-ui/cockpit.html` — sie ist ein **Konsument** dieses
+IO-Kanals, kein Teil davon (Details: `bausteine/08-control-ui/README.md`).
+
+Ihr Panel `server control (plane B)` hat Status (`state`/`health`/`uptime`/
+`started_at`), Logs (letzte N Zeilen) und die Buttons `Restart server`/`Start`/
+`Stop`. Datenquellen sind die Plane-B-Host-Agent-Routen `GET /server/status`,
+`GET /server/logs?tail=N` (N ≤ 5000) und `POST /server/{restart,start,stop}`
+(Body `{}`), relative Pfade auf derselben Origin. Ist der Agent nicht erreichbar
+(HTTP !ok, Parse-Fehler), zeigt das Panel nur "—", meldet den Fehler in einer
+eigenen kleinen Statuszeile und **laedt die Seite nie neu**; Status pollt alle
+~5 s, Logs nur auf Knopf.
 
 **Live-Daten brauchen gemergtes #424** (Agent + Caddy-Route `handle /server/*`)
 und die Bearer-Injektion in der Caddy-Route (der Browser hat keinen Token -> sonst
-401 -> "—"). Der neue Node-Test `tests/server-control-panel` laeuft ohne Netzwerk
+401 -> "—"). Der Node-Test `tests/server-control-panel` laeuft ohne Netzwerk
 und Dependencies (`cd tests/server-control-panel && npm test`).
+
+**Auslieferung:** `scripts/gen_cockpit_html.py` liest die UI aus Baustein 08 und
+erzeugt `bridge/cockpit_html.inc` (Build-Artefakt, gitignored) fuer
+`pipe_bridge.c`; die Bridge liefert sie unter `GET /` aus. Schritt 2 (#474)
+entkoppelt das (Caddy `file_server` + API-Proxy).
 
 ## Build (Windows, x64)
 

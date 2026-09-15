@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Generate cockpit_html.inc from cockpit.html (single source of truth).
 
-Reads bausteine/04-trainer-io/bridge/cockpit.html and emits the C string
-constant `COCKPIT_HTML` as an include file next to pipe_bridge.c, so the bridge
-serves the operator cockpit UI without a duplicated, hand-maintained copy.
+Reads bausteine/08-control-ui/cockpit.html (Baustein 08, #474) and emits the C
+string constant `COCKPIT_HTML` as an include file next to pipe_bridge.c, so the
+bridge serves the operator cockpit UI without a duplicated, hand-maintained
+copy. The UI is the single source of truth; the .inc is a build artifact for
+pipe_bridge.c and stays in bausteine/04-trainer-io/bridge/.
 
 Idempotent + deterministic (byte-for-byte stable for a given input). Run by
 scripts/build_rbbridge_tools.sh before compiling pipe_bridge.c.
@@ -15,7 +17,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BRIDGE_DIR = os.path.join(ROOT, "bausteine", "04-trainer-io", "bridge")
-SRC = os.path.join(BRIDGE_DIR, "cockpit.html")
+SRC = os.path.join(ROOT, "bausteine", "08-control-ui", "cockpit.html")
 OUT = os.path.join(BRIDGE_DIR, "cockpit_html.inc")
 
 
