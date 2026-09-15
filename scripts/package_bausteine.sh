@@ -7,14 +7,14 @@
 #   rbb-02-custom-ui.zip, rbb-03-log-bridge.zip, rbb-05-economy-loop.zip
 #   (lua/... an der Zip-Wurzel, genau wie nach <game>/mods/<ModName>/ gehoert).
 #
-#   Baustein 04 (trainer-io):
+#   Baustein 04 (rbbridge):
 #     - ist x86_64-w64-mingw32-gcc auf dem PATH: kompiliert rbbridge.dll +
 #       injector.exe + rbbridge_standalone.exe (Windows x64, #ifdef
 #       RBBRIDGE_STANDALONE) + pipe_bridge.exe (HTTP(9001)->Pipe-Bridge,
-#       Issue #265; Win32 + ws2_32) -> rbb-04-trainer-io.zip
+#       Issue #265; Win32 + ws2_32) -> rbb-rbbridge.zip
 #     - sonst ist zig (PATH oder $ZIG) verfuegbar: gleicher Build via
 #       "zig cc -target x86_64-windows-gnu" (Zig bringt die mingw-Libc mit)
-#     - sonst: Quellen + pipe_client.py + README -> rbb-04-trainer-io-src.zip
+#     - sonst: Quellen + pipe_client.py + README -> rbb-rbbridge-src.zip
 #
 # Ausgabe: je Zip eine Zeile "NAME=<dateiname> ZIP=<absoluter-pfad>"
 # (maschinenlesbar fuer Release-Upload).
@@ -77,11 +77,11 @@ for entry in "${BAUSTEINE[@]}"; do
     echo "NAME=$name.zip ZIP=$out"
 done
 
-# Baustein 04: trainer-io (Compile mit mingw-gcc oder zig; sonst Quell-Zip).
+# Baustein 04: rbbridge (Compile mit mingw-gcc oder zig; sonst Quell-Zip).
 # Inhalt des Binary-Zips: injector.exe + rbbridge.dll + rbbridge_standalone.exe
 # + pipe_bridge.exe (Issue #265; alle aus dem aktuellen Quellstand;
 # standalone via -DRBBRIDGE_STANDALONE).
-SRC04="$ROOT/bausteine/04-trainer-io"
+SRC04="$ROOT/bausteine/rbbridge"
 TOOLCHAIN="none"
 if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
     TOOLCHAIN="mingw"
@@ -93,18 +93,18 @@ build_04_binaries() { # <builddir> — kompiliert die 4 Windows-x64-Binaries
     if [ "$TOOLCHAIN" = "mingw" ]; then
         echo "[package_bausteine] 04: x86_64-w64-mingw32-gcc gefunden -> Build (Windows x64)"
         (cd "$bd" \
-            && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -shared -o rbbridge.dll "$SRC04/rbbridge/rbbridge.c" \
+            && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -shared -o rbbridge.dll "$SRC04/dll/rbbridge.c" \
             && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe "$SRC04/injector/injector.c" \
-            && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe "$SRC04/rbbridge/rbbridge.c" \
-            && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o pipe_bridge.exe "$SRC04/bridge/pipe_bridge.c" -lws2_32)
+            && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe "$SRC04/dll/rbbridge.c" \
+            && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o pipe_bridge.exe "$SRC04/pipe-bridge/pipe_bridge.c" -lws2_32)
     else
         local zigc="${ZIG:-zig}"
         echo "[package_bausteine] 04: kein mingw-gcc, aber zig -> Build (zig cc, x86_64-windows-gnu)"
         (cd "$bd" \
-            && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -shared -o rbbridge.dll "$SRC04/rbbridge/rbbridge.c" \
+            && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -shared -o rbbridge.dll "$SRC04/dll/rbbridge.c" \
             && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -o injector.exe "$SRC04/injector/injector.c" \
-            && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe "$SRC04/rbbridge/rbbridge.c" \
-            && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -o pipe_bridge.exe "$SRC04/bridge/pipe_bridge.c" -lws2_32)
+            && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe "$SRC04/dll/rbbridge.c" \
+            && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -o pipe_bridge.exe "$SRC04/pipe-bridge/pipe_bridge.c" -lws2_32)
     fi
 }
 BUILD_DIR="$OUT_DIR/.build-04"
@@ -118,16 +118,16 @@ python3 "$ROOT/scripts/gen_cockpit_html.py"
 if [ "$TOOLCHAIN" = "none" ]; then
     rm -rf "$BUILD_DIR"
     echo "[package_bausteine] 04: weder x86_64-w64-mingw32-gcc noch zig verfuegbar -> Quell-Zip"
-    out04="$OUT_DIR/rbb-04-trainer-io-src.zip"
+    out04="$OUT_DIR/rbb-rbbridge-src.zip"
     zip_content_root "$SRC04" "$out04"
-    echo "NAME=rbb-04-trainer-io-src.zip ZIP=$out04"
+    echo "NAME=rbb-rbbridge-src.zip ZIP=$out04"
 elif build_04_binaries "$BUILD_DIR"; then
     # nur die 4 Binaries ins Zip (keine .pdb/.lib-Artefakte von zig)
     rm -f "$BUILD_DIR"/*.pdb "$BUILD_DIR"/*.lib "$BUILD_DIR"/*.o
-    out04="$OUT_DIR/rbb-04-trainer-io.zip"
+    out04="$OUT_DIR/rbb-rbbridge.zip"
     zip_content_root "$BUILD_DIR" "$out04"
     rm -rf "$BUILD_DIR"
-    echo "NAME=rbb-04-trainer-io.zip ZIP=$out04"
+    echo "NAME=rbb-rbbridge.zip ZIP=$out04"
 else
     echo "FEHLER: 04-Build (TOOLCHAIN=$TOOLCHAIN) fehlgeschlagen." >&2
     exit 1

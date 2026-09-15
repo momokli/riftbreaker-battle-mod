@@ -5,7 +5,7 @@ description: Reverse-engineering the Riftbreaker DLL (riftbreaker_dll_win_releas
 
 # Riftbreaker DLL Reverse Engineering (ingress/egress C++ direct reads)
 
-For work on the dedicated-IO bridge (`bausteine/04-trainer-io/rbbridge/rbbridge.c`):
+For work on the dedicated-IO bridge (`bausteine/rbbridge/dll/rbbridge.c`):
 reading game state directly out of `riftbreaker_dll_win_release.dll` without
 log-tailing. Build 2.0.58485 (GOG == Dedi, byte-identical on mac + planet).
 

@@ -11,9 +11,9 @@ schreibt; ein bloß nachgewiesener RE-Offset ist **nicht** „proven“.
 ```
             ┌────────────────────────────────────────────────────────────────┐
             │  Game (C++/Lua-State, DedicatedServer)                         │
-            │  rbbridge.dll  bausteine/04-trainer-io/rbbridge/rbbridge.c     │
-            │  pipe_bridge.c  bausteine/04-trainer-io/bridge/pipe_bridge.c   │
-            │  WebUI  bausteine/04-trainer-io/bridge/contract.html           │
+            │  rbbridge.dll  bausteine/rbbridge/dll/rbbridge.c     │
+            │  pipe_bridge.c  bausteine/rbbridge/pipe-bridge/pipe_bridge.c   │
+            │  WebUI  bausteine/rbbridge/pipe-bridge/contract.html           │
             │         bzw. tournament/web/                                    │
             └────────────────────────────────────────────────────────────────┘
 

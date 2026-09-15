@@ -12,7 +12,7 @@ Die .c-Datei wird NUR hier editiert (io.open(..., newline="\n")).
 import io
 import sys
 
-PATH = "bausteine/04-trainer-io/rbbridge/rbbridge.c"
+PATH = "bausteine/rbbridge/dll/rbbridge.c"
 
 TYPED_BLOCK = """\
 /* Typed native WRITE commands (#378): Puffer + Drain. Der Detour fuehrt sie

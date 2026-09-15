@@ -8,7 +8,7 @@ editor schreiben). Idempotent: laeuft nur, wenn die Anker vorhanden sind.
 import io
 import sys
 
-PATH = "bausteine/04-trainer-io/rbbridge/rbbridge.c"
+PATH = "bausteine/rbbridge/dll/rbbridge.c"
 
 HELPER = r"""/* ====================================================================== */
 /* DOM-Wellen-Counter + time-to-next (Issue #376): direkter C++-Read      */

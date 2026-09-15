@@ -2,7 +2,7 @@
 
 Notiz zum Transportvertrag zwischen dem Relay (`bausteine/07-relay/relay.py`,
 `dispatch_exec`/`PipeClient`) und der In-Game-Bridge
-(`bausteine/04-trainer-io/rbbridge/rbbridge.c`, kanonisch, Pipe-Server). Das rbbridge-Gegenstück ist in
+(`bausteine/rbbridge/dll/rbbridge.c`, kanonisch, Pipe-Server). Das rbbridge-Gegenstück ist in
 [trainer/protocol.md](../trainer/protocol.md) dokumentiert; dieser Abschnitt
 fixiert die Parameter, die der Relay einhält.
 

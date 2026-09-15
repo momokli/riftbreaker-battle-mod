@@ -22,7 +22,7 @@
  *   POST /probe        -> Memory-Dump (PlayerService-Kette)
  *   sonst              -> 404 {"ok":false,"reason":"not_found"}
  *
- * Protokoll auf der Pipe (v0, siehe bausteine/04-trainer-io/README.md):
+ * Protokoll auf der Pipe (v0, siehe bausteine/rbbridge/README.md):
  *   Kommandos: ping, probe, get_state, add_resource, activate_mission_flow,
  *   deactivate_mission_flow.
  *   Line-delimited JSON, max. 8 KiB pro Zeile (LINE_MAX).

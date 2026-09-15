@@ -50,7 +50,7 @@ im geteilten `$HOME` racen. Hintergrund, Audit und Kapazitätswerte:
 - **ccache** (`actions/cache`, Pfad `~/.cache/ccache`): der MinGW-C++-Build
   (rbbridge.dll/injector.exe/rbbridge_standalone.exe) wird über den
   ccache-Wrapper (`/opt/ccache-rbbattle/bin`) kompiliert; Key basiert auf den
-  C-Quellen unter `bausteine/04-trainer-io/**/*.c`.
+  C-Quellen unter `bausteine/rbbridge/**/*.c`.
 
 ## Offen (bewusst nicht in diesem PR)
 

@@ -14,7 +14,7 @@ Alles bleibt auf dem Game-Thread (im ConsoleService::Update-Detour). Die
 import io
 import sys
 
-PATH = "bausteine/04-trainer-io/rbbridge/rbbridge.c"
+PATH = "bausteine/rbbridge/dll/rbbridge.c"
 
 HELPER_BLOCK = """\
 /* self:method() -> Number (z.B. players = self:GetPlayersCounter()). */

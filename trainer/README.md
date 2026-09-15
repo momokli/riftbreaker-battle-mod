@@ -6,7 +6,7 @@
 > markiert — siehe [Offene RE-Punkte](#offene-re-punkte).
 
 > **Die C-Quellen (`rbbridge.c`, `injector.c`) liegen kanonisch in
-> [`bausteine/04-trainer-io/`](../bausteine/04-trainer-io/); hier liegen nur
+> [`bausteine/rbbridge/`](../bausteine/rbbridge/); hier liegen nur
 > Protokoll (`protocol.md`) und RE-Tooling (`scan/`).** Hier gibt es bewusst
 > keine Kopie mehr (Issue #299).
 
@@ -52,8 +52,8 @@ Außenwelt.** Der Lua-Mod bleibt reine Spiellogik — er darf (Findings:
 
 | Komponente | Inhalt | Aufgabe |
 |---|---|---|
-| `bausteine/04-trainer-io/injector/injector.c` | `injector.exe` (x64, Windows) | DLL zur Laufzeit in den Spielprozess laden (Remote-`LoadLibraryW`); Ziel per PID oder Prozessname |
-| `bausteine/04-trainer-io/rbbridge/rbbridge.c` | `rbbridge.dll` + `rbbridge_standalone.exe` (x64, Windows) | In-Game-Gateway: Named-Pipe-Server `\\.\pipe\rbbattle`, line-delimited JSON v0; `exec`-Dispatch löst `ConsoleService::ExecuteCommand` per AOB-Signatur/RTTI auf (statt fester RVAs) und führt sie aus; `score_update`-State-Snapshot (send_state-Egress, Issue #13). **Dual-Mode:** eine Quelle baut per `-DRBBRIDGE_STANDALONE` zusätzlich eine Standalone-EXE mit identischem Protokoll (Test ohne Injection, Baustein 04 Test 0) |
+| `bausteine/rbbridge/injector/injector.c` | `injector.exe` (x64, Windows) | DLL zur Laufzeit in den Spielprozess laden (Remote-`LoadLibraryW`); Ziel per PID oder Prozessname |
+| `bausteine/rbbridge/dll/rbbridge.c` | `rbbridge.dll` + `rbbridge_standalone.exe` (x64, Windows) | In-Game-Gateway: Named-Pipe-Server `\\.\pipe\rbbattle`, line-delimited JSON v0; `exec`-Dispatch löst `ConsoleService::ExecuteCommand` per AOB-Signatur/RTTI auf (statt fester RVAs) und führt sie aus; `score_update`-State-Snapshot (send_state-Egress, Issue #13). **Dual-Mode:** eine Quelle baut per `-DRBBRIDGE_STANDALONE` zusätzlich eine Standalone-EXE mit identischem Protokoll (Test ohne Injection, Baustein 04 Test 0) |
 | `scan/` | Python + pymem | RE-Phase: Prozess-/Modul-Info (`scan_find.py`), interaktiver Wert-Scan (`scan_values.py`) → `offsets.json` |
 | `protocol.md` | Spezifikation | Event-Schema v0 (Spiel ⇄ Server) |
 
@@ -64,31 +64,31 @@ müssen x64 sein**.
 
 ### Option A — MinGW-w64
 
-Die Quellen liegen kanonisch unter `bausteine/04-trainer-io/` (vom Repo-Root
+Die Quellen liegen kanonisch unter `bausteine/rbbridge/` (vom Repo-Root
 aus aufrufen).
 
 ```bat
 :: rbbridge.dll (Injection)
-x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -shared -o rbbridge.dll bausteine/04-trainer-io/rbbridge/rbbridge.c
+x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -shared -o rbbridge.dll bausteine/rbbridge/dll/rbbridge.c
 
 :: rbbridge_standalone.exe (gleiche Quelle, kein Injection noetig)
-x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe bausteine/04-trainer-io/rbbridge/rbbridge.c
+x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe bausteine/rbbridge/dll/rbbridge.c
 
 :: injector.exe
-x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe bausteine/04-trainer-io/injector/injector.c
+x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe bausteine/rbbridge/injector/injector.c
 ```
 
 ### Option B — MSVC (Visual Studio Build Tools / Developer Prompt)
 
 ```bat
 :: rbbridge.dll
-cl /nologo /O2 /W3 /LD bausteine/04-trainer-io/rbbridge/rbbridge.c /Fe:rbbridge.dll
+cl /nologo /O2 /W3 /LD bausteine/rbbridge/dll/rbbridge.c /Fe:rbbridge.dll
 
 :: rbbridge_standalone.exe
-cl /nologo /O2 /W3 /DRBBRIDGE_STANDALONE bausteine/04-trainer-io/rbbridge/rbbridge.c /Fe:rbbridge_standalone.exe
+cl /nologo /O2 /W3 /DRBBRIDGE_STANDALONE bausteine/rbbridge/dll/rbbridge.c /Fe:rbbridge_standalone.exe
 
 :: injector.exe  (shell32.lib nur wegen CommandLineToArgvW)
-cl /nologo /O2 /W3 bausteine/04-trainer-io/injector/injector.c shell32.lib /Fe:injector.exe
+cl /nologo /O2 /W3 bausteine/rbbridge/injector/injector.c shell32.lib /Fe:injector.exe
 ```
 
 ## Nutzung
@@ -161,7 +161,7 @@ exec_cmd_client.exe "rb_wave 3"
 
 Client-seitig wird das dadurch abgefangen, dass der Client `argv` **ab Index 2**
 an den Command-String anhängt (unquotierte Argumente bleiben so erhalten). Der
-Referenz-Client `bausteine/04-trainer-io/pipe_client.py` macht das bereits —
+Referenz-Client `bausteine/rbbridge/pipe_client.py` macht das bereits —
 äquivalent zu `exec_cmd_client "rb_wave 3"`:
 
 ```bat

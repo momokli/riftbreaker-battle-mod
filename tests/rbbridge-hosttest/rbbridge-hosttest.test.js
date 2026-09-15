@@ -15,7 +15,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..', '..');
-const RBBRIDGE_DIR = path.join(ROOT, 'bausteine', '04-trainer-io', 'rbbridge');
+const RBBRIDGE_DIR = path.join(ROOT, 'bausteine', 'rbbridge', 'dll');
 const HARNESS = path.join(__dirname, 'hosttest', 'rbbridge_hosttest.c');
 
 function findHostCC() {

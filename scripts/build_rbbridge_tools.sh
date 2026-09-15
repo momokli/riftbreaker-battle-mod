@@ -3,7 +3,7 @@
 # build_rbbridge_tools.sh — baut die Windows-x64-Tools des Trainer-I/O-Kanals
 # (Baustein 04, Issue #265) in ein Staging-Verzeichnis.
 #
-# Baut aus bausteine/04-trainer-io/ (kanonische Quelle):
+# Baut aus bausteine/rbbridge/ (kanonische Quelle):
 #   rbbridge.dll            Injection-DLL; Named-Pipe-Server \\.\pipe\rbbattle
 #   injector.exe            Remote-LoadLibrary-Injector (x64)
 #   rbbridge_standalone.exe Pipe-Server ohne Injection (-DRBBRIDGE_STANDALONE)
@@ -22,7 +22,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
-SRC04="$ROOT/bausteine/04-trainer-io"
+SRC04="$ROOT/bausteine/rbbridge"
 
 OUT_DIR="${1:-$ROOT/dist/rbtools}"
 mkdir -p "$OUT_DIR"
@@ -65,9 +65,9 @@ cc() {
 }
 
 # --- Quellen pruefen --------------------------------------------------------
-RBBRIDGE_SRC="$SRC04/rbbridge/rbbridge.c"
+RBBRIDGE_SRC="$SRC04/dll/rbbridge.c"
 INJECTOR_SRC="$SRC04/injector/injector.c"
-BRIDGE_SRC="$SRC04/bridge/pipe_bridge.c"
+BRIDGE_SRC="$SRC04/pipe-bridge/pipe_bridge.c"
 for f in "$RBBRIDGE_SRC" "$INJECTOR_SRC" "$BRIDGE_SRC"; do
     if [ ! -f "$f" ]; then
         echo "FEHLER: Quelle nicht gefunden: $f" >&2

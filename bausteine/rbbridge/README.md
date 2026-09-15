@@ -1,6 +1,6 @@
-# Baustein 04 — Trainer-I/O (Injector + rbbridge-DLL + pipe_client)
+# Baustein 04 — rbbridge (Injector + rbbridge-DLL + pipe_client)
 
-**Was es testet:** Den kompletten Trainer-I/O-Kanal der Architektur
+**Was es testet:** Den kompletten rbbridge-Kanal der Architektur
 (Trainer-only, s. `docs/concept.md`) — **ohne das Spiel**:
 1. `injector.exe` lädt `rbbridge.dll` zur Laufzeit in einen **beliebigen
    x64-Prozess** (Test: `notepad.exe`),
@@ -28,7 +28,7 @@ zwei Wege, den Kanal zu testen: **Test 0** startet dieselbe Pipe-Server-
 Logik als normale `rbbridge_standalone.exe` — ganz **ohne Injection**;
 **Test 1** ist der bisherige Injection-Test (notepad.exe + injector.exe).
 
-**Richtung (kanonisch):** `bausteine/04-trainer-io/` ist die **einzige**
+**Richtung (kanonisch):** `bausteine/rbbridge/` ist die **einzige**
 Build-/Distributions-Quelle — `scripts/package_bausteine.sh` und der
 Build-Job in `.github/workflows/ci.yml` bauen **ausschließlich** hieraus.
 Der frühere byte-identische Spiegel unter `trainer/injector/` +
@@ -40,16 +40,16 @@ nur hier.
 
 ```
 injector/injector.c      <- kanonisch (injector.exe, x64, Windows)
-rbbridge/rbbridge.c      <- kanonisch (baut rbbridge.dll UND
+dll/rbbridge.c      <- kanonisch (baut rbbridge.dll UND
                             rbbridge_standalone.exe, x64, Windows)
-bridge/pipe_bridge.c     <- NEU (Issue #265): baut pipe_bridge.exe — HTTP(9001)->Pipe-Bridge
+pipe-bridge/pipe_bridge.c     <- NEU (Issue #265): baut pipe_bridge.exe — HTTP(9001)->Pipe-Bridge
                             (x64, Windows; Win32 + ws2_32; nur in dieser Quelle, kein Spiegel)
 pipe_client.py           <- Test-Client (Python 3, Windows, nur Standardbibliothek)
 ```
 
 ## Hinweis zur Bridge (Issue #265)
 
-`bridge/pipe_bridge.c` → `pipe_bridge.exe` ist der HTTP-Endpunkt, den der
+`pipe-bridge/pipe_bridge.c` → `pipe_bridge.exe` ist der HTTP-Endpunkt, den der
 Dedicated-Server-Deploy braucht: er laeuft als Wine-x64-Prozess im Container,
 nimmt `GET /health` und `POST /exec` an und uebersetzt die Kommandos in
 exec-Zeilen auf `\\.\pipe\rbbattle` (der Wine-Named-Pipe ist nur aus Wine
@@ -77,7 +77,7 @@ und die Bearer-Injektion in der Caddy-Route (der Browser hat keinen Token -> son
 und Dependencies (`cd tests/server-control-panel && npm test`).
 
 **Auslieferung:** `scripts/gen_cockpit_html.py` liest die UI aus Baustein 08 und
-erzeugt `bridge/cockpit_html.inc` (Build-Artefakt, gitignored) fuer
+erzeugt `pipe-bridge/cockpit_html.inc` (Build-Artefakt, gitignored) fuer
 `pipe_bridge.c`; die Bridge liefert sie unter `GET /` aus. Schritt 2 (#474)
 entkoppelt das (Caddy `file_server` + API-Proxy).
 
@@ -89,12 +89,12 @@ Voraussetzung: 64-bit-Toolchain — **Injector UND DLL müssen x64 sein**
 Option A — MinGW-w64:
 ```bat
 :: rbbridge.dll (Injection)
-x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -shared -o rbbridge.dll rbbridge\rbbridge.c
+x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -shared -o rbbridge.dll dll\rbbridge.c
 :: rbbridge_standalone.exe (Test 0, kein -lws2_32 noetig)
-x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe rbbridge\rbbridge.c
+x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe dll\rbbridge.c
 x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe injector\injector.c
 :: pipe_bridge.exe (HTTP-Bridge, Issue #265; braucht ws2_32)
-x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o pipe_bridge.exe bridge\pipe_bridge.c -lws2_32
+x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o pipe_bridge.exe pipe-bridge\pipe_bridge.c -lws2_32
 ```
 
 Alle vier zusammen (Linux-Cross-Build, kanonischer Weg):
@@ -148,7 +148,7 @@ beim Start).
    ```
 2. **DLL injizieren** (Pfad zur gebauten DLL):
    ```bat
-   injector.exe <pid> C:\pfad\zu\bausteine\04-trainer-io\rbbridge\rbbridge.dll
+   injector.exe <pid> C:\pfad\zu\bausteine\rbbridge\dll\rbbridge.dll
    ```
    Erwartet: `[+] rbbridge.dll geladen: HMODULE=0x...`
    (Alternativ Prozessname: `injector.exe notepad.exe <dll>`.)
@@ -249,7 +249,7 @@ injizieren (os.open blockiert, bis der Pipe-Server existiert).
 
 ## Status
 
-- [x] rbbridge.c/injector.c einzige Quelle in `bausteine/04-trainer-io/` (Spiegel unter `trainer/` mit Issue #299 entfernt)
+- [x] rbbridge.c/injector.c einzige Quelle in `bausteine/rbbridge/` (Spiegel unter `trainer/` mit Issue #299 entfernt)
 - [x] rbbridge.c Dual-Mode-Umbau (DLL + Standalone-EXE aus einer Quelle)
 - [x] exec-Dispatch per AOB-Signatur/RTTI (statt fester RVAs) + Cache
 - [x] Host-Test `rbbridge_hosttest.c` (scan_bytes + RTTI-Resolver, synthetischer PE-Puffer)

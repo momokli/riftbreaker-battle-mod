@@ -15,7 +15,7 @@ import sys
 # C side
 # ============================================================================
 
-C_PATH = "bausteine/04-trainer-io/rbbridge/rbbridge.c"
+C_PATH = "bausteine/rbbridge/dll/rbbridge.c"
 
 C_HELPER = r"""/* ====================================================================== */
 /* DOM/Voll-State-Egress (Issue #376): thread-sichere Variante via Game-       */
