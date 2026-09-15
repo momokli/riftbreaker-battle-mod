@@ -95,6 +95,27 @@
           (meta rb-env/rb-ref + Badge, Issue #483).
         success_msg: "Landing-HTML traegt env/ref (Issue #483)."
 
+    # Deploy-Identitaet im Server-Control-EnvironmentFile (Issue #483, US4):
+    # /server/status liest SERVER_CONTROL_ENV/REF aus dieser Datei. Rein lokal.
+    - name: Server-Control EnvironmentFile rendern (Issue 483)
+      template:
+        src: roles/server-control/templates/server-control.env.j2
+        dest: "{{ render_dir }}/server-control.env"
+        mode: "0600"
+
+    - name: EnvironmentFile traegt env/ref (Issue 483)
+      vars:
+        sc_env: "{{ lookup('file', render_dir ~ '/server-control.env') }}"
+      assert:
+        that:
+          - "('SERVER_CONTROL_ENV=' ~ rift_env) in sc_env"
+          - "('SERVER_CONTROL_REF=' ~ rift_deploy_ref) in sc_env"
+        fail_msg: >-
+          Das gerenderte server-control-EnvironmentFile traegt SERVER_CONTROL_ENV/
+          REF nicht (Issue #483) — /server/status koennte die Identitaet nicht
+          ausweisen.
+        success_msg: "server-control EnvironmentFile traegt env/ref (Issue #483)."
+
     # Regression-Guard Issue #355: rift-caddy MUSS `admin off` setzen. Sonst
     # belegt der host-net-Container Caddys Default-Admin-Port 127.0.0.1:2019 und
     # kollidiert mit der Admin-API des geteilten Host-Caddys (mellon-caddy):

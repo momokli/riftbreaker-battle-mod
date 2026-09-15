@@ -47,3 +47,10 @@ server_control_env_file: /etc/rbmods/server-control.env
 
 # Quell-Skript im Repo.
 server_control_script_src: "{{ playbook_dir }}/../tools/server-control/server_control.py"
+
+# Deploy-Identitaet (Issue #483, US4): Fallback fuer das EnvironmentFile, damit
+# die Vorlage auch ohne die Plays renderbar bleibt. Die Plays setzen rift_env als
+# Play-Var; rift_deploy_ref kommt aus deploy/tasks/deploy-identity.yml (set_fact
+# schlaegt diese Defaults).
+rift_env: unknown
+rift_deploy_ref: unknown
