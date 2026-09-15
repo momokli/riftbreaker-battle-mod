@@ -1840,15 +1840,21 @@ static const void *resolve_db_getstring_fn(const unsigned char *base,
 
 /* Loest Exor::Database::Database() NICHT per Prolog-Scan auf (der Body ist
  * nicht eindeutig), sondern ueber die `new 0x60`-Call-Site: das rel32-Ziel
- * des zweiten E8 (nach `mov rcx,rax`) ist der Ctor. Mehr als ein
- * unterschiedliches Ziel oder kein Treffer -> NULL (kein Aufruf). Der Fund
- * wird gegen den Prolog (RBBRIDGE_DB_CTOR_SIG) gegengeprueft. */
+ * des zweiten E8 (nach `mov rcx,rax`) ist ein Ctor-Kandidat. Von den
+ * Kandidaten bleibt nur, wer den Prolog (RBBRIDGE_DB_CTOR_SIG) erfuellt -
+ * gleichgrosse Fremd-Ctors (z. B. `??0EntityStatComponent@Riftbreaker@@`)
+ * weichen bereits bei Byte 4 ab. Genau 1 Treffer -> Ctor, sonst NULL
+ * (kein Aufruf). Live-Gegenprobe planet 2026-09-15: Kandidaten
+ * {0x26AF30, 0x26B0A0, 0x2C6550} -> Prolog-Filter -> 0x2C6550. */
 static const void *resolve_db_ctor_fn(const unsigned char *base, size_t size)
 {
     const unsigned char *end = base + size;
     const unsigned char *p = base;
-    const void *found = NULL;
+    const void *cand[16];
+    int ncand = 0;
     int sites = 0;
+    const void *match = NULL;
+    int nmatch = 0;
 
     while (p && p < end) {
         const unsigned char *site =
@@ -1870,31 +1876,39 @@ static const void *resolve_db_ctor_fn(const unsigned char *base, size_t size)
             memcpy(&rel, e8 + 1, sizeof(rel));
             const unsigned char *tgt = e8 + 5 + rel; /* rel32 @ e8+1 */
             if (tgt >= base && tgt < end) {
-                if (found && found != (const void *)tgt) {
-                    dbg("resolve_db_ctor_fn: mehrdeutig (%p vs %p) -> NULL",
-                        found, (const void *)tgt);
-                    return NULL;
+                int seen = 0;
+                for (int i = 0; i < ncand; i++) {
+                    if (cand[i] == (const void *)tgt)
+                        seen = 1;
                 }
-                found = (const void *)tgt;
+                if (!seen && ncand < (int)(sizeof(cand) / sizeof(cand[0])))
+                    cand[ncand++] = (const void *)tgt;
             }
         }
         p = site + 1;
     }
 
-    if (!found) {
-        dbg("resolve_db_ctor_fn: keine new-0x60-Site -> NULL");
+    /* Nur Kandidaten mit passendem Prolog zaehlen. */
+    for (int i = 0; i < ncand; i++) {
+        const unsigned char *c = (const unsigned char *)cand[i];
+        if (c + sizeof(RBBRIDGE_DB_CTOR_SIG) > end)
+            continue;
+        if (sig_matches(c, RBBRIDGE_DB_CTOR_SIG, RBBRIDGE_DB_CTOR_SIG_MASK,
+                        sizeof(RBBRIDGE_DB_CTOR_SIG))) {
+            match = cand[i];
+            nmatch++;
+        }
+    }
+
+    if (nmatch != 1) {
+        dbg("resolve_db_ctor_fn: %d Site(s), %d Prolog-Kandidat(en) "
+            "-> NULL (kein Aufruf)",
+            sites, nmatch);
         return NULL;
     }
-    if (!sig_matches((const unsigned char *)found, RBBRIDGE_DB_CTOR_SIG,
-                     RBBRIDGE_DB_CTOR_SIG_MASK,
-                     sizeof(RBBRIDGE_DB_CTOR_SIG))) {
-        dbg("resolve_db_ctor_fn: Anker-Ziel %p passt nicht zum Prolog -> NULL",
-            found);
-        return NULL;
-    }
-    dbg("resolve_db_ctor_fn: %d Site(s), Ctor=%p (rva=%08lx)", sites, found,
-        (unsigned long)((const unsigned char *)found - base));
-    return found;
+    dbg("resolve_db_ctor_fn: %d Site(s), Ctor=%p (rva=%08lx)", sites, match,
+        (unsigned long)((const unsigned char *)match - base));
+    return match;
 }
 
 /* Kopiert einen C-String mit harter Schranke (immer NUL-terminiert). */

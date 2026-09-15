@@ -184,8 +184,11 @@ würde also (erster Treffer `0x26B9A0` = `??0CampaignMissionSaveInfo@…`) die
 `mov ecx,0x60` (`B9 60 00 00 00`) → `call operator new` (`E8`) → 0x60-B-
 Nullung → `mov rcx,rax` (`48 8B C8`) → `call Database::Database()` (`E8`).
 Das rel32-Ziel des **zweiten** E8 ist der Ctor. Die auflösende Funktion
-(`resolve_db_ctor_fn`) nimmt das rel32-Ziel aller `new 0x60`-Sites, verlangt
-**genau ein** unterschiedliches Ziel (sonst `NULL`, kein Aufruf) und prüft es
+(`resolve_db_ctor_fn`) nimmt das rel32-Ziel aller `new 0x60`-Sites als
+**Kandidat**, behaelt davon nur die mit passendem Prolog und akzeptiert
+**genau einen** Treffer (sonst `NULL`, kein Aufruf). Live-Beleg planet
+(2026-09-15): 646 Sites -> Kandidaten `{0x26AF30, 0x26B0A0, 0x2C6550}` ->
+Prolog-Filter -> `0x2C6550`.
 gegen den Prolog `RBBRIDGE_DB_CTOR_SIG` gegen. `GetStringKeys` ist ebenfalls
 nicht eindeutig (3 Schwestern) und wurde entfernt (unbenutzt).
 

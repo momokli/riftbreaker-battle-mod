@@ -261,8 +261,9 @@ Maske entschaerft):
 **Ctor-Anker statt Prolog-Scan:** der `Database::Database()`-Body ist
 byte-identisch mit `??0EntityStatComponent@Riftbreaker@@QEAA@XZ` u. a. Darum
 loest `resolve_db_ctor_fn` den Ctor ueber die `new 0x60`-Call-Site auf
-(`B9 60 00 00 00 E8 ..` … `48 8B C8 E8 <rel32>`), verlangt **genau ein**
-unterschiedliches Ziel und prueft es gegen den Prolog gegen; sonst `NULL`
+(`B9 60 00 00 00 E8 ..` … `48 8B C8 E8 <rel32>`), behaelt von den
+Ctor-Kandidaten nur die mit passendem Prolog und akzeptiert **genau einen**
+Treffer; sonst `NULL`
 (kein Aufruf).
 
 **Read-Leg:** `get_state` liefert `mission_flow_payload{spawn_point}` aus dem
