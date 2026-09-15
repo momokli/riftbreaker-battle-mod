@@ -1,0 +1,16 @@
+# Verwaltet von deploy/ role "server-control" (Jinja). NICHT manuell editieren.
+#
+# Basiswerte fuer das config.cfg-Rendering des Agenten (POST /server/config).
+# Dieselben Variablen, die auch die Rolle riftbreaker-server in config.cfg.j2
+# einsetzt — EINE Quelle. Enthaelt das Server-Passwort, daher 0600.
+{{ {
+  'riftbreaker_server_name': riftbreaker_server_name,
+  'riftbreaker_server_password': riftbreaker_server_password,
+  'riftbreaker_server_rcon_password': riftbreaker_server_rcon_password | default(''),
+  'riftbreaker_server_max_players': riftbreaker_server_max_players,
+  'riftbreaker_server_broadcast_enabled': riftbreaker_server_broadcast_enabled,
+  'riftbreaker_server_pause_game_when_empty': riftbreaker_server_pause_game_when_empty,
+  'riftbreaker_server_campaign': riftbreaker_server_campaign,
+  'riftbreaker_server_mission': riftbreaker_server_mission,
+  'riftbreaker_server_difficulty': riftbreaker_server_difficulty,
+} | to_nice_json }}
