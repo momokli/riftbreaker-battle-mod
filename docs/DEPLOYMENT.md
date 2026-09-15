@@ -494,7 +494,7 @@ dev-Konstanten — Ansible kennt keine Variablen-Herkunft).
 | Session-Recorder | JSONL-Record `env`,`ref` | `RBB_ENV`/`RBB_REF` im Sidecar + CLI `--env/--ref` |
 | Referee-Egress | Event-Record `env`,`ref` | dito |
 | Container | Labels `RBB_ENV`/`RBB_REF` | `docker inspect` (ohne Log) |
-| Mod-Log | `event=mod_load … env=… ref=…` | `mod/lua/rbbattle_autoexec.lua` |
+| Mod-Log | `event=mod_load … env=… ref=…` | `mod/lua/rbbattle_autoexec.lua` — **vorbereitet, im Live-Lauf nicht wirksam** (`env=unknown`, s. u.) |
 
 ### Offene Punkte (bewusst NICHT in #483)
 
@@ -503,6 +503,10 @@ dev-Konstanten — Ansible kennt keine Variablen-Herkunft).
   Rollback-Runbook.
 - **Kein host-seitiger Checkout-Umbau** (`/opt/rbbattle-deploy/repo-<env>` +
   `.deploy-<env>.sha`/`-ref`) — forced-command/Wrapper sind nicht im Repo.
-- **Mod-Log-`env`/`ref` in-game** ist vorbereitet, aber nur mit laufendem Spiel
-  verifizierbar → noch nicht live nachgewiesen.
+- **Mod-Log-`env`/`ref` in-game** ist vorbereitet, aber im Live-Lauf **nicht
+  wirksam**: der (rot gelaufene) Boot-Test-Log zeigte trotz gesetztem
+  `RBB_ENV=test`/`RBB_REF=<sha>` `event=mod_load … env=unknown ref=unknown` —
+  die Riftbreaker-Lua-Sandbox liefert `os.getenv` offenbar nicht, der
+  defensive Fallback greift. NICHT als erledigte Surface führen. Verlässlicher
+  Kanal (Config/Datei statt Lua-`getenv`) ist Follow-up (Review-F2).
 - **Landing-Domain-Isolationsgrad** für Prod-Artefakte (`/mods/prod/…`) offen.

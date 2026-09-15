@@ -61,5 +61,15 @@
     - role: mods-zip
     - role: dedicated-server-image
     - role: game-content
+    # Trainer-I/O-Tools (Issue #265): baut die 4 Windows-Binaries auf dem
+    # Zielhost und staged sie nach {{ rbtools_dir }}. Seit Issue #483 (US3)
+    # isoliert test-vars.yml rbtools_dir je Lauf
+    # (/opt/rbmods/rbtools-test-<run>) — OHNE diese Rolle blieb der isolierte
+    # Ordner leer, der Compose-Mount {{ riftbreaker_rbtools_dir }}:/opt/rbtools
+    # lieferte ein leeres /opt/rbtools und die IO-Bridge kam nicht hoch
+    # (Core-IO-Gate C1 Timeout, Review-F1). Reihenfolge wie in site.yml: die
+    # Rolle stagt die Binaries VOR riftbreaker-server (Compose-Mount-Source),
+    # damit der Container beim Boot bereits rbbridge.dll/pipe_bridge.exe sieht.
+    - role: rbtools
     - role: riftbreaker-server
     - role: tournament-server

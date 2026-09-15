@@ -55,6 +55,15 @@ end)
 -- `os.getenv` in der Sandbox oder wirft der Aufruf, faellt der Wert auf
 -- "unknown" zurueck und die BESTEHENDEN Felder (version/status) bleiben
 -- unveraendert — der mod_load-Marker wird nie gebrochen.
+--
+-- BEST-EFFORT, im Live-Lauf bisher NICHT wirksam (Review-F2): im Boot-Test
+-- stand trotz gesetztem RBB_ENV=test/RBB_REF=<sha> weiterhin
+-- `event=mod_load ... env=unknown ref=unknown` — die Riftbreaker-Lua-Sandbox
+-- liefert `os.getenv` offenbar nicht (nil/Exception), der Fallback "unknown"
+-- greift. Diese Surface ist also nur VORBEREITET, nicht als erledigt zu
+-- fuehren. Verlaesslicher Kanal (Config/Datei statt Lua-getenv) ist Follow-up;
+-- die uebrigen Identitaets-Surfaces (Labels, Tournament, Server-Control,
+-- Sidecars) liefern env/ref unabhaengig davon korrekt.
 local function DeployEnv(name)
     local ok, value = pcall(function()
         if type(os) == "table" and type(os.getenv) == "function" then
