@@ -54,6 +54,13 @@
         rift_deploy_checkout: "{{ playbook_dir }}/.."
       tags: always
 
+    # Fail-loud-Contract (Issue #483, US2).
+    - name: "ENV-ISOLATION-GATE (Issue #483)"
+      include_tasks: "{{ playbook_dir }}/tasks/env-assert.yml"
+      vars:
+        rift_env_isolation_root: "{{ playbook_dir }}/.."
+      tags: always
+
   roles:
     - role: mods-zip
     - role: dedicated-server-image

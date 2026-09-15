@@ -41,6 +41,13 @@
         rift_deploy_checkout: "{{ playbook_dir }}/.."
       tags: always
 
+    # Fail-loud-Contract (Issue #483, US2).
+    - name: "ENV-ISOLATION-GATE (Issue #483)"
+      include_tasks: "{{ playbook_dir }}/tasks/env-assert.yml"
+      vars:
+        rift_env_isolation_root: "{{ playbook_dir }}/.."
+      tags: always
+
     # Disk-Space-Gate (#310) — derselbe Preflight wie in deploy/site.yml, damit
     # der Boot-Test denselben Abbruch-Pfad fährt (Schwelle via test-vars.yml
     # überschreibbar). Vor dedicated-server-image, also vor dem Image-Build.

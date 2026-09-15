@@ -1,0 +1,23 @@
+---
+# Hermetischer Negativ-Test des Env-Isolations-Gates (Issue #483, US2).
+#
+# Läuft LOKAL auf dem Control-Node/CI-Runner: kein Host, kein Vault, keine
+# Prod-Aktion. Bindet die ECHTE Task-Datei deploy/tasks/env-assert.yml ein
+# (kein Nachbau) und richtet den Audit gegen ein Fixture-Repo (`test_root`).
+#
+# run.sh fährt:
+#   Positiv: Fixture vollstaendig klassifiziert -> Lauf MUSS durchlaufen (rc=0).
+#   Negativ: ein `per_env`-Key aus der prod-Kopie entfernt -> Lauf MUSS
+#            abbrechen (auch unter --check) und `ENV-ISOLATION-GATE` nennen.
+- name: "Env-Isolation Selbsttest (Issue #483, US2)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    rift_env: "{{ test_env }}"
+    rift_env_isolation_root: "{{ test_root }}"
+
+  tasks:
+    - name: Env-Isolation-Gate ausfuehren (echte Task-Datei)
+      include_tasks: "{{ playbook_dir }}/../../tasks/env-assert.yml"

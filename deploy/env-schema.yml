@@ -1,0 +1,68 @@
+---
+# env-schema.yml — Env-Isolations-Schema (Issue #483, US2).
+#
+# Vertrag: JEDE Variable in den Env-Override-Dateien
+# (deploy/prod-vars.yml, deploy/test-vars.yml) ist entweder
+#   * `per_env`  -> Umgebungs-spezifisch (Pfad/Name/Port/Domain) und MUSS in
+#                   JEDER gelisteten Env-Datei **explizit** stehen. Fehlt sie,
+#                   erbt die Env still den dev-Wert (host_vars) — genau die
+#                   Bug-Klasse aus #483. Das Gate bricht dann ab.
+#   * `shared`   -> bewusst env-uebergreifend identisch, MIT Begruendung
+#                   (Allowlist). Ein Eintrag ohne Begruendung ist ein Fehler.
+#
+# `per_env` ist ein Mapping `variable: [envs]` — die Liste nennt die Envs, die
+# die Variable explizit setzen MUESSEN. So bleiben env-spezifische Features
+# (z. B. Website nur prod) korrekt: sie werden fuer prod gefordert, nicht fuer
+# eine Env, die die Komponente gar nicht deployt.
+#
+# Geprueft wird von tools/deploy-gate/check_env_isolation.py (stdlib, kein
+# PyYAML); der Aufruf steht in deploy/tasks/env-assert.yml (Marker
+# ENV-ISOLATION-GATE) und laeuft in den pre_tasks VOR den Rollen.
+#
+# `dev` hat keine eigene Override-Datei: dev IST die Basis
+# (inventory/host_vars/planet/vars.yml). Genau diese Asymmetrie ist der Kern
+# des Issues.
+
+per_env:
+  # --- Dedicated-Server -----------------------------------------------------
+  riftbreaker_server_container: [prod, test]
+  riftbreaker_server_port_udp: [prod, test]
+  riftbreaker_compose_project: [test]
+  riftbreaker_game_dir: [prod, test]
+  riftbreaker_mod_dir: [prod, test]
+  riftbreaker_backup_dir: [prod, test]
+  riftbreaker_deploy_dir: [prod, test]
+  riftbreaker_config_dir: [prod]
+  riftbreaker_wine_volume: [prod, test]
+  riftbreaker_saves_volume: [prod, test]
+  riftbreaker_bridge_port: [prod, test]
+  # --- Trainer-I/O-Tools (rbtools) -----------------------------------------
+  rbtools_dir: [prod]
+  rbtools_staging_dir: [prod]
+  # --- Sidecars (Session-Recorder + Referee-Egress) ------------------------
+  riftbreaker_sessions_container: [prod, test]
+  riftbreaker_referee_egress_container: [prod, test]
+  riftbreaker_sessions_dir: [prod, test]
+  # --- Tournament-Server ----------------------------------------------------
+  tournament_install_dir: [prod, test]
+  tournament_unit: [prod, test]
+  tournament_port: [prod, test]
+  tournament_bridge_a_url: [prod, test]
+  tournament_bridge_b_url: [prod, test]
+  # --- Website (nur prod betreibt eine eigene Landing/Cockpit) -------------
+  landing_domain: [prod]
+  cockpit_domain: [prod]
+  rift_caddy_container: [prod]
+  rift_caddy_port: [prod]
+  rift_caddy_deploy_dir: [prod]
+  # --- Boot-Test (nur test) -------------------------------------------------
+  dedicated_server_context_dir: [test]
+  website_mods_dir: [test]
+
+shared:
+  riftbreaker_content_mode: "Content wird in allen Envs per Sync aus dem kanonischen Cache geholt — gleicher Modus, kein Env-Zustand (#483)."
+  riftbreaker_content_cache_dir: "Kanonischer Steam-Content-Cache auf planet (Host-Stand, /srv/riftbreaker/data/server) — EINE Quelle fuer alle Envs."
+  riftbreaker_disk_min_free_gb: "Disk-Gate-Schwelle ist ein Host-Ressourcen-Parameter, kein Env-Pfad/-Name/Stand (gleiche Schwelle ueberall)."
+  cargo_home: "Rust-Toolchain-Pfad des CI-Runners — Laufzeit-/Runner-Infrastruktur, kein Env-State."
+  rustup_home: "Rust-Toolchain-Pfad des CI-Runners — Laufzeit-/Runner-Infrastruktur, kein Env-State."
+  rbbattle_run_suffix: "Nur die Test-Instanz traegt einen Lauf-Suffix (github.run_id) — Lauf-Parameter, kein Env-Pfad/Port/Domain."
