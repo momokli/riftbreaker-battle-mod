@@ -206,6 +206,37 @@ static int json_get_string(const char *json, const char *key,
     return 0;
 }
 
+/* json_get_raw_number: findet "key": <zahl> ODER "key":"<zahl>" und kopiert
+ * die fuehrenden Ziffern (max. out_sz-1). Liefert 1, wenn mindestens eine
+ * Ziffer gefunden wurde. Fuer optionale numerische Felder (z. B. "ref"), die
+ * im rbbridge-Wire-Format als String erwartet werden. */
+static int json_get_raw_number(const char *json, const char *key,
+                               char *out, size_t out_sz)
+{
+    char pat[64];
+    const char *q;
+    size_t n = 0;
+
+    if (!json || !key || !out || out_sz == 0)
+        return 0;
+    snprintf(pat, sizeof(pat), "\"%s\"", key);
+    q = strstr(json, pat);
+    if (!q)
+        return 0;
+    q += strlen(pat);
+    while (*q == ' ' || *q == '\t')
+        q++;
+    if (*q != ':')
+        return 0;
+    q++;
+    while (*q == ' ' || *q == '\t' || *q == '"')
+        q++;
+    while (*q >= '0' && *q <= '9' && n + 1 < out_sz)
+        out[n++] = *q++;
+    out[n] = '\0';
+    return n > 0;
+}
+
 
 
 /* ------------------------------------------------------------------ */
@@ -691,6 +722,60 @@ static void handle_activate_mission_flow(SOCKET c, const char *body)
     http_respond(c, 200, "OK", line);
 }
 
+/* POST /pause_dom und /resume_dom: fuehren {"cmd":"pause_dom"} bzw.
+ * {"cmd":"resume_dom"} auf der Pipe aus und liefern die dom_control-Zeile
+ * (ok:true/false inkl. reason) als HTTP-Body. Ein optionaler "ref" aus dem
+ * Request-Body wird durchgereicht (luabind-Registry-Ref der dom_mananger-
+ * Instanz); ohne ref laeuft die automatische C++-only Aufloesung. */
+static void handle_dom_control(SOCKET c, const char *body, const char *cmd)
+{
+    char line[READ_BUF];
+    char payload[CMD_MAX];
+    char ref[32] = "";
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+    HANDLE h;
+
+    /* ref optional: als JSON-String bevorzugt, sonst nackte Zahl. */
+    if (!json_get_string(body, "ref", ref, sizeof(ref)) || !ref[0])
+        json_get_raw_number(body, "ref", ref, sizeof(ref));
+
+    if (ref[0]) {
+        char resc[64];
+        json_escape(ref, resc, sizeof(resc));
+        snprintf(payload, sizeof(payload),
+                 "{\"cmd\":\"%s\",\"ref\":\"%s\"}\n", cmd, resc);
+    } else {
+        snprintf(payload, sizeof(payload), "{\"cmd\":\"%s\"}\n", cmd);
+    }
+
+    h = pipe_connect(2500);
+    if (h == INVALID_HANDLE_VALUE) {
+        blog("POST /%s: Pipe nicht erreichbar -> pipe_unavailable", cmd);
+        http_respond(c, 503, "Service Unavailable",
+                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+        return;
+    }
+
+    if (!pipe_write_all(h, payload)) {
+        CloseHandle(h);
+        http_respond(c, 500, "Internal Server Error",
+                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
+        return;
+    }
+
+    {
+        int rc = pipe_wait_line(h, "dom_control", NULL, timeout_ms,
+                                line, sizeof(line));
+        CloseHandle(h);
+        if (rc != 0) {
+            http_respond(c, 500, "Internal Server Error",
+                         "{\"ok\":false,\"reason\":\"timeout\"}");
+            return;
+        }
+    }
+    http_respond(c, 200, "OK", line);
+}
+
 static void handle_client(SOCKET c)
 {
     char *req = malloc(REQ_MAX + 1);
@@ -782,6 +867,26 @@ static void handle_client(SOCKET c)
             memcpy(b, body, (size_t)body_len);
             b[body_len] = '\0';
             handle_activate_mission_flow(c, b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/pause_dom") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_dom_control(c, b, "pause_dom");
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/resume_dom") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_dom_control(c, b, "resume_dom");
             free(b);
         } else if (strcmp(method, "GET") == 0 &&
                    (strcmp(path, "/") == 0 ||

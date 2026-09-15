@@ -248,3 +248,111 @@ den Wellen-Spawn bis zur HQ-Platzierung (`RBB.commenced`). Für volle Kontrolle:
   HUD-Mission-Flow `MissionService:ActivateMissionFlow`/`time_max` friert
   dabei NICHT mit ein (kein `deactivate_mission_flow`-Command registriert).
 - **START:** `debug_dom_resume` + `debug_dom_manager_spawn_wave_level N`.
+
+
+## Phase E: dom_mananger C++-only Auflösung (Issue #387, statisch)
+
+RE gegen `/srv/rbgame/bin/riftbreaker_dll_win_release.{dll,pdb}` (Build 2.0.58485),
+`llvm-pdbutil` = `/usr/lib/llvm-18/bin/llvm-pdbutil`, Disasm via
+`/opt/rb-re/venv/bin/python /tmp/disasm.py <RVA> [count]`.
+
+### RVA-Umrechnung (bestätigt)
+`.text` (0001) → RVA = `0x1000 + dec`; `.rdata` (0002) → `0x2DA2000 + dec`.
+Sanity: `GetTypeName@LuaGraphNode` `0001:28945904` → `0x1B9BDF0` (Disasm liefert
+`lea rax,[rip+…]; ret`). `??_7LuaGraphNode@Exor@@6B@` `0002:1723760` →
+`0x2F46D70` (deckt sich mit dem bereits dokumentierten vftable).
+
+### vftable-Layout `LuaGraphNode` (RVA `0x2F46D70`)
+
+Die vftable hat **9 Slots**; die nächste (`LuaGraphNodeSelector`) beginnt bei
+`0x2F46F38` (Stride 0x48 = 9 Slots). Belegte Slots:
+
+| Slot | RVA | Symbol | Befund |
+|---|---|---|---|
+| 1 | `0x1B9BDF0` | `LuaGraphNode::GetTypeName()` (virtual) | `lea rax,[rip+_typeName]; ret` |
+| 2 | `0x1B9BD40` | `LuaGraphNode::GetTypeHash()` (virtual) | TypeHash-Getter |
+| 7 | `0x1BAA140` | `LuaGraphNode::Update(float)` (virtual) | `cmp byte [rcx+0xF1],0; je …; ret` |
+
+`GetTypeName` ist ein **per-Klasse überschriebener** Virtual: die vftable von
+`LuaGraphNodeSelector` (`0x2F46F38`) hat in Slot 1/2 **andere** Funktions­zeiger
+(`0x1B9BE00` / `0x1B9BD50`, ebenfalls `lea rax,[rip+…]; ret`). Exor-Reflection
+(„`_typeName`") ist also das Klassen-Identitäts-Idiom.
+
+`_typeName`-Strings: `LuaGraphNode` @ RVA `0x2DCD960` (roh = `"LuaGraphNode"`),
+`LuaGraphNodeSelector` @ RVA `0x2DCDA08`.
+
+### `SetSuspended(bool)` — bestätigt
+
+```
+LuaGraphNode::SetSuspended(bool)  RVA 0x1BA6CB0   (0001:28990640)
+  0x181ba6cb0: mov byte ptr [rcx + 0xf1], dl
+  0x181ba6cb6: ret
+```
+
+→ `__thiscall`: `this` = `rcx`, `bool` = `dl`; reiner Flag-Write `[this+0xF1]`.
+**Thread-agnostisch** (kein Lua, kein State) — sicher von jedem Thread.
+Korrespondiert exakt mit dem Suspend-Check in `Update` (Slot 7).
+
+### Klassen-Identität: KEIN C++-Subclass-Marker vorhanden
+
+Statisch geprüft (publics):
+
+- Es existiert **keine** C++-Klasse `*Dom*` (Grep `[A-Za-z_]*Dom[A-Za-z_]*@(Riftbreaker|Exor)` → leer).
+- `dom_mananger` / `event_manager` sind **pure Lua-Klassen**
+  (`missions/v2/dom_manager.lua`, `class 'X' ( base )`), keine `??_7`/`??_R0`
+  der Subklasse. Die LuaGraphNode-Familie im Binary ist `LuaGraphNode`,
+  `LuaGraphNodeSelector`, `LuaGraphPackedNode`, `LuaBehaviourNode`,
+  `LuaEmbeddedBehaviourNode` — **kein** DOM/Event-Manager.
+- Konsequenz: `dom_mananger` und `event_manager` teilen sich real die
+  C++-vftable `0x2F46D70`. Die vorgeschlagenen Marker (eigene `??_7`/`??_R0`,
+  Layout-Unterschied) existieren **nicht**; die Klassen-Identität lebt
+  ausschließlich im Lua-Objekt (`LuaGraphNode +0x20` = `luabind::object`
+  {`lua_State*` @+0, `int ref` @+8}).
+
+### Konsequenz für den Resolver (#387)
+
+1. **AOB/Signatur statt fixer RVA:** Die LuaGraphNode-Herkunft wird über eine
+   Byte-Signatur (`RBBRIDGE_DOM_SIG`/`_MASK`, rel32 wildcarded) + vtable-
+   Rückrechnung aufgelöst — nicht über hartkodierte RVA.
+2. **Instanz-Scan:** `VirtualQuery`-Scan (nur lesbare Regionen) auf
+   `qword == LuaGraphNode-vftable` (Muster wie `resolve_console_instance`).
+3. **C++-only Diskriminator** (ersetzt `currentDifficultyLevel is number`):
+   Der per-Klasse überschriebene Virtual **`GetTypeName()` (vtable-Slot 1)**
+   ist ein reiner C++-Call und liefert den registrierten Klassennamen; als
+   Bestätigung dient `GetTypeHash()` (Slot 2) + Layout-Check
+   (`+0xF0`/`+0xF1` lesbar, `+0xB8/+0xC0` child-vector). **Kein `lua_*`.**
+   Restrisiko (statisch nicht entscheidbar): ob luabind für Lua-abgeleitete
+   Klassen eine eigene Wrapper-vftable mit überschriebenem `GetTypeName`
+   installiert — wird im Live-Probe (planet) verifiziert; bei Nicht-Treffer
+   degradiert der Resolver graceful (`ok:false`, kein Crash).
+
+### Live-Probe (planet, Build 2.0.58485) — Marker-Hypothesen widerlegt
+
+Probe-DLL (`probe_dom_nodes`, TEMP) in `rbbridge.dll` via
+`/opt/rbmods/rbtools-drift/rbbridge.dll` + `docker restart riftbreaker-dedicated`,
+Abruf über `POST http://127.0.0.1:9001/probe`.
+
+Scan-Kriterium: Objekt, dessen Qword[0] in das Modul-Image zeigt **und** dessen
+vtable-Slot 7 == `LuaGraphNode::Update` (`base+0x1BAA140`) ist.
+
+| Messung | Ergebnis |
+|---|---|
+| Familien-Instanzen | **109** (mehr als ein DOM/Event-Manager) |
+| vtables | `0x2F46D70` (LuaGraphNode) und `0x2F46F38` (LuaGraphNodeSelector) |
+| `GetTypeName()` (Slot 1) | `"LuaGraphNode"` **für alle** Instanzen (per-Class-Override, aber nur C++-Klassen) |
+| `GetTypeHash()` (Slot 2) | nur **zwei** Werte: `0xde5d72b3` = FNV1a("LuaGraphNode"), `0xde… ` / `0xc7919a42` = FNV1a("LuaGraphNodeSelector") |
+| Member-Strings `+0x08/+0x50/+0x100/+0x120` | leer (1 Treffer = Garbage) |
+| luabind-Object `+0x20` | `lua_State*` konstant, `int ref` pro Instanz verschieden (1912…3479) |
+
+**Schlussfolgerung (widerlegt die Task-Annahme):** es gibt **keinen** C++-only
+Marker (keine eigene `??_7`/`??_R0`-vftable, kein Layout-Unterschied, kein
+eingebetteter Klassenname), der `dom_mananger` von `event_manager` trennt.
+`dom_mananger`/`event_manager` sind **pure Lua-Klassen**; die C++-Objekte sind
+`LuaGraphNode`- bzw. `LuaGraphNodeSelector`-Instanzen. `GetTypeHash()` ist ein
+**C++-Klassen**-Hash (FNV-1a des C++-Namens), **nicht** ein Lua-Klassen-Hash —
+für Lua-abgeleitete Klassen liefert er den Basis-Hash.
+
+Die Klassen-Identität lebt ausschließlich im Lua-Table, auf den nur das
+luabind-Object (`+0x20` = {`lua_State*` @+0, `int ref` @+8}) zeigt. Ein reiner
+C++-Read dieser Identität erfordert einen rohen Lua-Table-/Metatable-Walk
+(Lua-5.1-Fork-Interna), der **nicht** Teil dieses Reverts ist.
