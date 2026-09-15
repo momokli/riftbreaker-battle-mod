@@ -16,7 +16,7 @@
 //!
 //! Fehler: `{"error": "<meldung>", "type": "<invalid|not_found|conflict>"}`
 //! mit 400/404/409. Unbekannte Felder in Bodies werden ignoriert
-//! (vorwärtskompatibel, wie im Protokoll des Trainers üblich).
+//! (vorwärtskompatibel, wie im Protokoll des Servers üblich).
 
 use crate::broadcast;
 use crate::referee::{Command, GameEvent, GameEventKind, Referee, RefereeConfig};

@@ -34,7 +34,7 @@ Wine-Laufzeit als der headless Client:
 |---|---|
 | `Dockerfile` | Erweitert `scottyhardy/docker-wine:latest` (winehq-stable, winetricks, Xvfb, gosu aus dem Base) um `procps` + `iproute2` und legt den `steamuser` an |
 | `scripts/docker-entrypoint.sh` | root → `gosu steamuser` → entrypoint |
-| `scripts/entrypoint.sh` | Config kopieren, Logs streamen, Port-/Startup-Watch, Trainer-I/O-Supervisor (Injection + Bridge), Server starten |
+| `scripts/entrypoint.sh` | Config kopieren, Logs streamen, Port-/Startup-Watch, Server-I/O-Supervisor (Injection + Bridge), Server starten |
 | `scripts/wine-init.sh` | Einmalige Prefix-Init (win10, vcrun2022, d3dcompiler_47) |
 | `config/config.cfg.example` | Vorlage Server-Config (LAN/Direct-IP-Modus) |
 
@@ -52,10 +52,10 @@ docker build -t rb-dedicated tools/dedicated-server
 Der Entrypoint erwartet beim Start `config.cfg` unter `/data/config/config.cfg`
 (vom Compose als read-only gemountet).
 
-## Trainer-I/O im Container (Issue #265)
+## Server-I/O im Container (Issue #265)
 
 Der Dedicated-Server ist ohne Injection ein reiner Spielserver. Fuer den
-Trainerkommando-Kanal (GO/Wave vom Tournament-Server) braucht er:
+Serverkommando-Kanal (GO/Wave vom Tournament-Server) braucht er:
 
 1. **Die Tools** (`injector.exe`, `rbbridge.dll`, `pipe_bridge.exe`) unter
    `/opt/rbtools` — vom Deploy als read-only Volume gemountet. Gebaut werden sie

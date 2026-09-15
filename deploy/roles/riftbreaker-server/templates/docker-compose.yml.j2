@@ -24,7 +24,7 @@ services:
       # Rig-Rezept: Sync-Primitive AUS (sonst Crash im Boost-Thread vor dem bind()).
       WINEESYNC: "0"
       WINEFSYNC: "0"
-      # Trainer-I/O-Bridge (Issue #265): pipe_bridge.exe lauscht IM Container auf
+      # Server-I/O-Bridge (Issue #265): pipe_bridge.exe lauscht IM Container auf
       # {{ riftbreaker_bridge_container_port }} (immer 9001); der Host publiziert
       # nur 127.0.0.1:{{ riftbreaker_bridge_port }} (konsistent mit
       # tournament_bridge_a_url). Container-/Host-Port sind getrennt (Issue #289):
@@ -48,7 +48,7 @@ services:
       - "{{ riftbreaker_config_dir }}/config.cfg:/data/config/config.cfg:ro"
       - "{{ riftbreaker_wine_volume }}:/data/.wine"
       - "{{ riftbreaker_saves_volume }}:/data/saves"
-      # Trainer-I/O-Tools (Issue #265, von Rolle rbtools gestagt). Read-only:
+      # Server-I/O-Tools (Issue #265, von Rolle rbtools gestagt). Read-only:
       # entrypoint injiziert Z:\opt\rbtools\rbbridge.dll und startet pipe_bridge.exe.
       - "{{ riftbreaker_rbtools_dir }}:/opt/rbtools:ro"
 

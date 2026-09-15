@@ -48,7 +48,7 @@ Plattform-Verfügbarkeit).
   Bottle-`Documents`-Ordner). Die Konsolen-Taste `~`/`` ` `` liegt auf
   Mac-Tastaturen physisch anders (Backtick nahe der Umschalttaste, `§` oben
   links) — im Bottle gilt das Windows-Tastatur-Layout.
-- **Trainer-DLL:** Named Pipe (`\\.\pipe\rbbattle`) + Runtime-Injection sind
+- **Server-DLL:** Named Pipe (`\\.\pipe\rbbattle`) + Runtime-Injection sind
   Windows-spezifisch. Unter Wine/VM = Windows-Pfad (vermutlich funktionsfähig,
   ungetestet); nativ macOS = nicht vorhanden (SIP + Hardened Runtime,
   in `docs/concept.md` bewusst vertagt).
@@ -60,7 +60,7 @@ Plattform-Verfügbarkeit).
    Bottle ist, aber **unverifiziert**.
 2. **Konsole/Aktivierung unter Wine:** `enable_developer_console` +
    Konsolen-Taste im Bottle — unverifiziert.
-3. **Trainer/Relay unter Wine:** Named-Pipe-Brücke zur Trainer-DLL im Bottle —
+3. **Server/Relay unter Wine:** Named-Pipe-Brücke zur Server-DLL im Bottle —
    unverifiziert; ggf. eigenes Issue.
 
 ## Empfehlung

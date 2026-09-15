@@ -34,7 +34,7 @@ Matheos Prototyp-Repo (<https://github.com/BestToasty/riftbreaker_mod>, Stand 07
 8. **In-Game-Konsole existiert** — Tasten ´/ö/'/ñ/ù/`~`/` (Layout-abhängig);
    GamePass: `enable_developer_console 1` in `Conf/initial_config_win`.
 9. **Kein PvP im Spiel** — Co-op ist eine gemeinsame Welt. Duell = eigene
-   Kopplung zweier Partien (Relay/Trainer, siehe concept.md).
+   Kopplung zweier Partien (Relay/Server, siehe concept.md).
 10. **`mp_deathmatch` nicht nutzbar** — interner EXOR-Netcodetest, kein Zugang.
 
 ## Offene Punkte (klärt der In-Game-Test, nicht mehr die Doku)
@@ -64,15 +64,15 @@ Zusätzlich aus Matheos Prototyp (In-Game-Test 07.09.2026, Fortsetzung der Numme
 
 16. **`io.open` CRASHT das Spiel** — Datei-I/O ist im Lua-Sandbox blockiert und beendet das Spiel hart (nicht nur ein Fehler!). `io.*` im Mod niemals anfassen.
 
-## Entscheidung (08.09.2026): Trainer-only-Architektur
+## Entscheidung (08.09.2026): Server-only-Architektur
 
 **Der Mod hat keinen eigenen I/O-Kanal** — Ingress und Egress laufen
-ausschließlich über die **Trainer-DLL** (die Lua-Sandbox blockiert File-I/O
+ausschließlich über die **Server-DLL** (die Lua-Sandbox blockiert File-I/O
 ohnehin hart, s. o.). Pfad: Server → Relay-Client → Named Pipe
 (`\\.\pipe\rbbattle`) → DLL → Mod-Command (Ingress); DLL liest Game-State /
 fängt Events ab → Pipe → Relay-Client → Server (Egress). **Konsole-Route
 verworfen** — Konsole-Buffer-Injektion ist fragil, UI-Automation/SendInput kein
 echtes Ingress (Fokus-Probleme); Log-File-Tailing nur noch Notnagel. Konsequenz:
-Mod = reine Spiellogik (Steam-Workshop-tauglich), Trainer-DLL = externes
+Mod = reine Spiellogik (Steam-Workshop-tauglich), Server-DLL = externes
 „für uns“-Tool (runtime-only Injection, keine Game-Datei-Änderung).
-Details: `docs/concept.md` → „Tournament-Architektur (Trainer-only)“.
+Details: `docs/concept.md` → „Tournament-Architektur (Server-only)“.

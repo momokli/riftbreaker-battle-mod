@@ -45,7 +45,7 @@ website_mods_dir: "/opt/rbbattle-deploy/test/mods-{{ rbbattle_run_suffix }}"
 # dev-Docroot /srv/rbmods-site (analog zur bestehenden website_mods_dir-
 # Isolation). Additiv, kein Rename der dev-Pfade.
 website_docroot: "/srv/rbmods-site-test-{{ rbbattle_run_suffix }}"
-# Trainer-I/O-Tools je Lauf isoliert (Issue #483, US3/Ziel B): Pfad-Schema
+# Server-I/O-Tools je Lauf isoliert (Issue #483, US3/Ziel B): Pfad-Schema
 # /opt/rbmods/rbtools/<env>-<run> (statt rbtools-test-<run>). Ohne eigene Werte
 # erbt der Boot-Test den dev-Pfad (Live-Befund #3).
 rbtools_dir: "/opt/rbmods/rbtools/{{ rift_env }}-{{ rbbattle_run_suffix }}"
