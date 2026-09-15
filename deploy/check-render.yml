@@ -39,6 +39,21 @@
       set_fact:
         server_control_enabled: true
 
+    # Deploy-Identitaet im dev-Kontext (Issue #483, US4): set_fact, weil die hier
+    # als vars_files geladenen Rollen-Defaults (website/defaults:
+    # rift_env/rift_deploy_ref) die Praezedenz von Play-Vars ueberschreiben.
+    - name: "Dev-Kontext: Deploy-Identitaet setzen (Issue #483)"
+      set_fact:
+        rift_env: dev
+        rift_deploy_ref: "{{ deploy_image_tag }}"
+
+    # Eigener Task: Werte eines einzelnen set_fact werden gegen den VORHERIGEN
+    # Variablenstand gerendert — rift_deploy_identity wuerde sonst die
+    # Rollen-Defaults ("unknown · unknown") sehen.
+    - name: "Dev-Kontext: rift_deploy_identity ableiten (Issue #483)"
+      set_fact:
+        rift_deploy_identity: "{{ rift_env }} · {{ rift_deploy_ref }}"
+
     - name: Render-Verzeichnis sicherstellen
       file:
         path: "{{ render_dir }}"
@@ -56,6 +71,29 @@
         src: roles/website/templates/docker-compose.yml.j2
         dest: "{{ render_dir }}/rift-caddy.yml"
         mode: "0644"
+
+    # Deploy-Identitaet sichtbar (Issue #483, US4): die Landing-HTML wird aus
+    # dem echten Rollen-Template gerendert; meta rb-env/rb-ref + Badge muessen
+    # den dev-Kontext tragen. Rein lokal (hermetischer Render-Test).
+    - name: Landing-HTML rendern (Issue 483)
+      template:
+        src: roles/website/templates/index.html.j2
+        dest: "{{ render_dir }}/index.html"
+        mode: "0644"
+
+    - name: Landing-HTML traegt env/ref (Issue 483)
+      vars:
+        landing: "{{ lookup('file', render_dir ~ '/index.html') }}"
+      assert:
+        that:
+          - "'<meta name=\"rb-env\" content=\"dev\">' in landing"
+          - "('<meta name=\"rb-ref\" content=\"' ~ rift_deploy_ref ~ '\">') in landing"
+          - "'rb-identity' in landing"
+          - "('dev · ' ~ rift_deploy_ref) in landing"
+        fail_msg: >-
+          Die gerenderte Landing-HTML traegt die Deploy-Identitaet nicht
+          (meta rb-env/rb-ref + Badge, Issue #483).
+        success_msg: "Landing-HTML traegt env/ref (Issue #483)."
 
     # Regression-Guard Issue #355: rift-caddy MUSS `admin off` setzen. Sonst
     # belegt der host-net-Container Caddys Default-Admin-Port 127.0.0.1:2019 und

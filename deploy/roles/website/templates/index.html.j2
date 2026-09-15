@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {# Deploy-Identitaet (Issue #483, US4): dieselbe <env> · <ref> wie Container,
+     Tournament-API und Server-Control. Maschinenlesbar via meta-Tags, sichtbar
+     als Badge. #}
+  <meta name="rb-env" content="{{ rift_env }}">
+  <meta name="rb-ref" content="{{ rift_deploy_ref }}">
+  <title>RIFT BATTLE — {{ rift_env }}</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1rem; color: #222; }
+    .dim { color: #777; }
+    .badge { display: inline-block; padding: .15rem .5rem; border: 1px solid #bbb; border-radius: .25rem;
+             font: 12px/1.4 ui-monospace, "JetBrains Mono", Consolas, monospace; color: #444; background: #f4f4f4; }
+  </style>
+</head>
+<body>
+  <h1>RIFT BATTLE</h1>
+  <p>Deploy-Identität: <span class="badge" id="rb-identity">{{ rift_deploy_identity | default(rift_env ~ ' · ' ~ rift_deploy_ref) }}</span></p>
+  <p class="dim">env <span id="rb-env">{{ rift_env }}</span> · ref <span id="rb-ref">{{ rift_deploy_ref }}</span></p>
+  <p>Mod-Download: <a href="/mod.zip">/mod.zip</a></p>
+</body>
+</html>

@@ -41,6 +41,15 @@
     dest: "{{ website_docroot }}"
     mode: "0644"
 
+# Deploy-Identitaet sichtbar (Issue #483, US4): die Landing-HTML kommt aus dem
+# Template (meta rb-env/rb-ref + Badge). Der copy-Task oben bleibt fuer die
+# statischen Assets (z. B. mod.zip); index.html wird hier ueberschrieben.
+- name: Landing-HTML aus Template rendern (env/ref sichtbar)
+  template:
+    src: index.html.j2
+    dest: "{{ website_docroot }}/index.html"
+    mode: "0644"
+
 # ---------------------------------------------------------------------------
 # Eigener Rift-Caddy (Issue #322): Container + Config im Rift-Stack. Zuert
 # aufbauen und validieren, danach erst den Host-Caddy umbiegen — so gibt es
