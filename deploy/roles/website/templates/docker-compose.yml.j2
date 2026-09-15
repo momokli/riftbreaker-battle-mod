@@ -6,6 +6,11 @@
 #      des Hosts zeigt und
 #   2) der geteilte Host-Caddy ({{ website_host_caddy_container }}, ebenfalls host-net)
 #      auf 127.0.0.1:{{ rift_caddy_port }} hierher proxen kann.
+#
+# Expliziter Compose-Projektname (Issue #483): ohne `name:`/`-p` wuerde der
+# Projektname aus dem Verzeichnis-Basename (`caddy` fuer dev UND prod) abgeleitet
+# und --remove-orphans wuerde den fremden Env-Container als Orphan entfernen.
+name: "{{ rift_caddy_container }}"
 services:
   {{ rift_caddy_container }}:
     image: "{{ rift_caddy_image }}"

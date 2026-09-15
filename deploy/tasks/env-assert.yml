@@ -68,19 +68,29 @@
     - website_mods_dir
     - mods_zip_dest
     - riftbreaker_game_dir
+    - riftbreaker_backup_dir
     - riftbreaker_deploy_dir
     - riftbreaker_sessions_dir
+    - riftbreaker_compose_project
     - rbtools_dir
+    - rbtools_staging_dir
+    - rift_caddy_deploy_dir
   when: rift_env != 'dev'
   vars:
     # dev-Basiswerte (host_vars/planet). Bewusst als explizite Liste: Ansible
     # kennt keine Variablen-Herkunft -> Vergleich gegen diese Konstanten.
+    # Stand Ziel-B-Schema (Issue #483): /srv/rift-dev/*, /opt/rbmods/compose/
+    # rift-dev/*, /opt/rbmods/rbtools/dev.
     rift_env_dev_base:
       website_docroot: /srv/rbmods-site
       website_mods_dir: /srv/rbmods-site/mods
       mods_zip_dest: /srv/rbmods-site/mods/rbbattle.zip
-      riftbreaker_game_dir: /srv/rbgame
-      riftbreaker_deploy_dir: /opt/rbmods/compose/riftbreaker-dedicated
-      riftbreaker_sessions_dir: /srv/rbmods-sessions
-      rbtools_dir: /opt/rbmods/rbtools-drift
+      riftbreaker_game_dir: /srv/rift-dev/game
+      riftbreaker_backup_dir: /srv/rift-dev/backups
+      riftbreaker_deploy_dir: /opt/rbmods/compose/rift-dev/riftbreaker
+      riftbreaker_sessions_dir: /srv/rift-dev/sessions
+      riftbreaker_compose_project: riftbreaker-dedicated
+      rbtools_dir: /opt/rbmods/rbtools/dev
+      rbtools_staging_dir: /opt/rbmods/rbtools/dev/.staging
+      rift_caddy_deploy_dir: /opt/rbmods/compose/rift-dev/caddy
   tags: always

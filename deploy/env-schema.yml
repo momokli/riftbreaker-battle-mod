@@ -19,15 +19,24 @@
 # PyYAML); der Aufruf steht in deploy/tasks/env-assert.yml (Marker
 # ENV-ISOLATION-GATE) und laeuft in den pre_tasks VOR den Rollen.
 #
-# `dev` hat keine eigene Override-Datei: dev IST die Basis
-# (inventory/host_vars/planet/vars.yml). Genau diese Asymmetrie ist der Kern
-# des Issues.
+# `dev` hat KEINE eigene Override-Datei: dev IST die Basis
+# (inventory/host_vars/planet/vars.yml). Seit der Ziel-B-Migration (#483) nutzt
+# dev DENSELBEN `<env>`-Namensraum (/srv/rift-dev/... statt der frueheren
+# unsuffigierten Sonderpfade /srv/rbgame etc.) — ein Schema, aus `rift_env`
+# abgeleitet. Die Distinctness gegen die dev-Basis asserted env-assert.yml.
 
 per_env:
   # --- Dedicated-Server -----------------------------------------------------
   riftbreaker_server_container: [prod, test]
   riftbreaker_server_port_udp: [prod, test]
-  riftbreaker_compose_project: [test]
+  # Compose-Projekt JE Env explizit (Issue #483, Ziel B): im neuen
+  # `<env>`-Schema ist der Compose-Verzeichnis-Basename ueberall "riftbreaker"
+  # -> ohne expliziten Projektnamen kollidierten dev und prod. Variante (a),
+  # Befund 2: der Wert bleibt der HISTORISCHE Projektname
+  # (dev `riftbreaker-dedicated`, prod `riftbreaker-dedicated-prod`), damit die
+  # projekt-praefixten Docker-Volumes der laufenden Instanzen weiter getroffen
+  # werden; test bleibt lauf-isoliert (`rb-test-<suffix>`).
+  riftbreaker_compose_project: [dev, prod, test]
   riftbreaker_game_dir: [prod, test]
   riftbreaker_mod_dir: [prod, test]
   riftbreaker_backup_dir: [prod, test]

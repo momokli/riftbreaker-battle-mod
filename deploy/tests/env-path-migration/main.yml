@@ -1,0 +1,25 @@
+---
+# Hermetischer Selbsttest der Env-Pfad-Migration (Issue #483, Ziel B).
+#
+# Läuft LOKAL (kein Host, kein Vault): bindet die ECHTE Task-Datei
+# deploy/tasks/env-path-migration.yml ein und uebersteuert die Paarliste auf
+# ein Wegwerf-Verzeichnis. Kein Live-Eingriff.
+- name: "Env-Pfad-Migration Selbsttest (Issue #483, Ziel B)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    rift_env: dev
+    rift_env_path_migrations:
+      - {old: "{{ test_base }}/old-game", new: "{{ test_base }}/new/game"}
+      - {old: "{{ test_base }}/old-rbtools", new: "{{ test_base }}/new/rbtools"}
+      # Verschachteltes Paar (Befund #496-Review): dirname(new) ist zugleich
+      # `new` des vorherigen Paars — darf den mv-Guard nicht aushebeln.
+      - {old: "{{ test_base }}/old-staging", new: "{{ test_base }}/new/rbtools/.staging"}
+      # Alt UND Neu vorhanden -> kein mv, nur Warnung (mehrdeutig).
+      - {old: "{{ test_base }}/both-old", new: "{{ test_base }}/both-new"}
+
+  tasks:
+    - name: "Env-Pfad-Migration (echte Task-Datei)"
+      include_tasks: "{{ playbook_dir }}/../../tasks/env-path-migration.yml"

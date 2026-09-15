@@ -5,17 +5,21 @@
 # ============================================================================
 
 # --- Dedicated Game-Server (Dev-SP, 6321, 1v1 "vs sich selbst") -------------
-riftbreaker_game_dir: /srv/rbgame
+# Pfad-Schema `<env>` (Issue #483, Ziel B): dev wird vom unsuffigierten
+# Sonderfall auf DENSELBEN Namensraum wie prod/test gebracht — ein Schema, aus
+# `rift_env` abgeleitet (keine drei handgepflegten Saetze).
+#   /srv/rift-<env>/game | backups | sessions
+riftbreaker_game_dir: "/srv/rift-{{ rift_env }}/game"
 riftbreaker_mod_dir: "{{ riftbreaker_game_dir }}/mods/rbbattle"
 # Mod-Backups liegen AUSSERHALB von mods/ — der Dedicated Server lädt sonst
 # jeden Backup-Ordner mit *.manifest als zweite Mod (Befund 2026-09-10,
 # Issue #212; Guard + Verifikation in der Rolle).
-riftbreaker_backup_dir: "{{ riftbreaker_game_dir }}-backups"
-# Bridge-Binaries (rbtools) isoliert von prod — prod überschreibt via
-# deploy/prod-vars.yml auf /opt/rbmods/rbtools-rift (Root cause #409: sonst
-# teilen sich beide Stacks den einen Mount /opt/rbmods/rbtools).
-rbtools_dir: /opt/rbmods/rbtools-drift
-rbtools_staging_dir: /opt/rbmods/rbtools-staging-drift
+riftbreaker_backup_dir: "/srv/rift-{{ rift_env }}/backups"
+# Bridge-Binaries (rbtools) isoliert von prod (Root cause #409). Pfad-Schema
+# `<env>` (Issue #483, Ziel B): /opt/rbmods/rbtools/<env> (dev lag vorher unter
+# rbtools-drift, prod unter rbtools-rift).
+rbtools_dir: "/opt/rbmods/rbtools/{{ rift_env }}"
+rbtools_staging_dir: "/opt/rbmods/rbtools/{{ rift_env }}/.staging"
 # Laufzeit-Image (Rolle dedicated-server-image, Issue #241, Community-Rezept).
 # Tag = Deploy-SHA aus site.yml (pre_tasks) — KEIN `latest`; das Image existiert
 # garantiert, bevor der Container startet.
@@ -24,6 +28,25 @@ dedicated_server_image: "{{ dedicated_server_image_name }}:{{ deploy_image_tag }
 riftbreaker_server_image: "{{ dedicated_server_image }}"
 riftbreaker_server_container: riftbreaker-dedicated
 riftbreaker_server_port_udp: 6321
+# Compose-Projekt EXPLIZIT je Env (Issue #483, Ziel B): der Verzeichnis-Basename
+# ist im neuen Schema ueberall "riftbreaker" (/opt/rbmods/compose/rift-<env>/
+# riftbreaker) — die projekt-abgeleitete Kollision wird so vermieden und dev/
+# prod laufen als getrennte Compose-Projekte (kein Netz-/Container-Clash).
+#
+# Variante (a), Befund 2: HISTORISCHER Projektname BEIBEHALTEN. Compose
+# praefixt unbenannte Top-Level-Volumes mit dem Projektnamen
+# (<projekt>_<volume>) — live auf planet heisst das dev-Volume
+# `riftbreaker-dedicated_rb-wine` (+ `..._rb-saves`). Der Projektname ist
+# unabhaengig vom Compose-Verzeichnis; eine Umbenennung auf `rift-dev` wuerde
+# NEUE leere Volumes erzeugen und Wine-Prefix/Saves der laufenden Instanz
+# verwaisen lassen (die Host-Pfad-Migration deckt Docker-Ressourcen nicht ab).
+# Deshalb bleibt der Wert der historische Default (Basename des ALTEN
+# Deploy-Verzeichnisses /opt/rbmods/compose/riftbreaker-dedicated).
+riftbreaker_compose_project: "riftbreaker-dedicated"
+# Compose-/Config-/Sessions-Pfade im `<env>`-Schema.
+riftbreaker_deploy_dir: "/opt/rbmods/compose/rift-{{ rift_env }}/riftbreaker"
+riftbreaker_config_dir: "{{ riftbreaker_deploy_dir }}/config"
+riftbreaker_sessions_dir: "/srv/rift-{{ rift_env }}/sessions"
 # Welt/Config gemäß Community-Rezept (config.cfg.j2). Werte = funktionierender
 # Stand (verifiziert 2026-09-11).
 riftbreaker_server_campaign: mp_survival/mp_survival
@@ -69,7 +92,7 @@ website_mods_dir: "{{ website_docroot }}/mods"
 rift_caddy_container: rift-caddy
 rift_caddy_image: caddy:2
 rift_caddy_port: 8787
-rift_caddy_deploy_dir: /opt/rbmods/compose/rift-caddy
+rift_caddy_deploy_dir: "/opt/rbmods/compose/rift-{{ rift_env }}/caddy"
 rift_caddy_data_dir: "{{ rift_caddy_deploy_dir }}/data"
 rift_caddy_config_dir: "{{ rift_caddy_deploy_dir }}/config"
 # Docroot IM Container (read-only Bind-Mount von website_docroot).

@@ -1,0 +1,127 @@
+---
+# deploy/tasks/env-path-migration.yml — idempotente Migration der Env-Pfade auf
+# das `<env>`-Schema (Issue #483, Ziel B).
+#
+# Pro Pfadpaar {old,new}:
+#   * NUR wenn der ALTE Pfad existiert UND der NEUE noch nicht,
+#   * `mv` (KEIN copy — #301: eine Kopie verdoppelt die Daten und kann die
+#     Platte voll laufen lassen),
+#   * danach Symlink old -> new (Rollback-fest: laufende Mounts/Altpfade
+#     funktionieren weiter, ein Rollback scheitert nicht an Pfaden).
+# Beim erneuten Lauf ist der alte Pfad ein Symlink auf den neuen -> no-op
+# (idempotent).
+#
+# Kein Live-Eingriff durch das Repo: die Ausfuehrung passiert im regulaeren
+# Deploy (pre_tasks von site.yml/deploy-prod.yml) oder gezielt ueber
+# deploy/migrate-env-paths.yml. Runbook + Rollback: docs/DEPLOYMENT.md.
+#
+# Die Paarliste kommt aus der env-keyed Map unten (`rift_env_path_migration_map`)
+# und ist fuer den hermetischen Test ueber die Var `rift_env_path_migrations`
+# uebersteuerbar.
+
+- name: "Env-Pfad-Migration — env pruefen (#483)"
+  assert:
+    that: rift_env in ['dev', 'prod', 'test']
+    fail_msg: "rift_env muss dev|prod|test sein (ist '{{ rift_env }}')."
+    success_msg: "Migration env={{ rift_env }}."
+
+- name: "Env-Pfad-Migration — Paarliste ermitteln (#483)"
+  set_fact:
+    rift_env_path_migrations: "{{ rift_env_path_migration_map[rift_env] }}"
+  when: rift_env_path_migrations is not defined
+  vars:
+    # Alt-Pfade = Stand VOR dem `<env>`-Schema. test hatte keine persistenten
+    # Alt-Pfade (Boot-Test raeumt selbst auf) -> leer.
+    rift_env_path_migration_map:
+      dev:
+        - {old: /srv/rbgame, new: /srv/rift-dev/game}
+        - {old: /srv/rbgame-backups, new: /srv/rift-dev/backups}
+        - {old: /srv/rbmods-sessions, new: /srv/rift-dev/sessions}
+        - {old: /opt/rbmods/compose/riftbreaker-dedicated, new: /opt/rbmods/compose/rift-dev/riftbreaker}
+        - {old: /opt/rbmods/compose/rift-caddy, new: /opt/rbmods/compose/rift-dev/caddy}
+        - {old: /opt/rbmods/rbtools-drift, new: /opt/rbmods/rbtools/dev}
+        - {old: /opt/rbmods/rbtools-staging-drift, new: /opt/rbmods/rbtools/dev/.staging}
+      prod:
+        - {old: /srv/rbgame-prod, new: /srv/rift-prod/game}
+        - {old: /srv/rbgame-prod-backups, new: /srv/rift-prod/backups}
+        - {old: /srv/rbmods-sessions-prod, new: /srv/rift-prod/sessions}
+        - {old: /opt/rbmods/compose/riftbreaker-dedicated-prod, new: /opt/rbmods/compose/rift-prod/riftbreaker}
+        - {old: /opt/rbmods/compose/rift-caddy-prod, new: /opt/rbmods/compose/rift-prod/caddy}
+        - {old: /opt/rbmods/rbtools-rift, new: /opt/rbmods/rbtools/prod}
+        - {old: /opt/rbmods/rbtools-staging-rift, new: /opt/rbmods/rbtools/prod/.staging}
+      test: []
+
+- name: "Env-Pfad-Migration — Ziel-Elternverzeichnis anlegen (#483)"
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  # Nur Top-Level-Eltern anlegen. Bei verschachtelten Paaren (z. B.
+  # rbtools/<env> und rbtools/<env>/.staging) ist dirname(new) des einen
+  # Paars gleichzeitig new des anderen — wuerde man das vorab anlegen,
+  # griffe der `not ... exists`-Guard beim mv nicht (stiller No-Op).
+  loop: "{{ (rift_env_path_migrations | map(attribute='new') | map('dirname') | unique) | difference(rift_env_path_migrations | map(attribute='new')) }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: "Env-Pfad-Migration — alten Pfad pruefen (#483)"
+  stat:
+    path: "{{ item.old }}"
+    follow: false
+  loop: "{{ rift_env_path_migrations }}"
+  loop_control:
+    label: "{{ item.old }}"
+  register: rift_env_mig_old
+
+- name: "Env-Pfad-Migration — neuen Pfad pruefen (#483)"
+  stat:
+    path: "{{ item.new }}"
+    follow: false
+  loop: "{{ rift_env_path_migrations }}"
+  loop_control:
+    label: "{{ item.new }}"
+  register: rift_env_mig_new
+
+- name: "Env-Pfad-Migration — Alt vorhanden/Neu fehlt: mv (kein copy) (#483)"
+  command:
+    argv:
+      - mv
+      - "--"
+      - "{{ item.old }}"
+      - "{{ item.new }}"
+  loop: "{{ rift_env_path_migrations }}"
+  loop_control:
+    extended: true
+    label: "{{ item.old }} -> {{ item.new }}"
+  when:
+    - rift_env_mig_old.results[ansible_loop.index0].stat.exists
+    - not rift_env_mig_new.results[ansible_loop.index0].stat.exists
+
+- name: "Env-Pfad-Migration — Symlink Alt -> Neu (#483)"
+  file:
+    src: "{{ item.new }}"
+    dest: "{{ item.old }}"
+    state: link
+    force: false
+  loop: "{{ rift_env_path_migrations }}"
+  loop_control:
+    extended: true
+    label: "{{ item.old }} -> {{ item.new }}"
+  when:
+    - rift_env_mig_old.results[ansible_loop.index0].stat.exists
+    - not rift_env_mig_new.results[ansible_loop.index0].stat.exists
+
+- name: "Env-Pfad-Migration — mehrdeutig (Alt UND Neu existieren, kein Symlink) (#483)"
+  debug:
+    msg: >-
+      WARN: '{{ item.old }}' UND '{{ item.new }}' existieren beide — keine
+      automatische Migration (manuell pruefen: verwaister Alt-Pfad?). Der Deploy
+      nutzt fortan '{{ item.new }}'.
+  loop: "{{ rift_env_path_migrations }}"
+  loop_control:
+    extended: true
+    label: "{{ item.old }}"
+  when:
+    - rift_env_mig_old.results[ansible_loop.index0].stat.exists
+    - rift_env_mig_old.results[ansible_loop.index0].stat.islnk | default(false) | bool == false
+    - rift_env_mig_new.results[ansible_loop.index0].stat.exists

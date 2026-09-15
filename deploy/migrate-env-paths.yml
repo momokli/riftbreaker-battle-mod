@@ -1,0 +1,26 @@
+---
+# RIFT BATTLE — Env-Pfad-Migration auf das `<env>`-Schema (Issue #483, Ziel B).
+#
+# EXPLIZITES WERKZEUG fuer einen manuellen Einzellauf im Wartungsfenster.
+# Die Migration laeuft seit Befund-1-Fix AUTOMATISCH im regulaeren Deploy: die
+# Task-Datei ist in den pre_tasks von deploy/site.yml (dev) und
+# deploy/deploy-prod.yml (prod) eingebunden. Dieser Play bleibt fuer einen
+# gezielten Lauf je Env (idempotent = no-op, falls der Deploy schon migriert hat):
+#   ansible-playbook -i deploy/inventory deploy/migrate-env-paths.yml -e rift_env=dev
+#   ansible-playbook -i deploy/inventory deploy/migrate-env-paths.yml -e rift_env=prod
+#
+# Idempotent: pro Pfad `mv` (KEIN copy) + Symlink Alt->Neu, nur wenn der alte
+# Pfad existiert und der neue fehlt. Runbook/Rollback: docs/DEPLOYMENT.md
+# §„Environment-Isolation" → „Migration & Rollback".
+- name: RIFT BATTLE — Env-Pfad-Migration (planet)
+  hosts: planet
+  become: true
+  gather_facts: false
+
+  vars:
+    # Default nur fuer direkte Einzellaeufe; im Betrieb IMMER `-e rift_env=...`.
+    rift_env: dev
+
+  tasks:
+    - name: "Env-Pfad-Migration (Issue #483, Ziel B)"
+      include_tasks: tasks/env-path-migration.yml

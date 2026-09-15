@@ -1,0 +1,41 @@
+---
+# Hermetischer Check-Mode-Selbsttest der Schreibkette (Issue #483, Befund
+# deploy-check planet / PR #496).
+#
+# Läuft LOKAL im `--check` (kein Host, kein Docker, kein Vault): die Rolle
+# riftbreaker-server wird mit ihren Schreibzielen in ein Verzeichnis gebunden,
+# das es NICHT gibt. Genau das ist der Host-Zustand VOR der Pfad-Migration:
+# das `<env>`-Schema zeigt auf neue Verzeichnisse, die im `--check` nicht real
+# angelegt werden dürfen. Ohne Check-Mode-Schutz bricht der Copy-Task hart ab
+# („Destination directory … does not exist" — der planet-Fail aus #496).
+#
+# Die Script-Quellen zeigen bewusst auf die ECHTEN Repo-Dateien: nur so läuft
+# der Copy-Task bis zur Ziel-Verzeichnisprüfung (bei fehlender Quelle wäre der
+# Abbruch ein anderer und der Test damit wirkungslos).
+- name: "riftbreaker-server — Check-Mode-Selbsttest (Issue #483)"
+  hosts: localhost
+  connection: local
+  # `ansible_date_time` (Backup-/Stray-Zeitstempel der Rolle) ist Teil der Facts.
+  gather_facts: true
+
+  vars:
+    rift_env: dev
+    # Rolle mit den neuen `<env>`-Pfaden unter einem NICHT existierenden Baum.
+    riftbreaker_game_dir: "{{ test_missing_root }}/srv/rift-dev/game"
+    riftbreaker_mod_dir: "{{ riftbreaker_game_dir }}/mods/rbbattle"
+    riftbreaker_backup_dir: "{{ test_missing_root }}/srv/rift-dev/backups"
+    riftbreaker_deploy_dir: "{{ test_missing_root }}/opt/rbmods/compose/rift-dev/riftbreaker"
+    riftbreaker_config_dir: "{{ riftbreaker_deploy_dir }}/config"
+    riftbreaker_sessions_dir: "{{ test_missing_root }}/srv/rift-dev/sessions"
+    riftbreaker_compose_project: riftbreaker-dedicated
+    # Repo-Dateien (Game-Content/Zip existieren auf planet — hier als Fixture).
+    mods_zip_dest: "{{ test_fixture_root }}/rbbattle.zip"
+    riftbreaker_sessions_script_src: "{{ playbook_dir }}/../../../tools/session-recorder/session_recorder.py"
+    riftbreaker_referee_egress_script_src: "{{ playbook_dir }}/../../../tools/referee-egress/referee_egress.py"
+    # Werte, die sonst aus dem Vault/host_vars kommen (hier nur Dummies).
+    riftbreaker_server_password: check-dummy
+    riftbreaker_server_campaign: mp_survival/mp_survival
+    riftbreaker_server_mission: survival/jungle
+
+  roles:
+    - role: riftbreaker-server

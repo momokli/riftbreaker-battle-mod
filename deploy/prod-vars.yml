@@ -13,13 +13,26 @@
 # Eigene Container-/Port-Namen (dev = 6321 bleibt unberührt).
 riftbreaker_server_container: riftbreaker-dedicated-prod
 riftbreaker_server_port_udp: 6322
+# Compose-Projekt EXPLIZIT (Issue #483, Ziel B): der Verzeichnis-Basename ist im
+# neuen Schema ueberall "riftbreaker" — ohne diesen Wert kollidierten dev und
+# prod im Compose-Projektnamen/Netz.
+#
+# Variante (a), Befund 2: HISTORISCHER Projektname BEIBEHALTEN
+# (`riftbreaker-dedicated-prod` = Basename des ALTEN prod-Deploy-Verzeichnisses).
+# Compose praefixt unbenannte Volumes mit dem Projektnamen; live heisst das
+# prod-Volume `riftbreaker-dedicated-prod_rb-wine-prod` (+ `..._rb-saves-prod`).
+# Eine Umbenennung auf `rift-prod` erzeugte neue leere Volumes und verwaiste den
+# Wine-Prefix/die Saves der laufenden Instanz.
+riftbreaker_compose_project: "riftbreaker-dedicated-prod"
 
 # Eigener Game-Stand + Mod (wird im Tag-Workflow, Follow-up, eingefroren).
-riftbreaker_game_dir: /srv/rbgame-prod
-riftbreaker_mod_dir: /srv/rbgame-prod/mods/rbbattle
-riftbreaker_backup_dir: /srv/rbgame-prod-backups
-riftbreaker_deploy_dir: /opt/rbmods/compose/riftbreaker-dedicated-prod
-riftbreaker_config_dir: /opt/rbmods/compose/riftbreaker-dedicated-prod/config
+# Pfad-Schema `<env>` (Issue #483, Ziel B): /srv/rift-<env>/game|backups.
+riftbreaker_game_dir: "/srv/rift-{{ rift_env }}/game"
+riftbreaker_mod_dir: "{{ riftbreaker_game_dir }}/mods/rbbattle"
+riftbreaker_backup_dir: "/srv/rift-{{ rift_env }}/backups"
+# /opt/rbmods/compose/rift-<env>/riftbreaker (Ziel B; vorher riftbreaker-dedicated-prod).
+riftbreaker_deploy_dir: "/opt/rbmods/compose/rift-{{ rift_env }}/riftbreaker"
+riftbreaker_config_dir: "{{ riftbreaker_deploy_dir }}/config"
 
 # Eigene persistente Volumes (Wine-Prefix + Saves).
 riftbreaker_wine_volume: rb-wine-prod
@@ -28,18 +41,19 @@ riftbreaker_saves_volume: rb-saves-prod
 # IO-Bridge isoliert von dev (9001) — sonst Kollision auf 127.0.0.1.
 riftbreaker_bridge_port: 9002
 
-# Bridge-Binaries (rbtools) isoliert von dev — sonst laden prod UND dev aus dem
-# gemeinsamen /opt/rbmods/rbtools (Root cause #409: prod lief nach dem Refactor
+# Bridge-Binaries (rbtools) isoliert von dev — Pfad-Schema `<env>` (Issue #483,
+# Ziel B: /opt/rbmods/rbtools/<env>) statt der frueheren rbtools-rift/
+# rbtools-staging-rift (Root cause #409: prod lief nach dem Refactor
 # auf neuen Binaries statt auf dem eingefrorenen Tag-Stand).
-rbtools_dir: /opt/rbmods/rbtools-rift
-rbtools_staging_dir: /opt/rbmods/rbtools-staging-rift
+rbtools_dir: "/opt/rbmods/rbtools/{{ rift_env }}"
+rbtools_staging_dir: "/opt/rbmods/rbtools/{{ rift_env }}/.staging"
 
 # Sidecars (Session-Recorder + Referee-Egress) isoliert von dev — die festen
 # container_name-Werte (riftbreaker-sessions/-egress) würden sonst mit dem
 # dev-Stack kollidieren. Eigener Sessions-Dir, damit die JSONL getrennt bleiben.
 riftbreaker_sessions_container: riftbreaker-sessions-prod
 riftbreaker_referee_egress_container: riftbreaker-egress-prod
-riftbreaker_sessions_dir: /srv/rbmods-sessions-prod
+riftbreaker_sessions_dir: "/srv/rift-{{ rift_env }}/sessions"
 
 # Content kommt per Sync aus dem kanonischen Cache (wie dev).
 riftbreaker_content_mode: sync
@@ -63,7 +77,7 @@ landing_domain: www.rift.projectmellon.de
 cockpit_domain: cockpit.rift.projectmellon.de
 rift_caddy_container: rift-caddy-prod
 rift_caddy_port: 8788
-rift_caddy_deploy_dir: /opt/rbmods/compose/rift-caddy-prod
+rift_caddy_deploy_dir: "/opt/rbmods/compose/rift-{{ rift_env }}/caddy"
 
 # --- Crash-Collector (Prod-Zwilling, Issue #481) ----------------------------
 # Eigene Unit + eigenes Bundle-Verzeichnis, damit "prod ist stabil" BELEGBAR

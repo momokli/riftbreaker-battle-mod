@@ -522,26 +522,100 @@ bei Lücke ab (Marker `ENV-ISOLATION-GATE`), aufgerufen aus
 
 | Achse | dev (Basis) | prod (`prod-vars.yml`) | test (`test-vars.yml`) |
 | --- | --- | --- | --- |
+| `riftbreaker_game_dir` | `/srv/rift-dev/game` | `/srv/rift-prod/game` | `/srv/rift-test-<run>/game` |
+| `riftbreaker_backup_dir` | `/srv/rift-dev/backups` | `/srv/rift-prod/backups` | `/srv/rift-test-<run>/backups` |
+| `riftbreaker_sessions_dir` | `/srv/rift-dev/sessions` | `/srv/rift-prod/sessions` | `/srv/rift-test-<run>/sessions` |
+| `riftbreaker_deploy_dir` | `/opt/rbmods/compose/rift-dev/riftbreaker` | `/opt/rbmods/compose/rift-prod/riftbreaker` | `/opt/rbmods/compose/rift-test-<run>/riftbreaker` |
+| `riftbreaker_compose_project` | `riftbreaker-dedicated` | `riftbreaker-dedicated-prod` | `rb-test-<run>` |
+| `rbtools_dir` | `/opt/rbmods/rbtools/dev` | `/opt/rbmods/rbtools/prod` | `/opt/rbmods/rbtools/test-<run>` |
+| `rbtools_staging_dir` | `<rbtools_dir>/.staging` | `<rbtools_dir>/.staging` | `<rbtools_dir>/.staging` |
 | `website_docroot` | `/srv/rbmods-site` | `/srv/rbmods-site-prod` | `/srv/rbmods-site-test-<run>` |
 | `website_mods_dir` | `/srv/rbmods-site/mods` | `<docroot>/mods` | `/opt/rbbattle-deploy/test/mods-<run>` |
 | `mods_zip_dest` | `<mods_dir>/rbbattle.zip` | `<mods_dir>/rbbattle.zip` | (abgeleitet, isoliert) |
-| `riftbreaker_game_dir` | `/srv/rbgame` | `/srv/rbgame-prod` | `/srv/rbgame-test-<run>` |
-| `riftbreaker_deploy_dir` | `/opt/rbmods/compose/riftbreaker-dedicated` | `…-prod` | `/opt/rbbattle-deploy/test/rb-<run>` |
-| `riftbreaker_sessions_dir` | `/srv/rbmods-sessions` | `/srv/rbmods-sessions-prod` | `/srv/rbmods-sessions-test-<run>` |
-| `rbtools_dir` | `/opt/rbmods/rbtools-drift` | `/opt/rbmods/rbtools-rift` | `/opt/rbmods/rbtools-test-<run>` |
 | Game-Port (UDP) | 6321 | 6322 | ephemer (je Lauf) |
 | Bridge-Port | 9001 | 9002 | je Lauf (Fallback 9003) |
 | Tournament-Port | 8081 | 8082 | je Lauf |
-| rift-caddy | `rift-caddy` :8787 | `rift-caddy-prod` :8788 | — (kein website-Rolle im Boot-Test) |
+| rift-caddy | `rift-caddy` :8787, `/opt/rbmods/compose/rift-dev/caddy` | `rift-caddy-prod` :8788, `/opt/rbmods/compose/rift-prod/caddy` | — (keine website-Rolle im Boot-Test) |
 | Container-Env/Labels | `RBB_ENV=dev`/`RBB_REF=<sha>` | `prod`/`<tag>+<sha>` | `test`/`<sha>` |
 
-**Additiv, kein Rename:** die dev-Pfade bleiben unverändert; prod/test bekommen
-**eigene** Werte. `mods_zip_name: rbbattle.zip` + seine md5-Parität bleiben
-unverändert (zusätzlich entsteht `rbbattle-<env>-<ref>.zip`).
+**Ein Schema `-<env>` (Ziel B):** dev ist **kein** Sonderfall mehr — alle Envs
+leiten ihre Pfade aus `rift_env` ab: `/srv/rift-<env>/{game,backups,sessions}`,
+`/opt/rbmods/compose/rift-<env>/{riftbreaker,caddy}`,
+`/opt/rbmods/rbtools/<env>/{,.staging}`. `riftbreaker_compose_project` wird
+**explizit je Env** gesetzt und bleibt der **historische** Projektname
+(dev `riftbreaker-dedicated`, prod `riftbreaker-dedicated-prod`): das
+Compose-Template deklariert die Volumes ohne `name:`, Compose praefixt sie also
+mit dem Projektnamen (`<projekt>_<volume>`). Der Projektname ist unabhaengig vom
+Verzeichnis; eine Umbenennung auf `rift-<env>` erzeugte **neue leere** Volumes
+und verwaiste den Wine-Prefix/die Saves der laufenden Instanzen (die
+Host-Pfad-Migration deckt Docker-Ressourcen **nicht** ab — Regressions-Nachweis:
+`deploy/tests/compose-project/run.sh`).
+`website_docroot`/`website_mods_dir` bleiben außerhalb dieses Schemas (eigener
+Docroot je Env, s. #483/US3). `mods_zip_name: rbbattle.zip` + seine md5-Parität
+bleiben **unverändert** (zusätzlich entsteht `rbbattle-<env>-<ref>.zip`).
 
 `deploy/tasks/env-assert.yml` asserted zusätzlich, dass für `env != dev` jeder
 der obigen Pfade **vom dev-Basiswert abweicht** (Distinctness gegen explizite
 dev-Konstanten — Ansible kennt keine Variablen-Herkunft).
+
+### Migration & Rollback: `-<env>`-Schema (Ziel B, Issue #483)
+
+Da dev-/prod-Daten auf planet bereits unter den **alten** Pfaden liegen, ist
+die Umstellung ein **idempotentes Repo-Artefakt** — kein Copy. Sie laeuft
+**automatisch im Deploy**: `deploy/tasks/env-path-migration.yml` ist in den
+`pre_tasks` von `deploy/site.yml` (dev, push auf `main`), `deploy/deploy-prod.yml`
+(prod, Tag `v*`) und `deploy/test-deploy.yml` (test, no-op) eingebunden —
+**direkt nach dem ENV-ISOLATION-GATE und VOR den Rollen**. Ohne diese Einbindung
+deployt der automatische CD die **neuen** Pfade ohne migrierten Stand
+(`/srv/rift-dev/game` fehlt → `game-content` kopiert 664MB aus dem Cache statt
+`mv`, #301; Alt-Pfade verwaisten).
+
+```bash
+# Wartungsfenster, je Env manuell (Explizit-Werkzeug; idempotent = no-op falls
+# der Deploy schon migriert hat). Setzt mv + Symlink Alt->Neu, nur wenn Alt
+# existiert und Neu fehlt:
+ansible-playbook -i deploy/inventory deploy/migrate-env-paths.yml -e rift_env=dev
+ansible-playbook -i deploy/inventory deploy/migrate-env-paths.yml -e rift_env=prod
+```
+
+`deploy/tasks/env-path-migration.yml` macht pro Pfad:
+1. Ziel-Elternverzeichnis anlegen,
+2. `mv <alt> <neu>` (**kein** `cp` — eine Kopie verdoppelt die Daten und kann die
+   Platte volllaufen lassen, #301),
+3. Symlink `<alt> -> <neu>` — laufende Mounts/Altpfade funktionieren weiter,
+   und ein **Rollback scheitert nicht an Pfaden**.
+
+Sind Alt **und** Neu vorhanden (mehrdeutig), passiert nichts außer einer
+Warnung — manuell prüfen. Nach der Migration zeigt der alte Pfad bewusst auf
+den neuen (Übergangs-Symlink); er kann später entfernt werden. Der Wiring-
+Vertrag (Migration in `pre_tasks` vor den Rollen) wird von
+`deploy/tests/env-path-migration/run.sh` via `ansible-playbook --list-tasks`
+geprüft (inkl. Negativ-Probe).
+
+**Check-Mode (`--check`):** auf einem Host, dessen Daten noch unter den ALTEN
+Pfaden liegen, existieren die neuen `<env>`-Verzeichnisse nicht — und im
+`--check` darf Ansible sie nicht anlegen (`file: state=directory` bleibt
+„would change"). Die Rollen, die in diese Verzeichnisse schreiben
+(`riftbreaker-server`: Session-Recorder-/Referee-Script, `config.cfg`,
+`docker-compose.yml`; `website`: `Caddyfile`, `docker-compose.yml`), hängen ihre
+Schreib-Tasks deshalb an die Bedingung „Ziel existiert ODER kein Check-Mode"
+und protokollieren den Übersprung als Hinweis. Ebenso ist der Mod-Rollout
+(`unarchive`) im `--check` geskippt — er verlangt ein real existierendes
+Zielverzeichnis. Der echte Deploy ist unverändert.
+Regressionstest: `deploy/tests/check-mode-paths/run.sh` (planet-frei, läuft in
+`deploy-check-local`; Negativ-Probe ohne den Schutz muss mit
+„Destination directory … does not exist" abbrechen).
+
+**Rollback (Schema):** neuen Pfad zurück nach alt `mv`en (`mv <neu>/* <alt>/`
+bzw. `mv <neu> <alt>` nach Entfernen des Symlinks) und `rift_env` in den
+Vars auf die alten Werte zurücksetzen. Die Daten liegen unverändert am neu
+gemounteten Ort.
+
+**Rollback (Deploy-Checkouts, Ziel A):** siehe `deploy/README.md`
+§„Migration: geteilter Checkout/Marker → `repo-<env>`" — Legacy-Marker
+`.deploy-sha`/`-ref` + Checkout `repo/` bleiben erhalten und werden als
+Fallback gelesen.
+
 
 ### Identitäts-Surface-Vertrag (`<env> · <ref>`)
 
@@ -556,13 +630,8 @@ dev-Konstanten — Ansible kennt keine Variablen-Herkunft).
 | Container | Labels `RBB_ENV`/`RBB_REF` | `docker inspect` (ohne Log) |
 | Mod-Log | `event=mod_load … env=… ref=…` | `mod/lua/rbbattle_autoexec.lua` — **vorbereitet, im Live-Lauf nicht wirksam** (`env=unknown`, s. u.) |
 
-### Offene Punkte (bewusst NICHT in #483)
+### Offene Punkte (live-only / bewusst offen)
 
-- **Kein `-<env>`-Rename** der dev-Pfade (`/srv/rbgame`, `/srv/rbmods-site`,
-  `/opt/rbmods/rbtools-drift`) — Live-Eingriff auf prod; eigener PR mit
-  Rollback-Runbook.
-- **Kein host-seitiger Checkout-Umbau** (`/opt/rbbattle-deploy/repo-<env>` +
-  `.deploy-<env>.sha`/`-ref`) — forced-command/Wrapper sind nicht im Repo.
 - **Mod-Log-`env`/`ref` in-game** ist vorbereitet, aber im Live-Lauf **nicht
   wirksam**: der (rot gelaufene) Boot-Test-Log zeigte trotz gesetztem
   `RBB_ENV=test`/`RBB_REF=<sha>` `event=mod_load … env=unknown ref=unknown` —
@@ -570,3 +639,15 @@ dev-Konstanten — Ansible kennt keine Variablen-Herkunft).
   defensive Fallback greift. NICHT als erledigte Surface führen. Verlässlicher
   Kanal (Config/Datei statt Lua-`getenv`) ist Follow-up (Review-F2).
 - **Landing-Domain-Isolationsgrad** für Prod-Artefakte (`/mods/prod/…`) offen.
+  Der Prod-Artefakt-Kanal (`mods_zip_dest`) ist heute env-isoliert; ob Prod
+  zusätzlich unter einer eigenen Landing-Domain (`www.rift.*`) ausliefert,
+  bleibt eine offene Produktentscheidung.
+- **Live-Migration der Env-Pfade:** laeuft seit dem Befund-1-Fix automatisch in
+  den `pre_tasks` des regulaeren Deploys (site.yml/deploy-prod.yml); der separate
+  Lauf `migrate-env-paths.yml` bleibt als explizites Werkzeug. Die
+  Checkout-/Marker-Umstellung (`repo-<env>`) steht weiter aus — Repo-Artefakt +
+  Tests sind fertig, der `mv`-Schritt laeuft im planet-Wartungsfenster.
+- **Pfad-Familien außerhalb des `-<env>`-Schemas:** `website_docroot`
+  (`/srv/rbmods-site[-<env>]`) und `dedicated_server_context_dir` (Boot-Test,
+  `/opt/rbbattle-deploy/test/…`) behalten ihr eigenes (isolations-geprüftes)
+  Schema.
