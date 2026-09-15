@@ -1,0 +1,9 @@
+{
+  "name": "send-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Web-UI-Test fuer das Cockpit-Panel send tracker (Issue #527): persistentes Send-Log (timestamp+amount) + austauschbare Quelle. Keine Dependencies, kein Netzwerk.",
+  "scripts": {
+    "test": "node --test"
+  }
+}
