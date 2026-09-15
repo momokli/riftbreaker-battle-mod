@@ -2229,6 +2229,44 @@ static int connplayers_count_from_vec(const unsigned char *vec, int *out)
     return 1;
 }
 
+/* Ermittelt den Deallocate-Zeiger fuer den Rueckgabe-Vektor aus dem
+ * Allocator-Objekt `alloc` (= vec[+0x00]). Disasm-belegt (RVA 0x26F340,
+ * `~Vector`):
+ *   mov rcx,[rcx]        ; rcx = Allocator-Objekt (vec[+0x00])
+ *   mov rax,[rcx]        ; rax = vptr  (Obj+0x00)
+ *   call qword ptr [rax+0x10]   ; Slot +0x10
+ * Also ZWEI Indirektionen (vptr -> Slot), NICHT `alloc[+0x10]`. Beide Reads
+ * laufen per safe_read_u64 (kein Roh-Deref); der Slot wird zusaetzlich auf
+ * 0 und auf den eigenen Modulbereich [base,base+size) geprueft - ein
+ * fehlgeleiteter/abgeraeumter Zeiger fuehrt so NIE zu einem Blind-Call
+ * (Leak statt Crash). Reine Lese-Logik -> host-testbar.
+ * Rueckgabe 1 = out_fn gesetzt, 0 = unplausibel (kein Aufruf). */
+static int connplayers_dealloc_target(const unsigned char *alloc,
+                                      const unsigned char *base, size_t size,
+                                      uintptr_t *out_fn)
+{
+    uint64_t vptr = 0, slot = 0;
+
+    if (out_fn)
+        *out_fn = 0;
+    if (!alloc || !out_fn)
+        return 0;
+    if (!safe_read_u64(alloc, &vptr) || !vptr)
+        return 0; /* vptr (Obj+0x00) unlesbar/0 */
+    if (!safe_read_u64((const unsigned char *)(uintptr_t)vptr + 0x10,
+                       &slot) ||
+        !slot)
+        return 0; /* Slot +0x10 unlesbar/0 */
+    if (base && size) {
+        uintptr_t lo = (uintptr_t)base;
+        uintptr_t hi = lo + size;
+        if (slot < lo || slot >= hi)
+            return 0; /* Ziel ausserhalb des Moduls -> kein Aufruf */
+    }
+    *out_fn = (uintptr_t)slot;
+    return 1;
+}
+
 #ifndef RBBRIDGE_HOSTTEST
 
 /* ------------------------------------------------------------------ */
@@ -3664,33 +3702,43 @@ static RBBRIDGE_NOINLINE void dispatch_natural_waves(HANDLE hPipe,
  * `Exor::Vector<uint32,StlAllocatorProxy<uint32>>::~Vector`
  * (Disasm RVA 0x26F340):
  *   cap = vec[+0x18]; nur wenn cap != 0:
- *     alloc = vec[+0x00]; alloc->vtable[0x10](alloc, vec[+0x08], cap*4)
+ *     alloc = vec[+0x00]; vptr = *alloc; vptr[+0x10](alloc, vec[+0x08], cap*4)
  * (Element = uint32 -> cap*4 Byte; die Engine setzt `vec[+0x00]` beim
  * Aufbau des Vektors selbst.) Bewusst KEINE Dtor-Symbolaufloesung: der
  * Dtor-Body liegt im .text DREIFACH (drei byte-identische Instanzen fuer
  * 4-Byte-Elemente; planet-Gegenprobe 0x26F340 / 0x2B30F0 / 0x18906E0) -
  * eine AOB waere also nicht eindeutig. Der Deallocate-Aufruf ueber die
- * Allocator-vtable ist dagegen deterministisch (kein Leak). */
-static void connplayers_vec_release(unsigned char *vec)
+ * Allocator-vtable ist dagegen deterministisch (kein Leak).
+ *
+ * Review PR #524: der vtable-Slot wird NICHT roh dereferenziert. Beide
+ * Indirektionen (vptr -> Slot) laufen per safe_read_u64 und der Slot wird
+ * auf 0 + Modulbereich geprueft (connplayers_dealloc_target); zusaetzlich
+ * wird `cap` begrenzt. Ein abweichendes Vektor-Layout oder eine
+ * fehlgeleitete AOB fuehrt damit zu einem Leak, nie zu einem Blind-Call. */
+static void connplayers_vec_release(unsigned char *vec,
+                                    const unsigned char *base, size_t size)
 {
     uint64_t alloc = 0, begin = 0, cap = 0;
+    uintptr_t dealloc_addr = 0;
+    typedef void (*vec_dealloc_fn)(void *self, void *p, size_t bytes);
 
     if (!vec)
         return;
     if (!safe_read_u64(vec + 0x18, &cap) || cap == 0)
         return; /* keine Allokation -> nichts freizugeben */
+    if (cap > (uint64_t)RBBRIDGE_CONNPLAYERS_MAX)
+        return; /* unplausible Kapazitaet -> nicht freigeben (Leak statt Crash) */
     if (!safe_read_u64(vec + 0x00, &alloc) || !alloc)
         return;
     if (!safe_read_u64(vec + 0x08, &begin) || !begin)
         return;
+    if (!connplayers_dealloc_target((const unsigned char *)(uintptr_t)alloc,
+                                    base, size, &dealloc_addr))
+        return; /* kein plausibles Ziel -> kein Aufruf */
 
-    typedef void (*vec_dealloc_fn)(void *self, void *p, size_t bytes);
-    void **vt = (void **)(uintptr_t)alloc;
-    vec_dealloc_fn dealloc = (vec_dealloc_fn)vt[2]; /* vtable-Slot +0x10 */
-    if (!dealloc)
-        return;
-    dealloc((void *)(uintptr_t)alloc, (void *)(uintptr_t)begin,
-            (size_t)(cap * 4));
+    ((vec_dealloc_fn)dealloc_addr)((void *)(uintptr_t)alloc,
+                                   (void *)(uintptr_t)begin,
+                                   (size_t)(cap * 4));
 }
 
 /* Liest die Zahl der verbundenen Spieler. Resolver gecacht (Build-Bindung
@@ -3725,7 +3773,7 @@ static int read_player_count(const unsigned char *base, size_t size,
         ((connplayers_fn)(uintptr_t)s_fn)(vec, (void *)(uintptr_t)world);
     }
     ok = connplayers_count_from_vec(vec, &n);
-    connplayers_vec_release(vec);
+    connplayers_vec_release(vec, base, size);
     if (!ok)
         return 0;
     *out = n;

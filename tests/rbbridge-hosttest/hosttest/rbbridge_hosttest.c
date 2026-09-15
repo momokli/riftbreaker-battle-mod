@@ -793,6 +793,51 @@ int main(void)
                   "connplayers-Sig: 15 Wildcards (3x E8-rel32 + 3 rel8), "
                   "3 E8-Opcodes Pflicht");
         }
+
+        /* Review PR #524: vtable-Slot (+0x10) NICHT roh dereferenzieren.
+         * Disasm 0x26F340 = ZWEI Indirektionen (vptr -> Slot); der Slot
+         * wird per safe_read_u64 gelesen und auf 0 + Modulbereich
+         * geprueft -> kein Blind-Call. */
+        {
+            unsigned char *mod = (unsigned char *)calloc(1, 0x200);
+            unsigned char *alloc_obj = mod + 0x40; /* vec[+0x00] */
+            unsigned char *vtable = mod + 0x100;   /* vptr -> Slot +0x10 */
+            uintptr_t fnaddr = (uintptr_t)(mod + 0x180);
+            uintptr_t out = 0;
+
+            check(mod != NULL, "connplayers_dealloc_target: Testbuffer");
+
+            /* Korrekt: alloc->vptr = vtable; vtable[+0x10] = fnaddr. */
+            wr64(alloc_obj, (uint64_t)(uintptr_t)vtable);
+            wr64(vtable + 0x10, (uint64_t)fnaddr);
+            check(connplayers_dealloc_target(alloc_obj, mod, 0x200, &out) == 1 &&
+                      out == fnaddr,
+                  "connplayers_dealloc_target: vptr->Slot+0x10 -> Ziel");
+
+            /* Slot 0 -> kein Aufruf. */
+            wr64(vtable + 0x10, 0);
+            out = 0;
+            check(connplayers_dealloc_target(alloc_obj, mod, 0x200, &out) == 0 &&
+                      out == 0,
+                  "connplayers_dealloc_target: Slot 0 -> kein Aufruf");
+
+            /* Ziel ausserhalb des Modulbereichs -> kein Aufruf. */
+            wr64(vtable + 0x10, (uint64_t)(uintptr_t)(mod + 0x10000));
+            check(connplayers_dealloc_target(alloc_obj, mod, 0x200, &out) == 0,
+                  "connplayers_dealloc_target: Ziel ausserhalb Modul -> kein "
+                  "Aufruf");
+
+            /* vptr 0 (abgeraeumtes Objekt) -> kein Aufruf. */
+            wr64(alloc_obj, 0);
+            check(connplayers_dealloc_target(alloc_obj, mod, 0x200, &out) == 0,
+                  "connplayers_dealloc_target: vptr 0 -> kein Aufruf");
+
+            /* NULL-Objekt -> kein Aufruf. */
+            check(connplayers_dealloc_target(NULL, mod, 0x200, &out) == 0,
+                  "connplayers_dealloc_target: NULL -> kein Aufruf");
+
+            free(mod);
+        }
     }
 
     /* #479: Readiness-Gate — reiner Log-Marker-Test (host-testbar)     */
