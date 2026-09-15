@@ -215,10 +215,25 @@ injizieren (os.open blockiert, bis der Pipe-Server existiert).
 
 ## Risiken & offene Punkte
 
-- **Thread-Marshalling (OFFEN):** `fn(instance, command)` läuft im Pipe-Thread,
-  nicht auf dem Main-/Spiel-Thread. Ob `ConsoleService::ExecuteCommand`
-  thread-safe ist bzw. auf den Spiel-Thread gemarshalled werden muss, ist
-  **nicht belegt** — Live-Test (#252). Nicht als erledigt betrachten.
+- **Readiness-Gate (#479, implementiert):** vor JEDEM Game-Call wird geprüft, ob
+  die Welt fertig initialisiert ist (`world_is_ready()` liest die Ready-Marker
+  `NavigationGraph::Generate - Graph generated` / `InstantiateMap took` aus
+  `exor_logs.txt`; Override `RBBRIDGE_EXOR_LOG`). Bis dahin antwortet der Call
+  `{"ok":false,"reason":"world_not_ready"}` — **kein** Game-Call, kein Crash.
+  Grund: der `world`-Pointer ist früh non-NULL, die ECS-/Team-Map aber noch im
+  Aufbau (Crash #436/#479 in `GetPlayerAccount → GetPlayerTeam → FindIt`).
+  Betroffen: `get_state`, `add_resource`, `activate_mission_flow`,
+  `deactivate_mission_flow`, `creatures_difficulty`, `probe`.
+- **Thread-Modell (korrigiert #378, Stand #479):** der `main`-Dispatch ist
+  **pure C++ auf dem Pipe-Thread** — kein vtable-Detour, kein `lua_*` (mit
+  #387/#446 entfernt). `ConsoleService::Update` läuft auf einem **Worker**-Thread
+  (`TaskWorldExecutor`) und ist für `lua_*` untauglich. Falls ein Call wirklich
+  deferred/marshal-braucht: native Executor/CommandBuffer
+  (`Exor::InOrderWorldExecutor`, `EcsCommandBuffer::ExecuteCommands` 0x1DD01B0)
+  — **kein** Vtable-Detour ohne Thread-Nachweis im PR (Regel aus #479).
+- **Readiness nur ohne Neustart gelatcht:** ein Map-Neustart im laufenden Prozess
+  setzt `g_world_ready` nicht zurück; der Live-Pfad geht von Prozess-Neustart +
+  frischem `exor_logs.txt` aus (OFFEN: Re-Arm bei In-Process-Map-Reload).
 - **Fehl-Fund der Instanz (teilweise abgesichert, offen):** die „first hit =
   this“-Heuristik ist durch den vftable-Plausibilitätscheck
   (`looks_like_vftable`: vftable im Modul-Image, erste Referenz zeigt ins

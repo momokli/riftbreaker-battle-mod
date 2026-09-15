@@ -668,6 +668,53 @@ int main(void)
         check(buf[0] == '\0', "copy_cstr: NULL -> leerer String");
     }
 
+    /* -------------------------------------------------------------- */
+    /* #479: Readiness-Gate — reiner Log-Marker-Test (host-testbar)     */
+    /* -------------------------------------------------------------- */
+    {
+        /* Erfolgreicher Boot: NavigationGraph-Marker vorhanden. */
+        const char *ok_log =
+            "[12:40:33.501] [info] MapGenerator.cpp:828 - InstantiateMap took: 4846 ms\n"
+            "[12:40:34.154] [info] NavigationGraph.cpp:462 - "
+            "NavigationGraph::Generate - Graph generated in 0.595806 sec.\n";
+        check(rbbridge_log_is_ready(ok_log, strlen(ok_log)) == 1,
+              "readiness: erfolgreicher Boot (Graph generated) -> bereit");
+
+        /* Gecrashter Boot (#479): Crash VOR Map-Fertigstellung, kein Marker. */
+        const char *crash_log =
+            "[13:39:45.677] [info] MapGenerator.cpp:976 - ExecuteBuffers took: 48 ms\n"
+            "[13:39:46.763] [critical] CrashHandlerWin32.cpp:103 - CRASH\n";
+        check(rbbridge_log_is_ready(crash_log, strlen(crash_log)) == 0,
+              "readiness: Crash-Boot ohne Marker -> NICHT bereit");
+
+        /* Nur der MapGenerator-Marker (Fallback) genuegt ebenfalls. */
+        const char *map_only =
+            "[12:40:33.501] [info] MapGenerator.cpp:828 - InstantiateMap took: 4846 ms\n";
+        check(rbbridge_log_is_ready(map_only, strlen(map_only)) == 1,
+              "readiness: nur InstantiateMap-Marker -> bereit");
+
+        /* Leer/fehlend -> konservativ NICHT bereit. */
+        check(rbbridge_log_is_ready("", 0) == 0,
+              "readiness: leerer Puffer -> NICHT bereit");
+        check(rbbridge_log_is_ready(NULL, 100) == 0,
+              "readiness: NULL -> NICHT bereit");
+
+        /* Marker NICHT ueber die Puffergrenze hinaus suchen (kein Treffer
+         * bei abgeschnittenem Marker) -> kein Read-Overrun, 0. */
+        const char *partial =
+            "NavigationGraph::Generate - Graph gene";
+        check(rbbridge_log_is_ready(partial, strlen(partial)) == 0,
+              "readiness: abgeschnittener Marker -> NICHT bereit");
+
+        /* Substring-Helper: Ende exakt an der Puffergrenze. */
+        const char *tail = "xx Graph generated";
+        check(rbbridge_buf_contains(tail, strlen(tail),
+                                    "Graph generated") == 1,
+              "buf_contains: Treffer bis exakt Pufferende");
+        check(rbbridge_buf_contains(tail, 9, "Graph generated") == 0,
+              "buf_contains: Treffer hinter Pufferende ignoriert");
+    }
+
     free(img);
 
     printf("HOSTTEST_PASS=%d HOSTTEST_FAIL=%d\n", g_pass, g_fail);
