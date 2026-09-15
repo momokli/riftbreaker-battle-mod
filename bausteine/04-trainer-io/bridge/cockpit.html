@@ -146,22 +146,6 @@
             </div>
         </section>
 
-        <section>
-            <h2>dom (wave cycle)</h2>
-            <div class="row">
-                <span class="dim">last</span>
-                <span id="dom_status" class="val">—</span>
-            </div>
-            <div class="row">
-                <button id="dom_pause">DOM Pause</button>
-                <button id="dom_resume">DOM Resume</button>
-            </div>
-            <div class="row">
-                <span class="dim">ref (optional)</span>
-                <input id="dom_ref" size="14" placeholder="auto" />
-            </div>
-        </section>
-
         <div id="out" class="err"></div>
 
         <script>
@@ -264,55 +248,6 @@
 
                 $("flow_stop_btn").onclick = function () {
                     stopMissionFlow();
-                };
-
-                // #387: DOM Pause/Resume (Write) + Statusanzeige des letzten
-                // dom_control-Ergebnisses. ok:false wird bewusst NICHT
-                // versteckt (z. B. ambiguous_dom bleibt sichtbar).
-                function domStatus(r) {
-                    if (r && r.ok) {
-                        $("dom_status").textContent =
-                            (r.action || "?") +
-                            " ok (suspended=" +
-                            r.suspended +
-                            ", candidates=" +
-                            r.candidates +
-                            ")";
-                        $("dom_status").className = "val";
-                    } else {
-                        var reason = r && r.reason ? r.reason : JSON.stringify(r);
-                        var cand =
-                            r && r.candidates !== undefined
-                                ? " (candidates=" + r.candidates + ")"
-                                : "";
-                        $("dom_status").textContent =
-                            (r && r.action ? r.action + " " : "") +
-                            "FAIL: " +
-                            reason +
-                            cand;
-                        $("dom_status").className = "err";
-                    }
-                }
-
-                async function domControl(cmd) {
-                    try {
-                        var body = {};
-                        var ref = $("dom_ref").value.trim();
-                        if (ref) {
-                            body.ref = ref;
-                        }
-                        domStatus(await post(cmd, body));
-                    } catch (e) {
-                        $("dom_status").textContent = "ERR " + e.message;
-                        $("dom_status").className = "err";
-                    }
-                }
-
-                $("dom_pause").onclick = function () {
-                    domControl("pause_dom");
-                };
-                $("dom_resume").onclick = function () {
-                    domControl("resume_dom");
                 };
 
                 refresh();
