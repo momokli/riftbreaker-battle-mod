@@ -385,6 +385,7 @@
                         ) {
                             return;
                         }
+                        var failed = false;
                         try {
                             var res = await fetchFn("/server/" + action, {
                                 method: "POST",
@@ -394,12 +395,15 @@
                             if (!res || !res.ok) {
                                 throw new Error("HTTP " + (res && res.status));
                             }
-                            msg("server " + action + " requested");
                         } catch (e) {
-                            msg("server " + action + " failed");
+                            failed = true;
                         }
+                        // Poll first, then set the outcome message: the refresh
+                        // helpers clear/populate #server_control_msg, so setting it
+                        // afterwards keeps the user confirmation visible.
                         await refreshStatus();
                         await refreshLogs();
+                        msg("server " + action + (failed ? " failed" : " requested"));
                     }
 
                     return {
@@ -413,7 +417,6 @@
                 var serverPanel = createServerControlPanel({
                     fetch: window.fetch.bind(window),
                     document: document,
-                    location: location,
                 });
 
                 $("server_restart").onclick = function () {

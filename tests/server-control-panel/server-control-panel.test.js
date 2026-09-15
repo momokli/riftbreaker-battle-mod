@@ -65,18 +65,8 @@ function makeDoc() {
   };
 }
 
-function makeLocation() {
-  return {
-    reloadCalled: false,
-    reload() {
-      this.reloadCalled = true;
-      throw new Error("location.reload must never be called");
-    },
-  };
-}
-
-function loadPanel(location) {
-  const sandbox = { location: location || makeLocation() };
+function loadPanel() {
+  const sandbox = {};
   vm.createContext(sandbox);
   const fn = vm.runInNewContext(
     extractBlock() + "\ncreateServerControlPanel;",
@@ -111,12 +101,7 @@ test("Fall A: fetch wirft / HTTP !ok / Parse-Fehler -> nur '—', kein Wurf", as
 
   for (const fakeFetch of cases) {
     const { els, document } = makeDoc();
-    const location = makeLocation();
-    const panel = loadPanel(location)({
-      fetch: fakeFetch,
-      document,
-      location,
-    });
+    const panel = loadPanel()({ fetch: fakeFetch, document });
 
     await assert.doesNotReject(() => panel.refreshStatus());
     await assert.doesNotReject(() => panel.refreshLogs());
@@ -125,7 +110,6 @@ test("Fall A: fetch wirft / HTTP !ok / Parse-Fehler -> nur '—', kein Wurf", as
       assert.equal(els[id].textContent, DASH, id + " zeigt '—'");
     }
     assert.equal(els.server_logs.textContent, DASH, "logs zeigen '—'");
-    assert.equal(location.reloadCalled, false, "kein location.reload");
   }
 });
 
@@ -143,8 +127,7 @@ test("Fall B: erfolgreiche Antworten rendern Werte", async () => {
     return resp({});
   };
 
-  const location = makeLocation();
-  const panel = loadPanel(location)({ fetch: fakeFetch, document, location });
+  const panel = loadPanel()({ fetch: fakeFetch, document });
 
   await panel.refreshStatus();
   await panel.refreshLogs();
@@ -154,7 +137,6 @@ test("Fall B: erfolgreiche Antworten rendern Werte", async () => {
   assert.equal(els.server_uptime.textContent, "2h");
   assert.equal(els.server_started_at.textContent, DASH, "fehlendes Feld -> '—'");
   assert.equal(els.server_logs.textContent, "a\nb");
-  assert.equal(location.reloadCalled, false, "kein location.reload");
 
   const statusCall = calls.find((c) => c.url === "/server/status");
   assert.ok(statusCall, "GET /server/status aufgerufen");
@@ -177,8 +159,7 @@ test("Fall C: control() postet /server/{restart,start,stop}", async () => {
     return resp({ lines: [] });
   };
 
-  const location = makeLocation();
-  const panel = loadPanel(location)({ fetch: fakeFetch, document, location });
+  const panel = loadPanel()({ fetch: fakeFetch, document });
 
   await panel.control("restart");
   await panel.control("start");
@@ -192,26 +173,13 @@ test("Fall C: control() postet /server/{restart,start,stop}", async () => {
     assert.equal(p.opts.method, "POST");
     assert.equal(p.opts.body, "{}");
   }
-  assert.equal(location.reloadCalled, false, "kein location.reload");
 });
 
-test("Fall D: location.reload wird in keinem Pfad aufgerufen", async () => {
-  const location = makeLocation();
-  const { document } = makeDoc();
-  const failing = async () => {
-    throw new Error("unreachable");
-  };
-  const panel = loadPanel(location)({
-    fetch: failing,
-    document,
-    location,
-  });
-
-  await panel.refreshStatus();
-  await panel.refreshLogs();
-  await panel.control("restart");
-  await panel.control("start");
-  await panel.control("stop");
-
-  assert.equal(location.reloadCalled, false);
+test("Fall D: Panel-Block referenziert location/reload nicht (No-Reload-Garantie)", () => {
+  const block = extractBlock();
+  assert.ok(
+    !/\blocation\b/.test(block),
+    "Panel-Block darf location nicht referenzieren",
+  );
+  assert.ok(!/\breload\b/.test(block), "Panel-Block darf reload nicht aufrufen");
 });
