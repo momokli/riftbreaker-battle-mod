@@ -880,6 +880,7 @@ int main(void)
     {
         float hp = -1.0f, hpmax = -1.0f;
         int dead = -1;
+        hq_dead_state_t st = {0, 0.0f};
 
         g_hq_stub_entity = 0x1234u;
         g_hq_stub_hp = 850.5f;
@@ -887,7 +888,7 @@ int main(void)
         g_hq_stub_find_calls = g_hq_stub_get_calls = g_hq_stub_getmax_calls = 0;
         g_hq_stub_type[0] = '\0';
         check(hq_health_from_calls((void *)1, (void *)2, hq_stub_find,
-                                   hq_stub_get, hq_stub_getmax,
+                                   hq_stub_get, hq_stub_getmax, &st,
                                    &hp, &hpmax, &dead) == 1 &&
                   hp == 850.5f && hpmax == 1000.0f && dead == 0 &&
                   strcmp(g_hq_stub_type, "headquarters") == 0 &&
@@ -898,25 +899,54 @@ int main(void)
         /* HP 0 -> tot (Interface-Konvention hp <= 0). */
         g_hq_stub_hp = 0.0f;
         check(hq_health_from_calls((void *)1, (void *)2, hq_stub_find,
-                                   hq_stub_get, hq_stub_getmax,
+                                   hq_stub_get, hq_stub_getmax, &st,
                                    &hp, &hpmax, &dead) == 1 && dead == 1,
               "hq core: hp==0 -> dead=true (#511)");
 
-        /* INVALID_ID -> nicht verfuegbar, KEIN Health-Call (graceful). */
+        /* INVALID_ID ohne HQ-Vorgeschichte -> nicht verfuegbar, KEIN
+         * Health-Call (graceful): ein noch nicht geladenes HQ ist nicht tot. */
         g_hq_stub_entity = RBBRIDGE_HQ_INVALID_ENTITY;
         g_hq_stub_get_calls = g_hq_stub_getmax_calls = 0;
         check(hq_health_from_calls((void *)1, (void *)2, hq_stub_find,
-                                   hq_stub_get, hq_stub_getmax,
+                                   hq_stub_get, hq_stub_getmax, &(hq_dead_state_t){0, 0.0f},
                                    &hp, &hpmax, &dead) == 0 &&
                   g_hq_stub_get_calls == 0 && g_hq_stub_getmax_calls == 0,
-              "hq core: INVALID_ID -> 0, kein Health-Call (#511)");
+              "hq core: INVALID_ID ohne Vorgeschichte -> 0, kein Health-Call (#511)");
+
+        /* INVALID_ID MIT HQ-Vorgeschichte -> zerstoert (Finding 4,
+         * Review PR #525): Entity verschwunden = tot, hp 0, hp_max letzter
+         * bekannter Wert. */
+        g_hq_stub_get_calls = g_hq_stub_getmax_calls = 0;
+        st.seen_alive = 1;
+        st.last_hp_max = 1000.0f;
+        hp = -1.0f;
+        hpmax = -1.0f;
+        dead = -1;
+        check(hq_health_from_calls((void *)1, (void *)2, hq_stub_find,
+                                   hq_stub_get, hq_stub_getmax, &st,
+                                   &hp, &hpmax, &dead) == 1 &&
+                  hp == 0.0f && hpmax == 1000.0f && dead == 1 &&
+                  g_hq_stub_get_calls == 0 && g_hq_stub_getmax_calls == 0,
+              "hq core: Entity weg nach HQ-Leben -> dead=true, kein Call (#511)");
+
+        /* HQ taucht wieder auf (Map-/Welt-Reload) -> Latch heilt sich. */
+        g_hq_stub_entity = 0x1234u;
+        g_hq_stub_hp = 500.0f;
+        g_hq_stub_hpmax = 1000.0f;
+        check(hq_health_from_calls((void *)1, (void *)2, hq_stub_find,
+                                   hq_stub_get, hq_stub_getmax, &st,
+                                   &hp, &hpmax, &dead) == 1 &&
+                  hp == 500.0f && dead == 0 && st.last_hp_max == 1000.0f,
+              "hq core: HQ wieder da -> dead=false (Latch heilt) (#511)");
 
         /* Unvollstaendige Aufloesung -> 0, kein Call, kein Crash. */
         check(hq_health_from_calls(NULL, (void *)2, hq_stub_find, hq_stub_get,
-                                   hq_stub_getmax, &hp, &hpmax, &dead) == 0,
+                                   hq_stub_getmax, &st, &hp, &hpmax,
+                                   &dead) == 0,
               "hq core: find_svc NULL -> 0 (graceful) (#511)");
         check(hq_health_from_calls((void *)1, (void *)2, NULL, hq_stub_get,
-                                   hq_stub_getmax, &hp, &hpmax, &dead) == 0,
+                                   hq_stub_getmax, &st, &hp, &hpmax,
+                                   &dead) == 0,
               "hq core: find_fn NULL -> 0 (graceful) (#511)");
     }
 

@@ -1166,26 +1166,63 @@ typedef uint32_t (__fastcall *hq_find_entity_fn)(void *self, const char *type);
 typedef float (__fastcall *hq_health_fn)(void *self, uint32_t entity);
 #endif
 
+/* #511: Zustand fuer die `dead`-Semantik (Session-Latch).
+ *
+ * Die Engine kann "HQ zerstoert" auf ZWEI Wegen abbilden:
+ *   (a) HealthComponent hp <= 0  -> `dead` direkt aus dem Live-Wert,
+ *   (b) Entity verschwindet (FindEntityByType -> INVALID_ID).
+ * Wird nur (a) gewertet, kann `hq_dead` im Fall (b) NIE true werden (der
+ * Read liefert dann `null`). Deshalb: eine Session, die das HQ schon mit
+ * hp > 0 gesehen hat, wertet ein danach verschwundenes HQ als zerstoert.
+ * Vor dem ersten HQ-Leben bleibt es `null` (ein noch nicht geladenes HQ ist
+ * nicht "tot"). Die Entity taucht nach Map-/Welt-Reload wieder auf -> der
+ * Latch heilt sich selbst (dead faellt auf false zurueck).
+ *
+ * Das ist eine INTERFACE-Konvention (Review PR #525, Finding 4), KEIN
+ * Engine-Beweis: welche der beiden Abbildungen das Spiel nutzt, klaert der
+ * Player-Test (offener Punkt, Issue #511). */
+typedef struct {
+    int   seen_alive;  /* HQ lief in dieser Session schon mit hp > 0 */
+    float last_hp_max; /* letzter bekannter hp_max (fuer den Todesfall)  */
+} hq_dead_state_t;
+
 /* Reine HQ-Logik ohne Win32/Spielprozess -> host-testbar (tests/rbbridge-
  * hosttest). Findet die Entity "headquarters" und liest HP/HP-Max; die
- * Todgewichtung ist NUR die Interface-Konvention `hp <= 0` (keine
- * Re-Semantisierung). Rueckgabe: 1 = gelesen (out gesetzt), 0 = nicht
- * verfuegbar (Entity fehlt/INVALID_ID oder Resolver unvollstaendig) -
+ * Todgewichtung ist `hp <= 0` plus der Entity-Verschwinde-Fall aus dem
+ * Session-Latch (`dead_state`, siehe oben) - keine Re-Semantisierung.
+ * Rueckgabe: 1 = gelesen (out gesetzt), 0 = nicht verfuegbar (Entity
+ * fehlt/INVALID_ID ohne HQ-Vorgeschichte oder Resolver unvollstaendig) -
  * niemals Crash, die Aufrufer emittieren dann `null`. */
 static int hq_health_from_calls(void *find_svc, void *health_svc,
                                 hq_find_entity_fn find_fn,
                                 hq_health_fn get_fn, hq_health_fn getmax_fn,
+                                hq_dead_state_t *dead_state,
                                 float *hp, float *hp_max, int *dead)
 {
     if (!find_svc || !health_svc || !find_fn || !get_fn || !getmax_fn)
         return 0;
 
     uint32_t entity = find_fn(find_svc, "headquarters");
-    if (entity == RBBRIDGE_HQ_INVALID_ENTITY)
-        return 0;
+    if (entity == RBBRIDGE_HQ_INVALID_ENTITY) {
+        /* Entity weg: zerstoert NUR mit HQ-Vorgeschichte dieser Session. */
+        if (!dead_state || !dead_state->seen_alive)
+            return 0;
+        if (hp)
+            *hp = 0.0f;
+        if (hp_max)
+            *hp_max = dead_state->last_hp_max;
+        if (dead)
+            *dead = 1;
+        return 1;
+    }
 
     float h = get_fn(health_svc, entity);
     float m = getmax_fn(health_svc, entity);
+    if (dead_state) {
+        dead_state->last_hp_max = m;
+        if (h > 0.0f)
+            dead_state->seen_alive = 1;
+    }
     if (hp)
         *hp = h;
     if (hp_max)
@@ -3748,6 +3785,11 @@ static void *resolve_hq_service(const unsigned char *base,
     return found;
 }
 
+/* #511: Rescan-Intervall des Instanz-Scans (Negativ-Cache, Finding 1 aus
+ * Review PR #525). Bewusst endlich: 0 waere ein voller Scan pro get_state,
+ * "nie wieder" wuerde einen spaeteren Map-/Re-Init-Fall verpassen. */
+#define RBBRIDGE_HQ_SVC_RESCAN_MS 5000ull
+
 /* #511: HQ-Health nativ (FindService -> Entity "headquarters" ->
  * HealthComponent[+0x00]/[+0x04]). Funktionsadressen per AOB, Instanzen per
  * vftable-Scan; beides wird gecacht (wie die uebrigen Service-Aufloesungen).
@@ -3756,11 +3798,20 @@ static void *resolve_hq_service(const unsigned char *base,
 static int read_hq_health(const unsigned char *base, size_t size, float *hp,
                           float *hp_max, int *dead)
 {
+    /* Thread-Modell (#378/#388): Diese Statics sind UNGESCHUETZT und werden
+     * ausschliesslich vom Pipe-Server-Thread beruehrt (dispatch_get_state
+     * laeuft dort; kein lua_*-Call, kein Main-Thread). Zwei gleichzeitige
+     * get_state-Aufrufe sieht das Protokoll nicht vor — der Live-Test prueft
+     * paralleles get_state deshalb explizit (offener Punkt, Issue #511). */
     static const void *find_fn = NULL;
     static const void *get_fn = NULL;
     static const void *getmax_fn = NULL;
     static void *find_svc = NULL;
     static void *health_svc = NULL;
+    static hq_dead_state_t dead_state = {0, 0.0f};
+    /* Negativ-Cache: Wann wurde zuletzt (erfolglos) gescannt? */
+    static unsigned long long svc_last_scan_ms = 0;
+    static int svc_scanned = 0;
 
     if (!find_fn)
         find_fn = resolve_hq_find_fn(base, size);
@@ -3771,17 +3822,35 @@ static int read_hq_health(const unsigned char *base, size_t size, float *hp,
     if (!find_fn || !get_fn || !getmax_fn)
         return 0;
 
-    if (!find_svc)
+    if (!find_svc || !health_svc) {
+        /* Finding 1 (Review PR #525): Ein voller QWORD-Scan ueber alle
+         * MEM_PRIVATE-Regionen ist teuer und lief sonst bei JEDEM get_state
+         * (2x), solange die Services nicht eindeutig aufloesbar sind. Nach
+         * einem Fehlversuch erst nach RBBRIDGE_HQ_SVC_RESCAN_MS erneut
+         * scannen -> Map-/Re-Init-Faelle loesen sich ohne Neustart, ein
+         * Permanent-Null wird vermieden. */
+        unsigned long long now = GetTickCount64();
+        if (svc_scanned &&
+            (now - svc_last_scan_ms) < RBBRIDGE_HQ_SVC_RESCAN_MS)
+            return 0;
+        svc_scanned = 1;
+        svc_last_scan_ms = now;
         find_svc = resolve_hq_service(base, RBBRIDGE_HQ_RVA_FIND_VFTABLE);
-    if (!health_svc)
-        health_svc = resolve_hq_service(base, RBBRIDGE_HQ_RVA_HEALTH_VFTABLE);
-    if (!find_svc || !health_svc)
-        return 0;
+        health_svc =
+            resolve_hq_service(base, RBBRIDGE_HQ_RVA_HEALTH_VFTABLE);
+        if (!find_svc || !health_svc) {
+            /* Teil-Ergebnis NICHT puffern: beide gehoeren zusammen. */
+            find_svc = NULL;
+            health_svc = NULL;
+            return 0;
+        }
+    }
 
     return hq_health_from_calls(find_svc, health_svc,
                                 (hq_find_entity_fn)find_fn,
                                 (hq_health_fn)get_fn,
-                                (hq_health_fn)getmax_fn, hp, hp_max, dead);
+                                (hq_health_fn)getmax_fn, &dead_state,
+                                hp, hp_max, dead);
 }
 
 static void dispatch_get_state(HANDLE hPipe)
