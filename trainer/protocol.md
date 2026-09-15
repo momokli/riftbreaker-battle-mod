@@ -34,8 +34,21 @@ Wahrheitsquelle, Events sind nur Benachrichtigungen.
 ```json
 {"cmd":"ping"}
 {"cmd":"exec","command":"rb_wave 3"}
+{"cmd":"restart_map"}
+{"cmd":"restart_map","seed":4242}
 ```
 
+- `restart_map` (**first-class nativ**, #423) ist kein `exec`-String, sondern
+  ein eigenes Kommando: `restart_map` ist ein **natives C++-Konsolenkommando**
+  der Engine (GameplayState; RE-Beleg in `docs/findings.md`), kein
+  Lua-Mod-Command. Ohne `seed` wird die aktuelle Map neu gewuerfelt; mit
+  `seed` wird zuvor `map_generator_seed <seed>` gesetzt (deterministisch).
+  Die DLL antwortet `{"event":"restart_map_result","ok":true,
+  "command":"restart_map","async":true[,"seed":N]}` — `ok:false` mit
+  `reason` (z. B. `console_service_not_found`), wenn die Zieladresse nicht
+  aufloesbar ist (graceful, kein Aufruf, kein Crash). Der Seed ist optional;
+  ein nicht-numerischer Seed liefert `{"event":"error",
+  "error":"invalid_seed"}`.
 - `exec` ist der **v0-Einheitskanal**: Beliebiges Spiel-Kommando als String.
   In der RE-Phase wird `dispatch_exec` an den echten Spiel-Console-Dienst
   angeschlossen (dann gilt `"ok":true`). Bis dahin antwortet die DLL mit

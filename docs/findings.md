@@ -7,6 +7,31 @@ Machbarkeits-Findings für den Runden-Duell-Modus. Basis: exorstudios-Wiki
 (github.com/PonomarevDmitry/RiftbreakersMods → `OriginalPacksData/`) sowie
 Matheos Prototyp-Repo (<https://github.com/BestToasty/riftbreaker_mod>, Stand 07.09.2026).
 
+## RE-Belege (Ergänzung 15.09.2026, #423)
+
+### `restart_map` / `map_generator_seed` / `r_show_map_info`
+
+Belegbasis: Dedicated-Server-Container auf `planet`
+(`/opt/riftbreaker/bin/riftbreaker_dll_win_release.dll`, Build 2.0.58485) +
+Inhalt der Lua-Packs (`packs/00_win_data.zip`, `packs/*/…`).
+
+- **`restart_map` ist ein NATIVES C++-Konsolenkommando.** Der String steht in
+  der String-Tabelle der Spiel-DLL in unmittelbarer Nachbarschaft von
+  `load_save` / `change_map` / `save_game` / `convert_binary_save_to_text`;
+  der umgebende Bereich gehört zu
+  `…/dev/src/riftbreaker/app/GameplayState.cpp` (mit
+  `Riftbreaker::GameplayState`-Symbolen). In **keinem** Lua-Pack vorhanden
+  (Stream-Grep über alle Packs → 0 Treffer). Also kein Lua-Mod-Command.
+  Konsequenz (#423): typed natives Pipe-Kommando; der Aufruf läuft per
+  `ConsoleService::ExecuteCommand` auf dem Game-Thread (Update-Detour wie
+  #376) — kein Lua-Game-Thread-Marshalling über die Mod-Queue.
+- **`map_generator_seed`** steht ebenfalls in der DLL (u. a. als
+  `MissionDef.cpp`-Serializer-Feld) **und** wird aus den Lua-Packs
+  referenziert (24 Treffer in `00_win_data.zip`) → nativer Konsolencommand,
+  der den Map-Seed setzt.
+- **`r_show_map_info`** ist ein nativer cvar der DLL (2 String-Treffer).
+  Verifikation des Seeds im Spiel: Player-Test #423 (OFFEN).
+
 ## Verifiziert
 
 1. **Mod-API offiziell seit 2022** — Lua-basierte Mods, Distribution über Steam

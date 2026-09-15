@@ -44,6 +44,8 @@ fixiert die Parameter, die der Relay einhält.
   Outbox), dedupliziert der Relay weiterhin über `cmd_id`; der Push-Payload
   trägt `cmd_id` deshalb mit. Ein `restart`-Command ist **nicht** idempotent —
   die Dedup-Zusage ist also verpflichtend, nicht optional.
+- **`restart_map` ist NICHT idempotent** — wie `restart` dedupliziert der Relay
+  ueber `cmd_id`; ein erneuter Dispatch wuerfelt die Map erneut.
 - **Antwortrichtung (Issue #73):** Nach erfolgreichem Write liest der Relay
   auf demselben Pipe-Handle weiter, bis eine `exec_result`-Zeile mit
   passendem `command`-Feld kommt oder `RBB_PIPE_TIMEOUT_S` abläuft. Andere
@@ -73,6 +75,38 @@ fixiert die Parameter, die der Relay einhält.
   dieselbe Pipe. Der `cmd_id` ist hier der gemeinsame Dedup-Schlüssel von Push
   (#267) und Poll: ein per Push zugestellter Command wird über den Poll nicht
   erneut dispatcht. Kein `RBB_MATCH_ID` nötig.
+
+## Native Kommandos (#423)
+
+Einige Kommandos sind **first-class Pipe-Kommandos** statt `exec`-Strings, weil
+sie natives Engine-Verhalten ausloesen (kein Lua-Mod-Command). Aktuell:
+`restart_map` (Map-Re-Roll, Spieler bleiben verbunden).
+
+| Kommandostring (Kanal) | Pipe-Payload | Antwort-Event |
+|---|---|---|
+| `restart_map` | `{"cmd":"restart_map"}` | `restart_map_result` |
+| `restart_map 4242` | `{"cmd":"restart_map","seed":4242}` | `restart_map_result` |
+
+- Der Relay bildet den dispatchten Kommandostring ueber
+  `native_pipe_payload()`/`exec_line_payload()` auf den nativen Payload ab;
+  alles andere bleibt `{"cmd":"exec",...}` (inkl. `cmd_id`).
+- Bei nativen Kommandos echot die DLL nur den **Kommandonamen**
+  (`"command":"restart_map"`) — nicht den Seed. Der Relay matcht die Antwort
+  daher ueber `result_match_command()` auf `restart_map`, sonst laeuft
+  `restart_map 4242` in den Antwort-Timeout.
+- Die `pipe_bridge` (HTTP→Pipe) macht dieselbe Abbildung
+  (`native_cmd_payload()`) und wartet auf `restart_map_result`.
+- **Normalisierung (F4 #423):** beide Pfade trimmen fuehrenden/abschliessenden
+  Whitespace (`relay.native_pipe_payload()` via `command.strip()`,
+  `pipe_bridge.native_cmd_payload()` via Space/Tab-Trim) — `"restart_map "`
+  wird damit ueber Relay **und** Bridge identisch nativ geroutet, nicht einmal
+  nativ und einmal `exec`.
+- **Seed-Parsing (F3 #423):** `rbbridge.json_get_uint()` setzt die Suche fort,
+  wenn `"seed"` nur als String-Wert auftaucht (kein `:` dahinter) — kein
+  vorschnelles `invalid_seed`.
+- `ok:true` ist ein **Transport-/Enqueue-Ack** (Kommando auf dem Game-Thread
+  eingeplant), kein Beweis, dass die Map sichtbar neu generiert wurde — der
+  Sichtbeweis ist der Player-Test (#423, OFFEN).
 
 ## Test ohne Windows
 

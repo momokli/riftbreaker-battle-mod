@@ -49,6 +49,14 @@ const PIPE_BRIDGE_C = path.join(
   "bridge",
   "pipe_bridge.c",
 );
+const CONTRACT_HTML = path.join(
+  ROOT,
+  "bausteine",
+  "04-trainer-io",
+  "bridge",
+  "contract.html",
+);
+const MOD_PATH = path.join(ROOT, "mod", "lua", "rbbattle_autoexec.lua");
 
 // ---------------------------------------------------------------------------
 // Python-Harness: echter relay.py + echtes PipeClient gegen eine FIFO-"Pipe"
@@ -56,7 +64,7 @@ const PIPE_BRIDGE_C = path.join(
 // Der Server wird per monkeypatch von relay.http_json ersetzt (kein Netz).
 // ---------------------------------------------------------------------------
 
-function runRelayDispatch(reply) {
+function runRelayDispatch(reply, command = "rb_wave 3") {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rb288-pipe-"));
   try {
     const fifo = path.join(dir, "fake_pipe");
@@ -96,7 +104,7 @@ cfg = {
     'pipe_timeout_s': 3.0,
 }
 r = relay.Relay(cfg)  # echter PipeClient (kein Stub)
-r.handle_outgoing({'event': 'exec_command', 'command': 'rb_wave 3', 'cmd_id': 7})
+r.handle_outgoing({'event': 'exec_command', 'command': ${JSON.stringify(command)}, 'cmd_id': 7})
 _due, _seq, item = r.dispatch_queue.get_nowait()
 buf = io.StringIO()
 with contextlib.redirect_stdout(buf):
@@ -216,8 +224,88 @@ test("EGRESS: pipe_bridge ist reiner exec-Kanal, kein State-Forwarding (OFFEN #1
 });
 
 // ---------------------------------------------------------------------------
+// 5) Native restart_map (#423, ohne Spieler)
+// ---------------------------------------------------------------------------
+
+test('Native restart_map (ohne Spieler): Pipe-Roundtrip -> restart_map_result ok:true', () => {
+  const res = runRelayDispatch(
+    { event: 'restart_map_result', command: 'restart_map', ok: true, async: true },
+    'restart_map');
+  assert.strictEqual(res.ok, true, 'Dispatch gilt als erfolgreich');
+  assert.strictEqual(res.acked, true, 'cmd_id=7 ist acked');
+  assert.ok(res.log.includes('dispatch sent cmd_id=7'), 'Log: dispatch sent cmd_id=7');
+  assert.ok(res.log.includes('dispatch result cmd_id=7 status=ok'),
+    'Log: dispatch result cmd_id=7 status=ok');
+  const rep = res.reports[0] && res.reports[0].event;
+  assert.deepStrictEqual(rep, {
+    type: 'exec_result', command: 'restart_map', cmd_id: 7, ok: true, status: 'ok',
+  }, 'Meldung an den Server: command=restart_map, ok:true (kein Spawn-/Map-Feld)');
+});
+
+test('Native restart_map <seed> (ohne Spieler): Seed-Form wird dispatcht', () => {
+  const res = runRelayDispatch(
+    { event: 'restart_map_result', command: 'restart_map', ok: true, seed: 4242, async: true },
+    'restart_map 4242');
+  assert.strictEqual(res.ok, true, 'Seed-Kommando wird dispatcht');
+  assert.ok(res.log.includes('dispatch result cmd_id=7 status=ok'),
+    'Log: status=ok (Antwort restart_map_result wird gematcht)');
+});
+
+test('Native restart_map graceful Fail (ohne Spieler): ok:false -> status=error, kein Crash', () => {
+  const res = runRelayDispatch({
+    event: 'restart_map_result', command: 'restart_map', ok: false,
+    reason: 'console_service_not_found',
+  }, 'restart_map');
+  assert.strictEqual(res.ok, true, 'Transport ok -> kein Dispatch-Fehler');
+  assert.ok(res.log.includes('dispatch result cmd_id=7 status=error'),
+    'Log: status=error aus dem restart_map_result');
+  assert.ok(res.log.includes('console_service_not_found'),
+    'Log: reason=console_service_not_found durchgereicht (kein Crash)');
+});
+
+test('Native restart_map ist im Pfad verdrahtet (statisch)', () => {
+  const rb = fs.readFileSync(RBBRIDGE_C, 'utf8');
+  assert.ok(rb.includes('RBBRIDGE_TYPED_RESTART_MAP'),
+    'rbbridge: typed restart_map-Kommando');
+  assert.ok(rb.includes('dispatch_restart_map'), 'rbbridge: dispatch_restart_map()');
+  assert.ok(rb.includes('restart_map_result'), 'rbbridge: restart_map_result-Event');
+  assert.ok(rb.includes('map_generator_seed'), 'rbbridge: optionaler Seed via map_generator_seed');
+  assert.ok(rb.includes('invalid_seed'), 'rbbridge: ungueltiger Seed -> graceful error');
+
+  const b = fs.readFileSync(PIPE_BRIDGE_C, 'utf8');
+  assert.ok(b.includes('native_cmd_payload'), 'pipe_bridge: natives Payload-Mapping');
+  assert.ok(b.includes('restart_map_result'),
+    'pipe_bridge: wartet auf restart_map_result (nicht exec_result)');
+
+  // F4 (#423): die Bridge muss dieselbe Whitespace-Normalisierung wie
+  // relay.native_pipe_payload() (command.strip()) anwenden — fuehrenden UND
+  // abschliessenden Whitespace tolerieren. Sonst routet "restart_map " hier
+  // als exec, waehrend der Relay es nativ schickt (divergenter Pfad).
+  const nativeBody = b.slice(
+    b.indexOf('static int native_cmd_payload'),
+    b.indexOf('static int pipe_exec_one', b.indexOf('static int native_cmd_payload')));
+  assert.ok(nativeBody.includes("while (*p == ' ' || *p == '\\t')"),
+    'pipe_bridge: Whitespace-Trim (Space/Tab) wie relay (F4)');
+  assert.ok(nativeBody.includes('normalisierung') ||
+            nativeBody.includes('Normalisierung'),
+    'pipe_bridge: F4-Normalisierung dokumentiert');
+
+  const h = fs.readFileSync(CONTRACT_HTML, 'utf8');
+  assert.ok(h.includes('re-roll map'), 'cockpit: Button "re-roll map"');
+  assert.ok(h.includes('restart_map'), 'cockpit: schickt restart_map');
+});
+
+// ---------------------------------------------------------------------------
 // OFFEN: nur mit Player pruefbar
 // ---------------------------------------------------------------------------
+
+test(
+  "OFFEN (Player-Test Momo/Matheo): restart_map regeneriert Map sichtbar, Spieler bleibt verbunden",
+  {
+    skip: 'OFFEN (#423): "Map regeneriert sichtbar + Spieler bleibt verbunden" braucht einen beigetretenen Spieler + Screen/Log-Beleg (r_show_map_info zeigt neuen Seed) — Player-Test Momo/Matheo, NICHT erledigt.',
+  },
+  () => {},
+);
 
 test(
   "OFFEN (Player-Test Momo/Matheo): Welle spawnt sichtbar und korrekt",

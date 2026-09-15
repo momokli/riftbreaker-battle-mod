@@ -73,6 +73,8 @@
     <h2>game</h2>
     <div class="row">
       <button id="end_game" class="danger">end game</button>
+      <input id="seed" size="10" placeholder="seed (opt)" spellcheck="false">
+      <button id="restart_map">re-roll map</button>
       <input id="cmd" size="24" placeholder="custom command" spellcheck="false">
       <button id="exec">exec</button>
     </div>
@@ -146,6 +148,17 @@
   $('exec').onclick = async function () {
     var c = $('cmd').value.trim();
     if (!c) return;
+    try {
+      var r = await post('exec', { command: c });
+      $('exec_out').textContent = JSON.stringify(r);
+      refresh();
+    } catch (e) { $('exec_out').textContent = 'ERR ' + e.message; }
+  };
+  $('restart_map').onclick = async function () {
+    var s = $('seed').value.trim();
+    var c = s ? ('restart_map ' + s) : 'restart_map';
+    if (!window.confirm('Re-roll map mit ' + c + '? Die aktuelle Map wird neu generiert.')) return;
+    $('exec_out').textContent = 'sending ' + c + ' ...';
     try {
       var r = await post('exec', { command: c });
       $('exec_out').textContent = JSON.stringify(r);

@@ -70,6 +70,7 @@ import argparse
 import json
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -113,6 +114,52 @@ NUMERIC_KEYS = frozenset([
     'score', 'wave', 'level', 'round', 'duration_s', 'delay_s',
     'cost', 'kills', 'points',
 ])
+
+# Native rbbridge-Pipe-Kommandos (#423): Kommandostrings, die NICHT als
+# {"cmd":"exec","command":...} -> ConsoleService gehen, sondern als
+# first-class natives Kommando auf die Pipe geschrieben werden.
+#   restart_map       -> {"cmd":"restart_map"}
+#   restart_map 12345 -> {"cmd":"restart_map","seed":12345}
+NATIVE_CMD_RE = re.compile(r'^restart_map(?:\s+(\d{1,10}))?$')
+
+
+def native_pipe_payload(command):
+    """Bildet einen dispatchten Kommandostring auf einen nativen Pipe-Payload
+    ab - oder liefert None, wenn es ein normales exec-Kommando bleibt.
+
+    Reine Funktion (kein I/O), damit sie ohne Pipe/Spiel testbar ist.
+    """
+    if not isinstance(command, str):
+        return None
+    m = NATIVE_CMD_RE.match(command.strip())
+    if not m:
+        return None
+    payload = {'cmd': 'restart_map'}
+    if m.group(1):
+        payload['seed'] = int(m.group(1))
+    return payload
+
+
+def exec_line_payload(command, cmd_id):
+    """Pipe-Payload fuer einen dispatchten Kommandostring: nativ (#423) oder
+    klassisches exec. Bei nativ entfaellt cmd_id (rbbridge kennt das Feld
+    nur fuer den exec-Pfad; der Relay dedupliziert weiterhin ueber cmd_id)."""
+    native = native_pipe_payload(command)
+    if native is not None:
+        return native
+    return {'cmd': 'exec', 'command': command, 'cmd_id': cmd_id}
+
+
+def result_match_command(command):
+    """Das command-Feld, das rbbridge in der Ergebnis-Zeile zurueck-echot.
+
+    Nativ (#423): rbbridge echot nur den Kommandonamen ("restart_map"), nicht
+    den Seed — deshalb muss der Relay auf den Namen matchen, nicht auf die
+    ganze Zeile "restart_map 4242". Sonst laeuft die Antwort in den Timeout.
+    """
+    if native_pipe_payload(command) is not None:
+        return 'restart_map'
+    return command
 
 log_lock = threading.Lock()
 
@@ -296,7 +343,7 @@ class PipeClient:
 
         Fire-and-forget (kein Read der Antwort) - fuer die Antwort siehe
         send_exec_and_wait."""
-        payload = {'cmd': 'exec', 'command': command, 'cmd_id': cmd_id}
+        payload = exec_line_payload(command, cmd_id)
         # Kompaktes JSON ohne Leerzeichen (Vertrag trainer/protocol.md).
         data = (json.dumps(payload, ensure_ascii=False, separators=(',', ':')) + '\n').encode('utf-8')
         if self.timeout_s is None or self.timeout_s <= 0:
@@ -355,7 +402,9 @@ class PipeClient:
                     msg = json.loads(line.decode('utf-8', errors='replace'))
                 except ValueError:
                     continue
-                if isinstance(msg, dict) and msg.get('event') == 'exec_result' \
+                if isinstance(msg, dict) \
+                        and msg.get('event') in ('exec_result',
+                                                 'restart_map_result') \
                         and msg.get('command') == command:
                     return msg
                 if lines_seen > 200:
@@ -374,7 +423,7 @@ class PipeClient:
         TimeoutError nur, wenn schon Connect/Write fehlschlagen (wie
         send_exec).
         """
-        payload = {'cmd': 'exec', 'command': command, 'cmd_id': cmd_id}
+        payload = exec_line_payload(command, cmd_id)
         data = (json.dumps(payload, ensure_ascii=False, separators=(',', ':')) + '\n').encode('utf-8')
         timeout_s = self.timeout_s if (self.timeout_s and self.timeout_s > 0) else None
 
@@ -398,7 +447,8 @@ class PipeClient:
                 result['n'] = len(data)
                 written.set()
                 deadline = None if timeout_s is None else time.time() + timeout_s
-                result['msg'] = self._read_result(fd, command, deadline)
+                result['msg'] = self._read_result(
+                    fd, result_match_command(command), deadline)
             finally:
                 os.close(fd)
                 finished.set()

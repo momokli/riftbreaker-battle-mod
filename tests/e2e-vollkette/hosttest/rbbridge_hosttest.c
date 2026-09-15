@@ -410,6 +410,46 @@ int main(void)
     check(player_count_call(NULL, NULL, &pc_n) == 0,
           "player_count_call: fn == NULL -> 0");
 
+    /* -------------------------------------------------------------- */
+    /* json_get_uint (#423, Review F3) — optionaler restart_map-Seed    */
+    /* -------------------------------------------------------------- */
+    char u[16];
+
+    /* Happy Path: Zahl als Wert. */
+    memset(u, 0, sizeof(u));
+    check(json_get_uint("{\"cmd\":\"restart_map\",\"seed\":4242}", "seed",
+                        u, sizeof(u)) == 1 && strcmp(u, "4242") == 0,
+          "json_get_uint: \"seed\":4242 -> 4242");
+
+    /* Toleranz: Seed als String (\"12\"). */
+    memset(u, 0, sizeof(u));
+    check(json_get_uint("{\"cmd\":\"restart_map\",\"seed\":\"12\"}", "seed",
+                        u, sizeof(u)) == 1 && strcmp(u, "12") == 0,
+          "json_get_uint: \"seed\":\"12\" -> 12 (quoted toleriert)");
+
+    /* Fehlender Key -> 0 (nicht ungueltig; Seed ist optional). */
+    check(json_get_uint("{\"cmd\":\"restart_map\"}", "seed", u,
+                        sizeof(u)) == 0,
+          "json_get_uint: kein seed -> 0 (fehlend ok)");
+
+    /* Echter Unsinn: nicht-numerischer Wert -> -1 (invalid_seed). */
+    check(json_get_uint("{\"cmd\":\"restart_map\",\"seed\":\"abc\"}",
+                        "seed", u, sizeof(u)) == -1,
+          "json_get_uint: \"seed\":\"abc\" -> -1 (invalid)");
+
+    /* F3-Regression: "seed" zuerst als STRING-WERT eines anderen Keys.
+     * Frueher fuehrte das zu sofortigem -1 (falsches invalid_seed); die
+     * Suche muss weiterlaufen und den echten Schluessel finden. */
+    memset(u, 0, sizeof(u));
+    check(json_get_uint("{\"command\":\"seed\",\"seed\":7}", "seed", u,
+                        sizeof(u)) == 1 && strcmp(u, "7") == 0,
+          "F3: String-Wert \"seed\" -> Suche laeuft weiter bis \"seed\":7");
+
+    /* F3-Variante: nur der String-Wert, kein echter Schluessel -> 0. */
+    check(json_get_uint("{\"command\":\"seed\"}", "seed", u,
+                        sizeof(u)) == 0,
+          "F3: nur String-Wert \"seed\" -> 0 (kein falsches -1)");
+
     /* Test-Knobs fuer alles Nachfolgende zuruecksetzen. */
     ht_set_loader_visible(1);
     ht_set_region_type(0);
