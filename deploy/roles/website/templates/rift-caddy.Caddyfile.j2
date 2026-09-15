@@ -4,7 +4,9 @@
 #   * {{ landing_domain }} — statische Landing + /mod.zip (file_server)
 #   * {{ cockpit_domain }} — Operator-Cockpit (Root an die IO-Bridge,
 #     /tournament/* an den tournament-server, /server/* an den
-#     server-control-Agent; Issue #424)
+#     server-control-Agent; Issue #424). Root UND /server/* liegen hinter
+#     demselben basic_auth (operator); den Agent-Bearer injiziert Caddy
+#     (Issue #454).
 # Plain HTTP, lauscht ausschliesslich auf 127.0.0.1:{{ rift_caddy_port }} —
 # TLS terminiert weiterhin der geteilte Host-Caddy
 # ({{ website_host_caddy_container }}), der hierher proxyt. Deshalb kein ACME.
@@ -43,10 +45,22 @@ http://{{ cockpit_domain }}:{{ rift_caddy_port }} {
 
 	# Server-Control (Plane B, Issue #424): Host-Agent fuer den
 	# Dedicated-Server-Container (Status/Logs/Restart/Start/Stop, config.cfg).
-	# Praefix bleibt stehen (der Agent bedient /server/*); Auth macht der Agent
-	# selbst (Bearer erzwungen, er bindet ohnehin nur 127.0.0.1).
+	# Praefix bleibt stehen (der Agent bedient /server/*).
+	# Issue #454: derselbe basic_auth-Schutz wie das Cockpit-Root — ein Browser
+	# kann den Bearer des Agenten nicht senden (sonst 401 vom Agenten). Caddy
+	# injiziert ihn hier; der Agent bindet ohnehin nur 127.0.0.1. Ohne Token
+	# (leerer Vault-Wert) entfaellt der header_up — ein literales `Bearer `
+	# wuerde der Agent ablehnen.
 	handle /server/* {
-		reverse_proxy 127.0.0.1:{{ server_control_port }}
+		basic_auth {
+			operator {{ contract_basic_auth_hash }}
+		}
+		reverse_proxy 127.0.0.1:{{ server_control_port }} {
+{# Ansible setzt trim_blocks: der Umbruch direkt nach einem Jinja-Tag entfaellt.
+   if/endif stehen deshalb am Zeilenanfang bzw. -ende — so behalten BEIDE Faelle
+   (mit/ohne Token) den Umbruch vor der schliessenden Klammer (Caddy verlangt ihn). #}
+{% if server_control_token | default('') %}			header_up Authorization "Bearer {{ server_control_token }}"
+{% endif %}		}
 	}
 
 	# Operator-Cockpit (pipe_bridge.exe, eingebettetes cockpit.html) am Root.

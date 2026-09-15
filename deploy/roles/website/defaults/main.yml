@@ -30,6 +30,13 @@ rift_caddy_site_root: /srv/site
 # von "zukka"; als Default unkritisch, kein Vault nötig.
 contract_basic_auth_hash: "$2a$14$TSQCK7adF/aDuDzaRGY8wum3034v2huWYk9g9JPRCggLDugyHyZVm"
 
+# Server-Control-Bearer (Issue #454, Token-Quelle #451): Der rift-caddy proxyt
+# /server/* an den Host-Agenten und muss dessen Bearer-Token selbst setzen —
+# ein Browser kann ihn nicht senden. Quelle ist ausschliesslich der Vault
+# (`vault_server_control_token`, siehe Rolle server-control); leer = KEIN
+# `header_up` im Caddyfile (der Agent lehnt ein leeres `Bearer ` ab).
+server_control_token: "{{ vault_server_control_token | default('') }}"
+
 # Geteilter Host-Caddy.
 website_host_caddy_container: mellon-caddy
 website_host_caddyfile_path: /home/momo/Caddyfile
