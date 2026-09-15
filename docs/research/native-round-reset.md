@@ -85,11 +85,38 @@ Adresse**:
    (`restart_find_setter`) → `RequestRestart`.
 3. **vtables**: aus dem Image abgeleitet (`restart_find_vtables`: QWORD == fn,
    minus Slot-Offset `0x20`) → GameplayState **und** ServerGameplayState.
-4. **Instance**: QWORD-Scan (8-Byte-aligniert) nach der vtable.
+4. **Instance**: QWORD-Scan (8-Byte-aligniert) nach der vtable, **nur in
+   beschreibbaren Regionen** (`is_writable_region`).
 
 `reset` schreibt `[instance+0x52A] = 1` (nur auf beschreibbar gemappte
 Seiten, `restart_write_u8`). Nicht-Fund auf **jeder** Stufe →
 `{"ok":false,"reason":"not_resolvable"}` — **kein** Schreibzugriff.
+
+## Hashärtung nach Review (PR #528)
+
+Drei nicht-blockierende Review-Anmerkungen sind umgesetzt:
+
+1. **Cache-Re-Validierung seiten-geprüft.** `resolve_restart()` prüfte die
+   gecachte Instanz per rohem `memcpy` (8 B) — genau nach einem `reset` kann
+   der Map-Restart die Instanz ersetzen/freigeben (Stale-Pointer). Jetzt läuft
+   die Re-Validierung über `safe_read_u64` + `restart_read_u8` (also
+   `VirtualQuery` + `is_readable_region`); schlägt sie fehl, wird der Cache
+   verworfen und neu aufgelöst. Kein Zugriff auf nicht committeten Speicher.
+2. **Instance-Scan bevorzugt/filtert beschreibbare Seiten.**
+   `restart_scan_instance()` durchsucht nur noch Regionen, die laut Protect
+   beschreibbar sind (`is_writable_region`, geteilt mit `restart_write_u8`).
+   Ein QWORD-Zufallstreffer in `.rdata`/Code kann damit nicht mehr als
+   Instanz gelten → der Miss-Fall bleibt `ok:false` ("kein Schreibzugriff")
+   statt Stray-Write. Die reine Protect-Prüfung ist host-getestet.
+3. **`restart_pending`-Semantik dokumentiert (Race mit Game-Thread).**
+   Der Wert ist eine **Momentaufnahme** von `[instance+0x52A]` direkt nach dem
+   Write. Der Gameplay-Update auf dem Game-Thread konsumiert das Flag
+   (`mov [this+0x52A],0`) und kann es vor dem Readback zurücksetzen: ein
+   `restart_pending:false` nach `reset` heißt also *nicht* "nicht gefeuert",
+   sondern "vom Game-Thread bereits abgeholt". Erfolgskriterium ist der
+   erfolgreiche **Write** (`ok:true`); das Feld ist Diagnose, kein
+   Zustandsbeweis. Der Feldname bleibt aus Kompatibilität zur Cockpit-Anzeige
+   unverändert (Kommentar in `dispatch_restart_map`).
 
 ## Graceful-Nicht-Fund (host-getestet)
 

@@ -1448,6 +1448,27 @@ static int is_readable_region(const MEMORY_BASIC_INFORMATION *mi)
 }
 
 /*
+ * Ist die Region laut Protect-Flags BESCHREIBBAR (ohne PAGE_GUARD)?
+ * Rein (keine Win32-Abhaengigkeit) -> host-testbar. Wird vom Round-Reset
+ * fuer zwei Dinge verwendet: (a) Zielseite vor `restart_write_u8` pruefen,
+ * (b) Instanz-Kandidat muss in einer beschreibbaren Seite liegen (#516).
+ */
+static int is_writable_region(const MEMORY_BASIC_INFORMATION *mi)
+{
+    if (mi->State != MEM_COMMIT || (mi->Protect & PAGE_GUARD))
+        return 0;
+    switch (mi->Protect & 0xFF) {
+    case PAGE_READWRITE:
+    case PAGE_WRITECOPY:
+    case PAGE_EXECUTE_READWRITE:
+    case PAGE_EXECUTE_WRITECOPY:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/*
  * Vergleicht n Bytes an p mit dem Muster pat unter der Byte-Maske mask
  * (mask == NULL bedeutet: alle Bytes muessen exakt passen). Rueckgabe 1 =
  * Treffer. Reiner Speichervergleich, keine Win32-Abhaengigkeit.
@@ -2853,7 +2874,8 @@ static int restart_read_u8(const void *addr, unsigned char *out)
     return 1;
 }
 
-/* Byte-Schreibzugriff; nur auf als beschreibbar gemappte Seiten. */
+/* Byte-Schreibzugriff; nur auf als beschreibbar gemappte Seiten (identische
+ * Protect-Pruefung wie bei der Instanz-Suche, #516-Review). */
 static int restart_write_u8(void *addr, unsigned char val)
 {
     MEMORY_BASIC_INFORMATION mi;
@@ -2861,9 +2883,7 @@ static int restart_write_u8(void *addr, unsigned char val)
         return 0;
     if (VirtualQuery(addr, &mi, sizeof(mi)) == 0)
         return 0;
-    if (!(mi.Protect & PAGE_READWRITE) && !(mi.Protect & PAGE_WRITECOPY) &&
-        !(mi.Protect & PAGE_EXECUTE_READWRITE) &&
-        !(mi.Protect & PAGE_EXECUTE_WRITECOPY))
+    if (!is_writable_region(&mi))
         return 0;
     memcpy(addr, &val, 1);
     return 1;
@@ -2881,7 +2901,15 @@ typedef struct {
 
 static restart_cache_t g_restart;
 
-/* Sucht die Instanz zu `vtable` (8-Byte-alignierter QWORD == vtable). */
+/* Sucht die Instanz zu `vtable` (8-Byte-alignierter QWORD == vtable).
+ *
+ * #516-Review: es wird NUR in BESCHREIBBAREN Regionen gesucht. Die
+ * GameplayState-Instanz ist ein heap-allokiertes C++-Objekt (PAGE_READWRITE);
+ * der Flag-Write `[instance+0x52A]=1` setzt das ohnehin voraus. Ein
+ * QWORD-Zufallstreffer in einer nicht beschreibbaren Fremd-Region (z. B.
+ * Code/.rdata) kann also nicht die Instanz sein und wird verworfen -> der
+ * Miss-Fall bleibt "kein Schreibzugriff" (ok:false) statt Stray-Write.
+ * Innerhalb der beschreibbaren Regionen gewinnt der erste Treffer. */
 static unsigned char *restart_scan_instance(uintptr_t vtable)
 {
     uintptr_t addr = 0;
@@ -2893,7 +2921,7 @@ static unsigned char *restart_scan_instance(uintptr_t vtable)
         if (next <= addr)
             break;
         addr = next;
-        if (!is_readable_region(&mi))
+        if (!is_writable_region(&mi))
             continue;
         const uint64_t *q = (const uint64_t *)mi.BaseAddress;
         size_t nq = mi.RegionSize / sizeof(uint64_t);
@@ -2921,12 +2949,23 @@ static int resolve_restart(void)
     if (g_restart.valid && g_restart.base == base) {
         size_t cur_size = 0;
         uintptr_t cur_vt = 0;
-        memcpy(&cur_vt, g_restart.instance, sizeof(cur_vt));
-        if (pe_image_size(base, &cur_size) && cur_size == g_restart.size &&
+        unsigned char cur_flag = 0;
+        /* Seiten-geprueft: genau `reset` loest einen Map-Restart aus und kann
+         * die gecachte GameplayState-Instanz ersetzen/freigeben. Ein roheres
+         * memcpy koennte dann auf veralteten (nicht mehr committeten) Speicher
+         * zugreifen -> deshalb derselbe Guard wie beim Read/Write-Pfad. */
+        int vt_ok = safe_read_u64(g_restart.instance, (uint64_t *)&cur_vt);
+        int flag_ok = restart_read_u8(g_restart.instance + g_restart.flag_off,
+                                      &cur_flag);
+        if (vt_ok && flag_ok &&
+            pe_image_size(base, &cur_size) && cur_size == g_restart.size &&
             cur_vt == g_restart.vtable &&
             sig_matches(g_restart.fn, RBBRIDGE_RESTART_SIG,
                         RBBRIDGE_RESTART_SIG_MASK, RBBRIDGE_RESTART_SIG_LEN))
             return 1;
+        dbg("resolve_restart: Cache verworfen (vt_ok=%d flag_ok=%d "
+            "instance=%p)",
+            vt_ok, flag_ok, (void *)g_restart.instance);
         g_restart.valid = 0;
     }
 
@@ -2991,6 +3030,18 @@ static int resolve_restart(void)
  * den vollstaendigen Map-Restart (neue Runde, Economy 0, HQ-Placement)
  * fuehrt der Gameplay-Update auf dem GAME-Thread aus (vtable-Slot 0x90).
  * Reines C++-Flag -> thread-agnostisch, kein lua_*.
+ *
+ * `restart_pending`-Readback-Semantik (#516-Review, Race mit Game-Thread):
+ * Der Wert ist ein MOMENTANwert `[instance+0x52A]`, der unmittelbar nach dem
+ * Write gelesen wird. Der Gameplay-Update auf dem Game-Thread konsumiert das
+ * Flag (`mov [this+0x52A],0`) und kann es VOR unserem Readback zuruecksetzen.
+ * Ein `restart_pending:false` nach `reset` bedeutet daher NICHT, dass der
+ * Reset nicht gefeuert hat, sondern dass der Game-Thread das Flag bereits
+ * abgeholt hat (= der Restart laeuft an). Umgekehrt garantiert
+ * `restart_pending:true` nur, dass das Flag gesetzt ist, nicht dass der
+ * Restart schon fertig ist. Erfolgskriterium fuer `reset` ist der
+ * erfolgreiche WRITE (sonst `ok:false`) — `restart_pending` ist Diagnose,
+ * kein Zustandsbeweis. Feldname bleibt kompatibel zur Cockpit-Anzeige.
  * Events:
  *   {"event":"restart_map_result","ok":true,"op":"...","flag_offset":"0x..",
  *    "restart_pending":bool,"vtable":"0x..","instance":"0x.."}
@@ -3037,6 +3088,9 @@ static void dispatch_restart_map(HANDLE hPipe, const char *op)
     int have_after = restart_read_u8(g_restart.instance + g_restart.flag_off,
                                      &after);
 
+    /* Diagnosewert (Momentaufnahme) — siehe Race-Hinweis im Funktionskopf:
+     * `false` kann "vom Game-Thread schon konsumiert" heissen, nicht "nicht
+     * gefeuert". `ok:true` belegt den erfolgreichen Write. */
     dbg("restart_map: reset -> flag[0x%x]=%u (before=%d/%u) vtable=%p "
         "instance=%p",
         (unsigned)g_restart.flag_off, (unsigned)after, have_before,

@@ -839,6 +839,40 @@ int main(void)
             check(restart_find_setter(NULL, sizeof(txt), 0x52Au) == NULL,
                   "#516 restart_find_setter: NULL -> NULL (kein Crash)");
         }
+
+        /* #516-Review: die Beschreibbarkeits-Pruefung ist rein und damit
+         * host-testbar (restart_scan_instance/restart_write_u8 nutzen sie). */
+        {
+            MEMORY_BASIC_INFORMATION mi;
+            memset(&mi, 0, sizeof(mi));
+            mi.State = MEM_COMMIT;
+
+            mi.Protect = PAGE_READWRITE;
+            check(is_writable_region(&mi) == 1,
+                  "#516 is_writable_region: READWRITE -> 1");
+            mi.Protect = PAGE_WRITECOPY;
+            check(is_writable_region(&mi) == 1,
+                  "#516 is_writable_region: WRITECOPY -> 1");
+            mi.Protect = PAGE_EXECUTE_READWRITE;
+            check(is_writable_region(&mi) == 1,
+                  "#516 is_writable_region: EXECUTE_READWRITE -> 1");
+            mi.Protect = PAGE_EXECUTE_WRITECOPY;
+            check(is_writable_region(&mi) == 1,
+                  "#516 is_writable_region: EXECUTE_WRITECOPY -> 1");
+            mi.Protect = PAGE_READONLY;
+            check(is_writable_region(&mi) == 0,
+                  "#516 is_writable_region: READONLY -> 0 (kein Stray-Write)");
+            mi.Protect = PAGE_EXECUTE_READ;
+            check(is_writable_region(&mi) == 0,
+                  "#516 is_writable_region: EXECUTE_READ -> 0");
+            mi.Protect = PAGE_READWRITE | PAGE_GUARD;
+            check(is_writable_region(&mi) == 0,
+                  "#516 is_writable_region: PAGE_GUARD -> 0");
+            mi.Protect = PAGE_READWRITE;
+            mi.State = MEM_FREE;
+            check(is_writable_region(&mi) == 0,
+                  "#516 is_writable_region: MEM_FREE -> 0");
+        }
     }
 
     free(img);
