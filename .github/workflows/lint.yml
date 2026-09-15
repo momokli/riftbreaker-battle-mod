@@ -54,6 +54,12 @@ jobs:
       # Retention + Idempotenz, graceful non-crash. Fake-Docker, planetfrei.
       - name: Crash-Collector-Logik (Fake-Docker, planetfrei)
         run: tests/shell/crash-collector.test.sh
+      # Red/Green-Beweis des stdlib-Minidump-Parsers (Issue #481): synthetische
+      # MDMP-Fixtures (gueltig/truncated/falsche Magic/fehlender Stream/
+      # Adresse ausserhalb) -> JSON-Felder exception_code/address/module/base/
+      # fault_rva/thread/stack_rvas + _ok-false-Vertrag. Kein Docker, kein Netz.
+      - name: Minidump-Parser-Unit (stdlib, planetfrei)
+        run: tests/shell/minidump_meta.test.sh
 
       # --- python ---
       - uses: actions/setup-python@v5
