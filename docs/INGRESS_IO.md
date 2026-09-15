@@ -61,27 +61,27 @@ Wine sieht den Container-Root als `Z:` → die DLL liegt als
 
 ## Dateien
 
-| Datei | Rolle |
-|---|---|
-| `bausteine/04-trainer-io/bridge/pipe_bridge.c` | HTTP(9001)→Pipe-Bridge (Quelle, x64) |
-| `scripts/build_rbbridge_tools.sh` | baut alle 4 Binaries in ein Staging-Dir |
-| `deploy/roles/rbtools/{defaults,tasks}` | Build + Stage nach `/opt/rbmods/rbtools` |
-| `deploy/roles/riftbreaker-server/templates/docker-compose.yml.j2` | Mount `/opt/rbtools:ro`, Port `127.0.0.1:9001:9001` |
-| `deploy/roles/riftbreaker-server/defaults/main.yml` | `riftbreaker_bridge_port` |
-| `tools/dedicated-server/scripts/entrypoint.sh` | Injection-Supervisor + Bridge-Start |
-| `tools/referee-egress/referee_egress.py` | Egress-Sidecar (`exor_logs.txt` → `POST /referee/event`, #358) |
+| Datei                                                             | Rolle                                                          |
+| ----------------------------------------------------------------- | -------------------------------------------------------------- |
+| `bausteine/04-trainer-io/bridge/pipe_bridge.c`                    | HTTP(9001)→Pipe-Bridge (Quelle, x64)                           |
+| `scripts/build_rbbridge_tools.sh`                                 | baut alle 4 Binaries in ein Staging-Dir                        |
+| `deploy/roles/rbtools/{defaults,tasks}`                           | Build + Stage nach `/opt/rbmods/rbtools`                       |
+| `deploy/roles/riftbreaker-server/templates/docker-compose.yml.j2` | Mount `/opt/rbtools:ro`, Port `127.0.0.1:9001:9001`            |
+| `deploy/roles/riftbreaker-server/defaults/main.yml`               | `riftbreaker_bridge_port`                                      |
+| `tools/dedicated-server/scripts/entrypoint.sh`                    | Injection-Supervisor + Bridge-Start                            |
+| `tools/referee-egress/referee_egress.py`                          | Egress-Sidecar (`exor_logs.txt` → `POST /referee/event`, #358) |
 
 ## Bridge-Protokoll (HTTP)
 
 Antworten immer `application/json`, `Connection: close`.
 
-| Request | Antwort |
-|---|---|
-| `GET /health` | `200 {"ok":true,"pipe":<bool>}` (`pipe` = Pipe erreichbar) |
-| `POST /exec` mit `{"command":"rb_wave 3"}` | `200 {"ok":<bool>,"results":[{"command":"rb_wave 3","ok":true}]}` |
-| `POST /exec` mit `{"match_id":…,"round":3,"commands":["rb_wave 3"]}` | wie oben, ein Result je Kommando |
-| `POST /exec`, Pipe nicht erreichbar | `503 {"ok":false,"reason":"pipe_unavailable"}` |
-| sonstiger Pfad/Methode | `404 {"ok":false,"reason":"not_found"}` |
+| Request                                                              | Antwort                                                           |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `GET /health`                                                        | `200 {"ok":true,"pipe":<bool>}` (`pipe` = Pipe erreichbar)        |
+| `POST /exec` mit `{"command":"rb_wave 3"}`                           | `200 {"ok":<bool>,"results":[{"command":"rb_wave 3","ok":true}]}` |
+| `POST /exec` mit `{"match_id":…,"round":3,"commands":["rb_wave 3"]}` | wie oben, ein Result je Kommando                                  |
+| `POST /exec`, Pipe nicht erreichbar                                  | `503 {"ok":false,"reason":"pipe_unavailable"}`                    |
+| sonstiger Pfad/Methode                                               | `404 {"ok":false,"reason":"not_found"}`                           |
 
 `ok` ist `true`, wenn **alle** Kommandos `ok:true` lieferten. Ein Antwort-Timeout
 auf der Pipe ist kein Schreibfehler: das Resultat trägt dann
@@ -93,12 +93,12 @@ Auf der Pipe (v0, line-delimited JSON) schreibt die Bridge je Kommando
 
 ### Umgebung (Bridge)
 
-| Env | Default | Bedeutung |
-|---|---|---|
-| `RBB_BRIDGE_BIND` | `0.0.0.0` | Bind-Adresse (im Container; Host published nur 127.0.0.1) |
-| `RBB_BRIDGE_PORT` | `9001` | TCP-Port |
-| `RBB_BRIDGE_PIPE` | `\\.\pipe\rbbattle` | Pipe-Pfad |
-| `RBB_BRIDGE_TIMEOUT_MS` | `5000` | Antwort-Timeout je Kommando |
+| Env                     | Default             | Bedeutung                                                 |
+| ----------------------- | ------------------- | --------------------------------------------------------- |
+| `RBB_BRIDGE_BIND`       | `0.0.0.0`           | Bind-Adresse (im Container; Host published nur 127.0.0.1) |
+| `RBB_BRIDGE_PORT`       | `9001`              | TCP-Port                                                  |
+| `RBB_BRIDGE_PIPE`       | `\\.\pipe\rbbattle` | Pipe-Pfad                                                 |
+| `RBB_BRIDGE_TIMEOUT_MS` | `5000`              | Antwort-Timeout je Kommando                               |
 
 ### Modi (Smoke-Tests)
 
@@ -124,10 +124,12 @@ Quelländerungen anschlägt.
 ## Testanleitung
 
 **Automatisiertes Gate (Issue #289, ohne Player):** `tests/core-io/core_io_probe.py`
-prüft den ganzen Kanal am gebooteten Test-Stack — Boot (C1), Ingress-Effekt
-(C2, Invariante `ok:true ⟹ event=…`), Egress an einen laufenden Consumer (C3)
-und den serverseitig ausgelösten Wave-Auftrag (C4). CI: `.github/workflows/boot-test.yml`
-(Required-Check `boot-test`, Schritt „Core-IO-Gate"); Details: [`tests/core-io/README.md`](../tests/core-io/README.md).
+prüft am gebooteten Test-Stack den Boot/Host-Zustand (C1: Container stabil +
+Mod geladen + Bridge `/health` ok). C2–C4 (Ingress-Effekt, Egress, Server-Wave)
+testeten die alte Lua-Architektur und sind nach der Green-Field-Refaktorierung
+eingestampft — sie werden gegen die C++-Backend-Pfade neu aufgebaut. CI:
+`.github/workflows/boot-test.yml` (Required-Check `boot-test`, Schritt
+„Core-IO-Gate“); Details: [`tests/core-io/README.md`](../tests/core-io/README.md).
 
 **Manuell (Host/Bridge), ohne Player:**
 
@@ -135,7 +137,7 @@ und den serverseitig ausgelösten Wave-Auftrag (C4). CI: `.github/workflows/boot
    Dateien vorhanden.
 2. Nach dem Deploy im Container:
    - `docker logs riftbreaker-dedicated` → `[entrypoint] ingress: Injection
-     erfolgreich`, `[pipe_bridge] HTTP-Bridge lauscht auf 0.0.0.0:9001`.
+erfolgreich`, `[pipe_bridge] HTTP-Bridge lauscht auf 0.0.0.0:9001`.
    - `curl -s http://127.0.0.1:9001/health` → `{"ok":true,"pipe":true}`.
    - `curl -s -X POST http://127.0.0.1:9001/exec -d '{"command":"rb_wave 3"}'`
      → `{"ok":true,"results":[{"command":"rb_wave 3","ok":true}]}`.
@@ -156,10 +158,10 @@ Anker-Aufloesung (`FindService == nil`, kein Spieler).
 
 Zwei Testebenen sichern den Kernpfad **ohne Spieler** ab (CI-faehig):
 
-| Test | Deckt ab |
-|---|---|
-| `tests/lua-static/wave-anchor.test.js` | Anker-Kette border→mission→mech: `FindService=nil`+kein Spieler → `status=no_player`, **kein** `status=done`, 0 `SpawnEntity`-Aufrufe; Rand-Spawner ohne Spieler → `status=done spawned=8 anchor=border`; nur Mech → `anchor=mech`; Anker da, Spawn schlaegt fehl → `status=no_spawns` (kein Falsch-Gruen) |
-| `tests/e2e-vollkette/kern-io-pfad.test.js` | Pipe-Roundtrip `exec → exec_result ok:true` (echter `relay.py` + FIFO-Responder), graceful `ok:false reason=console_service_not_found` (kein Crash), Falsch-Gruen-Kontrakt (`exec_result` traegt keinen Spawn), Egress-Verifikation |
+| Test                                       | Deckt ab                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tests/lua-static/wave-anchor.test.js`     | Anker-Kette border→mission→mech: `FindService=nil`+kein Spieler → `status=no_player`, **kein** `status=done`, 0 `SpawnEntity`-Aufrufe; Rand-Spawner ohne Spieler → `status=done spawned=8 anchor=border`; nur Mech → `anchor=mech`; Anker da, Spawn schlaegt fehl → `status=no_spawns` (kein Falsch-Gruen) |
+| `tests/e2e-vollkette/kern-io-pfad.test.js` | Pipe-Roundtrip `exec → exec_result ok:true` (echter `relay.py` + FIFO-Responder), graceful `ok:false reason=console_service_not_found` (kein Crash), Falsch-Gruen-Kontrakt (`exec_result` traegt keinen Spawn), Egress-Verifikation                                                                        |
 
 Damit ist `exec_result.ok:true ⟹ spawned>0` **nicht** mehr ungeprueft: der
 Spawn-Beweis ist das Game-Log `event=wave level=N status=done` (nur bei

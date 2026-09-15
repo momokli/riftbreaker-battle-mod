@@ -86,7 +86,7 @@ Puffern je Richtung tritt das nicht auf). Deshalb:
 - Antwortpfad (`exec_result` parsen/matchen): `os.pipe()` in
   `bausteine/07-relay/test_dispatch.py` (`ReadResultTest`) — echte getrennte
   Enden, keine Selbst-Lese-Falle.
-- End-to-End (Timeout-Verhalten, kein Haenger): FIFO in
-  `bausteine/07-relay/test_e2e_prototype.sh` und
-  `tests/e2e-vollkette/vollkette.test.js` — dort ohne Responder, geprüft wird
-  `dispatch result cmd_id=... status=timeout`.
+- End-to-End (Timeout-Verhalten, kein Hänger): FIFO in
+  `bausteine/07-relay/test_dispatch.py` (`PipeClientTest`) sowie der
+  `os.pipe()`-Fall (`ReadResultTest`) — dort ohne Responder, geprüft wird das
+  `status=timeout`-Verhalten des Dispatchs.
