@@ -12,6 +12,8 @@
 //!   POST /wave    Operator-Wellen-Spawn       {"world":"A","n":3} → exec rb_wave 3
 //!   GET  /state   Match-Zustand (Poll)        —
 //!   GET  /health  Healthcheck                 —
+//!   POST /buy_order  Buy-Order vom Player-Mod {"world":"A","amount":10,"resource":"carbonium","item":"..."} (PoC #518)
+//!   GET  /buy_orders Buy-Order-Queue (PoC #518)
 //!   GET  /*       statische Web-UI            —
 //!
 //! Fehler: `{"error": "<meldung>", "type": "<invalid|not_found|conflict>"}`
@@ -25,12 +27,12 @@ use axum::extract::{Query, State as AxumState};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
 /// Konfiguration (aus Env im `main`, in Tests direkt konstruierbar).
@@ -81,6 +83,10 @@ pub struct AppState {
     /// Server-seitiger Referee (autoritative Event-/State-Quelle, Issue #268).
     pub referee: Arc<RwLock<Referee>>,
     pub cfg: Arc<Config>,
+    /// Buy-Order-Queue (PoC #518): reine In-Memory-Ablage der vom Player-Mod
+    /// emittierten Buy-Orders. KEINE autoritative Wirkung/State-Mutation — die
+    /// verarbeitet der Operator/Referee/DLL (Lua kann das Konto nicht anfassen).
+    pub buy_orders: Arc<RwLock<Vec<BuyOrder>>>,
 }
 
 impl AppState {
@@ -93,6 +99,7 @@ impl AppState {
             state: Arc::new(RwLock::new(MatchState::new(cfg.hq_hp_start))),
             referee: Arc::new(RwLock::new(referee)),
             cfg: Arc::new(cfg),
+            buy_orders: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -225,6 +232,38 @@ struct RefereePollQuery {
     world: String,
 }
 
+/// Eine Buy-Order vom Player-Mod (PoC #518): "10 carbonium für <item>".
+/// Wird vom Log-Sidecar als `event=buy_order` gemeldet und hier nur in einer
+/// Queue abgelegt. Die autoritative Wirkung (Ressource abziehen + Item
+/// gewähren) macht NICHT der Mod — der Operator/Referee verarbeitet die Queue.
+#[derive(Debug, Clone, Serialize)]
+pub struct BuyOrder {
+    pub seq: u64,
+    pub ts: u64,
+    pub world: World,
+    pub amount: u64,
+    pub resource: String,
+    pub item: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct BuyOrderReq {
+    world: String,
+    #[serde(default)]
+    amount: Option<u64>,
+    #[serde(default)]
+    resource: Option<String>,
+    #[serde(default)]
+    item: Option<String>,
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 // ---- Router ----
 
 pub fn router(app: AppState) -> Router {
@@ -243,6 +282,8 @@ pub fn router(app: AppState) -> Router {
         .route("/state", get(state_get))
         .route("/events", get(events))
         .route("/health", get(health))
+        .route("/buy_order", post(buy_order))
+        .route("/buy_orders", get(buy_orders))
         .fallback_service(tower_http::services::ServeDir::new(web))
         .with_state(app)
 }
@@ -733,6 +774,42 @@ async fn health(AxumState(app): AxumState<AppState>) -> ApiResult<Json<Value>> {
         "env": app.cfg.env,
         "ref": app.cfg.deploy_ref,
     })))
+}
+
+/// POST /buy_order — nimmt eine Buy-Order vom Player-Mod/Log-Sidecar entgegen
+/// und legt sie in die In-Memory-Queue (PoC #518, keine State-Mutation).
+async fn buy_order(
+    AxumState(app): AxumState<AppState>,
+    Json(req): Json<BuyOrderReq>,
+) -> ApiResult<Json<Value>> {
+    let world = parse_world(&req.world)?;
+    let amount = req.amount.unwrap_or(0);
+    let resource = req.resource.unwrap_or_else(|| "carbonium".to_string());
+    let item = req.item.unwrap_or_else(|| "unknown".to_string());
+
+    let (order, queue_len) = {
+        let mut q = app.buy_orders.write().await;
+        let seq = q.len() as u64 + 1;
+        let order = BuyOrder {
+            seq,
+            ts: now_ms(),
+            world,
+            amount,
+            resource,
+            item,
+        };
+        q.push(order.clone());
+        (order, q.len())
+    };
+    Ok(Json(
+        json!({ "ok": true, "order": order, "queue_len": queue_len }),
+    ))
+}
+
+/// GET /buy_orders — liefert die Buy-Order-Queue (PoC #518).
+async fn buy_orders(AxumState(app): AxumState<AppState>) -> ApiResult<Json<Value>> {
+    let orders = app.buy_orders.read().await.clone();
+    Ok(Json(json!({ "orders": orders })))
 }
 
 // ---- GO-Broadcast ----
@@ -1772,6 +1849,48 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(v["ok"], true);
         assert_eq!(v["phase"], "lobby");
+    }
+
+    #[tokio::test]
+    async fn buy_order_queue_receives_and_lists() {
+        let app = make_app(test_cfg()).await;
+
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/buy_order",
+            Some(json!({
+                "world": "A",
+                "amount": 10,
+                "resource": "carbonium",
+                "item": "boss"
+            })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["queue_len"].as_u64(), Some(1));
+        assert_eq!(v["order"]["seq"].as_u64(), Some(1));
+        assert_eq!(v["order"]["world"].as_str(), Some("A"));
+        assert_eq!(v["order"]["amount"].as_u64(), Some(10));
+        assert_eq!(v["order"]["resource"].as_str(), Some("carbonium"));
+        assert_eq!(v["order"]["item"].as_str(), Some("boss"));
+
+        // Defaults greifen: fehlende amount/resource/item werden gefüllt.
+        let (s, v) = call(&app, "POST", "/buy_order", Some(json!({ "world": "B" }))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["queue_len"].as_u64(), Some(2));
+        assert_eq!(v["order"]["world"].as_str(), Some("B"));
+        assert_eq!(v["order"]["amount"].as_u64(), Some(0));
+        assert_eq!(v["order"]["resource"].as_str(), Some("carbonium"));
+        assert_eq!(v["order"]["item"].as_str(), Some("unknown"));
+
+        let (s, v) = call(&app, "GET", "/buy_orders", None).await;
+        assert_eq!(s, StatusCode::OK);
+        let orders = v["orders"].as_array().expect("orders ist ein Array");
+        assert_eq!(orders.len(), 2);
+        assert_eq!(orders[0]["item"].as_str(), Some("boss"));
+        assert_eq!(orders[1]["world"].as_str(), Some("B"));
     }
 
     #[tokio::test]
