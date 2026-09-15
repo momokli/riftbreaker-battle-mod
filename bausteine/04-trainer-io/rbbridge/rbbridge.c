@@ -1179,6 +1179,71 @@ static int diff_decode(const unsigned char *fn, uint32_t *this_deref,
     return 1;
 }
 
+/* ------------------------------------------------------------------ */
+/* #479: Readiness-Gate — Welt-Initialisierung abwarten                */
+/*                                                                    */
+/* Crash #436/#479: der Pipe-Thread ruft einen Game-Call (get_state),   */
+/* obwohl der `world`-Pointer schon non-NULL ist, die Welt aber noch    */
+/* NICHT fertig initialisiert wurde (ECS-/Team-Map im Aufbau). Folge:   */
+/* GetPlayerAccount -> GetPlayerTeam -> EcsContext::FindIt faultet mit  */
+/* einem Garbage-Pointer (RIP riftbreaker.dll+0x275895).                */
+/*                                                                    */
+/* Ready-Signal (log-belegt, Build 2.0.58485, planet): exor_logs.txt    */
+/* enthaelt in JEDEM erfolgreichen Boot                                */
+/*   MapGenerator.cpp:828  - InstantiateMap took: <n> ms               */
+/*   NavigationGraph.cpp:462 - NavigationGraph::Generate - Graph       */
+/*                             generated in <n> sec                    */
+/* und in den gecrashten Boots (Crash VOR Map-Fertigstellung) NICHT.    */
+/*                                                                    */
+/* Der reine Marker-Test steht bewusst AUSSERHALB des                   */
+/* #ifndef-RBBRIDGE_HOSTTEST-Blocks -> direkt host-testbar (#394).      */
+/* ------------------------------------------------------------------ */
+
+/* Fertig-Marker (Substring, ohne Zeilen-/Zeitstempel). Der NavigationGraph-
+ * Marker ist der belastbare: er wird erst nach abgeschlossener Map-Instanz
+ * und Navmesh-Aufbau geloggt. Belege siehe docs/research/
+ * dedicated-io-re-findings.md, Abschnitt "#479". */
+static const char *const RBBRIDGE_READY_MARKERS[] = {
+    "NavigationGraph::Generate - Graph generated",
+    "InstantiateMap took",
+};
+#define RBBRIDGE_READY_MARKER_COUNT \
+    (sizeof(RBBRIDGE_READY_MARKERS) / sizeof(RBBRIDGE_READY_MARKERS[0]))
+
+/* Substring-Suche in einem NICHT-NUL-terminierten Puffer (portabel; memmem
+ * gibt es nicht ueberall). Rueckgabe 1 = gefunden. */
+static int rbbridge_buf_contains(const char *hay, size_t hay_len,
+                                 const char *needle)
+{
+    size_t nlen;
+    if (!hay || !needle)
+        return 0;
+    nlen = strlen(needle);
+    if (nlen == 0)
+        return 1;
+    if (hay_len < nlen)
+        return 0;
+    for (size_t i = 0; i + nlen <= hay_len; i++) {
+        if (hay[i] == needle[0] && memcmp(hay + i, needle, nlen) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+/* Readiness-Entscheidung AUS dem Log-Inhalt (rein, host-testbar).
+ * Rueckgabe 1 = Welt fertig, 0 = noch nicht bereit. Leerer/fehlender
+ * Inhalt -> 0 (konservativ: NICHT aufrufen). */
+static int rbbridge_log_is_ready(const char *buf, size_t len)
+{
+    if (!buf || len == 0)
+        return 0;
+    for (size_t i = 0; i < RBBRIDGE_READY_MARKER_COUNT; i++) {
+        if (rbbridge_buf_contains(buf, len, RBBRIDGE_READY_MARKERS[i]))
+            return 1;
+    }
+    return 0;
+}
+
 /* x64-Aufrufkonvention: this=RCX, cmd=RDX - __fastcall ist auf x64 der
  * Standard (das Schluesselwort dokumentiert die Konvention nur). */
 #ifdef RBBRIDGE_HOSTTEST
@@ -2032,6 +2097,110 @@ static void copy_cstr(char *dst, size_t n, const char *src)
 }
 #ifndef RBBRIDGE_HOSTTEST
 
+/* ------------------------------------------------------------------ */
+/* #479: Readiness-Gate (produktionsseitig)                            */
+/*                                                                    */
+/* world_is_ready(): 1, sobald die Welt nachweislich fertig ist. Das    */
+/* Signal kommt aus dem Spiel-Log (exor_logs.txt), NICHT aus einem      */
+/* `world != NULL`-Test: der Pointer ist frueh non-NULL, die ECS-/       */
+/* Team-Strukturen aber noch im Aufbau (Crash #436/#479).               */
+/*                                                                    */
+/* Einmal erkannt -> gelatcht. Die Welt wird im Betrieb nicht wieder     */
+/* "unfertig"; ein Map-Neustart geht ohnehin mit Prozess-Neustart +      */
+/* frischem exor_logs.txt einher.                                       */
+/* ------------------------------------------------------------------ */
+
+/* Log-Suffixe relativ zu %USERPROFILE% (Wine: C:\users\<user>).
+ * Fall 1 = Community-Rezept (Documents), Fall 2 = -Dedicated-Server-Pfad. */
+static const char *const RBBRIDGE_EXOR_LOG_CANDIDATES[] = {
+    "\\Documents\\The Riftbreaker\\exor_logs.txt",
+    "\\AppData\\LocalLow\\The Riftbreaker - Dedicated Server\\exor_logs.txt",
+};
+
+static int g_world_ready = 0; /* Latch: 1 = Welt fertig (einmalig gesetzt) */
+
+/* Eine Logdatei oeffnen, (bis Cap) einlesen und auf Ready-Marker pruefen.
+ * Rueckgabe 1 = Marker gefunden. Jeder Fehler -> 0 (konservativ). */
+static int readiness_scan_file(const char *path)
+{
+    HANDLE h;
+    char *buf;
+    DWORD got = 0;
+    int ready = 0;
+    /* exor_logs.txt ist wenige 10 KB; 4 MB als harte Obergrenze genuegt
+     * und verhindert, dass ein absichtlich/versehentlich riesiger Log
+     * den Pipe-Thread blockiert. */
+    const DWORD cap = 4u * 1024u * 1024u;
+
+    if (!path || !path[0])
+        return 0;
+    h = CreateFileA(path, GENERIC_READ,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE)
+        return 0;
+    buf = (char *)malloc(cap);
+    if (!buf) {
+        CloseHandle(h);
+        return 0;
+    }
+    if (ReadFile(h, buf, cap, &got, NULL) && got > 0)
+        ready = rbbridge_log_is_ready(buf, (size_t)got);
+    free(buf);
+    CloseHandle(h);
+    return ready;
+}
+
+/* Welt fertig? Prueft zuerst den expliziten Override RBBRIDGE_EXOR_LOG,
+ * dann die Standardpfade unter %USERPROFILE%. Rueckgabe 1 = bereit. */
+static int world_is_ready(void)
+{
+    char env[1024];
+
+    if (g_world_ready)
+        return 1;
+
+    if (GetEnvironmentVariableA("RBBRIDGE_EXOR_LOG", env, sizeof(env)) > 0 &&
+        env[0]) {
+        if (readiness_scan_file(env)) {
+            g_world_ready = 1;
+            return 1;
+        }
+    }
+
+    if (GetEnvironmentVariableA("USERPROFILE", env, sizeof(env)) > 0 &&
+        env[0]) {
+        char path[1200];
+        for (size_t i = 0;
+             i < sizeof(RBBRIDGE_EXOR_LOG_CANDIDATES) /
+                     sizeof(RBBRIDGE_EXOR_LOG_CANDIDATES[0]);
+             i++) {
+            snprintf(path, sizeof(path), "%s%s", env,
+                     RBBRIDGE_EXOR_LOG_CANDIDATES[i]);
+            if (readiness_scan_file(path)) {
+                g_world_ready = 1;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/* Gate fuer alle Game-Calls: liefert 1, wenn der Call NICHT laufen darf
+ * (und hat dann bereits `{"event":<event>,"ok":false,
+ * "reason":"world_not_ready"}` gesendet). 0 = Call darf laufen. */
+static int readiness_block(HANDLE hPipe, const char *event)
+{
+    if (world_is_ready())
+        return 0;
+    dbg("readiness-gate: %s -> world_not_ready (kein Game-Call)",
+        event ? event : "?");
+    send_line(hPipe,
+              "{\"event\":\"%s\",\"ok\":false,"
+              "\"reason\":\"world_not_ready\"}",
+              event ? event : "error");
+    return 1;
+}
 
 /* Liest ein QWORD von addr, nur wenn die Region committet+lesbar ist.
  * Rueckgabe 1 = gelesen, 0 = nicht lesbar (out bleibt unveraendert). */
@@ -2149,6 +2318,13 @@ static void probe_resources(HANDLE hPipe) {
 
   if (!resolve_module(&base, &size, &via, &execfn)) {
     send_line(hPipe, "{\"event\":\"probe\",\"error\":\"no_module\"}");
+    return;
+  }
+
+  /* #479: Readiness-Gate — die Probe traversiert die PlayerService-Kette
+   * (World-Nutzung) und darf erst nach fertiger Welt laufen. */
+  if (!world_is_ready()) {
+    send_line(hPipe, "{\"event\":\"probe\",\"error\":\"world_not_ready\"}");
     return;
   }
 
@@ -2536,6 +2712,10 @@ static void dispatch_activate_mission_flow(HANDLE hPipe, const char *logic,
         return;
     }
 
+    /* #479: Readiness-Gate vor dem Game-Call (Welt muss fertig sein). */
+    if (readiness_block(hPipe, "activate_mission_flow_result"))
+        return;
+
     if (!resolve_module(&base, &size, &via, &execfn)) {
         send_line(hPipe, "{\"event\":\"activate_mission_flow_result\","
                          "\"ok\":false,\"reason\":\"no_module\"}");
@@ -2905,6 +3085,10 @@ static RBBRIDGE_NOINLINE void dispatch_creatures_difficulty(HANDLE hPipe,
         return;
     }
 
+    /* #479: Readiness-Gate vor dem Game-Call (Welt muss fertig sein). */
+    if (readiness_block(hPipe, "creatures_difficulty_result"))
+        return;
+
     if (!resolve_module(&base, &size, &via, &execfn)) {
         send_line(hPipe, "{\"event\":\"creatures_difficulty_result\","
                          "\"ok\":false,\"reason\":\"no_module\"}");
@@ -3007,6 +3191,10 @@ static void dispatch_deactivate_mission_flow(HANDLE hPipe, const char *flow)
                          "\"ok\":false,\"reason\":\"missing_flow\"}");
         return;
     }
+
+    /* #479: Readiness-Gate vor dem Game-Call (Welt muss fertig sein). */
+    if (readiness_block(hPipe, "deactivate_mission_flow_result"))
+        return;
 
     if (!resolve_module(&base, &size, &via, &execfn)) {
         send_line(hPipe, "{\"event\":\"deactivate_mission_flow_result\","
@@ -3334,6 +3522,10 @@ static void dispatch_get_state(HANDLE hPipe)
     const char *via = NULL;
     const unsigned char *execfn = NULL;
 
+    /* #479: Readiness-Gate zuerst — vor JEDEM Game-Call. */
+    if (readiness_block(hPipe, "get_state_result"))
+        return;
+
     if (!resolve_module(&base, &size, &via, &execfn)) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
                          "\"reason\":\"no_module\"}");
@@ -3573,6 +3765,11 @@ static void dispatch_add_resource(HANDLE hPipe, const char *resource_str,
                          "\"reason\":\"bad_amount\"}");
         return;
     }
+
+    /* #479: Readiness-Gate — erst nach der Argument-Validierung, aber vor
+     * jedem Game-Zugriff (vtable-Scan/Call). */
+    if (readiness_block(hPipe, "add_resource_result"))
+        return;
 
     /* PlayerService-Instanz per vftable-Scan (RVA 0x2e8e910, wie get_state). */
     const unsigned char *vftable = base + 0x2e8e910;

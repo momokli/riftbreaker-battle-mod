@@ -316,3 +316,56 @@ initialisiert). Fix läuft in #479 (Readiness-Gate). Der Live-Game-Wert des
 Naturwellen-Schalters ist damit weiterhin offen (Player-/Operator-Test), aber
 nicht durch diese DLL blockiert. Der Live-Default-Flip auf `planet` ist aus dem
 PR #478 de-scoped und landet separat.
+## #479: Readiness-Gate — Welt-Init abwarten (Crash-Klasse #436)
+
+**Symptom:** `get_state` während der Welt-/Map-Init → Crash, RIP
+`riftbreaker_dll_win_release.dll+0x275895` (`mov rdx,[r10]`, `r10` = Garbage),
+Stack `dispatch_get_state → GetPlayerAccount(0xC60050) → GetPlayerTeam(0xC60F50)
+→ Exor::EcsContext::FindIt(0x1DD0370)`. Der `world`-Pointer war **non-NULL**,
+die ECS-/Team-Map aber noch im Aufbau → der `no_world`-Guard griff nicht.
+
+**Root Cause:** fehlende **Readiness** (nicht Threading, nicht Lua). Der
+Pipe-Thread ruft eine Game-Funktion, die eine fertig initialisierte Welt
+braucht — zu früh. Zweitursache (Race) ist mit dem Gate entschärft, solange der
+Call erst nach Map-Fertigstellung läuft; die Session läuft in `main` komplett
+pure-C++ auf dem Pipe-Thread (kein vtable-Detour, kein `lua_*` — #446).
+
+### Ready-Signal (log-belegt, Build 2.0.58485, planet 2026-09-15)
+
+`exor_logs.txt` (unter `%USERPROFILE%\Documents\The Riftbreaker\`) enthält in
+JEDEM **erfolgreichen** Boot:
+
+```
+[12:40:33.501] [info] MapGenerator.cpp:828 - InstantiateMap took: 4846 ms
+[12:40:34.154] [info] NavigationGraph.cpp:462 - NavigationGraph::Generate - Graph generated in 0.595806 sec.
+```
+
+Die **gecrashten** Boots (13:05, 12:52, 13:39) enden dagegen bei
+`MapGenerator.cpp:976 - ExecuteBuffers took: 48 ms` — d. h. der Crash passiert
+VOR der Map-Fertigstellung, ohne die beiden Marker. Das ist der belastbare,
+invertierte Beleg (`grep` über `exor_logs*.txt`).
+
+### Implementierung (`rbbridge.c`)
+
+- `RBBRIDGE_READY_MARKERS[]` = `"NavigationGraph::Generate - Graph generated"`,
+  `"InstantiateMap took"` (Substring, ohne Zeitstempel).
+- `rbbridge_log_is_ready(buf, len)` — **rein**, host-testbar (kein Win32).
+- `world_is_ready()` — liest `exor_logs.txt` (Override `RBBRIDGE_EXOR_LOG`,
+  sonst `%USERPROFILE%`-Kandidaten), latchet einmalig; ohne Fund konservativ 0.
+- `readiness_block(hPipe, event)` — Gate für **alle** Game-Calls:
+  `get_state`, `add_resource`, `activate_mission_flow`,
+  `deactivate_mission_flow`, `creatures_difficulty`, `probe`.
+  Vor Ready → `{"event":"<x>_result","ok":false,"reason":"world_not_ready"}`
+  (graceful, KEIN Call).
+
+**Warum Log statt Memory-Flag:** der Page-Fault-Pfad (`World::GetSystem`,
+`GetPlayerAccount`) tritt beim Boot selbst auf — ein Memory-Read als
+Readiness-Probe wäre genau der Crash. Das Log-Signal kennt den Endzustand ohne
+Spielzugriff.
+
+**Thread-Entscheidung (#479-Nachtrag):** kein Vtable-Detour (der #376-Detour ist
+mit #387/#446 entfernt; `ConsoleService::Update` = Worker-Thread, für `lua_*`
+untauglich — #378). Native Executor/CommandBuffer
+(`Exor::InOrderWorldExecutor`, `EcsCommandBuffer::ExecuteCommands` 0x1DD01B0)
+bleiben Option, sind aber **nicht nötig**: das Gate allein behebt die
+Crash-Ursache. Ein Detour bräuchte den Thread-Nachweis (Regel aus #479).
