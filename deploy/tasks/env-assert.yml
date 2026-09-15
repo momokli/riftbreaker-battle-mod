@@ -52,15 +52,17 @@
 - name: "ENV-ISOLATION-GATE — per-env-Pfade vom dev-Basiswert abweichend (Issue #483, US3)"
   assert:
     that:
-      - vars[item] is defined
-      - (vars[item] | string) | length > 0
-      - (vars[item] | string) != (rift_env_dev_base[item] | string)
+      # lookup('vars', item) statt des internen `vars`-Dict (ansible-core
+      # 2.24 entfernt `vars[...]`); Semantik identisch (undefiniert -> undefined).
+      - lookup('vars', item) is defined
+      - (lookup('vars', item) | string) | length > 0
+      - (lookup('vars', item) | string) != (rift_env_dev_base[item] | string)
     fail_msg: >-
       ENV-ISOLATION-GATE (env={{ rift_env }}): '{{ item }}' erbt den
       dev-Basiswert ('{{ rift_env_dev_base[item] }}'). Der Pfad muss je Env
       explizit isoliert sein (Issue #483, US3) — sonst schreiben zwei Envs in
       denselben Ort (Cross-Env-Schreibpfad).
-    success_msg: "{{ item }} isoliert ({{ vars[item] }} != dev-Basiswert)."
+    success_msg: "{{ item }} isoliert ({{ lookup('vars', item) }} != dev-Basiswert)."
   loop:
     - website_docroot
     - website_mods_dir

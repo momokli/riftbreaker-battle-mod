@@ -11,8 +11,10 @@ Geprueft wird gegen deploy/env-schema.yml:
   1. Schema sauber: `shared`-Eintrag ohne Begruendung -> Fehler.
   2. `per_env: <var>: [envs]` — jede gelistete Env-Datei MUSS die Variable
      explizit definieren (sonst erbt sie still den dev-Wert aus host_vars).
-  3. Jede Top-Level-Variable in prod-vars.yml/test-vars.yml MUSS im Schema
-     klassifiziert sein (`per_env` oder `shared`) — sonst rot.
+  3. Jede Top-Level-Variable in ALLEN Var-Quellen (host_vars/planet/vars.yml,
+     prod-vars.yml, test-vars.yml) MUSS im Schema klassifiziert sein
+     (`per_env` oder `shared`) — sonst rot. Gerade host_vars-only-Keys sind
+     die Bug-Klasse des Issues ("was nicht in prod steht, erbt still dev").
 
 `dev` hat keine eigene Override-Datei; dev IST die Basis
 (inventory/host_vars/planet/vars.yml). Die Distinctness der per-env-Pfade
@@ -39,9 +41,6 @@ ENV_FILES = {
     "prod": os.path.join("deploy", "prod-vars.yml"),
     "test": os.path.join("deploy", "test-vars.yml"),
 }
-# Nur diese Override-Dateien werden auf "unclassified key" geprueft (dev ist
-# die Basis — host_vars deckt bewusst alle dev-Werte ab).
-OVERRIDE_ENVS = ("prod", "test")
 SCHEMA_REL = os.path.join("deploy", "env-schema.yml")
 
 TOP_KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):")
@@ -147,8 +146,10 @@ def check(repo_root, env=None):
                     % (var, ENV_FILES.get(env_name, env_name), env_name)
                 )
 
-    # 3. Jede Variable aus prod-/test-vars muss klassifiziert sein.
-    for env_name in OVERRIDE_ENVS:
+    # 3. Jeder Top-Level-Key aus ALLEN Var-Quellen muss klassifiziert sein —
+    #    auch die dev-Basis (host_vars): ein Key, der nur dort steht, wuerde
+    #    sonst still in jeder anderen Env den dev-Wert erben (Kern von #483).
+    for env_name in ENV_FILES:
         for var in keys.get(env_name, []):
             if var not in classified:
                 problems.append(

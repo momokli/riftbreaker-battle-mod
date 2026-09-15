@@ -73,3 +73,21 @@ shared:
   cargo_home: "Rust-Toolchain-Pfad des CI-Runners — Laufzeit-/Runner-Infrastruktur, kein Env-State."
   rustup_home: "Rust-Toolchain-Pfad des CI-Runners — Laufzeit-/Runner-Infrastruktur, kein Env-State."
   rbbattle_run_suffix: "Nur die Test-Instanz traegt einen Lauf-Suffix (github.run_id) — Lauf-Parameter, kein Env-Pfad/Port/Domain."
+  # --- Dev-Basis-Keys (host_vars/planet), env-uebergreifend identisch -------
+  # Diese Keys stehen NUR in host_vars, nicht in prod-/test-vars. Sie sind
+  # bewusst klassifiziert (nicht "still geerbt"): das Gate fordert fuer JEDEN
+  # host_vars-Top-Level-Key eine Klasse. Begruendung je Key unten.
+  dedicated_server_image_name: "Image-Basisname (rb-dedicated) ist ueber alle Envs gleich; der Tag kommt aus deploy_image_tag (Deploy-SHA), nicht aus der Env."
+  dedicated_server_image: "Rendert den env-unabhaengigen Tag (image_name:deploy_image_tag); Env-Trennung laeuft ueber Container-Name/Pfade, nicht den Image-Namen."
+  riftbreaker_server_image: "Alias auf dedicated_server_image — gleiche Begruendung (Tag = Deploy-SHA, kein Env-Praefix)."
+  rift_caddy_image: "Upstream-Image caddy:2 — derselbe schlanke Caddy fuer jede Env, kein Env-Zustand."
+  website_host_caddy_container: "Geteilter Host-Caddy (mellon-caddy) hostet fremde Domains — EINER pro Host, kein Env-Praefix moeglich (#322)."
+  website_host_caddyfile_path: "Pfad zum geteilten Host-Caddyfile (/home/momo/Caddyfile) — Host-Konstante, kein Env-Zustand."
+  website_host_caddyfile_owner: "Owner des geteilten Host-Caddyfiles (momo) — Host-Konstante, kein Env-Zustand."
+  website_host_caddyfile_group: "Gruppe des geteilten Host-Caddyfiles (momo) — Host-Konstante, kein Env-Zustand."
+  mods_zip_name: "Zip-Dateiname rbbattle.zip ist historisch fix (md5-Paritaet/Download-Link); Env-Trennung erfolgt ueber das abweichende mods_zip_dest."
+  rift_caddy_site_root: "Docroot IM Caddy-Container (/srv/site) — container-interner Pfad, unabhaengig vom Host-Mount je Env."
+  server_control_port: "Nur der dev-Host-Agent bindet 8092; prod rendert die /server/*-Route nicht (#463) — kein Env-Konflikt."
+  riftbreaker_server_campaign: "Bis #476 gemeinsam (Game-Settings koppeln heute dev/prod) — Kopplung ist bewusst/dokumentiert, kein stilles Erben."
+  riftbreaker_server_mission: "Bis #476 gemeinsam (Game-Settings koppeln heute dev/prod) — wie campaign."
+  riftbreaker_server_difficulty: "Bis #476 gemeinsam (Game-Settings koppeln heute dev/prod) — wie campaign."

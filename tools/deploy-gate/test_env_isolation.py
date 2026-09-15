@@ -120,6 +120,16 @@ class CheckTest(unittest.TestCase):
         problems = cei.check(repo.root)
         self.assertTrue(any("website_docroot" in p and "test" in p for p in problems), problems)
 
+    def test_unclassified_host_vars_only_variable_is_reported(self):
+        # Negativ-Fall (Issue #483): ein Key, der NUR in der dev-Basis
+        # (host_vars) steht, muss ebenso rot werden — sonst erbt ihn jede
+        # andere Env still (genau die Bug-Klasse des Issues).
+        host = HOST_VARS + "dev_only_thing: 1\n"
+        repo = FixtureRepo(host=host)
+        self.addCleanup(repo.cleanup)
+        problems = cei.check(repo.root)
+        self.assertTrue(any("dev_only_thing" in p for p in problems), problems)
+
     def test_unclassified_new_variable_is_reported(self):
         prod = PROD_VARS + "brand_new_thing: 1\n"
         repo = FixtureRepo(prod=prod)
