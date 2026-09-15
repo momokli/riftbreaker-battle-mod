@@ -232,9 +232,11 @@
                 border-color: #383c42;
                 cursor: default;
             }
+            /* Read-only stays muted, but the focus indicator must stay visible
+               (WCAG 2.4.7) — dimmed instead of removed. */
             input[readonly]:focus {
-                border-color: #383c42;
-                box-shadow: none;
+                border-color: var(--dim);
+                box-shadow: 0 0 0 1px var(--dim);
             }
 
             button {
@@ -345,6 +347,7 @@
 
             .flow-readouts {
                 display: flex;
+                flex-wrap: wrap;
                 gap: 16px;
                 background: var(--base);
                 padding: 6px 8px;
@@ -356,6 +359,7 @@
                 display: flex;
                 align-items: baseline;
                 gap: 6px;
+                min-width: 0;
             }
             .prop-label {
                 font-size: 11px;
@@ -370,6 +374,7 @@
                 font-weight: 600;
                 color: #ffffff;
                 font-variant-numeric: tabular-nums;
+                overflow-wrap: anywhere;
             }
 
             .flow-action-row {
@@ -379,7 +384,15 @@
                 align-items: center;
             }
 
-            .flow-action-row input {
+            /* Action rows: every control keeps its natural width; only the
+               path/ID inputs opt into growing (.flow-grow). */
+            .flow-action-row input,
+            .flow-action-row button {
+                flex: 0 0 auto;
+            }
+
+            .flow-action-row input.flow-grow {
+                flex: 1 1 auto;
                 min-width: 0;
             }
 
@@ -569,8 +582,7 @@
                             <div class="flow-action-row">
                                 <input
                                     id="flow_logic"
-                                    class="mono"
-                                    style="flex: 1 1 auto;"
+                                    class="mono flow-grow"
                                     value="logic/dom/attack_level_1_entry.logic"
                                     aria-label="Mission flow logic entry path"
                                     title="Mission logic entry path"
@@ -599,8 +611,7 @@
                             <div class="flow-action-row">
                                 <input
                                     id="flow_stop"
-                                    class="mono"
-                                    style="flex: 1 1 auto;"
+                                    class="mono flow-grow"
                                     placeholder="flow-id (empty = most recently started)"
                                     aria-label="Flow ID to stop"
                                 />
