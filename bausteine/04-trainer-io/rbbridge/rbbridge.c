@@ -460,6 +460,62 @@ static void dbg(const char *fmt, ...)
 #endif /* !RBBRIDGE_HOSTTEST */
 }
 
+/* ------------------------------------------------------------------ */
+/* json_get_uint — reine Zeichenketten-Logik, auch im Host-Test sichtbar */
+/* ------------------------------------------------------------------ */
+
+/*
+ * json_get_uint: findet "key":<digits> oder "key":"<digits>".
+ * Rueckgabe 1 = geparst (out = Ziffernfolge), 0 = Key nicht vorhanden,
+ * -1 = Key vorhanden, aber kein nicht-negativer Integer (ungueltig).
+ * Fuer den optionalen restart_map-Seed (#423): fehlend ist ok, Unsinn nicht.
+ * Bewusst AUSSERHALB des !RBBRIDGE_HOSTTEST-Blocks: reine Funktion ohne
+ * Win32-Bezug, damit der Host-Test sie direkt pruefen kann (Review F3).
+ */
+static int json_get_uint(const char *json, const char *key,
+                         char *out, size_t out_sz)
+{
+    if (!json || !key || !out || out_sz == 0)
+        return 0;
+
+    size_t key_len = strlen(key);
+    const char *p = json;
+
+    while ((p = strstr(p, key)) != NULL) {
+        if (p != json && p[-1] == '"' && p[key_len] == '"') {
+            const char *q = p + key_len + 1;
+            while (*q == ' ' || *q == '\t')
+                q++;
+            if (*q != ':') {
+                /* "key" gefunden, aber es ist ein String-Wert (kein Objekt-
+                 * Schluessel) -> Suche fortsetzen statt sofort invalid.
+                 * F3 (#423): vorher return -1 -> falsches invalid_seed. */
+                p += key_len;
+                continue;
+            }
+            q++;
+            while (*q == ' ' || *q == '\t')
+                q++;
+            int quoted = 0;
+            if (*q == '"') { /* toleriere "12" */
+                quoted = 1;
+                q++;
+            }
+            size_t n = 0;
+            while (*q >= '0' && *q <= '9' && n + 1 < out_sz)
+                out[n++] = *q++;
+            out[n] = '\0';
+            if (n == 0)
+                return -1;
+            if (quoted && *q != '"')
+                return -1;
+            return 1;
+        }
+        p += key_len;
+    }
+    return 0;
+}
+
 #ifndef RBBRIDGE_HOSTTEST
 
 /* ------------------------------------------------------------------ */
@@ -517,51 +573,6 @@ static int json_get_string(const char *json, const char *key,
             }
             out[n] = '\0';
             return *q == '"'; /* sauber geschlossen? */
-        }
-        p += key_len;
-    }
-    return 0;
-}
-
-/*
- * json_get_uint: findet "key":<digits> oder "key":"<digits>".
- * Rueckgabe 1 = geparst (out = Ziffernfolge), 0 = Key nicht vorhanden,
- * -1 = Key vorhanden, aber kein nicht-negativer Integer (ungueltig).
- * Fuer den optionalen restart_map-Seed (#423): fehlend ist ok, Unsinn nicht.
- */
-static int json_get_uint(const char *json, const char *key,
-                         char *out, size_t out_sz)
-{
-    if (!json || !key || !out || out_sz == 0)
-        return 0;
-
-    size_t key_len = strlen(key);
-    const char *p = json;
-
-    while ((p = strstr(p, key)) != NULL) {
-        if (p != json && p[-1] == '"' && p[key_len] == '"') {
-            const char *q = p + key_len + 1;
-            while (*q == ' ' || *q == '\t')
-                q++;
-            if (*q != ':')
-                return -1;
-            q++;
-            while (*q == ' ' || *q == '\t')
-                q++;
-            int quoted = 0;
-            if (*q == '"') { /* toleriere "12" */
-                quoted = 1;
-                q++;
-            }
-            size_t n = 0;
-            while (*q >= '0' && *q <= '9' && n + 1 < out_sz)
-                out[n++] = *q++;
-            out[n] = '\0';
-            if (n == 0)
-                return -1;
-            if (quoted && *q != '"')
-                return -1;
-            return 1;
         }
         p += key_len;
     }

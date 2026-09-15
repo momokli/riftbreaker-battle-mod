@@ -361,6 +361,24 @@ class NativeCommandTest(unittest.TestCase):
         self.assertEqual(relay.exec_line_payload('rb_wave 3', 7),
                          {'cmd': 'exec', 'command': 'rb_wave 3', 'cmd_id': 7})
 
+    def test_whitespace_normalization_matches_bridge(self):
+        # F4 (#423): Relay strippt, die Bridge normalisiert identisch
+        # (pipe_bridge.native_cmd_payload trimmt fuehrend/abschliessend).
+        # "restart_map " darf ueber BEIDE Pfade nativ geroutet werden.
+        self.assertEqual(relay.native_pipe_payload('restart_map '),
+                         {'cmd': 'restart_map'})
+        self.assertEqual(relay.native_pipe_payload('  restart_map  '),
+                         {'cmd': 'restart_map'})
+        self.assertEqual(relay.native_pipe_payload('  restart_map 4242  '),
+                         {'cmd': 'restart_map', 'seed': 4242})
+        self.assertEqual(relay.native_pipe_payload('restart_map\t99'),
+                         {'cmd': 'restart_map', 'seed': 99})
+        self.assertEqual(relay.exec_line_payload(' restart_map 5 ', 3),
+                         {'cmd': 'restart_map', 'seed': 5})
+        # Unsinn bleibt exec (beide Pfade).
+        self.assertIsNone(relay.native_pipe_payload('restart_map 12x'))
+        self.assertIsNone(relay.native_pipe_payload('restart_mapfoo'))
+
     def test_result_match_command_uses_echoed_name(self):
         # rbbridge echot bei nativ nur den Kommandonamen, nicht den Seed.
         self.assertEqual(relay.result_match_command('restart_map'), 'restart_map')

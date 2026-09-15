@@ -470,27 +470,38 @@ static int pipe_wait_line(HANDLE h, const char *event, const char *command,
 static int native_cmd_payload(const char *command, char *payload_out,
                               size_t payload_sz)
 {
-    const char *p = command;
+    const char *p;
     unsigned long long seed = 0;
     int digits = 0;
 
-    if (!command || strncmp(command, "restart_map", 11) != 0)
+    if (!command)
+        return 0;
+    /* F4 (#423): dieselbe Normalisierung wie relay.native_pipe_payload()
+     * (command.strip()) — fuehrenden/abschliessenden Whitespace ignorieren,
+     * damit "restart_map " ueber beide Pfade identisch nativ geroutet wird. */
+    p = command;
+    while (*p == ' ' || *p == '\t')
+        p++;
+    if (strncmp(p, "restart_map", 11) != 0)
         return 0;
     p += 11;
-    if (*p == '\0') {
-        snprintf(payload_out, payload_sz, "{\"cmd\":\"restart_map\"}\n");
-        return 1;
-    }
-    if (*p != ' ')
-        return 0; /* unbekanntes Kommando mit gleichem Praefix -> exec */
-    p++;
+    if (*p != '\0' && *p != ' ' && *p != '\t')
+        return 0; /* z. B. "restart_mapfoo" -> exec */
+    while (*p == ' ' || *p == '\t')
+        p++;
     while (*p >= '0' && *p <= '9' && digits < 10) {
         seed = seed * 10ull + (unsigned long long)(*p - '0');
         p++;
         digits++;
     }
-    if (digits == 0 || *p != '\0')
+    while (*p == ' ' || *p == '\t')
+        p++;
+    if (*p != '\0')
         return 0; /* kein sauberer Seed -> exec-Pfad (rbbridge: invalid_seed) */
+    if (digits == 0) {
+        snprintf(payload_out, payload_sz, "{\"cmd\":\"restart_map\"}\n");
+        return 1;
+    }
     snprintf(payload_out, payload_sz, "{\"cmd\":\"restart_map\",\"seed\":%llu}\n",
              seed);
     return 1;

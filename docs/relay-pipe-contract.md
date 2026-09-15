@@ -96,6 +96,14 @@ sie natives Engine-Verhalten ausloesen (kein Lua-Mod-Command). Aktuell:
   `restart_map 4242` in den Antwort-Timeout.
 - Die `pipe_bridge` (HTTP→Pipe) macht dieselbe Abbildung
   (`native_cmd_payload()`) und wartet auf `restart_map_result`.
+- **Normalisierung (F4 #423):** beide Pfade trimmen fuehrenden/abschliessenden
+  Whitespace (`relay.native_pipe_payload()` via `command.strip()`,
+  `pipe_bridge.native_cmd_payload()` via Space/Tab-Trim) — `"restart_map "`
+  wird damit ueber Relay **und** Bridge identisch nativ geroutet, nicht einmal
+  nativ und einmal `exec`.
+- **Seed-Parsing (F3 #423):** `rbbridge.json_get_uint()` setzt die Suche fort,
+  wenn `"seed"` nur als String-Wert auftaucht (kein `:` dahinter) — kein
+  vorschnelles `invalid_seed`.
 - `ok:true` ist ein **Transport-/Enqueue-Ack** (Kommando auf dem Game-Thread
   eingeplant), kein Beweis, dass die Map sichtbar neu generiert wurde — der
   Sichtbeweis ist der Player-Test (#423, OFFEN).

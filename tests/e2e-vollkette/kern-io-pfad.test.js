@@ -277,6 +277,19 @@ test('Native restart_map ist im Pfad verdrahtet (statisch)', () => {
   assert.ok(b.includes('restart_map_result'),
     'pipe_bridge: wartet auf restart_map_result (nicht exec_result)');
 
+  // F4 (#423): die Bridge muss dieselbe Whitespace-Normalisierung wie
+  // relay.native_pipe_payload() (command.strip()) anwenden — fuehrenden UND
+  // abschliessenden Whitespace tolerieren. Sonst routet "restart_map " hier
+  // als exec, waehrend der Relay es nativ schickt (divergenter Pfad).
+  const nativeBody = b.slice(
+    b.indexOf('static int native_cmd_payload'),
+    b.indexOf('static int pipe_exec_one', b.indexOf('static int native_cmd_payload')));
+  assert.ok(nativeBody.includes("while (*p == ' ' || *p == '\\t')"),
+    'pipe_bridge: Whitespace-Trim (Space/Tab) wie relay (F4)');
+  assert.ok(nativeBody.includes('normalisierung') ||
+            nativeBody.includes('Normalisierung'),
+    'pipe_bridge: F4-Normalisierung dokumentiert');
+
   const h = fs.readFileSync(CONTRACT_HTML, 'utf8');
   assert.ok(h.includes('re-roll map'), 'cockpit: Button "re-roll map"');
   assert.ok(h.includes('restart_map'), 'cockpit: schickt restart_map');
