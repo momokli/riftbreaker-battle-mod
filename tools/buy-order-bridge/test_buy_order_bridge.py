@@ -43,6 +43,12 @@ class ParseTests(unittest.TestCase):
             {"world": "A", "amount": 10, "resource": "carbonium", "item": "boss"},
         )
 
+    def test_default_log_paths(self):
+        paths = bridge.default_log_paths("/data/.wine", "steamuser")
+        self.assertEqual(len(paths), 2)
+        self.assertTrue(all(p.endswith("exor_logs.txt") for p in paths))
+        self.assertTrue(all("steamuser" in p for p in paths))
+
 
 if __name__ == "__main__":
     unittest.main()
