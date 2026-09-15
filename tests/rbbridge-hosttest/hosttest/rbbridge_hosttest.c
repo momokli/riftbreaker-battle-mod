@@ -51,6 +51,10 @@ static void check(int cond, const char *msg)
 #define TEXT_VSIZE  0x800
 
 #define SIG_OFF     0x1100 /* ExecuteCommand-Signatur in .text        */
+#define DGET_SIG_OFF 0x1180 /* CampaignService difficulty-Get-Signatur  */
+#define DSET_SIG_OFF 0x11A0 /* CampaignService difficulty-Set-Signatur  */
+#define DINC_SIG_OFF 0x11C0 /* CampaignService difficulty-Inc-Signatur  */
+#define DDEC_SIG_OFF 0x11E0 /* CampaignService difficulty-Dec-Signatur  */
 #define ACT_SIG_OFF 0x1300 /* ActivateMissionFlow-Signatur in .text   */
 #define DEACT_SIG_OFF 0x1340 /* DeactivateMissionFlow-Signatur (#389)  */
 #define NAME_OFF    0x1400 /* RTTI-Namensstring                       */
@@ -100,6 +104,14 @@ static unsigned char *build_image(int with_sig, int with_rtti, int valid_col,
 
     if (with_sig) {
         memcpy(img + SIG_OFF, RBBRIDGE_EXEC_SIG, sizeof(RBBRIDGE_EXEC_SIG));
+        memcpy(img + DGET_SIG_OFF, RBBRIDGE_DIFF_GET_SIG,
+               sizeof(RBBRIDGE_DIFF_GET_SIG));
+        memcpy(img + DSET_SIG_OFF, RBBRIDGE_DIFF_SET_SIG,
+               sizeof(RBBRIDGE_DIFF_SET_SIG));
+        memcpy(img + DINC_SIG_OFF, RBBRIDGE_DIFF_INC_SIG,
+               sizeof(RBBRIDGE_DIFF_INC_SIG));
+        memcpy(img + DDEC_SIG_OFF, RBBRIDGE_DIFF_DEC_SIG,
+               sizeof(RBBRIDGE_DIFF_DEC_SIG));
         memcpy(img + ACT_SIG_OFF, RBBRIDGE_ACTIVATE_SIG,
                sizeof(RBBRIDGE_ACTIVATE_SIG));
         memcpy(img + DEACT_SIG_OFF, RBBRIDGE_DEACTIVATE_SIG,
@@ -265,6 +277,90 @@ int main(void)
               "Deactivate-AOB: E8-Opcode bleibt Pflicht");
         free(img7);
     }
+
+    /* -------------------------------------------------------------- */
+    /* CampaignService-Difficulty-AOBs (Issue #388)                    */
+    /* -------------------------------------------------------------- */
+    ht_set_module(img, IMG_SIZE);
+    check(scan_bytes(img + TEXT_RVA, TEXT_VSIZE, RBBRIDGE_DIFF_GET_SIG,
+                     sizeof(RBBRIDGE_DIFF_GET_SIG)) == img + DGET_SIG_OFF,
+          "difficulty-Get-AOB im .text gefunden (#388)");
+    check(scan_bytes(img + TEXT_RVA, TEXT_VSIZE, RBBRIDGE_DIFF_SET_SIG,
+                     sizeof(RBBRIDGE_DIFF_SET_SIG)) == img + DSET_SIG_OFF,
+          "difficulty-Set-AOB im .text gefunden (#388)");
+    check(scan_bytes(img + TEXT_RVA, TEXT_VSIZE, RBBRIDGE_DIFF_INC_SIG,
+                     sizeof(RBBRIDGE_DIFF_INC_SIG)) == img + DINC_SIG_OFF,
+          "difficulty-Increase-AOB im .text gefunden (#388)");
+    check(scan_bytes(img + TEXT_RVA, TEXT_VSIZE, RBBRIDGE_DIFF_DEC_SIG,
+                     sizeof(RBBRIDGE_DIFF_DEC_SIG)) == img + DDEC_SIG_OFF,
+          "difficulty-Decrease-AOB im .text gefunden (#388)");
+    /* Get (13 B, endet auf C3) darf NICHT in der Decrease-Funktion
+     * aufschlagen: Decrease hat dieselben ersten 12 Bytes, aber statt C3
+     * geht es mit F3 0F 5C C1 weiter. */
+    {
+        unsigned char *imgs = build_image(1, 1, 1, 1, 1);
+        memcpy(imgs + DGET_SIG_OFF, RBBRIDGE_DIFF_DEC_SIG,
+               sizeof(RBBRIDGE_DIFF_DEC_SIG));
+        memset(imgs + DGET_SIG_OFF + sizeof(RBBRIDGE_DIFF_DEC_SIG), 0,
+               sizeof(RBBRIDGE_DIFF_GET_SIG));
+        ht_set_module(imgs, IMG_SIZE);
+        check(scan_bytes(imgs + TEXT_RVA, TEXT_VSIZE, RBBRIDGE_DIFF_GET_SIG,
+                         sizeof(RBBRIDGE_DIFF_GET_SIG)) == NULL,
+              "difficulty-Get-AOB: kein Treffer im Decrease-Prefix");
+        free(imgs);
+    }
+    {
+        unsigned char *img4 = build_image(1, 1, 1, 1, 1);
+        img4[DSET_SIG_OFF + 5] ^= 0xFF; /* Prolog-Byte abweichend */
+        ht_set_module(img4, IMG_SIZE);
+        check(scan_bytes(img4 + TEXT_RVA, TEXT_VSIZE, RBBRIDGE_DIFF_SET_SIG,
+                         sizeof(RBBRIDGE_DIFF_SET_SIG)) == NULL,
+              "difficulty-Set-AOB: abweichendes Byte -> kein Treffer");
+        free(img4);
+    }
+
+    /* -------------------------------------------------------------- */
+    /* diff_decode (Layout-Offsets aus dem Funktionskoerper)           */
+    /* -------------------------------------------------------------- */
+    /* Alle vier Prologe muessen denselben this-deref (0x10) und dasselbe
+     * Feld-Offset (0x584) dekodieren. */
+    {
+        uint32_t td = 0;
+        int32_t fo = 0;
+        check(diff_decode(RBBRIDGE_DIFF_GET_SIG, &td, &fo) && td == 0x10 &&
+                  fo == 0x584,
+              "diff_decode: Get -> this_deref 0x10 / field 0x584");
+        check(diff_decode(RBBRIDGE_DIFF_SET_SIG, &td, &fo) && td == 0x10 &&
+                  fo == 0x584,
+              "diff_decode: Set -> this_deref 0x10 / field 0x584");
+        check(diff_decode(RBBRIDGE_DIFF_INC_SIG, &td, &fo) && td == 0x10 &&
+                  fo == 0x584,
+              "diff_decode: Increase -> this_deref 0x10 / field 0x584");
+        check(diff_decode(RBBRIDGE_DIFF_DEC_SIG, &td, &fo) && td == 0x10 &&
+                  fo == 0x584,
+              "diff_decode: Decrease -> this_deref 0x10 / field 0x584");
+
+        /* Ein geaendertes Layout aendert die Bytes -> Decoder lehnt ab
+         * (statt ein falsches Offset zu liefern). */
+        unsigned char body[sizeof(RBBRIDGE_DIFF_GET_SIG)];
+        memcpy(body, RBBRIDGE_DIFF_GET_SIG, sizeof(body));
+        body[2] = 0x42; /* nicht mehr `mov rax,[rcx+disp8]` */
+        check(!diff_decode(body, &td, &fo),
+              "diff_decode: fremder Prolog -> 0");
+        memcpy(body, RBBRIDGE_DIFF_GET_SIG, sizeof(body));
+        body[6] = 0x99; /* unbekannter SSE-Opcode */
+        check(!diff_decode(body, &td, &fo),
+              "diff_decode: unbekannter Opcode -> 0");
+        memcpy(body, RBBRIDGE_DIFF_GET_SIG, sizeof(body));
+        body[7] = 0x90; /* kein movss-ModRM */
+        check(!diff_decode(body, &td, &fo),
+              "diff_decode: unbekanntes ModRM -> 0");
+        check(!diff_decode(NULL, &td, &fo) &&
+                  !diff_decode(RBBRIDGE_DIFF_GET_SIG, NULL, &fo) &&
+                  !diff_decode(RBBRIDGE_DIFF_GET_SIG, &td, NULL),
+              "diff_decode: NULL-Argumente -> 0");
+    }
+
 
     /* -------------------------------------------------------------- */
     /* resolve_console_vftable                                         */

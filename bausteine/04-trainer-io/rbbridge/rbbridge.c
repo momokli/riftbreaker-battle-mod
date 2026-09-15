@@ -69,6 +69,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 typedef int BOOL;
@@ -878,6 +879,106 @@ static const unsigned char RBBRIDGE_DEACTIVATE_SIG_MASK[] = {
 /* #389: Riftbreaker::MissionService::DeactivateMissionFlow(UtfString const&)
  * RVA 0xF960E0 (planet 2026-09-15, publics addr=0001:16339168 -> 0x1000+).
  * NUR Verifikations-Notiz: aufgeloest wird per RBBRIDGE_DEACTIVATE_SIG. */
+
+/* ------------------------------------------------------------------ */
+/* CampaignService-Difficulty (Issue #388, Build 2.0.58485)            */
+/*                                                                    */
+/* `Riftbreaker::CampaignService` haelt die Kreaturen-Basis-Difficulty   */
+/* dieses Runs. Die Methoden sind NICHT virtuell (PDB: QEAA/Public     */
+/* non-virtual) - sie werden also direkt aufgerufen, nicht ueber die    */
+/* vftable. Die vftable (RVA 0x2E9C340) dient nur der Instanz-Aufloesung */
+/* (dieselbe QWORD-Scan-Technik wie bei Player-/MissionService).        */
+/*                                                                    */
+/* Layout (Disasm aller vier Funktionen, planet 2026-09-15):            */
+/*   CampaignService + 0x10 -> ptr; dieses Ziel-Objekt haelt            */
+/*   float creatures_base_difficulty bei + 0x584.                       */
+/*                                                                    */
+/* Aufrufkonvention (MSVC x64): this=RCX, float-Argument in XMM1        */
+/* (Integer-Slot 0 = this belegt RCX; FP-Args zaehlen unabhaengig).      */
+/* Rueckgabe float in XMM0. Reines C++ -> thread-agnostisch (#378).     */
+/*                                                                    */
+/* Hinweis zum Issue-Text: eine Methode `RevertCreaturesBaseDifficulty` */
+/* existiert im Binary NICHT. Es gibt stattdessen                        */
+/* `DecreaseCreaturesBaseDifficulty(float)` (Delta) und                   */
+/* `SetCreaturesBaseDifficulty(float)` (absolut). Beide sind abgebildet. */
+/* ------------------------------------------------------------------ */
+
+/* Float-Konstante +0x584 steht in allen vier Funktionen; die Prologe sind
+ * im .text eindeutig (Gegenprobe planet 2026-09-15: je genau 1 Treffer).
+ * Die RVA ist NUR Verifikations-Notiz - die Laufzeitadresse kommt aus dem
+ * AOB-Scan (KEINE feste Adresse). */
+
+/* GetCreaturesBaseDifficulty() -> float  (RVA 0x100B9E0)
+ *   48 8B 41 10              mov   rax,[rcx+0x10]
+ *   F3 0F 10 80 84 05 00 00  movss xmm0,[rax+0x584]
+ *   C3                       ret */
+static const unsigned char RBBRIDGE_DIFF_GET_SIG[] = {
+    0x48, 0x8B, 0x41, 0x10, 0xF3, 0x0F, 0x10, 0x80, 0x84, 0x05,
+    0x00, 0x00, 0xC3
+};
+
+/* SetCreaturesBaseDifficulty(float)  (RVA 0x101F100)
+ *   48 8B 41 10              mov   rax,[rcx+0x10]
+ *   F3 0F 11 88 84 05 00 00  movss [rax+0x584],xmm1
+ *   C3                       ret */
+static const unsigned char RBBRIDGE_DIFF_SET_SIG[] = {
+    0x48, 0x8B, 0x41, 0x10, 0xF3, 0x0F, 0x11, 0x88, 0x84, 0x05,
+    0x00, 0x00, 0xC3
+};
+
+/* IncreaseCreaturesBaseDifficulty(float)  (RVA 0x10118B0)
+ *   48 8B 41 10              mov   rax,[rcx+0x10]
+ *   F3 0F 58 88 84 05 00 00  addss xmm1,[rax+0x584]
+ *   F3 0F 11 88 84 05 00 00  movss [rax+0x584],xmm1
+ *   C3                       ret */
+static const unsigned char RBBRIDGE_DIFF_INC_SIG[] = {
+    0x48, 0x8B, 0x41, 0x10, 0xF3, 0x0F, 0x58, 0x88, 0x84, 0x05,
+    0x00, 0x00, 0xF3, 0x0F, 0x11, 0x88, 0x84, 0x05, 0x00, 0x00,
+    0xC3
+};
+
+/* DecreaseCreaturesBaseDifficulty(float)  (RVA 0x1008180)
+ *   48 8B 41 10              mov   rax,[rcx+0x10]
+ *   F3 0F 10 80 84 05 00 00  movss xmm0,[rax+0x584]
+ *   F3 0F 5C C1              subss xmm0,xmm1
+ *   F3 0F 11 80 84 05 00 00  movss [rax+0x584],xmm0
+ *   C3                       ret */
+static const unsigned char RBBRIDGE_DIFF_DEC_SIG[] = {
+    0x48, 0x8B, 0x41, 0x10, 0xF3, 0x0F, 0x10, 0x80, 0x84, 0x05,
+    0x00, 0x00, 0xF3, 0x0F, 0x5C, 0xC1, 0xF3, 0x0F, 0x11, 0x80,
+    0x84, 0x05, 0x00, 0x00, 0xC3
+};
+
+#define RBBRIDGE_RVA_CAMPAIGNSERVICE_VFTABLE 0x2e9c340u /* ??_7CampaignService@Riftbreaker@@6B@ */
+
+/* Zerlegt den Funktionskoerper einer der vier Tiny-Difficulty-Funktionen in
+ * die beiden Layout-Offsets:
+ *   48 8B 41 <disp8>                mov   rax,[rcx+disp8]   ; this_deref
+ *   F3 0F <op> <modrm> <disp32>     movss/addss [rax+disp32] / xmm..,[rax+disp32]
+ *   C3                              ret
+ * Rueckgabe 1 = erwartete Form. Damit sind die Layout-Offsets NICHT fest
+ * verdrahtet, sondern stammen aus dem per AOB aufgeloesten Funktionskoerper
+ * (build-robust: ein geaendertes Layout aendert die Bytes und wird erkannt).
+ * Steht bewusst AUSSERHALB des #ifndef-RBBRIDGE_HOSTTEST-Blocks, damit der
+ * Host-Test den Decoder direkt pruefen kann (Review PR #433). */
+static int diff_decode(const unsigned char *fn, uint32_t *this_deref,
+                       int32_t *field_off)
+{
+    if (!fn || !this_deref || !field_off)
+        return 0;
+    if (fn[0] != 0x48 || fn[1] != 0x8B || fn[2] != 0x41)
+        return 0; /* mov rax,[rcx+disp8] */
+    if (fn[4] != 0xF3 || fn[5] != 0x0F)
+        return 0;
+    /* 0x10 movss-load, 0x11 movss-store, 0x58 addss, 0x5C subss */
+    if (fn[6] != 0x10 && fn[6] != 0x11 && fn[6] != 0x58 && fn[6] != 0x5C)
+        return 0;
+    if (fn[7] != 0x80 && fn[7] != 0x88)
+        return 0;
+    *this_deref = (uint32_t)fn[3];
+    memcpy(field_off, fn + 8, sizeof(*field_off));
+    return 1;
+}
 
 /* x64-Aufrufkonvention: this=RCX, cmd=RDX - __fastcall ist auf x64 der
  * Standard (das Schluesselwort dokumentiert die Konvention nur). */
@@ -2024,7 +2125,7 @@ static void dispatch_activate_mission_flow(HANDLE hPipe, const char *logic,
         return;
     }
 
-    /* Argumente: name="" (leer, wie der spieleigene Wave-Spawn), logicFile, mode. */
+    /* Argumente: name="" (wie dom_mananger:SpawnWave), logicFile, mode. */
     build_utfstring(base, "", u_name);
     build_utfstring(base, logic, u_logic);
     build_utfstring(base, (mode && mode[0]) ? mode : "default", u_mode);
@@ -2087,6 +2188,323 @@ static int mission_flow_active(const unsigned char *base, const char *flow)
     r = is_active((void *)ms, (const void *)u);
     destroy_utfstring(base, u);
     return r ? 1 : 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* CampaignService::*CreaturesBaseDifficulty (Issue #388)              */
+/*                                                                    */
+/* Vier native C++-Methoden (KEIN Lua, KEIN Console):                  */
+/*   GetCreaturesBaseDifficulty()          -> float                    */
+/*   SetCreaturesBaseDifficulty(float)     -> absolut setzen           */
+/*   Increase-/DecreaseCreaturesBaseDifficulty(float) -> Delta         */
+/* Alle vier werden per AOB-Signatur aufgeloest (RBBRIDGE_DIFF_*_SIG,  */
+/* planet-verifiziert eindeutig) - KEINE feste Adresse. Die            */
+/* CampaignService-Instanz kommt aus dem vftable-QWORD-Scan            */
+/* (RVA 0x2E9C340). Die Layout-Offsets (this-deref + Feld-Offset)       */
+/* werden aus dem AOB-aufgeloesten Funktionskoerper DEKODIERT, nicht    */
+/* hart verdrahtet.                                                    */
+/*                                                                    */
+/* Aufruf-Strategie: die Methoden werden NICHT indirekt aufgerufen.    */
+/* Live-Befund (#388, planet): ein `call` mit scan-abgeleitetem `this`  */
+/* aus dem Pipe-Thread hat den Pipe-Thread gefaultet (Unhandled page    */
+/* fault, Stack-Guard) und die Bridge bis zum Restart lahmgelegt. Der   */
+/* Effekt der Methoden (movss-Load/Store auf [*[this+this_deref]+off])   */
+/* wird deshalb als VirtualQuery-geprueter Speicher-Zugriff ausgefuehrt  */
+/* - identische Semantik, kein Fremdspeicher-Zugriff.                   */
+/*                                                                    */
+/* Thread-Modell (#378): reine Speicher-Ops -> thread-agnostisch,       */
+/* laeuft auf dem Pipe-Thread. Kein lua_* beteiligt.                    */
+/* ------------------------------------------------------------------ */
+
+#ifdef RBBRIDGE_HOSTTEST
+#define RBBRIDGE_NOINLINE
+#else
+#define RBBRIDGE_NOINLINE __attribute__((noinline))
+#endif
+
+typedef struct {
+    int valid;
+    const unsigned char *module_base;
+    size_t module_size;
+    unsigned char *cs; /* CampaignService-Instanz */
+    uint32_t this_deref;
+    int32_t field_off;
+    /* Fundstellen der vier Funktionen: erlaubt die Re-Validierung der
+     * Funktionskoerper (Layout-Hotpatch bei gleicher Modulbasis) ohne
+     * kompletten Neu-Scan (Review-Hinweis PR #433). */
+    const unsigned char *fget, *fset, *finc, *fdec;
+} campaign_diff_cache_t;
+
+static campaign_diff_cache_t g_campdiff_cache;
+
+/* Loest den kompletten Pfad auf: vier AOB-Signaturen -> Offsets aus dem
+ * Funktionskoerper -> CampaignService-Instanz per vftable-Scan. Alles rein
+ * lesend (VirtualQuery-geprueft). Rueckgabe 1 = auflösbar, 0 = graceful. */
+static RBBRIDGE_NOINLINE int resolve_campaign_diff(const unsigned char *base,
+                                                   size_t size,
+                                                   unsigned char **out_cs,
+                                                   uint32_t *out_this_deref,
+                                                   int32_t *out_field_off)
+{
+    const unsigned char *fget, *fset, *finc, *fdec;
+    uint32_t td_get = 0, td_set = 0, td_inc = 0, td_dec = 0;
+    int32_t off_get = 0, off_set = 0, off_inc = 0, off_dec = 0;
+    unsigned char *cs;
+    uint64_t inner = 0;
+
+    if (!base || size == 0 || !out_cs || !out_this_deref || !out_field_off)
+        return 0;
+
+    /* Cache-Treffer nur, wenn Modulbasis/-groesse, Instanz-vftable UND die
+     * vier Funktionskoerper unveraendert sind. Letzteres faengt einen
+     * Layout-Hotpatch (gleiche Modulbasis, geaenderte Prologe) ab, ohne den
+     * teuren vollen AOB-Scan zu wiederholen. */
+    if (g_campdiff_cache.valid && g_campdiff_cache.module_base == base &&
+        g_campdiff_cache.module_size == size && g_campdiff_cache.cs &&
+        g_campdiff_cache.fget && g_campdiff_cache.fset &&
+        g_campdiff_cache.finc && g_campdiff_cache.fdec &&
+        memcmp(g_campdiff_cache.fget, RBBRIDGE_DIFF_GET_SIG,
+               sizeof(RBBRIDGE_DIFF_GET_SIG)) == 0 &&
+        memcmp(g_campdiff_cache.fset, RBBRIDGE_DIFF_SET_SIG,
+               sizeof(RBBRIDGE_DIFF_SET_SIG)) == 0 &&
+        memcmp(g_campdiff_cache.finc, RBBRIDGE_DIFF_INC_SIG,
+               sizeof(RBBRIDGE_DIFF_INC_SIG)) == 0 &&
+        memcmp(g_campdiff_cache.fdec, RBBRIDGE_DIFF_DEC_SIG,
+               sizeof(RBBRIDGE_DIFF_DEC_SIG)) == 0 &&
+        safe_read_u64(g_campdiff_cache.cs, &inner) &&
+        inner == (uint64_t)(uintptr_t)(base +
+                                       RBBRIDGE_RVA_CAMPAIGNSERVICE_VFTABLE)) {
+        *out_cs = g_campdiff_cache.cs;
+        *out_this_deref = g_campdiff_cache.this_deref;
+        *out_field_off = g_campdiff_cache.field_off;
+        return 1;
+    }
+    g_campdiff_cache.valid = 0;
+
+    fget = scan_bytes(base, size, RBBRIDGE_DIFF_GET_SIG,
+                      sizeof(RBBRIDGE_DIFF_GET_SIG));
+    fset = scan_bytes(base, size, RBBRIDGE_DIFF_SET_SIG,
+                      sizeof(RBBRIDGE_DIFF_SET_SIG));
+    finc = scan_bytes(base, size, RBBRIDGE_DIFF_INC_SIG,
+                      sizeof(RBBRIDGE_DIFF_INC_SIG));
+    fdec = scan_bytes(base, size, RBBRIDGE_DIFF_DEC_SIG,
+                      sizeof(RBBRIDGE_DIFF_DEC_SIG));
+    if (!fget || !fset || !finc || !fdec)
+        return 0;
+
+    if (!diff_decode(fget, &td_get, &off_get) ||
+        !diff_decode(fset, &td_set, &off_set) ||
+        !diff_decode(finc, &td_inc, &off_inc) ||
+        !diff_decode(fdec, &td_dec, &off_dec))
+        return 0;
+
+    /* Alle vier Funktionen muessen dasselbe Ziel-Feld adressieren. */
+    if (td_get != td_set || td_get != td_inc || td_get != td_dec)
+        return 0;
+    if (off_get != off_set || off_get != off_inc || off_get != off_dec)
+        return 0;
+
+    cs = scan_qword_instance((uint64_t)(uintptr_t)(
+        base + RBBRIDGE_RVA_CAMPAIGNSERVICE_VFTABLE));
+    if (!cs)
+        return 0;
+    if (!safe_read_u64(cs + td_get, &inner) || !inner)
+        return 0;
+
+    g_campdiff_cache.valid = 1;
+    g_campdiff_cache.module_base = base;
+    g_campdiff_cache.module_size = size;
+    g_campdiff_cache.cs = cs;
+    g_campdiff_cache.this_deref = td_get;
+    g_campdiff_cache.field_off = off_get;
+    g_campdiff_cache.fget = fget;
+    g_campdiff_cache.fset = fset;
+    g_campdiff_cache.finc = finc;
+    g_campdiff_cache.fdec = fdec;
+
+    *out_cs = cs;
+    *out_this_deref = td_get;
+    *out_field_off = off_get;
+    return 1;
+}
+
+/* Liest float nur aus committed+lesbarer Region (kein Crash auf Fremdspeicher). */
+static int safe_read_f32(const void *addr, float *out)
+{
+    MEMORY_BASIC_INFORMATION mi;
+    if (!addr || !out)
+        return 0;
+    if (!VirtualQuery(addr, &mi, sizeof(mi)))
+        return 0;
+    if (!is_readable_region(&mi))
+        return 0;
+    if ((uintptr_t)addr + sizeof(float) >
+        (uintptr_t)mi.BaseAddress + mi.RegionSize)
+        return 0;
+    memcpy(out, addr, sizeof(*out));
+    return 1;
+}
+
+/* IEEE-Endlichkeitspruefung ohne libm/math.h (mingw exponiert `isfinite`
+ * nicht unter der Default-std). NaN: v-v != 0; +/-Inf: v-v = NaN != 0. */
+static int float_is_finite(float v)
+{
+    volatile float d = v - v;
+    return d == 0.0f;
+}
+
+/* Schreibt float nur in committed+lesbare Region (Seite kurz RW schalten).
+ * PAGE_READWRITE genuegt fuer einen reinen Datenschreibzugriff - PAGE_EXECUTE
+ * waere unnoetig und wuerde die Angriffsflaeche fuer Anti-Cheat/AV vergroessern
+ * (Review-Hinweis PR #433). Der alte Schutz wird in einer EIGENEN Variablen
+ * festgehalten (nicht als Out-Param wiederverwendet). */
+static int safe_write_f32(void *addr, float v)
+{
+    MEMORY_BASIC_INFORMATION mi;
+    DWORD old_protect = 0;
+    DWORD ignored = 0;
+    if (!addr)
+        return 0;
+    if (!VirtualQuery(addr, &mi, sizeof(mi)))
+        return 0;
+    if (!is_readable_region(&mi))
+        return 0;
+    if ((uintptr_t)addr + sizeof(float) >
+        (uintptr_t)mi.BaseAddress + mi.RegionSize)
+        return 0;
+    if (!VirtualProtect(addr, sizeof(float), PAGE_READWRITE, &old_protect))
+        return 0;
+    memcpy(addr, &v, sizeof(v));
+    /* Restore mit separater Out-Variable (der alte Schutz bleibt erhalten). */
+    if (!VirtualProtect(addr, sizeof(float), old_protect, &ignored))
+        return 0;
+    return 1;
+}
+
+/* Read (#388): creatures_base_difficulty ueber den AOB-aufgeloesten Pfad.
+ * 1 = ok. Es wird NUR gelesen (kein Aufruf in Spielcode). */
+static RBBRIDGE_NOINLINE int creatures_difficulty_read(
+    const unsigned char *base, size_t size, float *out)
+{
+    unsigned char *cs;
+    uint32_t this_deref = 0;
+    int32_t field_off = 0;
+    uint64_t inner = 0;
+
+    if (!out)
+        return 0;
+    if (!resolve_campaign_diff(base, size, &cs, &this_deref, &field_off))
+        return 0;
+    if (!safe_read_u64(cs + this_deref, &inner) || !inner)
+        return 0;
+    return safe_read_f32((const unsigned char *)(uintptr_t)inner + field_off,
+                         out);
+}
+
+/*
+ * creatures_difficulty (Write/Read #388): op = set|increase|decrease,
+ * value = float. Semantik identisch zu den RE-ten Methoden (Set/Increase/
+ * Decrease schreiben alle dasselbe float-Feld), aber als geführter
+ * Speicher-Zugriff - KEIN indirekter Aufruf in Spielcode aus dem
+ * Pipe-Thread (live #388: der Aufruf mit scan-abgeleitetem `this` hat den
+ * Pipe-Thread gefaultet). Events:
+ *   {"event":"creatures_difficulty_result","ok":true,"op":"set",
+ *    "value":2.5,"before":1.0,"after":2.5}
+ *   {"event":"creatures_difficulty_result","ok":false,"reason":"..."}
+ */
+static RBBRIDGE_NOINLINE void dispatch_creatures_difficulty(HANDLE hPipe,
+                                                            const char *op,
+                                                            double value)
+{
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    const char *via = NULL;
+    const unsigned char *execfn = NULL;
+    unsigned char *cs;
+    uint32_t this_deref = 0;
+    int32_t field_off = 0;
+    uint64_t inner = 0;
+    float before = 0.0f, after = 0.0f, target = (float)value;
+    int have_before;
+
+    if (!op || !op[0]) {
+        send_line(hPipe, "{\"event\":\"creatures_difficulty_result\","
+                         "\"ok\":false,\"reason\":\"missing_op\"}");
+        return;
+    }
+    if (strcmp(op, "set") != 0 && strcmp(op, "increase") != 0 &&
+        strcmp(op, "decrease") != 0) {
+        send_line(hPipe, "{\"event\":\"creatures_difficulty_result\","
+                         "\"ok\":false,\"reason\":\"unknown_op\"}");
+        return;
+    }
+
+    if (!resolve_module(&base, &size, &via, &execfn)) {
+        send_line(hPipe, "{\"event\":\"creatures_difficulty_result\","
+                         "\"ok\":false,\"reason\":\"no_module\"}");
+        return;
+    }
+
+    if (!resolve_campaign_diff(base, size, &cs, &this_deref, &field_off)) {
+        dbg("creatures_difficulty: Pfad nicht auflösbar (AOB/Instanz)");
+        send_line(hPipe, "{\"event\":\"creatures_difficulty_result\","
+                         "\"ok\":false,\"reason\":\"no_campaignservice\"}");
+        return;
+    }
+    if (!safe_read_u64(cs + this_deref, &inner) || !inner) {
+        send_line(hPipe, "{\"event\":\"creatures_difficulty_result\","
+                         "\"ok\":false,\"reason\":\"no_target\"}");
+        return;
+    }
+
+    have_before = safe_read_f32(
+        (const unsigned char *)(uintptr_t)inner + field_off, &before);
+
+    if (strcmp(op, "increase") == 0) {
+        if (!have_before) {
+            send_line(hPipe, "{\"event\":\"creatures_difficulty_result\","
+                             "\"ok\":false,\"reason\":\"no_read\"}");
+            return;
+        }
+        target = before + (float)value;
+    } else if (strcmp(op, "decrease") == 0) {
+        if (!have_before) {
+            send_line(hPipe, "{\"event\":\"creatures_difficulty_result\","
+                             "\"ok\":false,\"reason\":\"no_read\"}");
+            return;
+        }
+        target = before - (float)value;
+    }
+
+    if (!safe_write_f32(
+            (unsigned char *)(uintptr_t)inner + field_off, target)) {
+        send_line(hPipe, "{\"event\":\"creatures_difficulty_result\","
+                         "\"ok\":false,\"reason\":\"write_failed\"}");
+        return;
+    }
+
+    if (!safe_read_f32((const unsigned char *)(uintptr_t)inner + field_off,
+                       &after))
+        after = target;
+
+    dbg("creatures_difficulty: op='%s' value=%.4f cs=%p inner=%p off=0x%x "
+        "before=%.4f after=%.4f",
+        op, value, (void *)cs, (void *)(uintptr_t)inner,
+        (unsigned)field_off, (double)(have_before ? before : 0.0f),
+        (double)after);
+
+    if (have_before) {
+        send_line(hPipe,
+                  "{\"event\":\"creatures_difficulty_result\",\"ok\":true,"
+                  "\"op\":\"%s\",\"value\":%.4f,\"before\":%.4f,"
+                  "\"after\":%.4f}",
+                  op, value, (double)before, (double)after);
+    } else {
+        send_line(hPipe,
+                  "{\"event\":\"creatures_difficulty_result\",\"ok\":true,"
+                  "\"op\":\"%s\",\"value\":%.4f,\"after\":%.4f}",
+                  op, value, (double)after);
+    }
 }
 
 /*
@@ -2184,6 +2602,21 @@ static void dispatch_get_state(HANDLE hPipe)
     int flow_active = mission_flow_active(base, g_last_flow);
     json_escape_into(g_last_flow, flow_esc, sizeof(flow_esc));
 
+    /* Creatures-Base-Difficulty (Read #388): haengt an der
+     * CampaignService-Instanz, NICHT am Spieler-Account - also auch ohne
+     * geladene Welt lesbar. Nicht aufloesbar -> null (graceful).
+     * NaN/Inf wuerden als `nan`/`inf` kein gueltiges JSON ergeben -> null
+     * (Review-Hinweis PR #433). */
+    char diff_field[48];
+    {
+        float cbd = 0.0f;
+        if (creatures_difficulty_read(base, size, &cbd) &&
+            float_is_finite(cbd))
+            snprintf(diff_field, sizeof(diff_field), "%.4f", (double)cbd);
+        else
+            snprintf(diff_field, sizeof(diff_field), "null");
+    }
+
     /* PlayerService-vftable RVA 0x2e8e910 (RE #363/#365). */
     const unsigned char *vftable = base + 0x2e8e910;
     const uint64_t needle = (uint64_t)(uintptr_t)vftable;
@@ -2216,8 +2649,9 @@ static void dispatch_get_state(HANDLE hPipe)
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
                          "\"reason\":\"no_playerservice\","
                          "\"mission_flow\":\"%s\","
-                         "\"mission_flow_active\":%s}",
-                  flow_esc, flow_active ? "true" : "false");
+                         "\"mission_flow_active\":%s,"
+                         "\"creatures_base_difficulty\":%s}",
+                  flow_esc, flow_active ? "true" : "false", diff_field);
         return;
     }
 
@@ -2227,8 +2661,9 @@ static void dispatch_get_state(HANDLE hPipe)
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
                          "\"reason\":\"no_world\","
                          "\"mission_flow\":\"%s\","
-                         "\"mission_flow_active\":%s}",
-                  flow_esc, flow_active ? "true" : "false");
+                         "\"mission_flow_active\":%s,"
+                         "\"creatures_base_difficulty\":%s}",
+                  flow_esc, flow_active ? "true" : "false", diff_field);
         return;
     }
 
@@ -2239,8 +2674,9 @@ static void dispatch_get_state(HANDLE hPipe)
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
                          "\"reason\":\"no_account\","
                          "\"mission_flow\":\"%s\","
-                         "\"mission_flow_active\":%s}",
-                  flow_esc, flow_active ? "true" : "false");
+                         "\"mission_flow_active\":%s,"
+                         "\"creatures_base_difficulty\":%s}",
+                  flow_esc, flow_active ? "true" : "false", diff_field);
         return;
     }
 
@@ -2294,10 +2730,12 @@ static void dispatch_get_state(HANDLE hPipe)
               "{\"event\":\"get_state_result\",\"ok\":true,"
               "\"carbonium\":%llu,\"carbonium_max\":%lld,"
               "\"ironium\":%llu,\"ironium_max\":%lld,\"resources\":%s,"
-              "\"mission_flow\":\"%s\",\"mission_flow_active\":%s}",
+              "\"mission_flow\":\"%s\",\"mission_flow_active\":%s,"
+              "\"creatures_base_difficulty\":%s}",
               (unsigned long long)carbonium, (long long)carbonium_max,
               (unsigned long long)ironium, (long long)ironium_max,
-              resources, flow_esc, flow_active ? "true" : "false");
+              resources, flow_esc, flow_active ? "true" : "false",
+              diff_field);
 }
 
 
@@ -2503,6 +2941,27 @@ static void handle_line(HANDLE hPipe, const char *line)
         }
         json_get_string(line, "mode", mode, sizeof(mode));
         dispatch_activate_mission_flow(hPipe, logic, mode);
+        return;
+    }
+
+    /* creatures_difficulty (Read/Write #388): CampaignService-Kreaturen-
+     * Basis-Difficulty per C++-Primitiv. `op` = set|increase|decrease,
+     * `value` = float (als String, wie bei add_resource/amount). */
+    if (strcmp(cmd, "creatures_difficulty") == 0) {
+        char op[32] = "";
+        char value[64] = "";
+        if (!json_get_string(line, "op", op, sizeof(op)) || !op[0]) {
+            send_line(hPipe, "{\"event\":\"creatures_difficulty_result\","
+                             "\"ok\":false,\"reason\":\"missing_op\"}");
+            return;
+        }
+        if (!json_get_string(line, "value", value, sizeof(value)) ||
+            !value[0]) {
+            send_line(hPipe, "{\"event\":\"creatures_difficulty_result\","
+                             "\"ok\":false,\"reason\":\"missing_value\"}");
+            return;
+        }
+        dispatch_creatures_difficulty(hPipe, op, strtod(value, NULL));
         return;
     }
 

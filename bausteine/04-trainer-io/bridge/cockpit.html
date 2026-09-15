@@ -152,6 +152,20 @@
             </div>
         </section>
 
+        <section>
+            <h2>creatures base difficulty</h2>
+            <div class="row">
+                <span class="dim">now</span>
+                <span id="creatures_base_difficulty" class="val">—</span>
+            </div>
+            <div class="row">
+                <input id="cbd_value" size="10" value="1" />
+                <button id="cbd_set">set</button>
+                <button id="cbd_inc">+ increase</button>
+                <button id="cbd_dec">− decrease</button>
+            </div>
+        </section>
+
         <div id="out" class="err"></div>
 
         <script>
@@ -185,6 +199,11 @@
                             s.mission_flow_active === undefined
                                 ? "—"
                                 : String(s.mission_flow_active);
+                        $("creatures_base_difficulty").textContent =
+                            s.creatures_base_difficulty === undefined ||
+                            s.creatures_base_difficulty === null
+                                ? "—"
+                                : String(s.creatures_base_difficulty);
                         $("out").textContent = "";
                     } catch (e) {
                         $("out").textContent = "ERR " + e.message;
@@ -255,8 +274,31 @@
                     }
                 }
 
+                async function creaturesDifficulty(op) {
+                    try {
+                        var r = await post("creatures_difficulty", {
+                            op: op,
+                            value: parseFloat($("cbd_value").value) || 0,
+                        });
+                        $("out").textContent = r && r.ok ? "" : JSON.stringify(r);
+                        refresh();
+                    } catch (e) {
+                        $("out").textContent = "ERR " + e.message;
+                    }
+                }
+
                 $("flow_stop_btn").onclick = function () {
                     stopMissionFlow();
+                };
+
+                $("cbd_set").onclick = function () {
+                    creaturesDifficulty("set");
+                };
+                $("cbd_inc").onclick = function () {
+                    creaturesDifficulty("increase");
+                };
+                $("cbd_dec").onclick = function () {
+                    creaturesDifficulty("decrease");
                 };
 
                 refresh();
