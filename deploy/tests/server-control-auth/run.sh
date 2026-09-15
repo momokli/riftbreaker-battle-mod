@@ -98,7 +98,9 @@ echo "== Ports: caddy=$CADDY_PORT agent=$AGENT_PORT bridge=$BRIDGE_PORT tourname
 # ---------------------------------------------------------------------------
 # Testwerte als extra-vars unter den PRODUKTIONS-Namen: extra-vars gewinnen
 # gegen die Rollen-Defaults (vars_files) — das Template wird also genau so
-# verdrahtet wie auf planet, nur mit Testports/-token.
+# verdrahtet wie auf planet, nur mit Testports/-token. server_control_enabled=true
+# explizit, weil die Rolle die /server/*-Route seit Issue #463 nur bei
+# deploytem Agenten rendert — dieser Test prueft genau diese Route.
 "$ANSIBLE_PLAYBOOK" "$PLAYBOOK" \
   -e "rift_caddy_port=$CADDY_PORT" \
   -e "rift_caddy_site_root=/tmp" \
@@ -108,6 +110,7 @@ echo "== Ports: caddy=$CADDY_PORT agent=$AGENT_PORT bridge=$BRIDGE_PORT tourname
   -e "riftbreaker_bridge_port=$BRIDGE_PORT" \
   -e "tournament_port=$TOURNAMENT_PORT" \
   -e "vault_server_control_token=$TOKEN" \
+  -e "server_control_enabled=true" \
   -e "test_render_dir=$TMP" >"$TMP/ansible.log" 2>&1 || {
   cat "$TMP/ansible.log" >&2
   fail "Caddyfile liess sich nicht rendern"

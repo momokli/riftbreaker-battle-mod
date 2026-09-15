@@ -10,7 +10,7 @@ genau dann braucht man den Restart.
 - **Deploy**: Ansible-Rolle `deploy/roles/server-control` (Muster `tournament-server`),
   verdrahtet in `deploy/site.yml` (Tag `server`); `config.cfg`-Rendering nutzt
   dieselbe Vorlage `config.cfg.j2` wie die Rolle `riftbreaker-server`.
-- **Issue**: #424 (Plane B) · Refs #363 (Plane A), #298 (API-Härtung), #394 (Full-Chain)
+- **Issue**: #424 (Plane B) · Refs #363 (Plane A), #298 (API-Härtung), #394 (Full-Chain), #463 (Route nur bei deploytem Agenten)
 
 ## Endpunkte
 
@@ -26,6 +26,16 @@ Alle Routen liegen unter `/server/*` und verlangen **immer** `Authorization: Bea
 | `POST /server/config` | `config.cfg` rendern (`mode`/`mission`/`difficulty`/`seed`/`mission_save`) + Restart |
 
 ## Netz- und Auth-Topologie
+
+Der Agent wird **nur von dev** deployt (`deploy/site.yml`, Rolle
+`server-control`); **prod deployt (noch) keinen Agenten**
+(`deploy/deploy-prod.yml`). Deshalb rendert die Rolle `website` die
+`/server/*`-Route nur, wenn das jeweilige Play `server_control_enabled: true`
+setzt (Issue #463). Ohne dieses Gate zeigte die prod-Route sonst auf
+`127.0.0.1:8092` — auf planet den **dev**-Agenten — und ein Klick auf
+*Restart server* im Prod-Cockpit traefe den dev-Container (Regression aus
+#456). Prod setzt das Flag in `deploy-prod.yml` explizit auf `false`; die Route
+fehlt dort, bis prod einen eigenen Agenten (eigener Port/Unit/Token) bekommt.
 
 ```
 Browser ──► Host-Caddy (mellon-caddy) ──► rift-caddy (127.0.0.1:8787, plain HTTP)

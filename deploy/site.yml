@@ -35,6 +35,13 @@
   hosts: planet
   become: true
 
+  vars:
+    # Dieses Play deployt den server-control-Agenten (Rolle unten) => die
+    # /server/*-Route im Cockpit darf gerendert werden (Issue #463). Play-Var,
+    # damit die Verdrahtung eindeutig an DER Stelle steht, die die Rolle
+    # enthaelt (Rollen-Defaults + host_vars sind niedriger praezedent).
+    server_control_enabled: true
+
   pre_tasks:
     # Image-Tag = Deploy-SHA (kein `latest`). Läuft auch im --check
     # (check_mode: false, read-only, lokal), damit das Compose-Template dort

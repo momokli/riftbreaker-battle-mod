@@ -11,6 +11,7 @@ name: Deploy Check (local)
 #   * Deploy-Wiring + Provider-Unit-Tests (Issue #337)
 #   * Disk-Space-Gate-Selbsttest (Issue #310)
 #   * Server-Control-Auth hinter dem Caddy (Issue #454)
+#   * /server/*-Route-Selbsttest (dev rendert sie, prod nicht; Issue #463)
 #   * Compose-Templates rendern + `docker compose config`
 #
 # Der echte Host-Check (`ansible --check --diff` gegen planet) lebt weiter in
@@ -126,6 +127,15 @@ jobs:
       - name: "Crash-Collector Unit-Render (Issue #462)"
         if: steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/crash-collector/run.sh
+
+      # /server/*-Route-Selbsttest (Issue #463): rendert die ECHTE
+      # Cockpit-Caddyfile-Vorlage zweimal — dev (server_control_enabled=true)
+      # MUSS die Agent-Route enthalten, prod (prod-vars/deploy-prod.yml,
+      # false) darf sie NICHT enthalten. Sonst zeigt "Restart server" im
+      # Prod-Cockpit auf den DEV-Agenten. Lokal, kein Host.
+      - name: "/server/*-Route Selbsttest (Issue #463)"
+        if: steps.gate.outputs.skip != 'true'
+        run: bash deploy/tests/server-control-route/run.sh
 
       - name: Compose-Templates rendern + `docker compose config`
         if: steps.gate.outputs.skip != 'true'

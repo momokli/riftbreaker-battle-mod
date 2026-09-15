@@ -30,6 +30,15 @@
     render_dir: "{{ lookup('env', 'RBBATTLE_RENDER_DIR') | default('/tmp/rbbattle-compose-render', true) }}"
 
   tasks:
+    # Issue #463: check-render emuliert das dev-Play (site.yml) — dev deployt den
+    # server-control-Agenten, also darf die /server/*-Route im Cockpit gerendert
+    # werden. Als set_fact, weil die hier als vars_files geladenen
+    # Rollen-Defaults (website/defaults: server_control_enabled: false) die
+    # Praezedenz von Play-Vars ueberschreiben; set_fact gewinnt dagegen.
+    - name: "Dev-Kontext: server-control-Route aktivieren (Issue #463)"
+      set_fact:
+        server_control_enabled: true
+
     - name: Render-Verzeichnis sicherstellen
       file:
         path: "{{ render_dir }}"
@@ -134,3 +143,17 @@
           /server/* hinter der Operator-Basic-Auth, Bearer wird von Caddy
           injiziert (kein Token im Browser), leeres Token = kein header_up —
           /tournament/* unveraendert.
+
+    # Regression-Guard Issue #463: im dev-Render (server_control_enabled=true)
+    # MUSS die /server/*-Route da sein — sonst sieht check-render etwas anderes
+    # als das echte dev-Play. (Die prod-Abwesenheit + die Port-Zuordnung deckt
+    # deploy/tests/server-control-route/run.sh hermetisch ab.)
+    - name: rift-caddy — /server/*-Route im dev-Render vorhanden (Issue 463)
+      assert:
+        that:
+          - "'handle /server/*' in (lookup('file', render_dir ~ '/rift-caddy.Caddyfile'))"
+        fail_msg: >-
+          Der dev-Render des Cockpit-Caddyfiles enthaelt keine /server/*-Route.
+          dev deployt den server-control-Agenten (site.yml) — die Route muss
+          gerendert sein (Issue #463).
+        success_msg: "/server/*-Route im dev-Render vorhanden."

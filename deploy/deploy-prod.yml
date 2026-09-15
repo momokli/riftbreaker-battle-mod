@@ -20,6 +20,15 @@
   hosts: planet
   become: true
 
+  vars:
+    # Dieses Play deployt (noch) KEINEN server-control-Agenten (Rolle fehlt
+    # unten) => die /server/*-Route im Cockpit NICHT rendern (Issue #463).
+    # Sonst zeigt sie auf 127.0.0.1:{{ server_control_port }} — auf planet den
+    # DEV-Agenten — und "Restart server" im Prod-Cockpit traefe den
+    # dev-Container. Kommt prod ein Agent hinzu (eigener Port/Unit/Token),
+    # hier auf true setzen + server-control-Rolle aufnehmen.
+    server_control_enabled: false
+
   pre_tasks:
     - name: Deploy-SHA für den Image-Tag ermitteln
       command: git -c safe.directory=* -C {{ playbook_dir }}/.. rev-parse --short=12 HEAD

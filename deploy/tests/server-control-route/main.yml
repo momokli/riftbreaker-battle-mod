@@ -1,0 +1,114 @@
+---
+# Hermetischer Render-Selbsttest der /server/*-Route im Cockpit-Caddyfile
+# (Issue #463).
+#
+# Läuft LOKAL auf dem Control-Node/CI-Runner: keine Host-Facts, kein SSH,
+# kein Docker, kein Vault, keine Prod-Aktion. Gerendert wird die ECHTE
+# Vorlage der Rolle website (kein Nachbau). Geprüft wird die Invariante aus
+# dem DoD:
+#
+#   dev  (server_control_enabled=true, wie site.yml)  -> handle /server/* MUSS
+#        gerendert sein und auf server_control_port (host_vars: 8092) zeigen.
+#   prod (server_control_enabled=false, wie deploy-prod.yml + prod-vars.yml)
+#        -> handle /server/* darf NICHT gerendert sein; das Cockpit-Root und
+#        /tournament/* bleiben erhalten.
+#
+# vars_files sind bewusst so geordnet, dass die host_vars die Rollen-Defaults
+# ÜBERSCHREIBEN (host_vars zuletzt) — das entspricht der echten Ansible-
+# Präzedenz (Rollen-Defaults < host_vars) und ist der Grund, weshalb das Flag
+# als Play-Var in site.yml/deploy-prod.yml steht, nicht in den host_vars.
+#
+# Zusätzlich wird die Ursache festgenagelt: prod deployt keinen Agenten
+# (deploy-prod.yml ohne Role server-control) und schaltet die Route ab —
+# dev deployt ihn und schaltet sie ein.
+#
+# Aufruf über run.sh (oder direkt):
+#   RB_ROUTE_RENDER_DIR=$(mktemp -d) ansible-playbook deploy/tests/server-control-route/main.yml \
+#     -e expect_route=true -e server_control_enabled=true
+- name: "/server/*-Route Render (Issue #463)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    # Rollen-Defaults zuerst, host_vars ZULETZT (host_vars gewinnen) — echte
+    # Ansible-Praedenz. Die Defaults liefern riftbreaker_bridge_port/Ports.
+    - "{{ playbook_dir }}/../../roles/riftbreaker-server/defaults/main.yml"
+    - "{{ playbook_dir }}/../../roles/website/defaults/main.yml"
+    - "{{ playbook_dir }}/../../roles/server-control/defaults/main.yml"
+    - "{{ playbook_dir }}/../../inventory/host_vars/planet/vars.yml"
+
+  vars:
+    render_dir: "{{ lookup('env', 'RB_ROUTE_RENDER_DIR') | default('/tmp/rb-server-control-route-render', true) }}"
+    # expect_route + server_control_enabled kommen als extra vars aus run.sh
+    # (spiegeln die Play-Vars aus site.yml bzw. deploy-prod.yml).
+    expect_route: true
+    server_control_enabled: false
+
+  tasks:
+    - name: Render-Verzeichnis sicherstellen
+      file:
+        path: "{{ render_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Cockpit-Caddyfile rendern (echte Rollen-Vorlage)
+      template:
+        src: "{{ playbook_dir }}/../../roles/website/templates/rift-caddy.Caddyfile.j2"
+        dest: "{{ render_dir }}/Caddyfile"
+        mode: "0644"
+
+    - name: Gerendertes Caddyfile laden
+      set_fact:
+        caddyfile: "{{ lookup('file', render_dir ~ '/Caddyfile') }}"
+
+    # DoD-Kern: Route vorhanden <-> Agent deployt. Kein Fremdgriff moeglich.
+    - name: "/server/*-Route gemaess Erwartung (Issue #463)"
+      assert:
+        that:
+          - ("handle /server/*" in caddyfile) == (expect_route | bool)
+        fail_msg: >-
+          /server/*-Route stimmt nicht mit der Erwartung ueberein
+          (expect_route={{ expect_route }}). Rendert das Cockpit-Caddyfile die
+          Route ohne deployten Agenten (oder laesst es sie mit Agenten weg),
+          zeigt der "Restart server"-Knopf auf einen fremden Container
+          (auf planet den DEV-Agenten) — genau der Bug aus #463.
+        success_msg: "/server/*-Route passt zur Erwartung (expect_route={{ expect_route }})."
+
+    - name: "Route zeigt (nur) auf den eigenen Agent-Port"
+      assert:
+        that:
+          - (("127.0.0.1:" ~ (server_control_port | string)) in caddyfile) == (expect_route | bool)
+          - ("127.0.0.1:8092" in caddyfile) == (expect_route | bool)
+        fail_msg: >-
+          Die /server/*-Route zeigt nicht auf den eigenen Agent-Port
+          (server_control_port={{ server_control_port }}), bzw. rendert den
+          DEV-Port 8092, obwohl die Route aus sein muss.
+        success_msg: "/server/*-Route zeigt genau auf 127.0.0.1:{{ server_control_port }} (dev 8092)."
+
+    # Auch bei abgeschalteter Route darf der Rest des Cockpits NICHT fehlen.
+    - name: "Cockpit-Root + /tournament bleiben erhalten"
+      assert:
+        that:
+          - "'handle /*' in caddyfile"
+          - "'handle_path /tournament/*' in caddyfile"
+        fail_msg: >-
+          Das gerenderte Caddyfile verliert den Cockpit-Root oder
+          /tournament/* — das Gating darf nur die /server/*-Route betreffen.
+        success_msg: "Cockpit-Root und /tournament/* unveraendert vorhanden."
+
+    # Ursache festnageln: die Route haengt an der Rolle. dev deployt sie und
+    # schaltet das Flag im Play an, prod nicht.
+    - name: "Ursache: prod ohne server-control-Rolle/Route, dev mit (Issue #463)"
+      assert:
+        that:
+          - "'- role: server-control' in (lookup('file', playbook_dir ~ '/../../site.yml'))"
+          - "'server_control_enabled: true' in (lookup('file', playbook_dir ~ '/../../site.yml'))"
+          - "'- role: server-control' not in (lookup('file', playbook_dir ~ '/../../deploy-prod.yml'))"
+          - "'server_control_enabled: false' in (lookup('file', playbook_dir ~ '/../../deploy-prod.yml'))"
+        fail_msg: >-
+          Die Rollen-/Flag-Verdrahtung passt nicht zur Route: dev muss den
+          server-control-Agenten deployen und server_control_enabled=true
+          setzen, prod darf ihn nicht deployen und muss das Flag auf false
+          setzen.
+        success_msg: "prod ohne Agent/Route, dev mit Agent/Route — Ursache und Fix passen zusammen."

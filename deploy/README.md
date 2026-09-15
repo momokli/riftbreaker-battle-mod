@@ -376,10 +376,12 @@ nur `deploy-check-local`**:
 - [`deploy-check-local.yml`](../.github/workflows/deploy-check-local.yml)
   (**Required Check**, GitHub-Hosted-Runner, `ubuntu-latest`) prüft rein
   lokal: `yamllint` über `deploy/`, Playbook-`--syntax-check` für `site.yml` +
-  `deploy-prod.yml` (prod-Playbook, Issue #328), Compose-Templates rendern
-  (`check-render.yml`) und jedes gerenderte Compose-File durch
-  `docker compose config`. Kein Host-/SSH-Zugriff, keine Secrets. Läuft damit
-  immer, auch wenn der planet-Runner gerade nicht erreichbar ist.
+  `deploy-prod.yml` (prod-Playbook, Issue #328), die hermetischen
+  Rollen-Selbsttests (`deploy/tests/`: Disk-Gate #310,
+  `/server/*`-Route #463), Compose-Templates rendern (`check-render.yml`) und
+  jedes gerenderte Compose-File durch `docker compose config`. Kein
+  Host-/SSH-Zugriff, keine Secrets. Läuft damit immer, auch wenn der
+  planet-Runner gerade nicht erreichbar ist.
 - [`deploy-check.yml`](../.github/workflows/deploy-check.yml)
   (self-hosted Runner, planet) fährt den echten Host-Check read-only gegen
   planet: `ansible-playbook --check --diff` (`--tags server,website`). Seit
@@ -422,7 +424,7 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 | `riftbreaker-server`     | docker             | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation                                                                                                               |
 | `satellite-relay`        | iptables + systemd | UDP-DNAT-Relay auf `satellite`: inbound `:6321` → planet prod `:6322` (reboot-fest; Rollen-Defaults = einzige Wertquelle)                                                                                                                             |
 | `tournament-server`      | systemd            | Rust/axum Referee + Web-UI. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt)                                                          |
-| `website`                | eigener Caddy      | eigener `rift-caddy` (plain HTTP: Landing + `/mod.zip` + Cockpit `/contract/*` + `/tournament/*`) + ZWEI Einträge im geteilten Host-Caddy (Issue #322); Host-Caddy-Reload deterministisch + fehlersichtbar, `rift-caddy` mit `admin off` (Issue #355) |
+| `website`                | eigener Caddy      | eigener `rift-caddy` (plain HTTP: Landing + `/mod.zip` + Cockpit `/contract/*` + `/tournament/*`) + ZWEI Einträge im geteilten Host-Caddy (Issue #322); Host-Caddy-Reload deterministisch + fehlersichtbar, `rift-caddy` mit `admin off` (Issue #355); `/server/*` nur bei deploytem Agenten (`server_control_enabled`, Issue #463) |
 | `mods-zip`               | —                  | Paketierung + md5-Paritäts-Check (hart)                                                                                                                                                                                                               |
 | `host-hygiene`           | systemd            | wöchentlicher Timer: entfernt **dangling** Docker-Images (`docker image prune`, **kein** `-a`; Issue #308)                                                                                                                                            |
 | `crash-collector`        | systemd            | Dauer-Dienst: sichert bei Crash-Markern das neueste `crash_info/<uuid>.{dmp,log,trace}` als Bundle nach `/opt/rbmods/crashes/` (+ Kontext/Meta, Retention; Issue #462)                                                                                  |
