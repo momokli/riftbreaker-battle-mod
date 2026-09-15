@@ -136,6 +136,14 @@
                 <input id="flow_mode" size="10" value="default" />
                 <button id="flow_start">start wave</button>
             </div>
+            <div class="row">
+                <input
+                    id="flow_stop"
+                    size="42"
+                    placeholder="flow-id (leer = zuletzt gestarteter)"
+                />
+                <button id="flow_stop_btn">stop wave</button>
+            </div>
         </section>
 
         <section>
@@ -237,6 +245,25 @@
 
                 $("flow_start").onclick = function () {
                     startMissionFlow();
+                };
+
+                async function stopMissionFlow() {
+                    try {
+                        var body = {};
+                        var f = $("flow_stop").value;
+                        if (f) {
+                            body.flow = f;
+                        }
+                        var r = await post("deactivate_mission_flow", body);
+                        $("out").textContent = r && r.ok ? "" : JSON.stringify(r);
+                        refresh();
+                    } catch (e) {
+                        $("out").textContent = "ERR " + e.message;
+                    }
+                }
+
+                $("flow_stop_btn").onclick = function () {
+                    stopMissionFlow();
                 };
 
                 // #387: DOM Pause/Resume (Write) + Statusanzeige des letzten

@@ -807,6 +807,73 @@ static const unsigned char RBBRIDGE_ACTIVATE_SIG[] = {
     0x8B, 0x59, 0x08
 };
 
+/*
+ * Byte-Signatur des DeactivateMissionFlow-Entrypoints (Issue #389, Build
+ * 2.0.58485). 88 Bytes, im .text eindeutig (Gegenprobe planet 2026-09-15:
+ * genau 1 Treffer - RVA 0xF960E0). Sie entspricht
+ * `Riftbreaker::MissionService::DeactivateMissionFlow(UtfString const&)`
+ * (RVA 0xF960E0 = reine Verifikations-Notiz; die Laufzeitadresse kommt
+ * ausschliesslich aus diesem AOB-Scan, KEINE feste Adresse).
+ *
+ * WICHTIG: Der 16-Byte-Prolog ALLEIN ist NICHT eindeutig - er matcht auch
+ * `MissionService::IsGraphActive(UtfString const&)` (RVA 0xF9E1F0); beide
+ * teilen Prolog + Argument-Marshalling. Unterschied erst am Ende: IsGraph-
+ * Active kehrt mit `cmp eax,1 / sete al` (bool) zurueck, DeactivateMission-
+ * Flow mit `add rsp,0x30` (void). Deshalb laeuft die Signatur exakt 88 Bytes
+ * bis zum letzten Byte 87 (`0x48` = `add rsp,0x30` vs `0x83` = `cmp eax,1`).
+ * Die vier E8-CALL-rel32 sind NICHT gepinnt (buildabhaengig) -> Wildcard-
+ * Maske (analog RBBRIDGE_EXEC_SIG_MASK); die E8-Opcodes bleiben Pflicht.
+ *
+ * Prolog-Disasm (tools/re/disasm.py, planet):
+ *   48 89 5C 24 08   mov  [rsp+8], rbx
+ *   57               push rdi
+ *   48 83 EC 30      sub  rsp,0x30
+ *   48 8B 59 08      mov  rbx,[rcx+8]     ; this -> World*
+ *   48 8B FA         mov  rdi,rdx         ; a1 (UtfString const& name)
+ *   E8 ..            call <getter>        (rel32 wildcard)
+ *   48 8B C8         mov  rcx,rax
+ *   E8 ..            call <system getter> (rel32 wildcard)
+ *   48 8B CB         mov  rcx,rbx
+ *   8B 50 30         mov  edx,[rax+0x30]
+ *   E8 ..            call <deactivate>    (rel32 wildcard)
+ *   48 8B 4F 18      mov  rcx,[rdi+0x18]  ; name.size
+ *   48 83 C7 08      add  rdi,8
+ *   48 83 7F 18 0F   cmp  qword [rdi+0x18],0xf  ; SSO?
+ *   76 03            jbe  +3
+ *   48 8B 3F         mov  rdi,[rdi]
+ *   48 89 4C 24 28   mov  [rsp+0x28],rcx
+ *   48 8D 54 24 20   lea  rdx,[rsp+0x20]
+ *   48 8B C8         mov  rcx,rax
+ *   48 89 7C 24 20   mov  [rsp+0x20],rdi
+ *   E8 ..            call <core>          (rel32 wildcard)
+ *   48 8B 5C 24 40   mov  rbx,[rsp+0x40]
+ *   48               (Beginn `add rsp,0x30`; Diskriminator vs IsGraphActive)
+ */
+static const unsigned char RBBRIDGE_DEACTIVATE_SIG[] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x8B,
+    0x59, 0x08, 0x48, 0x8B, 0xFA, 0xE8, 0xCA, 0xDC, 0x5D, 0x01, 0x48, 0x8B,
+    0xC8, 0xE8, 0x62, 0x40, 0x37, 0xFF, 0x48, 0x8B, 0xCB, 0x8B, 0x50, 0x30,
+    0xE8, 0xA7, 0x52, 0xD4, 0x00, 0x48, 0x8B, 0x4F, 0x18, 0x48, 0x83, 0xC7,
+    0x08, 0x48, 0x83, 0x7F, 0x18, 0x0F, 0x76, 0x03, 0x48, 0x8B, 0x3F, 0x48,
+    0x89, 0x4C, 0x24, 0x28, 0x48, 0x8D, 0x54, 0x24, 0x20, 0x48, 0x8B, 0xC8,
+    0x48, 0x89, 0x7C, 0x24, 0x20, 0xE8, 0x5E, 0x67, 0x3A, 0xFF, 0x48, 0x8B,
+    0x5C, 0x24, 0x40, 0x48
+};
+
+/* Wildcard-Maske zu RBBRIDGE_DEACTIVATE_SIG: 0x00 = don't care. Nur die
+ * rel32-Operanden der vier E8-CALLs sind maskiert; die E8-Opcodes selbst
+ * bleiben Pflicht. */
+static const unsigned char RBBRIDGE_DEACTIVATE_SIG_MASK[] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF,
+    0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF
+};
+
 /* RE-Befunde #385 (Build 2.0.58485) - feste RVAs NUR fuer die kleinen
  * Helfer (analog zu den bestehenden PlayerService-RVAs in get_state);
  * ActivateMissionFlow selbst wird per AOB aufgeloest (RBBRIDGE_ACTIVATE_SIG).
@@ -820,6 +887,9 @@ static const unsigned char RBBRIDGE_ACTIVATE_SIG[] = {
 #define RBBRIDGE_RVA_UTFSTRING_CTOR         0x3ae1e0u  /* UtfString(char const*) */
 #define RBBRIDGE_RVA_UTFSTRING_DTOR         0x26f1f0u  /* ~UtfString() */
 #define RBBRIDGE_RVA_ISGRAPHACTIVE          0xf9e1f0u  /* bool MissionService::IsGraphActive(UtfString const&) */
+/* #389: Riftbreaker::MissionService::DeactivateMissionFlow(UtfString const&)
+ * RVA 0xF960E0 (planet 2026-09-15, publics addr=0001:16339168 -> 0x1000+).
+ * NUR Verifikations-Notiz: aufgeloest wird per RBBRIDGE_DEACTIVATE_SIG. */
 
 /* x64-Aufrufkonvention: this=RCX, cmd=RDX - __fastcall ist auf x64 der
  * Standard (das Schluesselwort dokumentiert die Konvention nur). */
@@ -2277,6 +2347,82 @@ static int mission_flow_active(const unsigned char *base, const char *flow)
     return r ? 1 : 0;
 }
 
+/*
+ * deactivate_mission_flow (Write #389): beendet einen Mission-Flow direkt
+ * ueber den C++-Workhorse (AOB-aufgeloest), KEIN Lua/Console:
+ *   MissionService::DeactivateMissionFlow(UtfString const& name)
+ * `name` = Flow-ID (aus activate_mission_flow) bzw. explizit uebergeben.
+ * Events:
+ *   {"event":"deactivate_mission_flow_result","ok":true,"flow":"<id>"}
+ *   {"event":"deactivate_mission_flow_result","ok":false,"reason":"..."}
+ * Graceful: fehlt Modul/Signatur/Instanz oder ist `flow` leer, wird NICHTS
+ * aufgerufen (kein Crash).
+ *
+ * Thread-Modell (#378): reines C++ -> thread-agnostisch (Pipe-Thread), kein
+ * lua_*. Der Effekt ist ueber das Read-Feld `mission_flow_active`
+ * (MissionService::IsGraphActive) in get_state sichtbar (Full-Chain #394).
+ */
+static void dispatch_deactivate_mission_flow(HANDLE hPipe, const char *flow)
+{
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    const char *via = NULL;
+    const unsigned char *execfn = NULL;
+    const unsigned char *fn = NULL;
+    unsigned char *ms;
+    unsigned char u_flow[40];
+    char esc[192 * 2];
+
+    typedef void (__fastcall * deactivate_fn)(void *self, const void *name);
+    deactivate_fn deact;
+
+    if (!flow || !flow[0]) {
+        send_line(hPipe, "{\"event\":\"deactivate_mission_flow_result\","
+                         "\"ok\":false,\"reason\":\"missing_flow\"}");
+        return;
+    }
+
+    if (!resolve_module(&base, &size, &via, &execfn)) {
+        send_line(hPipe, "{\"event\":\"deactivate_mission_flow_result\","
+                         "\"ok\":false,\"reason\":\"no_module\"}");
+        return;
+    }
+
+    /* Funktion per AOB-Signatur + Maske im Modulabbild (kein festes RVA). */
+    fn = scan_bytes_mask(base, size, RBBRIDGE_DEACTIVATE_SIG,
+                         RBBRIDGE_DEACTIVATE_SIG_MASK,
+                         sizeof(RBBRIDGE_DEACTIVATE_SIG));
+    if (!fn) {
+        dbg("deactivate_mission_flow: AOB-Signatur nicht gefunden");
+        send_line(hPipe, "{\"event\":\"deactivate_mission_flow_result\","
+                         "\"ok\":false,\"reason\":\"no_deactivate_signature\"}");
+        return;
+    }
+
+    /* MissionService-Instanz per vftable-Scan (RVA 0x2E962A0). */
+    ms = scan_qword_instance(
+        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE));
+    if (!ms) {
+        send_line(hPipe, "{\"event\":\"deactivate_mission_flow_result\","
+                         "\"ok\":false,\"reason\":\"no_missionservice\"}");
+        return;
+    }
+
+    build_utfstring(base, flow, u_flow);
+    deact = (deactivate_fn)(uintptr_t)fn;
+    deact((void *)ms, (const void *)u_flow);
+    destroy_utfstring(base, u_flow);
+
+    json_escape_into(flow, esc, sizeof(esc));
+    dbg("deactivate_mission_flow: flow='%s' fn_rva=%08lx ms=%p",
+        flow, (unsigned long)(uintptr_t)(fn - base), (void *)ms);
+
+    send_line(hPipe,
+              "{\"event\":\"deactivate_mission_flow_result\",\"ok\":true,"
+              "\"flow\":\"%s\"}",
+              esc);
+}
+
 static void dispatch_get_state(HANDLE hPipe)
 {
     const unsigned char *base = NULL;
@@ -2654,6 +2800,18 @@ static void handle_line(HANDLE hPipe, const char *line)
         }
         json_get_string(line, "mode", mode, sizeof(mode));
         dispatch_activate_mission_flow(hPipe, logic, mode);
+        return;
+    }
+
+    /* deactivate_mission_flow (Write #389): beendet einen Mission-Flow (Welle)
+     * direkt per C++ (kein Lua/Console). `flow` optional; Default = zuletzt per
+     * activate_mission_flow gestarteter Flow (g_last_flow). */
+    if (strcmp(cmd, "deactivate_mission_flow") == 0) {
+        char flow[192] = "";
+        if (!json_get_string(line, "flow", flow, sizeof(flow)) || !flow[0]) {
+            snprintf(flow, sizeof(flow), "%s", g_last_flow);
+        }
+        dispatch_deactivate_mission_flow(hPipe, flow);
         return;
     }
 
