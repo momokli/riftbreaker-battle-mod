@@ -52,6 +52,10 @@ services:
     restart: unless-stopped
     depends_on:
       - {{ riftbreaker_server_container }}
+    environment:
+      # Deploy-Identitaet (Issue #483, US4): je JSONL-Record mitgeschrieben.
+      RBB_ENV: "{{ rift_env }}"
+      RBB_REF: "{{ rift_deploy_ref }}"
     volumes:
       # Quelle: derselbe Wine-Prefix wie der Server (nur lesend).
       - "{{ riftbreaker_wine_volume }}:/data/.wine:ro"
@@ -79,6 +83,11 @@ services:
       - {{ riftbreaker_server_container }}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    environment:
+      # Deploy-Identitaet (Issue #483, US4): je gepostetem Referee-Event
+      # mitgeschickt.
+      RBB_ENV: "{{ rift_env }}"
+      RBB_REF: "{{ rift_deploy_ref }}"
     volumes:
       # Quelle: derselbe Wine-Prefix wie der Server (nur lesend).
       - "{{ riftbreaker_wine_volume }}:/data/.wine:ro"

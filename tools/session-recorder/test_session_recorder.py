@@ -227,6 +227,68 @@ class SessionTests(unittest.TestCase):
         self.assertEqual([f for f in os.listdir(self.out) if f.endswith(".jsonl")], [])
 
 
+class IdentityTests(unittest.TestCase):
+    """Deploy-Identitaet env/ref je JSONL-Record (Issue #483, US4)."""
+
+    def _record(self, out):
+        name = [f for f in os.listdir(out) if f.endswith(".jsonl") and f != "index.jsonl"][0]
+        return read_jsonl(os.path.join(out, name))
+
+    def test_records_carry_env_and_ref(self):
+        with tempfile.TemporaryDirectory() as base:
+            log = os.path.join(base, "exor_logs.txt")
+            out = os.path.join(base, "out")
+            write_lines(log, [line for _ev, line in FIXTURE_CHAIN])
+            rec = sr.SessionRecorder(out, log_names=[log], clock=clock_factory(),
+                                     id_factory=ids(), env="prod", ref="v1.2+aabbcc")
+            sr.LogTailer(rec, [log]).poll_once()
+            rec.close()
+            records = self._record(out)
+            self.assertTrue(records)
+            self.assertTrue(all(r["env"] == "prod" and r["ref"] == "v1.2+aabbcc" for r in records))
+            summary_file = [f for f in os.listdir(out) if f.endswith(".summary.json")][0]
+            with open(os.path.join(out, summary_file), encoding="utf-8") as fh:
+                summary = json.load(fh)
+            self.assertEqual((summary["env"], summary["ref"]), ("prod", "v1.2+aabbcc"))
+
+    def test_default_identity_is_unknown(self):
+        with tempfile.TemporaryDirectory() as base:
+            log = os.path.join(base, "exor_logs.txt")
+            out = os.path.join(base, "out")
+            write_lines(log, [FIXTURE_CHAIN[0][1]])
+            rec = sr.SessionRecorder(out, log_names=[log], clock=clock_factory(), id_factory=ids())
+            sr.LogTailer(rec, [log]).poll_once()
+            rec.close()
+            self.assertEqual(self._record(out)[0]["env"], "unknown")
+            self.assertEqual(self._record(out)[0]["ref"], "unknown")
+
+    def test_cli_env_ref_flags(self):
+        with tempfile.TemporaryDirectory() as base:
+            log = os.path.join(base, "exor_logs.txt")
+            out = os.path.join(base, "out")
+            write_lines(log, [FIXTURE_CHAIN[0][1]])
+            rc = sr.main(["--log", log, "--out-dir", out, "--once", "--env", "test", "--ref", "abc"])
+            self.assertEqual(rc, 0)
+            record = self._record(out)[0]
+            self.assertEqual((record["env"], record["ref"]), ("test", "abc"))
+
+    def test_cli_falls_back_to_rbb_env_vars(self):
+        with tempfile.TemporaryDirectory() as base:
+            log = os.path.join(base, "exor_logs.txt")
+            out = os.path.join(base, "out")
+            write_lines(log, [FIXTURE_CHAIN[0][1]])
+            os.environ["RBB_ENV"] = "prod"
+            os.environ["RBB_REF"] = "sha-42"
+            try:
+                rc = sr.main(["--log", log, "--out-dir", out, "--once"])
+            finally:
+                os.environ.pop("RBB_ENV", None)
+                os.environ.pop("RBB_REF", None)
+            self.assertEqual(rc, 0)
+            record = self._record(out)[0]
+            self.assertEqual((record["env"], record["ref"]), ("prod", "sha-42"))
+
+
 class CliTests(unittest.TestCase):
     def test_once_mode_writes_session(self):
         with tempfile.TemporaryDirectory() as base:
