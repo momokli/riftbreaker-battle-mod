@@ -1,0 +1,47 @@
+---
+# Hermetischer Render-Test des Compose-PROJEKTNAMENS (Issue #483, Befund 2).
+#
+# Rendert das ECHTE riftbreaker-server-Compose-Template und schreibt den
+# effektiven `riftbreaker_compose_project` + die Volume-Namen nach render_dir.
+# run.sh prueft damit via `docker compose -p <projekt> config`, dass die
+# projekt-praefixten Docker-Volumes weiterhin die HISTORISCHEN Namen tragen
+# (<projekt>_<volume>) — sonst verwaisten Wine-Prefix/Saves der laufenden
+# Instanz (Variante a, Befund 2).
+#
+# Lokal (localhost), kein Host, kein Vault, keine Prod-Aktion.
+- name: RIFT BATTLE — Compose-Projekt Render (Befund 2)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    # Rollen-Defaults ZUERST, dann die dev-Basis — bei doppelten Keys gewinnt
+    # der spaetere File, so greift die ECHTE Praezedenz (host_vars > defaults).
+    # Fuer prod ueberschreibt der Aufrufer mit `-e rift_env=prod
+    # -e @deploy/prod-vars.yml` (extra-vars > vars_files).
+    - ../../roles/riftbreaker-server/defaults/main.yml
+    - ../../inventory/host_vars/planet/vars.yml
+
+  vars:
+    deploy_image_tag: check
+    riftbreaker_server_password: check-dummy
+    render_dir: "{{ lookup('env', 'RBBATTLE_RENDER_DIR') | default('/tmp/rbbattle-compose-project', true) }}"
+
+  tasks:
+    - name: Render-Verzeichnis sicherstellen
+      file:
+        path: "{{ render_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: riftbreaker-server Compose rendern
+      template:
+        src: ../../roles/riftbreaker-server/templates/docker-compose.yml.j2
+        dest: "{{ render_dir }}/riftbreaker-server.yml"
+        mode: "0600"
+
+    - name: Effektives Compose-Projekt + Volume-Namen protokollieren
+      copy:
+        content: "{{ riftbreaker_compose_project }}\n{{ riftbreaker_wine_volume }}\n{{ riftbreaker_saves_volume }}\n"
+        dest: "{{ render_dir }}/compose-project.txt"
+        mode: "0644"

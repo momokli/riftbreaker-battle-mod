@@ -542,8 +542,14 @@ bei Lücke ab (Marker `ENV-ISOLATION-GATE`), aufgerufen aus
 leiten ihre Pfade aus `rift_env` ab: `/srv/rift-<env>/{game,backups,sessions}`,
 `/opt/rbmods/compose/rift-<env>/{riftbreaker,caddy}`,
 `/opt/rbmods/rbtools/<env>/{,.staging}`. `riftbreaker_compose_project` wird
-**explizit je Env** gesetzt (der Compose-Verzeichnis-Basename ist überall
-`riftbreaker` → sonst kollidierten dev/prod im Compose-Projekt/Netz).
+**explizit je Env** gesetzt und bleibt der **historische** Projektname
+(dev `riftbreaker-dedicated`, prod `riftbreaker-dedicated-prod`): das
+Compose-Template deklariert die Volumes ohne `name:`, Compose praefixt sie also
+mit dem Projektnamen (`<projekt>_<volume>`). Der Projektname ist unabhaengig vom
+Verzeichnis; eine Umbenennung auf `rift-<env>` erzeugte **neue leere** Volumes
+und verwaiste den Wine-Prefix/die Saves der laufenden Instanzen (die
+Host-Pfad-Migration deckt Docker-Ressourcen **nicht** ab — Regressions-Nachweis:
+`deploy/tests/compose-project/run.sh`).
 `website_docroot`/`website_mods_dir` bleiben außerhalb dieses Schemas (eigener
 Docroot je Env, s. #483/US3). `mods_zip_name: rbbattle.zip` + seine md5-Parität
 bleiben **unverändert** (zusätzlich entsteht `rbbattle-<env>-<ref>.zip`).
@@ -555,11 +561,19 @@ dev-Konstanten — Ansible kennt keine Variablen-Herkunft).
 ### Migration & Rollback: `-<env>`-Schema (Ziel B, Issue #483)
 
 Da dev-/prod-Daten auf planet bereits unter den **alten** Pfaden liegen, ist
-die Umstellung ein **idempotentes Repo-Artefakt** — kein Copy:
+die Umstellung ein **idempotentes Repo-Artefakt** — kein Copy. Sie laeuft
+**automatisch im Deploy**: `deploy/tasks/env-path-migration.yml` ist in den
+`pre_tasks` von `deploy/site.yml` (dev, push auf `main`), `deploy/deploy-prod.yml`
+(prod, Tag `v*`) und `deploy/test-deploy.yml` (test, no-op) eingebunden —
+**direkt nach dem ENV-ISOLATION-GATE und VOR den Rollen**. Ohne diese Einbindung
+deployt der automatische CD die **neuen** Pfade ohne migrierten Stand
+(`/srv/rift-dev/game` fehlt → `game-content` kopiert 664MB aus dem Cache statt
+`mv`, #301; Alt-Pfade verwaisten).
 
 ```bash
-# Wartungsfenster, je Env (setzt mv + Symlink Alt->Neu, nur wenn Alt existiert
-# und Neu fehlt; erneuter Lauf = no-op):
+# Wartungsfenster, je Env manuell (Explizit-Werkzeug; idempotent = no-op falls
+# der Deploy schon migriert hat). Setzt mv + Symlink Alt->Neu, nur wenn Alt
+# existiert und Neu fehlt:
 ansible-playbook -i deploy/inventory deploy/migrate-env-paths.yml -e rift_env=dev
 ansible-playbook -i deploy/inventory deploy/migrate-env-paths.yml -e rift_env=prod
 ```
@@ -573,7 +587,10 @@ ansible-playbook -i deploy/inventory deploy/migrate-env-paths.yml -e rift_env=pr
 
 Sind Alt **und** Neu vorhanden (mehrdeutig), passiert nichts außer einer
 Warnung — manuell prüfen. Nach der Migration zeigt der alte Pfad bewusst auf
-den neuen (Übergangs-Symlink); er kann später entfernt werden.
+den neuen (Übergangs-Symlink); er kann später entfernt werden. Der Wiring-
+Vertrag (Migration in `pre_tasks` vor den Rollen) wird von
+`deploy/tests/env-path-migration/run.sh` via `ansible-playbook --list-tasks`
+geprüft (inkl. Negativ-Probe).
 
 **Rollback (Schema):** neuen Pfad zurück nach alt `mv`en (`mv <neu>/* <alt>/`
 bzw. `mv <neu> <alt>` nach Entfernen des Symlinks) und `rift_env` in den
@@ -611,9 +628,11 @@ Fallback gelesen.
   Der Prod-Artefakt-Kanal (`mods_zip_dest`) ist heute env-isoliert; ob Prod
   zusätzlich unter einer eigenen Landing-Domain (`www.rift.*`) ausliefert,
   bleibt eine offene Produktentscheidung.
-- **Live-Ausführung der Migrations** (`migrate-env-paths.yml`) + der
-  Checkout-/Marker-Umstellung (`repo-<env>`) steht aus — Repo-Artefakt + Tests
-  sind fertig, der `mv`-Schritt läuft im planet-Wartungsfenster einzeln je Env.
+- **Live-Migration der Env-Pfade:** laeuft seit dem Befund-1-Fix automatisch in
+  den `pre_tasks` des regulaeren Deploys (site.yml/deploy-prod.yml); der separate
+  Lauf `migrate-env-paths.yml` bleibt als explizites Werkzeug. Die
+  Checkout-/Marker-Umstellung (`repo-<env>`) steht weiter aus — Repo-Artefakt +
+  Tests sind fertig, der `mv`-Schritt laeuft im planet-Wartungsfenster.
 - **Pfad-Familien außerhalb des `-<env>`-Schemas:** `website_docroot`
   (`/srv/rbmods-site[-<env>]`) und `dedicated_server_context_dir` (Boot-Test,
   `/opt/rbbattle-deploy/test/…`) behalten ihr eigenes (isolations-geprüftes)

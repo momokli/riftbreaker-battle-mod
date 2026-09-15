@@ -83,6 +83,7 @@ jobs:
           bash deploy/tests/env-isolation/run.sh
           bash deploy/tests/deploy-checkout/run.sh
           bash deploy/tests/env-path-migration/run.sh
+          bash deploy/tests/compose-project/run.sh
 
       # Hinweis (Issue #318): Dieser Job läuft auf einem GitHub-Hosted-Runner
       # (frischer, ephemärer VM je Lauf) — $HOME ist NICHT zwischen Jobs
