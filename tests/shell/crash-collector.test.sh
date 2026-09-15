@@ -19,6 +19,10 @@
 #   (d) kein Marker -> kein Bundle, rc=0 (graceful non-crash)
 #   (e) Retention: nach dem Sammeln bleiben nur die neuesten N Bundles
 #   (f) Idempotenz: derselbe Crash erzeugt kein zweites Bundle
+#   (g) gueltiger MDMP im Bundle -> meta.json traegt exception_code/-address,
+#       module, module_base, fault_rva, fault_thread, stack_rvas (#481)
+#   (h) ungueltiger Dump ("MZ fake") -> rc=0, neue Felder null, module_base
+#       weiterhin aus der module_range-Log-Zeile (#481)
 #
 # Läuft in CI (lint.yml) und lokal:  tests/shell/crash-collector.test.sh
 # ============================================================
@@ -42,6 +46,71 @@ UUID="cbb85f6a-699b-4b7d-8959-3c0698474f51"
 printf 'MZ fake-minidump\n' >"${FAKE_ROOT}${CRASHINFO}/${UUID}.dmp"
 printf '[08:37:25.292] [critical] CRASH\n' >"${FAKE_ROOT}${CRASHINFO}/${UUID}.log"
 printf '(function-name not available)\n' >"${FAKE_ROOT}${CRASHINFO}/${UUID}.trace"
+
+# Gueltiger MDMP (Issue #481): 1 Modul (riftbreaker.exe), Exception IM Modul,
+# Stack-Pointer im Modulbereich -> der Collector muss die Dump-Felder uebernehmen.
+VALID_UUID="7f3a1b2c-0000-4aaa-9bbb-0123456789ab"
+VALID_DMP="${FAKE_ROOT}${CRASHINFO}/${VALID_UUID}.dmp"
+python3 - "$VALID_DMP" <<'PY'
+import struct
+import sys
+
+BASE = 0x140000000
+SIZE = 0x10000
+ADDR = BASE + 0x1234
+THREAD = 0x1F4
+STACK_START = 0x7FF000
+STACK_LEN = 0x40
+NAME = "C:\\game\\riftbreaker.exe".encode("utf-16-le")
+DIR_RVA = 32
+n_streams = 4
+payload = DIR_RVA + n_streams * 12
+rva_name = payload
+payload += 4 + len(NAME)
+rva_stack = payload
+payload += STACK_LEN
+rva_mem = payload
+payload += 20
+rva_thr = payload
+payload += 52
+rva_mod = payload
+payload += 112
+rva_exc = payload
+payload += 168
+buf = bytearray(payload)
+
+buf[0:4] = b"MDMP"
+struct.pack_into("<I", buf, 4, 0xA793)
+struct.pack_into("<I", buf, 8, n_streams)
+struct.pack_into("<I", buf, 12, DIR_RVA)
+for i, (stype, rva) in enumerate([(4, rva_mod), (3, rva_thr), (5, rva_mem), (6, rva_exc)]):
+    struct.pack_into("<I", buf, DIR_RVA + i * 12, stype)
+    struct.pack_into("<I", buf, DIR_RVA + i * 12 + 8, rva)
+struct.pack_into("<I", buf, rva_name, len(NAME))
+buf[rva_name + 4:rva_name + 4 + len(NAME)] = NAME
+for i, p in enumerate([BASE + 0x500, BASE + 0xABC, BASE + 0x500, 0x7FF001, 0, 0, 0, 0]):
+    struct.pack_into("<Q", buf, rva_stack + i * 8, p)
+struct.pack_into("<I", buf, rva_mem, 1)
+struct.pack_into("<Q", buf, rva_mem + 4, STACK_START)
+struct.pack_into("<I", buf, rva_mem + 12, STACK_LEN)
+struct.pack_into("<I", buf, rva_mem + 16, rva_stack)
+struct.pack_into("<I", buf, rva_thr, 1)
+struct.pack_into("<I", buf, rva_thr + 4, THREAD)
+struct.pack_into("<Q", buf, rva_thr + 4 + 24, STACK_START)
+struct.pack_into("<I", buf, rva_thr + 4 + 32, STACK_LEN)
+struct.pack_into("<I", buf, rva_thr + 4 + 36, rva_stack)
+struct.pack_into("<I", buf, rva_mod, 1)
+struct.pack_into("<Q", buf, rva_mod + 4, BASE)
+struct.pack_into("<I", buf, rva_mod + 12, SIZE)
+struct.pack_into("<I", buf, rva_mod + 24, rva_name)
+struct.pack_into("<I", buf, rva_exc, THREAD)
+struct.pack_into("<I", buf, rva_exc + 8, 0xC0000005)
+struct.pack_into("<Q", buf, rva_exc + 8 + 16, ADDR)
+with open(sys.argv[1], "wb") as fh:
+    fh.write(bytes(buf))
+PY
+printf '[10:00:00.000] [critical] CRASH: in valid mdmp\n' >"${FAKE_ROOT}${CRASHINFO}/${VALID_UUID}.log"
+printf '(function-name not available)\n' >"${FAKE_ROOT}${CRASHINFO}/${VALID_UUID}.trace"
 
 cat >"${BIN}/docker" <<'FAKE'
 #!/usr/bin/env bash
@@ -200,6 +269,47 @@ run_case "$C5" "${TMP}/crash.log" "${FAKE_ROOT}${CRASHINFO}/${UUID}.dmp"
 run_case "$C5" "${TMP}/crash.log" "${FAKE_ROOT}${CRASHINFO}/${UUID}.dmp"
 assert_eq "zweiter Lauf -> rc=0" "0" "$RC"
 assert_eq "Idempotenz: weiterhin ein Bundle" "1" "$(find "${C5}/crashes" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+
+# --- (g) gueltiger Minidump -> Dump-Felder in meta.json (Issue #481) ---------
+C6="${TMP}/c6"
+run_case "$C6" "${TMP}/crash.log" "$VALID_DMP"
+assert_eq "valid dmp -> rc=0" "0" "$RC"
+mapfile -t B6 < <(find "${C6}/crashes" -mindepth 1 -maxdepth 1 -type d | sed 's|.*/||')
+assert_eq "valid dmp -> genau ein Bundle" "1" "${#B6[@]}"
+if [ "${#B6[@]}" -eq 1 ]; then
+  M6="${C6}/crashes/${B6[0]}/meta.json"
+  m6() { python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2]))" "$M6" "$1"; }
+  assert_eq "meta.exception_code" "3221225477" "$(m6 exception_code)"
+  assert_eq "meta.exception_address" "140001234" "$(m6 exception_address)"
+  assert_eq "meta.module" "riftbreaker.exe" "$(m6 module)"
+  assert_eq "meta.module_base (Dump)" "140000000" "$(m6 module_base)"
+  assert_eq "meta.module_size" "65536" "$(m6 module_size)"
+  assert_eq "meta.fault_rva" "1234" "$(m6 fault_rva)"
+  assert_eq "meta.fault_thread" "500" "$(m6 fault_thread)"
+  assert_eq "meta.stack_rvas" "500,abc" \
+    "$(python3 -c "import json,sys;print(','.join(json.load(open(sys.argv[1]))['stack_rvas']))" "$M6")"
+  # fault_rva == exception_address - module_base
+  assert_eq "meta.fault_rva == addr - base" "True" \
+    "$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(int(d['fault_rva'],16)==int(d['exception_address'],16)-int(d['module_base'],16))" "$M6")"
+fi
+
+# --- (h) ungueltiger Dump -> rc=0, neue Felder null, module_base aus Log ------
+C7="${TMP}/c7"
+run_case "$C7" "${TMP}/crash.log" "${FAKE_ROOT}${CRASHINFO}/${UUID}.dmp"
+assert_eq "invalid dmp -> rc=0" "0" "$RC"
+mapfile -t B7 < <(find "${C7}/crashes" -mindepth 1 -maxdepth 1 -type d | sed 's|.*/||')
+assert_eq "invalid dmp -> genau ein Bundle" "1" "${#B7[@]}"
+if [ "${#B7[@]}" -eq 1 ]; then
+  M7="${C7}/crashes/${B7[0]}/meta.json"
+  m7() { python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2]))" "$M7" "$1"; }
+  assert_eq "invalid: exception_code null" "None" "$(m7 exception_code)"
+  assert_eq "invalid: exception_address null" "None" "$(m7 exception_address)"
+  assert_eq "invalid: module null" "None" "$(m7 module)"
+  assert_eq "invalid: fault_rva null" "None" "$(m7 fault_rva)"
+  assert_eq "invalid: fault_thread null" "None" "$(m7 fault_thread)"
+  assert_eq "invalid: stack_rvas null" "None" "$(m7 stack_rvas)"
+  assert_eq "invalid: module_base aus Log-Zeile" "00006ffff6da0000" "$(m7 module_base)"
+fi
 
 if [ "$FAIL" -ne 0 ]; then
   printf '\ncrash-collector.test.sh: FAIL\n'
