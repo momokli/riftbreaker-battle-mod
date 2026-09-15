@@ -1,0 +1,49 @@
+---
+# Defaults der Rolle server-control (Host-Agent, Plane B — Issue #424).
+#
+# Der Agent ist ein kleiner Python-Dienst (Standardbibliothek), der `docker`
+# auf dem Host wrappt: Status/Logs/Restart/Start/Stop + config.cfg-Rendering.
+# Bewusst NICHT der In-Game-Kanal (Plane A, pipe_bridge) — er muss auch dann
+# funktionieren, wenn das Spiel haengt oder gerade neu startet.
+#
+# Haertung wie die Tournament-API (Issue #298): Bind nur 127.0.0.1, Caddy
+# proxyt dorthin, Bearer-Token PFLICHT. Ohne Token startet der Agent NICHT
+# (fail-closed) — deshalb bricht auch die Rolle ohne gesetztes
+# `vault_server_control_token` ab (siehe tasks/main.yml).
+
+# Installationsort (Binary + gerenderte Vorlage + Config-Vars).
+server_control_install_dir: /opt/rbmods/server-control
+
+# systemd-Unit + Entry-Point.
+server_control_unit: server-control
+server_control_bin: "{{ server_control_install_dir }}/server_control.py"
+server_control_python: /usr/bin/python3
+
+# Netz: ausschliesslich localhost (der rift-caddy proxyt /server/*).
+server_control_bind: 127.0.0.1
+server_control_port: 8091
+
+# Der gesteuerte Container kommt aus den bestehenden Deploy-Vars — kein
+# zweiter Name, der auseinanderlaufen kann.
+server_control_container: "{{ riftbreaker_server_container }}"
+# Compose-Projekt (nur informativ im Status/Env; gesteuert wird per Container-Name).
+server_control_compose_project: "{{ riftbreaker_compose_project | default('') }}"
+
+# Token-Quelle: NUR der Vault. Der Wert landet nie im Repo, nie im Log — die
+# Unit liest ihn aus einer 0600-Datei (EnvironmentFile), nicht aus `Environment=`.
+server_control_token: "{{ vault_server_control_token | default('') }}"
+
+# config.cfg-Rendering: dieselbe Vorlage wie die Rolle riftbreaker-server
+# (config.cfg.j2) und dieselben Basiswerte — es gibt nur EINE Quelle.
+server_control_config_path: "{{ riftbreaker_config_dir | default('/opt/rbmods/compose/riftbreaker-dedicated/config') }}/config.cfg"
+server_control_config_template: "{{ server_control_install_dir }}/config.cfg.j2"
+server_control_config_vars: "{{ server_control_install_dir }}/config-vars.json"
+server_control_config_template_src: "{{ playbook_dir }}/../deploy/roles/riftbreaker-server/templates/config.cfg.j2"
+
+# Agent-Verhalten.
+server_control_log_level: INFO
+server_control_timeout: 60
+server_control_env_file: /etc/rbmods/server-control.env
+
+# Quell-Skript im Repo.
+server_control_script_src: "{{ playbook_dir }}/../tools/server-control/server_control.py"
