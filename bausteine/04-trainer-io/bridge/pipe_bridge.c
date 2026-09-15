@@ -888,7 +888,6 @@ static void handle_client(SOCKET c)
             b[body_len] = '\0';
             handle_dom_control(c, b, "resume_dom");
             free(b);
-            free(b);
         } else if (strcmp(method, "GET") == 0 &&
                    (strcmp(path, "/") == 0 ||
                     strcmp(path, "/index.html") == 0)) {

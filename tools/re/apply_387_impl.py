@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Issue #387: C++-only DOM resolve + SetSuspended primitive + dispatch."""
-import io, os
+import io
+import os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 P = os.path.join(ROOT, "bausteine", "04-trainer-io", "rbbridge", "rbbridge.c")
