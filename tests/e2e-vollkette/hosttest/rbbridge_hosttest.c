@@ -57,9 +57,20 @@ static void check(int cond, const char *msg)
 #define VFT_OFF     0x1600 /* vftable-Start (= VFT_REF_OFF + 8)       */
 #define INST_OFF    0x1700 /* QWORD == base+VFT_OFF (Instanz)         */
 #define PAT_OFF     0x1800 /* freies Byte-Muster fuer scan_bytes      */
+#define PC_SIG_OFF  0x1200 /* Player-Count-AOB in .text (#390)        */
 
 static void wr32(unsigned char *p, uint32_t v) { memcpy(p, &v, 4); }
 static void wr64(unsigned char *p, uint64_t v) { memcpy(p, &v, 8); }
+
+/* Stub fuer den Wrapper: schreibt den Vektor-Count (Layout +0x10) in out.
+ * Ersetzt im Hosttest den echten C++-Wrapper -> Call-Layout + Auswertung
+ * sind ohne Modul pruefbar (#390). */
+static void ht_stub_player_count(void *ps, void *out)
+{
+    uint64_t n = 3;
+    (void)ps;
+    memcpy((unsigned char *)out + 0x10, &n, sizeof(n));
+}
 
 /*
  * Baut ein synthetisches Modul-Image.
@@ -328,6 +339,76 @@ int main(void)
     ((IMAGE_NT_HEADERS *)(pit + NT_OFF))->OptionalHeader.SizeOfImage = 0;
     check(!pe_image_size(pit, &psz), "R2: SizeOfImage == 0 -> verworfen");
     free(pit);
+
+    /* -------------------------------------------------------------- */
+    /* Player-Count via C++ (#390): AOB + Call-Layout + Count-Auswertung */
+    /* -------------------------------------------------------------- */
+    unsigned char *imgpc = build_image(1, 1, 1, 1, 1);
+    memcpy(imgpc + PC_SIG_OFF, RBBRIDGE_PLAYER_COUNT_SIG,
+           sizeof(RBBRIDGE_PLAYER_COUNT_SIG));
+    ht_set_module(imgpc, IMG_SIZE);
+
+    check(player_count_scan(imgpc, IMG_SIZE) == imgpc + PC_SIG_OFF,
+          "player_count_scan: AOB im .text gefunden");
+
+    /* rel32-Wildcard: Operand (Index 17..20) darf abweichen, E8 nicht. */
+    unsigned char *imgpc2 = build_image(1, 1, 1, 1, 1);
+    memcpy(imgpc2 + PC_SIG_OFF, RBBRIDGE_PLAYER_COUNT_SIG,
+           sizeof(RBBRIDGE_PLAYER_COUNT_SIG));
+    imgpc2[PC_SIG_OFF + 18] ^= 0xFF; /* rel32-Operand kaputt */
+    ht_set_module(imgpc2, IMG_SIZE);
+    check(player_count_scan(imgpc2, IMG_SIZE) == imgpc2 + PC_SIG_OFF,
+          "player_count_scan: rel32-Wildcard toleriert");
+    imgpc2[PC_SIG_OFF + 16] ^= 0xFF; /* E8-Opcode kaputt -> kein Treffer */
+    ht_set_module(imgpc2, IMG_SIZE);
+    check(player_count_scan(imgpc2, IMG_SIZE) == NULL,
+          "player_count_scan: E8-Opcode bleibt Pflicht");
+    free(imgpc2);
+
+    /* Negativfall: AOB fehlt -> Scan NULL, read graceful (kein Crash). */
+    unsigned char *imgnopc = build_image(1, 1, 1, 1, 1);
+    ht_set_module(imgnopc, IMG_SIZE);
+    check(player_count_scan(imgnopc, IMG_SIZE) == NULL,
+          "player_count_scan: AOB fehlt -> NULL");
+    uint64_t pc_n = 123;
+    check(player_count_read(NULL, IMG_SIZE, (void *)imgnopc, &pc_n) == 0,
+          "player_count_read: base == NULL -> 0 (kein Crash)");
+    check(player_count_read(imgnopc, IMG_SIZE, NULL, &pc_n) == 0,
+          "player_count_read: ps == NULL -> 0 (kein Crash)");
+
+    /* Fallback: kein AOB -> bekannte RVA 0xF27960 (Cache vorher leeren). */
+    g_player_count_fn = NULL;
+    g_player_count_base = NULL;
+    check(player_count_resolve(imgnopc, IMG_SIZE) ==
+              imgnopc + RBBRIDGE_PLAYER_COUNT_RVA,
+          "player_count_resolve: AOB fehlt -> RVA-Fallback 0xF27960");
+    g_player_count_fn = NULL;
+    g_player_count_base = NULL;
+    ht_set_module(imgpc, IMG_SIZE); /* shim-VirtualQuery sieht nur das
+                                       aktuelle Modul -> hier imgpc */
+    check(player_count_resolve(imgpc, IMG_SIZE) == imgpc + PC_SIG_OFF,
+          "player_count_resolve: AOB primaer");
+    check(player_count_resolve(imgpc, IMG_SIZE) == imgpc + PC_SIG_OFF,
+          "player_count_resolve: Cache-Treffer (2. Aufruf)");
+    ht_set_module(imgnopc, IMG_SIZE);
+    free(imgnopc);
+
+    /* Count-Auswertung: 0-init out -> count == 0 (Layout +0x10). */
+    unsigned char pc_out[0x18];
+    memset(pc_out, 0, sizeof(pc_out));
+    pc_n = 99;
+    check(player_count_from_out(pc_out, &pc_n) == 1 && pc_n == 0,
+          "player_count_from_out: 0-init -> count 0 aus +0x10");
+    check(player_count_from_out(NULL, &pc_n) == 0,
+          "player_count_from_out: out == NULL -> 0");
+
+    /* Call-Layout: Stub schreibt +0x10, player_count_call liest es. */
+    pc_n = 0;
+    check(player_count_call(ht_stub_player_count, NULL, &pc_n) == 1 &&
+              pc_n == 3,
+          "player_count_call: Stub-Count 3 aus out+0x10");
+    check(player_count_call(NULL, NULL, &pc_n) == 0,
+          "player_count_call: fn == NULL -> 0");
 
     /* Test-Knobs fuer alles Nachfolgende zuruecksetzen. */
     ht_set_loader_visible(1);

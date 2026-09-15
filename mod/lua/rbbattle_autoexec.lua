@@ -47,4 +47,6 @@ pcall(function()
     end)
 end)
 
-Log("player_mod ok")
+-- Load-Marker für Boot-Test C1 + Deploy-Runtime-Check (kein Business-Logik,
+-- nur das Lebenszeichen, das die Pipeline erwartet).
+Log("event=mod_load version=%s status=ok", RBB.version)

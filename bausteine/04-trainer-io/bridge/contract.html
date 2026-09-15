@@ -50,6 +50,14 @@
   </section>
 
   <section>
+    <h2>players</h2>
+    <div class="row">
+      <span class="dim">connected</span>
+      <span id="players" class="val">—</span>
+    </div>
+  </section>
+
+  <section>
     <h2>HQ</h2>
     <div class="row">
       <span class="dim">hp</span>
@@ -101,6 +109,7 @@
       $('raw').textContent = JSON.stringify(s, null, 2);
       $('carbonium').textContent = (typeof s.carbonium === 'number') ? s.carbonium.toLocaleString() : String(s.carbonium);
       $('carbonium_max').textContent = (typeof s.carbonium_max === 'number') ? s.carbonium_max.toLocaleString() : String(s.carbonium_max);
+      $('players').textContent = (s.players === null || s.players === undefined) ? '—' : s.players;
       $('hq_hp').textContent = (s.hq_hp === null || s.hq_hp === undefined) ? '—' : s.hq_hp;
       $('hq_hp_max').textContent = (s.hq_hp_max === null || s.hq_hp_max === undefined) ? '—' : s.hq_hp_max;
       $('hq_dead').textContent = (s.hq_dead === null || s.hq_dead === undefined) ? '—' : String(s.hq_dead);

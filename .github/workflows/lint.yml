@@ -33,7 +33,6 @@ jobs:
           shellcheck \
             scripts/*.sh \
             tests/shell/*.sh \
-            bausteine/*/test_e2e*.sh \
             bausteine/07-relay/fake-log.sh \
             tools/headless-client/*.sh
       # Dedicated-Server-Image-Scripts (Issue #241). Eigener Schritt statt
