@@ -3694,15 +3694,25 @@ static RBBRIDGE_NOINLINE void dispatch_natural_waves(HANDLE hPipe,
               esc_d);
 }
 
-/* #511: Service-Instanz ueber ihre vftable finden (QWORD-Scan im eigenen,
- * committeten und lesbaren Adressraum). Eine MSVC-C++-Instanz beginnt mit
- * ihrem vftable-Zeiger; derselbe Scan wie fuer PlayerService in get_state.
- * Reine Lese-Operation, kein Spiel-Call. NULL = nicht gefunden. */
-static void *resolve_instance_by_vftable_rva(const unsigned char *base,
-                                             uint32_t vftable_rva)
+/* #511: Service-Instanz ueber ihre vftable finden (QWORD-Scan).
+ *
+ * Bewusst STRENGER als der PlayerService-Scan in get_state (der naiv den
+ * ersten Treffer nimmt): eine vftable-Adresse kann auch anderswo als
+ * QWORD-Wert liegen (z. B. Type-Registry-Eintrag oder ein gecachter
+ * Zeiger). Ein falscher "Instanz"-Zeiger fuehrt beim anschliessenden
+ * Game-Call zu einem Page-Fault (#511: Live-Crash am Boot). Deshalb:
+ *   - nur MEM_PRIVATE (Heap) - Image-/Registry-Felder fallen weg,
+ *   - nur Kandidaten, deren Folgefeld (+0x08, der World*-Slot der Services)
+ *     lesbar und != 0 ist,
+ *   - genau EIN solcher Kandidat; 0 oder >1 -> NULL (lieber null als raten).
+ * Reine Lese-Operation, kein Spiel-Call. NULL = nicht gefunden/mehrdeutig. */
+static void *resolve_hq_service(const unsigned char *base,
+                                uint32_t vftable_rva)
 {
     const uint64_t needle = (uint64_t)(uintptr_t)(base + vftable_rva);
     uintptr_t addr = 0;
+    void *found = NULL;
+    int ncand = 0;
 
     for (;;) {
         MEMORY_BASIC_INFORMATION mi;
@@ -3712,16 +3722,30 @@ static void *resolve_instance_by_vftable_rva(const unsigned char *base,
         if (next <= addr)
             break;
         addr = next;
-        if (!is_readable_region(&mi))
+        if (!is_readable_region(&mi) || mi.Type != MEM_PRIVATE)
             continue;
         const uint64_t *q = (const uint64_t *)mi.BaseAddress;
         size_t nq = mi.RegionSize / sizeof(uint64_t);
         for (size_t i = 0; i < nq; i++) {
-            if (q[i] == needle)
-                return (void *)&q[i];
+            if (q[i] != needle)
+                continue;
+            uint64_t world = 0;
+            if (!safe_read_u64((const unsigned char *)&q[i] + 8, &world) ||
+                world == 0)
+                continue;
+            ncand++;
+            if (!found)
+                found = (void *)&q[i];
         }
     }
-    return NULL;
+
+    if (ncand != 1) {
+        dbg("resolve_hq_service: rva=%08lx Kandidaten=%d -> %s",
+            (unsigned long)vftable_rva, ncand,
+            ncand == 1 ? "ok" : "NULL (nicht eindeutig)");
+        return NULL;
+    }
+    return found;
 }
 
 /* #511: HQ-Health nativ (FindService -> Entity "headquarters" ->
@@ -3748,11 +3772,9 @@ static int read_hq_health(const unsigned char *base, size_t size, float *hp,
         return 0;
 
     if (!find_svc)
-        find_svc = resolve_instance_by_vftable_rva(
-            base, RBBRIDGE_HQ_RVA_FIND_VFTABLE);
+        find_svc = resolve_hq_service(base, RBBRIDGE_HQ_RVA_FIND_VFTABLE);
     if (!health_svc)
-        health_svc = resolve_instance_by_vftable_rva(
-            base, RBBRIDGE_HQ_RVA_HEALTH_VFTABLE);
+        health_svc = resolve_hq_service(base, RBBRIDGE_HQ_RVA_HEALTH_VFTABLE);
     if (!find_svc || !health_svc)
         return 0;
 
@@ -3800,26 +3822,14 @@ static void dispatch_get_state(HANDLE hPipe)
             snprintf(diff_field, sizeof(diff_field), "null");
     }
 
-    /* HQ-Health (Read #511, nativ C++): FindService -> Entity "headquarters"
-     * -> HealthComponent[+0x00]/[+0x04]. Unabhaengig vom Spieler-Account.
-     * Nicht aufloesbar (Instanz/Signatur fehlt, kein HQ) -> null (graceful,
-     * kein Crash). NaN/Inf wuerden kein gueltiges JSON ergeben -> null. */
+    /* HQ-Health (Read #511, nativ C++): Default null. Der Game-Call laeuft
+     * erst NACH aufgeloestem Spieler-Account (= Welt geladen) - vorher wird
+     * KEINE Game-Funktion gerufen (#511: ein HQ-Read waehrend des Boots
+     * page-faultete den Dedi). Gleiche Klasse wie #378/#479: Game-Zugriffe
+     * erst, wenn die Welt steht. */
     char hq_field[96];
-    {
-        float hq_hp = 0.0f, hq_hp_max = 0.0f;
-        int hq_dead = 0;
-        if (read_hq_health(base, size, &hq_hp, &hq_hp_max, &hq_dead) &&
-            float_is_finite(hq_hp) && float_is_finite(hq_hp_max))
-            snprintf(hq_field, sizeof(hq_field),
-                     "\"hq_hp\":%.2f,\"hq_hp_max\":%.2f,"
-                     "\"hq_dead\":%s",
-                     (double)hq_hp, (double)hq_hp_max,
-                     hq_dead ? "true" : "false");
-        else
-            snprintf(hq_field, sizeof(hq_field),
-                     "\"hq_hp\":null,\"hq_hp_max\":null,"
-                     "\"hq_dead\":null");
-    }
+    snprintf(hq_field, sizeof(hq_field),
+             "\"hq_hp\":null,\"hq_hp_max\":null,\"hq_dead\":null");
 
     /* Mission-Flow-Payload (Read #386): zuletzt gebautes Exor::Database-
      * Objekt; spawn_point via Database::GetString (AOB-aufgeloest),
@@ -3914,6 +3924,22 @@ static void dispatch_get_state(HANDLE hPipe)
                   flow_esc, flow_active ? "true" : "false", payload_field,
                   diff_field, hq_field);
         return;
+    }
+
+    /* HQ-Health (Read #511): Welt ist geladen (Account da) -> jetzt der
+     * native C++-Read FindService -> Entity "headquarters" ->
+     * HealthComponent[+0x00]/[+0x04]. Nicht aufloesbar -> bleibt null
+     * (graceful, kein Crash). NaN/Inf -> kein gueltiges JSON -> null. */
+    {
+        float hq_hp = 0.0f, hq_hp_max = 0.0f;
+        int hq_dead = 0;
+        if (read_hq_health(base, size, &hq_hp, &hq_hp_max, &hq_dead) &&
+            float_is_finite(hq_hp) && float_is_finite(hq_hp_max))
+            snprintf(hq_field, sizeof(hq_field),
+                     "\"hq_hp\":%.2f,\"hq_hp_max\":%.2f,"
+                     "\"hq_dead\":%s",
+                     (double)hq_hp, (double)hq_hp_max,
+                     hq_dead ? "true" : "false");
     }
 
     uint64_t arr = 0, count = 0;
