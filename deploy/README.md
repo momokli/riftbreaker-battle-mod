@@ -546,7 +546,7 @@ docker image prune          # = dangling only, KEIN -a
 - **Automatik statt Handarbeit:** systemd-Timer `rbmods-host-hygiene.timer`
   (wöchentlich, `Persistent=true` — holt verpasste Läufe nach Reboot nach),
   Unit + Skript werden vom Playbook installiert. Das Skript
-  (`scripts/host_hygiene.sh`) protokolliert Vorher/Nachher-Zähler ins Journal.
+  (`deploy/host-hygiene/host_hygiene.sh`) protokolliert Vorher/Nachher-Zähler ins Journal.
 - **⚠️ Niemals `docker image prune -a`:** `-a` entfernt **alle** Images ohne
   laufenden Container — inklusive des getaggten Rollback-Stands
   `rb-dedicated:<alte-sha>`. Ohne den ist der nächste kaputte Deploy nicht mehr

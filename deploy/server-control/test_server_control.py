@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Unit-/Integrationstests fuer tools/server-control/server_control.py (Issue #424).
+"""Unit-/Integrationstests fuer deploy/server-control/server_control.py (Issue #424).
 
 Reine Tests ohne Docker, Netz oder Spiel: `docker` wird durch ein Fake-Binary
 ersetzt (ein Python-Skript, ueber ``SERVER_CONTROL_DOCKER`` adressiert). Aufruf:
@@ -89,7 +89,7 @@ class BaseFixture(unittest.TestCase):
         self.vars_path = os.path.join(self.tmp, "config-vars.json")
 
         # Echte deployte Vorlage verwenden — es gibt nur EINE Quelle fuer das
-        # Rendering (tools/server-control und die Ansible-Rolle lesen dieselbe).
+        # Rendering (deploy/server-control und die Ansible-Rolle lesen dieselbe).
         here = os.path.dirname(os.path.abspath(__file__))
         repo_root = os.path.abspath(os.path.join(here, "..", ".."))
         real_template = os.path.join(

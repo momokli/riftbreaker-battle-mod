@@ -30,7 +30,7 @@
     riftbreaker_compose_project: riftbreaker-dedicated
     # Repo-Dateien (Game-Content/Zip existieren auf planet — hier als Fixture).
     mods_zip_dest: "{{ test_fixture_root }}/rbbattle.zip"
-    riftbreaker_sessions_script_src: "{{ playbook_dir }}/../../../tools/session-recorder/session_recorder.py"
+    riftbreaker_sessions_script_src: "{{ playbook_dir }}/../../session-recorder/session_recorder.py"
     # Werte, die sonst aus dem Vault/host_vars kommen (hier nur Dummies).
     riftbreaker_server_password: check-dummy
     riftbreaker_server_campaign: mp_survival/mp_survival

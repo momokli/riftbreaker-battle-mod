@@ -11,7 +11,7 @@
 # Was es tut:
 #   * sucht `<uuid>.dmp` im Bundle (oder nimmt `--dmp`),
 #   * prueft die Skip-Regeln (Master-Switch/Pflichtdateien/Tool),
-#   * ruft den Python-Kern (`tools/crash/symbolize.py`) und schreibt
+#   * ruft den Python-Kern (`deploy/crash-collector/symbolize.py`) und schreibt
 #     `<bundle>/symbolized.txt` ATOMAR (Temp-Datei + `mv`).
 #
 # Umgebung (setzt die systemd-Unit; Defaults s.u.):
