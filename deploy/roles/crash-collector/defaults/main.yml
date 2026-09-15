@@ -45,6 +45,7 @@ crash_collector_python: /usr/bin/python3
 # Groessen-/Startzeit-Regress). llvm-symbolizer loest die Minidump-Adressen
 # gegen die bereits auf dem Host liegende DLL/PDB auf.
 # Diese Rolle rollt ausdruecklich NUR die Skripte aus — keine PDB/DLL.
+# Hintergrund/Entscheidung: docs/crash-symbolication.md (Issue #480).
 crash_collector_symbolize: true
 crash_collector_symbolize_bin: /usr/local/bin/rbmods-crash-symbolize.sh
 crash_collector_symbolize_script_src: "{{ playbook_dir }}/../scripts/crash_symbolize.sh"
