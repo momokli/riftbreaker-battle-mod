@@ -70,7 +70,7 @@ exec-Zeilen auf die rbbridge-Named-Pipe:
 | `probe` | Bridge-/Pipe-Erreichbarkeit (API-Fläche der Bridge) |
 
 `GET /health` der Bridge gehört ebenfalls zur API-Fläche. Details und
-Verdrahtung: `docs/INGRESS_IO.md`, `bausteine/04-trainer-io/README.md`.
+Verdrahtung: `docs/INGRESS_IO.md`, `bausteine/rbbridge/README.md`.
 
 ### 2. Server-Control-Agent — Plane B (#424)
 
@@ -96,7 +96,7 @@ bekommt.
 
 Die UI wird **noch** in `pipe_bridge.exe` eingebettet: `scripts/gen_cockpit_html.py`
 liest diese Datei und erzeugt `cockpit_html.inc` im Bridge-Ordner
-(`bausteine/04-trainer-io/bridge/`, Build-Artefakt, gitignored, direkt neben
+(`bausteine/rbbridge/pipe-bridge/`, Build-Artefakt, gitignored, direkt neben
 `pipe_bridge.c`), das die Bridge unter `GET /` ausliefert. **Einzige Quelle**
 bleibt `cockpit.html` hier — es gibt keine handgepflegte Kopie.
 

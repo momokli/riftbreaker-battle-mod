@@ -13,9 +13,9 @@ Log-Tailing.
 | `docs/361-architecture` | `docs/ARCHITECTURE.md` (Zwei-Welten-Mirror, #361) |
 
 Relevante Dateien:
-- `bausteine/04-trainer-io/rbbridge/rbbridge.c` — `probe_resources()`,
+- `bausteine/rbbridge/dll/rbbridge.c` — `probe_resources()`,
   `safe_read_u64()`, `dump_qwords()`, `scan_hash()`
-- `bausteine/04-trainer-io/bridge/pipe_bridge.c` — `handle_probe()` (`POST /probe`)
+- `bausteine/rbbridge/pipe-bridge/pipe_bridge.c` — `handle_probe()` (`POST /probe`)
 - `docs/research/dedicated-io-re-findings.md` — RE-Offsets/Symbole
 - `docs/research/pdb-symbol-validation.md` — PDB stripped (#364)
 

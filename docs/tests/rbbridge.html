@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>04 — trainer-io · test guide</title>
+<title>04 — rbbridge · test guide</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -92,7 +92,7 @@
 <div class="shell">
   <a class="back" href="../index.html"><span class="arrow">&gt;</span> cd ..</a>
   <header>
-    <h1><span class="idx">04</span> — trainer-io</h1>
+    <h1><span class="idx">04</span> — rbbridge</h1>
     <p class="prompt"><span class="lbl">test guide</span> · tests <b><span id="ct">0/0</span></b> · validated <b><span id="cv">0/0</span></b></p>
   </header>
 
@@ -109,8 +109,8 @@
       <summary><span class="icn">▸</span> INSTALL (BUILD)</summary>
       <ol>
         <li>64-bit-Toolchain nötig — <b>Injector UND DLL müssen x64 sein</b> (notepad.exe unter Windows 10/11 x64 ist 64-bit). MinGW-w64:
-<pre>x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -shared -o rbbridge.dll rbbridge\rbbridge.c
-x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe rbbridge\rbbridge.c
+<pre>x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -shared -o rbbridge.dll dll\rbbridge.c
+x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe dll\rbbridge.c
 x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe injector\injector.c</pre>
         (MSVC-Alt: <code>cl /nologo /O2 /W3 /LD rbbridge.c /Fe:rbbridge.dll</code>, <code>cl /nologo /O2 /W3 /DRBBRIDGE_STANDALONE rbbridge.c /Fe:rbbridge_standalone.exe</code> und <code>cl /nologo /O2 /W3 injector.c shell32.lib /Fe:injector.exe</code>)</li>
         <li><code>pipe_client.py</code> braucht keinen Build (Python 3.7+, „Add python.exe to PATH“).</li>
@@ -156,7 +156,7 @@ x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe injector\injector.c</pr
     </span></label>
     <label class="chk"><input type="checkbox" data-g="t"><span class="body">
       <span class="t">test 07 — dll injizieren</span>
-      <span class="w">> was: <code>injector.exe &lt;pid&gt; C:\pfad\zu\bausteine\04-trainer-io\rbbridge\rbbridge.dll</code> ausführen (alternativ Prozessname: <code>injector.exe notepad.exe &lt;dll&gt;</code>).</span>
+      <span class="w">> was: <code>injector.exe &lt;pid&gt; C:\pfad\zu\bausteine\rbbridge\dll\rbbridge.dll</code> ausführen (alternativ Prozessname: <code>injector.exe notepad.exe &lt;dll&gt;</code>).</span>
       <span class="e">→ erwartet: Meldung <code>[+] rbbridge.dll geladen: HMODULE=0x...</code>.</span>
     </span></label>
     <label class="chk"><input type="checkbox" data-g="t"><span class="body">

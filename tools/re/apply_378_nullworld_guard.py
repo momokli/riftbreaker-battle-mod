@@ -13,7 +13,7 @@ Die .c-Datei wird NUR hier editiert (io.open(..., newline="\n")).
 import io
 import sys
 
-PATH = "bausteine/04-trainer-io/rbbridge/rbbridge.c"
+PATH = "bausteine/rbbridge/dll/rbbridge.c"
 
 EDITS = [
     # 1) read_hq_health: World* an HealthService[+0x08] pruefen.

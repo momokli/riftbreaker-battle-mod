@@ -1,7 +1,7 @@
 # Steam-Workshop-Upload — Anleitung (nur Lua-Mod!)
 
 > ⚠️ **Grundregel: NUR der Lua-Mod (`mod/`, `bausteine/00–03`) geht in den
-> Workshop. Der Trainer (`trainer/`, `bausteine/04-trainer-io`) wird NIE
+> Workshop. Der Trainer (`trainer/`, `bausteine/rbbridge`) wird NIE
 > hochgeladen** — In-Process-Injection verstößt gegen die Plattform-Regeln
 > und bleibt private Distribution (Entscheidung 08.09.2026,
 > `docs/concept.md` → „Steam-Kompatibilität“).
@@ -100,7 +100,7 @@ steamcmd +login <steamaccount> +workshop_build_item D:\rbbattle_workshop\worksho
 - Workshop-Regeln verbieten Prozess-Manipulation/Injection-Inhalte.
 - Der Trainer ist ein „für uns“-Tool (runtime-only Injection, kein
   Datei-Eingriff) — Distribution ausschließlich privat (z. B. direktes
-  ZIP von `trainer/` bzw. `bausteine/04-trainer-io/`), nie über Steam.
+  ZIP von `trainer/` bzw. `bausteine/rbbridge/`), nie über Steam.
 - Der Lua-Mod bleibt dadurch ein normaler, update-fester Workshop-Mod.
 
 ## Referenzen

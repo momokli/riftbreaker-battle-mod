@@ -20,7 +20,7 @@ target/
 *.log
 
 # Generated web-UI C-include (single source = cockpit.html)
-bausteine/04-trainer-io/bridge/cockpit_html.inc
+bausteine/rbbridge/pipe-bridge/cockpit_html.inc
 
 # Python
 __pycache__/

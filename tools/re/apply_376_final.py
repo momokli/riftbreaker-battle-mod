@@ -11,7 +11,7 @@ Both files edited via str.replace (KEIN Formatter).
 import io
 import sys
 
-C_PATH = "bausteine/04-trainer-io/rbbridge/rbbridge.c"
+C_PATH = "bausteine/rbbridge/dll/rbbridge.c"
 M_PATH = "mod/lua/rbbattle_autoexec.lua"
 BLOCK_PATH = "tools/re/dom_capture_block.lua"
 

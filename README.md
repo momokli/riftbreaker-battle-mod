@@ -22,16 +22,16 @@ nur noch die Player-HUD-Schicht.
 ## Status
 
 - **Feasibility verifiziert** — Mod-API vorhanden, Grenzen bekannt (Details: [docs/findings.md](docs/findings.md))
-- **SERVERMOD (C++)** — State-Egress + WRITE liegen in `rbbridge.dll` (`bausteine/04-trainer-io/`)
+- **SERVERMOD (C++)** — State-Egress + WRITE liegen in `rbbridge.dll` (`bausteine/rbbridge/`)
 - **PLAYERMOD (Lua)** — reine HUD-/Display-Schicht (`mod/lua/rbbattle_autoexec.lua`)
-- **Trainer-Harness** — Injector + In-Game-Bridge-DLL + RE-Scan-Tools, C-Quellen in [bausteine/04-trainer-io/](bausteine/04-trainer-io/README.md); Protokoll/RE-Tooling in [trainer/README.md](trainer/README.md)
+- **Trainer-Harness** — Injector + In-Game-Bridge-DLL + RE-Scan-Tools, C-Quellen in [bausteine/rbbridge/](bausteine/rbbridge/README.md); Protokoll/RE-Tooling in [trainer/README.md](trainer/README.md)
 
 ## Komponenten
 
 | Komponente            | Ort                                                                         | Aufgabe                                                                                                 |
 | --------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | **Lua-Mod**           | `mod/` (Spike)                                                              | gesamte Spiellogik im Spiel (Wellen, Punkte, Defense, HUD) — Spike-Skeleton mit Experimenten A/B/C      |
-| **Trainer / Harness** | `bausteine/04-trainer-io/` (C-Quellen), `trainer/` (Protokoll + RE-Tooling) | I/O-Gateway zwischen Spiel und Netz: DLL-Injection + Named Pipe + RE-Scan-Tools (Windows-first)         |
+| **Trainer / Harness** | `bausteine/rbbridge/` (C-Quellen), `trainer/` (Protokoll + RE-Tooling) | I/O-Gateway zwischen Spiel und Netz: DLL-Injection + Named Pipe + RE-Scan-Tools (Windows-first)         |
 | **Bausteine**         | `bausteine/`                                                                | eigenständig testbare Komponenten aus Mod + Trainer (Index: [bausteine/README.md](bausteine/README.md)) |
 | **Relay-Server**      | `server/` (geplant)                                                         | Matchmaking + Event-Routing (Node)                                                                      |
 
@@ -60,7 +60,7 @@ Lua-Mod selbst ist Workshop-tauglich (siehe [docs/workshop.md](docs/workshop.md)
 riftbreaker-battle-mod/
 ├── bausteine/ # eigenständig testbare Komponenten (00–04, Index: bausteine/README.md)
 ├── mod/       # Lua-PLAYERMOD (nur HUD/Display; SERVERMOD = rbbridge.dll)
-├── trainer/   # Sidecar/Trainer (Protokoll + RE-Scan-Tools; C-Quellen in bausteine/04-trainer-io/)
+├── trainer/   # Sidecar/Trainer (Protokoll + RE-Scan-Tools; C-Quellen in bausteine/rbbridge/)
 ├── server/    # Relay-Server (geplant, Node)
 ├── scripts/   # Tooling (package_mod.sh: Mod-ZIP bauen)
 ├── docs/      # Konzept, Findings, Workshop-Anleitung
