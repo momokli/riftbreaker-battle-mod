@@ -32,6 +32,13 @@ tournament_port: 8081
 tournament_bridge_a_url: "http://127.0.0.1:9001/exec"
 tournament_bridge_b_url: "http://127.0.0.1:9002/exec"
 
+# --- Server-Control (Plane B, systemd Host-Agent, Issue #424) ----------------
+# Wrappt `docker` auf dem Host: Status/Logs/Restart/Start/Stop + config.cfg.
+# Bindet NUR 127.0.0.1 — der rift-caddy proxyt /server/* dorthin (siehe
+# rift-caddy.Caddyfile.j2). Der Bearer-Token liegt AUSSCHLIESSLICH im Vault
+# (vault_server_control_token); ohne ihn bricht die Rolle ab (fail-closed).
+server_control_port: 8092
+
 # --- Website (Landing + Cockpit, eigener rift-caddy) -------------------------
 # Architektur (Issue #322): Der Riftbreaker-Stack betreibt einen EIGENEN,
 # schlanken Caddy-Container (`rift-caddy`, plain HTTP, reines Durchreichen):

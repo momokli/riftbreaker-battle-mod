@@ -46,6 +46,14 @@ http://{{ cockpit_domain }}:{{ rift_caddy_port }} {
 		reverse_proxy 127.0.0.1:{{ riftbreaker_bridge_port }}
 	}
 
+	# Server-Control (Plane B, Issue #424): Host-Agent fuer den
+	# Dedicated-Server-Container (Status/Logs/Restart/Start/Stop, config.cfg).
+	# Praefix bleibt stehen (der Agent bedient /server/*); Auth macht der Agent
+	# selbst (Bearer erzwungen, er bindet ohnehin nur 127.0.0.1).
+	handle /server/* {
+		reverse_proxy 127.0.0.1:{{ server_control_port }}
+	}
+
 	# Tournament-Server (Web-UI + API, z. B. der /wave-Knopf) unter
 	# /tournament/* — Präfix wird gestrippt.
 	handle_path /tournament/* {

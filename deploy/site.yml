@@ -17,11 +17,13 @@
 #      (/opt/rbmods/rbtools -> /opt/rbtools:ro im Container, Issue #265)
 #   5. riftbreaker-server   Dev-SP-Server 6321 (Mod-Install + Restart-Handler)
 #   6. tournament-server    systemd (Rust/axum)
-#   7. website              eigener rift-caddy (Landing: file_server + /mod.zip,
+#   7. server-control       systemd Host-Agent (docker-Wrapper: Status/Logs/
+#                           Restart/Start/Stop + config.cfg; Plane B, #424)
+#   8. website              eigener rift-caddy (Landing: file_server + /mod.zip,
 #                           Cockpit: /contract/* + /tournament/*)
-#   8. image-retention      systemd-Timer → alte Mod-Image-Tags aufräumen
+#   9. image-retention      systemd-Timer → alte Mod-Image-Tags aufräumen
 #                           (Rollback-Stand + laufendes Image bleiben, #309)
-#   9. host-hygiene         systemd-Timer → dangling Docker-Images aufräumen
+#  10. host-hygiene         systemd-Timer → dangling Docker-Images aufräumen
 #                           (`docker image prune`, KEIN `-a`; Issue #308)
 #
 # Tags erlauben einen gezielten Lauf (z. B. `--tags server` im PR-Gate
@@ -78,6 +80,8 @@
       tags: [server]
     - role: tournament-server
       tags: [tournament]
+    - role: server-control
+      tags: [server]
     - role: website
       tags: [website]
     - role: image-retention

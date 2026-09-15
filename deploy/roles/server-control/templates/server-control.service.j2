@@ -1,0 +1,27 @@
+# Verwaltet von deploy/ role "server-control" (Jinja). NICHT manuell editieren.
+#
+# Host-Agent fuer den Dedicated-Server-Container (Plane B, Issue #424).
+# Bindet ausschliesslich {{ server_control_bind }}:{{ server_control_port }};
+# der rift-caddy proxyt /server/* dorthin. Bearer-Token PFLICHT (Env-Datei).
+[Unit]
+Description=RIFT BATTLE Server-Control Host-Agent (Docker-Wrapper)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory={{ server_control_install_dir }}
+# Token etc. aus 0600-Datei (nicht aus Environment= — sonst world-readable).
+EnvironmentFile={{ server_control_env_file }}
+ExecStart={{ server_control_python }} {{ server_control_bin }}
+Restart=on-failure
+RestartSec=5
+# Kein Shell-Start, keine Schreibrechte ausserhalb der Config: der Agent
+# braucht den Docker-Socket, sonst nichts.
+
+[Install]
+WantedBy=multi-user.target

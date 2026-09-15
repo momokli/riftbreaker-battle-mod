@@ -1,0 +1,91 @@
+---
+# Rolle: server-control — Host-Agent fuer den Dedicated-Server-Container
+# (Plane B, Issue #424). Muster: tournament-server (systemd-Unit + Binary aus
+# dem Repo-Checkout) bzw. probe-timer (Skript + Unit).
+#
+# Der Agent laeuft als root, weil er den Docker-Socket nutzt; er bindet nur
+# 127.0.0.1 und verlangt fuer JEDEN Request einen Bearer-Token.
+
+- name: "Vorbedingung: Bearer-Token gesetzt (kein offener Restart-Endpunkt)"
+  assert:
+    that:
+      - server_control_token | length > 0
+    fail_msg: >-
+      vault_server_control_token ist leer. Der Server-Control-Agent hat einen
+      Bearer-Token PFLICHT (Issue #424, Haertung wie #298) und wuerde ohne ihn
+      gar nicht starten. Token im Vault (host_vars/planet/vault.yml) setzen:
+      `ansible-vault edit deploy/inventory/host_vars/planet/vault.yml`.
+    success_msg: "Server-Control-Token vorhanden (Wert wird nie geloggt)."
+  when: not ansible_check_mode
+
+- name: Installationsverzeichnis anlegen
+  file:
+    path: "{{ server_control_install_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Umgebungsverzeichnis anlegen
+  file:
+    path: "{{ server_control_env_file | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Agent-Skript installieren
+  copy:
+    src: "{{ server_control_script_src }}"
+    dest: "{{ server_control_bin }}"
+    mode: "0755"
+    owner: root
+    group: root
+  notify: restart server-control
+
+- name: config.cfg.j2-Vorlage installieren (EINE Quelle mit riftbreaker-server)
+  copy:
+    src: "{{ server_control_config_template_src }}"
+    dest: "{{ server_control_config_template }}"
+    mode: "0644"
+    owner: root
+    group: root
+  notify: restart server-control
+
+- name: config.cfg-Basiswerte rendern (JSON fuer den Agenten)
+  template:
+    src: config-vars.json.j2
+    dest: "{{ server_control_config_vars }}"
+    mode: "0600"
+    owner: root
+    group: root
+  notify: restart server-control
+
+- name: Umgebungsdatei rendern (Token, 0600 — nie world-readable)
+  template:
+    src: server-control.env.j2
+    dest: "{{ server_control_env_file }}"
+    mode: "0600"
+    owner: root
+    group: root
+  notify: restart server-control
+
+- name: systemd-Unit rendern
+  template:
+    src: server-control.service.j2
+    dest: "/etc/systemd/system/{{ server_control_unit }}.service"
+    mode: "0644"
+  notify: restart server-control
+
+- name: Unit aktivieren und starten
+  systemd:
+    name: "{{ server_control_unit }}"
+    state: started
+    enabled: true
+    daemon_reload: true
+  register: server_control_systemd
+  # Erster Deploy im PR-Gate (`--check --tags server,website`): der Check-Modus
+  # schreibt die Unit-Datei NICHT, deshalb kennt systemd den Service noch nicht
+  # („Could not find the requested service"). Das ist kein Template-Fehler — im
+  # echten Lauf wird die Unit geschrieben und der Handler greift. Genau diesen
+  # einen Fall tolerieren, alles andere bleibt ein harter Fehler.
+  failed_when: >-
+    server_control_systemd is failed and not
+    (ansible_check_mode | bool and
+     'Could not find the requested service' in (server_control_systemd.msg | default('')))
