@@ -85,7 +85,9 @@ Strg+C beendet sauber; Log-Rotation wird erkannt.
    ausführt, deterministisch er selbst, nie ein externer Reader (bei einer
    echten Windows-Named-Pipe mit getrennten Puffern je Richtung tritt das
    nicht auf). Details: `docs/relay-pipe-contract.md`.
-6. Kompletter Durchstich inkl. Assertions: `bash test_e2e_prototype.sh` (Baustein 07, s. u.)
+6. Kompletter Durchstich inkl. Assertions: entfällt — der frühere Prototyp-Harness
+   `test_e2e_prototype.sh` hing am mit Baustein 06 (Green-Field-Refaktorierung)
+   entfernten Node-Tournament-Server und wurde gelöscht.
 
 Unit-Tests des Pipe-Dispatchs (Erfolg / Pipe-fehlt / Ack-Pfad / exec_result-
 Antwort, ohne Spiel, FIFO bzw. `os.pipe()` als Named-Pipe-Ersatz):

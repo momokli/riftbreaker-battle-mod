@@ -15,10 +15,10 @@ MinGW) waren nirgends als Code versioniert.
 
 ## Aufbau
 
-| Datei | Zweck |
-| --- | --- |
-| [`setup.sh`](setup.sh) | Idempotentes, race-freies Setup: MinGW-w64, ccache, zip installieren; ccache als Compiler-Wrapper registrieren; Ansible-Venv (ansible-core + yamllint) und Rust-Toolchain provisionieren; Node/npm/Python verifizieren. |
-| [`README.md`](README.md) | Diese Doku (Reproduktion, Caches, offene Punkte). |
+| Datei                    | Zweck                                                                                                                                                                                                                   |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`setup.sh`](setup.sh)   | Idempotentes, race-freies Setup: MinGW-w64, ccache, zip installieren; ccache als Compiler-Wrapper registrieren; Ansible-Venv (ansible-core + yamllint) und Rust-Toolchain provisionieren; Node/npm/Python verifizieren. |
+| [`README.md`](README.md) | Diese Doku (Reproduktion, Caches, offene Punkte).                                                                                                                                                                       |
 
 ## Setup auf frischem Host (< 10 min)
 
@@ -44,10 +44,9 @@ im geteilten `$HOME` racen. Hintergrund, Audit und Kapazitätswerte:
 
 ## Caches (warme Builds)
 
-- **npm-Store** (`actions/cache`, Pfad `~/.npm`): beide npm-Projekte
-  (`tests/lua-static`, `tests/e2e-vollkette`) teilen sich `fengari` + `luaparse`;
-  `npm ci` zieht die Pakete aus dem Store statt aus dem Netz. Key basiert auf den
-  `package-lock.json`-Hashes.
+- **npm-Store** (`actions/cache`, Pfad `~/.npm`): `tests/e2e-vollkette` zieht
+  `fengari` + `luaparse`; `npm ci` zieht die Pakete aus dem Store statt aus dem
+  Netz. Key basiert auf dem `package-lock.json`-Hash.
 - **ccache** (`actions/cache`, Pfad `~/.cache/ccache`): der MinGW-C++-Build
   (rbbridge.dll/injector.exe/rbbridge_standalone.exe) wird über den
   ccache-Wrapper (`/opt/ccache-rbbattle/bin`) kompiliert; Key basiert auf den

@@ -16,10 +16,6 @@
 #       "zig cc -target x86_64-windows-gnu" (Zig bringt die mingw-Libc mit)
 #     - sonst: Quellen + pipe_client.py + README -> rbb-04-trainer-io-src.zip
 #
-#   Baustein 06 (tournament-server): der Baustein-Ordner als Content-Root ->
-#   rbb-06-tournament-server.zip (server.js, mock_client.js, test_e2e.sh,
-#   README.md an der Zip-Wurzel).
-#
 # Ausgabe: je Zip eine Zeile "NAME=<dateiname> ZIP=<absoluter-pfad>"
 # (maschinenlesbar fuer Release-Upload).
 #
@@ -131,15 +127,6 @@ else
     echo "FEHLER: 04-Build (TOOLCHAIN=$TOOLCHAIN) fehlgeschlagen." >&2
     exit 1
 fi
-
-# Baustein 06: tournament-server (Server + Mock-Client + E2E + README)
-SRC06="$ROOT/bausteine/06-tournament-server"
-for f in server.js mock_client.js test_e2e.sh README.md; do
-    [ -f "$SRC06/$f" ] || { echo "FEHLER: $SRC06/$f nicht gefunden." >&2; exit 1; }
-done
-out06="$OUT_DIR/rbb-06-tournament-server.zip"
-zip_content_root "$SRC06" "$out06"
-echo "NAME=rbb-06-tournament-server.zip ZIP=$out06"
 
 # Einzel-Mod (Issue #16): der fusionierte Mod mod/ als rbbattle.zip —
 # Primär-Download. Content-Root = mod/ (lua/ + <GUID>.manifest + README.md an

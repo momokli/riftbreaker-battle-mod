@@ -1382,6 +1382,127 @@ static int resolve_console_service(console_exec_fn *out_fn, void **out_inst)
     return 1;
 }
 
+/* ------------------------------------------------------------------ */
+/* Player-Count via C++ (#390): PlayerService::GetConnectedPlayers()   */
+/*                                                                     */
+/* RE (Build 2.0.58485, planet, s. docs/research/                      */
+/* dedicated-io-re-findings.md "Phase E"):                             */
+/*   Member-Wrapper RVA 0xF27960. Win64-Aufrufkonvention:              */
+/*     RCX = this (PlayerService* ps)                                  */
+/*     RDX = hidden-sret Exor::Vector<uint>* out                       */
+/*   Der Wrapper liest [ps+8] (World*) selbst und ruft intern die      */
+/*   freie Riftbreaker::GetConnectedPlayers(out, World*) (RVA 0xC5EE70)*/
+/*   auf. Vector-Layout: +0x00 StlAllocatorProxy, +0x08 uint32_t* data,*/
+/*   +0x10 size_t count  => count = *(uint64_t*)(out+0x10).            */
+/*                                                                     */
+/* AOB statt fester RVA (rel32 des internen CALL ist Wildcard, wie     */
+/* RBBRIDGE_EXEC_SIG). Reiner C++-Read -> pipe-thread-tauglich, KEIN   */
+/* lua_* (Thread-Modell s. SKILL riftbreaker-re).                      */
+/*                                                                     */
+/* Der Wrapper gibt eine Exor::Vector<uint> per Copy-Assign zurueck;   */
+/* ein Exor::Vector<uint>-Destruktor ist per AOB/Symbol nicht sauber   */
+/* verankert und wird daher NICHT geraten aufgerufen -> der kleine     */
+/* Heap-Puffer von out[+0x08] bleibt liegen (dokumentierter, kleiner,  */
+/* seltener Leak; bei players==0 bleibt der Vektor leer). Kein Crash.  */
+/* ------------------------------------------------------------------ */
+
+/* 30-Byte-AOB des Wrappers. Die 4 Byte ab Index 17 sind der rel32 des
+ * internen E8-CALLs -> Wildcard (Maske 0x00), der E8-Opcode bleibt Pflicht. */
+static const unsigned char RBBRIDGE_PLAYER_COUNT_SIG[] = {
+    0x40, 0x53, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x8B, 0xDA, 0x48,
+    0x8B, 0x51, 0x08, 0x48, 0x8B, 0xCB, 0xE8, 0x00, 0x00, 0x00,
+    0x00, 0x48, 0x8B, 0xC3, 0x48, 0x83, 0xC4, 0x30, 0x5B, 0xC3
+};
+static const unsigned char RBBRIDGE_PLAYER_COUNT_SIG_MASK[] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00,
+    0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+};
+
+/* Fallback-RVA, falls der AOB-Scan fehlschlaegt (Engine-Rebuild). */
+#define RBBRIDGE_PLAYER_COUNT_RVA 0xF27960u
+
+/* Win64: this=RCX (ps), out=RDX (Vector-Puffer). Auf x64==Default-ABI. */
+typedef void (*player_count_fn)(void *ps, void *out);
+
+static const unsigned char *g_player_count_fn = NULL;
+static const unsigned char *g_player_count_base = NULL;
+
+/* AOB-Scan (bevorzugt .text, sonst gesamtes Abbild). Rueckgabe: Wrapper-
+ * Adresse oder NULL. Reiner Speichervergleich -> host-testbar. */
+static const unsigned char *player_count_scan(const unsigned char *base,
+                                              size_t size)
+{
+    if (!base || size == 0)
+        return NULL;
+    const unsigned char *text = NULL;
+    size_t text_len = 0;
+    if (text_range(base, &text, &text_len)) {
+        const unsigned char *hit = scan_bytes_mask(
+            text, text_len, RBBRIDGE_PLAYER_COUNT_SIG,
+            RBBRIDGE_PLAYER_COUNT_SIG_MASK,
+            sizeof(RBBRIDGE_PLAYER_COUNT_SIG));
+        if (hit)
+            return hit;
+    }
+    return scan_bytes_mask(base, size, RBBRIDGE_PLAYER_COUNT_SIG,
+                           RBBRIDGE_PLAYER_COUNT_SIG_MASK,
+                           sizeof(RBBRIDGE_PLAYER_COUNT_SIG));
+}
+
+/* Wrapper-Adresse: AOB primaer, RVA-Fallback 0xF27960, einmalig gecached. */
+static const unsigned char *player_count_resolve(const unsigned char *base,
+                                                 size_t size)
+{
+    if (g_player_count_fn && g_player_count_base == base)
+        return g_player_count_fn;
+    const unsigned char *fn = player_count_scan(base, size);
+    if (!fn)
+        fn = base + RBBRIDGE_PLAYER_COUNT_RVA;
+    g_player_count_fn = fn;
+    g_player_count_base = base;
+    return fn;
+}
+
+/* Liest den Count aus dem gefuellten out-Puffer (Layout: +0x10 = size_t). */
+static int player_count_from_out(const void *out, uint64_t *players)
+{
+    if (!out || !players)
+        return 0;
+    uint64_t count = 0;
+    memcpy(&count, (const unsigned char *)out + 0x10, sizeof(count));
+    *players = count;
+    return 1;
+}
+
+/* Ruft den Wrapper mit 0-initialisiertem 0x18-Byte-out und wertet den Count
+ * aus. Der eigentliche Aufruf ist gekapselt, damit der Hosttest Call-Layout +
+ * Auswertung mit einem Stub pruefen kann (kein echtes Modul noetig). */
+static int player_count_call(player_count_fn fn, void *ps, uint64_t *players)
+{
+    if (!fn || !players)
+        return 0;
+    unsigned char out[0x18];
+    memset(out, 0, sizeof(out));
+    fn(ps, out);
+    return player_count_from_out(out, players);
+}
+
+/* Vollstaendiges Primitiv: base/size (Modul), ps (PlayerService-Instanz,
+ * aus dem vftable-Scan), *players = RAW-Count (NICHT auf 4 geklemmt — der
+ * Lua-Clamp gehoert in die Interface-Schicht). Rueckgabe 0 = graceful
+ * (no_module/no_playerservice/kein Wrapper), 1 = gelesen. */
+static int player_count_read(const unsigned char *base, size_t size,
+                             void *ps, uint64_t *players)
+{
+    if (!base || !ps || !players)
+        return 0;
+    const unsigned char *fn = player_count_resolve(base, size);
+    if (!fn)
+        return 0;
+    return player_count_call((player_count_fn)(uintptr_t)fn, ps, players);
+}
+
 #ifndef RBBRIDGE_HOSTTEST
 
 /* ------------------------------------------------------------------ */
@@ -2835,6 +2956,20 @@ static void dispatch_get_state(HANDLE hPipe)
         snprintf(hq_json, sizeof(hq_json),
                  "\"hq_hp\":null,\"hq_hp_max\":null,\"hq_dead\":null,");
 
+    /* Player-Count (#390): nativ per AOB-verankertem C++-Wrapper (RAW-Count,
+     * NICHT auf 4 geklemmt). Reiner Read -> pipe-thread-tauglich. Nicht
+     * verfuegbar -> null (konsistent zu hq_*). */
+    char players_json[48];
+    {
+        uint64_t players = 0;
+        if (player_count_read(base, size, ps, &players))
+            snprintf(players_json, sizeof(players_json),
+                     "\"players\":%llu,", (unsigned long long)players);
+        else
+            snprintf(players_json, sizeof(players_json),
+                     "\"players\":null,");
+    }
+
     /* DOM/Voll-State aus dem Cache (game thread schreibt; spinlock-guarded). */
     char state_json[RESP_BUF_SIZE];
     while (InterlockedExchange(&g_dom_state_lock, 1) != 0)
@@ -2849,9 +2984,10 @@ static void dispatch_get_state(HANDLE hPipe)
               "{\"event\":\"get_state_result\",\"ok\":true,"
               "\"carbonium\":%llu,\"carbonium_max\":%lld,\"resources\":%s,"
               "%s"
+              "%s"
               "\"state\":%s}",
               (unsigned long long)carbonium, (long long)carbonium_max,
-              resources, hq_json, state_json);
+              resources, hq_json, players_json, state_json);
 }
 
 

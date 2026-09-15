@@ -229,23 +229,20 @@ jobs:
             "http://127.0.0.1:${TOURNAMENT_PORT}/health" | grep -q '"ok":true'
           echo "Boot-Test OK: Container läuft stabil, tournament-server healthy auf ${TOURNAMENT_PORT}."
 
-      - name: Core-IO-Gate (C1-C4, Effekt-Invariante — Issue #289)
+      - name: Core-IO-Gate (C1 Boot — Issue #289)
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
-          # Beweist am laufenden Test-Server: Ingress wirkt (ok:true ⟹ Effekt-
-          # Logzeile, sonst ROT), Egress erreicht einen laufenden Consumer und
-          # der server-ausgeloeste Wave-Auftrag kommt im Mod an. Der Sicht-Spawn
-          # (spawned>0) ist headless nicht erreichbar -> ::warning:: (offener
-          # Punkt, Player-Test), kein Hard-Fail. Container/Bridge/Tournament
-          # sind je Lauf eindeutig (Issue #307) -> parallele Läufe kollidieren nicht.
+          # Nach der Green-Field-Refaktorierung prüft das Gate nur noch C1:
+          # Container stabil + Mod geladen + Bridge /health ok. C2–C4 (Ingress-
+          # Effekt, Egress, Server-Wave) testeten die alte Lua-Architektur und
+          # werden gegen die C++-Backend-Pfade (get_state/add_resource) neu
+          # aufgebaut (Folge-Issue).
           python3 tests/core-io/core_io_probe.py \
             --remote "ssh planet" \
             --container "riftbreaker-dedicated-test-${RBBATTLE_RUN_ID}" \
             --bridge-url "http://127.0.0.1:${BRIDGE_PORT}/exec" \
-            --tournament-url "http://127.0.0.1:${TOURNAMENT_PORT}" \
-            --boot-timeout 240 \
-            --effect-timeout 60
+            --boot-timeout 240
 
       - name: Aufräumen (Test-Container + Unit + je Lauf eindeutige Pfade/Volumes)
         if: always() && needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'

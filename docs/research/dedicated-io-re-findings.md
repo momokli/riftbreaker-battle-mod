@@ -239,6 +239,95 @@ Live bestätigt (Build 2.0.58485): `debug_dom_pause`/`debug_dom_resume`/
 `debug_dom_manager_spawn_wave_level` → `ok:true`, kein Crash; pause friert
 `time_to_next` ein, resume taut auf, spawn_wave spawnt Kreaturen.
 
+## Phase E: Player-Count via C++ `GetConnectedPlayers` (#390)
+
+Ziel: die Spielerzahl **nativ aus dem C++** lesen (kein Lua, kein Log-Tailing),
+analog zum Lua-`dom_mananger:GetPlayersCounter()` =
+`#PlayerService:GetConnectedPlayers()` (Lua klemmt auf 4; das Primitiv liefert den
+**RAW-Count** — der Clamp gehört in die Interface-Schicht, nicht in den Read).
+Alle Befunde Build 2.0.58485, planet, Symbol-Lookup `llvm-pdbutil dump -publics`
+(`addr` DEZIMAL, `.text`-Basis `0x1000`), Disasm `tools/re/disasm.py`.
+
+Es gibt **kein** Symbol `GetPlayersCounter` (das ist nur ein Lua-Methodenname).
+Das C++-Äquivalent ist `PlayerService::GetConnectedPlayers()`.
+
+### RVA-Tabelle
+
+| Symbol (demangled) | decimal addr | RVA |
+| --- | --- | --- |
+| `Vector<uint> PlayerService::GetConnectedPlayers()` | `0001:15886688` | **`0xF27960`** |
+| `Vector<uint> PlayerService::GetConnectedPlayersFromTeam(TeamId)` | `0001:15886720` | `0xF27980` |
+| `Vector<uint> Riftbreaker::GetConnectedPlayers(World*)` (frei) | `0001:12967536` | **`0xC5EE70`** |
+| `Vector<uint> Riftbreaker::GetConnectedPlayersFromTeam(World*, TeamId)` | `0001:12967888` | `0xC5EFD0` |
+| `Vector<PlayerInfo> ServerGameplaySessions::GetConnectedPlayers()` (static) | `0001:24781920` | `0x17A3460` |
+
+### Disasm `0xF27960` (Member-Wrapper, dünn)
+
+```
+push rbx ; sub rsp,0x30
+mov rbx,rdx            ; rbx = hidden-sret Vector*  (out)
+mov rdx,[rcx+8]        ; rdx = this->World*  (PlayerService+8 = World*, #363)
+mov rcx,rbx            ; rcx = out
+call 0x180c5ee70       ; = Riftbreaker::GetConnectedPlayers(out, World*)
+mov rax,rbx
+add rsp,0x30 ; pop rbx ; ret
+```
+
+### Aufrufkonvention (Win64)
+
+`PlayerService::GetConnectedPlayers()` ist ein **Member-Wrapper**: die
+hidden-sret-Rückgabe (`Exor::Vector<uint>*`) steht in **RDX**, nicht RCX.
+
+- `this` = **RCX** = `PlayerService*` (`ps`)
+- `out`  = **RDX** = Zeiger auf einen `Exor::Vector<uint>`-Puffer
+
+⇒ Aufruf als `((void (*)(void *ps, void *out))fn)(ps, &out)` (MS-x64 mes-ABI;
+MinGW-x64 nutzt diese per Default). Der Wrapper liest `[ps+8]` (World*) selbst;
+es wird **kein** World-/System-Map-Zugriff gebraucht (der ist boot-racy, #376).
+
+### `Exor::Vector<uint>`-Layout (aus Disasm `0xC5EE70`)
+
+| Offset | Bedeutung |
+| --- | --- |
+| `+0x00` | `StlAllocatorProxy` (stateless erwartet) |
+| `+0x08` | `uint32_t*` Daten |
+| `+0x10` | `size_t` Count |
+
+Nach dem Aufruf gilt: **`count = *(uint64_t*)(out + 0x10)`**.
+Der Wrapper füllt `out` per Vector-Copy-Assign (`0x181df3f50`) und iteriert
+danach `[out+8]`/`[out+0x10]` zum Dedupe/Filter.
+
+### AOB-Signatur statt fester RVA
+
+Fester RVA ist unsicher (Engine-Rebuild). Der Wrapper wird per 30-Byte-AOB im
+`.text` gesucht (`??` = rel32 des internen CALL, Wildcard):
+
+```
+40 53 48 83 EC 30 48 8B DA 48 8B 51 08 48 8B CB E8 ?? ?? ?? ?? 48 8B C3 48 83 C4 30 5B C3
+```
+
+- Länge: **30 Byte** (die `??` stehen an Index 17..20 als rel32 des `E8`-CALLs).
+- Planet: **genau 1 Treffer** im `.text` (verifiziert).
+- Muster wie `RBBRIDGE_EXEC_SIG` aus #385: `scan_bytes_mask` mit Byte-Maske
+  (`0x00` == don't care), nur die `E8`-Opcode bleibt Pflicht.
+- PlayerService-Instanz (`ps`) kommt aus dem bestehenden vftable-Scan
+  (vftable RVA `0x2E8E910`, `ps+8` = World*) — derselbe Pfad wie in
+  `dispatch_get_state()`.
+
+### Thread-Modell
+
+Reiner C++-Read (kein `lua_*`, kein ConsoleService) ⇒ **pipe-thread-tauglich**.
+
+### Offene RE-Punkte (live zu verifizieren)
+
+- Ist der 0x18-Byte-`out`-Puffer vor dem Aufruf vorzuinitialisieren?
+  Erwartung: 0-init genügt (`StlAllocatorProxy` stateless).
+- **Leak:** Der Copy-Assign alloziert für `[out+0x08]` Heap, den wir nicht
+  destruieren. Ohne sauberen, per AOB/Symbol erreichbaren
+  `Exor::Vector<uint>`-Destruktor wird der kleine Puffer bewusst nicht
+  geraten-freigegeben (kein blindes Dtor-Raten) ⇒ dokumentierter, kleiner,
+  seltener Leak. Mit `players == 0` bleibt der Vektor leer (keine Allokation).
+
 ## Control-Workflow (STOP/START von außen, manuell)
 
 Join (ohne HQ): DOM steht in `wait` (suspended) — nichts passiert; der Mod hält
