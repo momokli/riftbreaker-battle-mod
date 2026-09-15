@@ -1,0 +1,32 @@
+# Verwaltet von deploy/ role "crash-collector" (Jinja). NICHT manuell editieren.
+#
+# Crash-Collector (Issue #462): Dauer-Dienst, beobachtet `docker logs -f` des
+# Dedicated-Servers auf Crash-Marker und sichert das neueste
+# crash_info/<uuid>.{dmp,log,trace} als Bundle nach {{ crash_collector_dir }}.
+[Unit]
+Description=RIFT BATTLE Crash-Collector — Crash-Artefakte sichern (Issue #462)
+Documentation=file:{{ crash_collector_bin }}
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+Environment=RB_CRASH_CONTAINER={{ crash_collector_container }}
+Environment="RB_CRASH_DIR={{ crash_collector_dir }}"
+Environment="RB_CRASH_CRASHINFO={{ crash_collector_crashinfo }}"
+Environment=RB_CRASH_CONTEXT_LINES={{ crash_collector_context_lines }}
+Environment=RB_CRASH_RETENTION={{ crash_collector_retention }}
+Environment=RB_CRASH_WAIT_SECS={{ crash_collector_wait_secs }}
+Environment=RB_CRASH_RETRY_SLEEP={{ crash_collector_retry_sleep }}
+Environment=RB_CRASH_PRUNE_WINE={{ crash_collector_prune_wine }}
+Environment=RB_CRASH_PYTHON={{ crash_collector_python }}
+ExecStart={{ crash_collector_bin }}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

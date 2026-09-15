@@ -57,7 +57,7 @@ ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
 
 Reihenfolge der Rollen (site.yml): `mods-zip` → `dedicated-server-image` →
 `game-content` → `riftbreaker-server` → `tournament-server` →
-`website` → `image-retention` → `host-hygiene`.
+`website` → `image-retention` → `host-hygiene` → `crash-collector`.
 
 **Vor** den Rollen (in den `pre_tasks`) prüft ein Preflight den freien Platz auf
 `/` (Disk-Space-Gate, Issue #310): zu wenig Platz → Abbruch **vor** Image-Build
@@ -425,6 +425,7 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 | `website`                | eigener Caddy      | eigener `rift-caddy` (plain HTTP: Landing + `/mod.zip` + Cockpit `/contract/*` + `/tournament/*`) + ZWEI Einträge im geteilten Host-Caddy (Issue #322); Host-Caddy-Reload deterministisch + fehlersichtbar, `rift-caddy` mit `admin off` (Issue #355) |
 | `mods-zip`               | —                  | Paketierung + md5-Paritäts-Check (hart)                                                                                                                                                                                                               |
 | `host-hygiene`           | systemd            | wöchentlicher Timer: entfernt **dangling** Docker-Images (`docker image prune`, **kein** `-a`; Issue #308)                                                                                                                                            |
+| `crash-collector`        | systemd            | Dauer-Dienst: sichert bei Crash-Markern das neueste `crash_info/<uuid>.{dmp,log,trace}` als Bundle nach `/opt/rbmods/crashes/` (+ Kontext/Meta, Retention; Issue #462)                                                                                  |
 
 ## Host-Caddy-Reload (Issue #355)
 
@@ -467,7 +468,8 @@ deploy/
     ├── tournament-server/         # systemd
     ├── website/                   # eigener rift-caddy: Landing + Cockpit (Issue #322)
     ├── mods-zip/                  # Paketierung + md5-Parität
-    └── host-hygiene/              # systemd-Timer (dangling Images, #308)
+    ├── host-hygiene/              # systemd-Timer (dangling Images, #308)
+    └── crash-collector/           # systemd-Dienst (Crash-Artefakte, #462)
 ```
 
 ## Sicherheit

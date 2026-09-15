@@ -16,6 +16,7 @@
 | Operator-Cockpit + Tournament-UI | planet            | **eigener** Caddy (`rift-caddy`, plain HTTP) hinter `mellon-caddy` | 443 → 127.0.0.1:8787 | `/contract/*` → IO-Bridge (basic_auth) · `/tournament/*` → tournament-server                   |
 | rbmods-image-retention.timer     | planet            | systemd                                                            | —                    | Alte Mod-Image-Tags aufräumen (Rollback-Stand + laufendes Image bleiben)                       |
 | rbmods-host-hygiene.timer        | planet            | systemd                                                            | —                    | wöchentlich dangling Docker-Images aufräumen (`docker image prune`, **kein** `-a`; Issue #308) |
+| rbmods-crash-collector           | planet            | systemd                                                            | —                    | Crash-Artefakte (Minidump + Trace + Log) sichern + Retention (Issue #462)                      |
 | rbbridge                         | in Mod-Containern | Prozess                                                            | —                    | Command-Injection (`exec_cmd_client`, Argument IMMER als EIN gequotierter String)              |
 
 ## Deployment-Plan (Ansible, inventory `planet`)
@@ -51,6 +52,14 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
    Rollback-Stand bleibt erhalten). Installiert `scripts/host_hygiene.sh` +
    Unit/Timer; automatische Variante der manuellen Aufräum-Befehle in
    [`SERVER_SIZING.md`](SERVER_SIZING.md).
+9. **crash-collector** — systemd-*Dauer*-Dienst (Issue #462): beobachtet
+   `docker logs -f` des Dedicated-Servers auf Crash-Marker (`CRASH:`,
+   `page fault`) und sichert das neueste `crash_info/<uuid>.{dmp,log,trace}`
+   als Bundle nach `/opt/rbmods/crashes/<ts>-<uuid>/` — zusammen mit
+   `context.log` (letzte N Container-Zeilen) und `meta.json` (Image-Tag,
+   Git-SHA, Container-Uptime, Modulbasis aus der `module_range`-Zeile,
+   Fault-Adresse aus der `page fault`-Zeile). Retention (Default 20 Bundles)
+   begrenzt auch das crash_info-Wachstum im Wine-Volume (#462).
 
 Grundsätze:
 

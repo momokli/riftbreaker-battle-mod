@@ -1,0 +1,51 @@
+---
+# Rolle: crash-collector (Issue #462) — Crash-Artefakte automatisch einsammeln.
+#
+# Dauer-Dienst (Type=simple, Restart=always): beobachtet `docker logs -f` des
+# Dedicated-Servers und sichert bei einem Crash-Marker das neueste
+# crash_info/<uuid>.{dmp,log,trace} als Bundle nach {{ crash_collector_dir }},
+# zusammen mit context.log + meta.json. Retention begrenzt sowohl die Bundles
+# als auch das crash_info-Wachstum im Wine-Volume.
+#
+# Muster: host-hygiene (Skript + Unit + Handler). Abgrenzung (NICHT hier):
+# Symbolisierung des Dumps (#462 „Optional", eigenes Issue), Session-Logging
+# (#392), Session-Mitschnitt (#280).
+
+- name: Zielverzeichnis fuer Crash-Bundles anlegen
+  file:
+    path: "{{ crash_collector_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Collector-Skript installieren
+  copy:
+    src: "{{ crash_collector_script_src }}"
+    dest: "{{ crash_collector_bin }}"
+    mode: "0755"
+    owner: root
+    group: root
+  notify: restart rbmods-crash-collector
+
+- name: systemd-Unit rendern
+  template:
+    src: rbmods-crash-collector.service.j2
+    dest: "/etc/systemd/system/{{ crash_collector_unit }}.service"
+    mode: "0644"
+  notify: restart rbmods-crash-collector
+
+- name: Unit aktivieren und starten
+  systemd:
+    name: "{{ crash_collector_unit }}"
+    state: started
+    enabled: true
+    daemon_reload: true
+  register: crash_collector_systemd
+  # Erster Deploy im PR-Gate (`--check`): der Check-Modus schreibt die
+  # Unit-Datei NICHT, deshalb kennt systemd den Service noch nicht
+  # („Could not find the requested service"). Kein Template-Fehler — im echten
+  # Lauf wird die Unit geschrieben und der Handler greift. Nur diesen einen
+  # Fall tolerieren (wie Rolle server-control, Issue #424).
+  failed_when: >-
+    crash_collector_systemd is failed and not
+    (ansible_check_mode | bool and
+     'Could not find the requested service' in (crash_collector_systemd.msg | default('')))
