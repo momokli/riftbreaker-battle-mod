@@ -177,6 +177,54 @@ documented fallback / for resolving `MissionSystem` (which is NOT a Lua singleto
    `data:SetFloat("time_max", …)` in Lua) — a native `ActivateMissionFlow` without
    setting `time_max` spawns the wave but shows no HUD timer.
 
+## #385 — `ActivateMissionFlow` als natives Primitive (AOB, LIVE)
+
+Umgesetzt in `rbbridge.c`: `activate_mission_flow` ruft den Workhorse direkt
+(kein Lua/Console), die Adresse kommt aus einer **AOB-Signatur** (kein festes
+RVA), die Service-Instanz aus dem vftable-Scan.
+
+**AOB-Signatur** (`RBBRIDGE_ACTIVATE_SIG`, 33 B, planet 2026-09-15: genau
+1 Treffer im `.text`, entspricht RVA `0xF93280`):
+
+```
+48 89 5C 24 08 48 89 6C 24 18 48 89 74 24 20 57 48 83 EC 50
+49 8B E9 49 8B F0 48 8B FA 48 8B 59 08
+```
+
+**Aufrufkonvention des Database\*-Overloads** (verifiziert am Disasm):
+`this=RCX`, hidden-ret-`UtfString*`=RDX, `name`=R8, `logicFile`=R9,
+`mode`=[rsp+0x20], `data`=[rsp+0x28]. Der 3-Arg-Overload (`0xF93130`) ist nur
+ein Shim, der den Workhorse mit `data=NULL` ruft — NULL ist also ein vom Spiel
+selbst benutzter, gueltiger `Database*`-Wert (→ #385 ohne #386 nutzbar).
+
+**Helfer-RVAs** (klein, fest — wie die PlayerService-RVAs):
+
+| Symbol | RVA |
+| --- | --- |
+| `??_7MissionService@Riftbreaker@@6B@` (vftable) | `0x2E962A0` |
+| `UtfString(char const*)` (Ctor) | `0x3AE1E0` |
+| `~UtfString()` (Dtor) | `0x26F1F0` |
+| `MissionService::IsGraphActive(UtfString const&)` | `0xF9E1F0` |
+
+`UtfString`-Layout (aus Ctor-Disasm): `+0x00` Allocator-Proxy, `+0x08`
+SSO-Puffer/Heap-Ptr, `+0x18` size, `+0x20` capacity. Die Argumente werden ueber
+den **Spiel-eigenen Ctor** gebaut (Logic-Pfade > 15 Zeichen → Heap), nicht von
+Hand.
+
+**Live belegt** (planet, `riftbreaker-dedicated`, 2026-09-15, AOB→`fn_rva=0xF93280`):
+
+```
+POST /activate_mission_flow {"logic":"logic/dom/attack_level_1_entry.logic"}
+ -> {"event":"activate_mission_flow_result","ok":true,
+     "flow":"logic/dom/attack_level_1_entry.logic##000070E2E2690000##1"}
+POST /get_state
+ -> ...,"mission_flow":"logic/dom/attack_level_1_entry.logic##...##1",
+       "mission_flow_active":false   (spaeter: true = IsGraphActive)
+```
+
+Kein Crash; die `no_account`-Antworten (`Welt laedt noch`) liefern die
+Mission-Flow-Felder mit (Read haengt nicht am Spieler-Account).
+
 ## References
 
 - `docs/research/dedicated-io-re-findings.md` (read path, `World::GetSystem`,

@@ -51,6 +51,7 @@ static void check(int cond, const char *msg)
 #define TEXT_VSIZE  0x800
 
 #define SIG_OFF     0x1100 /* ExecuteCommand-Signatur in .text        */
+#define ACT_SIG_OFF 0x1300 /* ActivateMissionFlow-Signatur in .text   */
 #define NAME_OFF    0x1400 /* RTTI-Namensstring                       */
 #define COL_OFF     0x1500 /* CompleteObjectLocator                   */
 #define VFT_REF_OFF 0x15F8 /* QWORD == base+COL_OFF (vftable-8)       */
@@ -96,8 +97,11 @@ static unsigned char *build_image(int with_sig, int with_rtti, int valid_col,
     sec->Misc.VirtualSize = TEXT_VSIZE;
     sec->VirtualAddress = TEXT_RVA;
 
-    if (with_sig)
+    if (with_sig) {
         memcpy(img + SIG_OFF, RBBRIDGE_EXEC_SIG, sizeof(RBBRIDGE_EXEC_SIG));
+        memcpy(img + ACT_SIG_OFF, RBBRIDGE_ACTIVATE_SIG,
+               sizeof(RBBRIDGE_ACTIVATE_SIG));
+    }
 
     if (with_rtti) {
         memcpy(img + NAME_OFF, RBBRIDGE_RTTI_NAME, sizeof(RBBRIDGE_RTTI_NAME));
@@ -175,6 +179,23 @@ int main(void)
                           sizeof(RBBRIDGE_EXEC_SIG)) == NULL,
           "Signatur+Maske: E8-Opcode bleibt Pflicht");
     free(img2);
+
+    /* -------------------------------------------------------------- */
+    /* ActivateMissionFlow-AOB (Issue #385)                            */
+    /* -------------------------------------------------------------- */
+    ht_set_module(img, IMG_SIZE);
+    check(scan_bytes(img + TEXT_RVA, TEXT_VSIZE, RBBRIDGE_ACTIVATE_SIG,
+                     sizeof(RBBRIDGE_ACTIVATE_SIG)) == img + ACT_SIG_OFF,
+          "ActivateMissionFlow-AOB im .text gefunden (#385)");
+    {
+        unsigned char *img3 = build_image(1, 1, 1, 1, 1);
+        img3[ACT_SIG_OFF + 5] ^= 0xFF; /* Prolog-Byte abweichend */
+        ht_set_module(img3, IMG_SIZE);
+        check(scan_bytes(img3 + TEXT_RVA, TEXT_VSIZE, RBBRIDGE_ACTIVATE_SIG,
+                         sizeof(RBBRIDGE_ACTIVATE_SIG)) == NULL,
+              "ActivateMissionFlow-AOB: abweichendes Byte -> kein Treffer");
+        free(img3);
+    }
 
     /* -------------------------------------------------------------- */
     /* resolve_console_vftable                                         */
