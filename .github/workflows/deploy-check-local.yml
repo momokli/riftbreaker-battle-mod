@@ -89,6 +89,20 @@ jobs:
           # migriertes <env>-Pfadschema gruen bleiben (kein reales Anlegen).
           bash deploy/tests/check-mode-paths/run.sh
 
+      # SOC-Attestation (Issue #504): hermetischer Test der Deploy-Identitaets-
+      # Attestation (konsistent -> PASS, abweichend -> FAIL, fehlende/inerte
+      # Flaeche -> n/a). Der eigentliche Live-Lauf lebt auf planet (nach dem
+      # Deploy); hier laeuft nur die reine Entscheidungslogik + CLI ueber
+      # Fixtures. Rein lokal, kein planet, kein Netz, keine Secrets.
+      - name: SOC-Attestation (Issue #504)
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          (
+            cd tools/deploy-gate
+            python3 -m unittest test_attest_identity -v
+          )
+
       # Hinweis (Issue #318): Dieser Job läuft auf einem GitHub-Hosted-Runner
       # (frischer, ephemärer VM je Lauf) — $HOME ist NICHT zwischen Jobs
       # geteilt, daher ist die einmalige Venv-Erstellung hier race-frei und
