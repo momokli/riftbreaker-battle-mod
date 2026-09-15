@@ -56,6 +56,15 @@
   when: crash_collector_symbolize | bool
   notify: restart rbmods-crash-collector
 
+- name: Minidump-Parser installieren (Issue #481)
+  copy:
+    src: "{{ crash_collector_helper_src }}"
+    dest: "{{ crash_collector_helper }}"
+    mode: "0755"
+    owner: root
+    group: root
+  notify: restart rbmods-crash-collector
+
 - name: systemd-Unit rendern
   template:
     src: rbmods-crash-collector.service.j2

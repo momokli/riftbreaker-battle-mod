@@ -12,6 +12,12 @@ crash_collector_unit: rbmods-crash-collector
 crash_collector_bin: /usr/local/bin/rbmods-crash-collector.sh
 crash_collector_script_src: "{{ playbook_dir }}/../scripts/crash_collector.sh"
 
+# Minidump-Parser (Issue #481): eigenstaendiger stdlib-Helper, den der Collector
+# per RB_CRASH_MINIDUMP_PY aufruft. Liegt bewusst NICHT als Geschwister des
+# Collector-Binaries (dieses heisst rbmods-crash-collector.sh) -> expliziter Pfad.
+crash_collector_helper: /usr/local/bin/rbmods-minidump-meta.py
+crash_collector_helper_src: "{{ playbook_dir }}/../scripts/minidump_meta.py"
+
 # Zielverzeichnis der Bundles (ein Unterordner je Crash: <ts>-<uuid>).
 crash_collector_dir: /opt/rbmods/crashes
 
@@ -37,7 +43,7 @@ crash_collector_retry_sleep: 5
 # 1 = crash_info im Container auf die Retention kuerzen.
 crash_collector_prune_wine: 1
 
-# Python fuer das meta.json-Rendering (json-Escaping; auf planet vorhanden).
+# Python fuer das meta.json-Rendering + den Minidump-Parser (auf planet vorhanden).
 crash_collector_python: /usr/bin/python3
 
 # --- Symbolik (Issue #480) ---------------------------------------------------

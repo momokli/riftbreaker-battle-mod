@@ -17,6 +17,7 @@
     # Rollen-Defaults hier explizit (der Test laeuft ohne Rollen-Defaults).
     crash_collector_unit: rbmods-crash-collector
     crash_collector_bin: /usr/local/bin/rbmods-crash-collector.sh
+    crash_collector_helper: /usr/local/bin/rbmods-minidump-meta.py
     crash_collector_container: riftbreaker-dedicated
     crash_collector_dir: /opt/rbmods/crashes
     crash_collector_crashinfo: "/data/.wine/drive_c/users/steamuser/Documents/The Riftbreaker/crash_info"
@@ -66,11 +67,12 @@
           - ("RB_CRASH_LLVM_SYMBOLIZER=" ~ crash_collector_llvm_symbolizer) in unit
           - ("RB_CRASH_SYMBOLIZE_TOOL=" ~ crash_collector_symbolize_tool) in unit
           - ("RB_CRASH_SYMBOLIZE_TIMEOUT=" ~ crash_collector_symbolize_timeout) in unit
+          - ("RB_CRASH_MINIDUMP_PY=" ~ crash_collector_helper) in unit
           - "'Restart=always' in unit"
           - "'Type=simple' in unit"
           - "'Requires=docker.service' in unit"
         fail_msg: >-
           Gerenderte systemd-Unit verletzt eine Invariante (ExecStart,
-          RB_CRASH_*-Env inkl. Symbolik #480, Restart=always, Type=simple oder
-          Requires=docker.service).
-        success_msg: "Unit-Render ok (ExecStart + Env + Symbolik + Restart + Docker-Requires)."
+          RB_CRASH_*-Env inkl. Symbolik #480 + RB_CRASH_MINIDUMP_PY, Restart=always,
+          Type=simple oder Requires=docker.service).
+        success_msg: "Unit-Render ok (ExecStart + Env + Symbolik + Parser + Restart + Docker)."

@@ -1,0 +1,47 @@
+---
+# Hermetischer Selbsttest der Deploy-Identitaet (Issue #483, US1).
+#
+# Läuft LOKAL auf dem Control-Node/CI-Runner: kein Host, kein Vault, keine
+# Prod-Aktion. Bindet die ECHTE Task-Datei deploy/tasks/deploy-identity.yml ein
+# (kein Nachbau) und asserted den Identitaets-Vertrag für dev/prod/test:
+#
+#   rift_deploy_identity == "<env> · <ref>"
+#   dev/test             -> rift_deploy_ref == deploy_image_tag (Checkout-SHA)
+#   prod                 -> rift_deploy_ref enthaelt zusaetzlich den Git-Tag
+#
+# `test_checkout` zeigt auf ein Wegwerf-Repo (run.sh legt es mit Tag an), damit
+# `git describe --tags --always` deterministisch ist.
+#
+# Aufruf über run.sh (oder direkt):
+#   ansible-playbook deploy/tests/env-identity/main.yml \
+#     -e test_env=dev -e test_checkout=/tmp/rb-identity-checkout
+- name: "Deploy-Identitaet Selbsttest (Issue #483, US1)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    rift_env: "{{ test_env }}"
+    # Checkout-SHA, den die pre_tasks der drei Plays liefern (Stellvertreter).
+    deploy_image_tag: "deadbeef1234"
+    rift_deploy_checkout: "{{ test_checkout }}"
+
+  tasks:
+    - name: Deploy-Identitaet erzeugen (echte Task-Datei)
+      include_tasks: "{{ playbook_dir }}/../../tasks/deploy-identity.yml"
+
+    - name: "Identitaets-Vertrag (Issue #483, US1)"
+      assert:
+        that:
+          - rift_deploy_identity == (rift_env ~ ' · ' ~ rift_deploy_ref)
+          - rift_deploy_identity.startswith(rift_env ~ ' · ')
+          - rift_deploy_ref | length > 0
+          # dev/test sind exakt der Checkout-SHA.
+          - (rift_env == 'prod') or (rift_deploy_ref == deploy_image_tag)
+          # prod traegt zusaetzlich den Git-Tag (Tag+SHA).
+          - (rift_env != 'prod') or ('+' in rift_deploy_ref)
+          - (rift_env != 'prod') or (deploy_image_tag in rift_deploy_ref)
+        fail_msg: >-
+          Deploy-Identitaet verletzt den Vertrag (env={{ rift_env }},
+          ref={{ rift_deploy_ref }}, identity={{ rift_deploy_identity }}).
+        success_msg: "Identitaet ok: {{ rift_deploy_identity }}"

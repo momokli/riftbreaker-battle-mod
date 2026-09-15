@@ -48,6 +48,19 @@ header {
 .cursor { animation: blink 1.1s steps(1) infinite; color: var(--accent); }
 @keyframes blink { 50% { opacity: 0; } }
 
+/* Deploy-Identitaet (Issue #483, US4): Badge aus GET /health. */
+.env-badge {
+  margin-left: 10px;
+  padding: 1px 6px;
+  border: 1px solid var(--accent-dim);
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  background: rgba(63, 208, 212, 0.08);
+}
+
 .conn { font-size: 12px; }
 .conn.ok { color: var(--good); }
 .conn.err { color: var(--bad); }

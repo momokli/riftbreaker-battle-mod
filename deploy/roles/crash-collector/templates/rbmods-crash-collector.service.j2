@@ -32,6 +32,7 @@ Environment="RB_CRASH_PDB={{ crash_collector_pdb }}"
 Environment="RB_CRASH_LLVM_SYMBOLIZER={{ crash_collector_llvm_symbolizer }}"
 Environment="RB_CRASH_SYMBOLIZE_TOOL={{ crash_collector_symbolize_tool }}"
 Environment=RB_CRASH_SYMBOLIZE_TIMEOUT={{ crash_collector_symbolize_timeout }}
+Environment=RB_CRASH_MINIDUMP_PY={{ crash_collector_helper }}
 ExecStart={{ crash_collector_bin }}
 Restart=always
 RestartSec=5

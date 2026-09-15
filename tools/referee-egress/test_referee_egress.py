@@ -9,6 +9,8 @@ Testet deterministisch ohne Spiel und ohne Netz:
 """
 
 import json
+import os
+import tempfile
 import unittest
 import urllib.request
 
@@ -97,6 +99,71 @@ class PostContractTest(unittest.TestCase):
             urllib.request.urlopen = orig
         self.assertTrue(ok)
         self.assertEqual(captured["body"], {"world": "A", "type": "wave_done", "level": 3})
+
+
+class IdentityTest(unittest.TestCase):
+    """Deploy-Identitaet env/ref je Event-Record (Issue #483, US4)."""
+
+    class _Resp:
+        status = 200
+
+        @staticmethod
+        def read():
+            return b"{}"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def _deliver_with(self, line, feeder):
+        captured = {}
+
+        def fake_urlopen(req, timeout):
+            captured["body"] = json.loads(req.data.decode("utf-8"))
+            return self._Resp()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log = os.path.join(tmp, "exor_logs.txt")
+            with open(log, "w", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+            feeder.path = log
+            orig = urllib.request.urlopen
+            urllib.request.urlopen = fake_urlopen
+            try:
+                delivered = feeder.poll_once()
+            finally:
+                urllib.request.urlopen = orig
+        return delivered, captured
+
+    def test_posted_event_carries_env_and_ref(self):
+        feeder = re_.RefereeEgress("/nonexistent.log", "http://127.0.0.1:8081",
+                                   env="prod", ref="v1.2+aabbcc")
+        delivered, captured = self._deliver_with(
+            "[RBBATTLE] event=wave level=3 status=done", feeder)
+        self.assertEqual(delivered, 1)
+        self.assertEqual(captured["body"], {
+            "world": "A", "type": "wave_done", "level": 3,
+            "env": "prod", "ref": "v1.2+aabbcc",
+        })
+
+    def test_default_identity_is_unknown(self):
+        feeder = re_.RefereeEgress("/nonexistent.log", "http://127.0.0.1:8081")
+        _delivered, captured = self._deliver_with("[RBBATTLE] event=hq_dead", feeder)
+        self.assertEqual(captured["body"]["env"], "unknown")
+        self.assertEqual(captured["body"]["ref"], "unknown")
+
+    def test_cli_defaults_from_env_vars(self):
+        os.environ["RBB_ENV"] = "test"
+        os.environ["RBB_REF"] = "sha-9"
+        try:
+            args = re_.build_parser().parse_args(["--once"])
+        finally:
+            os.environ.pop("RBB_ENV", None)
+            os.environ.pop("RBB_REF", None)
+        self.assertEqual(args.env, "test")
+        self.assertEqual(args.ref, "sha-9")
 
 
 if __name__ == "__main__":
