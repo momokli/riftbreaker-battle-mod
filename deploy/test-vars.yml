@@ -30,23 +30,26 @@ riftbreaker_compose_project: "rb-test-{{ rbbattle_run_suffix }}"
 riftbreaker_server_port_udp: ""
 riftbreaker_bridge_port: 9003
 
-# Host-Pfade je Lauf eindeutig (Issue #307). Werden im Teardown wieder entfernt.
-riftbreaker_game_dir: "/srv/rbgame-test-{{ rbbattle_run_suffix }}"
+# Host-Pfade je Lauf eindeutig (Issue #307). Pfad-Schema `<env>` (Issue #483,
+# Ziel B): /srv/rift-<env>-<run>/game|backups|sessions — derselbe Namensraum wie
+# dev/prod, je Lauf eindeutig (zwei parallele boot-tests koennen sich nicht
+# treffen). Werden im Teardown wieder entfernt.
+riftbreaker_game_dir: "/srv/rift-{{ rift_env }}-{{ rbbattle_run_suffix }}/game"
 # Der Mod-Ordner MUSS relativ zum (eindeutigen) Game-Dir liegen — sonst würde
-# der Singular-Fallback auf das Prod-Pfad /srv/rbgame/mods/rbbattle greifen.
+# der Singular-Fallback auf das Prod-Pfad greifen.
 riftbreaker_mod_dir: "{{ riftbreaker_game_dir }}/mods/rbbattle"
-riftbreaker_backup_dir: "{{ riftbreaker_game_dir }}-backups"
-riftbreaker_deploy_dir: "/opt/rbbattle-deploy/test/rb-{{ rbbattle_run_suffix }}"
+riftbreaker_backup_dir: "/srv/rift-{{ rift_env }}-{{ rbbattle_run_suffix }}/backups"
+riftbreaker_deploy_dir: "/opt/rbmods/compose/rift-{{ rift_env }}-{{ rbbattle_run_suffix }}/riftbreaker"
 website_mods_dir: "/opt/rbbattle-deploy/test/mods-{{ rbbattle_run_suffix }}"
 # Docroot je Lauf eindeutig (Issue #483, US3): sonst erbt der Boot-Test den
 # dev-Docroot /srv/rbmods-site (analog zur bestehenden website_mods_dir-
 # Isolation). Additiv, kein Rename der dev-Pfade.
 website_docroot: "/srv/rbmods-site-test-{{ rbbattle_run_suffix }}"
-# Trainer-I/O-Tools je Lauf isoliert (Issue #483, US3): ohne eigene Werte erbt
-# der Boot-Test den dev-Pfad /opt/rbmods/rbtools-drift bzw. den Rollen-Default
-# /opt/rbmods/rbtools (Live-Befund #3). Additiv, je Lauf eindeutig.
-rbtools_dir: "/opt/rbmods/rbtools-test-{{ rbbattle_run_suffix }}"
-rbtools_staging_dir: "/opt/rbmods/rbtools-staging-test-{{ rbbattle_run_suffix }}"
+# Trainer-I/O-Tools je Lauf isoliert (Issue #483, US3/Ziel B): Pfad-Schema
+# /opt/rbmods/rbtools/<env>-<run> (statt rbtools-test-<run>). Ohne eigene Werte
+# erbt der Boot-Test den dev-Pfad (Live-Befund #3).
+rbtools_dir: "/opt/rbmods/rbtools/{{ rift_env }}-{{ rbbattle_run_suffix }}"
+rbtools_staging_dir: "{{ rbtools_dir }}/.staging"
 # Der Build-Kontext (tools/dedicated-server) wurde bisher in einen festen Pfad
 # (/opt/rbmods/dedicated-server) synchronisiert. Bei zwei parallelen Läufen
 # schreiben beide in dasselbe Verzeichnis, während `docker build` daraus liest
@@ -88,7 +91,7 @@ rustup_home: /home/runner/.rustup
 # ("container name ... already in use"). Daher wie alle übrigen Ressourcen mit
 # `rbbattle_run_suffix` (die Prod-Isolation selbst kam mit Issue #280).
 riftbreaker_sessions_container: "riftbreaker-sessions-test-{{ rbbattle_run_suffix }}"
-riftbreaker_sessions_dir: "/srv/rbmods-sessions-test-{{ rbbattle_run_suffix }}"
+riftbreaker_sessions_dir: "/srv/rift-{{ rift_env }}-{{ rbbattle_run_suffix }}/sessions"
 
 # Referee-Egress-Sidecar (Issue #358) ebenfalls je Lauf eindeutig: er hat wie der
 # Session-Sidecar einen globalen Compose-`container_name`. Ohne Suffix kollidieren

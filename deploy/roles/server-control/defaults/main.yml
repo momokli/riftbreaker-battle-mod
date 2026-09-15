@@ -35,7 +35,7 @@ server_control_token: "{{ vault_server_control_token | default('') }}"
 
 # config.cfg-Rendering: dieselbe Vorlage wie die Rolle riftbreaker-server
 # (config.cfg.j2) und dieselben Basiswerte — es gibt nur EINE Quelle.
-server_control_config_path: "{{ riftbreaker_config_dir | default('/opt/rbmods/compose/riftbreaker-dedicated/config') }}/config.cfg"
+server_control_config_path: "{{ riftbreaker_config_dir | default('/opt/rbmods/compose/rift-' ~ (rift_env | default('dev')) ~ '/riftbreaker/config') }}/config.cfg"
 server_control_config_template: "{{ server_control_install_dir }}/config.cfg.j2"
 server_control_config_vars: "{{ server_control_install_dir }}/config-vars.json"
 server_control_config_template_src: "{{ playbook_dir }}/../deploy/roles/riftbreaker-server/templates/config.cfg.j2"

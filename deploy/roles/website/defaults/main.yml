@@ -29,7 +29,7 @@ rift_deploy_identity: "{{ rift_env }} · {{ rift_deploy_ref }}"
 rift_caddy_container: rift-caddy
 rift_caddy_image: caddy:2
 rift_caddy_port: 8787
-rift_caddy_deploy_dir: /opt/rbmods/compose/rift-caddy
+rift_caddy_deploy_dir: "/opt/rbmods/compose/rift-{{ rift_env }}/caddy"
 rift_caddy_data_dir: "{{ rift_caddy_deploy_dir }}/data"
 rift_caddy_config_dir: "{{ rift_caddy_deploy_dir }}/config"
 rift_caddy_site_root: /srv/site

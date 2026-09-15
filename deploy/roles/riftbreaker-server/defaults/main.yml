@@ -3,7 +3,7 @@
 # Planet-spezifische Werte (Pfade, Ports, Passwort) stehen in
 # deploy/inventory/host_vars/planet/ — diese Defaults liefern nur Fallbacks.
 
-riftbreaker_deploy_dir: /opt/rbmods/compose/riftbreaker-dedicated
+riftbreaker_deploy_dir: "/opt/rbmods/compose/rift-{{ rift_env }}/riftbreaker"
 riftbreaker_compose_project: "{{ riftbreaker_deploy_dir | basename }}"
 
 # --- Dedicated-Server (Community-Rezept, Issue #241) ------------------------
@@ -90,7 +90,7 @@ riftbreaker_sessions_container: riftbreaker-sessions
 # Standard-Python-Image (stdlib-only Recorder) — kein eigenes Image-Build noetig.
 riftbreaker_sessions_image: "python:3.12-slim"
 # Host-Verzeichnis der JSONL-Protokolle (bind-mount -> /data/sessions im Sidecar).
-riftbreaker_sessions_dir: /srv/rbmods-sessions
+riftbreaker_sessions_dir: "/srv/rift-{{ rift_env }}/sessions"
 # Recorder-Script auf dem Host (bind-mount ro in den Sidecar).
 riftbreaker_sessions_script: "{{ riftbreaker_deploy_dir }}/session_recorder.py"
 riftbreaker_sessions_script_src: "{{ playbook_dir }}/../tools/session-recorder/session_recorder.py"
