@@ -202,6 +202,9 @@ jobs:
           ---
           riftbreaker_server_password: boot-test
           vault_solo_basic_auth_hash: ""
+          # Server-Control (Issue #424): Bearer-Token PFLICHT. Dummy-Wert fuer
+          # den Boot-Test — kein Secret. Prod: echtes Vault-Secret setzen.
+          vault_server_control_token: boot-test-token
           EOF
           ansible-playbook -i "$INV" deploy/test-deploy.yml \
             -e @deploy/test-vars.yml \
