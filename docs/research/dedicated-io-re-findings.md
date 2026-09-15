@@ -6,6 +6,14 @@ Disasm-Befunde. Stand: 2026-09-13, auf `planet` gegen
 `/srv/rbgame/bin/riftbreaker_dll_win_release.dll` + `.pdb` (Build 2.0.58485 /
 GOG == Dedi) verifiziert.
 
+> **⚠️ Teilweise historisch.** Die **Lua**-basierten Pfade dieses Dokuments sind
+> **nicht mehr im Code**: sowohl die State-Egress-Capture (Phase C,
+> `rbbridge_capture_state`) als auch der WRITE-Marshal (Phase D, `g_pending_cmd` +
+> `ConsoleService::Update`-vtable-Detour) wurden mit dem C++-direct-only-Umbau
+> entfernt (`c4db642` Refs #376; `f022f35` #446). Die RE-Befunde (RVAs, Layouts)
+> bleiben Referenz; der **Ist-Stand + das Thread-Modell** stehen in
+> **[dedicated-io-thread-model.md](dedicated-io-thread-model.md)**.
+
 ## Namespace-Korrektur
 
 Die Spiel-Objekte liegen im Namespace **`Riftbreaker`**, nicht `Exor` (das ist
@@ -183,7 +191,7 @@ Quelle: Disasm der Capacity-Prüfung in `PlayerService::AddResourceAmount`
 Implementiert in `read_resource_max()` (rbbridge.c); `get_state` liefert
 `carbonium_max`. Live validiert: Speicher bauen → max 300 → 350.
 
-## Phase C: Wave-Counter + time-to-next + full state egress — LIVE (#376)
+## Phase C: Wave-Counter + time-to-next + full state egress — historisch (#376, in `main` entfernt)
 
 `dom_mananger` (Lua class `dom_mananger -> event_manager -> LuaGraphNode`) hält:
 
@@ -197,6 +205,9 @@ Implementiert in `read_resource_max()` (rbbridge.c); `get_state` liefert
 (crasht). Deshalb: Mod wrappt `dom_mananger:Update` auf dem game thread und ruft
 `_G.rbbridge_capture_state(json)`; die DLL cached den String (spinlock),
 `get_state` liest nur den Cache.
+
+> **Historisch:** dieser Lua-Capture-Pfad wurde mit `c4db642` (C++-direct-only,
+> Refs #376) entfernt — `main` hat kein `lua_*`/`rbbridge_capture_state` mehr.
 
 **Resolver:** `lua_State*` NICHT über `World::GetSystem<LuaSystem>()` (`0x194EDA0`)
 holen — das page-faultet beim Boot (`World::GetSystem(TypeHash)`), weil die
@@ -216,7 +227,12 @@ Live bestätigt (Build 2.0.58485): `wave=1`, `dom_state="wait"`, `time_to_next=5
 - Typed Control-Commands (`pause_dom`/`resume_dom`/`spawn_wave`/`end_game`/…)
   als Wrapper über bestätigte `exec`-Strings.
 
-## Phase D: WRITE path — Game-Thread-Kommando-Marshalling (LIVE #376)
+## Phase D: WRITE path — Game-Thread-Kommando-Marshalling (historisch; #376-Bau in `main` entfernt)
+
+> **Historischer RE-/Machbarkeits-Nachweis.** Die folgende Architektur
+> (`g_pending_cmd` + `ConsoleService::Update`-vtable-Detour, `dispatch_exec`) ist
+> **nicht mehr im Code** (entfernt `c4db642`/`f022f35`, #387/#446). Aktueller
+> Ist-Stand + Marshal-Optionen: **[dedicated-io-thread-model.md](dedicated-io-thread-model.md)**.
 
 `ConsoleService::ExecuteCommand` (`0x1C0BEF0`) dispatcht den Command-Handler
 **inline auf dem Thread des Aufrufers** — ein Lua-Kommando vom Pipe-Thread

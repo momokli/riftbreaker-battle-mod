@@ -221,10 +221,12 @@ Nicht-Fund an **jeder** Stufe → `NULL` + `dbg()`, **kein** Aufruf.
 
 * `Database`-Builder (malloc/Ctor/SetString): pures C++, thread-agnostisch.
 * `ActivateMissionFlow` mutiert Mission-Flow-/MissionSystem-State → **bevorzugt
-  Game-Thread** (Marshal-Detour `ConsoleService::Update`-Muster, #376). Der
-  solcher Detour ist im Branch `feat/386-database-payload` **nicht** vorhanden; bis
-  dahin läuft der **guarded Direktaufruf** aus dem Pipe-Thread — als
-  **Live-Risiko** markiert (Story 8, nur mit Player).
+  Game-Thread**. Es gibt **keinen** Marshal im Code — weder in `main` noch im
+  Branch `feat/386-database-payload`: der frühere `ConsoleService::Update`-
+  vtable-Detour (#376) wurde mit dem C++-direct-only-Umbau entfernt
+  (#387/#446). Der Aufruf läuft daher als **guarded Direktaufruf** aus dem
+  Pipe-Thread — **Live-Risiko** (Belege: Crash #436, Readiness #479). Ist-Stand
+  und Soll-Modell: **[dedicated-io-thread-model.md](dedicated-io-thread-model.md)**.
 * `data`-Lifetime: der Kern `0x33A7E0` reicht den Zeiger durch → das Payload
   muss bis zur Flow-Deaktivierung am Leben bleiben (kein `free` nach dem Call).
 * `UtfString`-Rückgabe (sret) kann Heap allokieren → derzeit bewusst geleakt
