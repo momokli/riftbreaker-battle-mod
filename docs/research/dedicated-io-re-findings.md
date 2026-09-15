@@ -385,3 +385,140 @@ untauglich — #378). Native Executor/CommandBuffer
 (`Exor::InOrderWorldExecutor`, `EcsCommandBuffer::ExecuteCommands` 0x1DD01B0)
 bleiben Option, sind aber **nicht nötig**: das Gate allein behebt die
 Crash-Ursache. Ein Detour bräuchte den Thread-Nachweis (Regel aus #479).
+
+## #367: Wave-Counter — Instanz-Navigation + Feld-Offset (statisch, Build 2.0.58485)
+
+**Auftrag:** Instanz + Feld-Offset des Wave-Counters statisch belegen (PDB-publics
+grep `Wave` → Getter-RVA → vftable-Scan-Instanz → Offset per Disasm), **AOB-Signatur
+statt fester Adresse**. **Ergebnis vorab:** es gibt **keinen** nativen Wave-Counter —
+der Zähler ist das **Lua-Feld** `dom_mananger.currentDifficultyLevel`. Statisch
+belegt ist damit die **Instanz-Navigation** (bis zum `lua_State*` + Registry-Ref);
+ein **fester C++-Struct-Offset existiert nicht** (Lua-Hashfeld). Deckt sich mit #376.
+
+### 1. PDB-publics-Scan (negativ, vollständig)
+
+`llvm-pdbutil dump -publics` → **556.365** Public-Symbole; `grep -i wave` →
+**2.545** Treffer. Alle gehören zu ECS/Component/Audio/Cheat: `WaveSystem`,
+`WaveSpawnerComponent`, `WaveSpawnerSplineComponent`, `WaveGround`, `WaveDesc`,
+`WaveUnitComponent`, `AIWaveMovementSystem`, `DebugSpawnWave`, `ShockWave*` —
+**kein** Zähler-/Level-Getter.
+
+- `grep -i 'dom_?man'` → **0 Treffer**: `dom_mananger` ist **keine** native Klasse
+  (reine Lua-Klasse, `lua/missions/v2/dom_manager.lua`).
+- `WaveSystem::Update` (RVA `0x290D20`) ruft nur `HandleWaveSpawn` (`0x2D5B50`) +
+  `DetectAndHandleBlockedWaveUnits` (`0x2D18A0`) — kein Zähler.
+- `Riftbreaker::DifficultyService` hat nur Zeit-/Multiplikator-Getter
+  (`GetWaveIntermissionTime` `0x10104E0`, `GetPrepareAttackTimeMultiplier`
+  `0x100DEC0`, …); `Riftbreaker::MissionService` keinen Wave-Zähler.
+- Die **Lua-Feldnamen** `currentDifficultyLevel`, `waitForSpawnTimer`, `idleTimer`,
+  `cooldownTimer` kommen in `/opt/rb-re/strings_dll.txt` (9,1 MB) **nicht** vor →
+  kein nativer Code liest den Zähler namentlich.
+
+Der Zähler ist damit ausschließlich Lua-seitig; Identität/Read laufen über #376.
+
+### 2. LuaGraphNode-Layout (Disasm-belegt)
+
+`?Update@LuaGraphNode@Exor@@UEAAXM@Z` RVA `0x1BAA140` und
+`?SetSuspended@LuaGraphNode@Exor@@QEAAX_N@Z` RVA `0x1BA6CB0`:
+
+```
+0x1BAA140  80 B9 F1 00 00 00 00   cmp  byte [rcx+0xF1], 0
+           0F 84 <rel32>           je   <body>        ; suspended -> return
+0x1BA6CB0  88 91 F1 00 00 00      mov  byte [rcx+0xF1], dl
+           C3                      ret
+```
+
+Basis-Ctor RVA `0x1B33630` (nicht public; von beiden Node-Ctors gerufen):
+
+```
+[rsi+0x00] = vftable            ; LuaGraphNode 0x2F46D70 | Selector 0x2F46DB8
+[rsi+0x08] = member-ctor        ; call 0x2C8090
+[rsi+0x10] = 0                  ; luabind::object #1   L
+[rsi+0x18] = 0xFFFFFFFE         ;                     ref = LUA_NOREF (-2)
+[rsi+0x20] = luabind::object #2 ; <-- Lua-Instanz (self-Tabelle)
+            call 0x1DA9F10 (object-assign; rcx=&dest+0x20, r8=&src-arg)
+[rsi+0x38] = 0
+[rsi+0x40] = std::string/UtfString-Ctor (0x26A060)
+[rsi+0x88] = luabind::object #3
+[rsi+0xA8] = 0xFFFFFFFF ; +0xAC = 0
+[rsi+0xB0] = new (0x25C0050 = TLS-Counter) ; +0xB8/+0xC0/+0xC8 = 0
+[rsi+0xD0] = new (0x25C0050) ; +0xD8/+0xE0/+0xE8 = 0
+```
+
+`0x1DA9F10` = `luabind::object`-Assign (Disasm):
+
+```
+mov rcx,[r8] ; mov [rdi],rcx            ; dest.L = src.L
+mov dword [rdi+8], 0xFFFFFFFE           ; dest.ref = LUA_NOREF
+if (L) { r8d=[r8+8]; edx=LUA_REGISTRYINDEX(-10000)
+         call 0x290CFA0                 ; lua_rawgeti  (push src value)
+         call 0x291C4E0                 ; luaL_ref(REGISTRY) -> eax
+         mov [rdi+8], eax }
+mov [rdi+0x10], ebx                     ; dest.extra (int)
+```
+
+⇒ **`luabind::object` = 24 B: `lua_State* L @+0x00`, `int ref @+0x08`,
+`int extra @+0x10`.** Am Node also: **`L @+0x20`, `ref @+0x28`, `extra @+0x30`**
+(deckt die `+0x20`-Angabe aus Phase C / `riftbreaker-re`-Skill statisch ab).
+Neue RVAs aus diesem Pfad: `luaL_ref = 0x291C4E0`, `luaL_unref = 0x291C5C0`.
+
+### 3. Instanz-Navigation + AOB-Signaturen (statt fester Adresse)
+
+| Symbol | RVA |
+|---|---|
+| `??_7LuaGraphNode@Exor@@6B@` (vftable) | `0x2F46D70` |
+| `??_7LuaGraphNodeSelector@Exor@@6B@` | `0x2F46DB8` |
+| `LuaGraphNode::Update` | `0x1BAA140` |
+| `LuaGraphNode::SetSuspended` | `0x1BA6CB0` |
+| Basis-Ctor | `0x1B33630` |
+| LuaGraphNodeSelector-Ctor | `0x1B95070` |
+| LuaGraphNode-vtable-Stores (Ctor-Sites) | `0x1B84164`, `0x1BAEDF1`, `0x1BB11AA` |
+
+Verifizierte **AOB-Signaturen** (eindeutig im `.text`, Build 2.0.58485):
+
+| Zweck | AOB | Treffer |
+|---|---|---|
+| LuaGraphNode-**vtable**-Store im Ctor | `48 8D 05 ?? ?? ?? ?? 48 89 03 66 C7 83 F0 00 00 00 00 00` | 3 (`0x1B84164`,`0x1BAEDF1`,`0x1BB11AA`) — alle laden dieselbe vtable |
+| `LuaGraphNode::Update` | `80 B9 F1 00 00 00 00 0F 84` | 1 (`0x1BAA140`) |
+| `LuaGraphNode::SetSuspended` | `88 91 F1 00 00 00 C3` | 1 (`0x1BA6CB0`) |
+
+**vtable-Auflösung ohne feste Adresse:** ersten `AOB-VTABLE`-Treffer nehmen →
+`vtable_RVA = site + 7 + disp32`. Alle drei Ctor-Sites zeigen auf `0x2F46D70`
+→ erster Treffer genügt. (Die Selector-Site `0x1B95090` lädt `0x2F46DB8` mit
+`48 89 07`.)
+
+**Reader-Rezept (read-only, kein World-/System-Map-Zugriff):**
+
+```
+base   = Modulbasis riftbreaker_dll_win_release.dll
+vtable = AOB-VTABLE  ->  site + 7 + disp32
+node   = Scan committed/readable Memory: QWORD == base + vtable
+L      = *(uint64*)(node + 0x20)     ; lua_State*
+ref    = *(int32 *)(node + 0x28)     ; Lua-Registry-Ref der self-Tabelle
+lua_rawgeti(L, LUA_REGISTRYINDEX, ref)         -> self-Tabelle
+lua_getfield(L, -1, "currentDifficultyLevel")  -> Zahl
+```
+
+### 4. Ergebnis / Grenzen
+
+- **Feld-Offset:** `currentDifficultyLevel` liegt in der **Lua-Hashpart** der
+  self-Tabelle — es gibt **keinen stabilen C++-Struct-Offset**. Ein Read muss über
+  die Lua-C-API (`lua_getfield`) auf dem **Lua/main-Thread** laufen (Thread-Modell:
+  #378/#446; `lua_*` ist NICHT thread-safe) → gehört zu #376.
+- **Instanz-Identität:** der `0x2F46D70`-Scan liefert *einen* LuaGraphNode
+  (live-belegt: gültiger `lua_State*`), **nicht** beweisbar *die*
+  `dom_mananger`-Instanz. Sichere Identität liefert nur der Lua-Hook
+  (`dom_mananger:Update`-Wrapper, #376).
+- **Konsequenz:** ein rein-nativer Wave-Counter ist nicht verfügbar; belastbare
+  Quelle bleibt der Lua-Capture aus #376. Delta dieses Issues ist die **statische
+  Belegkette** (publics-Scan, Layout, AOB) — keine Doppel-Implementierung.
+
+### 5. Test-Split
+
+- **OHNE Player:** dieser PR ist **docs-only** — Host-Test
+  (`tests/rbbridge-hosttest`, `HOSTTEST_PASS`) + Tool-Build
+  (`scripts/build_rbbridge_tools.sh`) als Regressionsbeleg; DLL/PDB-Disasm ist
+  offline reproduzierbar.
+- **NUR mit Player (OFFEN, nicht erledigt):** Live-Verifikation des Werts (Welle
+  abwarten bzw. `debug_dom_manager_spawn_wave_level N`) und der
+  Instanz-Identität — siehe #376.
