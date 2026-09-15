@@ -231,6 +231,7 @@ injizieren (os.open blockiert, bis der Pipe-Server existiert).
   deferred/marshal-braucht: native Executor/CommandBuffer
   (`Exor::InOrderWorldExecutor`, `EcsCommandBuffer::ExecuteCommands` 0x1DD01B0)
   — **kein** Vtable-Detour ohne Thread-Nachweis im PR (Regel aus #479).
+  Single Source of Truth: `docs/research/dedicated-io-thread-model.md`.
 - **Readiness nur ohne Neustart gelatcht:** ein Map-Neustart im laufenden Prozess
   setzt `g_world_ready` nicht zurück; der Live-Pfad geht von Prozess-Neustart +
   frischem `exor_logs.txt` aus (OFFEN: Re-Arm bei In-Process-Map-Reload).

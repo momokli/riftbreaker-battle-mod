@@ -229,9 +229,12 @@ markieren.
 
 ## Risiken (nicht host-seitig entscheidbar)
 
-- **Thread-Marshalling** des `ConsoleService::ExecuteCommand`-Aufrufs (läuft im
-  Pipe-Thread, nicht im Spiel-Thread) — offen, siehe
-  `bausteine/04-trainer-io/README.md`.
+- **Thread-Modell (Ist-Stand `main`):** es gibt **keinen** Marshal — alle
+  Game-Calls laufen **inline im Pipe-Thread** (`exec`/`lua_*` und der frühere
+  `ConsoleService::Update`-Detour sind mit dem C++-direct-only-Umbau entfernt,
+  #387/#446). Das ist ein **offenes Live-Risiko** (Crash `#436`, Readiness
+  `#479`). Single Source of Truth:
+  `docs/research/dedicated-io-thread-model.md`.
 - **Signatur build-gebunden** (Build 2.0.58485) — bei Engine-Update nachziehen.
 - Injection unter Wine in `DedicatedServer.exe` ist live verifiziert
   (2026-09-12, siehe Live-Belege): Attach ohne Prozessneustart, Pipe-Ping und
