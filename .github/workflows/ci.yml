@@ -1,6 +1,6 @@
 name: CI
 
-# Tests + Build/Package. Läuft für alle Pull Requests und auf Push nach main.
+# Tests + Build/Package. Läuft für alle Pull Requests, auf Push nach main und auf Tag-Push (v*).
 #
 # Path-Gating (Issue #393): die teuren planet-Jobs (`test`, `build`) sind
 # Required-Checks und laufen deshalb IMMER (damit der Context nie als
@@ -16,12 +16,16 @@ name: CI
 #   build       Bausteine 00-06 + mod/ + Packaging-Skripte (dist/*.zip, rbbridge.dll)
 #   tournament  tournament/src + Cargo.toml/Cargo.lock (cargo test)
 #
-# Tags (`v*`) sind reine Marker (Issue #209): dieser Workflow hat KEINEN
-# Tag-Trigger und legt KEINE GitHub-Releases mehr an. Der Download läuft über
-# den deployten Stand (https://rift.projectmellon.de/mods/rbbattle.zip).
+# Tags (`v*`) triggern den Workflow zusätzlich (Issue #499): ein Tag-Push
+# überspringt den Pfad-Filter und baut IMMER, damit die Build-Identität
+# (ref = Tag) kohärent in den Mod gebacken wird. GitHub-Releases werden
+# weiterhin NICHT angelegt - der Download läuft über den deployten Stand
+# (https://rift.projectmellon.de/mods/rbbattle.zip).
 on:
   push:
     branches: [main]
+    tags:
+      - 'v*'
   pull_request:
 
 permissions:
@@ -43,12 +47,25 @@ jobs:
         id: decide
         env:
           EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF: ${{ github.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BEFORE_SHA: ${{ github.event.before }}
           AFTER_SHA: ${{ github.event.after }}
         run: |
           set -euo pipefail
+          # Tag-Push (refs/tags/*): IMMER voll bauen - ein Tag soll unabhängig
+          # von Pfad-Änderungen paketieren, damit die gebackene Build-Identität
+          # (ref = Tag) kohärent ist. Der git-diff-Pfadfilter ist für Tags
+          # nicht aussagekräftig (before = vorherige Tag-Spitze bzw. all-zeros).
+          case "$GITHUB_REF" in
+            refs/tags/*)
+              echo "test=true" >> "$GITHUB_OUTPUT"
+              echo "build=true" >> "$GITHUB_OUTPUT"
+              echo "tournament=true" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
           # PR: base..head; Push nach main: before..after. Bei Diff-Problemen
           # over-inclusive laufen lassen (nie fälschlich skippen -> Required-
           # Check bliebe sonst fälschlich grün).
@@ -190,6 +207,11 @@ jobs:
             ccache-rbbridge-${{ runner.os }}-
       - name: Baustein-04-Binaries kompilieren + alle Zips bauen
         if: needs.changes.outputs.build == 'true'
+        env:
+          # Build-Identität (Issue #499): bei Tag-Push den Tag, sonst den
+          # Commit-SHA in den Mod backen (package_bausteine.sh substituiert
+          # RBB_BUILD_REF in der ausgelieferten Lua).
+          RBB_BUILD_REF: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
         run: |
           # ccache-Wrapper aus setup.sh aktivieren, falls vorhanden; sonst
           # direkter MinGW-Build (graceful degradation, kein Hard-Fail).
