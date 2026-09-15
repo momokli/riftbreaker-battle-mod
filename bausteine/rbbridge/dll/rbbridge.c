@@ -2095,6 +2095,183 @@ static void copy_cstr(char *dst, size_t n, const char *src)
     }
     dst[i] = '\0';
 }
+/* Vorwaerts-Deklarationen: die Windows-Build-Definitionen von        */
+/* safe_read_u32/u64 liegen weiter unten (im Dispatch-Block); der     */
+/* Hosttest-Shim stellt sie bereits bereit.                            */
+static int safe_read_u32(const void *addr, uint32_t *out);
+static int safe_read_u64(const void *addr, uint64_t *out);
+
+/* #520: pause_dom / resume_dom — nativ via LuaGraphNode::SetSuspended  */
+/*                                                                    */
+/* Reines C++-Primitiv (kein Lua/Console, kein DOM-Lua-Pfad #446):     */
+/*   Exor::LuaGraphNode::SetSuspended(bool) = `mov byte [rcx+0xF1],dl; */
+/*   ret` (RVA 0x1BA6CB0, Build 2.0.58485) — setzt NUR das Flag;       */
+/*   LuaGraphNode::Update (RVA 0x1BAA140) kehrt bei [this+0xF1]!=0     */
+/*   SOFORT zurueck => der DOM-Node friert ein (Pause).                */
+/*                                                                    */
+/* Instanz-Navigation (NATIV, ohne lua_*):                             */
+/*   Alle LuaGraphNode-Instanzen teilen EINE vftable                  */
+/*   (RVA 0x2F46D70, PDB `??_7LuaGraphNode@Exor@@6B@`). Unterschieden */
+/*   werden sie ueber das Feld +0x30: das ist der FNV-1a-32-Hash des   */
+/*   Lua-Skriptpfads der Klasse (live verifiziert auf planet            */
+/*   2026-09-15: +0x30 == fnv1a("lua/missions/v2/dom_manager.lua")     */
+/*   = 0x76aad119 => dom_mananger; daneben: survival_jungle-Node,      */
+/*   graph/logic/…-Pool …). Der DOM-Node ist damit deterministisch      */
+/*   auffindbar: vftable-Scan + TypeHash == fnv1a(DOM-Skript).          */
+/*                                                                    */
+/* Klassen-Layout (PDB + Disasm, Build 2.0.58485):                     */
+/*   +0x20 luabind::object { lua_State* }  +0x28 registry-ref (int)    */
+/*   +0x30 u32 TypeHash (FNV-1a des Skriptpfads)                       */
+/*   +0xB8/+0xC0 child-node-Vector (begin/size)                        */
+/*   +0xF0/+0xF1 finished/suspended-Flags                             */
+/*                                                                    */
+/* Thread-Modell (#378): reiner C++-Flag-Write, KEIN lua_*, kein Lock  */
+/* => thread-agnostisch; der Pipe-Thread ruft direkt. Kein Detour.     */
+/* Lua-Semantik-Note: das Spiel-Lua macht in PauseDOM zusaetzlich      */
+/* `CampaignService:OperateDOMPlanetaryJump(true)` (ResumeDOM nur      */
+/* `SetSuspended(false)`) — der HUD-Mission-Flow bleibt davon ohnehin  */
+/* unberuehrt (siehe Skill-Pitfall). Diese Bridge bildet exakt         */
+/* SetSuspended ab (Issue-Scope); PlanetaryJump ist Folge-Issue.       */
+/*                                                                    */
+/* Steht AUSSERHALB des #ifndef-RBBRIDGE_HOSTTEST-Blocks, damit der    */
+/* Host-Test FNV-1a, Signatur-Selfcheck und TypeHash-Konstante direkt  */
+/* pruefen kann.                                                      */
+/* ------------------------------------------------------------------ */
+
+#define RBBRIDGE_LUAGRAPHNODE_VFTABLE_RVA   0x2F46D70u
+#define RBBRIDGE_LUAGRAPHNODE_L_OFF         0x20u
+#define RBBRIDGE_LUAGRAPHNODE_REF_OFF       0x28u
+#define RBBRIDGE_LUAGRAPHNODE_TYPEHASH_OFF  0x30u
+#define RBBRIDGE_LUAGRAPHNODE_SUSPENDED_OFF 0xF1u
+
+/* Lua-Skriptpfad der DOM-Klasse (MissionService:AddGameRule-Pfad);
+ * die TypeHash-Konstante ist NUR Verifikations-Notiz — der Resolver
+ * hasht den Pfad zur Laufzeit. */
+static const char RBBRIDGE_DOM_SCRIPT[] = "lua/missions/v2/dom_manager.lua";
+#define RBBRIDGE_DOM_SCRIPT_HASH 0x76aad119u
+
+/* FNV-1a-32 (Offset-Basis 0x811c9dc5, Primzahl 0x01000193) — identisch
+ * zur Resource-StringHash-Implementierung (docs/research/resource-hash-map.md).
+ * Die Engine keyed auch Lua-Klassen-TypeHashes so (live belegt #520). */
+static uint32_t rbbridge_fnv1a32(const char *s)
+{
+    uint32_t h = 0x811c9dc5u;
+    if (!s)
+        return h;
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++)
+        h = (h ^ (uint32_t)*p) * 0x01000193u;
+    return h;
+}
+
+/* Byte-Signatur von LuaGraphNode::SetSuspended (die GANZE Funktion,
+ * 7 Bytes, Build 2.0.58485): `mov byte ptr [rcx+0xF1], dl; ret`.
+ * Kein rel32-Operand => keine Wildcard-Maske noetig. Die Signatur ist im
+ * .text genau EINMAL vorhanden (Gegenprobe 2026-09-15, planet); zur
+ * Laufzeit wird die Eindeutigkeit erneut geprueft (s. resolve unten). */
+static const unsigned char RBBRIDGE_SET_SUSPENDED_SIG[] = {
+    0x88, 0x91, 0xF1, 0x00, 0x00, 0x00, 0xC3
+};
+
+/* Selfcheck (host-testbar): Laenge, Ret-Opcode und der adressierte
+ * Flag-Offset (+0xF1) stehen konsistent zur Layout-Annahme. */
+static int set_suspended_sig_selfcheck(void)
+{
+    static const unsigned char expect[] = {0x88, 0x91, 0xF1, 0x00, 0x00, 0x00, 0xC3};
+    if (sizeof(RBBRIDGE_SET_SUSPENDED_SIG) != sizeof(expect))
+        return 0;
+    if (memcmp(RBBRIDGE_SET_SUSPENDED_SIG, expect, sizeof(expect)) != 0)
+        return 0;
+    /* +0xF1 im Displacement der mov-Anweisung? */
+    if (RBBRIDGE_SET_SUSPENDED_SIG[2] != (unsigned char)(RBBRIDGE_LUAGRAPHNODE_SUSPENDED_OFF & 0xFF))
+        return 0;
+    /* TypeHash der DOM-Klasse == FNV-1a ihres Skriptpfads? */
+    if (rbbridge_fnv1a32(RBBRIDGE_DOM_SCRIPT) != RBBRIDGE_DOM_SCRIPT_HASH)
+        return 0;
+    return 1;
+}
+
+/* Zaehlt Treffer einer Signatur im Modul-Image (Eindeutigkeits-Guard). */
+static int sig_count_in_image(const unsigned char *base, size_t size,
+                              const unsigned char *sig, size_t n)
+{
+    const unsigned char *p = base;
+    const unsigned char *end = base + size;
+    int count = 0;
+
+    if (!base || !sig || !n)
+        return 0;
+    while (p < end) {
+        const unsigned char *hit = scan_bytes(p, (size_t)(end - p), sig, n);
+        if (!hit)
+            break;
+        count++;
+        p = hit + 1;
+    }
+    return count;
+}
+
+/* Loest LuaGraphNode::SetSuspended per AOB auf — NUR wenn die Signatur im
+ * .text genau einmal vorkommt (sonst NULL, kein Aufruf). */
+static const unsigned char *resolve_set_suspended_fn(const unsigned char *base,
+                                                     size_t size)
+{
+    if (!set_suspended_sig_selfcheck())
+        return NULL;
+    if (sig_count_in_image(base, size, RBBRIDGE_SET_SUSPENDED_SIG,
+                           sizeof(RBBRIDGE_SET_SUSPENDED_SIG)) != 1)
+        return NULL;
+    return scan_bytes(base, size, RBBRIDGE_SET_SUSPENDED_SIG,
+                      sizeof(RBBRIDGE_SET_SUSPENDED_SIG));
+}
+
+/* Findet den DOM-Node (dom_mananger): vftable-Scan + TypeHash-Filter.
+ * Reine Leseoperation, kein Aufruf — graceful NULL. */
+static void *resolve_dom_node(const unsigned char *base)
+{
+    uint32_t want;
+    uint64_t needle;
+    uintptr_t addr = 0;
+
+    if (!base)
+        return NULL;
+    want = rbbridge_fnv1a32(RBBRIDGE_DOM_SCRIPT);
+    needle = (uint64_t)(uintptr_t)(base + RBBRIDGE_LUAGRAPHNODE_VFTABLE_RVA);
+
+    for (;;) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
+            break;
+        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
+        if (next <= addr)
+            break;
+        addr = next;
+        if (!is_readable_region(&mi))
+            continue;
+        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
+        size_t nq = mi.RegionSize / sizeof(uint64_t);
+        for (size_t i = 0; i < nq; i++) {
+            unsigned char *inst;
+            uint32_t th = 0, ref32 = 0;
+            uint64_t L = 0;
+            if (q[i] != needle)
+                continue;
+            inst = (unsigned char *)&q[i];
+            if (!safe_read_u32(inst + RBBRIDGE_LUAGRAPHNODE_TYPEHASH_OFF, &th))
+                continue;
+            if (th != want)
+                continue; /* anderer LuaGraphNode (Pool/Mission) */
+            if (!safe_read_u64(inst + RBBRIDGE_LUAGRAPHNODE_L_OFF, &L) || !L)
+                continue;
+            if (!safe_read_u32(inst + RBBRIDGE_LUAGRAPHNODE_REF_OFF, &ref32))
+                continue;
+            if ((int32_t)ref32 < 0)
+                continue;
+            return inst;
+        }
+    }
+    return NULL;
+}
+
 #ifndef RBBRIDGE_HOSTTEST
 
 /* ------------------------------------------------------------------ */
@@ -3515,6 +3692,82 @@ static RBBRIDGE_NOINLINE void dispatch_natural_waves(HANDLE hPipe,
               esc_d);
 }
 
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* #520: pause_dom / resume_dom — nativ via LuaGraphNode::SetSuspended  */
+/* Konstanten/Helper (fnv1a, AOB, Resolver) stehen AUSSERHALB des       */
+/* Hosttest-Guards weiter oben; hier nur der Pipe-Dispatch.             */
+/* ------------------------------------------------------------------ */
+
+
+typedef void (__fastcall *lua_graphnode_set_suspended_fn)(void *self,
+                                                          unsigned char suspended);
+
+/*
+ * pause_dom / resume_dom (Write #520): setzt LuaGraphNode::SetSuspended
+ * des DOM-Nodes. Events:
+ *   {"event":"pause_dom_result","ok":true,"paused":true,
+ *    "readback":"ok","node":"0x..."}
+ *   {"event":"resume_dom_result","ok":true,"paused":false,...}
+ *   {"event":"..._result","ok":false,"reason":
+ *    "no_module"|"signature_not_found"|"dom_node_not_found"}
+ * Graceful: fehlt Modul/Signatur/Instanz -> ok:false, es wird NICHTS
+ * geschrieben (kein Aufruf, kein Crash).
+ */
+static RBBRIDGE_NOINLINE void dispatch_pause_dom(HANDLE hPipe, int pause)
+{
+    const char *ev = pause ? "pause_dom_result" : "resume_dom_result";
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    const char *via = NULL;
+    const unsigned char *execfn = NULL;
+    const unsigned char *fn;
+    void *inst;
+    unsigned char rb = 0;
+    int rb_ok;
+
+    if (!resolve_module(&base, &size, &via, &execfn)) {
+        dbg("pause_dom: Modul nicht aufloesbar");
+        send_line(hPipe,
+                  "{\"event\":\"%s\",\"ok\":false,\"reason\":\"no_module\"}",
+                  ev);
+        return;
+    }
+    fn = resolve_set_suspended_fn(base, size);
+    if (!fn) {
+        dbg("pause_dom: SetSuspended-Signatur fehlt/mehrdeutig");
+        send_line(hPipe,
+                  "{\"event\":\"%s\",\"ok\":false,"
+                  "\"reason\":\"signature_not_found\"}",
+                  ev);
+        return;
+    }
+    inst = resolve_dom_node(base);
+    if (!inst) {
+        dbg("pause_dom: DOM-Node (dom_mananger) nicht gefunden");
+        send_line(hPipe,
+                  "{\"event\":\"%s\",\"ok\":false,"
+                  "\"reason\":\"dom_node_not_found\"}",
+                  ev);
+        return;
+    }
+
+    ((lua_graphnode_set_suspended_fn)(uintptr_t)fn)(inst, (unsigned char)(pause ? 1 : 0));
+
+    rb_ok = safe_read_u8((unsigned char *)inst +
+                         RBBRIDGE_LUAGRAPHNODE_SUSPENDED_OFF, &rb);
+    dbg("pause_dom: %s node=%p write=%d readback=%s(%d)",
+        pause ? "pause" : "resume", inst, pause ? 1 : 0,
+        rb_ok ? "ok" : "failed", (int)rb);
+    send_line(hPipe,
+              "{\"event\":\"%s\",\"ok\":true,\"paused\":%s,"
+              "\"readback\":\"%s\",\"node\":\"0x%llx\"}",
+              ev,
+              rb_ok ? (rb ? "true" : "false") : (pause ? "true" : "false"),
+              rb_ok ? "ok" : "failed",
+              (unsigned long long)(uintptr_t)inst);
+}
+
 static void dispatch_get_state(HANDLE hPipe)
 {
     const unsigned char *base = NULL;
@@ -3530,6 +3783,20 @@ static void dispatch_get_state(HANDLE hPipe)
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
                          "\"reason\":\"no_module\"}");
         return;
+    }
+
+    /* DOM-Suspend-Flag (Read #520): nativ aus dem dom_mananger-Node
+     * (LuaGraphNode::+0xF1) — unabhaengig vom Spieler-Account. Nicht
+     * aufloesbar -> null (graceful). */
+    char dom_field[48];
+    {
+        void *dn = resolve_dom_node(base);
+        unsigned char sb = 0;
+        if (dn && safe_read_u8((unsigned char *)dn +
+                               RBBRIDGE_LUAGRAPHNODE_SUSPENDED_OFF, &sb))
+            snprintf(dom_field, sizeof(dom_field), "%s", sb ? "true" : "false");
+        else
+            snprintf(dom_field, sizeof(dom_field), "null");
     }
 
     /* Mission-Flow (Read #385): haengt NICHT am Spieler-Account, ist also
@@ -3610,12 +3877,13 @@ static void dispatch_get_state(HANDLE hPipe)
     if (!ps) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
                          "\"reason\":\"no_playerservice\","
+                         "\"dom_paused\":%s,"
                          "\"mission_flow\":\"%s\","
                          "\"mission_flow_active\":%s,"
                          "\"mission_flow_payload\":%s,"
                          "\"creatures_base_difficulty\":%s}",
-                  flow_esc, flow_active ? "true" : "false", payload_field,
-                  diff_field);
+                  dom_field, flow_esc, flow_active ? "true" : "false",
+                  payload_field, diff_field);
         return;
     }
 
@@ -3624,12 +3892,13 @@ static void dispatch_get_state(HANDLE hPipe)
     if (!world) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
                          "\"reason\":\"no_world\","
+                         "\"dom_paused\":%s,"
                          "\"mission_flow\":\"%s\","
                          "\"mission_flow_active\":%s,"
                          "\"mission_flow_payload\":%s,"
                          "\"creatures_base_difficulty\":%s}",
-                  flow_esc, flow_active ? "true" : "false", payload_field,
-                  diff_field);
+                  dom_field, flow_esc, flow_active ? "true" : "false",
+                  payload_field, diff_field);
         return;
     }
 
@@ -3639,12 +3908,13 @@ static void dispatch_get_state(HANDLE hPipe)
     if (!account) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
                          "\"reason\":\"no_account\","
+                         "\"dom_paused\":%s,"
                          "\"mission_flow\":\"%s\","
                          "\"mission_flow_active\":%s,"
                          "\"mission_flow_payload\":%s,"
                          "\"creatures_base_difficulty\":%s}",
-                  flow_esc, flow_active ? "true" : "false", payload_field,
-                  diff_field);
+                  dom_field, flow_esc, flow_active ? "true" : "false",
+                  payload_field, diff_field);
         return;
     }
 
@@ -3698,12 +3968,13 @@ static void dispatch_get_state(HANDLE hPipe)
               "{\"event\":\"get_state_result\",\"ok\":true,"
               "\"carbonium\":%llu,\"carbonium_max\":%lld,"
               "\"ironium\":%llu,\"ironium_max\":%lld,\"resources\":%s,"
+              "\"dom_paused\":%s,"
               "\"mission_flow\":\"%s\",\"mission_flow_active\":%s,"
               "\"mission_flow_payload\":%s,"
               "\"creatures_base_difficulty\":%s}",
               (unsigned long long)carbonium, (long long)carbonium_max,
               (unsigned long long)ironium, (long long)ironium_max,
-              resources, flow_esc, flow_active ? "true" : "false",
+              resources, dom_field, flow_esc, flow_active ? "true" : "false",
               payload_field, diff_field);
 }
 
@@ -3961,6 +4232,18 @@ static void handle_line(HANDLE hPipe, const char *line)
             snprintf(flow, sizeof(flow), "%s", g_last_flow);
         }
         dispatch_deactivate_mission_flow(hPipe, flow);
+        return;
+    }
+
+    /* pause_dom / resume_dom (Write #520): natives LuaGraphNode::
+     * SetSuspended des DOM-Nodes (kein Lua-DOM, kein Console). */
+    if (strcmp(cmd, "pause_dom") == 0) {
+        dispatch_pause_dom(hPipe, 1);
+        return;
+    }
+
+    if (strcmp(cmd, "resume_dom") == 0) {
+        dispatch_pause_dom(hPipe, 0);
         return;
     }
 

@@ -346,6 +346,132 @@ call is made. `resolve_campaign_diff()` additionally requires
 re-validated against module base/size, the instance vftable **and** the four
 function prologues (layout hot-patch at unchanged module base -> re-scan).
 
+## #520 — `pause_dom`/`resume_dom` nativ (`LuaGraphNode::SetSuspended`)
+
+Natives Pendant zum frueheren Lua-DOM-Pfad (#446 entfernt): friert den
+DOM-`LuaGraphNode` ueber sein Suspend-Flag ein — reiner C++-Flag-Write,
+kein Lua/Console. Live belegt auf planet (dev-Dedi, 2026-09-15).
+
+### Symbol / AOB (Build 2.0.58485)
+
+| Symbol | PDB `addr` | RVA | Form |
+| --- | --- | --- | --- |
+| `Exor::LuaGraphNode::SetSuspended(bool)` | `0001:28990640` | `0x1BA6CB0` | `mov byte [rcx+0xF1], dl; ret` |
+| `Exor::LuaGraphNode::Update(float)` | `0001:29004096` | `0x1BAA140` | `cmp byte [rcx+0xF1], 0; je …; ret` |
+| `??_7LuaGraphNode@Exor@@6B@` (vftable) | `0002:1723760` | `0x2F46D70` | — |
+
+Disasm-Probe (`tools/re/disasm.py 0x1BA6CB0`):
+
+```
+0x181ba6cb0: mov  byte ptr [rcx + 0xf1], dl
+0x181ba6cb6: ret
+0x181ba6cb7: int3 …
+```
+
+`Update` kehrt bei `[this+0xF1] != 0` SOFORT zurueck (`0x181baa140: cmp byte
+ptr [rcx+0xf1],0; je 0x181b48b80; ret`) ⇒ das Flag ist genau der Freeze.
+
+**AOB statt fester Adresse** (`RBBRIDGE_SET_SUSPENDED_SIG`, 7 B =
+die ganze Funktion):
+
+```
+88 91 F1 00 00 00 C3
+```
+
+Im `.text` **genau 1x** (Gegenprobe 2026-09-15, planet/byte-identische DLL).
+Kein rel32-Operand ⇒ keine Wildcard-Maske. Zur Laufzeit wird die
+Eindeutigkeit erneut geprueft; >1 Treffer ⇒ `NULL` (kein Aufruf).
+
+### Klassen-Layout (PDB + Disasm)
+
+```
+Exor::LuaGraphNode (vftable RVA 0x2F46D70)
+  +0x20  luabind::object { lua_State* L }   (self-table)
+  +0x28  int  registry-ref                  (Index in LUA_REGISTRYINDEX)
+  +0x30  u32  TypeHash                       <-- Diskriminator (s. u.)
+  +0xB8/+0xC0  child-node-Vector (begin/size)
+  +0xF0/+0xF1 finished/suspended-Bits
+```
+
+### Instanz-Navigation — NATIV, ohne `lua_*`
+
+Alle `LuaGraphNode`-Instanzen teilen **eine** vftable, deshalb reicht der
+vftable-Scan allein nicht (Beobachtung dev-Dedi: 47 Instanzen; davon 45
+Pool-Knoten des Mission-Graphen + Missions- und DOM-Node). Der Diskriminator
+ist **`+0x30`**: es ist der **FNV-1a-32-Hash des Lua-Skriptpfads** der Klasse
+(`Offset 0x811c9dc5`, Primzahl `0x01000193`).
+
+Live-Mapping (Prozess-Scan, planet 2026-09-15):
+
+| `+0x30` | Klasse (Skriptpfad) |
+| --- | --- |
+| `0x76aad119` | **`lua/missions/v2/dom_manager.lua` = `dom_mananger`** |
+| `0xa8c579cd` | `lua/missions/survival/survival_jungle.lua` |
+| `0x47b9e696` | `lua/graph/logic/logic_wait.lua` (Pool) |
+| `0xf150edbc` | `lua/graph/logic/logic_and.lua` (Pool) |
+| … | weitere `lua/graph/*`-Knoten |
+
+Damit ist der DOM-Node **deterministisch** auffindbar:
+vftable-Scan + `+0x30 == fnv1a("lua/missions/v2/dom_manager.lua")`.
+Der Hash wird zur Laufzeit berechnet (keine Magic-Konstante);
+`0x76aad119` ist nur Verifikations-Notiz. Der Resolver prueft zusaetzlich
+`L != NULL` und `ref >= 0` (gueltiges luabind-Objekt). Kein `lua_*`-Aufruf,
+kein Lock ⇒ thread-agnostisch (#378).
+
+> ⚠️ Feste Adressen sind nur Notiz: RVAs **und** der TypeHash sind
+> build-gebunden; AOB + Laufzeit-Hash machen die Aufloesung update-robust.
+
+### Lua-Semantik (Vergleich)
+
+`dom_manager.lua`:
+
+```lua
+function dom_mananger:PauseDOM()
+    self:SetSuspended( true )
+    CampaignService:OperateDOMPlanetaryJump( true )
+end
+function dom_mananger:ResumeDOM()
+    self:SetSuspended( false )
+end
+```
+
+Die Bridge bildet exakt `SetSuspended` ab (Issue-Scope). Der zusaetzliche
+`OperateDOMPlanetaryJump`-Call aus `PauseDOM` ist **Folge-Issue**; der
+HUD-Mission-Flow-Timer wird davon ohnehin nicht eingefroren (Skill-Pitfall).
+
+### Bridge / UI
+
+- `rbbridge.c`: `dispatch_pause_dom()` (Pipe-Cmds `pause_dom` / `resume_dom`),
+  AOB-`resolve_set_suspended_fn()` + `resolve_dom_node()`; `get_state` traegt
+  `dom_paused` (bool|`null`).
+- `pipe_bridge.c`: `POST /pause_dom` + `POST /resume_dom` (kein Body).
+- `cockpit.html`: Mission-Flow-Panel — Readout *dom paused* + Buttons
+  *pause dom* / *resume dom*.
+
+Graceful: fehlt Modul/Signatur/DOM-Node ⇒ `ok:false`
+(`no_module`|`signature_not_found`|`dom_node_not_found`), es wird **nichts**
+geschrieben (kein Aufruf, kein Crash) — host-getestet.
+
+### Live-Beleg (planet, dev-Dedi, 2026-09-15)
+
+```
+POST /get_state  -> {"ok":false,"reason":"no_account","dom_paused":true,…}
+POST /resume_dom -> {"event":"resume_dom_result","ok":true,"paused":false,
+                     "readback":"ok","node":"0x7e1a16fd3500"}
+POST /get_state  -> … "dom_paused":false …
+POST /pause_dom  -> {"event":"pause_dom_result","ok":true,"paused":true,
+                     "readback":"ok","node":"0x7e1a16fd3500"}
+POST /get_state  -> … "dom_paused":true …
+```
+
+12x pause/resume im Wechsel: alle `ok:true`, `readback:ok`, DLL-Pipe und
+Container healthy — **kein Crash**.
+
+**Offener Punkt (Player-Test Momo/Matheo):** ob der DOM im Spiel sichtbar
+friert (Wellen-/Spawner-Stillstand) ist ohne verbundenen Spieler NICHT
+pruefbar. Auf einem leeren Dedi gibt `get_state` `no_account`; der Flag-Write
+gelang (Readback), die Gameplay-Wirkung ist noch zu bestaetigen.
+
 ## References
 
 - `docs/research/dedicated-io-re-findings.md` (read path, `World::GetSystem`,
