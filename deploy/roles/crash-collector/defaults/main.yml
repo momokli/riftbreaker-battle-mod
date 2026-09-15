@@ -45,3 +45,20 @@ crash_collector_prune_wine: 1
 
 # Python fuer das meta.json-Rendering + den Minidump-Parser (auf planet vorhanden).
 crash_collector_python: /usr/bin/python3
+
+# --- Symbolik (Issue #480) ---------------------------------------------------
+# Collector-seitig: die PDB (252 MB) bleibt AUSSERHALB des Images (kein
+# Groessen-/Startzeit-Regress). llvm-symbolizer loest die Minidump-Adressen
+# gegen die bereits auf dem Host liegende DLL/PDB auf.
+# Diese Rolle rollt ausdruecklich NUR die Skripte aus — keine PDB/DLL.
+# Hintergrund/Entscheidung: docs/crash-symbolication.md (Issue #480).
+crash_collector_symbolize: true
+crash_collector_symbolize_bin: /usr/local/bin/rbmods-crash-symbolize.sh
+crash_collector_symbolize_script_src: "{{ playbook_dir }}/../scripts/crash_symbolize.sh"
+crash_collector_symbolize_tool_dir: /usr/local/lib/rbmods/crash
+crash_collector_symbolize_tool_src: "{{ playbook_dir }}/../tools/crash/symbolize.py"
+crash_collector_symbolize_tool: "{{ crash_collector_symbolize_tool_dir }}/symbolize.py"
+crash_collector_dll: /srv/rbgame/bin/riftbreaker_dll_win_release.dll
+crash_collector_pdb: /srv/rbgame/bin/riftbreaker_dll_win_release.pdb
+crash_collector_llvm_symbolizer: /usr/lib/llvm-18/bin/llvm-symbolizer
+crash_collector_symbolize_timeout: 60

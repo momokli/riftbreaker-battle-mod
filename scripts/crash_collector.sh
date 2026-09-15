@@ -54,6 +54,8 @@ WAIT_SECS="${RB_CRASH_WAIT_SECS:-30}"
 RETRY_SLEEP="${RB_CRASH_RETRY_SLEEP:-5}"
 PRUNE_WINE="${RB_CRASH_PRUNE_WINE:-1}"
 LOG_CMD="${RB_CRASH_LOG_CMD:-}"
+# Symbolik (Issue #480): CLI-Seam, die das Bundle collector-seitig symbolisiert.
+SYMBOLIZE_BIN="${RB_CRASH_SYMBOLIZE_BIN:-/usr/local/bin/rbmods-crash-symbolize.sh}"
 # `CRASH:` (CrashHandlerWin32-Ausgabe) statt nur `CRASH` — sonst wuerde die
 # Zeile „[critical] CrashHandlerWin32.cpp:103 - " selbst als Marker zaehlen.
 MARKER_RE="${RB_CRASH_MARKER_RE:-CRASH:|page fault}"
@@ -287,6 +289,75 @@ with open(sys.argv[1], "w", encoding="utf-8") as fh:
 PY
 }
 
+# --- Symbolik (Issue #480) ----------------------------------------------------
+# Collector-seitig: die PDB (252 MB) bleibt ausserhalb des Images. Der Symbolizer
+# liest das Minidump und schreibt `symbolized.txt` ins Bundle; hier wird nur das
+# Ergebnis in `meta.json` referenziert (files-Liste + Feld `symbolized`).
+# Fehler/Skips duerfen den Collector NIE toeten (kein `set -e`): das Bundle bleibt
+# in jedem Fall gueltig, es gibt maximal ein WARN.
+update_meta_symbolized() {
+  local bundle="$1" status="$2"
+  RB_META_PATH="${bundle}/meta.json" RB_META_STATUS="$status" \
+    "$PYTHON" - <<'PY'
+import datetime
+import json
+import os
+import sys
+
+path = os.environ["RB_META_PATH"]
+try:
+    with open(path, encoding="utf-8") as fh:
+        meta = json.load(fh)
+except (OSError, ValueError):
+    sys.exit(1)
+
+frames = 0
+header = {}
+sym_path = os.path.join(os.path.dirname(path), "symbolized.txt")
+try:
+    with open(sym_path, encoding="utf-8") as fh:
+        for line in fh:
+            if line.startswith("# ") and ":" in line:
+                key, _, value = line[2:].partition(":")
+                header[key.strip()] = value.strip()
+            elif line.startswith("0x"):
+                frames += 1
+except OSError:
+    pass
+
+files = meta.get("files") or []
+if frames and "symbolized.txt" not in files:
+    files.append("symbolized.txt")
+meta["files"] = files
+meta["symbolized"] = {
+    "status": os.environ["RB_META_STATUS"],
+    "frames": frames,
+    "tool": header.get("tool") or None,
+    "dll": header.get("dll") or None,
+    "generated_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+}
+
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(meta, fh, indent=2, ensure_ascii=False)
+    fh.write("\n")
+PY
+}
+
+symbolize_bundle() {
+  local bundle="$1" out
+  # Fehlt das Symbolizer-Skript, verhaelt sich der Collector wie vor #480.
+  [ -x "$SYMBOLIZE_BIN" ] || return 0
+  out="$("$SYMBOLIZE_BIN" "$bundle" 2>&1)" || true
+  if [ -n "$out" ]; then
+    while IFS= read -r line; do log "${line}"; done <<<"$out"
+  fi
+  if [ -s "${bundle}/symbolized.txt" ]; then
+    update_meta_symbolized "$bundle" ok || log "WARN: meta.json-Symbolikfeld nicht schreibbar"
+  else
+    update_meta_symbolized "$bundle" skipped || log "WARN: meta.json-Symbolikfeld nicht schreibbar"
+  fi
+}
+
 # --- Parsen der Crash-Kontextzeilen aus context.log ---------------------------
 parse_context() {
   local ctx="$1"
@@ -376,6 +447,7 @@ collect_bundle() {
     || log "WARN: meta.json konnte nicht geschrieben werden (python3 fehlt?)"
 
   log "Bundle gesichert: ${bundle_name} (${files# })"
+  symbolize_bundle "$bundle"
   retention_prune
   wine_prune
 }

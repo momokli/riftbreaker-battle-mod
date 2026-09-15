@@ -54,6 +54,12 @@ jobs:
       # Retention + Idempotenz, graceful non-crash. Fake-Docker, planetfrei.
       - name: Crash-Collector-Logik (Fake-Docker, planetfrei)
         run: tests/shell/crash-collector.test.sh
+      # Red/Green-Beweis der collector-seitigen Symbolik (Issue #480): synthetischer
+      # Minidump (Streams 3/4/5/6) + Fake-llvm-symbolizer im PATH — RVA-Mathe,
+      # Aufruf-Vertrag (--obj/--relative-address), Skip-/Fehlerpfade, Idempotenz
+      # und Collector-Kopplung. Braucht KEIN echtes llvm-18 und keine PDB.
+      - name: Crash-Symbolizer (Fake-llvm-symbolizer, planetfrei)
+        run: tests/shell/crash-symbolize.test.sh
       # Red/Green-Beweis des stdlib-Minidump-Parsers (Issue #481): synthetische
       # MDMP-Fixtures (gueltig/truncated/falsche Magic/fehlender Stream/
       # Adresse ausserhalb) -> JSON-Felder exception_code/address/module/base/

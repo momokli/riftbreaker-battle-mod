@@ -137,10 +137,10 @@ jobs:
         if: steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/server-control-auth/run.sh
 
-      # Crash-Collector unit-Render (Issue #462): rendert die ECHTE
-      # systemd-Unit-Vorlage der Rolle (ExecStart + RB_CRASH_*-Env +
-      # Restart=always + Requires=docker.service) und prueft die
-      # Konfigurierbarkeit der Retention. Lokal, kein Host.
+      # Crash-Collector unit-Render (Issue #462/#480): rendert die ECHTE
+      # systemd-Unit-Vorlage der Rolle (ExecStart + RB_CRASH_*-Env inkl. der
+      # Symbolik-Variablen aus #480 + Restart=always + Requires=docker.service)
+      # und prueft die Konfigurierbarkeit der Retention. Lokal, kein Host.
       - name: "Crash-Collector Unit-Render (Issue #462)"
         if: steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/crash-collector/run.sh
