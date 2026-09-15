@@ -146,6 +146,13 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         working-directory: tools/referee-egress
         run: python3 -m unittest test_referee_egress -v
+      # Server-Control-Host-Agent (Issue #459): Unit-/Integrationstests ohne
+      # Docker, Netz oder Spiel (Fake-docker-Binary + echter Agent auf
+      # Ephemeral-Port). Reiner Standardbibliothek-Code, daher kein npm ci.
+      - name: Unit-Test Server-Control (Issue #459)
+        if: needs.changes.outputs.test == 'true'
+        working-directory: tools/server-control
+        run: python3 -m unittest test_server_control -v
       - name: rbbridge host-test (Issue #243)
         if: needs.changes.outputs.test == 'true'
         working-directory: tests/rbbridge-hosttest
