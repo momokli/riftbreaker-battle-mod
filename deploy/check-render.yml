@@ -24,6 +24,9 @@
     deploy_image_tag: check
     riftbreaker_server_password: check-dummy
     vault_solo_basic_auth_hash: ""
+    # Server-Control-Bearer (Issue #424/#454): die website-Rolle rendert ihn in
+    # die /server/*-Route. Dummy — das echte Vault wird hier nie entschlüsselt.
+    vault_server_control_token: check-dummy-token
     render_dir: "{{ lookup('env', 'RBBATTLE_RENDER_DIR') | default('/tmp/rbbattle-compose-render', true) }}"
 
   tasks:
@@ -68,3 +71,44 @@
           belegen und mit der Admin-API des geteilten Host-Caddys kollidieren
           (Reload → HTTP 400 unknown module dns.providers.cloudflare, Issue #355).
         success_msg: "rift-caddy Admin-Port aus (admin off) — keine Kollision mit dem Host-Caddy."
+
+    # Regression-Guard Issue #454: die /server/*-Route ist im Browser erreichbar
+    # (Operator-Basic-Auth wie der Cockpit-Root) UND der Agent-Bearer wird von
+    # Caddy injiziert — sonst kann der Browser den Token gar nicht senden und
+    # jedes Panel-Request endet im 401 des Agenten. Der Token darf NIE im
+    # gerenderten Caddyfile fehlen (leer = Panel kaputt) und NIE im Browser/JS
+    # landen (deshalb liegt er hier nur serverseitig im Proxy-Block).
+    - name: rift-caddy — /server/* MUSS basic_auth + injizierten Bearer tragen (Issue 454)
+      vars:
+        # Nur der ROUTEN-BODY, ohne die Kommentar-Bloecke (die nennen
+        # `basic_auth`/`handle /*` ebenfalls und wuerden die Pruefung aufweichen).
+        server_route: >-
+          {{ (lookup('file', render_dir ~ '/rift-caddy.Caddyfile')
+              | split('handle /server/*'))[1] | split('handle /*') | first }}
+        tournament_route: >-
+          {{ (lookup('file', render_dir ~ '/rift-caddy.Caddyfile')
+              | split('handle_path /tournament/*'))[1] | split('# Server-Control') | first }}
+      assert:
+        that:
+          # 401 vom Caddy (Challenge), nicht vom Agenten: Basic-Auth liegt hier.
+          - "'basic_auth' in server_route"
+          # Der Credential-Hash ist DERSELBE wie im Cockpit-Root-Block
+          # (gleicher Realm → der Browser schickt die Credentials auch hierhin).
+          - "contract_basic_auth_hash in server_route"
+          # Bearer wird von Caddy gesetzt — kein Token im Browser/JS.
+          - "('Authorization \"Bearer ' ~ server_control_token ~ '\"') in server_route"
+          - "server_control_token | length > 0"
+          - "(('reverse_proxy 127.0.0.1:' ~ server_control_port) in server_route)"
+          # Abgrenzung (Issue #298): /tournament/* bleibt unangetastet.
+          - "'basic_auth' not in tournament_route"
+        fail_msg: >-
+          rift-caddy.Caddyfile.j2 ist fuer /server/* falsch verdrahtet (Issue
+          #454). Erwartet: `basic_auth { operator <hash> }` (wie der
+          Cockpit-Root) UND `header_up Authorization "Bearer <token>"` im
+          reverse_proxy. Ohne Basic-Auth kommt der Browser nicht am Caddy
+          vorbei (401 vom Agenten); ohne injizierten Bearer erreicht Caddy den
+          Agenten nicht (401). /tournament/* darf dabei KEIN basic_auth
+          bekommen (eigene Haertung, #298).
+        success_msg: >-
+          /server/* hinter der Operator-Basic-Auth, Bearer wird von Caddy
+          injiziert (kein Token im Browser) — /tournament/* unveraendert.

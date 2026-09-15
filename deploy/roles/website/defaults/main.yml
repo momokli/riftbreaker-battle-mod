@@ -30,6 +30,14 @@ rift_caddy_site_root: /srv/site
 # von "zukka"; als Default unkritisch, kein Vault nötig.
 contract_basic_auth_hash: "$2a$14$TSQCK7adF/aDuDzaRGY8wum3034v2huWYk9g9JPRCggLDugyHyZVm"
 
+# Bearer-Token des Server-Control-Agenten (Plane B, Issue #424). Die Caddyfile
+# injiziert ihn per `header_up` auf der /server/*-Route, damit der Browser den
+# Token NICHT braucht (Issue #454). EINE Quelle mit der Rolle server-control:
+# beide lesen denselben Vault-Wert, hier wird nur gerendert. Fehlt der Wert,
+# bleibt der Platzhalter leer → der Agent antwortet 401 (fail-closed), es wird
+# nie ein Zugang ohne Token geoeffnet.
+server_control_token: "{{ vault_server_control_token | default('') }}"
+
 # Geteilter Host-Caddy.
 website_host_caddy_container: mellon-caddy
 website_host_caddyfile_path: /home/momo/Caddyfile

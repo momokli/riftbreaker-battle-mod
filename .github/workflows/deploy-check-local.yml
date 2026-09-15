@@ -108,6 +108,16 @@ jobs:
         if: steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/disk-gate/run.sh
 
+      # Auth-Selbsttest der /server/*-Route (Issue #454): rendert das ECHTE
+      # rift-caddy-Template, startet Caddy (host-net) + einen Mock-Agenten und
+      # prüft per curl: ohne Credentials 401 MIT `WWW-Authenticate: Basic` vom
+      # Caddy (nicht der Agent-401), mit Operator-Credentials 200, und der
+      # Agent sieht den von Caddy injizierten Bearer. Hermetisch (Dummy-Token,
+      # keine planet-Verbindung, kein Vault); Docker kommt vom Runner.
+      - name: "Server-Control-Auth hinter dem Caddy (Issue #454)"
+        if: steps.gate.outputs.skip != 'true'
+        run: bash deploy/tests/server-control-auth/run.sh
+
       - name: Compose-Templates rendern + `docker compose config`
         if: steps.gate.outputs.skip != 'true'
         run: |

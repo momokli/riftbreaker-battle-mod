@@ -156,6 +156,12 @@ Eigenschaften:
 - `/contract/*` wird auf die IO-Bridge (`riftbreaker_bridge_port`) proxyt und
   per `basic_auth` (operator) geschützt; `/tournament/*` geht unverändert an den
   tournament-server.
+- `/server/*` (Server-Control-Agent, Plane B, #424) liegt hinter **derselben**
+  Operator-`basic_auth` wie der Cockpit-Root (#454) — der Browser schickt die
+  Credentials automatisch mit (gleicher Realm). Den Bearer des Agenten kann
+  kein Browser senden; der rift-caddy injiziert ihn per
+  `header_up Authorization "Bearer <server_control_token>"`. Der Token kommt aus
+  dem Vault (`vault_server_control_token`) und verlässt nie den Host.
 - Variablen: `deploy/inventory/host_vars/planet/vars.yml` (dev) bzw.
   `deploy/prod-vars.yml` (prod) — `landing_domain`, `cockpit_domain`,
   `rift_caddy_*`, `riftbreaker_bridge_port`; Umsetzung: `deploy/roles/website/`.
