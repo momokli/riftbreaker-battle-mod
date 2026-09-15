@@ -39,8 +39,8 @@ rift_caddy_site_root: /srv/site
 # fail-safe: ohne Agent zeigt die Route sonst auf 127.0.0.1:<server_control_port>
 # und traefe dort einen FREMDEN Agenten (auf planet den dev-Agenten).
 # Gesetzt wird das Flag im jeweiligen PLAY (site.yml true, deploy-prod.yml
-# false) — Play-Vars schlagen diese Defaults, waehrend die host_vars fuer dev
-# UND prod gelten und deshalb hier nicht taugen.
+# true, Issue #498) — Play-Vars schlagen diese Defaults, waehrend die host_vars
+# fuer dev UND prod gelten und deshalb hier nicht taugen.
 server_control_enabled: false
 
 # /contract (Bridge-Kontrollpanel): basic_auth-Schutz (operator). bcrypt-Hash
@@ -50,7 +50,8 @@ contract_basic_auth_hash: "$2a$14$TSQCK7adF/aDuDzaRGY8wum3034v2huWYk9g9JPRCggLDu
 # Server-Control-Bearer (Issue #454, Token-Quelle #451): Der rift-caddy proxyt
 # /server/* an den Host-Agenten und muss dessen Bearer-Token selbst setzen —
 # ein Browser kann ihn nicht senden. Quelle ist ausschliesslich der Vault
-# (`vault_server_control_token`, siehe Rolle server-control); leer = KEIN
+# (`vault_server_control_token` fuer dev; prod setzt den Wert per Play-Var auf
+# `vault_server_control_prod_token`, siehe deploy-prod.yml); leer = KEIN
 # `header_up` im Caddyfile (der Agent lehnt ein leeres `Bearer ` ab).
 server_control_token: "{{ vault_server_control_token | default('') }}"
 

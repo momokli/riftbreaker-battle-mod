@@ -21,13 +21,14 @@
   become: true
 
   vars:
-    # Dieses Play deployt (noch) KEINEN server-control-Agenten (Rolle fehlt
-    # unten) => die /server/*-Route im Cockpit NICHT rendern (Issue #463).
-    # Sonst zeigt sie auf 127.0.0.1:{{ server_control_port }} — auf planet den
-    # DEV-Agenten — und "Restart server" im Prod-Cockpit traefe den
-    # dev-Container. Kommt prod ein Agent hinzu (eigener Port/Unit/Token),
-    # hier auf true setzen + server-control-Rolle aufnehmen.
-    server_control_enabled: false
+    # Prod ist voller Twin von dev (Issue #498): eigener server-control-Agent
+    # (Unit server-control-prod, Port 8093, eigenes Token) => die /server/*-
+    # Route im prod-Cockpit wird gerendert und zeigt auf 127.0.0.1:8093 — NIE
+    # auf den dev-Agenten (8092). Der prod-Bearer kommt aus dem Vault
+    # (vault_server_control_prod_token) und wird von beiden Rollen
+    # (server-control + website) gemeinsam gelesen.
+    server_control_enabled: true
+    server_control_token: "{{ vault_server_control_prod_token | default('') }}"
     # Deploy-Identitaet (Issue #483, US1): DIESES Play ist prod. Play-Var, damit
     # prod nicht den dev-Wert erbt; der Ref traegt zusaetzlich den Git-Tag.
     rift_env: prod
@@ -77,6 +78,8 @@
     - role: rbtools
     - role: riftbreaker-server
     - role: tournament-server
+    - role: server-control
+      tags: [server]
     - role: website
       tags: [website]
     # Prod-Zwilling des Crash-Collectors (Issue #481): eigene Unit + eigenes

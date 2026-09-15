@@ -11,10 +11,10 @@
     that:
       - server_control_token | length > 0
     fail_msg: >-
-      vault_server_control_token ist leer. Der Server-Control-Agent hat einen
-      Bearer-Token PFLICHT (Issue #424, Haertung wie #298) und wuerde ohne ihn
-      gar nicht starten. Token im Vault (host_vars/planet/vault.yml) setzen:
-      `ansible-vault edit deploy/inventory/host_vars/planet/vault.yml`.
+      Das Bearer-Token (server_control_token) ist leer. Der Server-Control-Agent
+      hat einen Bearer-Token PFLICHT (Issue #424, Haertung wie #298) und wuerde
+      ohne ihn gar nicht starten. Token im Vault (host_vars/planet/vault.yml)
+      setzen: `ansible-vault edit deploy/inventory/host_vars/planet/vault.yml`.
     success_msg: "Server-Control-Token vorhanden (Wert wird nie geloggt)."
   when: not ansible_check_mode
 

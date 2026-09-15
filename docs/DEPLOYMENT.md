@@ -630,6 +630,45 @@ Fallback gelesen.
 | Container | Labels `RBB_ENV`/`RBB_REF` | `docker inspect` (ohne Log) |
 | Mod-Log | `event=mod_load … env=… ref=…` | `mod/lua/rbbattle_autoexec.lua` — **vorbereitet, im Live-Lauf nicht wirksam** (`env=unknown`, s. u.) |
 
+### SOC-Attestation nach Deploy (Issue #504)
+
+Nach jedem Deploy prüft `tools/deploy-gate/attest_identity.py` (stdlib-only,
+kein PyYAML, kein Netz-Zwang im Hermetik-Test) live, dass `<env> · <ref>` auf
+jeder erreichbaren Surface sichtbar und konsistent ist — der eigentliche
+SOC-Beweis („dev ist wirklich dev, prod ist wirklich prod“). Die Extraktoren
+sind pure Funktionen ohne I/O; die Quellen sind über `--sources-json` bzw.
+`RBB_ATTEST_SOURCE_<SURFACE>` übersteuerbar, damit der hermetische CI-Test
+(`deploy-check-local`, `test_attest_identity.py`) ohne planet läuft.
+
+```bash
+# dev: Checkout-SHA
+python3 tools/deploy-gate/attest_identity.py --env dev --ref <sha> --sources-json /tmp/attest-dev.json
+
+# prod: Tag (+ SHA)
+python3 tools/deploy-gate/attest_identity.py --env prod --ref <tag> --sources-json /tmp/attest-prod.json
+```
+
+`/tmp/attest-<env>.json` wird auf planet aus den Live-Quellen erzeugt — ein
+JSON-Objekt `{surface: rohwert}` mit den Rohwerten je Surface:
+
+- `landing`/`cockpit`: `curl -s <url>` (gerenderte HTML)
+- `tournament_health`: `curl -s <host>/health`
+- `server_status`: `curl -s -H 'Authorization: Bearer <token>' <host>/server/status`
+- `container_labels`: `docker inspect --format '{{json .Config.Labels}}' <container>`
+- `session_jsonl`: `tail -n1 <sessions-dir>/<session>.jsonl`
+- `mod_zip`: `ls` des env-getaggten Zip-Namens
+
+Alternativ liest `--live` die Quellen direkt aus Umgebungsvariablen
+(`RBB_ATTEST_LANDING_URL`, `RBB_ATTEST_COCKPIT_URL`, `RBB_ATTEST_HEALTH_URL`,
+`RBB_ATTEST_SERVER_STATUS_URL` + `RBB_ATTEST_SERVER_STATUS_TOKEN`,
+`RBB_ATTEST_CONTAINER`, `RBB_ATTEST_SESSION_JSONL`, `RBB_ATTEST_MOD_LOG`,
+`RBB_ATTEST_MOD_ZIP_NAME`).
+
+Ausgabe ist eine PASS/FAIL/n/a-Matrix je Surface; `n/a` markiert Flächen, die
+(noch) keine Identität exponieren — Mod-Log explizit `n/a (#499)`, Cockpit `n/a`,
+solange dort kein Badge/Meta steht. Exit `0` nur, wenn alle anwendbaren Flächen
+PASS sind.
+
 ### Offene Punkte (live-only / bewusst offen)
 
 - **Mod-Log-`env`/`ref` in-game** ist vorbereitet, aber im Live-Lauf **nicht
