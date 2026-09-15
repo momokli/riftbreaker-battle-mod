@@ -130,7 +130,8 @@ erzeugen (→ #247, reproduzierbare Builds in GHCR).
 Pro Environment („Twin“) betreibt der Rift-Stack einen **eigenen `rift-caddy`**
 (plain HTTP, `network_mode: host`), der ZWEI Hostnames bedient — die statische
 **Landing** (+ `/mod.zip`) und das **Operator-Cockpit** (`/contract/*` →
-IO-Bridge, `/tournament/*` → tournament-server):
+IO-Bridge, `/tournament/*` → tournament-server, `/server/*` →
+server-control-Agent):
 
 ```text
 www.<env>.projectmellon.de    ┐
@@ -140,7 +141,9 @@ cockpit.<env>.projectmellon.de┤→ Host-Caddy (mellon-caddy, hostet viele Doma
                                    └─ rift-caddy (eigener Container, plain HTTP, net=host)
                                         ├─ file_server (Landing + /mod.zip)
                                         ├─ handle_path /contract/*   → 127.0.0.1:<bridge> (basic_auth)
-                                        └─ handle_path /tournament/* → 127.0.0.1:8081
+                                        ├─ handle_path /tournament/* → 127.0.0.1:8081
+                                        └─ handle /server/*          → 127.0.0.1:<server_control_port>
+                                             (basic_auth + Bearer-Injektion, #454)
 ```
 
 Eigenschaften:
@@ -156,6 +159,14 @@ Eigenschaften:
 - `/contract/*` wird auf die IO-Bridge (`riftbreaker_bridge_port`) proxyt und
   per `basic_auth` (operator) geschützt; `/tournament/*` geht unverändert an den
   tournament-server.
+- `/server/*` (Server-Control-Agent, Plane B, #424) liegt seit #454 hinter
+  **derselben** Operator-`basic_auth` wie der Cockpit-Root (Fix #456) — der
+  Browser schickt die Credentials automatisch mit (gleicher Realm). Den Bearer
+  des Agenten kann kein Browser senden; der rift-caddy injiziert ihn per
+  `header_up Authorization "Bearer <server_control_token>"`. Nur bei gesetztem
+  Token: ist der Wert leer, entfällt der `header_up` (der Agent lehnt ein
+  literales `Bearer ` ab und antwortet 401). Der Token kommt aus dem Vault
+  (`vault_server_control_token`) und verlässt nie den Host.
 - Variablen: `deploy/inventory/host_vars/planet/vars.yml` (dev) bzw.
   `deploy/prod-vars.yml` (prod) — `landing_domain`, `cockpit_domain`,
   `rift_caddy_*`, `riftbreaker_bridge_port`; Umsetzung: `deploy/roles/website/`.
