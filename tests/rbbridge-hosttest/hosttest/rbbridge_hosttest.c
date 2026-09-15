@@ -482,6 +482,26 @@ int main(void)
     check(strcmp(resource_internal_name(NULL), "carbonium") == 0,
           "resource_internal_name: NULL -> carbonium");
 
+    /* -------------------------------------------------------------- */
+    /* mission_flow_mode_ok (#447): nur "default" ist erlaubt           */
+    /* -------------------------------------------------------------- */
+    /* Verhalten: "default" -> erlaubt; leer/NULL -> erlaubt (wird im
+     * Dispatch als "default" behandelt, Backward-Compat fuer alte Clients
+     * ohne `mode`-Feld); alles andere -> abgelehnt (bad_mode), weil ein
+     * Nicht-default-Modus die DLL-Pipe dauerhaft killt. */
+    check(mission_flow_mode_ok("default") == 1,
+          "mission_flow_mode_ok: \"default\" -> erlaubt");
+    check(mission_flow_mode_ok("") == 1,
+          "mission_flow_mode_ok: leer -> erlaubt (Default)");
+    check(mission_flow_mode_ok(NULL) == 1,
+          "mission_flow_mode_ok: NULL -> erlaubt (Default)");
+    check(mission_flow_mode_ok("hard") == 0,
+          "mission_flow_mode_ok: \"hard\" -> abgelehnt (bad_mode)");
+    check(mission_flow_mode_ok("Default") == 0,
+          "mission_flow_mode_ok: \"Default\" -> abgelehnt (case-sensitiv)");
+    check(mission_flow_mode_ok("default ") == 0,
+          "mission_flow_mode_ok: \"default \" -> abgelehnt (kein Trim)");
+
     free(img);
 
     printf("HOSTTEST_PASS=%d HOSTTEST_FAIL=%d\n", g_pass, g_fail);
