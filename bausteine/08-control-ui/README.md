@@ -62,7 +62,7 @@ exec-Zeilen auf die rbbridge-Named-Pipe:
 
 | Route (POST) | Zweck in der UI |
 |---|---|
-| `get_state` | Ressourcen (`carbonium`/`ironium` + Max), `mission_flow`, `mission_flow_active`, `mission_flow_payload.spawn_point`, `creatures_base_difficulty` |
+| `get_state` | Ressourcen (`carbonium`/`ironium` + Max), `mission_flow`, `mission_flow_active`, `mission_flow_payload.spawn_point`, `creatures_base_difficulty`, `hq_hp`/`hq_hp_max`/`hq_dead` (nativ C++, #511) |
 | `add_resource` | Ressourcen addieren/subtrahieren (`{amount, resource?}`) |
 | `activate_mission_flow` | Welle starten (`{logic, mode:"default"}`) |
 | `deactivate_mission_flow` | Welle stoppen (`flow-id`, leer = zuletzt gestarteter) |
