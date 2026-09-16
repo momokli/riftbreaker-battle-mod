@@ -211,8 +211,8 @@ static int inject_into(HANDLE hProc, const wchar_t *dll_path)
 static void usage(const wchar_t *prog)
 {
     wprintf(L"Usage: %ls <pid|prozessname> <pfad\\zu\\rbbridge.dll>\n"
-            L"  Bsp. : %ls 4821  bausteine\\rbbridge\\rbbridge\\rbbridge.dll\n"
-            L"         %ls riftbreaker.exe bausteine\\rbbridge\\rbbridge\\rbbridge.dll\n"
+            L"  Bsp. : %ls 4821  server\\dll\\rbbridge.dll\n"
+            L"         %ls riftbreaker.exe server\\dll\\rbbridge.dll\n"
             L"  (Prozessname ohne/mit .exe; Gross-/Kleinschreibung egal)\n",
             prog, prog, prog);
 }

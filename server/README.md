@@ -148,7 +148,7 @@ beim Start).
    ```
 2. **DLL injizieren** (Pfad zur gebauten DLL):
    ```bat
-   injector.exe <pid> C:\pfad\zu\bausteine\rbbridge\dll\rbbridge.dll
+   injector.exe <pid> C:\pfad\zu\server\dll\rbbridge.dll
    ```
    Erwartet: `[+] rbbridge.dll geladen: HMODULE=0x...`
    (Alternativ Prozessname: `injector.exe notepad.exe <dll>`.)

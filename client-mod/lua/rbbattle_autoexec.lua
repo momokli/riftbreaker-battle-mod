@@ -53,7 +53,7 @@ end)
 --
 -- Build-Identitaet (Issue #499): `ref` wird beim BAUEN in den Mod gebacken.
 -- `RBB.ref` ist hier nur der Platzhalter "RBB_BUILD_REF"; scripts/
--- package_bausteine.sh ersetzt ihn vor dem Zippen durch den echten
+-- package.sh ersetzt ihn vor dem Zippen durch den echten
 -- Commit/Tag (Env RBB_BUILD_REF, sonst `git rev-parse HEAD`). Grund: die
 -- Riftbreaker-Lua-Sandbox liefert weder `os.getenv` noch `io.open` - ein
 -- Laufzeit-Auslesen ergibt zuverlaessig "unknown". `env` ist eine

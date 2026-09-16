@@ -202,7 +202,7 @@ jobs:
         if: needs.changes.outputs.build == 'true'
         env:
           # Build-Identität (Issue #499): bei Tag-Push den Tag, sonst den
-          # Commit-SHA in den Mod backen (package_bausteine.sh substituiert
+          # Commit-SHA in den Mod backen (package.sh substituiert
           # RBB_BUILD_REF in der ausgelieferten Lua).
           RBB_BUILD_REF: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
         run: |
@@ -219,7 +219,7 @@ jobs:
         if: needs.changes.outputs.build == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: bausteine-zips
+          name: component-zips
           # Mod-Updater als Einzeldatei mitliefern (Issue #120: ohne Checkout
           # herunterladbar); rbbattle.zip bleibt der Primaer-Download.
           path: |

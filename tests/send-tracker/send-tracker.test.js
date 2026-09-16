@@ -22,14 +22,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const COCKPIT = path.join(
-  __dirname,
-  "..",
-  "..",
-  "bausteine",
-  "08-control-ui",
-  "cockpit.html",
-);
+const COCKPIT = path.join(__dirname, "..", "..", "cockpit", "cockpit.html");
 const BEGIN = "// --- send tracker (testable) ---";
 const END = "// --- end send tracker ---";
 const DASH = "—";
@@ -95,9 +88,7 @@ function fakeSource(result) {
     poll(cursor) {
       this.calls.push(cursor);
       if (result instanceof Error) return Promise.reject(result);
-      return Promise.resolve(
-        typeof result === "function" ? result(cursor) : result,
-      );
+      return Promise.resolve(typeof result === "function" ? result(cursor) : result);
     },
   };
 }
