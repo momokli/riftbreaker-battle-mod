@@ -944,21 +944,6 @@ static void send_state(HANDLE hPipe)
 {
     game_state_t st;
 
-    /* Chat-Detour (#549): pending player_chat ausgeben. Die Zeile wird von
-     * der host-testbaren chat_build_player_chat() gebaut (Escaping via
-     * json_escape_into) und nur bei nicht-leerem Ergebnis gesendet. */
-    if (g_chat_pending) {
-        char raw[256];
-        char line[600];
-        EnterCriticalSection(&g_chat_cs);
-        memcpy(raw, g_chat_text, sizeof(raw));
-        g_chat_pending = 0;
-        LeaveCriticalSection(&g_chat_cs);
-        raw[sizeof(raw) - 1] = '\0';
-        if (chat_build_player_chat(raw, line, sizeof(line)) > 0)
-            send_line(hPipe, "%s", line);
-    }
-
     read_game_state(&st);
     send_line(hPipe,
               "{\"event\":\"score_update\",\"t\":%llu,\"score\":%llu,"
@@ -4504,6 +4489,21 @@ static void dispatch_get_state(HANDLE hPipe)
         return;
     }
 
+    /* Chat-Detour (#549): pending player_chat ausgeben. Die Zeile wird von
+     * der host-testbaren chat_build_player_chat() gebaut (Escaping via
+     * json_escape_into) und nur bei nicht-leerem Ergebnis gesendet. */
+    if (g_chat_pending) {
+        char raw[256];
+        char line[600];
+        EnterCriticalSection(&g_chat_cs);
+        memcpy(raw, g_chat_text, sizeof(raw));
+        g_chat_pending = 0;
+        LeaveCriticalSection(&g_chat_cs);
+        raw[sizeof(raw) - 1] = '\0';
+        if (chat_build_player_chat(raw, line, sizeof(line)) > 0)
+            send_line(hPipe, "%s", line);
+    }
+
     /* Mission-Flow (Read #385): haengt NICHT am Spieler-Account, ist also
      * auch ohne geladene Welt lesbar (Flow-ID + IsGraphActive). */
     char flow_esc[192 * 2];
@@ -5198,6 +5198,7 @@ static void capture_chat_text(const void *req)
     memset(buf, 0, sizeof(buf));
     if (!utfstring_to_cstr((const unsigned char *)req, buf, sizeof(buf)))
         return;
+    dbg("player_chat: %s", buf);
     EnterCriticalSection(&g_chat_cs);
     memcpy(g_chat_text, buf, sizeof(g_chat_text));
     g_chat_text[sizeof(g_chat_text) - 1] = '\0';
