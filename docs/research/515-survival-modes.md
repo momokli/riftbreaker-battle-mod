@@ -42,7 +42,7 @@ Engine. Die Modus-Unterscheidung liegt vor der Engine:
 | 1. Mission-Script | pro Modus/Biom eine eigene Lua-Datei (`survival_<biome>.lua`, `headquarters_<biome>.lua`, `…_scout.lua`, `…_resource_outpost.lua`, `prologue.lua`) | `lua/missions/…` |
 | 2. Rules-Pfad | `GetRulesForDifficulty("<prefix>")` wählt `<prefix><difficulty>.lua` | `utils/rules_utils.lua:11` |
 | 3. Engine-Bindung | `MissionService:AddGameRule("lua/missions/v2/dom_manager.lua", rulesPath)` — immer dieselbe Engine-Datei | `survival_desert.lua:34` |
-| 4. Laufzeit-Difficulty | Engine ruft `DifficultyService:*` (Waves an/aus, Wave-Strength, Intermission, Mission-Infinite/Duration/Warmup) | `dom_manager.lua:144–155` u. a. |
+| 4. Laufzeit-Difficulty | Engine ruft `DifficultyService:*` (Waves an/aus, Wave-Strength, Intermission, Mission-Infinite/Duration/Warmup) | `dom_manager.lua:149–158` u. a. |
 | 5. Campaign-Typ (C++) | `CampaignService:GetCurrentCampaignType()` — Lua vergleicht nur `"survival"` / `"story"` | `survival_base.lua:20`, `mission_base.lua:286` |
 
 `GetRulesForDifficulty` (`utils/rules_utils.lua:11–35`) löst die Variante auf:
@@ -98,10 +98,12 @@ wait(5s) ─► streaming ─► spawn ─► cooldown_after_spawn ─► idle �
 - `sleep` (fix `sleepSafeTime = 1200`) wird bei HQ-Upgrade/Major-Attack genutzt → nur
   Campaign-Pfad relevant.
 
-> Der Takt selbst (Timer, HUD-Countdown, `interval` → `prepareSpawnTime`) ist bereits
-> vollständig in **[#514](514-wave-takt-dom-manager.md)** dokumentiert und hier **nicht**
-> dupliziert. Die Engine-Details (Wellen-Pools, Bosse, Spawn-Punkte) stehen in
-> **[#508](508-catalog-of-things.md)**.
+> Der Takt selbst (Timer, HUD-Countdown, `interval` → `prepareSpawnTime`) ist im Rahmen
+> von **#514** (Wave-Takt, Spike geplant, noch nicht geschrieben) dokumentiert und hier
+> **nicht** dupliziert. Die Engine-Details (Wellen-Pools, Bosse, Spawn-Punkte) stehen im
+> Rahmen von **#508** (Catalog of Things, Spike geplant, noch nicht geschrieben).
+> Beide Docs liegen noch nicht in `docs/research/` vor — bis dahin gelten die Refs als
+> Issue-Referenzen ohne Dateilink.
 
 ---
 
@@ -167,7 +169,7 @@ end                                        -- dom_manager.lua:1126–1132
 
 | Wirkung | Solo (`== 1`) | Koop (`> 1`) | Quelle |
 |---|---|---|---|
-| **Intermission** (`prepareSpawnTime`) | voller Rules-Wert | `− (players−1) * DifficultyService:GetWaveIntermissionMultiplier()` | `GetPrepareSpawnTime` `:1136–1146` |
+| **Intermission** (`prepareSpawnTime`) | voller Rules-Wert | `− (players−1) * DifficultyService:GetWaveIntermissionMultiplier()` | `GetPrepareSpawnTime` `:1135–1146` |
 | **Cooldown** nach Spawn | voller Rules-Wert | `÷ (1 + players * DifficultyService:GetWaveCooldownPerPlayerFactor())` | `GetCooldownAfterAttacksTime` `:1148–1158` |
 | **Multiplayer-Wave** | `clamp(additionalWaves, 0, 1)` | `clamp(additionalWaves + 1, 0, 1)` | `GetMultiplayerAttackCount` `:1115–1124` |
 | **Kreaturen-Basis-Difficulty** | Index `[1]` aus `creatureDifficultyIncrementPerDOMDifficulty` | Index `[playersCounter]` (2..4) | `Increase/Revert/UpdateCreaturesBaseDifficulty` `:1180–1212` |
@@ -219,7 +221,7 @@ Auswahl über `GetRulesForDifficulty` (§1). Muster (Survival, desert):
 - `_sandbox.lua` = `require` Default + leert `buildingsUpgradeStartsLogic`; der
   „Waves-aus"-Effekt kommt **nicht** aus der Datei, sondern aus
   `DifficultyService:GetWaveStrength() == "sandbox"` ⇒ `pauseAttacks = true`
-  (`dom_manager.lua:150–155`, Log ` sandbox mode on - pausing attacks.`).
+  (`dom_manager.lua:149–158`, Log ` sandbox mode on - pausing attacks.`).
 
 **v1 vs v2:** Der Missions-Code lädt **immer** `…/v2/…` (z. B. `survival_*:32`). Die
 v1-Dateien unter `missions/survival/dom_survival_*_rules_*.lua` existieren parallel, decken
