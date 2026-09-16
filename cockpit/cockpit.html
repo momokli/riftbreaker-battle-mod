@@ -693,6 +693,27 @@
                         </div>
                     </fieldset>
 
+                    <!-- C2. MATCH END (#519) — nativer C++-Write -->
+                    <fieldset class="q-groupbox" id="panel-endgame">
+                        <legend>Match End (Win/Lose)</legend>
+                        <div class="flow-container">
+                            <div class="flow-readouts">
+                                <div class="flow-prop">
+                                    <span class="prop-label">last end</span>
+                                    <span id="end_game" class="prop-val">—</span>
+                                </div>
+                            </div>
+                            <div class="flow-action-row">
+                                <button id="end_win" class="btn-primary" aria-label="End the match as win">win</button>
+                                <button id="end_lose" aria-label="End the match as lose">lose</button>
+                            </div>
+                            <div class="flow-note">
+                                nativ: MissionService::FinishCurrentMission
+                                (MISSION_STATUS_WIN/LOSE), kein Lua/Console (#519)
+                            </div>
+                        </div>
+                    </fieldset>
+
                     <!-- D. CREATURES BASE DIFFICULTY -->
                     <fieldset class="q-groupbox" id="panel-creatures">
                         <legend>Creatures Base Difficulty</legend>
@@ -871,6 +892,11 @@
                             mfp.spawn_point !== undefined
                                 ? String(mfp.spawn_point)
                                 : "—";
+                        var eg = s.end_game;
+                        $("end_game").textContent = eg &&
+                            eg.result !== undefined
+                                ? String(eg.result)
+                                : "—";
                         $("players").textContent =
                             s.players === undefined || s.players === null
                                 ? "—"
@@ -968,6 +994,23 @@
 
                 $("flow_stop_btn").onclick = function () {
                     stopMissionFlow();
+                };
+
+                async function endGame(result) {
+                    try {
+                        var r = await post("end_game", { result: result });
+                        $("out").textContent = r && r.ok ? "" : JSON.stringify(r);
+                        refresh();
+                    } catch (e) {
+                        $("out").textContent = "ERR " + e.message;
+                    }
+                }
+
+                $("end_win").onclick = function () {
+                    endGame("win");
+                };
+                $("end_lose").onclick = function () {
+                    endGame("lose");
                 };
 
                 $("cbd_set").onclick = function () {

@@ -59,6 +59,7 @@ static void check(int cond, const char *msg)
 #define CONNP_OFF   0x1420 /* #512 GetConnectedPlayers-AOB (114 B)    */
 #define CONNP2_OFF  0x1710 /* #512: 2. Kopie (Mehrdeutigkeits-Test)   */
 #define DEACT_SIG_OFF 0x1340 /* DeactivateMissionFlow-Signatur (#389)  */
+#define FINM_SIG_OFF 0x13A0 /* FinishCurrentMission-Signatur (#519)   */
 #define DBSS_SIG_OFF 0x1240 /* Database::SetString-Signatur (#386)     */
 #define DBGS_SIG_OFF 0x1260 /* Database::GetString-Signatur (#386)     */
 #define DBCTOR_OFF   0x1280 /* Database::Database()-Prolog (#386)      */
@@ -125,6 +126,8 @@ static unsigned char *build_image(int with_sig, int with_rtti, int valid_col,
                sizeof(RBBRIDGE_CONNPLAYERS_SIG));
         memcpy(img + DEACT_SIG_OFF, RBBRIDGE_DEACTIVATE_SIG,
                sizeof(RBBRIDGE_DEACTIVATE_SIG));
+        memcpy(img + FINM_SIG_OFF, RBBRIDGE_FINISHMISSION_SIG,
+               sizeof(RBBRIDGE_FINISHMISSION_SIG));
         /* #386: Database-Payload-Anker (SetString/GetString-Prolog + die
          * `new 0x60`-Call-Site, deren zweiter E8 auf den Ctor-Prolog zeigt). */
         memcpy(img + DBSS_SIG_OFF, RBBRIDGE_DB_SETSTRING_SIG,
@@ -305,6 +308,49 @@ int main(void)
               "Deactivate-AOB: E8-Opcode bleibt Pflicht");
         free(img7);
     }
+
+    /* -------------------------------------------------------------- */
+    /* FinishCurrentMission-AOB (#519)                                 */
+    /* -------------------------------------------------------------- */
+    ht_set_module(img, IMG_SIZE);
+    check(scan_bytes(img + TEXT_RVA, TEXT_VSIZE, RBBRIDGE_FINISHMISSION_SIG,
+                     sizeof(RBBRIDGE_FINISHMISSION_SIG)) == img + FINM_SIG_OFF,
+          "FinishCurrentMission-AOB im .text gefunden (#519)");
+    {
+        unsigned char *img8 = build_image(1, 1, 1, 1, 1);
+        img8[FINM_SIG_OFF + 3] ^= 0xFF; /* Prolog-Byte abweichend */
+        ht_set_module(img8, IMG_SIZE);
+        check(scan_bytes(img8 + TEXT_RVA, TEXT_VSIZE,
+                         RBBRIDGE_FINISHMISSION_SIG,
+                         sizeof(RBBRIDGE_FINISHMISSION_SIG)) == NULL,
+              "FinishCurrentMission-AOB: abweichendes Byte -> kein Treffer");
+        free(img8);
+    }
+    {
+        /* Diskriminator: gleiche Form bei [rcx+8] ohne den status-Move
+         * (8B DA) darf NICHT treffen (sonst Kollision mit anderen
+         * this+8-Methoden). */
+        unsigned char *img9 = build_image(1, 1, 1, 1, 1);
+        img9[FINM_SIG_OFF + 13] = 0x90; /* 8B DA -> nop nop */
+        ht_set_module(img9, IMG_SIZE);
+        check(scan_bytes(img9 + TEXT_RVA, TEXT_VSIZE,
+                         RBBRIDGE_FINISHMISSION_SIG,
+                         sizeof(RBBRIDGE_FINISHMISSION_SIG)) == NULL,
+              "FinishCurrentMission-AOB: ohne status-Move -> kein Treffer");
+        free(img9);
+    }
+
+    /* end_game-Parser (#519): nur win/lose sind gueltige Match-Enden. */
+    check(end_game_status_from_str("win") == 0,
+          "end_game-Result 'win' -> MissionStatus 0");
+    check(end_game_status_from_str("lose") == 1,
+          "end_game-Result 'lose' -> MissionStatus 1");
+    check(end_game_status_from_str("draw") == -1,
+          "end_game-Result 'draw' -> abgelehnt");
+    check(end_game_status_from_str("") == -1,
+          "end_game-Result '' -> abgelehnt");
+    check(end_game_status_from_str(NULL) == -1,
+          "end_game-Result NULL -> abgelehnt");
 
     /* -------------------------------------------------------------- */
     /* CampaignService-Difficulty-AOBs (Issue #388)                    */
