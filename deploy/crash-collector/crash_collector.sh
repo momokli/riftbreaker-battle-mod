@@ -28,6 +28,10 @@
 #   RB_CRASH_CONTAINER      beobachteter Container (Default: riftbreaker-dedicated)
 #   RB_CRASH_DIR            Zielverzeichnis der Bundles (Default: /opt/rbmods/crashes)
 #   RB_CRASH_ENV            Environment-Name fuer den Bundle-Pfad (Default: dev)
+#   RB_CRASH_REF            Build-Ref fuer meta.json + Bundle-Pfad (Default: leer;
+#                           Faellt zurueck auf den Image-Tag/git_sha). Kommt aus
+#                           der systemd-Unit (Rolle crash-collector) und ist
+#                           DERSELBE ref wie in die Binaries gebacken (#607).
 #   RB_CRASH_CRASHINFO      crash_info-Pfad IM Container
 #   RB_CRASH_CONTEXT_LINES  Zeilen für context.log (Default: 200)
 #   RB_CRASH_RETENTION      behaltene Bundles (Default: 20)
@@ -56,10 +60,15 @@ DOCKER="${RB_CRASH_DOCKER:-docker}"
 CONTAINER="${RB_CRASH_CONTAINER:-riftbreaker-dedicated}"
 CRASH_DIR="${RB_CRASH_DIR:-/opt/rbmods/crashes}"
 # Environment/Commit-Ref fuer den Bundle-Pfad (Issue #605): <env>/<ref>/<ts>-<uuid>.
-# ENV kommt aus der systemd-Unit (RB_CRASH_ENV), Default dev. REF wird aus dem
-# Image-Tag (git_sha) abgeleitet und in collect_bundle gesetzt (vor dem ersten
-# bundle_exists, damit Pfad/Idempotenz/Retention denselben Stamm sehen).
+# ENV kommt aus der systemd-Unit (RB_CRASH_ENV), Default dev. REF wird in
+# collect_bundle gesetzt (vor dem ersten bundle_exists, damit Pfad/Idempotenz/
+# Retention denselben Stamm sehen): Vorrang hat RB_CRASH_REF (Build-Ref aus den
+# Binaries, Issue #607), sonst faellt er auf den Image-Tag (git_sha) zurueck.
 ENV="${RB_CRASH_ENV:-dev}"
+# Build-Ref (Issue #607): derselbe ref wie in die Binaries gebacken
+# (RBB_BUILD_REF -> RBBRIDGE_REF). Die systemd-Unit (Rolle crash-collector)
+# setzt ihn als RB_CRASH_REF. Leer = Fallback auf den Image-Tag (git_sha).
+BUILD_REF="${RB_CRASH_REF:-}"
 REF=""
 CRASHINFO="${RB_CRASH_CRASHINFO:-/data/.wine/drive_c/users/steamuser/Documents/The Riftbreaker/crash_info}"
 CONTEXT_LINES="${RB_CRASH_CONTEXT_LINES:-200}"
@@ -548,13 +557,14 @@ collect_bundle() {
   local marker_line="$1"
   local uuid="" waited=0 marker
 
-  # ENV + REF (Commit aus dem Image-Tag) vor dem ersten bundle_exists setzen,
-  # damit Idempotenz-Check, Bundle-Pfad und Retention denselben Stamm sehen.
+  # ENV + REF vor dem ersten bundle_exists setzen, damit Idempotenz-Check,
+  # Bundle-Pfad und Retention denselben Stamm sehen.
   IMAGE="$(container_image)"
   STARTED_AT="$(container_started_at)"
   GIT_SHA="${IMAGE##*:}"
   if [ "$GIT_SHA" = "$IMAGE" ]; then GIT_SHA=""; fi
-  REF="$GIT_SHA"
+  # Issue #607: RB_CRASH_REF (Build-Ref) hat Vorrang, sonst Image-Tag (git_sha).
+  REF="${BUILD_REF:-$GIT_SHA}"
 
   while [ "$waited" -lt "$WAIT_SECS" ]; do
     uuid="$(newest_uuid || true)"

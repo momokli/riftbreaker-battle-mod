@@ -24,6 +24,8 @@
 #   (h) ungueltiger Dump ("MZ fake") -> rc=0, neue Felder null, module_base
 #       weiterhin aus der module_range-Log-Zeile (#481)
 #   (i) ohne Commit-Ref (Image ohne Tag) -> flacher Bundle-Pfad (Graceful #605)
+#   (j) RB_CRASH_REF (Build-Ref, #607) -> meta.ref + Bundle-Pfad nutzen ihn
+#       (git_sha bleibt der Image-Tag-SHA)
 #
 # Läuft in CI (lint.yml) und lokal:  tests/shell/crash-collector.test.sh
 # ============================================================
@@ -33,7 +35,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COLLECTOR="${REPO_ROOT}/deploy/crash-collector/crash_collector.sh"
 
 # Bundle-Pfad (Issue #605): <env>/<ref>/<ts>-<uuid>. ENV kommt aus RB_CRASH_ENV
-# (Default dev), REF aus dem Image-Tag des Fake-Dockers (rb-dedicated:<sha>).
+# (Default dev); REF hat Vorrang aus RB_CRASH_REF (#607), sonst aus dem
+# Image-Tag des Fake-Dockers (rb-dedicated:<sha>).
 ENV_NAME="dev"
 REF_SHA="8131ee0bd0c8"
 
@@ -189,7 +192,7 @@ assert_true() {
 
 # Führt den Collector einmalig aus. $1 = case-dir, $2 = log-fixture, $3 = newest dmp
 run_case() {
-  local dir="$1" logs="$2" newest="$3" env_name="${4:-$ENV_NAME}" image="${5:-rb-dedicated:8131ee0bd0c8}"
+  local dir="$1" logs="$2" newest="$3" env_name="${4:-$ENV_NAME}" image="${5:-rb-dedicated:8131ee0bd0c8}" ref="${6:-}"
   mkdir -p "${dir}/crashes"
   : >"${dir}/docker.log"
   set +e
@@ -202,6 +205,7 @@ run_case() {
     FAKE_IMAGE="$image" \
     RB_CRASH_DIR="${dir}/crashes" \
     RB_CRASH_ENV="$env_name" \
+    RB_CRASH_REF="$ref" \
     RB_CRASH_CRASHINFO="${CRASHINFO}" \
     RB_CRASH_CONTAINER="riftbreaker-dedicated" \
     RB_CRASH_WAIT_SECS=2 \
@@ -335,6 +339,26 @@ if [ "${#B8[@]}" -eq 1 ]; then
   m8() { python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2]))" "$M8" "$1"; }
   assert_eq "ohne Ref -> meta.env" "dev" "$(m8 env)"
   assert_eq "ohne Ref -> meta.ref" "None" "$(m8 ref)"
+fi
+
+# --- (j) RB_CRASH_REF (Build-Ref, #607) -> meta.ref + Bundle-Pfad -----------
+# Issue #607: RB_CRASH_REF traegt denselben ref wie die Binaries (RBB_BUILD_REF,
+# z. B. Tag "v0.38.0"). meta.ref + Bundle-Pfad nutzen ihn; git_sha bleibt der
+# Image-Tag-SHA (Fallback-Wert).
+C9="${TMP}/c9"
+BUILD_REF="v0.38.0"
+run_case "$C9" "${TMP}/crash.log" "${FAKE_ROOT}${CRASHINFO}/${UUID}.dmp" "$ENV_NAME" "rb-dedicated:8131ee0bd0c8" "$BUILD_REF"
+assert_eq "RB_CRASH_REF -> rc=0" "0" "$RC"
+mapfile -t B9 < <(find "${C9}/crashes" -mindepth 3 -maxdepth 3 -type d | sed 's|.*/||')
+assert_eq "RB_CRASH_REF -> genau ein Bundle" "1" "${#B9[@]}"
+if [ "${#B9[@]}" -eq 1 ]; then
+  BD9="${C9}/crashes/${ENV_NAME}/${BUILD_REF}/${B9[0]}"
+  assert_true "RB_CRASH_REF -> Bundle unter <env>/<ref>" test -d "$BD9"
+  M9="${BD9}/meta.json"
+  m9() { python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2]))" "$M9" "$1"; }
+  assert_eq "RB_CRASH_REF -> meta.ref" "$BUILD_REF" "$(m9 ref)"
+  assert_eq "RB_CRASH_REF -> meta.git_sha (Image-Tag)" "$REF_SHA" "$(m9 git_sha)"
+  assert_eq "RB_CRASH_REF -> meta.env" "$ENV_NAME" "$(m9 env)"
 fi
 
 if [ "$FAIL" -ne 0 ]; then
