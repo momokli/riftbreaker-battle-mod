@@ -1,0 +1,57 @@
+---
+# Lokale Solo-Dev-Überschreibungen (Issue #566) — Pendant zu prod-vars.yml/
+# test-vars.yml, aber NICHT Teil des Env-Isolations-Schemas (env-schema.yml):
+# auf einem Solo-Rechner gibt es keine dev/prod/test-Kollision, die dieses
+# Schema löst. Alle Pfade liegen unter riftbreaker_local_root (Default
+# /srv/rift-local) — EIN Wurzelverzeichnis, leicht zu finden/aufzuräumen.
+#
+# Aufruf: siehe deploy/LOCAL_DEV.md.
+
+rift_env: local
+
+# --- Wurzelverzeichnis (einzige Stelle, die man anpassen muss) -------------
+riftbreaker_local_root: /srv/rift-local
+
+# --- Dedicated-Server ---------------------------------------------------
+riftbreaker_game_dir: "{{ riftbreaker_local_root }}/game"
+riftbreaker_mod_dir: "{{ riftbreaker_game_dir }}/mods/rbbattle"
+riftbreaker_backup_dir: "{{ riftbreaker_local_root }}/backups"
+riftbreaker_deploy_dir: "{{ riftbreaker_local_root }}/compose/riftbreaker"
+riftbreaker_config_dir: "{{ riftbreaker_deploy_dir }}/config"
+riftbreaker_sessions_dir: "{{ riftbreaker_local_root }}/sessions"
+
+# Server-Passwort: rein lokal (127.0.0.1-Bridge/Direct-IP), kein Vault nötig.
+# Beliebig überschreibbar (-e riftbreaker_server_password=...), falls der
+# Server je über localhost hinaus erreichbar gemacht wird.
+riftbreaker_server_password: localdev
+
+# Welt/Mission wie der verifizierte dev-Stand (planet host_vars) — funktioniert.
+riftbreaker_server_campaign: mp_survival/mp_survival
+riftbreaker_server_mission: survival/jungle
+
+# --- Laufzeit-Image (Rolle dedicated-server-image) --------------------------
+dedicated_server_image_name: rb-dedicated
+dedicated_server_image: "{{ dedicated_server_image_name }}:{{ deploy_image_tag }}"
+riftbreaker_server_image: "{{ dedicated_server_image }}"
+
+# --- Server-I/O-Tools (Rolle rbtools) ---------------------------------------
+rbtools_dir: "{{ riftbreaker_local_root }}/rbtools"
+rbtools_staging_dir: "{{ rbtools_dir }}/.staging"
+
+# --- Mods-Zip (Rolle mods-zip) — kein Website-Docroot nötig, reines Ablagefach
+website_mods_dir: "{{ riftbreaker_local_root }}/mods"
+mods_zip_name: rbbattle.zip
+mods_zip_dest: "{{ website_mods_dir }}/{{ mods_zip_name }}"
+
+# --- Game-Content (Rolle game-content) --------------------------------------
+# Anders als planet (dort: sync, weil SteamCMD an lib32gcc-s1 hängt):
+# frisches Desktop-Linux hat i386-Multiarch normalerweise verfügbar.
+# Anonymer Login, App 4114030 — kostenlos, kein Steam-Account nötig.
+riftbreaker_content_mode: steamcmd
+
+# --- Tournament-Server (nur bei `--tags tournament`, optional) -------------
+tournament_install_dir: "{{ riftbreaker_local_root }}/tournament-server"
+tournament_unit: tournament-server-local
+tournament_port: 8081
+tournament_bridge_a_url: "http://127.0.0.1:{{ riftbreaker_bridge_port }}/exec"
+tournament_bridge_b_url: ""
