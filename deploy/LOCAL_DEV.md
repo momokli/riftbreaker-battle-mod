@@ -73,30 +73,52 @@ Steam-Content-Stand irgendwo liegen.
 ## Aufruf
 
 ```bash
-# Einmalig: ansible-core (falls nicht vorhanden)
-python3 -m venv ~/.venvs/rift-deploy
-~/.venvs/rift-deploy/bin/pip install "ansible-core>=2.19"
-
-# Server + Bridge hochfahren (Server-Passwort + Pfade: deploy/local-vars.yml)
-~/.venvs/rift-deploy/bin/ansible-playbook \
-  -i deploy/local-inventory.yml deploy/local-deploy.yml \
-  -e @deploy/local-vars.yml -K
+scripts/local-dev.sh
 ```
 
-`-K` fragt das `sudo`-Passwort ab (`become: true`). Danach:
+Bootstrapt `ansible-core` beim ersten Aufruf automatisch in ein eigenes venv
+(`~/.venvs/rift-deploy`, überschreibbar via `RBBATTLE_ANSIBLE_VENV`), fragt
+dann per `-K` das `sudo`-Passwort ab (`become: true`) und fährt Image +
+Game-Content + Server-I/O-Tools + Dedicated-Server + Server-Control +
+Crash-Collector hoch. Idempotent — jeder weitere Aufruf ist ein billiger
+No-Op, außer sich hat sich wirklich etwas geändert (Code, Content).
+
+Danach:
 
 ```bash
 curl -X POST http://127.0.0.1:9001/get_state
 # im Browser: http://127.0.0.1:9001/  (Cockpit)
 ```
 
+Äquivalent von Hand (falls du kein Wrapper-Script willst):
+
+```bash
+python3 -m venv ~/.venvs/rift-deploy
+~/.venvs/rift-deploy/bin/pip install "ansible-core>=2.19"
+~/.venvs/rift-deploy/bin/ansible-playbook \
+  -i deploy/local-inventory.yml deploy/local-deploy.yml \
+  -e @deploy/local-vars.yml -K
+```
+
+### Server aus-/wieder anschalten (ohne neu zu bauen)
+
+Für den Alltag — kein Ansible, kein `sudo`-Passwort, kein Neu-Provisionieren:
+
+```bash
+scripts/local-dev-stop.sh     # anhalten
+scripts/local-dev-start.sh    # wieder starten
+```
+
+(Server-Control und Crash-Collector laufen als systemd-Units durchgehend im
+Hintergrund, unabhängig vom Dedicated-Server-Container.)
+
 ### Nur einen Teil laufen lassen
 
 ```bash
---tags content      # nur Mod-Zip + Game-Content
---tags server        # Image + Server-I/O-Tools + Dedicated-Server + Server-Control
---tags crash          # nur den Crash-Collector
---tags tournament    # zusätzlich den Tournament-Server (systemd, optional)
+scripts/local-dev.sh --tags content      # nur Mod-Zip + Game-Content
+scripts/local-dev.sh --tags server        # Image + Server-I/O-Tools + Dedicated-Server + Server-Control
+scripts/local-dev.sh --tags crash          # nur den Crash-Collector
+scripts/local-dev.sh --tags tournament    # zusätzlich den Tournament-Server (systemd, optional)
 ```
 
 `--tags tournament` ALLEIN startet nur den Tournament-Server, nicht Server/
@@ -126,7 +148,9 @@ DLL/PDB, die SteamCMD dir gegeben hat.
 
 ### Aufräumen
 
-Alles Projekt-/Instanz-Bezogene liegt unter `riftbreaker_local_root`
+Für ein bloßes Pausieren reicht `scripts/local-dev-stop.sh` (Container
+angehalten, nichts gelöscht). Für vollständiges Entfernen: alles
+Projekt-/Instanz-Bezogene liegt unter `riftbreaker_local_root`
 (Default `/srv/rift-local`) + Containern/Volumes des Compose-Projekts
 `riftbreaker` (`riftbreaker_compose_project`) + den systemd-Units. Der
 Docker-Build-Kontext (`/opt/rbmods/dedicated-server`) und die
