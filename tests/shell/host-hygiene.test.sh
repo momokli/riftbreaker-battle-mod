@@ -163,6 +163,60 @@ else
   FAIL=1
 fi
 
+# --- rbtools test-* Retention (Issue #606) -----------------------------------
+# Planetfrei: die Retention laeuft VOR dem Docker-Abschnitt und benoetigt kein
+# Docker. Wir pruefen sie ueber die Verzeichnis-Zustaende (nicht ueber $CALLS).
+assert_dir_exists() {  # <path> <label>
+  if [ -d "$1" ]; then printf 'PASS  %s\n' "$2"; else printf 'FAIL  %s fehlt\n' "$2"; FAIL=1; fi
+}
+assert_dir_absent() {  # <path> <label>
+  if [ -e "$1" ] || [ -L "$1" ]; then printf 'FAIL  %s noch vorhanden (sollte entfernt sein)\n' "$2"; FAIL=1; else printf 'PASS  %s entfernt\n' "$2"; fi
+}
+
+# (e)/(5) Retention: behalte die N neuesten test-* (mtime), entferne aeltere;
+# dev/prod/staging bleiben unangetastet.
+C5="${TMP}/c5"; mkdir -p "$C5"
+RB5="${C5}/rbtools"
+mkdir -p "$RB5/test-a" "$RB5/test-b" "$RB5/test-c" "$RB5/test-d" "$RB5/dev" "$RB5/prod" "$RB5/staging"
+touch -t 202401010000.00 "$RB5/test-a"
+touch -t 202402010000.00 "$RB5/test-b"
+touch -t 202403010000.00 "$RB5/test-c"
+touch -t 202404010000.00 "$RB5/test-d"
+touch -t 202301010000.00 "$RB5/dev" "$RB5/prod" "$RB5/staging"
+exec_hygiene "$C5" RB_HYGIENE_RBTOOLS_DIR="$RB5" RB_HYGIENE_RBTOOLS_RETENTION=2
+assert_dir_absent "$RB5/test-a" "test-a (aeltestes)"
+assert_dir_absent "$RB5/test-b" "test-b (zweit-aeltestes)"
+assert_dir_exists "$RB5/test-c" "test-c (neu) bleibt"
+assert_dir_exists "$RB5/test-d" "test-d (neuestes) bleibt"
+assert_dir_exists "$RB5/dev" "dev bleibt"
+assert_dir_exists "$RB5/prod" "prod bleibt"
+assert_dir_exists "$RB5/staging" "staging bleibt"
+
+# (f)/(6) DRY-RUN: rbtools-Retention loescht nichts.
+C6="${TMP}/c6"; mkdir -p "$C6"
+RB6="${C6}/rbtools"
+mkdir -p "$RB6/test-a" "$RB6/test-b"
+touch -t 202401010000.00 "$RB6/test-a"
+touch -t 202402010000.00 "$RB6/test-b"
+exec_hygiene "$C6" RB_HYGIENE_RBTOOLS_DIR="$RB6" RB_HYGIENE_RBTOOLS_RETENTION=0 RB_HYGIENE_DRY_RUN=1
+assert_dir_exists "$RB6/test-a" "dry-run: test-a bleibt"
+assert_dir_exists "$RB6/test-b" "dry-run: test-b bleibt"
+
+# (g)/(7) Retention=0 entfernt ALLE test-*; dev/prod/staging + Nicht-Verzeichnis bleiben.
+C7="${TMP}/c7"; mkdir -p "$C7"
+RB7="${C7}/rbtools"
+mkdir -p "$RB7/test-a" "$RB7/test-b" "$RB7/dev" "$RB7/prod" "$RB7/staging"
+printf 'x' > "$RB7/test-notdir"
+touch -t 202401010000.00 "$RB7/test-a"
+touch -t 202402010000.00 "$RB7/test-b"
+exec_hygiene "$C7" RB_HYGIENE_RBTOOLS_DIR="$RB7" RB_HYGIENE_RBTOOLS_RETENTION=0
+assert_dir_absent "$RB7/test-a" "retention=0: test-a"
+assert_dir_absent "$RB7/test-b" "retention=0: test-b"
+assert_dir_exists "$RB7/dev" "retention=0: dev bleibt"
+assert_dir_exists "$RB7/prod" "retention=0: prod bleibt"
+assert_dir_exists "$RB7/staging" "retention=0: staging bleibt"
+if [ -f "$RB7/test-notdir" ]; then printf 'PASS  Datei test-notdir bleibt\n'; else printf 'FAIL  Datei test-notdir entfernt\n'; FAIL=1; fi
+
 if [ "$FAIL" -ne 0 ]; then
   printf '\nhost-hygiene.test.sh: FAIL\n'
   exit 1
