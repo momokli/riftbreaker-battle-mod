@@ -2,7 +2,8 @@
 
 Ziel-Stack + Betriebsregeln: [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md) ·
 Host-Anforderungen (CPU/RAM/Storage je Szenario):
-[`docs/SERVER_SIZING.md`](../docs/SERVER_SIZING.md).
+[`docs/SERVER_SIZING.md`](../docs/SERVER_SIZING.md) · Eigener Rechner statt
+planet: [`LOCAL_DEV.md`](LOCAL_DEV.md).
 **Deploy NUR über dieses Playbook** — kein manuelles Gedudel. Seit 2026-09-11
 läuft der CD (main→dev) per **SSH über einen dedizierten deploy-User** auf
 planet (Abschnitt [„CD: SSH-Deploy"](#cd-ssh-deploy-dedizierter-deploy-user));

@@ -693,6 +693,27 @@
                         </div>
                     </fieldset>
 
+                    <!-- C2. MATCH END (#519) — nativer C++-Write -->
+                    <fieldset class="q-groupbox" id="panel-endgame">
+                        <legend>Match End (Win/Lose)</legend>
+                        <div class="flow-container">
+                            <div class="flow-readouts">
+                                <div class="flow-prop">
+                                    <span class="prop-label">last end</span>
+                                    <span id="end_game" class="prop-val">—</span>
+                                </div>
+                            </div>
+                            <div class="flow-action-row">
+                                <button id="end_win" class="btn-primary" aria-label="End the match as win">win</button>
+                                <button id="end_lose" aria-label="End the match as lose">lose</button>
+                            </div>
+                            <div class="flow-note">
+                                nativ: MissionService::FinishCurrentMission
+                                (MISSION_STATUS_WIN/LOSE), kein Lua/Console (#519)
+                            </div>
+                        </div>
+                    </fieldset>
+
                     <!-- D. CREATURES BASE DIFFICULTY -->
                     <fieldset class="q-groupbox" id="panel-creatures">
                         <legend>Creatures Base Difficulty</legend>
@@ -721,7 +742,28 @@
                         </div>
                     </fieldset>
 
-                    <!-- E. NATURAL WAVES (VANILLA) -->
+                    <!-- E. HQ HEALTH (#573/#511) — nativer C++-Read -->
+                    <fieldset class="q-groupbox" id="panel-hq">
+                        <legend>HQ Health</legend>
+                        <div class="flow-container">
+                            <div class="flow-readouts">
+                                <div class="flow-prop">
+                                    <span class="prop-label">hp</span>
+                                    <span id="hq_hp" class="prop-val">—</span>
+                                </div>
+                                <div class="flow-prop">
+                                    <span class="prop-label">hp_max</span>
+                                    <span id="hq_hp_max" class="prop-val">—</span>
+                                </div>
+                                <div class="flow-prop">
+                                    <span class="prop-label">dead</span>
+                                    <span id="hq_dead" class="prop-val">—</span>
+                                </div>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <!-- F. NATURAL WAVES (VANILLA) -->
                     <fieldset class="q-groupbox" id="panel-waves">
                         <legend>Natural Waves (Vanilla)</legend>
                         <div class="flow-container">
@@ -776,7 +818,7 @@
                 </div>
 
                 <div class="right-col">
-                    <!-- F. SERVER CONTROL (PLANE B) -->
+                    <!-- G. SERVER CONTROL (PLANE B) -->
                     <fieldset class="q-groupbox" id="panel-server">
                         <legend>Server Control (Plane B)</legend>
                         <div class="server-group-content">
@@ -823,7 +865,7 @@
                 </div>
             </main>
 
-            <!-- G. STATUS BAR -->
+            <!-- H. STATUS BAR -->
             <footer class="status-bar">
                 <div class="sb-cell left">
                     <span id="out" aria-live="polite"></span>
@@ -871,6 +913,11 @@
                             mfp.spawn_point !== undefined
                                 ? String(mfp.spawn_point)
                                 : "—";
+                        var eg = s.end_game;
+                        $("end_game").textContent = eg &&
+                            eg.result !== undefined
+                                ? String(eg.result)
+                                : "—";
                         $("players").textContent =
                             s.players === undefined || s.players === null
                                 ? "—"
@@ -880,6 +927,18 @@
                             s.creatures_base_difficulty === null
                                 ? "—"
                                 : String(s.creatures_base_difficulty);
+                        $("hq_hp").textContent =
+                            s.hq_hp === undefined || s.hq_hp === null
+                                ? "—"
+                                : fmt(s.hq_hp);
+                        $("hq_hp_max").textContent =
+                            s.hq_hp_max === undefined || s.hq_hp_max === null
+                                ? "—"
+                                : fmt(s.hq_hp_max);
+                        $("hq_dead").textContent =
+                            s.hq_dead === undefined || s.hq_dead === null
+                                ? "—"
+                                : String(s.hq_dead);
                         $("out").textContent = "";
                     } catch (e) {
                         $("out").textContent = "ERR " + e.message;
@@ -968,6 +1027,23 @@
 
                 $("flow_stop_btn").onclick = function () {
                     stopMissionFlow();
+                };
+
+                async function endGame(result) {
+                    try {
+                        var r = await post("end_game", { result: result });
+                        $("out").textContent = r && r.ok ? "" : JSON.stringify(r);
+                        refresh();
+                    } catch (e) {
+                        $("out").textContent = "ERR " + e.message;
+                    }
+                }
+
+                $("end_win").onclick = function () {
+                    endGame("win");
+                };
+                $("end_lose").onclick = function () {
+                    endGame("lose");
                 };
 
                 $("cbd_set").onclick = function () {
