@@ -38,7 +38,8 @@
 #                           `<dir von $0>/minidump_meta.py`). Fehlt er oder ist
 #                           der Dump kaputt -> neue Felder null, KEIN Abbruch.
 #   RB_CRASH_PYTHON         Python fuer meta.json + Parser (Default: python3)
-#   RB_CRASH_RBBRIDGE_DLL   Host-Pfad rbbridge.dll (Default: /opt/rbmods/rbtools/rbbridge.dll)
+#   RB_CRASH_RBBRIDGE_DLL   Host-Pfad rbbridge.dll (Default: /opt/rbmods/rbtools/rbbridge.dll,
+#                           nur manueller Fallback — die systemd-Unit setzt den per-env-Pfad)
 #   RB_CRASH_DLL            Host-Pfad Game-DLL (Default: /srv/rbgame/bin/riftbreaker_dll_win_release.dll)
 #
 # Aufruf: rbmods-crash-collector.sh [--once]
@@ -66,7 +67,8 @@ SYMBOLIZE_BIN="${RB_CRASH_SYMBOLIZE_BIN:-/usr/local/bin/rbmods-crash-symbolize.s
 MARKER_RE="${RB_CRASH_MARKER_RE:-CRASH:|page fault}"
 # Modul-Bytes + sha256 (Issue #588): Host-Pfade der geladenen DLLs. Die
 # systemd-Unit setzt RB_CRASH_RBBRIDGE_DLL/RB_CRASH_DLL bereits (Rolle
-# crash-collector); Defaults identisch zur Symbolik (crash_symbolize.sh).
+# crash-collector, per-env); die Defaults darunter greifen nur bei manuellen
+# Einzel-Läufen ohne Unit und sind bewusst NICHT per-env (plain shell).
 RBBRIDGE_DLL="${RB_CRASH_RBBRIDGE_DLL:-/opt/rbmods/rbtools/rbbridge.dll}"
 GAME_DLL="${RB_CRASH_DLL:-/srv/rbgame/bin/riftbreaker_dll_win_release.dll}"
 
