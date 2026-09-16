@@ -645,6 +645,10 @@
                                     <span class="prop-label">payload.spawn_point</span>
                                     <span id="mission_flow_spawn" class="prop-val">—</span>
                                 </div>
+                                <div class="flow-prop">
+                                    <span class="prop-label">players</span>
+                                    <span id="players" class="prop-val" title="verbundene Spieler (nativ C++ #512); null = nicht lesbar">—</span>
+                                </div>
                             </div>
 
                             <!-- Row 2: Act (Start wave) -->
@@ -867,6 +871,10 @@
                             mfp.spawn_point !== undefined
                                 ? String(mfp.spawn_point)
                                 : "—";
+                        $("players").textContent =
+                            s.players === undefined || s.players === null
+                                ? "—"
+                                : String(s.players);
                         $("creatures_base_difficulty").textContent =
                             s.creatures_base_difficulty === undefined ||
                             s.creatures_base_difficulty === null
