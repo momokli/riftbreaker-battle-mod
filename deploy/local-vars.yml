@@ -93,6 +93,9 @@ crash_collector_symbolize: true
 # (by design, Issue #424) -- daher zwingend gesetzt, nicht nur ein Kommentar.
 server_control_token: localdev
 server_control_install_dir: "{{ riftbreaker_local_root }}/server-control"
+# Review #567, Mini-Nitpick: explizit statt stiller Rollen-Default (Discover-
+# ability, analog zu riftbreaker_bridge_port).
+server_control_port: 8091
 
 # --- Ausserhalb von riftbreaker_local_root, bewusst (Review #566, Blocker 4) -
 # Build-Kontext (Docker-Build-Cache) und die SteamCMD-Installation sind kein

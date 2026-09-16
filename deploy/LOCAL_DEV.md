@@ -142,6 +142,11 @@ scripts/local-dev.sh --tags tournament    # zusätzlich den Tournament-Server (s
 Bridge — für den vollen Stack ohne Filter laufen lassen (Server-Control und
 Crash-Collector laufen dabei immer mit; nur `tournament` ist opt-in).
 
+`--tags crash` ALLEIN (Review #567) läuft ins Leere, solange der
+Dedicated-Server-Container noch nicht existiert (`--tags server` einmal
+vorher laufen lassen) — der Collector beobachtet einen Container, den es
+noch nicht gibt.
+
 ### Server-Control (Plane B) — Status/Restart ohne Docker-Befehle
 
 ```bash
