@@ -19,6 +19,14 @@ server_control_unit: server-control
 server_control_bin: "{{ server_control_install_dir }}/server_control.py"
 server_control_python: /usr/bin/python3
 
+# Harte systemd-Abhaengigkeit von docker.service (Default true, planet-
+# Verhalten). Issue #593: unter WSL2 + Docker Desktop existiert KEINE
+# docker.service-Unit (die WSL-Integration haengt nur Socket/CLI rein) --
+# `Requires=docker.service` liesse den Start dort sofort mit "Unit
+# docker.service not found" scheitern, obwohl Docker laengst laeuft. Lokal
+# (local-vars.yml) auf false gesetzt.
+server_control_require_docker_service: true
+
 # Netz: ausschliesslich localhost (der rift-caddy proxyt /server/*).
 server_control_bind: 127.0.0.1
 server_control_port: 8091

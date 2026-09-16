@@ -5,9 +5,11 @@
 # der rift-caddy proxyt /server/* dorthin. Bearer-Token PFLICHT (Env-Datei).
 [Unit]
 Description=RIFT BATTLE Server-Control Host-Agent (Docker-Wrapper)
-After=network-online.target docker.service
+After=network-online.target{{ ' docker.service' if server_control_require_docker_service | default(true) | bool else '' }}
 Wants=network-online.target
+{% if server_control_require_docker_service | default(true) | bool %}
 Requires=docker.service
+{% endif %}
 StartLimitIntervalSec=60
 StartLimitBurst=3
 

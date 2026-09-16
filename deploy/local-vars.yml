@@ -97,6 +97,11 @@ riftbreaker_bridge_port: 9001
 crash_collector_dir: "{{ riftbreaker_local_root }}/crashes"
 crash_collector_rbbridge_dll: "{{ rbtools_dir }}/rbbridge.dll"
 crash_collector_symbolize: true
+# Live-Befund (Issue #593, WSL2 + Docker Desktop): keine echte docker.service-
+# systemd-Unit vorhanden (WSL-Integration haengt nur Socket/CLI rein) --
+# `Requires=docker.service` liess den Unit-Start sonst hart mit "Unit
+# docker.service not found" scheitern, obwohl Docker laengst lief.
+crash_collector_require_docker_service: false
 
 # --- Server-Control / Plane B (Review #566, Blocker 2) ----------------------
 # Kein Vault lokal -- Token direkt (wie riftbreaker_server_password), nicht
@@ -107,6 +112,8 @@ server_control_install_dir: "{{ riftbreaker_local_root }}/server-control"
 # Review #567, Mini-Nitpick: explizit statt stiller Rollen-Default (Discover-
 # ability, analog zu riftbreaker_bridge_port).
 server_control_port: 8091
+# Selbe Ursache wie bei crash_collector_require_docker_service oben (#593).
+server_control_require_docker_service: false
 
 # --- Ausserhalb von riftbreaker_local_root, bewusst (Review #566, Blocker 4) -
 # Build-Kontext (Docker-Build-Cache) und die SteamCMD-Installation sind kein
