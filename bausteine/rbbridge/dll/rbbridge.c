@@ -972,8 +972,10 @@ __attribute__((naked)) static void detour_chat_handler(void)
         "movq %rcx, g_chat_this(%rip)\n"
         "movq %rdx, g_chat_conn(%rip)\n"
         "movq %r8, g_chat_req(%rip)\n"
+        "subq $0x28, %rsp\n" /* MS-x64: 0x20 Shadow-Space + 8 B Alignment */
         "movq g_chat_req(%rip), %rcx\n"
         "call *g_chat_capture(%rip)\n"
+        "addq $0x28, %rsp\n"
         "movq g_chat_this(%rip), %rcx\n"
         "movq g_chat_conn(%rip), %rdx\n"
         "movq g_chat_req(%rip), %r8\n"
