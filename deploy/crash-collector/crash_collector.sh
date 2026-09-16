@@ -12,6 +12,9 @@
 #   * parst den Minidump minimal (`deploy/crash-collector/minidump_meta.py`, Issue #481) und
 #     uebernimmt Exception-Code/-Adresse, Modul, Modulbasis, RVA, Fault-Thread
 #     und Stack-RVAs — robuster als das Log-Zeilen-Fenster,
+#   * sichert beim Crash die geladenen Modul-Bytes (rbbridge.dll + Game-DLL) mit
+#     sha256 (Issue #588) — Checksums/Pfade landen in `meta.json`
+#     (`module_sha256`/`module_paths`); fehlende Dateien sind kein Fehler,
 #   * legt `context.log` (letzte N Container-Zeilen) + `meta.json`
 #     (Image-Tag, Git-SHA, Container-Uptime, Modulbasis/Fault-Adresse aus dem
 #     Dump; Fallback: `module_range`-/`page fault`-Zeile DIESES Bundles) dazu,
@@ -35,6 +38,8 @@
 #                           `<dir von $0>/minidump_meta.py`). Fehlt er oder ist
 #                           der Dump kaputt -> neue Felder null, KEIN Abbruch.
 #   RB_CRASH_PYTHON         Python fuer meta.json + Parser (Default: python3)
+#   RB_CRASH_RBBRIDGE_DLL   Host-Pfad rbbridge.dll (Default: /opt/rbmods/rbtools/rbbridge.dll)
+#   RB_CRASH_DLL            Host-Pfad Game-DLL (Default: /srv/rbgame/bin/riftbreaker_dll_win_release.dll)
 #
 # Aufruf: rbmods-crash-collector.sh [--once]
 #   --once  liest den Stream bis EOF, sammelt einen evtl. Crash und beendet
@@ -59,6 +64,11 @@ SYMBOLIZE_BIN="${RB_CRASH_SYMBOLIZE_BIN:-/usr/local/bin/rbmods-crash-symbolize.s
 # `CRASH:` (CrashHandlerWin32-Ausgabe) statt nur `CRASH` — sonst wuerde die
 # Zeile „[critical] CrashHandlerWin32.cpp:103 - " selbst als Marker zaehlen.
 MARKER_RE="${RB_CRASH_MARKER_RE:-CRASH:|page fault}"
+# Modul-Bytes + sha256 (Issue #588): Host-Pfade der geladenen DLLs. Die
+# systemd-Unit setzt RB_CRASH_RBBRIDGE_DLL/RB_CRASH_DLL bereits (Rolle
+# crash-collector); Defaults identisch zur Symbolik (crash_symbolize.sh).
+RBBRIDGE_DLL="${RB_CRASH_RBBRIDGE_DLL:-/opt/rbmods/rbtools/rbbridge.dll}"
+GAME_DLL="${RB_CRASH_DLL:-/srv/rbgame/bin/riftbreaker_dll_win_release.dll}"
 
 RUN_ONCE=0
 for arg in "$@"; do
@@ -77,6 +87,11 @@ PYTHON="${RB_CRASH_PYTHON:-python3}"
 MINIDUMP_PY="${RB_CRASH_MINIDUMP_PY:-$(dirname "$0")/minidump_meta.py}"
 # Rohes Parser-JSON des aktuellen Bundles (set -u-Fest, von collect_bundle gesetzt).
 DUMP_JSON=""
+# Modul-Sha256/Pfade + kopierte Modul-Dateinamen (Issue #588). JSON-Objekte
+# "{}" als Leerwert, damit `set -u` nie feuert (von collect_modules gesetzt).
+MODULE_SHA256_JSON="{}"
+MODULE_PATH_JSON="{}"
+MODULE_FILES=""
 
 # --- Minidump-Parse (Issue #481) ----------------------------------------------
 # Rohes Helper-JSON (oder leer): Datei fehlt / Python fehlt / Parsefehler ->
@@ -196,6 +211,8 @@ write_meta() {
     RB_META_FAULT_ADDRESS="$FAULT_ADDRESS" \
     RB_META_CONTEXT_LINES="$CONTEXT_LINES" \
     RB_META_DUMP_JSON="$DUMP_JSON" \
+    RB_META_MODULE_SHA256="$MODULE_SHA256_JSON" \
+    RB_META_MODULE_PATH="$MODULE_PATH_JSON" \
     "$PYTHON" - "$meta_path" <<'PY'
 import datetime
 import json
@@ -238,6 +255,28 @@ if raw_dump:
     if isinstance(candidate, dict) and candidate.get("_ok"):
         dump = candidate
 
+# Issue #588: Modul-Bytes/Checksums aus dem selben Bundle. JSON-Objekte werden
+# von collect_modules erzeugt; fehlt etwas, bleibt das Feld ein leeres Objekt.
+module_sha256 = {}
+raw_module_sha256 = env("RB_META_MODULE_SHA256", "")
+if raw_module_sha256:
+    try:
+        candidate = json.loads(raw_module_sha256)
+        if isinstance(candidate, dict):
+            module_sha256 = candidate
+    except (TypeError, ValueError):
+        pass
+
+module_paths = {}
+raw_module_paths = env("RB_META_MODULE_PATH", "")
+if raw_module_paths:
+    try:
+        candidate = json.loads(raw_module_paths)
+        if isinstance(candidate, dict):
+            module_paths = candidate
+    except (TypeError, ValueError):
+        pass
+
 module_base = env("RB_META_MODULE_BASE", "") or None
 fault_address = env("RB_META_FAULT_ADDRESS", "") or None
 exception_address = None
@@ -274,6 +313,8 @@ meta = {
     "exception_code": exception_code,
     "exception_address": exception_address,
     "module": module,
+    "module_sha256": module_sha256,
+    "module_paths": module_paths,
     "fault_rva": fault_rva,
     "fault_thread": fault_thread,
     "stack_rvas": stack_rvas,
@@ -394,6 +435,78 @@ marker_name() {
   shopt -u nocasematch
 }
 
+# --- Modul-Bytes + sha256 (Issue #588) ----------------------------------------
+# Beim Crash die geladenen DLL-Bytes ins Bundle kopieren und die Checksumme
+# berechnen, damit CI-Artefakt und Crash-Zeit-DLL byte-identisch vergleichbar
+# sind (der Minidump enthaelt keine Modul-Bytes). Graceful: fehlende Datei =>
+# Eintrag ausgelassen + WARN, der Collector stirbt nie.
+json_escape() {
+  local s="$1" out="" i ch
+  for ((i = 0; i < ${#s}; i++)); do
+    ch="${s:$i:1}"
+    case "$ch" in
+      '"' | '\') out="${out}\\${ch}" ;;
+      *) out="${out}${ch}" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+collect_modules() {
+  local bundle="$1"
+  local names=("rbbridge.dll" "riftbreaker_dll_win_release.dll")
+  local paths=("$RBBRIDGE_DLL" "$GAME_DLL")
+  local i n name host_path dest sha
+  local sha_json="{" path_json="{" sha_first=1 path_first=1
+
+  MODULE_SHA256_JSON="{}"
+  MODULE_PATH_JSON="{}"
+  MODULE_FILES=""
+
+  n=${#names[@]}
+  for ((i = 0; i < n; i++)); do
+    name="${names[$i]}"
+    host_path="${paths[$i]}"
+    [ -n "$host_path" ] || {
+      log "WARN: kein Host-Pfad fuer Modul ${name} — ausgelassen"
+      continue
+    }
+    if [ ! -f "$host_path" ]; then
+      log "WARN: Modul ${name} fehlt (${host_path}) — ausgelassen"
+      continue
+    fi
+
+    dest="${bundle}/${name}"
+    if ! cp "$host_path" "$dest" 2>/dev/null; then
+      log "WARN: ${name} konnte nicht kopiert werden (${host_path})"
+      continue
+    fi
+    log "Modul gesichert: ${name} <- ${host_path}"
+    MODULE_FILES="${MODULE_FILES} ${name}"
+
+    [ "$path_first" = "1" ] || path_json="${path_json},"
+    path_json="${path_json}\"$(json_escape "$name")\":\"$(json_escape "$host_path")\""
+    path_first=0
+
+    sha=""
+    if command -v sha256sum >/dev/null 2>&1; then
+      sha="$(sha256sum "$dest" 2>/dev/null | awk '{print $1}')"
+    elif command -v shasum >/dev/null 2>&1; then
+      sha="$(shasum -a 256 "$dest" 2>/dev/null | awk '{print $1}')"
+    fi
+    if [ -n "$sha" ]; then
+      [ "$sha_first" = "1" ] || sha_json="${sha_json},"
+      sha_json="${sha_json}\"$(json_escape "$name")\":\"${sha}\""
+      sha_first=0
+    else
+      log "WARN: sha256sum/shasum fehlt — Checksum fuer ${name} ausgelassen"
+    fi
+  done
+
+  MODULE_SHA256_JSON="${sha_json}}"
+  MODULE_PATH_JSON="${path_json}}"
+}
+
 # --- Ein Crash -> ein Bundle --------------------------------------------------
 collect_bundle() {
   local marker_line="$1"
@@ -430,6 +543,11 @@ collect_bundle() {
       log "WARN: ${uuid}.${ext} konnte nicht kopiert werden"
     fi
   done
+
+  # Modul-Bytes + sha256 (Issue #588) — vor write_meta, damit die Checksums
+  # und kopierten Dateinamen (files-Liste) im selben Bundle landen.
+  collect_modules "$bundle"
+  files="${files}${MODULE_FILES}"
 
   ring_dump >"${bundle}/context.log"
 
