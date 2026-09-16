@@ -340,6 +340,24 @@ prologues -> no wildcard mask needed.
 - `cockpit.html`: section *creatures base difficulty* (read + set/increase/
   decrease buttons).
 
+### HQ-Health (#511, nativer C++-Read)
+
+`findings`-Ergaenzung: derselbe Kanal liefert HQ-HP/Tod ohne Lua.
+
+- Kette: `FindService::FindEntityByType("headquarters")` (RVA `0x1C0E420`)
+  -> `HealthService::GetHealth/GetMaxHealth(entityId)` (RVA `0xF9BBB0` /
+  `0xF9C360`); liest `HealthComponent[+0x00]`/`[+0x04]` (Disasm:
+  `movss xmm0,[rax]` / `movss xmm0,[rax+4]`).
+- vftables (nur Instanz-Aufloesung): `FindService` `0x2E94C98`,
+  `HealthService` `0x2E95760`.
+- Alle drei Funktionsadressen per **AOB-Signatur** (je 1x im Abbild,
+  Build 2.0.58485); `GetHealth`/`GetMaxHealth` teilen den Prolog -> die
+  Signatur reicht bis nach die disambiguierende `movss`-Instruktion.
+- `get_state` liefert `hq_hp`, `hq_hp_max` (number) und `hq_dead` (bool);
+  nicht aufloesbar (Instanz/Signatur fehlt/kein HQ) -> je `null`, kein Crash.
+- Thread-Modell: reine C++-Reads (kein `lua_*`), Pipe-Thread wie bei #388.
+
+
 Graceful failure: missing module / signature / instance -> `ok:false`, **no**
 call is made. `resolve_campaign_diff()` additionally requires
 `this+0x10` to be readable before any method is invoked. Its cache is
