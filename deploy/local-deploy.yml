@@ -1,0 +1,88 @@
+---
+# RIFT BATTLE — lokales Solo-Dev-Setup (Issue #566).
+#
+# Reproduziert, was dev/prod auf planet tun (deploy/site.yml), aber auf DEINEM
+# Rechner: Dedicated-Server-Image bauen, Game-Content ziehen, die
+# Server-I/O-Tools (rbbridge.dll/pipe_bridge.exe) cross-compilen und den Server
+# + die Bridge hochfahren. `cockpit.html` liefert die Bridge selbst unter
+# `GET /` aus (Issue #474) — kein Caddy/Website/Server-Control/Crash-Collector
+# nötig, das sind Mehr-Umgebungs-/Ops-Belange von planet, keine Solo-Dev-Sache.
+#
+# Bewusst EIGENER Einstiegspunkt statt eines vierten Eintrags im
+# Env-Isolations-Schema (#483, env-schema.yml): das Schema loest
+# Namensraum-Kollisionen auf einem GETEILTEN Mehr-Umgebungs-Host — auf deinem
+# eigenen Rechner läuft nur eine Instanz, die Kollision existiert nicht.
+#
+# Aufruf: siehe deploy/LOCAL_DEV.md.
+#   ansible-playbook -i deploy/local-inventory.yml deploy/local-deploy.yml \
+#     -e @deploy/local-vars.yml -K
+#
+# Tags: [content] mods-zip+game-content · [server] Image+rbtools+Server+
+#       server-control · [crash] Crash-Collector (Minidump/Trace/Log, ohne
+#       Symbolik) · [tournament] Tournament-Server (optional, braucht
+#       systemd -- wie crash-collector/server-control auch).
+
+- name: RIFT BATTLE — lokales Solo-Dev-Setup
+  hosts: local
+  become: true
+
+  pre_tasks:
+    # Image-Tag = Checkout-SHA, wie bei site.yml/test-deploy.yml — kein
+    # `latest`, damit ein Rebuild nie ein stilles altes Image weiterlaufen
+    # lässt. `-c safe.directory=*`: falls unter sudo/anderem Owner ausgeführt.
+    - name: Image-Tag ermitteln (Checkout-SHA)
+      command: git -c safe.directory=* -C {{ playbook_dir }}/.. rev-parse --short=12 HEAD
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      changed_when: false
+      register: rbbattle_local_sha
+      tags: always
+
+    - name: Image-Tag als Fact setzen
+      set_fact:
+        deploy_image_tag: "{{ rbbattle_local_sha.stdout | trim }}"
+      tags: always
+
+    # Review #566, Nitpick: ohne dies bleibt rift_deploy_ref auf dem
+    # Rollen-Default "unknown" (RBB_REF=unknown, rbbattle-local-unknown.zip).
+    # Kein voller deploy-identity.yml-Import (der asserted/prueft Dinge, die
+    # nur im geteilten Mehr-Umgebungs-Schema Sinn ergeben) -- nur der eine Wert.
+    - name: Deploy-Ref als Fact setzen
+      set_fact:
+        rift_deploy_ref: "{{ deploy_image_tag }}"
+      tags: always
+
+    # Derselbe Preflight wie site.yml/test-deploy.yml — VOR dem Image-Build.
+    # Prüft den Mountpoint "/" (Default riftbreaker_disk_mount); liegt
+    # riftbreaker_local_root auf einem eigenen Mount, mit
+    # `-e riftbreaker_disk_mount=/dein/mount` überschreiben (muss EXAKT einem
+    # Eintrag aus `ansible_mounts` entsprechen, sonst gilt er als voll).
+    - name: "Disk-Gate — freien Platz VOR Image-Build prüfen (#310)"
+      include_role:
+        name: riftbreaker-server
+        tasks_from: disk-preflight
+      tags: always
+
+  roles:
+    - role: mods-zip
+      tags: [content]
+    - role: dedicated-server-image
+      tags: [server]
+    - role: game-content
+      tags: [content]
+    - role: rbtools
+      tags: [server]
+    - role: riftbreaker-server
+      tags: [server]
+    # Review #566, Blocker 2: Restart/Status/Logs/config.cfg ohne planet
+    # (Plane B, #424) -- laeuft standardmaessig mit (kein `never`), wie
+    # riftbreaker-server selbst.
+    - role: server-control
+      tags: [server]
+    # Review #566, Blocker 1: Minidump/Trace/Log sichern, essenziell fuer die
+    # Wave-/Difficulty-Spikes. Symbolisierung bewusst aus (local-vars.yml).
+    - role: crash-collector
+      tags: [crash]
+    - role: tournament-server
+      tags: [tournament, never]
