@@ -12,9 +12,6 @@ Geprüft:
 - `resolve_console_service` (Signatur + vftable + Instanz + Cache)
 - `resolve_module` (Wine-robust, Stufe d `sigbase`, Negativfälle)
 - `pe_image_size` (defensive Grenzfälle)
-- `json_escape_into` + `chat_build_player_chat` (#549: player_chat-Zeile,
-  Escaping von Quote/Backslash/Steuerzeichen, graceful `0` bei leerem
-  Text/zu kleinem Puffer)
 - Fehlerpfade (Modul/RTTI/Signatur/Instanz fehlt → `0`/`NULL`, kein Crash)
 
 Ist kein Host-C-Compiler vorhanden, wird der Test **sichtbar übersprungen**
