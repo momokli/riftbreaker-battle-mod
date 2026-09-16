@@ -140,6 +140,16 @@ jobs:
           ansible-playbook -i deploy/inventory deploy/test-deploy.yml \
             -e @deploy/test-vars.yml --syntax-check
 
+      # Playbook-Syntax des lokalen Solo-Dev-Setups (Issue #566): eigenes
+      # Inventory (deploy/local-inventory.yml), außerhalb des
+      # Env-Isolations-Schemas (siehe deploy/LOCAL_DEV.md).
+      - name: Playbook-Syntax (local-deploy.yml)
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          ansible-playbook -i deploy/local-inventory.yml deploy/local-deploy.yml \
+            -e @deploy/local-vars.yml --syntax-check
+
       # Disk-Space-Gate Selbsttest (Issue #310): hermetisch (synthetische
       # Mount-Facts, localhost) — prüft die ECHTE Preflight-Task-Datei. Bei zu
       # wenig Platz MUSS der Lauf rot abbrechen (fail_msg "PLATZ-GATE"); der
