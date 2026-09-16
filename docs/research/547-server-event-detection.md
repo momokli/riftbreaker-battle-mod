@@ -142,9 +142,10 @@ Der Issue-Kandidatensatz aus #547 (`BuildingCompletedEvent`, `BuildingPlacedEven
 `ResourceObtainedEvent`, `ResearchUnlockedEvent`) ist **falsch benannt** und wurde durch R1 verworfen.
 Reale, im Vanilla-Lua tatsächlich gefeuerte Events sind `BuildingBuildEvent`, `BuildingBuildEndEvent`,
 `StartBuildingEvent`. Ob diese auf einem **headless Dedi** mit **Vanilla-Client** feuern, ist laut R6
-unbelegt — genau das ist die Spike-Frage. Basis: gemergter Research `plans/547-plan-doc.md` (R1–R7 +
-Test-Split). Mod-Stand: `mod/lua/rbbattle_autoexec.lua` v0.34.3, registriert keinen GlobalEvent-Handler;
-das Handler-Muster liegt fertig, aber ungetestet in Baustein 05.
+unbelegt — genau das ist die Spike-Frage. Basis: Issue #547 sowie die in diesem Dokument
+enthaltenen Recherche-Abschnitte R1–R7 + Test-Split. Mod-Stand: `mod/lua/rbbattle_autoexec.lua`
+v0.34.3, registriert keinen GlobalEvent-Handler; das Handler-Muster liegt fertig, aber ungetestet
+in Baustein 05.
 
 **Reproduzierbarkeits-Anker (im Gateway-Checkout verifiziert am 2026-09-16):**
 Referenz-Commit `c7623d2a526f248d98cd7abb70ab9724daccb9d9`, Blob-SHA1 der unveränderten Mod-Datei
