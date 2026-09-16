@@ -15,20 +15,20 @@ Rust/axum in `tournament/` (Issue #29), Web-UI in `tournament/web/`
 
 ## Konfiguration (nur Env, keine Hardcodes)
 
-| Env | Default | Bedeutung |
-|---|---|---|
-| `TOURNAMENT_HOST` | `0.0.0.0` | Bind-Adresse |
-| `TOURNAMENT_PORT` | `8080` | HTTP-Port (API + Web-UI) |
-| `TOURNAMENT_AUTO_GO` | `true` | GO automatisch, sobald beide Welten ready |
-| `RBBRIDGE_A_URL` | — | HTTP-Endpoint der Welt-A-Bridge (GO-Push) |
-| `RBBRIDGE_B_URL` | — | HTTP-Endpoint der Welt-B-Bridge (GO-Push) |
-| `TOURNAMENT_GO_COMMANDS` | `debug_dom_resume` | Komma-separierte Unpause-/Start-Kommandos je Welt beim GO (je EIN gequotetes Argument, Issue #18) |
-| `TOURNAMENT_GO_TIMEOUT_MS` | `3000` | Timeout je Broadcast-Endpoint |
-| `TOURNAMENT_HQ_HP` | `100` | Start-HP jedes HQ |
-| `TOURNAMENT_REFEREE_MAX_WAVE` | `0` | Wellen-Deckel des Referees (`0` = unbegrenzt, Issue #268) |
-| `TOURNAMENT_REFEREE_RESTART_CMD` | `rb_reset` | In-game Command des Referees bei HQ-Tod (Issues #268/#281; Mod-Kommando `rb_reset`) |
-| `TOURNAMENT_WEB_DIR` | `<crate>/web` | Verzeichnis der statischen Web-UI |
-| `RUST_LOG` | `info` | Log-Level |
+| Env                              | Default            | Bedeutung                                                                                         |
+| -------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------- |
+| `TOURNAMENT_HOST`                | `0.0.0.0`          | Bind-Adresse                                                                                      |
+| `TOURNAMENT_PORT`                | `8080`             | HTTP-Port (API + Web-UI)                                                                          |
+| `TOURNAMENT_AUTO_GO`             | `true`             | GO automatisch, sobald beide Welten ready                                                         |
+| `RBBRIDGE_A_URL`                 | —                  | HTTP-Endpoint der Welt-A-Bridge (GO-Push)                                                         |
+| `RBBRIDGE_B_URL`                 | —                  | HTTP-Endpoint der Welt-B-Bridge (GO-Push)                                                         |
+| `TOURNAMENT_GO_COMMANDS`         | `debug_dom_resume` | Komma-separierte Unpause-/Start-Kommandos je Welt beim GO (je EIN gequotetes Argument, Issue #18) |
+| `TOURNAMENT_GO_TIMEOUT_MS`       | `3000`             | Timeout je Broadcast-Endpoint                                                                     |
+| `TOURNAMENT_HQ_HP`               | `100`              | Start-HP jedes HQ                                                                                 |
+| `TOURNAMENT_REFEREE_MAX_WAVE`    | `0`                | Wellen-Deckel des Referees (`0` = unbegrenzt, Issue #268)                                         |
+| `TOURNAMENT_REFEREE_RESTART_CMD` | `rb_reset`         | In-game Command des Referees bei HQ-Tod (Issues #268/#281; Mod-Kommando `rb_reset`)               |
+| `TOURNAMENT_WEB_DIR`             | `<crate>/web`      | Verzeichnis der statischen Web-UI                                                                 |
+| `RUST_LOG`                       | `info`             | Log-Level                                                                                         |
 
 `RBBRIDGE_*_URL` zeigen auf den HTTP-Adapter der jeweiligen Dedi-Bridge
 (z. B. `http://10.0.0.5:9001/exec`). Fehlen sie, entfällt der Push und die
@@ -76,21 +76,26 @@ Alle Antworten sind JSON. Fehler:
 ### POST /lobby — Spieler registrieren
 
 ```json
-{"player": "momo", "world": "A"}
+{ "player": "momo", "world": "A" }
 ```
 
 Idempotent; Namenswechsel setzt den Ready-Status der Welt zurück. Nur in
 Phase `lobby` (sonst 409). Antwort:
 
 ```json
-{"world": "A", "player": "momo", "created": true,
- "match_complete": false, "phase": "lobby"}
+{
+  "world": "A",
+  "player": "momo",
+  "created": true,
+  "match_complete": false,
+  "phase": "lobby"
+}
 ```
 
 ### POST /ready — Welt meldet sich bereit
 
 ```json
-{"world": "A"}
+{ "world": "A" }
 ```
 
 Voraussetzung: Welt registriert. Antwort:
@@ -115,8 +120,7 @@ broadcastet GO an beide `RBBRIDGE_*_URL`-Endpoints (async). Bei
 Broadcast-Payload an jede Bridge (`POST` auf `RBBRIDGE_*_URL`):
 
 ```json
-{"cmd": "go", "match_id": "rift-1", "round": 1,
- "commands": ["debug_dom_resume"]}
+{ "cmd": "go", "match_id": "rift-1", "round": 1, "commands": ["debug_dom_resume"] }
 ```
 
 `commands` ist die **geordnete** Liste der Unpause-/Start-Kommandos, die die
@@ -134,17 +138,28 @@ von `GET /state`, der zuverlässige Kanal ist das Polling der Bridges.
 Antwort:
 
 ```json
-{"started": true, "phase": "running", "round": 1,
- "broadcast": {"A": {"ok": true, "status": 200, "error": null, "endpoint": "http://…"},
-               "B": {"ok": null, "note": "kein Endpoint konfiguriert — Bridges pollten /state"}}}
+{
+  "started": true,
+  "phase": "running",
+  "round": 1,
+  "broadcast": {
+    "A": { "ok": true, "status": 200, "error": null, "endpoint": "http://…" },
+    "B": { "ok": null, "note": "kein Endpoint konfiguriert — Bridges pollten /state" }
+  }
+}
 ```
 
 ### POST /send — Wave-Routing
 
 ```json
-{"world": "A",
- "units": [{"unit": "creeper", "count": 5}, {"unit": "brute", "count": 2}],
- "value": 1500}
+{
+  "world": "A",
+  "units": [
+    { "unit": "creeper", "count": 5 },
+    { "unit": "brute", "count": 2 }
+  ],
+  "value": 1500
+}
 ```
 
 Nur in Phase `running` (sonst 409). Der Send wird in die Queue der
@@ -205,20 +220,33 @@ Commands gehen in der Antwort und/oder über `GET /referee/poll` zurück.
 {"world": "A", "type": "hq_destroyed"}
 ```
 
-| `type` | Wirkung | Command |
-|---|---|---|
-| `ready` | Executor oben (Map geladen; nach `rb_reset` **Mapping OFFEN**, s. `REFEREE.md` „Offene Punkte") | `rb_wave 1` |
-| `wave_done` (mit `level`) | Welle abgeschlossen | `rb_wave <level+1>` (bis `TOURNAMENT_REFEREE_MAX_WAVE`) |
-| `hq_destroyed` | HQ zerstört | `rb_reset` (Mod: Runde auf 0, Setup-Phase), Runde +1, Wellen ruhen bis `ready` |
+| `type`                    | Wirkung                                                                                         | Command                                                                        |
+| ------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `ready`                   | Executor oben (Map geladen; nach `rb_reset` **Mapping OFFEN**, s. `REFEREE.md` „Offene Punkte") | `rb_wave 1`                                                                    |
+| `wave_done` (mit `level`) | Welle abgeschlossen                                                                             | `rb_wave <level+1>` (bis `TOURNAMENT_REFEREE_MAX_WAVE`)                        |
+| `hq_destroyed`            | HQ zerstört                                                                                     | `rb_reset` (Mod: Runde auf 0, Setup-Phase), Runde +1, Wellen ruhen bis `ready` |
 
 Duplikate/veraltete Level/mehrfaches `hq_destroyed` sind idempotent (kein
 Doppel-Command). Antwort:
 
 ```json
-{"world": "A", "type": "wave_done", "accepted": true,
- "commands": [{"world": "A", "command": "rb_wave 4", "cmd_id": 7, "reason": "wave_done"}],
- "state": {"running": true, "restart_pending": false, "waves_in_flight": 4,
-           "next_level": 4, "rounds": 0, "commands_sent": 4, "queued_commands": 1}}
+{
+  "world": "A",
+  "type": "wave_done",
+  "accepted": true,
+  "commands": [
+    { "world": "A", "command": "rb_wave 4", "cmd_id": 7, "reason": "wave_done" }
+  ],
+  "state": {
+    "running": true,
+    "restart_pending": false,
+    "waves_in_flight": 4,
+    "next_level": 4,
+    "rounds": 0,
+    "commands_sent": 4,
+    "queued_commands": 1
+  }
+}
 ```
 
 Fehler: unbekannte Welt → 400 `invalid`; `wave_done` ohne `level` → 400;
@@ -245,7 +273,7 @@ Lua-Reduktion, #265): [`docs/REFEREE.md`](REFEREE.md).
 ### POST /sp — SP-Mode starten (Issue #44, Server-only)
 
 ```json
-{"player": "momo"}
+{ "player": "momo" }
 ```
 
 Startet ein Solo-/SP-Match: P1 (`player`) wird für Welt A registriert, die
@@ -258,6 +286,7 @@ duelliert sich gegen sich selbst. Kein zweiter Client nötig. Antwort:
 ```
 
 SP-Mode-Semantik (Mirror-Konzept):
+
 - **Sends gespiegelt:** `POST /send` von A routet normal zu B **und** legt einen
   identischen Spiegel-Batch (von B) zurück in die Queue von A — die eigenen
   Sends kommen als Gegner-Seite zurück.
@@ -272,7 +301,7 @@ SP-Mode-Semantik (Mirror-Konzept):
 ### POST /wave — Operator-Wellen-Spawn (Issue #266)
 
 ```json
-{"world": "A", "n": 3}
+{ "world": "A", "n": 3 }
 ```
 
 Leitet `exec rb_wave <n>` an den Bridge-/Relay-HTTP-Endpoint der Welt weiter
@@ -287,9 +316,16 @@ falscher Typ (z. B. `n:1.5`, `n:-1`, `n:"x"`) wird schon von Serde abgewiesen
 Antwort:
 
 ```json
-{"ok": true, "exec_ok": true, "world": "A", "command": "rb_wave 3",
- "endpoint": "http://127.0.0.1:9001/exec", "status": 200, "error": null,
- "exec_result": {"ok": true, "results": [{"command": "rb_wave 3", "ok": true}]}}
+{
+  "ok": true,
+  "exec_ok": true,
+  "world": "A",
+  "command": "rb_wave 3",
+  "endpoint": "http://127.0.0.1:9001/exec",
+  "status": 200,
+  "error": null,
+  "exec_result": { "ok": true, "results": [{ "command": "rb_wave 3", "ok": true }] }
+}
 ```
 
 Zwei getrennte Erfolgsflags (Review #271, Finding 2/3):
@@ -310,9 +346,7 @@ protokolliert (sichtbar im Live-Dev-Log der `/solo`-Seite). Der Endpoint
 veraendert den Match-Zustand nicht.
 
 Transport: auf dem Dedicated-Server ist der Endpoint die `pipe_bridge` (Wine,
-HTTP → `\\.\pipe\rbbattle`, #265); fuer native Windows-Welten der
-`relay.py`-Pfad (gleiches `exec`/`exec_result`-Protokoll, s.
-[relay-pipe-contract.md](relay-pipe-contract.md)). Der Live-Beweis, dass die
+HTTP → `\\.\pipe\rbbattle`, #265). Der Live-Beweis, dass die
 Welle im Spiel sichtbar spawnt (`[RBBATTLE] event=wave level=3 status=start`),
 ist ein Player-Test (Momo/Matheo) und bleibt offen.
 
@@ -378,15 +412,15 @@ Jede Dedi-Welt betreibt eine Bridge (rbbridge + Python/tools). Sie **pollt
 `GET /state`** (Default 2 s) und führt Game-Commands über den lokalen
 exec-Kanal aus (`exec_cmd_client`/rbbridge-exec-Dispatch):
 
-| Beobachtung in `/state` | Bridge-Kommando | Wirkung |
-|---|---|---|
-| `phase` wird `running` | `debug_dom_resume` (bzw. `TOURNAMENT_GO_COMMANDS`) | Unpause/Start des Runden-Loops (Fallback, falls der GO-Push nicht ankam; Idempotenz vorausgesetzt) |
-| `round` steigt | `round_start <n>` | Neue Build-Phase, HUD-Updates |
-| `reveal.round` neu | `reveal` | HUD-Aufdeckung: Built-Values + eingehende Komposition |
-| `phase` wird `finished` | `match_over` | Sieg-/Verlierer-Screen |
-| — | `POST /report wave_start` | Welt meldet Lock + Built-Value (vom Mod/RE-Layer ausgelöst) |
-| — | `POST /report hq_hp` | Welt meldet HQ-HP (send_state-Egress, Issue #13) |
-| — | `POST /report hq_dead` | Welt meldet HQ-Tod (Mod-Log, #267) → Referee-`rb_reset`-Push an `RBBRIDGE_*_URL` (#281: In-game-Round-Reset) |
+| Beobachtung in `/state` | Bridge-Kommando                                    | Wirkung                                                                                                      |
+| ----------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `phase` wird `running`  | `debug_dom_resume` (bzw. `TOURNAMENT_GO_COMMANDS`) | Unpause/Start des Runden-Loops (Fallback, falls der GO-Push nicht ankam; Idempotenz vorausgesetzt)           |
+| `round` steigt          | `round_start <n>`                                  | Neue Build-Phase, HUD-Updates                                                                                |
+| `reveal.round` neu      | `reveal`                                           | HUD-Aufdeckung: Built-Values + eingehende Komposition                                                        |
+| `phase` wird `finished` | `match_over`                                       | Sieg-/Verlierer-Screen                                                                                       |
+| —                       | `POST /report wave_start`                          | Welt meldet Lock + Built-Value (vom Mod/RE-Layer ausgelöst)                                                  |
+| —                       | `POST /report hq_hp`                               | Welt meldet HQ-HP (send_state-Egress, Issue #13)                                                             |
+| —                       | `POST /report hq_dead`                             | Welt meldet HQ-Tod (Mod-Log, #267) → Referee-`rb_reset`-Push an `RBBRIDGE_*_URL` (#281: In-game-Round-Reset) |
 
 Der GO-Push des Servers (`RBBRIDGE_*_URL`) und das Poll-Fallback sind
 **redundant aber idempotent**: Kommandos dürfen doppelt ankommen
@@ -400,7 +434,7 @@ Der Lua-Mod/RE-Layer einer Welt liefert Sends als
 `POST /send {"world": "A", "units": […], "value": …}` an den Referee
 (direkt oder über die Bridge). Der Referee routet in die Queue von B;
 beim nächsten `wave_start` von B erscheint der Send in `reveal.incoming.B`.
-Kein Echtzeit-Zwang: Polling-Pull-Modell (wie im Trainer-Protokoll).
+Kein Echtzeit-Zwang: Polling-Pull-Modell (wie im Server-Protokoll).
 
 ## Bekannte v1-Grenzen
 

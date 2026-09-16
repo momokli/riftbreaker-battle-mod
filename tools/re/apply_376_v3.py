@@ -10,7 +10,7 @@ direkte Read in v1/v2 crashte den Server, s. SKILL riftbreaker-re).
 import io
 import sys
 
-PATH = "bausteine/rbbridge/dll/rbbridge.c"
+PATH = "server/dll/rbbridge.c"
 
 HELPER = r"""/* ====================================================================== */
 /* DOM-Wellen-Counter + time-to-next (Issue #376): thread-sichere Variante  */

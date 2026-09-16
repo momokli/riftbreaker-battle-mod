@@ -9,7 +9,7 @@
 
 - name: Retention-Skript installieren
   copy:
-    src: "{{ playbook_dir }}/../scripts/docker_image_tag_retention.sh"
+    src: "{{ playbook_dir }}/image-retention/docker_image_tag_retention.sh"
     dest: "{{ image_retention_bin }}"
     mode: "0755"
     owner: root

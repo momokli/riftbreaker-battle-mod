@@ -46,7 +46,7 @@ server_control_timeout: 60
 server_control_env_file: /etc/rbmods/server-control.env
 
 # Quell-Skript im Repo.
-server_control_script_src: "{{ playbook_dir }}/../tools/server-control/server_control.py"
+server_control_script_src: "{{ playbook_dir }}/server-control/server_control.py"
 
 # Deploy-Identitaet (Issue #483, US4): Fallback fuer das EnvironmentFile, damit
 # die Vorlage auch ohne die Plays renderbar bleibt. Die Plays setzen rift_env als

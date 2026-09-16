@@ -23,11 +23,11 @@
 
 Rollen in `deploy/roles/` (Details: `deploy/README.md`):
 
-1. **mods-zip** — Mod aus `mod/` paketieren (`scripts/package_bausteine.sh`),
+1. **mods-zip** — Mod aus `client-mod/` paketieren (`scripts/package.sh`),
    `rbbattle.zip` nach planet; **md5-Paritäts-Check (Zip == Prod) hart als
    Fehlschlag**.
 2. **dedicated-server-image** — baut `rb-dedicated:<deploy-sha>` IM
-   Playbook auf planet aus `tools/dedicated-server` (Wine-Laufzeit
+   Playbook auf planet aus `deploy/dedicated-server` (Wine-Laufzeit
    für :6321, Community-Rezept; Docker-Layer-Cache → billig/idempotent). Das
    gerenderte Compose pinnt exakt diesen Tag (kein `latest`).
 3. **game-content** — Dedicated-Server-Content (Steam-App 4114030) deklarativ
@@ -44,12 +44,12 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
    Cockpit `/contract/*` + `/tournament/*`) und **ZWEI** Einträge im geteilten
    Host-Caddy (`mellon-caddy`, Landing- + Cockpit-Domain). Details: „Website-Pfad“ unten.
 7. **image-retention** — systemd-Timer für
-   `scripts/docker_image_tag_retention.sh`: entfernt alte
+   `deploy/image-retention/docker_image_tag_retention.sh`: entfernt alte
    `rb-dedicated`/`rb-headless-client`-Tags, behält das laufende Image und den
    Rollback-Stand (Issue #309, siehe unten).
 8. **host-hygiene** — wöchentlicher systemd-Timer (Issue #308): entfernt
    dangling Docker-Images (`docker image prune`, **kein** `-a`; der getaggte
-   Rollback-Stand bleibt erhalten). Installiert `scripts/host_hygiene.sh` +
+   Rollback-Stand bleibt erhalten). Installiert `deploy/host-hygiene/host_hygiene.sh` +
    Unit/Timer; automatische Variante der manuellen Aufräum-Befehle in
    [`SERVER_SIZING.md`](SERVER_SIZING.md).
 9. **crash-collector** — systemd-*Dauer*-Dienst (Issue #462/#481): beobachtet
@@ -78,7 +78,7 @@ Grundsätze:
 
 ## Crash-Bundles & meta.json (Issue #462/#481)
 
-Der Collector (`scripts/crash_collector.sh`, Unit `rbmods-crash-collector` bzw.
+Der Collector (`deploy/crash-collector/crash_collector.sh`, Unit `rbmods-crash-collector` bzw.
 `rbmods-crash-collector-prod`) legt je Crash ein Bundle
 `<crash_collector_dir>/<ts>-<uuid>/` an: `<uuid>.{dmp,log,trace}`,
 `context.log` (letzte N Container-Zeilen) und `meta.json`. Beide Skripte sind
@@ -102,7 +102,7 @@ Aus dem Minidump (#481) — `null`, wenn der Dump fehlt oder kaputt ist:
 Dump des Bundles; fehlt der Dump, aus der `module_range`-/`page fault`-Zeile
 **desselben** Bundles (`context.log`). Nie ein Wert aus einem anderen Boot.
 
-### Parser (`scripts/minidump_meta.py`)
+### Parser (`deploy/crash-collector/minidump_meta.py`)
 
 Nur stdlib (`struct`/`json`/`sys`/`os`) — keine Symbole, kein PDB, kein Netz.
 CLI: `minidump_meta.py [--json] <dmp>` -> JSON. Genutzte Streams:
@@ -187,7 +187,7 @@ journalctl -u rbmods-image-retention.service -n 40 --no-pager
 ```
 
 Details zu den Schaltern (`--keep N`, `--repo NAME`, ENV-Variablen):
-`scripts/docker_image_tag_retention.sh --help`. Der hermetische
+`deploy/image-retention/docker_image_tag_retention.sh --help`. Der hermetische
 Red/Green-Test (kein Docker nötig) liegt in
 `tests/shell/image-retention.test.sh` und läuft in CI (`lint.yml`).
 
@@ -301,7 +301,7 @@ Nach Entfernen des Ordners aus `mods/` + Container-Restart:
 
 **Update (Issue #245, Community-Rezept #241):** Seit dem Umstieg auf das
 Community-Dedicated-Server-Image ist die Quelle wieder **`docker logs`** —
-`tools/dedicated-server/scripts/entrypoint.sh` (`follow_server_logs`) tailt
+`deploy/dedicated-server/scripts/entrypoint.sh` (`follow_server_logs`) tailt
 `exor_logs.txt` selbst nach stdout, daher landen `[RBBATTLE] event=...`-Zeilen
 jetzt in `docker logs {{ riftbreaker_server_container }}`. `riftbreaker_mod_log_cmd`
 in der Rolle spiegelt das. Der Rest dieses Abschnitts (Befund planet
@@ -444,8 +444,8 @@ unter `/opt/rbmods/compose/…`.
 Bis zur CD (#91) wurde die Mod auf :6321 manuell eingespielt:
 
 ```bash
-# 1) Mod-Zip aus Repo main bauen (Content-Root = mod/):
-bash scripts/package_bausteine.sh          # → dist/rbbattle.zip
+# 1) Mod-Zip aus Repo main bauen (Content-Root = client-mod/):
+bash scripts/package.sh          # → dist/rbbattle.zip
 
 # 2) Auf planet kopieren + md5-Parität (lokal == remote):
 scp dist/rbbattle.zip planet:/tmp/rbbattle.zip
@@ -628,7 +628,7 @@ Fallback gelesen.
 | Session-Recorder | JSONL-Record `env`,`ref` | `RBB_ENV`/`RBB_REF` im Sidecar + CLI `--env/--ref` |
 | Referee-Egress | Event-Record `env`,`ref` | dito |
 | Container | Labels `RBB_ENV`/`RBB_REF` | `docker inspect` (ohne Log) |
-| Mod-Log | `event=mod_load … env=… ref=…` | `mod/lua/rbbattle_autoexec.lua` — **vorbereitet, im Live-Lauf nicht wirksam** (`env=unknown`, s. u.) |
+| Mod-Log | `event=mod_load … env=… ref=…` | `client-mod/lua/rbbattle_autoexec.lua` — **vorbereitet, im Live-Lauf nicht wirksam** (`env=unknown`, s. u.) |
 
 ### SOC-Attestation nach Deploy (Issue #504)
 

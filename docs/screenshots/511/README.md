@@ -1,6 +1,6 @@
 # Screenshots — Issue #511 (HQ Health im Cockpit)
 
-Neue Cockpit-Sektion *HQ Health* (`bausteine/08-control-ui/cockpit.html`): drei
+Neue Cockpit-Sektion *HQ Health* (`cockpit/cockpit.html`): drei
 Readouts (`hq_hp`, `hq_hp_max`, `hq_dead`) aus dem nativen C++-Read
 (`POST /get_state`, Felder `hq_hp`/`hq_hp_max`/`hq_dead`).
 
@@ -13,7 +13,7 @@ Readouts (`hq_hp`, `hq_hp_max`, `hq_dead`) aus dem nativen C++-Read
 
 Erzeugt mit **headless Chromium** (chromium-1223, DevTools-Protokoll,
 `deviceScaleFactor=2`, Viewport 900 × Inhaltshöhe) gegen die **unveränderte**
-`bausteine/08-control-ui/cockpit.html` auf dem PR-Branch.
+`cockpit/cockpit.html` auf dem PR-Branch.
 
 Als Backend lief lokal ein **Mock** (kein Dedicated Server nötig), der
 `POST /get_state` mit der dokumentierten Bridge-Antwort bedient (Ressourcen,

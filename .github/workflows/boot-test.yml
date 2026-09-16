@@ -20,10 +20,10 @@ name: Boot-Test
 # Path-Filter (Issue #303, Option A): Der Job `boot-test` läuft IMMER (damit der
 # Required-Check nie als "Expected" hängen bleibt), überspringt aber den teuren
 # Deploy/Boot, wenn kein relevanter Pfad geändert wurde. Relevant (Issue #393):
-#   * bausteine/rbbridge/dll/  -> DLL: build + host/boot test
-#   * bausteine/rbbridge/pipe-bridge/    -> HTTP-Bridge: build + smoke
-#   * deploy/, tools/dedicated-server/, scripts/, dieses Workflow-File
-# Bewusst NICHT relevant: mod/ (PLAYERMOD, HUD-only, low risk -> kein Heavy-Test)
+#   * server/dll/  -> DLL: build + host/boot test
+#   * server/pipe-bridge/    -> HTTP-Bridge: build + smoke
+#   * deploy/, deploy/dedicated-server/, scripts/, dieses Workflow-File
+# Bewusst NICHT relevant: client-mod/ (PLAYERMOD, HUD-only, low risk -> kein Heavy-Test)
 # und tournament/web/ (statische WebUI -> kein Boot-Test). Doku-/Metadaten-PRs
 # ziehen das Gate damit nicht mehr.
 #
@@ -74,7 +74,7 @@ jobs:
           # sonst fälschlich grün). Doku-PRs landen hier auf relevant=false.
           CHANGED="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || true)"
           if printf '%s\n' "$CHANGED" \
-             | grep -Eq '^(deploy/|tools/dedicated-server/|bausteine/rbbridge/(dll|pipe-bridge)/|scripts/(build_rbbridge_tools|package_bausteine|package_mod|mod_version)\.sh|\.github/workflows/boot-test\.yml)'; then
+             | grep -Eq '^(deploy/|server/(dll|pipe-bridge)/|scripts/(build_rbbridge_tools|package|package_mod|mod_version)\.sh|\.github/workflows/boot-test\.yml)'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "relevant=false" >> "$GITHUB_OUTPUT"

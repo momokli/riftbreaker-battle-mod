@@ -90,7 +90,7 @@ Teil des 1.0-Presets, nicht „nice to have“:
 | ------------------------------------------------------------------------------- | ------------- |
 | Tag / Kandidat                                                                  | `v1.0.0`      |
 | Commit (SHA)                                                                    | `<ausfüllen>` |
-| Mod-Version (`mod/*.manifest` → `version`)                                      | `<ausfüllen>` |
+| Mod-Version (`client-mod/*.manifest` → `version`)                                      | `<ausfüllen>` |
 | `rbbattle.zip` md5 (lokal == deployt == Download-URL)                           | `<ausfüllen>` |
 | Deployter Mod-Stand (`riftbreaker-dedicated`, `/opt/riftbreaker/mods/rbbattle`) | `<ausfüllen>` |
 | Tournament-Server (Binary-/Commit-Stand)                                        | `<ausfüllen>` |
@@ -387,7 +387,7 @@ python3 tests/core-io/core_io_probe.py --remote "ssh planet" \
   --bridge-url http://127.0.0.1:9001/exec
 ```
 
-**Erwartete Logzeilen (Mod, `mod/lua/rbbattle_autoexec.lua`):**
+**Erwartete Logzeilen (Mod, `client-mod/lua/rbbattle_autoexec.lua`):**
 
 ```
 [RBBATTLE] event=mod_load version=<V> status=ok mode=<sp|duel> econ_source=…

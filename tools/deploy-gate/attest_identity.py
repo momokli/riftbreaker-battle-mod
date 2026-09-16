@@ -16,13 +16,13 @@ Live-Betrieb (``--live``) liest das Skript echte URLs / ``docker inspect``.
 Surfaces (Issue #483/#492/#498/#499):
 
     Landing        <meta name="rb-env"/"rb-ref"> + Badge (index.html)
-    Cockpit        Bridge-HTML (bausteine/08-control-ui/cockpit.html)
+    Cockpit        Bridge-HTML (cockpit/cockpit.html)
     Tournament     GET /health -> {"env", "ref"} (TOURNAMENT_ENV/REF)
     Server-Control GET /server/status -> {"env", "ref"} (SERVER_CONTROL_ENV/REF)
     Session        JSONL-Record {"env", "ref"} (RBB_ENV/REF im Sidecar)
     Egress         Event-Record {"env", "ref"} (RBB_ENV/REF im Sidecar)
     Container      Labels RBB_ENV/RBB_REF (docker inspect)
-    Mod-Log        event=mod_load ... env=... ref=... (mod/lua) — n/a (#499)
+    Mod-Log        event=mod_load ... env=... ref=... (client-mod/lua) — n/a (#499)
     Mod-ZIP        Dateiname rbbattle-<env>-<ref>.zip
 
 Status je Surface: PASS (identisch), FAIL (abweichend), n/a (exponiert keine

@@ -16,7 +16,7 @@
 # Issue #245: die #244-Vereinfachung hatte den Mod-Rollout auf ein einzelnes
 # `unarchive ... creates: {{ riftbreaker_mod_dir }}` reduziert — sobald der
 # Ordner einmal existiert, überspringt Ansible das Entpacken auf JEDEM
-# folgenden Deploy, egal ob sich `mod/lua/*` geändert hat. Iteration
+# folgenden Deploy, egal ob sich `client-mod/lua/*` geändert hat. Iteration
 # (ändern -> mergen -> live) war damit kaputt. Diese Datei stellt die
 # md5-Marker-Änderungserkennung + Backup/Rollback aus #212 wieder her,
 # angepasst an das aktuelle Rezept: {{ riftbreaker_game_dir }} (und damit
@@ -104,15 +104,6 @@
   copy:
     src: "{{ riftbreaker_sessions_script_src }}"
     dest: "{{ riftbreaker_sessions_script }}"
-    remote_src: true
-    mode: "0644"
-  when: (not ansible_check_mode) or (riftbreaker_write_dirs_ready | bool)
-  notify: restart riftbreaker-server
-
-- name: "Referee-Egress-Script bereitstellen (Issue #358/#268)"
-  copy:
-    src: "{{ riftbreaker_referee_egress_script_src }}"
-    dest: "{{ riftbreaker_referee_egress_script }}"
     remote_src: true
     mode: "0644"
   when: (not ansible_check_mode) or (riftbreaker_write_dirs_ready | bool)
@@ -307,7 +298,7 @@
         mode: "0755"
       when: riftbreaker_mod_update_needed
 
-    - name: Mod-Zip entpacken (Content-Root = mod/)
+    - name: Mod-Zip entpacken (Content-Root = client-mod/)
       unarchive:
         src: "{{ mods_zip_dest }}"
         dest: "{{ riftbreaker_mod_dir }}"
@@ -347,7 +338,7 @@
     #   B) Runtime-Log-Check (best effort): der Wine-Prefix liegt in einem
     #      benannten Volume (nicht auf dem Host), der Lua-Log ist daher nur
     #      über den Container erreichbar. Das aktuelle Rezept (Issue #241,
-    #      tools/dedicated-server/scripts/entrypoint.sh: follow_server_logs)
+    #      deploy/dedicated-server/scripts/entrypoint.sh: follow_server_logs)
     #      tailt exor_logs.txt selbst nach stdout — `docker logs` enthält die
     #      `[RBBATTLE] event=...`-Zeilen also wieder (anders als beim alten
     #      Wine-Client-Image, das nur die run-server.sh-Wrapper-Zeilen zeigte).
@@ -358,7 +349,7 @@
       # `--include`: nur die Mod-Manifeste lesen, sonst würden README/Docs mit
       # `version "…"`-Zeilen mitgelesen. Ein einzelner Befehl, keine Pipe.
       command:
-        cmd: "grep -rhoE --include='*.manifest' '^[[:space:]]*version[[:space:]]*\"[^\"]+\"' {{ riftbreaker_mod_dir }}"
+        cmd: 'grep -rhoE --include=''*.manifest'' ''^[[:space:]]*version[[:space:]]*"[^"]+"'' {{ riftbreaker_mod_dir }}'
       register: rbbattle_deploy_manifest_version_raw
       changed_when: false
       failed_when: false
@@ -366,7 +357,7 @@
 
     - name: "Verifikation — RBB.version im deployten Lua lesen"
       command:
-        cmd: "grep -rhoE --include='*.lua' 'RBB[.]version[[:space:]]*=[[:space:]]*\"[^\"]+\"' {{ riftbreaker_mod_dir }}"
+        cmd: 'grep -rhoE --include=''*.lua'' ''RBB[.]version[[:space:]]*=[[:space:]]*"[^"]+"'' {{ riftbreaker_mod_dir }}'
       register: rbbattle_deploy_lua_version_raw
       changed_when: false
       failed_when: false

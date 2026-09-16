@@ -1,6 +1,6 @@
 # Screenshots — Issue #516 (nativer Round-Reset im Cockpit)
 
-Neues Cockpit-Panel *Round Reset (native)* (`bausteine/08-control-ui/cockpit.html`,
+Neues Cockpit-Panel *Round Reset (native)* (`cockpit/cockpit.html`,
 Fieldset `#panel-round`): zwei Readouts (`pending flag`, `flag offset`), zwei
 Buttons (`reset round` / `status`) und die Hinweiszeile zur nativen
 Write-Semantik (`RequestRestart()` → Pending-Flag → Map-Restart auf dem
@@ -16,7 +16,7 @@ Game-Thread, Slot `0x90`).
 
 Erzeugt mit **headless Chromium** (`--headless=new --no-sandbox --disable-gpu
 --hide-scrollbars --force-device-scale-factor=2`, chromium-1223) gegen die
-**unveränderte** `bausteine/08-control-ui/cockpit.html` (Viewport
+**unveränderte** `cockpit/cockpit.html` (Viewport
 `1300x1935` → PNG `2600x3870`; Layout bei ≥ 980 px Breite, wie im Betrieb).
 Als Backend lief lokal ein Mock (kein Dedicated Server nötig), der
 
@@ -42,5 +42,5 @@ Kein Lua/DOM im Backend, keine Secrets. Die Werte stammen aus der C++-Read-
 Antwort (`flag_offset`/`restart_pending`), nicht aus einer UI-seitigen
 Konstante. Hinweis: `restart_pending` ist eine Momentaufnahme (Race mit dem
 Game-Thread) — siehe `dispatch_restart_map` in
-`bausteine/rbbridge/dll/rbbridge.c` und
+`server/dll/rbbridge.c` und
 `docs/research/native-round-reset.md`.

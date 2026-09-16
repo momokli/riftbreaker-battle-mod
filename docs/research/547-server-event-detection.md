@@ -79,9 +79,9 @@ Weitere Service-APIs: `PlayerService:GetResourceAmount`, `PlayerService:UnlockRe
   Enthält `[RBBATTLE]`-Log-Helfer, **ein** `ConsoleService:RegisterCommand("rb_poc_send")` → `event=poc_send amount=10 resource=mythium`,
   sowie `Log("event=mod_load …")` als Lebenszeichen. Sandbox-Kommentar: kein `os.getenv`, kein `io.open`.
 - Manifest `mod/{96745BE8-…}.manifest`: nur Lua-Mod, `version 0.34.3`.
-- **Handler-Pattern existiert bereits als Baustein:** `bausteine/05-economy-loop/.../rbbattle_05_economy_autoexec.lua:479-483`
+- **Handler-Pattern existiert bereits als Baustein:** `[ehemals 05-economy-loop]/.../rbbattle_05_economy_autoexec.lua:479-483`
   (`pcall(function() RegisterGlobalEventHandler("EntityKilledEvent", …) RegisterGlobalEventHandler("HourEvent", …) end)`)
-  — Status `bausteine/README.md:21`: „Code fertig — In-Game-Test offen".
+  — Status `[ehemals bausteine-README]:21`: „Code fertig — In-Game-Test offen".
 - **Reporting-Pattern (Prod-belegt):** `[RBBATTLE] event=<name> …` via `LogService:Log`; Ernte per `docker logs … | grep -a RBBATTLE`
   (`docs/PLAYTEST_1.0.md:125,393-401`, `docs/DEPLOYMENT.md:305`). Mod lädt headless und loggt ins Dedi-Log (`docs/INGRESS_IO.md:11,173-175`).
 - Sandbox: kein File-I/O (`io.open` crasht hart, `findings.md:16` #16), kein HTTP/Socket/`os.getenv`.

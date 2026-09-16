@@ -5,7 +5,7 @@ description: Reverse-engineering the Riftbreaker DLL (riftbreaker_dll_win_releas
 
 # Riftbreaker DLL Reverse Engineering (ingress/egress C++ direct reads)
 
-For work on the dedicated-IO bridge (`bausteine/rbbridge/dll/rbbridge.c`):
+For work on the dedicated-IO bridge (`server/dll/rbbridge.c`):
 reading game state directly out of `riftbreaker_dll_win_release.dll` without
 log-tailing. Build 2.0.58485 (GOG == Dedi, byte-identical on mac + planet).
 
@@ -121,7 +121,7 @@ StateMachine::GetCurrentStateName() RVA 0x1DAEB50 (returns UtfString by out-ptr)
 
 ### Full state egress (LIVE #376 — mod hook + C cache)
 
-Thread-safe architecture: the Lua mod (`mod/lua/rbbattle_autoexec.lua` →
+Thread-safe architecture: the Lua mod (`client-mod/lua/rbbattle_autoexec.lua` →
 `PatchDomCapture`) wraps `dom_mananger:Update` on the **game thread**, builds a
 JSON snapshot (`BuildStateJson`), and calls the C-registered
 `_G.rbbridge_capture_state(json)` (registered once via the memory-read
