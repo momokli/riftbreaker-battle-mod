@@ -233,9 +233,9 @@ class CliTest(unittest.TestCase):
         self.assertIn("env=%s ref=%s" % (ENV, REF), out)
 
     def test_cli_rejects_invalid_env(self):
-        code, _out, err = self._run(["--env", "staging", "--ref", REF])
+        code, _out, err = self._run(["--env", "qa", "--ref", REF])
         self.assertEqual(code, 2)
-        self.assertIn("staging", err)
+        self.assertIn("qa", err)
 
     def test_cli_requires_ref(self):
         code, _out, err = self._run(["--env", ENV])

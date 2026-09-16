@@ -21,8 +21,8 @@
 
 - name: "Env-Pfad-Migration — env pruefen (#483)"
   assert:
-    that: rift_env in ['dev', 'prod', 'test']
-    fail_msg: "rift_env muss dev|prod|test sein (ist '{{ rift_env }}')."
+    that: rift_env in ['dev', 'prod', 'test', 'staging']
+    fail_msg: "rift_env muss dev|prod|test|staging sein (ist '{{ rift_env }}')."
     success_msg: "Migration env={{ rift_env }}."
 
 - name: "Env-Pfad-Migration — Paarliste ermitteln (#483)"
@@ -50,6 +50,8 @@
         - {old: /opt/rbmods/rbtools-rift, new: /opt/rbmods/rbtools/prod}
         - {old: /opt/rbmods/rbtools-staging-rift, new: /opt/rbmods/rbtools/prod/.staging}
       test: []
+      # staging ist eine NEUE Env ohne Alt-Pfade -> keine Migration (leer).
+      staging: []
 
 - name: "Env-Pfad-Migration — Ziel-Elternverzeichnis anlegen (#483)"
   file:
