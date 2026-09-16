@@ -514,6 +514,26 @@ Das belegt nur den **Graceful-Pfad** (kein Crash, `null` statt Blind-Call) —
 Erst danach ist Blocker 2 (Live-Zahlenwert) bestätigt. Bis dahin bleibt der
 Wert `players` ausdrücklich **nicht live verifiziert** — kein „proven".
 
+### Rework-Zyklus 5 — Verifikationsstand 2026-09-16 (HEAD f292d1d)
+
+Erneuter Code-/Merge-Rework ohne neuen Code-Änderungsbedarf; der Branch-Stand
+ist unverändert geprüft und weiterhin sauber:
+
+- **Merge:** `origin/main` (`3556bd9`) ist Ancestor von HEAD; `mergeable=MERGEABLE`,
+  keine Konfliktmarker, Netto-Diff vs. `main` bleibt #512-only. Kein Merge nötig.
+- **Host-Test (unabhängig, ohne Player):** `cc -O1 -g -Wall -Wextra -I
+  bausteine/rbbridge/dll tests/rbbridge-hosttest/hosttest/rbbridge_hosttest.c` →
+  **HOSTTEST_PASS=153 HOSTTEST_FAIL=0**.
+- **Required-Check `boot-test`: rot, aber Infra-Ursache (#301).** Der Lauf endet im
+  Disk-Gate auf planet — `"PLATZ-GATE: nur 9.0 GB frei auf / (planet) — gefordert
+  sind 10 GB"` (Workflow `Boot-Test`, Lauf 35062072155). Kein PR-Verschulden.
+- **Blocker 1 (Screenshots) und 3 (`connplayers_vec_release`-Roh-Deref):** behoben
+  und im Review bestätigt.
+
+**Blocker 2 (Live-Zahlenwert `players`) bleibt OFFEN, NICHT erledigt** — er hängt
+an einem Player-Lauf mit verbundenem Client (Momo/Matheo, Runbook oben). Der Wert
+ist bis dahin **nicht live verifiziert**; kein Merge, bis der Beleg vorliegt.
+
 ## #367: Wave-Counter — Instanz-Navigation + Feld-Offset (statisch, Build 2.0.58485)
 
 **Auftrag:** Instanz + Feld-Offset des Wave-Counters statisch belegen (PDB-publics
