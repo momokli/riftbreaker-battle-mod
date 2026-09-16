@@ -65,3 +65,7 @@ crash_collector_dll: "{{ riftbreaker_game_dir | default('/srv/rift-dev/game') }}
 crash_collector_pdb: "{{ riftbreaker_game_dir | default('/srv/rift-dev/game') }}/bin/riftbreaker_dll_win_release.pdb"
 crash_collector_llvm_symbolizer: /usr/lib/llvm-18/bin/llvm-symbolizer
 crash_collector_symbolize_timeout: 60
+# Zweites Modul (Issue #559): die injizierte DLL rbbridge.dll (mingw -g).
+# Liegt gestaged auf dem Host; optional — fehlt sie, symbolisiert der Collector
+# weiterhin nur die Game-DLL (graceful, kein Hard-Fail).
+crash_collector_rbbridge_dll: /opt/rbmods/rbtools/rbbridge.dll

@@ -77,6 +77,10 @@ LLVM_SYMBOLIZER="${RB_CRASH_LLVM_SYMBOLIZER:-/usr/lib/llvm-18/bin/llvm-symbolize
 TOOL="${RB_CRASH_SYMBOLIZE_TOOL:-/usr/local/lib/rbmods/crash/symbolize.py}"
 TIMEOUT="${RB_CRASH_SYMBOLIZE_TIMEOUT:-60}"
 PYTHON="${RB_CRASH_PYTHON:-python3}"
+# Zweites Modul (Issue #559): rbbridge.dll (eigene injizierte DLL, mingw -g).
+# Optional: nur wenn gesetzt UND die Datei existiert, sonst nur Game-DLL.
+RBBRIDGE_DLL="${RB_CRASH_RBBRIDGE_DLL:-}"
+RBBRIDGE_MODULE="${RB_CRASH_RBBRIDGE_MODULE:-rbbridge.dll}"
 
 [ -n "$OUT" ] || OUT="${BUNDLE}/symbolized.txt"
 TMP_OUT="${OUT}.tmp.$$"
@@ -109,16 +113,22 @@ fi
 [ -f "$TOOL" ] || skip "Symbolizer-Kern fehlt ($TOOL)"
 command -v "$PYTHON" >/dev/null 2>&1 || skip "Python fehlt ($PYTHON)"
 
+# Optionales zweites Modul (rbbridge.dll) vorbereiten — graceful, nie Hard-Fail.
+EXTRA=()
+if [ -n "$RBBRIDGE_DLL" ] && [ -f "$RBBRIDGE_DLL" ]; then
+  EXTRA=(--dll2 "$RBBRIDGE_DLL" --module2 "$RBBRIDGE_MODULE")
+fi
+
 rm -f "$TMP_OUT"
 RC=0
 if command -v timeout >/dev/null 2>&1; then
   timeout "$TIMEOUT" "$PYTHON" "$TOOL" \
     --dmp "$DMP" --dll "$DLL" --symbolizer "$LLVM_SYMBOLIZER" \
-    --uuid "$(basename "$DMP" .dmp)" --out "$TMP_OUT" || RC=$?
+    --uuid "$(basename "$DMP" .dmp)" --out "$TMP_OUT" ${EXTRA[@]+"${EXTRA[@]}"} || RC=$?
 else
   "$PYTHON" "$TOOL" \
     --dmp "$DMP" --dll "$DLL" --symbolizer "$LLVM_SYMBOLIZER" \
-    --uuid "$(basename "$DMP" .dmp)" --out "$TMP_OUT" || RC=$?
+    --uuid "$(basename "$DMP" .dmp)" --out "$TMP_OUT" ${EXTRA[@]+"${EXTRA[@]}"} || RC=$?
 fi
 
 case "$RC" in

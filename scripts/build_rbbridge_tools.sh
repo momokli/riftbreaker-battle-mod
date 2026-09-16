@@ -79,8 +79,10 @@ done
 python3 "$ROOT/scripts/gen_cockpit_html.py"
 
 # --- Bauen ------------------------------------------------------------------
+# `-g` (DWARF) nur auf rbbridge.dll: collector-seitige Crash-Symbolik (#559)
+# braucht Symbole; Debug-Sections werden nicht geladen -> kein Runtime-Regress.
 (cd "$OUT_DIR" \
-    && cc -O2 -Wall -Wextra ${LD_REPRO[@]+"${LD_REPRO[@]}"} -shared -o rbbridge.dll "$RBBRIDGE_SRC" \
+    && cc -O2 -g -Wall -Wextra ${LD_REPRO[@]+"${LD_REPRO[@]}"} -shared -o rbbridge.dll "$RBBRIDGE_SRC" \
     && cc -O2 -Wall -Wextra ${LD_REPRO[@]+"${LD_REPRO[@]}"} -o injector.exe "$INJECTOR_SRC" \
     && cc -O2 -Wall -Wextra ${LD_REPRO[@]+"${LD_REPRO[@]}"} -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe "$RBBRIDGE_SRC" \
     && cc -O2 -Wall -Wextra ${LD_REPRO[@]+"${LD_REPRO[@]}"} -o pipe_bridge.exe "$BRIDGE_SRC" -lws2_32)
