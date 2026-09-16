@@ -330,31 +330,6 @@ Runtime addresses come **only** from these AOB scans (`RBBRIDGE_DIFF_*_SIG` in
 `rbbridge.c`); the RVAs above are verification notes. No rel32 operands in the
 prologues -> no wildcard mask needed.
 
-### HQ-Health (#511/#573, nativer C++-Read)
-
-`findings`-Ergaenzung: derselbe Kanal liefert HQ-HP/Tod ohne Lua.
-
-- Kette: `FindService::FindEntityByName("headquarters")` (RVA `0x1C0DF60`)
-  -> `HealthService::GetHealth/GetMaxHealth(entityId)` (RVA `0xF9BBB0` /
-  `0xF9C360`); liest `HealthComponent[+0x00]`/`[+0x04]` (Disasm:
-  `movss xmm0,[rax]` / `movss xmm0,[rax+4]`).
-- **#573-Korrektur:** `FindEntityByName`, **nicht** `FindEntityByType`
-  (`0x1C0E420` liefert die falsche Entity). Beleg:
-  `docs/research/dedicated-io-direct-reads.md` §1.
-- vftables (nur Instanz-Aufloesung): `FindService` `0x2E94C98`,
-  `HealthService` `0x2E95760`.
-- Alle drei Funktionsadressen per **AOB-Signatur** (Build 2.0.58485);
-  `GetHealth`/`GetMaxHealth` teilen den Prolog -> die Signatur reicht bis
-  nach die disambiguierende `movss`-Instruktion. `FindEntityByName` teilt
-  den Prolog mit den drei `FindEntityBy*`-Geschwistern -> Signatur bis in
-  den divergenten Body (ab +0x84), gegen die Geschwister verifiziert.
-- Defensives Gate (#573): kein HQ -> Namens-Lookup `INVALID_ID` -> **kein**
-  Health-Call (kein Off-Thread-ECS-Zugriff, kein Crash) -> `null`.
-- `get_state` liefert `hq_hp`, `hq_hp_max` (number) und `hq_dead` (bool);
-  nicht aufloesbar (Instanz/Signatur fehlt/kein HQ) -> je `null`, kein Crash.
-- Thread-Modell: reine C++-Reads (kein `lua_*`), Pipe-Thread wie bei #388.
-
-
 ### Bridge / UI
 
 - `rbbridge.c`: `dispatch_creatures_difficulty()` (ops `set|increase|decrease`),
