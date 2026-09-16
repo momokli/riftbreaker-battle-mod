@@ -18,8 +18,13 @@ crash_collector_script_src: "{{ playbook_dir }}/crash-collector/crash_collector.
 crash_collector_helper: /usr/local/bin/rbmods-minidump-meta.py
 crash_collector_helper_src: "{{ playbook_dir }}/crash-collector/minidump_meta.py"
 
-# Zielverzeichnis der Bundles (ein Unterordner je Crash: <ts>-<uuid>).
+# Zielverzeichnis der Bundles (Issue #605): <env>/<ref>/<ts>-<uuid>).
 crash_collector_dir: /opt/rbmods/crashes
+
+# Environment-Name fuer den Bundle-Pfad (Issue #605): <env>/<ref>/<ts>-<uuid>.
+# Kommt aus der Deploy-Identitaet (rift_env, Play-Var in site.yml/deploy-prod.yml/
+# test-deploy.yml) und landet als RB_CRASH_ENV in der systemd-Unit.
+crash_collector_env: "{{ rift_env }}"
 
 # Beobachteter Container (derselbe wie server-control/riftbreaker-server —
 # kein zweiter Name, der auseinanderlaufen kann).
