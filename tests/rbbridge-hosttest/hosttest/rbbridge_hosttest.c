@@ -48,7 +48,7 @@ static void check(int cond, const char *msg)
 #define IMG_SIZE    0x3000
 #define NT_OFF      0x80
 #define TEXT_RVA    0x1000
-#define TEXT_VSIZE  0x800
+#define TEXT_VSIZE  0xA00
 
 #define SIG_OFF     0x1100 /* ExecuteCommand-Signatur in .text        */
 #define DGET_SIG_OFF 0x1180 /* CampaignService difficulty-Get-Signatur  */
@@ -59,16 +59,20 @@ static void check(int cond, const char *msg)
 #define CONNP_OFF   0x1420 /* #512 GetConnectedPlayers-AOB (114 B)    */
 #define CONNP2_OFF  0x1710 /* #512: 2. Kopie (Mehrdeutigkeits-Test)   */
 #define DEACT_SIG_OFF 0x1340 /* DeactivateMissionFlow-Signatur (#389)  */
+#define FINM_SIG_OFF 0x13A0 /* FinishCurrentMission-Signatur (#519)   */
 #define DBSS_SIG_OFF 0x1240 /* Database::SetString-Signatur (#386)     */
 #define DBGS_SIG_OFF 0x1260 /* Database::GetString-Signatur (#386)     */
 #define DBCTOR_OFF   0x1280 /* Database::Database()-Prolog (#386)      */
 #define NEWDB_OFF    0x12A0 /* `new Database`-Call-Site (#386)         */
+#define HQFN_SIG_OFF 0x1800 /* #573 FindEntityByName-AOB (152 B)       */
+#define HQGH_SIG_OFF 0x18A0 /* #573 GetHealth-AOB                      */
+#define HQGM_SIG_OFF 0x18F0 /* #573 GetMaxHealth-AOB                   */
 #define NAME_OFF    0x1400 /* RTTI-Namensstring                       */
 #define COL_OFF     0x1500 /* CompleteObjectLocator                   */
 #define VFT_REF_OFF 0x15F8 /* QWORD == base+COL_OFF (vftable-8)       */
 #define VFT_OFF     0x1600 /* vftable-Start (= VFT_REF_OFF + 8)       */
 #define INST_OFF    0x1700 /* QWORD == base+VFT_OFF (Instanz)         */
-#define PAT_OFF     0x1800 /* freies Byte-Muster fuer scan_bytes      */
+#define PAT_OFF     0x1A00 /* freies Byte-Muster fuer scan_bytes      */
 
 static void wr32(unsigned char *p, uint32_t v) { memcpy(p, &v, 4); }
 static void wr64(unsigned char *p, uint64_t v) { memcpy(p, &v, 8); }
@@ -125,6 +129,8 @@ static unsigned char *build_image(int with_sig, int with_rtti, int valid_col,
                sizeof(RBBRIDGE_CONNPLAYERS_SIG));
         memcpy(img + DEACT_SIG_OFF, RBBRIDGE_DEACTIVATE_SIG,
                sizeof(RBBRIDGE_DEACTIVATE_SIG));
+        memcpy(img + FINM_SIG_OFF, RBBRIDGE_FINISHMISSION_SIG,
+               sizeof(RBBRIDGE_FINISHMISSION_SIG));
         /* #386: Database-Payload-Anker (SetString/GetString-Prolog + die
          * `new 0x60`-Call-Site, deren zweiter E8 auf den Ctor-Prolog zeigt). */
         memcpy(img + DBSS_SIG_OFF, RBBRIDGE_DB_SETSTRING_SIG,
@@ -135,6 +141,13 @@ static unsigned char *build_image(int with_sig, int with_rtti, int valid_col,
                sizeof(RBBRIDGE_DB_CTOR_SIG));
         memcpy(img + NEWDB_OFF, RBBRIDGE_NEWDB_SITE_SIG,
                sizeof(RBBRIDGE_NEWDB_SITE_SIG));
+        /* #573: HQ-Signaturen (FindEntityByName + GetHealth/GetMaxHealth). */
+        memcpy(img + HQFN_SIG_OFF, RBBRIDGE_HQ_FINDNAME_SIG,
+               sizeof(RBBRIDGE_HQ_FINDNAME_SIG));
+        memcpy(img + HQGH_SIG_OFF, RBBRIDGE_HQ_GETHEALTH_SIG,
+               sizeof(RBBRIDGE_HQ_GETHEALTH_SIG));
+        memcpy(img + HQGM_SIG_OFF, RBBRIDGE_HQ_GETMAXHEALTH_SIG,
+               sizeof(RBBRIDGE_HQ_GETMAXHEALTH_SIG));
         {
             unsigned char *cs = img + NEWDB_OFF + 0x20;
             int32_t rel;
@@ -165,6 +178,43 @@ static unsigned char *build_image(int with_sig, int with_rtti, int valid_col,
         wr64(img + INST_OFF, (uint64_t)(uintptr_t)(img + VFT_OFF));
 
     return img;
+}
+
+
+/* --- #573: Stubs fuer hq_health_from_calls (reine Host-Logik) -------- */
+static uint32_t g_hq_stub_entity;
+static int g_hq_stub_find_calls;
+static int g_hq_stub_get_calls;
+static int g_hq_stub_getmax_calls;
+static float g_hq_stub_hp;
+static float g_hq_stub_hpmax;
+static char g_hq_stub_name[32];
+
+static uint32_t hq_stub_find(void *self, const char *name)
+{
+    (void)self;
+    g_hq_stub_find_calls++;
+    if (name) {
+        strncpy(g_hq_stub_name, name, sizeof(g_hq_stub_name) - 1);
+        g_hq_stub_name[sizeof(g_hq_stub_name) - 1] = '\0';
+    }
+    return g_hq_stub_entity;
+}
+
+static float hq_stub_get(void *self, uint32_t entity)
+{
+    (void)self;
+    (void)entity;
+    g_hq_stub_get_calls++;
+    return g_hq_stub_hp;
+}
+
+static float hq_stub_getmax(void *self, uint32_t entity)
+{
+    (void)self;
+    (void)entity;
+    g_hq_stub_getmax_calls++;
+    return g_hq_stub_hpmax;
 }
 
 int main(void)
@@ -305,6 +355,49 @@ int main(void)
               "Deactivate-AOB: E8-Opcode bleibt Pflicht");
         free(img7);
     }
+
+    /* -------------------------------------------------------------- */
+    /* FinishCurrentMission-AOB (#519)                                 */
+    /* -------------------------------------------------------------- */
+    ht_set_module(img, IMG_SIZE);
+    check(scan_bytes(img + TEXT_RVA, TEXT_VSIZE, RBBRIDGE_FINISHMISSION_SIG,
+                     sizeof(RBBRIDGE_FINISHMISSION_SIG)) == img + FINM_SIG_OFF,
+          "FinishCurrentMission-AOB im .text gefunden (#519)");
+    {
+        unsigned char *img8 = build_image(1, 1, 1, 1, 1);
+        img8[FINM_SIG_OFF + 3] ^= 0xFF; /* Prolog-Byte abweichend */
+        ht_set_module(img8, IMG_SIZE);
+        check(scan_bytes(img8 + TEXT_RVA, TEXT_VSIZE,
+                         RBBRIDGE_FINISHMISSION_SIG,
+                         sizeof(RBBRIDGE_FINISHMISSION_SIG)) == NULL,
+              "FinishCurrentMission-AOB: abweichendes Byte -> kein Treffer");
+        free(img8);
+    }
+    {
+        /* Diskriminator: gleiche Form bei [rcx+8] ohne den status-Move
+         * (8B DA) darf NICHT treffen (sonst Kollision mit anderen
+         * this+8-Methoden). */
+        unsigned char *img9 = build_image(1, 1, 1, 1, 1);
+        img9[FINM_SIG_OFF + 13] = 0x90; /* 8B DA -> nop nop */
+        ht_set_module(img9, IMG_SIZE);
+        check(scan_bytes(img9 + TEXT_RVA, TEXT_VSIZE,
+                         RBBRIDGE_FINISHMISSION_SIG,
+                         sizeof(RBBRIDGE_FINISHMISSION_SIG)) == NULL,
+              "FinishCurrentMission-AOB: ohne status-Move -> kein Treffer");
+        free(img9);
+    }
+
+    /* end_game-Parser (#519): nur win/lose sind gueltige Match-Enden. */
+    check(end_game_status_from_str("win") == 0,
+          "end_game-Result 'win' -> MissionStatus 0");
+    check(end_game_status_from_str("lose") == 1,
+          "end_game-Result 'lose' -> MissionStatus 1");
+    check(end_game_status_from_str("draw") == -1,
+          "end_game-Result 'draw' -> abgelehnt");
+    check(end_game_status_from_str("") == -1,
+          "end_game-Result '' -> abgelehnt");
+    check(end_game_status_from_str(NULL) == -1,
+          "end_game-Result NULL -> abgelehnt");
 
     /* -------------------------------------------------------------- */
     /* CampaignService-Difficulty-AOBs (Issue #388)                    */
@@ -997,6 +1090,177 @@ int main(void)
             check(is_writable_region(&mi) == 0,
                   "#516 is_writable_region: MEM_FREE -> 0");
         }
+    }
+
+
+    /* -------------------------------------------------------------- */
+    /* HQ-Health-AOBs (Issue #573/#511)                                */
+    /* -------------------------------------------------------------- */
+    check(sizeof(RBBRIDGE_HQ_FINDNAME_SIG) == 152 &&
+              sizeof(RBBRIDGE_HQ_FINDNAME_SIG) ==
+                  sizeof(RBBRIDGE_HQ_FINDNAME_SIG_MASK),
+          "HQ-FindEntityByName-AOB: 152 B + Maske gleich lang (#573)");
+    check(sizeof(RBBRIDGE_HQ_GETHEALTH_SIG) ==
+              sizeof(RBBRIDGE_HQ_GETHEALTH_SIG_MASK) &&
+              sizeof(RBBRIDGE_HQ_GETMAXHEALTH_SIG) ==
+                  sizeof(RBBRIDGE_HQ_GETMAXHEALTH_SIG_MASK),
+          "HQ-Get(Health|MaxHealth)-AOB: Signal/Maske gleich lang (#573)");
+
+    ht_set_module(img, IMG_SIZE);
+    check(scan_bytes_mask(img + TEXT_RVA, TEXT_VSIZE,
+                     RBBRIDGE_HQ_FINDNAME_SIG,
+                     RBBRIDGE_HQ_FINDNAME_SIG_MASK,
+                     sizeof(RBBRIDGE_HQ_FINDNAME_SIG)) == img + HQFN_SIG_OFF,
+          "HQ-FindEntityByName-AOB im .text gefunden (#573)");
+    check(scan_bytes_mask(img + TEXT_RVA, TEXT_VSIZE, RBBRIDGE_HQ_GETHEALTH_SIG,
+                     RBBRIDGE_HQ_GETHEALTH_SIG_MASK,
+                     sizeof(RBBRIDGE_HQ_GETHEALTH_SIG)) == img + HQGH_SIG_OFF,
+          "HQ-GetHealth-AOB im .text gefunden (#573)");
+    check(scan_bytes_mask(img + TEXT_RVA, TEXT_VSIZE, RBBRIDGE_HQ_GETMAXHEALTH_SIG,
+                     RBBRIDGE_HQ_GETMAXHEALTH_SIG_MASK,
+                     sizeof(RBBRIDGE_HQ_GETMAXHEALTH_SIG)) == img + HQGM_SIG_OFF,
+          "HQ-GetMaxHealth-AOB im .text gefunden (#573)");
+
+    /* GetHealth/GetMaxHealth teilen sich den Prolog -> die Signaturen MUESSEN
+     * sich gegenseitig ausschliessen, sonst trifft die falsche Funktion. */
+    {
+        unsigned char *imgA = build_image(1, 1, 1, 1, 1);
+        memset(imgA + HQFN_SIG_OFF, 0, 0x180); /* HQ-Bereich leeren */
+        memcpy(imgA + HQGH_SIG_OFF, RBBRIDGE_HQ_GETMAXHEALTH_SIG,
+               sizeof(RBBRIDGE_HQ_GETMAXHEALTH_SIG));
+        ht_set_module(imgA, IMG_SIZE);
+        check(scan_bytes_mask(imgA + TEXT_RVA, TEXT_VSIZE,
+                         RBBRIDGE_HQ_GETHEALTH_SIG,
+                         RBBRIDGE_HQ_GETHEALTH_SIG_MASK,
+                         sizeof(RBBRIDGE_HQ_GETHEALTH_SIG)) == NULL,
+              "HQ-GetHealth-AOB: kein Treffer in GetMaxHealth-Bytes (#573)");
+        check(scan_bytes_mask(imgA + TEXT_RVA, TEXT_VSIZE,
+                         RBBRIDGE_HQ_GETMAXHEALTH_SIG,
+                         RBBRIDGE_HQ_GETMAXHEALTH_SIG_MASK,
+                         sizeof(RBBRIDGE_HQ_GETMAXHEALTH_SIG))
+                  == imgA + HQGH_SIG_OFF,
+              "HQ-GetMaxHealth-AOB: disambiguierendes Tail trifft (#573)");
+        free(imgA);
+    }
+    {
+        unsigned char *imgB = build_image(1, 1, 1, 1, 1);
+        memset(imgB + HQFN_SIG_OFF, 0, 0x180);
+        memcpy(imgB + HQGH_SIG_OFF, RBBRIDGE_HQ_GETHEALTH_SIG,
+               sizeof(RBBRIDGE_HQ_GETHEALTH_SIG));
+        ht_set_module(imgB, IMG_SIZE);
+        check(scan_bytes_mask(imgB + TEXT_RVA, TEXT_VSIZE,
+                         RBBRIDGE_HQ_GETMAXHEALTH_SIG,
+                         RBBRIDGE_HQ_GETMAXHEALTH_SIG_MASK,
+                         sizeof(RBBRIDGE_HQ_GETMAXHEALTH_SIG)) == NULL,
+              "HQ-GetMaxHealth-AOB: kein Treffer in GetHealth-Bytes (#573)");
+        free(imgB);
+    }
+    {
+        unsigned char *imgC = build_image(1, 1, 1, 1, 1);
+        memset(imgC + HQFN_SIG_OFF, 0, 0x180); /* Signaturen fehlen */
+        ht_set_module(imgC, IMG_SIZE);
+        check(scan_bytes_mask(imgC + TEXT_RVA, TEXT_VSIZE,
+                         RBBRIDGE_HQ_FINDNAME_SIG,
+                         RBBRIDGE_HQ_FINDNAME_SIG_MASK,
+                         sizeof(RBBRIDGE_HQ_FINDNAME_SIG)) == NULL,
+              "HQ-FindEntityByName-AOB: fehlend -> kein Treffer (#573)");
+        check(scan_bytes_mask(imgC + TEXT_RVA, TEXT_VSIZE,
+                         RBBRIDGE_HQ_GETHEALTH_SIG,
+                         RBBRIDGE_HQ_GETHEALTH_SIG_MASK,
+                         sizeof(RBBRIDGE_HQ_GETHEALTH_SIG)) == NULL,
+              "HQ-GetHealth-AOB: fehlend -> kein Treffer (#573)");
+        free(imgC);
+    }
+
+    /* -------------------------------------------------------------- */
+    /* HQ-Core-Logik (hq_health_from_calls, Issue #573/#511)           */
+    /* -------------------------------------------------------------- */
+    {
+        float hp = -1.0f, hpmax = -1.0f;
+        int dead = -1;
+        hq_dead_state_t st = {0, 0.0f};
+
+        g_hq_stub_entity = 0x1234u;
+        g_hq_stub_hp = 850.5f;
+        g_hq_stub_hpmax = 1000.0f;
+        g_hq_stub_find_calls = g_hq_stub_get_calls = g_hq_stub_getmax_calls = 0;
+        g_hq_stub_name[0] = '\0';
+        check(hq_health_from_calls((void *)1, (void *)2, hq_stub_find,
+                                   hq_stub_get, hq_stub_getmax, &st,
+                                   &hp, &hpmax, &dead) == 1 &&
+                  hp == 850.5f && hpmax == 1000.0f && dead == 0 &&
+                  strcmp(g_hq_stub_name, "headquarters") == 0 &&
+                  g_hq_stub_find_calls == 1 && g_hq_stub_get_calls == 1 &&
+                  g_hq_stub_getmax_calls == 1,
+              "hq core: HQ per Namen gefunden -> hp/hp_max/dead (#573)");
+
+        /* #573-KERNFALL: HQ noch NICHT gebaut (Entity INVALID_ID) -> der
+         * Health-Read laeuft GAR NICHT (kein Off-Thread-ECS-Zugriff, kein
+         * Crash), Ergebnis `nicht verfuegbar` -> null. */
+        g_hq_stub_entity = RBBRIDGE_HQ_INVALID_ENTITY;
+        g_hq_stub_get_calls = g_hq_stub_getmax_calls = 0;
+        hp = -1.0f; hpmax = -1.0f; dead = -1;
+        check(hq_health_from_calls((void *)1, (void *)2, hq_stub_find,
+                                   hq_stub_get, hq_stub_getmax,
+                                   &(hq_dead_state_t){0, 0.0f},
+                                   &hp, &hpmax, &dead) == 0 &&
+                  g_hq_stub_get_calls == 0 && g_hq_stub_getmax_calls == 0 &&
+                  hp == -1.0f,
+              "hq core: kein HQ -> kein Health-Call, graceful 0 (#573)");
+
+        /* #573-KERNFALL 2: Entity existiert, Health-Component aber (noch)
+         * nicht -> GetHealth/GetMax liefern 0/0 -> NICHT als 'tot' ausgeben,
+         * sondern 'nicht verfuegbar' (0) -> null. */
+        g_hq_stub_entity = 0x1234u;
+        g_hq_stub_hp = 0.0f;
+        g_hq_stub_hpmax = 0.0f;
+        check(hq_health_from_calls((void *)1, (void *)2, hq_stub_find,
+                                   hq_stub_get, hq_stub_getmax,
+                                   &(hq_dead_state_t){0, 0.0f},
+                                   &hp, &hpmax, &dead) == 0,
+              "hq core: Component fehlt (0/0) -> 0, kein falsches dead (#573)");
+
+        /* HP 0 bei hp_max > 0 -> tot (Interface-Konvention hp <= 0). */
+        g_hq_stub_hp = 0.0f;
+        g_hq_stub_hpmax = 1000.0f;
+        check(hq_health_from_calls((void *)1, (void *)2, hq_stub_find,
+                                   hq_stub_get, hq_stub_getmax, &st,
+                                   &hp, &hpmax, &dead) == 1 && dead == 1,
+              "hq core: hp==0 (max>0) -> dead=true (#573)");
+
+        /* INVALID_ID MIT HQ-Vorgeschichte -> zerstoert (Entity verschwunden =
+         * tot, hp 0, hp_max letzter bekannter Wert), kein Health-Call. */
+        g_hq_stub_entity = RBBRIDGE_HQ_INVALID_ENTITY;
+        g_hq_stub_get_calls = g_hq_stub_getmax_calls = 0;
+        st.seen_alive = 1;
+        st.last_hp_max = 1000.0f;
+        hp = -1.0f; hpmax = -1.0f; dead = -1;
+        check(hq_health_from_calls((void *)1, (void *)2, hq_stub_find,
+                                   hq_stub_get, hq_stub_getmax, &st,
+                                   &hp, &hpmax, &dead) == 1 &&
+                  hp == 0.0f && hpmax == 1000.0f && dead == 1 &&
+                  g_hq_stub_get_calls == 0 && g_hq_stub_getmax_calls == 0,
+              "hq core: Entity weg nach HQ-Leben -> dead=true, kein Call (#573)");
+
+        /* HQ taucht wieder auf (Map-/Welt-Reload) -> Latch heilt sich. */
+        g_hq_stub_entity = 0x1234u;
+        g_hq_stub_hp = 500.0f;
+        g_hq_stub_hpmax = 1000.0f;
+        check(hq_health_from_calls((void *)1, (void *)2, hq_stub_find,
+                                   hq_stub_get, hq_stub_getmax, &st,
+                                   &hp, &hpmax, &dead) == 1 &&
+                  hp == 500.0f && dead == 0 && st.last_hp_max == 1000.0f,
+              "hq core: HQ wieder da -> dead=false (Latch heilt) (#573)");
+
+        /* Unvollstaendige Aufloesung -> 0, kein Call, kein Crash. */
+        check(hq_health_from_calls(NULL, (void *)2, hq_stub_find, hq_stub_get,
+                                   hq_stub_getmax, &st, &hp, &hpmax,
+                                   &dead) == 0,
+              "hq core: find_svc NULL -> 0 (graceful) (#573)");
+        check(hq_health_from_calls((void *)1, (void *)2, NULL, hq_stub_get,
+                                   hq_stub_getmax, &st, &hp, &hpmax,
+                                   &dead) == 0,
+              "hq core: find_fn NULL -> 0 (graceful) (#573)");
     }
 
     free(img);
