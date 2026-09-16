@@ -34,6 +34,7 @@
     crash_collector_llvm_symbolizer: /usr/lib/llvm-18/bin/llvm-symbolizer
     crash_collector_symbolize_tool: /usr/local/lib/rbmods/crash/symbolize.py
     crash_collector_symbolize_timeout: 60
+    crash_collector_rbbridge_dll: /opt/rbmods/rbtools/rbbridge.dll
     render_dir: "{{ lookup('env', 'RB_CRASH_RENDER_DIR') | default('/tmp/rb-crash-collector-render', true) }}"
 
   tasks:
@@ -67,6 +68,7 @@
           - ("RB_CRASH_LLVM_SYMBOLIZER=" ~ crash_collector_llvm_symbolizer) in unit
           - ("RB_CRASH_SYMBOLIZE_TOOL=" ~ crash_collector_symbolize_tool) in unit
           - ("RB_CRASH_SYMBOLIZE_TIMEOUT=" ~ crash_collector_symbolize_timeout) in unit
+          - ("RB_CRASH_RBBRIDGE_DLL=" ~ crash_collector_rbbridge_dll) in unit
           - ("RB_CRASH_MINIDUMP_PY=" ~ crash_collector_helper) in unit
           - "'Restart=always' in unit"
           - "'Type=simple' in unit"

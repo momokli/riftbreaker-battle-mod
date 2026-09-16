@@ -2,7 +2,7 @@
 # ============================================================
 # tests/shell/crash-collector.test.sh
 # ------------------------------------------------------------
-# Planetfreier Red/Green-Test für scripts/crash_collector.sh (Issue #462):
+# Planetfreier Red/Green-Test für deploy/crash-collector/crash_collector.sh (Issue #462):
 # nagelt die Collector-Logik fest, ohne Docker/Daemon/Spieler.
 #
 # Ein Fake-`docker` liegt im PATH und protokolliert jeden Aufruf:
@@ -29,7 +29,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-COLLECTOR="${REPO_ROOT}/scripts/crash_collector.sh"
+COLLECTOR="${REPO_ROOT}/deploy/crash-collector/crash_collector.sh"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

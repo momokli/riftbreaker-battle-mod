@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================================
-# build_rbbridge_tools.sh — baut die Windows-x64-Tools des Trainer-I/O-Kanals
+# build_rbbridge_tools.sh — baut die Windows-x64-Tools des Server-I/O-Kanals
 # (Baustein 04, Issue #265) in ein Staging-Verzeichnis.
 #
-# Baut aus bausteine/rbbridge/ (kanonische Quelle):
+# Baut aus server/ (kanonische Quelle):
 #   rbbridge.dll            Injection-DLL; Named-Pipe-Server \\.\pipe\rbbattle
 #   injector.exe            Remote-LoadLibrary-Injector (x64)
 #   rbbridge_standalone.exe Pipe-Server ohne Injection (-DRBBRIDGE_STANDALONE)
@@ -22,7 +22,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
-SRC04="$ROOT/bausteine/rbbridge"
+SRC04="$ROOT/server"
 
 OUT_DIR="${1:-$ROOT/dist/rbtools}"
 mkdir -p "$OUT_DIR"
@@ -79,8 +79,10 @@ done
 python3 "$ROOT/scripts/gen_cockpit_html.py"
 
 # --- Bauen ------------------------------------------------------------------
+# `-g` (DWARF) nur auf rbbridge.dll: collector-seitige Crash-Symbolik (#559)
+# braucht Symbole; Debug-Sections werden nicht geladen -> kein Runtime-Regress.
 (cd "$OUT_DIR" \
-    && cc -O2 -Wall -Wextra ${LD_REPRO[@]+"${LD_REPRO[@]}"} -shared -o rbbridge.dll "$RBBRIDGE_SRC" \
+    && cc -O2 -g -Wall -Wextra ${LD_REPRO[@]+"${LD_REPRO[@]}"} -shared -o rbbridge.dll "$RBBRIDGE_SRC" \
     && cc -O2 -Wall -Wextra ${LD_REPRO[@]+"${LD_REPRO[@]}"} -o injector.exe "$INJECTOR_SRC" \
     && cc -O2 -Wall -Wextra ${LD_REPRO[@]+"${LD_REPRO[@]}"} -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe "$RBBRIDGE_SRC" \
     && cc -O2 -Wall -Wextra ${LD_REPRO[@]+"${LD_REPRO[@]}"} -o pipe_bridge.exe "$BRIDGE_SRC" -lws2_32)

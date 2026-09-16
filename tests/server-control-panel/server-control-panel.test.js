@@ -16,14 +16,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const COCKPIT = path.join(
-  __dirname,
-  "..",
-  "..",
-  "bausteine",
-  "08-control-ui",
-  "cockpit.html",
-);
+const COCKPIT = path.join(__dirname, "..", "..", "cockpit", "cockpit.html");
 const BEGIN = "// --- server-control panel (testable) ---";
 const END = "// --- end server-control panel ---";
 
@@ -67,10 +60,7 @@ function makeDoc() {
 function loadPanel() {
   const sandbox = {};
   vm.createContext(sandbox);
-  const fn = vm.runInNewContext(
-    extractBlock() + "\ncreateServerControlPanel;",
-    sandbox,
-  );
+  const fn = vm.runInNewContext(extractBlock() + "\ncreateServerControlPanel;", sandbox);
   assert.equal(typeof fn, "function", "createServerControlPanel gefunden");
   return fn;
 }
@@ -176,9 +166,6 @@ test("Fall C: control() postet /server/{restart,start,stop}", async () => {
 
 test("Fall D: Panel-Block referenziert location/reload nicht (No-Reload-Garantie)", () => {
   const block = extractBlock();
-  assert.ok(
-    !/\blocation\b/.test(block),
-    "Panel-Block darf location nicht referenzieren",
-  );
+  assert.ok(!/\blocation\b/.test(block), "Panel-Block darf location nicht referenzieren");
   assert.ok(!/\breload\b/.test(block), "Panel-Block darf reload nicht aufrufen");
 });

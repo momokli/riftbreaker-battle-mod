@@ -3,7 +3,7 @@
 # tests/shell/crash-symbolize.test.sh
 # ------------------------------------------------------------
 # Planetfreier Red/Green-Test für die collector-seitige Symbolik (Issue #480):
-# nagelt `tools/crash/symbolize.py` + `scripts/crash_symbolize.sh` fest, ohne
+# nagelt `deploy/crash-collector/symbolize.py` + `deploy/crash-collector/crash_symbolize.sh` fest, ohne
 # planet, Docker, Spieler oder echtes llvm-18.
 #
 # Bausteine:
@@ -31,9 +31,9 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SYMBOLIZE_SH="${REPO_ROOT}/scripts/crash_symbolize.sh"
-SYMBOLIZE_PY="${REPO_ROOT}/tools/crash/symbolize.py"
-COLLECTOR="${REPO_ROOT}/scripts/crash_collector.sh"
+SYMBOLIZE_SH="${REPO_ROOT}/deploy/crash-collector/crash_symbolize.sh"
+SYMBOLIZE_PY="${REPO_ROOT}/deploy/crash-collector/symbolize.py"
+COLLECTOR="${REPO_ROOT}/deploy/crash-collector/crash_collector.sh"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -123,6 +123,86 @@ returns = [int(a, 0) for a in sys.argv[5:]]
 name = "C:\\game\\bin\\riftbreaker_dll_win_release.dll"
 with open(out, 'wb') as fh:
     fh.write(build(base, size, fault, returns, name))
+PY
+
+# --- synthetischer Minidump mit ZWEI Modulen (Game + rbbridge, #559) ---
+cat >"${TMP}/mkdump2.py" <<'PY'
+import struct
+import sys
+
+
+def p32(v):
+    return struct.pack('<I', v)
+
+
+def p64(v):
+    return struct.pack('<Q', v)
+
+
+def module_entry(base, size, name_rva):
+    return (p64(base) + p32(size) + p32(0) + p32(0) + p32(name_rva)
+            + b'\x00' * 52 + b'\x00' * 8 + b'\x00' * 8 + p64(0) + p64(0))
+
+
+def build(mods, fault, returns):
+    ctx = bytearray(0x4d0)
+    struct.pack_into('<I', ctx, 0x30, 0x0010001F)
+    struct.pack_into('<Q', ctx, 0xF8, fault)
+    ctx = bytes(ctx)
+
+    stack = b''.join(p64(a) for a in returns) or p64(0)
+    stack_start = 0x0000007ff0000000
+
+    names = []
+    for _b, _s, name in mods:
+        raw = name.encode('utf-16-le')
+        names.append(p32(len(raw)) + raw + b'\x00\x00')
+
+    base_rva = 32 + 12 * 4
+    rva = base_rva
+    name_rvas = []
+    for blob in names:
+        name_rvas.append(rva)
+        rva += len(blob)
+    rva_ctx = rva
+    rva_stack = rva_ctx + len(ctx)
+    rva_exc = rva_stack + len(stack)
+    rva_threads = rva_exc + 168
+    rva_modules = rva_threads + 52
+    rva_memory = rva_modules + 4 + 108 * len(mods)
+
+    exc = (p32(1) + p32(0) + p32(0xC0000005) + p32(0) + p64(0) + p64(fault)
+           + p32(0) + p32(0) + b'\x00' * 120 + p32(len(ctx)) + p32(rva_ctx))
+    threads = (p32(1) + p32(1) + p32(0) + p32(2) + p32(0) + p64(0)
+               + p64(stack_start) + p32(len(stack)) + p32(rva_stack)
+               + p32(len(ctx)) + p32(rva_ctx))
+    modules = p32(len(mods)) + b''.join(
+        module_entry(b, s, name_rvas[i]) for i, (b, s, _n) in enumerate(mods))
+    memory = p32(1) + p64(stack_start) + p32(len(stack)) + p32(rva_stack)
+
+    directory = b''.join([
+        p32(3) + p32(len(threads)) + p32(rva_threads),
+        p32(4) + p32(len(modules)) + p32(rva_modules),
+        p32(5) + p32(len(memory)) + p32(rva_memory),
+        p32(6) + p32(168) + p32(rva_exc),
+    ])
+    header = p32(0x504D444D) + p32(0xA793) + p32(4) + p32(32) + p32(0) + p32(0) + p64(0)
+    return header + directory + b''.join(names) + ctx + stack + exc + threads + modules + memory
+
+
+out = sys.argv[1]
+base = int(sys.argv[2], 0)
+size = int(sys.argv[3], 0)
+base2 = int(sys.argv[4], 0)
+size2 = int(sys.argv[5], 0)
+fault = int(sys.argv[6], 0)
+returns = [int(a, 0) for a in sys.argv[7:]]
+mods = [
+    (base, size, "C:\\game\\bin\\riftbreaker_dll_win_release.dll"),
+    (base2, size2, "C:\\rbmods\\rbtools\\rbbridge.dll"),
+]
+with open(out, 'wb') as fh:
+    fh.write(build(mods, fault, returns))
 PY
 
 MODULE_BASE=$((0x00006ffff6da0000))
@@ -366,6 +446,41 @@ files = json.load(open(sys.argv[1]))['files']
 sys.exit(0 if 'symbolized.txt' in files else 1)
 " "${BD}/meta.json"
 fi
+
+# --- (g) Zweites Modul (rbbridge.dll) ---------------------------------------
+G="${TMP}/g"
+RBBRIDGE_BASE=$((0x00006ffff3670000))
+RBBRIDGE_SIZE=430080
+RBBRIDGE_DLL="${TMP}/rbbridge.dll"
+printf 'MZ fake-rbbridge\n' >"$RBBRIDGE_DLL"
+
+mkdir -p "${G}/bundle"
+python3 "${TMP}/mkdump2.py" "${G}/bundle/${UUID}.dmp" \
+  "$MODULE_BASE" "$MODULE_SIZE" "$RBBRIDGE_BASE" "$RBBRIDGE_SIZE" \
+  "$((RBBRIDGE_BASE + 0x50))" "$((MODULE_BASE + 0x100))"
+
+mkdir -p "$G"
+: >"${G}/sym.log"
+set +e
+env \
+  PATH="${BIN}:${PATH}" \
+  FAKE_SYM_LOG="${G}/sym.log" \
+  RB_CRASH_SYMBOLIZE_TOOL="$SYMBOLIZE_PY" \
+  RB_CRASH_LLVM_SYMBOLIZER="${BIN}/llvm-symbolizer" \
+  RB_CRASH_DLL="$DLL" \
+  RB_CRASH_PDB="$PDB" \
+  RB_CRASH_RBBRIDGE_DLL="$RBBRIDGE_DLL" \
+  RB_CRASH_PYTHON="python3" \
+  bash "$SYMBOLIZE_SH" "${G}/bundle" >"${G}/out.txt" 2>&1
+RC=$?
+set -e
+assert_eq "(g) zweites Modul -> rc=0" "0" "$RC"
+SYMG="${G}/bundle/symbolized.txt"
+assert_true "(g) rbbridge-Fault-Frame annotiert" grep -qP '^0x50\t\[rbbridge.dll\] frame_80$' "$SYMG"
+assert_true "(g) game-Frame ohne Annotation" grep -qP '^0x100\tframe_256$' "$SYMG"
+assert_true "(g) header dll2" grep -q "^# dll2: ${RBBRIDGE_DLL}$" "$SYMG"
+assert_true "(g) Aufruf --obj rbbridge.dll" grep -q -- "--obj=${RBBRIDGE_DLL}" "${G}/sym.log"
+assert_true "(g) Aufruf --obj game-dll" grep -q -- "--obj=${DLL}" "${G}/sym.log"
 
 # --- Aufräumen der Log-Fixture-Prüfung ---------------------------------------
 if [ "$FAIL" -ne 0 ]; then

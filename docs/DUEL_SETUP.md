@@ -14,7 +14,7 @@ hard, Map large, identischer Seed auf beiden Welten (GDD „Setup“, Issue #23)
 
 | Punkt | Umsetzung | Ort |
 |---|---|---|
-| Runden-Takt (Cap) | `dom_mananger:GetPrepareSpawnTime` wird zur Laufzeit auf **max. das Preset-Intervall** gedeckelt (Function-Wrap, pcall-gesichert, idempotent; Retry bei Mod-Load, `PlayerInitializedEvent` und jedem `rb_wave`/`rb_send`). Der Rules-Wert (normal/hard 420) wird nur gesenkt, nie angehoben (`#278`) | `mod/lua/rbbattle_autoexec.lua` |
+| Runden-Takt (Cap) | `dom_mananger:GetPrepareSpawnTime` wird zur Laufzeit auf **max. das Preset-Intervall** gedeckelt (Function-Wrap, pcall-gesichert, idempotent; Retry bei Mod-Load, `PlayerInitializedEvent` und jedem `rb_wave`/`rb_send`). Der Rules-Wert (normal/hard 420) wird nur gesenkt, nie angehoben (`#278`) | `client-mod/lua/rbbattle_autoexec.lua` |
 | Verifikations-Log | `[RBBATTLE] event=dom_timer patch status=ok cap=<Preset>` + `event=setup difficulty=<name> creatures_difficulty=<n> timer_cap=<Preset> preset=A interval_cfg=<Preset> interval_eff=<wirksam> strength_pct=<n> base_difficulty=<name>` | dito |
 | Effektiv-Abstand | Zwischen zwei Naturwellen liegt zusätzlich `cooldownAfterAttacks` (Survival-rules 60–240 s je DOM-Level) + `idleTime` (hard: 0) + ggf. Streaming. **Beide Welten laufen identisch** (gleiche Rules/Seed), Fairness bleibt; exakt-300-s-Runden wären nur mit zusätzlichem Cooldown-Patch möglich (Folge-Tuning, bewusst nicht Teil von #23) | dom_manager v2 State-Machine |
 
@@ -70,7 +70,7 @@ identisch); der Mod **loggt** die aktiv wirksame Difficulty zur Verifikation
 ## SP-Mode / Mod-Parität (Issue #44) — Client joint ohne Mod
 
 Im SP-Mode läuft der Mod **nur auf dem Server**; der Client joint **ohne** Mod.
-Da der Mod reine Lua ist (keine neuen Entities/Assets/UI, `mod/lua/`), muss ein
+Da der Mod reine Lua ist (keine neuen Entities/Assets/UI, `client-mod/lua/`), muss ein
 Vanilla-Client nichts rendern. Die Engine-Content-Prüfung (`ContentMismatch`,
 „different set of mods“) verhindert den Join aber als Paritäts-Gate — Lösung aus
 dem Research (Befund im Issue #44): die CVar

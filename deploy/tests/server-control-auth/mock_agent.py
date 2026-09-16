@@ -3,7 +3,7 @@
 """Mock des Server-Control-Agenten fuer den Auth-Test (Issue #454).
 
 Bildet die EINE Eigenschaft nach, auf die es hier ankommt: JEDER Request braucht
-``Authorization: Bearer <token>`` (wie ``tools/server-control/server_control.py``,
+``Authorization: Bearer <token>`` (wie ``deploy/server-control/server_control.py``,
 ``hmac.compare_digest``). Alles andere (docker, config.cfg) ist fuer den
 Caddy-Auth-Test irrelevant.
 

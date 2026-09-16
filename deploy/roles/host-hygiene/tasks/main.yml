@@ -2,7 +2,7 @@
 # Rolle: host-hygiene (Issue #308) — automatische, konservative Docker-
 # Image-Hygiene auf planet als systemd-Timer.
 #
-# Was der Timer tut (Skript scripts/host_hygiene.sh):
+# Was der Timer tut (Skript deploy/host-hygiene/host_hygiene.sh):
 #   * dangling Images (ungetaggte <none>-Layer) entfernen:
 #     `docker image prune -f` — ausdrücklich OHNE `-a`. `-a` würde alle Images
 #     ohne laufenden Container entfernen, inklusive des getaggten
@@ -19,7 +19,7 @@
 
 - name: Hygiene-Skript installieren
   copy:
-    src: "{{ playbook_dir }}/../scripts/host_hygiene.sh"
+    src: "{{ playbook_dir }}/host-hygiene/host_hygiene.sh"
     dest: "{{ host_hygiene_bin }}"
     mode: "0755"
     owner: root

@@ -5,7 +5,7 @@ KEIN Formatter — gleiche Regel wie fuer .c)."""
 import io
 import sys
 
-PATH = "mod/lua/rbbattle_autoexec.lua"
+PATH = "client-mod/lua/rbbattle_autoexec.lua"
 
 INSERT_AFTER = """    RBB.domTimerPatched = true
     return true

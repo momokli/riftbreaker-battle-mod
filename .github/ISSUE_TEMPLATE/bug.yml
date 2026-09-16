@@ -49,7 +49,7 @@ body:
     attributes:
       label: Umgebung
       description: Baustein/Betroffener Bereich, Betriebssystem, Version/Commit.
-      placeholder: z. B. bausteine/07-relay, Windows 11, v0.16.0
+      placeholder: z. B. server/, Windows 11, v0.16.0
     validations:
       required: false
 

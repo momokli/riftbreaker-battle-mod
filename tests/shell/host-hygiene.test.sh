@@ -2,7 +2,7 @@
 # ============================================================
 # tests/shell/host-hygiene.test.sh
 # ------------------------------------------------------------
-# Planetfreier Red/Green-Test für scripts/host_hygiene.sh (Issue #308):
+# Planetfreier Red/Green-Test für deploy/host-hygiene/host_hygiene.sh (Issue #308):
 # nagelt die Kerninvarianten des Host-Hygiene-Prune fest, ohne Docker/Daemon.
 #
 # Ein Fake-`docker` liegt im PATH, protokolliert jeden Aufruf in
@@ -27,7 +27,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-HYGIENE="${REPO_ROOT}/scripts/host_hygiene.sh"
+HYGIENE="${REPO_ROOT}/deploy/host-hygiene/host_hygiene.sh"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

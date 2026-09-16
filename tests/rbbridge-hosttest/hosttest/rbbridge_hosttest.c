@@ -56,14 +56,13 @@ static void check(int cond, const char *msg)
 #define DINC_SIG_OFF 0x11C0 /* CampaignService difficulty-Inc-Signatur  */
 #define DDEC_SIG_OFF 0x11E0 /* CampaignService difficulty-Dec-Signatur  */
 #define ACT_SIG_OFF 0x1300 /* ActivateMissionFlow-Signatur in .text   */
+#define CONNP_OFF   0x1420 /* #512 GetConnectedPlayers-AOB (114 B)    */
+#define CONNP2_OFF  0x1710 /* #512: 2. Kopie (Mehrdeutigkeits-Test)   */
 #define DEACT_SIG_OFF 0x1340 /* DeactivateMissionFlow-Signatur (#389)  */
 #define DBSS_SIG_OFF 0x1240 /* Database::SetString-Signatur (#386)     */
 #define DBGS_SIG_OFF 0x1260 /* Database::GetString-Signatur (#386)     */
 #define DBCTOR_OFF   0x1280 /* Database::Database()-Prolog (#386)      */
 #define NEWDB_OFF    0x12A0 /* `new Database`-Call-Site (#386)         */
-#define HQF_SIG_OFF  0x1020 /* HQ FindEntityByType-AOB (#511)          */
-#define HQGH_SIG_OFF 0x1050 /* HQ HealthService::GetHealth-AOB (#511)  */
-#define HQGM_SIG_OFF 0x10A0 /* HQ HealthService::GetMaxHealth-AOB (#511)*/
 #define NAME_OFF    0x1400 /* RTTI-Namensstring                       */
 #define COL_OFF     0x1500 /* CompleteObjectLocator                   */
 #define VFT_REF_OFF 0x15F8 /* QWORD == base+COL_OFF (vftable-8)       */
@@ -121,6 +120,9 @@ static unsigned char *build_image(int with_sig, int with_rtti, int valid_col,
                sizeof(RBBRIDGE_DIFF_DEC_SIG));
         memcpy(img + ACT_SIG_OFF, RBBRIDGE_ACTIVATE_SIG,
                sizeof(RBBRIDGE_ACTIVATE_SIG));
+        /* #512: GetConnectedPlayers-AOB (nur Scan, rel32 nicht dekodiert). */
+        memcpy(img + CONNP_OFF, RBBRIDGE_CONNPLAYERS_SIG,
+               sizeof(RBBRIDGE_CONNPLAYERS_SIG));
         memcpy(img + DEACT_SIG_OFF, RBBRIDGE_DEACTIVATE_SIG,
                sizeof(RBBRIDGE_DEACTIVATE_SIG));
         /* #386: Database-Payload-Anker (SetString/GetString-Prolog + die
@@ -133,12 +135,6 @@ static unsigned char *build_image(int with_sig, int with_rtti, int valid_col,
                sizeof(RBBRIDGE_DB_CTOR_SIG));
         memcpy(img + NEWDB_OFF, RBBRIDGE_NEWDB_SITE_SIG,
                sizeof(RBBRIDGE_NEWDB_SITE_SIG));
-        memcpy(img + HQF_SIG_OFF, RBBRIDGE_HQ_FIND_SIG,
-               sizeof(RBBRIDGE_HQ_FIND_SIG));
-        memcpy(img + HQGH_SIG_OFF, RBBRIDGE_HQ_GETHEALTH_SIG,
-               sizeof(RBBRIDGE_HQ_GETHEALTH_SIG));
-        memcpy(img + HQGM_SIG_OFF, RBBRIDGE_HQ_GETMAXHEALTH_SIG,
-               sizeof(RBBRIDGE_HQ_GETMAXHEALTH_SIG));
         {
             unsigned char *cs = img + NEWDB_OFF + 0x20;
             int32_t rel;
@@ -169,42 +165,6 @@ static unsigned char *build_image(int with_sig, int with_rtti, int valid_col,
         wr64(img + INST_OFF, (uint64_t)(uintptr_t)(img + VFT_OFF));
 
     return img;
-}
-
-/* --- #511: Stubs fuer hq_health_from_calls (reine Host-Logik) -------- */
-static uint32_t g_hq_stub_entity;
-static int g_hq_stub_find_calls;
-static int g_hq_stub_get_calls;
-static int g_hq_stub_getmax_calls;
-static float g_hq_stub_hp;
-static float g_hq_stub_hpmax;
-static char g_hq_stub_type[32];
-
-static uint32_t hq_stub_find(void *self, const char *type)
-{
-    (void)self;
-    g_hq_stub_find_calls++;
-    if (type) {
-        strncpy(g_hq_stub_type, type, sizeof(g_hq_stub_type) - 1);
-        g_hq_stub_type[sizeof(g_hq_stub_type) - 1] = '\0';
-    }
-    return g_hq_stub_entity;
-}
-
-static float hq_stub_get(void *self, uint32_t entity)
-{
-    (void)self;
-    (void)entity;
-    g_hq_stub_get_calls++;
-    return g_hq_stub_hp;
-}
-
-static float hq_stub_getmax(void *self, uint32_t entity)
-{
-    (void)self;
-    (void)entity;
-    g_hq_stub_getmax_calls++;
-    return g_hq_stub_hpmax;
 }
 
 int main(void)
@@ -761,6 +721,125 @@ int main(void)
         }
     }
 
+    /* -------------------------------------------------------------- */
+    /* #512: Spielerzahl — AOB-Resolver + Vektor-Count (host-testbar)  */
+    /* -------------------------------------------------------------- */
+    {
+        const unsigned char *fn = NULL;
+
+        /* Positiv: genau EIN Treffer im .text -> aufrufbar. */
+        ht_set_module(img, IMG_SIZE);
+        check(connplayers_resolve(img, IMG_SIZE, &fn) == 1 &&
+                  fn == img + CONNP_OFF,
+              "connplayers_resolve: eindeutiger AOB-Treffer -> fn");
+
+        /* Negativ: AOB fehlt -> 0/NULL (kein Aufruf). */
+        {
+            unsigned char *img_x = build_image(0, 1, 1, 1, 1);
+            ht_set_module(img_x, IMG_SIZE);
+            fn = (const unsigned char *)0x1;
+            check(connplayers_resolve(img_x, IMG_SIZE, &fn) == 0 && !fn,
+                  "connplayers_resolve: kein Treffer -> 0/NULL (kein Aufruf)");
+            free(img_x);
+        }
+
+        /* Negativ: zweiter Treffer -> mehrdeutig -> kein Aufruf. */
+        {
+            unsigned char *img_y = build_image(1, 1, 1, 1, 1);
+            memcpy(img_y + CONNP2_OFF, RBBRIDGE_CONNPLAYERS_SIG,
+                   sizeof(RBBRIDGE_CONNPLAYERS_SIG));
+            ht_set_module(img_y, IMG_SIZE);
+            check(connplayers_resolve(img_y, IMG_SIZE, &fn) == 0,
+                  "connplayers_resolve: 2 Treffer -> mehrdeutig -> 0");
+            free(img_y);
+        }
+
+        /* Vektor-Layout (Disasm-belegt): count = vec[+0x10]. */
+        {
+            unsigned char vec[0x20];
+            int n = -1;
+            memset(vec, 0xAB, sizeof(vec));
+            wr64(vec + 0x10, 3);
+            check(connplayers_count_from_vec(vec, &n) == 1 && n == 3,
+                  "connplayers_count_from_vec: vec[+0x10] == count");
+
+            wr64(vec + 0x10, 0);
+            check(connplayers_count_from_vec(vec, &n) == 1 && n == 0,
+                  "connplayers_count_from_vec: 0 Spieler (leerer Server)");
+
+            wr64(vec + 0x10, (uint64_t)RBBRIDGE_CONNPLAYERS_MAX + 1);
+            check(connplayers_count_from_vec(vec, &n) == 0,
+                  "connplayers_count_from_vec: > MAX -> 0 (Muell)");
+
+            check(connplayers_count_from_vec(NULL, &n) == 0,
+                  "connplayers_count_from_vec: NULL -> 0");
+        }
+
+        /* Sig-Selbstkontrolle: Laenge == Maske, 3 E8-Opcodes Pflicht,
+         * 15 Wildcards (3x E8-rel32 = 12 + 3 rel8). */
+        {
+            size_t i, wild = 0, e8 = 0;
+            check(sizeof(RBBRIDGE_CONNPLAYERS_SIG) ==
+                      sizeof(RBBRIDGE_CONNPLAYERS_SIG_MASK),
+                  "connplayers-Sig: Laenge == Maske");
+            for (i = 0; i < sizeof(RBBRIDGE_CONNPLAYERS_SIG); i++) {
+                if (RBBRIDGE_CONNPLAYERS_SIG_MASK[i] == 0x00)
+                    wild++;
+                if (RBBRIDGE_CONNPLAYERS_SIG[i] == 0xE8 &&
+                    RBBRIDGE_CONNPLAYERS_SIG_MASK[i] == 0xFF)
+                    e8++;
+            }
+            check(wild == 15 && e8 == 3,
+                  "connplayers-Sig: 15 Wildcards (3x E8-rel32 + 3 rel8), "
+                  "3 E8-Opcodes Pflicht");
+        }
+
+        /* Review PR #524: vtable-Slot (+0x10) NICHT roh dereferenzieren.
+         * Disasm 0x26F340 = ZWEI Indirektionen (vptr -> Slot); der Slot
+         * wird per safe_read_u64 gelesen und auf 0 + Modulbereich
+         * geprueft -> kein Blind-Call. */
+        {
+            unsigned char *mod = (unsigned char *)calloc(1, 0x200);
+            unsigned char *alloc_obj = mod + 0x40; /* vec[+0x00] */
+            unsigned char *vtable = mod + 0x100;   /* vptr -> Slot +0x10 */
+            uintptr_t fnaddr = (uintptr_t)(mod + 0x180);
+            uintptr_t out = 0;
+
+            check(mod != NULL, "connplayers_dealloc_target: Testbuffer");
+
+            /* Korrekt: alloc->vptr = vtable; vtable[+0x10] = fnaddr. */
+            wr64(alloc_obj, (uint64_t)(uintptr_t)vtable);
+            wr64(vtable + 0x10, (uint64_t)fnaddr);
+            check(connplayers_dealloc_target(alloc_obj, mod, 0x200, &out) == 1 &&
+                      out == fnaddr,
+                  "connplayers_dealloc_target: vptr->Slot+0x10 -> Ziel");
+
+            /* Slot 0 -> kein Aufruf. */
+            wr64(vtable + 0x10, 0);
+            out = 0;
+            check(connplayers_dealloc_target(alloc_obj, mod, 0x200, &out) == 0 &&
+                      out == 0,
+                  "connplayers_dealloc_target: Slot 0 -> kein Aufruf");
+
+            /* Ziel ausserhalb des Modulbereichs -> kein Aufruf. */
+            wr64(vtable + 0x10, (uint64_t)(uintptr_t)(mod + 0x10000));
+            check(connplayers_dealloc_target(alloc_obj, mod, 0x200, &out) == 0,
+                  "connplayers_dealloc_target: Ziel ausserhalb Modul -> kein "
+                  "Aufruf");
+
+            /* vptr 0 (abgeraeumtes Objekt) -> kein Aufruf. */
+            wr64(alloc_obj, 0);
+            check(connplayers_dealloc_target(alloc_obj, mod, 0x200, &out) == 0,
+                  "connplayers_dealloc_target: vptr 0 -> kein Aufruf");
+
+            /* NULL-Objekt -> kein Aufruf. */
+            check(connplayers_dealloc_target(NULL, mod, 0x200, &out) == 0,
+                  "connplayers_dealloc_target: NULL -> kein Aufruf");
+
+            free(mod);
+        }
+    }
+
     /* #479: Readiness-Gate — reiner Log-Marker-Test (host-testbar)     */
     /* -------------------------------------------------------------- */
     {
@@ -918,148 +997,6 @@ int main(void)
             check(is_writable_region(&mi) == 0,
                   "#516 is_writable_region: MEM_FREE -> 0");
         }
-    }
-    /* -------------------------------------------------------------- */
-    /* HQ-Health-AOBs (Issue #511)                                     */
-    /* -------------------------------------------------------------- */
-    ht_set_module(img, IMG_SIZE);
-    check(scan_bytes_mask(img + TEXT_RVA, TEXT_VSIZE, RBBRIDGE_HQ_FIND_SIG,
-                     RBBRIDGE_HQ_FIND_SIG_MASK,
-                     sizeof(RBBRIDGE_HQ_FIND_SIG)) == img + HQF_SIG_OFF,
-          "HQ-FindEntityByType-AOB im .text gefunden (#511)");
-    check(scan_bytes_mask(img + TEXT_RVA, TEXT_VSIZE, RBBRIDGE_HQ_GETHEALTH_SIG,
-                     RBBRIDGE_HQ_GETHEALTH_SIG_MASK,
-                     sizeof(RBBRIDGE_HQ_GETHEALTH_SIG)) == img + HQGH_SIG_OFF,
-          "HQ-GetHealth-AOB im .text gefunden (#511)");
-    check(scan_bytes_mask(img + TEXT_RVA, TEXT_VSIZE, RBBRIDGE_HQ_GETMAXHEALTH_SIG,
-                     RBBRIDGE_HQ_GETMAXHEALTH_SIG_MASK,
-                     sizeof(RBBRIDGE_HQ_GETMAXHEALTH_SIG)) == img + HQGM_SIG_OFF,
-          "HQ-GetMaxHealth-AOB im .text gefunden (#511)");
-
-    /* GetHealth/GetMaxHealth teilen sich den Prolog -> die Signaturen MUESSEN
-     * sich gegenseitig ausschliessen, sonst trifft die falsche Funktion. */
-    {
-        unsigned char *imgA = build_image(1, 1, 1, 1, 1);
-        memset(imgA + HQF_SIG_OFF, 0, 0xE0); /* HQ-Bereich leeren */
-        memcpy(imgA + HQGH_SIG_OFF, RBBRIDGE_HQ_GETMAXHEALTH_SIG,
-               sizeof(RBBRIDGE_HQ_GETMAXHEALTH_SIG));
-        ht_set_module(imgA, IMG_SIZE);
-        check(scan_bytes_mask(imgA + TEXT_RVA, TEXT_VSIZE,
-                         RBBRIDGE_HQ_GETHEALTH_SIG,
-                         RBBRIDGE_HQ_GETHEALTH_SIG_MASK,
-                         sizeof(RBBRIDGE_HQ_GETHEALTH_SIG)) == NULL,
-              "HQ-GetHealth-AOB: kein Treffer in GetMaxHealth-Bytes (#511)");
-        check(scan_bytes_mask(imgA + TEXT_RVA, TEXT_VSIZE,
-                         RBBRIDGE_HQ_GETMAXHEALTH_SIG,
-                         RBBRIDGE_HQ_GETMAXHEALTH_SIG_MASK,
-                         sizeof(RBBRIDGE_HQ_GETMAXHEALTH_SIG))
-                  == imgA + HQGH_SIG_OFF,
-              "HQ-GetMaxHealth-AOB: disambiguierendes Tail trifft (#511)");
-        free(imgA);
-    }
-    {
-        unsigned char *imgB = build_image(1, 1, 1, 1, 1);
-        memset(imgB + HQF_SIG_OFF, 0, 0xE0);
-        memcpy(imgB + HQGH_SIG_OFF, RBBRIDGE_HQ_GETHEALTH_SIG,
-               sizeof(RBBRIDGE_HQ_GETHEALTH_SIG));
-        ht_set_module(imgB, IMG_SIZE);
-        check(scan_bytes_mask(imgB + TEXT_RVA, TEXT_VSIZE,
-                         RBBRIDGE_HQ_GETMAXHEALTH_SIG,
-                         RBBRIDGE_HQ_GETMAXHEALTH_SIG_MASK,
-                         sizeof(RBBRIDGE_HQ_GETMAXHEALTH_SIG)) == NULL,
-              "HQ-GetMaxHealth-AOB: kein Treffer in GetHealth-Bytes (#511)");
-        free(imgB);
-    }
-    {
-        unsigned char *imgC = build_image(1, 1, 1, 1, 1);
-        memset(imgC + HQF_SIG_OFF, 0, 0xE0); /* Signaturen fehlen */
-        ht_set_module(imgC, IMG_SIZE);
-        check(scan_bytes_mask(imgC + TEXT_RVA, TEXT_VSIZE, RBBRIDGE_HQ_FIND_SIG,
-                         RBBRIDGE_HQ_FIND_SIG_MASK,
-                         sizeof(RBBRIDGE_HQ_FIND_SIG)) == NULL,
-              "HQ-Find-AOB: fehlend -> kein Treffer (#511)");
-        check(scan_bytes_mask(imgC + TEXT_RVA, TEXT_VSIZE,
-                         RBBRIDGE_HQ_GETHEALTH_SIG,
-                         RBBRIDGE_HQ_GETHEALTH_SIG_MASK,
-                         sizeof(RBBRIDGE_HQ_GETHEALTH_SIG)) == NULL,
-              "HQ-GetHealth-AOB: fehlend -> kein Treffer (#511)");
-        free(imgC);
-    }
-
-    /* -------------------------------------------------------------- */
-    /* HQ-Core-Logik (hq_health_from_calls, Issue #511)                */
-    /* -------------------------------------------------------------- */
-    {
-        float hp = -1.0f, hpmax = -1.0f;
-        int dead = -1;
-        hq_dead_state_t st = {0, 0.0f};
-
-        g_hq_stub_entity = 0x1234u;
-        g_hq_stub_hp = 850.5f;
-        g_hq_stub_hpmax = 1000.0f;
-        g_hq_stub_find_calls = g_hq_stub_get_calls = g_hq_stub_getmax_calls = 0;
-        g_hq_stub_type[0] = '\0';
-        check(hq_health_from_calls((void *)1, (void *)2, hq_stub_find,
-                                   hq_stub_get, hq_stub_getmax, &st,
-                                   &hp, &hpmax, &dead) == 1 &&
-                  hp == 850.5f && hpmax == 1000.0f && dead == 0 &&
-                  strcmp(g_hq_stub_type, "headquarters") == 0 &&
-                  g_hq_stub_find_calls == 1 && g_hq_stub_get_calls == 1 &&
-                  g_hq_stub_getmax_calls == 1,
-              "hq core: HQ gefunden -> hp/hp_max/dead gesetzt (#511)");
-
-        /* HP 0 -> tot (Interface-Konvention hp <= 0). */
-        g_hq_stub_hp = 0.0f;
-        check(hq_health_from_calls((void *)1, (void *)2, hq_stub_find,
-                                   hq_stub_get, hq_stub_getmax, &st,
-                                   &hp, &hpmax, &dead) == 1 && dead == 1,
-              "hq core: hp==0 -> dead=true (#511)");
-
-        /* INVALID_ID ohne HQ-Vorgeschichte -> nicht verfuegbar, KEIN
-         * Health-Call (graceful): ein noch nicht geladenes HQ ist nicht tot. */
-        g_hq_stub_entity = RBBRIDGE_HQ_INVALID_ENTITY;
-        g_hq_stub_get_calls = g_hq_stub_getmax_calls = 0;
-        check(hq_health_from_calls((void *)1, (void *)2, hq_stub_find,
-                                   hq_stub_get, hq_stub_getmax, &(hq_dead_state_t){0, 0.0f},
-                                   &hp, &hpmax, &dead) == 0 &&
-                  g_hq_stub_get_calls == 0 && g_hq_stub_getmax_calls == 0,
-              "hq core: INVALID_ID ohne Vorgeschichte -> 0, kein Health-Call (#511)");
-
-        /* INVALID_ID MIT HQ-Vorgeschichte -> zerstoert (Finding 4,
-         * Review PR #525): Entity verschwunden = tot, hp 0, hp_max letzter
-         * bekannter Wert. */
-        g_hq_stub_get_calls = g_hq_stub_getmax_calls = 0;
-        st.seen_alive = 1;
-        st.last_hp_max = 1000.0f;
-        hp = -1.0f;
-        hpmax = -1.0f;
-        dead = -1;
-        check(hq_health_from_calls((void *)1, (void *)2, hq_stub_find,
-                                   hq_stub_get, hq_stub_getmax, &st,
-                                   &hp, &hpmax, &dead) == 1 &&
-                  hp == 0.0f && hpmax == 1000.0f && dead == 1 &&
-                  g_hq_stub_get_calls == 0 && g_hq_stub_getmax_calls == 0,
-              "hq core: Entity weg nach HQ-Leben -> dead=true, kein Call (#511)");
-
-        /* HQ taucht wieder auf (Map-/Welt-Reload) -> Latch heilt sich. */
-        g_hq_stub_entity = 0x1234u;
-        g_hq_stub_hp = 500.0f;
-        g_hq_stub_hpmax = 1000.0f;
-        check(hq_health_from_calls((void *)1, (void *)2, hq_stub_find,
-                                   hq_stub_get, hq_stub_getmax, &st,
-                                   &hp, &hpmax, &dead) == 1 &&
-                  hp == 500.0f && dead == 0 && st.last_hp_max == 1000.0f,
-              "hq core: HQ wieder da -> dead=false (Latch heilt) (#511)");
-
-        /* Unvollstaendige Aufloesung -> 0, kein Call, kein Crash. */
-        check(hq_health_from_calls(NULL, (void *)2, hq_stub_find, hq_stub_get,
-                                   hq_stub_getmax, &st, &hp, &hpmax,
-                                   &dead) == 0,
-              "hq core: find_svc NULL -> 0 (graceful) (#511)");
-        check(hq_health_from_calls((void *)1, (void *)2, NULL, hq_stub_get,
-                                   hq_stub_getmax, &st, &hp, &hpmax,
-                                   &dead) == 0,
-              "hq core: find_fn NULL -> 0 (graceful) (#511)");
     }
 
     free(img);

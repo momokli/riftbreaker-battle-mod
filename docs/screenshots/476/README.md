@@ -1,7 +1,7 @@
 # Screenshots — Issue #476 (Natural Waves (Vanilla) im Cockpit)
 
 Neue Cockpit-Sektion *Natural Waves (Vanilla)*
-(`bausteine/08-control-ui/cockpit.html`): zwei Readouts (`waves`, `strength`),
+(`cockpit/cockpit.html`): zwei Readouts (`waves`, `strength`),
 drei Buttons (`off (next load)` / `on (next load)` / `status`) und eine
 Hinweiszeile zur Runtime-Write-Semantik.
 
@@ -15,7 +15,7 @@ Hinweiszeile zur Runtime-Write-Semantik.
 
 Erzeugt mit **headless Chromium** (`--headless=new --no-sandbox --disable-gpu
 --force-device-scale-factor=2`, chromium-1223) gegen die **unveränderte**
-`bausteine/08-control-ui/cockpit.html`. Als Backend lief lokal ein Mock
+`cockpit/cockpit.html`. Als Backend lief lokal ein Mock
 (kein Dedicated Server nötig), der
 
 - `POST /get_state` mit der dokumentierten Bridge-Antwort bedient

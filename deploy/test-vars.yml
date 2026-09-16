@@ -45,12 +45,12 @@ website_mods_dir: "/opt/rbbattle-deploy/test/mods-{{ rbbattle_run_suffix }}"
 # dev-Docroot /srv/rbmods-site (analog zur bestehenden website_mods_dir-
 # Isolation). Additiv, kein Rename der dev-Pfade.
 website_docroot: "/srv/rbmods-site-test-{{ rbbattle_run_suffix }}"
-# Trainer-I/O-Tools je Lauf isoliert (Issue #483, US3/Ziel B): Pfad-Schema
+# Server-I/O-Tools je Lauf isoliert (Issue #483, US3/Ziel B): Pfad-Schema
 # /opt/rbmods/rbtools/<env>-<run> (statt rbtools-test-<run>). Ohne eigene Werte
 # erbt der Boot-Test den dev-Pfad (Live-Befund #3).
 rbtools_dir: "/opt/rbmods/rbtools/{{ rift_env }}-{{ rbbattle_run_suffix }}"
 rbtools_staging_dir: "{{ rbtools_dir }}/.staging"
-# Der Build-Kontext (tools/dedicated-server) wurde bisher in einen festen Pfad
+# Der Build-Kontext (deploy/dedicated-server) wurde bisher in einen festen Pfad
 # (/opt/rbmods/dedicated-server) synchronisiert. Bei zwei parallelen Läufen
 # schreiben beide in dasselbe Verzeichnis, während `docker build` daraus liest
 # → Race (halb geschriebene Files). Das ist genau die Kollisionsklasse aus
@@ -98,7 +98,6 @@ riftbreaker_sessions_dir: "/srv/rift-{{ rift_env }}-{{ rbbattle_run_suffix }}/se
 # zwei parallele boot-tests am `docker compose up` des Game-Servers (exakt die
 # Klasse aus #307/#318: "container name ... already in use"). Prod bleibt beim
 # Default-Namen `riftbreaker-egress` (defaults/main.yml).
-riftbreaker_referee_egress_container: "riftbreaker-egress-test-{{ rbbattle_run_suffix }}"
 
 # Disk-Space-Gate (Issue #310): Mindest-freier-Platz auf / vor Image-Build und
 # Mod-Backup. Der Boot-Test fährt denselben Preflight wie Prod (Default 10 GB).

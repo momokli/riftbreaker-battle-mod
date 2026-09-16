@@ -1,13 +1,13 @@
 ---
 # Rolle: mods-zip — Mod paketieren + md5-Paritäts-Check (hart).
-# 1) Paketierung auf dem Control-Node (repo checkout, scripts/package_bausteine.sh)
-#    → dist/rbbattle.zip (Content-Root = mod/).
+# 1) Paketierung auf dem Control-Node (repo checkout, scripts/package.sh)
+#    → dist/rbbattle.zip (Content-Root = client-mod/).
 # 2) Zip nach planet kopieren.
 # 3) md5(Zip lokal) == md5(Zip planet) — sonst harter Abbruch.
 
-- name: Mod paketieren (scripts/package_bausteine.sh, Control-Node)
+- name: Mod paketieren (scripts/package.sh, Control-Node)
   command:
-    cmd: bash scripts/package_bausteine.sh
+    cmd: bash scripts/package.sh
     chdir: "{{ playbook_dir }}/.."
   delegate_to: localhost
   become: false

@@ -33,13 +33,12 @@ jobs:
           shellcheck \
             scripts/*.sh \
             tests/shell/*.sh \
-            bausteine/07-relay/fake-log.sh \
             tools/headless-client/*.sh
       # Dedicated-Server-Image-Scripts (Issue #241). Eigener Schritt statt
       # Einreihen in die Liste oben, um den Hunk von #254 (tests/shell) nicht
       # zu ueberlappen (parallele PRs, ein Datei-Block).
       - name: shellcheck (dedicated-server)
-        run: shellcheck tools/dedicated-server/scripts/*.sh
+        run: shellcheck deploy/dedicated-server/scripts/*.sh
       # Red/Green-Beweis der Image-Tag-Retention (Issue #309): laufendes Image
       # + N Rollback-Tags bleiben, nur aeltere Tags gehen. Braucht kein Docker
       # (Fake-docker + Szenario-Dateien).
@@ -74,7 +73,7 @@ jobs:
       # Syntax-Fallback zuerst: faengt Parse-Fehler auch dann, wenn die
       # ruff-Installation scheitert — der Schritt faellt so nie still durch.
       - name: Python-Syntax (compileall)
-        run: python3 -m compileall -q scripts trainer bausteine tournament tools
+        run: python3 -m compileall -q scripts server tournament tools
       - name: ruff installieren (gepinnt)
         run: python3 -m pip install --disable-pip-version-check "ruff==0.6.9"
       # Kein --exit-zero: ruff verletzt den Job bei Findings (E/F, siehe ruff.toml).

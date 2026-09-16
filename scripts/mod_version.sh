@@ -3,7 +3,7 @@
 # mod_version.sh — liest die Mod-Version aus den Mod-Metadaten (Manifest).
 #
 # Einzige Quelle der Wahrheit für die Mod-Version ist das Mod-Manifest
-# mod/<GUID>.manifest (Feld `version "x.y.z"`). Dieses Skript extrahiert den
+# client-mod/<GUID>.manifest (Feld `version "x.y.z"`). Dieses Skript extrahiert den
 # Wert und gibt ihn auf stdout aus (ohne Zusatz).
 #
 # Verwendung:
@@ -18,15 +18,15 @@ cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
 shopt -s nullglob
-MANIFESTS=( "$ROOT"/mod/*.manifest )
+MANIFESTS=( "$ROOT"/client-mod/*.manifest )
 shopt -u nullglob
 
 if [ "${#MANIFESTS[@]}" -eq 0 ]; then
-    echo "FEHLER: kein Mod-Manifest (*.manifest) unter mod/ gefunden." >&2
+    echo "FEHLER: kein Mod-Manifest (*.manifest) unter client-mod/ gefunden." >&2
     exit 1
 fi
 if [ "${#MANIFESTS[@]}" -gt 1 ]; then
-    echo "FEHLER: mehrere Mod-Manifeste unter mod/ gefunden (${#MANIFESTS[@]})." >&2
+    echo "FEHLER: mehrere Mod-Manifeste unter client-mod/ gefunden (${#MANIFESTS[@]})." >&2
     exit 1
 fi
 

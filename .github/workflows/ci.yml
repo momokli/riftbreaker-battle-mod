@@ -12,8 +12,8 @@ name: CI
 # sind.
 #
 # Relevanz-Kategorien:
-#   test        bausteine/, mod/, tests/, tools/, scripts/ (statische/Unit-Tests)
-#   build       Bausteine 00-06 + mod/ + Packaging-Skripte (dist/*.zip, rbbridge.dll)
+#   test        client-mod/, server/, cockpit/, tests/, tools/, scripts/ (statische/Unit-Tests)
+#   build       server/ + cockpit/ + client-mod/ + Packaging-Skripte (dist/*.zip, rbbridge.dll)
 #   tournament  tournament/src + Cargo.toml/Cargo.lock (cargo test)
 #
 # Tags (`v*`) triggern den Workflow zusätzlich (Issue #499): ein Tag-Push
@@ -82,14 +82,14 @@ jobs:
           fi
 
           if printf '%s\n' "$CHANGED" \
-             | grep -Eq '^(bausteine/|mod/|tests/|tools/|scripts/|\.github/workflows/ci\.yml)'; then
+             | grep -Eq '^(client-mod/|server/|cockpit/|tests/|tools/|scripts/|\.github/workflows/ci\.yml)'; then
             echo "test=true" >> "$GITHUB_OUTPUT"
           else
             echo "test=false" >> "$GITHUB_OUTPUT"
           fi
 
           if printf '%s\n' "$CHANGED" \
-             | grep -Eq '^(bausteine/00-mod-skeleton/|bausteine/01-wave-spawn/|bausteine/02-custom-ui/|bausteine/03-log-bridge/|bausteine/rbbridge/|bausteine/05-economy-loop/|bausteine/08-control-ui/|mod/|scripts/(package_bausteine|mod_version)\.sh|\.github/workflows/ci\.yml)'; then
+             | grep -Eq '^(server/|cockpit/|client-mod/|scripts/(package|mod_version)\.sh|\.github/workflows/ci\.yml)'; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
             echo "build=false" >> "$GITHUB_OUTPUT"
@@ -127,16 +127,6 @@ jobs:
           key: npm-store-${{ runner.os }}-${{ hashFiles('tests/rbbridge-hosttest/package-lock.json') }}
           restore-keys: |
             npm-store-${{ runner.os }}-
-      - name: Unit-Test Relay-Pipe-Dispatch (Issue #60)
-        if: needs.changes.outputs.test == 'true'
-        working-directory: bausteine/07-relay
-        run: python3 -m unittest test_dispatch -v
-      # Referee-Rueckkanal (#268): Event-In/Uebersetzung + Fehlerpfade
-      # (URLError/5xx -> requeue in Reihenfolge, 4xx -> verwerfen).
-      - name: Unit-Test Referee-Rueckkanal (Issue #268)
-        if: needs.changes.outputs.test == 'true'
-        working-directory: bausteine/07-relay
-        run: python3 -m unittest test_referee -v
       - name: Unit-Test Deploy-Gate (Issue #118)
         if: needs.changes.outputs.test == 'true'
         working-directory: tools/deploy-gate
@@ -151,7 +141,7 @@ jobs:
         run: python3 -m unittest test_check_mods_dir -v
       - name: Unit-Test Session-Recorder (Issue #280)
         if: needs.changes.outputs.test == 'true'
-        working-directory: tools/session-recorder
+        working-directory: deploy/session-recorder
         run: python3 -m unittest test_session_recorder -v
       # Pack-Reader (Issue #416): zip64-sichere Game-Pack-Leser, hermetisch
       # (synthetische Zips im tmpdir, kein Game-Daten-Zugriff).
@@ -159,16 +149,12 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         working-directory: tools/re
         run: python3 -m unittest test_rbpack -v
-      - name: Unit-Test Referee-Egress (Issue #358)
-        if: needs.changes.outputs.test == 'true'
-        working-directory: tools/referee-egress
-        run: python3 -m unittest test_referee_egress -v
       # Server-Control-Host-Agent (Issue #459): Unit-/Integrationstests ohne
       # Docker, Netz oder Spiel (Fake-docker-Binary + echter Agent auf
       # Ephemeral-Port). Reiner Standardbibliothek-Code, daher kein npm ci.
       - name: Unit-Test Server-Control (Issue #459)
         if: needs.changes.outputs.test == 'true'
-        working-directory: tools/server-control
+        working-directory: deploy/server-control
         run: python3 -m unittest test_server_control -v
       - name: rbbridge host-test (Issue #243)
         if: needs.changes.outputs.test == 'true'
@@ -203,20 +189,20 @@ jobs:
       # MinGW-w64 ist jetzt vorab auf dem Runner-Host installiert
       # (.github/runner/setup.sh, Issue #153) — kein per-Job-sudo-apt-get mehr.
       # Der Cross-Compiler muss auf dem Host vorhanden sein; sonst fällt
-      # package_bausteine.sh auf das Quell-Zip für Baustein 04 zurück.
+      # package.sh auf das Quell-Zip für Baustein 04 zurück.
       - name: ccache-Cache (MinGW-C++-Build rbbridge)
         if: needs.changes.outputs.build == 'true'
         uses: actions/cache@v4
         with:
           path: ~/.cache/ccache
-          key: ccache-rbbridge-${{ runner.os }}-${{ hashFiles('bausteine/rbbridge/**/*.c') }}
+          key: ccache-rbbridge-${{ runner.os }}-${{ hashFiles('server/**/*.c') }}
           restore-keys: |
             ccache-rbbridge-${{ runner.os }}-
       - name: Baustein-04-Binaries kompilieren + alle Zips bauen
         if: needs.changes.outputs.build == 'true'
         env:
           # Build-Identität (Issue #499): bei Tag-Push den Tag, sonst den
-          # Commit-SHA in den Mod backen (package_bausteine.sh substituiert
+          # Commit-SHA in den Mod backen (package.sh substituiert
           # RBB_BUILD_REF in der ausgelieferten Lua).
           RBB_BUILD_REF: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
         run: |
@@ -228,12 +214,12 @@ jobs:
           else
             echo "Hinweis: /opt/ccache-rbbattle/bin fehlt — .github/runner/setup.sh noch nicht ausgeführt; Build ohne ccache."
           fi
-          bash scripts/package_bausteine.sh
+          bash scripts/package.sh
       - name: Artefakte hochladen (dist/*.zip + Mod-Updater)
         if: needs.changes.outputs.build == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: bausteine-zips
+          name: component-zips
           # Mod-Updater als Einzeldatei mitliefern (Issue #120: ohne Checkout
           # herunterladbar); rbbattle.zip bleibt der Primaer-Download.
           path: |

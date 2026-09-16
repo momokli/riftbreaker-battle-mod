@@ -1,6 +1,6 @@
 # Screenshots — Issue #468 (Cockpit-Redesign: Qt-Style-Chrome, responsive 1/2/3 Spalten)
 
-Redesign des Operator-Cockpits (`bausteine/08-control-ui/cockpit.html`):
+Redesign des Operator-Cockpits (`cockpit/cockpit.html`):
 dunkles Grau-Chrome, ein Teal-Akzent (`--accent #3fd0d4`), vier
 `fieldset`-Gruppen (_Resources_, _Mission Flow (Wave)_,
 _Creatures Base Difficulty_, _Server Control (Plane B)_ inkl. Container-Log)
