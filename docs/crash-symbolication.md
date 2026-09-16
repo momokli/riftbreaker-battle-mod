@@ -97,7 +97,8 @@ ebenfalls symbolisiert: `rbbridge.dll` wird mit `-g` (DWARF) gebaut (Codegen
 unverändert), und `symbolize.py` löst ein zweites Modul (`--dll2`/`--module2`)
 gegen eine zweite DLL auf. Frames des zweiten Moduls erscheinen in
 `symbolized.txt` als `0x<rva>\t[<modul>] <name>` annotiert. Der Pfad kommt über
-`RB_CRASH_RBBRIDGE_DLL` (Default `/opt/rbmods/rbtools/rbbridge.dll`); fehlt die
+`RB_CRASH_RBBRIDGE_DLL` (Default `{{ rbtools_dir }}/rbbridge.dll`, per Env z. B.
+`/opt/rbmods/rbtools/dev/rbbridge.dll`); fehlt die
 Datei, symbolisiert der Collector weiterhin nur die Game-DLL (graceful, kein
 Hard-Fail).
 
