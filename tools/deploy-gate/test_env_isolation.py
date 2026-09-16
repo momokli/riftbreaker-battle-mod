@@ -50,7 +50,7 @@ riftbreaker_content_mode: sync
 
 
 class FixtureRepo:
-    def __init__(self, schema=SCHEMA, host=HOST_VARS, prod=PROD_VARS, test=TEST_VARS):
+    def __init__(self, schema=SCHEMA, host=HOST_VARS, prod=PROD_VARS, test=TEST_VARS, staging=""):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = self.tmp.name
         base = os.path.join(self.root, "deploy")
@@ -59,6 +59,7 @@ class FixtureRepo:
         self._write(os.path.join(base, "inventory", "host_vars", "planet", "vars.yml"), host)
         self._write(os.path.join(base, "prod-vars.yml"), prod)
         self._write(os.path.join(base, "test-vars.yml"), test)
+        self._write(os.path.join(base, "staging-vars.yml"), staging)
 
     @staticmethod
     def _write(path, text):
@@ -95,7 +96,7 @@ class ParseSchemaTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "env-schema.yml")
             with open(path, "w", encoding="utf-8") as handle:
-                handle.write("per_env:\n  x: [staging]\n")
+                handle.write("per_env:\n  x: [qa]\n")
             _per_env, _shared, problems = cei.parse_schema(path)
         self.assertTrue(any("ungueltige Env" in p for p in problems), problems)
 
@@ -165,7 +166,7 @@ class RealRepoTest(unittest.TestCase):
             self.assertIn("prod", per_env[var], var)
             self.assertIn("test", per_env[var], var)
         self.assertEqual(per_env.get("riftbreaker_compose_project"),
-                         ["dev", "prod", "test"])
+                         ["dev", "prod", "test", "staging"])
 
     def test_real_dev_basis_uses_env_schema(self):
         # dev ist kein Sonderfall mehr: die Pfade leiten sich aus `rift_env` ab.
@@ -230,9 +231,9 @@ class CliTest(unittest.TestCase):
     def test_cli_rejects_invalid_env_name(self):
         repo = FixtureRepo()
         self.addCleanup(repo.cleanup)
-        code, _out, err = self._run(repo.root, ["--env", "staging"])
+        code, _out, err = self._run(repo.root, ["--env", "qa"])
         self.assertEqual(code, 1)
-        self.assertIn("staging", err)
+        self.assertIn("qa", err)
 
 
 if __name__ == "__main__":

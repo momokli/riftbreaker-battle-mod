@@ -1,0 +1,100 @@
+---
+# Staging-Instanz-Overrides — dritter Dedicated-Server auf planet, öffentlich
+# erreichbar über das zweite UDP-Relay (sync:6321 -> planet:6323).
+#
+# Analog deploy/prod-vars.yml. Wird nur von deploy/deploy-staging.yml via
+# -e @deploy/staging-vars.yml benutzt.
+#
+# Staging läuft KOEXISTIEREND mit dev (main, :6321) und prod (:6322): eigene
+# Container-/Port-/Pfad-/Volume-Namen, kein Clash. Der Image-Tag wird wie dev
+# aus dem Checkout-SHA abgeleitet.
+
+# Eigene Container-/Port-Namen (dev = 6321, prod = 6322 bleiben unberührt).
+riftbreaker_server_container: riftbreaker-dedicated-staging
+riftbreaker_server_port_udp: 6323
+# Compose-Projekt EXPLIZIT (Issue #483, Ziel B): der Verzeichnis-Basename ist im
+# neuen Schema ueberall "riftbreaker" — ohne diesen Wert kollidierten dev, prod
+# und staging im Compose-Projektnamen/Netz.
+riftbreaker_compose_project: "riftbreaker-dedicated-staging"
+
+# Eigener Game-Stand + Mod. Pfad-Schema `<env>` (Issue #483, Ziel B):
+# /srv/rift-<env>/game|backups.
+riftbreaker_game_dir: "/srv/rift-{{ rift_env }}/game"
+riftbreaker_mod_dir: "{{ riftbreaker_game_dir }}/mods/rbbattle"
+riftbreaker_backup_dir: "/srv/rift-{{ rift_env }}/backups"
+# /opt/rbmods/compose/rift-<env>/riftbreaker (Ziel B).
+riftbreaker_deploy_dir: "/opt/rbmods/compose/rift-{{ rift_env }}/riftbreaker"
+riftbreaker_config_dir: "{{ riftbreaker_deploy_dir }}/config"
+
+# Eigene persistente Volumes (Wine-Prefix + Saves).
+riftbreaker_wine_volume: rb-wine-staging
+riftbreaker_saves_volume: rb-saves-staging
+
+# IO-Bridge isoliert von dev (9001) und prod (9002) — sonst Kollision auf
+# 127.0.0.1.
+riftbreaker_bridge_port: 9003
+
+# Bridge-Binaries (rbtools) isoliert — Pfad-Schema `<env>` (Issue #483,
+# Ziel B: /opt/rbmods/rbtools/<env>).
+rbtools_dir: "/opt/rbmods/rbtools/{{ rift_env }}"
+rbtools_staging_dir: "/opt/rbmods/rbtools/{{ rift_env }}/.staging"
+
+# Sidecars (Session-Recorder + Referee-Egress) isoliert von dev/prod — die
+# festen container_name-Werte (riftbreaker-sessions/-egress) würden sonst mit
+# dem dev-/prod-Stack kollidieren. Eigener Sessions-Dir, damit die JSONL
+# getrennt bleiben.
+riftbreaker_sessions_container: riftbreaker-sessions-staging
+riftbreaker_sessions_dir: "/srv/rift-{{ rift_env }}/sessions"
+
+# Content kommt per Sync aus dem kanonischen Cache (wie dev/prod).
+riftbreaker_content_mode: sync
+
+# --- Tournament-Server (Referee + Web-UI, eigener Port/Unit/Install) ---------
+# Staging-Zwilling: isoliert von dev (8081) und prod (8082) auf 8083; bridge A
+# zeigt auf die eigene staging-Bridge :9003 (kein Cross-Reference auf dev/prod).
+tournament_install_dir: /opt/rbmods/tournament-server-staging
+tournament_unit: tournament-server-staging
+tournament_port: 8083
+tournament_bridge_a_url: "http://127.0.0.1:9003/exec"
+tournament_bridge_b_url: "http://127.0.0.1:9003/exec"
+
+# --- Server-Control (Staging-Zwilling des Host-Agenten) ----------------------
+# Eigener Agent auf 8094 (dev bleibt 8092, prod 8093), eigene Unit/Install/
+# Env-Datei — steuert den staging-Container (riftbreaker_server_container oben
+# = riftbreaker-dedicated-staging). Das Token kommt aus dem Vault
+# (vault_server_control_staging_token, gesetzt in deploy/deploy-staging.yml).
+server_control_unit: server-control-staging
+server_control_port: 8094
+server_control_install_dir: /opt/rbmods/server-control-staging
+server_control_env_file: /etc/rbmods/server-control-staging.env
+
+# --- Website (Landing + Cockpit, eigener Caddy) -----------------------------
+# Staging-Zwilling: eigene Landing (www.staging.projectmellon.de) + eigenes
+# Operator-Cockpit (cockpit.staging.projectmellon.de), eigener rift-caddy-
+# staging-Container (plain HTTP) auf 127.0.0.1:8789 — isoliert von dev
+# (rift-caddy :8787) und prod (rift-caddy-prod :8788). Der geteilte Host-Caddy
+# proxyt beide staging-Domains dorthin; die Bridge :9003 (oben) liefert das
+# /contract/*-Panel.
+landing_domain: www.staging.projectmellon.de
+cockpit_domain: cockpit.staging.projectmellon.de
+rift_caddy_container: rift-caddy-staging
+rift_caddy_port: 8789
+rift_caddy_deploy_dir: "/opt/rbmods/compose/rift-{{ rift_env }}/caddy"
+
+# --- Crash-Collector (Staging-Zwilling, Issue #481) --------------------------
+# Eigene Unit + eigenes Bundle-Verzeichnis. Der Container ist explizit der
+# staging-Container (Default der Rolle waere ohnehin riftbreaker_server_container
+# = riftbreaker-dedicated-staging).
+crash_collector_unit: rbmods-crash-collector-staging
+crash_collector_dir: /opt/rbmods/crashes-staging
+crash_collector_container: riftbreaker-dedicated-staging
+# --- Docroot/Mods/Caddy-Daten explizit staging (Issue #483, US3) ------------
+# Staging bekommt einen EIGENEN Docroot/Mods-Ort; mods_zip_dest folgt
+# website_mods_dir.
+website_docroot: /srv/rbmods-site-staging
+website_mods_dir: "{{ website_docroot }}/mods"
+mods_zip_dest: "{{ website_mods_dir }}/{{ mods_zip_name }}"
+# Caddy-Daten/Config explizit staging (sonst erbt staging den dev-Pfad
+# {{ rift_caddy_deploy_dir }}/data|config unter /opt/rbmods/compose/rift-caddy).
+rift_caddy_data_dir: "{{ rift_caddy_deploy_dir }}/data"
+rift_caddy_config_dir: "{{ rift_caddy_deploy_dir }}/config"

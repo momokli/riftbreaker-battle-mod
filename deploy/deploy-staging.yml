@@ -1,0 +1,95 @@
+---
+# Staging-Instanz + zweites Relay — dritter Dedicated-Server (planet, :6323),
+# öffentlich erreichbar über das zweite UDP-Relay (sync:6321 -> :6323). Staging
+# ist ein Ko-Zwilling von prod auf planet: eigene Container-/Port-/Pfad-/
+# Volume-Namen (Suffix -staging), eigener server-control-Agent (:8094), eigene
+# Landing/Cockpit-Domains und eigener rift-caddy :8789.
+#
+# Aufruf (analog deploy/deploy-prod.yml, Vault nötig für Server-Passwort):
+#   ansible-playbook -i deploy/inventory deploy/deploy-staging.yml \
+#     -e @deploy/staging-vars.yml --vault-password-file <vault.pass>
+#
+# Der CD-Workflow (.github/workflows/deploy.yml) fährt dieses Playbook bei
+# Push auf den Branch `staging`. Der Image-Tag wird weiterhin aus dem
+# Checkout-SHA abgeleitet.
+
+- name: RIFT BATTLE — Staging-Instanz (planet :6323)
+  hosts: planet
+  become: true
+
+  vars:
+    # Staging ist ein voller Twin von prod: eigener server-control-Agent
+    # (Unit server-control-staging, Port 8094, eigenes Token) => die
+    # /server/*-Route im staging-Cockpit wird gerendert und zeigt auf
+    # 127.0.0.1:8094 — NIE auf den dev-Agenten (8092) oder den prod-Agenten
+    # (8093). Der staging-Bearer kommt aus dem Vault
+    # (vault_server_control_staging_token) und wird von beiden Rollen
+    # (server-control + website) gemeinsam gelesen.
+    server_control_enabled: true
+    server_control_token: "{{ vault_server_control_staging_token | default('') }}"
+    # Deploy-Identitaet: DIESES Play ist staging. Play-Var, damit staging nicht
+    # den dev-Wert erbt; der Ref traegt den Checkout-SHA (Branch `staging`).
+    rift_env: staging
+
+  pre_tasks:
+    - name: Deploy-SHA für den Image-Tag ermitteln
+      command: git -c safe.directory=* -C {{ playbook_dir }}/.. rev-parse --short=12 HEAD
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      changed_when: false
+      register: rbbattle_staging_sha
+      tags: always
+
+    - name: Image-Tag (Deploy-SHA) als Fact setzen
+      set_fact:
+        deploy_image_tag: "{{ rbbattle_staging_sha.stdout | trim }}"
+      tags: always
+
+    # Deploy-Identitaet (Issue #483, US1): staging-Ref = Checkout-SHA.
+    - name: "Deploy-Identitaet erzeugen (Issue #483)"
+      include_tasks: "{{ playbook_dir }}/tasks/deploy-identity.yml"
+      vars:
+        rift_deploy_checkout: "{{ playbook_dir }}/.."
+      tags: always
+
+    # Fail-loud-Contract (Issue #483, US2).
+    - name: "ENV-ISOLATION-GATE (Issue #483)"
+      include_tasks: "{{ playbook_dir }}/tasks/env-assert.yml"
+      vars:
+        rift_env_isolation_root: "{{ playbook_dir }}/.."
+      tags: always
+
+    # Env-Pfad-Migration (Issue #483, Ziel B): idempotenter `mv` + Symlink-
+    # Uebergang Alt->Neu VOR den Rollen. staging ist eine NEUE Env ohne
+    # Alt-Pfade -> die Paarliste ist leer (no-op).
+    - name: "Env-Pfad-Migration (#483)"
+      include_tasks: "{{ playbook_dir }}/tasks/env-path-migration.yml"
+      tags: always
+
+  roles:
+    - role: mods-zip
+    - role: dedicated-server-image
+    - role: game-content
+    - role: rbtools
+    - role: riftbreaker-server
+    - role: tournament-server
+    - role: server-control
+      tags: [server]
+    - role: website
+      tags: [website]
+    # Staging-Zwilling des Crash-Collectors (Issue #481): eigene Unit + eigenes
+    # Bundle-Dir (crash_collector_* in staging-vars.yml) — Crashes auf staging
+    # sind damit sichtbar statt nur "keine Marker im dev-Log".
+    - role: crash-collector
+      tags: [crash]
+
+- name: RIFT BATTLE — Satellite-Relay (sync → planet:6323)
+  hosts: sync
+  become: true
+
+  vars:
+    satellite_relay_target_port: 6323
+
+  roles:
+    - role: satellite-relay
