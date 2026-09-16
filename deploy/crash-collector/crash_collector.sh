@@ -8,7 +8,8 @@
 #   * beobachtet `docker logs -f --tail 0 <container>` auf Crash-Marker
 #     (`CRASH`, `page fault` — rhcrash/„Unhandled page fault" des Wine-Prozesses),
 #   * kopiert beim Crash die NEUESTEN `crash_info/<uuid>.{dmp,log,trace}` aus
-#     dem Wine-Volume (`docker cp`) nach `<crash_dir>/<ts>-<uuid>/`,
+#     dem Wine-Volume (`docker cp`) nach `<crash_dir>/<env>/<ref>/<ts>-<uuid>/`
+#     (Issue #605; ohne env/ref faellt er auf den flachen Pfad zurueck),
 #   * parst den Minidump minimal (`deploy/crash-collector/minidump_meta.py`, Issue #481) und
 #     uebernimmt Exception-Code/-Adresse, Modul, Modulbasis, RVA, Fault-Thread
 #     und Stack-RVAs — robuster als das Log-Zeilen-Fenster,
@@ -26,6 +27,11 @@
 #   RB_CRASH_DOCKER         Docker-Binary (Default: docker)
 #   RB_CRASH_CONTAINER      beobachteter Container (Default: riftbreaker-dedicated)
 #   RB_CRASH_DIR            Zielverzeichnis der Bundles (Default: /opt/rbmods/crashes)
+#   RB_CRASH_ENV            Environment-Name fuer den Bundle-Pfad (Default: dev)
+#   RB_CRASH_REF            Build-Ref fuer meta.json + Bundle-Pfad (Default: leer;
+#                           Faellt zurueck auf den Image-Tag/git_sha). Kommt aus
+#                           der systemd-Unit (Rolle crash-collector) und ist
+#                           DERSELBE ref wie in die Binaries gebacken (#607).
 #   RB_CRASH_CRASHINFO      crash_info-Pfad IM Container
 #   RB_CRASH_CONTEXT_LINES  Zeilen für context.log (Default: 200)
 #   RB_CRASH_RETENTION      behaltene Bundles (Default: 20)
@@ -38,7 +44,8 @@
 #                           `<dir von $0>/minidump_meta.py`). Fehlt er oder ist
 #                           der Dump kaputt -> neue Felder null, KEIN Abbruch.
 #   RB_CRASH_PYTHON         Python fuer meta.json + Parser (Default: python3)
-#   RB_CRASH_RBBRIDGE_DLL   Host-Pfad rbbridge.dll (Default: /opt/rbmods/rbtools/rbbridge.dll)
+#   RB_CRASH_RBBRIDGE_DLL   Host-Pfad rbbridge.dll (Default: /opt/rbmods/rbtools/rbbridge.dll,
+#                           nur manueller Fallback — die systemd-Unit setzt den per-env-Pfad)
 #   RB_CRASH_DLL            Host-Pfad Game-DLL (Default: /srv/rbgame/bin/riftbreaker_dll_win_release.dll)
 #
 # Aufruf: rbmods-crash-collector.sh [--once]
@@ -52,6 +59,17 @@ set -uo pipefail
 DOCKER="${RB_CRASH_DOCKER:-docker}"
 CONTAINER="${RB_CRASH_CONTAINER:-riftbreaker-dedicated}"
 CRASH_DIR="${RB_CRASH_DIR:-/opt/rbmods/crashes}"
+# Environment/Commit-Ref fuer den Bundle-Pfad (Issue #605): <env>/<ref>/<ts>-<uuid>.
+# ENV kommt aus der systemd-Unit (RB_CRASH_ENV), Default dev. REF wird in
+# collect_bundle gesetzt (vor dem ersten bundle_exists, damit Pfad/Idempotenz/
+# Retention denselben Stamm sehen): Vorrang hat RB_CRASH_REF (Build-Ref aus den
+# Binaries, Issue #607), sonst faellt er auf den Image-Tag (git_sha) zurueck.
+ENV="${RB_CRASH_ENV:-dev}"
+# Build-Ref (Issue #607): derselbe ref wie in die Binaries gebacken
+# (RBB_BUILD_REF -> RBBRIDGE_REF). Die systemd-Unit (Rolle crash-collector)
+# setzt ihn als RB_CRASH_REF. Leer = Fallback auf den Image-Tag (git_sha).
+BUILD_REF="${RB_CRASH_REF:-}"
+REF=""
 CRASHINFO="${RB_CRASH_CRASHINFO:-/data/.wine/drive_c/users/steamuser/Documents/The Riftbreaker/crash_info}"
 CONTEXT_LINES="${RB_CRASH_CONTEXT_LINES:-200}"
 RETENTION="${RB_CRASH_RETENTION:-20}"
@@ -66,7 +84,8 @@ SYMBOLIZE_BIN="${RB_CRASH_SYMBOLIZE_BIN:-/usr/local/bin/rbmods-crash-symbolize.s
 MARKER_RE="${RB_CRASH_MARKER_RE:-CRASH:|page fault}"
 # Modul-Bytes + sha256 (Issue #588): Host-Pfade der geladenen DLLs. Die
 # systemd-Unit setzt RB_CRASH_RBBRIDGE_DLL/RB_CRASH_DLL bereits (Rolle
-# crash-collector); Defaults identisch zur Symbolik (crash_symbolize.sh).
+# crash-collector, per-env); die Defaults darunter greifen nur bei manuellen
+# Einzel-Läufen ohne Unit und sind bewusst NICHT per-env (plain shell).
 RBBRIDGE_DLL="${RB_CRASH_RBBRIDGE_DLL:-/opt/rbmods/rbtools/rbbridge.dll}"
 GAME_DLL="${RB_CRASH_DLL:-/srv/rbgame/bin/riftbreaker_dll_win_release.dll}"
 
@@ -159,10 +178,20 @@ newest_uuid() {
   basename "$p" .dmp
 }
 
+# Bundle-Stammverzeichnis: nested <env>/<ref>, sonst flach (graceful bei leerem
+# ENV/REF — keine leeren Pfad-Segmente, Issue #605).
+bundle_root() {
+  if [ -n "$ENV" ] && [ -n "$REF" ]; then
+    printf '%s/%s/%s' "$CRASH_DIR" "$ENV" "$REF"
+  else
+    printf '%s' "$CRASH_DIR"
+  fi
+}
+
 # Bundle für diese uuid existiert schon? (Idempotenz: kein Doppel-Bundle)
 bundle_exists() {
   local uuid="$1" d
-  for d in "$CRASH_DIR"/*-"$uuid"; do
+  for d in "$(bundle_root)"/*-"$uuid"; do
     [ -d "$d" ] && return 0
   done
   return 1
@@ -170,14 +199,26 @@ bundle_exists() {
 
 # --- Retention ----------------------------------------------------------------
 retention_prune() {
-  local dirs=() n
+  local dirs=() n depth
+  if [ -n "$ENV" ] && [ -n "$REF" ]; then
+    depth=3
+  else
+    depth=1
+  fi
   # Portabel: kein `find -printf` (GNU-only) — BSD/macOS-find kennt es nicht
   # und lieferte dort eine leere Liste (Retention griff nicht, Test rot).
-  mapfile -t dirs < <(find "$CRASH_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sed 's|.*/||' | sort)
+  # Bundle-leaf (<ts>-<uuid>) ist der chronologische Sortierschluessel; basename
+  # voranstellen, sortieren, vollen Pfad fuer `rm` behalten (nested: mehrere
+  # env/ref-Aeste unter CRASH_DIR).
+  mapfile -t dirs < <(
+    find "$CRASH_DIR" -mindepth "$depth" -maxdepth "$depth" -type d 2>/dev/null \
+      | while IFS= read -r d; do printf '%s\t%s\n' "$(basename "$d")" "$d"; done \
+      | sort | cut -f2-
+  )
   n=${#dirs[@]}
   while [ "$n" -gt "$RETENTION" ]; do
-    log "Retention: entferne altes Bundle ${dirs[0]}"
-    rm -rf "${CRASH_DIR:?}/${dirs[0]}"
+    log "Retention: entferne altes Bundle $(basename "${dirs[0]}")"
+    rm -rf "${dirs[0]}"
     dirs=("${dirs[@]:1}")
     n=$((n - 1))
   done
@@ -205,6 +246,8 @@ write_meta() {
     RB_META_CONTAINER="$CONTAINER" \
     RB_META_IMAGE="$IMAGE" \
     RB_META_GIT_SHA="$GIT_SHA" \
+    RB_META_ENV="$ENV" \
+    RB_META_REF="$REF" \
     RB_META_STARTED_AT="$STARTED_AT" \
     RB_META_MODULE_BASE="$MODULE_BASE" \
     RB_META_MODULE_SIZE="$MODULE_SIZE" \
@@ -305,6 +348,8 @@ meta = {
     "container": env("RB_META_CONTAINER", ""),
     "image": env("RB_META_IMAGE", "") or None,
     "git_sha": env("RB_META_GIT_SHA", "") or None,
+    "env": env("RB_META_ENV", "") or None,
+    "ref": env("RB_META_REF", "") or None,
     "container_started_at": started or None,
     "container_uptime_seconds": uptime,
     "module_base": module_base,
@@ -512,6 +557,15 @@ collect_bundle() {
   local marker_line="$1"
   local uuid="" waited=0 marker
 
+  # ENV + REF vor dem ersten bundle_exists setzen, damit Idempotenz-Check,
+  # Bundle-Pfad und Retention denselben Stamm sehen.
+  IMAGE="$(container_image)"
+  STARTED_AT="$(container_started_at)"
+  GIT_SHA="${IMAGE##*:}"
+  if [ "$GIT_SHA" = "$IMAGE" ]; then GIT_SHA=""; fi
+  # Issue #607: RB_CRASH_REF (Build-Ref) hat Vorrang, sonst Image-Tag (git_sha).
+  REF="${BUILD_REF:-$GIT_SHA}"
+
   while [ "$waited" -lt "$WAIT_SECS" ]; do
     uuid="$(newest_uuid || true)"
     if [ -n "$uuid" ] && ! bundle_exists "$uuid"; then break; fi
@@ -532,7 +586,7 @@ collect_bundle() {
   local ts bundle_name bundle
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
   bundle_name="${ts}-${uuid}"
-  bundle="${CRASH_DIR}/${bundle_name}"
+  bundle="$(bundle_root)/${bundle_name}"
   mkdir -p "$bundle" || { log "FEHLER: ${bundle} nicht anlegbar"; return 1; }
 
   local ext files=""
@@ -550,11 +604,6 @@ collect_bundle() {
   files="${files}${MODULE_FILES}"
 
   ring_dump >"${bundle}/context.log"
-
-  IMAGE="$(container_image)"
-  STARTED_AT="$(container_started_at)"
-  GIT_SHA="${IMAGE##*:}"
-  if [ "$GIT_SHA" = "$IMAGE" ]; then GIT_SHA=""; fi
 
   parse_context "${bundle}/context.log"
   DUMP_JSON="$(minidump_meta_json "${bundle}/${uuid}.dmp")"
@@ -583,7 +632,7 @@ watch_stream() {
 }
 
 mkdir -p "$CRASH_DIR" 2>/dev/null || true
-log "start: container=${CONTAINER} dir=${CRASH_DIR} retention=${RETENTION} markers=${MARKER_RE}"
+log "start: container=${CONTAINER} env=${ENV} dir=${CRASH_DIR} retention=${RETENTION} markers=${MARKER_RE}"
 
 while true; do
   watch_stream

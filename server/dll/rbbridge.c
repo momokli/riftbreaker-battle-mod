@@ -55,6 +55,12 @@
  *      (-lws2_32 ist nicht noetig: die Named Pipe nutzt nur Win32-API.)
  */
 
+/* Build-Identitaet (Issue #499): ref (Commit/Tag) wird beim Build per
+ * -DRBBRIDGE_REF="..." gesetzt; Default "unknown". */
+#ifndef RBBRIDGE_REF
+#define RBBRIDGE_REF "unknown"
+#endif
+
 #ifdef RBBRIDGE_HOSTTEST
 /*
  * Host-Test-Build (tests/rbbridge-hosttest, KEIN Windows noetig):
@@ -1285,225 +1291,6 @@ static const unsigned char RBBRIDGE_DIFF_DEC_SIG[] = {
 
 #define RBBRIDGE_RVA_CAMPAIGNSERVICE_VFTABLE 0x2e9c340u /* ??_7CampaignService@Riftbreaker@@6B@ */
 
-/* ================================================================== */
-/* HQ-Health (Issue #511, Fix #573): hq_hp/hq_hp_max/hq_dead nativ     */
-/*                                                                     */
-/* Kette (Build 2.0.58485, PDB + Disasm planet 2026-09-15):            */
-/*   Exor::FindService::FindEntityByName(char const*) -> uint32        */
-/*       vftable ??_7FindService@Exor@@6B@  RVA 0x2E94C98              */
-/*       RVA 0x1C0DF60; Rueckgabe 0xFFFFFFFF = INVALID_ID              */
-/*   Riftbreaker::HealthService::GetHealth(uint32) -> float            */
-/*       vftable ??_7HealthService@Riftbreaker@@6B@  RVA 0x2E95760     */
-/*       RVA 0xF9BBB0; liest HealthComponent[+0x00] (movss xmm0,[rax]) */
-/*   Riftbreaker::HealthService::GetMaxHealth(uint32) -> float         */
-/*       RVA 0xF9C360; liest HealthComponent[+0x04] (movss xmm0,[rax+4])*/
-/*                                                                     */
-/* #573 KORREKTUR gegenueber #525: Das HQ wird ueber seinen NAMEN       */
-/* aufgeloest (FindEntityByName), NICHT ueber den Typ. RE-Beleg         */
-/* (docs/research/dedicated-io-direct-reads.md 1):                      */
-/* FindEntityByType("headquarters") liefert die FALSCHE Entity bzw.     */
-/* INVALID_ID; die Spiel-Skripte nutzen FindEntityByName. Der falsche    */
-/* Typ-Treffer war die #511-Crash-Ursache: GetHealth bekam eine Entity   */
-/* ohne HealthComponent (ECS im Aufbau) -> Page-Fault in                  */
-/* Ecs::GetComponent. Mit der Namensaufloesung liefert ein noch nicht    */
-/* gebautes HQ INVALID_ID -> der Health-Read laeuft dann GAR NICHT       */
-/* (defensives Gate, siehe hq_health_from_calls).                        */
-/*                                                                       */
-/* Alle drei Funktionsadressen per AOB-Signatur (KEINE feste Adresse).    */
-/* FindEntityByName ist ohne Displacement NICHT eindeutig: die drei       */
-/* FindEntityBy*-Geschwister teilen den Prolog und unterscheiden sich     */
-/* nur im rel32 des Hash-Helfers - die Signatur reicht daher bis in den    */
-/* divergenten Body (ab +0x84) und ist gegen die Geschwister verifiziert  */
-/* (genau 1x im Abbild, planet 2026-09-16).                               */
-/*                                                                       */
-/* GetHealth/GetMaxHealth teilen sich die ersten 64 Prolog-Bytes          */
-/* (identischer ECS-Lookup); die Signatur ist daher bis NACH die          */
-/* disambiguierende `movss`-Instruktion gezogen (F3 0F 10 00 vs           */
-/* F3 0F 10 40 04).                                                       */
-/*                                                                       */
-/* Steht AUSSERHALB des #ifndef-RBBRIDGE_HOSTTEST-Blocks -> Signatur +    */
-/* Core-Logik sind direkt host-testbar (#243/#394).                       */
-/* ================================================================== */
-
-#define RBBRIDGE_HQ_INVALID_ENTITY 0xFFFFFFFFu
-
-/* vftables nur zur Instanz-Aufloesung (PDB-abgeleitet, Build 2.0.58485). */
-#define RBBRIDGE_HQ_RVA_FIND_VFTABLE   0x2E94C98u
-#define RBBRIDGE_HQ_RVA_HEALTH_VFTABLE 0x2E95760u
-
-/* Exor::FindService::FindEntityByName(char const*)  (RVA 0x1C0DF60)
- * Einzige Signatur, die die drei FindEntityBy*-Geschwister trennt (sie
- * sind im Prolog byte-identisch) -> Body ab +0x84 in die Signatur. */
-static const unsigned char RBBRIDGE_HQ_FINDNAME_SIG[] = {
-    0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48,
-    0x83, 0xec, 0x40, 0x48, 0x8b, 0xfa, 0x33, 0xdb, 0x48, 0x8b, 0x71, 0x10,
-    0x48, 0x85, 0xd2, 0x74, 0x1d, 0x38, 0x1a, 0x74, 0x19, 0x48, 0x8d, 0x4a,
-    0x01, 0xe8, 0xa6, 0xa1, 0x67, 0xfe, 0x4c, 0x8d, 0x40, 0x01, 0x49, 0x83,
-    0xf8, 0xff, 0x0f, 0x84, 0xc8, 0x00, 0x00, 0x00, 0xeb, 0x03, 0x4c, 0x8b,
-    0xc3, 0x48, 0x85, 0xff, 0x75, 0x10, 0x4d, 0x85, 0xc0, 0x0f, 0x85, 0xb5,
-    0x00, 0x00, 0x00, 0xb9, 0xc5, 0x9d, 0x1c, 0x81, 0xeb, 0x22, 0xb9, 0xc5,
-    0x9d, 0x1c, 0x81, 0x48, 0x8b, 0xd3, 0x4d, 0x85, 0xc0, 0x74, 0x15, 0x90,
-    0x0f, 0xbe, 0x04, 0x17, 0x33, 0xc1, 0x69, 0xc8, 0x93, 0x01, 0x00, 0x01,
-    0x48, 0xff, 0xc2, 0x49, 0x3b, 0xd0, 0x72, 0xec, 0x89, 0x4c, 0x24, 0x50,
-    0x4c, 0x8d, 0x44, 0x24, 0x50, 0x48, 0x8d, 0x54, 0x24, 0x20, 0x48, 0x8d,
-    0x4e, 0x18, 0xe8, 0x15, 0xcc, 0x67, 0xfe, 0x48, 0x8b, 0x54, 0x24, 0x20,
-    0x48, 0x85, 0xd2, 0x74, 0x2e, 0x48, 0x83, 0xc2,
-};
-static const unsigned char RBBRIDGE_HQ_FINDNAME_SIG_MASK[] = {
-    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff, 0xff,
-    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00,
-    0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff, 0xff,
-    0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-    0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0x00, 0xff, 0xff,
-    0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00,
-    0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff,
-    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff,
-    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff, 0xff, 0xff,
-    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-    0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff,
-    0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff, 0xff,
-};
-
-/* HealthService::GetHealth(uint32) -> float  (RVA 0xF9BBB0)
- *   ...  ECS-Lookup (identisch zu GetMaxHealth) ...
- *   48 85 C0                 test rax,rax
- *   74 0F                    je   <fallback>
- *   F3 0F 10 00              movss xmm0,[rax]     ; HealthComponent+0x00 */
-static const unsigned char RBBRIDGE_HQ_GETHEALTH_SIG[] = {
-    0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x20,
-    0x48, 0x8B, 0x59, 0x08, 0x8B, 0xFA, 0x66, 0xC7, 0x44, 0x24,
-    0x34, 0x01, 0x01, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00,
-    0x00, 0x48, 0x8B, 0x44, 0x24, 0x30, 0x48, 0x8D, 0x4B, 0x30,
-    0x48, 0x89, 0x44, 0x24, 0x30, 0xE8, 0x00, 0x00, 0x00, 0x00,
-    0x4C, 0x8B, 0xC0, 0x4C, 0x8D, 0x4C, 0x24, 0x30, 0x8B, 0xD7,
-    0x48, 0x8D, 0x4B, 0x30, 0xE8, 0x00, 0x00, 0x00, 0x00, 0x48,
-    0x85, 0xC0, 0x74, 0x00, 0xF3, 0x0F, 0x10, 0x00
-};
-static const unsigned char RBBRIDGE_HQ_GETHEALTH_SIG_MASK[] = {
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00,
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF,
-    0xFF, 0xFF, 0xFF, 0x00, 0xFF, 0xFF, 0xFF, 0xFF
-};
-
-/* HealthService::GetMaxHealth(uint32) -> float  (RVA 0xF9C360)
- *   nur das disambiguierende Tail unterscheidet sich von GetHealth:
- *   74 10                    je   <fallback>
- *   F3 0F 10 40 04           movss xmm0,[rax+4]   ; HealthComponent+0x04 */
-static const unsigned char RBBRIDGE_HQ_GETMAXHEALTH_SIG[] = {
-    0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x20,
-    0x48, 0x8B, 0x59, 0x08, 0x8B, 0xFA, 0x66, 0xC7, 0x44, 0x24,
-    0x34, 0x01, 0x01, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00,
-    0x00, 0x48, 0x8B, 0x44, 0x24, 0x30, 0x48, 0x8D, 0x4B, 0x30,
-    0x48, 0x89, 0x44, 0x24, 0x30, 0xE8, 0x00, 0x00, 0x00, 0x00,
-    0x4C, 0x8B, 0xC0, 0x4C, 0x8D, 0x4C, 0x24, 0x30, 0x8B, 0xD7,
-    0x48, 0x8D, 0x4B, 0x30, 0xE8, 0x00, 0x00, 0x00, 0x00, 0x48,
-    0x85, 0xC0, 0x74, 0x00, 0xF3, 0x0F, 0x10, 0x40, 0x04
-};
-static const unsigned char RBBRIDGE_HQ_GETMAXHEALTH_SIG_MASK[] = {
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00,
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF,
-    0xFF, 0xFF, 0xFF, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
-};
-
-/* Aufrufkonvention der beiden Service-Methoden (MSVC x64): this=RCX,
- * EntityId=EDX, float-Rueckgabe in XMM0. Im Host-Test ist __fastcall ein
- * No-Op-Makro (der Host-CC nutzt die SysV/ABI-Regeln des Testrechners). */
-#ifdef RBBRIDGE_HOSTTEST
-typedef uint32_t (*hq_find_entity_fn)(void *self, const char *name);
-typedef float (*hq_health_fn)(void *self, uint32_t entity);
-#else
-typedef uint32_t (__fastcall *hq_find_entity_fn)(void *self,
-                                                 const char *name);
-typedef float (__fastcall *hq_health_fn)(void *self, uint32_t entity);
-#endif
-
-/* #511: Zustand fuer die `dead`-Semantik (Session-Latch).
- *
- * Die Engine kann "HQ zerstoert" auf ZWEI Wegen abbilden:
- *   (a) HealthComponent hp <= 0  -> `dead` direkt aus dem Live-Wert,
- *   (b) Entity verschwindet (FindEntityByName -> INVALID_ID).
- * Wird nur (a) gewertet, kann `hq_dead` im Fall (b) NIE true werden (der
- * Read liefert dann `null`). Deshalb: eine Session, die das HQ schon mit
- * hp > 0 gesehen hat, wertet ein danach verschwundenes HQ als zerstoert.
- * Vor dem ersten HQ-Leben bleibt es `null` (ein noch nicht geladenes HQ ist
- * nicht "tot"). Die Entity taucht nach Map-/Welt-Reload wieder auf -> der
- * Latch heilt sich selbst (dead faellt auf false zurueck).
- *
- * Das ist eine INTERFACE-Konvention (Review PR #525, Finding 4), KEIN
- * Engine-Beweis: welche der beiden Abbildungen das Spiel nutzt, klaert der
- * Player-Test (offener Punkt, Issue #573/#511). */
-typedef struct {
-    int   seen_alive;  /* HQ lief in dieser Session schon mit hp > 0 */
-    float last_hp_max; /* letzter bekannter hp_max (fuer den Todesfall)  */
-} hq_dead_state_t;
-
-/* Reine HQ-Logik ohne Win32/Spielprozess -> host-testbar (tests/rbbridge-
- * hosttest). Defensives Gate (#573):
- *   1. Entity per NAMEN aufloesen; INVALID_ID (HQ nicht gebaut) -> kein
- *      Game-Call, Rueckgabe 0 (Aufrufer emittiert null).
- *   2. Erst dann GetHealth/GetMaxHealth aufrufen (ESA: die ECS-Zugriffe des
- *      Spiels laufen ausschliesslich mit gueltiger HQ-Entity).
- *   3. "Keine Component"-Erkennung: hp <= 0 UND hp_max <= 0 (ein echtes HQ
- *      hat hp_max > 0) -> nicht verfuegbar (0), KEIN falsches `dead`.
- * Die Todgewichtung ist `hp <= 0` plus der Entity-Verschwinde-Fall aus dem
- * Session-Latch (`dead_state`) - keine Re-Semantisierung.
- * Rueckgabe: 1 = gelesen (out gesetzt), 0 = nicht verfuegbar - niemals
- * Crash, die Aufrufer emittieren dann `null`. */
-static int hq_health_from_calls(void *find_svc, void *health_svc,
-                                hq_find_entity_fn find_fn,
-                                hq_health_fn get_fn, hq_health_fn getmax_fn,
-                                hq_dead_state_t *dead_state,
-                                float *hp, float *hp_max, int *dead)
-{
-    if (!find_svc || !health_svc || !find_fn || !get_fn || !getmax_fn)
-        return 0;
-
-    uint32_t entity = find_fn(find_svc, "headquarters");
-    if (entity == RBBRIDGE_HQ_INVALID_ENTITY) {
-        /* Entity weg: zerstoert NUR mit HQ-Vorgeschichte dieser Session. */
-        if (!dead_state || !dead_state->seen_alive)
-            return 0;
-        if (hp)
-            *hp = 0.0f;
-        if (hp_max)
-            *hp_max = dead_state->last_hp_max;
-        if (dead)
-            *dead = 1;
-        return 1;
-    }
-
-    float h = get_fn(health_svc, entity);
-    float m = getmax_fn(health_svc, entity);
-    /* #573: Health-Component (noch) nicht vorhanden -> GetHealth/GetMax
-     * liefern 0/0. Nicht als "tot" fehldeuten. */
-    if (h <= 0.0f && m <= 0.0f)
-        return 0;
-    if (dead_state) {
-        dead_state->last_hp_max = m;
-        if (h > 0.0f)
-            dead_state->seen_alive = 1;
-    }
-    if (hp)
-        *hp = h;
-    if (hp_max)
-        *hp_max = m;
-    if (dead)
-        *dead = (h <= 0.0f);
-    return 1;
-}
-
-
 /* ------------------------------------------------------------------ */
 /* #476: Vanilla-Naturwellen "aus" — DifficultyService-Schalter        */
 /*                                                                    */
@@ -2316,8 +2103,12 @@ static void *resolve_console_instance(const unsigned char *vftable)
 {
     uint64_t needle = (uint64_t)(uintptr_t)vftable;
     int hits = 0;
+    int regions = 0;
     void *instance = NULL;
     uintptr_t addr = 0;
+
+    dbg("resolve_console_service: scan start (needle=0x%llx)",
+        (unsigned long long)needle);
 
     for (;;) {
         MEMORY_BASIC_INFORMATION mi;
@@ -2330,6 +2121,10 @@ static void *resolve_console_instance(const unsigned char *vftable)
 
         if (!is_readable_region(&mi))
             continue;
+        regions++;
+        if ((regions & 0xFF) == 0)
+            dbg("resolve_console_service: scan progress "
+                "(regions=%d candidates=%d)", regions, hits);
 
         const uint64_t *q = (const uint64_t *)mi.BaseAddress;
         size_t nq = mi.RegionSize / sizeof(uint64_t); /* BaseAddress ist
@@ -2343,6 +2138,8 @@ static void *resolve_console_instance(const unsigned char *vftable)
                 instance = (void *)&q[i]; /* erster plausibler Kandidat */
         }
     }
+    dbg("resolve_console_service: done (regions=%d candidates=%d)",
+        regions, hits);
     dbg("resolve_console_instance: vftable=%p hits=%d instance=%p",
         (void *)vftable, hits, instance);
     return instance;
@@ -2556,35 +2353,6 @@ static const void *resolve_db_getstring_fn(const unsigned char *base,
                                          RBBRIDGE_DB_GETSTRING_SIG,
                                          RBBRIDGE_DB_GETSTRING_SIG_MASK,
                                          sizeof(RBBRIDGE_DB_GETSTRING_SIG));
-}
-
-/* #573/#511: HQ-Signaturen -> Zieladressen (AOB, KEINE feste Adresse).
- * Nicht gefunden -> NULL (Aufrufer emittiert dann null statt zu crashen). */
-static const void *resolve_hq_find_name_fn(const unsigned char *base,
-                                           size_t size)
-{
-    return (const void *)scan_text_first(base, size,
-                                         RBBRIDGE_HQ_FINDNAME_SIG,
-                                         RBBRIDGE_HQ_FINDNAME_SIG_MASK,
-                                         sizeof(RBBRIDGE_HQ_FINDNAME_SIG));
-}
-
-static const void *resolve_hq_gethealth_fn(const unsigned char *base,
-                                           size_t size)
-{
-    return (const void *)scan_text_first(base, size,
-                                         RBBRIDGE_HQ_GETHEALTH_SIG,
-                                         RBBRIDGE_HQ_GETHEALTH_SIG_MASK,
-                                         sizeof(RBBRIDGE_HQ_GETHEALTH_SIG));
-}
-
-static const void *resolve_hq_getmaxhealth_fn(const unsigned char *base,
-                                              size_t size)
-{
-    return (const void *)scan_text_first(base, size,
-                                         RBBRIDGE_HQ_GETMAXHEALTH_SIG,
-                                         RBBRIDGE_HQ_GETMAXHEALTH_SIG_MASK,
-                                         sizeof(RBBRIDGE_HQ_GETMAXHEALTH_SIG));
 }
 
 /* Loest Exor::Database::Database() NICHT per Prolog-Scan auf (der Body ist
@@ -3178,9 +2946,14 @@ static int64_t read_resource_max(const unsigned char *base,
 /* Scannt den eigenen Adressraum (nur MEM_COMMIT + lesbar, kein PAGE_GUARD)
  * nach einem 8-Byte-alignierten QWORD == needle. Reine Leseoperation, kein
  * Aufruf; Rueckgabe = Fundstelle (erstes Vorkommen) oder NULL. */
-static unsigned char *scan_qword_instance(uint64_t needle)
+static unsigned char *scan_qword_instance(uint64_t needle, const char *name)
 {
     uintptr_t addr = 0;
+    int regions = 0;
+    int candidates = 0;
+
+    dbg("%s: scan start (needle=0x%llx)", name, (unsigned long long)needle);
+
     for (;;) {
         MEMORY_BASIC_INFORMATION mi;
         if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
@@ -3191,13 +2964,22 @@ static unsigned char *scan_qword_instance(uint64_t needle)
         addr = next;
         if (!is_readable_region(&mi))
             continue;
+        regions++;
+        if ((regions & 0xFF) == 0)
+            dbg("%s: scan progress (regions=%d candidates=%d)", name, regions,
+                candidates);
         const uint64_t *q = (const uint64_t *)mi.BaseAddress;
         size_t nq = mi.RegionSize / sizeof(uint64_t);
         for (size_t i = 0; i < nq; i++) {
-            if (q[i] == needle)
+            if (q[i] == needle) {
+                candidates++;
+                dbg("%s: done (regions=%d candidates=%d)", name, regions,
+                    candidates);
                 return (unsigned char *)&q[i];
+            }
         }
     }
+    dbg("%s: done (regions=%d candidates=%d)", name, regions, candidates);
     return NULL;
 }
 
@@ -3406,6 +3188,12 @@ static restart_cache_t g_restart;
 static unsigned char *restart_scan_instance(uintptr_t vtable)
 {
     uintptr_t addr = 0;
+    int regions = 0;
+    int candidates = 0;
+
+    dbg("resolve_restart: scan start (needle=0x%llx)",
+        (unsigned long long)vtable);
+
     for (;;) {
         MEMORY_BASIC_INFORMATION mi;
         if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
@@ -3416,13 +3204,23 @@ static unsigned char *restart_scan_instance(uintptr_t vtable)
         addr = next;
         if (!is_writable_region(&mi))
             continue;
+        regions++;
+        if ((regions & 0xFF) == 0)
+            dbg("resolve_restart: scan progress (regions=%d candidates=%d)",
+                regions, candidates);
         const uint64_t *q = (const uint64_t *)mi.BaseAddress;
         size_t nq = mi.RegionSize / sizeof(uint64_t);
         for (size_t i = 0; i < nq; i++) {
-            if (q[i] == (uint64_t)vtable)
+            if (q[i] == (uint64_t)vtable) {
+                candidates++;
+                dbg("resolve_restart: done (regions=%d candidates=%d)",
+                    regions, candidates);
                 return (unsigned char *)&q[i];
+            }
         }
     }
+    dbg("resolve_restart: done (regions=%d candidates=%d)", regions,
+        candidates);
     return NULL;
 }
 
@@ -3678,7 +3476,8 @@ static void dispatch_activate_mission_flow(HANDLE hPipe, const char *logic,
 
     /* MissionService-Instanz per vftable-Scan (RVA 0x2E962A0). */
     ms = scan_qword_instance(
-        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE));
+        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE),
+        "activate_mission_flow");
     if (!ms) {
         send_line(hPipe, "{\"event\":\"activate_mission_flow_result\","
                          "\"ok\":false,\"reason\":\"no_missionservice\"}");
@@ -3769,7 +3568,8 @@ static int mission_flow_active(const unsigned char *base, const char *flow)
     if (!flow || !flow[0])
         return 0;
     ms = scan_qword_instance(
-        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE));
+        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE),
+        "mission_flow_active");
     if (!ms)
         return 0;
 
@@ -3895,7 +3695,7 @@ static RBBRIDGE_NOINLINE int resolve_campaign_diff(const unsigned char *base,
         return 0;
 
     cs = scan_qword_instance((uint64_t)(uintptr_t)(
-        base + RBBRIDGE_RVA_CAMPAIGNSERVICE_VFTABLE));
+        base + RBBRIDGE_RVA_CAMPAIGNSERVICE_VFTABLE), "resolve_campaign_diff");
     if (!cs)
         return 0;
     if (!safe_read_u64(cs + td_get, &inner) || !inner)
@@ -4159,7 +3959,8 @@ static void dispatch_deactivate_mission_flow(HANDLE hPipe, const char *flow)
 
     /* MissionService-Instanz per vftable-Scan (RVA 0x2E962A0). */
     ms = scan_qword_instance(
-        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE));
+        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE),
+        "deactivate_mission_flow");
     if (!ms) {
         send_line(hPipe, "{\"event\":\"deactivate_mission_flow_result\","
                          "\"ok\":false,\"reason\":\"no_missionservice\"}");
@@ -4242,7 +4043,8 @@ static void dispatch_end_game(HANDLE hPipe, const char *result)
 
     /* MissionService-Instanz per vftable-Scan (RVA 0x2E962A0). */
     ms = scan_qword_instance(
-        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE));
+        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE),
+        "end_game");
     if (!ms) {
         send_line(hPipe, "{\"event\":\"end_game_result\",\"ok\":false,"
                          "\"reason\":\"no_missionservice\"}");
@@ -4373,7 +4175,7 @@ static RBBRIDGE_NOINLINE int resolve_diffsys(const unsigned char *base,
     vt = resolve_rtti_vftable(base, size, RBBRIDGE_DIFFSVC_RTTI);
     if (!vt)
         return 0;
-    svc = scan_qword_instance((uint64_t)(uintptr_t)vt);
+    svc = scan_qword_instance((uint64_t)(uintptr_t)vt, "resolve_diffsys");
     if (!svc)
         return 0;
     if (!safe_read_u64(svc + 8, &world) || !world)
@@ -4625,125 +4427,6 @@ static int read_player_count(const unsigned char *base, size_t size,
     return 1;
 }
 
-/* #573/#511: Service-Instanz ueber ihre vftable finden (QWORD-Scan).
- *
- * Bewusst STRENGER als der PlayerService-Scan in get_state (der naiv den
- * ersten Treffer nimmt): eine vftable-Adresse kann auch anderswo als
- * QWORD-Wert liegen (z. B. Type-Registry-Eintrag oder ein gecachter
- * Zeiger). Ein falscher "Instanz"-Zeiger fuehrt beim anschliessenden
- * Game-Call zu einem Page-Fault. Deshalb:
- *   - nur MEM_PRIVATE (Heap) - Image-/Registry-Felder fallen weg,
- *   - nur Kandidaten, deren Folgefeld (+0x08, der World*-Slot der Services)
- *     lesbar und != 0 ist,
- *   - genau EIN solcher Kandidat; 0 oder >1 -> NULL (lieber null als raten).
- * Reine Lese-Operation, kein Spiel-Call. NULL = nicht gefunden/mehrdeutig. */
-static void *resolve_hq_service(const unsigned char *base,
-                                uint32_t vftable_rva)
-{
-    const uint64_t needle = (uint64_t)(uintptr_t)(base + vftable_rva);
-    uintptr_t addr = 0;
-    void *found = NULL;
-    int ncand = 0;
-
-    for (;;) {
-        MEMORY_BASIC_INFORMATION mi;
-        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
-            break;
-        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
-        if (next <= addr)
-            break;
-        addr = next;
-        if (!is_readable_region(&mi) || mi.Type != MEM_PRIVATE)
-            continue;
-        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
-        size_t nq = mi.RegionSize / sizeof(uint64_t);
-        for (size_t i = 0; i < nq; i++) {
-            if (q[i] != needle)
-                continue;
-            uint64_t world = 0;
-            if (!safe_read_u64((const unsigned char *)&q[i] + 8, &world) ||
-                world == 0)
-                continue;
-            ncand++;
-            if (!found)
-                found = (void *)&q[i];
-        }
-    }
-
-    if (ncand != 1) {
-        dbg("resolve_hq_service: rva=%08lx Kandidaten=%d -> %s",
-            (unsigned long)vftable_rva, ncand,
-            ncand == 1 ? "ok" : "NULL (nicht eindeutig)");
-        return NULL;
-    }
-    return found;
-}
-
-/* #573/#511: Rescan-Intervall des Instanz-Scans (Negativ-Cache). Bewusst
- * endlich: 0 waere ein voller Scan pro get_state, "nie wieder" wuerde einen
- * spaeteren Map-/Re-Init-Fall verpassen. */
-#define RBBRIDGE_HQ_SVC_RESCAN_MS 5000ull
-
-/* #573/#511: HQ-Health nativ (FindEntityByName -> Entity "headquarters" ->
- * HealthComponent[+0x00]/[+0x04]). Funktionsadressen per AOB, Instanzen per
- * vftable-Scan; beides wird gecacht (wie die uebrigen Service-Aufloesungen).
- * Rueckgabe 1 = hp/hp_max/dead gesetzt, 0 = (noch) nicht aufloesbar - kein
- * Crash, kein Game-Call bei unvollstaendiger Aufloesung. */
-static int read_hq_health(const unsigned char *base, size_t size, float *hp,
-                          float *hp_max, int *dead)
-{
-    /* Thread-Modell (#378/#388): Diese Statics sind UNGESCHUETZT und werden
-     * ausschliesslich vom Pipe-Server-Thread beruehrt (dispatch_get_state
-     * laeuft dort; kein lua_*-Call, kein Main-Thread). */
-    static const void *find_fn = NULL;
-    static const void *get_fn = NULL;
-    static const void *getmax_fn = NULL;
-    static void *find_svc = NULL;
-    static void *health_svc = NULL;
-    static hq_dead_state_t dead_state = {0, 0.0f};
-    /* Negativ-Cache: Wann wurde zuletzt (erfolglos) gescannt? */
-    static unsigned long long svc_last_scan_ms = 0;
-    static int svc_scanned = 0;
-
-    if (!find_fn)
-        find_fn = resolve_hq_find_name_fn(base, size);
-    if (!get_fn)
-        get_fn = resolve_hq_gethealth_fn(base, size);
-    if (!getmax_fn)
-        getmax_fn = resolve_hq_getmaxhealth_fn(base, size);
-    if (!find_fn || !get_fn || !getmax_fn)
-        return 0;
-
-    if (!find_svc || !health_svc) {
-        /* Ein voller QWORD-Scan ueber alle MEM_PRIVATE-Regionen ist teuer und
-         * liefe sonst bei JEDEM get_state (2x), solange die Services nicht
-         * eindeutig aufloesbar sind. Nach einem Fehlversuch erst nach
-         * RBBRIDGE_HQ_SVC_RESCAN_MS erneut scannen -> Map-/Re-Init-Faelle
-         * loesen sich ohne Neustart, ein Permanent-Null wird vermieden. */
-        unsigned long long now = GetTickCount64();
-        if (svc_scanned &&
-            (now - svc_last_scan_ms) < RBBRIDGE_HQ_SVC_RESCAN_MS)
-            return 0;
-        svc_scanned = 1;
-        svc_last_scan_ms = now;
-        find_svc = resolve_hq_service(base, RBBRIDGE_HQ_RVA_FIND_VFTABLE);
-        health_svc =
-            resolve_hq_service(base, RBBRIDGE_HQ_RVA_HEALTH_VFTABLE);
-        if (!find_svc || !health_svc) {
-            /* Teil-Ergebnis NICHT puffern: beide gehoeren zusammen. */
-            find_svc = NULL;
-            health_svc = NULL;
-            return 0;
-        }
-    }
-
-    return hq_health_from_calls(find_svc, health_svc,
-                                (hq_find_entity_fn)find_fn,
-                                (hq_health_fn)get_fn,
-                                (hq_health_fn)getmax_fn, &dead_state,
-                                hp, hp_max, dead);
-}
-
 static void dispatch_get_state(HANDLE hPipe)
 {
     const unsigned char *base = NULL;
@@ -4781,15 +4464,6 @@ static void dispatch_get_state(HANDLE hPipe)
         else
             snprintf(diff_field, sizeof(diff_field), "null");
     }
-
-    /* HQ-Health (Read #573/#511, nativ C++): Default null. Der Game-Call
-     * laeuft erst nach erfolgreicher Entity-/Service-Aufloesung - vorher
-     * wird KEINE Game-Funktion gerufen (#511: ein HQ-Read ohne gebautes HQ
-     * page-faultete den Dedi). Gleiche Klasse wie #378/#479: Game-Zugriffe
-     * erst, wenn Entity + Komponente wirklich da sind. */
-    char hq_field[96];
-    snprintf(hq_field, sizeof(hq_field),
-             "\"hq_hp\":null,\"hq_hp_max\":null,\"hq_dead\":null");
 
     /* Mission-Ende nativ (Read #519): Ergebnis des letzten end_game-
      * Aufrufs (Win/Lose) als Readback der Full-Chain (#394). Haengt NICHT
@@ -4875,11 +4549,9 @@ static void dispatch_get_state(HANDLE hPipe)
                          "\"mission_flow_active\":%s,"
                          "\"mission_flow_payload\":%s,"
                          "\"creatures_base_difficulty\":%s,"
-                         "\"end_game\":%s,"
-                         "\"players\":%s,"
-                         "%s}",
+                         "\"end_game\":%s,\"players\":%s}",
                   flow_esc, flow_active ? "true" : "false", payload_field,
-                  diff_field, end_field, players_field, hq_field);
+                  diff_field, end_field, players_field);
         return;
     }
 
@@ -4892,11 +4564,9 @@ static void dispatch_get_state(HANDLE hPipe)
                          "\"mission_flow_active\":%s,"
                          "\"mission_flow_payload\":%s,"
                          "\"creatures_base_difficulty\":%s,"
-                         "\"end_game\":%s,"
-                         "\"players\":%s,"
-                         "%s}",
+                         "\"end_game\":%s,\"players\":%s}",
                   flow_esc, flow_active ? "true" : "false", payload_field,
-                  diff_field, end_field, players_field, hq_field);
+                  diff_field, end_field, players_field);
         return;
     }
 
@@ -4910,11 +4580,9 @@ static void dispatch_get_state(HANDLE hPipe)
                          "\"mission_flow_active\":%s,"
                          "\"mission_flow_payload\":%s,"
                          "\"creatures_base_difficulty\":%s,"
-                         "\"end_game\":%s,"
-                         "\"players\":%s,"
-                         "%s}",
+                         "\"end_game\":%s,\"players\":%s}",
                   flow_esc, flow_active ? "true" : "false", payload_field,
-                  diff_field, end_field, players_field, hq_field);
+                  diff_field, end_field, players_field);
         return;
     }
 
@@ -4981,22 +4649,6 @@ static void dispatch_get_state(HANDLE hPipe)
     int64_t ironium_max = read_resource_max(base, account,
                                             RBBRIDGE_HASH_IRONIUM);
 
-    /* HQ-Health (Read #573/#511): HQ ist geladen (Account da) -> jetzt der
-     * native C++-Read FindEntityByName -> Entity "headquarters" ->
-     * HealthComponent[+0x00]/[+0x04]. Nicht aufloesbar/kein HQ -> bleibt
-     * null (graceful, kein Crash). NaN/Inf -> kein gueltiges JSON -> null. */
-    {
-        float hq_hp = 0.0f, hq_hp_max = 0.0f;
-        int hq_dead = 0;
-        if (read_hq_health(base, size, &hq_hp, &hq_hp_max, &hq_dead) &&
-            float_is_finite(hq_hp) && float_is_finite(hq_hp_max))
-            snprintf(hq_field, sizeof(hq_field),
-                     "\"hq_hp\":%.2f,\"hq_hp_max\":%.2f,"
-                     "\"hq_dead\":%s",
-                     (double)hq_hp, (double)hq_hp_max,
-                     hq_dead ? "true" : "false");
-    }
-
     send_line(hPipe,
               "{\"event\":\"get_state_result\",\"ok\":true,"
               "\"carbonium\":%llu,\"carbonium_max\":%lld,"
@@ -5004,13 +4656,11 @@ static void dispatch_get_state(HANDLE hPipe)
               "\"mission_flow\":\"%s\",\"mission_flow_active\":%s,"
               "\"mission_flow_payload\":%s,"
               "\"creatures_base_difficulty\":%s,"
-              "\"end_game\":%s,"
-              "\"players\":%s,"
-              "%s}",
+              "\"end_game\":%s,\"players\":%s}",
               (unsigned long long)carbonium, (long long)carbonium_max,
               (unsigned long long)ironium, (long long)ironium_max,
               resources, flow_esc, flow_active ? "true" : "false",
-              payload_field, diff_field, end_field, players_field, hq_field);
+              payload_field, diff_field, end_field, players_field);
 }
 
 
@@ -5458,6 +5108,8 @@ int rbbridge_start(void)
 
     InitializeCriticalSection(&g_log_cs);
     g_stop = 0;
+
+    dbg("rbbridge_start: ref=%s", RBBRIDGE_REF);
 
     /* WICHTIG (DLL-Fall): Hier laeuft das ggf. im DllMain-Kontext
      * (Loader-Lock) - nie blockieren/kein LoadLibrary, wir starten nur

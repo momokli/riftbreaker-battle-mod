@@ -1,7 +1,8 @@
 ---
-# Defaults der Rolle host-hygiene (systemd-Timer, Issue #308).
-# Konservative Docker-Image-Hygiene auf planet: entfernt NUR dangling
-# (ungetaggte) Images — `docker image prune`, ausdrücklich KEIN `-a`.
+# Defaults der Rolle host-hygiene (systemd-Timer, Issue #308/#606).
+# Host-Hygiene auf planet: entfernt NUR dangling (ungetaggte) Docker-Images
+# — `docker image prune`, ausdrücklich KEIN `-a` — UND raeumt alte
+# rbtools-test-*-Verzeichnisse auf (Retention, s.u.).
 # Muster: systemd-Skript + *.service.j2 + *.timer.j2.
 host_hygiene_unit: rbmods-host-hygiene
 host_hygiene_bin: /usr/local/bin/rbmods-host-hygiene.sh
@@ -12,3 +13,8 @@ host_hygiene_oncalendar: weekly
 # Repo-Präfixe der Mod-Images für den Vorher/Nachher-Nachweis im Journal.
 # Diese getaggten Images dürfen sich durch den Prune nie ändern.
 host_hygiene_image_repos: [rb-dedicated, rb-headless-client]
+
+# rbtools test-* Retention (Issue #606): alte /opt/rbmods/rbtools/test-<run>-
+# Verzeichnisse (Boot-Test-Leak) aufraeumen — behalte die N neuesten (mtime).
+host_hygiene_rbtools_dir: /opt/rbmods/rbtools
+host_hygiene_rbtools_retention: 10

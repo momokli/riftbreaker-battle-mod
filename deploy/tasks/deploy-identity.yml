@@ -47,6 +47,41 @@
   when: rift_env == 'prod'
   tags: always
 
+# Build-Ref (Issue #607): DERSELBE ref wie in die Binaries gebacken
+# (scripts/build_ref.sh -> RBB_BUILD_REF: Tag-Name bei Tag-Push, sonst voller
+# Commit-SHA). prod = Tag-Deploy -> Tag-Name (exact-match, leer wenn der
+# Checkout nicht exakt auf einem Tag liegt), sonst voller Commit-SHA.
+- name: "Build-Ref — voller Commit-SHA ermitteln (Issue #607)"
+  command: git -c safe.directory=* -C {{ rift_deploy_checkout }} rev-parse HEAD
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  changed_when: false
+  register: rbbattle_full_sha
+  tags: always
+
+- name: "Build-Ref — Tag-Name (nur prod, exact-match, Issue #607)"
+  command: git -c safe.directory=* -C {{ rift_deploy_checkout }} describe --tags --exact-match HEAD
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  register: rbbattle_exact_tag
+  when: rift_env == 'prod'
+  tags: always
+
+- name: "Build-Ref setzen (rift_build_ref, Issue #607)"
+  set_fact:
+    # Tag-Name hat Vorrang (prod), sonst voller Commit-SHA — exakt die
+    # RBB_BUILD_REF-Semantik. Leerer exact-match (kein Tag am Checkout) faellt
+    # auf den vollen SHA zurueck.
+    rift_build_ref: "{{ rbbattle_exact_tag_trim if rbbattle_exact_tag_trim | length > 0 else rbbattle_full_sha_trim }}"
+  vars:
+    rbbattle_exact_tag_trim: "{{ (rbbattle_exact_tag.stdout | default('')) | trim }}"
+    rbbattle_full_sha_trim: "{{ (rbbattle_full_sha.stdout | default('')) | trim }}"
+  tags: always
+
 - name: "Deploy-Ref zusammensetzen (rift_deploy_ref)"
   set_fact:
     rift_deploy_ref: >-

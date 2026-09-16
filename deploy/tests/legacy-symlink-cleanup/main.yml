@@ -1,0 +1,21 @@
+---
+# Hermetischer Selbsttest der Legacy-rbtools-Symlink-Cleanup (Issue #606).
+#
+# Läuft LOKAL (kein Host, kein Vault): bindet die ECHTE Task-Datei
+# deploy/tasks/legacy-rbtools-symlink-cleanup.yml ein und uebersteuert die
+# Paarliste auf ein Wegwerf-Verzeichnis. Kein Live-Eingriff.
+- name: "Legacy-rbtools-Symlink-Cleanup Selbsttest (Issue #606)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    legacy_rbtools_symlinks:
+      - {old: "{{ test_base }}/rbtools-drift", new: "{{ test_base }}/dev"}
+      - {old: "{{ test_base }}/rbtools-rift", new: "{{ test_base }}/prod"}
+      # Alt-Pfad als ECHTES Verzeichnis (kein Symlink) -> darf NICHT entfernt werden.
+      - {old: "{{ test_base }}/rbtools-not-a-link", new: "{{ test_base }}/prod2"}
+
+  tasks:
+    - name: "Legacy-rbtools-Symlink-Cleanup (echte Task-Datei)"
+      include_tasks: "{{ playbook_dir }}/../../tasks/legacy-rbtools-symlink-cleanup.yml"

@@ -48,6 +48,12 @@
 /* Laenger als 15 s sollte LoadLibraryW im Ziel nie brauchen. */
 #define INJECT_TIMEOUT_MS 15000
 
+/* Build-Identitaet (Issue #499): ref (Commit/Tag) wird beim Build per
+ * -DRBBRIDGE_REF="..." gesetzt; Default "unknown". */
+#ifndef RBBRIDGE_REF
+#define RBBRIDGE_REF "unknown"
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Hilfsfunktionen                                                     */
 /* ------------------------------------------------------------------ */
@@ -225,6 +231,7 @@ int main(void)
         printf("[-] CommandLineToArgvW fehlgeschlagen\n");
         return 2;
     }
+    printf("[injector] ref=%s\n", RBBRIDGE_REF);
 
     int rc = 2;
     if (argc != 3) {

@@ -41,6 +41,10 @@
           # prod traegt zusaetzlich den Git-Tag (Tag+SHA).
           - (rift_env != 'prod') or ('+' in rift_deploy_ref)
           - (rift_env != 'prod') or (deploy_image_tag in rift_deploy_ref)
+          # Build-Ref (Issue #607): prod = exakter Tag (KEIN +sha), sonst voller
+          # Commit-SHA — exakt die RBB_BUILD_REF-Semantik.
+          - (rift_env != 'prod') or (rift_build_ref == 'v9.9.9')
+          - (rift_env == 'prod') or (rift_build_ref | length == 40)
         fail_msg: >-
           Deploy-Identitaet verletzt den Vertrag (env={{ rift_env }},
           ref={{ rift_deploy_ref }}, identity={{ rift_deploy_identity }}).

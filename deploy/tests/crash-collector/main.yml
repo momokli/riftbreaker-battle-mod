@@ -20,6 +20,8 @@
     crash_collector_helper: /usr/local/bin/rbmods-minidump-meta.py
     crash_collector_container: riftbreaker-dedicated
     crash_collector_dir: /opt/rbmods/crashes
+    crash_collector_env: dev
+    crash_collector_ref: "{{ test_ref | default('8131ee0bd0c8') }}"
     crash_collector_crashinfo: "/data/.wine/drive_c/users/steamuser/Documents/The Riftbreaker/crash_info"
     crash_collector_context_lines: 200
     crash_collector_retention: "{{ test_retention | default(20) }}"
@@ -34,7 +36,8 @@
     crash_collector_llvm_symbolizer: /usr/lib/llvm-18/bin/llvm-symbolizer
     crash_collector_symbolize_tool: /usr/local/lib/rbmods/crash/symbolize.py
     crash_collector_symbolize_timeout: 60
-    crash_collector_rbbridge_dll: /opt/rbmods/rbtools/rbbridge.dll
+    rbtools_dir: /opt/rbmods/rbtools/dev
+    crash_collector_rbbridge_dll: "{{ rbtools_dir }}/rbbridge.dll"
     render_dir: "{{ lookup('env', 'RB_CRASH_RENDER_DIR') | default('/tmp/rb-crash-collector-render', true) }}"
 
   tasks:
@@ -59,6 +62,8 @@
         that:
           - ("ExecStart=" ~ crash_collector_bin) in unit
           - ("RB_CRASH_CONTAINER=" ~ crash_collector_container) in unit
+          - ("RB_CRASH_ENV=" ~ crash_collector_env) in unit
+          - ("RB_CRASH_REF=" ~ crash_collector_ref) in unit
           - ("RB_CRASH_DIR=" ~ crash_collector_dir) in unit
           - ("RB_CRASH_RETENTION=" ~ crash_collector_retention) in unit
           - ("RB_CRASH_SYMBOLIZE=" ~ (crash_collector_symbolize | bool | int)) in unit
