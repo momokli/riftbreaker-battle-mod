@@ -10,18 +10,60 @@
 # Rollen laufen (deploy/site.yml, deploy/test-deploy.yml):
 #   include_role: {name: riftbreaker-server, tasks_from: disk-preflight}
 #
-# Read-only (Fact ansible_mounts) → läuft im --check unverändert und ändert
-# nichts. Schwelle konfigurierbar über riftbreaker_disk_min_free_gb (Default 10)
-# und riftbreaker_disk_mount (Default "/"), siehe defaults/main.yml.
+# Read-only → läuft im --check unverändert und ändert nichts. Schwelle
+# konfigurierbar über riftbreaker_disk_min_free_gb (Default 10) und
+# riftbreaker_disk_mount (Default "/"), siehe defaults/main.yml.
+#
+# Fallback (Issue #586, Live-Befund WSL2): der `ansible_mounts`-Fact kommt auf
+# manchen Systemen (beobachtet unter WSL2/Ubuntu) leer zurück — kein Fehler,
+# einfach ein leeres Ergebnis. Ohne Fallback fiel das Gate dadurch still auf
+# "0 Bytes frei" zurück und blockierte den Deploy dauerhaft, UNABHÄNGIG vom
+# echten Speicherstand (0.0 GB blieb exakt gleich, egal wie viel frei gemacht
+# wurde) — "konnte nicht gemessen werden" sah aus wie "Platte voll". Deshalb
+# hier: erst ansible_mounts versuchen, bei leerem Treffer auf `df` zurückfallen
+# (portabel, jedes Linux/WSL2 hat coreutils), und nur wenn WIRKLICH beides
+# nichts liefert, laut mit einer eigenen Fehlermeldung abbrechen statt still 0
+# anzunehmen.
+
+- name: "Disk-Gate — freien Platz aus ansible_mounts lesen ({{ riftbreaker_disk_mount }}, #310)"
+  vars:
+    riftbreaker_disk_mount_match: >-
+      {{ (ansible_mounts | default([]))
+         | selectattr('mount', 'equalto', riftbreaker_disk_mount)
+         | list }}
+  set_fact:
+    riftbreaker_disk_avail_bytes: "{{ riftbreaker_disk_mount_match[0].size_available | int }}"
+  when: riftbreaker_disk_mount_match | length > 0
+
+- name: "Disk-Gate — Fallback ueber df, wenn ansible_mounts nichts liefert ({{ riftbreaker_disk_mount }}, #310/#586)"
+  command: "df --output=avail -B1 {{ riftbreaker_disk_mount }}"
+  register: riftbreaker_disk_df_fallback
+  changed_when: false
+  check_mode: false
+  when: riftbreaker_disk_avail_bytes is not defined
+
+- name: "Disk-Gate — df-Ausgabe als Bytes uebernehmen (#310/#586)"
+  set_fact:
+    riftbreaker_disk_avail_bytes: "{{ riftbreaker_disk_df_fallback.stdout_lines[1] | trim | int }}"
+  when:
+    - riftbreaker_disk_avail_bytes is not defined
+    - riftbreaker_disk_df_fallback is not skipped
+    - (riftbreaker_disk_df_fallback.stdout_lines | default([])) | length > 1
+
+- name: "Disk-Gate — Speicherplatz konnte nicht ermittelt werden (#310/#586)"
+  fail:
+    msg: >-
+      Speicherplatz auf {{ riftbreaker_disk_mount }} ({{ inventory_hostname }}) konnte
+      weder über ansible_mounts noch über `df` ermittelt werden — das Gate kann so
+      nicht sicher prüfen, ob genug Platz frei ist. Kein stiller Fallback auf
+      "genug Platz" (siehe Issue #586). Prüf von Hand (`df -h {{ riftbreaker_disk_mount }}`)
+      und überschreib bei Bedarf mit `-e riftbreaker_disk_min_free_gb=0`, wenn du
+      weißt, dass genug frei ist.
+  when: riftbreaker_disk_avail_bytes is not defined
 
 - name: "Disk-Gate — freien Platz auf {{ riftbreaker_disk_mount }} prüfen (vor Image-Build/Backup, #310)"
   vars:
     riftbreaker_disk_threshold_bytes: "{{ (riftbreaker_disk_min_free_gb | float) * 1073741824 }}"
-    riftbreaker_disk_avail_bytes: >-
-      {{ ((ansible_mounts | default([]))
-          | selectattr('mount', 'equalto', riftbreaker_disk_mount)
-          | map(attribute='size_available')
-          | list | first) | default(0) | int }}
   assert:
     that:
       - riftbreaker_disk_avail_bytes | float >= riftbreaker_disk_threshold_bytes | float
