@@ -17,8 +17,10 @@
 #   ansible-playbook -i deploy/local-inventory.yml deploy/local-deploy.yml \
 #     -e @deploy/local-vars.yml -K
 #
-# Tags: [content] mods-zip+game-content · [server] Image+rbtools+Server ·
-#       [tournament] Tournament-Server (optional, braucht systemd).
+# Tags: [content] mods-zip+game-content · [server] Image+rbtools+Server+
+#       server-control · [crash] Crash-Collector (Minidump/Trace/Log, ohne
+#       Symbolik) · [tournament] Tournament-Server (optional, braucht
+#       systemd -- wie crash-collector/server-control auch).
 
 - name: RIFT BATTLE — lokales Solo-Dev-Setup
   hosts: local
@@ -40,6 +42,15 @@
     - name: Image-Tag als Fact setzen
       set_fact:
         deploy_image_tag: "{{ rbbattle_local_sha.stdout | trim }}"
+      tags: always
+
+    # Review #566, Nitpick: ohne dies bleibt rift_deploy_ref auf dem
+    # Rollen-Default "unknown" (RBB_REF=unknown, rbbattle-local-unknown.zip).
+    # Kein voller deploy-identity.yml-Import (der asserted/prueft Dinge, die
+    # nur im geteilten Mehr-Umgebungs-Schema Sinn ergeben) -- nur der eine Wert.
+    - name: Deploy-Ref als Fact setzen
+      set_fact:
+        rift_deploy_ref: "{{ deploy_image_tag }}"
       tags: always
 
     # Derselbe Preflight wie site.yml/test-deploy.yml — VOR dem Image-Build.
@@ -64,5 +75,14 @@
       tags: [server]
     - role: riftbreaker-server
       tags: [server]
+    # Review #566, Blocker 2: Restart/Status/Logs/config.cfg ohne planet
+    # (Plane B, #424) -- laeuft standardmaessig mit (kein `never`), wie
+    # riftbreaker-server selbst.
+    - role: server-control
+      tags: [server]
+    # Review #566, Blocker 1: Minidump/Trace/Log sichern, essenziell fuer die
+    # Wave-/Difficulty-Spikes. Symbolisierung bewusst aus (local-vars.yml).
+    - role: crash-collector
+      tags: [crash]
     - role: tournament-server
       tags: [tournament, never]

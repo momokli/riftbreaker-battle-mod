@@ -55,3 +55,44 @@ tournament_unit: tournament-server-local
 tournament_port: 8081
 tournament_bridge_a_url: "http://127.0.0.1:{{ riftbreaker_bridge_port }}/exec"
 tournament_bridge_b_url: ""
+
+# --- Bridge-Port explizit (Review #566): sonst stiller Rollen-Default 9001 --
+riftbreaker_bridge_port: 9001
+
+# --- Deploy-Identitaet (Review #566, Nitpick) -------------------------------
+# Ohne deploy-identity.yml (bewusst nicht eingebunden, s. local-deploy.yml)
+# bliebe rift_deploy_ref auf dem Rollen-Default "unknown" -> RBB_REF=unknown,
+# rbbattle-local-unknown.zip. set_fact in local-deploy.yml pre_tasks setzt ihn
+# auf deploy_image_tag; hier nur als Doku-Anker, kein eigener Wert noetig.
+
+# --- Crash-Collector (Review #566, Blocker 1) -------------------------------
+# Rohe Bundles (Minidump+Trace+Log) IMMER sichern -- essenziell fuer die
+# Wave-/Difficulty-Spikes (#508/#513), die den Server regelmaessig crashen
+# lassen koennen. Symbolisierung bewusst AUS: braucht die volle PRIVATE PDB
+# (252 MB, planet-only -- SteamCMD liefert nur die oeffentliche Distributions-
+# DLL/PDB) UND einen distro-spezifischen llvm-symbolizer-Pfad (der Rollen-
+# Default /usr/lib/llvm-18/bin/llvm-symbolizer ist Debian-Paketlayout, auf
+# Fedora anders). Ohne die private PDB waere symbolisierter Output ohnehin
+# unzuverlaessig. Rohe Bundles bleiben trotzdem nuetzlich (Crash-Marker,
+# Zeitpunkt, Kontext-Log). Zum Nachruesten: crash_collector_symbolize: true
+# + crash_collector_llvm_symbolizer auf den echten lokalen Pfad setzen.
+crash_collector_dir: "{{ riftbreaker_local_root }}/crashes"
+crash_collector_rbbridge_dll: "{{ rbtools_dir }}/rbbridge.dll"
+crash_collector_symbolize: false
+
+# --- Server-Control / Plane B (Review #566, Blocker 2) ----------------------
+# Kein Vault lokal -- Token direkt (wie riftbreaker_server_password), nicht
+# ueber vault_server_control_token. Ohne Token bricht die Rolle fail-closed ab
+# (by design, Issue #424) -- daher zwingend gesetzt, nicht nur ein Kommentar.
+server_control_token: localdev
+server_control_install_dir: "{{ riftbreaker_local_root }}/server-control"
+
+# --- Ausserhalb von riftbreaker_local_root, bewusst (Review #566, Blocker 4) -
+# Build-Kontext (Docker-Build-Cache) und die SteamCMD-Installation sind kein
+# Projekt-/Instanz-Zustand, sondern Tooling-Cache -- bleiben an den ueblichen
+# Systempfaden, DAMIT ein `rm -rf riftbreaker_local_root` (Aufräumen, siehe
+# LOCAL_DEV.md) sie NICHT mitreisst (sonst laedt/baut der naechste Lauf beides
+# unnoetig neu). Wer auch diese unter das Wurzelverzeichnis legen will, kann
+# dedicated_server_context_dir/steamcmd_dir hier ueberschreiben.
+# dedicated_server_context_dir: /opt/rbmods/dedicated-server (Rollen-Default)
+# steamcmd_dir: /opt/steamcmd (Rollen-Default)
