@@ -172,6 +172,7 @@ Nur in Phase `running` (sonst 409). Der Send wird in die Queue der
 {"world": "A", "event": "wave_start", "built_value": 8200}
 {"world": "A", "event": "hq_hp", "hp": 70.0}
 {"world": "A", "event": "score_update", "score": 1240, "resources": {"iron": 320, "carbon": 80}, "wave": 4}
+{"world": "A", "event": "player_chat", "text": "gg wp"}
 {"world": "A", "event": "hq_dead"}
 ```
 
@@ -184,6 +185,9 @@ Nur in Phase `running` (sonst 409). Der Send wird in die Queue der
   Score, Ressourcen und aktuelle Wave einer Welt. Idempotent; der Feed wird nur
   bei Score-/Wave-Änderung belastet. Antwort
   `{"event": "score_update", "score": …, "wave": …, "changed": bool, "phase": …}`.
+- `player_chat` (Issue #549): Spieler-Chat aus dem Spiel, erzeugt vom Pipe-Server
+  (`rbbridge.c`, inline Hook auf `OnNetPlayerChatRequest`; Feld `text`).
+  Benachrichtigend/forward-only (kein State-Effekt). Wire-Spec: `server/protocol.md`.
 - `hq_dead` (Aliase `hq_destroy`/`hq_destroyed`, Issue #267): HQ-Tod aus dem
   echten Spiel (Mod-Log `event=hq_dead status=match_end hp=0`). Wird als
   `HqDestroyed` in den Referee gespeist; der Referee entscheidet genau EIN
