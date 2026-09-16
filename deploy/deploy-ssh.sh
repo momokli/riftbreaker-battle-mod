@@ -4,6 +4,7 @@
 #
 # $SSH_ORIGINAL_COMMAND = "<sha> <ref>" — vom Workflow übergeben. Der <ref>
 # bestimmt die Env UND den Deploy-Checkout:
+#   * refs/heads/staging   -> env=staging
 #   * refs/heads/* (main)  -> env=dev
 #   * refs/tags/v*         -> env=prod
 # Alles andere (z. B. refs/pull/*) ist ein Fehler (fail loud).
@@ -45,6 +46,7 @@ esac
 
 case "${ref:-}" in
   refs/tags/v*) env=prod ;;
+  refs/heads/staging) env=staging ;;
   refs/heads/*|"") env=dev ;;
   *) echo "invalid ref: ${ref} (erwartet refs/heads/* oder refs/tags/v*)" >&2; exit 1 ;;
 esac
