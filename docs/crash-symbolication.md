@@ -90,6 +90,17 @@ Symbolizer-Skript ganz, verhält sich der Collector wie vor #480.
 | `RB_CRASH_SYMBOLIZE_TOOL` | `/usr/local/lib/rbmods/crash/symbolize.py` |
 | `RB_CRASH_SYMBOLIZE_TIMEOUT` | `60` |
 
+## Zweites Modul (rbbridge.dll) — Issue #559
+
+Crashes in der injizierten DLL `rbbridge.dll` (mingw-Build, kein PDB) werden
+ebenfalls symbolisiert: `rbbridge.dll` wird mit `-g` (DWARF) gebaut (Codegen
+unverändert), und `symbolize.py` löst ein zweites Modul (`--dll2`/`--module2`)
+gegen eine zweite DLL auf. Frames des zweiten Moduls erscheinen in
+`symbolized.txt` als `0x<rva>\t[<modul>] <name>` annotiert. Der Pfad kommt über
+`RB_CRASH_RBBRIDGE_DLL` (Default `/opt/rbmods/rbtools/rbbridge.dll`); fehlt die
+Datei, symbolisiert der Collector weiterhin nur die Game-DLL (graceful, kein
+Hard-Fail).
+
 ## Betrieb
 
 Manuell (read-only, z. B. für Evidenz an bestehenden Bundles):

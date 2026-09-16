@@ -107,7 +107,13 @@ def parse_modules(data, streams):
         base = _u64(data, off)
         size = _u32(data, off + 8)
         name_rva = _u32(data, off + 20)
-        modules.append({"name": _utf16(data, name_rva), "base": base, "size": size})
+        name = _utf16(data, name_rva)
+        modules.append({
+            "name": name,
+            "basename": os.path.basename(name.replace("\\", "/")),
+            "base": base,
+            "size": size,
+        })
     return modules
 
 
@@ -204,18 +210,29 @@ def stack_ranges(threads, memory, fault_thread_id):
     return ranges
 
 
-def collect_frames(data, module, exc, threads, memory, max_frames):
-    base, size = module["base"], module["size"]
+def _module_for(modules, addr):
+    for m in modules:
+        if m["base"] <= addr < m["base"] + m["size"]:
+            return m
+    return None
+
+
+def collect_frames(data, modules, exc, threads, memory, max_frames):
+    """Frames aller gegebenen Module sammeln; jeder Frame kennt sein Modul."""
     frames, seen = [], set()
 
     def add(addr, kind):
-        if addr is None or not (base <= addr < base + size):
+        if addr is None:
             return
-        rva = addr - base
-        if rva in seen:
+        m = _module_for(modules, addr)
+        if m is None:
             return
-        seen.add(rva)
-        frames.append({"addr": addr, "rva": rva, "kind": kind})
+        rva = addr - m["base"]
+        key = (m["name"], rva)
+        if key in seen:
+            return
+        seen.add(key)
+        frames.append({"addr": addr, "rva": rva, "kind": kind, "module": m})
 
     add(exc.get("address"), "fault")
     add(exc.get("rip"), "context")
@@ -262,21 +279,30 @@ def symbolize_rva(symbolizer, dll, rva, timeout):
     raise ToolError("llvm-symbolizer lieferte keine Ausgabe fuer RVA 0x%x" % rva)
 
 
-def render(uuid, module, frames, names, fault_address, dll, symbolizer):
+def render(uuid, modules, frames, names, fault_address, dlls, symbolizer):
+    primary = modules[0]
     lines = [
         "# rbmods crash symbolizer (Issue #480)",
         "# uuid: %s" % uuid,
-        "# module: %s" % module["name"],
-        "# module_base: 0x%x" % module["base"],
-        "# module_size: %d" % module["size"],
+        "# module: %s" % primary["name"],
+        "# module_base: 0x%x" % primary["base"],
+        "# module_size: %d" % primary["size"],
         "# fault_address: %s" % (("0x%x" % fault_address) if fault_address else ""),
-        "# dll: %s" % dll,
+        "# dll: %s" % dlls.get(primary["name"], ""),
         "# tool: %s" % symbolizer,
-        "# frames: %d" % len(frames),
-        "",
     ]
+    for m in modules[1:]:
+        lines.append("# module2: %s" % m["name"])
+        lines.append("# module2_base: 0x%x" % m["base"])
+        lines.append("# module2_size: %d" % m["size"])
+        lines.append("# dll2: %s" % dlls.get(m["name"], ""))
+    lines.append("# frames: %d" % len(frames))
+    lines.append("")
     for frame, name in zip(frames, names):
-        lines.append("0x%x\t%s" % (frame["rva"], name))
+        if frame["module"]["name"] != primary["name"]:
+            lines.append("0x%x\t[%s] %s" % (frame["rva"], frame["module"]["basename"], name))
+        else:
+            lines.append("0x%x\t%s" % (frame["rva"], name))
     return "\n".join(lines) + "\n"
 
 
@@ -295,6 +321,8 @@ def main(argv=None):
     ap.add_argument("--symbolizer", default="llvm-symbolizer", help="llvm-symbolizer-Binary")
     ap.add_argument("--module", default="riftbreaker_dll_win_release.dll",
                     help="Basename/Substring des zu symbolisierenden Moduls")
+    ap.add_argument("--dll2", default="", help="Optional: zweites Modul (z.B. rbbridge.dll) fuer llvm-symbolizer --obj")
+    ap.add_argument("--module2", default="", help="Optional: Basename/Substring des zweiten Moduls")
     ap.add_argument("--out", default="-", help="Ausgabedatei ('-' = stdout)")
     ap.add_argument("--uuid", default="", help="Crash-uuid fuer den Header")
     ap.add_argument("--max-frames", type=int, default=32, help="maximale Frame-Anzahl")
@@ -320,11 +348,15 @@ def main(argv=None):
         uuid = uuid[:-4]
 
     try:
-        module = select_module(modules, args.module)
+        selected = [select_module(modules, args.module)]
+        if args.dll2 and args.module2:
+            second = select_module(modules, args.module2)
+            if second["name"] != selected[0]["name"]:
+                selected.append(second)
         exc = parse_exception(data, streams)
         threads = parse_threads(data, streams)
         memory = parse_memory(data, streams)
-        frames = collect_frames(data, module, exc, threads, memory, args.max_frames)
+        frames = collect_frames(data, selected, exc, threads, memory, args.max_frames)
     except DumpError as err:
         print("symbolize: Dump nicht parsebar: %s" % err, file=sys.stderr)
         return EXIT_DUMP_ERROR
@@ -332,19 +364,24 @@ def main(argv=None):
     fault_address = exc.get("address")
     if not frames:
         print("symbolize: kein Kandidat im Modulbereich (base=0x%x size=%d fault=%s)"
-              % (module["base"], module["size"], ("0x%x" % fault_address) if fault_address else "?"),
+              % (selected[0]["base"], selected[0]["size"], ("0x%x" % fault_address) if fault_address else "?"),
               file=sys.stderr)
         return EXIT_NO_FRAME
 
+    dlls = {selected[0]["name"]: args.dll}
+    if len(selected) > 1:
+        dlls[selected[1]["name"]] = args.dll2
+
     names = []
     for frame in frames:
+        dll = dlls.get(frame["module"]["name"], args.dll)
         try:
-            names.append(symbolize_rva(args.symbolizer, args.dll, frame["rva"], args.timeout))
+            names.append(symbolize_rva(args.symbolizer, dll, frame["rva"], args.timeout))
         except ToolError as err:
             print("symbolize: %s" % err, file=sys.stderr)
             return EXIT_TOOL_ERROR
 
-    text = render(uuid, module, frames, names, fault_address, args.dll, args.symbolizer)
+    text = render(uuid, selected, frames, names, fault_address, dlls, args.symbolizer)
     if args.out == "-":
         sys.stdout.write(text)
     else:

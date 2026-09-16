@@ -92,8 +92,9 @@ build_04_binaries() { # <builddir> — kompiliert die 4 Windows-x64-Binaries
     local bd="$1"
     if [ "$TOOLCHAIN" = "mingw" ]; then
         echo "[package_bausteine] 04: x86_64-w64-mingw32-gcc gefunden -> Build (Windows x64)"
+        # `-g` (DWARF) nur auf rbbridge.dll: collector-seitige Crash-Symbolik (#559).
         (cd "$bd" \
-            && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -shared -o rbbridge.dll "$SRC04/dll/rbbridge.c" \
+            && x86_64-w64-mingw32-gcc -O2 -g -Wall -Wextra -shared -o rbbridge.dll "$SRC04/dll/rbbridge.c" \
             && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe "$SRC04/injector/injector.c" \
             && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe "$SRC04/dll/rbbridge.c" \
             && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o pipe_bridge.exe "$SRC04/pipe-bridge/pipe_bridge.c" -lws2_32)
@@ -101,7 +102,7 @@ build_04_binaries() { # <builddir> — kompiliert die 4 Windows-x64-Binaries
         local zigc="${ZIG:-zig}"
         echo "[package_bausteine] 04: kein mingw-gcc, aber zig -> Build (zig cc, x86_64-windows-gnu)"
         (cd "$bd" \
-            && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -shared -o rbbridge.dll "$SRC04/dll/rbbridge.c" \
+            && "$zigc" cc -target x86_64-windows-gnu -O2 -g -Wall -Wextra -shared -o rbbridge.dll "$SRC04/dll/rbbridge.c" \
             && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -o injector.exe "$SRC04/injector/injector.c" \
             && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe "$SRC04/dll/rbbridge.c" \
             && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -o pipe_bridge.exe "$SRC04/pipe-bridge/pipe_bridge.c" -lws2_32)
