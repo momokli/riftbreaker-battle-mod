@@ -768,6 +768,32 @@
                             </div>
                         </div>
                     </fieldset>
+
+                    <fieldset class="q-groupbox" id="panel-round">
+                        <legend>Round Reset (native)</legend>
+                        <div class="flow-container">
+                            <div class="flow-readouts">
+                                <div class="flow-prop">
+                                    <span class="prop-label">pending flag</span>
+                                    <span id="round_restart_pending" class="prop-val">—</span>
+                                </div>
+                                <div class="flow-prop">
+                                    <span class="prop-label">flag offset</span>
+                                    <span id="round_flag_offset" class="prop-val">—</span>
+                                </div>
+                            </div>
+                            <div class="flow-action-row">
+                                <button id="rr_reset" class="btn-primary" title="Setzt das Spiel-eigene Pending-Flag (GameplayState+0x52A) -> der Game-Thread faehrt den vollen Map-Restart (neue Runde, Economy 0, HQ-Placement)" aria-label="Native round reset (map restart)">reset round</button>
+                                <button id="rr_status" title="Liest den nativen Reset-Pfad: Aufloesung + Pending-Flag (read-only)" aria-label="Refresh native round reset status">status</button>
+                            </div>
+                            <div class="flow-note">
+                                nativ (kein Lua): RequestRestart() setzt nur das
+                                Pending-Flag; den Map-Restart fuehrt der Gameplay-
+                                Update auf dem Game-Thread aus (Slot 0x90).
+                                Ersetzt das alte Lua-`rb_reset` (#516).
+                            </div>
+                        </div>
+                    </fieldset>
                 </div>
 
                 <div class="right-col">
@@ -1019,6 +1045,30 @@
                 };
                 $("nw_status").onclick = function () {
                     naturalWaves("status");
+                };
+
+                async function roundReset(op) {
+                    try {
+                        var r = await post("restart_map", { op: op });
+                        if (r && r.ok) {
+                            $("round_restart_pending").textContent =
+                                r.restart_pending ? "yes" : "no";
+                            $("round_flag_offset").textContent =
+                                r.flag_offset || "—";
+                            $("out").textContent = "";
+                        } else {
+                            $("out").textContent = JSON.stringify(r);
+                        }
+                    } catch (e) {
+                        $("out").textContent = "ERR " + e.message;
+                    }
+                }
+
+                $("rr_reset").onclick = function () {
+                    roundReset("reset");
+                };
+                $("rr_status").onclick = function () {
+                    roundReset("status");
                 };
 
                 refresh();
