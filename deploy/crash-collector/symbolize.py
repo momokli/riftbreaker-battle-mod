@@ -217,9 +217,48 @@ def _module_for(modules, addr):
     return None
 
 
-def collect_frames(data, modules, exc, threads, memory, max_frames):
-    """Frames aller gegebenen Module sammeln; jeder Frame kennt sein Modul."""
+def read_text_range(dll_path):
+    """PE-Section-Tabelle lesen -> (text_rva, text_size) der .text-Section.
+
+    Nur Code-Adressen sind ein verlaesslicher Stack-Frame; Daten (vftable,
+    Konstanten, __data_end__/__bss_end__) fallen in .rdata/.data und sollen
+    aus dem Stack-Scan rausgefiltert werden. Rueckgabe None = nicht lesbar
+    (dann wird nicht gefiltert, das alte Verhalten).
+    """
+    try:
+        with open(dll_path, "rb") as fh:
+            fh.seek(0x3C)
+            e_lfanew = struct.unpack("<I", fh.read(4))[0]
+            fh.seek(e_lfanew)
+            if fh.read(4) != b"PE\0\0":
+                return None
+            coff = fh.read(20)
+            nsections = struct.unpack_from("<H", coff, 2)[0]
+            opt_size = struct.unpack_from("<H", coff, 16)[0]
+            sec_off = e_lfanew + 4 + 20 + opt_size
+            for i in range(nsections):
+                fh.seek(sec_off + i * 40)
+                sec = fh.read(40)
+                name = sec[:8].rstrip(b"\0").decode("ascii", "replace")
+                if name == ".text":
+                    vsize = struct.unpack_from("<I", sec, 8)[0]
+                    vaddr = struct.unpack_from("<I", sec, 12)[0]
+                    return (vaddr, vsize)
+    except (OSError, struct.error):
+        return None
+    return None
+
+
+def collect_frames(data, modules, exc, threads, memory, max_frames, text_ranges=None, stack_scan=False):
+    """Frames aller gegebenen Module sammeln; jeder Frame kennt sein Modul.
+
+    Verlaesslich sind nur fault (Exception-Address) und context (RIP). Der
+    Stack-Scan ist heuristisch (fischt Daten-Pointer/vftable/Konstanten und
+    fremde Code-Adressen) und deshalb per Default AUS — nur auf expliziten
+    Wunsch (--stack-scan) werden .text-gefilterte Kandidaten ergaenzt.
+    """
     frames, seen = [], set()
+    text_ranges = text_ranges or {}
 
     def add(addr, kind):
         if addr is None:
@@ -228,6 +267,10 @@ def collect_frames(data, modules, exc, threads, memory, max_frames):
         if m is None:
             return
         rva = addr - m["base"]
+        if kind == "stack":
+            tr = text_ranges.get(m["name"])
+            if tr and not (tr[0] <= rva < tr[0] + tr[1]):
+                return
         key = (m["name"], rva)
         if key in seen:
             return
@@ -247,7 +290,7 @@ def collect_frames(data, modules, exc, threads, memory, max_frames):
                 break
 
     for start, count, rva in stack_ranges(threads, memory, exc.get("thread_id")):
-        if len(frames) >= max_frames:
+        if not stack_scan or len(frames) >= max_frames:
             break
         for i in range(0, count - 7, 8):
             off = rva + i
@@ -299,10 +342,11 @@ def render(uuid, modules, frames, names, fault_address, dlls, symbolizer):
     lines.append("# frames: %d" % len(frames))
     lines.append("")
     for frame, name in zip(frames, names):
+        mod = ""
         if frame["module"]["name"] != primary["name"]:
-            lines.append("0x%x\t[%s] %s" % (frame["rva"], frame["module"]["basename"], name))
-        else:
-            lines.append("0x%x\t%s" % (frame["rva"], name))
+            mod = "[%s] " % frame["module"]["basename"]
+        tag = "FAULT" if frame["kind"] == "fault" else frame["kind"]
+        lines.append("0x%x\t%s%s %s" % (frame["rva"], mod, tag, name))
     return "\n".join(lines) + "\n"
 
 
@@ -326,6 +370,8 @@ def main(argv=None):
     ap.add_argument("--out", default="-", help="Ausgabedatei ('-' = stdout)")
     ap.add_argument("--uuid", default="", help="Crash-uuid fuer den Header")
     ap.add_argument("--max-frames", type=int, default=32, help="maximale Frame-Anzahl")
+    ap.add_argument("--stack-scan", action="store_true",
+                    help="heuristischen Stack-Scan zuschalten (Default: aus)")
     ap.add_argument("--timeout", type=float, default=60.0, help="Timeout je Symbolizer-Aufruf")
     ap.add_argument("--list-modules", action="store_true", help="ModuleList ausgeben und beenden")
     args = ap.parse_args(argv)
@@ -353,10 +399,15 @@ def main(argv=None):
             second = select_module(modules, args.module2)
             if second["name"] != selected[0]["name"]:
                 selected.append(second)
+        dlls = {selected[0]["name"]: args.dll}
+        if len(selected) > 1:
+            dlls[selected[1]["name"]] = args.dll2
+        text_ranges = {name: read_text_range(path) for name, path in dlls.items()}
         exc = parse_exception(data, streams)
         threads = parse_threads(data, streams)
         memory = parse_memory(data, streams)
-        frames = collect_frames(data, selected, exc, threads, memory, args.max_frames)
+        frames = collect_frames(data, selected, exc, threads, memory,
+                                args.max_frames, text_ranges, args.stack_scan)
     except DumpError as err:
         print("symbolize: Dump nicht parsebar: %s" % err, file=sys.stderr)
         return EXIT_DUMP_ERROR
