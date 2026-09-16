@@ -173,15 +173,16 @@ the server (same class as the read crash).
 
 RVAs (build 2.0.58485):
 
-| symbol | RVA | meaning |
-|---|---|---|
-| `ConsoleService::ExecuteCommand(char const*)` | `0x1C0BEF0` | dispatches inline (NOT thread-safe) |
-| `ConsoleService::Update(float)` | `0x1C1FBA0` | **worker-thread** update (TaskWorldExecutor); NOT safe for lua_* |
-| `LuaGraphNode::SetSuspended(bool)` | `0x1BA6CB0` | pure C++ flag write (`[this+0xF1]`); safe from any thread |
-| `MissionService::FinishCurrentMission(int)` | `0xF9A190` | pure C++ (needs resolved MissionService + World) |
-| `LuaGraphNode::Update(float)` | `0x1BAA140` | **worker-thread** update; `[this+0xF1]` suspend check, returns early when suspended |
+| symbol                                        | RVA         | meaning                                                                             |
+| --------------------------------------------- | ----------- | ----------------------------------------------------------------------------------- |
+| `ConsoleService::ExecuteCommand(char const*)` | `0x1C0BEF0` | dispatches inline (NOT thread-safe)                                                 |
+| `ConsoleService::Update(float)`               | `0x1C1FBA0` | **worker-thread** update (TaskWorldExecutor); NOT safe for lua\_\*                  |
+| `LuaGraphNode::SetSuspended(bool)`            | `0x1BA6CB0` | pure C++ flag write (`[this+0xF1]`); safe from any thread                           |
+| `MissionService::FinishCurrentMission(int)`   | `0xF9A190`  | pure C++ (needs resolved MissionService + World)                                    |
+| `LuaGraphNode::Update(float)`                 | `0x1BAA140` | **worker-thread** update; `[this+0xF1]` suspend check, returns early when suspended |
 
 Architecture (native WRITE is thread-agnostic, Lua is NOT):
+
 - `dispatch_exec` (pipe thread) writes the command into a spinlock buffer
   (`g_pending_cmd`), never calls `ExecuteCommand`.
 - `install_update_hook()` scans the `ConsoleService` vtable for
@@ -197,8 +198,10 @@ Architecture (native WRITE is thread-agnostic, Lua is NOT):
 
 1. **Build** (mingw): `x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -Wl,--no-insert-timestamp -shared -o rbbridge.dll rbbridge.c`
    (or `bash scripts/build_rbbridge_tools.sh /tmp/rbtools-build`).
-2. **Stage + restart:** `cp rbbridge.dll /opt/rbmods/rbtools/rbbridge.dll &&
-docker restart riftbreaker-dedicated`. Injection runs at boot (~2-3 min).
+2. **Stage + restart:** `cp rbbridge.dll /opt/rbmods/rbtools/dev/rbbridge.dll &&
+docker restart riftbreaker-dedicated` (per-env; prod: `/opt/rbmods/rbtools/prod/rbbridge.dll`).
+   Injection runs at boot (~2-3 min). **Never** the top-level `/opt/rbmods/rbtools/rbbridge.dll` —
+   that stale path was removed (per-env isolation, #409/#601).
 3. **Readiness:** poll `curl -s http://127.0.0.1:9001/health` then
    `curl -s -X POST http://127.0.0.1:9001/get_state -d '{}'` until `ok:true`
    (boot takes ~2-3 min; `no_account` = world still loading).
