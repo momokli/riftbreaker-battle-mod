@@ -642,6 +642,10 @@
                                     <span id="mission_flow_active" class="prop-val">—</span>
                                 </div>
                                 <div class="flow-prop">
+                                    <span class="prop-label">dom paused</span>
+                                    <span id="dom_paused" class="prop-val">—</span>
+                                </div>
+                                <div class="flow-prop">
                                     <span class="prop-label">payload.spawn_point</span>
                                     <span id="mission_flow_spawn" class="prop-val">—</span>
                                 </div>
@@ -685,6 +689,12 @@
                                     aria-label="Flow ID to stop"
                                 />
                                 <button id="flow_stop_btn">stop wave</button>
+                            </div>
+
+                            <!-- Row 4: Act (DOM freeze, #520) -->
+                            <div class="flow-action-row">
+                                <button id="dom_pause" title="LuaGraphNode::SetSuspended(true) am dom_mananger-Node — eigener C++-Write, kein Lua/Console" aria-label="Pause the DOM (freeze game loop node)">pause dom</button>
+                                <button id="dom_resume" title="LuaGraphNode::SetSuspended(false) am dom_mananger-Node" aria-label="Resume the DOM">resume dom</button>
                             </div>
                         </div>
                     </fieldset>
@@ -883,6 +893,12 @@
                             s.mission_flow_active === undefined
                                 ? "—"
                                 : String(s.mission_flow_active);
+                        $("dom_paused").textContent =
+                            s.dom_paused === undefined || s.dom_paused === null
+                                ? "—"
+                                : s.dom_paused
+                                  ? "yes"
+                                  : "no";
                         var mfp = s.mission_flow_payload;
                         $("mission_flow_spawn").textContent = mfp &&
                             mfp.spawn_point !== undefined
@@ -993,6 +1009,34 @@
 
                 $("flow_stop_btn").onclick = function () {
                     stopMissionFlow();
+                };
+
+                async function domSuspend(action) {
+                    try {
+                        var r = await post(action, {});
+                        if (r && r.ok) {
+                            if (r.readback === "failed") {
+                                $("out").textContent =
+                                    action + ": written, readback failed";
+                                return;
+                            }
+                            $("dom_paused").textContent = r.paused
+                                ? "yes"
+                                : "no";
+                            $("out").textContent = "";
+                        } else {
+                            $("out").textContent = JSON.stringify(r);
+                        }
+                    } catch (e) {
+                        $("out").textContent = "ERR " + e.message;
+                    }
+                }
+
+                $("dom_pause").onclick = function () {
+                    domSuspend("pause_dom");
+                };
+                $("dom_resume").onclick = function () {
+                    domSuspend("resume_dom");
                 };
 
                 $("cbd_set").onclick = function () {
