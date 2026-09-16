@@ -33,6 +33,10 @@ Difficulty-Spikes (#508/#513): Server hochfahren, `POST /get_state` /
 - `ansible-core` (≥ 2.19) auf deinem Rechner (Control-Node = Zielhost hier).
 - `sudo`-Rechte (das Playbook läuft mit `become: true`, wie `site.yml` auf
   planet — Docker/`/srv`/`/opt`-Schreibzugriff).
+- **≥ 5 GB frei auf `/`** (Disk-Space-Gate, Issue #310/#566 — bricht sonst
+  VOR dem Image-Build ab, mit klarer Fehlermeldung. `riftbreaker_disk_min_free_gb`
+  in `local-vars.yml` bei Bedarf anpassen; Live-Befund: 7,7 GB frei reichten
+  mit dem auf 5 GB gesenkten lokalen Default).
 
 **Game-Content kommt per HTTP-Download von planet** (`riftbreaker_content_mode:
 http`, Default in `local-vars.yml`): ein vorbereitetes, checksum-verifiziertes

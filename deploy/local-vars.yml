@@ -9,6 +9,17 @@
 
 rift_env: local
 
+# --- Disk-Space-Gate (Live-Befund #566: 10 GB blockierte auf 7,7 GB frei) --
+# Rollen-Default (10 GB) ist fuer planet kalibriert -- ein GETEILTER
+# Produktions-Host mit mehreren Envs/Image-Tags gleichzeitig braucht mehr
+# Marge als ein Solo-Dev-Rechner mit EINEM Image + einem Content-Stand.
+# Realistischer Bedarf hier: Docker-Image (Wine-Base) + Game-Content
+# (~300-400 MB entpackt) + PDB (241 MB) + Bridge-Tools (paar MB) -- 5 GB
+# lassen noch spuerbaren Puffer. Bei Bedarf weiter senken/erhoehen:
+# -e riftbreaker_disk_min_free_gb=<n> (Mount ueber riftbreaker_disk_mount,
+# muss exakt einem Eintrag aus `ansible_mounts` entsprechen).
+riftbreaker_disk_min_free_gb: 5
+
 # --- Wurzelverzeichnis (einzige Stelle, die man anpassen muss) -------------
 riftbreaker_local_root: /srv/rift-local
 
