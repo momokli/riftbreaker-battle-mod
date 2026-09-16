@@ -26,8 +26,20 @@ crash_collector_require_docker_service: true
 crash_collector_helper: /usr/local/bin/rbmods-minidump-meta.py
 crash_collector_helper_src: "{{ playbook_dir }}/crash-collector/minidump_meta.py"
 
-# Zielverzeichnis der Bundles (ein Unterordner je Crash: <ts>-<uuid>).
+# Zielverzeichnis der Bundles (Issue #605): <env>/<ref>/<ts>-<uuid>).
 crash_collector_dir: /opt/rbmods/crashes
+
+# Environment-Name fuer den Bundle-Pfad (Issue #605): <env>/<ref>/<ts>-<uuid>.
+# Kommt aus der Deploy-Identitaet (rift_env, Play-Var in site.yml/deploy-prod.yml/
+# test-deploy.yml) und landet als RB_CRASH_ENV in der systemd-Unit.
+crash_collector_env: "{{ rift_env }}"
+
+# Build-Ref fuer den Bundle-Pfad + meta.json (Issue #607): DERSELBE ref wie in
+# die Binaries gebacken (scripts/build_ref.sh -> RBB_BUILD_REF). Kommt aus
+# deploy/tasks/deploy-identity.yml (rift_build_ref, set_fact) und landet als
+# RB_CRASH_REF in der systemd-Unit. Leer (z. B. local-deploy ohne deploy-identity)
+# -> der Collector faellt auf den Image-Tag (git_sha) zurueck.
+crash_collector_ref: "{{ rift_build_ref | default('') }}"
 
 # Beobachteter Container (derselbe wie server-control/riftbreaker-server —
 # kein zweiter Name, der auseinanderlaufen kann).
@@ -75,5 +87,7 @@ crash_collector_llvm_symbolizer: /usr/lib/llvm-18/bin/llvm-symbolizer
 crash_collector_symbolize_timeout: 60
 # Zweites Modul (Issue #559): die injizierte DLL rbbridge.dll (mingw -g).
 # Liegt gestaged auf dem Host; optional — fehlt sie, symbolisiert der Collector
-# weiterhin nur die Game-DLL (graceful, kein Hard-Fail).
-crash_collector_rbbridge_dll: /opt/rbmods/rbtools/rbbridge.dll
+# weiterhin nur die Game-DLL (graceful, kein Hard-Fail). Pfad-Schema `<env>`
+# (Issue #483): aus dem je Env gesetzten {{ rbtools_dir }} abgeleitet (vorher
+# fest top-level /opt/rbmods/rbtools — Issue #601 kopierte so die falsche DLL).
+crash_collector_rbbridge_dll: "{{ rbtools_dir }}/rbbridge.dll"

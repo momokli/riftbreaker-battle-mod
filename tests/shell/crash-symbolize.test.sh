@@ -431,10 +431,10 @@ env \
 RC=$?
 set -e
 assert_eq "(f) Collector -> rc=0" "0" "$RC"
-mapfile -t FB < <(find "${F}/crashes" -mindepth 1 -maxdepth 1 -type d | sed 's|.*/||')
+mapfile -t FB < <(find "${F}/crashes" -mindepth 3 -maxdepth 3 -type d)
 assert_eq "(f) genau ein Bundle" "1" "${#FB[@]}"
 if [ "${#FB[@]}" -eq 1 ]; then
-  BD="${F}/crashes/${FB[0]}"
+  BD="${FB[0]}"
   assert_true "(f) Bundle enthaelt symbolized.txt" test -s "${BD}/symbolized.txt"
   meta_sym() { python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['symbolized'].get(sys.argv[2],''))" "${BD}/meta.json" "$1"; }
   assert_eq "(f) meta.symbolized.status" "ok" "$(meta_sym status)"

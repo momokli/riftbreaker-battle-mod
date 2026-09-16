@@ -1,6 +1,7 @@
 ---
-# Rolle: host-hygiene (Issue #308) — automatische, konservative Docker-
-# Image-Hygiene auf planet als systemd-Timer.
+# Rolle: host-hygiene (Issue #308/#606) — automatische Host-Hygiene auf
+# planet als systemd-Timer: konservativer Docker-Image-Prune UND rbtools
+# test-*-Retention (alte Boot-Test-Verzeichnisse).
 #
 # Was der Timer tut (Skript deploy/host-hygiene/host_hygiene.sh):
 #   * dangling Images (ungetaggte <none>-Layer) entfernen:
@@ -9,6 +10,8 @@
 #     Rollback-Stands `rb-dedicated:<alte-sha>`.
 #   * Vorher/Nachher-Zähler ins Journal schreiben (getaggte Mod-Images müssen
 #     gleich bleiben) und laut scheitern, falls sich die Menge ändert.
+#   * rbtools test-*-Retention (Issue #606): behalte die N neuesten
+#     /opt/rbmods/rbtools/test-<run>-Verzeichnisse (mtime), entferne aeltere.
 #
 # Wiederkehr: Timer mit `Persistent=true` (holt verpasste Läufe nach Reboot
 # nach) und `enabled: true` (übersteht Reboots) — reboot-/timer-fest.

@@ -69,6 +69,12 @@
 #define CMD_MAX              512
 #define IDENT_CAP            256           /* max. Laenge env/ref-Badge */
 
+/* Build-Identitaet (Issue #499): ref (Commit/Tag) wird beim Build per
+ * -DRBBRIDGE_REF="..." gesetzt; Default "unknown". */
+#ifndef RBBRIDGE_REF
+#define RBBRIDGE_REF "unknown"
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Logging                                                             */
 /* ------------------------------------------------------------------ */
@@ -117,6 +123,25 @@ static void log_request(const char *method, const char *path,
         if (b[i] == '\n' || b[i] == '\r' || b[i] == '\t')
             b[i] = ' ';
     blog("%s %s body=%s", method, path, n > 0 ? b : "-");
+}
+
+/* rbbridge-Reply-Body loggen (trunkiert + saniert, analog log_request),
+ * damit ein WebUI-Klick / get_state-Poll end-to-end nachvollziehbar ist. */
+static void log_response(const char *path, const char *body)
+{
+    char b[160];
+    int n = 0;
+    if (body) {
+        size_t len = strlen(body);
+        n = (len > 140) ? 140 : (int)len;
+    }
+    if (n > 0)
+        memcpy(b, body, (size_t)n);
+    b[n] = '\0';
+    for (int i = 0; i < n; i++)
+        if (b[i] == '\n' || b[i] == '\r' || b[i] == '\t')
+            b[i] = ' ';
+    blog("resp %s body=%s", path, n > 0 ? b : "-");
 }
 
 /* ------------------------------------------------------------------ */
@@ -598,6 +623,7 @@ static void handle_probe(SOCKET c)
     {
         char resp[RESP_MAX];
         snprintf(resp, sizeof(resp), "{\"ok\":true,\"events\":%s}", results);
+        log_response("/probe", resp);
         http_respond(c, 200, "OK", resp);
     }
 }
@@ -633,6 +659,7 @@ static void handle_get_state(SOCKET c)
                      "{\"ok\":false,\"reason\":\"timeout\"}");
         return;
     }
+    log_response("/get_state", line);
     http_respond(c, 200, "OK", line);
 }
 
@@ -696,6 +723,7 @@ static void handle_add_resource(SOCKET c, const char *body)
             return;
         }
     }
+    log_response("/add_resource", line);
     http_respond(c, 200, "OK", line);
 }
 
@@ -766,6 +794,7 @@ static void handle_activate_mission_flow(SOCKET c, const char *body)
             return;
         }
     }
+    log_response("/activate_mission_flow", line);
     http_respond(c, 200, "OK", line);
 }
 
@@ -818,6 +847,7 @@ static void handle_deactivate_mission_flow(SOCKET c, const char *body)
             return;
         }
     }
+    log_response("/deactivate_mission_flow", line);
     http_respond(c, 200, "OK", line);
 }
 
@@ -880,6 +910,7 @@ static void handle_end_game(SOCKET c, const char *body)
             return;
         }
     }
+    log_response("/end_game", line);
     http_respond(c, 200, "OK", line);
 }
 
@@ -950,6 +981,7 @@ static void handle_creatures_difficulty(SOCKET c, const char *body)
             return;
         }
     }
+    log_response("/creatures_difficulty", line);
     http_respond(c, 200, "OK", line);
 }
 
@@ -1005,6 +1037,7 @@ static void handle_natural_waves(SOCKET c, const char *body)
             return;
         }
     }
+    log_response("/natural_waves", line);
     http_respond(c, 200, "OK", line);
 }
 
@@ -1060,6 +1093,7 @@ static void handle_restart_map(SOCKET c, const char *body)
             return;
         }
     }
+    log_response("/restart_map", line);
     http_respond(c, 200, "OK", line);
 }
 
@@ -1226,6 +1260,7 @@ static int mode_server(void)
 {
     init_session_id();
     blog("session start %s", g_session_id);
+    blog("pipe_bridge ref=%s", RBBRIDGE_REF);
 
     const char *bind_addr = env_str("RBB_BRIDGE_BIND", DEFAULT_BIND);
     int port = env_int("RBB_BRIDGE_PORT", DEFAULT_PORT);

@@ -78,6 +78,7 @@ prüfen, ob ein passender Thread existiert, statt einen neuen aufzumachen.
 
 Der komplette Game-Ordner liegt auf planet vor — inkl. **Debug-Symbols**. Für
 INGRESS/RE-Arbeit nutz das statt AOB zu raten:
+
 - `/srv/rbgame/bin/riftbreaker_dll_win_release.pdb` (volles privates PDB)
 - `/srv/rbgame/bin/riftbreaker_dll_win_release.dll` (Spiel-Logik, `Exor::ConsoleService`)
 - `/srv/rbgame/bin/DedicatedServer.exe`
@@ -87,3 +88,16 @@ INGRESS/RE-Arbeit nutz das statt AOB zu raten:
 Wine-Gotcha: `GetModuleHandleA("riftbreaker_dll_win_release.dll")` kann unter Wine
 GLE=126 (ERROR_MOD_NOT_FOUND) liefern — Modul-Auflösung explizit prüfen. Live-Test
 (Named Pipe `\\.\pipe\rbbattle`) nur im Wine-Prefix (kein Unix-Socket).
+
+## 10. Observability & Crash-Debugging
+
+- Beim Debuggen eines Server-Crashes **nicht raten**: der vollständige Workflow
+  steht im Skill `crash-debugging` (`.agents/skills/crash-debugging/SKILL.md`) —
+  Bundle → `context.log` → `meta.json` → `symbolized.txt` → **DLL-Verifikation**
+  (per-env `rbbridge.dll`, `SizeOfImage` vs `module_size`) → Re-Symbolisierung →
+  Source → `git log -S` (blame des einführenden PRs).
+- **Observability ist ein First-Class-Deliverable.** Fehlt ein Log (Komponente X
+  loggt nicht, Response fehlt, env/commit/DLL nicht erfasst), **Issue aufmachen
+  statt still zu kompensieren**.
+- Crash-Bundles: `/opt/rbmods/crashes/` (dev) / `-prod/` (prod); Ziel-Pfad
+  perspektivisch `ENV/COMMIT-REF/<ts>-<uuid>` (offenes Follow-up).

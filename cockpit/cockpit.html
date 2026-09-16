@@ -742,28 +742,7 @@
                         </div>
                     </fieldset>
 
-                    <!-- E. HQ HEALTH (#573/#511) — nativer C++-Read -->
-                    <fieldset class="q-groupbox" id="panel-hq">
-                        <legend>HQ Health</legend>
-                        <div class="flow-container">
-                            <div class="flow-readouts">
-                                <div class="flow-prop">
-                                    <span class="prop-label">hp</span>
-                                    <span id="hq_hp" class="prop-val">—</span>
-                                </div>
-                                <div class="flow-prop">
-                                    <span class="prop-label">hp_max</span>
-                                    <span id="hq_hp_max" class="prop-val">—</span>
-                                </div>
-                                <div class="flow-prop">
-                                    <span class="prop-label">dead</span>
-                                    <span id="hq_dead" class="prop-val">—</span>
-                                </div>
-                            </div>
-                        </div>
-                    </fieldset>
-
-                    <!-- F. NATURAL WAVES (VANILLA) -->
+                    <!-- E. NATURAL WAVES (VANILLA) -->
                     <fieldset class="q-groupbox" id="panel-waves">
                         <legend>Natural Waves (Vanilla)</legend>
                         <div class="flow-container">
@@ -818,7 +797,7 @@
                 </div>
 
                 <div class="right-col">
-                    <!-- G. SERVER CONTROL (PLANE B) -->
+                    <!-- F. SERVER CONTROL (PLANE B) -->
                     <fieldset class="q-groupbox" id="panel-server">
                         <legend>Server Control (Plane B)</legend>
                         <div class="server-group-content">
@@ -865,7 +844,7 @@
                 </div>
             </main>
 
-            <!-- H. STATUS BAR -->
+            <!-- G. STATUS BAR -->
             <footer class="status-bar">
                 <div class="sb-cell left">
                     <span id="out" aria-live="polite"></span>
@@ -927,18 +906,6 @@
                             s.creatures_base_difficulty === null
                                 ? "—"
                                 : String(s.creatures_base_difficulty);
-                        $("hq_hp").textContent =
-                            s.hq_hp === undefined || s.hq_hp === null
-                                ? "—"
-                                : fmt(s.hq_hp);
-                        $("hq_hp_max").textContent =
-                            s.hq_hp_max === undefined || s.hq_hp_max === null
-                                ? "—"
-                                : fmt(s.hq_hp_max);
-                        $("hq_dead").textContent =
-                            s.hq_dead === undefined || s.hq_dead === null
-                                ? "—"
-                                : String(s.hq_dead);
                         $("out").textContent = "";
                     } catch (e) {
                         $("out").textContent = "ERR " + e.message;

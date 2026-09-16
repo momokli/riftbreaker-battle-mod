@@ -23,6 +23,10 @@ ROOT="$PWD"
 OUT_DIR="$ROOT/dist"
 mkdir -p "$OUT_DIR"
 
+# Build-Identitaet (Issue #499): ref (Commit/Tag) fuer alle Binaries + Mod.
+REF="$(bash "$ROOT/scripts/build_ref.sh")"
+REF_DEF="-DRBBRIDGE_REF=\"${REF}\""
+
 # zip_content_root <srcdir> <outzip>: packt den INHALT von <srcdir> mit
 # <srcdir> als Content-Root (der Ordner selbst kommt NICHT ins Zip),
 # .DS_Store wird rausgefiltert.
@@ -68,18 +72,18 @@ build_server_binaries() { # <builddir> — kompiliert die 4 Windows-x64-Binaries
         echo "[package] server: x86_64-w64-mingw32-gcc gefunden -> Build (Windows x64)"
         # `-g` (DWARF) nur auf rbbridge.dll: collector-seitige Crash-Symbolik (#559).
         (cd "$bd" \
-            && x86_64-w64-mingw32-gcc -O2 -g -Wall -Wextra -shared -o rbbridge.dll "$SERVER_SRC/dll/rbbridge.c" \
-            && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o injector.exe "$SERVER_SRC/injector/injector.c" \
-            && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe "$SERVER_SRC/dll/rbbridge.c" \
-            && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -o pipe_bridge.exe "$SERVER_SRC/pipe-bridge/pipe_bridge.c" -lws2_32)
+            && x86_64-w64-mingw32-gcc -O2 -g -Wall -Wextra "$REF_DEF" -shared -o rbbridge.dll "$SERVER_SRC/dll/rbbridge.c" \
+            && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra "$REF_DEF" -o injector.exe "$SERVER_SRC/injector/injector.c" \
+            && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra "$REF_DEF" -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe "$SERVER_SRC/dll/rbbridge.c" \
+            && x86_64-w64-mingw32-gcc -O2 -Wall -Wextra "$REF_DEF" -o pipe_bridge.exe "$SERVER_SRC/pipe-bridge/pipe_bridge.c" -lws2_32)
     else
         local zigc="${ZIG:-zig}"
         echo "[package] server: kein mingw-gcc, aber zig -> Build (zig cc, x86_64-windows-gnu)"
         (cd "$bd" \
-            && "$zigc" cc -target x86_64-windows-gnu -O2 -g -Wall -Wextra -shared -o rbbridge.dll "$SERVER_SRC/dll/rbbridge.c" \
-            && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -o injector.exe "$SERVER_SRC/injector/injector.c" \
-            && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe "$SERVER_SRC/dll/rbbridge.c" \
-            && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -o pipe_bridge.exe "$SERVER_SRC/pipe-bridge/pipe_bridge.c" -lws2_32)
+            && "$zigc" cc -target x86_64-windows-gnu -O2 -g -Wall -Wextra "$REF_DEF" -shared -o rbbridge.dll "$SERVER_SRC/dll/rbbridge.c" \
+            && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra "$REF_DEF" -o injector.exe "$SERVER_SRC/injector/injector.c" \
+            && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra "$REF_DEF" -DRBBRIDGE_STANDALONE -o rbbridge_standalone.exe "$SERVER_SRC/dll/rbbridge.c" \
+            && "$zigc" cc -target x86_64-windows-gnu -O2 -Wall -Wextra "$REF_DEF" -o pipe_bridge.exe "$SERVER_SRC/pipe-bridge/pipe_bridge.c" -lws2_32)
     fi
 }
 BUILD_DIR="$OUT_DIR/.build-server"
@@ -113,7 +117,24 @@ fi
 # der Zip-Wurzel), genau wie er nach <game>/mods/rbbattle/ gehoert.
 SRCMOD="$ROOT/client-mod"
 outmod="$OUT_DIR/rbbattle.zip"
-zip_content_root "$SRCMOD" "$outmod"
+
+# Build-Identitaet (Issue #499): ref in die Lua backen. Temp-Kopie, damit die
+# git-getrackte Quelle unveraendert bleibt (RBB_BUILD_REF -> echter ref).
+MOD_TMP="$OUT_DIR/.mod-tmp"
+rm -rf "$MOD_TMP"
+mkdir -p "$MOD_TMP"
+cp -R "$SRCMOD"/. "$MOD_TMP"/
+python3 - "$MOD_TMP/lua/rbbattle_autoexec.lua" "$REF" <<'PYEOF'
+import io, sys
+path, ref = sys.argv[1], sys.argv[2]
+s = io.open(path, encoding="utf-8").read()
+# Nur die Zuweisung ersetzen (Kommentar/Platzhalter-Doku bleibt erhalten).
+s = s.replace('RBB.ref = "RBB_BUILD_REF"', 'RBB.ref = "' + ref + '"')
+io.open(path, "w", encoding="utf-8", newline="\n").write(s)
+PYEOF
+
+zip_content_root "$MOD_TMP" "$outmod"
+rm -rf "$MOD_TMP"
 echo "NAME=rbbattle.zip ZIP=$outmod"
 
 # Einzel-Mod versioniert (Issue #119): die Mod-Version kommt aus den

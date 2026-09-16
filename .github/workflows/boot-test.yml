@@ -276,8 +276,9 @@ jobs:
           ssh planet "rm -f '/etc/systemd/system/${U}.service' 2>/dev/null || true"
           ssh planet "systemctl daemon-reload 2>/dev/null || true"
           # Je Lauf eindeutige Host-Pfade entfernen (sonst akkumulieren pro Lauf
-          # ~664 MB Game-Content + Mods/Deploy-Artefakte + Build-Kontext F2).
-          ssh planet "rm -rf '${D}' '/srv/rbgame-test-${RBBATTLE_RUN_ID}' '/srv/rbgame-test-${RBBATTLE_RUN_ID}-backups' '/opt/rbbattle-deploy/test/mods-${RBBATTLE_RUN_ID}' '/opt/rbbattle-deploy/test/dedicated-server-${RBBATTLE_RUN_ID}' '/opt/rbmods/tournament-server-test-${RBBATTLE_RUN_ID}' '/srv/rbmods-sessions-test-${RBBATTLE_RUN_ID}' 2>/dev/null || true"
+          # ~664 MB Game-Content + Mods/Deploy-Artefakte + Build-Kontext F2 +
+          # rbtools test-<run> — Issue #606: rbtools_dir war hier ein Leak).
+          ssh planet "rm -rf '${D}' '/srv/rbgame-test-${RBBATTLE_RUN_ID}' '/srv/rbgame-test-${RBBATTLE_RUN_ID}-backups' '/opt/rbbattle-deploy/test/mods-${RBBATTLE_RUN_ID}' '/opt/rbbattle-deploy/test/dedicated-server-${RBBATTLE_RUN_ID}' '/opt/rbmods/rbtools/test-${RBBATTLE_RUN_ID}' '/opt/rbmods/tournament-server-test-${RBBATTLE_RUN_ID}' '/srv/rbmods-sessions-test-${RBBATTLE_RUN_ID}' 2>/dev/null || true"
           # Altlasten des ALTEN, festen Test-Schemas (vor #307): dessen Cleanup
           # zielte auf feste Namen, die diese run-scoped Logik nie mehr anfasst.
           # Idempotent + gefahrlos (reine Test-Pfade, kein Prod-Overlap), daher
