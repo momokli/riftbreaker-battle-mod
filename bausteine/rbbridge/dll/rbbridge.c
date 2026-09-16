@@ -659,6 +659,21 @@ static volatile LONG g_stop = 0;   /* 1 = Thread soll sich beenden       */
 static HANDLE g_thread = NULL;     /* Handle des Pipe-Server-Threads     */
 static LONG g_thread_started = 0;  /* verhindert doppelte Attach-Threads */
 static CRITICAL_SECTION g_log_cs;  /* schuetzt das Datei-Log             */
+
+/* Chat-Detour (PoC #549): OnNetPlayerChatRequest (RVA 0x1821B50) inline-
+ * gehakt. Der Spieler tippt Chat (vanilla Client), die DLL liest den Text
+ * und stellt ihn der Pipe als player_chat-Event bereit. */
+static CRITICAL_SECTION g_chat_cs;
+static char g_chat_text[256];
+static volatile LONG g_chat_pending = 0;
+void *g_chat_trampoline = NULL;
+void (*g_chat_capture)(const void *) = NULL;
+volatile uintptr_t g_chat_this, g_chat_conn, g_chat_req;
+
+/* Vorabdeklaration: Definition steht weiter unten im Modul (#549-Chat-Hook). */
+static int resolve_module(const unsigned char **out_base, size_t *out_size,
+                          const char **out_via,
+                          const unsigned char **out_execfn);
 #endif /* !RBBRIDGE_HOSTTEST */
 
 /* ------------------------------------------------------------------ */
@@ -851,6 +866,33 @@ static void read_game_state(game_state_t *st)
 static void send_state(HANDLE hPipe)
 {
     game_state_t st;
+
+    /* Chat-Detour (PoC #549): pending player_chat ausgeben. */
+    if (g_chat_pending) {
+        char raw[256];
+        char esc[512];
+        size_t i, o = 0;
+        EnterCriticalSection(&g_chat_cs);
+        for (i = 0; i < 256; i++)
+            raw[i] = g_chat_text[i];
+        g_chat_pending = 0;
+        LeaveCriticalSection(&g_chat_cs);
+        raw[255] = '\0';
+        for (i = 0; raw[i] && o < sizeof(esc) - 3; i++) {
+            char c = raw[i];
+            if (c == '"' || c == '\\') {
+                esc[o++] = '\\';
+                esc[o++] = c;
+            } else if (c == '\n' || c == '\r') {
+                esc[o++] = ' ';
+            } else {
+                esc[o++] = c;
+            }
+        }
+        esc[o] = '\0';
+        send_line(hPipe, "{\"event\":\"player_chat\",\"text\":\"%s\"}", esc);
+    }
+
     read_game_state(&st);
     send_line(hPipe,
               "{\"event\":\"score_update\",\"t\":%llu,\"score\":%llu,"
@@ -863,6 +905,152 @@ static void send_state(HANDLE hPipe)
 }
 
 #endif /* !RBBRIDGE_HOSTTEST: JSON-Helfer + send_line/game_state */
+
+#ifndef RBBRIDGE_HOSTTEST
+/* ------------------------------------------------------------------ */
+/* Chat-Detour (PoC #549): OnNetPlayerChatRequest inline hook          */
+/*                                                                    */
+/* RVA 0x1821B50 (Build 2.0.58485), NON-virtuell (AEAA) -> kein        */
+/* vtable-Slot, sondern inline Hook. Argumente beim Eintritt:          */
+/*   rcx = this (ServerGameplayState*), rdx = NetConnection*,          */
+/*   r8  = &NetPlayerChatReq (by-value-Struct via Hidden-Pointer).      */
+/*   Chat-Text = SSO-UtfString: +0x00 data, +0x18 len, +0x20 cap       */
+/*   (cap <= 0xF -> SSO inline bei req; sonst Heap-Pointer [req]).     */
+/*                                                                    */
+/* Prolog (12 Bytes, saubere Instruktionsgrenze):                      */
+/*   48 89 5c 24 10   mov [rsp+0x10], rbx                              */
+/*   4c 89 44 24 18   mov [rsp+0x18], r8                               */
+/*   55               push rbp                                         */
+/*   56               push rsi                                         */
+/* ab Byte 12: 57 push rdi.                                            */
+/* ------------------------------------------------------------------ */
+
+#define CHAT_HOOK_RVA 0x1821B50u
+
+static void capture_chat_text(const void *req)
+{
+    uint64_t cap = 0, len = 0, ptr = 0;
+    const unsigned char *src;
+    size_t n, i;
+    char buf[256];
+
+    if (req == NULL)
+        return;
+    safe_read_u64((const unsigned char *)req + 0x20, &cap);
+    safe_read_u64((const unsigned char *)req + 0x18, &len);
+    if (len == 0)
+        return;
+    if (cap <= 0xF) {
+        src = (const unsigned char *)req;
+    } else {
+        safe_read_u64((const unsigned char *)req, &ptr);
+        if (ptr == 0)
+            return;
+        src = (const unsigned char *)ptr;
+    }
+    n = len > 255 ? 255 : (size_t)len;
+    for (i = 0; i < n; i += 8) {
+        uint64_t v = 0;
+        size_t c = (n - i) < 8 ? (n - i) : 8;
+        size_t j;
+        if (!safe_read_u64(src + i, &v))
+            break;
+        for (j = 0; j < c; j++)
+            buf[i + j] = (char)((v >> (j * 8)) & 0xFF);
+    }
+    buf[n] = '\0';
+    EnterCriticalSection(&g_chat_cs);
+    for (i = 0; i <= n; i++)
+        g_chat_text[i] = buf[i];
+    g_chat_pending = 1;
+    LeaveCriticalSection(&g_chat_cs);
+}
+
+__attribute__((naked)) static void detour_chat_handler(void)
+{
+    __asm__ volatile(
+        "movq %rcx, g_chat_this(%rip)\n"
+        "movq %rdx, g_chat_conn(%rip)\n"
+        "movq %r8, g_chat_req(%rip)\n"
+        "movq g_chat_req(%rip), %rcx\n"
+        "call *g_chat_capture(%rip)\n"
+        "movq g_chat_this(%rip), %rcx\n"
+        "movq g_chat_conn(%rip), %rdx\n"
+        "movq g_chat_req(%rip), %r8\n"
+        "movq g_chat_trampoline(%rip), %rax\n"
+        "jmp *%rax\n");
+}
+
+static int install_chat_hook(void)
+{
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    const char *via = NULL;
+    const unsigned char *execfn = NULL;
+    unsigned char *target;
+    unsigned char *tramp;
+    unsigned char patch[12];
+    DWORD oldp;
+    uintptr_t fn = (uintptr_t)(void *)detour_chat_handler;
+    uintptr_t ret;
+    int k;
+
+    if (g_chat_trampoline != NULL)
+        return 0;
+
+    if (!resolve_module(&base, &size, &via, &execfn) || base == NULL)
+        return -1;
+
+    target = (unsigned char *)(base + CHAT_HOOK_RVA);
+
+    tramp = (unsigned char *)VirtualAlloc(NULL, 24, MEM_COMMIT,
+                                          PAGE_EXECUTE_READWRITE);
+    if (tramp == NULL)
+        return -1;
+
+    {
+        static const unsigned char orig[12] = {
+            0x48, 0x89, 0x5c, 0x24, 0x10,  /* mov [rsp+0x10], rbx */
+            0x4c, 0x89, 0x44, 0x24, 0x18,  /* mov [rsp+0x18], r8  */
+            0x55,                            /* push rbp           */
+            0x56                             /* push rsi           */
+        };
+        ret = (uintptr_t)(base + CHAT_HOOK_RVA + 12);
+        for (k = 0; k < 12; k++)
+            tramp[k] = orig[k];
+        tramp[12] = 0x48;
+        tramp[13] = 0xB8; /* mov rax, imm64 */
+        for (k = 0; k < 8; k++)
+            tramp[14 + k] = (unsigned char)(ret >> (8 * k));
+        tramp[22] = 0xFF;
+        tramp[23] = 0xE0; /* jmp rax */
+    }
+
+    patch[0] = 0x48;
+    patch[1] = 0xB8; /* mov rax, imm64 */
+    for (k = 0; k < 8; k++)
+        patch[2 + k] = (unsigned char)(fn >> (8 * k));
+    patch[10] = 0xFF;
+    patch[11] = 0xE0; /* jmp rax */
+
+    g_chat_capture = capture_chat_text;
+    g_chat_trampoline = tramp; /* vor dem Patch, damit der Detour ein Ziel hat */
+
+    if (!VirtualProtect(target, 12, PAGE_EXECUTE_READWRITE, &oldp)) {
+        VirtualFree(tramp, 0, MEM_RELEASE);
+        g_chat_trampoline = NULL;
+        return -1;
+    }
+    for (k = 0; k < 12; k++)
+        target[k] = patch[k];
+    VirtualProtect(target, 12, oldp, &oldp);
+
+    dbg("install_chat_hook: Detour installiert (target=%p tramp=%p)",
+        (void *)target, (void *)tramp);
+    return 0;
+}
+
+#endif /* !RBBRIDGE_HOSTTEST: Chat-Detour (#549) */
 
 /* ------------------------------------------------------------------ */
 /* ConsoleService-Anbindung (RE, AOB-/Signatur-basiert)                */
@@ -4950,7 +5138,11 @@ int rbbridge_start(void)
     }
 
     InitializeCriticalSection(&g_log_cs);
+    InitializeCriticalSection(&g_chat_cs);
     g_stop = 0;
+
+    /* Chat-Detour (PoC #549): best effort; ohne Modul/Fehler kein Crash. */
+    install_chat_hook();
 
     /* WICHTIG (DLL-Fall): Hier laeuft das ggf. im DllMain-Kontext
      * (Loader-Lock) - nie blockieren/kein LoadLibrary, wir starten nur
