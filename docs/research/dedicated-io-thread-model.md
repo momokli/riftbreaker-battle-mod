@@ -7,7 +7,7 @@ Stand: Build 2.0.58485, `main` (Commit-Stand 2026-09-15).
 Dieses Dokument ersetzt die verstreuten/veralteten Thread-Aussagen in
 `dedicated-io-write-functions.md`, `dedicated-io-re-findings.md`,
 `io-write-poc.md`, `database-object-re-findings.md`, `docs/INGRESS_IO.md` und
-`bausteine/rbbridge/README.md`.
+`server/README.md`.
 
 ## Was `main` **nicht mehr** hat (historisch)
 

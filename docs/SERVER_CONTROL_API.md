@@ -5,8 +5,8 @@ Bewusst getrennt vom In-Game-I/O-Kanal (Plane A: `pipe_bridge` → `rbbridge.dll
 denn er muss auch dann funktionieren, wenn das Spiel hängt oder gerade neu startet —
 genau dann braucht man den Restart.
 
-- **Implementierung**: `tools/server-control/server_control.py` (Python,
-  Standardbibliothek). Doku/Endpunkt-Tabelle: [tools/server-control/README.md](../tools/server-control/README.md)
+- **Implementierung**: `deploy/server-control/server_control.py` (Python,
+  Standardbibliothek). Doku/Endpunkt-Tabelle: [deploy/server-control/README.md](server-control/README.md)
 - **Deploy**: Ansible-Rolle `deploy/roles/server-control` (Muster `tournament-server`),
   verdrahtet in `deploy/site.yml` (Tag `server`); `config.cfg`-Rendering nutzt
   dieselbe Vorlage `config.cfg.j2` wie die Rolle `riftbreaker-server`.

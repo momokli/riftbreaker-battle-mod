@@ -11,7 +11,7 @@ idle oder prepare_spawn haengt.
 import io
 import sys
 
-PATH = "bausteine/rbbridge/dll/rbbridge.c"
+PATH = "server/dll/rbbridge.c"
 
 OLD = r"""            getfield((void *)(uintptr_t)L, tbl, "currentDifficultyLevel");
             long long wave = tointeger((void *)(uintptr_t)L, tbl + 1);

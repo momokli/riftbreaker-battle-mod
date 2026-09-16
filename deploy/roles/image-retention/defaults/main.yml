@@ -1,6 +1,6 @@
 ---
 # Defaults der Rolle image-retention (Issue #309): systemd-Timer, der alte
-# Mod-Image-Tags per scripts/docker_image_tag_retention.sh entfernt — ohne das
+# Mod-Image-Tags per deploy/image-retention/docker_image_tag_retention.sh entfernt — ohne das
 # laufende Image und ohne den Rollback-Stand zu verlieren.
 #
 # Muster: systemd-Skript + *.service.j2 + *.timer.j2.

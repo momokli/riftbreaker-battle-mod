@@ -2,7 +2,7 @@
 # ============================================================
 # tests/shell/image-retention.test.sh
 # ------------------------------------------------------------
-# Planetfreier Red/Green-Test fuer scripts/docker_image_tag_retention.sh
+# Planetfreier Red/Green-Test fuer deploy/image-retention/docker_image_tag_retention.sh
 # (Issue #309). Beweist, dass die Retention den Rollback-Stand NICHT
 # wegwirft:
 #   * das laufende Image (Container-Referenz) bleibt unangetastet,
@@ -24,7 +24,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SCRIPT="${REPO_ROOT}/scripts/docker_image_tag_retention.sh"
+SCRIPT="${REPO_ROOT}/deploy/image-retention/docker_image_tag_retention.sh"
 BASH_BIN="$(command -v bash)"
 
 TMP="$(mktemp -d)"

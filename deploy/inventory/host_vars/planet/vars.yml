@@ -111,7 +111,7 @@ website_host_caddyfile_group: momo
 mods_zip_name: rbbattle.zip
 mods_zip_dest: "{{ website_mods_dir }}/{{ mods_zip_name }}"
 
-# --- Image-Tag-Retention (systemd, scripts/docker_image_tag_retention.sh) ----
+# --- Image-Tag-Retention (systemd, deploy/image-retention/docker_image_tag_retention.sh) ----
 # Issue #309: alter rb-dedicated/rb-headless-client-Tags aufräumen, aber das
 # laufende Image + N Rollback-Tags behalten. Wirksame Werte stehen in den
 # Rollen-Defaults (deploy/roles/image-retention/defaults/main.yml):

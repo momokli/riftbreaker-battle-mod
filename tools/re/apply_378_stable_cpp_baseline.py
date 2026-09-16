@@ -13,7 +13,7 @@ Die .c-Datei wird NUR hier editiert (io.open(..., newline="\n")).
 import io
 import sys
 
-PATH = "bausteine/rbbridge/dll/rbbridge.c"
+PATH = "server/dll/rbbridge.c"
 
 LGN_BLOCK = """\
 /* ----------------------------------------------------------------------------

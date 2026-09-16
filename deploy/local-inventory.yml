@@ -1,0 +1,11 @@
+---
+# Eigenständiges Inventory für lokale Solo-Entwicklung (Issue #566) — bewusst
+# GETRENNT von deploy/inventory (planet/satellite, SSH-only, produktions-
+# kritisch). "local" ist immer DIESER Rechner: kein SSH, keine Mesh-Aliase,
+# kein Vault nötig.
+
+all:
+  hosts:
+    local:
+      ansible_connection: local
+      ansible_python_interpreter: "{{ ansible_playbook_python }}"

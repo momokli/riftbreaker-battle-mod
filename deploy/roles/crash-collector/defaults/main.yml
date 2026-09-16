@@ -10,13 +10,13 @@
 # systemd-Unit + installiertes Skript.
 crash_collector_unit: rbmods-crash-collector
 crash_collector_bin: /usr/local/bin/rbmods-crash-collector.sh
-crash_collector_script_src: "{{ playbook_dir }}/../scripts/crash_collector.sh"
+crash_collector_script_src: "{{ playbook_dir }}/crash-collector/crash_collector.sh"
 
 # Minidump-Parser (Issue #481): eigenstaendiger stdlib-Helper, den der Collector
 # per RB_CRASH_MINIDUMP_PY aufruft. Liegt bewusst NICHT als Geschwister des
 # Collector-Binaries (dieses heisst rbmods-crash-collector.sh) -> expliziter Pfad.
 crash_collector_helper: /usr/local/bin/rbmods-minidump-meta.py
-crash_collector_helper_src: "{{ playbook_dir }}/../scripts/minidump_meta.py"
+crash_collector_helper_src: "{{ playbook_dir }}/crash-collector/minidump_meta.py"
 
 # Zielverzeichnis der Bundles (ein Unterordner je Crash: <ts>-<uuid>).
 crash_collector_dir: /opt/rbmods/crashes
@@ -54,9 +54,9 @@ crash_collector_python: /usr/bin/python3
 # Hintergrund/Entscheidung: docs/crash-symbolication.md (Issue #480).
 crash_collector_symbolize: true
 crash_collector_symbolize_bin: /usr/local/bin/rbmods-crash-symbolize.sh
-crash_collector_symbolize_script_src: "{{ playbook_dir }}/../scripts/crash_symbolize.sh"
+crash_collector_symbolize_script_src: "{{ playbook_dir }}/crash-collector/crash_symbolize.sh"
 crash_collector_symbolize_tool_dir: /usr/local/lib/rbmods/crash
-crash_collector_symbolize_tool_src: "{{ playbook_dir }}/../tools/crash/symbolize.py"
+crash_collector_symbolize_tool_src: "{{ playbook_dir }}/crash-collector/symbolize.py"
 crash_collector_symbolize_tool: "{{ crash_collector_symbolize_tool_dir }}/symbolize.py"
 # DLL/PDB des Laufzeit-Images. Pfad-Schema `<env>` (Issue #483, Ziel B):
 # aus dem je Env gesetzten {{ riftbreaker_game_dir }} abgeleitet (vorher fest
@@ -65,3 +65,7 @@ crash_collector_dll: "{{ riftbreaker_game_dir | default('/srv/rift-dev/game') }}
 crash_collector_pdb: "{{ riftbreaker_game_dir | default('/srv/rift-dev/game') }}/bin/riftbreaker_dll_win_release.pdb"
 crash_collector_llvm_symbolizer: /usr/lib/llvm-18/bin/llvm-symbolizer
 crash_collector_symbolize_timeout: 60
+# Zweites Modul (Issue #559): die injizierte DLL rbbridge.dll (mingw -g).
+# Liegt gestaged auf dem Host; optional — fehlt sie, symbolisiert der Collector
+# weiterhin nur die Game-DLL (graceful, kein Hard-Fail).
+crash_collector_rbbridge_dll: /opt/rbmods/rbtools/rbbridge.dll

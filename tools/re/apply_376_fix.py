@@ -10,7 +10,7 @@ Memory-Read (LuaGraphNode-vftable-Scan + [0x20] luabind-object) holen.
 import io
 import sys
 
-PATH = "bausteine/rbbridge/dll/rbbridge.c"
+PATH = "server/dll/rbbridge.c"
 
 # 1) Defines ergaenzen (nach LUA_GLOBALSINDEX).
 OLD_DEF = "#define RBBRIDGE_LUA_GLOBALSINDEX     (-10002)\n"

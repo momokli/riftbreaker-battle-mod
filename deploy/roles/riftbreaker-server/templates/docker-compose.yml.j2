@@ -18,13 +18,13 @@ services:
       LC_ALL: C.UTF-8
       LANG: C.UTF-8
       # Deploy-Identitaet im Container-Env (Issue #483, US4): der Mod-Log
-      # (mod/lua) liest RBB_ENV/RBB_REF daraus.
+      # (client-mod/lua) liest RBB_ENV/RBB_REF daraus.
       RBB_ENV: "{{ rift_env }}"
       RBB_REF: "{{ rift_deploy_ref }}"
       # Rig-Rezept: Sync-Primitive AUS (sonst Crash im Boost-Thread vor dem bind()).
       WINEESYNC: "0"
       WINEFSYNC: "0"
-      # Trainer-I/O-Bridge (Issue #265): pipe_bridge.exe lauscht IM Container auf
+      # Server-I/O-Bridge (Issue #265): pipe_bridge.exe lauscht IM Container auf
       # {{ riftbreaker_bridge_container_port }} (immer 9001); der Host publiziert
       # nur 127.0.0.1:{{ riftbreaker_bridge_port }} (konsistent mit
       # tournament_bridge_a_url). Container-/Host-Port sind getrennt (Issue #289):
@@ -48,7 +48,7 @@ services:
       - "{{ riftbreaker_config_dir }}/config.cfg:/data/config/config.cfg:ro"
       - "{{ riftbreaker_wine_volume }}:/data/.wine"
       - "{{ riftbreaker_saves_volume }}:/data/saves"
-      # Trainer-I/O-Tools (Issue #265, von Rolle rbtools gestagt). Read-only:
+      # Server-I/O-Tools (Issue #265, von Rolle rbtools gestagt). Read-only:
       # entrypoint injiziert Z:\opt\rbtools\rbbridge.dll und startet pipe_bridge.exe.
       - "{{ riftbreaker_rbtools_dir }}:/opt/rbtools:ro"
 
@@ -82,41 +82,6 @@ services:
       - /data/.wine
       - --out-dir
       - /data/sessions
-
-  # Referee-Egress (Issue #358/#268): tailt denselben Lua-Log (ro) und postet
-  # ready/wave_done/hq_destroyed an POST /referee/event des Tournament-Servers.
-  # Der Tournament-Server bindet 0.0.0.0:{{ tournament_port | default(8081) }} auf dem
-  # Host -> aus dem Sidecar via host.docker.internal (host-gateway) erreichbar.
-  {{ riftbreaker_referee_egress_container }}:
-    image: "{{ riftbreaker_referee_egress_image }}"
-    container_name: {{ riftbreaker_referee_egress_container }}
-    restart: unless-stopped
-    depends_on:
-      - {{ riftbreaker_server_container }}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    labels:
-      RBB_ENV: "{{ rift_env }}"
-      RBB_REF: "{{ rift_deploy_ref }}"
-    environment:
-      # Deploy-Identitaet (Issue #483, US4): je gepostetem Referee-Event
-      # mitgeschickt.
-      RBB_ENV: "{{ rift_env }}"
-      RBB_REF: "{{ rift_deploy_ref }}"
-    volumes:
-      # Quelle: derselbe Wine-Prefix wie der Server (nur lesend).
-      - "{{ riftbreaker_wine_volume }}:/data/.wine:ro"
-      - "{{ riftbreaker_referee_egress_script }}:/app/referee_egress.py:ro"
-    command:
-      - python3
-      - -u
-      - /app/referee_egress.py
-      - --wine-prefix
-      - /data/.wine
-      - --server
-      - "{{ riftbreaker_referee_egress_server }}"
-      - --world
-      - "{{ riftbreaker_referee_egress_world }}"
 
 volumes:
   {{ riftbreaker_wine_volume }}:
