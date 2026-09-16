@@ -67,5 +67,7 @@ crash_collector_llvm_symbolizer: /usr/lib/llvm-18/bin/llvm-symbolizer
 crash_collector_symbolize_timeout: 60
 # Zweites Modul (Issue #559): die injizierte DLL rbbridge.dll (mingw -g).
 # Liegt gestaged auf dem Host; optional — fehlt sie, symbolisiert der Collector
-# weiterhin nur die Game-DLL (graceful, kein Hard-Fail).
-crash_collector_rbbridge_dll: /opt/rbmods/rbtools/rbbridge.dll
+# weiterhin nur die Game-DLL (graceful, kein Hard-Fail). Pfad-Schema `<env>`
+# (Issue #483): aus dem je Env gesetzten {{ rbtools_dir }} abgeleitet (vorher
+# fest top-level /opt/rbmods/rbtools — Issue #601 kopierte so die falsche DLL).
+crash_collector_rbbridge_dll: "{{ rbtools_dir }}/rbbridge.dll"
