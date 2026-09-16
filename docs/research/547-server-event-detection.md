@@ -133,7 +133,8 @@ auf einem headless Dedi mit Vanilla-Client feuern.**
 
 ### Plan: Spike B1 (Detailfassung)
 
-Einwänden + 3 Hinweisen). Übernommen am 2026-09-16._
+_Dieser Abschnitt gibt den Spike-Plan in der überarbeiteten Fassung wieder — nach Einarbeitung der
+5 Critic-Einwände + 3 Hinweisen (Critic-Urteil Iteration 2: PASS, s. Annex). Übernommen am 2026-09-16._
 
 ## Kontext
 
