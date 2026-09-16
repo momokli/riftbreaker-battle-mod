@@ -44,10 +44,14 @@ mods_zip_name: rbbattle.zip
 mods_zip_dest: "{{ website_mods_dir }}/{{ mods_zip_name }}"
 
 # --- Game-Content (Rolle game-content) --------------------------------------
-# Anders als planet (dort: sync, weil SteamCMD an lib32gcc-s1 hängt):
-# frisches Desktop-Linux hat i386-Multiarch normalerweise verfügbar.
-# Anonymer Login, App 4114030 — kostenlos, kein Steam-Account nötig.
-riftbreaker_content_mode: steamcmd
+# HTTP-Bundle von planet (Issue #566, Review-Antwort auf den "SteamCMD ist
+# unverifiziert"-Punkt): vorbereitetes Archiv + private PDB, checksum-
+# verifiziert, keine distro-spezifischen 32-bit-Abhängigkeiten wie bei
+# SteamCMD. Struktur geprüft (2026-09-16): `./bin/DedicatedServer.exe` +
+# `./bin/riftbreaker_dll_win_release.dll` passen 1:1, Checksum stimmt.
+# Alternativen weiterhin verfügbar: `-e riftbreaker_content_mode=steamcmd`
+# (anonym, App 4114030, kostenlos) oder `=sync` (eigener kanonischer Cache).
+riftbreaker_content_mode: http
 
 # --- Tournament-Server (nur bei `--tags tournament`, optional) -------------
 tournament_install_dir: "{{ riftbreaker_local_root }}/tournament-server"
@@ -68,17 +72,20 @@ riftbreaker_bridge_port: 9001
 # --- Crash-Collector (Review #566, Blocker 1) -------------------------------
 # Rohe Bundles (Minidump+Trace+Log) IMMER sichern -- essenziell fuer die
 # Wave-/Difficulty-Spikes (#508/#513), die den Server regelmaessig crashen
-# lassen koennen. Symbolisierung bewusst AUS: braucht die volle PRIVATE PDB
-# (252 MB, planet-only -- SteamCMD liefert nur die oeffentliche Distributions-
-# DLL/PDB) UND einen distro-spezifischen llvm-symbolizer-Pfad (der Rollen-
-# Default /usr/lib/llvm-18/bin/llvm-symbolizer ist Debian-Paketlayout, auf
-# Fedora anders). Ohne die private PDB waere symbolisierter Output ohnehin
-# unzuverlaessig. Rohe Bundles bleiben trotzdem nuetzlich (Crash-Marker,
-# Zeitpunkt, Kontext-Log). Zum Nachruesten: crash_collector_symbolize: true
-# + crash_collector_llvm_symbolizer auf den echten lokalen Pfad setzen.
+# lassen koennen.
+#
+# Symbolisierung jetzt AN (war zunaechst aus): das game-content-HTTP-Bundle
+# (oben) liefert die volle PRIVATE PDB mit -- der urspruengliche Blocker
+# (PDB war planet-only, SteamCMD liefert sie nicht) ist damit geloest.
+# OFFEN bleibt der llvm-symbolizer-Pfad: der Rollen-Default
+# /usr/lib/llvm-18/bin/llvm-symbolizer ist Debian-Paketlayout, auf Fedora
+# anders (z. B. `dnf install llvm` -> meist /usr/bin/llvm-symbolizer, je nach
+# Version). Mit `-e crash_collector_llvm_symbolizer=<dein Pfad>` anpassen,
+# falls Symbolik im Crash-Bundle leer bleibt -- ungetestet in dieser Session
+# (kein Fedora-Host hier, kein echter Crash provoziert).
 crash_collector_dir: "{{ riftbreaker_local_root }}/crashes"
 crash_collector_rbbridge_dll: "{{ rbtools_dir }}/rbbridge.dll"
-crash_collector_symbolize: false
+crash_collector_symbolize: true
 
 # --- Server-Control / Plane B (Review #566, Blocker 2) ----------------------
 # Kein Vault lokal -- Token direkt (wie riftbreaker_server_password), nicht

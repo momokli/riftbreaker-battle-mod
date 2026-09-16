@@ -138,6 +138,58 @@
     - riftbreaker_content_mode == 'sync'
     - (riftbreaker_content_force | bool) or not rbbattle_content_bin.stat.exists
 
+# --- HTTP-Bundle (Modus http, Issue #566) -----------------------------------
+# Alternative zu SteamCMD: vorbereitetes Bundle + private PDB von planet,
+# ohne distro-spezifische 32-bit-Abhängigkeiten. Checksum-Verifikation über
+# `get_url`s eingebauten "sha256:<URL>"-Mechanismus (lädt SHA256SUMS selbst
+# und sucht die passende Zeile) -- kein manuelles Parsen.
+- name: HTTP-Download-Verzeichnis sicherstellen (http)
+  file:
+    path: "{{ riftbreaker_content_http_download_dir }}"
+    state: directory
+    mode: "0755"
+  when: riftbreaker_content_mode == 'http'
+
+- name: Game-Content-Bundle herunterladen (http, checksum-verifiziert)
+  get_url:
+    url: "{{ riftbreaker_content_http_base }}/{{ riftbreaker_content_http_archive }}"
+    dest: "{{ riftbreaker_content_http_download_dir }}/{{ riftbreaker_content_http_archive }}"
+    checksum: "sha256:{{ riftbreaker_content_http_base }}/{{ riftbreaker_content_http_checksums }}"
+    mode: "0644"
+  when: riftbreaker_content_mode == 'http'
+
+- name: Game-Content-Bundle entpacken (http, idempotent)
+  unarchive:
+    src: "{{ riftbreaker_content_http_download_dir }}/{{ riftbreaker_content_http_archive }}"
+    dest: "{{ riftbreaker_game_dir }}"
+    remote_src: true
+  when:
+    - riftbreaker_content_mode == 'http'
+    - (riftbreaker_content_force | bool) or not rbbattle_content_bin.stat.exists
+
+# Best effort: die PDB ist NUR fuers Crash-Symbolik-Modul (Issue #480) --
+# ein Netzwerk-Hakler hier darf das eigentliche Hochfahren des Servers nicht
+# blockieren (deshalb ignore_errors statt Teil des Fail-loud-Contracts unten).
+- name: Private PDB fuer Crash-Symbolik herunterladen (http, checksum-verifiziert, best effort)
+  get_url:
+    url: "{{ riftbreaker_content_http_base }}/{{ riftbreaker_content_http_pdb }}"
+    dest: "{{ riftbreaker_game_dir }}/bin/{{ riftbreaker_content_http_pdb }}"
+    checksum: "sha256:{{ riftbreaker_content_http_base }}/{{ riftbreaker_content_http_checksums }}"
+    mode: "0644"
+  register: rbbattle_content_http_pdb
+  ignore_errors: true
+  when: riftbreaker_content_mode == 'http'
+
+- name: Hinweis, falls PDB-Download fehlschlug (http, Crash-Symbolik bleibt aus)
+  debug:
+    msg: >-
+      PDB-Download fehlgeschlagen ({{ rbbattle_content_http_pdb.msg | default('unbekannter Fehler') }}) --
+      Server laeuft trotzdem, aber Crash-Symbolik (crash_collector_symbolize)
+      haette keine private PDB zum Aufloesen der Adressen.
+  when:
+    - riftbreaker_content_mode == 'http'
+    - rbbattle_content_http_pdb is failed
+
 - name: Content-Verifikation (Binary vorhanden?)
   stat:
     path: "{{ riftbreaker_game_dir }}/{{ riftbreaker_server_bin }}"
@@ -149,11 +201,12 @@
   fail:
     msg: >-
       Dedicated-Server-Content fehlt: {{ riftbreaker_game_dir }}/{{ riftbreaker_server_bin }}
-      existiert nach dem Lauf nicht. SteamCMD (anonym, App {{ riftbreaker_app_id }})
-      hat den Content nicht bereitgestellt. Fallback: Content aus einem
-      kanonischen Cache spiegeln, z. B.
+      existiert nach dem Lauf nicht. Modus {{ riftbreaker_content_mode }} hat den
+      Content nicht bereitgestellt. Alternativen:
       `-e riftbreaker_content_mode=sync -e riftbreaker_content_cache_dir=/srv/riftbreaker/data/server`
-      (setzt einen vollständigen Steam-Stand im Cache voraus).
+      (setzt einen vollständigen Steam-Stand im Cache voraus) oder
+      `-e riftbreaker_content_mode=http` (vorbereitetes Bundle von planet,
+      s. riftbreaker_content_http_base).
   when:
     - not ansible_check_mode
     - not rbbattle_content_after.stat.exists

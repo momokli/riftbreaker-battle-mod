@@ -14,7 +14,9 @@ Difficulty-Spikes (#508/#513): Server hochfahren, `POST /get_state` /
 - Den **Crash-Collector** (systemd, Review #566): sichert Minidump+Trace+Log
   bei einem Absturz nach `{{ riftbreaker_local_root }}/crashes` — essenziell
   für die Wave-/Difficulty-Spikes, die den Server crashen lassen können.
-  Symbolisierung standardmäßig **aus** (siehe unten, "Crash-Symbolik").
+  Symbolisierung ist AN (die private PDB kommt über das HTTP-Content-Bundle
+  mit, siehe unten) — der `llvm-symbolizer`-Pfad kann trotzdem distro-
+  abhängig nachjustiert werden müssen, siehe "Crash-Symbolik" unten.
 - **Server-Control** (systemd, Plane B/#424, Review #566): Status/Logs/
   Restart/Start/Stop des Containers per HTTP, `127.0.0.1:8091`
   (`server_control_port`) — kein Browser-Panel dafür lokal, aber `curl`
@@ -32,18 +34,35 @@ Difficulty-Spikes (#508/#513): Server hochfahren, `POST /get_state` /
 - `sudo`-Rechte (das Playbook läuft mit `become: true`, wie `site.yml` auf
   planet — Docker/`/srv`/`/opt`-Schreibzugriff).
 
-Die Rolle `game-content` bootstrapt `steamcmd` selbst (kein manueller Download
-nötig) — anonymer Login, App-ID 4114030, **kostenlos, kein Steam-Account
-nötig**. Ihre 32-bit-Laufzeitabhängigkeit ist distro-abhängig, die Rolle
-erkennt das über `ansible_os_family`:
+**Game-Content kommt per HTTP-Download von planet** (`riftbreaker_content_mode:
+http`, Default in `local-vars.yml`): ein vorbereitetes, checksum-verifiziertes
+Bundle (`riftbreaker-game-content.tar.gz`, ~254 MiB) **inklusive der privaten
+PDB** fürs Crash-Symbolik-Modul (~241 MiB) — kein SteamCMD, keine
+distro-spezifischen 32-bit-Abhängigkeiten. Struktur geprüft (2026-09-16,
+Checksum verifiziert): `./bin/DedicatedServer.exe` passt 1:1 auf
+`riftbreaker_server_bin`.
+
+**Alternativen** (falls der HTTP-Download mal nicht erreichbar ist):
+
+```bash
+# SteamCMD (anonym, App 4114030, kostenlos) -- braucht 32-bit-Multilib:
+scripts/local-dev.sh -e riftbreaker_content_mode=steamcmd
+
+# eigener kanonischer Cache (du brauchst dafuer selbst schon einen
+# vollstaendigen Steam-Content-Stand irgendwo liegen):
+scripts/local-dev.sh -e riftbreaker_content_mode=sync -e riftbreaker_content_cache_dir=/pfad
+```
+
+Bei `mode=steamcmd` ist die 32-bit-Laufzeitabhängigkeit distro-abhängig, die
+Rolle erkennt das über `ansible_os_family`:
 
 | Distro | Was die Rolle installiert | Manuell vorher |
 |---|---|---|
 | Debian/Ubuntu | `dpkg --add-architecture i386` + `apt install lib32gcc-s1` | nichts |
 | Fedora/RHEL | `dnf install glibc.i686 libstdc++.i686` | nichts |
-| andere | — (kein Zweig) | `-e riftbreaker_content_mode=sync` (Fallback, siehe unten) |
+| andere | — (kein Zweig) | `mode=sync` verwenden |
 
-**mingw-w64-Paketnamen:**
+**mingw-w64-Paketnamen** (für die Bridge-Tools, unabhängig vom Content-Modus):
 
 ```bash
 # Debian/Ubuntu
@@ -59,16 +78,14 @@ dann `dnf install docker-ce docker-ce-cli containerd.io docker-compose-plugin`)
 die verlässlichsten Ergebnisse — `podman` + `podman-docker`-Kompat-Shim wurde
 hier nicht getestet und kann bei `docker compose`-Details abweichen.
 
-**Achtung, unverifiziert:** planet selbst nutzt `riftbreaker_content_mode:
-sync` statt `steamcmd` (host_vars/planet/vars.yml) — dieser Pfad läuft in
-KEINEM CI-Job und wurde hier nicht live getestet (diese Session hat kein
-Docker/Wine/Game-Content, um das zu verifizieren; die Debian/Fedora-Zweige
-oben sind nur syntaktisch/durch Doku-Recherche geprüft, nicht live gebootet).
-Schlägt SteamCMD trotz der obigen Abhängigkeiten fehl:
-`-e riftbreaker_content_mode=sync -e riftbreaker_content_cache_dir=<dein
-vollständiger Steam-Stand>` als Fallback (siehe `deploy/roles/game-content/`)
-— dafür brauchst du dann allerdings selbst schon einen vollständigen
-Steam-Content-Stand irgendwo liegen.
+**Achtung, unverifiziert:** der HTTP-Download selbst wurde geprüft (Checksum +
+Archiv-Struktur, s. o.) — was NICHT in dieser Session getestet werden konnte,
+ist der komplette Rest der Kette danach: `unarchive` durch Ansible,
+Docker-Image-Build, Wine-Boot, tatsächliches Hochfahren von
+`DedicatedServer.exe` (kein Docker/Wine hier). `steamcmd`/`sync` als Modus
+sind ebenfalls nur syntaktisch/durch Doku-Recherche geprüft, nicht live
+gebootet — planet selbst nutzt übrigens `sync` (host_vars/planet/vars.yml),
+nicht `steamcmd`.
 
 ## Aufruf
 
@@ -135,16 +152,18 @@ curl -X POST -H "Authorization: Bearer localdev" http://127.0.0.1:8091/restart
 Token = `server_control_token` aus `deploy/local-vars.yml` (Default
 `localdev` — bei Bedarf mit `-e server_control_token=...` überschreiben).
 
-### Crash-Symbolik nachrüsten (optional)
+### Crash-Symbolik
 
-Standardmäßig aus (`crash_collector_symbolize: false` in `local-vars.yml`) —
-die volle **private** PDB (252 MB) ist planet-only, SteamCMD liefert sie
-nicht, und der Rollen-Default für `llvm-symbolizer` ist ein Debian-Paketpfad.
-Rohe Bundles (Minidump+Trace+Log) landen trotzdem immer in
-`{{ riftbreaker_local_root }}/crashes`. Zum Nachrüsten:
-`-e crash_collector_symbolize=true -e crash_collector_llvm_symbolizer=<dein
-lokaler Pfad>` — Symbolisierung bleibt dann trotzdem nur so gut wie die
-DLL/PDB, die SteamCMD dir gegeben hat.
+Standardmäßig AN (`crash_collector_symbolize: true`) — das HTTP-Content-
+Bundle liefert die volle **private** PDB mit (kein SteamCMD-Blocker mehr).
+Falls Symbolik im Crash-Bundle trotzdem leer bleibt: der Rollen-Default für
+`llvm-symbolizer` (`/usr/lib/llvm-18/bin/llvm-symbolizer`) ist ein
+Debian-Paketpfad, auf Fedora anders — mit
+`-e crash_collector_llvm_symbolizer=<dein lokaler Pfad>` korrigieren (z. B.
+nach `sudo dnf install llvm`, Pfad via `which llvm-symbolizer` finden).
+Rohe Bundles (Minidump+Trace+Log) landen so oder so immer in
+`{{ riftbreaker_local_root }}/crashes`, auch wenn die Symbolisierung
+fehlschlägt. Ganz ausschalten: `-e crash_collector_symbolize=false`.
 
 ### Aufräumen
 
