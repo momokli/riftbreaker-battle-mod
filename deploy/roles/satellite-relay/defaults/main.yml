@@ -12,8 +12,15 @@
 #
 # EINZIGE QUELLE der satellite_relay_*-Werte (Issue #328, Review #329): bewusst
 # KEINE host_vars/satellite/, sonst würde host_vars die Defaults still
-# überschreiben (Precedence). Die Rolle läuft ohnehin nur gegen den Host
-# `satellite`. Falls host-spezifische Abweichungen nötig werden, hier ändern.
+# überschreiben (Precedence). Die Rolle lief ursprünglich nur gegen den Host
+# `satellite`; sie dient jetzt ZUSÄTZLICH dem Host `sync` als zweites UDP-
+# Relay (sync:6321 -> planet:6323) — dort wird `satellite_relay_target_port`
+# auf Play-Ebene (deploy/deploy-staging.yml, Play 2) auf 6323 gesetzt,
+# während `satellite_relay_target_host` (65.21.27.234) und
+# `satellite_relay_interface` (eth0) die Rollen-Defaults bleiben (für sync
+# ebenfalls korrekt). Der Default `satellite_relay_target_port: 6322` bleibt
+# der satellite/prod-Wert. Falls host-spezifische Abweichungen nötig werden,
+# hier ändern.
 #
 # Bewusste Design-Grenzen (nicht-blockierende Review-Hinweise #329):
 #   * Das Relay-Script fügt Regeln idempotent HINZU, entfernt aber keine

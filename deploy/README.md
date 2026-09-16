@@ -12,11 +12,13 @@ die forced command führt genau dieses Playbook aus.
 ## Voraussetzungen
 
 - `ansible` (core ≥ 2.19) auf dem Control-Node (dem Rechner, von dem du deployst; beim CD ist das planet selbst, als root — siehe CD-Abschnitt).
-- SSH mesh-first: Aliase `planet` (dev-/prod-Dedi) **und** `satellite`
-  (Relay-Host) in `~/.ssh/config` (Tailscale), jeweils `root`-Login. Wie `planet`
-  ist `satellite` ein Mesh-Alias — SSH **niemals** über die Public-IP
-  (`65.21.181.48` ist nur für den öffentlichen UDP-Port). Ohne den Alias läuft
-  `deploy/deploy-prod.yml` (`hosts: satellite`) ins Leere.
+- SSH mesh-first: Aliase `planet` (dev-/prod-/staging-Dedi) **sowie** die beiden
+  Relay-Hosts `satellite` (prod) und `sync` (staging) in `~/.ssh/config`
+  (Tailscale), jeweils `root`-Login. Wie `planet` sind `satellite`/`sync`
+  Mesh-Aliase — SSH **niemals** über die Public-IP (`65.21.181.48` bzw.
+  `65.21.253.64` sind nur für den öffentlichen UDP-Port). Ohne den Alias läuft
+  `deploy/deploy-prod.yml` (`hosts: satellite`) bzw.
+  `deploy/deploy-staging.yml` (`hosts: sync`) ins Leere.
 - Auf planet: Docker + `docker compose`, `systemd`,
   Caddy als geteilter Container `mellon-caddy` (Host-Gateway) — der Rift-Stack
   betreibt zusätzlich einen eigenen, schlanken `rift-caddy` (Image `caddy:2`,
@@ -125,13 +127,17 @@ ansible-playbook -i deploy/inventory deploy/deploy-prod.yml \
   `satellite_relay_port` → `satellite_relay_target_host:target_port`) via
   iptables-PREROUTING + MASQUERADE, persistiert über eine systemd-Oneshot-Unit;
   nur Core-Module.
-- **Einzige Quelle der `satellite_relay_*`-Werte** sind die Rollen-Defaults
-  (`roles/satellite-relay/defaults/main.yml`) — bewusst **keine**
-  `host_vars/satellite/`, damit keine Precedence-Falle entsteht (host_vars
-  würde die Defaults still überschreiben). Die Rolle läuft nur gegen `satellite`.
+- Die Rolle läuft jetzt gegen **zwei** Relay-Hosts: `satellite` (prod,
+  `:6321 → :6322`) und `sync` (staging, `:6321 → :6323`). Das Ziel-Port je
+  Relay wird **auf Play-Ebene** gesetzt (`satellite_relay_target_port`;
+  prod-Default `:6322`, staging überschreibt in `deploy-staging.yml` auf
+  `:6323`) — bewusst **keine** `host_vars/satellite/` oder `host_vars/sync/`,
+  damit keine Precedence-Falle entsteht (host_vars würde die Defaults still
+  überschreiben).
 
 Der Relay ergänzt den dev-Stack; `deploy/site.yml` (CD) bleibt unverändert der
-dev-Rollout.
+dev-Rollout. Staging nutzt dasselbe Muster: `deploy/deploy-staging.yml` Play 2
+installiert die Rolle auf `sync` mit `satellite_relay_target_port: 6323`.
 
 ### Vault
 
@@ -145,7 +151,14 @@ Nach jedem Merge auf `main` rollt der Workflow
 [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) den aktuellen
 Mod-Stand automatisch auf den Solo-**DEV**-Server aus (planet, Port 6321).
 
-Topologie (Issue #328): **zwei** Instanzen, ein Dedi-Port.
+Topologie (Issue #328 + staging): **drei** koexistierende Instanzen auf planet,
+ein Dedi-Port (`:6321`).
+
+| Env     | Trigger        | Host   | Game-Port | Öffentlicher Einstieg              |
+| ------- | -------------- | ------ | --------- | ---------------------------------- |
+| DEV     | push `main`    | planet | `:6321`   | `65.21.27.234:6321`                |
+| PROD    | push Tag `v*`  | planet | `:6322`   | `satellite:6321 → :6322`           |
+| STAGING | push `staging` | planet | `:6323`   | `sync (65.21.253.64):6321 → :6323` |
 
 - **DEV** (planet, `:6321`): rolling, von diesem CD-Workflow deployt
   (`deploy/site.yml`, Werte aus `inventory/host_vars/planet/`).
@@ -153,19 +166,28 @@ Topologie (Issue #328): **zwei** Instanzen, ein Dedi-Port.
   (`riftbreaker-dedicated-prod`), öffentlich erreichbar über den
   **Satellite-Relay** (eigene IPv4, inbound `:6321` → DNAT → planet `:6322`).
   Deploy separat per [`deploy-prod.yml`](deploy-prod.yml) +
-  [`prod-vars.yml`](prod-vars.yml). Der Client ist effektiv auf Port `6321`
-  hardgewired — der zweite öffentliche Zugang läuft deshalb über eine zweite
-  **Adresse** (den Satellite), nicht über einen zweiten Port.
+  [`prod-vars.yml`](prod-vars.yml).
+- **STAGING** (planet, `:6323`): dritter Twin (wie prod), öffentlich erreichbar
+  über den **Sync-Relay** (eigene IPv4 `65.21.253.64`, inbound `:6321` → DNAT →
+  planet `:6323`). Deploy bei Push auf `staging` per `deploy/deploy-staging.yml` +
+  `deploy/staging-vars.yml`.
 
-Der **Tag→prod-Kanal ist verdrahtet**: ein Tag-Push `v*` rollt
-`deploy/deploy-prod.yml` (+ `-e @deploy/prod-vars.yml`) auf prod aus. Der
-forced command reicht den `<ref>` per Marker-Datei an den root-Wrapper, der
-`main` → `site.yml` (dev) und `refs/tags/v*` → `deploy-prod.yml` (prod)
-dispatched (siehe [„CD: SSH-Deploy"](#cd-ssh-deploy-dedizierter-deploy-user)).
+Der Client ist effektiv auf Port `6321` hardgewired — die zusätzlichen
+öffentlichen Zugänge laufen deshalb über je eine zweite **Adresse** (den
+`satellite` für prod, den `sync` für staging), nicht über weitere Ports.
+
+Der **Tag→prod- und Branch→staging-Kanal ist verdrahtet**: ein Tag-Push `v*`
+rollt `deploy/deploy-prod.yml` (+ `-e @deploy/prod-vars.yml`) auf prod aus, ein
+Push auf `staging` rollt `deploy/deploy-staging.yml` (+ `-e @deploy/staging-vars.yml`)
+aus. Der forced command reicht den `<ref>` per Marker-Datei an den root-Wrapper,
+der `main` → `site.yml` (dev), `refs/tags/v*` → `deploy-prod.yml` (prod) und
+`refs/heads/staging` → `deploy-staging.yml` (staging) dispatched (siehe
+[„CD: SSH-Deploy"](#cd-ssh-deploy-dedizierter-deploy-user)).
 
 ```text
-push auf main          → deploy-dev  (site.yml,          dev  :6321)
-push auf Tag v*        → deploy-prod (deploy-prod.yml,   prod :6322 via Satellite)
+push auf main          → deploy-dev     (site.yml,           dev     :6321)
+push auf Tag v*        → deploy-prod    (deploy-prod.yml,    prod    :6322 via satellite)
+push auf staging       → deploy-staging (deploy-staging.yml, staging :6323 via sync-Relay)
 ```
 
 ## CD: SSH-Deploy (dedizierter deploy-User)
@@ -434,17 +456,17 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 
 ## Rollen
 
-| Rolle                    | Typ                | Was                                                                                                                                                                                                                                                   |
-| ------------------------ | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dedicated-server-image` | docker             | baut `rb-dedicated:<deploy-sha>` auf planet (Laufzeit :6321)                                                                                                                                                                                          |
-| `game-content`           | steamcmd/sync      | Dedicated-Server-Content (App 4114030) nach `riftbreaker_game_dir` (idempotent, fail loud)                                                                                                                                                            |
-| `riftbreaker-server`     | docker             | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation                                                                                                               |
-| `satellite-relay`        | iptables + systemd | UDP-DNAT-Relay auf `satellite`: inbound `:6321` → planet prod `:6322` (reboot-fest; Rollen-Defaults = einzige Wertquelle)                                                                                                                             |
-| `tournament-server`      | systemd            | Rust/axum Referee + Web-UI. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt)                                                          |
+| Rolle                    | Typ                | Was                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------ | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dedicated-server-image` | docker             | baut `rb-dedicated:<deploy-sha>` auf planet (Laufzeit :6321)                                                                                                                                                                                                                                                                        |
+| `game-content`           | steamcmd/sync      | Dedicated-Server-Content (App 4114030) nach `riftbreaker_game_dir` (idempotent, fail loud)                                                                                                                                                                                                                                          |
+| `riftbreaker-server`     | docker             | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation                                                                                                                                                                                             |
+| `satellite-relay`        | iptables + systemd | UDP-DNAT-Relay auf zwei Hosts: `satellite` (prod, `:6321 → :6322`) und `sync` (staging, `:6321 → :6323`); Ziel-Port je Relay als Play-Var (`satellite_relay_target_port`), reboot-fest, kein `host_vars`                                                                                                                            |
+| `tournament-server`      | systemd            | Rust/axum Referee + Web-UI. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt)                                                                                                                                        |
 | `website`                | eigener Caddy      | eigener `rift-caddy` (plain HTTP: Landing + `/mod.zip` + Cockpit `/contract/*` + `/tournament/*`) + ZWEI Einträge im geteilten Host-Caddy (Issue #322); Host-Caddy-Reload deterministisch + fehlersichtbar, `rift-caddy` mit `admin off` (Issue #355); `/server/*` nur bei deploytem Agenten (`server_control_enabled`, Issue #463) |
-| `mods-zip`               | —                  | Paketierung + md5-Paritäts-Check (hart)                                                                                                                                                                                                               |
-| `host-hygiene`           | systemd            | wöchentlicher Timer: entfernt **dangling** Docker-Images (`docker image prune`, **kein** `-a`; Issue #308)                                                                                                                                            |
-| `crash-collector`        | systemd            | Dauer-Dienst: sichert bei Crash-Markern das neueste `crash_info/<uuid>.{dmp,log,trace}` als Bundle nach `/opt/rbmods/crashes/` (+ Kontext/Meta, Retention; Issue #462)                                                                                  |
+| `mods-zip`               | —                  | Paketierung + md5-Paritäts-Check (hart)                                                                                                                                                                                                                                                                                             |
+| `host-hygiene`           | systemd            | wöchentlicher Timer: entfernt **dangling** Docker-Images (`docker image prune`, **kein** `-a`; Issue #308)                                                                                                                                                                                                                          |
+| `crash-collector`        | systemd            | Dauer-Dienst: sichert bei Crash-Markern das neueste `crash_info/<uuid>.{dmp,log,trace}` als Bundle nach `/opt/rbmods/crashes/` (+ Kontext/Meta, Retention; Issue #462)                                                                                                                                                              |
 
 ## Host-Caddy-Reload (Issue #355)
 
@@ -471,11 +493,13 @@ deploy/
 ├── site.yml                       # Haupt-Playbook dev (pre_tasks + Rollenreihenfolge)
 ├── deploy-prod.yml                # Prod-Instanz (planet :6322) + Satellite-Relay
 ├── prod-vars.yml                  # Overrides der prod-Instanz (dev-kokexistierend)
+├── deploy-staging.yml             # Staging-Instanz (planet :6323) + Sync-Relay
+├── staging-vars.yml               # Overrides der staging-Instanz (dev-/prod-kokexistierend)
 ├── test-deploy.yml / test-vars.yml # Boot-Test-Instanz (CI)
 ├── check-render.yml               # deploy-check-local: rendert Compose-Templates lokal
 ├── deploy-ssh.sh                  # CD: forced command für den deploy-User (SSH)
 ├── inventory/
-│   ├── hosts.yml                  # Hosts "planet" (dev/prod) + "satellite" (Relay, mesh-first)
+│   ├── hosts.yml                  # Hosts "planet" (dev/prod/staging) + "satellite"/"sync" (Relays, mesh-first)
 │   └── host_vars/planet/
 │       ├── vars.yml               # nicht-geheime Konfiguration
 │       └── vault.yml              # Geheimnis (ansible-vault verschlüsselt)
@@ -483,7 +507,7 @@ deploy/
     ├── dedicated-server-image/    # baut rb-dedicated:<sha>
     ├── game-content/              # Steam-Content (App 4114030) deklarativ
     ├── riftbreaker-server/        # docker 6321 (+ Restart-Handler)
-    ├── satellite-relay/           # UDP-DNAT-Relay (planet prod :6322 via satellite)
+    ├── satellite-relay/           # UDP-DNAT-Relay (prod :6322 via satellite, staging :6323 via sync)
     ├── tournament-server/         # systemd
     ├── website/                   # eigener rift-caddy: Landing + Cockpit (Issue #322)
     ├── mods-zip/                  # Paketierung + md5-Parität
@@ -612,18 +636,17 @@ Die Rolle `riftbreaker-server`
 Regel, Befund und Kontrollwerkzeug (`tools/mods-guard/check_mods_dir.py`):
 [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md) → „Mod-Backups & mods/-Guard".
 
-
 ## Environment-Isolation & Deploy-Identitaet (Issue #483)
 
 Jeder Deploy traegt genau eine Identitaet `<env> · <ref>`:
 
-| Baustein | Datei | Zweck |
-| --- | --- | --- |
-| Identitaet | `deploy/tasks/deploy-identity.yml` | setzt `rift_env`/`rift_deploy_ref`/`rift_deploy_identity` (in `pre_tasks` aller drei Plays) |
-| Schema | `deploy/env-schema.yml` | `per_env` (Pflicht je Env explizit) vs. `shared` (begruendet) |
-| Audit | `tools/deploy-gate/check_env_isolation.py` | stdlib-Audit (kein PyYAML); Marker `ENV-ISOLATION-GATE` |
-| Assert | `deploy/tasks/env-assert.yml` | Audit + Distinctness der per-env-Pfade; non-zero rc bricht den Deploy ab |
-| Tests | `deploy/tests/env-identity/`, `deploy/tests/env-isolation/`, `tools/deploy-gate/test_env_isolation.py` | hermetisch (kein Host, kein Vault) |
+| Baustein   | Datei                                                                                                  | Zweck                                                                                       |
+| ---------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| Identitaet | `deploy/tasks/deploy-identity.yml`                                                                     | setzt `rift_env`/`rift_deploy_ref`/`rift_deploy_identity` (in `pre_tasks` aller drei Plays) |
+| Schema     | `deploy/env-schema.yml`                                                                                | `per_env` (Pflicht je Env explizit) vs. `shared` (begruendet)                               |
+| Audit      | `tools/deploy-gate/check_env_isolation.py`                                                             | stdlib-Audit (kein PyYAML); Marker `ENV-ISOLATION-GATE`                                     |
+| Assert     | `deploy/tasks/env-assert.yml`                                                                          | Audit + Distinctness der per-env-Pfade; non-zero rc bricht den Deploy ab                    |
+| Tests      | `deploy/tests/env-identity/`, `deploy/tests/env-isolation/`, `tools/deploy-gate/test_env_isolation.py` | hermetisch (kein Host, kein Vault)                                                          |
 
 `rift_env` ist bewusst eine **Play-Var** in `site.yml` (dev), `deploy-prod.yml`
 (prod) und `test-deploy.yml` (test): Play-Vars schlagen Rollen-Defaults und
@@ -632,6 +655,7 @@ Jeder Deploy traegt genau eine Identitaet `<env> · <ref>`:
 Basis (`inventory/host_vars/planet/vars.yml`).
 
 **Assert-Semantik (fail-loud):**
+
 - Eine Variable in `prod-vars.yml`/`test-vars.yml` ohne Schema-Eintrag → rot.
 - Ein `per_env`-Key, der in einer gelisteten Env-Datei fehlt → rot.
 - Ein `shared`-Eintrag ohne Begruendung → rot.
@@ -650,7 +674,7 @@ Der host-seitige Checkout (`/opt/rbbattle-deploy/repo-…`) und der Wrapper
 Repo versioniert (forced-command des deploy-Users). Der vorgesehene, noch nicht
 umgesetzte Umbau trennt sie je Env:
 
-- Checkout: `/opt/rbbattle-deploy/repo-<env>` (dev|prod|test)
+- Checkout: `/opt/rbbattle-deploy/repo-<env>` (dev|prod|test|staging)
 - Marker: `.deploy-<env>.sha` (Checkout-SHA) und `.deploy-<env>.ref` (Tag+SHA)
 - Damit deployt jeder Lauf aus seinem eigenen Checkout statt alle aus einem
   gemeinsamen — Ziel des Issues, aber **eigener PR mit Rollback-Runbook**
