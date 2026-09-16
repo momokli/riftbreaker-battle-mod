@@ -55,6 +55,12 @@
  *      (-lws2_32 ist nicht noetig: die Named Pipe nutzt nur Win32-API.)
  */
 
+/* Build-Identitaet (Issue #499): ref (Commit/Tag) wird beim Build per
+ * -DRBBRIDGE_REF="..." gesetzt; Default "unknown". */
+#ifndef RBBRIDGE_REF
+#define RBBRIDGE_REF "unknown"
+#endif
+
 #ifdef RBBRIDGE_HOSTTEST
 /*
  * Host-Test-Build (tests/rbbridge-hosttest, KEIN Windows noetig):
@@ -5102,6 +5108,8 @@ int rbbridge_start(void)
 
     InitializeCriticalSection(&g_log_cs);
     g_stop = 0;
+
+    dbg("rbbridge_start: ref=%s", RBBRIDGE_REF);
 
     /* WICHTIG (DLL-Fall): Hier laeuft das ggf. im DllMain-Kontext
      * (Loader-Lock) - nie blockieren/kein LoadLibrary, wir starten nur
