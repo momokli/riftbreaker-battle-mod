@@ -26,6 +26,13 @@ crash_collector_dir: /opt/rbmods/crashes
 # test-deploy.yml) und landet als RB_CRASH_ENV in der systemd-Unit.
 crash_collector_env: "{{ rift_env }}"
 
+# Build-Ref fuer den Bundle-Pfad + meta.json (Issue #607): DERSELBE ref wie in
+# die Binaries gebacken (scripts/build_ref.sh -> RBB_BUILD_REF). Kommt aus
+# deploy/tasks/deploy-identity.yml (rift_build_ref, set_fact) und landet als
+# RB_CRASH_REF in der systemd-Unit. Leer (z. B. local-deploy ohne deploy-identity)
+# -> der Collector faellt auf den Image-Tag (git_sha) zurueck.
+crash_collector_ref: "{{ rift_build_ref | default('') }}"
+
 # Beobachteter Container (derselbe wie server-control/riftbreaker-server —
 # kein zweiter Name, der auseinanderlaufen kann).
 crash_collector_container: "{{ riftbreaker_server_container }}"

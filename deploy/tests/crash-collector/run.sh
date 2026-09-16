@@ -24,11 +24,12 @@ RB_CRASH_RENDER_DIR="$dev_dir" ansible-playbook "$play"
 echo "== Retention konfigurierbar (5) =="
 RB_CRASH_RENDER_DIR="$(mktemp -d)" ansible-playbook "$play" -e test_retention=5
 
-echo "== Prod-Variante (eigene Unit/Bundle-Dir/Container/Env) =="
+echo "== Prod-Variante (eigene Unit/Bundle-Dir/Container/Env/Ref) =="
 RB_CRASH_RENDER_DIR="$prod_dir" ansible-playbook "$play" \
   -e crash_collector_unit=rbmods-crash-collector-prod \
   -e crash_collector_dir=/opt/rbmods/crashes-prod \
   -e crash_collector_env=prod \
+  -e crash_collector_ref=v0.38.0 \
   -e crash_collector_container=riftbreaker-dedicated-prod
 
 # dev und prod müssen sich in Unit-Name-relevanten Env-Werten unterscheiden
@@ -39,6 +40,8 @@ grep -q 'RB_CRASH_DIR=/opt/rbmods/crashes"' "$dev_unit"
 grep -q 'RB_CRASH_DIR=/opt/rbmods/crashes-prod' "$prod_unit"
 grep -q 'RB_CRASH_ENV=dev' "$dev_unit"
 grep -q 'RB_CRASH_ENV=prod' "$prod_unit"
+grep -q 'RB_CRASH_REF=8131ee0bd0c8' "$dev_unit"
+grep -q 'RB_CRASH_REF=v0.38.0' "$prod_unit"
 grep -q 'RB_CRASH_CONTAINER=riftbreaker-dedicated-prod' "$prod_unit"
 if grep -q 'crashes-prod' "$dev_unit"; then
   echo "FEHLER: dev-Unit rendert das prod-Bundle-Dir (Regression)" >&2
