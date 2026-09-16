@@ -1,0 +1,119 @@
+---
+# Lokale Solo-Dev-Überschreibungen (Issue #566) — Pendant zu prod-vars.yml/
+# test-vars.yml, aber NICHT Teil des Env-Isolations-Schemas (env-schema.yml):
+# auf einem Solo-Rechner gibt es keine dev/prod/test-Kollision, die dieses
+# Schema löst. Alle Pfade liegen unter riftbreaker_local_root (Default
+# /srv/rift-local) — EIN Wurzelverzeichnis, leicht zu finden/aufzuräumen.
+#
+# Aufruf: siehe deploy/LOCAL_DEV.md.
+
+rift_env: local
+
+# --- Disk-Space-Gate (Live-Befund #566: 10 GB blockierte auf 7,7 GB frei) --
+# Rollen-Default (10 GB) ist fuer planet kalibriert -- ein GETEILTER
+# Produktions-Host mit mehreren Envs/Image-Tags gleichzeitig braucht mehr
+# Marge als ein Solo-Dev-Rechner mit EINEM Image + einem Content-Stand.
+# Realistischer Bedarf hier: Docker-Image (Wine-Base) + Game-Content
+# (~300-400 MB entpackt) + PDB (241 MB) + Bridge-Tools (paar MB) -- 5 GB
+# lassen noch spuerbaren Puffer. Bei Bedarf weiter senken/erhoehen:
+# -e riftbreaker_disk_min_free_gb=<n> (Mount ueber riftbreaker_disk_mount,
+# muss exakt einem Eintrag aus `ansible_mounts` entsprechen).
+riftbreaker_disk_min_free_gb: 5
+
+# --- Wurzelverzeichnis (einzige Stelle, die man anpassen muss) -------------
+riftbreaker_local_root: /srv/rift-local
+
+# --- Dedicated-Server ---------------------------------------------------
+riftbreaker_game_dir: "{{ riftbreaker_local_root }}/game"
+riftbreaker_mod_dir: "{{ riftbreaker_game_dir }}/mods/rbbattle"
+riftbreaker_backup_dir: "{{ riftbreaker_local_root }}/backups"
+riftbreaker_deploy_dir: "{{ riftbreaker_local_root }}/compose/riftbreaker"
+riftbreaker_config_dir: "{{ riftbreaker_deploy_dir }}/config"
+riftbreaker_sessions_dir: "{{ riftbreaker_local_root }}/sessions"
+
+# Server-Passwort: rein lokal (127.0.0.1-Bridge/Direct-IP), kein Vault nötig.
+# Beliebig überschreibbar (-e riftbreaker_server_password=...), falls der
+# Server je über localhost hinaus erreichbar gemacht wird.
+riftbreaker_server_password: localdev
+
+# Welt/Mission wie der verifizierte dev-Stand (planet host_vars) — funktioniert.
+riftbreaker_server_campaign: mp_survival/mp_survival
+riftbreaker_server_mission: survival/jungle
+
+# --- Laufzeit-Image (Rolle dedicated-server-image) --------------------------
+dedicated_server_image_name: rb-dedicated
+dedicated_server_image: "{{ dedicated_server_image_name }}:{{ deploy_image_tag }}"
+riftbreaker_server_image: "{{ dedicated_server_image }}"
+
+# --- Server-I/O-Tools (Rolle rbtools) ---------------------------------------
+rbtools_dir: "{{ riftbreaker_local_root }}/rbtools"
+rbtools_staging_dir: "{{ rbtools_dir }}/.staging"
+
+# --- Mods-Zip (Rolle mods-zip) — kein Website-Docroot nötig, reines Ablagefach
+website_mods_dir: "{{ riftbreaker_local_root }}/mods"
+mods_zip_name: rbbattle.zip
+mods_zip_dest: "{{ website_mods_dir }}/{{ mods_zip_name }}"
+
+# --- Game-Content (Rolle game-content) --------------------------------------
+# HTTP-Bundle von planet (Issue #566, Review-Antwort auf den "SteamCMD ist
+# unverifiziert"-Punkt): vorbereitetes Archiv + private PDB, checksum-
+# verifiziert, keine distro-spezifischen 32-bit-Abhängigkeiten wie bei
+# SteamCMD. Struktur geprüft (2026-09-16): `./bin/DedicatedServer.exe` +
+# `./bin/riftbreaker_dll_win_release.dll` passen 1:1, Checksum stimmt.
+# Alternativen weiterhin verfügbar: `-e riftbreaker_content_mode=steamcmd`
+# (anonym, App 4114030, kostenlos) oder `=sync` (eigener kanonischer Cache).
+riftbreaker_content_mode: http
+
+# --- Tournament-Server (nur bei `--tags tournament`, optional) -------------
+tournament_install_dir: "{{ riftbreaker_local_root }}/tournament-server"
+tournament_unit: tournament-server-local
+tournament_port: 8081
+tournament_bridge_a_url: "http://127.0.0.1:{{ riftbreaker_bridge_port }}/exec"
+tournament_bridge_b_url: ""
+
+# --- Bridge-Port explizit (Review #566): sonst stiller Rollen-Default 9001 --
+riftbreaker_bridge_port: 9001
+
+# --- Deploy-Identitaet (Review #566, Nitpick) -------------------------------
+# Ohne deploy-identity.yml (bewusst nicht eingebunden, s. local-deploy.yml)
+# bliebe rift_deploy_ref auf dem Rollen-Default "unknown" -> RBB_REF=unknown,
+# rbbattle-local-unknown.zip. set_fact in local-deploy.yml pre_tasks setzt ihn
+# auf deploy_image_tag; hier nur als Doku-Anker, kein eigener Wert noetig.
+
+# --- Crash-Collector (Review #566, Blocker 1) -------------------------------
+# Rohe Bundles (Minidump+Trace+Log) IMMER sichern -- essenziell fuer die
+# Wave-/Difficulty-Spikes (#508/#513), die den Server regelmaessig crashen
+# lassen koennen.
+#
+# Symbolisierung jetzt AN (war zunaechst aus): das game-content-HTTP-Bundle
+# (oben) liefert die volle PRIVATE PDB mit -- der urspruengliche Blocker
+# (PDB war planet-only, SteamCMD liefert sie nicht) ist damit geloest.
+# OFFEN bleibt der llvm-symbolizer-Pfad: der Rollen-Default
+# /usr/lib/llvm-18/bin/llvm-symbolizer ist Debian-Paketlayout, auf Fedora
+# anders (z. B. `dnf install llvm` -> meist /usr/bin/llvm-symbolizer, je nach
+# Version). Mit `-e crash_collector_llvm_symbolizer=<dein Pfad>` anpassen,
+# falls Symbolik im Crash-Bundle leer bleibt -- ungetestet in dieser Session
+# (kein Fedora-Host hier, kein echter Crash provoziert).
+crash_collector_dir: "{{ riftbreaker_local_root }}/crashes"
+crash_collector_rbbridge_dll: "{{ rbtools_dir }}/rbbridge.dll"
+crash_collector_symbolize: true
+
+# --- Server-Control / Plane B (Review #566, Blocker 2) ----------------------
+# Kein Vault lokal -- Token direkt (wie riftbreaker_server_password), nicht
+# ueber vault_server_control_token. Ohne Token bricht die Rolle fail-closed ab
+# (by design, Issue #424) -- daher zwingend gesetzt, nicht nur ein Kommentar.
+server_control_token: localdev
+server_control_install_dir: "{{ riftbreaker_local_root }}/server-control"
+# Review #567, Mini-Nitpick: explizit statt stiller Rollen-Default (Discover-
+# ability, analog zu riftbreaker_bridge_port).
+server_control_port: 8091
+
+# --- Ausserhalb von riftbreaker_local_root, bewusst (Review #566, Blocker 4) -
+# Build-Kontext (Docker-Build-Cache) und die SteamCMD-Installation sind kein
+# Projekt-/Instanz-Zustand, sondern Tooling-Cache -- bleiben an den ueblichen
+# Systempfaden, DAMIT ein `rm -rf riftbreaker_local_root` (Aufräumen, siehe
+# LOCAL_DEV.md) sie NICHT mitreisst (sonst laedt/baut der naechste Lauf beides
+# unnoetig neu). Wer auch diese unter das Wurzelverzeichnis legen will, kann
+# dedicated_server_context_dir/steamcmd_dir hier ueberschreiben.
+# dedicated_server_context_dir: /opt/rbmods/dedicated-server (Rollen-Default)
+# steamcmd_dir: /opt/steamcmd (Rollen-Default)
