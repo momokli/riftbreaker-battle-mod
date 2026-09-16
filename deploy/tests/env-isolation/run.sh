@@ -21,7 +21,7 @@ trap 'rm -rf "$fixture"' EXIT
 mkdir -p "$fixture/deploy/inventory/host_vars/planet" "$fixture/tools/deploy-gate"
 cp "$repo/tools/deploy-gate/check_env_isolation.py" "$fixture/tools/deploy-gate/"
 cp "$repo/deploy/env-schema.yml" "$fixture/deploy/"
-cp "$repo/deploy/prod-vars.yml" "$repo/deploy/test-vars.yml" "$fixture/deploy/"
+cp "$repo/deploy/prod-vars.yml" "$repo/deploy/test-vars.yml" "$repo/deploy/staging-vars.yml" "$fixture/deploy/"
 cp "$repo/deploy/inventory/host_vars/planet/vars.yml" "$fixture/deploy/inventory/host_vars/planet/"
 
 echo "== Positiv: Fixture vollstaendig + Pfade distinct -> muss durchlaufen =="

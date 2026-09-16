@@ -3,18 +3,21 @@ name: Deploy (CD)
 # Continuous Deployment: jeder Merge auf main rollt DEV aus (planet :6321,
 # Operator-Cockpit cockpit.drift.projectmellon.de); jeder Tag-Push `v*` rollt
 # PROD aus (planet :6322 via Satellite-Relay, Operator-Cockpit
-# cockpit.rift.projectmellon.de, deploy/deploy-prod.yml).
+# cockpit.rift.projectmellon.de, deploy/deploy-prod.yml); jeder Push auf den
+# Branch `staging` rollt STAGING aus (planet :6323 via zweites Relay,
+# Operator-Cockpit cockpit.staging.projectmellon.de, deploy/deploy-staging.yml).
 #
 # Deploy-Mechanik: SSH als deploy-User (`ssh rbd "<sha> <ref>"`), forced command
 # macht git fetch + Hard-Checkout + Playbook. Der Remote-forced-command wählt
-# dev vs prod anhand von <ref> (branch `main` -> dev, tag `v*` -> prod).
+# dev/staging/prod anhand von <ref> (branch `main` -> dev, branch `staging` ->
+# staging, tag `v*` -> prod).
 #
 # (2026-09-13) Deploy-Gate ("parken bis 0 Spieler online") ENTFERNT:
 # deployt sofort bei jedem Merge/Tag, ohne auf leeren Server zu warten.
 
 on:
   push:
-    branches: [main]
+    branches: [main, staging]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -26,7 +29,7 @@ jobs:
     name: Deploy Dev (planet :6321)
     runs-on: [self-hosted, planet]
     timeout-minutes: 60
-    if: startsWith(github.ref, 'refs/heads/')
+    if: github.ref == 'refs/heads/main'
     concurrency:
       group: cd-dev
       cancel-in-progress: false
@@ -34,6 +37,26 @@ jobs:
       name: dev
       url: https://cockpit.drift.projectmellon.de/
     steps:
+      - name: Deploy per SSH (deploy-User, forced command)
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes rbd "${GITHUB_SHA} ${GITHUB_REF}"
+
+  deploy-staging:
+    name: Deploy Staging (planet :6323)
+    runs-on: [self-hosted, planet]
+    timeout-minutes: 60
+    if: startsWith(github.ref, 'refs/heads/staging')
+    concurrency:
+      group: cd-staging
+      cancel-in-progress: false
+    environment:
+      name: staging
+      url: https://cockpit.staging.projectmellon.de/
+    steps:
+      # Staging fährt deploy/deploy-staging.yml (+ -e @deploy/staging-vars.yml).
+      # Der Remote-forced-command unterscheidet dev/staging/prod anhand von
+      # <ref> — gleiche SSH-Mechanik wie dev/prod.
       - name: Deploy per SSH (deploy-User, forced command)
         run: |
           set -euo pipefail
@@ -52,8 +75,9 @@ jobs:
       url: https://cockpit.rift.projectmellon.de/
     steps:
       # Prod fährt deploy/deploy-prod.yml (+ -e @deploy/prod-vars.yml). Der
-      # Remote-forced-command unterscheidet dev/prod anhand von <ref>
-      # (branch `main` -> dev, tag `v*` -> prod) — gleiche SSH-Mechanik wie dev.
+      # Remote-forced-command unterscheidet dev/staging/prod anhand von <ref>
+      # (branch `main` -> dev, branch `staging` -> staging, tag `v*` -> prod) —
+      # gleiche SSH-Mechanik wie dev.
       - name: Deploy per SSH (deploy-User, forced command)
         run: |
           set -euo pipefail

@@ -51,7 +51,7 @@ import urllib.error
 import urllib.request
 
 MARKER = "SOC-ATTEST"
-VALID_ENVS = ("dev", "prod", "test")
+VALID_ENVS = ("dev", "prod", "test", "staging")
 
 HTTP_TIMEOUT_S = 10
 DOCKER_TIMEOUT_S = 15
@@ -436,7 +436,7 @@ def build_parser():
     parser.add_argument(
         "--env",
         default=os.environ.get("RBB_ATTEST_ENV"),
-        help="Erwartete Env (dev|prod|test). Default: RBB_ATTEST_ENV.",
+        help="Erwartete Env (dev|prod|test|staging). Default: RBB_ATTEST_ENV.",
     )
     parser.add_argument(
         "--ref",
@@ -458,7 +458,7 @@ def main(argv=None):
 
     problems = []
     if args.env not in VALID_ENVS:
-        problems.append("--env/RBB_ATTEST_ENV muss dev|prod|test sein (ist %r)." % args.env)
+        problems.append("--env/RBB_ATTEST_ENV muss dev|prod|test|staging sein (ist %r)." % args.env)
     if not args.ref:
         problems.append("--ref/RBB_ATTEST_REF fehlt (Commit-SHA/Tag angeben).")
     if problems:

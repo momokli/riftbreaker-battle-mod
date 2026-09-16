@@ -1,14 +1,15 @@
 ---
 # deploy/tasks/deploy-identity.yml — erzeugt die Deploy-Identitaet je Play
 # (Issue #483, US1). Wird per include_tasks in den pre_tasks von site.yml
-# (dev), deploy-prod.yml (prod) und test-deploy.yml (test) eingebunden.
+# (dev), deploy-prod.yml (prod), test-deploy.yml (test) und deploy-staging.yml
+# (staging) eingebunden.
 #
-# `rift_env` MUSS dort als Play-Var stehen (dev|prod|test): Play-Vars schlagen
+# `rift_env` MUSS dort als Play-Var stehen (dev|prod|test|staging): Play-Vars schlagen
 # Rollen-Defaults + host_vars, sonst erbt prod/test den dev-Wert (dieselbe
 # Praezedenz-Falle wie `server_control_enabled`, Issue #463).
 #
 # Ergebnis:
-#   rift_deploy_ref       dev/test = Checkout-SHA (deploy_image_tag);
+#   rift_deploy_ref       dev/test/staging = Checkout-SHA (deploy_image_tag);
 #                         prod     = Git-Tag (git describe --tags --always)
 #                                    + Checkout-SHA
 #   rift_deploy_identity  "<env> · <ref>"   (Surface-Vertrag, US4)
@@ -24,9 +25,9 @@
   assert:
     that:
       - rift_env is defined
-      - rift_env in ['dev', 'prod', 'test']
+      - rift_env in ['dev', 'prod', 'test', 'staging']
     fail_msg: >-
-      rift_env fehlt oder ist ungueltig (erwartet dev|prod|test). Es MUSS als
+      rift_env fehlt oder ist ungueltig (erwartet dev|prod|test|staging). Es MUSS als
       Play-Var im jeweiligen Playbook stehen (Play-Vars schlagen
       Rollen-Defaults/host_vars) — sonst erbt prod/test den dev-Wert
       (Issue #483).
