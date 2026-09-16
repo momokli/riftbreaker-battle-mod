@@ -386,6 +386,154 @@ untauglich — #378). Native Executor/CommandBuffer
 bleiben Option, sind aber **nicht nötig**: das Gate allein behebt die
 Crash-Ursache. Ein Detour bräuchte den Thread-Nachweis (Regel aus #479).
 
+## #512: verbundene Spielerzahl nativ (`players`) — nativ, mit-Player-Test offen
+
+**Frage:** Solo-/Koop-Erkennung ohne Lua. Lua-Pfad im Spiel:
+`dom_mananger:GetPlayersCounter()` == `#PlayerService:GetConnectedPlayers()`.
+
+**Befund:** Es gibt **kein** statisches "connected player count"-Feld. Die Zahl
+wird berechnet (Filter über den Spieler-Container) — ein reiner Offset-Read ist
+deshalb unmöglich; der einzige praktikable native Weg ist **ein Game-Call + ein
+Deref** (genau so, wie `dom_mananger:GetPlayersCounter()` es in Lua tut).
+
+### Aufgelöste Funktion (AOB, keine feste Adresse)
+
+`Riftbreaker::GetConnectedPlayers(Exor::World*)` — freie Funktion,
+RVA `0xC5EE70` (Build 2.0.58485; **nur Verifikations-Notiz**).
+
+```
+rcx = out-Vektor (hidden return ptr, MSVC-x64-Aggregat-Return)
+rdx = World*
+  48 8D 9A C0 00 00 00   lea rbx,[rdx+0xc0]    ; Sessions-Store (World+0xC0)
+  41 B8 B1 B8 7E 10      mov r8d,0x107eb8b1    ; TypeHash (ServerGameplaySessions)
+  Helper 0x1DF3F50 füllt `out` mit ALLEN Spieler-Ids,
+  Filter in-place auf "connected" via 0x1CF5AB0.
+Rückgabe-Typ: Exor::Vector<uint32,StlAllocatorProxy<uint32>>
+```
+
+### Vektor-Layout (drei unabhängige Disasm-Belege)
+
+| Beleg | Fundstelle |
+|---|---|
+| Erzeuger/Filter | `0xC5EE70` (`[r15+8]` = begin, `[r15+0x10]` = size) |
+| Konsument | `0x12B8386` (`lea rcx,[rbp+0x38]`, liest `[rbp+0x40]`/`[rbp+0x48]`) |
+| Destruktor | `0x26F340` (`[rcx+0x18]` = capacity, `[rcx]` = Allocator-Objekt) |
+
+```
+Exor::Vector<uint32> (+0x00 Allocator-Objekt*, +0x08 begin, +0x10 size, +0x18 capacity) = 0x20 B
+=> players = vec[+0x10]
+```
+
+### AOB statt RVA
+
+114-Byte-Signatur ab Funktions-Entry `RBBRIDGE_CONNPLAYERS_SIG`
+(`rbbridge.c`), im `.text` **eindeutig** (Gegenprobe planet 2026-09-15: genau
+1 Treffer @ RVA `0xC5EE70`). Wildcards: die drei `E8`-rel32 (buildabhängige
+Call-Ziele) und die drei rel8-Sprünge; die drei `E8`-Opcodes, die beiden
+`mov r8d,0x107eb8b1`-Anker und `lea rbx,[rdx+0xc0]` bleiben Pflicht.
+
+**Warum der Member-Wrapper `PlayerService::GetConnectedPlayers()` (RVA
+`0xF27960`) NICHT aufgelöst wird:** seine 30-Byte-Signatur matcht 5× (er teilt
+die Form mit `GetConnectedPlayersFromTeam`/`GetPlayersFromTeam` + 2 weiteren
+Geschwistern) — eine eindeutige AOB ist dort unmöglich. Deshalb wird die freie
+Impl direkt aufgelöst und mit dem bereits vorhandenen `World*` (aus
+`PlayerService[+0x08]`) aufgerufen.
+
+### Thread-Modell
+
+Reiner C++-Read, **kein `lua_*`** → thread-agnostisch; der Pipe-Thread ruft ihn
+direkt (analog `GetPlayerAccount`). Kein Vtable-Detour.
+
+### Aufräumen (kein Leak)
+
+Der Rückgabe-Vektor wird wie in `~Vector` (Disasm `0x26F340`) freigegeben:
+`cap = vec[+0x18]`; bei `cap != 0` → `vec[+0x00]->vtable[0x10](alloc,
+vec[+0x08], cap*4)`. **Keine Dtor-Symbolauflösung:** die Dtor-Bytes liegen
+dreifach byte-identisch im `.text` (3 Instanzen für 4-Byte-Elemente:
+`0x26F340`/`0x2B30F0`/`0x18906E0`) — eine AOB wäre nicht eindeutig. Der
+Deallocate-Aufruf über die Allocator-vtable des von der Engine selbst gesetzten
+Allocator-Objekts ist dagegen deterministisch und semantisch identisch.
+
+### Egress
+
+`get_state` liefert `"players":<n>` (Solo = 1) bzw. `"players":null`, wenn der
+AOB nicht auflösbar ist **oder die Welt nicht live ist** (graceful, kein Call).
+Cockpit: `Mission Flow (Wave)` → `players`.
+
+### WICHTIG: Aufruf erst NACH dem Account-Check (LIVE-Crash #512)
+
+`Riftbreaker::GetConnectedPlayers` ist **nicht** safe auf einer noch nicht
+geladenen Welt: die Funktion holt den Session-Pointer aus `World+0xC0` und
+ruft damit das Session-Prädikat (RVA `0x1CF5AB0` → `cmp rax,[rcx+0x1e0]`). Ist
+der Store noch nicht da, ist der Pointer NULL → Page-Fault:
+
+```
+wine: Unhandled page fault on read access to 00000000000001E0
+      at address 00006FFFF8EC5AD3 (thread 025c)
+```
+
+`0x6FFFF8EC5AD3 - base(0x6FFFF71D0000)` = **DLL+0x1CF5AD3** = genau
+`cmp rax,[rcx+0x1e0]` mit `rcx = 0` (NULL-Session). Der Read läuft deshalb erst
+**nach** erfolgreichem `GetPlayerAccount` — dieselbe live-bewiesene Vorbedingung
+"Welt wirklich da" wie beim carbonium-Read.
+
+### Live-Stand (Build mit Fix)
+
+Der Fix wurde gegen die dev-Instanz (`riftbreaker-dedicated`, Port 9001)
+verifiziert: `get_state` liefert ohne Spieler `ok:false, reason:no_account` mit
+`"players":null`, die Pipe bleibt oben (**kein Crash**).
+
+**Offener Punkt (Player-Test Momo/Matheo):** Ein Dedicated-Server ohne
+verbundenen Spieler lädt kein Konto — der `players`-Read ist dann per Design
+`null`. Die Zahlen 0/1/2 bei 0/1/2 Spielern (Solo = 1) sind damit erst mit
+verbundenem Spieler bestätigbar und **nicht** live verifiziert.
+
+### Player-Test — Stand 2026-09-16 (OFFEN, NICHT erledigt)
+
+**Deploy-Beleg:** Die dev-Instanz fährt exakt den Branch-Build: die deployte DLL
+`/opt/rbmods/rbtools/dev/rbbridge.dll` ist **byte-identisch** mit dem frischen
+Branch-Build (`sha256 9c76d836…427a5`; `strings` → 4× `"players"` in den vier
+`get_state`-Pfaden). Der Read-Pfad ist also live geladen.
+
+**Was live messbar ist (ohne Client): 0 Zahlenwert.** 3×
+`POST /get_state` (2026-09-16, Abstand 5 s) → alle
+`ok:false, reason:"no_account"`, `players:null`; `/health` →
+`{"ok":true,"pipe":true}`; Container `running`, `RestartCount=0`.
+Das belegt nur den **Graceful-Pfad** (kein Crash, `null` statt Blind-Call) —
+**nicht** die zurückgegebene Zahl.
+
+**Durchführung (mit verbundenem Client, Momo/Matheo):**
+
+1. Client auf die dev-Instanz verbinden (`:9001`/`:6321`), Mission starten
+   (Welt/Konto laden — `get_state` muss `ok:true` liefern).
+2. `curl -s -X POST http://127.0.0.1:9001/get_state -d '{}'`.
+3. Erwartet: Solo → `"players":1`; zweiter Client → `"players":2`; nach
+   Verlassen zurück auf 1/0 (0 nur bei leerem, aber geladenem Konto).
+4. Roh-JSON-Zeile **mit Zeitstempel** als Beleg-Kommentar an Issue #512.
+
+Erst danach ist Blocker 2 (Live-Zahlenwert) bestätigt. Bis dahin bleibt der
+Wert `players` ausdrücklich **nicht live verifiziert** — kein „proven".
+
+### Rework-Zyklus 5 — Verifikationsstand 2026-09-16 (HEAD f292d1d)
+
+Erneuter Code-/Merge-Rework ohne neuen Code-Änderungsbedarf; der Branch-Stand
+ist unverändert geprüft und weiterhin sauber:
+
+- **Merge:** `origin/main` (`3556bd9`) ist Ancestor von HEAD; `mergeable=MERGEABLE`,
+  keine Konfliktmarker, Netto-Diff vs. `main` bleibt #512-only. Kein Merge nötig.
+- **Host-Test (unabhängig, ohne Player):** `cc -O1 -g -Wall -Wextra -I
+  bausteine/rbbridge/dll tests/rbbridge-hosttest/hosttest/rbbridge_hosttest.c` →
+  **HOSTTEST_PASS=153 HOSTTEST_FAIL=0**.
+- **Required-Check `boot-test`: rot, aber Infra-Ursache (#301).** Der Lauf endet im
+  Disk-Gate auf planet — `"PLATZ-GATE: nur 9.0 GB frei auf / (planet) — gefordert
+  sind 10 GB"` (Workflow `Boot-Test`, Lauf 35062072155). Kein PR-Verschulden.
+- **Blocker 1 (Screenshots) und 3 (`connplayers_vec_release`-Roh-Deref):** behoben
+  und im Review bestätigt.
+
+**Blocker 2 (Live-Zahlenwert `players`) bleibt OFFEN, NICHT erledigt** — er hängt
+an einem Player-Lauf mit verbundenem Client (Momo/Matheo, Runbook oben). Der Wert
+ist bis dahin **nicht live verifiziert**; kein Merge, bis der Beleg vorliegt.
+
 ## #367: Wave-Counter — Instanz-Navigation + Feld-Offset (statisch, Build 2.0.58485)
 
 **Auftrag:** Instanz + Feld-Offset des Wave-Counters statisch belegen (PDB-publics
