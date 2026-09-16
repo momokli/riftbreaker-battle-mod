@@ -39,7 +39,7 @@ Baseline-Werte #33 sind unten mit Quelle aus dem Git-Verlauf wiederholt).
 | Stärke je Einheit | `tools/re/rbpack.py cat entities/units/ground/<name>.ent` → `HealthDesc.max_health` | Basis-HP je Unit-Typ (echte Spieldaten) |
 | Spawner-Struktur | `docs/PLAYTEST_1.0.md:398` (`event=wave_spawners count=<N>`) | 16 Rand-Spawner in 4 Gruppen |
 | v1-Preisliste + HQ-HP-Kurve (#33) | Git-Verlauf: `clanker-git show da99b89:docs/GAME_DESIGN.md` (bzw. `ca58561^:docs/GAME_DESIGN.md`) | Repo-etablierter Wert-Proxy (Mod-Units) |
-| Mod-Wellenkomposition (`rb_wave`) | `bausteine/01-wave-spawn/...autoexec.lua` (`RBB.waves`), `bausteine/05-economy-loop/...` (`killPoints`) | Repo-eigene Platzhalter-Wellen |
+| Mod-Wellenkomposition (`rb_wave`) | `[ehemals 01-wave-spawn]/...autoexec.lua` (`RBB.waves`), `[ehemals 05-economy-loop]/...` (`killPoints`) | Repo-eigene Platzhalter-Wellen |
 
 **Methodik:** Die `.logic`-Dateien sind Text (FlowGraph v5) und über
 `tools/re/rbpack.py cat` lesbar (zip64-sicher) — belegt in
@@ -92,7 +92,7 @@ Stärke-Proxy je Typ = **Basis-HP** (`HealthDesc.max_health`). Reale Naturwellen
 Zum Vergleich die Units des **Mod-Platzhalter-Shops** (`#33`-Preisliste) — gleiche
 Methode, aber **anderer Unit-Satz** (nicht die Naturwellen-Units):
 
-| Unit-Typ | max_health | #33-Preis | `killPoints` (bausteine/05) |
+| Unit-Typ | max_health | #33-Preis | `killPoints` ([ehemals 05]) |
 | --- | --- | --- | --- |
 | `brabit` | 120 | 100 | 1 |
 | `baxmoth` | 1000 | 150 | 2 |

@@ -108,7 +108,7 @@ Rematch, Bridge-Poll-Protokoll, Env-Tabelle): [`docs/TOURNAMENT_API.md`](../docs
 ## Einordnung
 
 Der Dienst ist die Server-Seite der Turnier-Architektur; Baustein 06
-(`bausteine/06-tournament-server`) war der Node-Prototyp dafür — diese
+(`[ehemals 06-tournament-server]`) war der Node-Prototyp dafür — diese
 Implementierung ist der echte Rust-Dienst mit Rift-Battle-Semantik
 (2 Welten, HQ-HP, Reveal, Rematch). rbbridge auf den Dedi-Servern
 (`server/`)

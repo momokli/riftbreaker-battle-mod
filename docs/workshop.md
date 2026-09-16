@@ -1,6 +1,6 @@
 # Steam-Workshop-Upload — Anleitung (nur Lua-Mod!)
 
-> ⚠️ **Grundregel: NUR der Lua-Mod (`client-mod/`, `bausteine/00–03`) geht in den
+> ⚠️ **Grundregel: NUR der Lua-Mod (`client-mod/`) geht in den
 > Workshop. Der Server (`server/`, `server`) wird NIE
 > hochgeladen** — In-Process-Injection verstößt gegen die Plattform-Regeln
 > und bleibt private Distribution (Entscheidung 08.09.2026,

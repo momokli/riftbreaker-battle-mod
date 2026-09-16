@@ -40,7 +40,7 @@ Wahrheitsquelle, Events sind nur Benachrichtigungen.
   In der RE-Phase wird `dispatch_exec` an den echten Spiel-Console-Dienst
   angeschlossen (dann gilt `"ok":true`). Bis dahin antwortet die DLL mit
   `exec_result ... "ok":false`.
-- **Client-seitig implementiert:** `bausteine/07-relay/relay.py` schreibt
+- **Client-seitig implementiert:** `server/pipe_client.py` schreibt
   `exec`-Zeilen nach diesem Vertrag auf die Pipe (`dispatch_exec`, Issue
   #60), inkl. eines zusätzlichen `cmd_id`-Felds zur Korrelation (unbekannte
   Felder werden von der DLL ignoriert, s. o.). Pfad/Timeout über
