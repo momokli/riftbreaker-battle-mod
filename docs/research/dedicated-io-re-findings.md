@@ -488,6 +488,32 @@ verbundenen Spieler lädt kein Konto — der `players`-Read ist dann per Design
 `null`. Die Zahlen 0/1/2 bei 0/1/2 Spielern (Solo = 1) sind damit erst mit
 verbundenem Spieler bestätigbar und **nicht** live verifiziert.
 
+### Player-Test — Stand 2026-09-16 (OFFEN, NICHT erledigt)
+
+**Deploy-Beleg:** Die dev-Instanz fährt exakt den Branch-Build: die deployte DLL
+`/opt/rbmods/rbtools/dev/rbbridge.dll` ist **byte-identisch** mit dem frischen
+Branch-Build (`sha256 9c76d836…427a5`; `strings` → 4× `"players"` in den vier
+`get_state`-Pfaden). Der Read-Pfad ist also live geladen.
+
+**Was live messbar ist (ohne Client): 0 Zahlenwert.** 3×
+`POST /get_state` (2026-09-16, Abstand 5 s) → alle
+`ok:false, reason:"no_account"`, `players:null`; `/health` →
+`{"ok":true,"pipe":true}`; Container `running`, `RestartCount=0`.
+Das belegt nur den **Graceful-Pfad** (kein Crash, `null` statt Blind-Call) —
+**nicht** die zurückgegebene Zahl.
+
+**Durchführung (mit verbundenem Client, Momo/Matheo):**
+
+1. Client auf die dev-Instanz verbinden (`:9001`/`:6321`), Mission starten
+   (Welt/Konto laden — `get_state` muss `ok:true` liefern).
+2. `curl -s -X POST http://127.0.0.1:9001/get_state -d '{}'`.
+3. Erwartet: Solo → `"players":1`; zweiter Client → `"players":2`; nach
+   Verlassen zurück auf 1/0 (0 nur bei leerem, aber geladenem Konto).
+4. Roh-JSON-Zeile **mit Zeitstempel** als Beleg-Kommentar an Issue #512.
+
+Erst danach ist Blocker 2 (Live-Zahlenwert) bestätigt. Bis dahin bleibt der
+Wert `players` ausdrücklich **nicht live verifiziert** — kein „proven".
+
 ## #367: Wave-Counter — Instanz-Navigation + Feld-Offset (statisch, Build 2.0.58485)
 
 **Auftrag:** Instanz + Feld-Offset des Wave-Counters statisch belegen (PDB-publics
