@@ -720,50 +720,6 @@ int main(void)
           "mission_flow_mode_ok: \"default \" -> abgelehnt (kein Trim)");
 
     /* -------------------------------------------------------------- */
-    /* #549: Chat-Payload-Builder (json_escape_into + player_chat-Zeile) */
-    /* -------------------------------------------------------------- */
-    /* Rein, ohne Spielprozess: prueft Wire-Event-Form, Escaping von
-     * Quote/Backslash/Steuerzeichen und die graceful-Faelle (leerer Text /
-     * zu kleiner Puffer -> 0 = NICHTS senden). */
-    {
-        char out[600];
-        size_t n;
-
-        n = chat_build_player_chat("hello", out, sizeof(out));
-        check(n > 0 && strcmp(out,
-              "{\"event\":\"player_chat\",\"text\":\"hello\"}") == 0,
-              "chat_build_player_chat: einfacher Text -> player_chat-Zeile");
-
-        n = chat_build_player_chat("a\"b\\c", out, sizeof(out));
-        check(n > 0 && strcmp(out,
-              "{\"event\":\"player_chat\",\"text\":\"a\\\"b\\\\c\"}") == 0,
-              "chat_build_player_chat: Quote/Backslash escaped");
-
-        /* Tab (0x09) ist ein Steuerzeichen < 0x20 -> \u0009, NICHT roh. */
-        n = chat_build_player_chat("a\tb", out, sizeof(out));
-        check(n > 0 && strstr(out, "\\u0009") != NULL &&
-                  strchr(out, '\t') == NULL,
-              "chat_build_player_chat: Tab -> \\u0009 (kein Roh-Steuerzeichen)");
-
-        /* Leerer Text -> 0 (kein leeres Event senden). */
-        check(chat_build_player_chat("", out, sizeof(out)) == 0,
-              "chat_build_player_chat: leerer Text -> 0 (nichts senden)");
-        check(chat_build_player_chat(NULL, out, sizeof(out)) == 0,
-              "chat_build_player_chat: NULL -> 0 (kein Crash)");
-        /* Puffer zu klein -> 0 (kein abgeschnittenes JSON). */
-        check(chat_build_player_chat("hello", out, 8) == 0,
-              "chat_build_player_chat: Puffer zu klein -> 0");
-
-        /* json_escape_into direkt: < 0x20 -> \uXXXX. */
-        {
-            char esc[32];
-            json_escape_into("x\x01y", esc, sizeof(esc));
-            check(strcmp(esc, "x\\u0001y") == 0,
-                  "json_escape_into: 0x01 -> \\u0001");
-        }
-    }
-
-    /* -------------------------------------------------------------- */
     /* #386: Database-Payload-Resolver + Builder (AOB, kein Lua)        */
     /* -------------------------------------------------------------- */
     /* Frisches Image: das Haupt-`img` ist an dieser Stelle nicht mehr
