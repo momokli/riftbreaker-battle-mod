@@ -56,6 +56,8 @@ static void check(int cond, const char *msg)
 #define DINC_SIG_OFF 0x11C0 /* CampaignService difficulty-Inc-Signatur  */
 #define DDEC_SIG_OFF 0x11E0 /* CampaignService difficulty-Dec-Signatur  */
 #define ACT_SIG_OFF 0x1300 /* ActivateMissionFlow-Signatur in .text   */
+#define CONNP_OFF   0x1420 /* #512 GetConnectedPlayers-AOB (114 B)    */
+#define CONNP2_OFF  0x1710 /* #512: 2. Kopie (Mehrdeutigkeits-Test)   */
 #define DEACT_SIG_OFF 0x1340 /* DeactivateMissionFlow-Signatur (#389)  */
 #define DBSS_SIG_OFF 0x1240 /* Database::SetString-Signatur (#386)     */
 #define DBGS_SIG_OFF 0x1260 /* Database::GetString-Signatur (#386)     */
@@ -121,6 +123,9 @@ static unsigned char *build_image(int with_sig, int with_rtti, int valid_col,
                sizeof(RBBRIDGE_DIFF_DEC_SIG));
         memcpy(img + ACT_SIG_OFF, RBBRIDGE_ACTIVATE_SIG,
                sizeof(RBBRIDGE_ACTIVATE_SIG));
+        /* #512: GetConnectedPlayers-AOB (nur Scan, rel32 nicht dekodiert). */
+        memcpy(img + CONNP_OFF, RBBRIDGE_CONNPLAYERS_SIG,
+               sizeof(RBBRIDGE_CONNPLAYERS_SIG));
         memcpy(img + DEACT_SIG_OFF, RBBRIDGE_DEACTIVATE_SIG,
                sizeof(RBBRIDGE_DEACTIVATE_SIG));
         /* #386: Database-Payload-Anker (SetString/GetString-Prolog + die
@@ -758,6 +763,125 @@ int main(void)
                                RBBRIDGE_DIFFSYS_GET_SIG_MASK,
                                sizeof(body)),
                   "natural_waves-Sig: E8-Opcode Pflicht -> kein Treffer");
+        }
+    }
+
+    /* -------------------------------------------------------------- */
+    /* #512: Spielerzahl — AOB-Resolver + Vektor-Count (host-testbar)  */
+    /* -------------------------------------------------------------- */
+    {
+        const unsigned char *fn = NULL;
+
+        /* Positiv: genau EIN Treffer im .text -> aufrufbar. */
+        ht_set_module(img, IMG_SIZE);
+        check(connplayers_resolve(img, IMG_SIZE, &fn) == 1 &&
+                  fn == img + CONNP_OFF,
+              "connplayers_resolve: eindeutiger AOB-Treffer -> fn");
+
+        /* Negativ: AOB fehlt -> 0/NULL (kein Aufruf). */
+        {
+            unsigned char *img_x = build_image(0, 1, 1, 1, 1);
+            ht_set_module(img_x, IMG_SIZE);
+            fn = (const unsigned char *)0x1;
+            check(connplayers_resolve(img_x, IMG_SIZE, &fn) == 0 && !fn,
+                  "connplayers_resolve: kein Treffer -> 0/NULL (kein Aufruf)");
+            free(img_x);
+        }
+
+        /* Negativ: zweiter Treffer -> mehrdeutig -> kein Aufruf. */
+        {
+            unsigned char *img_y = build_image(1, 1, 1, 1, 1);
+            memcpy(img_y + CONNP2_OFF, RBBRIDGE_CONNPLAYERS_SIG,
+                   sizeof(RBBRIDGE_CONNPLAYERS_SIG));
+            ht_set_module(img_y, IMG_SIZE);
+            check(connplayers_resolve(img_y, IMG_SIZE, &fn) == 0,
+                  "connplayers_resolve: 2 Treffer -> mehrdeutig -> 0");
+            free(img_y);
+        }
+
+        /* Vektor-Layout (Disasm-belegt): count = vec[+0x10]. */
+        {
+            unsigned char vec[0x20];
+            int n = -1;
+            memset(vec, 0xAB, sizeof(vec));
+            wr64(vec + 0x10, 3);
+            check(connplayers_count_from_vec(vec, &n) == 1 && n == 3,
+                  "connplayers_count_from_vec: vec[+0x10] == count");
+
+            wr64(vec + 0x10, 0);
+            check(connplayers_count_from_vec(vec, &n) == 1 && n == 0,
+                  "connplayers_count_from_vec: 0 Spieler (leerer Server)");
+
+            wr64(vec + 0x10, (uint64_t)RBBRIDGE_CONNPLAYERS_MAX + 1);
+            check(connplayers_count_from_vec(vec, &n) == 0,
+                  "connplayers_count_from_vec: > MAX -> 0 (Muell)");
+
+            check(connplayers_count_from_vec(NULL, &n) == 0,
+                  "connplayers_count_from_vec: NULL -> 0");
+        }
+
+        /* Sig-Selbstkontrolle: Laenge == Maske, 3 E8-Opcodes Pflicht,
+         * 15 Wildcards (3x E8-rel32 = 12 + 3 rel8). */
+        {
+            size_t i, wild = 0, e8 = 0;
+            check(sizeof(RBBRIDGE_CONNPLAYERS_SIG) ==
+                      sizeof(RBBRIDGE_CONNPLAYERS_SIG_MASK),
+                  "connplayers-Sig: Laenge == Maske");
+            for (i = 0; i < sizeof(RBBRIDGE_CONNPLAYERS_SIG); i++) {
+                if (RBBRIDGE_CONNPLAYERS_SIG_MASK[i] == 0x00)
+                    wild++;
+                if (RBBRIDGE_CONNPLAYERS_SIG[i] == 0xE8 &&
+                    RBBRIDGE_CONNPLAYERS_SIG_MASK[i] == 0xFF)
+                    e8++;
+            }
+            check(wild == 15 && e8 == 3,
+                  "connplayers-Sig: 15 Wildcards (3x E8-rel32 + 3 rel8), "
+                  "3 E8-Opcodes Pflicht");
+        }
+
+        /* Review PR #524: vtable-Slot (+0x10) NICHT roh dereferenzieren.
+         * Disasm 0x26F340 = ZWEI Indirektionen (vptr -> Slot); der Slot
+         * wird per safe_read_u64 gelesen und auf 0 + Modulbereich
+         * geprueft -> kein Blind-Call. */
+        {
+            unsigned char *mod = (unsigned char *)calloc(1, 0x200);
+            unsigned char *alloc_obj = mod + 0x40; /* vec[+0x00] */
+            unsigned char *vtable = mod + 0x100;   /* vptr -> Slot +0x10 */
+            uintptr_t fnaddr = (uintptr_t)(mod + 0x180);
+            uintptr_t out = 0;
+
+            check(mod != NULL, "connplayers_dealloc_target: Testbuffer");
+
+            /* Korrekt: alloc->vptr = vtable; vtable[+0x10] = fnaddr. */
+            wr64(alloc_obj, (uint64_t)(uintptr_t)vtable);
+            wr64(vtable + 0x10, (uint64_t)fnaddr);
+            check(connplayers_dealloc_target(alloc_obj, mod, 0x200, &out) == 1 &&
+                      out == fnaddr,
+                  "connplayers_dealloc_target: vptr->Slot+0x10 -> Ziel");
+
+            /* Slot 0 -> kein Aufruf. */
+            wr64(vtable + 0x10, 0);
+            out = 0;
+            check(connplayers_dealloc_target(alloc_obj, mod, 0x200, &out) == 0 &&
+                      out == 0,
+                  "connplayers_dealloc_target: Slot 0 -> kein Aufruf");
+
+            /* Ziel ausserhalb des Modulbereichs -> kein Aufruf. */
+            wr64(vtable + 0x10, (uint64_t)(uintptr_t)(mod + 0x10000));
+            check(connplayers_dealloc_target(alloc_obj, mod, 0x200, &out) == 0,
+                  "connplayers_dealloc_target: Ziel ausserhalb Modul -> kein "
+                  "Aufruf");
+
+            /* vptr 0 (abgeraeumtes Objekt) -> kein Aufruf. */
+            wr64(alloc_obj, 0);
+            check(connplayers_dealloc_target(alloc_obj, mod, 0x200, &out) == 0,
+                  "connplayers_dealloc_target: vptr 0 -> kein Aufruf");
+
+            /* NULL-Objekt -> kein Aufruf. */
+            check(connplayers_dealloc_target(NULL, mod, 0x200, &out) == 0,
+                  "connplayers_dealloc_target: NULL -> kein Aufruf");
+
+            free(mod);
         }
     }
 
