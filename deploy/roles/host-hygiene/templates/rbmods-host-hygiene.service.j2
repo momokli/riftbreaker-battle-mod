@@ -1,5 +1,5 @@
 [Unit]
-Description=RIFT BATTLE Host-Hygiene — dangling Docker-Images aufräumen (Issue #308)
+Description=RIFT BATTLE Host-Hygiene — dangling Docker-Images + rbtools test-* Retention (Issue #308/#606)
 Documentation=file:{{ host_hygiene_bin }}
 After=network-online.target docker.service
 Wants=network-online.target docker.service
@@ -7,4 +7,6 @@ Wants=network-online.target docker.service
 [Service]
 Type=oneshot
 Environment="RB_HYGIENE_IMAGE_REPOS={{ host_hygiene_image_repos | join(' ') }}"
+Environment="RB_HYGIENE_RBTOOLS_DIR={{ host_hygiene_rbtools_dir }}"
+Environment=RB_HYGIENE_RBTOOLS_RETENTION={{ host_hygiene_rbtools_retention }}
 ExecStart={{ host_hygiene_bin }}

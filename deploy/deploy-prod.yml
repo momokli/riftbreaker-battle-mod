@@ -71,6 +71,14 @@
       include_tasks: "{{ playbook_dir }}/tasks/env-path-migration.yml"
       tags: always
 
+    # Legacy-rbtools-Symlink-Cleanup (#606): entfernt die vier Alt-Pfad-Symlinks
+    # rbtools-drift/-staging-drift (dev) und rbtools-rift/-staging-rift (prod),
+    # die die #483-Migration als Rollback-Alias hinterlassen hat. Kein aktiver
+    # Pfad referenziert sie mehr. Idempotent (nur Symlink, nie ein Verzeichnis).
+    - name: "Legacy-rbtools-Symlink-Cleanup (#606)"
+      include_tasks: "{{ playbook_dir }}/tasks/legacy-rbtools-symlink-cleanup.yml"
+      tags: always
+
   roles:
     - role: mods-zip
     - role: dedicated-server-image

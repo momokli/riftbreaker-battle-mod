@@ -178,6 +178,13 @@ jobs:
         if: steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/crash-collector/run.sh
 
+      # Legacy-rbtools-Symlink-Cleanup (Issue #606): laesst die ECHTE Task-Datei
+      # gegen ein Wegwerf-Verzeichnis laufen — Symlink entfernt, echtes
+      # Verzeichnis bleibt, idempotent. Lokal, kein Host.
+      - name: "Legacy-rbtools-Symlink-Cleanup (Issue #606)"
+        if: steps.gate.outputs.skip != 'true'
+        run: bash deploy/tests/legacy-symlink-cleanup/run.sh
+
       # /server/*-Route-Selbsttest (Issue #463): rendert die ECHTE
       # Cockpit-Caddyfile-Vorlage zweimal — dev (server_control_enabled=true)
       # MUSS die Agent-Route enthalten, prod (prod-vars/deploy-prod.yml,
