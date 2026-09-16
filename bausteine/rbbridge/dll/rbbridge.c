@@ -492,6 +492,181 @@ static int end_game_status_from_str(const char *result)
     return -1;
 }
 
+/* ------------------------------------------------------------------ */
+/* #516: Nativer Round-Reset (HQ-Tod -> neue Runde) — C++-Primitiv    */
+/*                                                                    */
+/* RE-Befund (Build 2.0.58485, PDB + Disasm; identisch auf planet):    */
+/*   `restart_map` ist ein NATIVES Console-Kommando (String-Literal    */
+/*   `restart_map` im .rdata, ??_C@_0M@DPMJDBBG@restart_map@). Der      */
+/*   Handler `GameplayState::OnRestart` (RVA 0x1A0F200) setzt nur ein   */
+/*   Pending-Flag; der Gameplay-Update konsumiert es auf dem           */
+/*   GAME-Thread und ruft die eigentliche Restart-Routine (Slot 0x90,   */
+/*   RVA 0x1A10860) auf. Der Trigger selbst ist                       */
+/*       GameplayState::RequestRestart()   RVA 0x1A17E70              */
+/*       mov byte ptr [rcx+disp32], 1 ; ret      (8 Bytes)             */
+/*   also eine REINE Flag-Schreiboperation (thread-agnostisch, KEIN    */
+/*   lua_*).                                                          */
+/*                                                                    */
+/*   Konsum (RVA 0x1A1C378, im .text GENAU 1 Treffer — der eindeutige  */
+/*   Anker):                                                          */
+/*       cmp byte [this+0x52A],0 ; je .. ; mov rax,[this] ;            */
+/*       call qword [rax+0x90] ; mov byte [this+0x52A],0              */
+/*   => Flag setzen == voller Map-Restart (neue Runde, Economy 0,      */
+/*      HQ-Placement) auf dem naechsten Game-Tick.                     */
+/*                                                                    */
+/* Aufloesung OHNE feste Adresse: (1) Konsum-Muster per AOB ->         */
+/* Flag-Offset + Restart-Slot; (2) der Setter, dessen dekodierter      */
+/* Offset dazu passt, ist RequestRestart; (3) vtables mit diesem       */
+/* Pointer im Slot 0x20 werden aus dem Image abgeleitet; (4) Instance  */
+/* per vftable-QWORD-Scan.                                            */
+/*                                                                    */
+/* Die reinen Helfer stehen AUSSERHALB des #ifndef-RBBRIDGE_HOSTTEST-  */
+/* Blocks -> direkt host-testbar (analog diff_decode, #394).           */
+/* ------------------------------------------------------------------ */
+
+/* AOB: `mov byte ptr [rcx+disp32], 1 ; ret`. disp32 bewusst Wildcard,
+ * der Flag-Offset wird daraus dekodiert (build-robust). */
+static const unsigned char RBBRIDGE_RESTART_SIG[] = {
+    0xC6, 0x81, 0x00, 0x00, 0x00, 0x00, 0x01, 0xC3
+};
+static const unsigned char RBBRIDGE_RESTART_SIG_MASK[] = {
+    0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF
+};
+#define RBBRIDGE_RESTART_SIG_LEN 8
+#define RBBRIDGE_RESTART_VT_SLOT 0x20u /* vtable-Offset von RequestRestart */
+#define RBBRIDGE_RESTART_MAX_VT  8
+
+/* Zerlegt den Koerper von RequestRestart:
+ *   C6 81 <disp32> 01 C3   mov byte [rcx+disp32],1 ; ret
+ * Rueckgabe 1 = erwartete Form (flag_off gesetzt), 0 = passt nicht.
+ * Reine Funktion ohne Spielprozess -> host-testbar. */
+static int restart_decode(const unsigned char *fn, uint32_t *flag_off)
+{
+    if (!fn)
+        return 0;
+    if (fn[0] != 0xC6 || fn[1] != 0x81 || fn[6] != 0x01 || fn[7] != 0xC3)
+        return 0;
+    uint32_t off = (uint32_t)fn[2] | ((uint32_t)fn[3] << 8) |
+                   ((uint32_t)fn[4] << 16) | ((uint32_t)fn[5] << 24);
+    if (off == 0)
+        return 0;
+    if (flag_off)
+        *flag_off = off;
+    return 1;
+}
+
+/* EINDEUTIGER Anker: der Konsum im Gameplay-Update liest das Pending-Flag,
+ * ruft die Restart-Routine und loescht das Flag:
+ *   41 80 BE <disp32> 00       cmp byte [r14+disp32], 0
+ *   74 <rel8>                  je  ...
+ *   49 8B 06                   mov rax,[r14]
+ *   49 8B CE                   mov rcx,r14
+ *   FF 90 <disp32>             call qword [rax+slot]
+ *   41 C6 86 <disp32> 00       mov byte [r14+disp32], 0
+ * Im .text GENAU 1 Treffer (RVA 0x1A1C378). Alle disp32 sowie das je-rel8
+ * sind Wildcards; der Decoder liefert Flag-Offset UND Restart-vtable-Slot.
+ * Reine Byte-Logik -> host-testbar. */
+static const unsigned char RBBRIDGE_RESTART_CONSUMER_SIG[] = {
+    0x41, 0x80, 0xBE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x74, 0x00,
+    0x49, 0x8B, 0x06, 0x49, 0x8B, 0xCE, 0xFF, 0x90, 0x00, 0x00,
+    0x00, 0x00, 0x41, 0xC6, 0x86, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+static const unsigned char RBBRIDGE_RESTART_CONSUMER_MASK[] = {
+    0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x00,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00,
+    0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF
+};
+#define RBBRIDGE_RESTART_CONSUMER_LEN 30
+
+/* Dekodiert Flag-Offset + Restart-Slot aus dem Konsum-Muster.
+ * Rueckgabe 1 = erwartete Form, 0 = passt nicht. */
+static int restart_decode_consumer(const unsigned char *fn,
+                                   uint32_t *flag_off,
+                                   uint32_t *restart_slot)
+{
+    if (!fn)
+        return 0;
+    if (fn[0] != 0x41 || fn[1] != 0x80 || fn[2] != 0xBE || fn[7] != 0x00)
+        return 0;
+    if (fn[8] != 0x74 || fn[10] != 0x49 || fn[11] != 0x8B || fn[12] != 0x06)
+        return 0;
+    if (fn[13] != 0x49 || fn[14] != 0x8B || fn[15] != 0xCE || fn[16] != 0xFF ||
+        fn[17] != 0x90)
+        return 0;
+    if (fn[22] != 0x41 || fn[23] != 0xC6 || fn[24] != 0x86 || fn[29] != 0x00)
+        return 0;
+    uint32_t off = (uint32_t)fn[3] | ((uint32_t)fn[4] << 8) |
+                   ((uint32_t)fn[5] << 16) | ((uint32_t)fn[6] << 24);
+    uint32_t off2 = (uint32_t)fn[25] | ((uint32_t)fn[26] << 8) |
+                    ((uint32_t)fn[27] << 16) | ((uint32_t)fn[28] << 24);
+    uint32_t slot = (uint32_t)fn[18] | ((uint32_t)fn[19] << 8) |
+                    ((uint32_t)fn[20] << 16) | ((uint32_t)fn[21] << 24);
+    if (off == 0 || off != off2)
+        return 0;
+    if (flag_off)
+        *flag_off = off;
+    if (restart_slot)
+        *restart_slot = slot;
+    return 1;
+}
+
+/* Leitet aus einem Image [img,img+size) alle vtables ab, die `fn` im Slot
+ * RBBRIDGE_RESTART_VT_SLOT tragen (GameplayState UND ServerGameplayState).
+ * Reine Byte-Logik, 8-Byte-aligniert -> host-testbar.
+ * Rueckgabe: Anzahl (<= out_cap), 0 = keine. */
+static int restart_find_vtables(const unsigned char *img, size_t size,
+                                uintptr_t fn, uintptr_t *out, int out_cap)
+{
+    if (!img || !out || out_cap <= 0 || size < RBBRIDGE_RESTART_VT_SLOT + 8)
+        return 0;
+    int n = 0;
+    for (size_t i = 0; i + 8 <= size; i += 8) {
+        uintptr_t v = 0;
+        memcpy(&v, img + i, sizeof(v));
+        if (v != fn)
+            continue;
+        uintptr_t vt = (uintptr_t)(img + i) - RBBRIDGE_RESTART_VT_SLOT;
+        int dup = 0;
+        for (int k = 0; k < n; k++)
+            if (out[k] == vt)
+                dup = 1;
+        if (dup)
+            continue;
+        if (n >= out_cap)
+            break;
+        out[n++] = vt;
+    }
+    return n;
+}
+
+/* Forward-Decls: sig_matches ist weiter unten definiert (Host-Test baut die
+ * reine Logik ohne Windows; deshalb hier die Vorwaertsdeklaration). */
+static int sig_matches(const unsigned char *p, const unsigned char *pat,
+                       const unsigned char *mask, size_t n);
+
+/* Sucht unter ALLEN maskierten Setter-Treffern den, dessen dekodierter
+ * Flag-Offset zu `flag_off` passt (= RequestRestart). Der Setter-Treffer
+ * allein ist NICHT eindeutig (66 Treffer im .text); erst der aus dem
+ * Konsum-Muster stammende Offset macht ihn eindeutig. Linearer Scan ueber
+ * den bereits validierten .text-Bereich (kein VirtualQuery pro Byte) ->
+ * host-testbar. Rueckgabe: Zeiger auf den Koerper oder NULL. */
+static const unsigned char *restart_find_setter(const unsigned char *text,
+                                                size_t text_len,
+                                                uint32_t flag_off)
+{
+    if (!text || text_len < RBBRIDGE_RESTART_SIG_LEN)
+        return NULL;
+    for (size_t i = 0; i + RBBRIDGE_RESTART_SIG_LEN <= text_len; i++) {
+        uint32_t off = 0;
+        if (!sig_matches(text + i, RBBRIDGE_RESTART_SIG,
+                         RBBRIDGE_RESTART_SIG_MASK, RBBRIDGE_RESTART_SIG_LEN))
+            continue;
+        if (restart_decode(text + i, &off) && off == flag_off)
+            return text + i;
+    }
+    return NULL;
+}
+
 #ifndef RBBRIDGE_HOSTTEST
 /* Datei-Log: 1 = %TEMP%\rbbridge.log mitschreiben (Default an; abschalten
  * mit Umgebungsvariable RBBRIDGE_LOG=0). DebugView geht immer. */
@@ -1520,6 +1695,27 @@ static int is_readable_region(const MEMORY_BASIC_INFORMATION *mi)
     case PAGE_READWRITE:
     case PAGE_WRITECOPY:
     case PAGE_EXECUTE_READ:
+    case PAGE_EXECUTE_READWRITE:
+    case PAGE_EXECUTE_WRITECOPY:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/*
+ * Ist die Region laut Protect-Flags BESCHREIBBAR (ohne PAGE_GUARD)?
+ * Rein (keine Win32-Abhaengigkeit) -> host-testbar. Wird vom Round-Reset
+ * fuer zwei Dinge verwendet: (a) Zielseite vor `restart_write_u8` pruefen,
+ * (b) Instanz-Kandidat muss in einer beschreibbaren Seite liegen (#516).
+ */
+static int is_writable_region(const MEMORY_BASIC_INFORMATION *mi)
+{
+    if (mi->State != MEM_COMMIT || (mi->Protect & PAGE_GUARD))
+        return 0;
+    switch (mi->Protect & 0xFF) {
+    case PAGE_READWRITE:
+    case PAGE_WRITECOPY:
     case PAGE_EXECUTE_READWRITE:
     case PAGE_EXECUTE_WRITECOPY:
         return 1;
@@ -2944,6 +3140,261 @@ static char g_last_flow[192];
  * Zugriff nur auf dem (einzigen) Pipe-Server-Thread -> kein Lock noetig. */
 static char g_end_result[16] = "";
 static int  g_end_status = -1;
+
+/* ------------------------------------------------------------------ */
+/* #516: Nativer Round-Reset — Resolver + Dispatch (C++-only)          */
+/*                                                                    */
+/* AOB-aufgeloest; vtable-Slot + Flag-Offset werden zur Laufzeit aus    */
+/* dem Image abgeleitet (KEINE festen RVAs). Instance per vftable-Scan. */
+/* Nicht-Fund auf JEDER Stufe -> ok:false, KEIN Schreibzugriff.         */
+/* ------------------------------------------------------------------ */
+
+/* Byte-Lesezugriff mit Seitenschutz (kein SEH unter MinGW-x64). */
+static int restart_read_u8(const void *addr, unsigned char *out)
+{
+    MEMORY_BASIC_INFORMATION mi;
+    if (!addr || !out)
+        return 0;
+    if (VirtualQuery(addr, &mi, sizeof(mi)) == 0)
+        return 0;
+    if (!is_readable_region(&mi))
+        return 0;
+    memcpy(out, addr, 1);
+    return 1;
+}
+
+/* Byte-Schreibzugriff; nur auf als beschreibbar gemappte Seiten (identische
+ * Protect-Pruefung wie bei der Instanz-Suche, #516-Review). */
+static int restart_write_u8(void *addr, unsigned char val)
+{
+    MEMORY_BASIC_INFORMATION mi;
+    if (!addr)
+        return 0;
+    if (VirtualQuery(addr, &mi, sizeof(mi)) == 0)
+        return 0;
+    if (!is_writable_region(&mi))
+        return 0;
+    memcpy(addr, &val, 1);
+    return 1;
+}
+
+typedef struct {
+    int                  valid;
+    const unsigned char *base;
+    size_t               size;
+    const unsigned char *fn;
+    uint32_t             flag_off;
+    uintptr_t            vtable;
+    unsigned char       *instance;
+} restart_cache_t;
+
+static restart_cache_t g_restart;
+
+/* Sucht die Instanz zu `vtable` (8-Byte-alignierter QWORD == vtable).
+ *
+ * #516-Review: es wird NUR in BESCHREIBBAREN Regionen gesucht. Die
+ * GameplayState-Instanz ist ein heap-allokiertes C++-Objekt (PAGE_READWRITE);
+ * der Flag-Write `[instance+0x52A]=1` setzt das ohnehin voraus. Ein
+ * QWORD-Zufallstreffer in einer nicht beschreibbaren Fremd-Region (z. B.
+ * Code/.rdata) kann also nicht die Instanz sein und wird verworfen -> der
+ * Miss-Fall bleibt "kein Schreibzugriff" (ok:false) statt Stray-Write.
+ * Innerhalb der beschreibbaren Regionen gewinnt der erste Treffer. */
+static unsigned char *restart_scan_instance(uintptr_t vtable)
+{
+    uintptr_t addr = 0;
+    for (;;) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
+            break;
+        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
+        if (next <= addr)
+            break;
+        addr = next;
+        if (!is_writable_region(&mi))
+            continue;
+        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
+        size_t nq = mi.RegionSize / sizeof(uint64_t);
+        for (size_t i = 0; i < nq; i++) {
+            if (q[i] == (uint64_t)vtable)
+                return (unsigned char *)&q[i];
+        }
+    }
+    return NULL;
+}
+
+/* Loest den nativen Round-Reset-Pfad auf (Signatur + vtable + Instance).
+ * Cache mit billiger Re-Validierung (Imagegroesse + vtable der Instanz +
+ * Signaturbytes am fn). Rueckgabe 1 = ok, 0 = nicht verfuegbar. */
+static int resolve_restart(void)
+{
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    const char *via = NULL;
+    const unsigned char *execfn = NULL;
+
+    if (!resolve_module(&base, &size, &via, &execfn))
+        return 0;
+
+    if (g_restart.valid && g_restart.base == base) {
+        size_t cur_size = 0;
+        uintptr_t cur_vt = 0;
+        unsigned char cur_flag = 0;
+        /* Seiten-geprueft: genau `reset` loest einen Map-Restart aus und kann
+         * die gecachte GameplayState-Instanz ersetzen/freigeben. Ein roheres
+         * memcpy koennte dann auf veralteten (nicht mehr committeten) Speicher
+         * zugreifen -> deshalb derselbe Guard wie beim Read/Write-Pfad. */
+        int vt_ok = safe_read_u64(g_restart.instance, (uint64_t *)&cur_vt);
+        int flag_ok = restart_read_u8(g_restart.instance + g_restart.flag_off,
+                                      &cur_flag);
+        if (vt_ok && flag_ok &&
+            pe_image_size(base, &cur_size) && cur_size == g_restart.size &&
+            cur_vt == g_restart.vtable &&
+            sig_matches(g_restart.fn, RBBRIDGE_RESTART_SIG,
+                        RBBRIDGE_RESTART_SIG_MASK, RBBRIDGE_RESTART_SIG_LEN))
+            return 1;
+        dbg("resolve_restart: Cache verworfen (vt_ok=%d flag_ok=%d "
+            "instance=%p)",
+            vt_ok, flag_ok, (void *)g_restart.instance);
+        g_restart.valid = 0;
+    }
+
+    /* (1) Eindeutiger Anker: Konsum-Muster -> Flag-Offset + Restart-Slot. */
+    const unsigned char *consumer = scan_text_first(
+        base, size, RBBRIDGE_RESTART_CONSUMER_SIG,
+        RBBRIDGE_RESTART_CONSUMER_MASK, RBBRIDGE_RESTART_CONSUMER_LEN);
+    uint32_t flag_off = 0, restart_slot = 0;
+    if (!consumer ||
+        !restart_decode_consumer(consumer, &flag_off, &restart_slot)) {
+        dbg("resolve_restart: Konsum-Muster (Pending-Flag) nicht gefunden");
+        return 0;
+    }
+
+    /* (2) RequestRestart = der Setter, dessen Offset dazu passt. */
+    const unsigned char *text = NULL;
+    size_t text_len = 0;
+    const unsigned char *fn = NULL;
+    if (rbbridge_text_range(base, size, &text, &text_len))
+        fn = restart_find_setter(text, text_len, flag_off);
+    if (!fn) {
+        dbg("resolve_restart: kein Setter zu Flag-Offset 0x%x",
+            (unsigned)flag_off);
+        return 0;
+    }
+
+    uintptr_t vts[RBBRIDGE_RESTART_MAX_VT];
+    int nvt = restart_find_vtables(base, size, (uintptr_t)fn, vts,
+                                   RBBRIDGE_RESTART_MAX_VT);
+    if (nvt <= 0) {
+        dbg("resolve_restart: keine vtable mit RequestRestart (fn=%p)",
+            (void *)fn);
+        return 0;
+    }
+
+    for (int i = 0; i < nvt; i++) {
+        unsigned char *inst = restart_scan_instance(vts[i]);
+        if (!inst)
+            continue;
+        g_restart.valid = 1;
+        g_restart.base = base;
+        g_restart.size = size;
+        g_restart.fn = fn;
+        g_restart.flag_off = flag_off;
+        g_restart.vtable = vts[i];
+        g_restart.instance = inst;
+        dbg("resolve_restart: fn=%p flag_off=0x%x restart_slot=0x%x "
+            "vtable=%p instance=%p",
+            (void *)fn, (unsigned)flag_off, (unsigned)restart_slot,
+            (void *)vts[i], (void *)inst);
+        return 1;
+    }
+
+    dbg("resolve_restart: %d vtable-Kandidaten, keine Instanz", nvt);
+    return 0;
+}
+
+/*
+ * restart_map (Write/Read #516): nativer Round-Reset nach HQ-Tod.
+ * `op` = status (Read, Default) | reset (Write). Der Reset setzt exakt das
+ * Spiel-eigene Pending-Flag `[GameplayState+0x52A]=1` (= RequestRestart());
+ * den vollstaendigen Map-Restart (neue Runde, Economy 0, HQ-Placement)
+ * fuehrt der Gameplay-Update auf dem GAME-Thread aus (vtable-Slot 0x90).
+ * Reines C++-Flag -> thread-agnostisch, kein lua_*.
+ *
+ * `restart_pending`-Readback-Semantik (#516-Review, Race mit Game-Thread):
+ * Der Wert ist ein MOMENTANwert `[instance+0x52A]`, der unmittelbar nach dem
+ * Write gelesen wird. Der Gameplay-Update auf dem Game-Thread konsumiert das
+ * Flag (`mov [this+0x52A],0`) und kann es VOR unserem Readback zuruecksetzen.
+ * Ein `restart_pending:false` nach `reset` bedeutet daher NICHT, dass der
+ * Reset nicht gefeuert hat, sondern dass der Game-Thread das Flag bereits
+ * abgeholt hat (= der Restart laeuft an). Umgekehrt garantiert
+ * `restart_pending:true` nur, dass das Flag gesetzt ist, nicht dass der
+ * Restart schon fertig ist. Erfolgskriterium fuer `reset` ist der
+ * erfolgreiche WRITE (sonst `ok:false`) — `restart_pending` ist Diagnose,
+ * kein Zustandsbeweis. Feldname bleibt kompatibel zur Cockpit-Anzeige.
+ * Events:
+ *   {"event":"restart_map_result","ok":true,"op":"...","flag_offset":"0x..",
+ *    "restart_pending":bool,"vtable":"0x..","instance":"0x.."}
+ *   {"event":"restart_map_result","ok":false,"reason":"..."}
+ */
+static void dispatch_restart_map(HANDLE hPipe, const char *op)
+{
+    int do_write = (op && strcmp(op, "reset") == 0);
+
+    if (!resolve_restart()) {
+        send_line(hPipe, "{\"event\":\"restart_map_result\",\"ok\":false,"
+                         "\"reason\":\"not_resolvable\"}");
+        return;
+    }
+
+    unsigned char before = 0;
+    int have_before = restart_read_u8(g_restart.instance + g_restart.flag_off,
+                                      &before);
+
+    if (!do_write) {
+        send_line(hPipe,
+                  "{\"event\":\"restart_map_result\",\"ok\":true,"
+                  "\"op\":\"status\",\"flag_offset\":\"0x%x\","
+                  "\"restart_pending\":%s,\"vtable\":\"0x%llx\","
+                  "\"instance\":\"0x%llx\"}",
+                  (unsigned)g_restart.flag_off,
+                  (have_before && before) ? "true" : "false",
+                  (unsigned long long)g_restart.vtable,
+                  (unsigned long long)(uintptr_t)g_restart.instance);
+        return;
+    }
+
+    if (readiness_block(hPipe, "restart_map_result"))
+        return;
+
+    /* Vor dem Schreibzugriff: Zieladresse + Seite erneut pruefen. */
+    if (!restart_write_u8(g_restart.instance + g_restart.flag_off, 1)) {
+        send_line(hPipe, "{\"event\":\"restart_map_result\",\"ok\":false,"
+                         "\"reason\":\"write_failed\"}");
+        return;
+    }
+
+    unsigned char after = 0;
+    int have_after = restart_read_u8(g_restart.instance + g_restart.flag_off,
+                                     &after);
+
+    /* Diagnosewert (Momentaufnahme) — siehe Race-Hinweis im Funktionskopf:
+     * `false` kann "vom Game-Thread schon konsumiert" heissen, nicht "nicht
+     * gefeuert". `ok:true` belegt den erfolgreichen Write. */
+    dbg("restart_map: reset -> flag[0x%x]=%u (before=%d/%u) vtable=%p "
+        "instance=%p",
+        (unsigned)g_restart.flag_off, (unsigned)after, have_before,
+        (unsigned)before, (void *)g_restart.vtable, (void *)g_restart.instance);
+
+    send_line(hPipe,
+              "{\"event\":\"restart_map_result\",\"ok\":true,"
+              "\"op\":\"reset\",\"flag_offset\":\"0x%x\","
+              "\"restart_pending\":%s,\"vtable\":\"0x%llx\","
+              "\"instance\":\"0x%llx\"}",
+              (unsigned)g_restart.flag_off,
+              (have_after && after) ? "true" : "false",
+              (unsigned long long)g_restart.vtable,
+              (unsigned long long)(uintptr_t)g_restart.instance);
+}
 
 /* #386: zuletzt gebautes Exor::Database-Payload (Mission-Flow `data`) und
  * der darin gesetzte spawn_point. Geparkt fuer die Read-Leg in get_state;
@@ -4517,6 +4968,16 @@ static void handle_line(HANDLE hPipe, const char *line)
             return;
         }
         dispatch_end_game(hPipe, result);
+        return;
+    }
+
+    /* restart_map (Write/Read #516): nativer Round-Reset nach HQ-Tod.
+     * `op` = status|reset (Default status; reset = GameplayState-Pending-
+     * Flag setzen -> voller Map-Restart auf dem Game-Thread). */
+    if (strcmp(cmd, "restart_map") == 0) {
+        char op[32] = "status";
+        json_get_string(line, "op", op, sizeof(op));
+        dispatch_restart_map(hPipe, op);
         return;
     }
 
