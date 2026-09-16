@@ -471,6 +471,27 @@ static int mission_flow_mode_ok(const char *mode)
     return strcmp(mode, "default") == 0;
 }
 
+/* MissionStatus-Werte (Disasm MissionService::RegisterLua @ 0xFA4DB0, die
+ * vier Lua-Globals MISSION_STATUS_*): WIN=0, LOSE=1, IN_PROGRESS=2, NONE=3.
+ * Hier VOR dem Parser definiert, damit der Parser host-testbar ist. */
+#define RBBRIDGE_MSTATUS_WIN  0u
+#define RBBRIDGE_MSTATUS_LOSE 1u
+
+/* #519: `result`-Parser fuer end_game (rein, host-testbar). "win" ->
+ * MISSION_STATUS_WIN (0), "lose" -> MISSION_STATUS_LOSE (1), alles andere
+ * -> -1 (kein Game-Call). Bewusst nur diese zwei Typen: IN_PROGRESS/NONE
+ * sind keine gueltigen Match-Enden. */
+static int end_game_status_from_str(const char *result)
+{
+    if (!result)
+        return -1;
+    if (strcmp(result, "win") == 0)
+        return (int)RBBRIDGE_MSTATUS_WIN;
+    if (strcmp(result, "lose") == 0)
+        return (int)RBBRIDGE_MSTATUS_LOSE;
+    return -1;
+}
+
 /* ------------------------------------------------------------------ */
 /* #516: Nativer Round-Reset (HQ-Tod -> neue Runde) — C++-Primitiv    */
 /*                                                                    */
@@ -1036,6 +1057,52 @@ static const unsigned char RBBRIDGE_DEACTIVATE_SIG_MASK[] = {
     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF,
     0xFF, 0xFF, 0xFF, 0xFF
+};
+
+/* ------------------------------------------------------------------ */
+/* #519: Mission-Ende nativ (Win/Lose)                                 */
+/*                                                                    */
+/* `debug_win_game`/`debug_lose_game` (Lua, commands/debug.lua) laufen  */
+/* am Ende in                                                        */
+/*   Riftbreaker::MissionService::FinishCurrentMission(MissionStatus)   */
+/*       RVA 0xF9A190 (PDB publics: addr=0001:16355728 -> 0x1000+).     */
+/* Signatur per PDB belegt (Build 2.0.58485):                          */
+/*   ?FinishCurrentMission@MissionService@Riftbreaker@@QEAAXW4MissionStatus@2@@Z */
+/*   = public NON-virtual, void, genau 1 Argument (MissionStatus, 4 B). */
+/* Aufrufkonvention (MSVC x64): this=RCX, status=EDX.                   */
+/*                                                                    */
+/* Klassen-Layout (Disasm des Prologs):                                */
+/*   mov rdi,[rcx+8]   -> MissionService + 0x8 = Exor::World*           */
+/*   Der Body baut intern eine `MissionStatusChangeRequest`            */
+/*   (status @ +0x30, bool @ +0x34) und reicht sie an das MissionSystem */
+/*   weiter (E8-call). KEIN lua_* im Pfad -> reines C++ (#378),         */
+/*   thread-agnostisch; wird vom Pipe-Thread gerufen (wie #389).        */
+/*                                                                    */
+/* MissionStatus-Werte (Disasm MissionService::RegisterLua @ 0xFA4DB0,  */
+/* die vier Lua-Globals MISSION_STATUS_*; xorps=0.0 bzw. movsd 1.0/    */
+/* 2.0/3.0):                                                           */
+/*   MISSION_STATUS_WIN         = 0                                    */
+/*   MISSION_STATUS_LOSE        = 1                                    */
+/*   MISSION_STATUS_IN_PROGRESS = 2                                    */
+/*   MISSION_STATUS_NONE        = 3                                    */
+/*                                                                    */
+/* AOB statt fester Adresse: Signatur ist der 22-Byte-Prolog; Gegenprobe */
+/* planet 2026-09-15 ergab genau 1 Treffer im .text @ RVA 0xF9A190       */
+/* (kein rel32 im Muster -> keine Wildcard-Maske noetig).               */
+/* ------------------------------------------------------------------ */
+
+/* MissionService::FinishCurrentMission(MissionStatus) Prolog (RVA 0xF9A190)
+ *   48 89 5C 24 10   mov  [rsp+0x10],rbx
+ *   57               push rdi
+ *   48 81 EC 90 00 00 00  sub rsp,0x90
+ *   8B DA            mov  ebx,edx         ; status
+ *   48 8B 79 08      mov  rdi,[rcx+8]     ; World* (this+8)
+ *   48 8B CF         mov  rcx,rdi
+ * (die E8-calls liegen HINTER dem Muster -> rel32-frei). */
+static const unsigned char RBBRIDGE_FINISHMISSION_SIG[] = {
+    0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x81, 0xEC, 0x90,
+    0x00, 0x00, 0x00, 0x8B, 0xDA, 0x48, 0x8B, 0x79, 0x08, 0x48,
+    0x8B, 0xCF
 };
 
 /* ------------------------------------------------------------------ */
@@ -3272,6 +3339,12 @@ static int database_get_string(const unsigned char *base, const void *db,
  * Pipe-Server-Thread -> kein Lock noetig. */
 static char g_last_flow[192];
 
+/* #519: letzter nativ ausgefuehrter end_game-Aufruf (result-String +
+ * MissionStatus) fuer das Read-Feld in get_state. Leer = noch keiner.
+ * Zugriff nur auf dem (einzigen) Pipe-Server-Thread -> kein Lock noetig. */
+static char g_end_result[16] = "";
+static int  g_end_status = -1;
+
 /* ------------------------------------------------------------------ */
 /* #516: Nativer Round-Reset — Resolver + Dispatch (C++-only)          */
 /*                                                                    */
@@ -4109,6 +4182,90 @@ static void dispatch_deactivate_mission_flow(HANDLE hPipe, const char *flow)
 }
 
 /* ------------------------------------------------------------------ */
+/* #519: end_game (Write) — Mission nativ beenden (Win/Lose)            */
+/* ------------------------------------------------------------------ */
+
+/* end_game (Write #519): beendet das Match nativ ueber
+ * Riftbreaker::MissionService::FinishCurrentMission(MissionStatus)
+ * (AOB-aufgeloest), KEIN Lua/Console. `result` = "win" | "lose" -> status
+ * 0/1 (Werte aus dem RegisterLua-Disasm, siehe oben).
+ * Events:
+ *   {"event":"end_game_result","ok":true,"result":"win","status":0}
+ *   {"event":"end_game_result","ok":false,"reason":"..."}
+ * Graceful: unbekanntes result / fehlende Signatur oder Instanz -> NICHTS
+ * wird aufgerufen (kein Crash).
+ *
+ * Thread-Modell (#378): reines C++ (kein lua_*) -> thread-agnostisch,
+ * laeuft auf dem Pipe-Thread (wie #389). Der letzte Aufruf ist in get_state
+ * als Read-Feld `end_game` sichtbar (Full-Chain #394). */
+static void dispatch_end_game(HANDLE hPipe, const char *result)
+{
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    const char *via = NULL;
+    const unsigned char *execfn = NULL;
+    const unsigned char *fn = NULL;
+    unsigned char *ms;
+    int status;
+
+    typedef void (__fastcall * finish_fn)(void *self, unsigned int status);
+    finish_fn finish;
+
+    status = end_game_status_from_str(result);
+    if (status < 0) {
+        dbg("end_game: unbekanntes result '%s' (nur win|lose)",
+            result ? result : "");
+        send_line(hPipe, "{\"event\":\"end_game_result\",\"ok\":false,"
+                         "\"reason\":\"bad_result\"}");
+        return;
+    }
+
+    /* #479: Readiness-Gate vor dem Game-Call (Welt muss fertig sein). */
+    if (readiness_block(hPipe, "end_game_result"))
+        return;
+
+    if (!resolve_module(&base, &size, &via, &execfn)) {
+        send_line(hPipe, "{\"event\":\"end_game_result\",\"ok\":false,"
+                         "\"reason\":\"no_module\"}");
+        return;
+    }
+
+    /* Funktion per AOB-Signatur im Modulabbild (kein festes RVA). */
+    fn = scan_bytes(base, size, RBBRIDGE_FINISHMISSION_SIG,
+                    sizeof(RBBRIDGE_FINISHMISSION_SIG));
+    if (!fn) {
+        dbg("end_game: AOB-Signatur nicht gefunden");
+        send_line(hPipe, "{\"event\":\"end_game_result\",\"ok\":false,"
+                         "\"reason\":\"no_endgame_signature\"}");
+        return;
+    }
+
+    /* MissionService-Instanz per vftable-Scan (RVA 0x2E962A0). */
+    ms = scan_qword_instance(
+        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE));
+    if (!ms) {
+        send_line(hPipe, "{\"event\":\"end_game_result\",\"ok\":false,"
+                         "\"reason\":\"no_missionservice\"}");
+        return;
+    }
+
+    finish = (finish_fn)(uintptr_t)fn;
+    finish((void *)ms, (unsigned int)status);
+
+    /* Read-Leg (#394): letzten Aufloesung fuer das get_state-Feld merken. */
+    copy_cstr(g_end_result, sizeof(g_end_result), result);
+    g_end_status = status;
+
+    dbg("end_game: result='%s' status=%d fn_rva=%08lx ms=%p",
+        result, status, (unsigned long)(uintptr_t)(fn - base), (void *)ms);
+
+    send_line(hPipe,
+              "{\"event\":\"end_game_result\",\"ok\":true,"
+              "\"result\":\"%s\",\"status\":%d}",
+              result, status);
+}
+
+/* ------------------------------------------------------------------ */
 /* #476: natural_waves (Read+Write) — DifficultyService-Schalter        */
 /* ------------------------------------------------------------------ */
 
@@ -4634,6 +4791,23 @@ static void dispatch_get_state(HANDLE hPipe)
     snprintf(hq_field, sizeof(hq_field),
              "\"hq_hp\":null,\"hq_hp_max\":null,\"hq_dead\":null");
 
+    /* Mission-Ende nativ (Read #519): Ergebnis des letzten end_game-
+     * Aufrufs (Win/Lose) als Readback der Full-Chain (#394). Haengt NICHT
+     * am Spieler-Account -> auch in den no_*-Antworten sichtbar. Noch kein
+     * Aufruf -> null (graceful). */
+    char end_field[64];
+    {
+        if (g_end_result[0]) {
+            char er[16 * 2];
+            json_escape_into(g_end_result, er, sizeof(er));
+            snprintf(end_field, sizeof(end_field),
+                     "{\"result\":\"%s\",\"status\":%d}",
+                     er, g_end_status);
+        } else {
+            snprintf(end_field, sizeof(end_field), "null");
+        }
+    }
+
     /* Spielerzahl (Read #512, nativ C++): GetConnectedPlayers(World*).
      * Default `null` (nicht aufloesbar / keine Welt) - nur bei Erfolg eine
      * Zahl. Solo: 1, kein Spieler: 0. */
@@ -4701,10 +4875,11 @@ static void dispatch_get_state(HANDLE hPipe)
                          "\"mission_flow_active\":%s,"
                          "\"mission_flow_payload\":%s,"
                          "\"creatures_base_difficulty\":%s,"
+                         "\"end_game\":%s,"
                          "\"players\":%s,"
                          "%s}",
                   flow_esc, flow_active ? "true" : "false", payload_field,
-                  diff_field, players_field, hq_field);
+                  diff_field, end_field, players_field, hq_field);
         return;
     }
 
@@ -4717,10 +4892,11 @@ static void dispatch_get_state(HANDLE hPipe)
                          "\"mission_flow_active\":%s,"
                          "\"mission_flow_payload\":%s,"
                          "\"creatures_base_difficulty\":%s,"
+                         "\"end_game\":%s,"
                          "\"players\":%s,"
                          "%s}",
                   flow_esc, flow_active ? "true" : "false", payload_field,
-                  diff_field, players_field, hq_field);
+                  diff_field, end_field, players_field, hq_field);
         return;
     }
 
@@ -4734,10 +4910,11 @@ static void dispatch_get_state(HANDLE hPipe)
                          "\"mission_flow_active\":%s,"
                          "\"mission_flow_payload\":%s,"
                          "\"creatures_base_difficulty\":%s,"
+                         "\"end_game\":%s,"
                          "\"players\":%s,"
                          "%s}",
                   flow_esc, flow_active ? "true" : "false", payload_field,
-                  diff_field, players_field, hq_field);
+                  diff_field, end_field, players_field, hq_field);
         return;
     }
 
@@ -4827,12 +5004,13 @@ static void dispatch_get_state(HANDLE hPipe)
               "\"mission_flow\":\"%s\",\"mission_flow_active\":%s,"
               "\"mission_flow_payload\":%s,"
               "\"creatures_base_difficulty\":%s,"
+              "\"end_game\":%s,"
               "\"players\":%s,"
               "%s}",
               (unsigned long long)carbonium, (long long)carbonium_max,
               (unsigned long long)ironium, (long long)ironium_max,
               resources, flow_esc, flow_active ? "true" : "false",
-              payload_field, diff_field, players_field, hq_field);
+              payload_field, diff_field, end_field, players_field, hq_field);
 }
 
 
@@ -5089,6 +5267,21 @@ static void handle_line(HANDLE hPipe, const char *line)
             snprintf(flow, sizeof(flow), "%s", g_last_flow);
         }
         dispatch_deactivate_mission_flow(hPipe, flow);
+        return;
+    }
+
+    /* end_game (Write #519): beendet das Match nativ (Win/Lose) per C++
+     * MissionService::FinishCurrentMission (kein Lua/Console). `result` =
+     * "win" | "lose" (Pflicht). */
+    if (strcmp(cmd, "end_game") == 0) {
+        char result[16] = "";
+        if (!json_get_string(line, "result", result, sizeof(result)) ||
+            !result[0]) {
+            send_line(hPipe, "{\"event\":\"end_game_result\","
+                             "\"ok\":false,\"reason\":\"missing_result\"}");
+            return;
+        }
+        dispatch_end_game(hPipe, result);
         return;
     }
 

@@ -19,12 +19,13 @@
  *   POST /activate_mission_flow -> Mission-Flow starten (C++, optionaler
  *                                 Database*-Payload via spawn_point, #386)
  *   POST /deactivate_mission_flow -> Mission-Flow/Welle beenden (C++, #389)
+ *   POST /end_game     -> Match nativ beenden, result=win|lose (C++, #519)
  *   POST /probe        -> Memory-Dump (PlayerService-Kette)
  *   sonst              -> 404 {"ok":false,"reason":"not_found"}
  *
  * Protokoll auf der Pipe (v0, siehe server/README.md):
  *   Kommandos: ping, probe, get_state, add_resource, activate_mission_flow,
- *   deactivate_mission_flow.
+ *   deactivate_mission_flow, end_game.
  *   Line-delimited JSON, max. 8 KiB pro Zeile (LINE_MAX).
  *
  * Umgebung:
@@ -820,6 +821,68 @@ static void handle_deactivate_mission_flow(SOCKET c, const char *body)
     http_respond(c, 200, "OK", line);
 }
 
+/* POST /end_game: fuehrt {"cmd":"end_game","result":"win|lose"} auf der
+ * Pipe aus (WRITE, Issue #519) und liefert die end_game_result-Zeile.
+ * `result` ist Pflicht; nur "win"/"lose" werden akzeptiert (rbbridge
+ * lehnt alles andere mit ok:false, reason=bad_result ab). Die DLL ruft
+ * nativ MissionService::FinishCurrentMission (kein Lua/Console); ohne
+ * Bruecke/Signatur antwortet sie mit ok:false, kein Crash. */
+static void handle_end_game(SOCKET c, const char *body)
+{
+    char result[16] = "";
+    char line[READ_BUF];
+    char payload[LINE_MAX];
+    char esc_result[16 * 2];
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+    HANDLE h;
+
+    if (!json_get_string(body, "result", result, sizeof(result)) ||
+        !result[0]) {
+        blog("POST /end_game ohne result -> invalid_request");
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_request\"}");
+        return;
+    }
+    if (strcmp(result, "win") != 0 && strcmp(result, "lose") != 0) {
+        blog("POST /end_game: unbekanntes result '%s'", result);
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_result\"}");
+        return;
+    }
+
+    h = pipe_connect(2500);
+    if (h == INVALID_HANDLE_VALUE) {
+        blog("POST /end_game: Pipe nicht erreichbar -> pipe_unavailable");
+        http_respond(c, 503, "Service Unavailable",
+                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+        return;
+    }
+
+    json_escape(result, esc_result, sizeof(esc_result));
+    snprintf(payload, sizeof(payload),
+             "{\"cmd\":\"end_game\",\"result\":\"%s\"}\n",
+             esc_result);
+
+    if (!pipe_write_all(h, payload)) {
+        CloseHandle(h);
+        http_respond(c, 500, "Internal Server Error",
+                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
+        return;
+    }
+
+    {
+        int rc = pipe_wait_line(h, "end_game_result", NULL,
+                                timeout_ms, line, sizeof(line));
+        CloseHandle(h);
+        if (rc != 0) {
+            http_respond(c, 500, "Internal Server Error",
+                         "{\"ok\":false,\"reason\":\"timeout\"}");
+            return;
+        }
+    }
+    http_respond(c, 200, "OK", line);
+}
+
 /* POST /creatures_difficulty: CampaignService-Kreaturen-Basis-Difficulty
  * (Read/Write, Issue #388) ueber die Pipe. Body:
  *   {"op":"set|increase|decrease","value":2.5}
@@ -1101,6 +1164,16 @@ static void handle_client(SOCKET c)
             memcpy(b, body, (size_t)body_len);
             b[body_len] = '\0';
             handle_deactivate_mission_flow(c, b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/end_game") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_end_game(c, b);
             free(b);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/creatures_difficulty") == 0) {
             char *b = malloc((size_t)body_len + 1);

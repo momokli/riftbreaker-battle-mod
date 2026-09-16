@@ -371,6 +371,85 @@ call is made. `resolve_campaign_diff()` additionally requires
 re-validated against module base/size, the instance vftable **and** the four
 function prologues (layout hot-patch at unchanged module base -> re-scan).
 
+## #519 — `end_game` (Win/Lose) nativ: `MissionService::FinishCurrentMission`
+
+Natives Match-Ende (Win/Lose) ohne Lua/Console. `debug_win_game`/
+`debug_lose_game` (Lua) landen am Ende in `MissionService::FinishCurrentMission`;
+fuer den typisierten WRITE wird diese Funktion direkt gerufen.
+
+### Symbol / Signatur (PDB, Build 2.0.58485, planet 2026-09-15)
+
+| demangled symbol | PDB `addr` | RVA | notes |
+| --- | --- | --- | --- |
+| `?FinishCurrentMission@MissionService@Riftbreaker@@QEAAXW4MissionStatus@2@@Z` | `0001:16355728` | `0xF9A190` | `void`, public **non-virtual**, 1 Arg (`MissionStatus`, 4 B) |
+| `?ShowEndGameHud@MissionService@Riftbreaker@@QEAAXM_N@Z` | `0001:16415744` | `0xFA8C00` | HUD-Endschein; nicht der End-Write |
+| `?GetCurrentMissionFailedAction@MissionService@Riftbreaker@@QEAA?AW4MissionFinishedAction@2@XZ` | `0001:16360704` | `0xF9B500` | read-only |
+
+RVA-Umrechnung: `RVA = 0x1000 + 16355728 = 0xF9A190` (`.text`-Formel).
+Aufrufkonvention (MSVC x64): **this=RCX, status=EDX** (Rueckgabe void).
+
+### Klassen-Layout (Disasm `0xF9A190`, Prolog)
+
+```
+48 89 5C 24 10   mov  [rsp+0x10], rbx
+57               push rdi
+48 81 EC 90 00 00 00  sub rsp,0x90
+8B DA            mov  ebx,edx          ; status (MissionStatus)
+48 8B 79 08      mov  rdi,[rcx+8]      ; MissionService + 0x8 = Exor::World*
+48 8B CF         mov  rcx,rdi
+E8 ..            call <World::GetSystem>
+```
+
+Der Body baut eine `MissionStatusChangeRequest` (`status @ +0x30`,
+`bool @ +0x34`) und reicht sie an das `MissionSystem` weiter. **Kein `lua_*`**
+im Pfad -> reines C++, thread-agnostisch (#378); der Pipe-Thread ruft direkt
+(wie #389 `DeactivateMissionFlow`). Kein Vtable-Detour.
+
+### `MissionStatus`-Werte (Disasm `MissionService::RegisterLua` @ `0xFA4DB0`)
+
+Die vier Lua-Globals werden per `lua_pushnumber` gesetzt; Konstanten aus dem
+`RegisterLua`-Disasm:
+
+| Lua-Global | Wert |
+| --- | --- |
+| `MISSION_STATUS_WIN` | `0` (`xorps xmm1,xmm1`) |
+| `MISSION_STATUS_LOSE` | `1` (`movsd 1.0`) |
+| `MISSION_STATUS_IN_PROGRESS` | `2` (`movsd 2.0`) |
+| `MISSION_STATUS_NONE` | `3` (`movsd 3.0`) |
+
+### AOB statt fester Adresse
+
+`RBBRIDGE_FINISHMISSION_SIG` (22 B Prolog, kein rel32 -> keine Maske):
+
+```
+48 89 5C 24 10 57 48 81 EC 90 00 00 00 8B DA 48 8B 79 08 48 8B CF
+```
+
+Gegenprobe planet 2026-09-15: genau **1 Treffer** im `.text` @ RVA `0xF9A190`.
+
+### Bridge / UI (#394 Full-Chain)
+
+- `rbbridge.c`: `end_game_status_from_str()` (host-getestet) +
+  `dispatch_end_game()` (AOB-Signatur + vftable-Instanz-Scan), pipe cmd
+  `end_game` `{result:"win"|"lose"}` -> `{"event":"end_game_result","ok":true,
+  "result":...,"status":0|1}`.
+- Read-Leg: `get_state` liefert `end_game` (`null` oder
+  `{"result":"win","status":0}`), platziert **vor** den Account-Branches ->
+  auch in `no_playerservice`/`no_world`/`no_account` sichtbar.
+- `pipe_bridge.c`: `POST /end_game` `{result}` -> Pipe; 400 bei fehlendem/
+  unbekanntem `result`, 503/500 wie die uebrigen Writes.
+- `cockpit.html`: Sektion *Match End (Win/Lose)* (Readout `last end` +
+  Buttons `win`/`lose`).
+
+Graceful: unbekanntes `result` / fehlende Signatur / fehlende Instanz ->
+`ok:false`, **kein** Call. Wine-Gotcha (`GetModuleHandleA` GLE=126) ist durch
+`resolve_module` (Stufen a-e inkl. `sigbase`) bereits abgedeckt.
+
+**Offener Punkt (Player-Test Momo/Matheo):** die sichtbare Wirkung im Spiel
+(Match endet mit Win/Lose, End-Screen/HUD) ist nur mit verbundenem Spieler
+pruefbar (`get_state` ist auf leerem Dedi `no_account`). Live belegt ist der
+native Call (`end_game_result ok:true`) + Readback-Feld.
+
 ## References
 
 - `docs/research/dedicated-io-re-findings.md` (read path, `World::GetSystem`,

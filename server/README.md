@@ -223,7 +223,7 @@ injizieren (os.open blockiert, bis der Pipe-Server existiert).
   Grund: der `world`-Pointer ist früh non-NULL, die ECS-/Team-Map aber noch im
   Aufbau (Crash #436/#479 in `GetPlayerAccount → GetPlayerTeam → FindIt`).
   Betroffen: `get_state`, `add_resource`, `activate_mission_flow`,
-  `deactivate_mission_flow`, `creatures_difficulty`, `probe`.
+  `deactivate_mission_flow`, `creatures_difficulty`, `end_game`, `probe`.
 - **Thread-Modell (korrigiert #378, Stand #479):** der `main`-Dispatch ist
   **pure C++ auf dem Pipe-Thread** — kein vtable-Detour, kein `lua_*` (mit
   #387/#446 entfernt). `ConsoleService::Update` läuft auf einem **Worker**-Thread
