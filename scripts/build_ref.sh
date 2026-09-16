@@ -17,5 +17,5 @@ cd "$(dirname "$0")/.."
 if [ -n "${RBB_BUILD_REF:-}" ]; then
     printf '%s\n' "$RBB_BUILD_REF"
 else
-    git rev-parse HEAD
+    git -c safe.directory='*' rev-parse HEAD
 fi
