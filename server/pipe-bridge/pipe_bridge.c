@@ -945,61 +945,6 @@ static void handle_natural_waves(SOCKET c, const char *body)
     http_respond(c, 200, "OK", line);
 }
 
-/* POST /restart_map: nativer Round-Reset (Read/Write, Issue #516) ueber die
- * Pipe. Body:
- *   {"op":"status|reset"}   (op optional, Default status)
- * `reset` setzt das Spiel-eigene Pending-Flag (GameplayState+0x52A) -> der
- * Game-Thread faehrt den vollen Map-Restart (neue Runde, Economy 0,
- * HQ-Placement). Liefert die restart_map_result-Zeile der Bridge. */
-static void handle_restart_map(SOCKET c, const char *body)
-{
-    char op[32] = "status";
-    char line[READ_BUF];
-    char payload[LINE_MAX];
-    char esc_op[32 * 2];
-    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
-    HANDLE h;
-
-    json_get_string(body, "op", op, sizeof(op));
-    if (op[0] && strcmp(op, "status") != 0 && strcmp(op, "reset") != 0) {
-        blog("POST /restart_map: unbekanntes op '%s'", op);
-        http_respond(c, 400, "Bad Request",
-                     "{\"ok\":false,\"reason\":\"invalid_op\"}");
-        return;
-    }
-
-    h = pipe_connect(2500);
-    if (h == INVALID_HANDLE_VALUE) {
-        blog("POST /restart_map: Pipe nicht erreichbar -> pipe_unavailable");
-        http_respond(c, 503, "Service Unavailable",
-                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
-        return;
-    }
-
-    json_escape(op, esc_op, sizeof(esc_op));
-    snprintf(payload, sizeof(payload),
-             "{\"cmd\":\"restart_map\",\"op\":\"%s\"}\n", esc_op);
-
-    if (!pipe_write_all(h, payload)) {
-        CloseHandle(h);
-        http_respond(c, 500, "Internal Server Error",
-                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
-        return;
-    }
-
-    {
-        int rc = pipe_wait_line(h, "restart_map_result", NULL, timeout_ms,
-                                line, sizeof(line));
-        CloseHandle(h);
-        if (rc != 0) {
-            http_respond(c, 500, "Internal Server Error",
-                         "{\"ok\":false,\"reason\":\"timeout\"}");
-            return;
-        }
-    }
-    http_respond(c, 200, "OK", line);
-}
-
 static void handle_client(SOCKET c)
 {
     char *req = malloc(REQ_MAX + 1);
@@ -1121,16 +1066,6 @@ static void handle_client(SOCKET c)
             memcpy(b, body, (size_t)body_len);
             b[body_len] = '\0';
             handle_natural_waves(c, b);
-            free(b);
-        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/restart_map") == 0) {
-            char *b = malloc((size_t)body_len + 1);
-            if (!b) {
-                free(req);
-                return;
-            }
-            memcpy(b, body, (size_t)body_len);
-            b[body_len] = '\0';
-            handle_restart_map(c, b);
             free(b);
         } else if (strcmp(method, "GET") == 0 &&
                    (strcmp(path, "/") == 0 ||
