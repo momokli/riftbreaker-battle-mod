@@ -2097,8 +2097,12 @@ static void *resolve_console_instance(const unsigned char *vftable)
 {
     uint64_t needle = (uint64_t)(uintptr_t)vftable;
     int hits = 0;
+    int regions = 0;
     void *instance = NULL;
     uintptr_t addr = 0;
+
+    dbg("resolve_console_service: scan start (needle=0x%llx)",
+        (unsigned long long)needle);
 
     for (;;) {
         MEMORY_BASIC_INFORMATION mi;
@@ -2111,6 +2115,10 @@ static void *resolve_console_instance(const unsigned char *vftable)
 
         if (!is_readable_region(&mi))
             continue;
+        regions++;
+        if ((regions & 0xFF) == 0)
+            dbg("resolve_console_service: scan progress "
+                "(regions=%d candidates=%d)", regions, hits);
 
         const uint64_t *q = (const uint64_t *)mi.BaseAddress;
         size_t nq = mi.RegionSize / sizeof(uint64_t); /* BaseAddress ist
@@ -2124,6 +2132,8 @@ static void *resolve_console_instance(const unsigned char *vftable)
                 instance = (void *)&q[i]; /* erster plausibler Kandidat */
         }
     }
+    dbg("resolve_console_service: done (regions=%d candidates=%d)",
+        regions, hits);
     dbg("resolve_console_instance: vftable=%p hits=%d instance=%p",
         (void *)vftable, hits, instance);
     return instance;
@@ -2930,9 +2940,14 @@ static int64_t read_resource_max(const unsigned char *base,
 /* Scannt den eigenen Adressraum (nur MEM_COMMIT + lesbar, kein PAGE_GUARD)
  * nach einem 8-Byte-alignierten QWORD == needle. Reine Leseoperation, kein
  * Aufruf; Rueckgabe = Fundstelle (erstes Vorkommen) oder NULL. */
-static unsigned char *scan_qword_instance(uint64_t needle)
+static unsigned char *scan_qword_instance(uint64_t needle, const char *name)
 {
     uintptr_t addr = 0;
+    int regions = 0;
+    int candidates = 0;
+
+    dbg("%s: scan start (needle=0x%llx)", name, (unsigned long long)needle);
+
     for (;;) {
         MEMORY_BASIC_INFORMATION mi;
         if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
@@ -2943,13 +2958,22 @@ static unsigned char *scan_qword_instance(uint64_t needle)
         addr = next;
         if (!is_readable_region(&mi))
             continue;
+        regions++;
+        if ((regions & 0xFF) == 0)
+            dbg("%s: scan progress (regions=%d candidates=%d)", name, regions,
+                candidates);
         const uint64_t *q = (const uint64_t *)mi.BaseAddress;
         size_t nq = mi.RegionSize / sizeof(uint64_t);
         for (size_t i = 0; i < nq; i++) {
-            if (q[i] == needle)
+            if (q[i] == needle) {
+                candidates++;
+                dbg("%s: done (regions=%d candidates=%d)", name, regions,
+                    candidates);
                 return (unsigned char *)&q[i];
+            }
         }
     }
+    dbg("%s: done (regions=%d candidates=%d)", name, regions, candidates);
     return NULL;
 }
 
@@ -3158,6 +3182,12 @@ static restart_cache_t g_restart;
 static unsigned char *restart_scan_instance(uintptr_t vtable)
 {
     uintptr_t addr = 0;
+    int regions = 0;
+    int candidates = 0;
+
+    dbg("resolve_restart: scan start (needle=0x%llx)",
+        (unsigned long long)vtable);
+
     for (;;) {
         MEMORY_BASIC_INFORMATION mi;
         if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
@@ -3168,13 +3198,23 @@ static unsigned char *restart_scan_instance(uintptr_t vtable)
         addr = next;
         if (!is_writable_region(&mi))
             continue;
+        regions++;
+        if ((regions & 0xFF) == 0)
+            dbg("resolve_restart: scan progress (regions=%d candidates=%d)",
+                regions, candidates);
         const uint64_t *q = (const uint64_t *)mi.BaseAddress;
         size_t nq = mi.RegionSize / sizeof(uint64_t);
         for (size_t i = 0; i < nq; i++) {
-            if (q[i] == (uint64_t)vtable)
+            if (q[i] == (uint64_t)vtable) {
+                candidates++;
+                dbg("resolve_restart: done (regions=%d candidates=%d)",
+                    regions, candidates);
                 return (unsigned char *)&q[i];
+            }
         }
     }
+    dbg("resolve_restart: done (regions=%d candidates=%d)", regions,
+        candidates);
     return NULL;
 }
 
@@ -3430,7 +3470,8 @@ static void dispatch_activate_mission_flow(HANDLE hPipe, const char *logic,
 
     /* MissionService-Instanz per vftable-Scan (RVA 0x2E962A0). */
     ms = scan_qword_instance(
-        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE));
+        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE),
+        "activate_mission_flow");
     if (!ms) {
         send_line(hPipe, "{\"event\":\"activate_mission_flow_result\","
                          "\"ok\":false,\"reason\":\"no_missionservice\"}");
@@ -3521,7 +3562,8 @@ static int mission_flow_active(const unsigned char *base, const char *flow)
     if (!flow || !flow[0])
         return 0;
     ms = scan_qword_instance(
-        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE));
+        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE),
+        "mission_flow_active");
     if (!ms)
         return 0;
 
@@ -3647,7 +3689,7 @@ static RBBRIDGE_NOINLINE int resolve_campaign_diff(const unsigned char *base,
         return 0;
 
     cs = scan_qword_instance((uint64_t)(uintptr_t)(
-        base + RBBRIDGE_RVA_CAMPAIGNSERVICE_VFTABLE));
+        base + RBBRIDGE_RVA_CAMPAIGNSERVICE_VFTABLE), "resolve_campaign_diff");
     if (!cs)
         return 0;
     if (!safe_read_u64(cs + td_get, &inner) || !inner)
@@ -3911,7 +3953,8 @@ static void dispatch_deactivate_mission_flow(HANDLE hPipe, const char *flow)
 
     /* MissionService-Instanz per vftable-Scan (RVA 0x2E962A0). */
     ms = scan_qword_instance(
-        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE));
+        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE),
+        "deactivate_mission_flow");
     if (!ms) {
         send_line(hPipe, "{\"event\":\"deactivate_mission_flow_result\","
                          "\"ok\":false,\"reason\":\"no_missionservice\"}");
@@ -3994,7 +4037,8 @@ static void dispatch_end_game(HANDLE hPipe, const char *result)
 
     /* MissionService-Instanz per vftable-Scan (RVA 0x2E962A0). */
     ms = scan_qword_instance(
-        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE));
+        (uint64_t)(uintptr_t)(base + RBBRIDGE_RVA_MISSIONSERVICE_VFTABLE),
+        "end_game");
     if (!ms) {
         send_line(hPipe, "{\"event\":\"end_game_result\",\"ok\":false,"
                          "\"reason\":\"no_missionservice\"}");
@@ -4125,7 +4169,7 @@ static RBBRIDGE_NOINLINE int resolve_diffsys(const unsigned char *base,
     vt = resolve_rtti_vftable(base, size, RBBRIDGE_DIFFSVC_RTTI);
     if (!vt)
         return 0;
-    svc = scan_qword_instance((uint64_t)(uintptr_t)vt);
+    svc = scan_qword_instance((uint64_t)(uintptr_t)vt, "resolve_diffsys");
     if (!svc)
         return 0;
     if (!safe_read_u64(svc + 8, &world) || !world)
