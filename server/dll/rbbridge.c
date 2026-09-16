@@ -492,6 +492,53 @@ static int end_game_status_from_str(const char *result)
     return -1;
 }
 
+/* Minimales JSON-Escaping fuer String-Werte (Quote/Backslash/Steuerzeichen).
+ * Reine Funktion ohne Spielprozess -> host-testbar (tests/rbbridge-hosttest).
+ * Steht bewusst AUSSERHALB des #ifndef-RBBRIDGE_HOSTTEST-Blocks, weil auch
+ * die host-testbare Chat-Payload (chat_build_player_chat, #549) sie nutzt. */
+static void json_escape_into(const char *in, char *out, size_t n)
+{
+    size_t o = 0;
+    if (n == 0)
+        return;
+    for (size_t i = 0; in && in[i] && o + 7 < n; i++) {
+        unsigned char c = (unsigned char)in[i];
+        if (c == '"' || c == '\\') {
+            out[o++] = '\\';
+            out[o++] = (char)c;
+        } else if (c < 0x20) {
+            o += (size_t)snprintf(out + o, n - o, "\\u%04x", c);
+        } else {
+            out[o++] = (char)c;
+        }
+    }
+    out[o] = '\0';
+}
+
+/* #549: Baut die `player_chat`-Protokollzeile aus dem rohen Chat-Text.
+ * Escaping via json_escape_into(). Rein (nur snprintf) -> host-testbar
+ * (tests/rbbridge-hosttest). Rueckgabe = Laenge der Zeile ohne
+ * NUL-Terminator; 0 = leerer Text oder Puffer zu klein (der Aufrufer darf
+ * dann NICHTS senden).
+ *
+ * Die Zeile entspricht dem Wire-Event `player_chat` aus server/protocol.md. */
+static size_t chat_build_player_chat(const char *text, char *out, size_t n)
+{
+    char esc[512];
+    int len;
+
+    if (!out || n == 0)
+        return 0;
+    out[0] = '\0';
+    if (!text || !text[0])
+        return 0;
+    json_escape_into(text, esc, sizeof(esc));
+    len = snprintf(out, n, "{\"event\":\"player_chat\",\"text\":\"%s\"}", esc);
+    if (len < 0 || (size_t)len >= n)
+        return 0;
+    return (size_t)len;
+}
+
 /* ------------------------------------------------------------------ */
 /* #516: Nativer Round-Reset (HQ-Tod -> neue Runde) — C++-Primitiv    */
 /*                                                                    */
@@ -687,9 +734,16 @@ static CRITICAL_SECTION g_log_cs;  /* schuetzt das Datei-Log             */
 static CRITICAL_SECTION g_chat_cs;
 static char g_chat_text[256];
 static volatile LONG g_chat_pending = 0;
-void *g_chat_trampoline = NULL;
-void (*g_chat_capture)(const void *) = NULL;
-volatile uintptr_t g_chat_this, g_chat_conn, g_chat_req;
+/* Alle Chat-Detour-Slots bewusst `static` (nicht DLL-exportiert, #549
+ * Review Minor 'Externe Linkage'). Zugriff nur aus dem Pipe-Server-Thread
+ * bzw. aus dem Detour (Net-Thread) -> siehe Reentrancy-Hinweis unten.
+ * `used`: die Slots werden ausschliesslich aus dem naked-asm per Namen
+ * referenziert; ohne das Attribut eliminiert der Compiler die statics
+ * (asm-Symbolnamen zaehlen nicht als Use) -> Linker-Fehler. */
+__attribute__((used)) static void *g_chat_trampoline = NULL;
+__attribute__((used)) static void (*g_chat_capture)(const void *) = NULL;
+__attribute__((used)) static volatile uintptr_t g_chat_this, g_chat_conn,
+    g_chat_req;
 static int install_chat_hook(void); /* Definition weiter unten (#549) */
 #endif /* !RBBRIDGE_HOSTTEST */
 
@@ -884,30 +938,19 @@ static void send_state(HANDLE hPipe)
 {
     game_state_t st;
 
-    /* Chat-Detour (#549): pending player_chat ausgeben. */
+    /* Chat-Detour (#549): pending player_chat ausgeben. Die Zeile wird von
+     * der host-testbaren chat_build_player_chat() gebaut (Escaping via
+     * json_escape_into) und nur bei nicht-leerem Ergebnis gesendet. */
     if (g_chat_pending) {
         char raw[256];
-        char esc[512];
-        size_t i, o = 0;
+        char line[600];
         EnterCriticalSection(&g_chat_cs);
-        for (i = 0; i < 256; i++)
-            raw[i] = g_chat_text[i];
+        memcpy(raw, g_chat_text, sizeof(raw));
         g_chat_pending = 0;
         LeaveCriticalSection(&g_chat_cs);
-        raw[255] = '\0';
-        for (i = 0; raw[i] && o < sizeof(esc) - 3; i++) {
-            char c = raw[i];
-            if (c == '"' || c == '\\') {
-                esc[o++] = '\\';
-                esc[o++] = c;
-            } else if (c == '\n' || c == '\r') {
-                esc[o++] = ' ';
-            } else {
-                esc[o++] = c;
-            }
-        }
-        esc[o] = '\0';
-        send_line(hPipe, "{\"event\":\"player_chat\",\"text\":\"%s\"}", esc);
+        raw[sizeof(raw) - 1] = '\0';
+        if (chat_build_player_chat(raw, line, sizeof(line)) > 0)
+            send_line(hPipe, "%s", line);
     }
 
     read_game_state(&st);
@@ -3293,27 +3336,6 @@ static int utfstring_to_cstr(const unsigned char *us, char *buf, size_t n)
     return 1;
 }
 
-/* Minimales JSON-Escaping fuer String-Werte (Quote/Backslash/Steuerzeichen);
- * der Flow-Name stammt aus dem Spiel. */
-static void json_escape_into(const char *in, char *out, size_t n)
-{
-    size_t o = 0;
-    if (n == 0)
-        return;
-    for (size_t i = 0; in && in[i] && o + 7 < n; i++) {
-        unsigned char c = (unsigned char)in[i];
-        if (c == '"' || c == '\\') {
-            out[o++] = '\\';
-            out[o++] = (char)c;
-        } else if (c < 0x20) {
-            o += (size_t)snprintf(out + o, n - o, "\\u%04x", c);
-        } else {
-            out[o++] = (char)c;
-        }
-    }
-    out[o] = '\0';
-}
-
 /* Database-ABI (MSVC x64, aus dem Disasm):
  *   Database::Database()                       this=RCX
  *   Database::SetString(UtfString const& key,
@@ -5484,58 +5506,67 @@ static DWORD WINAPI pipe_server_main(LPVOID unused)
 /* vtable-Slot, sondern inline Hook. Argumente beim Eintritt:          */
 /*   rcx = this (ServerGameplayState*), rdx = NetConnection*,          */
 /*   r8  = &NetPlayerChatReq (by-value-Struct via Hidden-Pointer).      */
-/*   Chat-Text = SSO-UtfString: +0x00 data, +0x18 len, +0x20 cap       */
-/*   (cap <= 0xF -> SSO inline bei req; sonst Heap-Pointer [req]).     */
+/*   Chat-Text = UtfString am req-Anfang, Layout identisch zum          */
+/*   kanonischen Reader utfstring_to_cstr(): SSO-Daten bei +0x08       */
+/*   (Heap-Pointer *(req+0x08) bei cap > 0xF), size +0x18, cap +0x20.  */
+/*   (Review-Blocker 2: der fruehere +0x00-Datenoffset war um 8 daneben  */
+/*    und wurde durch Wiederverwendung von utfstring_to_cstr() ersetzt.) */
 /*                                                                    */
-/* Prolog (12 Bytes, saubere Instruktionsgrenze):                      */
+/* Prolog (12 Bytes, saubere Instruktionsgrenze) = CHAT_HOOK_ORIG:      */
 /*   48 89 5c 24 10   mov [rsp+0x10], rbx                              */
 /*   4c 89 44 24 18   mov [rsp+0x18], r8                               */
 /*   55               push rbp                                         */
 /*   56               push rsi                                         */
 /* ab Byte 12: 57 push rdi.                                            */
+/* Der Prolog wird VOR dem Patch per memcmp geprueft (siehe            */
+/* install_chat_hook) -> bei abweichendem Build kein Fremdpatch.        */
 /* ------------------------------------------------------------------ */
 
 #define CHAT_HOOK_RVA 0x1821B50u
 
+/* Erwarteter 12-Byte-Funktionsprolog an CHAT_HOOK_RVA. Nur bei exakter
+ * Uebereinstimmung mit den Live-Bytes wird gepatcht (sonst Abort + dbg),
+ * damit ein abweichender Build/Update keinen Fremdcode ueberschreibt
+ * (#549 Review-Blocker 1, analog RBBRIDGE_EXEC_SIG/RBBRIDGE_RESTART_SIG). */
+static const unsigned char CHAT_HOOK_ORIG[12] = {
+    0x48, 0x89, 0x5c, 0x24, 0x10, /* mov [rsp+0x10], rbx */
+    0x4c, 0x89, 0x44, 0x24, 0x18, /* mov [rsp+0x18], r8  */
+    0x55,                           /* push rbp           */
+    0x56                            /* push rsi           */
+};
+
+/* #549: liest den Chat-Text aus dem uebergebenen UtfString (req) und legt
+ * ihn als pending `player_chat` ab. Nutzt bewusst den kanonischen Reader
+ * utfstring_to_cstr() (kein eigener, abweichender Offset) und nullt den
+ * Puffer vorab -> kein Stack-Info-Leak ueber die Pipe (Review Minor). */
 static void capture_chat_text(const void *req)
 {
-    uint64_t cap = 0, len = 0, ptr = 0;
-    const unsigned char *src;
-    size_t n, i;
     char buf[256];
 
     if (req == NULL)
         return;
-    safe_read_u64((const unsigned char *)req + 0x20, &cap);
-    safe_read_u64((const unsigned char *)req + 0x18, &len);
-    if (len == 0)
+    memset(buf, 0, sizeof(buf));
+    if (!utfstring_to_cstr((const unsigned char *)req, buf, sizeof(buf)))
         return;
-    if (cap <= 0xF) {
-        src = (const unsigned char *)req;
-    } else {
-        safe_read_u64((const unsigned char *)req, &ptr);
-        if (ptr == 0)
-            return;
-        src = (const unsigned char *)ptr;
-    }
-    n = len > 255 ? 255 : (size_t)len;
-    for (i = 0; i < n; i += 8) {
-        uint64_t v = 0;
-        size_t c = (n - i) < 8 ? (n - i) : 8;
-        size_t j;
-        if (!safe_read_u64(src + i, &v))
-            break;
-        for (j = 0; j < c; j++)
-            buf[i + j] = (char)((v >> (j * 8)) & 0xFF);
-    }
-    buf[n] = '\0';
     EnterCriticalSection(&g_chat_cs);
-    for (i = 0; i <= n; i++)
-        g_chat_text[i] = buf[i];
+    memcpy(g_chat_text, buf, sizeof(g_chat_text));
+    g_chat_text[sizeof(g_chat_text) - 1] = '\0';
     g_chat_pending = 1;
     LeaveCriticalSection(&g_chat_cs);
 }
 
+/* Detour: rettet die drei Argumentregister in globale Slots, liest den
+ * Chat-Text und springt dann in die Trampoline (Original-Prolog + Sprung
+ * hinter den Patch).
+ *
+ * ABI (MS-x64): naked-Funktion ohne Compiler-Prolog -> im Rumpf genug
+ * Shadow-Space + 16-B-Alignment vor dem Call aufbauen (sub 0x28).
+ *
+ * Reentrancy (Review Minor): die Argumentregister werden in EINEM
+ * globalen Slotsatz geparkt. Sicher, solange der Hook nur vom Single-
+ * Net-Thread des Servers erreicht wird; bei verschachtelten/parallelen
+ * Aufrufen gingen die Original-Argumente verloren. Fuer diese einzige
+ * Aufrufstelle ist das gegeben. */
 __attribute__((naked)) static void detour_chat_handler(void)
 {
     __asm__ volatile(
@@ -5570,34 +5601,43 @@ static int install_chat_hook(void)
     if (g_chat_trampoline != NULL)
         return 0;
 
-    if (!resolve_module(&base, &size, &via, &execfn) || base == NULL)
+    if (!resolve_module(&base, &size, &via, &execfn) || base == NULL) {
+        dbg("install_chat_hook: resolve_module fehlgeschlagen -> kein Hook");
         return -1;
+    }
 
     target = (unsigned char *)(base + CHAT_HOOK_RVA);
 
-    tramp = (unsigned char *)VirtualAlloc(NULL, 24, MEM_COMMIT,
-                                          PAGE_EXECUTE_READWRITE);
-    if (tramp == NULL)
+    /* Review-Blocker 1: Prolog erst VERIFIZIEREN, dann patchen. Der RVA ist
+     * build-spezifisch (2.0.58485); ohne diesen Check wuerde ein abweichender
+     * Build beim Attach sofort crashen. */
+    if (memcmp(target, CHAT_HOOK_ORIG, sizeof(CHAT_HOOK_ORIG)) != 0) {
+        dbg("install_chat_hook: Prolog-Mismatch @%p (Build != 2.0.58485?) "
+            "-> Hook uebersprungen, kein Patch",
+            (void *)target);
         return -1;
-
-    {
-        static const unsigned char orig[12] = {
-            0x48, 0x89, 0x5c, 0x24, 0x10,  /* mov [rsp+0x10], rbx */
-            0x4c, 0x89, 0x44, 0x24, 0x18,  /* mov [rsp+0x18], r8  */
-            0x55,                            /* push rbp           */
-            0x56                             /* push rsi           */
-        };
-        ret = (uintptr_t)(base + CHAT_HOOK_RVA + 12);
-        for (k = 0; k < 12; k++)
-            tramp[k] = orig[k];
-        tramp[12] = 0x48;
-        tramp[13] = 0xB8; /* mov rax, imm64 */
-        for (k = 0; k < 8; k++)
-            tramp[14 + k] = (unsigned char)(ret >> (8 * k));
-        tramp[22] = 0xFF;
-        tramp[23] = 0xE0; /* jmp rax */
     }
 
+    tramp = (unsigned char *)VirtualAlloc(NULL, 24, MEM_COMMIT,
+                                          PAGE_EXECUTE_READWRITE);
+    if (tramp == NULL) {
+        dbg("install_chat_hook: VirtualAlloc(Trampoline) fehlgeschlagen");
+        return -1;
+    }
+
+    /* Trampoline: Original-Prolog (verifiziert) + absoluter Ruecksprung
+     * hinter den 12-Byte-Patch (base + RVA + 12). */
+    ret = (uintptr_t)(base + CHAT_HOOK_RVA + 12);
+    for (k = 0; k < 12; k++)
+        tramp[k] = CHAT_HOOK_ORIG[k];
+    tramp[12] = 0x48;
+    tramp[13] = 0xB8; /* mov rax, imm64 */
+    for (k = 0; k < 8; k++)
+        tramp[14 + k] = (unsigned char)(ret >> (8 * k));
+    tramp[22] = 0xFF;
+    tramp[23] = 0xE0; /* jmp rax */
+
+    /* 12-Byte-Sprung (mov rax, imm64 ; jmp rax) ueber den Prolog. */
     patch[0] = 0x48;
     patch[1] = 0xB8; /* mov rax, imm64 */
     for (k = 0; k < 8; k++)
@@ -5609,13 +5649,20 @@ static int install_chat_hook(void)
     g_chat_trampoline = tramp; /* vor dem Patch, damit der Detour ein Ziel hat */
 
     if (!VirtualProtect(target, 12, PAGE_EXECUTE_READWRITE, &oldp)) {
+        dbg("install_chat_hook: VirtualProtect(WRITE) fehlgeschlagen -> kein Hook");
         VirtualFree(tramp, 0, MEM_RELEASE);
         g_chat_trampoline = NULL;
         return -1;
     }
+    /* Hinweis (Review Minor): der 12-Byte-Write ist NICHT atomar; parallel
+     * laufende Net-Threads koennten eine zerrissene Instruktion sehen. Der
+     * Hook wird im Pipe-Server-Thread installiert, bevor ein Client Chat
+     * senden kann; die Ziel-Funktion wird nur bei eingehendem Chat betreten.
+     * Fuer diese einzige Aufrufstelle daher unkritisch. */
     for (k = 0; k < 12; k++)
         target[k] = patch[k];
-    VirtualProtect(target, 12, oldp, &oldp);
+    if (!VirtualProtect(target, 12, oldp, &oldp))
+        dbg("install_chat_hook: VirtualProtect(Restore) fehlgeschlagen");
 
     dbg("install_chat_hook: Detour installiert (target=%p tramp=%p)",
         (void *)target, (void *)tramp);
