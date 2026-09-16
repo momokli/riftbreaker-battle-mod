@@ -1479,6 +1479,72 @@ static const unsigned char RBBRIDGE_DIFFSYS_GET_SIG_MASK[] = {
     0xFF, 0x00, 0x00, 0x00, 0x00
 };
 
+/* ------------------------------------------------------------------ */
+/* #512: verbundene Spielerzahl nativ (Solo-/Koop-Erkennung)           */
+/*                                                                    */
+/* Lua-Pfad im Spiel: `dom_mananger:GetPlayersCounter()` ==             */
+/* `#PlayerService:GetConnectedPlayers()`. Die ZAHL ist KEIN statisches */
+/* Feld, sondern wird per Filter ueber den Spieler-Container berechnet  */
+/* (docs/research/dedicated-io-direct-reads.md, Abschnitt 2).           */
+/*                                                                    */
+/* Aufgeloest wird die FREIE Funktion                                 */
+/*   `Riftbreaker::GetConnectedPlayers(Exor::World*)`                  */
+/* als AOB - die RVA 0xC5EE70 (Build 2.0.58485) ist NUR Verifikations-  */
+/* Notiz, niemals die Laufzeitadresse.                                 */
+/*                                                                    */
+/* Disasm (planet, tools/re/disasm.py 0xC5EE70):                       */
+/*   rcx = out-Vektor (hidden return ptr, MSVC-x64-Aggregat-Return)     */
+/*   rdx = World*                                                      */
+/*     48 8D 9A C0 00 00 00   lea rbx,[rdx+0xc0]  ; Sessions-Store      */
+/*     41 B8 B1 B8 7E 10      mov r8d,0x107eb8b1  ; TypeHash (stabil)  */
+/*   fuellt `out` mit ALLEN Spieler-Ids (Helper 0x1DF3F50) und filtert   */
+/*   in-place auf "connected" (0x1CF5AB0). Rueckgabe-Typ:               */
+/*   Exor::Vector<uint32,StlAllocatorProxy<uint32>>.                    */
+/*                                                                    */
+/* Vektor-Layout (drei unabhaengige Disasm-Belege: 0xC5EE70,            */
+/* Konsument 0x12B8386, Dtor 0x26F340):                                */
+/*   +0x00 = Allocator-Objekt*   +0x08 = begin (uint32*)               */
+/*   +0x10 = size (count)        +0x18 = capacity                      */
+/*   Groesse 0x20 B; die Zahl ist `vec[+0x10]` (nicht ableitbar aus    */
+/*   einem festen Feld - genau deshalb der Funktionsaufruf).            */
+/*                                                                    */
+/* Die 114-Byte-Signatur ist im .text EINDEUTIG (Gegenprobe planet:     */
+/* genau 1 Treffer @ RVA 0xC5EE70). Wildcards: die drei E8-rel32        */
+/* (buildabhaengige Call-Ziele) und die drei rel8-Spruenge.             */
+/* ------------------------------------------------------------------ */
+static const unsigned char RBBRIDGE_CONNPLAYERS_SIG[] = {
+    0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18,
+    0x48, 0x89, 0x74, 0x24, 0x20, 0x48, 0x89, 0x4C, 0x24, 0x08,
+    0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xEC, 0x40, 0x4C,
+    0x8B, 0xF9, 0x45, 0x33, 0xF6, 0x44, 0x89, 0x74, 0x24, 0x20,
+    0x48, 0x8D, 0x9A, 0xC0, 0x00, 0x00, 0x00, 0x41, 0xB8, 0xB1,
+    0xB8, 0x7E, 0x10, 0x48, 0x8D, 0x54, 0x24, 0x28, 0x48, 0x8B,
+    0xCB, 0xE8, 0x00, 0x00, 0x00, 0x00, 0x48, 0x8B, 0x4C, 0x24,
+    0x28, 0x48, 0x85, 0xC9, 0x74, 0x00, 0x48, 0x83, 0xC1, 0x08,
+    0xE8, 0x00, 0x00, 0x00, 0x00, 0x48, 0x85, 0xC0, 0x74, 0x00,
+    0x48, 0x8B, 0x08, 0xEB, 0x00, 0x49, 0x8B, 0xCE, 0x49, 0x8B,
+    0xD7, 0xE8, 0x00, 0x00, 0x00, 0x00, 0xC7, 0x44, 0x24, 0x20,
+    0x01, 0x00, 0x00, 0x00
+};
+static const unsigned char RBBRIDGE_CONNPLAYERS_SIG_MASK[] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0x00,
+    0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF
+};
+
+/* Plausibilitaets-Obergrenze fuer die gelesene Spielerzahl (mehr als 64
+ * "connected" Spieler sind ein Fehllesen, kein Zustand). */
+#define RBBRIDGE_CONNPLAYERS_MAX 64
+
 /* ops des natural_waves-Kommandos. 0=status, 1=off, 2=on, -1=ungueltig.
  * Steht ausserhalb des Hosttest-Guards -> direkt host-testbar. */
 static int natural_waves_op(const char *op)
@@ -2507,6 +2573,112 @@ static void copy_cstr(char *dst, size_t n, const char *src)
     }
     dst[i] = '\0';
 }
+
+/* ------------------------------------------------------------------ */
+/* #512: Spielerzahl-Resolver (rein, host-testbar)                      */
+/* ------------------------------------------------------------------ */
+
+/* Loest `Riftbreaker::GetConnectedPlayers(Exor::World*)` ueber ihre
+ * 114-Byte-AOB auf. Reine Scan-/Eindeutigkeitslogik, KEIN Aufruf.
+ * Rueckgabe 1 = genau EIN Treffer (out_fn gesetzt), 0 = nicht aufloesbar
+ * (Nicht-Fund ODER mehrdeutig) -> Aufrufer meldet `null`, nie Crash. */
+static int connplayers_resolve(const unsigned char *base, size_t size,
+                               const unsigned char **out_fn)
+{
+    const unsigned char *text = NULL;
+    size_t text_len = 0;
+    const unsigned char *hit = NULL;
+
+    if (out_fn)
+        *out_fn = NULL;
+    if (!base || size == 0)
+        return 0;
+
+    /* .text bevorzugen (verhindert kurze Fremdtreffer in .rdata). */
+    if (!rbbridge_text_range(base, size, &text, &text_len)) {
+        text = base;
+        text_len = size;
+    }
+
+    hit = scan_bytes_mask(text, text_len, RBBRIDGE_CONNPLAYERS_SIG,
+                          RBBRIDGE_CONNPLAYERS_SIG_MASK,
+                          sizeof(RBBRIDGE_CONNPLAYERS_SIG));
+    if (!hit) {
+        dbg("connplayers_resolve: AOB ohne Treffer -> kein Aufruf");
+        return 0;
+    }
+    /* Eindeutigkeit: nur genau EIN Treffer ist aufrufbar. */
+    if (scan_bytes_mask(hit + 1,
+                        (size_t)((text + text_len) - (hit + 1)),
+                        RBBRIDGE_CONNPLAYERS_SIG,
+                        RBBRIDGE_CONNPLAYERS_SIG_MASK,
+                        sizeof(RBBRIDGE_CONNPLAYERS_SIG))) {
+        dbg("connplayers_resolve: AOB nicht eindeutig -> kein Aufruf");
+        return 0;
+    }
+    dbg("connplayers_resolve: GetConnectedPlayers=%p (rva=%08lx)",
+        (const void *)hit, (unsigned long)(hit - base));
+    if (out_fn)
+        *out_fn = hit;
+    return 1;
+}
+
+/* Liest die Spielerzahl aus dem Rueckgabe-Vektor (Layout s. Sig-Kommentar):
+ * count = `vec[+0x10]`. Reine Lese-Logik -> host-testbar. Die Zahl wird
+ * NICHT re-semantisiert (Interface-Konvention: das ist die rohe Zahl
+ * "connected players"); nur offensichtlicher Muell (> MAX) -> 0.
+ * Rueckgabe 1 = gelesen, 0 = unplausibel/unlesbar. */
+static int connplayers_count_from_vec(const unsigned char *vec, int *out)
+{
+    uint64_t n = 0;
+    if (!vec || !out)
+        return 0;
+    if (!safe_read_u64(vec + 0x10, &n))
+        return 0;
+    if (n > (uint64_t)RBBRIDGE_CONNPLAYERS_MAX)
+        return 0;
+    *out = (int)n;
+    return 1;
+}
+
+/* Ermittelt den Deallocate-Zeiger fuer den Rueckgabe-Vektor aus dem
+ * Allocator-Objekt `alloc` (= vec[+0x00]). Disasm-belegt (RVA 0x26F340,
+ * `~Vector`):
+ *   mov rcx,[rcx]        ; rcx = Allocator-Objekt (vec[+0x00])
+ *   mov rax,[rcx]        ; rax = vptr  (Obj+0x00)
+ *   call qword ptr [rax+0x10]   ; Slot +0x10
+ * Also ZWEI Indirektionen (vptr -> Slot), NICHT `alloc[+0x10]`. Beide Reads
+ * laufen per safe_read_u64 (kein Roh-Deref); der Slot wird zusaetzlich auf
+ * 0 und auf den eigenen Modulbereich [base,base+size) geprueft - ein
+ * fehlgeleiteter/abgeraeumter Zeiger fuehrt so NIE zu einem Blind-Call
+ * (Leak statt Crash). Reine Lese-Logik -> host-testbar.
+ * Rueckgabe 1 = out_fn gesetzt, 0 = unplausibel (kein Aufruf). */
+static int connplayers_dealloc_target(const unsigned char *alloc,
+                                      const unsigned char *base, size_t size,
+                                      uintptr_t *out_fn)
+{
+    uint64_t vptr = 0, slot = 0;
+
+    if (out_fn)
+        *out_fn = 0;
+    if (!alloc || !out_fn)
+        return 0;
+    if (!safe_read_u64(alloc, &vptr) || !vptr)
+        return 0; /* vptr (Obj+0x00) unlesbar/0 */
+    if (!safe_read_u64((const unsigned char *)(uintptr_t)vptr + 0x10,
+                       &slot) ||
+        !slot)
+        return 0; /* Slot +0x10 unlesbar/0 */
+    if (base && size) {
+        uintptr_t lo = (uintptr_t)base;
+        uintptr_t hi = lo + size;
+        if (slot < lo || slot >= hi)
+            return 0; /* Ziel ausserhalb des Moduls -> kein Aufruf */
+    }
+    *out_fn = (uintptr_t)slot;
+    return 1;
+}
+
 #ifndef RBBRIDGE_HOSTTEST
 
 /* ------------------------------------------------------------------ */
@@ -4182,6 +4354,99 @@ static RBBRIDGE_NOINLINE void dispatch_natural_waves(HANDLE hPipe,
               esc_d);
 }
 
+/* ------------------------------------------------------------------ */
+/* #512: Spielerzahl-Read (produktionsseitig)                           */
+/*                                                                    */
+/* Thread-Modell: reiner C++-Read (KEIN `lua_*`) - thread-agnostisch,   */
+/* der Pipe-Thread darf ihn direkt fahren (analog GetPlayerAccount).    */
+/* Die Zahl ist nicht als Offset lesbar, sondern nur berechenbar ->     */
+/* genau EIN Game-Call + ein Deref (`vec[+0x10]`).                      */
+/* Nicht-Fund (AOB mehrdeutig/fehlt) oder fehlende Welt -> 0, kein      */
+/* Aufruf (kein SEH unter MinGW-x64).                                   */
+/* ------------------------------------------------------------------ */
+
+/* Gibt den Rueckgabe-Vektor frei - exakt die Semantik von
+ * `Exor::Vector<uint32,StlAllocatorProxy<uint32>>::~Vector`
+ * (Disasm RVA 0x26F340):
+ *   cap = vec[+0x18]; nur wenn cap != 0:
+ *     alloc = vec[+0x00]; vptr = *alloc; vptr[+0x10](alloc, vec[+0x08], cap*4)
+ * (Element = uint32 -> cap*4 Byte; die Engine setzt `vec[+0x00]` beim
+ * Aufbau des Vektors selbst.) Bewusst KEINE Dtor-Symbolaufloesung: der
+ * Dtor-Body liegt im .text DREIFACH (drei byte-identische Instanzen fuer
+ * 4-Byte-Elemente; planet-Gegenprobe 0x26F340 / 0x2B30F0 / 0x18906E0) -
+ * eine AOB waere also nicht eindeutig. Der Deallocate-Aufruf ueber die
+ * Allocator-vtable ist dagegen deterministisch (kein Leak).
+ *
+ * Review PR #524: der vtable-Slot wird NICHT roh dereferenziert. Beide
+ * Indirektionen (vptr -> Slot) laufen per safe_read_u64 und der Slot wird
+ * auf 0 + Modulbereich geprueft (connplayers_dealloc_target); zusaetzlich
+ * wird `cap` begrenzt. Ein abweichendes Vektor-Layout oder eine
+ * fehlgeleitete AOB fuehrt damit zu einem Leak, nie zu einem Blind-Call. */
+static void connplayers_vec_release(unsigned char *vec,
+                                    const unsigned char *base, size_t size)
+{
+    uint64_t alloc = 0, begin = 0, cap = 0;
+    uintptr_t dealloc_addr = 0;
+    typedef void (*vec_dealloc_fn)(void *self, void *p, size_t bytes);
+
+    if (!vec)
+        return;
+    if (!safe_read_u64(vec + 0x18, &cap) || cap == 0)
+        return; /* keine Allokation -> nichts freizugeben */
+    if (cap > (uint64_t)RBBRIDGE_CONNPLAYERS_MAX)
+        return; /* unplausible Kapazitaet -> nicht freigeben (Leak statt Crash) */
+    if (!safe_read_u64(vec + 0x00, &alloc) || !alloc)
+        return;
+    if (!safe_read_u64(vec + 0x08, &begin) || !begin)
+        return;
+    if (!connplayers_dealloc_target((const unsigned char *)(uintptr_t)alloc,
+                                    base, size, &dealloc_addr))
+        return; /* kein plausibles Ziel -> kein Aufruf */
+
+    ((vec_dealloc_fn)dealloc_addr)((void *)(uintptr_t)alloc,
+                                   (void *)(uintptr_t)begin,
+                                   (size_t)(cap * 4));
+}
+
+/* Liest die Zahl der verbundenen Spieler. Resolver gecacht (Build-Bindung
+ * wie alle anderen AOB-Pfade dieser DLL). Rueckgabe 1 = gelesen (out),
+ * 0 = nicht verfuegbar -> Aufrufer meldet `null`.
+ * MSVC-x64-ABI der aufgeloesten Funktion: rcx = out-Vektor, rdx = World*. */
+static int read_player_count(const unsigned char *base, size_t size,
+                             const unsigned char *ps, int *out)
+{
+    static const unsigned char *s_fn = NULL;
+    static int s_tried = 0;
+    unsigned char vec[0x20];
+    uint64_t world = 0;
+    int n = 0, ok = 0;
+
+    if (!out)
+        return 0;
+    if (!s_tried) {
+        s_tried = 1;
+        if (!connplayers_resolve(base, size, &s_fn))
+            dbg("read_player_count: GetConnectedPlayers nicht aufloesbar "
+                "-> players=null");
+    }
+    if (!s_fn || !ps)
+        return 0;
+    if (!safe_read_u64(ps + 8, &world) || !world)
+        return 0;
+
+    memset(vec, 0, sizeof(vec));
+    {
+        typedef void (*connplayers_fn)(void *out_vec, void *world);
+        ((connplayers_fn)(uintptr_t)s_fn)(vec, (void *)(uintptr_t)world);
+    }
+    ok = connplayers_count_from_vec(vec, &n);
+    connplayers_vec_release(vec, base, size);
+    if (!ok)
+        return 0;
+    *out = n;
+    return 1;
+}
+
 /* #511: Service-Instanz ueber ihre vftable finden (QWORD-Scan).
  *
  * Bewusst STRENGER als der PlayerService-Scan in get_state (der naiv den
@@ -4342,6 +4607,11 @@ static void dispatch_get_state(HANDLE hPipe)
             snprintf(diff_field, sizeof(diff_field), "null");
     }
 
+    /* Spielerzahl (Read #512, nativ C++): GetConnectedPlayers(World*).
+     * Default `null` (nicht aufloesbar / keine Welt) - nur bei Erfolg eine
+     * Zahl. Solo: 1, kein Spieler: 0. */
+    char players_field[16];
+    copy_cstr(players_field, sizeof(players_field), "null");
     /* HQ-Health (Read #511, nativ C++): Default null. Der Game-Call laeuft
      * erst NACH aufgeloestem Spieler-Account (= Welt geladen) - vorher wird
      * KEINE Game-Funktion gerufen (#511: ein HQ-Read waehrend des Boots
@@ -4411,9 +4681,10 @@ static void dispatch_get_state(HANDLE hPipe)
                          "\"mission_flow\":\"%s\","
                          "\"mission_flow_active\":%s,"
                          "\"mission_flow_payload\":%s,"
-                         "\"creatures_base_difficulty\":%s,%s}",
+                         "\"creatures_base_difficulty\":%s,"
+                         "\"players\":%s,%s}",
                   flow_esc, flow_active ? "true" : "false", payload_field,
-                  diff_field, hq_field);
+                  diff_field, players_field, hq_field);
         return;
     }
 
@@ -4425,9 +4696,10 @@ static void dispatch_get_state(HANDLE hPipe)
                          "\"mission_flow\":\"%s\","
                          "\"mission_flow_active\":%s,"
                          "\"mission_flow_payload\":%s,"
-                         "\"creatures_base_difficulty\":%s,%s}",
+                         "\"creatures_base_difficulty\":%s,"
+                         "\"players\":%s,%s}",
                   flow_esc, flow_active ? "true" : "false", payload_field,
-                  diff_field, hq_field);
+                  diff_field, players_field, hq_field);
         return;
     }
 
@@ -4440,10 +4712,28 @@ static void dispatch_get_state(HANDLE hPipe)
                          "\"mission_flow\":\"%s\","
                          "\"mission_flow_active\":%s,"
                          "\"mission_flow_payload\":%s,"
-                         "\"creatures_base_difficulty\":%s,%s}",
+                         "\"creatures_base_difficulty\":%s,"
+                         "\"players\":%s,%s}",
                   flow_esc, flow_active ? "true" : "false", payload_field,
-                  diff_field, hq_field);
+                  diff_field, players_field, hq_field);
         return;
+    }
+
+    /* #512: Spielerzahl nativ lesen - BEWUSST erst NACH dem Account-Check.
+     *
+     * `Riftbreaker::GetConnectedPlayers` holt den Session-Pointer aus
+     * `World+0xC0` und ruft damit das Session-Praedikat (RVA 0x1CF5AB0 ->
+     * `cmp rax,[rcx+0x1e0]`). Ist die Welt noch nicht geladen, ist dieser
+     * Pointer NULL -> Page-Fault. LIVE belegt (#512, planet):
+     * `Unhandled page fault on read access to 0x1E0` at DLL+0x1CF5AD3
+     * (thread 025c) = genau `cmp rax,[rcx+0x1e0]` mit rcx=0. Der erfolgreiche
+     * Account-Lookup ist die live-bewiesene Vorbedingung "Welt wirklich da"
+     * (dieselbe wie fuer carbonium) und schuetzt den Aufruf. Ohne Account
+     * bleibt es bei `players:null` - ehrlich statt 0. */
+    {
+        int players = 0;
+        if (read_player_count(base, size, ps, &players))
+            snprintf(players_field, sizeof(players_field), "%d", players);
     }
 
     /* HQ-Health (Read #511): Welt ist geladen (Account da) -> jetzt der
@@ -4514,11 +4804,12 @@ static void dispatch_get_state(HANDLE hPipe)
               "\"ironium\":%llu,\"ironium_max\":%lld,\"resources\":%s,"
               "\"mission_flow\":\"%s\",\"mission_flow_active\":%s,"
               "\"mission_flow_payload\":%s,"
-              "\"creatures_base_difficulty\":%s,%s}",
+              "\"creatures_base_difficulty\":%s,"
+              "\"players\":%s,%s}",
               (unsigned long long)carbonium, (long long)carbonium_max,
               (unsigned long long)ironium, (long long)ironium_max,
               resources, flow_esc, flow_active ? "true" : "false",
-              payload_field, diff_field, hq_field);
+              payload_field, diff_field, players_field, hq_field);
 }
 
 
