@@ -69,6 +69,12 @@
 #define CMD_MAX              512
 #define IDENT_CAP            256           /* max. Laenge env/ref-Badge */
 
+/* Build-Identitaet (Issue #499): ref (Commit/Tag) wird beim Build per
+ * -DRBBRIDGE_REF="..." gesetzt; Default "unknown". */
+#ifndef RBBRIDGE_REF
+#define RBBRIDGE_REF "unknown"
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Logging                                                             */
 /* ------------------------------------------------------------------ */
@@ -1254,6 +1260,7 @@ static int mode_server(void)
 {
     init_session_id();
     blog("session start %s", g_session_id);
+    blog("pipe_bridge ref=%s", RBBRIDGE_REF);
 
     const char *bind_addr = env_str("RBB_BRIDGE_BIND", DEFAULT_BIND);
     int port = env_int("RBB_BRIDGE_PORT", DEFAULT_PORT);
