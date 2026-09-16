@@ -63,8 +63,12 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          # workflow_dispatch erzwingt den Boot-Test immer: das ist der Zweck —
-          # einen verhungerten Lauf ohne Leer-Commit nachholen zu können.
+          # workflow_dispatch erzwingt den Boot-Test immer. ACHTUNG: Dispatch
+          # braucht Actions: write — die Bot-Identity momo-clanker[bot] hat das
+          # NICHT (403, Issue #107). Der Dispatch ist daher ein OPERATOR-Pfad
+          # (eigenes Token / GitHub-UI); der Bot holt einen Lauf per Leer-Commit
+          # auf den PR-Branch nach (konfliktfreier PR).
+          # Runbook: momokli/openclaw-deploy docs/ci-retrigger.md.
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
             exit 0

@@ -134,9 +134,15 @@ Zwei identische Läufe gleichzeitig fahren und Grün abwarten — z. B. zwei
 `Boot-Test`-Dispatches (oder zwei `Deploy Check`) auf dieselbe Ref:
 
 ```bash
-gh workflow run boot-test.yml --ref <ref>   # 2× kurz hintereinander
+gh workflow run boot-test.yml --ref <ref>   # 2× kurz hintereinander (braucht Actions: write — Operator-Token)
 gh run list --workflow boot-test.yml --limit 4
 ```
+
+> **Hinweis (#107):** `gh workflow run` ist ein **Operator-Pfad** — der Trigger
+> `workflow_dispatch` verlangt `Actions: write`, das die Bot-Identity
+> `momo-clanker[bot]` **nicht** hat (403). Der Bot holt einen Lauf stattdessen per
+> Leer-Commit auf den (konfliktfreien) PR-Branch nach. Runbook:
+> `momokli/openclaw-deploy` → `docs/ci-retrigger.md`.
 
 Zu prüfen: beide Läufe gleichzeitig `in_progress` auf verschiedenen
 Runner-Instanzen, beide `success`, keine Port-/Container-Kollision im Log.
