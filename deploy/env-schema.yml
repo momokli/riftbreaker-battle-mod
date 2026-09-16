@@ -27,8 +27,8 @@
 
 per_env:
   # --- Dedicated-Server -----------------------------------------------------
-  riftbreaker_server_container: [prod, test]
-  riftbreaker_server_port_udp: [prod, test]
+  riftbreaker_server_container: [prod, test, staging]
+  riftbreaker_server_port_udp: [prod, test, staging]
   # Compose-Projekt JE Env explizit (Issue #483, Ziel B): im neuen
   # `<env>`-Schema ist der Compose-Verzeichnis-Basename ueberall "riftbreaker"
   # -> ohne expliziten Projektnamen kollidierten dev und prod. Variante (a),
@@ -36,51 +36,51 @@ per_env:
   # (dev `riftbreaker-dedicated`, prod `riftbreaker-dedicated-prod`), damit die
   # projekt-praefixten Docker-Volumes der laufenden Instanzen weiter getroffen
   # werden; test bleibt lauf-isoliert (`rb-test-<suffix>`).
-  riftbreaker_compose_project: [dev, prod, test]
-  riftbreaker_game_dir: [prod, test]
-  riftbreaker_mod_dir: [prod, test]
-  riftbreaker_backup_dir: [prod, test]
-  riftbreaker_deploy_dir: [prod, test]
-  riftbreaker_config_dir: [prod]
-  riftbreaker_wine_volume: [prod, test]
-  riftbreaker_saves_volume: [prod, test]
-  riftbreaker_bridge_port: [prod, test]
+  riftbreaker_compose_project: [dev, prod, test, staging]
+  riftbreaker_game_dir: [prod, test, staging]
+  riftbreaker_mod_dir: [prod, test, staging]
+  riftbreaker_backup_dir: [prod, test, staging]
+  riftbreaker_deploy_dir: [prod, test, staging]
+  riftbreaker_config_dir: [prod, staging]
+  riftbreaker_wine_volume: [prod, test, staging]
+  riftbreaker_saves_volume: [prod, test, staging]
+  riftbreaker_bridge_port: [prod, test, staging]
   # --- Server-I/O-Tools (rbtools) -----------------------------------------
-  rbtools_dir: [prod, test]
-  rbtools_staging_dir: [prod, test]
+  rbtools_dir: [prod, test, staging]
+  rbtools_staging_dir: [prod, test, staging]
   # --- Sidecars (Session-Recorder + Referee-Egress) ------------------------
-  riftbreaker_sessions_container: [prod, test]
-  riftbreaker_sessions_dir: [prod, test]
+  riftbreaker_sessions_container: [prod, test, staging]
+  riftbreaker_sessions_dir: [prod, test, staging]
 
   # --- Crash-Collector (Prod-Zwilling, Issue #481) -------------------------
-  crash_collector_unit: [prod]
-  crash_collector_dir: [prod]
-  crash_collector_container: [prod]
+  crash_collector_unit: [prod, staging]
+  crash_collector_dir: [prod, staging]
+  crash_collector_container: [prod, staging]
   # --- Server-Control (Prod-Zwilling, Issue #498) --------------------------
-  server_control_unit: [prod]
-  server_control_port: [prod]
-  server_control_install_dir: [prod]
-  server_control_env_file: [prod]
+  server_control_unit: [prod, staging]
+  server_control_port: [prod, staging]
+  server_control_install_dir: [prod, staging]
+  server_control_env_file: [prod, staging]
   # --- Tournament-Server ----------------------------------------------------
-  tournament_install_dir: [prod, test]
-  tournament_unit: [prod, test]
-  tournament_port: [prod, test]
-  tournament_bridge_a_url: [prod, test]
-  tournament_bridge_b_url: [prod, test]
-  # --- Website (nur prod betreibt eine eigene Landing/Cockpit) -------------
-  landing_domain: [prod]
-  cockpit_domain: [prod]
-  rift_caddy_container: [prod]
-  rift_caddy_port: [prod]
-  rift_caddy_deploy_dir: [prod]
-  rift_caddy_data_dir: [prod]
-  rift_caddy_config_dir: [prod]
+  tournament_install_dir: [prod, test, staging]
+  tournament_unit: [prod, test, staging]
+  tournament_port: [prod, test, staging]
+  tournament_bridge_a_url: [prod, test, staging]
+  tournament_bridge_b_url: [prod, test, staging]
+  # --- Website (prod + staging betreiben je eine eigene Landing/Cockpit) -----
+  landing_domain: [prod, staging]
+  cockpit_domain: [prod, staging]
+  rift_caddy_container: [prod, staging]
+  rift_caddy_port: [prod, staging]
+  rift_caddy_deploy_dir: [prod, staging]
+  rift_caddy_data_dir: [prod, staging]
+  rift_caddy_config_dir: [prod, staging]
   # --- Website-Pfade explizit je Env (Issue #483, US3) ---------------------
-  website_docroot: [prod, test]
-  website_mods_dir: [prod, test]
+  website_docroot: [prod, test, staging]
+  website_mods_dir: [prod, test, staging]
   # mods_zip_dest wird nur von prod explizit gesetzt; test leitet es (ueber das
   # isolierte website_mods_dir) aus host_vars ab und bleibt dadurch distinct.
-  mods_zip_dest: [prod]
+  mods_zip_dest: [prod, staging]
   # --- Boot-Test (nur test) -------------------------------------------------
   dedicated_server_context_dir: [test]
 
