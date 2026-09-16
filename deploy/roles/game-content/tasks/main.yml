@@ -10,32 +10,57 @@
 # dokumentiert und über riftbreaker_content_mode=sync aktivierbar.
 
 # --- SteamCMD (nur im Modus steamcmd) ---------------------------------------
-- name: Fremd-Architekturen prüfen (32-bit-libs für SteamCMD)
+# 32-bit-Laufzeitabhängigkeit von steamcmd.sh — der Mechanismus ist
+# distro-abhängig (Debian: dpkg-Multiarch + apt; RedHat-Familie: dnf-Multilib
+# direkt über das .i686-Suffix, kein separater "Architektur freischalten"-
+# Schritt nötig). Issue #566: Solo-Dev-Rechner sind nicht zwangsläufig
+# Debian/Ubuntu (planet ist es; das lokale Setup soll auch auf Fedora/RHEL
+# laufen).
+
+# --- Debian/Ubuntu -----------------------------------------------------
+- name: Fremd-Architekturen prüfen (32-bit-libs für SteamCMD, Debian)
   command: dpkg --print-foreign-architectures
   register: rbbattle_foreign_arch
   changed_when: false
   check_mode: false
-  when: riftbreaker_content_mode == 'steamcmd'
+  when:
+    - riftbreaker_content_mode == 'steamcmd'
+    - ansible_os_family == 'Debian'
 
-- name: i386-Architektur freischalten (SteamCMD braucht lib32gcc-s1)
+- name: i386-Architektur freischalten (SteamCMD braucht lib32gcc-s1, Debian)
   command: dpkg --add-architecture i386
   when:
     - riftbreaker_content_mode == 'steamcmd'
+    - ansible_os_family == 'Debian'
     - "'i386' not in (rbbattle_foreign_arch.stdout_lines | default([]))"
   changed_when: true
 
-- name: apt-Cache aktualisieren (nach Architektur-Änderung)
+- name: apt-Cache aktualisieren (nach Architektur-Änderung, Debian)
   apt:
     update_cache: true
   when:
     - riftbreaker_content_mode == 'steamcmd'
+    - ansible_os_family == 'Debian'
     - "'i386' not in (rbbattle_foreign_arch.stdout_lines | default([]))"
 
-- name: SteamCMD-Laufzeitabhängigkeit installieren (lib32gcc-s1)
+- name: SteamCMD-Laufzeitabhängigkeit installieren (lib32gcc-s1, Debian)
   apt:
     name: lib32gcc-s1
     state: present
-  when: riftbreaker_content_mode == 'steamcmd'
+  when:
+    - riftbreaker_content_mode == 'steamcmd'
+    - ansible_os_family == 'Debian'
+
+# --- Fedora/RHEL (dnf-Multilib, kein Architektur-Enable-Schritt nötig) --
+- name: SteamCMD-Laufzeitabhängigkeiten installieren (glibc.i686/libstdc++.i686, RedHat)
+  dnf:
+    name:
+      - glibc.i686
+      - libstdc++.i686
+    state: present
+  when:
+    - riftbreaker_content_mode == 'steamcmd'
+    - ansible_os_family == 'RedHat'
 
 - name: SteamCMD-Verzeichnis sicherstellen
   file:

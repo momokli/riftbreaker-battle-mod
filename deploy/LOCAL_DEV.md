@@ -18,25 +18,49 @@ Difficulty-Spikes (#508/#513): Server hochfahren, `POST /get_state` /
 ## Voraussetzungen
 
 - Docker + `docker compose`.
-- `mingw-w64` (`x86_64-w64-mingw32-gcc`) ODER `zig` — cross-compiled die
-  Server-I/O-Tools (`scripts/build_rbbridge_tools.sh`), kein Windows nötig.
-- `steamcmd`-fähiges System: `i386`-Multiarch installierbar
-  (`dpkg --add-architecture i386 && apt update`), dann `lib32gcc-s1`. Die
-  Rolle `game-content` bootstrapt `steamcmd` selbst (kein manueller Download
-  nötig) — anonymer Login, App-ID 4114030, **kostenlos, kein Steam-Account
-  nötig**.
+- `mingw-w64` ODER `zig` — cross-compiled die Server-I/O-Tools
+  (`scripts/build_rbbridge_tools.sh`), kein Windows nötig.
 - `ansible-core` (≥ 2.19) auf deinem Rechner (Control-Node = Zielhost hier).
 - `sudo`-Rechte (das Playbook läuft mit `become: true`, wie `site.yml` auf
   planet — Docker/`/srv`/`/opt`-Schreibzugriff).
 
+Die Rolle `game-content` bootstrapt `steamcmd` selbst (kein manueller Download
+nötig) — anonymer Login, App-ID 4114030, **kostenlos, kein Steam-Account
+nötig**. Ihre 32-bit-Laufzeitabhängigkeit ist distro-abhängig, die Rolle
+erkennt das über `ansible_os_family`:
+
+| Distro | Was die Rolle installiert | Manuell vorher |
+|---|---|---|
+| Debian/Ubuntu | `dpkg --add-architecture i386` + `apt install lib32gcc-s1` | nichts |
+| Fedora/RHEL | `dnf install glibc.i686 libstdc++.i686` | nichts |
+| andere | — (kein Zweig) | `-e riftbreaker_content_mode=sync` (Fallback, siehe unten) |
+
+**mingw-w64-Paketnamen:**
+
+```bash
+# Debian/Ubuntu
+sudo apt install mingw-w64
+
+# Fedora/RHEL
+sudo dnf install mingw64-gcc
+```
+
+**Docker:** auf Fedora liefert das offizielle Docker-CE-Repo
+(`dnf config-manager addrepo --from-repofile=https://download.docker.com/linux/fedora/docker-ce.repo`,
+dann `dnf install docker-ce docker-ce-cli containerd.io docker-compose-plugin`)
+die verlässlichsten Ergebnisse — `podman` + `podman-docker`-Kompat-Shim wurde
+hier nicht getestet und kann bei `docker compose`-Details abweichen.
+
 **Achtung, unverifiziert:** planet selbst nutzt `riftbreaker_content_mode:
-sync` statt `steamcmd`, weil SteamCMD dort an `lib32gcc-s1` hängt (host_vars/
-planet/vars.yml) — dieser Pfad läuft in KEINEM CI-Job und wurde hier nicht
-live getestet (diese Session hat kein Docker/Wine/Game-Content, um das zu
-verifizieren). Auf einem normalen Desktop-Ubuntu/Debian mit aktivierten
-i386-Paketquellen sollte `steamcmd` aber unproblematisch sein. Schlägt es
-fehl: `-e riftbreaker_content_mode=sync -e riftbreaker_content_cache_dir=<dein
-vollständiger Steam-Stand>` als Fallback (siehe `deploy/roles/game-content/`).
+sync` statt `steamcmd` (host_vars/planet/vars.yml) — dieser Pfad läuft in
+KEINEM CI-Job und wurde hier nicht live getestet (diese Session hat kein
+Docker/Wine/Game-Content, um das zu verifizieren; die Debian/Fedora-Zweige
+oben sind nur syntaktisch/durch Doku-Recherche geprüft, nicht live gebootet).
+Schlägt SteamCMD trotz der obigen Abhängigkeiten fehl:
+`-e riftbreaker_content_mode=sync -e riftbreaker_content_cache_dir=<dein
+vollständiger Steam-Stand>` als Fallback (siehe `deploy/roles/game-content/`)
+— dafür brauchst du dann allerdings selbst schon einen vollständigen
+Steam-Content-Stand irgendwo liegen.
 
 ## Aufruf
 
