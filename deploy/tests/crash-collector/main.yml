@@ -20,6 +20,7 @@
     crash_collector_helper: /usr/local/bin/rbmods-minidump-meta.py
     crash_collector_container: riftbreaker-dedicated
     crash_collector_dir: /opt/rbmods/crashes
+    crash_collector_env: dev
     crash_collector_crashinfo: "/data/.wine/drive_c/users/steamuser/Documents/The Riftbreaker/crash_info"
     crash_collector_context_lines: 200
     crash_collector_retention: "{{ test_retention | default(20) }}"
@@ -60,6 +61,7 @@
         that:
           - ("ExecStart=" ~ crash_collector_bin) in unit
           - ("RB_CRASH_CONTAINER=" ~ crash_collector_container) in unit
+          - ("RB_CRASH_ENV=" ~ crash_collector_env) in unit
           - ("RB_CRASH_DIR=" ~ crash_collector_dir) in unit
           - ("RB_CRASH_RETENTION=" ~ crash_collector_retention) in unit
           - ("RB_CRASH_SYMBOLIZE=" ~ (crash_collector_symbolize | bool | int)) in unit
