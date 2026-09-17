@@ -1,14 +1,14 @@
 EntityBlueprint
 {
-	name  "buildings/decorations/rbbattle_button"
+	name  "buildings/decorations/rbbattle_button_boss_random"
 
 	BuildingDesc
 	{
-		name 				"rbbattle_button"
-		bp   				"buildings/decorations/rbbattle_button"
+		name 				"rbbattle_button_boss_random"
+		bp   				"buildings/decorations/rbbattle_button_boss_random"
 		category 			"decorations"
-		localization_id		"rbbattle"
-		description			"rbbattle"
+		localization_id		"BOSS RANDOM"
+		description			"BOSS RANDOM"
 		menu_icon			"gui/hud/building_icons/wind_turbine"
 		menu_action			"rbbattle_chat"
 		order				"0"
