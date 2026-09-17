@@ -13,7 +13,10 @@ from send_tailer import SendTailer, parse_send_order
 
 class TestParseSendOrder(unittest.TestCase):
     def test_button_chat_with_id(self):
-        line = "[LUA 'lua/buildings/rbbattle_button.lua']: [RBBATTLE] button_chat sent: -send wave1 0000000000-000001-abcd1234"
+        line = (
+            "[LUA 'lua/buildings/rbbattle_button.lua']: [RBBATTLE] "
+            "button_chat sent: -send wave1 0000000000-000001-abcd1234"
+        )
         self.assertEqual(parse_send_order(line), ("wave1", "0000000000-000001-abcd1234"))
 
     def test_button_chat_without_id(self):
