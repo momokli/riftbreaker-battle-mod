@@ -827,8 +827,9 @@ static void dbg(const char *fmt, ...)
     {
         SYSTEMTIME st;
         GetLocalTime(&st);
-        fprintf(stderr, "[%02d:%02d:%02d.%03d] [rbbridge] %s\n",
-                st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, buf);
+        fprintf(stderr, "[%02d:%02d:%02d.%03d] [rbbridge] [tid=%lu] %s\n",
+                st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+                (unsigned long)GetCurrentThreadId(), buf);
         fflush(stderr);
     }
 
