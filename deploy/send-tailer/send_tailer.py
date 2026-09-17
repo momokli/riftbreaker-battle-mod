@@ -30,15 +30,16 @@ import urllib.error
 import urllib.request
 from typing import List, Optional, Tuple
 
-_SEND_RE = re.compile(r"-send\s+([A-Za-z0-9_]+)")
+_SEND_RE = re.compile(r"-send\s+([A-Za-z0-9_]+)(?:\s+([A-Za-z0-9_-]+))?")
 
 
-def parse_send_order(line: str) -> Optional[str]:
-    """Extrahiert den Order-Namen aus einer Mod-Chat-Log-Zeile.
+def parse_send_order(line: str) -> Optional[Tuple[str, str]]:
+    """Extrahiert (Name, ID) aus einer Mod-Chat-Log-Zeile.
 
     Akzeptiert nur die beiden serverseitigen Mod-Log-Formen (Button + RBSendChat),
     damit getippter Chat (der nicht über diese Log-Pfade läuft) NICHT doppelt
-    verarbeitet wird. Liefert den Namen (z. B. "wave1") oder None.
+    verarbeitet wird. Liefert (name, id) (z. B. ("wave1", "0000000000-000001-abcd1234"))
+    oder None; id ist "" wenn keine angegeben.
     """
     if not line or "-send" not in line:
         return None
@@ -47,7 +48,7 @@ def parse_send_order(line: str) -> Optional[str]:
     m = _SEND_RE.search(line)
     if not m:
         return None
-    return m.group(1)
+    return m.group(1), (m.group(2) or "")
 
 
 class LogTailer:
@@ -113,8 +114,8 @@ class SendTailer:
         self.ref = ref
         self._poster = _poster or self._http_post
 
-    def _http_post(self, name: str) -> Tuple[int, str]:
-        body = json.dumps({"name": name}).encode("utf-8")
+    def _http_post(self, name: str, id: str) -> Tuple[int, str]:
+        body = json.dumps({"name": name, "id": id}).encode("utf-8")
         req = urllib.request.Request(
             self.bridge_url,
             data=body,
@@ -131,14 +132,15 @@ class SendTailer:
 
     def feed(self, line: str) -> Optional[str]:
         """Feed eine Log-Zeile. POSTet bei Treffer und liefert den Namen zurück."""
-        name = parse_send_order(line)
-        if name is None:
+        parsed = parse_send_order(line)
+        if parsed is None:
             return None
-        status, body = self._poster(name)
+        name, id = parsed
+        status, body = self._poster(name, id)
         if 200 <= status < 300:
-            print(f"[send-tailer] order queued: {name} (HTTP {status})", flush=True)
+            print(f"[send-tailer] order queued: {name} id={id} (HTTP {status})", flush=True)
         else:
-            print(f"[send-tailer] order {name}: HTTP {status} {body[:160]}", flush=True)
+            print(f"[send-tailer] order {name} id={id}: HTTP {status} {body[:160]}", flush=True)
         return name
 
 
