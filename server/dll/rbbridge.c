@@ -720,6 +720,59 @@ static size_t chat_build_player_chat(const char *text, char *out, size_t n)
     return (size_t)len;
 }
 
+/* #549: kleine Single-Producer/Single-Consumer-Ring-Queue fuer eingehenden
+ * Chat. Bewusst REINE Logik (kein Lock, keine Windows-API) -> host-testbar
+ * (tests/rbbridge-hosttest). Die Produktions-Caller halten g_chat_cs (siehe
+ * capture_chat_text / dispatch_get_state); hier wird nur die Queue-Arithmetik
+ * geprueft. Kapazitaet 8 ist grosszuegig fuer den 3-s-Poll des Cockpits;
+ * bei Ueberlauf wird die AELTESTE Nachricht verworfen (neueste Kommandos
+ * gehen nie verloren). */
+#define CHAT_QUEUE_CAP 8
+#define CHAT_QUEUE_MSG 256
+
+typedef struct {
+    char buf[CHAT_QUEUE_CAP][CHAT_QUEUE_MSG];
+    int head;
+    int tail;
+    int count;
+} chat_queue_t;
+
+static void chat_queue_init(chat_queue_t *q)
+{
+    if (!q)
+        return;
+    memset(q, 0, sizeof(*q));
+}
+
+/* Fuegt eine Nachricht ein. Rueckgabe 1 = eingefuegt, 0 = text NULL/leer. */
+static int chat_queue_push(chat_queue_t *q, const char *text)
+{
+    if (!q || !text || !text[0])
+        return 0;
+    if (q->count == CHAT_QUEUE_CAP) {
+        /* voll: aelteste verwerfen, damit das neueste Kommando erhalten bleibt */
+        q->head = (q->head + 1) % CHAT_QUEUE_CAP;
+        q->count--;
+    }
+    snprintf(q->buf[q->tail], CHAT_QUEUE_MSG, "%s", text);
+    q->buf[q->tail][CHAT_QUEUE_MSG - 1] = '\0';
+    q->tail = (q->tail + 1) % CHAT_QUEUE_CAP;
+    q->count++;
+    return 1;
+}
+
+/* Entnimmt die aelteste Nachricht. Rueckgabe 1 = entnommen (in out),
+ * 0 = leer. */
+static int chat_queue_pop(chat_queue_t *q, char *out, size_t n)
+{
+    if (!q || !out || n == 0 || q->count == 0)
+        return 0;
+    snprintf(out, n, "%s", q->buf[q->head]);
+    q->head = (q->head + 1) % CHAT_QUEUE_CAP;
+    q->count--;
+    return 1;
+}
+
 #ifndef RBBRIDGE_HOSTTEST
 /* Datei-Log: 1 = %TEMP%\rbbridge.log mitschreiben (Default an; abschalten
  * mit Umgebungsvariable RBBRIDGE_LOG=0). DebugView geht immer. */
@@ -738,8 +791,7 @@ static CRITICAL_SECTION g_log_cs;  /* schuetzt das Datei-Log             */
  * gehakt. Der Spieler tippt Chat (vanilla Client), die DLL liest den Text
  * und stellt ihn der Pipe als player_chat-Event bereit. */
 static CRITICAL_SECTION g_chat_cs;
-static char g_chat_text[256];
-static volatile LONG g_chat_pending = 0;
+static chat_queue_t g_chat_q;
 /* Alle Chat-Detour-Slots bewusst `static` (nicht DLL-exportiert, #549
  * Review Minor 'Externe Linkage'). Zugriff nur aus dem Pipe-Server-Thread
  * bzw. aus dem Detour (Net-Thread) -> siehe Reentrancy-Hinweis unten.
@@ -4517,19 +4569,24 @@ static void dispatch_get_state(HANDLE hPipe)
         return;
     }
 
-    /* Chat-Detour (#549): pending player_chat ausgeben. Die Zeile wird von
-     * der host-testbaren chat_build_player_chat() gebaut (Escaping via
-     * json_escape_into) und nur bei nicht-leerem Ergebnis gesendet. */
-    if (g_chat_pending) {
+    /* Chat-Detour (#549): ALLE pending player_chat ausgeben (Queue statt
+     * Single-Buffer -> mehrere Nachrichten zwischen zwei Polls gehen nicht
+     * verloren). Jede Zeile wird von der host-testbaren
+     * chat_build_player_chat() gebaut (Escaping via json_escape_into) und
+     * nur bei nicht-leerem Ergebnis gesendet. */
+    {
         char raw[256];
         char line[600];
-        EnterCriticalSection(&g_chat_cs);
-        memcpy(raw, g_chat_text, sizeof(raw));
-        g_chat_pending = 0;
-        LeaveCriticalSection(&g_chat_cs);
-        raw[sizeof(raw) - 1] = '\0';
-        if (chat_build_player_chat(raw, line, sizeof(line)) > 0)
-            send_line(hPipe, "%s", line);
+        for (;;) {
+            int got = 0;
+            EnterCriticalSection(&g_chat_cs);
+            got = chat_queue_pop(&g_chat_q, raw, sizeof(raw));
+            LeaveCriticalSection(&g_chat_cs);
+            if (!got)
+                break;
+            if (chat_build_player_chat(raw, line, sizeof(line)) > 0)
+                send_line(hPipe, "%s", line);
+        }
     }
 
     /* Mission-Flow (Read #385): haengt NICHT am Spieler-Account, ist also
@@ -5228,9 +5285,7 @@ static void capture_chat_text(const void *req)
         return;
     dbg("player_chat: %s", buf);
     EnterCriticalSection(&g_chat_cs);
-    memcpy(g_chat_text, buf, sizeof(g_chat_text));
-    g_chat_text[sizeof(g_chat_text) - 1] = '\0';
-    g_chat_pending = 1;
+    chat_queue_push(&g_chat_q, buf);
     LeaveCriticalSection(&g_chat_cs);
 }
 
@@ -5374,6 +5429,7 @@ int rbbridge_start(void)
     g_stop = 0;
 
     InitializeCriticalSection(&g_chat_cs);
+    chat_queue_init(&g_chat_q);
 
     dbg("rbbridge_start: ref=%s", RBBRIDGE_REF);
 
