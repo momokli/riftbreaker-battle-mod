@@ -211,6 +211,57 @@ with open(out, 'wb') as fh:
     fh.write(build(mods, fault, returns))
 PY
 
+# --- synthetisches PE32+ mit .text/.pdata/.xdata (x64-Unwind, #676) ----------
+cat >"${TMP}/mkpe.py" <<'PY'
+import struct
+import sys
+
+# Minimal-PE fuer den Unwind-Test: Exception-Directory (Index 3) -> .pdata,
+# 2 RUNTIME_FUNCTION (foo 0x1000..0x1010, bar 0x1050..0x1060) und 2x
+# UNWIND_INFO (je 1 Code: PUSH_NONVOL rbp). Kein echter Code noetig.
+
+def sec(buf, i, name, vsize, vaddr, rawsize, rawptr):
+    off = 0x188 + i * 40
+    buf[off:off + 8] = name.ljust(8, b'\0')
+    struct.pack_into('<I', buf, off + 8, vsize)
+    struct.pack_into('<I', buf, off + 12, vaddr)
+    struct.pack_into('<I', buf, off + 16, rawsize)
+    struct.pack_into('<I', buf, off + 20, rawptr)
+
+
+def build():
+    buf = bytearray(0x800)
+    buf[0:2] = b'MZ'
+    struct.pack_into('<I', buf, 0x3C, 0x80)       # e_lfanew
+    buf[0x80:0x84] = b'PE\0\0'
+    struct.pack_into('<H', buf, 0x84, 0x8664)     # Machine x64
+    struct.pack_into('<H', buf, 0x86, 3)          # NumberOfSections
+    struct.pack_into('<H', buf, 0x84 + 16, 0xF0)  # SizeOfOptionalHeader = 240
+    struct.pack_into('<H', buf, 0x98, 0x20B)      # Magic PE32+
+    struct.pack_into('<I', buf, 0x104, 16)        # NumberOfRvaAndSizes
+    struct.pack_into('<I', buf, 0x120, 0x2000)    # Exception-Dir RVA (.pdata)
+    struct.pack_into('<I', buf, 0x124, 24)        # Exception-Dir Size (2 Eintraege)
+    sec(buf, 0, b'.text', 0x1000, 0x1000, 0x200, 0x200)
+    sec(buf, 1, b'.pdata', 24, 0x2000, 0x200, 0x400)
+    sec(buf, 2, b'.xdata', 16, 0x3000, 0x200, 0x600)
+    # RUNTIME_FUNCTION: foo 0x1000..0x1010 -> 0x3000; bar 0x1050..0x1060 -> 0x3008
+    struct.pack_into('<III', buf, 0x400, 0x1000, 0x1010, 0x3000)
+    struct.pack_into('<III', buf, 0x40C, 0x1050, 0x1060, 0x3008)
+    # UNWIND_INFO (je 8 B): Version 1, Prolog 1, 1 Code PUSH_NONVOL rbp (OpInfo 5)
+    for base in (0x600, 0x608):
+        buf[base] = 0x01
+        buf[base + 1] = 1          # SizeOfProlog
+        buf[base + 2] = 1          # CountOfCodes
+        buf[base + 3] = 0          # FrameRegister/FrameOffset
+        buf[base + 4] = 0          # CodeOffset
+        buf[base + 5] = (5 << 4) | 0  # UnwindOp=0 (PUSH_NONVOL), OpInfo=5 (rbp)
+    return bytes(buf)
+
+
+with open(sys.argv[1], 'wb') as fh:
+    fh.write(build())
+PY
+
 MODULE_BASE=$((0x00006ffff6da0000))
 MODULE_SIZE=78778368
 UUID="cbb85f6a-699b-4b7d-8959-3c0698474f51"
@@ -566,6 +617,38 @@ assert_eq "(i) Frame 0x3000 als unwind getaggt" "unwind" \
   "$(awk -F'\t' '$1=="0x3000" { print $2 }' "$SYMI" | cut -d' ' -f1)"
 assert_eq "(i) Frame 0x4000 als stack getaggt" "stack" \
   "$(awk -F'\t' '$1=="0x4000" { print $2 }' "$SYMI" | cut -d' ' -f1)"
+
+# --- (j) x64-Stack-Unwind via .pdata/.xdata (#676) ---------------------------
+J="${TMP}/j"
+python3 "${TMP}/mkpe.py" "${TMP}/fake_pe.dll"
+FAULT_X64=$((MODULE_BASE + 0x1004))
+BAR_X64=$((MODULE_BASE + 0x1054))
+BAZ_X64=$((MODULE_BASE + 0x10A4))
+mkdir -p "${J}/bundle"
+MKBUILD_RSP="0x7ff0000000" MKBUILD_RBP="0x0" \
+python3 "${TMP}/mkdump.py" "${J}/bundle/${UUID}.dmp" \
+  "$MODULE_BASE" "$MODULE_SIZE" "$FAULT_X64" \
+  "0x0" "$BAR_X64" "0x0" "$BAZ_X64"
+
+mkdir -p "$J"
+: >"${J}/sym.log"
+set +e
+env PATH="${BIN}:${PATH}" FAKE_SYM_LOG="${J}/sym.log" \
+  python3 "$SYMBOLIZE_PY" \
+    --dmp "${J}/bundle/${UUID}.dmp" --dll "${TMP}/fake_pe.dll" --symbolizer "${BIN}/llvm-symbolizer" \
+    --uuid "$UUID" --out "${J}/bundle/symbolized.txt" \
+    >"${J}/out.txt" 2>&1
+RC=$?
+set -e
+assert_eq "(j) x64-unwind rc=0" "0" "$RC"
+SYMJ="${J}/bundle/symbolized.txt"
+assert_true "(j) Header unwind x64" grep -q '^# unwind: x64$' "$SYMJ"
+assert_eq "(j) Reihenfolge fault, unwind" "0x1004 0x1054 0x10a4" \
+  "$(awk -F'\t' '/^0x/{print $1}' "$SYMJ" | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "(j) Frame 0x1054 als unwind getaggt" "unwind" \
+  "$(awk -F'\t' '$1=="0x1054" { print $2 }' "$SYMJ" | cut -d' ' -f1)"
+assert_eq "(j) Frame 0x10a4 als unwind getaggt" "unwind" \
+  "$(awk -F'\t' '$1=="0x10a4" { print $2 }' "$SYMJ" | cut -d' ' -f1)"
 
 # --- Aufräumen der Log-Fixture-Prüfung ---------------------------------------
 if [ "$FAIL" -ne 0 ]; then

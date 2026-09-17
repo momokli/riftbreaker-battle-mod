@@ -13,13 +13,13 @@ Funktionsnamen** — ohne Größen-/Startzeit-Regress im Dedicated-Image.
 
 ## Belege (planet, 2026-09-15)
 
-| Fakt | Wert |
-|---|---|
-| PDB | `/srv/rbgame/bin/riftbreaker_dll_win_release.pdb` — **252 334 080 B** |
-| DLL | `/srv/rbgame/bin/riftbreaker_dll_win_release.dll` — 77 885 440 B |
-| Tool | `/usr/lib/llvm-18/bin/llvm-symbolizer` (+ `llvm-pdbutil`), Paket `llvm-18` |
+| Fakt            | Wert                                                                             |
+| --------------- | -------------------------------------------------------------------------------- |
+| PDB             | `/srv/rbgame/bin/riftbreaker_dll_win_release.pdb` — **252 334 080 B**            |
+| DLL             | `/srv/rbgame/bin/riftbreaker_dll_win_release.dll` — 77 885 440 B                 |
+| Tool            | `/usr/lib/llvm-18/bin/llvm-symbolizer` (+ `llvm-pdbutil`), Paket `llvm-18`       |
 | RVA-Test (#436) | `llvm-symbolizer --obj=<dll> --relative-address 0x275895` → echter Funktionsname |
-| `.trace` | adressfrei → nicht nachsymbolisierbar |
+| `.trace`        | adressfrei → nicht nachsymbolisierbar                                            |
 
 `llvm-symbolizer` findet die PDB über das **CodeView-Debug-Directory der DLL im
 selben Ordner** — es gibt (llvm-18) **kein** `--pdb`-Flag, und die PDB muss
@@ -48,8 +48,9 @@ tests/shell/crash-symbolize.test.sh  # planetfrei (synthetischer Dump + Fake-Sym
 1. Minidump-Streams parsen: **ModuleList (4)** → Basis/-Größe des Game-Moduls,
    **Exception (6)** → Fault-Adresse + AMD64-`CONTEXT` (`Rip`/`Rsp`/`Rbp`),
    **ThreadList (3)** / **MemoryList (5)** → Stack-Speicher.
-2. Kandidaten = Fault-Adresse + `Rip` + geordneter RBP-Frame-Pointer-Walk
-   (`[rbp]=saved rbp`, `[rbp+8]=ret`, Tag `unwind`) + optional gescannte
+2. Kandidaten = Fault-Adresse + `Rip` + geordneter x64-Stack-Unwind über die
+   `.pdata`/`.xdata`-Unwind-Metadaten der DLL (Tag `unwind`; Fallback auf den
+   RBP-Walk aus #668, wenn keine Unwind-Daten lesbar sind) + optional gescannte
    Return-Adressen; behalten wird **nur**
    `module_base <= addr < module_base + module_size` (Fremdadressen werden
    gefiltert).
@@ -57,8 +58,9 @@ tests/shell/crash-symbolize.test.sh  # planetfrei (synthetischer Dump + Fake-Sym
    `llvm-symbolizer --obj=<dll> --relative-address <RVA>`
    (subprocess mit Argument-Liste, **kein** `shell=True`).
 4. Ausgabe `<bundle>/symbolized.txt`: `# key: value`-Header (uuid, module,
-   module_base/-size, fault_address, rsp, rbp, rip, dll, tool, frames) + je Frame
-   `<RVA-hex>\t<KIND> <Funktionsname>` (`unwind` = geordneter Frame-Pointer-Walk).
+   module_base/-size, fault_address, rsp, rbp, rip, unwind, dll, tool, frames) +
+   je Frame `<RVA-hex>\t<KIND> <Funktionsname>` + `# unwind: x64|rbp|none`
+   (`unwind` = geordneter x64-Unwind bzw. RBP-Fallback).
 
 Exit-Codes: `0` ok · `2` Dump nicht parsebar · `3` kein Modul-Frame ·
 `4` Symbolizer-Aufruf fehlgeschlagen (kein Teilergebnis).
@@ -82,16 +84,16 @@ Symbolizer-Skript ganz, verhält sich der Collector wie vor #480.
 
 ### Env-Vertrag
 
-| Var | Default |
-|---|---|
-| `RB_CRASH_SYMBOLIZE` | `1` |
-| `RB_CRASH_SYMBOLIZE_BIN` | `/usr/local/bin/rbmods-crash-symbolize.sh` |
-| `RB_CRASH_DLL` | `/srv/rbgame/bin/riftbreaker_dll_win_release.dll` |
-| `RB_CRASH_PDB` | `/srv/rbgame/bin/riftbreaker_dll_win_release.pdb` |
-| `RB_CRASH_LLVM_SYMBOLIZER` | `/usr/lib/llvm-18/bin/llvm-symbolizer` |
-| `RB_CRASH_SYMBOLIZE_TOOL` | `/usr/local/lib/rbmods/crash/symbolize.py` |
-| `RB_CRASH_SYMBOLIZE_TIMEOUT` | `60` |
-| `RB_CRASH_STACK_SCAN`        | `1` (0 = nur Fault-/Kontext-Frames) |
+| Var                          | Default                                           |
+| ---------------------------- | ------------------------------------------------- |
+| `RB_CRASH_SYMBOLIZE`         | `1`                                               |
+| `RB_CRASH_SYMBOLIZE_BIN`     | `/usr/local/bin/rbmods-crash-symbolize.sh`        |
+| `RB_CRASH_DLL`               | `/srv/rbgame/bin/riftbreaker_dll_win_release.dll` |
+| `RB_CRASH_PDB`               | `/srv/rbgame/bin/riftbreaker_dll_win_release.pdb` |
+| `RB_CRASH_LLVM_SYMBOLIZER`   | `/usr/lib/llvm-18/bin/llvm-symbolizer`            |
+| `RB_CRASH_SYMBOLIZE_TOOL`    | `/usr/local/lib/rbmods/crash/symbolize.py`        |
+| `RB_CRASH_SYMBOLIZE_TIMEOUT` | `60`                                              |
+| `RB_CRASH_STACK_SCAN`        | `1` (0 = nur Fault-/Kontext-Frames)               |
 
 ## Zweites Modul (rbbridge.dll) — Issue #559
 
@@ -124,17 +126,19 @@ mit den Env-Variablen der Rolle (`deploy/roles/crash-collector`).
 - Stack-Scanning liefert zusätzlich Datenwerte, die zufällig in den
   Modulbereich zeigen (Falsch-Frames möglich); die Fault-/Kontext-/`unwind`-Frames
   stehen vorn.
-- Der RBP-Walk (`unwind`) ist **kein vollständiger Unwind**: x64-MSVC-Release-
-  Builds werfen den Frame-Pointer häufig weg (**FPO**); dann ist `[rbp]`/`[rbp+8]`
-  keine echte Kette und der Walk bricht graceful ab (0 Frames). Ein
-  vollständiges `.pdata`/`.xdata`-Unwinding ist der dokumentierte Follow-up —
-  hier bewusst nicht implementiert.
+- Der x64-Unwind (`# unwind: x64`, Issue #676) nutzt die `.pdata`/`.xdata`-
+  Metadaten, die der Compiler für SEH/C++-Exceptions zwingend ablegt — damit
+  funktioniert er auch bei **FPO** (weg-optimiertem Frame-Pointer). Grenzen:
+  Epilog-Spezialfälle und ein Frame-Register ungleich `rbp` werden konservativ
+  als Abbruch behandelt (partial frames, kein stiller Fehler). Fehlen die
+  Unwind-Daten (kein PE), fällt er auf den RBP-Walk (#668) zurück
+  (`# unwind: rbp`) bzw. liefert keine `unwind`-Frames (`# unwind: none`).
 - Der Header emittiert den Register-Kontext des faultenden Threads
   (`# rsp:`, `# rbp:`, `# rip:`), soweit vorhanden.
 - Symbolik ist nur gültig, wenn **PDB und DLL zusammenpassen** (CodeView-GUID).
   Bei Mismatch warnt `llvm-symbolizer` / läuft rc≠0 → kein Ergebnis, kein
   stiller falscher Name.
-- **Offener Punkt (nur mit Spieler prüfbar):** ein *frisch provozierter* Crash
+- **Offener Punkt (nur mit Spieler prüfbar):** ein _frisch provozierter_ Crash
   im laufenden Dedicated-Server, der automatisch durch den Dienst symbolisiert
   wird (Ende-zu-Ende Marker → Bundle → `symbolized.txt`). Ist in #480 als
   offener Punkt geführt.
