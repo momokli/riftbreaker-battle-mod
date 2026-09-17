@@ -26,8 +26,15 @@ Wahrheitsquelle, Events sind nur Benachrichtigungen.
 {"event":"pong","t":12345678}
 {"event":"exec_result","command":"rb_wave 3","ok":false,"reason":"not_implemented (RE: ConsoleService/Lua-State finden)"}
 {"event":"score_update","t":12345678,"score":0,"resources":{"iron":0,"carbon":0},"wave":0}
+{"event":"player_chat","text":"-send carbonium 10"}
 {"event":"error","error":"unknown_cmd"}
 ```
+
+- `player_chat` ist der Vanilla-Chat-Ingress (Detour #549): Der Spieler tippt
+  Chat, die DLL liest den Text und legt ihn als `player_chat`-Zeile auf die
+  Pipe. Sie wird **vor** der `get_state_result`-Zeile von `get_state`
+  emittiert; `pipe_bridge` sammelt die Texte und injiziert sie als
+  `"chat":["...",...]`-Array in die `get_state`-Antwort (Cockpit-Poll).
 
 ### Nachrichten des Clients an die DLL (im Harness implementiert)
 
@@ -83,6 +90,7 @@ werden ignoriert (vorwärtskompatibel). Alle Events sind benachrichtigend
 | `round_start`   | Eigene Runde beginnt (Spiel-Seite bestätigt / startet Phase)    | `round`, `phase`                  | siehe unten |
 | `round_end`     | Eigene Runde ist vorbei (ausgewertet)                           | `round`, `score`, `survived`      | siehe unten |
 | `match_end`     | Partie entschieden                                              | `winner`, `reason`, `final_score` | siehe unten |
+| `player_chat`   | Spieler hat im Spiel-Chat geschrieben (Text aus Net-Request)     | `text`                            | siehe unten |
 
 ```json
 {"event":"score_update","t":882341,"score":1240,"resources":{"iron":320,"carbon":80},"wave":4}
@@ -91,6 +99,7 @@ werden ignoriert (vorwärtskompatibel). Alle Events sind benachrichtigend
 {"event":"round_start","t":900000,"round":2,"phase":"planning"}
 {"event":"round_end","t":990000,"round":2,"score":1560,"survived":true}
 {"event":"match_end","t":1200000,"winner":"player_a","reason":"base_destroyed","final_score":3120}
+{"event":"player_chat","t":1210450,"text":"gg wp"}
 ```
 
 ### server → game (Server steuert Spiel)
@@ -114,6 +123,7 @@ werden ignoriert (vorwärtskompatibel). Alle Events sind benachrichtigend
 | Event                                                                   | Erzeuger im Spiel                                                                                                                              | Stand im Harness                                                                                                                                                                                                                 |
 | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `pong`, `exec_result`, `score_update`, `error`                          | `rbbridge.c` (Pipe-Server)                                                                                                                     | ✅ implementiert                                                                                                                                                                                                                 |
+| `player_chat`                                                           | `rbbridge.c` (Pipe-Server): inline Hook auf `OnNetPlayerChatRequest` liest den UtfString (`utfstring_to_cstr`) und gibt ihn in `send_state()` aus | ✅ implementiert (Build 2.0.58485, Prolog-verifiziert); **Live-Nachweis offen** (Player-Test, #549)                                                                                                                              |
 | `score_update`, `wave_received`, `round_*`, `match_end`                 | **TODO(RE):** Werte/Adressen per `scan/` finden bzw. Events aus Lua-Signalen (`[RBBATTLE] event=...` Log-Prefix im Mod, Experiment C) ableiten | offen (Struktur in `send_state()` verdrahtet, Werte Default bis RE)                                                                                                                                                              |
 | `wave_sent`                                                             | Lua-Mod beim Kauf der Welle (meldet über `exec`-Kanal / künftigen Event-Pfad)                                                                  | offen (Mod folgt aus Spike)                                                                                                                                                                                                      |
 | `round_start`, `incoming_wave`, `round_end`, `match_end` (Server→Spiel) | Empfang in DLL → Zustellung an Spiel/Lua                                                                                                       | ✅ `dispatch_exec` implementiert: `ConsoleService::ExecuteCommand` per AOB-Signatur + RTTI/vftable aufgelöst (keine festen RVAs); Lua-seitig registriert der Mod `rb_wave <level>` bereits (Spike). Offen nur Live-Beweis (#252) |
