@@ -23,8 +23,18 @@ function rbbattle_button:GetMessage()
     return msg
 end
 
+-- Eindeutiger Buy-Request-Identifier (ULID-ähnlich, sortierbar; kein striktes
+-- Crockford-ULID). Format: <timestamp>-<zaehler>-<randomhex>.
+local function GenerateBuyId()
+    _G.RBB_BUY_COUNT = (_G.RBB_BUY_COUNT or 0) + 1
+    local ts = 0
+    pcall(function() ts = os.time() end)
+    local r = math.floor(math.random(0, 0x7FFFFFFF))
+    return string.format("%010d-%06d-%08x", ts, _G.RBB_BUY_COUNT, r)
+end
+
 function rbbattle_button:SendChat()
-    local text = self:GetMessage()
+    local text = self:GetMessage() .. " " .. GenerateBuyId()
     local player = PlayerService:GetLeadingPlayer()
     local mech = PlayerService:GetPlayerControlledEnt(player)
     if mech == nil or mech == 4294967295 then
