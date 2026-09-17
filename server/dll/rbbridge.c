@@ -703,7 +703,7 @@ static void json_escape_into(const char *in, char *out, size_t n)
  * dann NICHTS senden).
  *
  * Die Zeile entspricht dem Wire-Event `player_chat` aus server/protocol.md. */
-static size_t __attribute__((unused)) chat_build_player_chat(const char *text, char *out, size_t n)
+static size_t chat_build_player_chat(const char *text, char *out, size_t n)
 {
     char esc[512];
     int len;
@@ -5215,6 +5215,24 @@ static int serve_client(HANDLE hPipe)
         if (last_beat == 0 || now - last_beat >= HEARTBEAT_MS) {
             last_beat = now;
             send_state(hPipe);
+        }
+
+        /* #636: pending Chat sofort pushen (persistente Pipe, kein get_chat-
+         * Pull mehr). Jede Nachricht als player_chat-Zeile auf die offene
+         * Verbindung. */
+        {
+            char raw[256];
+            char cline[600];
+            for (;;) {
+                int got = 0;
+                EnterCriticalSection(&g_chat_cs);
+                got = chat_queue_pop(&g_chat_q, raw, sizeof(raw));
+                LeaveCriticalSection(&g_chat_cs);
+                if (!got)
+                    break;
+                if (chat_build_player_chat(raw, cline, sizeof(cline)) > 0)
+                    send_line(hPipe, "%s", cline);
+            }
         }
 
         Sleep(POLL_MS);
