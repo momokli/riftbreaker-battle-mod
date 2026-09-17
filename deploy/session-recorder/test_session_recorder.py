@@ -84,6 +84,16 @@ class ClassifyTests(unittest.TestCase):
     def test_non_rbbattle_line_ignored(self):
         self.assertIsNone(sr.classify("[server] [info] GameplayState::ResumeGame"))
 
+    def test_build_suffixed_tag_recognized(self):
+        # Issue #696: seit 08bb0ca (#631) kann das Tag einen Build-Suffix
+        # tragen ("[RBBATTLE:<build>]" statt nur "[RBBATTLE]").
+        line = ("[server] [20:12:25.161] [info] LogService.cpp:71 - "
+                "[LUA 'lua/rbbattle_autoexec.lua']: [RBBATTLE:20260917-203600]: "
+                "event=mod_load version=0.34.3 status=ok mode=server")
+        rec = sr.classify(line)
+        self.assertEqual(rec["event"], "mod_load")
+        self.assertEqual(rec["fields"]["version"], "0.34.3")
+
     def test_player_join_optional(self):
         line = "[server] [info] ServerGameplayState: OnNetPlayerCreateRequest '0':'crossover':'x'!"
         self.assertEqual(sr.classify(line)["event"], "player_join")
