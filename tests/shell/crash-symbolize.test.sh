@@ -64,6 +64,7 @@ chmod +x "${BIN}/llvm-symbolizer"
 
 # --- synthetischer Minidump (Streams 3/4/5/6) --------------------------------
 cat >"${TMP}/mkdump.py" <<'PY'
+import os
 import struct
 import sys
 
@@ -76,9 +77,11 @@ def p64(v):
     return struct.pack('<Q', v)
 
 
-def build(base, size, fault, returns, name, tid=1):
+def build(base, size, fault, returns, name, tid=1, rsp=0, rbp=0):
     ctx = bytearray(0x4d0)                       # CONTEXT_AMD64
     struct.pack_into('<I', ctx, 0x30, 0x0010001F)  # ContextFlags
+    struct.pack_into('<Q', ctx, 0x98, rsp)         # Rsp
+    struct.pack_into('<Q', ctx, 0xA0, rbp)         # Rbp
     struct.pack_into('<Q', ctx, 0xF8, fault)       # Rip
     ctx = bytes(ctx)
 
@@ -122,8 +125,10 @@ size = int(sys.argv[3], 0)
 fault = int(sys.argv[4], 0)
 returns = [int(a, 0) for a in sys.argv[5:]]
 name = "C:\\game\\bin\\riftbreaker_dll_win_release.dll"
+rsp = int(os.environ.get("MKBUILD_RSP", "0"), 0)
+rbp = int(os.environ.get("MKBUILD_RBP", "0"), 0)
 with open(out, 'wb') as fh:
-    fh.write(build(base, size, fault, returns, name))
+    fh.write(build(base, size, fault, returns, name, rsp=rsp, rbp=rbp))
 PY
 
 # --- synthetischer Minidump mit ZWEI Modulen (Game + rbbridge, #559) ---
@@ -522,6 +527,45 @@ assert_eq "(h) RVA-Reihenfolge/Anzahl" "0x1000 0x2000 0x3000" \
   "$(awk -F'\t' '/^0x/{print $1}' "$SYMH" | tr '\n' ' ' | sed 's/ $//')"
 assert_false "(h) Adresse ausserhalb gefiltert" grep -q '0x1234' "$SYMH"
 assert_eq "(h) genau 3 Symbolizer-Aufrufe" "3" "$(wc -l < "${H}/sym.log" | tr -d ' ')"
+
+# --- (i) Geordneter RBP-Frame-Pointer-Unwind + Register-Kontext (#668) -------
+I="${TMP}/i"
+RSP_HEX="0x7ff0000100"
+RBP_HEX="0x7ff0000000"
+RBP_NEXT=$((0x7ff0000010))
+UNWIND_RET0=$((MODULE_BASE + 0x2000))
+UNWIND_RET1=$((MODULE_BASE + 0x3000))
+UNWIND_FLAT=$((MODULE_BASE + 0x4000))
+
+mkdir -p "${I}/bundle"
+MKBUILD_RSP="$RSP_HEX" MKBUILD_RBP="$RBP_HEX" \
+python3 "${TMP}/mkdump.py" "${I}/bundle/${UUID}.dmp" \
+  "$MODULE_BASE" "$MODULE_SIZE" "$FAULT" \
+  "$RBP_NEXT" "$UNWIND_RET0" "0x0" "$UNWIND_RET1" "$UNWIND_FLAT"
+
+mkdir -p "$I"
+: >"${I}/sym.log"
+set +e
+env PATH="${BIN}:${PATH}" FAKE_SYM_LOG="${I}/sym.log" \
+  python3 "$SYMBOLIZE_PY" \
+    --dmp "${I}/bundle/${UUID}.dmp" --dll "$DLL" --symbolizer "${BIN}/llvm-symbolizer" \
+    --uuid "$UUID" --out "${I}/bundle/symbolized.txt" --stack-scan \
+    >"${I}/out.txt" 2>&1
+RC=$?
+set -e
+assert_eq "(i) unwind rc=0" "0" "$RC"
+SYMI="${I}/bundle/symbolized.txt"
+assert_eq "(i) Reihenfolge fault, unwind, stack" "0x1000 0x2000 0x3000 0x4000" \
+  "$(awk -F'\t' '/^0x/{print $1}' "$SYMI" | tr '\n' ' ' | sed 's/ $//')"
+assert_true "(i) Header rsp" grep -q "^# rsp: ${RSP_HEX}$" "$SYMI"
+assert_true "(i) Header rbp" grep -q "^# rbp: ${RBP_HEX}$" "$SYMI"
+assert_true "(i) Header rip" grep -q "^# rip: $(printf '0x%x' "$FAULT")$" "$SYMI"
+assert_eq "(i) Frame 0x2000 als unwind getaggt" "unwind" \
+  "$(awk -F'\t' '$1=="0x2000" { print $2 }' "$SYMI" | cut -d' ' -f1)"
+assert_eq "(i) Frame 0x3000 als unwind getaggt" "unwind" \
+  "$(awk -F'\t' '$1=="0x3000" { print $2 }' "$SYMI" | cut -d' ' -f1)"
+assert_eq "(i) Frame 0x4000 als stack getaggt" "stack" \
+  "$(awk -F'\t' '$1=="0x4000" { print $2 }' "$SYMI" | cut -d' ' -f1)"
 
 # --- Aufräumen der Log-Fixture-Prüfung ---------------------------------------
 if [ "$FAIL" -ne 0 ]; then
