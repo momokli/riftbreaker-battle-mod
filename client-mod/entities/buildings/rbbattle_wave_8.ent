@@ -1,0 +1,118 @@
+EntityBlueprint
+{
+	name  "buildings/decorations/rbbattle_wave_8"
+
+	BuildingDesc
+	{
+		name 				"rbbattle_wave_8"
+		bp   				"buildings/decorations/rbbattle_wave_8"
+		category 			"decorations"
+		localization_id		"send WAVE 8 | 3060"
+		description			"send WAVE 8 | 3060"
+		menu_icon			"gui/hud/building_icons/wind_turbine"
+		menu_action			"rbbattle_chat"
+		order				"0"
+		type				"decorations"
+		buildable			"0"
+		instant_build		"1"
+
+		costs
+		{
+			BuildingCostInfo
+			{
+				name "default"
+				building_time 1
+				building_cost
+				{
+					carbonium 	"1"
+				}
+			}
+		}
+	}
+
+	HealthDesc
+	{
+		max_health 					"100"
+		health 						"100"
+		regeneration 				"0"
+		regeneration_cooldown 		"0"
+		is_manual 1
+		update_health_uniform 		"1"
+	}
+
+	MeshDesc
+	{
+		mesh 		"meshes/buildings/energy/wind_turbine_lvl_1.mesh"
+		material 	"buildings/energy/wind_turbine_lvl_1"
+	}
+
+	TypeDesc
+	{
+		type "building"
+	}
+
+	InteractiveComponent
+	{
+		slot 				"ACTIVATOR"
+		radius 				"6"
+		remove_entity 		"0"
+		remove_component 	"0"
+		recreate_component 	"1"
+		priority			"1"
+	}
+
+	PhysicsDesc
+ 	{
+		objects
+		{
+			PhysicsObjectDesc
+			{
+				type 				"static"
+				group_id 			"building"
+				physics_material 	"default"
+				Shapes
+				{
+   					PhysicsBoxShape
+   					{
+    						x	1.9
+    						y	3.0
+    						z	1.9
+   					}
+				}
+			}
+		}
+	}
+
+	NodeCullerDesc
+	{
+		nav_mesh_cull_type "1"
+		cost_type "building"
+		flow_field_size "0.7"
+	}
+
+	GridCullerDesc
+	{
+		type 2
+
+		Shapes
+		{
+   			PhysicsBoxShape
+   			{
+    			x	1.9
+    			y	3.0
+    			z	1.9
+   			}
+		}
+	}
+
+	HealthBarDesc
+	{
+		type "2"
+		mode "1"
+	}
+
+	LuaDesc
+	{
+		script "lua/buildings/rbbattle_button.lua"
+	}
+}
