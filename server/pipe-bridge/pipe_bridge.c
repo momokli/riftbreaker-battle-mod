@@ -1522,6 +1522,7 @@ static void handle_restart_map(SOCKET c, const char *body)
 static void handle_order(SOCKET c, const char *body)
 {
     char name[64] = "";
+    char id[64] = "";
     const order_spec_t *spec = NULL;
     char resp[LINE_MAX];
 
@@ -1532,6 +1533,9 @@ static void handle_order(SOCKET c, const char *body)
         return;
     }
 
+    /* Optionale ULID: identifiziert den Buy-Request (Dedup/Correlation). */
+    json_get_string(body, "id", id, sizeof(id));
+
     if (!lookup_order_spec(name, &spec)) {
         blog("POST /order: unbekannte Order %s", name);
         http_respond(c, 400, "Bad Request",
@@ -1539,15 +1543,15 @@ static void handle_order(SOCKET c, const char *body)
         return;
     }
 
-    if (!queue_order(spec, "")) {
+    if (!queue_order(spec, id)) {
         http_respond(c, 503, "Service Unavailable",
                      "{\"ok\":false,\"reason\":\"queue_full\"}");
         return;
     }
 
     snprintf(resp, sizeof(resp),
-             "{\"ok\":true,\"name\":\"%s\",\"cost\":%d,\"queued\":true}",
-             spec->name, spec->cost);
+             "{\"ok\":true,\"name\":\"%s\",\"id\":\"%s\",\"cost\":%d,\"queued\":true}",
+             spec->name, id, spec->cost);
     http_respond(c, 200, "OK", resp);
 }
 
