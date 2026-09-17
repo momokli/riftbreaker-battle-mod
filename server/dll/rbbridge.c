@@ -773,42 +773,6 @@ static int chat_queue_pop(chat_queue_t *q, char *out, size_t n)
     return 1;
 }
 
-/* #635: Baut die chat_result-Zeile aus mehreren Chat-Texten. Rein -> host-
- * testbar. Rueckgabe = Laenge ohne NUL; 0 = count<=0 oder Puffer zu klein. */
-static size_t chat_build_chat_result(const char *const *texts, int count,
-                                     char *out, size_t n)
-{
-    size_t off = 0;
-    int i, n_emit = 0;
-    int len;
-
-    if (!out || n == 0)
-        return 0;
-    out[0] = '\0';
-    if (count <= 0)
-        return 0;
-    len = snprintf(out, n, "{\"event\":\"chat_result\",\"chat\":[");
-    if (len < 0 || (size_t)len >= n)
-        return 0;
-    off = (size_t)len;
-    for (i = 0; i < count; i++) {
-        char esc[512];
-        if (!texts[i] || !texts[i][0])
-            continue;
-        json_escape_into(texts[i], esc, sizeof(esc));
-        len = snprintf(out + off, n - off, "%s\"%s\"", n_emit ? "," : "", esc);
-        if (len < 0 || (size_t)len >= n - off)
-            return 0;
-        off += (size_t)len;
-        n_emit++;
-    }
-    len = snprintf(out + off, n - off, "]}");
-    if (len < 0 || (size_t)len >= n - off)
-        return 0;
-    off += (size_t)len;
-    return off;
-}
-
 #ifndef RBBRIDGE_HOSTTEST
 /* Datei-Log: 1 = %TEMP%\rbbridge.log mitschreiben (Default an; abschalten
  * mit Umgebungsvariable RBBRIDGE_LOG=0). DebugView geht immer. */
@@ -4993,36 +4957,6 @@ static void dispatch_add_resource(HANDLE hPipe, const char *resource_str,
               ret ? "true" : "false");
 }
 
-/* #635: liefert die pending Chat-Nachrichten als EINE chat_result-Zeile
- * (leichter Event-Kanal, entkoppelt vom schweren get_state-Snapshot). Leere
- * Queue -> chat:[] (damit der Poll nie timeoutet). */
-static void dispatch_get_chat(HANDLE hPipe)
-{
-    const char *texts[CHAT_QUEUE_CAP];
-    char raw[CHAT_QUEUE_CAP][256];
-    char out[RESP_BUF_SIZE];
-    int n = 0;
-
-    for (;;) {
-        int got = 0;
-        EnterCriticalSection(&g_chat_cs);
-        got = chat_queue_pop(&g_chat_q, raw[n], sizeof(raw[n]));
-        LeaveCriticalSection(&g_chat_cs);
-        if (!got)
-            break;
-        texts[n] = raw[n];
-        n++;
-        if (n >= CHAT_QUEUE_CAP)
-            break;
-    }
-    if (n == 0) {
-        send_line(hPipe, "{\"event\":\"chat_result\",\"chat\":[]}");
-        return;
-    }
-    if (chat_build_chat_result(texts, n, out, sizeof(out)) > 0)
-        send_line(hPipe, "%s", out);
-}
-
 static void handle_line(HANDLE hPipe, const char *line)
 {
     char cmd[64] = "";
@@ -5054,11 +4988,6 @@ static void handle_line(HANDLE hPipe, const char *line)
 
     if (strcmp(cmd, "get_state") == 0) {
         dispatch_get_state(hPipe);
-        return;
-    }
-
-    if (strcmp(cmd, "get_chat") == 0) {
-        dispatch_get_chat(hPipe);
         return;
     }
 
