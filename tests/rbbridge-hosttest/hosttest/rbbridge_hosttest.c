@@ -639,6 +639,29 @@ int main(void)
     }
 
     /* -------------------------------------------------------------- */
+    /* try_spend-Helfer: amount_to_raw + try_spend_afford (rein)       */
+    /* -------------------------------------------------------------- */
+    check(amount_to_raw(10.0) == 10000000LL,
+          "amount_to_raw: 10.0 -> 10000000");
+    check(amount_to_raw(0.5) == 500000LL,
+          "amount_to_raw: 0.5 -> 500000");
+    check(amount_to_raw(-3.0) == -3000000LL,
+          "amount_to_raw: -3.0 -> -3000000");
+
+    check(try_spend_afford(300000000, 10000000) == 1,
+          "try_spend_afford: genug -> 1");
+    check(try_spend_afford(10000000, 10000000) == 1,
+          "try_spend_afford: exakt genug -> 1");
+    check(try_spend_afford(9999999, 10000000) == 0,
+          "try_spend_afford: zu wenig -> 0");
+    check(try_spend_afford(0, 1) == 0,
+          "try_spend_afford: 0 < 1 -> 0");
+    check(try_spend_afford(0, 0) == 1,
+          "try_spend_afford: cost 0 -> 1 (kein Abzug)");
+    check(try_spend_afford(5, -10) == 1,
+          "try_spend_afford: negative cost -> 1 (kein Abzug)");
+
+    /* -------------------------------------------------------------- */
     /* resource_internal_name (#421): Anzeigename -> interner Name      */
     /* -------------------------------------------------------------- */
     check(strcmp(resource_internal_name("ironium"), "steel") == 0,

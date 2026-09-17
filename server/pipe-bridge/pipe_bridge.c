@@ -309,6 +309,48 @@ static int json_get_number(const char *json, const char *key, double *out)
     return 0;
 }
 
+/* json_get_bool: findet "key":true ODER "key":false (nur diese Literale)
+ * und liefert 1 bei Treffer, sonst 0. Der boolsche Wert wird in *out
+ * geschrieben. Benoetigt fuer das "ok"-Feld von try_spend_result. */
+static int json_get_bool(const char *json, const char *key, int *out)
+{
+    if (!json || !key || !out)
+        return 0;
+
+    size_t key_len = strlen(key);
+    const char *p = json;
+
+    while ((p = strstr(p, key)) != NULL) {
+        if (p != json && p[-1] == '"' && p[key_len] == '"') {
+            const char *q = p + key_len + 1;
+            while (*q == ' ' || *q == '\t')
+                q++;
+            if (*q == ':') {
+                q++;
+                while (*q == ' ' || *q == '\t')
+                    q++;
+                if (strncmp(q, "true", 4) == 0 &&
+                    (q[4] == '\0' || q[4] == ',' || q[4] == '}' ||
+                     q[4] == ' ' || q[4] == '\t' || q[4] == '\r' ||
+                     q[4] == '\n')) {
+                    *out = 1;
+                    return 1;
+                }
+                if (strncmp(q, "false", 5) == 0 &&
+                    (q[5] == '\0' || q[5] == ',' || q[5] == '}' ||
+                     q[5] == ' ' || q[5] == '\t' || q[5] == '\r' ||
+                     q[5] == '\n')) {
+                    *out = 0;
+                    return 1;
+                }
+                return 0;
+            }
+        }
+        p += key_len;
+    }
+    return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* Named-Pipe-Client (\\.\pipe\rbbattle)                                */
 /* ------------------------------------------------------------------ */
@@ -530,6 +572,208 @@ static int parse_send_command(const char *text, char *res, size_t res_sz,
     return 1;
 }
 
+/* ------------------------------------------------------------------ */
+/* Benannte Orders (-send <name>)                                       */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    const char *name;
+    const char *logic;
+    int cost;
+    DWORD delay_ms;
+} order_spec_t;
+
+static const order_spec_t g_order_specs[] = {
+    { "wave1", "logic/dom/attack_level_1_entry.logic", 10, 0 },
+};
+#define G_ORDER_SPEC_COUNT (sizeof(g_order_specs) / sizeof(g_order_specs[0]))
+
+static int lookup_order_spec(const char *name, const order_spec_t **out)
+{
+    size_t i;
+
+    if (!name || !out)
+        return 0;
+    for (i = 0; i < G_ORDER_SPEC_COUNT; i++) {
+        if (strcmp(g_order_specs[i].name, name) == 0) {
+            *out = &g_order_specs[i];
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Liest "-send <token>" (nur [A-Za-z0-9_], kein nachfolgender Betrag). */
+static int parse_order_name(const char *text, char *name, size_t name_sz)
+{
+    const char *p = text;
+    size_t i;
+
+    if (!text || !name)
+        return 0;
+    while (*p == ' ' || *p == '\t')
+        p++;
+    if (strncmp(p, "-send", 5) != 0)
+        return 0;
+    p += 5;
+    if (*p != ' ' && *p != '\t')
+        return 0;
+    while (*p == ' ' || *p == '\t')
+        p++;
+    i = 0;
+    while (p[i] && ((p[i] >= 'a' && p[i] <= 'z') ||
+                    (p[i] >= 'A' && p[i] <= 'Z') ||
+                    (p[i] >= '0' && p[i] <= '9') || p[i] == '_'))
+        i++;
+    if (i == 0 || i + 1 >= name_sz)
+        return 0;
+    memcpy(name, p, i);
+    name[i] = '\0';
+    p += i;
+    while (*p == ' ' || *p == '\t')
+        p++;
+    if (*p != '\0')
+        return 0;
+    return 1;
+}
+
+#define PENDING_MAX 64
+typedef struct {
+    char name[64];
+    char logic[256];
+    int cost;
+    DWORD fire_at;
+    int state; /* 0=pending, 1=fired, 2=failed, 3=in-progress */
+} pending_order_t;
+
+static pending_order_t g_orders[PENDING_MAX];
+static int g_orders_n = 0;
+static CRITICAL_SECTION g_orders_cs;
+
+static int enqueue_order(const order_spec_t *spec)
+{
+    if (!spec)
+        return 0;
+    EnterCriticalSection(&g_orders_cs);
+    if (g_orders_n >= PENDING_MAX) {
+        LeaveCriticalSection(&g_orders_cs);
+        return 0;
+    }
+    {
+        pending_order_t *o = &g_orders[g_orders_n];
+        strncpy(o->name, spec->name, sizeof(o->name) - 1);
+        o->name[sizeof(o->name) - 1] = '\0';
+        strncpy(o->logic, spec->logic, sizeof(o->logic) - 1);
+        o->logic[sizeof(o->logic) - 1] = '\0';
+        o->cost = spec->cost;
+        o->fire_at = GetTickCount() + spec->delay_ms;
+        o->state = 0;
+        g_orders_n++;
+    }
+    LeaveCriticalSection(&g_orders_cs);
+    return 1;
+}
+
+static void set_order_state(int idx, int state)
+{
+    EnterCriticalSection(&g_orders_cs);
+    if (idx >= 0 && idx < g_orders_n)
+        g_orders[idx].state = state;
+    LeaveCriticalSection(&g_orders_cs);
+}
+
+/* Forward-Deklaration: pipe_send_command ist weiter unten definiert, wird
+ * aber vom Scheduler-Thread benoetigt. */
+static int pipe_send_command(const char *event, const char *payload,
+                             int timeout_ms, char *line_out, size_t line_out_sz);
+
+/* Scheduler-Thread: drainst faellige Orders. Eigener Thread, damit
+ * pipe_send_command (blockiert auf g_resp_ev) den Reader-Thread nicht
+ * blockiert; g_orders_cs wird waehrend des blockierenden Calls NICHT
+ * gehalten. */
+static DWORD WINAPI scheduler_main(LPVOID unused)
+{
+    (void)unused;
+
+    for (;;) {
+        pending_order_t ord = {0};
+        int idx = -1;
+        int have = 0;
+
+        EnterCriticalSection(&g_orders_cs);
+        {
+            int i;
+            for (i = 0; i < g_orders_n; i++) {
+                if (g_orders[i].state == 0 &&
+                    deadline_passed(g_orders[i].fire_at)) {
+                    ord = g_orders[i];
+                    g_orders[i].state = 3;
+                    idx = i;
+                    have = 1;
+                    break;
+                }
+            }
+        }
+        LeaveCriticalSection(&g_orders_cs);
+
+        if (have) {
+            int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS",
+                                     DEFAULT_TIMEOUT_MS);
+            char line[READ_BUF];
+            char payload[LINE_MAX];
+            char amt[64];
+            char esc_logic[512];
+            int ok = 0;
+            int spent = 0;
+
+            snprintf(amt, sizeof(amt), "%d", ord.cost);
+            snprintf(payload, sizeof(payload),
+                     "{\"cmd\":\"try_spend\",\"amount\":\"%s\"}\n", amt);
+            blog("order %s: try_spend cost=%d", ord.name, ord.cost);
+
+            if (pipe_send_command("try_spend_result", payload, timeout_ms,
+                                  line, sizeof(line)) == 0 &&
+                json_get_bool(line, "ok", &ok) && ok) {
+                spent = 1;
+            }
+
+            if (spent) {
+                json_escape(ord.logic, esc_logic, sizeof(esc_logic));
+                snprintf(payload, sizeof(payload),
+                         "{\"cmd\":\"activate_mission_flow\",\"logic\":\"%s\","
+                         "\"mode\":\"default\"}\n",
+                         esc_logic);
+                blog("order %s: activate_mission_flow logic=%s",
+                     ord.name, ord.logic);
+                pipe_send_command("activate_mission_flow_result", payload,
+                                  timeout_ms, line, sizeof(line));
+                set_order_state(idx, 1);
+                {
+                    char ev_line[LINE_MAX];
+                    snprintf(ev_line, sizeof(ev_line),
+                             "{\"event\":\"order_fired\",\"name\":\"%s\"}",
+                             ord.name);
+                    sse_broadcast(ev_line);
+                }
+                blog("order %s: fired", ord.name);
+            } else {
+                set_order_state(idx, 2);
+                {
+                    char ev_line[LINE_MAX];
+                    snprintf(ev_line, sizeof(ev_line),
+                             "{\"event\":\"order_failed\",\"name\":\"%s\"}",
+                             ord.name);
+                    sse_broadcast(ev_line);
+                }
+                blog("order %s: failed", ord.name);
+            }
+        }
+
+        Sleep(100);
+    }
+    return 0;
+}
+
 /* Route eine Pipe-Zeile: Events -> Server-Handling, Responses -> Waiter. */
 static void route_pipe_line(HANDLE h, const char *line)
 {
@@ -564,8 +808,26 @@ static void route_pipe_line(HANDLE h, const char *line)
                 sse_broadcast(ev_line);
             }
         } else {
-            blog("player_chat (kein -send): %.120s", text);
-            sse_broadcast(line);
+            char name[64] = "";
+            const order_spec_t *spec = NULL;
+            if (parse_order_name(text, name, sizeof(name)) &&
+                lookup_order_spec(name, &spec)) {
+                if (enqueue_order(spec)) {
+                    char ev_line[LINE_MAX];
+                    snprintf(ev_line, sizeof(ev_line),
+                             "{\"event\":\"order_queued\",\"name\":\"%s\",\"cost\":%d}",
+                             spec->name, spec->cost);
+                    sse_broadcast(ev_line);
+                    blog("player_chat -send order: %s -> queued (cost=%d)",
+                         spec->name, spec->cost);
+                } else {
+                    blog("player_chat -send order: Queue voll, verworfen: %s",
+                         name);
+                }
+            } else {
+                blog("player_chat (kein -send): %.120s", text);
+                sse_broadcast(line);
+            }
         }
         return;
     }
@@ -1443,8 +1705,10 @@ static int mode_server(void)
     InitializeCriticalSection(&g_resp_cs);
     InitializeCriticalSection(&g_cmd_cs);
     InitializeCriticalSection(&g_sse_cs);
+    InitializeCriticalSection(&g_orders_cs);
     g_resp_ev = CreateEvent(NULL, FALSE, FALSE, NULL);
     CreateThread(NULL, 0, pipe_reader_main, NULL, 0, NULL);
+    CreateThread(NULL, 0, scheduler_main, NULL, 0, NULL);
 
     const char *bind_addr = env_str("RBB_BRIDGE_BIND", DEFAULT_BIND);
     int port = env_int("RBB_BRIDGE_PORT", DEFAULT_PORT);
