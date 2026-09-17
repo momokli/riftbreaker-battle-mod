@@ -20,6 +20,8 @@
  *                                 Database*-Payload via spawn_point, #386)
  *   POST /deactivate_mission_flow -> Mission-Flow/Welle beenden (C++, #389)
  *   POST /end_game     -> Match nativ beenden, result=win|lose (C++, #519)
+ *   POST /order        -> benannte Send-Order einreihen (Cost-Tabelle, #713);
+ *                         try_spend passiert im Scheduler (sofort)
  *   POST /probe        -> Memory-Dump (PlayerService-Kette)
  *   sonst              -> 404 {"ok":false,"reason":"not_found"}
  *
@@ -610,7 +612,7 @@ typedef struct {
     char logic[256];
     int cost;
     DWORD fire_at;
-    int state; /* 0=pending, 1=fired, 2=failed, 3=in-progress */
+    int state; /* 0=pending, 1=paid, 2=failed, 3=fired, 4=in-progress */
 } pending_order_t;
 
 static pending_order_t g_orders[PENDING_MAX];
@@ -649,80 +651,88 @@ static void set_order_state(int idx, int state)
     LeaveCriticalSection(&g_orders_cs);
 }
 
+/* Reiht eine Order aus der Cost-Tabelle ein (spec muss gueltig sein). Liefert
+ * 1 bei Erfolg, 0 bei voller Queue. KEIN try_spend hier: der Scheduler
+ * bezahlt SOFORT (Phase 1) und feuert nach Ablauf der Frist (Phase 2). */
+static int queue_order(const order_spec_t *spec)
+{
+    char ev_line[LINE_MAX];
+
+    if (!spec)
+        return 0;
+    if (!enqueue_order(spec)) {
+        blog("order %s: Queue voll, verworfen", spec->name);
+        return 0;
+    }
+    snprintf(ev_line, sizeof(ev_line),
+             "{\"event\":\"order_queued\",\"name\":\"%s\",\"cost\":%d}",
+             spec->name, spec->cost);
+    sse_broadcast(ev_line);
+    blog("order %s -> queued (cost=%d, fire in %ums)", spec->name, spec->cost,
+         spec->delay_ms);
+    return 1;
+}
+
 /* Forward-Deklaration: pipe_send_command ist weiter unten definiert, wird
  * aber vom Scheduler-Thread benoetigt. */
 static int pipe_send_command(const char *event, const char *payload,
                              int timeout_ms, char *line_out, size_t line_out_sz);
 
-/* Scheduler-Thread: drainst faellige Orders. Eigener Thread, damit
- * pipe_send_command (blockiert auf g_resp_ev) den Reader-Thread nicht
- * blockiert; g_orders_cs wird waehrend des blockierenden Calls NICHT
- * gehalten. */
+/* Scheduler-Thread: zwei Phasen.
+ * Phase 1 (spend): bezahlt SOFORT alle pending Orders (try_spend) —
+ *   state 0 -> 1 (paid) oder 2 (failed/insufficient).
+ * Phase 2 (fire): feuert paid Orders nach Ablauf ihrer Frist EINMAL —
+ *   state 1 -> 3 (fired).
+ * Eigener Thread, damit pipe_send_command (blockiert auf g_resp_ev) den
+ * Reader-Thread nicht blockiert; g_orders_cs wird waehrend des blockierenden
+ * Calls NICHT gehalten. */
 static DWORD WINAPI scheduler_main(LPVOID unused)
 {
     (void)unused;
 
     for (;;) {
-        pending_order_t ord = {0};
-        int idx = -1;
-        int have = 0;
+        int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+        char line[READ_BUF];
+        char payload[LINE_MAX];
+        char amt[64];
+        char esc_logic[512];
+        int ok = 0;
 
-        EnterCriticalSection(&g_orders_cs);
-        {
-            int i;
-            for (i = 0; i < g_orders_n; i++) {
-                if (g_orders[i].state == 0 &&
-                    deadline_passed(g_orders[i].fire_at)) {
-                    ord = g_orders[i];
-                    g_orders[i].state = 3;
-                    idx = i;
-                    have = 1;
-                    break;
+        /* --- Phase 1: spend (sofort, beim Ordern) --- */
+        for (;;) {
+            pending_order_t ord = {0};
+            int idx = -1;
+            int have = 0;
+
+            EnterCriticalSection(&g_orders_cs);
+            {
+                int i;
+                for (i = 0; i < g_orders_n; i++) {
+                    if (g_orders[i].state == 0) {
+                        ord = g_orders[i];
+                        g_orders[i].state = 4; /* in-progress */
+                        idx = i;
+                        have = 1;
+                        break;
+                    }
                 }
             }
-        }
-        LeaveCriticalSection(&g_orders_cs);
+            LeaveCriticalSection(&g_orders_cs);
 
-        if (have) {
-            int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS",
-                                     DEFAULT_TIMEOUT_MS);
-            char line[READ_BUF];
-            char payload[LINE_MAX];
-            char amt[64];
-            char esc_logic[512];
-            int ok = 0;
-            int spent = 0;
+            if (!have)
+                break;
 
             snprintf(amt, sizeof(amt), "%d", ord.cost);
             snprintf(payload, sizeof(payload),
                      "{\"cmd\":\"try_spend\",\"amount\":\"%s\"}\n", amt);
             blog("order %s: try_spend cost=%d", ord.name, ord.cost);
 
+            ok = 0;
             if (pipe_send_command("try_spend_result", payload, timeout_ms,
                                   line, sizeof(line)) == 0 &&
                 json_get_bool(line, "ok", &ok) && ok) {
-                spent = 1;
-            }
-
-            if (spent) {
-                json_escape(ord.logic, esc_logic, sizeof(esc_logic));
-                snprintf(payload, sizeof(payload),
-                         "{\"cmd\":\"activate_mission_flow\",\"logic\":\"%s\","
-                         "\"mode\":\"default\"}\n",
-                         esc_logic);
-                blog("order %s: activate_mission_flow logic=%s",
-                     ord.name, ord.logic);
-                pipe_send_command("activate_mission_flow_result", payload,
-                                  timeout_ms, line, sizeof(line));
                 set_order_state(idx, 1);
-                {
-                    char ev_line[LINE_MAX];
-                    snprintf(ev_line, sizeof(ev_line),
-                             "{\"event\":\"order_fired\",\"name\":\"%s\"}",
-                             ord.name);
-                    sse_broadcast(ev_line);
-                }
-                blog("order %s: fired", ord.name);
+                blog("order %s: bezahlt (carbonium -%d)", ord.name, ord.cost);
             } else {
                 set_order_state(idx, 2);
                 {
@@ -732,8 +742,53 @@ static DWORD WINAPI scheduler_main(LPVOID unused)
                              ord.name);
                     sse_broadcast(ev_line);
                 }
-                blog("order %s: failed", ord.name);
+                blog("order %s: failed (insufficient/error)", ord.name);
             }
+        }
+
+        /* --- Phase 2: fire (einmal, nach Ablauf der Frist) --- */
+        for (;;) {
+            pending_order_t ord = {0};
+            int idx = -1;
+            int have = 0;
+
+            EnterCriticalSection(&g_orders_cs);
+            {
+                int i;
+                for (i = 0; i < g_orders_n; i++) {
+                    if (g_orders[i].state == 1 &&
+                        deadline_passed(g_orders[i].fire_at)) {
+                        ord = g_orders[i];
+                        g_orders[i].state = 4; /* in-progress */
+                        idx = i;
+                        have = 1;
+                        break;
+                    }
+                }
+            }
+            LeaveCriticalSection(&g_orders_cs);
+
+            if (!have)
+                break;
+
+            json_escape(ord.logic, esc_logic, sizeof(esc_logic));
+            snprintf(payload, sizeof(payload),
+                     "{\"cmd\":\"activate_mission_flow\",\"logic\":\"%s\","
+                     "\"mode\":\"default\"}\n",
+                     esc_logic);
+            blog("order %s: activate_mission_flow logic=%s",
+                 ord.name, ord.logic);
+            pipe_send_command("activate_mission_flow_result", payload,
+                              timeout_ms, line, sizeof(line));
+            set_order_state(idx, 3);
+            {
+                char ev_line[LINE_MAX];
+                snprintf(ev_line, sizeof(ev_line),
+                         "{\"event\":\"order_fired\",\"name\":\"%s\"}",
+                         ord.name);
+                sse_broadcast(ev_line);
+            }
+            blog("order %s: fired", ord.name);
         }
 
         Sleep(100);
@@ -756,18 +811,7 @@ static void route_pipe_line(HANDLE h, const char *line)
         json_get_string(line, "text", text, sizeof(text));
         if (parse_order_name(text, name, sizeof(name)) &&
             lookup_order_spec(name, &spec)) {
-            if (enqueue_order(spec)) {
-                char ev_line[LINE_MAX];
-                snprintf(ev_line, sizeof(ev_line),
-                         "{\"event\":\"order_queued\",\"name\":\"%s\",\"cost\":%d}",
-                         spec->name, spec->cost);
-                sse_broadcast(ev_line);
-                blog("player_chat -send order: %s -> queued (cost=%d)",
-                     spec->name, spec->cost);
-            } else {
-                blog("player_chat -send order: Queue voll, verworfen: %s",
-                     name);
-            }
+            queue_order(spec); /* loggt + broadcastet intern */
         } else {
             blog("player_chat (kein -send): %.120s", text);
             sse_broadcast(line);
@@ -1438,6 +1482,41 @@ static void handle_restart_map(SOCKET c, const char *body)
     http_respond(c, 200, "OK", line);
 }
 
+/* POST /order: nimmt {"name":"wave1"} entgegen, schaut in der Cost-Tabelle
+ * nach und reiht die Order ein. KEIN try_spend hier — der Scheduler bezahlt
+ * sofort (Phase 1) und feuert nach Ablauf der Frist (Phase 2). */
+static void handle_order(SOCKET c, const char *body)
+{
+    char name[64] = "";
+    const order_spec_t *spec = NULL;
+    char resp[LINE_MAX];
+
+    if (!json_get_string(body, "name", name, sizeof(name)) || !name[0]) {
+        blog("POST /order ohne name -> invalid_request");
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_request\"}");
+        return;
+    }
+
+    if (!lookup_order_spec(name, &spec)) {
+        blog("POST /order: unbekannte Order %s", name);
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"unknown_order\"}");
+        return;
+    }
+
+    if (!queue_order(spec)) {
+        http_respond(c, 503, "Service Unavailable",
+                     "{\"ok\":false,\"reason\":\"queue_full\"}");
+        return;
+    }
+
+    snprintf(resp, sizeof(resp),
+             "{\"ok\":true,\"name\":\"%s\",\"cost\":%d,\"queued\":true}",
+             spec->name, spec->cost);
+    http_respond(c, 200, "OK", resp);
+}
+
 /* GET /events: SSE-Stream. Haelt die Verbindung offen; der Reader-Thread
  * broadcastet Events direkt an diesen (einen) Client. */
 static void handle_events(SOCKET c)
@@ -1608,6 +1687,16 @@ static void handle_client(SOCKET c)
             memcpy(b, body, (size_t)body_len);
             b[body_len] = '\0';
             handle_restart_map(c, b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/order") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_order(c, b);
             free(b);
         } else if (strcmp(method, "GET") == 0 &&
                    (strcmp(path, "/") == 0 ||

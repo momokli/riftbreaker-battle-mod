@@ -109,6 +109,15 @@
   when: (not ansible_check_mode) or (riftbreaker_write_dirs_ready | bool)
   notify: restart riftbreaker-server
 
+- name: "Send-Tailer-Script bereitstellen (Issue #713)"
+  copy:
+    src: "{{ riftbreaker_send_tailer_script_src }}"
+    dest: "{{ riftbreaker_send_tailer_script }}"
+    remote_src: true
+    mode: "0644"
+  when: (not ansible_check_mode) or (riftbreaker_write_dirs_ready | bool)
+  notify: restart riftbreaker-server
+
 - name: config.cfg rendern (Passwort aus Vault, 0644 fuer steamuser-lesbar)
   template:
     src: config.cfg.j2
