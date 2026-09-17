@@ -12,7 +12,8 @@ Aktuell prüft das Gate nur noch C1 BOOT/HOST:
 
   * Container läuft stabil (nicht restarting)
   * Bridge-HTTP ``/health`` antwortet ``ok:true``
-  * Mod geladen: ``[RBBATTLE] event=mod_load …`` im dedi-Log
+  * Mod geladen: ``[RBBATTLE…] event=mod_load …`` im dedi-Log (Praefix-Match,
+    das Tag kann seit #631 einen Build-Suffix tragen, "[RBBATTLE:<build>]")
 
 C2–C4 (Ingress-Effekt-Invariante, Egress, Server-Wave) werden wieder
 aufgebaut, sobald das Backend echte C++-Read/Write-Pfade hat
@@ -88,11 +89,22 @@ class Host:
         return status, body
 
 
+def is_rbbattle_line(line: str) -> bool:
+    """"[RBBATTLE" ohne schliessende Klammer (Issue #696): seit 08bb0ca traegt
+
+    das Tag einen Build-Suffix ("[RBBATTLE:20260917-203600]" statt
+    "[RBBATTLE]") -- der exakte "[RBBATTLE]"-Substring-Match matchte diese
+    Zeilen nie mehr und liess C1 in jedem echten Lauf in den Boot-Timeout
+    laufen, unabhaengig vom PR-Inhalt. Praefix-Match deckt beide Formate ab.
+    """
+    return "[RBBATTLE" in line
+
+
 def fetch_log_lines(host: Host, container: str, tail: int = 4000) -> List[str]:
     proc = host.run("docker logs --tail {} {} 2>&1".format(tail, shlex.quote(container)), timeout=45.0)
     if proc.returncode != 0:
         raise RuntimeError("docker logs fehlgeschlagen (rc={}): {}".format(proc.returncode, proc.stderr.strip()))
-    return [ln for ln in proc.stdout.splitlines() if "[RBBATTLE]" in ln]
+    return [ln for ln in proc.stdout.splitlines() if is_rbbattle_line(ln)]
 
 
 def log(msg: str) -> None:
@@ -135,7 +147,7 @@ def wait_for_boot(host: Host, container: str, bridge_url: str, timeout: float) -
                 last = "Bridge /health: HTTP {} {}".format(hstatus, body[:120])
                 log("C1 boot: warte auf Bridge /health — {}".format(last))
             else:
-                last = "Mod noch nicht geladen ([RBBATTLE] fehlt)"
+                last = "Mod noch nicht geladen ([RBBATTLE...]-Zeile mit event=mod_load fehlt)"
         time.sleep(8)
     err("C1 boot rot: {} (letzter Stand: {})".format("Timeout nach {}s".format(int(timeout)), last))
     log("--- Container-Log (letzte 60 Zeilen, Diagnose) ---")
