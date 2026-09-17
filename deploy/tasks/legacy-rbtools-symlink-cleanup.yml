@@ -1,0 +1,65 @@
+---
+# deploy/tasks/legacy-rbtools-symlink-cleanup.yml — entfernt die vier Legacy-
+# rbtools-Symlinks auf /opt/rbmods/-Ebene (Issue #606).
+#
+# Hintergrund: die Env-Pfad-Migration (#483) hat die alten rbtools-Pfade
+#   rbtools-drift            -> rbtools/dev
+#   rbtools-staging-drift    -> rbtools/dev/.staging
+#   rbtools-rift             -> rbtools/prod
+#   rbtools-staging-rift     -> rbtools/prod/.staging
+# per `mv` + Symlink Alt->Neu ueberfuehrt. Der Symlink blieb als Rollback-Alias
+# stehen. Kein aktiver Deploy-Pfad referenziert diese Aliase mehr (nur noch die
+# Migrations-Map selbst + historische Doku) -> aufraeumen.
+#
+# Sicherheit:
+#   * Es wird NUR ein Symlink entfernt (stat follow=false -> islnk) — nie ein
+#     echtes Verzeichnis (das bliebe stehen und erzeugt nur eine Warnung).
+#   * `file: state=absent` auf einem Symlink entfernt ausschliesslich den Link
+#     selbst, niemals das Ziel (kein `rm -rf`, kein rekursives Loeschen).
+# Idempotent: fehlt der Pfad oder ist kein Symlink, ist der Lauf ein no-op.
+
+- name: "Legacy-rbtools-Symlinks — Paarliste ermitteln (#606)"
+  set_fact:
+    legacy_rbtools_symlinks: "{{ legacy_rbtools_symlinks_default }}"
+  when: legacy_rbtools_symlinks is not defined
+  vars:
+    legacy_rbtools_symlinks_default:
+      - {old: /opt/rbmods/rbtools-drift, new: /opt/rbmods/rbtools/dev}
+      - {old: /opt/rbmods/rbtools-staging-drift, new: /opt/rbmods/rbtools/dev/.staging}
+      - {old: /opt/rbmods/rbtools-rift, new: /opt/rbmods/rbtools/prod}
+      - {old: /opt/rbmods/rbtools-staging-rift, new: /opt/rbmods/rbtools/prod/.staging}
+
+- name: "Legacy-rbtools-Symlinks pruefen (stat, follow=false) (#606)"
+  stat:
+    path: "{{ item.old }}"
+    follow: false
+  loop: "{{ legacy_rbtools_symlinks }}"
+  loop_control:
+    label: "{{ item.old }}"
+  register: legacy_rbtools_stat
+
+- name: "Legacy-rbtools-Symlink entfernen (nur Symlink) (#606)"
+  file:
+    path: "{{ item.old }}"
+    state: absent
+  loop: "{{ legacy_rbtools_symlinks }}"
+  loop_control:
+    extended: true
+    label: "{{ item.old }}"
+  when:
+    - legacy_rbtools_stat.results[ansible_loop.index0].stat.exists
+    - legacy_rbtools_stat.results[ansible_loop.index0].stat.islnk | default(false) | bool
+
+- name: "Legacy-rbtools-Pfad unerwartet (kein Symlink) — Warnung (#606)"
+  debug:
+    msg: >-
+      WARN: '{{ item.old }}' existiert, ist aber kein Symlink (islnk={{ legacy_rbtools_stat.results[ansible_loop.index0].stat.islnk | default(false) }};
+      erwartetes Ziel war '{{ item.new }}') — wird NICHT automatisch entfernt
+      (manuell pruefen).
+  loop: "{{ legacy_rbtools_symlinks }}"
+  loop_control:
+    extended: true
+    label: "{{ item.old }}"
+  when:
+    - legacy_rbtools_stat.results[ansible_loop.index0].stat.exists
+    - not (legacy_rbtools_stat.results[ansible_loop.index0].stat.islnk | default(false) | bool)

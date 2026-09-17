@@ -111,6 +111,12 @@ CLI: `minidump_meta.py [--json] <dmp>` -> JSON. Genutzte Streams:
 fehlender Stream, RVA ausserhalb) -> `{"_ok": false, "reason": ...}` und
 **rc=0** (kein Traceback) — der Collector stirbt nie an einem kaputten Dump.
 
+Aus dem ExceptionStream werden ausserdem `access_type`
+(`ExceptionInformation[0]`: 0=read, 1=write, 8=execute) und `faulting_address`
+(`ExceptionInformation[1]`, die fehlerhafte Datenadresse, Hex-String ohne
+`0x`) gelesen; fehlt oder ist `ExceptionInformation` zu kurz, bleiben beide
+`null` (nie ein Fehler).
+
 Grenzen (bewusst, nicht geraten):
 
 - **Pointer-Breite 8 Byte** (64-bit Wine): ein 32-bit-Dump liefert falsche
@@ -503,12 +509,12 @@ Rollback: Backup-`tar.gz` aus `/srv/riftbreaker/backups/` nach
 
 ## Environment-Isolation & Deploy-Identität (Issue #483)
 
-Jeder Deploy trägt **genau eine** Identität: `rift_env` (`dev`|`prod`|`test`) +
-`rift_deploy_ref` (dev/test = Checkout-SHA; prod = Git-Tag + SHA) →
+Jeder Deploy trägt **genau eine** Identität: `rift_env` (`dev`|`prod`|`test`|`staging`) +
+`rift_deploy_ref` (dev/test/staging = Checkout-SHA; prod = Git-Tag + SHA) →
 `rift_deploy_identity = "<env> · <ref>"`. Erzeugt wird sie in den `pre_tasks`
 (`deploy/tasks/deploy-identity.yml`); `rift_env` steht als **Play-Var** in
-`site.yml`/`deploy-prod.yml`/`test-deploy.yml` (Play-Vars schlagen
-Rollen-Defaults/host_vars — sonst erbt prod/test den dev-Wert).
+`site.yml`/`deploy-prod.yml`/`test-deploy.yml`/`deploy-staging.yml` (Play-Vars schlagen
+Rollen-Defaults/host_vars — sonst erbt prod/test/staging den dev-Wert).
 
 ### Schema: Env → Pfade / Ports / Stand
 

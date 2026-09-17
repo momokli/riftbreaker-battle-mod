@@ -29,6 +29,8 @@
   command:
     cmd: bash {{ rbtools_build_script }} {{ rbtools_staging_dir }}
     chdir: "{{ rbtools_repo_root }}"
+  environment:
+    RBB_BUILD_REF: "{{ rift_build_ref | default('') }}"
   register: rbtools_build
   changed_when: true
   when: not ansible_check_mode

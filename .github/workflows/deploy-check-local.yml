@@ -130,7 +130,7 @@ jobs:
       # das prod-Playbook deploy-prod.yml (+ prod-vars.yml) UND den Boot-Test
       # test-deploy.yml (+ test-vars.yml) ab. --syntax-check parst nur, verbindet
       # NICHT und entschlüsselt das Vault nicht.
-      - name: Playbook-Syntax (site.yml + deploy-prod.yml + test-deploy.yml)
+      - name: Playbook-Syntax (site.yml + deploy-prod.yml + test-deploy.yml + deploy-staging.yml)
         if: steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
@@ -139,6 +139,8 @@ jobs:
             -e @deploy/prod-vars.yml --syntax-check
           ansible-playbook -i deploy/inventory deploy/test-deploy.yml \
             -e @deploy/test-vars.yml --syntax-check
+          ansible-playbook -i deploy/inventory deploy/deploy-staging.yml \
+            -e @deploy/staging-vars.yml --syntax-check
 
       # Playbook-Syntax des lokalen Solo-Dev-Setups (Issue #566): eigenes
       # Inventory (deploy/local-inventory.yml), außerhalb des
@@ -175,6 +177,13 @@ jobs:
       - name: "Crash-Collector Unit-Render (Issue #462)"
         if: steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/crash-collector/run.sh
+
+      # Legacy-rbtools-Symlink-Cleanup (Issue #606): laesst die ECHTE Task-Datei
+      # gegen ein Wegwerf-Verzeichnis laufen — Symlink entfernt, echtes
+      # Verzeichnis bleibt, idempotent. Lokal, kein Host.
+      - name: "Legacy-rbtools-Symlink-Cleanup (Issue #606)"
+        if: steps.gate.outputs.skip != 'true'
+        run: bash deploy/tests/legacy-symlink-cleanup/run.sh
 
       # /server/*-Route-Selbsttest (Issue #463): rendert die ECHTE
       # Cockpit-Caddyfile-Vorlage zweimal — dev (server_control_enabled=true)

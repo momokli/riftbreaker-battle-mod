@@ -1,14 +1,15 @@
 ---
 # deploy/tasks/deploy-identity.yml — erzeugt die Deploy-Identitaet je Play
 # (Issue #483, US1). Wird per include_tasks in den pre_tasks von site.yml
-# (dev), deploy-prod.yml (prod) und test-deploy.yml (test) eingebunden.
+# (dev), deploy-prod.yml (prod), test-deploy.yml (test) und deploy-staging.yml
+# (staging) eingebunden.
 #
-# `rift_env` MUSS dort als Play-Var stehen (dev|prod|test): Play-Vars schlagen
+# `rift_env` MUSS dort als Play-Var stehen (dev|prod|test|staging): Play-Vars schlagen
 # Rollen-Defaults + host_vars, sonst erbt prod/test den dev-Wert (dieselbe
 # Praezedenz-Falle wie `server_control_enabled`, Issue #463).
 #
 # Ergebnis:
-#   rift_deploy_ref       dev/test = Checkout-SHA (deploy_image_tag);
+#   rift_deploy_ref       dev/test/staging = Checkout-SHA (deploy_image_tag);
 #                         prod     = Git-Tag (git describe --tags --always)
 #                                    + Checkout-SHA
 #   rift_deploy_identity  "<env> · <ref>"   (Surface-Vertrag, US4)
@@ -24,9 +25,9 @@
   assert:
     that:
       - rift_env is defined
-      - rift_env in ['dev', 'prod', 'test']
+      - rift_env in ['dev', 'prod', 'test', 'staging']
     fail_msg: >-
-      rift_env fehlt oder ist ungueltig (erwartet dev|prod|test). Es MUSS als
+      rift_env fehlt oder ist ungueltig (erwartet dev|prod|test|staging). Es MUSS als
       Play-Var im jeweiligen Playbook stehen (Play-Vars schlagen
       Rollen-Defaults/host_vars) — sonst erbt prod/test den dev-Wert
       (Issue #483).
@@ -44,6 +45,41 @@
   failed_when: false
   register: rbbattle_deploy_describe
   when: rift_env == 'prod'
+  tags: always
+
+# Build-Ref (Issue #607): DERSELBE ref wie in die Binaries gebacken
+# (scripts/build_ref.sh -> RBB_BUILD_REF: Tag-Name bei Tag-Push, sonst voller
+# Commit-SHA). prod = Tag-Deploy -> Tag-Name (exact-match, leer wenn der
+# Checkout nicht exakt auf einem Tag liegt), sonst voller Commit-SHA.
+- name: "Build-Ref — voller Commit-SHA ermitteln (Issue #607)"
+  command: git -c safe.directory=* -C {{ rift_deploy_checkout }} rev-parse HEAD
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  changed_when: false
+  register: rbbattle_full_sha
+  tags: always
+
+- name: "Build-Ref — Tag-Name (nur prod, exact-match, Issue #607)"
+  command: git -c safe.directory=* -C {{ rift_deploy_checkout }} describe --tags --exact-match HEAD
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  register: rbbattle_exact_tag
+  when: rift_env == 'prod'
+  tags: always
+
+- name: "Build-Ref setzen (rift_build_ref, Issue #607)"
+  set_fact:
+    # Tag-Name hat Vorrang (prod), sonst voller Commit-SHA — exakt die
+    # RBB_BUILD_REF-Semantik. Leerer exact-match (kein Tag am Checkout) faellt
+    # auf den vollen SHA zurueck.
+    rift_build_ref: "{{ rbbattle_exact_tag_trim if rbbattle_exact_tag_trim | length > 0 else rbbattle_full_sha_trim }}"
+  vars:
+    rbbattle_exact_tag_trim: "{{ (rbbattle_exact_tag.stdout | default('')) | trim }}"
+    rbbattle_full_sha_trim: "{{ (rbbattle_full_sha.stdout | default('')) | trim }}"
   tags: always
 
 - name: "Deploy-Ref zusammensetzen (rift_deploy_ref)"

@@ -14,7 +14,7 @@
 #
 # Geprüft wird:
 #   (a) CRASH-Marker -> Bundle <ts>-<uuid> mit dmp/log/trace + context.log + meta.json
-#   (b) meta.json: image/git_sha/module_base/fault_address stimmen
+#   (b) meta.json: image/git_sha/env/ref/module_base/fault_address stimmen (#605)
 #   (c) page fault-Marker löst ebenfalls ein Bundle aus
 #   (d) kein Marker -> kein Bundle, rc=0 (graceful non-crash)
 #   (e) Retention: nach dem Sammeln bleiben nur die neuesten N Bundles
@@ -23,6 +23,9 @@
 #       module, module_base, fault_rva, fault_thread, stack_rvas (#481)
 #   (h) ungueltiger Dump ("MZ fake") -> rc=0, neue Felder null, module_base
 #       weiterhin aus der module_range-Log-Zeile (#481)
+#   (i) ohne Commit-Ref (Image ohne Tag) -> flacher Bundle-Pfad (Graceful #605)
+#   (j) RB_CRASH_REF (Build-Ref, #607) -> meta.ref + Bundle-Pfad nutzen ihn
+#       (git_sha bleibt der Image-Tag-SHA)
 #
 # Läuft in CI (lint.yml) und lokal:  tests/shell/crash-collector.test.sh
 # ============================================================
@@ -30,6 +33,12 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COLLECTOR="${REPO_ROOT}/deploy/crash-collector/crash_collector.sh"
+
+# Bundle-Pfad (Issue #605): <env>/<ref>/<ts>-<uuid>. ENV kommt aus RB_CRASH_ENV
+# (Default dev); REF hat Vorrang aus RB_CRASH_REF (#607), sonst aus dem
+# Image-Tag des Fake-Dockers (rb-dedicated:<sha>).
+ENV_NAME="dev"
+REF_SHA="8131ee0bd0c8"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -106,6 +115,9 @@ struct.pack_into("<I", buf, rva_mod + 24, rva_name)
 struct.pack_into("<I", buf, rva_exc, THREAD)
 struct.pack_into("<I", buf, rva_exc + 8, 0xC0000005)
 struct.pack_into("<Q", buf, rva_exc + 8 + 16, ADDR)
+struct.pack_into("<I", buf, rva_exc + 8 + 24, 2)  # NumberParameters
+struct.pack_into("<Q", buf, rva_exc + 8 + 32, 1)  # access_type = write
+struct.pack_into("<Q", buf, rva_exc + 8 + 40, 0x1A2B3C4D5E6F)  # faulting_address
 with open(sys.argv[1], "wb") as fh:
     fh.write(bytes(buf))
 PY
@@ -124,7 +136,7 @@ case "$cmd" in
     esac ;;
   inspect)
     case "$*" in
-      *".Config.Image"*) printf 'rb-dedicated:8131ee0bd0c8\n' ;;
+      *".Config.Image"*) printf '%s\n' "${FAKE_IMAGE:-rb-dedicated:8131ee0bd0c8}" ;;
       *".State.StartedAt"*) printf '2026-09-15T09:00:00.000000000Z\n' ;;
       *) printf '\n' ;;
     esac ;;
@@ -183,7 +195,7 @@ assert_true() {
 
 # Führt den Collector einmalig aus. $1 = case-dir, $2 = log-fixture, $3 = newest dmp
 run_case() {
-  local dir="$1" logs="$2" newest="$3"
+  local dir="$1" logs="$2" newest="$3" env_name="${4:-$ENV_NAME}" image="${5:-rb-dedicated:8131ee0bd0c8}" ref="${6:-}"
   mkdir -p "${dir}/crashes"
   : >"${dir}/docker.log"
   set +e
@@ -193,7 +205,10 @@ run_case() {
     FAKE_LOGS="$logs" \
     FAKE_NEWEST_DMP="$newest" \
     FAKE_ROOT="${FAKE_ROOT}" \
+    FAKE_IMAGE="$image" \
     RB_CRASH_DIR="${dir}/crashes" \
+    RB_CRASH_ENV="$env_name" \
+    RB_CRASH_REF="$ref" \
     RB_CRASH_CRASHINFO="${CRASHINFO}" \
     RB_CRASH_CONTAINER="riftbreaker-dedicated" \
     RB_CRASH_WAIT_SECS=2 \
@@ -208,12 +223,12 @@ C1="${TMP}/c1"
 run_case "$C1" "${TMP}/crash.log" "${FAKE_ROOT}${CRASHINFO}/${UUID}.dmp"
 assert_eq "CRASH -> rc=0" "0" "$RC"
 
-mapfile -t BUNDLES < <(find "${C1}/crashes" -mindepth 1 -maxdepth 1 -type d | sed 's|.*/||')
+mapfile -t BUNDLES < <(find "${C1}/crashes" -mindepth 3 -maxdepth 3 -type d | sed 's|.*/||')
 assert_eq "genau ein Bundle" "1" "${#BUNDLES[@]}"
 B="${BUNDLES[0]:-}"
 assert_eq "Bundle-Name ist <ts>-<uuid>" "${B: -36}" "$UUID"
 if [ -n "$B" ]; then
-  BD="${C1}/crashes/${B}"
+  BD="${C1}/crashes/${ENV_NAME}/${REF_SHA}/${B}"
   for f in "${UUID}.dmp" "${UUID}.log" "${UUID}.trace" context.log meta.json; do
     assert_true "Bundle enthaelt ${f}" test -s "${BD}/${f}"
   done
@@ -224,7 +239,9 @@ if [ -n "$B" ]; then
   meta() { python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2],''))" "${BD}/meta.json" "$1"; }
   assert_eq "meta.uuid" "$UUID" "$(meta uuid)"
   assert_eq "meta.image" "rb-dedicated:8131ee0bd0c8" "$(meta image)"
-  assert_eq "meta.git_sha" "8131ee0bd0c8" "$(meta git_sha)"
+  assert_eq "meta.git_sha" "$REF_SHA" "$(meta git_sha)"
+  assert_eq "meta.env" "$ENV_NAME" "$(meta env)"
+  assert_eq "meta.ref" "$REF_SHA" "$(meta ref)"
   assert_eq "meta.module_base" "00006ffff6da0000" "$(meta module_base)"
   assert_eq "meta.module_size" "78778368" "$(meta module_size)"
   assert_eq "meta.container" "riftbreaker-dedicated" "$(meta container)"
@@ -239,10 +256,10 @@ fi
 C2="${TMP}/c2"
 run_case "$C2" "${TMP}/pf.log" "${FAKE_ROOT}${CRASHINFO}/${UUID}.dmp"
 assert_eq "page fault -> rc=0" "0" "$RC"
-mapfile -t B2 < <(find "${C2}/crashes" -mindepth 1 -maxdepth 1 -type d | sed 's|.*/||')
+mapfile -t B2 < <(find "${C2}/crashes" -mindepth 3 -maxdepth 3 -type d | sed 's|.*/||')
 assert_eq "page fault -> genau ein Bundle" "1" "${#B2[@]}"
 if [ "${#B2[@]}" -eq 1 ]; then
-  row="$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d['crash_marker'],d['fault_address'],d['module_base'])" "${C2}/crashes/${B2[0]}/meta.json")"
+  row="$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d['crash_marker'],d['fault_address'],d['module_base'])" "${C2}/crashes/${ENV_NAME}/${REF_SHA}/${B2[0]}/meta.json")"
   assert_eq "page fault meta (marker/fault/base)" "page fault 0000000140001234 00006ffff7a00000" "$row"
 fi
 
@@ -250,34 +267,34 @@ fi
 C3="${TMP}/c3"
 run_case "$C3" "${TMP}/clean.log" "${FAKE_ROOT}${CRASHINFO}/${UUID}.dmp"
 assert_eq "ohne Marker -> rc=0" "0" "$RC"
-assert_eq "ohne Marker -> kein Bundle" "0" "$(find "${C3}/crashes" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+assert_eq "ohne Marker -> kein Bundle" "0" "$(find "${C3}/crashes" -mindepth 3 -maxdepth 3 -type d | wc -l | tr -d ' ')"
 
 # --- (e) Retention: nur die neuesten N Bundles bleiben -----------------------
 C4="${TMP}/c4"
-mkdir -p "${C4}/crashes"
-for i in $(seq -w 1 25); do mkdir -p "${C4}/crashes/20260101T0000${i}Z-old"; done
+mkdir -p "${C4}/crashes/${ENV_NAME}/${REF_SHA}"
+for i in $(seq -w 1 25); do mkdir -p "${C4}/crashes/${ENV_NAME}/${REF_SHA}/20260101T0000${i}Z-old"; done
 run_case "$C4" "${TMP}/crash.log" "${FAKE_ROOT}${CRASHINFO}/${UUID}.dmp"
 assert_eq "Retention -> rc=0" "0" "$RC"
-N="$(find "${C4}/crashes" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+N="$(find "${C4}/crashes" -mindepth 3 -maxdepth 3 -type d | wc -l | tr -d ' ')"
 assert_eq "Retention haelt 20 Bundles" "20" "$N"
-assert_true "aeltestes Bundle entfernt" test ! -d "${C4}/crashes/20260101T000001Z-old"
-assert_true "neuestes Bundle (der Crash) noch da" grep -q . <(find "${C4}/crashes" -maxdepth 1 -type d -name "*${UUID}")
+assert_true "aeltestes Bundle entfernt" test ! -d "${C4}/crashes/${ENV_NAME}/${REF_SHA}/20260101T000001Z-old"
+assert_true "neuestes Bundle (der Crash) noch da" grep -q . <(find "${C4}/crashes" -maxdepth 3 -type d -name "*${UUID}")
 
 # --- (f) Idempotenz: derselbe Crash -> kein Doppel-Bundle --------------------
 C5="${TMP}/c5"
 run_case "$C5" "${TMP}/crash.log" "${FAKE_ROOT}${CRASHINFO}/${UUID}.dmp"
 run_case "$C5" "${TMP}/crash.log" "${FAKE_ROOT}${CRASHINFO}/${UUID}.dmp"
 assert_eq "zweiter Lauf -> rc=0" "0" "$RC"
-assert_eq "Idempotenz: weiterhin ein Bundle" "1" "$(find "${C5}/crashes" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+assert_eq "Idempotenz: weiterhin ein Bundle" "1" "$(find "${C5}/crashes" -mindepth 3 -maxdepth 3 -type d | wc -l | tr -d ' ')"
 
 # --- (g) gueltiger Minidump -> Dump-Felder in meta.json (Issue #481) ---------
 C6="${TMP}/c6"
 run_case "$C6" "${TMP}/crash.log" "$VALID_DMP"
 assert_eq "valid dmp -> rc=0" "0" "$RC"
-mapfile -t B6 < <(find "${C6}/crashes" -mindepth 1 -maxdepth 1 -type d | sed 's|.*/||')
+mapfile -t B6 < <(find "${C6}/crashes" -mindepth 3 -maxdepth 3 -type d | sed 's|.*/||')
 assert_eq "valid dmp -> genau ein Bundle" "1" "${#B6[@]}"
 if [ "${#B6[@]}" -eq 1 ]; then
-  M6="${C6}/crashes/${B6[0]}/meta.json"
+  M6="${C6}/crashes/${ENV_NAME}/${REF_SHA}/${B6[0]}/meta.json"
   m6() { python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2]))" "$M6" "$1"; }
   assert_eq "meta.exception_code" "3221225477" "$(m6 exception_code)"
   assert_eq "meta.exception_address" "140001234" "$(m6 exception_address)"
@@ -288,6 +305,8 @@ if [ "${#B6[@]}" -eq 1 ]; then
   assert_eq "meta.fault_thread" "500" "$(m6 fault_thread)"
   assert_eq "meta.stack_rvas" "500,abc" \
     "$(python3 -c "import json,sys;print(','.join(json.load(open(sys.argv[1]))['stack_rvas']))" "$M6")"
+  assert_eq "meta.access_type" "1" "$(m6 access_type)"
+  assert_eq "meta.faulting_address" "1a2b3c4d5e6f" "$(m6 faulting_address)"
   # fault_rva == exception_address - module_base
   assert_eq "meta.fault_rva == addr - base" "True" \
     "$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(int(d['fault_rva'],16)==int(d['exception_address'],16)-int(d['module_base'],16))" "$M6")"
@@ -297,10 +316,10 @@ fi
 C7="${TMP}/c7"
 run_case "$C7" "${TMP}/crash.log" "${FAKE_ROOT}${CRASHINFO}/${UUID}.dmp"
 assert_eq "invalid dmp -> rc=0" "0" "$RC"
-mapfile -t B7 < <(find "${C7}/crashes" -mindepth 1 -maxdepth 1 -type d | sed 's|.*/||')
+mapfile -t B7 < <(find "${C7}/crashes" -mindepth 3 -maxdepth 3 -type d | sed 's|.*/||')
 assert_eq "invalid dmp -> genau ein Bundle" "1" "${#B7[@]}"
 if [ "${#B7[@]}" -eq 1 ]; then
-  M7="${C7}/crashes/${B7[0]}/meta.json"
+  M7="${C7}/crashes/${ENV_NAME}/${REF_SHA}/${B7[0]}/meta.json"
   m7() { python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2]))" "$M7" "$1"; }
   assert_eq "invalid: exception_code null" "None" "$(m7 exception_code)"
   assert_eq "invalid: exception_address null" "None" "$(m7 exception_address)"
@@ -309,6 +328,42 @@ if [ "${#B7[@]}" -eq 1 ]; then
   assert_eq "invalid: fault_thread null" "None" "$(m7 fault_thread)"
   assert_eq "invalid: stack_rvas null" "None" "$(m7 stack_rvas)"
   assert_eq "invalid: module_base aus Log-Zeile" "00006ffff6da0000" "$(m7 module_base)"
+fi
+
+# --- (i) Fallback ohne Commit-Ref (Image ohne Tag) -> flaches Bundle ---------
+# Issue #605: fehlt der REF (git_sha aus dem Image-Tag), faellt der Collector
+# auf den flachen Pfad <crash_dir>/<ts>-<uuid> zurueck (keine leeren Segmente).
+C8="${TMP}/c8"
+run_case "$C8" "${TMP}/crash.log" "${FAKE_ROOT}${CRASHINFO}/${UUID}.dmp" dev rb-dedicated
+assert_eq "ohne Ref -> rc=0" "0" "$RC"
+mapfile -t B8 < <(find "${C8}/crashes" -mindepth 1 -maxdepth 1 -type d | sed 's|.*/||')
+assert_eq "ohne Ref -> genau ein flaches Bundle" "1" "${#B8[@]}"
+if [ "${#B8[@]}" -eq 1 ]; then
+  assert_true "ohne Ref -> Bundle liegt flach" test -d "${C8}/crashes/${B8[0]}"
+  M8="${C8}/crashes/${B8[0]}/meta.json"
+  m8() { python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2]))" "$M8" "$1"; }
+  assert_eq "ohne Ref -> meta.env" "dev" "$(m8 env)"
+  assert_eq "ohne Ref -> meta.ref" "None" "$(m8 ref)"
+fi
+
+# --- (j) RB_CRASH_REF (Build-Ref, #607) -> meta.ref + Bundle-Pfad -----------
+# Issue #607: RB_CRASH_REF traegt denselben ref wie die Binaries (RBB_BUILD_REF,
+# z. B. Tag "v0.38.0"). meta.ref + Bundle-Pfad nutzen ihn; git_sha bleibt der
+# Image-Tag-SHA (Fallback-Wert).
+C9="${TMP}/c9"
+BUILD_REF="v0.38.0"
+run_case "$C9" "${TMP}/crash.log" "${FAKE_ROOT}${CRASHINFO}/${UUID}.dmp" "$ENV_NAME" "rb-dedicated:8131ee0bd0c8" "$BUILD_REF"
+assert_eq "RB_CRASH_REF -> rc=0" "0" "$RC"
+mapfile -t B9 < <(find "${C9}/crashes" -mindepth 3 -maxdepth 3 -type d | sed 's|.*/||')
+assert_eq "RB_CRASH_REF -> genau ein Bundle" "1" "${#B9[@]}"
+if [ "${#B9[@]}" -eq 1 ]; then
+  BD9="${C9}/crashes/${ENV_NAME}/${BUILD_REF}/${B9[0]}"
+  assert_true "RB_CRASH_REF -> Bundle unter <env>/<ref>" test -d "$BD9"
+  M9="${BD9}/meta.json"
+  m9() { python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2]))" "$M9" "$1"; }
+  assert_eq "RB_CRASH_REF -> meta.ref" "$BUILD_REF" "$(m9 ref)"
+  assert_eq "RB_CRASH_REF -> meta.git_sha (Image-Tag)" "$REF_SHA" "$(m9 git_sha)"
+  assert_eq "RB_CRASH_REF -> meta.env" "$ENV_NAME" "$(m9 env)"
 fi
 
 if [ "$FAIL" -ne 0 ]; then

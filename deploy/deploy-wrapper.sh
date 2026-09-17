@@ -49,7 +49,7 @@ if [ -z "$env" ]; then
 fi
 
 case "$env" in
-  dev|prod) ;;
+  dev|prod|staging) ;;
   *) echo "rbbattle-deploy: ungültige env '${env}'" >&2; exit 1 ;;
 esac
 
@@ -79,12 +79,18 @@ if [ -n "$sha" ]; then
 fi
 chown -R deploy:deploy "$repo"
 
-# Dispatch anhand des ref: Tag v* -> prod, sonst dev.
+# Dispatch anhand des ref: Tag v* -> prod, Branch staging -> staging, sonst dev.
 case "$ref" in
   refs/tags/v*)
     exec "$ansible_bin" \
       -i deploy/inventory deploy/deploy-prod.yml \
       -e @deploy/prod-vars.yml \
+      --vault-password-file "$vault_file"
+    ;;
+  refs/heads/staging)
+    exec "$ansible_bin" \
+      -i deploy/inventory deploy/deploy-staging.yml \
+      -e @deploy/staging-vars.yml \
       --vault-password-file "$vault_file"
     ;;
   *)
