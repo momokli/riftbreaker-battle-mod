@@ -449,6 +449,233 @@ static int pipe_wait_line(HANDLE h, const char *event, const char *command,
 
 
 /* ------------------------------------------------------------------ */
+/* Persistente Pipe (#636): ein Reader-Thread haelt die Verbindung     */
+/* offen, liest Events (player_chat) + Responses und routed sie.       */
+/* HTTP-Handler schreiben Befehle auf dieselbe Verbindung und warten   */
+/* auf die Antwort. Dadurch entfaellt das open/write/read/close pro    */
+/* Request und der Chat wird serverseitig verarbeitet (Deduct ohne     */
+/* Browser im Pfad).                                                   */
+/* ------------------------------------------------------------------ */
+
+static HANDLE g_pipe = INVALID_HANDLE_VALUE; /* persistente Verbindung */
+static CRITICAL_SECTION g_pipe_cs;           /* schuetzt Writes */
+static CRITICAL_SECTION g_resp_cs;           /* schuetzt pending-Response */
+static HANDLE g_resp_ev = NULL;              /* auto-reset: Antwort da */
+static char g_resp_expect[64];               /* erwarteter event-Name */
+static char g_resp_line[READ_BUF];           /* gematchte Antwort-Zeile */
+static int g_resp_ok = 0;                    /* 1 = Antwort da */
+
+/* Parst "-send <resource> <amount>". Liefert resource (lowercase) und den
+ * NEGIERTEN Betrag als String (send = abziehen). Rueckgabe 1 = ok. */
+static int parse_send_command(const char *text, char *res, size_t res_sz,
+                              char *amount, size_t amount_sz)
+{
+    const char *p = text;
+    size_t i;
+    double amt;
+    char *end = NULL;
+
+    if (!text || !res || !amount)
+        return 0;
+    while (*p == ' ' || *p == '\t')
+        p++;
+    if (strncmp(p, "-send", 5) != 0)
+        return 0;
+    p += 5;
+    if (*p != ' ' && *p != '\t')
+        return 0;
+    while (*p == ' ' || *p == '\t')
+        p++;
+    i = 0;
+    while (p[i] && ((p[i] >= 'a' && p[i] <= 'z') ||
+                    (p[i] >= 'A' && p[i] <= 'Z') ||
+                    (p[i] >= '0' && p[i] <= '9') || p[i] == '_'))
+        i++;
+    if (i == 0 || i + 1 >= res_sz)
+        return 0;
+    memcpy(res, p, i);
+    res[i] = '\0';
+    p += i;
+    if (*p != ' ' && *p != '\t')
+        return 0;
+    while (*p == ' ' || *p == '\t')
+        p++;
+    amt = strtod(p, &end);
+    if (end == p)
+        return 0;
+    while (*end == ' ' || *end == '\t')
+        end++;
+    if (*end != '\0')
+        return 0;
+    amt = -amt; /* send = abziehen */
+    snprintf(amount, amount_sz, "%g", amt);
+    return 1;
+}
+
+/* Route eine Pipe-Zeile: Events -> Server-Handling, Responses -> Waiter. */
+static void route_pipe_line(HANDLE h, const char *line)
+{
+    char ev[64] = "";
+    if (!json_get_string(line, "event", ev, sizeof(ev)))
+        return;
+
+    if (strcmp(ev, "player_chat") == 0) {
+        char text[256] = "";
+        char res[64] = "";
+        char amount[64] = "";
+        json_get_string(line, "text", text, sizeof(text));
+        if (parse_send_command(text, res, sizeof(res), amount, sizeof(amount))) {
+            char esc_res[128], esc_amt[128], payload[LINE_MAX];
+            json_escape(res, esc_res, sizeof(esc_res));
+            json_escape(amount, esc_amt, sizeof(esc_amt));
+            snprintf(payload, sizeof(payload),
+                     "{\"cmd\":\"add_resource\",\"resource\":\"%s\","
+                     "\"amount\":\"%s\"}\n",
+                     esc_res, esc_amt);
+            EnterCriticalSection(&g_pipe_cs);
+            pipe_write_all(h, payload);
+            LeaveCriticalSection(&g_pipe_cs);
+            blog("player_chat -send: resource=%s amount=%s -> add_resource",
+                 res, amount);
+        } else {
+            blog("player_chat (kein -send): %.120s", text);
+        }
+        return;
+    }
+
+    /* Response-Zeile: an einen wartenden HTTP-Handler liefern. */
+    EnterCriticalSection(&g_resp_cs);
+    if (!g_resp_ok && strcmp(ev, g_resp_expect) == 0) {
+        strncpy(g_resp_line, line, sizeof(g_resp_line) - 1);
+        g_resp_line[sizeof(g_resp_line) - 1] = '\0';
+        g_resp_ok = 1;
+        SetEvent(g_resp_ev);
+    }
+    LeaveCriticalSection(&g_resp_cs);
+}
+
+/* Reader-Thread: haelt die Pipe offen und liest/routed kontinuierlich. */
+static DWORD WINAPI pipe_reader_main(LPVOID arg)
+{
+    char buf[READ_BUF];
+    size_t n = 0;
+    HANDLE h = INVALID_HANDLE_VALUE;
+
+    (void)arg;
+
+    for (;;) {
+        if (h == INVALID_HANDLE_VALUE) {
+            h = pipe_connect(2500);
+            if (h == INVALID_HANDLE_VALUE) {
+                Sleep(1000);
+                continue;
+            }
+            EnterCriticalSection(&g_pipe_cs);
+            g_pipe = h;
+            LeaveCriticalSection(&g_pipe_cs);
+            blog("pipe_reader: Pipe verbunden");
+        }
+
+        {
+            DWORD avail = 0;
+            if (!PeekNamedPipe(h, NULL, 0, NULL, &avail, NULL)) {
+                EnterCriticalSection(&g_pipe_cs);
+                if (g_pipe == h)
+                    g_pipe = INVALID_HANDLE_VALUE;
+                LeaveCriticalSection(&g_pipe_cs);
+                CloseHandle(h);
+                h = INVALID_HANDLE_VALUE;
+                blog("pipe_reader: Pipe getrennt, reconnect");
+                Sleep(500);
+                continue;
+            }
+            if (avail > 0) {
+                char chunk[4096];
+                DWORD rd = 0;
+                DWORD want = avail < (DWORD)sizeof(chunk) ? avail : (DWORD)sizeof(chunk);
+                if (!ReadFile(h, chunk, want, &rd, NULL) || rd == 0) {
+                    EnterCriticalSection(&g_pipe_cs);
+                    if (g_pipe == h)
+                        g_pipe = INVALID_HANDLE_VALUE;
+                    LeaveCriticalSection(&g_pipe_cs);
+                    CloseHandle(h);
+                    h = INVALID_HANDLE_VALUE;
+                    blog("pipe_reader: ReadFile-Fehler, reconnect");
+                    Sleep(500);
+                    continue;
+                }
+                if (n + rd > sizeof(buf) - 1)
+                    n = 0;
+                memcpy(buf + n, chunk, rd);
+                n += rd;
+                {
+                    size_t start = 0;
+                    size_t i;
+                    for (i = 0; i < n; i++) {
+                        if (buf[i] == '\n') {
+                            char *ln = buf + start;
+                            size_t len;
+                            buf[i] = '\0';
+                            len = strlen(ln);
+                            while (len > 0 && ln[len - 1] == '\r')
+                                ln[--len] = '\0';
+                            if (len > 0)
+                                route_pipe_line(h, ln);
+                            start = i + 1;
+                        }
+                    }
+                    if (start > 0) {
+                        memmove(buf, buf + start, n - start);
+                        n -= start;
+                    }
+                }
+            } else {
+                Sleep(10);
+            }
+        }
+    }
+    return 0;
+}
+
+/* Schreibt einen Befehl auf die persistente Pipe und wartet auf die
+ * Antwort (event-Name). Rueckgabe 0 = Antwort in line_out, 1 = Timeout,
+ * -1 = Pipe nicht erreichbar. */
+static int pipe_send_command(const char *event, const char *payload,
+                             int timeout_ms, char *line_out, size_t line_out_sz)
+{
+    int w;
+
+    if (g_pipe == INVALID_HANDLE_VALUE)
+        return -1;
+
+    EnterCriticalSection(&g_resp_cs);
+    strncpy(g_resp_expect, event, sizeof(g_resp_expect) - 1);
+    g_resp_expect[sizeof(g_resp_expect) - 1] = '\0';
+    g_resp_ok = 0;
+    ResetEvent(g_resp_ev);
+    LeaveCriticalSection(&g_resp_cs);
+
+    EnterCriticalSection(&g_pipe_cs);
+    w = pipe_write_all(g_pipe, payload);
+    LeaveCriticalSection(&g_pipe_cs);
+    if (!w)
+        return -1;
+
+    if (WaitForSingleObject(g_resp_ev, (DWORD)timeout_ms) != WAIT_OBJECT_0)
+        return 1;
+
+    EnterCriticalSection(&g_resp_cs);
+    if (!g_resp_ok) {
+        LeaveCriticalSection(&g_resp_cs);
+        return 1;
+    }
+    strncpy(line_out, g_resp_line, line_out_sz - 1);
+    line_out[line_out_sz - 1] = '\0';
+    LeaveCriticalSection(&g_resp_cs);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* HTTP                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -662,73 +889,27 @@ static void handle_probe(SOCKET c)
     }
 }
 
-/* POST /get_state: fuehrt {"cmd":"get_state"} aus und liefert die eine
- * get_state_result-Zeile als HTTP-Body (reiner Snapshot, kein chat). */
+/* POST /get_state: fuehrt {"cmd":"get_state"} ueber die persistente Pipe
+ * aus und liefert die eine get_state_result-Zeile (reiner Snapshot). */
 static void handle_get_state(SOCKET c)
 {
     char line[READ_BUF];
     int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
-    HANDLE h = pipe_connect(2500);
 
-    if (h == INVALID_HANDLE_VALUE) {
+    int rc = pipe_send_command("get_state_result", "{\"cmd\":\"get_state\"}\n",
+                               timeout_ms, line, sizeof(line));
+    if (rc == -1) {
         blog("POST /get_state: Pipe nicht erreichbar -> pipe_unavailable");
         http_respond(c, 503, "Service Unavailable",
                      "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
         return;
     }
-
-    if (!pipe_write_all(h, "{\"cmd\":\"get_state\"}\n")) {
-        CloseHandle(h);
-        http_respond(c, 500, "Internal Server Error",
-                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
-        return;
-    }
-
-    int rc = pipe_wait_line(h, "get_state_result", NULL, timeout_ms,
-                            line, sizeof(line));
-    CloseHandle(h);
-
     if (rc != 0) {
         http_respond(c, 500, "Internal Server Error",
                      "{\"ok\":false,\"reason\":\"timeout\"}");
         return;
     }
     log_response("/get_state", line);
-    http_respond(c, 200, "OK", line);
-}
-
-/* POST /get_chat: fuehrt {"cmd":"get_chat"} aus und liefert die eine
- * chat_result-Zeile als HTTP-Body (leichter Event-Kanal #635). */
-static void handle_get_chat(SOCKET c)
-{
-    char line[READ_BUF];
-    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
-    HANDLE h = pipe_connect(2500);
-
-    if (h == INVALID_HANDLE_VALUE) {
-        blog("POST /get_chat: Pipe nicht erreichbar -> pipe_unavailable");
-        http_respond(c, 503, "Service Unavailable",
-                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
-        return;
-    }
-
-    if (!pipe_write_all(h, "{\"cmd\":\"get_chat\"}\n")) {
-        CloseHandle(h);
-        http_respond(c, 500, "Internal Server Error",
-                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
-        return;
-    }
-
-    int rc = pipe_wait_line(h, "chat_result", NULL, timeout_ms,
-                            line, sizeof(line));
-    CloseHandle(h);
-
-    if (rc != 0) {
-        http_respond(c, 500, "Internal Server Error",
-                     "{\"ok\":false,\"reason\":\"timeout\"}");
-        return;
-    }
-    log_response("/get_chat", line);
     http_respond(c, 200, "OK", line);
 }
 
@@ -745,7 +926,6 @@ static void handle_add_resource(SOCKET c, const char *body)
     char line[READ_BUF];
     char payload[LINE_MAX];
     int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
-    HANDLE h;
 
     if (!json_get_string(body, "amount", amount, sizeof(amount))) {
         blog("POST /add_resource ohne amount -> invalid_request");
@@ -755,14 +935,6 @@ static void handle_add_resource(SOCKET c, const char *body)
     }
     /* resource ist optional (Default carbonium, Backward-Compat). */
     json_get_string(body, "resource", resource, sizeof(resource));
-
-    h = pipe_connect(2500);
-    if (h == INVALID_HANDLE_VALUE) {
-        blog("POST /add_resource: Pipe nicht erreichbar -> pipe_unavailable");
-        http_respond(c, 503, "Service Unavailable",
-                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
-        return;
-    }
 
     {
         char esc[64 * 2];
@@ -775,17 +947,15 @@ static void handle_add_resource(SOCKET c, const char *body)
                  resc, esc);
     }
 
-    if (!pipe_write_all(h, payload)) {
-        CloseHandle(h);
-        http_respond(c, 500, "Internal Server Error",
-                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
-        return;
-    }
-
     {
-        int rc = pipe_wait_line(h, "add_resource_result", NULL, timeout_ms,
-                                line, sizeof(line));
-        CloseHandle(h);
+        int rc = pipe_send_command("add_resource_result", payload, timeout_ms,
+                                   line, sizeof(line));
+        if (rc == -1) {
+            blog("POST /add_resource: Pipe nicht erreichbar -> pipe_unavailable");
+            http_respond(c, 503, "Service Unavailable",
+                         "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+            return;
+        }
         if (rc != 0) {
             http_respond(c, 500, "Internal Server Error",
                          "{\"ok\":false,\"reason\":\"timeout\"}");
@@ -1238,8 +1408,6 @@ static void handle_client(SOCKET c)
             handle_probe(c);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/get_state") == 0) {
             handle_get_state(c);
-        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/get_chat") == 0) {
-            handle_get_chat(c);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/add_resource") == 0) {
             char *b = malloc((size_t)body_len + 1);
             if (!b) {
@@ -1332,6 +1500,13 @@ static int mode_server(void)
     init_session_id();
     blog("session start %s", g_session_id);
     blog("pipe_bridge ref=%s", RBBRIDGE_REF);
+
+    /* #636: persistente Pipe — Reader-Thread starten (server-seitiges
+     * Command-Handling + Event-Routing). */
+    InitializeCriticalSection(&g_pipe_cs);
+    InitializeCriticalSection(&g_resp_cs);
+    g_resp_ev = CreateEvent(NULL, FALSE, FALSE, NULL);
+    CreateThread(NULL, 0, pipe_reader_main, NULL, 0, NULL);
 
     const char *bind_addr = env_str("RBB_BRIDGE_BIND", DEFAULT_BIND);
     int port = env_int("RBB_BRIDGE_PORT", DEFAULT_PORT);

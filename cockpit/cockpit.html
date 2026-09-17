@@ -926,65 +926,6 @@
                     }
                 }
 
-                async function sendResource(resource, amount) {
-                    var n = Math.abs(amount);
-                    try {
-                        var r = await post("add_resource", {
-                            resource: resource,
-                            amount: String(-n),
-                        });
-                        var ok = r && r.ok;
-                        if (ok && typeof sendTracker !== "undefined" && sendTracker.add) {
-                            sendTracker.add({
-                                timestamp: Date.now(),
-                                resource: resource,
-                                amount: -n,
-                            });
-                        }
-                        await refresh();
-                        $("out").textContent = ok
-                            ? "sent " + n + " " + resource
-                            : JSON.stringify(r);
-                    } catch (e) {
-                        $("out").textContent = "ERR " + e.message;
-                    }
-                }
-
-                async function processChat(messages) {
-                    if (!Array.isArray(messages) || !messages.length) {
-                        return;
-                    }
-                    for (var i = 0; i < messages.length; i++) {
-                        var text = messages[i];
-                        if (typeof text !== "string" || !text) {
-                            continue;
-                        }
-                        var m = /^\s*-send\s+([a-zA-Z0-9_]+)\s+([+-]?\d+(?:\.\d+)?)\s*$/.exec(text);
-                        if (m) {
-                            var res = m[1].toLowerCase();
-                            var amount = parseFloat(m[2]);
-                            if (res === "carbonium" || res === "ironium") {
-                                await sendResource(res, amount);
-                            } else {
-                                $("out").textContent = "unknown resource: " + res;
-                            }
-                        } else {
-                            $("out").textContent = "chat: " + text;
-                        }
-                    }
-                }
-
-                async function pollChat() {
-                    try {
-                        var r = await post("get_chat");
-                        if (r && r.chat && r.chat.length) {
-                            await processChat(r.chat);
-                        }
-                    } catch (e) {
-                        /* transient: naechster Poll versucht es erneut */
-                    }
-                }
-
                 $("add").onclick = function () {
                     addResource(null, $("amount").value);
                 };
@@ -1142,7 +1083,6 @@
 
                 refresh();
                 setInterval(refresh, 1000);
-                setInterval(pollChat, 150);
 
                 // --- send tracker (testable) ---
                 // Persistente Send-Liste (#527, 1.0-Send-Loop #517).
