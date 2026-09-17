@@ -217,12 +217,46 @@ static int json_get_string(const char *json, const char *key,
             while (*q && *q != '"' && n + 1 < out_sz) {
                 if (*q == '\\' && q[1]) {
                     q++;
-                    if (*q == 'n')
+                    if (*q == 'n') {
                         out[n++] = '\n';
-                    else if (*q == 't')
+                    } else if (*q == 't') {
                         out[n++] = '\t';
-                    else
-                        out[n++] = *q; /* \\ \" \/ -> Zeichen selbst */
+                    } else if (*q == 'u' && q[1] && q[2] && q[3] && q[4]) {
+                        unsigned int cp = 0;
+                        int k, ok = 1;
+                        for (k = 1; k <= 4; k++) {
+                            char hc = q[k];
+                            unsigned int d;
+                            if (hc >= '0' && hc <= '9')
+                                d = (unsigned int)(hc - '0');
+                            else if (hc >= 'a' && hc <= 'f')
+                                d = (unsigned int)(hc - 'a' + 10);
+                            else if (hc >= 'A' && hc <= 'F')
+                                d = (unsigned int)(hc - 'A' + 10);
+                            else {
+                                ok = 0;
+                                break;
+                            }
+                            cp = (cp << 4) | d;
+                        }
+                        if (ok) {
+                            if (cp < 0x80 && n + 1 < out_sz) {
+                                out[n++] = (char)cp;
+                            } else if (cp < 0x800 && n + 2 < out_sz) {
+                                out[n++] = (char)(0xC0 | (cp >> 6));
+                                out[n++] = (char)(0x80 | (cp & 0x3F));
+                            } else if (n + 3 < out_sz) {
+                                out[n++] = (char)(0xE0 | (cp >> 12));
+                                out[n++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+                                out[n++] = (char)(0x80 | (cp & 0x3F));
+                            }
+                            q += 4;
+                        } else {
+                            out[n++] = 'u';
+                        }
+                    } else {
+                        out[n++] = *q;
+                    }
                 } else {
                     out[n++] = *q;
                 }
