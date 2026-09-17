@@ -129,8 +129,9 @@ mit den Env-Variablen der Rolle (`deploy/roles/crash-collector`).
 - Der x64-Unwind (`# unwind: x64`, Issue #676) nutzt die `.pdata`/`.xdata`-
   Metadaten, die der Compiler für SEH/C++-Exceptions zwingend ablegt — damit
   funktioniert er auch bei **FPO** (weg-optimiertem Frame-Pointer). Grenzen:
-  Epilog-Spezialfälle und ein Frame-Register ungleich `rbp` werden konservativ
-  als Abbruch behandelt (partial frames, kein stiller Fehler). Fehlen die
+  Epilog-Spezialfälle, ein Frame-Register ungleich `rbp` und Laufzeit-
+  Argument-Pushes (die der Prolog-Unwind nicht kennt) werden konservativ als
+  Abbruch/partial frames behandelt (kein stiller Fehler). Fehlen die
   Unwind-Daten (kein PE), fällt er auf den RBP-Walk (#668) zurück
   (`# unwind: rbp`) bzw. liefert keine `unwind`-Frames (`# unwind: none`).
 - Der Header emittiert den Register-Kontext des faultenden Threads

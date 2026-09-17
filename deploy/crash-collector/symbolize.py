@@ -252,19 +252,23 @@ def stack_ranges(threads, memory, fault_thread_id):
 def fault_regs(data, exc, threads):
     """Register-Kontext (rip/rsp/rbp) des faultenden Threads.
 
-    Bevorzugt den CONTEXT aus der ThreadList (der faultende Thread); ist dort
-    keiner vorhanden, faellt auf den Exception-Stream-CONTEXT zurueck.
-    Fehlende/zu kurze Register werden als None ausgeliefert.
+    Bevorzugt den CONTEXT aus dem Exception-Stream: das ist der echte
+    Fault-Zeitpunkt (rip = ExceptionAddress). Unter Wine zeigt der
+    ThreadList-CONTEXT dagegen oft auf den Wine-Exception-Dispatcher (ntdll)
+    statt auf den Fault — deshalb ist der Exception-CONTEXT die verlaesslichere
+    Quelle. Nur wenn er fehlt/zu kurz ist, wird auf den ThreadList-CONTEXT des
+    faultenden Threads zurueckgefallen.
     """
     ctx_rva = exc.get("context_rva")
     ctx_size = exc.get("context_size")
-    tid = exc.get("thread_id")
-    for t in threads:
-        if tid is None or t["thread_id"] == tid:
-            if t["context_rva"] and t["context_size"]:
-                ctx_rva = t["context_rva"]
-                ctx_size = t["context_size"]
-            break
+    if not (ctx_rva and ctx_size and ctx_size >= AMD64_CONTEXT_MIN):
+        tid = exc.get("thread_id")
+        for t in threads:
+            if tid is None or t["thread_id"] == tid:
+                if t["context_rva"] and t["context_size"]:
+                    ctx_rva = t["context_rva"]
+                    ctx_size = t["context_size"]
+                break
     return {
         "rip": _reg(data, ctx_rva, ctx_size, AMD64_RIP_OFF),
         "rsp": _reg(data, ctx_rva, ctx_size, AMD64_RSP_OFF),
@@ -443,11 +447,15 @@ def _parse_unwind_info(data, sections, unwind_rva):
 def _apply_unwind(info, rsp, regs, read_u64, prolog_off=None):
     """Unwind-Codes rueckwaerts anwenden -> neuer RSP (oder None bei Abbruch).
 
+    Die Codes sind im Array in **absteigender** Prolog-Offset-Reihenfolge
+    gespeichert (= Reverse-Prolog-Reihenfolge) — daher wird das Array VORWAERTS
+    durchlaufen, um den Prolog rueckwaerts abzuwickeln.
+
     ``regs`` (Register-Nr -> Wert) wird mutiert (Restore aus PUSH_NONVOL/
     SAVE_NONVOL). Nur der Return-Adressen-Pfad wird gebraucht; XMM-Saves werden
     ignoriert.
     """
-    for code_off, op, opinfo, operand in reversed(info["codes"]):
+    for code_off, op, opinfo, operand in info["codes"]:
         if prolog_off is not None and code_off > prolog_off:
             continue
         if op == UWOP_PUSH_NONVOL:
@@ -622,7 +630,7 @@ def collect_frames(
     # .pdata/.xdata vorliegt; sonst Fallback auf den RBP-Walk (#668).
     unwind_method = "none"
     if pe_map:
-        rets = x64_unwind(modules, pe_map, regs.get("rip"), regs.get("rsp"), regs.get("rbp"), read_stack, max_frames)
+        rets = x64_unwind(modules, pe_map, exc.get("address"), regs.get("rsp"), regs.get("rbp"), read_stack, max_frames)
         if rets:
             for ret in rets:
                 add(ret, "unwind")
