@@ -990,8 +990,10 @@ static void send_state(HANDLE hPipe)
 /*                                                                    */
 /*   d) NICHT-Fund an JEDER Stelle -> dispatch_exec liefert             */
 /*      {"event":"exec_result","ok":false,...,"reason":"..."} + dbg()  */
-/*      und ruft NIEMALS auf. Unter MinGW-x64 gibt es kein SEH         */
-/*      (__try/__except ist MSVC-only) - die Absicherung ist der       */
+/*      und ruft NIEMALS auf. Der Instanz-Scan ist crash-sicher:       */
+/*      gelesen wird per ReadProcessMemory in einen lokalen Puffer     */
+/*      (kein roher QWORD-Deref) - MinGW-x64 stellt kein SEH           */
+/*      (__try/__except, MSVC-only) bereit. Absicherung bleibt der     */
 /*      Instanz-/Signatur-Check VOR dem Aufruf.                        */
 /*                                                                    */
 /* Gegenprobe (read-only pefile+capstone, planet, 2026-09-11): Die    */
@@ -3012,6 +3014,11 @@ static int64_t read_resource_max(const unsigned char *base,
 /* Scannt den eigenen Adressraum (nur MEM_COMMIT + lesbar, kein PAGE_GUARD)
  * nach einem 8-Byte-alignierten QWORD == needle. Reine Leseoperation, kein
  * Aufruf; Rueckgabe = Fundstelle (erstes Vorkommen) oder NULL. */
+/* Blockgroesse (Byte) fuer das crash-sichere ReadProcessMemory-Kopieren
+ * der Region in einen lokalen Stack-Puffer (klein gehalten, damit der
+ * Pipe-Thread-Stack nicht gesprengt wird). */
+#define RBBRIDGE_SCAN_CHUNK (64u * 1024u)
+
 static unsigned char *scan_qword_instance(uint64_t needle, const char *name)
 {
     uintptr_t addr = 0;
@@ -3034,15 +3041,36 @@ static unsigned char *scan_qword_instance(uint64_t needle, const char *name)
         if ((regions & 0xFF) == 0)
             dbg("%s: scan progress (regions=%d candidates=%d)", name, regions,
                 candidates);
-        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
-        size_t nq = mi.RegionSize / sizeof(uint64_t);
-        for (size_t i = 0; i < nq; i++) {
-            if (q[i] == needle) {
-                candidates++;
-                dbg("%s: done (regions=%d candidates=%d)", name, regions,
-                    candidates);
-                return (unsigned char *)&q[i];
+        /* Crash-sicher statt rohem q[i]-Deref: die Region wird chunkweise
+         * per ReadProcessMemory in einen lokalen, 8-Byte-alignierten
+         * Puffer kopiert und DORT gescannt. Wird die Region zwischen
+         * VirtualQuery und dem Lesen vom Spiel freigegeben (TOCTOU-Race
+         * beim Heap-Churn, z.B. Player-Join), liefert ReadProcessMemory
+         * FALSE statt eines Page-Faults -> Chunk ueberspringen, naechste
+         * Region. MinGW-x64 stellt kein SEH (__try/__except, MSVC-only)
+         * bereit. */
+        uint64_t buf[RBBRIDGE_SCAN_CHUNK / sizeof(uint64_t)];
+        size_t remaining = mi.RegionSize;
+        uintptr_t base = (uintptr_t)mi.BaseAddress;
+        while (remaining > 0) {
+            size_t chunk = remaining > sizeof(buf) ? sizeof(buf) : remaining;
+            SIZE_T nread = 0;
+            if (ReadProcessMemory(GetCurrentProcess(), (const void *)base, buf,
+                                  chunk, &nread) &&
+                nread >= sizeof(uint64_t)) {
+                size_t nq = nread / sizeof(uint64_t);
+                for (size_t i = 0; i < nq; i++) {
+                    if (buf[i] == needle) {
+                        candidates++;
+                        dbg("%s: done (regions=%d candidates=%d)", name,
+                            regions, candidates);
+                        return (unsigned char *)(base +
+                                                 i * sizeof(uint64_t));
+                    }
+                }
             }
+            base += chunk;
+            remaining -= chunk;
         }
     }
     dbg("%s: done (regions=%d candidates=%d)", name, regions, candidates);
