@@ -3,7 +3,8 @@
 -- PoC #631: Markt-Area mit 9 Wave-Buttons (WAVE 1..9), horizontal angeordnet.
 -- NUR der Dedicated-Server spawnt die Markt-Area (serverseitige Autorität).
 -- Client/Single-Player: kein Spawn (Client rendert nur die Server-Entities).
--- Jedes Gebäude: Space (InteractWithEntityRequest) -> Chat („send wave N“).
+-- Jedes Gebäude: Space (InteractWithEntityRequest) -> Chat "-send waveN"
+--   (-> pipe_bridge: try_spend + activate_mission_flow nach 5 min, #694/#698).
 -- Preise = Test-C-Kurve (#670), Label „send WAVE N | <preis>“ kommt aus der .ent.
 -- ============================================================================
 
@@ -61,15 +62,15 @@ local INVALID = 4294967295
 -- Blueprint je Button (Label kommt aus localization_id der jeweiligen .ent).
 -- Preise = Test-C-Kurve (#670): 10/110/480/960/1590/2250/2800/3060/3110.
 local BUTTONS = {
-    { bp = "buildings/decorations/rbbattle_wave_1", msg = "send wave 1" },
-    { bp = "buildings/decorations/rbbattle_wave_2", msg = "send wave 2" },
-    { bp = "buildings/decorations/rbbattle_wave_3", msg = "send wave 3" },
-    { bp = "buildings/decorations/rbbattle_wave_4", msg = "send wave 4" },
-    { bp = "buildings/decorations/rbbattle_wave_5", msg = "send wave 5" },
-    { bp = "buildings/decorations/rbbattle_wave_6", msg = "send wave 6" },
-    { bp = "buildings/decorations/rbbattle_wave_7", msg = "send wave 7" },
-    { bp = "buildings/decorations/rbbattle_wave_8", msg = "send wave 8" },
-    { bp = "buildings/decorations/rbbattle_wave_9", msg = "send wave 9" },
+    { bp = "buildings/decorations/rbbattle_wave_1", msg = "-send wave1" },
+    { bp = "buildings/decorations/rbbattle_wave_2", msg = "-send wave2" },
+    { bp = "buildings/decorations/rbbattle_wave_3", msg = "-send wave3" },
+    { bp = "buildings/decorations/rbbattle_wave_4", msg = "-send wave4" },
+    { bp = "buildings/decorations/rbbattle_wave_5", msg = "-send wave5" },
+    { bp = "buildings/decorations/rbbattle_wave_6", msg = "-send wave6" },
+    { bp = "buildings/decorations/rbbattle_wave_7", msg = "-send wave7" },
+    { bp = "buildings/decorations/rbbattle_wave_8", msg = "-send wave8" },
+    { bp = "buildings/decorations/rbbattle_wave_9", msg = "-send wave9" },
 }
 
 local function IsDedicatedServer()

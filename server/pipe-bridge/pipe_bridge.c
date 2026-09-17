@@ -526,52 +526,6 @@ static void sse_broadcast(const char *line)
     LeaveCriticalSection(&g_sse_cs);
 }
 
-/* Parst "-send <resource> <amount>". Liefert resource (lowercase) und den
- * POSITIVEN Betrag (double). Rueckgabe 1 = ok. */
-static int parse_send_command(const char *text, char *res, size_t res_sz,
-                              double *amount)
-{
-    const char *p = text;
-    size_t i;
-    double amt;
-    char *end = NULL;
-
-    if (!text || !res || !amount)
-        return 0;
-    while (*p == ' ' || *p == '\t')
-        p++;
-    if (strncmp(p, "-send", 5) != 0)
-        return 0;
-    p += 5;
-    if (*p != ' ' && *p != '\t')
-        return 0;
-    while (*p == ' ' || *p == '\t')
-        p++;
-    i = 0;
-    while (p[i] && ((p[i] >= 'a' && p[i] <= 'z') ||
-                    (p[i] >= 'A' && p[i] <= 'Z') ||
-                    (p[i] >= '0' && p[i] <= '9') || p[i] == '_'))
-        i++;
-    if (i == 0 || i + 1 >= res_sz)
-        return 0;
-    memcpy(res, p, i);
-    res[i] = '\0';
-    p += i;
-    if (*p != ' ' && *p != '\t')
-        return 0;
-    while (*p == ' ' || *p == '\t')
-        p++;
-    amt = strtod(p, &end);
-    if (end == p)
-        return 0;
-    while (*end == ' ' || *end == '\t')
-        end++;
-    if (*end != '\0')
-        return 0;
-    *amount = amt; /* positiv */
-    return 1;
-}
-
 /* ------------------------------------------------------------------ */
 /* Benannte Orders (-send <name>)                                       */
 /* ------------------------------------------------------------------ */
@@ -583,8 +537,21 @@ typedef struct {
     DWORD delay_ms;
 } order_spec_t;
 
+/* Zeitversatz zwischen Kauf (SPACE) und Wellen-Spawn: 5 Minuten, damit die
+ * Welle zeitversetzt beim Gegner ankommt. */
+#define ORDER_DELAY_MS (5 * 60 * 1000)
+
+/* Kostentabelle = Test-C-Kurve (#670); wave9 teilt den Pool mit wave8 (#658). */
 static const order_spec_t g_order_specs[] = {
-    { "wave1", "logic/dom/attack_level_1_entry.logic", 10, 0 },
+    { "wave1", "logic/missions/survival/attack_level_1_id_1.logic", 10, ORDER_DELAY_MS },
+    { "wave2", "logic/missions/survival/attack_level_2_id_1.logic", 110, ORDER_DELAY_MS },
+    { "wave3", "logic/missions/survival/attack_level_3_id_1.logic", 480, ORDER_DELAY_MS },
+    { "wave4", "logic/missions/survival/attack_level_4_id_1.logic", 960, ORDER_DELAY_MS },
+    { "wave5", "logic/missions/survival/attack_level_5_id_1.logic", 1590, ORDER_DELAY_MS },
+    { "wave6", "logic/missions/survival/attack_level_6_id_1.logic", 2250, ORDER_DELAY_MS },
+    { "wave7", "logic/missions/survival/attack_level_7_id_1.logic", 2800, ORDER_DELAY_MS },
+    { "wave8", "logic/missions/survival/attack_level_8_id_1.logic", 3060, ORDER_DELAY_MS },
+    { "wave9", "logic/missions/survival/attack_level_8_id_1.logic", 3110, ORDER_DELAY_MS },
 };
 #define G_ORDER_SPEC_COUNT (sizeof(g_order_specs) / sizeof(g_order_specs[0]))
 
@@ -778,56 +745,32 @@ static DWORD WINAPI scheduler_main(LPVOID unused)
 static void route_pipe_line(HANDLE h, const char *line)
 {
     char ev[64] = "";
+    (void)h;
     if (!json_get_string(line, "event", ev, sizeof(ev)))
         return;
 
     if (strcmp(ev, "player_chat") == 0) {
         char text[256] = "";
-        char res[64] = "";
-        double amt = 0.0;
+        char name[64] = "";
+        const order_spec_t *spec = NULL;
         json_get_string(line, "text", text, sizeof(text));
-        if (parse_send_command(text, res, sizeof(res), &amt)) {
-            char neg[64], esc_res[128], esc_amt[128], payload[LINE_MAX];
-            snprintf(neg, sizeof(neg), "%g", -amt); /* send = abziehen */
-            json_escape(res, esc_res, sizeof(esc_res));
-            json_escape(neg, esc_amt, sizeof(esc_amt));
-            snprintf(payload, sizeof(payload),
-                     "{\"cmd\":\"add_resource\",\"resource\":\"%s\","
-                     "\"amount\":\"%s\"}\n",
-                     esc_res, esc_amt);
-            EnterCriticalSection(&g_pipe_cs);
-            pipe_write_all(h, payload);
-            LeaveCriticalSection(&g_pipe_cs);
-            blog("player_chat -send: resource=%s amount=%s -> add_resource",
-                 res, neg);
-            {
+        if (parse_order_name(text, name, sizeof(name)) &&
+            lookup_order_spec(name, &spec)) {
+            if (enqueue_order(spec)) {
                 char ev_line[LINE_MAX];
                 snprintf(ev_line, sizeof(ev_line),
-                         "{\"event\":\"chat_sent\",\"resource\":\"%s\",\"amount\":%g}",
-                         esc_res, amt);
+                         "{\"event\":\"order_queued\",\"name\":\"%s\",\"cost\":%d}",
+                         spec->name, spec->cost);
                 sse_broadcast(ev_line);
+                blog("player_chat -send order: %s -> queued (cost=%d)",
+                     spec->name, spec->cost);
+            } else {
+                blog("player_chat -send order: Queue voll, verworfen: %s",
+                     name);
             }
         } else {
-            char name[64] = "";
-            const order_spec_t *spec = NULL;
-            if (parse_order_name(text, name, sizeof(name)) &&
-                lookup_order_spec(name, &spec)) {
-                if (enqueue_order(spec)) {
-                    char ev_line[LINE_MAX];
-                    snprintf(ev_line, sizeof(ev_line),
-                             "{\"event\":\"order_queued\",\"name\":\"%s\",\"cost\":%d}",
-                             spec->name, spec->cost);
-                    sse_broadcast(ev_line);
-                    blog("player_chat -send order: %s -> queued (cost=%d)",
-                         spec->name, spec->cost);
-                } else {
-                    blog("player_chat -send order: Queue voll, verworfen: %s",
-                         name);
-                }
-            } else {
-                blog("player_chat (kein -send): %.120s", text);
-                sse_broadcast(line);
-            }
+            blog("player_chat (kein -send): %.120s", text);
+            sse_broadcast(line);
         }
         return;
     }
