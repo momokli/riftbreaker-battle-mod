@@ -85,6 +85,10 @@ class LogTailer:
             if not os.path.isfile(path):
                 continue
             offset = self._cursor_for(path)
+            # Persistiere den Cursor SOFORT (auch bei leerem Read), damit
+            # from_start=False nicht bei jedem Poll ans aktuelle Dateiende
+            # springt und dadurch nie neue Zeilen liest (#713 Tailer-Bug).
+            self._cursor[path] = offset
             try:
                 with open(path, "rb") as fh:
                     fh.seek(offset)
