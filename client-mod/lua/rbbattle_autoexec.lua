@@ -9,7 +9,7 @@
 -- ============================================================================
 
 local RBB = {}
-RBB.version = "0.35.0"
+RBB.version = "0.35.1"
 RBB.ref = "RBB_BUILD_REF"
 RBB.build = "20260917-market-wave"
 
@@ -102,9 +102,11 @@ pcall(function()
         _G.RBB_MARKET_SPAWNED = true
         local pos = EntityService:GetPosition(mech)
         for i, b in ipairs(BUTTONS) do
-            -- Eine horizontale Reihe: 9 Buttons, Abstand 4, vor dem Mech.
-            local x = pos.x + 4 + (i - 1) * 4
-            local z = pos.z + 4
+            -- Eine horizontale Reihe (links->rechts): in Riftbreaker laeuft
+            -- links/rechts ueber die Z-Achse (X ist Tiefe/oben-unten auf dem
+            -- Screen). Deshalb X fix, Z variieren.
+            local x = pos.x + 4
+            local z = pos.z + 4 + (i - 1) * 4
             local ok, ent = SpawnButton(b.bp, x, pos.y, z, b.msg)
             Log("event=spawn_market i=%d msg=%s ok=%s ent=%s", i, b.msg, tostring(ok), tostring(ent))
         end
