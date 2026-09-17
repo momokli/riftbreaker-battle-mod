@@ -104,6 +104,13 @@ riftbreaker_sessions_script_src: "{{ playbook_dir }}/session-recorder/session_re
 # der Abbruch vor dedicated-server-image greift. Schwelle konfigurierbar.
 riftbreaker_disk_mount: "/"
 riftbreaker_disk_min_free_gb: 10
+# Echter Notausgang (Issue #586, Review-Blocker 1): wenn WEDER ansible_mounts
+# NOCH `df` eine Zahl liefern, faellt das Gate normalerweise hart ab (siehe
+# disk-preflight.yml) -- absichtlich, kein stiller "genug Platz"-Fallback.
+# Mit riftbreaker_disk_skip_unknown=true (z. B. `-e`) wird dieser Hart-Abbruch
+# statt eines Fails zu einer lauten Warnung + der Groessen-Check wird
+# ausgelassen (es gibt ja keine Zahl zum Vergleichen). Default false.
+riftbreaker_disk_skip_unknown: false
 
 # Deploy-Identitaet (Issue #483, US4): Fallback fuer die Compose-Vorlage, damit
 # sie auch ohne die Plays renderbar bleibt (check-render, Hermetik-Tests). Die
