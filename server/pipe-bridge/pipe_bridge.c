@@ -827,106 +827,30 @@ static void handle_health(SOCKET c)
 
 /* Liest einen Request (Header + Body) und beantwortet ihn. */
 
-/* POST /probe: fuehrt {"cmd":"probe"} auf der Pipe aus und sammelt alle
- * Antwortzeilen (event: probe + probe_dump*) als events-Array ein. */
+/* POST /probe: fuehrt {"cmd":"probe"} ueber die persistente Pipe aus und
+ * liefert die eine probe_result-Zeile (single-line, #653). */
 static void handle_probe(SOCKET c)
 {
-    char results[RESP_MAX];
-    size_t off = 0;
-    int nlines = 0;
+    char line[READ_BUF];
     int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
-    HANDLE h = pipe_connect(2500);
 
-    if (h == INVALID_HANDLE_VALUE) {
+    int rc = pipe_send_command("probe_result", "{\"cmd\":\"probe\"}\n",
+                               timeout_ms, line, sizeof(line));
+    if (rc == -1) {
         blog("POST /probe: Pipe nicht erreichbar -> pipe_unavailable");
         http_respond(c, 503, "Service Unavailable",
                      "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
         return;
     }
-
-    if (!pipe_write_all(h, "{\"cmd\":\"probe\"}\n")) {
-        CloseHandle(h);
+    if (rc != 0) {
         http_respond(c, 500, "Internal Server Error",
-                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
+                     "{\"ok\":false,\"reason\":\"timeout\"}");
         return;
     }
-
-    {
-        char buf[READ_BUF];
-        size_t n = 0;
-        DWORD deadline = GetTickCount() + (DWORD)timeout_ms;
-        int got_scan_done = 0;
-
-        off += (size_t)snprintf(results + off, sizeof(results) - off, "[");
-        for (;;) {
-            DWORD avail = 0;
-            if (!PeekNamedPipe(h, NULL, 0, NULL, &avail, NULL))
-                break;
-            if (avail > 0) {
-                char chunk[4096];
-                DWORD rd = 0;
-                DWORD want = avail < (DWORD)sizeof(chunk) ? avail : (DWORD)sizeof(chunk);
-                if (!ReadFile(h, chunk, want, &rd, NULL) || rd == 0)
-                    break;
-                if (n + rd > sizeof(buf) - 1)
-                    n = 0;
-                memcpy(buf + n, chunk, rd);
-                n += rd;
-                {
-                    size_t start = 0;
-                    size_t i;
-                    for (i = 0; i < n; i++) {
-                        if (buf[i] == '\n') {
-                            char *line = buf + start;
-                            size_t len;
-                            char ev[64] = "";
-                            buf[i] = '\0';
-                            len = strlen(line);
-                            while (len > 0 && line[len - 1] == '\r')
-                                line[--len] = '\0';
-                            if (json_get_string(line, "event", ev, sizeof(ev)) &&
-                                (strcmp(ev, "probe") == 0 ||
-                                 strcmp(ev, "probe_dump") == 0 ||
-                                 strcmp(ev, "scan_hit") == 0 ||
-                                 strcmp(ev, "scan_done") == 0 ||
-                                 strcmp(ev, "account") == 0 ||
-                                 strcmp(ev, "basket_entry") == 0 ||
-                                 strcmp(ev, "error") == 0)) {
-                                if (strcmp(ev, "scan_done") == 0)
-                                    got_scan_done = 1;
-                                if (off + len + 4 < sizeof(results)) {
-                                    off += (size_t)snprintf(
-                                        results + off, sizeof(results) - off,
-                                        "%s%s", nlines ? "," : "", line);
-                                    nlines++;
-                                }
-                            }
-                            start = i + 1;
-                        }
-                    }
-                    if (start > 0) {
-                        memmove(buf, buf + start, n - start);
-                        n -= start;
-                    }
-                }
-            } else if (got_scan_done) {
-                break;
-            }
-            if (deadline_passed(deadline))
-                break;
-            Sleep(10);
-        }
-        off += (size_t)snprintf(results + off, sizeof(results) - off, "]");
-    }
-    CloseHandle(h);
-
-    {
-        char resp[RESP_MAX];
-        snprintf(resp, sizeof(resp), "{\"ok\":true,\"events\":%s}", results);
-        log_response("/probe", resp);
-        http_respond(c, 200, "OK", resp);
-    }
+    log_response("/probe", line);
+    http_respond(c, 200, "OK", line);
 }
+
 
 /* POST /get_state: fuehrt {"cmd":"get_state"} ueber die persistente Pipe
  * aus und liefert die eine get_state_result-Zeile (reiner Snapshot). */
