@@ -143,6 +143,12 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         working-directory: deploy/session-recorder
         run: python3 -m unittest test_session_recorder -v
+      # Send-Tailer (#713): parst -send waveN aus Mod-Chat-Log-Zeilen und POSTet
+      # an /order. Hermetisch (Fake-Poster), kein Netz/Spiel. stdlib-only.
+      - name: Unit-Test Send-Tailer (Issue #713)
+        if: needs.changes.outputs.test == 'true'
+        working-directory: deploy/send-tailer
+        run: python3 -m unittest test_send_tailer -v
       - name: Unit-Test Core-IO-Probe RBBATTLE-Tag-Erkennung (Issue #696)
         if: needs.changes.outputs.test == 'true'
         working-directory: tests/core-io

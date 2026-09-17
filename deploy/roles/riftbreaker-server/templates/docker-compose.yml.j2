@@ -83,6 +83,33 @@ services:
       - --out-dir
       - /data/sessions
 
+  # Send-Tailer (Issue #713): tailt exor_logs.txt (ro) und POSTet Send-Orders
+  # (-send waveN) an die Bridge (POST /order). Kein Port, nur ins Compose-Netz.
+  {{ riftbreaker_send_tailer_container }}:
+    image: "{{ riftbreaker_send_tailer_image }}"
+    container_name: {{ riftbreaker_send_tailer_container }}
+    restart: unless-stopped
+    depends_on:
+      - {{ riftbreaker_server_container }}
+    labels:
+      RBB_ENV: "{{ rift_env }}"
+      RBB_REF: "{{ rift_deploy_ref }}"
+    environment:
+      RBB_ENV: "{{ rift_env }}"
+      RBB_REF: "{{ rift_deploy_ref }}"
+    volumes:
+      # Quelle: derselbe Wine-Prefix wie der Server (nur lesend).
+      - "{{ riftbreaker_wine_volume }}:/data/.wine:ro"
+      - "{{ riftbreaker_send_tailer_script }}:/app/send_tailer.py:ro"
+    command:
+      - python3
+      - -u
+      - /app/send_tailer.py
+      - --wine-prefix
+      - /data/.wine
+      - --bridge-url
+      - "{{ riftbreaker_send_tailer_bridge_url }}"
+
 volumes:
   {{ riftbreaker_wine_volume }}:
   {{ riftbreaker_saves_volume }}:

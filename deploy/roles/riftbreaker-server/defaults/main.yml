@@ -95,6 +95,18 @@ riftbreaker_sessions_dir: "/srv/rift-{{ rift_env }}/sessions"
 riftbreaker_sessions_script: "{{ riftbreaker_deploy_dir }}/session_recorder.py"
 riftbreaker_sessions_script_src: "{{ playbook_dir }}/session-recorder/session_recorder.py"
 
+# --- Send-Tailer (Issue #713) ------------------------------------------------
+# Env-agnostischer Sidecar (analog session-recorder): tailt exor_logs.txt und
+# POSTet Mod-Chat-Send-Orders (-send waveN) an die Bridge (POST /order).
+# Kein Netz nach aussen, nur zur Bridge im selben Compose-Netz.
+riftbreaker_send_tailer_container: riftbreaker-send-tailer
+riftbreaker_send_tailer_image: "python:3.12-slim"
+# Bridge-/order-Endpoint im Compose-Netz (Server-Container + Container-Port).
+riftbreaker_send_tailer_bridge_url: "http://{{ riftbreaker_server_container }}:{{ riftbreaker_bridge_container_port }}/order"
+# Script auf dem Host (bind-mount ro in den Sidecar).
+riftbreaker_send_tailer_script: "{{ riftbreaker_deploy_dir }}/send_tailer.py"
+riftbreaker_send_tailer_script_src: "{{ playbook_dir }}/send-tailer/send_tailer.py"
+
 # --- Sessions ---------------------------------------------------------------
 
 # --- Disk-Space-Gate (Issue #310) --------------------------------------------
