@@ -111,6 +111,12 @@ CLI: `minidump_meta.py [--json] <dmp>` -> JSON. Genutzte Streams:
 fehlender Stream, RVA ausserhalb) -> `{"_ok": false, "reason": ...}` und
 **rc=0** (kein Traceback) — der Collector stirbt nie an einem kaputten Dump.
 
+Aus dem ExceptionStream werden ausserdem `access_type`
+(`ExceptionInformation[0]`: 0=read, 1=write, 8=execute) und `faulting_address`
+(`ExceptionInformation[1]`, die fehlerhafte Datenadresse, Hex-String ohne
+`0x`) gelesen; fehlt oder ist `ExceptionInformation` zu kurz, bleiben beide
+`null` (nie ein Fehler).
+
 Grenzen (bewusst, nicht geraten):
 
 - **Pointer-Breite 8 Byte** (64-bit Wine): ein 32-bit-Dump liefert falsche

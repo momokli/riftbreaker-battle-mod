@@ -21,6 +21,8 @@
 #   RB_CRASH_LLVM_SYMBOLIZER Tool-Binary
 #   RB_CRASH_SYMBOLIZE_TOOL  Python-Kern
 #   RB_CRASH_SYMBOLIZE_TIMEOUT  Zeitbudget in Sekunden (Default 60)
+#   RB_CRASH_STACK_SCAN      1 = vollen Stack mit-symbolisieren (Default 1),
+#                            0 = nur Fault-/Kontext-Frames
 #   RB_CRASH_PYTHON          Python-Interpreter (Default python3)
 #
 # Vertrag: der Aufruf ist GRACEFUL — jeder Skip/Fehler endet mit rc=0 und
@@ -81,6 +83,11 @@ PYTHON="${RB_CRASH_PYTHON:-python3}"
 # Optional: nur wenn gesetzt UND die Datei existiert, sonst nur Game-DLL.
 RBBRIDGE_DLL="${RB_CRASH_RBBRIDGE_DLL:-}"
 RBBRIDGE_MODULE="${RB_CRASH_RBBRIDGE_MODULE:-rbbridge.dll}"
+# Stack-Scan (Issue #639): den vollen Stack des faultenden Threads mit-
+# symbolisieren (Fault + RIP + gescannte Return-Adressen). Der Python-Kern
+# filtert die Kandidaten .text-basiert, sobald die DLL eine echte PE-Section-
+# Tabelle hat; Datenwerte (vftable/Konstanten) bleiben dann draussen.
+STACK_SCAN="${RB_CRASH_STACK_SCAN:-1}"
 
 [ -n "$OUT" ] || OUT="${BUNDLE}/symbolized.txt"
 TMP_OUT="${OUT}.tmp.$$"
@@ -119,16 +126,22 @@ if [ -n "$RBBRIDGE_DLL" ] && [ -f "$RBBRIDGE_DLL" ]; then
   EXTRA=(--dll2 "$RBBRIDGE_DLL" --module2 "$RBBRIDGE_MODULE")
 fi
 
+# Stack-Scan-Flag (Issue #639): 0 schaltet auf das alte Verhalten zurück.
+STACK_FLAGS=()
+[ "$STACK_SCAN" = "1" ] && STACK_FLAGS=(--stack-scan)
+
 rm -f "$TMP_OUT"
 RC=0
 if command -v timeout >/dev/null 2>&1; then
   timeout "$TIMEOUT" "$PYTHON" "$TOOL" \
     --dmp "$DMP" --dll "$DLL" --symbolizer "$LLVM_SYMBOLIZER" \
-    --uuid "$(basename "$DMP" .dmp)" --out "$TMP_OUT" ${EXTRA[@]+"${EXTRA[@]}"} || RC=$?
+    --uuid "$(basename "$DMP" .dmp)" --out "$TMP_OUT" \
+    ${STACK_FLAGS[@]+"${STACK_FLAGS[@]}"} ${EXTRA[@]+"${EXTRA[@]}"} || RC=$?
 else
   "$PYTHON" "$TOOL" \
     --dmp "$DMP" --dll "$DLL" --symbolizer "$LLVM_SYMBOLIZER" \
-    --uuid "$(basename "$DMP" .dmp)" --out "$TMP_OUT" ${EXTRA[@]+"${EXTRA[@]}"} || RC=$?
+    --uuid "$(basename "$DMP" .dmp)" --out "$TMP_OUT" \
+    ${STACK_FLAGS[@]+"${STACK_FLAGS[@]}"} ${EXTRA[@]+"${EXTRA[@]}"} || RC=$?
 fi
 
 case "$RC" in

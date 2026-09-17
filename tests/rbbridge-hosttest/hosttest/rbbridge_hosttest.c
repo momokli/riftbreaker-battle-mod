@@ -673,6 +673,99 @@ int main(void)
           "mission_flow_mode_ok: \"default \" -> abgelehnt (kein Trim)");
 
     /* -------------------------------------------------------------- */
+    /* #549: Chat-Payload-Builder (json_escape_into + player_chat-Zeile) */
+    /* -------------------------------------------------------------- */
+    /* Rein, ohne Spielprozess: prueft Wire-Event-Form, Escaping von
+     * Quote/Backslash/Steuerzeichen und die graceful-Faelle (leerer Text /
+     * zu kleiner Puffer -> 0 = NICHTS senden). */
+    {
+        char out[600];
+        size_t n;
+
+        n = chat_build_player_chat("hello", out, sizeof(out));
+        check(n > 0 && strcmp(out,
+              "{\"event\":\"player_chat\",\"text\":\"hello\"}") == 0,
+              "chat_build_player_chat: einfacher Text -> player_chat-Zeile");
+
+        n = chat_build_player_chat("a\"b\\c", out, sizeof(out));
+        check(n > 0 && strcmp(out,
+              "{\"event\":\"player_chat\",\"text\":\"a\\\"b\\\\c\"}") == 0,
+              "chat_build_player_chat: Quote/Backslash escaped");
+
+        /* Tab (0x09) ist ein Steuerzeichen < 0x20 -> \u0009, NICHT roh. */
+        n = chat_build_player_chat("a\tb", out, sizeof(out));
+        check(n > 0 && strstr(out, "\\u0009") != NULL &&
+                  strchr(out, '\t') == NULL,
+              "chat_build_player_chat: Tab -> \\u0009 (kein Roh-Steuerzeichen)");
+
+        /* Leerer Text -> 0 (kein leeres Event senden). */
+        check(chat_build_player_chat("", out, sizeof(out)) == 0,
+              "chat_build_player_chat: leerer Text -> 0 (nichts senden)");
+        check(chat_build_player_chat(NULL, out, sizeof(out)) == 0,
+              "chat_build_player_chat: NULL -> 0 (kein Crash)");
+        /* Puffer zu klein -> 0 (kein abgeschnittenes JSON). */
+        check(chat_build_player_chat("hello", out, 8) == 0,
+              "chat_build_player_chat: Puffer zu klein -> 0");
+
+        /* json_escape_into direkt: < 0x20 -> \uXXXX. */
+        {
+            char esc[32];
+            json_escape_into("x\x01y", esc, sizeof(esc));
+            check(strcmp(esc, "x\\u0001y") == 0,
+                  "json_escape_into: 0x01 -> \\u0001");
+        }
+    }
+
+    /* -------------------------------------------------------------- */
+    /* #549: Chat-Ring-Queue (chat_queue_*) - pure Logik               */
+    /* -------------------------------------------------------------- */
+    {
+        chat_queue_t q;
+        char out[256];
+        int i;
+
+        chat_queue_init(&q);
+        check(chat_queue_pop(&q, out, sizeof(out)) == 0,
+              "chat_queue: leere Queue -> pop 0");
+
+        check(chat_queue_push(&q, "one") == 1, "chat_queue: push 'one'");
+        check(chat_queue_push(&q, "two") == 1, "chat_queue: push 'two'");
+        check(chat_queue_pop(&q, out, sizeof(out)) == 1 &&
+                  strcmp(out, "one") == 0,
+              "chat_queue: FIFO -> 'one' zuerst");
+        check(chat_queue_pop(&q, out, sizeof(out)) == 1 &&
+                  strcmp(out, "two") == 0,
+              "chat_queue: FIFO -> 'two' danach");
+        check(chat_queue_pop(&q, out, sizeof(out)) == 0,
+              "chat_queue: nach Drain wieder leer");
+
+        /* Ueberlauf: 8 Plaetze, aelteste Nachricht wird verworfen. */
+        chat_queue_init(&q);
+        for (i = 0; i < CHAT_QUEUE_CAP; i++) {
+            char msg[16];
+            snprintf(msg, sizeof(msg), "m%d", i);
+            chat_queue_push(&q, msg);
+        }
+        check(chat_queue_push(&q, "overflow") == 1,
+              "chat_queue: push bei voll -> aelteste verwerfen");
+        check(chat_queue_pop(&q, out, sizeof(out)) == 1 &&
+                  strcmp(out, "m1") == 0,
+              "chat_queue: nach Ueberlauf 'm0' weg ('m1' zuerst)");
+        {
+            int total = 1; /* 'm1' bereits gepopt */
+            while (chat_queue_pop(&q, out, sizeof(out)))
+                total++;
+            check(total == CHAT_QUEUE_CAP,
+                  "chat_queue: nach Ueberlauf genau CAP Elemente erhalten");
+        }
+
+        /* NULL/leer -> kein Insert, kein Crash. */
+        chat_queue_init(&q);
+        check(chat_queue_push(&q, NULL) == 0, "chat_queue: push NULL -> 0");
+        check(chat_queue_push(&q, "") == 0, "chat_queue: push leer -> 0");
+    }
+
+    /* -------------------------------------------------------------- */
     /* #386: Database-Payload-Resolver + Builder (AOB, kein Lua)        */
     /* -------------------------------------------------------------- */
     /* Frisches Image: das Haupt-`img` ist an dieser Stelle nicht mehr
@@ -923,13 +1016,45 @@ int main(void)
         check(rbbridge_log_is_ready(partial, strlen(partial)) == 0,
               "readiness: abgeschnittener Marker -> NICHT bereit");
 
-        /* Substring-Helper: Ende exakt an der Puffergrenze. */
+        /* #640: in-process Map-Reload - Teardown-Marker NACH Ready-Marker
+         * -> "letzter Marker gewinnt": NICHT bereit (Gate greift wieder). */
+        const char *restart_log =
+            "[12:40:33.501] [info] MapGenerator.cpp:828 - InstantiateMap took: 4846 ms\n"
+            "[12:40:40.000] [info] ControllerState.cpp:514 - "
+            "[ControllerState] deactivating: ServerGameplayState\n";
+        check(rbbridge_log_is_ready(restart_log, strlen(restart_log)) == 0,
+              "readiness: Teardown NACH Ready -> NICHT bereit");
+
+        /* Reload abgeschlossen: neuer Ready-Marker NACH dem Teardown -> bereit. */
+        const char *reloaded_log =
+            "[12:40:33.501] [info] MapGenerator.cpp:828 - InstantiateMap took: 4846 ms\n"
+            "[12:40:40.000] [info] ControllerState.cpp:514 - "
+            "[ControllerState] deactivating: ServerGameplayState\n"
+            "[12:40:52.000] [info] MapGenerator.cpp:828 - InstantiateMap took: 3400 ms\n";
+        check(rbbridge_log_is_ready(reloaded_log, strlen(reloaded_log)) == 1,
+              "readiness: Ready NACH Teardown -> bereit");
+
+        /* Nur Teardown, kein Ready-Marker -> konservativ NICHT bereit. */
+        const char *teardown_only =
+            "[12:40:40.000] [info] ControllerState.cpp:514 - "
+            "[ControllerState] deactivating: ServerGameplayState\n";
+        check(rbbridge_log_is_ready(teardown_only, strlen(teardown_only)) == 0,
+              "readiness: nur Teardown -> NICHT bereit");
+
+        /* rfind: letzte Fundstelle (fuer "letzter Marker gewinnt", #640). */
         const char *tail = "xx Graph generated";
-        check(rbbridge_buf_contains(tail, strlen(tail),
-                                    "Graph generated") == 1,
-              "buf_contains: Treffer bis exakt Pufferende");
-        check(rbbridge_buf_contains(tail, 9, "Graph generated") == 0,
-              "buf_contains: Treffer hinter Pufferende ignoriert");
+        check(rbbridge_buf_rfind(tail, strlen(tail), "Graph generated") == 3,
+              "buf_rfind: Treffer bis exakt Pufferende");
+        check(rbbridge_buf_rfind(tail, 9, "Graph generated") == (size_t)-1,
+              "buf_rfind: Treffer hinter Pufferende ignoriert");
+
+        const char *multi = "aa bb aa";
+        check(rbbridge_buf_rfind(multi, strlen(multi), "aa") == 6,
+              "buf_rfind: letzte Fundstelle");
+        check(rbbridge_buf_rfind(multi, strlen(multi), "cc") == (size_t)-1,
+              "buf_rfind: nicht gefunden -> (size_t)-1");
+        check(rbbridge_buf_rfind("", 0, "aa") == (size_t)-1,
+              "buf_rfind: leerer Puffer -> (size_t)-1");
     }
 
     /* ---- #516 nativer Round-Reset: reine Decoder/Finder ---- */
