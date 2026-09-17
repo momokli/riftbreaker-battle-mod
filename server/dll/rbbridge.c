@@ -1680,38 +1680,67 @@ static const char *const RBBRIDGE_READY_MARKERS[] = {
 #define RBBRIDGE_READY_MARKER_COUNT \
     (sizeof(RBBRIDGE_READY_MARKERS) / sizeof(RBBRIDGE_READY_MARKERS[0]))
 
-/* Substring-Suche in einem NICHT-NUL-terminierten Puffer (portabel; memmem
- * gibt es nicht ueberall). Rueckgabe 1 = gefunden. */
-static int rbbridge_buf_contains(const char *hay, size_t hay_len,
+/* Teardown-Marker (Issue #640): erscheinen beim in-process Map-Reload
+ * (restart_map / Round-Reset #516), BEVOR die Welt neu aufgebaut wird. Der
+ * Log wird appendiert - nach einem Reload steht der alte Ready-Marker VOR dem
+ * neuen Teardown-Marker. "Letzter Marker gewinnt" (rbbridge_log_is_ready)
+ * setzt die Readiness damit wieder zurueck. */
+static const char *const RBBRIDGE_TEARDOWN_MARKERS[] = {
+    "deactivating: ServerGameplayState",
+};
+#define RBBRIDGE_TEARDOWN_MARKER_COUNT \
+    (sizeof(RBBRIDGE_TEARDOWN_MARKERS) / sizeof(RBBRIDGE_TEARDOWN_MARKERS[0]))
+
+/* Letzte Fundstelle einer Substring-Suche (fuer "letzter Marker gewinnt",
+ * Issue #640). Rueckgabe: Index des letzten Treffers oder (size_t)-1 = nicht
+ * gefunden. */
+static size_t rbbridge_buf_rfind(const char *hay, size_t hay_len,
                                  const char *needle)
 {
     size_t nlen;
     if (!hay || !needle)
-        return 0;
+        return (size_t)-1;
     nlen = strlen(needle);
     if (nlen == 0)
-        return 1;
+        return hay_len;
     if (hay_len < nlen)
-        return 0;
-    for (size_t i = 0; i + nlen <= hay_len; i++) {
-        if (hay[i] == needle[0] && memcmp(hay + i, needle, nlen) == 0)
-            return 1;
+        return (size_t)-1;
+    for (size_t i = hay_len - nlen + 1; i > 0; i--) {
+        size_t j = i - 1;
+        if (hay[j] == needle[0] && memcmp(hay + j, needle, nlen) == 0)
+            return j;
     }
-    return 0;
+    return (size_t)-1;
 }
 
 /* Readiness-Entscheidung AUS dem Log-Inhalt (rein, host-testbar).
- * Rueckgabe 1 = Welt fertig, 0 = noch nicht bereit. Leerer/fehlender
- * Inhalt -> 0 (konservativ: NICHT aufrufen). */
+ * "Letzter Marker gewinnt" (Issue #640): nach einem in-process Map-Reload
+ * steht der alte Ready-Marker VOR dem neuen Teardown-Marker - der LETZTE
+ * Marker entscheidet. Rueckgabe 1 = Welt fertig, 0 = nicht bereit.
+ * Leerer/fehlender Inhalt -> 0 (konservativ: NICHT aufrufen). */
 static int rbbridge_log_is_ready(const char *buf, size_t len)
 {
+    size_t last_ready = (size_t)-1;
+    size_t last_teardown = (size_t)-1;
+    size_t p;
     if (!buf || len == 0)
         return 0;
     for (size_t i = 0; i < RBBRIDGE_READY_MARKER_COUNT; i++) {
-        if (rbbridge_buf_contains(buf, len, RBBRIDGE_READY_MARKERS[i]))
-            return 1;
+        p = rbbridge_buf_rfind(buf, len, RBBRIDGE_READY_MARKERS[i]);
+        if (p != (size_t)-1 && (last_ready == (size_t)-1 || p > last_ready))
+            last_ready = p;
     }
-    return 0;
+    for (size_t i = 0; i < RBBRIDGE_TEARDOWN_MARKER_COUNT; i++) {
+        p = rbbridge_buf_rfind(buf, len, RBBRIDGE_TEARDOWN_MARKERS[i]);
+        if (p != (size_t)-1 &&
+            (last_teardown == (size_t)-1 || p > last_teardown))
+            last_teardown = p;
+    }
+    if (last_ready == (size_t)-1)
+        return 0;
+    if (last_teardown != (size_t)-1 && last_teardown > last_ready)
+        return 0;
+    return 1;
 }
 
 /* x64-Aufrufkonvention: this=RCX, cmd=RDX - __fastcall ist auf x64 der
@@ -2712,9 +2741,9 @@ static int connplayers_dealloc_target(const unsigned char *alloc,
 /* `world != NULL`-Test: der Pointer ist frueh non-NULL, die ECS-/       */
 /* Team-Strukturen aber noch im Aufbau (Crash #436/#479).               */
 /*                                                                    */
-/* Einmal erkannt -> gelatcht. Die Welt wird im Betrieb nicht wieder     */
-/* "unfertig"; ein Map-Neustart geht ohnehin mit Prozess-Neustart +      */
-/* frischem exor_logs.txt einher.                                       */
+/* Kein Latch (#640): ein in-process Map-Reload (restart_map /           */
+/* Round-Reset #516) schreibt einen Teardown-Marker NACH dem alten       */
+/* Ready-Marker; "letzter Marker gewinnt" setzt die Readiness zurueck.   */
 /* ------------------------------------------------------------------ */
 
 /* Log-Suffixe relativ zu %USERPROFILE% (Wine: C:\users\<user>).
@@ -2723,8 +2752,6 @@ static const char *const RBBRIDGE_EXOR_LOG_CANDIDATES[] = {
     "\\Documents\\The Riftbreaker\\exor_logs.txt",
     "\\AppData\\LocalLow\\The Riftbreaker - Dedicated Server\\exor_logs.txt",
 };
-
-static int g_world_ready = 0; /* Latch: 1 = Welt fertig (einmalig gesetzt) */
 
 /* Eine Logdatei oeffnen, (bis Cap) einlesen und auf Ready-Marker pruefen.
  * Rueckgabe 1 = Marker gefunden. Jeder Fehler -> 0 (konservativ). */
@@ -2759,20 +2786,19 @@ static int readiness_scan_file(const char *path)
 }
 
 /* Welt fertig? Prueft zuerst den expliziten Override RBBRIDGE_EXOR_LOG,
- * dann die Standardpfade unter %USERPROFILE%. Rueckgabe 1 = bereit. */
+ * dann die Standardpfade unter %USERPROFILE%. Rueckgabe 1 = bereit.
+ * Scannt bei JEDEM Aufruf neu (kein Latch, Issue #640): so greift das Gate
+ * nach einem in-process Map-Reload wieder, sobald ein Teardown-Marker im
+ * Log steht. Die Datei ist klein (wenige 10 KB, Cap 4 MB) und wird nur vom
+ * Pipe-Thread gelesen. */
 static int world_is_ready(void)
 {
     char env[1024];
 
-    if (g_world_ready)
-        return 1;
-
     if (GetEnvironmentVariableA("RBBRIDGE_EXOR_LOG", env, sizeof(env)) > 0 &&
         env[0]) {
-        if (readiness_scan_file(env)) {
-            g_world_ready = 1;
+        if (readiness_scan_file(env))
             return 1;
-        }
     }
 
     if (GetEnvironmentVariableA("USERPROFILE", env, sizeof(env)) > 0 &&
@@ -2784,10 +2810,8 @@ static int world_is_ready(void)
              i++) {
             snprintf(path, sizeof(path), "%s%s", env,
                      RBBRIDGE_EXOR_LOG_CANDIDATES[i]);
-            if (readiness_scan_file(path)) {
-                g_world_ready = 1;
+            if (readiness_scan_file(path))
                 return 1;
-            }
         }
     }
     return 0;
