@@ -463,6 +463,27 @@ static const char *resource_internal_name(const char *display)
     return "carbonium";
 }
 
+/* amount (Display-Einheiten) -> int64-Fixed-Point x10^6. Identisch zur
+ * raw_dbl-Rechnung in dispatch_add_resource (raw = N * 1e6). Reine Funktion
+ * ohne Spielprozess -> host-testbar (tests/rbbridge-hosttest, analog
+ * resource_internal_name). */
+static int64_t amount_to_raw(double amount)
+{
+    return (int64_t)(amount * 1000000.0);
+}
+
+/* Prueft, ob ein Carbonium-Abzug von cost_raw (int64-Fixed-Point) aus
+ * balance_raw (uint64-Fixed-Point) leistbar ist. Defensiv: cost_raw <= 0
+ * -> leistbar (kein Abzug). Sonst reicht der Saldo, sobald
+ * balance_raw >= cost_raw. Reine Funktion -> host-testbar
+ * (tests/rbbridge-hosttest, analog basket_lookup_value). */
+static int try_spend_afford(uint64_t balance_raw, int64_t cost_raw)
+{
+    if (cost_raw <= 0)
+        return 1;
+    return balance_raw >= (uint64_t)cost_raw ? 1 : 0;
+}
+
 /* Prueft den `mode`-Parameter von activate_mission_flow. Das Spiel erwartet
  * als 3. Argument IMMER "default" (genau das uebergibt die spieleigene Lua);
  * ein anderer Wert (z. B. "hard") hat auf dem Dev-Server die DLL-Pipe
@@ -4952,6 +4973,134 @@ static void dispatch_add_resource(HANDLE hPipe, const char *resource_str,
               ret ? "true" : "false");
 }
 
+/*
+ * try_spend (transaktionales Carbonium-Abziehen): zieht Carbonium NUR ab,
+ * wenn das Guthaben reicht (kein Unterlauf). amount ist ein String in
+ * Display-Einheiten (wie bei add_resource), NUR Carbonium. Ablauf spiegelt
+ * dispatch_add_resource (resolve_module/readiness_block/scan_qword_instance/
+ * safe_read_u64/resource_internal_name/UtfString-SSO/AddResourceAmount),
+ * liest aber zuvor den Account-Basket aus (wie dispatch_get_state) und
+ * prueft die Leistbarkeit ueber die reinen Helfer amount_to_raw/
+ * try_spend_afford (host-getestet).
+ */
+static void dispatch_try_spend(HANDLE hPipe, const char *amount_str)
+{
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    const char *via = NULL;
+    const unsigned char *execfn = NULL;
+
+    if (!resolve_module(&base, &size, &via, &execfn)) {
+        send_line(hPipe, "{\"event\":\"try_spend_result\",\"ok\":false,"
+                         "\"reason\":\"no_module\"}");
+        return;
+    }
+
+    float amount = 0.0f;
+    if (sscanf(amount_str, "%f", &amount) != 1 || amount <= 0.0f) {
+        send_line(hPipe, "{\"event\":\"try_spend_result\",\"ok\":false,"
+                         "\"reason\":\"bad_amount\"}");
+        return;
+    }
+
+    /* Readiness-Gate erst nach der Argument-Validierung, aber vor jedem
+     * Game-Zugriff (vtable-Scan/Call), wie in dispatch_add_resource (#479). */
+    if (readiness_block(hPipe, "try_spend_result"))
+        return;
+
+    /* PlayerService-Instanz per vftable-Scan (RVA 0x2e8e910, wie get_state).
+     * Crash-sicher via scan_qword_instance (ReadProcessMemory, #655). */
+    const unsigned char *vftable = base + 0x2e8e910;
+    unsigned char *ps = scan_qword_instance(
+        (uint64_t)(uintptr_t)vftable, "try_spend");
+
+    if (!ps) {
+        send_line(hPipe, "{\"event\":\"try_spend_result\",\"ok\":false,"
+                         "\"reason\":\"no_playerservice\"}");
+        return;
+    }
+
+    uint64_t world = 0;
+    safe_read_u64(ps + 8, &world);
+    if (!world) {
+        send_line(hPipe, "{\"event\":\"try_spend_result\",\"ok\":false,"
+                         "\"reason\":\"no_world\"}");
+        return;
+    }
+
+    void *(*gpa)(void *, unsigned int) =
+        (void *(*)(void *, unsigned int))(uintptr_t)(base + 0xC60050);
+    void *account = gpa((void *)(uintptr_t)world, 0);
+    if (!account) {
+        send_line(hPipe, "{\"event\":\"try_spend_result\",\"ok\":false,"
+                         "\"reason\":\"no_account\"}");
+        return;
+    }
+
+    uint64_t arr = 0, count = 0;
+    safe_read_u64((unsigned char *)account + 8, &arr);
+    safe_read_u64((unsigned char *)account + 0x10, &count);
+
+    uint64_t balance = 0;
+    basket_lookup_value((const unsigned char *)(uintptr_t)arr, count,
+                        RBBRIDGE_HASH_CARBONIUM, &balance);
+
+    int64_t cost = amount_to_raw((double)amount);
+
+    if (!try_spend_afford(balance, cost)) {
+        send_line(hPipe,
+                  "{\"event\":\"try_spend_result\",\"ok\":false,"
+                  "\"reason\":\"insufficient\",\"amount\":\"%s\","
+                  "\"cost\":%lld,\"balance\":%llu}",
+                  amount_str, (long long)cost,
+                  (unsigned long long)balance);
+        return;
+    }
+
+    /* scale-Globale (RVA 0x4794210) lesen; 0 -> Fallback 1e6 (wie in
+     * dispatch_add_resource). Abzug = negativer Betrag an AddResourceAmount. */
+    uint64_t scale64 = 0;
+    safe_read_u64(base + 0x4794210, &scale64);
+    uint32_t scale = (uint32_t)scale64;
+    if (scale == 0)
+        scale = 1000000u;
+
+    float amount_float = -((float)cost / (float)scale);
+
+    /* Interner Ressourcenname (nur carbonium). UtfString als SSO-Instanz
+     * auf dem Stack (B4, identisch dispatch_add_resource): 40 Byte,
+     * [0]=unused, [8]=inline-buffer(16B), [0x18]=size, [0x20]=capacity. */
+    const char *internal = resource_internal_name("carbonium");
+    size_t nlen = strlen(internal);
+    unsigned char name[40];
+    memset(name, 0, sizeof(name));
+    memcpy(name + 8, internal, nlen + 1); /* + NUL */
+    {
+        uint64_t sz = nlen, cap = 0xf; /* cap <= 15 -> SSO, data = name + 8 */
+        memcpy(name + 0x18, &sz, sizeof(sz));
+        memcpy(name + 0x20, &cap, sizeof(cap));
+    }
+
+    /* bool PlayerService::AddResourceAmount(this, playerId, name, amount,
+     * flag) */
+    typedef unsigned char (__fastcall *add_resource_fn)(void *, unsigned int,
+                                                        const void *, float,
+                                                        unsigned char);
+    add_resource_fn fn = (add_resource_fn)(uintptr_t)(base + 0xF1E3D0);
+
+    unsigned char ret = fn(ps, 0, (const void *)name, amount_float, 1);
+
+    dbg("try_spend: amount='%s' cost=%lld balance=%llu scale=%u "
+        "amount_float=%.6f ret=%u",
+        amount_str, (long long)cost, (unsigned long long)balance,
+        (unsigned)scale, (double)amount_float, (unsigned)ret);
+
+    send_line(hPipe,
+              "{\"event\":\"try_spend_result\",\"ok\":true,"
+              "\"amount\":\"%s\",\"cost\":%lld,\"balance\":%llu}",
+              amount_str, (long long)cost, (unsigned long long)balance);
+}
+
 static void handle_line(HANDLE hPipe, const char *line)
 {
     char cmd[64] = "";
@@ -4997,6 +5146,16 @@ static void handle_line(HANDLE hPipe, const char *line)
         /* resource ist optional (Default carbonium, Backward-Compat). */
         json_get_string(line, "resource", resource, sizeof(resource));
         dispatch_add_resource(hPipe, resource, amount);
+        return;
+    }
+
+    if (strcmp(cmd, "try_spend") == 0) {
+        char amount[64] = "";
+        if (!json_get_string(line, "amount", amount, sizeof(amount))) {
+            send_line(hPipe, "{\"event\":\"try_spend_result\",\"ok\":false,\"reason\":\"bad_amount\"}");
+            return;
+        }
+        dispatch_try_spend(hPipe, amount);
         return;
     }
 
