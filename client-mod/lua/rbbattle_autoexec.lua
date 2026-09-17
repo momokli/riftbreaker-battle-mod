@@ -48,6 +48,58 @@ pcall(function()
     end)
 end)
 
+-- ---------------------------------------------------------------------------
+-- PoC (#629): EIN Button -> "hello world" per In-Game-Chat senden (Client-Mod).
+--
+-- Vanilla-Pfad (lua/player/mech_action.lua): Emotes senden Chat via
+--   QueueEvent("PlayerChatRequest", mechEntity, text, 4)
+-- Der Mod feuert denselben Request. Spieler-Entity (= Mech) kommt aus
+--   PlayerService:GetPlayerControlledEnt(PlayerService:GetLeadingPlayer()).
+-- Trigger: Konsolen-Kommando `rb_hello` (Default "hello world") bzw. Hotkey
+--   F7 (`bind f7 "rb_hello"`). Kein GUI-Button in Schritt 1 (shipped Lua hat
+--   keine saubere Button-API -> eigener Follow-up-Spike).
+-- ---------------------------------------------------------------------------
+local function RBSendChat(text)
+    if type(text) ~= "string" or text == "" then
+        text = "hello world"
+    end
+    local player = PlayerService:GetLeadingPlayer()
+    local mech = PlayerService:GetPlayerControlledEnt(player)
+    if mech == nil then
+        WriteConsole("rb_chat: keine Mech-Entity (player=" .. tostring(player) .. ")")
+        return false
+    end
+    local ok, err = pcall(QueueEvent, "PlayerChatRequest", mech, text, 4)
+    if not ok then
+        Log("event=chat_send status=error error=%s", tostring(err))
+        WriteConsole("rb_chat: QueueEvent fehlgeschlagen")
+        return false
+    end
+    Log("event=chat_send status=ok text=%s", text)
+    WriteConsole("rb_chat: gesendet: " .. text)
+    return true
+end
+
+-- PoC-Kommando `rb_hello` + generisches `rb_chat <text>`.
+pcall(function()
+    ConsoleService:RegisterCommand("rb_hello", function(args)
+        RBSendChat("hello world")
+    end)
+    ConsoleService:RegisterCommand("rb_chat", function(args)
+        local text = nil
+        if type(args) == "table" and #args >= 1 then
+            text = table.concat(args, " ")
+        end
+        RBSendChat(text)
+    end)
+end)
+
+-- PoC-"Button": F7 auf rb_hello binden (erfordert enable_developer_console 1;
+-- pcall, damit der Mod auch ohne funktionierenden bind laedt).
+pcall(function()
+    ConsoleService:ExecuteCommand('bind f7 "rb_hello"')
+end)
+
 -- Lade-Marker fuer Boot-Test C1 + Deploy-Runtime-Check (kein Business-Logik,
 -- nur das Lebenszeichen, das die Pipeline erwartet).
 --
