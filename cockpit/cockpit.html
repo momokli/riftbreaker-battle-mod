@@ -934,7 +934,16 @@
                             resource: resource,
                             amount: String(-n),
                         });
-                        $("out").textContent = r && r.ok
+                        var ok = r && r.ok;
+                        if (ok && typeof sendTracker !== "undefined" && sendTracker.add) {
+                            sendTracker.add({
+                                timestamp: Date.now(),
+                                resource: resource,
+                                amount: -n,
+                            });
+                        }
+                        await refresh();
+                        $("out").textContent = ok
                             ? "sent " + n + " " + resource
                             : JSON.stringify(r);
                     } catch (e) {
@@ -1122,7 +1131,7 @@
                 };
 
                 refresh();
-                setInterval(refresh, 3000);
+                setInterval(refresh, 1000);
 
                 // --- send tracker (testable) ---
                 // Persistente Send-Liste (#527, 1.0-Send-Loop #517).
