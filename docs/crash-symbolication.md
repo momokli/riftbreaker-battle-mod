@@ -89,6 +89,7 @@ Symbolizer-Skript ganz, verhält sich der Collector wie vor #480.
 | `RB_CRASH_LLVM_SYMBOLIZER` | `/usr/lib/llvm-18/bin/llvm-symbolizer` |
 | `RB_CRASH_SYMBOLIZE_TOOL` | `/usr/local/lib/rbmods/crash/symbolize.py` |
 | `RB_CRASH_SYMBOLIZE_TIMEOUT` | `60` |
+| `RB_CRASH_STACK_SCAN`        | `1` (0 = nur Fault-/Kontext-Frames) |
 
 ## Zweites Modul (rbbridge.dll) — Issue #559
 
