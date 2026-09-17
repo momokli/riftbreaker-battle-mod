@@ -14,8 +14,9 @@
 #     deterministische Namen (`frame_<dezimal-rva>`).
 #
 # Geprüft wird:
-#   (a) Default: nur der Fault-Frame (Stack-Scan ist opt-in, #587); Adressen
-#       AUSSERHALB des Modulbereichs werden gefiltert.
+#   (a) Default: Fault-Frame + Stack-Frames (Stack-Scan default an, #639);
+#       Adressen AUSSERHALB des Modulbereichs werden gefiltert.
+#   (a2) RB_CRASH_STACK_SCAN=0 -> nur der Fault-Frame (opt-out).
 #   (b) Aufruf-Vertrag: `--obj=<dll> --relative-address <rva>` je Frame,
 #       Ergebnis-Header + `RVA<TAB>[modul ]KIND Name` in symbolized.txt.
 #   (c) Skip-Regeln: RB_CRASH_SYMBOLIZE=0 / PDB fehlt / DLL fehlt / Tool
@@ -261,7 +262,7 @@ run_sym() {
   set -e
 }
 
-# --- (a)+(b) Default: nur Fault-Frame (Stack-Scan opt-in, #587) ---------------
+# --- (a)+(b) Default: Fault + Stack-Frames (Stack-Scan an, #639) --------------
 FAULT=$((MODULE_BASE + 0x1000))
 OUTSIDE=$((0x1234))          # ausserhalb jedes Moduls -> muss gefiltert werden
 A1="${TMP}/a1"
@@ -270,16 +271,37 @@ run_sym "$A1" "${A1}/bundle"
 assert_eq "symbolize ok -> rc=0" "0" "$RC"
 SYM="${A1}/bundle/symbolized.txt"
 assert_true "(a) symbolized.txt geschrieben" test -s "$SYM"
-assert_eq "(a) Default: genau der Fault-Frame" "0x1000" \
+assert_eq "(a) Default: Fault + Stack-Frames" "0x1000 0x2000 0x3000" \
   "$(awk -F'\t' '/^0x/{print $1}' "$SYM" | tr '\n' ' ' | sed 's/ $//')"
 assert_true "(b) Header enthaelt module_base" grep -q '^# module_base: 0x6ffff6da0000$' "$SYM"
 assert_true "(b) Header enthaelt dll" grep -q "^# dll: ${DLL}$" "$SYM"
 assert_true "(b) Header enthaelt tool" grep -q "^# tool: ${BIN}/llvm-symbolizer$" "$SYM"
 assert_true "(b) Fault-Frame 0x1000 als FAULT markiert" grep -qP '^0x1000\tFAULT frame_4096$' "$SYM"
-assert_false "(b) keine Stack-Frames ohne --stack-scan" grep -qP '^0x(2000|3000)\t' "$SYM"
+assert_true "(b) Stack-Frames 0x2000/0x3000 als stack markiert" grep -qP '^0x(2000|3000)\tstack frame_' "$SYM"
+assert_false "(b) Adresse ausserhalb des Moduls gefiltert" grep -q '0x1234' "$SYM"
 assert_true "(b) Aufruf mit --obj" grep -q -- "--obj=${DLL}" "${A1}/sym.log"
 assert_true "(b) Aufruf mit --relative-address 0x1000" grep -q -- '--relative-address 0x1000' "${A1}/sym.log"
-assert_eq "(b) genau 1 Symbolizer-Aufruf" "1" "$(wc -l < "${A1}/sym.log" | tr -d ' ')"
+assert_eq "(b) genau 3 Symbolizer-Aufrufe" "3" "$(wc -l < "${A1}/sym.log" | tr -d ' ')"
+
+# --- (a2) RB_CRASH_STACK_SCAN=0 -> nur Fault-Frame (opt-out, #639) -----------
+A2="${TMP}/a2"
+make_bundle "${A2}/bundle" "$FAULT" "$((MODULE_BASE + 0x2000))" "$OUTSIDE" "$((MODULE_BASE + 0x3000))"
+mkdir -p "$A2"
+: >"${A2}/sym.log"
+set +e
+env PATH="${BIN}:${PATH}" FAKE_SYM_LOG="${A2}/sym.log" \
+  RB_CRASH_SYMBOLIZE_TOOL="$SYMBOLIZE_PY" RB_CRASH_LLVM_SYMBOLIZER="${BIN}/llvm-symbolizer" \
+  RB_CRASH_DLL="$DLL" RB_CRASH_PDB="$PDB" RB_CRASH_PYTHON="python3" \
+  RB_CRASH_STACK_SCAN=0 \
+  bash "$SYMBOLIZE_SH" "${A2}/bundle" >"${A2}/out.txt" 2>&1
+RC=$?
+set -e
+assert_eq "(a2) STACK_SCAN=0 -> rc=0" "0" "$RC"
+SYM2="${A2}/bundle/symbolized.txt"
+assert_eq "(a2) STACK_SCAN=0: genau der Fault-Frame" "0x1000" \
+  "$(awk -F'\t' '/^0x/{print $1}' "$SYM2" | tr '\n' ' ' | sed 's/ $//')"
+assert_false "(a2) STACK_SCAN=0: keine Stack-Frames" grep -qP '^0x(2000|3000)\t' "$SYM2"
+assert_eq "(a2) STACK_SCAN=0: genau 1 Symbolizer-Aufruf" "1" "$(wc -l < "${A2}/sym.log" | tr -d ' ')"
 
 # --- (c) Skip-Regeln ---------------------------------------------------------
 C="${TMP}/c"
@@ -438,7 +460,7 @@ if [ "${#FB[@]}" -eq 1 ]; then
   assert_true "(f) Bundle enthaelt symbolized.txt" test -s "${BD}/symbolized.txt"
   meta_sym() { python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['symbolized'].get(sys.argv[2],''))" "${BD}/meta.json" "$1"; }
   assert_eq "(f) meta.symbolized.status" "ok" "$(meta_sym status)"
-  assert_eq "(f) meta.symbolized.frames" "1" "$(meta_sym frames)"
+  assert_eq "(f) meta.symbolized.frames" "2" "$(meta_sym frames)"
   assert_true "(f) symbolized.txt in meta.files" python3 -c "
 import json, sys
 files = json.load(open(sys.argv[1]))['files']
@@ -476,12 +498,12 @@ set -e
 assert_eq "(g) zweites Modul -> rc=0" "0" "$RC"
 SYMG="${G}/bundle/symbolized.txt"
 assert_true "(g) rbbridge-Fault-Frame annotiert" grep -qP '^0x50\t\[rbbridge.dll\] FAULT frame_80$' "$SYMG"
-assert_false "(g) kein game-Frame ohne --stack-scan" grep -qP '^0x100\t' "$SYMG"
+assert_true "(g) game-Stack-Frame 0x100 als stack" grep -qP '^0x100\tstack frame_256$' "$SYMG"
 assert_true "(g) header dll2" grep -q "^# dll2: ${RBBRIDGE_DLL}$" "$SYMG"
 assert_true "(g) Aufruf --obj rbbridge.dll" grep -q -- "--obj=${RBBRIDGE_DLL}" "${G}/sym.log"
-assert_false "(g) kein --obj game-dll ohne game-Frame" grep -q -- "--obj=${DLL}" "${G}/sym.log"
+assert_true "(g) Aufruf --obj game-dll (game-Frame)" grep -q -- "--obj=${DLL}" "${G}/sym.log"
 
-# --- (h) --stack-scan (opt-in): Stack-Frames inkl. Outside-Filter ------------
+# --- (h) --stack-scan (explizit, jetzt Default): Stack-Frames inkl. Outside-Filter ---
 H="${TMP}/h"
 make_bundle "${H}/bundle" "$FAULT" "$((MODULE_BASE + 0x2000))" "$OUTSIDE" "$((MODULE_BASE + 0x3000))"
 mkdir -p "$H"
