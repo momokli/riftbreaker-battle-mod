@@ -600,9 +600,15 @@
                         <div class="flow-container">
                             <div class="flow-action-row">
                                 <span class="prop-label">wave</span>
-                                <button id="send_wave_low" class="send-preset" data-preset="wave_low" title="attack_level_2_id_1 (~250 HP)" aria-label="Send wave low">low</button>
-                                <button id="send_wave_mid" class="send-preset" data-preset="wave_mid" title="attack_level_5_id_1 (~3731 HP)" aria-label="Send wave mid">mid</button>
-                                <button id="send_wave_high" class="send-preset" data-preset="wave_high" title="attack_level_8_id_1 (~9312 HP)" aria-label="Send wave high">high</button>
+                                <button id="send_wave_1" class="send-preset" data-preset="wave_1" title="attack_level_1_id_1 (~22,5 HP Pool-Schnitt)" aria-label="Send wave level 1">1</button>
+                                <button id="send_wave_2" class="send-preset" data-preset="wave_2" title="attack_level_2_id_1 (~250 HP Pool-Schnitt)" aria-label="Send wave level 2">2</button>
+                                <button id="send_wave_3" class="send-preset" data-preset="wave_3" title="attack_level_3_id_1 (~1088 HP Pool-Schnitt)" aria-label="Send wave level 3">3</button>
+                                <button id="send_wave_4" class="send-preset" data-preset="wave_4" title="attack_level_4_id_1 (~2180 HP Pool-Schnitt)" aria-label="Send wave level 4">4</button>
+                                <button id="send_wave_5" class="send-preset" data-preset="wave_5" title="attack_level_5_id_1 (~3731 HP Pool-Schnitt)" aria-label="Send wave level 5">5</button>
+                                <button id="send_wave_6" class="send-preset" data-preset="wave_6" title="attack_level_6_id_1 (~5582 HP Pool-Schnitt)" aria-label="Send wave level 6">6</button>
+                                <button id="send_wave_7" class="send-preset" data-preset="wave_7" title="attack_level_7_id_1 (~7648 HP Pool-Schnitt)" aria-label="Send wave level 7">7</button>
+                                <button id="send_wave_8" class="send-preset" data-preset="wave_8" title="attack_level_8_id_1 (~9312 HP Pool-Schnitt)" aria-label="Send wave level 8">8</button>
+                                <button id="send_wave_9" class="send-preset" data-preset="wave_9" title="attack_level_8_id_1 — Level 9 teilt sich den Pool mit Level 8 (#658), keine eigene Datei (~10512 HP Pool-Schnitt)" aria-label="Send wave level 9">9</button>
                             </div>
                             <div class="flow-action-row">
                                 <span class="prop-label">boss</span>
@@ -1000,14 +1006,23 @@
                     startMissionFlow();
                 };
 
-                // Send-Menu-Presets (#684): WAVE/BOSS LOW/MID/HIGH + Random-Boss.
-                // Jede Taste feuert activate_mission_flow mit mode "default"
-                // (#447) — bewusst OHNE Deduct und OHNE Chat-Parsing; Preise/
-                // Balance folgen in #205/#670.
+                // Send-Menu-Presets (#684, Wave-Reihe auf 9 Level erweitert in
+                // #689): WAVE 1-9 + BOSS LOW/MID/HIGH + Random-Boss. Jede Taste
+                // feuert activate_mission_flow mit mode "default" (#447) —
+                // bewusst OHNE Deduct und OHNE Chat-Parsing; Preise/Balance
+                // folgen in #205/#670. Level 9 nutzt bewusst dieselbe Datei wie
+                // Level 8 — Level 9 hat keinen eigenen Wellen-Pool, sondern teilt
+                // sich den von Level 8 (roh belegt in #658).
                 var SEND_PRESETS = {
-                    wave_low: "logic/missions/survival/attack_level_2_id_1.logic",
-                    wave_mid: "logic/missions/survival/attack_level_5_id_1.logic",
-                    wave_high: "logic/missions/survival/attack_level_8_id_1.logic",
+                    wave_1: "logic/missions/survival/attack_level_1_id_1.logic",
+                    wave_2: "logic/missions/survival/attack_level_2_id_1.logic",
+                    wave_3: "logic/missions/survival/attack_level_3_id_1.logic",
+                    wave_4: "logic/missions/survival/attack_level_4_id_1.logic",
+                    wave_5: "logic/missions/survival/attack_level_5_id_1.logic",
+                    wave_6: "logic/missions/survival/attack_level_6_id_1.logic",
+                    wave_7: "logic/missions/survival/attack_level_7_id_1.logic",
+                    wave_8: "logic/missions/survival/attack_level_8_id_1.logic",
+                    wave_9: "logic/missions/survival/attack_level_8_id_1.logic",
                     boss_low: "logic/missions/survival/attack_boss_baxmoth.logic",
                     boss_mid: "logic/missions/survival/attack_boss_magmoth.logic",
                     boss_high: "logic/missions/survival/attack_boss_arachnoid.logic",
