@@ -907,7 +907,6 @@
                                 ? "—"
                                 : String(s.creatures_base_difficulty);
                         $("out").textContent = "";
-                        await processChat(s.chat);
                     } catch (e) {
                         $("out").textContent = "ERR " + e.message;
                     }
@@ -972,6 +971,17 @@
                         } else {
                             $("out").textContent = "chat: " + text;
                         }
+                    }
+                }
+
+                async function pollChat() {
+                    try {
+                        var r = await post("get_chat");
+                        if (r && r.chat && r.chat.length) {
+                            await processChat(r.chat);
+                        }
+                    } catch (e) {
+                        /* transient: naechster Poll versucht es erneut */
                     }
                 }
 
@@ -1132,6 +1142,7 @@
 
                 refresh();
                 setInterval(refresh, 1000);
+                setInterval(pollChat, 150);
 
                 // --- send tracker (testable) ---
                 // Persistente Send-Liste (#527, 1.0-Send-Loop #517).

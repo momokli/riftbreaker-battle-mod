@@ -766,6 +766,23 @@ int main(void)
     }
 
     /* -------------------------------------------------------------- */
+    /* #635: chat_result-Builder (Array-Format fuer /get_chat)         */
+    /* -------------------------------------------------------------- */
+    {
+        char out[600];
+        const char *two[2] = { "hello", "world" };
+
+        check(chat_build_chat_result(two, 2, out, sizeof(out)) > 0 &&
+                  strcmp(out,
+                         "{\"event\":\"chat_result\",\"chat\":[\"hello\",\"world\"]}") == 0,
+              "chat_build_chat_result: zwei Texte -> chat_result-Array");
+        check(chat_build_chat_result(two, 0, out, sizeof(out)) == 0,
+              "chat_build_chat_result: count 0 -> 0 (nichts senden)");
+        check(chat_build_chat_result(two, 2, out, 12) == 0,
+              "chat_build_chat_result: Puffer zu klein -> 0");
+    }
+
+    /* -------------------------------------------------------------- */
     /* #386: Database-Payload-Resolver + Builder (AOB, kein Lua)        */
     /* -------------------------------------------------------------- */
     /* Frisches Image: das Haupt-`img` ist an dieser Stelle nicht mehr

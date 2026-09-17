@@ -662,18 +662,11 @@ static void handle_probe(SOCKET c)
     }
 }
 
-/* POST /get_state: fuehrt {"cmd":"get_state"} aus und liefert die
- * get_state_result-Zeile als HTTP-Body. Eingehende player_chat-Events
- * (Chat-Detour #549), die VOR der get_state_result-Zeile ankommen, werden
- * nicht verworfen, sondern als "chat":["...",...]-Array in die Antwort
- * injiziert (der 3-s-Cockpit-Poll holt so den Vanilla-Chat ab). */
+/* POST /get_state: fuehrt {"cmd":"get_state"} aus und liefert die eine
+ * get_state_result-Zeile als HTTP-Body (reiner Snapshot, kein chat). */
 static void handle_get_state(SOCKET c)
 {
-    char result[READ_BUF];
-    char chat[8192];
-    size_t chat_off = 0;
-    int nchat = 0;
-    int got_result = 0;
+    char line[READ_BUF];
     int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
     HANDLE h = pipe_connect(2500);
 
@@ -691,99 +684,52 @@ static void handle_get_state(SOCKET c)
         return;
     }
 
-    {
-        char buf[READ_BUF];
-        size_t n = 0;
-        DWORD deadline = GetTickCount() + (DWORD)timeout_ms;
-
-        chat_off = (size_t)snprintf(chat, sizeof(chat), "[");
-        for (;;) {
-            DWORD avail = 0;
-            if (!PeekNamedPipe(h, NULL, 0, NULL, &avail, NULL))
-                break;
-            if (avail > 0) {
-                char chunk[4096];
-                DWORD rd = 0;
-                DWORD want = avail < (DWORD)sizeof(chunk) ? avail : (DWORD)sizeof(chunk);
-                if (!ReadFile(h, chunk, want, &rd, NULL) || rd == 0)
-                    break;
-                if (n + rd > sizeof(buf) - 1)
-                    n = 0;
-                memcpy(buf + n, chunk, rd);
-                n += rd;
-                {
-                    size_t start = 0;
-                    size_t i;
-                    for (i = 0; i < n; i++) {
-                        if (buf[i] == '\n') {
-                            char *ln = buf + start;
-                            size_t len;
-                            char ev[64] = "";
-                            buf[i] = '\0';
-                            len = strlen(ln);
-                            while (len > 0 && ln[len - 1] == '\r')
-                                ln[--len] = '\0';
-                            if (json_get_string(ln, "event", ev, sizeof(ev))) {
-                                if (strcmp(ev, "player_chat") == 0) {
-                                    char text[256] = "";
-                                    char esc[512];
-                                    json_get_string(ln, "text", text, sizeof(text));
-                                    json_escape(text, esc, sizeof(esc));
-                                    if (chat_off + strlen(esc) + 4 < sizeof(chat)) {
-                                        chat_off += (size_t)snprintf(
-                                            chat + chat_off, sizeof(chat) - chat_off,
-                                            "%s\"%s\"", nchat ? "," : "", esc);
-                                        nchat++;
-                                    }
-                                } else if (strcmp(ev, "get_state_result") == 0) {
-                                    strncpy(result, ln, sizeof(result) - 1);
-                                    result[sizeof(result) - 1] = '\0';
-                                    got_result = 1;
-                                }
-                            }
-                            start = i + 1;
-                        }
-                    }
-                    if (start > 0) {
-                        memmove(buf, buf + start, n - start);
-                        n -= start;
-                    }
-                }
-            } else if (got_result) {
-                break;
-            }
-            if (deadline_passed(deadline))
-                break;
-            Sleep(10);
-        }
-        chat_off += (size_t)snprintf(chat + chat_off, sizeof(chat) - chat_off, "]");
-    }
+    int rc = pipe_wait_line(h, "get_state_result", NULL, timeout_ms,
+                            line, sizeof(line));
     CloseHandle(h);
 
-    if (!got_result) {
+    if (rc != 0) {
         http_respond(c, 500, "Internal Server Error",
                      "{\"ok\":false,\"reason\":\"timeout\"}");
         return;
     }
+    log_response("/get_state", line);
+    http_respond(c, 200, "OK", line);
+}
 
-    /* "chat":[...] in die get_state_result-Zeile injizieren (vor das letzte
-     * schliessende "}"). Leeres chat -> Feld weglassen. */
-    {
-        char resp[RESP_MAX];
-        size_t rlen = strlen(result);
-        while (rlen > 0 &&
-               (result[rlen - 1] == ' ' || result[rlen - 1] == '\t' ||
-                result[rlen - 1] == '\r' || result[rlen - 1] == '\n'))
-            result[--rlen] = '\0';
-        if (rlen > 0 && result[rlen - 1] == '}' && nchat > 0) {
-            snprintf(resp, sizeof(resp), "%.*s,\"chat\":%s}",
-                     (int)(rlen - 1), result, chat);
-        } else {
-            snprintf(resp, sizeof(resp), "%s", result);
-        }
-        log_response("/get_state", resp);
-        http_respond(c, 200, "OK", resp);
+/* POST /get_chat: fuehrt {"cmd":"get_chat"} aus und liefert die eine
+ * chat_result-Zeile als HTTP-Body (leichter Event-Kanal #635). */
+static void handle_get_chat(SOCKET c)
+{
+    char line[READ_BUF];
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+    HANDLE h = pipe_connect(2500);
+
+    if (h == INVALID_HANDLE_VALUE) {
+        blog("POST /get_chat: Pipe nicht erreichbar -> pipe_unavailable");
+        http_respond(c, 503, "Service Unavailable",
+                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+        return;
     }
+
+    if (!pipe_write_all(h, "{\"cmd\":\"get_chat\"}\n")) {
+        CloseHandle(h);
+        http_respond(c, 500, "Internal Server Error",
+                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
+        return;
+    }
+
+    int rc = pipe_wait_line(h, "chat_result", NULL, timeout_ms,
+                            line, sizeof(line));
+    CloseHandle(h);
+
+    if (rc != 0) {
+        http_respond(c, 500, "Internal Server Error",
+                     "{\"ok\":false,\"reason\":\"timeout\"}");
+        return;
+    }
+    log_response("/get_chat", line);
+    http_respond(c, 200, "OK", line);
 }
 
 /* POST /add_resource: fuehrt {"cmd":"add_resource","resource":"...",
@@ -1292,6 +1238,8 @@ static void handle_client(SOCKET c)
             handle_probe(c);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/get_state") == 0) {
             handle_get_state(c);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/get_chat") == 0) {
+            handle_get_chat(c);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/add_resource") == 0) {
             char *b = malloc((size_t)body_len + 1);
             if (!b) {
