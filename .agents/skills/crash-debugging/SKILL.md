@@ -27,14 +27,14 @@ The collector (`rbmods-crash-collector.sh`, systemd) writes one dir per crash:
 
 Files inside:
 
-| file | content |
-|---|---|
-| `<uuid>.dmp` | Windows minidump (crash memory/threads/modules) |
-| `<uuid>.log` / `<uuid>.trace` | game crash log + crash-handler trace (often empty/`function-name not available`) |
-| `context.log` | last N container log lines — **the bridge traffic + rbbridge `dbg()` lines live here** |
-| `meta.json` | `image`, `git_sha`, `module`, `module_base`, `module_size`, `fault_address`, `fault_rva`, `module_sha256`, `module_paths`, `stack_rvas`, `symbolized{status,frames}` |
-| `symbolized.txt` | symbolizer output (header + frames, one line per frame) |
-| `rbbridge.dll`, `riftbreaker_dll_win_release.dll` | the DLL **bytes copied at crash time** (#588) — used to verify symbolization |
+| file                                              | content                                                                                                                                                                                                                 |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<uuid>.dmp`                                      | Windows minidump (crash memory/threads/modules)                                                                                                                                                                         |
+| `<uuid>.log` / `<uuid>.trace`                     | game crash log + crash-handler trace (often empty/`function-name not available`)                                                                                                                                        |
+| `context.log`                                     | last N container log lines — **the bridge traffic + rbbridge `dbg()` lines live here**; each `dbg()` line carries `[tid=<thread-id>]`                                                                                   |
+| `meta.json`                                       | `image`, `git_sha`, `module`, `module_base`, `module_size`, `fault_address`, `fault_rva`, `fault_thread`, `access_type`, `faulting_address`, `module_sha256`, `module_paths`, `stack_rvas`, `symbolized{status,frames}` |
+| `symbolized.txt`                                  | symbolizer output: header (`# rsp`/`# rbp`/`# rip` + module info) + frames tagged `fault`/`context`/`unwind`/`stack`, one line per frame                                                                                |
+| `rbbridge.dll`, `riftbreaker_dll_win_release.dll` | the DLL **bytes copied at crash time** (#588) — used to verify symbolization                                                                                                                                            |
 
 ## Workflow (in this order)
 
@@ -51,10 +51,11 @@ ssh -o BatchMode=yes planet 'cat /opt/rbmods/crashes/<ts>-<uuid>/context.log'
 ```
 
 Look for:
+
 - `[pipe_bridge] POST /get_state body={}` — the Cockpit polls `get_state` every ~3 s.
 - `[pipe_bridge] POST /get_send_log body={}` — the send-log poll.
 - any WRITE command (`restart_map`, `creatures_difficulty`, `end_game`, …) — usually there is **none**; the crash is typically the automatic `get_state` read, **not** a user button.
-- `[rbbridge] ...` `dbg()` lines (e.g. `resolve_hq_service: rva=… Kandidaten=… -> NULL`).
+- `[rbbridge] ... [tid=<n>]` `dbg()` lines (e.g. `resolve_hq_service: rva=… Kandidaten=… -> NULL`). Note the `[tid=<n>]` — it matches `meta.json.fault_thread` to tell whether the faulting thread is the bridge/pipe thread or a game thread.
 - the game log (`ServerGameplayState`, `CrashHandlerWin32`, Lua lines) right before the crash.
 
 > The bridge logs **every** request. If a crash is triggered by a bridge command, it is visible here.
@@ -66,7 +67,16 @@ ssh -o BatchMode=yes planet 'cat /opt/rbmods/crashes/<ts>-<uuid>/meta.json'
 ```
 
 Key fields: `fault_rva`, `module` (which DLL faulted — usually `rbbridge.dll`),
-`module_sha256`, `module_paths`, `image`, `git_sha`.
+`module_sha256`, `module_paths`, `image`, `git_sha`, `fault_thread`,
+`access_type`, `faulting_address`.
+
+- `access_type` (`ExceptionInformation[0]`): `0` = read, `1` = write, `8` = execute/DEP.
+  **`8` = „jump to garbage"** (the process tried to _execute_ a bad pointer — the
+  faulting `exception_address`/RIP sits outside any module, e.g. in the heap). `0`/`1`
+  = a **read/write of a bad data pointer** (`faulting_address` is the bad data
+  address). This is the single most important discriminator for the #655-class crash.
+- `fault_thread` ↔ `[tid=<n>]` in `context.log`: match them to decide whether the
+  faulting thread is the bridge/pipe thread (off-thread read race) or a game thread.
 
 ### 4. Read `symbolized.txt` — the fault frame
 
@@ -74,8 +84,18 @@ Key fields: `fault_rva`, `module` (which DLL faulted — usually `rbbridge.dll`)
 ssh -o BatchMode=yes planet 'cat /opt/rbmods/crashes/<ts>-<uuid>/symbolized.txt'
 ```
 
-Expect exactly one line like `0x2d0c	[rbbridge.dll] FAULT <name>` (default = fault
-frame only; stack scan is opt-in via `--stack-scan`).
+The header carries the faulting thread's registers (`# rsp`, `# rbp`, `# rip`). Each
+frame line is tagged by kind:
+
+- `FAULT` — the exception address (present when it falls inside a module).
+- `unwind` — the **ordered** RBP frame-pointer walk (`[rbp]=saved rbp`, `[rbp+8]=ret`).
+  May be empty: MSVC release builds often omit frame pointers (FPO); a full
+  `.pdata`/`.xdata` unwind is follow-up #676.
+- `stack` — heuristic scan (opt-in via `--stack-scan`), unsorted/garbage-prone.
+
+For a `jump-to-garbage` crash (RIP outside all modules) there is **no `FAULT` frame**;
+the `# rsp`/`# rbp`/`# rip` register context is then your starting point for a manual
+unwind.
 
 ### 5. ⚠️ VERIFY the symbolizer used the CORRECT DLL — the #1 trap
 
@@ -83,6 +103,7 @@ The symbolizer resolves the fault RVA against a DLL file. If that file is not
 **byte-identical** to the DLL the game actually loaded, the symbol name is WRONG.
 
 Check:
+
 ```bash
 ssh -o BatchMode=yes planet '
   echo "collector copied:"; grep -A2 module_sha256 /opt/rbmods/crashes/<ts>-<uuid>/meta.json
@@ -155,8 +176,9 @@ first-class deliverable**, not an afterthought:
   `dbg()` line, the env/commit not recorded, a DLL not captured), **open an issue**
   for it instead of working around it silently.
 - Logging checklist per crash bundle: bridge request (+ response), rbbridge
-  resolution `dbg()` lines, game log tail, `meta.json` (fault + `git_sha` +
-  `module_sha256`), copied DLL bytes, `symbolized.txt`.
+  resolution `dbg()` lines (with `[tid=…]`), game log tail, `meta.json` (fault +
+  `git_sha` + `module_sha256` + `fault_thread` + `access_type` + `faulting_address`),
+  copied DLL bytes, `symbolized.txt` (registers + frames).
 - Bundle path should eventually be `ENV/COMMIT-REF/<ts>-<uuid>` (open follow-up).
 
 ## Planet access (read-only by default)
@@ -165,13 +187,13 @@ first-class deliverable**, not an afterthought:
 ssh -o BatchMode=yes planet '...'
 ```
 
-| what | path |
-|---|---|
-| crash bundles (dev / prod) | `/opt/rbmods/crashes/` , `/opt/rbmods/crashes-prod/` |
-| per-env rbbridge.dll | `/opt/rbmods/rbtools/<env>/rbbridge.dll` |
-| game DLL / PDB | `/srv/rift-<env>/game/bin/riftbreaker_dll_win_release.{dll,pdb}` |
-| deployed collector / symbolizer | `/usr/local/bin/rbmods-crash-collector.sh` , `/usr/local/lib/rbmods/crash/symbolize.py` |
-| container mounts | `docker inspect riftbreaker-dedicated --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}'` |
+| what                            | path                                                                                                                 |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| crash bundles (dev / prod)      | `/opt/rbmods/crashes/` , `/opt/rbmods/crashes-prod/`                                                                 |
+| per-env rbbridge.dll            | `/opt/rbmods/rbtools/<env>/rbbridge.dll`                                                                             |
+| game DLL / PDB                  | `/srv/rift-<env>/game/bin/riftbreaker_dll_win_release.{dll,pdb}`                                                     |
+| deployed collector / symbolizer | `/usr/local/bin/rbmods-crash-collector.sh` , `/usr/local/lib/rbmods/crash/symbolize.py`                              |
+| container mounts                | `docker inspect riftbreaker-dedicated --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}'` |
 
 ## References
 

@@ -402,7 +402,7 @@ static int safe_read_u32(const void *addr, uint32_t *out)
 
 #define PIPE_INBUF_SIZE   4096 /* Lesechunk vom Pipe-Client              */
 #define PIPE_LINE_MAX     8192 /* max. Laenge einer Protokollzeile       */
-#define RESP_BUF_SIZE     4096 /* max. Laenge einer Antwortzeile         */
+#define RESP_BUF_SIZE    16384 /* max. Laenge einer Antwortzeile         */
 #define HEARTBEAT_MS      5000 /* Intervall des State-Platzhalter-Events */
 #define POLL_MS           100  /* Serviceloop-Takt (nur bei Client)      */
 
@@ -673,6 +673,106 @@ static const unsigned char *restart_find_setter(const unsigned char *text,
     return NULL;
 }
 
+/* Minimales JSON-Escaping fuer String-Werte (Quote/Backslash/Steuerzeichen).
+ * Reine Funktion ohne Spielprozess -> host-testbar (tests/rbbridge-hosttest).
+ * Steht bewusst AUSSERHALB des #ifndef-RBBRIDGE_HOSTTEST-Blocks, weil auch
+ * die host-testbare Chat-Payload (chat_build_player_chat, #549) sie nutzt. */
+static void json_escape_into(const char *in, char *out, size_t n)
+{
+    size_t o = 0;
+    if (n == 0)
+        return;
+    for (size_t i = 0; in && in[i] && o + 7 < n; i++) {
+        unsigned char c = (unsigned char)in[i];
+        if (c == '"' || c == '\\') {
+            out[o++] = '\\';
+            out[o++] = (char)c;
+        } else if (c < 0x20) {
+            o += (size_t)snprintf(out + o, n - o, "\\u%04x", c);
+        } else {
+            out[o++] = (char)c;
+        }
+    }
+    out[o] = '\0';
+}
+
+/* #549: Baut die `player_chat`-Protokollzeile aus dem rohen Chat-Text.
+ * Escaping via json_escape_into(). Rein (nur snprintf) -> host-testbar
+ * (tests/rbbridge-hosttest). Rueckgabe = Laenge der Zeile ohne
+ * NUL-Terminator; 0 = leerer Text oder Puffer zu klein (der Aufrufer darf
+ * dann NICHTS senden).
+ *
+ * Die Zeile entspricht dem Wire-Event `player_chat` aus server/protocol.md. */
+static size_t chat_build_player_chat(const char *text, char *out, size_t n)
+{
+    char esc[512];
+    int len;
+
+    if (!out || n == 0)
+        return 0;
+    out[0] = '\0';
+    if (!text || !text[0])
+        return 0;
+    json_escape_into(text, esc, sizeof(esc));
+    len = snprintf(out, n, "{\"event\":\"player_chat\",\"text\":\"%s\"}", esc);
+    if (len < 0 || (size_t)len >= n)
+        return 0;
+    return (size_t)len;
+}
+
+/* #549: kleine Single-Producer/Single-Consumer-Ring-Queue fuer eingehenden
+ * Chat. Bewusst REINE Logik (kein Lock, keine Windows-API) -> host-testbar
+ * (tests/rbbridge-hosttest). Die Produktions-Caller halten g_chat_cs (siehe
+ * capture_chat_text / dispatch_get_state); hier wird nur die Queue-Arithmetik
+ * geprueft. Kapazitaet 8 ist grosszuegig fuer den 3-s-Poll des Cockpits;
+ * bei Ueberlauf wird die AELTESTE Nachricht verworfen (neueste Kommandos
+ * gehen nie verloren). */
+#define CHAT_QUEUE_CAP 8
+#define CHAT_QUEUE_MSG 256
+
+typedef struct {
+    char buf[CHAT_QUEUE_CAP][CHAT_QUEUE_MSG];
+    int head;
+    int tail;
+    int count;
+} chat_queue_t;
+
+static void chat_queue_init(chat_queue_t *q)
+{
+    if (!q)
+        return;
+    memset(q, 0, sizeof(*q));
+}
+
+/* Fuegt eine Nachricht ein. Rueckgabe 1 = eingefuegt, 0 = text NULL/leer. */
+static int chat_queue_push(chat_queue_t *q, const char *text)
+{
+    if (!q || !text || !text[0])
+        return 0;
+    if (q->count == CHAT_QUEUE_CAP) {
+        /* voll: aelteste verwerfen, damit das neueste Kommando erhalten bleibt */
+        q->head = (q->head + 1) % CHAT_QUEUE_CAP;
+        q->count--;
+    }
+    snprintf(q->buf[q->tail], CHAT_QUEUE_MSG, "%s", text);
+    q->buf[q->tail][CHAT_QUEUE_MSG - 1] = '\0';
+    q->tail = (q->tail + 1) % CHAT_QUEUE_CAP;
+    q->count++;
+    return 1;
+}
+
+/* Entnimmt die aelteste Nachricht. Rueckgabe 1 = entnommen (in out),
+ * 0 = leer. */
+static int chat_queue_pop(chat_queue_t *q, char *out, size_t n)
+{
+    if (!q || !out || n == 0 || q->count == 0)
+        return 0;
+    snprintf(out, n, "%s", q->buf[q->head]);
+    q->head = (q->head + 1) % CHAT_QUEUE_CAP;
+    q->count--;
+    return 1;
+}
+
 #ifndef RBBRIDGE_HOSTTEST
 /* Datei-Log: 1 = %TEMP%\rbbridge.log mitschreiben (Default an; abschalten
  * mit Umgebungsvariable RBBRIDGE_LOG=0). DebugView geht immer. */
@@ -686,6 +786,23 @@ static volatile LONG g_stop = 0;   /* 1 = Thread soll sich beenden       */
 static HANDLE g_thread = NULL;     /* Handle des Pipe-Server-Threads     */
 static LONG g_thread_started = 0;  /* verhindert doppelte Attach-Threads */
 static CRITICAL_SECTION g_log_cs;  /* schuetzt das Datei-Log             */
+
+/* Chat-Detour (#549): OnNetPlayerChatRequest (RVA 0x1821B50) inline-
+ * gehakt. Der Spieler tippt Chat (vanilla Client), die DLL liest den Text
+ * und stellt ihn der Pipe als player_chat-Event bereit. */
+static CRITICAL_SECTION g_chat_cs;
+static chat_queue_t g_chat_q;
+/* Alle Chat-Detour-Slots bewusst `static` (nicht DLL-exportiert, #549
+ * Review Minor 'Externe Linkage'). Zugriff nur aus dem Pipe-Server-Thread
+ * bzw. aus dem Detour (Net-Thread) -> siehe Reentrancy-Hinweis unten.
+ * `used`: die Slots werden ausschliesslich aus dem naked-asm per Namen
+ * referenziert; ohne das Attribut eliminiert der Compiler die statics
+ * (asm-Symbolnamen zaehlen nicht als Use) -> Linker-Fehler. */
+__attribute__((used)) static void *g_chat_trampoline = NULL;
+__attribute__((used)) static void (*g_chat_capture)(const void *) = NULL;
+__attribute__((used)) static volatile uintptr_t g_chat_this, g_chat_conn,
+    g_chat_req;
+static int install_chat_hook(void); /* Definition weiter unten (#549) */
 #endif /* !RBBRIDGE_HOSTTEST */
 
 /* ------------------------------------------------------------------ */
@@ -710,8 +827,9 @@ static void dbg(const char *fmt, ...)
     {
         SYSTEMTIME st;
         GetLocalTime(&st);
-        fprintf(stderr, "[%02d:%02d:%02d.%03d] [rbbridge] %s\n",
-                st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, buf);
+        fprintf(stderr, "[%02d:%02d:%02d.%03d] [rbbridge] [tid=%lu] %s\n",
+                st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+                (unsigned long)GetCurrentThreadId(), buf);
         fflush(stderr);
     }
 
@@ -878,6 +996,7 @@ static void read_game_state(game_state_t *st)
 static void send_state(HANDLE hPipe)
 {
     game_state_t st;
+
     read_game_state(&st);
     send_line(hPipe,
               "{\"event\":\"score_update\",\"t\":%llu,\"score\":%llu,"
@@ -924,8 +1043,10 @@ static void send_state(HANDLE hPipe)
 /*                                                                    */
 /*   d) NICHT-Fund an JEDER Stelle -> dispatch_exec liefert             */
 /*      {"event":"exec_result","ok":false,...,"reason":"..."} + dbg()  */
-/*      und ruft NIEMALS auf. Unter MinGW-x64 gibt es kein SEH         */
-/*      (__try/__except ist MSVC-only) - die Absicherung ist der       */
+/*      und ruft NIEMALS auf. Der Instanz-Scan ist crash-sicher:       */
+/*      gelesen wird per ReadProcessMemory in einen lokalen Puffer     */
+/*      (kein roher QWORD-Deref) - MinGW-x64 stellt kein SEH           */
+/*      (__try/__except, MSVC-only) bereit. Absicherung bleibt der     */
 /*      Instanz-/Signatur-Check VOR dem Aufruf.                        */
 /*                                                                    */
 /* Gegenprobe (read-only pefile+capstone, planet, 2026-09-11): Die    */
@@ -1524,38 +1645,67 @@ static const char *const RBBRIDGE_READY_MARKERS[] = {
 #define RBBRIDGE_READY_MARKER_COUNT \
     (sizeof(RBBRIDGE_READY_MARKERS) / sizeof(RBBRIDGE_READY_MARKERS[0]))
 
-/* Substring-Suche in einem NICHT-NUL-terminierten Puffer (portabel; memmem
- * gibt es nicht ueberall). Rueckgabe 1 = gefunden. */
-static int rbbridge_buf_contains(const char *hay, size_t hay_len,
+/* Teardown-Marker (Issue #640): erscheinen beim in-process Map-Reload
+ * (restart_map / Round-Reset #516), BEVOR die Welt neu aufgebaut wird. Der
+ * Log wird appendiert - nach einem Reload steht der alte Ready-Marker VOR dem
+ * neuen Teardown-Marker. "Letzter Marker gewinnt" (rbbridge_log_is_ready)
+ * setzt die Readiness damit wieder zurueck. */
+static const char *const RBBRIDGE_TEARDOWN_MARKERS[] = {
+    "deactivating: ServerGameplayState",
+};
+#define RBBRIDGE_TEARDOWN_MARKER_COUNT \
+    (sizeof(RBBRIDGE_TEARDOWN_MARKERS) / sizeof(RBBRIDGE_TEARDOWN_MARKERS[0]))
+
+/* Letzte Fundstelle einer Substring-Suche (fuer "letzter Marker gewinnt",
+ * Issue #640). Rueckgabe: Index des letzten Treffers oder (size_t)-1 = nicht
+ * gefunden. */
+static size_t rbbridge_buf_rfind(const char *hay, size_t hay_len,
                                  const char *needle)
 {
     size_t nlen;
     if (!hay || !needle)
-        return 0;
+        return (size_t)-1;
     nlen = strlen(needle);
     if (nlen == 0)
-        return 1;
+        return hay_len;
     if (hay_len < nlen)
-        return 0;
-    for (size_t i = 0; i + nlen <= hay_len; i++) {
-        if (hay[i] == needle[0] && memcmp(hay + i, needle, nlen) == 0)
-            return 1;
+        return (size_t)-1;
+    for (size_t i = hay_len - nlen + 1; i > 0; i--) {
+        size_t j = i - 1;
+        if (hay[j] == needle[0] && memcmp(hay + j, needle, nlen) == 0)
+            return j;
     }
-    return 0;
+    return (size_t)-1;
 }
 
 /* Readiness-Entscheidung AUS dem Log-Inhalt (rein, host-testbar).
- * Rueckgabe 1 = Welt fertig, 0 = noch nicht bereit. Leerer/fehlender
- * Inhalt -> 0 (konservativ: NICHT aufrufen). */
+ * "Letzter Marker gewinnt" (Issue #640): nach einem in-process Map-Reload
+ * steht der alte Ready-Marker VOR dem neuen Teardown-Marker - der LETZTE
+ * Marker entscheidet. Rueckgabe 1 = Welt fertig, 0 = nicht bereit.
+ * Leerer/fehlender Inhalt -> 0 (konservativ: NICHT aufrufen). */
 static int rbbridge_log_is_ready(const char *buf, size_t len)
 {
+    size_t last_ready = (size_t)-1;
+    size_t last_teardown = (size_t)-1;
+    size_t p;
     if (!buf || len == 0)
         return 0;
     for (size_t i = 0; i < RBBRIDGE_READY_MARKER_COUNT; i++) {
-        if (rbbridge_buf_contains(buf, len, RBBRIDGE_READY_MARKERS[i]))
-            return 1;
+        p = rbbridge_buf_rfind(buf, len, RBBRIDGE_READY_MARKERS[i]);
+        if (p != (size_t)-1 && (last_ready == (size_t)-1 || p > last_ready))
+            last_ready = p;
     }
-    return 0;
+    for (size_t i = 0; i < RBBRIDGE_TEARDOWN_MARKER_COUNT; i++) {
+        p = rbbridge_buf_rfind(buf, len, RBBRIDGE_TEARDOWN_MARKERS[i]);
+        if (p != (size_t)-1 &&
+            (last_teardown == (size_t)-1 || p > last_teardown))
+            last_teardown = p;
+    }
+    if (last_ready == (size_t)-1)
+        return 0;
+    if (last_teardown != (size_t)-1 && last_teardown > last_ready)
+        return 0;
+    return 1;
 }
 
 /* x64-Aufrufkonvention: this=RCX, cmd=RDX - __fastcall ist auf x64 der
@@ -2556,9 +2706,9 @@ static int connplayers_dealloc_target(const unsigned char *alloc,
 /* `world != NULL`-Test: der Pointer ist frueh non-NULL, die ECS-/       */
 /* Team-Strukturen aber noch im Aufbau (Crash #436/#479).               */
 /*                                                                    */
-/* Einmal erkannt -> gelatcht. Die Welt wird im Betrieb nicht wieder     */
-/* "unfertig"; ein Map-Neustart geht ohnehin mit Prozess-Neustart +      */
-/* frischem exor_logs.txt einher.                                       */
+/* Kein Latch (#640): ein in-process Map-Reload (restart_map /           */
+/* Round-Reset #516) schreibt einen Teardown-Marker NACH dem alten       */
+/* Ready-Marker; "letzter Marker gewinnt" setzt die Readiness zurueck.   */
 /* ------------------------------------------------------------------ */
 
 /* Log-Suffixe relativ zu %USERPROFILE% (Wine: C:\users\<user>).
@@ -2567,8 +2717,6 @@ static const char *const RBBRIDGE_EXOR_LOG_CANDIDATES[] = {
     "\\Documents\\The Riftbreaker\\exor_logs.txt",
     "\\AppData\\LocalLow\\The Riftbreaker - Dedicated Server\\exor_logs.txt",
 };
-
-static int g_world_ready = 0; /* Latch: 1 = Welt fertig (einmalig gesetzt) */
 
 /* Eine Logdatei oeffnen, (bis Cap) einlesen und auf Ready-Marker pruefen.
  * Rueckgabe 1 = Marker gefunden. Jeder Fehler -> 0 (konservativ). */
@@ -2603,20 +2751,19 @@ static int readiness_scan_file(const char *path)
 }
 
 /* Welt fertig? Prueft zuerst den expliziten Override RBBRIDGE_EXOR_LOG,
- * dann die Standardpfade unter %USERPROFILE%. Rueckgabe 1 = bereit. */
+ * dann die Standardpfade unter %USERPROFILE%. Rueckgabe 1 = bereit.
+ * Scannt bei JEDEM Aufruf neu (kein Latch, Issue #640): so greift das Gate
+ * nach einem in-process Map-Reload wieder, sobald ein Teardown-Marker im
+ * Log steht. Die Datei ist klein (wenige 10 KB, Cap 4 MB) und wird nur vom
+ * Pipe-Thread gelesen. */
 static int world_is_ready(void)
 {
     char env[1024];
 
-    if (g_world_ready)
-        return 1;
-
     if (GetEnvironmentVariableA("RBBRIDGE_EXOR_LOG", env, sizeof(env)) > 0 &&
         env[0]) {
-        if (readiness_scan_file(env)) {
-            g_world_ready = 1;
+        if (readiness_scan_file(env))
             return 1;
-        }
     }
 
     if (GetEnvironmentVariableA("USERPROFILE", env, sizeof(env)) > 0 &&
@@ -2628,10 +2775,8 @@ static int world_is_ready(void)
              i++) {
             snprintf(path, sizeof(path), "%s%s", env,
                      RBBRIDGE_EXOR_LOG_CANDIDATES[i]);
-            if (readiness_scan_file(path)) {
-                g_world_ready = 1;
+            if (readiness_scan_file(path))
                 return 1;
-            }
         }
     }
     return 0;
@@ -2684,40 +2829,64 @@ static int safe_read_u32(const void *addr, uint32_t *out) {
 
 /* Dumpft n QWORDS ab addr als Hex-Array (eine JSON-Zeile). Sichere Reads:
  * nicht-lesbare Woerter werden als null ausgegeben (kein Crash). */
-static void dump_qwords(HANDLE hPipe, const char *label, const void *addr,
-                        size_t n) {
-  char buf[RESP_BUF_SIZE];
-  size_t off = 0;
-  int w = snprintf(buf + off, sizeof(buf) - off,
-                   "{\"event\":\"probe_dump\",\"label\":\"%s\","
-                   "\"addr\":\"0x%llx\",\"qwords\":[",
-                   label, (unsigned long long)(uintptr_t)addr);
+/* JSON-Puffer-Builder (#653): baut die eine probe_result-Zeile statt vieler
+ * Einzelzeilen, damit /probe ueber die persistente Pipe (pipe_send_command)
+ * laufen kann wie get_state. */
+typedef struct {
+  char *buf;
+  size_t cap;
+  size_t off;
+  int overflow;
+} jbuf_t;
+
+static void jbuf_init(jbuf_t *jb, char *buf, size_t cap) {
+  jb->buf = buf;
+  jb->cap = cap;
+  jb->off = 0;
+  jb->overflow = 0;
+  if (cap > 0)
+    buf[0] = '\0';
+}
+
+static void jbuf_appendf(jbuf_t *jb, const char *fmt, ...) {
+  if (jb->overflow || jb->off >= jb->cap)
+    return;
+  va_list ap;
+  va_start(ap, fmt);
+  int w = vsnprintf(jb->buf + jb->off, jb->cap - jb->off, fmt, ap);
+  va_end(ap);
   if (w < 0)
     return;
-  off += (size_t)w;
+  if ((size_t)w >= jb->cap - jb->off) {
+    jb->off = jb->cap - 1;
+    jb->overflow = 1;
+  } else {
+    jb->off += (size_t)w;
+  }
+}
 
+/* Dumpft n QWORDS ab addr in einen JSON-Puffer (crash-sicher: nicht-lesbare
+ * Woerter werden als null ausgegeben, kein Page-Fault). */
+static void dump_qwords_into(jbuf_t *jb, const char *label, const void *addr,
+                             size_t n) {
+  jbuf_appendf(jb, "{\"label\":\"%s\",\"addr\":\"0x%llx\",\"qwords\":[",
+               label, (unsigned long long)(uintptr_t)addr);
   for (size_t i = 0; i < n; i++) {
     uint64_t v = 0;
     safe_read_u64((const unsigned char *)addr + i * 8, &v);
-    if (off + 32 >= sizeof(buf))
-      break;
-    w = snprintf(buf + off, sizeof(buf) - off, "%s\"0x%llx\"", i ? "," : "",
-                 (unsigned long long)v);
-    if (w < 0)
-      return;
-    off += (size_t)w;
+    jbuf_appendf(jb, "%s\"0x%llx\"", i ? "," : "", (unsigned long long)v);
   }
-  snprintf(buf + off, sizeof(buf) - off, "]}");
-  send_line(hPipe, "%s", buf);
+  jbuf_appendf(jb, "]}");
 }
 
-/* Scannt lesbare Regionen nach einem 32-bit-Wert (z.B. carbonium-Hash
- * 0x659cc791) und dumpft Treffer + den 8-Byte-Wert bei +8 (ResourceValue). */
-static void scan_hash(HANDLE hPipe, uint32_t needle, int max_hits) {
+/* Scannt lesbare Regionen nach einem 32-bit-Wert (Carbonium-Hash-Cross-Check)
+ * und haengt Treffer + Zusammenfassung an den JSON-Puffer. */
+static void scan_hash_into(jbuf_t *jb, uint32_t needle, int max_hits) {
   uintptr_t addr = 0;
   int hits = 0;
   unsigned long long regions = 0, bytes = 0;
 
+  jbuf_appendf(jb, "\"scan_hits\":[");
   for (;;) {
     MEMORY_BASIC_INFORMATION mi;
     if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
@@ -2738,108 +2907,98 @@ static void scan_hash(HANDLE hPipe, uint32_t needle, int max_hits) {
         const unsigned char *e = (const unsigned char *)&p[i];
         uint64_t val = 0;
         safe_read_u64(e + 8, &val);
-        send_line(hPipe,
-                  "{\"event\":\"scan_hit\",\"hash\":\"0x%08x\","
-                  "\"addr\":\"0x%llx\",\"value\":%llu,\"value_hex\":\"0x%llx\"}",
-                  needle, (unsigned long long)(uintptr_t)e,
-                  (unsigned long long)val, (unsigned long long)val);
-        if (++hits >= max_hits) {
-          send_line(hPipe,
-                    "{\"event\":\"scan_done\",\"hits\":%d,\"regions\":%llu,"
-                    "\"bytes\":%llu}",
-                    hits, regions, bytes);
-          return;
-        }
+        jbuf_appendf(jb, "%s{\"hash\":\"0x%08x\",\"addr\":\"0x%llx\","
+                     "\"value\":%llu}",
+                     hits ? "," : "", needle,
+                     (unsigned long long)(uintptr_t)e,
+                     (unsigned long long)val);
+        if (++hits >= max_hits)
+          goto done;
       }
     }
   }
-  send_line(hPipe,
-            "{\"event\":\"scan_done\",\"hits\":%d,\"regions\":%llu,"
-            "\"bytes\":%llu}",
-            hits, regions, bytes);
+done:
+  jbuf_appendf(jb, "],\"scan_done\":{\"hits\":%d,\"regions\":%llu,"
+               "\"bytes\":%llu}",
+               hits, regions, bytes);
 }
 
-/* Probe (RE #363): PlayerService-Kette live dumpen, um die Account-Struktur
- * zu bestaetigen. Gibt Pointer + Speicher-Fenster als JSON aus. */
+/* Probe (RE #363): PlayerService-Kette live dumpen. Gibt EINE
+ * probe_result-Zeile (Pointer, Speicher-Fenster, Hash-Scan, Account-Basket)
+ * als JSON zurueck (single-line, #653). */
+/* Forward-Decl (#655): probe_resources steht im File VOR der
+ * Definition von scan_qword_instance. */
+static unsigned char *scan_qword_instance(uint64_t needle,
+                                           const char *name);
+
 static void probe_resources(HANDLE hPipe) {
   const unsigned char *base = NULL;
   size_t size = 0;
   const char *via = NULL;
   const unsigned char *execfn = NULL;
+  char out[RESP_BUF_SIZE];
+  jbuf_t jb;
+
+  jbuf_init(&jb, out, sizeof(out));
 
   if (!resolve_module(&base, &size, &via, &execfn)) {
-    send_line(hPipe, "{\"event\":\"probe\",\"error\":\"no_module\"}");
+    send_line(hPipe, "{\"event\":\"probe_result\",\"ok\":false,"
+                     "\"reason\":\"no_module\"}");
     return;
   }
 
   /* #479: Readiness-Gate — die Probe traversiert die PlayerService-Kette
    * (World-Nutzung) und darf erst nach fertiger Welt laufen. */
   if (!world_is_ready()) {
-    send_line(hPipe, "{\"event\":\"probe\",\"error\":\"world_not_ready\"}");
+    send_line(hPipe, "{\"event\":\"probe_result\",\"ok\":false,"
+                     "\"reason\":\"world_not_ready\"}");
     return;
   }
 
-  /* PlayerService-vftable RVA 0x2e8e910 (RE #363, build-konsistent). */
+  /* PlayerService-vftable RVA 0x2e8e910 (RE #363, build-konsistent).
+   * Crash-sicher via scan_qword_instance (ReadProcessMemory, #655). */
   const unsigned char *vftable = base + 0x2e8e910;
-  const uint64_t needle = (uint64_t)(uintptr_t)vftable;
-  unsigned char *ps = NULL;
-  uintptr_t addr = 0;
-
-  for (;;) {
-    MEMORY_BASIC_INFORMATION mi;
-    if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
-      break;
-    uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
-    if (next <= addr)
-      break;
-    addr = next;
-    if (!is_readable_region(&mi))
-      continue;
-    const uint64_t *q = (const uint64_t *)mi.BaseAddress;
-    size_t nq = mi.RegionSize / sizeof(uint64_t);
-    for (size_t i = 0; i < nq; i++) {
-      if (q[i] == needle) {
-        ps = (unsigned char *)&q[i];
-        break;
-      }
-    }
-    if (ps)
-      break;
-  }
+  unsigned char *ps = scan_qword_instance(
+      (uint64_t)(uintptr_t)vftable, "probe");
 
   if (!ps) {
-    send_line(hPipe, "{\"event\":\"probe\",\"error\":\"no_playerservice\"}");
+    send_line(hPipe, "{\"event\":\"probe_result\",\"ok\":false,"
+                     "\"reason\":\"no_playerservice\"}");
     return;
   }
 
   uint64_t resource_system = 0;
   safe_read_u64(ps + 8, &resource_system);
-  /* Container ist EMBEDDED bei resource_system+0x30 (lea, kein Deref) -
-   * im Disasm 0x180c60050 / 0x180f1e700 belegt. */
+  /* Container ist EMBEDDED bei resource_system+0x30 (lea, kein Deref). */
   uint64_t container = resource_system ? resource_system + 0x30 : 0;
 
-  send_line(hPipe,
-            "{\"event\":\"probe\",\"playerservice\":\"0x%llx\","
-            "\"resource_system\":\"0x%llx\",\"container\":\"0x%llx\"}",
-            (unsigned long long)(uintptr_t)ps,
-            (unsigned long long)resource_system, (unsigned long long)container);
+  jbuf_appendf(&jb, "{\"event\":\"probe_result\",\"ok\":true,"
+               "\"playerservice\":\"0x%llx\",\"resource_system\":\"0x%llx\","
+               "\"container\":\"0x%llx\",\"dumps\":[",
+               (unsigned long long)(uintptr_t)ps,
+               (unsigned long long)resource_system,
+               (unsigned long long)container);
 
-  dump_qwords(hPipe, "playerservice", ps, 24);
-  if (resource_system)
-    dump_qwords(hPipe, "resource_system",
-                (const void *)(uintptr_t)resource_system, 24);
-  if (container)
-    dump_qwords(hPipe, "container", (const void *)(uintptr_t)container, 24);
+  dump_qwords_into(&jb, "playerservice", ps, 24);
+  if (resource_system) {
+    jbuf_appendf(&jb, ",");
+    dump_qwords_into(&jb, "resource_system",
+                     (const void *)(uintptr_t)resource_system, 24);
+  }
+  if (container) {
+    jbuf_appendf(&jb, ",");
+    dump_qwords_into(&jb, "container", (const void *)(uintptr_t)container, 24);
+  }
+  jbuf_appendf(&jb, "],");
 
   /* carbonium-Hash scannen (Cross-Check). */
-  scan_hash(hPipe, 0x659cc791, 24);
+  scan_hash_into(&jb, 0x659cc791, 24);
 
-  /* Account-Basket deterministisch dumpen: GetPlayerAccount(World*, 0) ->
-   * ResourceAccount*; account[+8] = sortiertes (StringHash, ResourceValue)-
-   * Array, account[+0x10] = Count (Disasm 0x2E04A0). */
+  /* Account-Basket deterministisch dumpen. */
   {
     uint64_t world = 0;
     safe_read_u64(ps + 8, &world);
+    jbuf_appendf(&jb, ",\"account\":");
     if (world) {
       void *(*gpa)(void *, unsigned int) =
           (void *(*)(void *, unsigned int))(uintptr_t)(base + 0xC60050);
@@ -2848,11 +3007,10 @@ static void probe_resources(HANDLE hPipe) {
         uint64_t arr = 0, count = 0;
         safe_read_u64((unsigned char *)account + 8, &arr);
         safe_read_u64((unsigned char *)account + 0x10, &count);
-        send_line(hPipe,
-                  "{\"event\":\"account\",\"account\":\"0x%llx\","
-                  "\"array\":\"0x%llx\",\"count\":%llu}",
-                  (unsigned long long)(uintptr_t)account,
-                  (unsigned long long)arr, (unsigned long long)count);
+        jbuf_appendf(&jb, "{\"account\":\"0x%llx\",\"array\":\"0x%llx\","
+                     "\"count\":%llu,\"basket\":[",
+                     (unsigned long long)(uintptr_t)account,
+                     (unsigned long long)arr, (unsigned long long)count);
         if (arr && count && count < 256) {
           for (unsigned long long i = 0; i < count; i++) {
             const unsigned char *e = (const unsigned char *)(uintptr_t)arr +
@@ -2860,22 +3018,24 @@ static void probe_resources(HANDLE hPipe) {
             uint64_t hv = 0, v = 0;
             safe_read_u64(e, &hv);
             safe_read_u64(e + 8, &v);
-            send_line(hPipe,
-                      "{\"event\":\"basket_entry\",\"i\":%llu,"
-                      "\"hash\":\"0x%08x\",\"value_hex\":\"0x%llx\","
-                      "\"value\":%llu}",
-                      i, (unsigned int)hv, (unsigned long long)v,
-                      (unsigned long long)v);
+            jbuf_appendf(&jb, "%s{\"hash\":\"0x%08x\",\"value\":%llu}",
+                         i ? "," : "", (unsigned int)hv,
+                         (unsigned long long)v);
           }
         }
+        jbuf_appendf(&jb, "]}");
       } else {
-        send_line(hPipe, "{\"event\":\"account\",\"error\":\"no_account\"}");
+        jbuf_appendf(&jb, "{\"error\":\"no_account\"}");
       }
     } else {
-      send_line(hPipe, "{\"event\":\"account\",\"error\":\"no_world\"}");
+      jbuf_appendf(&jb, "{\"error\":\"no_world\"}");
     }
   }
+
+  jbuf_appendf(&jb, "}");
+  send_line(hPipe, "%s", out);
 }
+
 
 
 /* get_state (Issue #363/#365, Ironium #401): liest den Account-Basket und
@@ -2946,6 +3106,11 @@ static int64_t read_resource_max(const unsigned char *base,
 /* Scannt den eigenen Adressraum (nur MEM_COMMIT + lesbar, kein PAGE_GUARD)
  * nach einem 8-Byte-alignierten QWORD == needle. Reine Leseoperation, kein
  * Aufruf; Rueckgabe = Fundstelle (erstes Vorkommen) oder NULL. */
+/* Blockgroesse (Byte) fuer das crash-sichere ReadProcessMemory-Kopieren
+ * der Region in einen lokalen Stack-Puffer (klein gehalten, damit der
+ * Pipe-Thread-Stack nicht gesprengt wird). */
+#define RBBRIDGE_SCAN_CHUNK (64u * 1024u)
+
 static unsigned char *scan_qword_instance(uint64_t needle, const char *name)
 {
     uintptr_t addr = 0;
@@ -2968,15 +3133,90 @@ static unsigned char *scan_qword_instance(uint64_t needle, const char *name)
         if ((regions & 0xFF) == 0)
             dbg("%s: scan progress (regions=%d candidates=%d)", name, regions,
                 candidates);
-        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
-        size_t nq = mi.RegionSize / sizeof(uint64_t);
-        for (size_t i = 0; i < nq; i++) {
-            if (q[i] == needle) {
-                candidates++;
-                dbg("%s: done (regions=%d candidates=%d)", name, regions,
-                    candidates);
-                return (unsigned char *)&q[i];
+        /* Crash-sicher statt rohem q[i]-Deref: die Region wird chunkweise
+         * per ReadProcessMemory in einen lokalen, 8-Byte-alignierten
+         * Puffer kopiert und DORT gescannt. Wird die Region zwischen
+         * VirtualQuery und dem Lesen vom Spiel freigegeben (TOCTOU-Race
+         * beim Heap-Churn, z.B. Player-Join), liefert ReadProcessMemory
+         * FALSE statt eines Page-Faults -> Chunk ueberspringen, naechste
+         * Region. MinGW-x64 stellt kein SEH (__try/__except, MSVC-only)
+         * bereit. */
+        uint64_t buf[RBBRIDGE_SCAN_CHUNK / sizeof(uint64_t)];
+        size_t remaining = mi.RegionSize;
+        uintptr_t base = (uintptr_t)mi.BaseAddress;
+        while (remaining > 0) {
+            size_t chunk = remaining > sizeof(buf) ? sizeof(buf) : remaining;
+            SIZE_T nread = 0;
+            if (ReadProcessMemory(GetCurrentProcess(), (const void *)base, buf,
+                                  chunk, &nread) &&
+                nread >= sizeof(uint64_t)) {
+                size_t nq = nread / sizeof(uint64_t);
+                for (size_t i = 0; i < nq; i++) {
+                    if (buf[i] == needle) {
+                        candidates++;
+                        dbg("%s: done (regions=%d candidates=%d)", name,
+                            regions, candidates);
+                        return (unsigned char *)(base +
+                                                 i * sizeof(uint64_t));
+                    }
+                }
             }
+            base += chunk;
+            remaining -= chunk;
+        }
+    }
+    dbg("%s: done (regions=%d candidates=%d)", name, regions, candidates);
+    return NULL;
+}
+
+/* Writable-Variante (Round-Reset #516): sucht die Instanz NUR in
+ * beschreibbaren Regionen (der Flag-Write [instance+0x52A]=1 setzt das
+ * voraus). Crash-sicher wie scan_qword_instance (ReadProcessMemory, #655). */
+static unsigned char *scan_qword_instance_writable(uint64_t needle,
+                                                   const char *name)
+{
+    uintptr_t addr = 0;
+    int regions = 0;
+    int candidates = 0;
+
+    dbg("%s: scan start (needle=0x%llx)", name, (unsigned long long)needle);
+
+    for (;;) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
+            break;
+        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
+        if (next <= addr)
+            break;
+        addr = next;
+        if (!is_writable_region(&mi))
+            continue;
+        regions++;
+        if ((regions & 0xFF) == 0)
+            dbg("%s: scan progress (regions=%d candidates=%d)", name, regions,
+                candidates);
+        uint64_t buf[RBBRIDGE_SCAN_CHUNK / sizeof(uint64_t)];
+        size_t remaining = mi.RegionSize;
+        uintptr_t base = (uintptr_t)mi.BaseAddress;
+        while (remaining > 0) {
+            size_t chunk = remaining > sizeof(buf) ? sizeof(buf) : remaining;
+            SIZE_T nread = 0;
+            if (ReadProcessMemory(GetCurrentProcess(), (const void *)base, buf,
+                                  chunk, &nread) &&
+                nread >= sizeof(uint64_t)) {
+                size_t nq = nread / sizeof(uint64_t);
+                for (size_t i = 0; i < nq; i++) {
+                    if (buf[i] == needle) {
+                        candidates++;
+                        dbg("%s: done (regions=%d candidates=%d)", name,
+                            regions, candidates);
+                        return (unsigned char *)(base +
+                                                 i * sizeof(uint64_t));
+                    }
+                }
+            }
+            base += chunk;
+            remaining -= chunk;
         }
     }
     dbg("%s: done (regions=%d candidates=%d)", name, regions, candidates);
@@ -3035,27 +3275,6 @@ static int utfstring_to_cstr(const unsigned char *us, char *buf, size_t n)
         memcpy(buf, data, (size_t)size);
     buf[size] = '\0';
     return 1;
-}
-
-/* Minimales JSON-Escaping fuer String-Werte (Quote/Backslash/Steuerzeichen);
- * der Flow-Name stammt aus dem Spiel. */
-static void json_escape_into(const char *in, char *out, size_t n)
-{
-    size_t o = 0;
-    if (n == 0)
-        return;
-    for (size_t i = 0; in && in[i] && o + 7 < n; i++) {
-        unsigned char c = (unsigned char)in[i];
-        if (c == '"' || c == '\\') {
-            out[o++] = '\\';
-            out[o++] = (char)c;
-        } else if (c < 0x20) {
-            o += (size_t)snprintf(out + o, n - o, "\\u%04x", c);
-        } else {
-            out[o++] = (char)c;
-        }
-    }
-    out[o] = '\0';
 }
 
 /* Database-ABI (MSVC x64, aus dem Disasm):
@@ -3187,41 +3406,9 @@ static restart_cache_t g_restart;
  * Innerhalb der beschreibbaren Regionen gewinnt der erste Treffer. */
 static unsigned char *restart_scan_instance(uintptr_t vtable)
 {
-    uintptr_t addr = 0;
-    int regions = 0;
-    int candidates = 0;
-
-    dbg("resolve_restart: scan start (needle=0x%llx)",
-        (unsigned long long)vtable);
-
-    for (;;) {
-        MEMORY_BASIC_INFORMATION mi;
-        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
-            break;
-        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
-        if (next <= addr)
-            break;
-        addr = next;
-        if (!is_writable_region(&mi))
-            continue;
-        regions++;
-        if ((regions & 0xFF) == 0)
-            dbg("resolve_restart: scan progress (regions=%d candidates=%d)",
-                regions, candidates);
-        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
-        size_t nq = mi.RegionSize / sizeof(uint64_t);
-        for (size_t i = 0; i < nq; i++) {
-            if (q[i] == (uint64_t)vtable) {
-                candidates++;
-                dbg("resolve_restart: done (regions=%d candidates=%d)",
-                    regions, candidates);
-                return (unsigned char *)&q[i];
-            }
-        }
-    }
-    dbg("resolve_restart: done (regions=%d candidates=%d)", regions,
-        candidates);
-    return NULL;
+    /* Crash-sicher via scan_qword_instance_writable (ReadProcessMemory,
+     * kein roher q[i]-Deref - #655). */
+    return scan_qword_instance_writable((uint64_t)vtable, "resolve_restart");
 }
 
 /* Loest den nativen Round-Reset-Pfad auf (Signatur + vtable + Instance).
@@ -4514,33 +4701,11 @@ static void dispatch_get_state(HANDLE hPipe)
         }
     }
 
-    /* PlayerService-vftable RVA 0x2e8e910 (RE #363/#365). */
+    /* PlayerService-vftable RVA 0x2e8e910 (RE #363/#365). Crash-sicher via
+     * scan_qword_instance (ReadProcessMemory, kein roher q[i]-Deref - #655). */
     const unsigned char *vftable = base + 0x2e8e910;
-    const uint64_t needle = (uint64_t)(uintptr_t)vftable;
-    unsigned char *ps = NULL;
-    uintptr_t addr = 0;
-
-    for (;;) {
-        MEMORY_BASIC_INFORMATION mi;
-        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
-            break;
-        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
-        if (next <= addr)
-            break;
-        addr = next;
-        if (!is_readable_region(&mi))
-            continue;
-        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
-        size_t nq = mi.RegionSize / sizeof(uint64_t);
-        for (size_t i = 0; i < nq; i++) {
-            if (q[i] == needle) {
-                ps = (unsigned char *)&q[i];
-                break;
-            }
-        }
-        if (ps)
-            break;
-    }
+    unsigned char *ps = scan_qword_instance(
+        (uint64_t)(uintptr_t)vftable, "get_state");
 
     if (!ps) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
@@ -4727,32 +4892,11 @@ static void dispatch_add_resource(HANDLE hPipe, const char *resource_str,
     if (readiness_block(hPipe, "add_resource_result"))
         return;
 
-    /* PlayerService-Instanz per vftable-Scan (RVA 0x2e8e910, wie get_state). */
+    /* PlayerService-Instanz per vftable-Scan (RVA 0x2e8e910, wie get_state).
+     * Crash-sicher via scan_qword_instance (ReadProcessMemory, #655). */
     const unsigned char *vftable = base + 0x2e8e910;
-    const uint64_t needle = (uint64_t)(uintptr_t)vftable;
-    unsigned char *ps = NULL;
-    uintptr_t addr = 0;
-    for (;;) {
-        MEMORY_BASIC_INFORMATION mi;
-        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
-            break;
-        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
-        if (next <= addr)
-            break;
-        addr = next;
-        if (!is_readable_region(&mi))
-            continue;
-        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
-        size_t nq = mi.RegionSize / sizeof(uint64_t);
-        for (size_t i = 0; i < nq; i++) {
-            if (q[i] == needle) {
-                ps = (unsigned char *)&q[i];
-                break;
-            }
-        }
-        if (ps)
-            break;
-    }
+    unsigned char *ps = scan_qword_instance(
+        (uint64_t)(uintptr_t)vftable, "add_resource");
 
     if (!ps) {
         send_line(hPipe, "{\"event\":\"add_resource_result\",\"ok\":false,"
@@ -5021,6 +5165,24 @@ static int serve_client(HANDLE hPipe)
             send_state(hPipe);
         }
 
+        /* #636: pending Chat sofort pushen (persistente Pipe, kein get_chat-
+         * Pull mehr). Jede Nachricht als player_chat-Zeile auf die offene
+         * Verbindung. */
+        {
+            char raw[256];
+            char cline[600];
+            for (;;) {
+                int got = 0;
+                EnterCriticalSection(&g_chat_cs);
+                got = chat_queue_pop(&g_chat_q, raw, sizeof(raw));
+                LeaveCriticalSection(&g_chat_cs);
+                if (!got)
+                    break;
+                if (chat_build_player_chat(raw, cline, sizeof(cline)) > 0)
+                    send_line(hPipe, "%s", cline);
+            }
+        }
+
         Sleep(POLL_MS);
     }
 }
@@ -5034,6 +5196,11 @@ static DWORD WINAPI pipe_server_main(LPVOID unused)
 {
     (void)unused;
     dbg("pipe_server_main: Start (Pipe %s)", PIPE_NAME_A);
+
+    /* Chat-Detour (#549): best effort; ohne Modul/Fehler kein Crash.
+     * Bewusst NICHT im DllMain-/Loader-Lock-Kontext (resolve_module kann
+     * als Fallback LoadLibrary aufrufen), sondern hier im Pipe-Thread. */
+    install_chat_hook();
 
     while (!g_stop) {
         HANDLE hPipe = CreateNamedPipeA(
@@ -5085,6 +5252,175 @@ static DWORD WINAPI pipe_server_main(LPVOID unused)
 }
 
 /* ------------------------------------------------------------------ */
+/* Chat-Detour (#549): OnNetPlayerChatRequest inline hook              */
+/*                                                                    */
+/* RVA 0x1821B50 (Build 2.0.58485), NON-virtuell (AEAA) -> kein        */
+/* vtable-Slot, sondern inline Hook. Argumente beim Eintritt:          */
+/*   rcx = this (ServerGameplayState*), rdx = NetConnection*,          */
+/*   r8  = &NetPlayerChatReq (by-value-Struct via Hidden-Pointer).      */
+/*   Chat-Text = UtfString am req-Anfang, Layout identisch zum          */
+/*   kanonischen Reader utfstring_to_cstr(): SSO-Daten bei +0x08       */
+/*   (Heap-Pointer *(req+0x08) bei cap > 0xF), size +0x18, cap +0x20.  */
+/*   (Review-Blocker 2: der fruehere +0x00-Datenoffset war um 8 daneben  */
+/*    und wurde durch Wiederverwendung von utfstring_to_cstr() ersetzt.) */
+/*                                                                    */
+/* Prolog (12 Bytes, saubere Instruktionsgrenze) = CHAT_HOOK_ORIG:      */
+/*   48 89 5c 24 10   mov [rsp+0x10], rbx                              */
+/*   4c 89 44 24 18   mov [rsp+0x18], r8                               */
+/*   55               push rbp                                         */
+/*   56               push rsi                                         */
+/* ab Byte 12: 57 push rdi.                                            */
+/* Der Prolog wird VOR dem Patch per memcmp geprueft (siehe            */
+/* install_chat_hook) -> bei abweichendem Build kein Fremdpatch.        */
+/* ------------------------------------------------------------------ */
+
+#define CHAT_HOOK_RVA 0x1821B50u
+
+/* Erwarteter 12-Byte-Funktionsprolog an CHAT_HOOK_RVA. Nur bei exakter
+ * Uebereinstimmung mit den Live-Bytes wird gepatcht (sonst Abort + dbg),
+ * damit ein abweichender Build/Update keinen Fremdcode ueberschreibt
+ * (#549 Review-Blocker 1, analog RBBRIDGE_EXEC_SIG/RBBRIDGE_RESTART_SIG). */
+static const unsigned char CHAT_HOOK_ORIG[12] = {
+    0x48, 0x89, 0x5c, 0x24, 0x10, /* mov [rsp+0x10], rbx */
+    0x4c, 0x89, 0x44, 0x24, 0x18, /* mov [rsp+0x18], r8  */
+    0x55,                           /* push rbp           */
+    0x56                            /* push rsi           */
+};
+
+/* #549: liest den Chat-Text aus dem uebergebenen UtfString (req) und legt
+ * ihn als pending `player_chat` ab. Nutzt bewusst den kanonischen Reader
+ * utfstring_to_cstr() (kein eigener, abweichender Offset) und nullt den
+ * Puffer vorab -> kein Stack-Info-Leak ueber die Pipe (Review Minor). */
+static void capture_chat_text(const void *req)
+{
+    char buf[256];
+
+    if (req == NULL)
+        return;
+    memset(buf, 0, sizeof(buf));
+    if (!utfstring_to_cstr((const unsigned char *)req, buf, sizeof(buf)))
+        return;
+    dbg("player_chat: %s", buf);
+    EnterCriticalSection(&g_chat_cs);
+    chat_queue_push(&g_chat_q, buf);
+    LeaveCriticalSection(&g_chat_cs);
+}
+
+/* Detour: rettet die drei Argumentregister in globale Slots, liest den
+ * Chat-Text und springt dann in die Trampoline (Original-Prolog + Sprung
+ * hinter den Patch).
+ *
+ * ABI (MS-x64): naked-Funktion ohne Compiler-Prolog -> im Rumpf genug
+ * Shadow-Space + 16-B-Alignment vor dem Call aufbauen (sub 0x28).
+ *
+ * Reentrancy (Review Minor): die Argumentregister werden in EINEM
+ * globalen Slotsatz geparkt. Sicher, solange der Hook nur vom Single-
+ * Net-Thread des Servers erreicht wird; bei verschachtelten/parallelen
+ * Aufrufen gingen die Original-Argumente verloren. Fuer diese einzige
+ * Aufrufstelle ist das gegeben. */
+__attribute__((naked)) static void detour_chat_handler(void)
+{
+    __asm__ volatile(
+        "movq %rcx, g_chat_this(%rip)\n"
+        "movq %rdx, g_chat_conn(%rip)\n"
+        "movq %r8, g_chat_req(%rip)\n"
+        "subq $0x28, %rsp\n" /* MS-x64: 0x20 Shadow-Space + 8 B Alignment */
+        "movq g_chat_req(%rip), %rcx\n"
+        "call *g_chat_capture(%rip)\n"
+        "addq $0x28, %rsp\n"
+        "movq g_chat_this(%rip), %rcx\n"
+        "movq g_chat_conn(%rip), %rdx\n"
+        "movq g_chat_req(%rip), %r8\n"
+        "movq g_chat_trampoline(%rip), %rax\n"
+        "jmp *%rax\n");
+}
+
+static int install_chat_hook(void)
+{
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    const char *via = NULL;
+    const unsigned char *execfn = NULL;
+    unsigned char *target;
+    unsigned char *tramp;
+    unsigned char patch[12];
+    DWORD oldp;
+    uintptr_t fn = (uintptr_t)(void *)detour_chat_handler;
+    uintptr_t ret;
+    int k;
+
+    if (g_chat_trampoline != NULL)
+        return 0;
+
+    if (!resolve_module(&base, &size, &via, &execfn) || base == NULL) {
+        dbg("install_chat_hook: resolve_module fehlgeschlagen -> kein Hook");
+        return -1;
+    }
+
+    target = (unsigned char *)(base + CHAT_HOOK_RVA);
+
+    /* Review-Blocker 1: Prolog erst VERIFIZIEREN, dann patchen. Der RVA ist
+     * build-spezifisch (2.0.58485); ohne diesen Check wuerde ein abweichender
+     * Build beim Attach sofort crashen. */
+    if (memcmp(target, CHAT_HOOK_ORIG, sizeof(CHAT_HOOK_ORIG)) != 0) {
+        dbg("install_chat_hook: Prolog-Mismatch @%p (Build != 2.0.58485?) "
+            "-> Hook uebersprungen, kein Patch",
+            (void *)target);
+        return -1;
+    }
+
+    tramp = (unsigned char *)VirtualAlloc(NULL, 24, MEM_COMMIT,
+                                          PAGE_EXECUTE_READWRITE);
+    if (tramp == NULL) {
+        dbg("install_chat_hook: VirtualAlloc(Trampoline) fehlgeschlagen");
+        return -1;
+    }
+
+    /* Trampoline: Original-Prolog (verifiziert) + absoluter Ruecksprung
+     * hinter den 12-Byte-Patch (base + RVA + 12). */
+    ret = (uintptr_t)(base + CHAT_HOOK_RVA + 12);
+    for (k = 0; k < 12; k++)
+        tramp[k] = CHAT_HOOK_ORIG[k];
+    tramp[12] = 0x48;
+    tramp[13] = 0xB8; /* mov rax, imm64 */
+    for (k = 0; k < 8; k++)
+        tramp[14 + k] = (unsigned char)(ret >> (8 * k));
+    tramp[22] = 0xFF;
+    tramp[23] = 0xE0; /* jmp rax */
+
+    /* 12-Byte-Sprung (mov rax, imm64 ; jmp rax) ueber den Prolog. */
+    patch[0] = 0x48;
+    patch[1] = 0xB8; /* mov rax, imm64 */
+    for (k = 0; k < 8; k++)
+        patch[2 + k] = (unsigned char)(fn >> (8 * k));
+    patch[10] = 0xFF;
+    patch[11] = 0xE0; /* jmp rax */
+
+    g_chat_capture = capture_chat_text;
+    g_chat_trampoline = tramp; /* vor dem Patch, damit der Detour ein Ziel hat */
+
+    if (!VirtualProtect(target, 12, PAGE_EXECUTE_READWRITE, &oldp)) {
+        dbg("install_chat_hook: VirtualProtect(WRITE) fehlgeschlagen -> kein Hook");
+        VirtualFree(tramp, 0, MEM_RELEASE);
+        g_chat_trampoline = NULL;
+        return -1;
+    }
+    /* Hinweis (Review Minor): der 12-Byte-Write ist NICHT atomar; parallel
+     * laufende Net-Threads koennten eine zerrissene Instruktion sehen. Der
+     * Hook wird im Pipe-Server-Thread installiert, bevor ein Client Chat
+     * senden kann; die Ziel-Funktion wird nur bei eingehendem Chat betreten.
+     * Fuer diese einzige Aufrufstelle daher unkritisch. */
+    for (k = 0; k < 12; k++)
+        target[k] = patch[k];
+    if (!VirtualProtect(target, 12, oldp, &oldp))
+        dbg("install_chat_hook: VirtualProtect(Restore) fehlgeschlagen");
+
+    dbg("install_chat_hook: Detour installiert (target=%p tramp=%p)",
+        (void *)target, (void *)tramp);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* Gemeinsame Start-/Stopp-API (DLL-Attach UND Standalone-main)        */
 /* ------------------------------------------------------------------ */
 
@@ -5108,6 +5444,9 @@ int rbbridge_start(void)
 
     InitializeCriticalSection(&g_log_cs);
     g_stop = 0;
+
+    InitializeCriticalSection(&g_chat_cs);
+    chat_queue_init(&g_chat_q);
 
     dbg("rbbridge_start: ref=%s", RBBRIDGE_REF);
 

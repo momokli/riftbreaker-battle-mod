@@ -18,6 +18,8 @@ Ausgabe (stdout, JSON)::
     {
       "exception_code": 3221225477,
       "exception_address": "140001234",
+      "access_type": 1,
+      "faulting_address": "1a2b3c4d5e6f",
       "module": "riftbreaker.exe",
       "module_base": "140000000",
       "module_size": 4096,
@@ -112,12 +114,15 @@ def parse_streams(dump):
 
 
 def parse_exception(dump, rva):
-    """ExceptionStream -> (thread_id, exception_code, exception_address)."""
+    """ExceptionStream -> (thread_id, code, address, access_type, faulting_address)."""
     thread_id = dump.u32(rva)
     # ExceptionRecord beginnt bei RVA+8; ExceptionAddress @ +16 im Record.
     code = dump.u32(rva + 8)
     address = dump.u64(rva + 8 + 16)
-    return thread_id, code, address
+    number_parameters = dump.u32(rva + 8 + 24)
+    access_type = dump.u64(rva + 8 + 32) if number_parameters >= 1 else None
+    faulting_address = dump.u64(rva + 8 + 40) if number_parameters >= 2 else None
+    return thread_id, code, address, access_type, faulting_address
 
 
 def parse_module_name(dump, rva):
@@ -214,7 +219,7 @@ def analyze(path):
         streams = parse_streams(dump)
         if STREAM_EXCEPTION not in streams:
             raise ParseError("no exception stream")
-        thread_id, code, address = parse_exception(dump, streams[STREAM_EXCEPTION])
+        thread_id, code, address, access_type, faulting_address = parse_exception(dump, streams[STREAM_EXCEPTION])
 
         modules = []
         if STREAM_MODULE_LIST in streams:
@@ -255,6 +260,8 @@ def analyze(path):
             "_ok": True,
             "exception_code": code,
             "exception_address": _hex(address),
+            "access_type": access_type,
+            "faulting_address": _hex(faulting_address),
             "module": module,
             "module_base": _hex(module_base),
             "module_size": module_size,

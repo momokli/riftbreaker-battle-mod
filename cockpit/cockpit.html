@@ -159,6 +159,11 @@
                     grid-row: 3;
                     align-self: start;
                 }
+                #panel-send-menu {
+                    grid-column: 2;
+                    grid-row: 2;
+                    align-self: start;
+                }
                 .right-col {
                     grid-column: 3;
                     grid-row: 1 / span 2;
@@ -588,6 +593,43 @@
                         </div>
                     </fieldset>
 
+                    <!-- A2. SEND MENU (#684): WAVE/BOSS-Presets -> activate_mission_flow,
+                         kein Deduct, kein Chat (Preise/Balance folgen #205/#670). -->
+                    <fieldset class="q-groupbox" id="panel-send-menu">
+                        <legend>Send Menu</legend>
+                        <div class="flow-container">
+                            <div class="flow-action-row">
+                                <span class="prop-label">wave</span>
+                                <button id="send_wave_1" class="send-preset" data-preset="wave_1" title="attack_level_1_id_1 (~22,5 HP Pool-Schnitt)" aria-label="Send wave level 1">1</button>
+                                <button id="send_wave_2" class="send-preset" data-preset="wave_2" title="attack_level_2_id_1 (~250 HP Pool-Schnitt)" aria-label="Send wave level 2">2</button>
+                                <button id="send_wave_3" class="send-preset" data-preset="wave_3" title="attack_level_3_id_1 (~1088 HP Pool-Schnitt)" aria-label="Send wave level 3">3</button>
+                                <button id="send_wave_4" class="send-preset" data-preset="wave_4" title="attack_level_4_id_1 (~2180 HP Pool-Schnitt)" aria-label="Send wave level 4">4</button>
+                                <button id="send_wave_5" class="send-preset" data-preset="wave_5" title="attack_level_5_id_1 (~3731 HP Pool-Schnitt)" aria-label="Send wave level 5">5</button>
+                                <button id="send_wave_6" class="send-preset" data-preset="wave_6" title="attack_level_6_id_1 (~5582 HP Pool-Schnitt)" aria-label="Send wave level 6">6</button>
+                                <button id="send_wave_7" class="send-preset" data-preset="wave_7" title="attack_level_7_id_1 (~7648 HP Pool-Schnitt)" aria-label="Send wave level 7">7</button>
+                                <button id="send_wave_8" class="send-preset" data-preset="wave_8" title="attack_level_8_id_1 (~9312 HP Pool-Schnitt)" aria-label="Send wave level 8">8</button>
+                                <button id="send_wave_9" class="send-preset" data-preset="wave_9" title="attack_level_8_id_1 — Level 9 teilt sich den Pool mit Level 8 (#658), keine eigene Datei (~10512 HP Pool-Schnitt)" aria-label="Send wave level 9">9</button>
+                            </div>
+                            <div class="flow-action-row">
+                                <span class="prop-label">boss</span>
+                                <button id="send_boss_low" class="send-preset" data-preset="boss_low" title="attack_boss_baxmoth (1000 HP)" aria-label="Send boss low">low</button>
+                                <button id="send_boss_mid" class="send-preset" data-preset="boss_mid" title="attack_boss_magmoth (3000 HP)" aria-label="Send boss mid">mid</button>
+                                <button id="send_boss_high" class="send-preset" data-preset="boss_high" title="attack_boss_arachnoid (5000 HP)" aria-label="Send boss high">high</button>
+                                <button id="send_boss_random" class="send-preset" data-preset="boss_random" title="attack_boss_dynamic (vanilla Random-Boss)" aria-label="Send random boss">random</button>
+                            </div>
+                            <div class="flow-readouts">
+                                <div class="flow-prop">
+                                    <span class="prop-label">last send</span>
+                                    <span id="send_menu_last" class="prop-val">—</span>
+                                </div>
+                            </div>
+                            <div class="flow-note">
+                                presets → activate_mission_flow (mode "default").
+                                Kein Deduct, kein Chat-Signal (#684).
+                            </div>
+                        </div>
+                    </fieldset>
+
                     <!-- B. SEND TRACKER (1.0-Send-Loop, #527) -->
                     <fieldset class="q-groupbox" id="panel-send-tracker">
                         <legend>Send Tracker (Carbonium)</legend>
@@ -964,6 +1006,62 @@
                     startMissionFlow();
                 };
 
+                // Send-Menu-Presets (#684, Wave-Reihe auf 9 Level erweitert in
+                // #689): WAVE 1-9 + BOSS LOW/MID/HIGH + Random-Boss. Jede Taste
+                // feuert activate_mission_flow mit mode "default" (#447) —
+                // bewusst OHNE Deduct und OHNE Chat-Parsing; Preise/Balance
+                // folgen in #205/#670. Level 9 nutzt bewusst dieselbe Datei wie
+                // Level 8 — Level 9 hat keinen eigenen Wellen-Pool, sondern teilt
+                // sich den von Level 8 (roh belegt in #658).
+                var SEND_PRESETS = {
+                    wave_1: "logic/missions/survival/attack_level_1_id_1.logic",
+                    wave_2: "logic/missions/survival/attack_level_2_id_1.logic",
+                    wave_3: "logic/missions/survival/attack_level_3_id_1.logic",
+                    wave_4: "logic/missions/survival/attack_level_4_id_1.logic",
+                    wave_5: "logic/missions/survival/attack_level_5_id_1.logic",
+                    wave_6: "logic/missions/survival/attack_level_6_id_1.logic",
+                    wave_7: "logic/missions/survival/attack_level_7_id_1.logic",
+                    wave_8: "logic/missions/survival/attack_level_8_id_1.logic",
+                    wave_9: "logic/missions/survival/attack_level_8_id_1.logic",
+                    boss_low: "logic/missions/survival/attack_boss_baxmoth.logic",
+                    boss_mid: "logic/missions/survival/attack_boss_magmoth.logic",
+                    boss_high: "logic/missions/survival/attack_boss_arachnoid.logic",
+                    boss_random: "logic/missions/survival/attack_boss_dynamic.logic",
+                };
+
+                async function sendPreset(key) {
+                    var logic = SEND_PRESETS[key];
+                    if (!logic) {
+                        $("out").textContent = "unknown preset: " + key;
+                        return;
+                    }
+                    try {
+                        var r = await post("activate_mission_flow", {
+                            logic: logic,
+                            mode: "default",
+                        });
+                        if (r && r.ok) {
+                            $("send_menu_last").textContent =
+                                key + " -> " + (r.flow || "ok");
+                            $("out").textContent = "";
+                        } else {
+                            $("send_menu_last").textContent = "—";
+                            $("out").textContent = key + ": " + JSON.stringify(r);
+                        }
+                        refresh();
+                    } catch (e) {
+                        $("send_menu_last").textContent = "—";
+                        $("out").textContent = "ERR " + e.message;
+                    }
+                }
+
+                var sendPresets = document.querySelectorAll(".send-preset");
+                for (var i = 0; i < sendPresets.length; i++) {
+                    sendPresets[i].onclick = function () {
+                        sendPreset(this.getAttribute("data-preset"));
+                    };
+                }
+
                 async function stopMissionFlow() {
                     try {
                         var body = {};
@@ -1082,7 +1180,7 @@
                 };
 
                 refresh();
-                setInterval(refresh, 3000);
+                setInterval(refresh, 1000);
 
                 // --- send tracker (testable) ---
                 // Persistente Send-Liste (#527, 1.0-Send-Loop #517).
@@ -1535,6 +1633,39 @@
                 serverPanel.refreshStatus();
                 serverPanel.refreshLogs();
                 setInterval(serverPanel.refreshStatus, 5000);
+
+                function initEvents() {
+                    if (typeof EventSource === "undefined") {
+                        return;
+                    }
+                    var es = new EventSource("/events");
+                    es.onmessage = function (ev) {
+                        var d;
+                        try {
+                            d = JSON.parse(ev.data);
+                        } catch (e) {
+                            return;
+                        }
+                        if (d && d.event === "chat_sent" && typeof d.amount === "number") {
+                            $("out").textContent = "sent " + d.amount + " " + (d.resource || "carbonium");
+                            if (typeof sendTracker !== "undefined" && sendTracker.add) {
+                                sendTracker.add({
+                                    timestamp: Date.now(),
+                                    resource: d.resource || "carbonium",
+                                    amount: -d.amount,
+                                });
+                            }
+                            refresh();
+                        } else if (d && d.event === "player_chat" && d.text) {
+                            $("out").textContent = "chat: " + d.text;
+                        }
+                    };
+                    es.onerror = function () {
+                        /* EventSource reconnectet automatisch */
+                    };
+                }
+
+                initEvents();
             })();
         </script>
     </body>
