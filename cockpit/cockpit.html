@@ -159,6 +159,11 @@
                     grid-row: 3;
                     align-self: start;
                 }
+                #panel-send-menu {
+                    grid-column: 2;
+                    grid-row: 2;
+                    align-self: start;
+                }
                 .right-col {
                     grid-column: 3;
                     grid-row: 1 / span 2;
@@ -588,6 +593,37 @@
                         </div>
                     </fieldset>
 
+                    <!-- A2. SEND MENU (#684): WAVE/BOSS-Presets -> activate_mission_flow,
+                         kein Deduct, kein Chat (Preise/Balance folgen #205/#670). -->
+                    <fieldset class="q-groupbox" id="panel-send-menu">
+                        <legend>Send Menu</legend>
+                        <div class="flow-container">
+                            <div class="flow-action-row">
+                                <span class="prop-label">wave</span>
+                                <button id="send_wave_low" class="send-preset" data-preset="wave_low" title="attack_level_2_id_1 (~250 HP)" aria-label="Send wave low">low</button>
+                                <button id="send_wave_mid" class="send-preset" data-preset="wave_mid" title="attack_level_5_id_1 (~3731 HP)" aria-label="Send wave mid">mid</button>
+                                <button id="send_wave_high" class="send-preset" data-preset="wave_high" title="attack_level_8_id_1 (~9312 HP)" aria-label="Send wave high">high</button>
+                            </div>
+                            <div class="flow-action-row">
+                                <span class="prop-label">boss</span>
+                                <button id="send_boss_low" class="send-preset" data-preset="boss_low" title="attack_boss_baxmoth (1000 HP)" aria-label="Send boss low">low</button>
+                                <button id="send_boss_mid" class="send-preset" data-preset="boss_mid" title="attack_boss_magmoth (3000 HP)" aria-label="Send boss mid">mid</button>
+                                <button id="send_boss_high" class="send-preset" data-preset="boss_high" title="attack_boss_arachnoid (5000 HP)" aria-label="Send boss high">high</button>
+                                <button id="send_boss_random" class="send-preset" data-preset="boss_random" title="attack_boss_dynamic (vanilla Random-Boss)" aria-label="Send random boss">random</button>
+                            </div>
+                            <div class="flow-readouts">
+                                <div class="flow-prop">
+                                    <span class="prop-label">last send</span>
+                                    <span id="send_menu_last" class="prop-val">—</span>
+                                </div>
+                            </div>
+                            <div class="flow-note">
+                                presets → activate_mission_flow (mode "default").
+                                Kein Deduct, kein Chat-Signal (#684).
+                            </div>
+                        </div>
+                    </fieldset>
+
                     <!-- B. SEND TRACKER (1.0-Send-Loop, #527) -->
                     <fieldset class="q-groupbox" id="panel-send-tracker">
                         <legend>Send Tracker (Carbonium)</legend>
@@ -963,6 +999,53 @@
                 $("flow_start").onclick = function () {
                     startMissionFlow();
                 };
+
+                // Send-Menu-Presets (#684): WAVE/BOSS LOW/MID/HIGH + Random-Boss.
+                // Jede Taste feuert activate_mission_flow mit mode "default"
+                // (#447) — bewusst OHNE Deduct und OHNE Chat-Parsing; Preise/
+                // Balance folgen in #205/#670.
+                var SEND_PRESETS = {
+                    wave_low: "logic/missions/survival/attack_level_2_id_1.logic",
+                    wave_mid: "logic/missions/survival/attack_level_5_id_1.logic",
+                    wave_high: "logic/missions/survival/attack_level_8_id_1.logic",
+                    boss_low: "logic/missions/survival/attack_boss_baxmoth.logic",
+                    boss_mid: "logic/missions/survival/attack_boss_magmoth.logic",
+                    boss_high: "logic/missions/survival/attack_boss_arachnoid.logic",
+                    boss_random: "logic/missions/survival/attack_boss_dynamic.logic",
+                };
+
+                async function sendPreset(key) {
+                    var logic = SEND_PRESETS[key];
+                    if (!logic) {
+                        $("out").textContent = "unknown preset: " + key;
+                        return;
+                    }
+                    try {
+                        var r = await post("activate_mission_flow", {
+                            logic: logic,
+                            mode: "default",
+                        });
+                        if (r && r.ok) {
+                            $("send_menu_last").textContent =
+                                key + " -> " + (r.flow || "ok");
+                            $("out").textContent = "";
+                        } else {
+                            $("send_menu_last").textContent = "—";
+                            $("out").textContent = key + ": " + JSON.stringify(r);
+                        }
+                        refresh();
+                    } catch (e) {
+                        $("send_menu_last").textContent = "—";
+                        $("out").textContent = "ERR " + e.message;
+                    }
+                }
+
+                var sendPresets = document.querySelectorAll(".send-preset");
+                for (var i = 0; i < sendPresets.length; i++) {
+                    sendPresets[i].onclick = function () {
+                        sendPreset(this.getAttribute("data-preset"));
+                    };
+                }
 
                 async function stopMissionFlow() {
                     try {
