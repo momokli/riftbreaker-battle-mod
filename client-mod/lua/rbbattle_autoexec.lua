@@ -1,15 +1,16 @@
 -- ============================================================================
 -- rbbattle_autoexec.lua — PLAYERMOD
--- PoC #631: Markt-Area mit 7 Gebäuden (UNIT LOW/MID/HIGH, BOSS LOW/MID/HIGH/RANDOM).
+-- PoC #631: Markt-Area mit 9 Wave-Buttons (WAVE 1..9), horizontal angeordnet.
 -- NUR der Dedicated-Server spawnt die Markt-Area (serverseitige Autorität).
 -- Client/Single-Player: kein Spawn (Client rendert nur die Server-Entities).
--- Jedes Gebäude: Space (InteractWithEntityRequest) + Radial (SpecialBuildingActionRequest) -> Chat.
+-- Jedes Gebäude: Space (InteractWithEntityRequest) -> Chat („send wave N“).
+-- Preise = Test-C-Kurve (#670), Label „send WAVE N | <preis>“ kommt aus der .ent.
 -- ============================================================================
 
 local RBB = {}
-RBB.version = "0.34.3"
+RBB.version = "0.35.0"
 RBB.ref = "RBB_BUILD_REF"
-RBB.build = "20260917-203600"
+RBB.build = "20260917-market-wave"
 
 local LOG_TAG = "[RBBATTLE:" .. RBB.build .. "]"
 
@@ -58,14 +59,17 @@ end)
 local INVALID = 4294967295
 
 -- Blueprint je Button (Label kommt aus localization_id der jeweiligen .ent).
+-- Preise = Test-C-Kurve (#670): 10/110/480/960/1590/2250/2800/3060/3110.
 local BUTTONS = {
-    { bp = "buildings/decorations/rbbattle_button_unit_low",    msg = "unit low" },
-    { bp = "buildings/decorations/rbbattle_button_unit_mid",    msg = "unit mid" },
-    { bp = "buildings/decorations/rbbattle_button_unit_high",   msg = "unit high" },
-    { bp = "buildings/decorations/rbbattle_button_boss_low",    msg = "boss low" },
-    { bp = "buildings/decorations/rbbattle_button_boss_mid",    msg = "boss mid" },
-    { bp = "buildings/decorations/rbbattle_button_boss_high",   msg = "boss high" },
-    { bp = "buildings/decorations/rbbattle_button_boss_random", msg = "boss random" },
+    { bp = "buildings/decorations/rbbattle_wave_1", msg = "send wave 1" },
+    { bp = "buildings/decorations/rbbattle_wave_2", msg = "send wave 2" },
+    { bp = "buildings/decorations/rbbattle_wave_3", msg = "send wave 3" },
+    { bp = "buildings/decorations/rbbattle_wave_4", msg = "send wave 4" },
+    { bp = "buildings/decorations/rbbattle_wave_5", msg = "send wave 5" },
+    { bp = "buildings/decorations/rbbattle_wave_6", msg = "send wave 6" },
+    { bp = "buildings/decorations/rbbattle_wave_7", msg = "send wave 7" },
+    { bp = "buildings/decorations/rbbattle_wave_8", msg = "send wave 8" },
+    { bp = "buildings/decorations/rbbattle_wave_9", msg = "send wave 9" },
 }
 
 local function IsDedicatedServer()
@@ -97,11 +101,9 @@ pcall(function()
         _G.RBB_MARKET_SPAWNED = true
         local pos = EntityService:GetPosition(mech)
         for i, b in ipairs(BUTTONS) do
-            -- 2 Reihen: UNIT (1-3) vorne, BOSS (4-7) dahinter.
-            local row = (i <= 3) and 0 or 1
-            local col = (i <= 3) and (i - 1) or (i - 4)
-            local x = pos.x + 4 + col * 4
-            local z = pos.z + 4 + row * 5
+            -- Eine horizontale Reihe: 9 Buttons, Abstand 4, vor dem Mech.
+            local x = pos.x + 4 + (i - 1) * 4
+            local z = pos.z + 4
             local ok, ent = SpawnButton(b.bp, x, pos.y, z, b.msg)
             Log("event=spawn_market i=%d msg=%s ok=%s ent=%s", i, b.msg, tostring(ok), tostring(ent))
         end
