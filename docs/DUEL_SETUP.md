@@ -1,7 +1,7 @@
 # DUEL_SETUP — Welt-Setup für den synchronen Runden-Takt (Issue #23)
 
-Stand: 2026-09-12 (Update `#278`) · Ziel: **synchroner Wellen-Takt**, Schwierigkeit
-hard, Map large, identischer Seed auf beiden Welten (GDD „Setup“, Issue #23).
+Stand: 2026-09-17 (Update `#710`) · Ziel: **synchroner Wellen-Takt**, Schwierigkeit
+normal (coop_normal), Map large, identischer Seed auf beiden Welten (GDD „Setup“, Issue #23).
 
 > **Update (#41/#278):** Das ursprünglich feste 300-s-Ziel aus #23 ist durch die
 > Wellen-Presets `RBB.wavePresets` (A=480 s / B=240 s) abgelöst. Der Cap wird
@@ -9,14 +9,19 @@ hard, Map large, identischer Seed auf beiden Welten (GDD „Setup“, Issue #23)
 > (er hebt nie). Das Setup-Log zeigt seit #278 das Preset-Ziel als `interval_cfg`
 > und den **wirksamen** DOM-Timer als `interval_eff`. Welcher Takt gewollt ist
 > (300 vs. 480) und ob Preset A den Timer anheben soll, ist **offen** (Player-Test).
+>
+> **Update (#710):** Difficulty-Soll ist **normal** (`coop_normal`) statt **hard** —
+> belegt im Repo (`deploy/inventory/host_vars/planet/vars.yml`), in der gerenderten
+> `config.cfg` (`set difficulty "coop_normal"`) und im Live-Log
+> (`event_manager:InitRules(): difficulty coop_normal`).
 
 ## Was der Mod leistet (rbbattle v0.3.0)
 
-| Punkt | Umsetzung | Ort |
-|---|---|---|
-| Runden-Takt (Cap) | `dom_mananger:GetPrepareSpawnTime` wird zur Laufzeit auf **max. das Preset-Intervall** gedeckelt (Function-Wrap, pcall-gesichert, idempotent; Retry bei Mod-Load, `PlayerInitializedEvent` und jedem `rb_wave`/`rb_send`). Der Rules-Wert (normal/hard 420) wird nur gesenkt, nie angehoben (`#278`) | `client-mod/lua/rbbattle_autoexec.lua` |
-| Verifikations-Log | `[RBBATTLE] event=dom_timer patch status=ok cap=<Preset>` + `event=setup difficulty=<name> creatures_difficulty=<n> timer_cap=<Preset> preset=A interval_cfg=<Preset> interval_eff=<wirksam> strength_pct=<n> base_difficulty=<name>` | dito |
-| Effektiv-Abstand | Zwischen zwei Naturwellen liegt zusätzlich `cooldownAfterAttacks` (Survival-rules 60–240 s je DOM-Level) + `idleTime` (hard: 0) + ggf. Streaming. **Beide Welten laufen identisch** (gleiche Rules/Seed), Fairness bleibt; exakt-300-s-Runden wären nur mit zusätzlichem Cooldown-Patch möglich (Folge-Tuning, bewusst nicht Teil von #23) | dom_manager v2 State-Machine |
+| Punkt             | Umsetzung                                                                                                                                                                                                                                                                                                                                            | Ort                                    |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| Runden-Takt (Cap) | `dom_mananger:GetPrepareSpawnTime` wird zur Laufzeit auf **max. das Preset-Intervall** gedeckelt (Function-Wrap, pcall-gesichert, idempotent; Retry bei Mod-Load, `PlayerInitializedEvent` und jedem `rb_wave`/`rb_send`). Der Rules-Wert (normal/hard 420) wird nur gesenkt, nie angehoben (`#278`)                                                 | `client-mod/lua/rbbattle_autoexec.lua` |
+| Verifikations-Log | `[RBBATTLE] event=dom_timer patch status=ok cap=<Preset>` + `event=setup difficulty=<name> creatures_difficulty=<n> timer_cap=<Preset> preset=A interval_cfg=<Preset> interval_eff=<wirksam> strength_pct=<n> base_difficulty=<name>`                                                                                                                | dito                                   |
+| Effektiv-Abstand  | Zwischen zwei Naturwellen liegt zusätzlich `cooldownAfterAttacks` (Survival-rules 60–240 s je DOM-Level) + `idleTime` (Survival-Rules: 0) + ggf. Streaming. **Beide Welten laufen identisch** (gleiche Rules/Seed), Fairness bleibt; exakt-300-s-Runden wären nur mit zusätzlichem Cooldown-Patch möglich (Folge-Tuning, bewusst nicht Teil von #23) | dom_manager v2 State-Machine           |
 
 ## Was NICHT der Mod setzen kann (Beleg)
 
@@ -31,7 +36,7 @@ und sind C++-seitig (Lobby/Dedicated-Server-Options):
   (Beleg: `lan:/home/momo/rb-game/LOBBY_RESEARCH.md`, 2026-09-09).
 - Difficulty-Rules-Auswahl beim Map-Start: `GetRulesForDifficulty()` hängt am
   `DifficultyService`-Postfix (`GetDomRulesScriptPostfix()` bzw.
-  `GetCurrentDifficultyName()`); Rules-Dateien `dom_survival_*_rules_hard.lua`
+  `GetCurrentDifficultyName()`); Rules-Dateien `dom_survival_*_rules_normal.lua`
   (prepareSpawnTime=420, Beleg lua-src) — gesetzt über die Server-/Lobby-Difficulty.
 - Mod-seitig gibt es **keinen** Lua-Setter für Difficulty/Seed/Map-Size; die
   CVar-/Config-Namen (`difficulty_max_map_size` etc.) kommen aus dem
@@ -40,7 +45,7 @@ und sind C++-seitig (Lobby/Dedicated-Server-Options):
 
 → Deshalb: **Server-Start-Konfiguration ist Operator-Aufgabe** (beide Welten
 identisch); der Mod **loggt** die aktiv wirksame Difficulty zur Verifikation
-(`event=setup difficulty=hard …`).
+(`event=setup difficulty=coop_normal …`).
 
 ## Operator-Checkliste (beide Welten identisch!)
 
@@ -51,8 +56,8 @@ identisch); der Mod **loggt** die aktiv wirksame Difficulty zur Verifikation
    `server.cfg`/GameServerOptions-Datei mit festem Seed — damit kein
    Drift zwischen den Welten entsteht):
    - Spielmodus/Karte: identische `campaign_name`/`mission_name`/`mission_id`
-   - Schwierigkeit: **hard** → wählt `dom_survival_<biome>_rules_hard.lua`
-     (bzw. Kampagnen-Äquivalent `*_rules_hard`)
+   - Schwierigkeit: **normal (`coop_normal`)** → wählt `dom_survival_<biome>_rules_normal.lua`
+     (bzw. Kampagnen-Äquivalent `*_rules_normal`)
    - Map-Größe: **large** (Cap gemäß CVar-Dump: `difficulty_max_map_size`)
    - **Seed: ein fester Wert** (gleiche Zahl in beiden Welten → identische
      Karte, identische Spawner-/Ressourcen-Verteilung, identischer DOM-Takt)
@@ -60,7 +65,7 @@ identisch); der Mod **loggt** die aktiv wirksame Difficulty zur Verifikation
    (`<game>/mods/rbbattle/lua/rbbattle_autoexec.lua`).
 4. **Live-Verifikation** (Operator, Prod):
    - Log beider Welten: `[RBBATTLE] event=dom_timer patch status=ok cap=480`
-     (Preset A) und `event=setup difficulty=hard …`
+     (Preset A) und `event=setup difficulty=coop_normal …`
    - `debug_dom_manager 1` → „Time left“ im `prepare_spawn`-State ≤ 480 s
      (Preset-Cap; wirksam ist `interval_eff` aus dem Setup-Log)
    - Wellenstart-Zeitstempel beider Welten vergleichen (Log-Sync)
@@ -107,6 +112,7 @@ bleibt als letzter Ausweg offen.
   dann → Operator erkennt es sofort).
 
 ## Quellen
+
 - `lan:/home/momo/rb-game/lua-src/`: `missions/v2/dom_manager.lua` (GetPrepareSpawnTime,
   cooldownAfterAttacks), `missions/survival/v2/dom_survival_*_rules_{default,hard,normal}.lua`,
   `utils/rules_utils.lua` (GetRulesForDifficulty)
