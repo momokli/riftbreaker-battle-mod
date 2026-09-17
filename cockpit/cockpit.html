@@ -1535,6 +1535,39 @@
                 serverPanel.refreshStatus();
                 serverPanel.refreshLogs();
                 setInterval(serverPanel.refreshStatus, 5000);
+
+                function initEvents() {
+                    if (typeof EventSource === "undefined") {
+                        return;
+                    }
+                    var es = new EventSource("/events");
+                    es.onmessage = function (ev) {
+                        var d;
+                        try {
+                            d = JSON.parse(ev.data);
+                        } catch (e) {
+                            return;
+                        }
+                        if (d && d.event === "chat_sent" && typeof d.amount === "number") {
+                            $("out").textContent = "sent " + d.amount + " " + (d.resource || "carbonium");
+                            if (typeof sendTracker !== "undefined" && sendTracker.add) {
+                                sendTracker.add({
+                                    timestamp: Date.now(),
+                                    resource: d.resource || "carbonium",
+                                    amount: -d.amount,
+                                });
+                            }
+                            refresh();
+                        } else if (d && d.event === "player_chat" && d.text) {
+                            $("out").textContent = "chat: " + d.text;
+                        }
+                    };
+                    es.onerror = function () {
+                        /* EventSource reconnectet automatisch */
+                    };
+                }
+
+                initEvents();
             })();
         </script>
     </body>
