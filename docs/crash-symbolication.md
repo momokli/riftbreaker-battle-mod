@@ -46,17 +46,19 @@ tests/shell/crash-symbolize.test.sh  # planetfrei (synthetischer Dump + Fake-Sym
 ### Kern (`deploy/crash-collector/symbolize.py`)
 
 1. Minidump-Streams parsen: **ModuleList (4)** → Basis/-Größe des Game-Moduls,
-   **Exception (6)** → Fault-Adresse + AMD64-`Rip`, **ThreadList (3)** /
-   **MemoryList (5)** → Stack-Speicher.
-2. Kandidaten = Fault-Adresse + `Rip` + gescannte Return-Adressen; behalten wird
-   **nur** `module_base <= addr < module_base + module_size` (Fremdadressen
-   werden gefiltert).
+   **Exception (6)** → Fault-Adresse + AMD64-`CONTEXT` (`Rip`/`Rsp`/`Rbp`),
+   **ThreadList (3)** / **MemoryList (5)** → Stack-Speicher.
+2. Kandidaten = Fault-Adresse + `Rip` + geordneter RBP-Frame-Pointer-Walk
+   (`[rbp]=saved rbp`, `[rbp+8]=ret`, Tag `unwind`) + optional gescannte
+   Return-Adressen; behalten wird **nur**
+   `module_base <= addr < module_base + module_size` (Fremdadressen werden
+   gefiltert).
 3. Je Frame: `RVA = addr - module_base`, dann
    `llvm-symbolizer --obj=<dll> --relative-address <RVA>`
    (subprocess mit Argument-Liste, **kein** `shell=True`).
 4. Ausgabe `<bundle>/symbolized.txt`: `# key: value`-Header (uuid, module,
-   module_base/-size, fault_address, dll, tool, frames) + je Frame
-   `<RVA-hex>\t<Funktionsname>`.
+   module_base/-size, fault_address, rsp, rbp, rip, dll, tool, frames) + je Frame
+   `<RVA-hex>\t<KIND> <Funktionsname>` (`unwind` = geordneter Frame-Pointer-Walk).
 
 Exit-Codes: `0` ok · `2` Dump nicht parsebar · `3` kein Modul-Frame ·
 `4` Symbolizer-Aufruf fehlgeschlagen (kein Teilergebnis).
@@ -120,8 +122,15 @@ mit den Env-Variablen der Rolle (`deploy/roles/crash-collector`).
 
 - **Nur `.dmp` hat Adressen** — der Breakpad-`.trace` bleibt unsymbolisiert.
 - Stack-Scanning liefert zusätzlich Datenwerte, die zufällig in den
-  Modulbereich zeigen (Falsch-Frames möglich); die Fault-/Kontext-Frames stehen
-  vorn.
+  Modulbereich zeigen (Falsch-Frames möglich); die Fault-/Kontext-/`unwind`-Frames
+  stehen vorn.
+- Der RBP-Walk (`unwind`) ist **kein vollständiger Unwind**: x64-MSVC-Release-
+  Builds werfen den Frame-Pointer häufig weg (**FPO**); dann ist `[rbp]`/`[rbp+8]`
+  keine echte Kette und der Walk bricht graceful ab (0 Frames). Ein
+  vollständiges `.pdata`/`.xdata`-Unwinding ist der dokumentierte Follow-up —
+  hier bewusst nicht implementiert.
+- Der Header emittiert den Register-Kontext des faultenden Threads
+  (`# rsp:`, `# rbp:`, `# rip:`), soweit vorhanden.
 - Symbolik ist nur gültig, wenn **PDB und DLL zusammenpassen** (CodeView-GUID).
   Bei Mismatch warnt `llvm-symbolizer` / läuft rc≠0 → kein Ergebnis, kein
   stiller falscher Name.

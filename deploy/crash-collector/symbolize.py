@@ -2,8 +2,9 @@
 """Minidump -> RVA -> Funktionsname (Issue #480, collector-seitige Symbolik).
 
 Liest ein breakpad-/Windows-Minidump (``.dmp``), zieht die Kandidaten-Adressen
-(Fault-Adresse aus dem Exception-Stream, RIP des faultenden Threads und
-gescannte Return-Adressen aus dem Stack-Speicher), filtert sie auf den Bereich
+(Fault-Adresse aus dem Exception-Stream, der Register-Kontext rip/rsp/rbp des
+faultenden Threads, ein geordneter RBP-Frame-Pointer-Walk und optional gescannte
+Return-Adressen aus dem Stack-Speicher), filtert sie auf den Bereich
 des Game-Moduls (``module_base <= addr < module_base + module_size``), rechnet
 je Adresse ``RVA = addr - module_base`` und ruft fuer jede RVA
 
@@ -40,6 +41,8 @@ THREAD_SIZE = 48
 EXCEPTION_SIZE = 168
 EXCEPTION_CONTEXT_OFF = 160  # MINIDUMP_EXCEPTION (152) + führende Header (8)
 AMD64_RIP_OFF = 0xF8
+AMD64_RSP_OFF = 0x98
+AMD64_RBP_OFF = 0xA0
 AMD64_CONTEXT_MIN = AMD64_RIP_OFF + 8
 
 EXIT_OK = 0
@@ -66,6 +69,16 @@ def _u64(data, off):
     if off < 0 or off + 8 > len(data):
         raise DumpError("u64 bei 0x%x ausserhalb des Dumps" % off)
     return struct.unpack_from("<Q", data, off)[0]
+
+
+def _reg(data, ctx_rva, ctx_size, off):
+    """Register aus dem AMD64-CONTEXT lesen; None wenn nicht vorhanden/lesbar."""
+    if not ctx_rva or ctx_size < off + 8:
+        return None
+    try:
+        return _u64(data, ctx_rva + off)
+    except DumpError:
+        return None
 
 
 def _utf16(data, rva):
@@ -210,6 +223,29 @@ def stack_ranges(threads, memory, fault_thread_id):
     return ranges
 
 
+def fault_regs(data, exc, threads):
+    """Register-Kontext (rip/rsp/rbp) des faultenden Threads.
+
+    Bevorzugt den CONTEXT aus der ThreadList (der faultende Thread); ist dort
+    keiner vorhanden, faellt auf den Exception-Stream-CONTEXT zurueck.
+    Fehlende/zu kurze Register werden als None ausgeliefert.
+    """
+    ctx_rva = exc.get("context_rva")
+    ctx_size = exc.get("context_size")
+    tid = exc.get("thread_id")
+    for t in threads:
+        if tid is None or t["thread_id"] == tid:
+            if t["context_rva"] and t["context_size"]:
+                ctx_rva = t["context_rva"]
+                ctx_size = t["context_size"]
+            break
+    return {
+        "rip": _reg(data, ctx_rva, ctx_size, AMD64_RIP_OFF),
+        "rsp": _reg(data, ctx_rva, ctx_size, AMD64_RSP_OFF),
+        "rbp": _reg(data, ctx_rva, ctx_size, AMD64_RBP_OFF),
+    }
+
+
 def _module_for(modules, addr):
     for m in modules:
         if m["base"] <= addr < m["base"] + m["size"]:
@@ -249,16 +285,19 @@ def read_text_range(dll_path):
     return None
 
 
-def collect_frames(data, modules, exc, threads, memory, max_frames, text_ranges=None, stack_scan=False):
+def collect_frames(data, modules, exc, threads, memory, max_frames, text_ranges=None, stack_scan=False, regs=None):
     """Frames aller gegebenen Module sammeln; jeder Frame kennt sein Modul.
 
-    Verlaesslich sind nur fault (Exception-Address) und context (RIP). Der
-    Stack-Scan ist heuristisch (fischt Daten-Pointer/vftable/Konstanten und
-    fremde Code-Adressen) und deshalb per Default AUS — nur auf expliziten
-    Wunsch (--stack-scan) werden .text-gefilterte Kandidaten ergaenzt.
+    Reihenfolge im Ergebnis: fault (Exception-Address), context (RIP), dann der
+    geordnete RBP-Frame-Pointer-Walk (kind="unwind") und zuletzt der
+    heuristische Stack-Scan (nur auf --stack-scan). Verlaesslich sind fault,
+    context und unwind; der Stack-Scan fischt Daten-Pointer/vftable/Konstanten
+    und fremde Code-Adressen und ist deshalb per Default AUS.
     """
     frames, seen = [], set()
     text_ranges = text_ranges or {}
+    if regs is None:
+        regs = fault_regs(data, exc, threads)
 
     def add(addr, kind):
         if addr is None:
@@ -267,7 +306,7 @@ def collect_frames(data, modules, exc, threads, memory, max_frames, text_ranges=
         if m is None:
             return
         rva = addr - m["base"]
-        if kind == "stack":
+        if kind in ("stack", "unwind"):
             tr = text_ranges.get(m["name"])
             if tr and not (tr[0] <= rva < tr[0] + tr[1]):
                 return
@@ -288,6 +327,30 @@ def collect_frames(data, modules, exc, threads, memory, max_frames, text_ranges=
                     except DumpError:
                         pass
                 break
+
+    # Geordneter x64 Frame-Pointer-Walk ([rbp]=saved rbp, [rbp+8]=ret) —
+    # laeuft VOR dem heuristischen Stack-Scan und nur innerhalb des Stack-Speichers.
+    rbp = regs.get("rbp")
+    if rbp:
+        for start, size, rva in stack_ranges(threads, memory, exc.get("thread_id")):
+            if size < 16 or not (start <= rbp and rbp + 16 <= start + size):
+                continue
+            cur = rbp
+            for _ in range(max_frames):
+                if len(frames) >= max_frames:
+                    break
+                if not (start <= cur and cur + 16 <= start + size):
+                    break
+                off = rva + (cur - start)
+                if off < 0 or off + 16 > len(data):
+                    break
+                saved = struct.unpack_from("<Q", data, off)[0]
+                ret = struct.unpack_from("<Q", data, off + 8)[0]
+                add(ret, "unwind")
+                if not saved or saved <= cur:
+                    break
+                cur = saved
+            break
 
     for start, count, rva in stack_ranges(threads, memory, exc.get("thread_id")):
         if not stack_scan or len(frames) >= max_frames:
@@ -322,7 +385,7 @@ def symbolize_rva(symbolizer, dll, rva, timeout):
     raise ToolError("llvm-symbolizer lieferte keine Ausgabe fuer RVA 0x%x" % rva)
 
 
-def render(uuid, modules, frames, names, fault_address, dlls, symbolizer):
+def render(uuid, modules, frames, names, fault_address, dlls, symbolizer, regs=None):
     primary = modules[0]
     lines = [
         "# rbmods crash symbolizer (Issue #480)",
@@ -334,6 +397,11 @@ def render(uuid, modules, frames, names, fault_address, dlls, symbolizer):
         "# dll: %s" % dlls.get(primary["name"], ""),
         "# tool: %s" % symbolizer,
     ]
+    if regs:
+        for reg in ("rsp", "rbp", "rip"):
+            val = regs.get(reg)
+            if val is not None:
+                lines.append("# %s: 0x%x" % (reg, val))
     for m in modules[1:]:
         lines.append("# module2: %s" % m["name"])
         lines.append("# module2_base: 0x%x" % m["base"])
@@ -406,8 +474,9 @@ def main(argv=None):
         exc = parse_exception(data, streams)
         threads = parse_threads(data, streams)
         memory = parse_memory(data, streams)
+        regs = fault_regs(data, exc, threads)
         frames = collect_frames(data, selected, exc, threads, memory,
-                                args.max_frames, text_ranges, args.stack_scan)
+                                args.max_frames, text_ranges, args.stack_scan, regs)
     except DumpError as err:
         print("symbolize: Dump nicht parsebar: %s" % err, file=sys.stderr)
         return EXIT_DUMP_ERROR
@@ -432,7 +501,7 @@ def main(argv=None):
             print("symbolize: %s" % err, file=sys.stderr)
             return EXIT_TOOL_ERROR
 
-    text = render(uuid, selected, frames, names, fault_address, dlls, args.symbolizer)
+    text = render(uuid, selected, frames, names, fault_address, dlls, args.symbolizer, regs)
     if args.out == "-":
         sys.stdout.write(text)
     else:
