@@ -3,8 +3,9 @@
 
 Liest ein breakpad-/Windows-Minidump (``.dmp``), zieht die Kandidaten-Adressen
 (Fault-Adresse aus dem Exception-Stream, der Register-Kontext rip/rsp/rbp des
-faultenden Threads, ein geordneter RBP-Frame-Pointer-Walk und optional gescannte
-Return-Adressen aus dem Stack-Speicher), filtert sie auf den Bereich
+faultenden Threads, ein geordneter x64-Stack-Unwind via ``.pdata``/``.xdata``
+(Fallback RBP-Walk) und optional gescannte Return-Adressen aus dem Stack-
+Speicher), filtert sie auf den Bereich
 des Game-Moduls (``module_base <= addr < module_base + module_size``), rechnet
 je Adresse ``RVA = addr - module_base`` und ruft fuer jede RVA
 
@@ -44,6 +45,25 @@ AMD64_RIP_OFF = 0xF8
 AMD64_RSP_OFF = 0x98
 AMD64_RBP_OFF = 0xA0
 AMD64_CONTEXT_MIN = AMD64_RIP_OFF + 8
+
+# x64-Stack-Unwind (Issue #676): Unwind-Opcodes + UNWIND_INFO-Flags der
+# Windows-x64-ABI. Der Compiler legt diese Metadaten zwingend ab (fuer
+# SEH/C++-Exceptions) — damit ist der Unwind auch bei Frame-Pointer-Omission
+# (FPO) verlaesslich.
+UWOP_PUSH_NONVOL = 0
+UWOP_ALLOC_LARGE = 1
+UWOP_ALLOC_SMALL = 2
+UWOP_SET_FPREG = 3
+UWOP_SAVE_NONVOL = 4
+UWOP_SAVE_NONVOL_FAR = 5
+UWOP_SAVE_XMM128 = 8
+UWOP_SAVE_XMM128_FAR = 9
+UWOP_PUSH_MACHFRAME = 10
+UNW_FLAG_CHAININFO = 0x04
+UNW_MAX_CHAIN = 4
+PE32_MAGIC = 0x10B
+PE32P_MAGIC = 0x20B
+IMAGE_DIR_ENTRY_EXCEPTION = 3
 
 EXIT_OK = 0
 EXIT_DUMP_ERROR = 2
@@ -86,7 +106,7 @@ def _utf16(data, rva):
     if rva == 0:
         return ""
     n = _u32(data, rva)
-    raw = data[rva + 4:rva + 4 + n]
+    raw = data[rva + 4 : rva + 4 + n]
     return raw.decode("utf-16-le", "replace")
 
 
@@ -121,12 +141,14 @@ def parse_modules(data, streams):
         size = _u32(data, off + 8)
         name_rva = _u32(data, off + 20)
         name = _utf16(data, name_rva)
-        modules.append({
-            "name": name,
-            "basename": os.path.basename(name.replace("\\", "/")),
-            "base": base,
-            "size": size,
-        })
+        modules.append(
+            {
+                "name": name,
+                "basename": os.path.basename(name.replace("\\", "/")),
+                "base": base,
+                "size": size,
+            }
+        )
     return modules
 
 
@@ -144,14 +166,16 @@ def parse_threads(data, streams):
         stack_rva = _u32(data, off + 36)
         ctx_size = _u32(data, off + 40)
         ctx_rva = _u32(data, off + 44)
-        threads.append({
-            "thread_id": _u32(data, off),
-            "stack_start": stack_start,
-            "stack_size": stack_size,
-            "stack_rva": stack_rva,
-            "context_rva": ctx_rva,
-            "context_size": ctx_size,
-        })
+        threads.append(
+            {
+                "thread_id": _u32(data, off),
+                "stack_start": stack_start,
+                "stack_size": stack_size,
+                "stack_rva": stack_rva,
+                "context_rva": ctx_rva,
+                "context_size": ctx_size,
+            }
+        )
     return threads
 
 
@@ -164,11 +188,13 @@ def parse_memory(data, streams):
     ranges = []
     for i in range(count):
         off = rva + 4 + i * 16
-        ranges.append({
-            "start": _u64(data, off),
-            "size": _u32(data, off + 8),
-            "rva": _u32(data, off + 12),
-        })
+        ranges.append(
+            {
+                "start": _u64(data, off),
+                "size": _u32(data, off + 8),
+                "rva": _u32(data, off + 12),
+            }
+        )
     return ranges
 
 
@@ -226,19 +252,23 @@ def stack_ranges(threads, memory, fault_thread_id):
 def fault_regs(data, exc, threads):
     """Register-Kontext (rip/rsp/rbp) des faultenden Threads.
 
-    Bevorzugt den CONTEXT aus der ThreadList (der faultende Thread); ist dort
-    keiner vorhanden, faellt auf den Exception-Stream-CONTEXT zurueck.
-    Fehlende/zu kurze Register werden als None ausgeliefert.
+    Bevorzugt den CONTEXT aus dem Exception-Stream: das ist der echte
+    Fault-Zeitpunkt (rip = ExceptionAddress). Unter Wine zeigt der
+    ThreadList-CONTEXT dagegen oft auf den Wine-Exception-Dispatcher (ntdll)
+    statt auf den Fault — deshalb ist der Exception-CONTEXT die verlaesslichere
+    Quelle. Nur wenn er fehlt/zu kurz ist, wird auf den ThreadList-CONTEXT des
+    faultenden Threads zurueckgefallen.
     """
     ctx_rva = exc.get("context_rva")
     ctx_size = exc.get("context_size")
-    tid = exc.get("thread_id")
-    for t in threads:
-        if tid is None or t["thread_id"] == tid:
-            if t["context_rva"] and t["context_size"]:
-                ctx_rva = t["context_rva"]
-                ctx_size = t["context_size"]
-            break
+    if not (ctx_rva and ctx_size and ctx_size >= AMD64_CONTEXT_MIN):
+        tid = exc.get("thread_id")
+        for t in threads:
+            if tid is None or t["thread_id"] == tid:
+                if t["context_rva"] and t["context_size"]:
+                    ctx_rva = t["context_rva"]
+                    ctx_size = t["context_size"]
+                break
     return {
         "rip": _reg(data, ctx_rva, ctx_size, AMD64_RIP_OFF),
         "rsp": _reg(data, ctx_rva, ctx_size, AMD64_RSP_OFF),
@@ -251,6 +281,262 @@ def _module_for(modules, addr):
         if m["base"] <= addr < m["base"] + m["size"]:
             return m
     return None
+
+
+def _rva_to_off(sections, rva):
+    """RVA -> Datei-Offset ueber die Section-Tabelle (None = nicht abbildbar)."""
+    for vaddr, vsize, raw_ptr, raw_size in sections:
+        if vaddr <= rva < vaddr + max(vsize, raw_size):
+            return raw_ptr + (rva - vaddr)
+    return None
+
+
+def parse_pe_unwind(dll_path):
+    """PE -> Unwind-Daten (.pdata RUNTIME_FUNCTION + .xdata UNWIND_INFO).
+
+    Rueckgabe: dict mit ``data`` (Bytes), ``sections`` (Liste aus
+    (vaddr, vsize, raw_ptr, raw_size)) und ``functions`` (Liste aus
+    (begin, end, unwind_rva)). ``None`` wenn kein PE / keine Exception-Directory /
+    unlesbar (dann greift der RBP-Fallback). Nur stdlib.
+    """
+    try:
+        with open(dll_path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return None
+    try:
+        if len(data) < 0x40:
+            return None
+        e_lfanew = struct.unpack_from("<I", data, 0x3C)[0]
+        if data[e_lfanew : e_lfanew + 4] != b"PE\0\0":
+            return None
+        coff = e_lfanew + 4
+        nsections = struct.unpack_from("<H", data, coff + 2)[0]
+        opt_off = coff + 20
+        magic = struct.unpack_from("<H", data, opt_off)[0]
+        if magic == PE32P_MAGIC:
+            dd_off = opt_off + 112
+        elif magic == PE32_MAGIC:
+            dd_off = opt_off + 96
+        else:
+            return None
+        exc_rva = struct.unpack_from("<I", data, dd_off + IMAGE_DIR_ENTRY_EXCEPTION * 8)[0]
+        exc_size = struct.unpack_from("<I", data, dd_off + IMAGE_DIR_ENTRY_EXCEPTION * 8 + 4)[0]
+        if not exc_rva or not exc_size:
+            return None
+        sec_off = opt_off + struct.unpack_from("<H", data, coff + 16)[0]
+        sections = []
+        for i in range(nsections):
+            s = sec_off + i * 40
+            if s + 40 > len(data):
+                break
+            vsize = struct.unpack_from("<I", data, s + 8)[0]
+            vaddr = struct.unpack_from("<I", data, s + 12)[0]
+            raw_size = struct.unpack_from("<I", data, s + 16)[0]
+            raw_ptr = struct.unpack_from("<I", data, s + 20)[0]
+            sections.append((vaddr, vsize, raw_ptr, raw_size))
+        off = _rva_to_off(sections, exc_rva)
+        if off is None:
+            return None
+        functions = []
+        for i in range(exc_size // 12):
+            base = off + i * 12
+            if base + 12 > len(data):
+                break
+            begin = struct.unpack_from("<I", data, base)[0]
+            end = struct.unpack_from("<I", data, base + 4)[0]
+            unw = struct.unpack_from("<I", data, base + 8)[0]
+            functions.append((begin, end, unw))
+        return {"data": data, "sections": sections, "functions": functions}
+    except (struct.error, IndexError):
+        return None
+
+
+def _find_runtime_function(functions, rva):
+    for begin, end, unw in functions:
+        if begin <= rva < end:
+            return (begin, end, unw)
+    return None
+
+
+def _parse_unwind_info(data, sections, unwind_rva):
+    """UNWIND_INFO an ``unwind_rva`` parsen -> dict oder None.
+
+    ``codes`` = Liste (code_off, op, opinfo, operand); ``operand`` ist die
+    aufgeloeste Groesse (ALLOC) bzw. der skalierte Offset (SAVE_*). Inline-
+    Operanden (ALLOC_LARGE/SAVE_*_FAR) sind bereits eingerechnet.
+    """
+    off = _rva_to_off(sections, unwind_rva)
+    if off is None or off + 4 > len(data):
+        return None
+    flags = data[off] >> 3
+    prolog = data[off + 1]
+    count = data[off + 2]
+    b3 = data[off + 3]
+    frame_reg = b3 & 0x0F
+    frame_offset = b3 >> 4
+    codes = []
+    p = off + 4
+    i = 0
+    while i < count:
+        if p + 2 > len(data):
+            return None
+        code_off = data[p]
+        code_b = data[p + 1]
+        op = code_b & 0x0F
+        opinfo = code_b >> 4
+        p += 2
+        i += 1
+        operand = None
+        if op == UWOP_ALLOC_LARGE:
+            if opinfo == 0:
+                if p + 2 > len(data):
+                    return None
+                operand = struct.unpack_from("<H", data, p)[0] * 8
+                p += 2
+                i += 1
+            else:
+                if p + 4 > len(data):
+                    return None
+                operand = struct.unpack_from("<I", data, p)[0]
+                p += 4
+                i += 2
+        elif op == UWOP_ALLOC_SMALL:
+            operand = (opinfo + 1) * 8
+        elif op == UWOP_SAVE_NONVOL:
+            if p + 2 > len(data):
+                return None
+            operand = struct.unpack_from("<H", data, p)[0] * 8
+            p += 2
+            i += 1
+        elif op == UWOP_SAVE_NONVOL_FAR:
+            if p + 4 > len(data):
+                return None
+            operand = struct.unpack_from("<I", data, p)[0]
+            p += 4
+            i += 2
+        elif op == UWOP_SAVE_XMM128:
+            if p + 2 > len(data):
+                return None
+            operand = struct.unpack_from("<H", data, p)[0] * 16
+            p += 2
+            i += 1
+        elif op == UWOP_SAVE_XMM128_FAR:
+            if p + 4 > len(data):
+                return None
+            operand = struct.unpack_from("<I", data, p)[0]
+            p += 4
+            i += 2
+        codes.append((code_off, op, opinfo, operand))
+    if count % 2:
+        p += 2  # Padding auf 4-Byte-Grenze
+    chain = None
+    if flags & UNW_FLAG_CHAININFO:
+        if p + 12 <= len(data):
+            chain = struct.unpack_from("<III", data, p)
+    return {
+        "flags": flags,
+        "prolog": prolog,
+        "codes": codes,
+        "frame_reg": frame_reg,
+        "frame_offset": frame_offset,
+        "chain": chain,
+    }
+
+
+def _apply_unwind(info, rsp, regs, read_u64, prolog_off=None):
+    """Unwind-Codes rueckwaerts anwenden -> neuer RSP (oder None bei Abbruch).
+
+    Die Codes sind im Array in **absteigender** Prolog-Offset-Reihenfolge
+    gespeichert (= Reverse-Prolog-Reihenfolge) — daher wird das Array VORWAERTS
+    durchlaufen, um den Prolog rueckwaerts abzuwickeln.
+
+    ``regs`` (Register-Nr -> Wert) wird mutiert (Restore aus PUSH_NONVOL/
+    SAVE_NONVOL). Nur der Return-Adressen-Pfad wird gebraucht; XMM-Saves werden
+    ignoriert.
+    """
+    for code_off, op, opinfo, operand in info["codes"]:
+        if prolog_off is not None and code_off > prolog_off:
+            continue
+        if op == UWOP_PUSH_NONVOL:
+            v = read_u64(rsp)
+            if v is not None:
+                regs[opinfo] = v
+            rsp += 8
+        elif op in (UWOP_ALLOC_SMALL, UWOP_ALLOC_LARGE):
+            rsp += operand
+        elif op == UWOP_SET_FPREG:
+            fr = regs.get(info["frame_reg"])
+            if fr is None:
+                return None
+            rsp = fr - info["frame_offset"] * 16
+        elif op in (UWOP_SAVE_NONVOL, UWOP_SAVE_NONVOL_FAR):
+            v = read_u64(rsp + operand)
+            if v is not None:
+                regs[opinfo] = v
+        elif op in (UWOP_SAVE_XMM128, UWOP_SAVE_XMM128_FAR):
+            pass  # XMM wird fuer die Return-Adressen-Kette nicht gebraucht
+        elif op == UWOP_PUSH_MACHFRAME:
+            rsp += 8 + (8 if opinfo else 0)
+        else:
+            return None
+    return rsp
+
+
+def x64_unwind(modules, pe_map, rip, rsp, rbp, read_u64, max_frames):
+    """x64-Stack-Unwind via .pdata/.xdata — geordnete Return-Adressen.
+
+    Geht ueber Modulgrenzen (je Frame das PE des Moduls, das den RIP enthaelt)
+    und deckt den jump-to-garbage-Fall ab (RIP in keinem Modul -> Ruecksprung-
+    adresse direkt bei ``[rsp]``). Bricht ab bei fehlendem RUNTIME_FUNCTION,
+    kaputter UNWIND_INFO, Stack-Read ausserhalb oder max_frames.
+    """
+    out = []
+    cur_rip = rip
+    cur_rsp = rsp
+    regs = {5: rbp}  # 5 = RBP (einziger gestuetzter Frame-Register)
+    for _ in range(max_frames):
+        if cur_rip is None or cur_rsp is None:
+            break
+        mod = _module_for(modules, cur_rip)
+        if mod is None:
+            # jump-to-garbage: RIP in keinem Modul -> Ruecksprungadresse direkt bei [rsp].
+            ret = read_u64(cur_rsp)
+            if ret is None or ret == 0:
+                break
+            out.append(ret)
+            cur_rip = ret
+            cur_rsp = cur_rsp + 8
+            continue
+        pe = pe_map.get(mod["name"])
+        if pe is None:
+            break  # Modul ohne PE/Unwind-Daten -> Abbruch (RBP-Fallback)
+        rva = cur_rip - mod["base"]
+        rf = _find_runtime_function(pe["functions"], rva)
+        if rf is None:
+            break  # im Modul, aber in keiner Funktion: konservativ abbrechen
+        info = _parse_unwind_info(pe["data"], pe["sections"], rf[2])
+        depth = 0
+        while info is not None and (info["flags"] & UNW_FLAG_CHAININFO) and info["chain"]:
+            info = _parse_unwind_info(pe["data"], pe["sections"], info["chain"][2])
+            depth += 1
+            if depth > UNW_MAX_CHAIN:
+                info = None
+        if info is None:
+            break
+        prolog_off = None
+        if info["prolog"] and 0 <= (rva - rf[0]) < info["prolog"]:
+            prolog_off = rva - rf[0]
+        new_rsp = _apply_unwind(info, cur_rsp, regs, read_u64, prolog_off)
+        if new_rsp is None:
+            break
+        ret = read_u64(new_rsp)
+        if ret is None or ret == 0:
+            break
+        out.append(ret)
+        cur_rip = ret
+        cur_rsp = new_rsp + 8
+    return out
 
 
 def read_text_range(dll_path):
@@ -285,14 +571,18 @@ def read_text_range(dll_path):
     return None
 
 
-def collect_frames(data, modules, exc, threads, memory, max_frames, text_ranges=None, stack_scan=False, regs=None):
+def collect_frames(
+    data, modules, exc, threads, memory, max_frames, text_ranges=None, stack_scan=False, regs=None, pe_map=None
+):
     """Frames aller gegebenen Module sammeln; jeder Frame kennt sein Modul.
 
     Reihenfolge im Ergebnis: fault (Exception-Address), context (RIP), dann der
-    geordnete RBP-Frame-Pointer-Walk (kind="unwind") und zuletzt der
-    heuristische Stack-Scan (nur auf --stack-scan). Verlaesslich sind fault,
-    context und unwind; der Stack-Scan fischt Daten-Pointer/vftable/Konstanten
-    und fremde Code-Adressen und ist deshalb per Default AUS.
+    geordnete Unwind (x64 .pdata/.xdata, Fallback RBP-Walk; kind="unwind") und
+    zuletzt der heuristische Stack-Scan (nur auf --stack-scan). Verlaesslich sind
+    fault, context und unwind; der Stack-Scan fischt Daten-Pointer/vftable/
+    Konstanten und fremde Code-Adressen und ist deshalb per Default AUS.
+
+    Rueckgabe: (frames, unwind_method) mit unwind_method in {x64, rbp, none}.
     """
     frames, seen = [], set()
     text_ranges = text_ranges or {}
@@ -316,6 +606,14 @@ def collect_frames(data, modules, exc, threads, memory, max_frames, text_ranges=
         seen.add(key)
         frames.append({"addr": addr, "rva": rva, "kind": kind, "module": m})
 
+    def read_stack(addr):
+        for start, size, rva in stack_ranges(threads, memory, exc.get("thread_id")):
+            if start <= addr and addr + 8 <= start + size:
+                off = rva + (addr - start)
+                if 0 <= off and off + 8 <= len(data):
+                    return struct.unpack_from("<Q", data, off)[0]
+        return None
+
     add(exc.get("address"), "fault")
     add(exc.get("rip"), "context")
     for tid in [exc.get("thread_id")]:
@@ -328,29 +626,40 @@ def collect_frames(data, modules, exc, threads, memory, max_frames, text_ranges=
                         pass
                 break
 
-    # Geordneter x64 Frame-Pointer-Walk ([rbp]=saved rbp, [rbp+8]=ret) —
-    # laeuft VOR dem heuristischen Stack-Scan und nur innerhalb des Stack-Speichers.
-    rbp = regs.get("rbp")
-    if rbp:
-        for start, size, rva in stack_ranges(threads, memory, exc.get("thread_id")):
-            if size < 16 or not (start <= rbp and rbp + 16 <= start + size):
-                continue
-            cur = rbp
-            for _ in range(max_frames):
-                if len(frames) >= max_frames:
-                    break
-                if not (start <= cur and cur + 16 <= start + size):
-                    break
-                off = rva + (cur - start)
-                if off < 0 or off + 16 > len(data):
-                    break
-                saved = struct.unpack_from("<Q", data, off)[0]
-                ret = struct.unpack_from("<Q", data, off + 8)[0]
+    # x64-Stack-Unwind (Issue #676): primaer. Greift nur, wenn ein PE mit
+    # .pdata/.xdata vorliegt; sonst Fallback auf den RBP-Walk (#668).
+    unwind_method = "none"
+    if pe_map:
+        rets = x64_unwind(modules, pe_map, exc.get("address"), regs.get("rsp"), regs.get("rbp"), read_stack, max_frames)
+        if rets:
+            for ret in rets:
                 add(ret, "unwind")
-                if not saved or saved <= cur:
-                    break
-                cur = saved
-            break
+            unwind_method = "x64"
+
+    if unwind_method == "none":
+        # Fallback: geordneter RBP-Frame-Pointer-Walk ([rbp]=saved rbp, [rbp+8]=ret).
+        rbp = regs.get("rbp")
+        if rbp:
+            for start, size, rva in stack_ranges(threads, memory, exc.get("thread_id")):
+                if size < 16 or not (start <= rbp and rbp + 16 <= start + size):
+                    continue
+                cur = rbp
+                for _ in range(max_frames):
+                    if len(frames) >= max_frames:
+                        break
+                    if not (start <= cur and cur + 16 <= start + size):
+                        break
+                    off = rva + (cur - start)
+                    if off < 0 or off + 16 > len(data):
+                        break
+                    saved = struct.unpack_from("<Q", data, off)[0]
+                    ret = struct.unpack_from("<Q", data, off + 8)[0]
+                    add(ret, "unwind")
+                    unwind_method = "rbp"
+                    if not saved or saved <= cur:
+                        break
+                    cur = saved
+                break
 
     for start, count, rva in stack_ranges(threads, memory, exc.get("thread_id")):
         if not stack_scan or len(frames) >= max_frames:
@@ -362,7 +671,7 @@ def collect_frames(data, modules, exc, threads, memory, max_frames, text_ranges=
             add(struct.unpack_from("<Q", data, off)[0], "stack")
             if len(frames) >= max_frames:
                 break
-    return frames[:max_frames]
+    return frames[:max_frames], unwind_method
 
 
 def symbolize_rva(symbolizer, dll, rva, timeout):
@@ -376,8 +685,7 @@ def symbolize_rva(symbolizer, dll, rva, timeout):
         raise ToolError("llvm-symbolizer nicht ausfuehrbar: %s" % err)
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()
-        raise ToolError("llvm-symbolizer rc=%d bei RVA 0x%x: %s"
-                        % (proc.returncode, rva, tail[-1] if tail else ""))
+        raise ToolError("llvm-symbolizer rc=%d bei RVA 0x%x: %s" % (proc.returncode, rva, tail[-1] if tail else ""))
     for line in proc.stdout.splitlines():
         line = line.strip()
         if line:
@@ -385,7 +693,7 @@ def symbolize_rva(symbolizer, dll, rva, timeout):
     raise ToolError("llvm-symbolizer lieferte keine Ausgabe fuer RVA 0x%x" % rva)
 
 
-def render(uuid, modules, frames, names, fault_address, dlls, symbolizer, regs=None):
+def render(uuid, modules, frames, names, fault_address, dlls, symbolizer, regs=None, unwind_method="none"):
     primary = modules[0]
     lines = [
         "# rbmods crash symbolizer (Issue #480)",
@@ -402,6 +710,7 @@ def render(uuid, modules, frames, names, fault_address, dlls, symbolizer, regs=N
             val = regs.get(reg)
             if val is not None:
                 lines.append("# %s: 0x%x" % (reg, val))
+    lines.append("# unwind: %s" % unwind_method)
     for m in modules[1:]:
         lines.append("# module2: %s" % m["name"])
         lines.append("# module2_base: 0x%x" % m["base"])
@@ -431,15 +740,15 @@ def main(argv=None):
     ap.add_argument("--dmp", required=True, help="Pfad zum Minidump (.dmp)")
     ap.add_argument("--dll", required=True, help="Game-Modul fuer llvm-symbolizer --obj")
     ap.add_argument("--symbolizer", default="llvm-symbolizer", help="llvm-symbolizer-Binary")
-    ap.add_argument("--module", default="riftbreaker_dll_win_release.dll",
-                    help="Basename/Substring des zu symbolisierenden Moduls")
+    ap.add_argument(
+        "--module", default="riftbreaker_dll_win_release.dll", help="Basename/Substring des zu symbolisierenden Moduls"
+    )
     ap.add_argument("--dll2", default="", help="Optional: zweites Modul (z.B. rbbridge.dll) fuer llvm-symbolizer --obj")
     ap.add_argument("--module2", default="", help="Optional: Basename/Substring des zweiten Moduls")
     ap.add_argument("--out", default="-", help="Ausgabedatei ('-' = stdout)")
     ap.add_argument("--uuid", default="", help="Crash-uuid fuer den Header")
     ap.add_argument("--max-frames", type=int, default=32, help="maximale Frame-Anzahl")
-    ap.add_argument("--stack-scan", action="store_true",
-                    help="heuristischen Stack-Scan zuschalten (Default: aus)")
+    ap.add_argument("--stack-scan", action="store_true", help="heuristischen Stack-Scan zuschalten (Default: aus)")
     ap.add_argument("--timeout", type=float, default=60.0, help="Timeout je Symbolizer-Aufruf")
     ap.add_argument("--list-modules", action="store_true", help="ModuleList ausgeben und beenden")
     args = ap.parse_args(argv)
@@ -471,21 +780,25 @@ def main(argv=None):
         if len(selected) > 1:
             dlls[selected[1]["name"]] = args.dll2
         text_ranges = {name: read_text_range(path) for name, path in dlls.items()}
+        pe_map = {name: parse_pe_unwind(path) for name, path in dlls.items()}
         exc = parse_exception(data, streams)
         threads = parse_threads(data, streams)
         memory = parse_memory(data, streams)
         regs = fault_regs(data, exc, threads)
-        frames = collect_frames(data, selected, exc, threads, memory,
-                                args.max_frames, text_ranges, args.stack_scan, regs)
+        frames, unwind_method = collect_frames(
+            data, selected, exc, threads, memory, args.max_frames, text_ranges, args.stack_scan, regs, pe_map
+        )
     except DumpError as err:
         print("symbolize: Dump nicht parsebar: %s" % err, file=sys.stderr)
         return EXIT_DUMP_ERROR
 
     fault_address = exc.get("address")
     if not frames:
-        print("symbolize: kein Kandidat im Modulbereich (base=0x%x size=%d fault=%s)"
-              % (selected[0]["base"], selected[0]["size"], ("0x%x" % fault_address) if fault_address else "?"),
-              file=sys.stderr)
+        print(
+            "symbolize: kein Kandidat im Modulbereich (base=0x%x size=%d fault=%s)"
+            % (selected[0]["base"], selected[0]["size"], ("0x%x" % fault_address) if fault_address else "?"),
+            file=sys.stderr,
+        )
         return EXIT_NO_FRAME
 
     dlls = {selected[0]["name"]: args.dll}
@@ -501,7 +814,7 @@ def main(argv=None):
             print("symbolize: %s" % err, file=sys.stderr)
             return EXIT_TOOL_ERROR
 
-    text = render(uuid, selected, frames, names, fault_address, dlls, args.symbolizer, regs)
+    text = render(uuid, selected, frames, names, fault_address, dlls, args.symbolizer, regs, unwind_method)
     if args.out == "-":
         sys.stdout.write(text)
     else:
