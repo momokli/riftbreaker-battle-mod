@@ -5048,6 +5048,8 @@ static void dispatch_try_spend(HANDLE hPipe, const char *amount_str)
     int64_t cost = amount_to_raw((double)amount);
 
     if (!try_spend_afford(balance, cost)) {
+        dbg("try_spend: DROP (insufficient) amount='%s' cost=%lld balance=%llu",
+            amount_str, (long long)cost, (unsigned long long)balance);
         send_line(hPipe,
                   "{\"event\":\"try_spend_result\",\"ok\":false,"
                   "\"reason\":\"insufficient\",\"amount\":\"%s\","
@@ -5090,7 +5092,7 @@ static void dispatch_try_spend(HANDLE hPipe, const char *amount_str)
 
     unsigned char ret = fn(ps, 0, (const void *)name, amount_float, 1);
 
-    dbg("try_spend: amount='%s' cost=%lld balance=%llu scale=%u "
+    dbg("try_spend: ACCEPT amount='%s' cost=%lld balance=%llu scale=%u "
         "amount_float=%.6f ret=%u",
         amount_str, (long long)cost, (unsigned long long)balance,
         (unsigned)scale, (double)amount_float, (unsigned)ret);

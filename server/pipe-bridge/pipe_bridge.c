@@ -755,12 +755,16 @@ static DWORD WINAPI scheduler_main(LPVOID unused)
             blog("order %s: try_spend cost=%d", ord.name, ord.cost);
 
             ok = 0;
+            double bal_dbl = 0.0;
             if (pipe_send_command("try_spend_result", payload, timeout_ms,
                                   line, sizeof(line)) == 0 &&
                 json_get_bool(line, "ok", &ok) && ok) {
+                json_get_number(line, "balance", &bal_dbl);
                 set_order_state(idx, 1);
-                blog("order %s id=%s: bezahlt (carbonium -%d)", ord.name, ord.id, ord.cost);
+                blog("order %s id=%s: ACCEPT (needed=%d carbonium, balance=%.2f carbonium)",
+                     ord.name, ord.id, ord.cost, bal_dbl / 1000000.0);
             } else {
+                json_get_number(line, "balance", &bal_dbl);
                 set_order_state(idx, 2);
                 {
                     char ev_line[LINE_MAX];
@@ -769,7 +773,8 @@ static DWORD WINAPI scheduler_main(LPVOID unused)
                              ord.name, ord.id);
                     sse_broadcast(ev_line);
                 }
-                blog("order %s id=%s: failed (insufficient/error)", ord.name, ord.id);
+                blog("order %s id=%s: DROP insufficient (needed=%d carbonium, balance=%.2f carbonium)",
+                     ord.name, ord.id, ord.cost, bal_dbl / 1000000.0);
             }
         }
 
