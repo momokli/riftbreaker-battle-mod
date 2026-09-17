@@ -1,0 +1,109 @@
+GuiRootGroupDef
+{
+	full_screen "5"
+	priority "12"
+	visible "1"
+	children
+	{
+		Pair_String_GuiDef2
+		{
+			key "test_img"
+			value "GuiImageDef"
+			{
+				error_material "gui/default"
+				material "gui/hud/new_quest_frame_fill"
+				alignment "left"
+				anchor "left"
+				id "test_img"
+				offset
+				{
+					x "60"
+					y "60"
+				}
+
+				size
+				{
+					x "200"
+					y "100"
+				}
+
+				z_order "5"
+			}
+
+		}
+
+		Pair_String_GuiDef2
+		{
+			key "button"
+			value "GuiButtonItemDef"
+			{
+				on_click_action "rb_send_chat"
+				children
+				{
+					Pair_String_GuiDef2
+					{
+						key "bg"
+						value "GuiQuadDef"
+						{
+							color
+							{
+								w "1"
+								x "1"
+								y "0"
+								z "0"
+							}
+
+							hitbox_visible "0"
+							id "bg"
+							size
+							{
+								x "200"
+								y "100"
+							}
+
+						}
+
+					}
+
+				}
+
+				alignment "left"
+				anchor "left"
+				id "button"
+				offset
+				{
+					x "60"
+					y "200"
+				}
+
+				size
+				{
+					x "200"
+					y "100"
+				}
+
+			}
+
+		}
+
+	}
+
+	id "gui/hud/rb_button"
+	size
+	{
+		x "1920"
+		y "1080"
+	}
+
+}
+
+GuiDataDefinitions
+{
+	GuiDataTypeDefinition
+	{
+		name "ScreenModel"
+		fields
+		handle "[1CD466DC-C379-494D-8CD9-6950349F4A51]"
+	}
+
+}
