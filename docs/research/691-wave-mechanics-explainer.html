@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wellen-Mechanik</title>
+<style>
+  :root {
+    --bg: #f3f1ec;
+    --surface: #ffffff;
+    --surface-2: #eae6dc;
+    --border: #d8d2c4;
+    --text: #1c1f1a;
+    --dim: #6b6a5e;
+    --accent: #c8571f;
+    --accent-2: #2f6e63;
+    --warn: #a5760a;
+    --warn-bg: #fbf0d9;
+    --confirmed-bg: #e9f1ec;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+    --sans: "IBM Plex Sans", system-ui, sans-serif;
+    --display: "Barlow Condensed", var(--sans);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14171a;
+      --surface: #1b1f22;
+      --surface-2: #21262a;
+      --border: #33393e;
+      --text: #ebeae4;
+      --dim: #9aa0a0;
+      --accent: #ff8a4d;
+      --accent-2: #5fc9ba;
+      --warn: #e8b93f;
+      --warn-bg: #2c2717;
+      --confirmed-bg: #182420;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14171a;
+    --surface: #1b1f22;
+    --surface-2: #21262a;
+    --border: #33393e;
+    --text: #ebeae4;
+    --dim: #9aa0a0;
+    --accent: #ff8a4d;
+    --accent-2: #5fc9ba;
+    --warn: #e8b93f;
+    --warn-bg: #2c2717;
+    --confirmed-bg: #182420;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.55;
+    padding-inline: 20px;
+    padding-block: 40px 80px;
+  }
+  img { max-width: 100%; }
+  .page {
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 22px;
+    height: 2px;
+    background: var(--accent);
+    display: inline-block;
+  }
+
+  h1 {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: clamp(34px, 6vw, 56px);
+    line-height: 1.05;
+    letter-spacing: 0.005em;
+    margin: 0 0 14px;
+    text-wrap: balance;
+  }
+  .subhead {
+    font-size: 18px;
+    color: var(--dim);
+    max-width: 62ch;
+    margin: 0 0 36px;
+  }
+
+  h2 {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: 30px;
+    letter-spacing: 0.005em;
+    margin: 0 0 6px;
+    text-wrap: balance;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+  }
+  h2 .num {
+    font-family: var(--mono);
+    color: var(--accent);
+    font-size: 16px;
+    font-weight: 500;
+  }
+  h3 {
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 16px;
+    margin: 0 0 8px;
+  }
+  p { margin: 0 0 14px; max-width: 68ch; }
+  .section-intro { color: var(--dim); max-width: 66ch; margin-bottom: 24px; }
+
+  section { margin-bottom: 64px; }
+  section + section { padding-top: 8px; border-top: 1px solid var(--border); padding-top: 48px; }
+
+  code, .path {
+    font-family: var(--mono);
+    font-size: 0.9em;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    white-space: nowrap;
+  }
+
+  /* status callouts */
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-weight: 600;
+  }
+  .tag-confirmed { background: var(--confirmed-bg); color: var(--accent-2); border: 1px solid color-mix(in srgb, var(--accent-2) 40%, transparent); }
+  .tag-open { background: var(--warn-bg); color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); }
+
+  .callout {
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent-2);
+    background: var(--surface);
+    border-radius: 6px;
+    padding: 14px 18px;
+    margin: 18px 0;
+  }
+  .callout.open { border-left-color: var(--warn); }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout .tag { margin-bottom: 8px; }
+
+  /* diagram frame */
+  figure {
+    margin: 22px 0 8px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 22px 18px 16px;
+  }
+  figure svg { display: block; width: 100%; height: auto; max-width: 100%; }
+  figcaption {
+    font-size: 13px;
+    color: var(--dim);
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px dashed var(--border);
+  }
+  .svg-wrap { overflow-x: auto; }
+
+  /* comparison card */
+  .compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 18px 0;
+  }
+  .compare > div { background: var(--surface); padding: 16px 18px; }
+  .compare .col-head {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 10px;
+  }
+  .compare .lvl { font-family: var(--display); font-size: 26px; font-weight: 700; }
+  .compare.l9 .col-head:last-of-type { color: var(--accent); }
+  .compare ul { margin: 10px 0 0; padding-left: 18px; font-size: 14px; }
+  .compare li { margin-bottom: 6px; }
+  .compare li b { color: var(--accent); }
+  @media (max-width: 560px) {
+    .compare { grid-template-columns: 1fr; }
+  }
+
+  /* charts row */
+  .chart-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+  @media (max-width: 640px) {
+    .chart-row { grid-template-columns: 1fr; }
+  }
+
+  /* params table */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    margin: 18px 0;
+  }
+  th, td {
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--dim);
+    font-weight: 600;
+  }
+  td.param { font-weight: 700; white-space: nowrap; }
+
+  footer {
+    margin-top: 60px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    color: var(--dim);
+    font-size: 13px;
+  }
+  footer .refs { font-family: var(--mono); font-size: 12px; margin-top: 6px; }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<div class="page">
+
+  <div class="eyebrow">Riftbreaker Battle Mod &middot; Wellen-Recherche</div>
+  <h1>Wie eine Welle entsteht &mdash; und warum Welle&nbsp;9 h&auml;rter ist als Welle&nbsp;8</h1>
+  <p class="subhead">
+    Alles hier ist aus dem echten Spiel-Code gelesen (Lua-Regeln + native C++-Disassembly),
+    nicht geraten. Wo etwas noch offen ist, steht das explizit dabei &mdash; nichts wird als
+    sicher verkauft, was es nicht ist.
+  </p>
+
+  <section>
+    <h2><span class="num">01</span> Wie das Spiel eine Welle ausw&auml;hlt und spawnt</h2>
+    <p class="section-intro">
+      Der Difficulty-Manager (<code>dom_mananger</code>) l&auml;uft in einem Zyklus. Bei jedem
+      Wellen-Trigger durchl&auml;uft er dieselben Schritte &mdash; und parallel dazu kann,
+      unabh&auml;ngig davon, noch ein Boss dazukommen.
+    </p>
+
+    <figure>
+      <div class="svg-wrap">
+        <svg viewBox="0 0 860 640" role="img" aria-label="Ablauf: DOM-Zyklus w&auml;hlt Difficulty-Level, zieht eine Wellen-Variante aus dem Pool, w&auml;hlt einen Spawnpunkt und startet die Welle nativ; parallel kann unabh&auml;ngig ein Boss dazu gewürfelt werden; der ganze Zyklus wiederholt sich attackCount(L)-mal pro Runde.">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"></path>
+            </marker>
+          </defs>
+          <g fill="none" stroke="currentColor" stroke-width="1.4" opacity="0.9">
+            <!-- main column arrows -->
+            <line x1="250" y1="66" x2="250" y2="96" marker-end="url(#arrow)"></line>
+            <line x1="250" y1="146" x2="250" y2="176" marker-end="url(#arrow)"></line>
+            <line x1="250" y1="230" x2="250" y2="256" marker-end="url(#arrow)"></line>
+            <line x1="250" y1="310" x2="250" y2="336" marker-end="url(#arrow)"></line>
+            <line x1="250" y1="390" x2="250" y2="416" marker-end="url(#arrow)"></line>
+            <line x1="250" y1="470" x2="250" y2="496" marker-end="url(#arrow)"></line>
+            <!-- side column arrows -->
+            <line x1="650" y1="230" x2="650" y2="256" marker-end="url(#arrow)"></line>
+            <line x1="650" y1="310" x2="650" y2="336" marker-end="url(#arrow)"></line>
+            <!-- side merges into main spawn box -->
+            <path d="M 570 366 L 470 526" marker-end="url(#arrow)"></path>
+            <!-- loop back -->
+            <path d="M 60 546 L 30 546 L 30 205 L 60 205" marker-end="url(#arrow)" stroke-dasharray="4 3"></path>
+          </g>
+
+          <!-- Row 0: DOM cycle -->
+          <rect x="60" y="16" width="380" height="50" rx="7" fill="none" stroke="currentColor" stroke-width="1.4"></rect>
+          <text x="250" y="46" text-anchor="middle" font-family="IBM Plex Mono" font-size="13" fill="currentColor">DOM-Update-Zyklus (l&auml;uft laufend)</text>
+
+          <!-- Row 1: Difficulty level -->
+          <rect x="60" y="96" width="380" height="50" rx="7" fill="var(--surface-2)" stroke="currentColor" stroke-width="1.4"></rect>
+          <text x="250" y="126" text-anchor="middle" font-family="IBM Plex Sans" font-weight="600" font-size="14" fill="currentColor">Difficulty-Level L (1&ndash;9)</text>
+
+          <!-- Row 2: pool -->
+          <rect x="60" y="176" width="380" height="54" rx="7" fill="none" stroke="currentColor" stroke-width="1.4"></rect>
+          <text x="250" y="199" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="currentColor">rules.waves["default"][L]</text>
+          <text x="250" y="217" text-anchor="middle" font-family="IBM Plex Sans" font-size="12" fill="var(--dim)">Pool aus 2&ndash;5 fertigen .logic-Dateien</text>
+
+          <!-- Row 3: random pick -->
+          <rect x="60" y="256" width="380" height="54" rx="7" fill="var(--surface-2)" stroke="currentColor" stroke-width="1.4"></rect>
+          <text x="250" y="279" text-anchor="middle" font-family="IBM Plex Sans" font-weight="600" font-size="13" fill="currentColor">Zuf&auml;llige Auswahl</text>
+          <text x="250" y="297" text-anchor="middle" font-family="IBM Plex Sans" font-size="12" fill="var(--dim)">1 von N Varianten aus dem Pool</text>
+
+          <!-- Row 4: spawn point -->
+          <rect x="60" y="336" width="380" height="54" rx="7" fill="none" stroke="currentColor" stroke-width="1.4"></rect>
+          <text x="250" y="359" text-anchor="middle" font-family="IBM Plex Sans" font-weight="600" font-size="13" fill="currentColor">Zuf&auml;lliger Spawnpunkt</text>
+          <text x="250" y="377" text-anchor="middle" font-family="IBM Plex Sans" font-size="12" fill="var(--dim)">1 von 16 Rand-Spawnern (4 Gruppen)</text>
+
+          <!-- Row 5: activate flow -->
+          <rect x="60" y="416" width="380" height="54" rx="7" fill="var(--surface-2)" stroke="currentColor" stroke-width="1.4"></rect>
+          <text x="250" y="439" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="currentColor">ActivateMissionFlow()</text>
+          <text x="250" y="457" text-anchor="middle" font-family="IBM Plex Sans" font-size="12" fill="var(--dim)">nativer C++-Aufruf, kein Lua</text>
+
+          <!-- Row 6: spawn units -->
+          <rect x="60" y="496" width="380" height="54" rx="7" stroke="var(--accent)" stroke-width="2" fill="none"></rect>
+          <text x="250" y="528" text-anchor="middle" font-family="IBM Plex Sans" font-weight="700" font-size="15" fill="var(--accent)">Einheiten spawnen</text>
+
+          <!-- loop label -->
+          <text x="16" y="380" font-family="IBM Plex Mono" font-size="11" fill="currentColor" transform="rotate(-90 16 380)" text-anchor="middle">&times; attackCount(L) pro Runde</text>
+
+          <!-- side branch header -->
+          <rect x="520" y="176" width="260" height="54" rx="7" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="3 3"></rect>
+          <text x="650" y="199" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="currentColor">rules.gameEvents</text>
+          <text x="650" y="217" text-anchor="middle" font-family="IBM Plex Sans" font-size="12" fill="var(--dim)">unabh&auml;ngiger Zufalls-Event-Pool</text>
+
+          <rect x="520" y="256" width="260" height="54" rx="7" fill="var(--warn-bg)" stroke="var(--warn)" stroke-width="1.4"></rect>
+          <text x="650" y="279" text-anchor="middle" font-family="IBM Plex Sans" font-weight="600" font-size="13" fill="var(--warn)">boss_attack Roll</text>
+          <text x="650" y="297" text-anchor="middle" font-family="IBM Plex Sans" font-size="12" fill="var(--dim)">nur ab Level &ge; 4 &uuml;berhaupt m&ouml;glich</text>
+
+          <rect x="520" y="336" width="260" height="54" rx="7" fill="none" stroke="currentColor" stroke-width="1.4"></rect>
+          <text x="650" y="368" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="currentColor">GetBossPool()</text>
+
+          <text x="650" y="410" text-anchor="middle" font-family="IBM Plex Sans" font-size="11.5" fill="var(--dim)">zus&auml;tzlich zur Welle,</text>
+          <text x="650" y="425" text-anchor="middle" font-family="IBM Plex Sans" font-size="11.5" fill="var(--dim)">nicht anstelle</text>
+
+          <!-- send button annotation -->
+          <rect x="480" y="580" width="360" height="46" rx="7" fill="var(--confirmed-bg)" stroke="var(--accent-2)" stroke-width="1.2"></rect>
+          <text x="660" y="600" text-anchor="middle" font-family="IBM Plex Sans" font-weight="600" font-size="12" fill="var(--accent-2)">Send-Mechanik (Cockpit-Buttons)</text>
+          <text x="660" y="616" text-anchor="middle" font-family="IBM Plex Sans" font-size="11" fill="var(--dim)">springt direkt zu Row 5, umgeht Pool-Zufall</text>
+        </svg>
+      </div>
+      <figcaption>
+        Der linke Pfad ist die nat&uuml;rliche Welle: Level &rarr; Pool &rarr; Zufallsvariante &rarr; Zufalls-Spawnpunkt &rarr; Spawn,
+        wiederholt <code>attackCount(L)</code>-mal pro Runde. Der rechte, gestrichelte Pfad ist der Boss: ein komplett
+        unabh&auml;ngiger Zufalls-Wurf, der ab Level&nbsp;4 <em>zus&auml;tzlich</em> zur normalen Welle feuern kann &mdash; nicht Teil
+        des Wellen-Pools. Im Cockpit springt der "Send"-Button direkt zur letzten Zeile und umgeht den Zufalls-Pool
+        (man w&auml;hlt eine feste Datei statt zu w&uuml;rfeln).
+      </figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2><span class="num">02</span> Warum Welle&nbsp;9 h&auml;rter ist als Welle&nbsp;8</h2>
+    <p class="section-intro">
+      Drei <em>separate</em> Mechanismen addieren sich. Keiner davon ist eine "neue Wellen-Art" f&uuml;r
+      Level&nbsp;9 &mdash; es ist dieselbe Maschine, nur mit anderen Eingabewerten.
+    </p>
+
+    <h3>Faktor 1 &mdash; der Pool selbst ist fast identisch</h3>
+    <div class="compare l9">
+      <div>
+        <div class="col-head">Level 8</div>
+        <ul>
+          <li>5 Wellen-Varianten im Pool</li>
+          <li>"Schwarm"-Slot: <b>gnerot &times;8</b></li>
+        </ul>
+      </div>
+      <div>
+        <div class="col-head">Level 9</div>
+        <ul>
+          <li>Dieselben 4 Hauptvarianten wie Level 8</li>
+          <li>"Schwarm"-Slot: <b>gnerot &times;11</b></li>
+        </ul>
+      </div>
+    </div>
+    <p>
+      Level&nbsp;9 hat <em>keinen eigenen</em> Wellen-Pool &mdash; er verweist komplett auf die Dateien von
+      Level&nbsp;8. Der einzige Unterschied: der eine "Schwarm"-Slot im Pool zieht bei Level&nbsp;9 aus
+      einer etwas st&auml;rkeren Datei (11 statt 8 gnerot). Kleiner Effekt, aber real.
+    </p>
+
+    <h3>Faktor 2 &mdash; Level 9 feuert eine Welle mehr pro Runde</h3>
+    <div class="chart-row">
+      <figure>
+        <div class="svg-wrap">
+          <svg viewBox="0 0 380 230" role="img" aria-label="Balkendiagramm: attackCount pro Difficulty-Level, Standardwerte 1,2,2,3,3,3,3,3,4 &mdash; Level 9 springt auf 4.">
+            <g font-family="IBM Plex Mono" font-size="10.5" fill="var(--dim)">
+              <line x1="40" y1="20" x2="40" y2="180" stroke="currentColor" stroke-width="1" opacity="0.5"></line>
+              <line x1="40" y1="180" x2="360" y2="180" stroke="currentColor" stroke-width="1" opacity="0.5"></line>
+              <text x="34" y="184" text-anchor="end">0</text>
+              <text x="34" y="139" text-anchor="end">1</text>
+              <text x="34" y="99" text-anchor="end">2</text>
+              <text x="34" y="59" text-anchor="end">3</text>
+              <text x="34" y="24" text-anchor="end">4</text>
+            </g>
+            <!-- bars: baseline y=180, unit height 40px per count -->
+            <!-- L1=1 -->
+            <rect x="50" y="140" width="26" height="40" fill="var(--dim)" opacity="0.55"></rect>
+            <!-- L2=2 -->
+            <rect x="88" y="100" width="26" height="80" fill="var(--dim)" opacity="0.55"></rect>
+            <!-- L3=2 -->
+            <rect x="126" y="100" width="26" height="80" fill="var(--dim)" opacity="0.55"></rect>
+            <!-- L4=3 -->
+            <rect x="164" y="60" width="26" height="120" fill="var(--dim)" opacity="0.55"></rect>
+            <!-- L5=3 -->
+            <rect x="202" y="60" width="26" height="120" fill="var(--dim)" opacity="0.55"></rect>
+            <!-- L6=3 -->
+            <rect x="240" y="60" width="26" height="120" fill="var(--dim)" opacity="0.55"></rect>
+            <!-- L7=3 -->
+            <rect x="278" y="60" width="26" height="120" fill="var(--dim)" opacity="0.55"></rect>
+            <!-- L8=3 -->
+            <rect x="316" y="60" width="26" height="120" fill="var(--dim)" opacity="0.75"></rect>
+            <g font-family="IBM Plex Sans" font-size="11" text-anchor="middle" fill="var(--dim)">
+              <text x="63" y="196">1</text><text x="101" y="196">2</text><text x="139" y="196">3</text>
+              <text x="177" y="196">4</text><text x="215" y="196">5</text><text x="253" y="196">6</text>
+              <text x="291" y="196">7</text><text x="329" y="196">8</text>
+            </g>
+          </svg>
+        </div>
+      </figure>
+      <figure>
+        <div class="svg-wrap">
+          <svg viewBox="0 0 380 230" role="img" aria-label="Dasselbe Diagramm mit Level 9 hervorgehoben: attackCount springt von 3 auf 4, ein Drittel mehr Wellen pro Runde.">
+            <g font-family="IBM Plex Mono" font-size="10.5" fill="var(--dim)">
+              <line x1="40" y1="20" x2="40" y2="180" stroke="currentColor" stroke-width="1" opacity="0.5"></line>
+              <line x1="40" y1="180" x2="360" y2="180" stroke="currentColor" stroke-width="1" opacity="0.5"></line>
+              <text x="34" y="184" text-anchor="end">0</text>
+              <text x="34" y="139" text-anchor="end">1</text>
+              <text x="34" y="99" text-anchor="end">2</text>
+              <text x="34" y="59" text-anchor="end">3</text>
+              <text x="34" y="24" text-anchor="end">4</text>
+            </g>
+            <rect x="50" y="60" width="70" height="120" fill="var(--dim)" opacity="0.3"></rect>
+            <text x="85" y="200" text-anchor="middle" font-family="IBM Plex Sans" font-size="11" fill="var(--dim)">Level 1&ndash;8</text>
+            <text x="85" y="45" text-anchor="middle" font-family="IBM Plex Sans" font-size="12" fill="var(--dim)">3 Wellen/Runde</text>
+            <rect x="200" y="20" width="100" height="160" fill="var(--accent)" opacity="0.85"></rect>
+            <text x="250" y="200" text-anchor="middle" font-family="IBM Plex Sans" font-weight="700" font-size="13" fill="var(--accent)">Level 9</text>
+            <text x="250" y="16" text-anchor="middle" font-family="IBM Plex Sans" font-weight="700" font-size="13" fill="var(--accent)">4 Wellen/Runde</text>
+          </svg>
+        </div>
+      </figure>
+    </div>
+    <p>
+      Standardwerte: <code>attackCount = [1,2,2,3,3,3,3,3,4]</code>. Von Level&nbsp;4 bis Level&nbsp;8 bleibt es
+      konstant bei 3 Wellen pro Runde &mdash; bei Level&nbsp;9 springt es auf 4. Ein Drittel mehr Wellen,
+      unabh&auml;ngig davon, was in den einzelnen Wellen drinsteckt.
+    </p>
+
+    <h3>Faktor 3 &mdash; der additive Difficulty-Bonus (der gr&ouml;&szlig;te Sprung von allen)</h3>
+    <figure>
+      <div class="svg-wrap">
+        <svg viewBox="0 0 780 240" role="img" aria-label="Kumulativer Difficulty-Bonus je Level fuer Solo-Spieler: 0 von Level 1 bis 5, dann 0,5 bei Level 6, 1,0 bei Level 7, 1,5 bei Level 8, und ein Sprung auf 3,0 bei Level 9 -- der groesste Einzelsprung der ganzen Tabelle.">
+          <g font-family="IBM Plex Mono" font-size="11" fill="var(--dim)">
+            <line x1="60" y1="20" x2="60" y2="180" stroke="currentColor" stroke-width="1" opacity="0.5"></line>
+            <line x1="60" y1="180" x2="740" y2="180" stroke="currentColor" stroke-width="1" opacity="0.5"></line>
+            <text x="54" y="184" text-anchor="end">0.0</text>
+            <text x="54" y="140" text-anchor="end">1.0</text>
+            <text x="54" y="100" text-anchor="end">2.0</text>
+            <text x="54" y="60" text-anchor="end">3.0</text>
+          </g>
+          <!-- baseline y=180, scale: 1.0 -> 40px -->
+          <!-- L1-5 = 0 -->
+          <rect x="80" y="178" width="56" height="2" fill="var(--dim)" opacity="0.4"></rect>
+          <rect x="150" y="178" width="56" height="2" fill="var(--dim)" opacity="0.4"></rect>
+          <rect x="220" y="178" width="56" height="2" fill="var(--dim)" opacity="0.4"></rect>
+          <rect x="290" y="178" width="56" height="2" fill="var(--dim)" opacity="0.4"></rect>
+          <rect x="360" y="178" width="56" height="2" fill="var(--dim)" opacity="0.4"></rect>
+          <!-- L6 = 0.5 -> 20px -->
+          <rect x="430" y="160" width="56" height="20" fill="var(--dim)" opacity="0.55"></rect>
+          <!-- L7 = 1.0 -> 40px -->
+          <rect x="500" y="140" width="56" height="40" fill="var(--dim)" opacity="0.55"></rect>
+          <!-- L8 = 1.5 -> 60px -->
+          <rect x="570" y="120" width="56" height="60" fill="var(--dim)" opacity="0.7"></rect>
+          <!-- L9 = 3.0 -> 120px, accent -->
+          <rect x="640" y="60" width="56" height="120" fill="var(--accent)"></rect>
+          <text x="668" y="50" text-anchor="middle" font-family="IBM Plex Sans" font-weight="700" font-size="13" fill="var(--accent)">+3,0</text>
+
+          <g font-family="IBM Plex Sans" font-size="12" text-anchor="middle" fill="var(--dim)">
+            <text x="108" y="198">L1</text><text x="178" y="198">L2</text><text x="248" y="198">L3</text>
+            <text x="318" y="198">L4</text><text x="388" y="198">L5</text><text x="458" y="198">L6</text>
+            <text x="528" y="198">L7</text><text x="598" y="198">L8</text>
+            <text x="668" y="198" font-weight="700" fill="var(--accent)">L9</text>
+          </g>
+          <!-- jump annotation -->
+          <path d="M 626 118 C 640 90, 645 85, 650 62" fill="none" stroke="var(--accent)" stroke-width="1.2" stroke-dasharray="3 2"></path>
+          <text x="720" y="100" text-anchor="middle" font-family="IBM Plex Sans" font-size="11" fill="var(--accent)">doppelt so</text>
+          <text x="720" y="114" text-anchor="middle" font-family="IBM Plex Sans" font-size="11" fill="var(--accent)">gro&szlig;er Sprung</text>
+          <text x="720" y="128" text-anchor="middle" font-family="IBM Plex Sans" font-size="11" fill="var(--accent)">wie je zuvor</text>
+        </svg>
+      </div>
+      <figcaption>
+        Werte f&uuml;r 1 Spieler (Solo), kumulativ &uuml;ber alle Level. Jeder Schritt von L6 bis L8 ist
+        <code>+0,5</code>. Der Schritt L8&rarr;L9 ist <code>+1,5</code> &mdash; dreimal so gro&szlig; wie jeder
+        Schritt davor. Das ist der auff&auml;lligste Einzelfaktor, warum L9 sich hart anf&uuml;hlen d&uuml;rfte.
+      </figcaption>
+    </figure>
+
+    <div class="callout">
+      <span class="tag tag-confirmed">bestätigt &mdash; per Disassembly gelesen</span>
+      <p>
+        Die Funktion, die diesen Bonus einbaut (<code>CampaignService::IncreaseCreaturesBaseDifficulty</code>),
+        macht wortw&ouml;rtlich nur eine Addition auf ein Float-Feld: <code>creatures_base_difficulty&nbsp;+=&nbsp;delta</code>.
+        Kein Multiplikator, keine Prozentrechnung, keine versteckte Formel an dieser Stelle &mdash; nur reines Aufaddieren.
+      </p>
+    </div>
+    <div class="callout open">
+      <span class="tag tag-open">noch offen &mdash; wird weiter untersucht</span>
+      <p>
+        Was dieser aufaddierte Wert dann tats&auml;chlich an den gespawnten Kreaturen bewirkt (mehr HP? mehr
+        Schaden? beides?), ist <strong>noch nicht abschlie&szlig;end gekl&auml;rt</strong>. Die eine Stelle, die
+        den Wert bisher genauer verfolgt wurde, f&uuml;hrte zu einer Spawn-Distanz-Berechnung, nicht zu einem
+        HP-/Schadens-Feld &mdash; 6 von 9 Aufrufstellen dieser Funktion sind noch nicht untersucht. Es ist also
+        best&auml;tigt, <em>dass</em> der Wert additiv wächst &mdash; noch nicht, <em>was er am Ende bewirkt</em>.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">03</span> Alle Parameter, die eine Welle ver&auml;ndern</h2>
+    <p class="section-intro">Zusammengefasst &mdash; was tats&auml;chlich Einfluss auf St&auml;rke und Zusammensetzung hat.</p>
+    <table>
+      <thead>
+        <tr><th>Parameter</th><th>Wirkung</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="param">Difficulty-Level (1&ndash;9)</td>
+          <td>Bestimmt Pool, attackCount und den kumulativen Difficulty-Bonus.</td>
+          <td><span class="tag tag-confirmed">bestätigt</span></td>
+        </tr>
+        <tr>
+          <td class="param">Pool-Variante (Zufall)</td>
+          <td>Bei jedem Wellen-Trigger wird 1 von 2&ndash;5 fertigen Kompositionen zuf&auml;llig gezogen.</td>
+          <td><span class="tag tag-confirmed">bestätigt</span></td>
+        </tr>
+        <tr>
+          <td class="param">attackCount(L)</td>
+          <td>Wellen pro Runde: <code>[1,2,2,3,3,3,3,3,4]</code> &mdash; Sprung bei L9.</td>
+          <td><span class="tag tag-confirmed">bestätigt</span></td>
+        </tr>
+        <tr>
+          <td class="param">creatures_base_difficulty</td>
+          <td>Additiver, kumulativer Bonus ab L6. Speicherung bestätigt, Spielwirkung offen.</td>
+          <td><span class="tag tag-open">teilweise offen</span></td>
+        </tr>
+        <tr>
+          <td class="param">Boss-Roll</td>
+          <td>Unabh&auml;ngiges Zufallsereignis ab L4, zus&auml;tzlich zur normalen Welle. HP je nach Boss-Art 3000&ndash;5000.</td>
+          <td><span class="tag tag-confirmed">bestätigt</span></td>
+        </tr>
+        <tr>
+          <td class="param">Spielerzahl</td>
+          <td>Sowohl attackCount als auch der Difficulty-Bonus haben eigene Tabellen je Spielerzahl &mdash; hier gezeigt: Solo-Werte.</td>
+          <td><span class="tag tag-confirmed">bestätigt</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer>
+    <div>Quelle: Lua-Regeln (<code>dom_manager.lua</code>, <code>dom_survival_jungle_rules_default.lua</code>) und native C++-Disassembly (<code>rbbridge.c</code>), aus dem laufenden Recherche-Thread von heute.</div>
+    <div class="refs">Refs &middot; #213 &middot; #646 &middot; #654 &middot; #658 &middot; #666 &middot; #670 &middot; #205</div>
+  </footer>
+
+</div>
+</body>
+</html>
