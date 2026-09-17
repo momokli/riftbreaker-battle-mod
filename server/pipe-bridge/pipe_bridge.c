@@ -1022,7 +1022,6 @@ static void handle_activate_mission_flow(SOCKET c, const char *body)
     char esc_mode[64 * 2];
     char esc_spawn[128 * 2];
     int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
-    HANDLE h;
 
     if (!json_get_string(body, "logic", logic, sizeof(logic)) || !logic[0]) {
         blog("POST /activate_mission_flow ohne logic -> invalid_request");
@@ -1038,15 +1037,6 @@ static void handle_activate_mission_flow(SOCKET c, const char *body)
      * `data` an den Mission-Flow durch. */
     json_get_string(body, "spawn_point", spawn, sizeof(spawn));
 
-    h = pipe_connect(2500);
-    if (h == INVALID_HANDLE_VALUE) {
-        blog("POST /activate_mission_flow: Pipe nicht erreichbar -> "
-             "pipe_unavailable");
-        http_respond(c, 503, "Service Unavailable",
-                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
-        return;
-    }
-
     json_escape(logic, esc_logic, sizeof(esc_logic));
     json_escape(mode, esc_mode, sizeof(esc_mode));
     json_escape(spawn, esc_spawn, sizeof(esc_spawn));
@@ -1055,17 +1045,16 @@ static void handle_activate_mission_flow(SOCKET c, const char *body)
              "\"mode\":\"%s\",\"spawn_point\":\"%s\"}\n",
              esc_logic, esc_mode, esc_spawn);
 
-    if (!pipe_write_all(h, payload)) {
-        CloseHandle(h);
-        http_respond(c, 500, "Internal Server Error",
-                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
-        return;
-    }
-
     {
-        int rc = pipe_wait_line(h, "activate_mission_flow_result", NULL,
-                                timeout_ms, line, sizeof(line));
-        CloseHandle(h);
+        int rc = pipe_send_command("activate_mission_flow_result", payload,
+                                   timeout_ms, line, sizeof(line));
+        if (rc == -1) {
+            blog("POST /activate_mission_flow: Pipe nicht erreichbar -> "
+                 "pipe_unavailable");
+            http_respond(c, 503, "Service Unavailable",
+                         "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+            return;
+        }
         if (rc != 0) {
             http_respond(c, 500, "Internal Server Error",
                          "{\"ok\":false,\"reason\":\"timeout\"}");
@@ -1089,36 +1078,25 @@ static void handle_deactivate_mission_flow(SOCKET c, const char *body)
     char payload[LINE_MAX];
     char esc_flow[192 * 2];
     int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
-    HANDLE h;
 
     /* `flow` ist optional: leer -> rbbridge nimmt g_last_flow. */
     json_get_string(body, "flow", flow, sizeof(flow));
-
-    h = pipe_connect(2500);
-    if (h == INVALID_HANDLE_VALUE) {
-        blog("POST /deactivate_mission_flow: Pipe nicht erreichbar -> "
-             "pipe_unavailable");
-        http_respond(c, 503, "Service Unavailable",
-                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
-        return;
-    }
 
     json_escape(flow, esc_flow, sizeof(esc_flow));
     snprintf(payload, sizeof(payload),
              "{\"cmd\":\"deactivate_mission_flow\",\"flow\":\"%s\"}\n",
              esc_flow);
 
-    if (!pipe_write_all(h, payload)) {
-        CloseHandle(h);
-        http_respond(c, 500, "Internal Server Error",
-                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
-        return;
-    }
-
     {
-        int rc = pipe_wait_line(h, "deactivate_mission_flow_result", NULL,
-                                timeout_ms, line, sizeof(line));
-        CloseHandle(h);
+        int rc = pipe_send_command("deactivate_mission_flow_result", payload,
+                                   timeout_ms, line, sizeof(line));
+        if (rc == -1) {
+            blog("POST /deactivate_mission_flow: Pipe nicht erreichbar -> "
+                 "pipe_unavailable");
+            http_respond(c, 503, "Service Unavailable",
+                         "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+            return;
+        }
         if (rc != 0) {
             http_respond(c, 500, "Internal Server Error",
                          "{\"ok\":false,\"reason\":\"timeout\"}");
@@ -1142,7 +1120,6 @@ static void handle_end_game(SOCKET c, const char *body)
     char payload[LINE_MAX];
     char esc_result[16 * 2];
     int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
-    HANDLE h;
 
     if (!json_get_string(body, "result", result, sizeof(result)) ||
         !result[0]) {
@@ -1158,30 +1135,20 @@ static void handle_end_game(SOCKET c, const char *body)
         return;
     }
 
-    h = pipe_connect(2500);
-    if (h == INVALID_HANDLE_VALUE) {
-        blog("POST /end_game: Pipe nicht erreichbar -> pipe_unavailable");
-        http_respond(c, 503, "Service Unavailable",
-                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
-        return;
-    }
-
     json_escape(result, esc_result, sizeof(esc_result));
     snprintf(payload, sizeof(payload),
              "{\"cmd\":\"end_game\",\"result\":\"%s\"}\n",
              esc_result);
 
-    if (!pipe_write_all(h, payload)) {
-        CloseHandle(h);
-        http_respond(c, 500, "Internal Server Error",
-                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
-        return;
-    }
-
     {
-        int rc = pipe_wait_line(h, "end_game_result", NULL,
-                                timeout_ms, line, sizeof(line));
-        CloseHandle(h);
+        int rc = pipe_send_command("end_game_result", payload,
+                                   timeout_ms, line, sizeof(line));
+        if (rc == -1) {
+            blog("POST /end_game: Pipe nicht erreichbar -> pipe_unavailable");
+            http_respond(c, 503, "Service Unavailable",
+                         "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+            return;
+        }
         if (rc != 0) {
             http_respond(c, 500, "Internal Server Error",
                          "{\"ok\":false,\"reason\":\"timeout\"}");
@@ -1204,7 +1171,6 @@ static void handle_creatures_difficulty(SOCKET c, const char *body)
     char esc_op[32 * 2];
     double value = 0.0;
     int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
-    HANDLE h;
 
     if (!json_get_string(body, "op", op, sizeof(op)) || !op[0]) {
         blog("POST /creatures_difficulty ohne op -> invalid_request");
@@ -1226,15 +1192,6 @@ static void handle_creatures_difficulty(SOCKET c, const char *body)
         return;
     }
 
-    h = pipe_connect(2500);
-    if (h == INVALID_HANDLE_VALUE) {
-        blog("POST /creatures_difficulty: Pipe nicht erreichbar -> "
-             "pipe_unavailable");
-        http_respond(c, 503, "Service Unavailable",
-                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
-        return;
-    }
-
     json_escape(op, esc_op, sizeof(esc_op));
     /* value als String (rbbridge json_get_string unterstuetzt nur Strings). */
     snprintf(payload, sizeof(payload),
@@ -1242,17 +1199,16 @@ static void handle_creatures_difficulty(SOCKET c, const char *body)
              "\"value\":\"%.6f\"}\n",
              esc_op, value);
 
-    if (!pipe_write_all(h, payload)) {
-        CloseHandle(h);
-        http_respond(c, 500, "Internal Server Error",
-                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
-        return;
-    }
-
     {
-        int rc = pipe_wait_line(h, "creatures_difficulty_result", NULL,
-                                timeout_ms, line, sizeof(line));
-        CloseHandle(h);
+        int rc = pipe_send_command("creatures_difficulty_result", payload,
+                                   timeout_ms, line, sizeof(line));
+        if (rc == -1) {
+            blog("POST /creatures_difficulty: Pipe nicht erreichbar -> "
+                 "pipe_unavailable");
+            http_respond(c, 503, "Service Unavailable",
+                         "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+            return;
+        }
         if (rc != 0) {
             http_respond(c, 500, "Internal Server Error",
                          "{\"ok\":false,\"reason\":\"timeout\"}");
@@ -1274,7 +1230,6 @@ static void handle_natural_waves(SOCKET c, const char *body)
     char payload[LINE_MAX];
     char esc_op[32 * 2];
     int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
-    HANDLE h;
 
     json_get_string(body, "op", op, sizeof(op));
     if (op[0] && strcmp(op, "status") != 0 && strcmp(op, "off") != 0 &&
@@ -1285,30 +1240,20 @@ static void handle_natural_waves(SOCKET c, const char *body)
         return;
     }
 
-    h = pipe_connect(2500);
-    if (h == INVALID_HANDLE_VALUE) {
-        blog("POST /natural_waves: Pipe nicht erreichbar -> "
-             "pipe_unavailable");
-        http_respond(c, 503, "Service Unavailable",
-                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
-        return;
-    }
-
     json_escape(op, esc_op, sizeof(esc_op));
     snprintf(payload, sizeof(payload),
              "{\"cmd\":\"natural_waves\",\"op\":\"%s\"}\n", esc_op);
 
-    if (!pipe_write_all(h, payload)) {
-        CloseHandle(h);
-        http_respond(c, 500, "Internal Server Error",
-                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
-        return;
-    }
-
     {
-        int rc = pipe_wait_line(h, "natural_waves_result", NULL,
-                                timeout_ms, line, sizeof(line));
-        CloseHandle(h);
+        int rc = pipe_send_command("natural_waves_result", payload,
+                                   timeout_ms, line, sizeof(line));
+        if (rc == -1) {
+            blog("POST /natural_waves: Pipe nicht erreichbar -> "
+                 "pipe_unavailable");
+            http_respond(c, 503, "Service Unavailable",
+                         "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+            return;
+        }
         if (rc != 0) {
             http_respond(c, 500, "Internal Server Error",
                          "{\"ok\":false,\"reason\":\"timeout\"}");
@@ -1332,7 +1277,6 @@ static void handle_restart_map(SOCKET c, const char *body)
     char payload[LINE_MAX];
     char esc_op[32 * 2];
     int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
-    HANDLE h;
 
     json_get_string(body, "op", op, sizeof(op));
     if (op[0] && strcmp(op, "status") != 0 && strcmp(op, "reset") != 0) {
@@ -1342,29 +1286,19 @@ static void handle_restart_map(SOCKET c, const char *body)
         return;
     }
 
-    h = pipe_connect(2500);
-    if (h == INVALID_HANDLE_VALUE) {
-        blog("POST /restart_map: Pipe nicht erreichbar -> pipe_unavailable");
-        http_respond(c, 503, "Service Unavailable",
-                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
-        return;
-    }
-
     json_escape(op, esc_op, sizeof(esc_op));
     snprintf(payload, sizeof(payload),
              "{\"cmd\":\"restart_map\",\"op\":\"%s\"}\n", esc_op);
 
-    if (!pipe_write_all(h, payload)) {
-        CloseHandle(h);
-        http_respond(c, 500, "Internal Server Error",
-                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
-        return;
-    }
-
     {
-        int rc = pipe_wait_line(h, "restart_map_result", NULL, timeout_ms,
-                                line, sizeof(line));
-        CloseHandle(h);
+        int rc = pipe_send_command("restart_map_result", payload,
+                                   timeout_ms, line, sizeof(line));
+        if (rc == -1) {
+            blog("POST /restart_map: Pipe nicht erreichbar -> pipe_unavailable");
+            http_respond(c, 503, "Service Unavailable",
+                         "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+            return;
+        }
         if (rc != 0) {
             http_respond(c, 500, "Internal Server Error",
                          "{\"ok\":false,\"reason\":\"timeout\"}");
