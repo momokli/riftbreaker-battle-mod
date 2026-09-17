@@ -465,10 +465,29 @@ static char g_resp_expect[64];               /* erwarteter event-Name */
 static char g_resp_line[READ_BUF];           /* gematchte Antwort-Zeile */
 static int g_resp_ok = 0;                    /* 1 = Antwort da */
 
+static CRITICAL_SECTION g_cmd_cs;           /* serialisiert HTTP-Commands */
+static SOCKET g_sse_sock = INVALID_SOCKET;  /* der eine SSE-Client */
+static CRITICAL_SECTION g_sse_cs;           /* schuetzt den SSE-Client */
+
+/* Broadcastet eine JSON-Zeile als SSE-Event an den (einen) Cockpit-Client. */
+static void sse_broadcast(const char *line)
+{
+    if (!line)
+        return;
+    EnterCriticalSection(&g_sse_cs);
+    if (g_sse_sock != INVALID_SOCKET) {
+        char frame[LINE_MAX + 64];
+        int n = snprintf(frame, sizeof(frame), "data: %s\n\n", line);
+        if (n > 0)
+            send(g_sse_sock, frame, n, 0);
+    }
+    LeaveCriticalSection(&g_sse_cs);
+}
+
 /* Parst "-send <resource> <amount>". Liefert resource (lowercase) und den
- * NEGIERTEN Betrag als String (send = abziehen). Rueckgabe 1 = ok. */
+ * POSITIVEN Betrag (double). Rueckgabe 1 = ok. */
 static int parse_send_command(const char *text, char *res, size_t res_sz,
-                              char *amount, size_t amount_sz)
+                              double *amount)
 {
     const char *p = text;
     size_t i;
@@ -507,8 +526,7 @@ static int parse_send_command(const char *text, char *res, size_t res_sz,
         end++;
     if (*end != '\0')
         return 0;
-    amt = -amt; /* send = abziehen */
-    snprintf(amount, amount_sz, "%g", amt);
+    *amount = amt; /* positiv */
     return 1;
 }
 
@@ -522,12 +540,13 @@ static void route_pipe_line(HANDLE h, const char *line)
     if (strcmp(ev, "player_chat") == 0) {
         char text[256] = "";
         char res[64] = "";
-        char amount[64] = "";
+        double amt = 0.0;
         json_get_string(line, "text", text, sizeof(text));
-        if (parse_send_command(text, res, sizeof(res), amount, sizeof(amount))) {
-            char esc_res[128], esc_amt[128], payload[LINE_MAX];
+        if (parse_send_command(text, res, sizeof(res), &amt)) {
+            char neg[64], esc_res[128], esc_amt[128], payload[LINE_MAX];
+            snprintf(neg, sizeof(neg), "%g", -amt); /* send = abziehen */
             json_escape(res, esc_res, sizeof(esc_res));
-            json_escape(amount, esc_amt, sizeof(esc_amt));
+            json_escape(neg, esc_amt, sizeof(esc_amt));
             snprintf(payload, sizeof(payload),
                      "{\"cmd\":\"add_resource\",\"resource\":\"%s\","
                      "\"amount\":\"%s\"}\n",
@@ -536,9 +555,17 @@ static void route_pipe_line(HANDLE h, const char *line)
             pipe_write_all(h, payload);
             LeaveCriticalSection(&g_pipe_cs);
             blog("player_chat -send: resource=%s amount=%s -> add_resource",
-                 res, amount);
+                 res, neg);
+            {
+                char ev_line[LINE_MAX];
+                snprintf(ev_line, sizeof(ev_line),
+                         "{\"event\":\"chat_sent\",\"resource\":\"%s\",\"amount\":%g}",
+                         esc_res, amt);
+                sse_broadcast(ev_line);
+            }
         } else {
             blog("player_chat (kein -send): %.120s", text);
+            sse_broadcast(line);
         }
         return;
     }
@@ -645,8 +672,14 @@ static int pipe_send_command(const char *event, const char *payload,
 {
     int w;
 
-    if (g_pipe == INVALID_HANDLE_VALUE)
+    /* Serialisierung: der HTTP-Server ist jetzt multi-threaded (PR B), aber
+     * Pipe + pending-Response-Slot sind single. */
+    EnterCriticalSection(&g_cmd_cs);
+
+    if (g_pipe == INVALID_HANDLE_VALUE) {
+        LeaveCriticalSection(&g_cmd_cs);
         return -1;
+    }
 
     EnterCriticalSection(&g_resp_cs);
     strncpy(g_resp_expect, event, sizeof(g_resp_expect) - 1);
@@ -658,20 +691,26 @@ static int pipe_send_command(const char *event, const char *payload,
     EnterCriticalSection(&g_pipe_cs);
     w = pipe_write_all(g_pipe, payload);
     LeaveCriticalSection(&g_pipe_cs);
-    if (!w)
+    if (!w) {
+        LeaveCriticalSection(&g_cmd_cs);
         return -1;
+    }
 
-    if (WaitForSingleObject(g_resp_ev, (DWORD)timeout_ms) != WAIT_OBJECT_0)
+    if (WaitForSingleObject(g_resp_ev, (DWORD)timeout_ms) != WAIT_OBJECT_0) {
+        LeaveCriticalSection(&g_cmd_cs);
         return 1;
+    }
 
     EnterCriticalSection(&g_resp_cs);
     if (!g_resp_ok) {
         LeaveCriticalSection(&g_resp_cs);
+        LeaveCriticalSection(&g_cmd_cs);
         return 1;
     }
     strncpy(line_out, g_resp_line, line_out_sz - 1);
     line_out[line_out_sz - 1] = '\0';
     LeaveCriticalSection(&g_resp_cs);
+    LeaveCriticalSection(&g_cmd_cs);
     return 0;
 }
 
@@ -1336,6 +1375,33 @@ static void handle_restart_map(SOCKET c, const char *body)
     http_respond(c, 200, "OK", line);
 }
 
+/* GET /events: SSE-Stream. Haelt die Verbindung offen; der Reader-Thread
+ * broadcastet Events direkt an diesen (einen) Client. */
+static void handle_events(SOCKET c)
+{
+    static const char hdr[] =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/event-stream\r\n"
+        "Cache-Control: no-cache\r\n"
+        "Connection: close\r\n\r\n";
+    char b;
+
+    send(c, hdr, (int)strlen(hdr), 0);
+
+    EnterCriticalSection(&g_sse_cs);
+    g_sse_sock = c; /* ein Client; ein neuer Connect ersetzt den alten */
+    LeaveCriticalSection(&g_sse_cs);
+    blog("SSE client verbunden");
+
+    recv(c, &b, 1, 0); /* blockiert bis Trennung */
+
+    EnterCriticalSection(&g_sse_cs);
+    if (g_sse_sock == c)
+        g_sse_sock = INVALID_SOCKET;
+    LeaveCriticalSection(&g_sse_cs);
+    blog("SSE client getrennt");
+}
+
 static void handle_client(SOCKET c)
 {
     char *req = malloc(REQ_MAX + 1);
@@ -1404,6 +1470,8 @@ static void handle_client(SOCKET c)
 
         if (strcmp(method, "GET") == 0 && strcmp(path, "/health") == 0) {
             handle_health(c);
+        } else if (strcmp(method, "GET") == 0 && strcmp(path, "/events") == 0) {
+            handle_events(c);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/probe") == 0) {
             handle_probe(c);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/get_state") == 0) {
@@ -1495,6 +1563,16 @@ static void handle_client(SOCKET c)
 /* Server-Modus                                                        */
 /* ------------------------------------------------------------------ */
 
+/* Thread-pro-Connection: handle_client in eigenem Thread, damit SSE
+ * (GET /events) den Accept-Loop nicht blockiert. */
+static DWORD WINAPI client_thread(LPVOID arg)
+{
+    SOCKET c = (SOCKET)(uintptr_t)arg;
+    handle_client(c);
+    closesocket(c);
+    return 0;
+}
+
 static int mode_server(void)
 {
     init_session_id();
@@ -1505,6 +1583,8 @@ static int mode_server(void)
      * Command-Handling + Event-Routing). */
     InitializeCriticalSection(&g_pipe_cs);
     InitializeCriticalSection(&g_resp_cs);
+    InitializeCriticalSection(&g_cmd_cs);
+    InitializeCriticalSection(&g_sse_cs);
     g_resp_ev = CreateEvent(NULL, FALSE, FALSE, NULL);
     CreateThread(NULL, 0, pipe_reader_main, NULL, 0, NULL);
 
@@ -1563,8 +1643,14 @@ static int mode_server(void)
             Sleep(100);
             continue;
         }
-        handle_client(c);
-        closesocket(c);
+        {
+            HANDLE th = CreateThread(NULL, 0, client_thread,
+                                     (LPVOID)(uintptr_t)c, 0, NULL);
+            if (th)
+                CloseHandle(th);
+            else
+                closesocket(c);
+        }
     }
 
     /* nicht erreichbar */
