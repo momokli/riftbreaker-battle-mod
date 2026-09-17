@@ -1,8 +1,15 @@
-# Verwaltet von deploy/ role "server-control" (Jinja). NICHT manuell editieren.
-#
-# Basiswerte fuer das config.cfg-Rendering des Agenten (POST /server/config).
-# Dieselben Variablen, die auch die Rolle riftbreaker-server in config.cfg.j2
-# einsetzt — EINE Quelle. Enthaelt das Server-Passwort, daher 0600.
+{#- Verwaltet von deploy/ role "server-control" (Jinja). NICHT manuell editieren.
+
+   Basiswerte fuer das config.cfg-Rendering des Agenten (POST /server/config).
+   Dieselben Variablen, die auch die Rolle riftbreaker-server in config.cfg.j2
+   einsetzt — EINE Quelle. Enthaelt das Server-Passwort, daher 0600.
+
+   Issue #704: ein Rauten-Kommentarkopf (kein echter Jinja-Kommentar) landete
+   bisher woertlich im Output -- das machte die Datei zu ungueltigem JSON und
+   liess POST /server/config seit Einfuehrung (#450) IMMER mit 503
+   config_unavailable ("Expecting value: line 1 column 1") fehlschlagen.
+   Jetzt als echter Jinja-Kommentar, der beim Rendern entfernt wird -- die
+   Datei ist reines JSON. -#}
 {{ {
   'riftbreaker_server_name': riftbreaker_server_name,
   'riftbreaker_server_password': riftbreaker_server_password,
