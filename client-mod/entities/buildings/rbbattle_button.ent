@@ -1,0 +1,63 @@
+EntityBlueprint
+{
+	name  "buildings/decorations/rbbattle_button"
+
+	TypeDesc
+	{
+		type "prop"
+	}
+
+	SelectableDesc
+	{
+		content "rbbattle_button"
+		can_activate "0"
+	}
+
+	LuaDesc
+	{
+		script "lua/buildings/rbbattle_button.lua"
+	}
+
+	MeshDesc
+	{
+		mesh 		"meshes/buildings/energy/wind_turbine_lvl_1.mesh"
+		material 	"buildings/energy/wind_turbine_lvl_1"
+	}
+
+	PhysicsDesc
+ 	{
+		objects
+		{
+			PhysicsObjectDesc
+			{
+				type 				"static"
+				group_id 			"building"
+				physics_material 	"default"
+				Shapes
+				{
+   					PhysicsBoxShape
+   					{
+    						x	1.9
+    						y	3.0
+    						z	1.9
+   					}
+				}
+			}
+		}
+	}
+
+	GridCullerDesc
+	{
+		type 2
+
+		Shapes
+		{
+   			PhysicsBoxShape
+   			{
+    			x	1.9
+    			y	3.0
+    			z	1.9
+   			}
+		}
+	}
+}

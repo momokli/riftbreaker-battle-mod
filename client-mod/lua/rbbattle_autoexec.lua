@@ -1,78 +1,41 @@
 -- ============================================================================
--- rbbattle_autoexec.lua — PLAYERMOD (HUD/Player-Facing, GREEN FIELD)
---
--- SERVERMOD = rbbridge.dll (C++): State-Egress + WRITE liegen dort (#378).
--- PLAYERMOD = diese Lua: nur HUD/Display + Event-Emission.
---
--- Business-Logik lag bis Commit 3c4c5249696c17c0eb2f535802168b9f57c9e9a3 hier
--- und wurde entfernt (#378/#380). Wiederherstellbar via:
---   git show 3c4c524:client-mod/lua/rbbattle_autoexec.lua
+-- rbbattle_autoexec.lua — PLAYERMOD
+-- PoC #629: BUILDING-SPIKE. Spawnt ein klickbares Gebäude (rbbattle_button)
+-- beim Mech. Klick -> OnActivate -> PlayerChatRequest -> Backend.
 -- ============================================================================
 
 local RBB = {}
 RBB.version = "0.34.3"
 RBB.ref = "RBB_BUILD_REF"
-RBB.round = 0
-RBB.mode = "sp"
-RBB.commenced = false
-RBB.hq = nil
+RBB.build = "20260917-173910"
 
--- Log-/Konsole-Helfer: Praefix [RBBATTLE] fuer externes Parsen.
-local LOG_TAG = "[RBBATTLE]"
+local LOG_TAG = "[RBBATTLE:" .. RBB.build .. "]"
+
 local function Log(fmt, ...)
     local okMsg, msg = pcall(string.format, fmt, ...)
     if not okMsg then msg = fmt end
     local service = LogService
-    if service then
-        pcall(service.Log, service, LOG_TAG .. " " .. msg)
-    end
+    if service then pcall(service.Log, service, LOG_TAG .. " " .. msg) end
 end
 
 local function WriteConsole(fmt, ...)
     local okMsg, msg = pcall(string.format, fmt, ...)
     if not okMsg then msg = fmt end
     local service = ConsoleService
-    if service then
-        pcall(service.Write, service, LOG_TAG .. " " .. msg)
-    end
+    if service then pcall(service.Write, service, LOG_TAG .. " " .. msg) end
 end
 
--- ---------------------------------------------------------------------------
--- PoC (#379): "send 10 mythium" nur als Event emittieren. Die Subtraktion macht
--- das Backend, NICHT der Mod. (Transport Webhook/curl noch offen.)
--- ---------------------------------------------------------------------------
-pcall(function()
-    ConsoleService:RegisterCommand("rb_poc_send", function(args)
-        Log("event=poc_send amount=10 resource=mythium")
-        WriteConsole("poc_send: 10 mythium (Backend subtrahiert)")
-    end)
-end)
-
--- ---------------------------------------------------------------------------
--- PoC (#629): EIN Button -> "hello world" per In-Game-Chat senden (Client-Mod).
---
--- Vanilla-Pfad (lua/player/mech_action.lua): Emotes senden Chat via
---   QueueEvent("PlayerChatRequest", mechEntity, text, 4)
--- Der Mod feuert denselben Request. Spieler-Entity (= Mech) kommt aus
---   PlayerService:GetPlayerControlledEnt(PlayerService:GetLeadingPlayer()).
--- Trigger: Konsolen-Kommando `rb_hello` (Default "hello world") bzw. Hotkey
---   F7 (`bind f7 "rb_hello"`). Kein GUI-Button in Schritt 1 (shipped Lua hat
---   keine saubere Button-API -> eigener Follow-up-Spike).
--- ---------------------------------------------------------------------------
-local function RBSendChat(text)
-    if type(text) ~= "string" or text == "" then
-        text = "hello world"
-    end
+function RBSendChat(text)
+    if type(text) ~= "string" or text == "" then text = "hello world" end
     local player = PlayerService:GetLeadingPlayer()
     local mech = PlayerService:GetPlayerControlledEnt(player)
     if mech == nil then
-        WriteConsole("rb_chat: keine Mech-Entity (player=" .. tostring(player) .. ")")
+        WriteConsole("rb_chat: keine Mech-Entity")
         return false
     end
     local ok, err = pcall(QueueEvent, "PlayerChatRequest", mech, text, 4)
     if not ok then
-        Log("event=chat_send status=error error=%s", tostring(err))
-        WriteConsole("rb_chat: QueueEvent fehlgeschlagen")
+        Log("event=chat_send status=error err=%s", tostring(err))
         return false
     end
     Log("event=chat_send status=ok text=%s", text)
@@ -80,37 +43,22 @@ local function RBSendChat(text)
     return true
 end
 
--- PoC-Kommando `rb_hello` + generisches `rb_chat <text>`.
+local INVALID = 4294967295
+
 pcall(function()
-    ConsoleService:RegisterCommand("rb_hello", function(args)
-        RBSendChat("hello world")
-    end)
-    ConsoleService:RegisterCommand("rb_chat", function(args)
-        local text = nil
-        if type(args) == "table" and #args >= 1 then
-            text = table.concat(args, " ")
+    RegisterGlobalEventHandler("PlayerControlledEntityChangeEvent", function()
+        if _G.RBB_BUTTON_SPAWNED then return end
+        local mech = PlayerService:GetPlayerControlledEnt(PlayerService:GetLeadingPlayer())
+        Log("event=controlled mech=%s", tostring(mech))
+        if mech and mech ~= INVALID then
+            _G.RBB_BUTTON_SPAWNED = true
+            local pos = EntityService:GetPosition(mech)
+            local ok, ent = pcall(function()
+                return EntityService:SpawnEntity("buildings/decorations/rbbattle_button", pos.x + 6, pos.y, pos.z, "")
+            end)
+            Log("event=spawn_button ok=%s ent=%s", tostring(ok), tostring(ent))
         end
-        RBSendChat(text)
     end)
 end)
 
--- PoC-"Button": F7 auf rb_hello binden (erfordert enable_developer_console 1;
--- pcall, damit der Mod auch ohne funktionierenden bind laedt).
-pcall(function()
-    ConsoleService:ExecuteCommand('bind f7 "rb_hello"')
-end)
-
--- Lade-Marker fuer Boot-Test C1 + Deploy-Runtime-Check (kein Business-Logik,
--- nur das Lebenszeichen, das die Pipeline erwartet).
---
--- Build-Identitaet (Issue #499): `ref` wird beim BAUEN in den Mod gebacken.
--- `RBB.ref` ist hier nur der Platzhalter "RBB_BUILD_REF"; scripts/
--- package.sh ersetzt ihn vor dem Zippen durch den echten
--- Commit/Tag (Env RBB_BUILD_REF, sonst `git rev-parse HEAD`). Grund: die
--- Riftbreaker-Lua-Sandbox liefert weder `os.getenv` noch `io.open` - ein
--- Laufzeit-Auslesen ergibt zuverlaessig "unknown". `env` ist eine
--- Deploy-Eigenschaft und wird ueber die uebrigen Identitaets-Surfaces
--- (Labels, Tournament, Server-Control, Sidecars) geliefert, NICHT ueber den
--- Mod - deshalb kein env-Feld mehr im mod_load-Marker. version/status bleiben
--- unveraendert, der mod_load-Marker bricht nie.
 Log("event=mod_load version=%s status=ok ref=%s", RBB.version, RBB.ref)
