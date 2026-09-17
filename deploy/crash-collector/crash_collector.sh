@@ -327,6 +327,8 @@ exception_code = None
 fault_thread = None
 module = None
 fault_rva = None
+access_type = None
+faulting_address = None
 stack_rvas = None
 if dump:
     exception_code = dump.get("exception_code")
@@ -335,6 +337,8 @@ if dump:
     module = dump.get("module")
     fault_rva = dump.get("fault_rva")
     stack_rvas = dump.get("stack_rvas") or []
+    access_type = dump.get("access_type")
+    faulting_address = dump.get("faulting_address")
     # Dump bevorzugt, sonst Log-Fenster — beides aus DIESEM Bundle.
     module_base = dump.get("module_base") or module_base
     if dump.get("module_size") is not None:
@@ -363,6 +367,8 @@ meta = {
     "fault_rva": fault_rva,
     "fault_thread": fault_thread,
     "stack_rvas": stack_rvas,
+    "access_type": access_type,
+    "faulting_address": faulting_address,
     "crash_marker": env("RB_META_MARKER", ""),
     "crash_line": env("RB_META_CRASH_LINE", ""),
     "context_lines": context_lines,
