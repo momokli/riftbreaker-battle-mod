@@ -717,6 +717,55 @@ int main(void)
     }
 
     /* -------------------------------------------------------------- */
+    /* #549: Chat-Ring-Queue (chat_queue_*) - pure Logik               */
+    /* -------------------------------------------------------------- */
+    {
+        chat_queue_t q;
+        char out[256];
+        int i;
+
+        chat_queue_init(&q);
+        check(chat_queue_pop(&q, out, sizeof(out)) == 0,
+              "chat_queue: leere Queue -> pop 0");
+
+        check(chat_queue_push(&q, "one") == 1, "chat_queue: push 'one'");
+        check(chat_queue_push(&q, "two") == 1, "chat_queue: push 'two'");
+        check(chat_queue_pop(&q, out, sizeof(out)) == 1 &&
+                  strcmp(out, "one") == 0,
+              "chat_queue: FIFO -> 'one' zuerst");
+        check(chat_queue_pop(&q, out, sizeof(out)) == 1 &&
+                  strcmp(out, "two") == 0,
+              "chat_queue: FIFO -> 'two' danach");
+        check(chat_queue_pop(&q, out, sizeof(out)) == 0,
+              "chat_queue: nach Drain wieder leer");
+
+        /* Ueberlauf: 8 Plaetze, aelteste Nachricht wird verworfen. */
+        chat_queue_init(&q);
+        for (i = 0; i < CHAT_QUEUE_CAP; i++) {
+            char msg[16];
+            snprintf(msg, sizeof(msg), "m%d", i);
+            chat_queue_push(&q, msg);
+        }
+        check(chat_queue_push(&q, "overflow") == 1,
+              "chat_queue: push bei voll -> aelteste verwerfen");
+        check(chat_queue_pop(&q, out, sizeof(out)) == 1 &&
+                  strcmp(out, "m1") == 0,
+              "chat_queue: nach Ueberlauf 'm0' weg ('m1' zuerst)");
+        {
+            int total = 1; /* 'm1' bereits gepopt */
+            while (chat_queue_pop(&q, out, sizeof(out)))
+                total++;
+            check(total == CHAT_QUEUE_CAP,
+                  "chat_queue: nach Ueberlauf genau CAP Elemente erhalten");
+        }
+
+        /* NULL/leer -> kein Insert, kein Crash. */
+        chat_queue_init(&q);
+        check(chat_queue_push(&q, NULL) == 0, "chat_queue: push NULL -> 0");
+        check(chat_queue_push(&q, "") == 0, "chat_queue: push leer -> 0");
+    }
+
+    /* -------------------------------------------------------------- */
     /* #386: Database-Payload-Resolver + Builder (AOB, kein Lua)        */
     /* -------------------------------------------------------------- */
     /* Frisches Image: das Haupt-`img` ist an dieser Stelle nicht mehr

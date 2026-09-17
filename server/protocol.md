@@ -26,8 +26,15 @@ Wahrheitsquelle, Events sind nur Benachrichtigungen.
 {"event":"pong","t":12345678}
 {"event":"exec_result","command":"rb_wave 3","ok":false,"reason":"not_implemented (RE: ConsoleService/Lua-State finden)"}
 {"event":"score_update","t":12345678,"score":0,"resources":{"iron":0,"carbon":0},"wave":0}
+{"event":"player_chat","text":"-send carbonium 10"}
 {"event":"error","error":"unknown_cmd"}
 ```
+
+- `player_chat` ist der Vanilla-Chat-Ingress (Detour #549): Der Spieler tippt
+  Chat, die DLL liest den Text und legt ihn als `player_chat`-Zeile auf die
+  Pipe. Sie wird **vor** der `get_state_result`-Zeile von `get_state`
+  emittiert; `pipe_bridge` sammelt die Texte und injiziert sie als
+  `"chat":["...",...]`-Array in die `get_state`-Antwort (Cockpit-Poll).
 
 ### Nachrichten des Clients an die DLL (im Harness implementiert)
 
