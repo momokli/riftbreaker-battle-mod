@@ -1,0 +1,84 @@
+---
+# Hermetischer Render-Selbsttest der Rolle server-control (Issue #424/#593).
+#
+# Läuft LOKAL auf dem Control-Node/CI-Runner: keine Host-Facts, kein SSH,
+# kein Docker, kein Vault, keine Prod-Aktion. Gerendert wird die ECHTE
+# systemd-Unit-Vorlage der Rolle (kein Nachbau) mit Dummy-Werten; geprüft
+# werden die Invarianten der Unit.
+#
+# Bisher hatte server-control.service.j2 GAR KEINEN Render-Selbsttest (nur
+# server-control-auth/-route testen die Caddy-Route, nicht die Unit selbst).
+# Issue #593 (WSL2 + Docker Desktop, keine echte docker.service-Unit) fügt
+# server_control_require_docker_service hinzu (Default true, planet-
+# Verhalten unverändert) — dieser Test deckt beide Zweige ab.
+#
+# Aufruf über run.sh (oder direkt):
+#   RB_SC_RENDER_DIR=$(mktemp -d) ansible-playbook deploy/tests/server-control-service/main.yml
+- name: "Server-Control Unit-Render (Issue #424/#593)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    # Rollen-Defaults hier explizit (der Test laeuft ohne Rollen-Defaults).
+    server_control_install_dir: /opt/rbmods/server-control
+    server_control_bind: 127.0.0.1
+    server_control_port: 8091
+    server_control_python: /usr/bin/python3
+    server_control_bin: "{{ server_control_install_dir }}/server_control.py"
+    server_control_env_file: /etc/rbmods/server-control.env
+    render_dir: "{{ lookup('env', 'RB_SC_RENDER_DIR') | default('/tmp/rb-server-control-render', true) }}"
+    # Issue #593 (WSL2 + Docker Desktop): konfigurierbar, Default true = planet-
+    # Verhalten unveraendert. run.sh testet explizit auch false.
+    server_control_require_docker_service: "{{ test_require_docker_service | default(true) }}"
+
+  tasks:
+    - name: Render-Verzeichnis sicherstellen
+      file:
+        path: "{{ render_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: systemd-Unit rendern (echte Rollen-Vorlage)
+      template:
+        src: "{{ playbook_dir }}/../../roles/server-control/templates/server-control.service.j2"
+        dest: "{{ render_dir }}/server-control.service"
+        mode: "0644"
+
+    - name: Gerenderte Unit laden
+      set_fact:
+        unit: "{{ lookup('file', render_dir ~ '/server-control.service') }}"
+
+    - name: Unit-Invarianten pruefen (ExecStart + EnvironmentFile + Restart)
+      assert:
+        that:
+          - ("ExecStart=" ~ server_control_python ~ " " ~ server_control_bin) in unit
+          - ("EnvironmentFile=" ~ server_control_env_file) in unit
+          - ("WorkingDirectory=" ~ server_control_install_dir) in unit
+          - "'Restart=on-failure' in unit"
+          - "'Type=simple' in unit"
+        fail_msg: >-
+          Gerenderte systemd-Unit verletzt eine Invariante (ExecStart,
+          EnvironmentFile, WorkingDirectory, Restart=on-failure oder
+          Type=simple).
+        success_msg: "Unit-Render ok (ExecStart + EnvironmentFile + Restart)."
+
+    # Issue #593: Requires=docker.service ist KEINE feste Invariante,
+    # sondern folgt server_control_require_docker_service (Default true,
+    # planet-Verhalten unveraendert; local-vars.yml setzt false fuer WSL2 +
+    # Docker Desktop, wo docker.service als systemd-Unit gar nicht existiert).
+    - name: "Docker-Requires folgt dem Flag, keine verwaiste Leerzeile (Issue #593)"
+      assert:
+        that:
+          - ("Requires=docker.service" in unit) == (server_control_require_docker_service | bool)
+          - ("After=network-online.target docker.service" in unit) == (server_control_require_docker_service | bool)
+          - ("After=network-online.target" in unit)
+          - ("\n\nStartLimitIntervalSec" not in unit)
+        fail_msg: >-
+          server_control_require_docker_service={{ server_control_require_docker_service }}:
+          Requires=docker.service bzw. der docker.service-Teil von After= muss
+          exakt dem Flag folgen, und das Weglassen darf keine Leerzeile im
+          [Unit]-Block hinterlassen (Issue #593).
+        success_msg: >-
+          Docker-Requires korrekt (require_docker_service={{ server_control_require_docker_service }}),
+          keine verwaiste Leerzeile.

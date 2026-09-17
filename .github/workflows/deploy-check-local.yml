@@ -170,13 +170,24 @@ jobs:
         if: steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/server-control-auth/run.sh
 
-      # Crash-Collector unit-Render (Issue #462/#480): rendert die ECHTE
+      # Crash-Collector unit-Render (Issue #462/#480/#593): rendert die ECHTE
       # systemd-Unit-Vorlage der Rolle (ExecStart + RB_CRASH_*-Env inkl. der
-      # Symbolik-Variablen aus #480 + Restart=always + Requires=docker.service)
-      # und prueft die Konfigurierbarkeit der Retention. Lokal, kein Host.
+      # Symbolik-Variablen aus #480 + Restart=always) und prueft die
+      # Konfigurierbarkeit der Retention sowie beide Zweige von
+      # crash_collector_require_docker_service (Issue #593, WSL2 + Docker
+      # Desktop). Lokal, kein Host.
       - name: "Crash-Collector Unit-Render (Issue #462)"
         if: steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/crash-collector/run.sh
+
+      # Server-Control unit-Render (Issue #424/#593): rendert die ECHTE
+      # systemd-Unit-Vorlage der Rolle (ExecStart, EnvironmentFile,
+      # Restart=on-failure) und prueft beide Zweige von
+      # server_control_require_docker_service (Issue #593, WSL2 + Docker
+      # Desktop). Lokal, kein Host.
+      - name: "Server-Control Unit-Render (Issue #593)"
+        if: steps.gate.outputs.skip != 'true'
+        run: bash deploy/tests/server-control-service/run.sh
 
       # Legacy-rbtools-Symlink-Cleanup (Issue #606): laesst die ECHTE Task-Datei
       # gegen ein Wegwerf-Verzeichnis laufen — Symlink entfernt, echtes
