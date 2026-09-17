@@ -543,6 +543,11 @@ typedef struct {
  * Welle zeitversetzt beim Gegner ankommt. */
 #define ORDER_DELAY_MS (5 * 60 * 1000)
 
+/* Cooldown zwischen zwei Buys (SPACE): 1 Sekunde. Global (PoC; pro-Spieler
+ * folgt spaeter). */
+#define ORDER_COOLDOWN_MS 1000
+static DWORD g_last_order_ms = 0;
+
 /* Kostentabelle = Test-C-Kurve (#670); wave9 teilt den Pool mit wave8 (#658). */
 static const order_spec_t g_order_specs[] = {
     { "wave1", "logic/missions/survival/attack_level_1_id_1.logic", 10, ORDER_DELAY_MS },
@@ -572,8 +577,11 @@ static int lookup_order_spec(const char *name, const order_spec_t **out)
     return 0;
 }
 
-/* Liest "-send <token>" (nur [A-Za-z0-9_], kein nachfolgender Betrag). */
-static int parse_order_name(const char *text, char *name, size_t name_sz)
+/* Liest "-send <name> [<id>]" — name = [A-Za-z0-9_], optionaler id-Token
+ * ([A-Za-z0-9_-], z. B. ULID). id darf NULL sein (dann wird ein trailing
+ * Token toleriert, aber nicht extrahiert). */
+static int parse_order_name(const char *text, char *name, size_t name_sz,
+                            char *id, size_t id_sz)
 {
     const char *p = text;
     size_t i;
@@ -601,6 +609,22 @@ static int parse_order_name(const char *text, char *name, size_t name_sz)
     p += i;
     while (*p == ' ' || *p == '\t')
         p++;
+    if (id && id_sz > 0) {
+        size_t j = 0;
+        id[0] = '\0';
+        while (p[j] && ((p[j] >= 'a' && p[j] <= 'z') ||
+                        (p[j] >= 'A' && p[j] <= 'Z') ||
+                        (p[j] >= '0' && p[j] <= '9') ||
+                        p[j] == '_' || p[j] == '-'))
+            j++;
+        if (j + 1 >= id_sz)
+            return 0;
+        memcpy(id, p, j);
+        id[j] = '\0';
+        p += j;
+    }
+    while (*p == ' ' || *p == '\t')
+        p++;
     if (*p != '\0')
         return 0;
     return 1;
@@ -609,6 +633,7 @@ static int parse_order_name(const char *text, char *name, size_t name_sz)
 #define PENDING_MAX 64
 typedef struct {
     char name[64];
+    char id[64];
     char logic[256];
     int cost;
     DWORD fire_at;
@@ -619,7 +644,7 @@ static pending_order_t g_orders[PENDING_MAX];
 static int g_orders_n = 0;
 static CRITICAL_SECTION g_orders_cs;
 
-static int enqueue_order(const order_spec_t *spec)
+static int enqueue_order(const order_spec_t *spec, const char *id)
 {
     if (!spec)
         return 0;
@@ -632,6 +657,8 @@ static int enqueue_order(const order_spec_t *spec)
         pending_order_t *o = &g_orders[g_orders_n];
         strncpy(o->name, spec->name, sizeof(o->name) - 1);
         o->name[sizeof(o->name) - 1] = '\0';
+        strncpy(o->id, id ? id : "", sizeof(o->id) - 1);
+        o->id[sizeof(o->id) - 1] = '\0';
         strncpy(o->logic, spec->logic, sizeof(o->logic) - 1);
         o->logic[sizeof(o->logic) - 1] = '\0';
         o->cost = spec->cost;
@@ -654,22 +681,22 @@ static void set_order_state(int idx, int state)
 /* Reiht eine Order aus der Cost-Tabelle ein (spec muss gueltig sein). Liefert
  * 1 bei Erfolg, 0 bei voller Queue. KEIN try_spend hier: der Scheduler
  * bezahlt SOFORT (Phase 1) und feuert nach Ablauf der Frist (Phase 2). */
-static int queue_order(const order_spec_t *spec)
+static int queue_order(const order_spec_t *spec, const char *id)
 {
     char ev_line[LINE_MAX];
 
     if (!spec)
         return 0;
-    if (!enqueue_order(spec)) {
+    if (!enqueue_order(spec, id)) {
         blog("order %s: Queue voll, verworfen", spec->name);
         return 0;
     }
     snprintf(ev_line, sizeof(ev_line),
-             "{\"event\":\"order_queued\",\"name\":\"%s\",\"cost\":%d}",
-             spec->name, spec->cost);
+             "{\"event\":\"order_queued\",\"name\":\"%s\",\"id\":\"%s\",\"cost\":%d}",
+             spec->name, id ? id : "", spec->cost);
     sse_broadcast(ev_line);
-    blog("order %s -> queued (cost=%d, fire in %ums)", spec->name, spec->cost,
-         spec->delay_ms);
+    blog("order %s id=%s -> queued (cost=%d, fire in %ums)", spec->name,
+         id ? id : "", spec->cost, spec->delay_ms);
     return 1;
 }
 
@@ -732,17 +759,17 @@ static DWORD WINAPI scheduler_main(LPVOID unused)
                                   line, sizeof(line)) == 0 &&
                 json_get_bool(line, "ok", &ok) && ok) {
                 set_order_state(idx, 1);
-                blog("order %s: bezahlt (carbonium -%d)", ord.name, ord.cost);
+                blog("order %s id=%s: bezahlt (carbonium -%d)", ord.name, ord.id, ord.cost);
             } else {
                 set_order_state(idx, 2);
                 {
                     char ev_line[LINE_MAX];
                     snprintf(ev_line, sizeof(ev_line),
-                             "{\"event\":\"order_failed\",\"name\":\"%s\"}",
-                             ord.name);
+                             "{\"event\":\"order_failed\",\"name\":\"%s\",\"id\":\"%s\"}",
+                             ord.name, ord.id);
                     sse_broadcast(ev_line);
                 }
-                blog("order %s: failed (insufficient/error)", ord.name);
+                blog("order %s id=%s: failed (insufficient/error)", ord.name, ord.id);
             }
         }
 
@@ -784,11 +811,11 @@ static DWORD WINAPI scheduler_main(LPVOID unused)
             {
                 char ev_line[LINE_MAX];
                 snprintf(ev_line, sizeof(ev_line),
-                         "{\"event\":\"order_fired\",\"name\":\"%s\"}",
-                         ord.name);
+                         "{\"event\":\"order_fired\",\"name\":\"%s\",\"id\":\"%s\"}",
+                         ord.name, ord.id);
                 sse_broadcast(ev_line);
             }
-            blog("order %s: fired", ord.name);
+            blog("order %s id=%s: fired", ord.name, ord.id);
         }
 
         Sleep(100);
@@ -807,11 +834,18 @@ static void route_pipe_line(HANDLE h, const char *line)
     if (strcmp(ev, "player_chat") == 0) {
         char text[256] = "";
         char name[64] = "";
+        char id[64] = "";
         const order_spec_t *spec = NULL;
         json_get_string(line, "text", text, sizeof(text));
-        if (parse_order_name(text, name, sizeof(name)) &&
+        if (parse_order_name(text, name, sizeof(name), id, sizeof(id)) &&
             lookup_order_spec(name, &spec)) {
-            queue_order(spec); /* loggt + broadcastet intern */
+            DWORD now = GetTickCount();
+            if ((LONG)(now - g_last_order_ms) < ORDER_COOLDOWN_MS) {
+                blog("player_chat -send order: cooldown, ignoriert: %s id=%s",
+                     spec->name, id);
+            } else if (queue_order(spec, id)) {
+                g_last_order_ms = now;
+            }
         } else {
             blog("player_chat (kein -send): %.120s", text);
             sse_broadcast(line);
@@ -1505,7 +1539,7 @@ static void handle_order(SOCKET c, const char *body)
         return;
     }
 
-    if (!queue_order(spec)) {
+    if (!queue_order(spec, "")) {
         http_respond(c, 503, "Service Unavailable",
                      "{\"ok\":false,\"reason\":\"queue_full\"}");
         return;

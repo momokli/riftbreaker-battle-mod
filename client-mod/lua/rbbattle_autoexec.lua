@@ -9,7 +9,7 @@
 -- ============================================================================
 
 local RBB = {}
-RBB.version = "0.35.1"
+RBB.version = "0.35.2"
 RBB.ref = "RBB_BUILD_REF"
 RBB.build = "20260917-market-wave"
 
