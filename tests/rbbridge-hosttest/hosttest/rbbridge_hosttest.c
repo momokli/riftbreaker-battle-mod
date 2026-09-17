@@ -1033,13 +1033,45 @@ int main(void)
         check(rbbridge_log_is_ready(partial, strlen(partial)) == 0,
               "readiness: abgeschnittener Marker -> NICHT bereit");
 
-        /* Substring-Helper: Ende exakt an der Puffergrenze. */
+        /* #640: in-process Map-Reload - Teardown-Marker NACH Ready-Marker
+         * -> "letzter Marker gewinnt": NICHT bereit (Gate greift wieder). */
+        const char *restart_log =
+            "[12:40:33.501] [info] MapGenerator.cpp:828 - InstantiateMap took: 4846 ms\n"
+            "[12:40:40.000] [info] ControllerState.cpp:514 - "
+            "[ControllerState] deactivating: ServerGameplayState\n";
+        check(rbbridge_log_is_ready(restart_log, strlen(restart_log)) == 0,
+              "readiness: Teardown NACH Ready -> NICHT bereit");
+
+        /* Reload abgeschlossen: neuer Ready-Marker NACH dem Teardown -> bereit. */
+        const char *reloaded_log =
+            "[12:40:33.501] [info] MapGenerator.cpp:828 - InstantiateMap took: 4846 ms\n"
+            "[12:40:40.000] [info] ControllerState.cpp:514 - "
+            "[ControllerState] deactivating: ServerGameplayState\n"
+            "[12:40:52.000] [info] MapGenerator.cpp:828 - InstantiateMap took: 3400 ms\n";
+        check(rbbridge_log_is_ready(reloaded_log, strlen(reloaded_log)) == 1,
+              "readiness: Ready NACH Teardown -> bereit");
+
+        /* Nur Teardown, kein Ready-Marker -> konservativ NICHT bereit. */
+        const char *teardown_only =
+            "[12:40:40.000] [info] ControllerState.cpp:514 - "
+            "[ControllerState] deactivating: ServerGameplayState\n";
+        check(rbbridge_log_is_ready(teardown_only, strlen(teardown_only)) == 0,
+              "readiness: nur Teardown -> NICHT bereit");
+
+        /* rfind: letzte Fundstelle (fuer "letzter Marker gewinnt", #640). */
         const char *tail = "xx Graph generated";
-        check(rbbridge_buf_contains(tail, strlen(tail),
-                                    "Graph generated") == 1,
-              "buf_contains: Treffer bis exakt Pufferende");
-        check(rbbridge_buf_contains(tail, 9, "Graph generated") == 0,
-              "buf_contains: Treffer hinter Pufferende ignoriert");
+        check(rbbridge_buf_rfind(tail, strlen(tail), "Graph generated") == 3,
+              "buf_rfind: Treffer bis exakt Pufferende");
+        check(rbbridge_buf_rfind(tail, 9, "Graph generated") == (size_t)-1,
+              "buf_rfind: Treffer hinter Pufferende ignoriert");
+
+        const char *multi = "aa bb aa";
+        check(rbbridge_buf_rfind(multi, strlen(multi), "aa") == 6,
+              "buf_rfind: letzte Fundstelle");
+        check(rbbridge_buf_rfind(multi, strlen(multi), "cc") == (size_t)-1,
+              "buf_rfind: nicht gefunden -> (size_t)-1");
+        check(rbbridge_buf_rfind("", 0, "aa") == (size_t)-1,
+              "buf_rfind: leerer Puffer -> (size_t)-1");
     }
 
     /* ---- #516 nativer Round-Reset: reine Decoder/Finder ---- */
