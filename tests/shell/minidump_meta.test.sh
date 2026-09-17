@@ -57,7 +57,7 @@ def pad8(n):
     return (n + 7) // 8 * 8
 
 
-def build(addr, include_exception=True):
+def build(addr, include_exception=True, include_einfo=False):
     name_bytes = NAME.encode("utf-16-le")
     n_streams = N_STREAMS if include_exception else N_STREAMS - 1
     payload = DIR_RVA + n_streams * 12
@@ -120,11 +120,15 @@ def build(addr, include_exception=True):
     struct.pack_into("<I", buf, rva_exc, FAULT_THREAD)
     struct.pack_into("<I", buf, rva_exc + 8, EXC_CODE)
     struct.pack_into("<Q", buf, rva_exc + 8 + 16, addr)
+    if include_einfo:
+        struct.pack_into("<I", buf, rva_exc + 8 + 24, 2)  # NumberParameters
+        struct.pack_into("<Q", buf, rva_exc + 8 + 32, 1)  # access_type = write
+        struct.pack_into("<Q", buf, rva_exc + 8 + 40, 0x1A2B3C4D5E6F)  # faulting_address
     return bytes(buf)
 
 
 with open(out + "/valid.dmp", "wb") as fh:
-    fh.write(build(ADDR_INSIDE))
+    fh.write(build(ADDR_INSIDE, include_einfo=True))
 with open(out + "/outside.dmp", "wb") as fh:
     fh.write(build(ADDR_OUTSIDE))
 with open(out + "/noexc.dmp", "wb") as fh:
@@ -192,6 +196,8 @@ assert_eq "valid: module_size" "65536" "$(field "$OUT_JSON" module_size)"
 assert_eq "valid: fault_rva" '"1234"' "$(field "$OUT_JSON" fault_rva)"
 assert_eq "valid: fault_thread" "500" "$(field "$OUT_JSON" fault_thread)"
 assert_eq "valid: stack_rvas" "[500,abc]" "$(field "$OUT_JSON" stack_rvas)"
+assert_eq "valid: access_type" "1" "$(field "$OUT_JSON" access_type)"
+assert_eq "valid: faulting_address" '"1a2b3c4d5e6f"' "$(field "$OUT_JSON" faulting_address)"
 # fault_rva == exception_address - module_base
 assert_eq "valid: fault_rva-Arithmetik" "True" "$(python3 - "$OUT_JSON" <<'PY'
 import json
@@ -236,6 +242,8 @@ assert_eq "outside: exception_address gesetzt" '"7fff0000dead"' "$(field "${TMP}
 assert_eq "outside: module null" "null" "$(field "${TMP}/outside.json" module)"
 assert_eq "outside: module_base null" "null" "$(field "${TMP}/outside.json" module_base)"
 assert_eq "outside: fault_rva null" "null" "$(field "${TMP}/outside.json" fault_rva)"
+assert_eq "outside: access_type null" "null" "$(field "${TMP}/outside.json" access_type)"
+assert_eq "outside: faulting_address null" "null" "$(field "${TMP}/outside.json" faulting_address)"
 
 # --- (6) nicht existierende Datei -------------------------------------------
 run_parser "${TMP}/gibt-es-nicht.dmp"

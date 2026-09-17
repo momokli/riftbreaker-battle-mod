@@ -115,6 +115,9 @@ struct.pack_into("<I", buf, rva_mod + 24, rva_name)
 struct.pack_into("<I", buf, rva_exc, THREAD)
 struct.pack_into("<I", buf, rva_exc + 8, 0xC0000005)
 struct.pack_into("<Q", buf, rva_exc + 8 + 16, ADDR)
+struct.pack_into("<I", buf, rva_exc + 8 + 24, 2)  # NumberParameters
+struct.pack_into("<Q", buf, rva_exc + 8 + 32, 1)  # access_type = write
+struct.pack_into("<Q", buf, rva_exc + 8 + 40, 0x1A2B3C4D5E6F)  # faulting_address
 with open(sys.argv[1], "wb") as fh:
     fh.write(bytes(buf))
 PY
@@ -302,6 +305,8 @@ if [ "${#B6[@]}" -eq 1 ]; then
   assert_eq "meta.fault_thread" "500" "$(m6 fault_thread)"
   assert_eq "meta.stack_rvas" "500,abc" \
     "$(python3 -c "import json,sys;print(','.join(json.load(open(sys.argv[1]))['stack_rvas']))" "$M6")"
+  assert_eq "meta.access_type" "1" "$(m6 access_type)"
+  assert_eq "meta.faulting_address" "1a2b3c4d5e6f" "$(m6 faulting_address)"
   # fault_rva == exception_address - module_base
   assert_eq "meta.fault_rva == addr - base" "True" \
     "$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(int(d['fault_rva'],16)==int(d['exception_address'],16)-int(d['module_base'],16))" "$M6")"
