@@ -14,8 +14,9 @@
 #     deterministische Namen (`frame_<dezimal-rva>`).
 #
 # Geprüft wird:
-#   (a) Default: nur der Fault-Frame (Stack-Scan ist opt-in, #587); Adressen
-#       AUSSERHALB des Modulbereichs werden gefiltert.
+#   (a) Default: Fault-Frame + Stack-Frames (Stack-Scan default an, #639);
+#       Adressen AUSSERHALB des Modulbereichs werden gefiltert.
+#   (a2) RB_CRASH_STACK_SCAN=0 -> nur der Fault-Frame (opt-out).
 #   (b) Aufruf-Vertrag: `--obj=<dll> --relative-address <rva>` je Frame,
 #       Ergebnis-Header + `RVA<TAB>[modul ]KIND Name` in symbolized.txt.
 #   (c) Skip-Regeln: RB_CRASH_SYMBOLIZE=0 / PDB fehlt / DLL fehlt / Tool
@@ -63,6 +64,7 @@ chmod +x "${BIN}/llvm-symbolizer"
 
 # --- synthetischer Minidump (Streams 3/4/5/6) --------------------------------
 cat >"${TMP}/mkdump.py" <<'PY'
+import os
 import struct
 import sys
 
@@ -75,9 +77,11 @@ def p64(v):
     return struct.pack('<Q', v)
 
 
-def build(base, size, fault, returns, name, tid=1):
+def build(base, size, fault, returns, name, tid=1, rsp=0, rbp=0):
     ctx = bytearray(0x4d0)                       # CONTEXT_AMD64
     struct.pack_into('<I', ctx, 0x30, 0x0010001F)  # ContextFlags
+    struct.pack_into('<Q', ctx, 0x98, rsp)         # Rsp
+    struct.pack_into('<Q', ctx, 0xA0, rbp)         # Rbp
     struct.pack_into('<Q', ctx, 0xF8, fault)       # Rip
     ctx = bytes(ctx)
 
@@ -121,8 +125,10 @@ size = int(sys.argv[3], 0)
 fault = int(sys.argv[4], 0)
 returns = [int(a, 0) for a in sys.argv[5:]]
 name = "C:\\game\\bin\\riftbreaker_dll_win_release.dll"
+rsp = int(os.environ.get("MKBUILD_RSP", "0"), 0)
+rbp = int(os.environ.get("MKBUILD_RBP", "0"), 0)
 with open(out, 'wb') as fh:
-    fh.write(build(base, size, fault, returns, name))
+    fh.write(build(base, size, fault, returns, name, rsp=rsp, rbp=rbp))
 PY
 
 # --- synthetischer Minidump mit ZWEI Modulen (Game + rbbridge, #559) ---
@@ -205,6 +211,57 @@ with open(out, 'wb') as fh:
     fh.write(build(mods, fault, returns))
 PY
 
+# --- synthetisches PE32+ mit .text/.pdata/.xdata (x64-Unwind, #676) ----------
+cat >"${TMP}/mkpe.py" <<'PY'
+import struct
+import sys
+
+# Minimal-PE fuer den Unwind-Test: Exception-Directory (Index 3) -> .pdata,
+# 2 RUNTIME_FUNCTION (foo 0x1000..0x1010, bar 0x1050..0x1060) und 2x
+# UNWIND_INFO (je 1 Code: PUSH_NONVOL rbp). Kein echter Code noetig.
+
+def sec(buf, i, name, vsize, vaddr, rawsize, rawptr):
+    off = 0x188 + i * 40
+    buf[off:off + 8] = name.ljust(8, b'\0')
+    struct.pack_into('<I', buf, off + 8, vsize)
+    struct.pack_into('<I', buf, off + 12, vaddr)
+    struct.pack_into('<I', buf, off + 16, rawsize)
+    struct.pack_into('<I', buf, off + 20, rawptr)
+
+
+def build():
+    buf = bytearray(0x800)
+    buf[0:2] = b'MZ'
+    struct.pack_into('<I', buf, 0x3C, 0x80)       # e_lfanew
+    buf[0x80:0x84] = b'PE\0\0'
+    struct.pack_into('<H', buf, 0x84, 0x8664)     # Machine x64
+    struct.pack_into('<H', buf, 0x86, 3)          # NumberOfSections
+    struct.pack_into('<H', buf, 0x84 + 16, 0xF0)  # SizeOfOptionalHeader = 240
+    struct.pack_into('<H', buf, 0x98, 0x20B)      # Magic PE32+
+    struct.pack_into('<I', buf, 0x104, 16)        # NumberOfRvaAndSizes
+    struct.pack_into('<I', buf, 0x120, 0x2000)    # Exception-Dir RVA (.pdata)
+    struct.pack_into('<I', buf, 0x124, 24)        # Exception-Dir Size (2 Eintraege)
+    sec(buf, 0, b'.text', 0x1000, 0x1000, 0x200, 0x200)
+    sec(buf, 1, b'.pdata', 24, 0x2000, 0x200, 0x400)
+    sec(buf, 2, b'.xdata', 16, 0x3000, 0x200, 0x600)
+    # RUNTIME_FUNCTION: foo 0x1000..0x1010 -> 0x3000; bar 0x1050..0x1060 -> 0x3008
+    struct.pack_into('<III', buf, 0x400, 0x1000, 0x1010, 0x3000)
+    struct.pack_into('<III', buf, 0x40C, 0x1050, 0x1060, 0x3008)
+    # UNWIND_INFO (je 8 B): Version 1, Prolog 1, 1 Code PUSH_NONVOL rbp (OpInfo 5)
+    for base in (0x600, 0x608):
+        buf[base] = 0x01
+        buf[base + 1] = 1          # SizeOfProlog
+        buf[base + 2] = 1          # CountOfCodes
+        buf[base + 3] = 0          # FrameRegister/FrameOffset
+        buf[base + 4] = 0          # CodeOffset
+        buf[base + 5] = (5 << 4) | 0  # UnwindOp=0 (PUSH_NONVOL), OpInfo=5 (rbp)
+    return bytes(buf)
+
+
+with open(sys.argv[1], 'wb') as fh:
+    fh.write(build())
+PY
+
 MODULE_BASE=$((0x00006ffff6da0000))
 MODULE_SIZE=78778368
 UUID="cbb85f6a-699b-4b7d-8959-3c0698474f51"
@@ -261,7 +318,7 @@ run_sym() {
   set -e
 }
 
-# --- (a)+(b) Default: nur Fault-Frame (Stack-Scan opt-in, #587) ---------------
+# --- (a)+(b) Default: Fault + Stack-Frames (Stack-Scan an, #639) --------------
 FAULT=$((MODULE_BASE + 0x1000))
 OUTSIDE=$((0x1234))          # ausserhalb jedes Moduls -> muss gefiltert werden
 A1="${TMP}/a1"
@@ -270,16 +327,37 @@ run_sym "$A1" "${A1}/bundle"
 assert_eq "symbolize ok -> rc=0" "0" "$RC"
 SYM="${A1}/bundle/symbolized.txt"
 assert_true "(a) symbolized.txt geschrieben" test -s "$SYM"
-assert_eq "(a) Default: genau der Fault-Frame" "0x1000" \
+assert_eq "(a) Default: Fault + Stack-Frames" "0x1000 0x2000 0x3000" \
   "$(awk -F'\t' '/^0x/{print $1}' "$SYM" | tr '\n' ' ' | sed 's/ $//')"
 assert_true "(b) Header enthaelt module_base" grep -q '^# module_base: 0x6ffff6da0000$' "$SYM"
 assert_true "(b) Header enthaelt dll" grep -q "^# dll: ${DLL}$" "$SYM"
 assert_true "(b) Header enthaelt tool" grep -q "^# tool: ${BIN}/llvm-symbolizer$" "$SYM"
 assert_true "(b) Fault-Frame 0x1000 als FAULT markiert" grep -qP '^0x1000\tFAULT frame_4096$' "$SYM"
-assert_false "(b) keine Stack-Frames ohne --stack-scan" grep -qP '^0x(2000|3000)\t' "$SYM"
+assert_true "(b) Stack-Frames 0x2000/0x3000 als stack markiert" grep -qP '^0x(2000|3000)\tstack frame_' "$SYM"
+assert_false "(b) Adresse ausserhalb des Moduls gefiltert" grep -q '0x1234' "$SYM"
 assert_true "(b) Aufruf mit --obj" grep -q -- "--obj=${DLL}" "${A1}/sym.log"
 assert_true "(b) Aufruf mit --relative-address 0x1000" grep -q -- '--relative-address 0x1000' "${A1}/sym.log"
-assert_eq "(b) genau 1 Symbolizer-Aufruf" "1" "$(wc -l < "${A1}/sym.log" | tr -d ' ')"
+assert_eq "(b) genau 3 Symbolizer-Aufrufe" "3" "$(wc -l < "${A1}/sym.log" | tr -d ' ')"
+
+# --- (a2) RB_CRASH_STACK_SCAN=0 -> nur Fault-Frame (opt-out, #639) -----------
+A2="${TMP}/a2"
+make_bundle "${A2}/bundle" "$FAULT" "$((MODULE_BASE + 0x2000))" "$OUTSIDE" "$((MODULE_BASE + 0x3000))"
+mkdir -p "$A2"
+: >"${A2}/sym.log"
+set +e
+env PATH="${BIN}:${PATH}" FAKE_SYM_LOG="${A2}/sym.log" \
+  RB_CRASH_SYMBOLIZE_TOOL="$SYMBOLIZE_PY" RB_CRASH_LLVM_SYMBOLIZER="${BIN}/llvm-symbolizer" \
+  RB_CRASH_DLL="$DLL" RB_CRASH_PDB="$PDB" RB_CRASH_PYTHON="python3" \
+  RB_CRASH_STACK_SCAN=0 \
+  bash "$SYMBOLIZE_SH" "${A2}/bundle" >"${A2}/out.txt" 2>&1
+RC=$?
+set -e
+assert_eq "(a2) STACK_SCAN=0 -> rc=0" "0" "$RC"
+SYM2="${A2}/bundle/symbolized.txt"
+assert_eq "(a2) STACK_SCAN=0: genau der Fault-Frame" "0x1000" \
+  "$(awk -F'\t' '/^0x/{print $1}' "$SYM2" | tr '\n' ' ' | sed 's/ $//')"
+assert_false "(a2) STACK_SCAN=0: keine Stack-Frames" grep -qP '^0x(2000|3000)\t' "$SYM2"
+assert_eq "(a2) STACK_SCAN=0: genau 1 Symbolizer-Aufruf" "1" "$(wc -l < "${A2}/sym.log" | tr -d ' ')"
 
 # --- (c) Skip-Regeln ---------------------------------------------------------
 C="${TMP}/c"
@@ -438,7 +516,7 @@ if [ "${#FB[@]}" -eq 1 ]; then
   assert_true "(f) Bundle enthaelt symbolized.txt" test -s "${BD}/symbolized.txt"
   meta_sym() { python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['symbolized'].get(sys.argv[2],''))" "${BD}/meta.json" "$1"; }
   assert_eq "(f) meta.symbolized.status" "ok" "$(meta_sym status)"
-  assert_eq "(f) meta.symbolized.frames" "1" "$(meta_sym frames)"
+  assert_eq "(f) meta.symbolized.frames" "2" "$(meta_sym frames)"
   assert_true "(f) symbolized.txt in meta.files" python3 -c "
 import json, sys
 files = json.load(open(sys.argv[1]))['files']
@@ -476,12 +554,12 @@ set -e
 assert_eq "(g) zweites Modul -> rc=0" "0" "$RC"
 SYMG="${G}/bundle/symbolized.txt"
 assert_true "(g) rbbridge-Fault-Frame annotiert" grep -qP '^0x50\t\[rbbridge.dll\] FAULT frame_80$' "$SYMG"
-assert_false "(g) kein game-Frame ohne --stack-scan" grep -qP '^0x100\t' "$SYMG"
+assert_true "(g) game-Stack-Frame 0x100 als stack" grep -qP '^0x100\tstack frame_256$' "$SYMG"
 assert_true "(g) header dll2" grep -q "^# dll2: ${RBBRIDGE_DLL}$" "$SYMG"
 assert_true "(g) Aufruf --obj rbbridge.dll" grep -q -- "--obj=${RBBRIDGE_DLL}" "${G}/sym.log"
-assert_false "(g) kein --obj game-dll ohne game-Frame" grep -q -- "--obj=${DLL}" "${G}/sym.log"
+assert_true "(g) Aufruf --obj game-dll (game-Frame)" grep -q -- "--obj=${DLL}" "${G}/sym.log"
 
-# --- (h) --stack-scan (opt-in): Stack-Frames inkl. Outside-Filter ------------
+# --- (h) --stack-scan (explizit, jetzt Default): Stack-Frames inkl. Outside-Filter ---
 H="${TMP}/h"
 make_bundle "${H}/bundle" "$FAULT" "$((MODULE_BASE + 0x2000))" "$OUTSIDE" "$((MODULE_BASE + 0x3000))"
 mkdir -p "$H"
@@ -500,6 +578,77 @@ assert_eq "(h) RVA-Reihenfolge/Anzahl" "0x1000 0x2000 0x3000" \
   "$(awk -F'\t' '/^0x/{print $1}' "$SYMH" | tr '\n' ' ' | sed 's/ $//')"
 assert_false "(h) Adresse ausserhalb gefiltert" grep -q '0x1234' "$SYMH"
 assert_eq "(h) genau 3 Symbolizer-Aufrufe" "3" "$(wc -l < "${H}/sym.log" | tr -d ' ')"
+
+# --- (i) Geordneter RBP-Frame-Pointer-Unwind + Register-Kontext (#668) -------
+I="${TMP}/i"
+RSP_HEX="0x7ff0000100"
+RBP_HEX="0x7ff0000000"
+RBP_NEXT=$((0x7ff0000010))
+UNWIND_RET0=$((MODULE_BASE + 0x2000))
+UNWIND_RET1=$((MODULE_BASE + 0x3000))
+UNWIND_FLAT=$((MODULE_BASE + 0x4000))
+
+mkdir -p "${I}/bundle"
+MKBUILD_RSP="$RSP_HEX" MKBUILD_RBP="$RBP_HEX" \
+python3 "${TMP}/mkdump.py" "${I}/bundle/${UUID}.dmp" \
+  "$MODULE_BASE" "$MODULE_SIZE" "$FAULT" \
+  "$RBP_NEXT" "$UNWIND_RET0" "0x0" "$UNWIND_RET1" "$UNWIND_FLAT"
+
+mkdir -p "$I"
+: >"${I}/sym.log"
+set +e
+env PATH="${BIN}:${PATH}" FAKE_SYM_LOG="${I}/sym.log" \
+  python3 "$SYMBOLIZE_PY" \
+    --dmp "${I}/bundle/${UUID}.dmp" --dll "$DLL" --symbolizer "${BIN}/llvm-symbolizer" \
+    --uuid "$UUID" --out "${I}/bundle/symbolized.txt" --stack-scan \
+    >"${I}/out.txt" 2>&1
+RC=$?
+set -e
+assert_eq "(i) unwind rc=0" "0" "$RC"
+SYMI="${I}/bundle/symbolized.txt"
+assert_eq "(i) Reihenfolge fault, unwind, stack" "0x1000 0x2000 0x3000 0x4000" \
+  "$(awk -F'\t' '/^0x/{print $1}' "$SYMI" | tr '\n' ' ' | sed 's/ $//')"
+assert_true "(i) Header rsp" grep -q "^# rsp: ${RSP_HEX}$" "$SYMI"
+assert_true "(i) Header rbp" grep -q "^# rbp: ${RBP_HEX}$" "$SYMI"
+assert_true "(i) Header rip" grep -q "^# rip: $(printf '0x%x' "$FAULT")$" "$SYMI"
+assert_eq "(i) Frame 0x2000 als unwind getaggt" "unwind" \
+  "$(awk -F'\t' '$1=="0x2000" { print $2 }' "$SYMI" | cut -d' ' -f1)"
+assert_eq "(i) Frame 0x3000 als unwind getaggt" "unwind" \
+  "$(awk -F'\t' '$1=="0x3000" { print $2 }' "$SYMI" | cut -d' ' -f1)"
+assert_eq "(i) Frame 0x4000 als stack getaggt" "stack" \
+  "$(awk -F'\t' '$1=="0x4000" { print $2 }' "$SYMI" | cut -d' ' -f1)"
+
+# --- (j) x64-Stack-Unwind via .pdata/.xdata (#676) ---------------------------
+J="${TMP}/j"
+python3 "${TMP}/mkpe.py" "${TMP}/fake_pe.dll"
+FAULT_X64=$((MODULE_BASE + 0x1004))
+BAR_X64=$((MODULE_BASE + 0x1054))
+BAZ_X64=$((MODULE_BASE + 0x10A4))
+mkdir -p "${J}/bundle"
+MKBUILD_RSP="0x7ff0000000" MKBUILD_RBP="0x0" \
+python3 "${TMP}/mkdump.py" "${J}/bundle/${UUID}.dmp" \
+  "$MODULE_BASE" "$MODULE_SIZE" "$FAULT_X64" \
+  "0x0" "$BAR_X64" "0x0" "$BAZ_X64"
+
+mkdir -p "$J"
+: >"${J}/sym.log"
+set +e
+env PATH="${BIN}:${PATH}" FAKE_SYM_LOG="${J}/sym.log" \
+  python3 "$SYMBOLIZE_PY" \
+    --dmp "${J}/bundle/${UUID}.dmp" --dll "${TMP}/fake_pe.dll" --symbolizer "${BIN}/llvm-symbolizer" \
+    --uuid "$UUID" --out "${J}/bundle/symbolized.txt" \
+    >"${J}/out.txt" 2>&1
+RC=$?
+set -e
+assert_eq "(j) x64-unwind rc=0" "0" "$RC"
+SYMJ="${J}/bundle/symbolized.txt"
+assert_true "(j) Header unwind x64" grep -q '^# unwind: x64$' "$SYMJ"
+assert_eq "(j) Reihenfolge fault, unwind" "0x1004 0x1054 0x10a4" \
+  "$(awk -F'\t' '/^0x/{print $1}' "$SYMJ" | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "(j) Frame 0x1054 als unwind getaggt" "unwind" \
+  "$(awk -F'\t' '$1=="0x1054" { print $2 }' "$SYMJ" | cut -d' ' -f1)"
+assert_eq "(j) Frame 0x10a4 als unwind getaggt" "unwind" \
+  "$(awk -F'\t' '$1=="0x10a4" { print $2 }' "$SYMJ" | cut -d' ' -f1)"
 
 # --- Aufräumen der Log-Fixture-Prüfung ---------------------------------------
 if [ "$FAIL" -ne 0 ]; then
