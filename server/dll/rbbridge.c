@@ -402,7 +402,7 @@ static int safe_read_u32(const void *addr, uint32_t *out)
 
 #define PIPE_INBUF_SIZE   4096 /* Lesechunk vom Pipe-Client              */
 #define PIPE_LINE_MAX     8192 /* max. Laenge einer Protokollzeile       */
-#define RESP_BUF_SIZE     4096 /* max. Laenge einer Antwortzeile         */
+#define RESP_BUF_SIZE    16384 /* max. Laenge einer Antwortzeile         */
 #define HEARTBEAT_MS      5000 /* Intervall des State-Platzhalter-Events */
 #define POLL_MS           100  /* Serviceloop-Takt (nur bei Client)      */
 
@@ -2828,40 +2828,64 @@ static int safe_read_u32(const void *addr, uint32_t *out) {
 
 /* Dumpft n QWORDS ab addr als Hex-Array (eine JSON-Zeile). Sichere Reads:
  * nicht-lesbare Woerter werden als null ausgegeben (kein Crash). */
-static void dump_qwords(HANDLE hPipe, const char *label, const void *addr,
-                        size_t n) {
-  char buf[RESP_BUF_SIZE];
-  size_t off = 0;
-  int w = snprintf(buf + off, sizeof(buf) - off,
-                   "{\"event\":\"probe_dump\",\"label\":\"%s\","
-                   "\"addr\":\"0x%llx\",\"qwords\":[",
-                   label, (unsigned long long)(uintptr_t)addr);
+/* JSON-Puffer-Builder (#653): baut die eine probe_result-Zeile statt vieler
+ * Einzelzeilen, damit /probe ueber die persistente Pipe (pipe_send_command)
+ * laufen kann wie get_state. */
+typedef struct {
+  char *buf;
+  size_t cap;
+  size_t off;
+  int overflow;
+} jbuf_t;
+
+static void jbuf_init(jbuf_t *jb, char *buf, size_t cap) {
+  jb->buf = buf;
+  jb->cap = cap;
+  jb->off = 0;
+  jb->overflow = 0;
+  if (cap > 0)
+    buf[0] = '\0';
+}
+
+static void jbuf_appendf(jbuf_t *jb, const char *fmt, ...) {
+  if (jb->overflow || jb->off >= jb->cap)
+    return;
+  va_list ap;
+  va_start(ap, fmt);
+  int w = vsnprintf(jb->buf + jb->off, jb->cap - jb->off, fmt, ap);
+  va_end(ap);
   if (w < 0)
     return;
-  off += (size_t)w;
+  if ((size_t)w >= jb->cap - jb->off) {
+    jb->off = jb->cap - 1;
+    jb->overflow = 1;
+  } else {
+    jb->off += (size_t)w;
+  }
+}
 
+/* Dumpft n QWORDS ab addr in einen JSON-Puffer (crash-sicher: nicht-lesbare
+ * Woerter werden als null ausgegeben, kein Page-Fault). */
+static void dump_qwords_into(jbuf_t *jb, const char *label, const void *addr,
+                             size_t n) {
+  jbuf_appendf(jb, "{\"label\":\"%s\",\"addr\":\"0x%llx\",\"qwords\":[",
+               label, (unsigned long long)(uintptr_t)addr);
   for (size_t i = 0; i < n; i++) {
     uint64_t v = 0;
     safe_read_u64((const unsigned char *)addr + i * 8, &v);
-    if (off + 32 >= sizeof(buf))
-      break;
-    w = snprintf(buf + off, sizeof(buf) - off, "%s\"0x%llx\"", i ? "," : "",
-                 (unsigned long long)v);
-    if (w < 0)
-      return;
-    off += (size_t)w;
+    jbuf_appendf(jb, "%s\"0x%llx\"", i ? "," : "", (unsigned long long)v);
   }
-  snprintf(buf + off, sizeof(buf) - off, "]}");
-  send_line(hPipe, "%s", buf);
+  jbuf_appendf(jb, "]}");
 }
 
-/* Scannt lesbare Regionen nach einem 32-bit-Wert (z.B. carbonium-Hash
- * 0x659cc791) und dumpft Treffer + den 8-Byte-Wert bei +8 (ResourceValue). */
-static void scan_hash(HANDLE hPipe, uint32_t needle, int max_hits) {
+/* Scannt lesbare Regionen nach einem 32-bit-Wert (Carbonium-Hash-Cross-Check)
+ * und haengt Treffer + Zusammenfassung an den JSON-Puffer. */
+static void scan_hash_into(jbuf_t *jb, uint32_t needle, int max_hits) {
   uintptr_t addr = 0;
   int hits = 0;
   unsigned long long regions = 0, bytes = 0;
 
+  jbuf_appendf(jb, "\"scan_hits\":[");
   for (;;) {
     MEMORY_BASIC_INFORMATION mi;
     if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
@@ -2882,29 +2906,25 @@ static void scan_hash(HANDLE hPipe, uint32_t needle, int max_hits) {
         const unsigned char *e = (const unsigned char *)&p[i];
         uint64_t val = 0;
         safe_read_u64(e + 8, &val);
-        send_line(hPipe,
-                  "{\"event\":\"scan_hit\",\"hash\":\"0x%08x\","
-                  "\"addr\":\"0x%llx\",\"value\":%llu,\"value_hex\":\"0x%llx\"}",
-                  needle, (unsigned long long)(uintptr_t)e,
-                  (unsigned long long)val, (unsigned long long)val);
-        if (++hits >= max_hits) {
-          send_line(hPipe,
-                    "{\"event\":\"scan_done\",\"hits\":%d,\"regions\":%llu,"
-                    "\"bytes\":%llu}",
-                    hits, regions, bytes);
-          return;
-        }
+        jbuf_appendf(jb, "%s{\"hash\":\"0x%08x\",\"addr\":\"0x%llx\","
+                     "\"value\":%llu}",
+                     hits ? "," : "", needle,
+                     (unsigned long long)(uintptr_t)e,
+                     (unsigned long long)val);
+        if (++hits >= max_hits)
+          goto done;
       }
     }
   }
-  send_line(hPipe,
-            "{\"event\":\"scan_done\",\"hits\":%d,\"regions\":%llu,"
-            "\"bytes\":%llu}",
-            hits, regions, bytes);
+done:
+  jbuf_appendf(jb, "],\"scan_done\":{\"hits\":%d,\"regions\":%llu,"
+               "\"bytes\":%llu}",
+               hits, regions, bytes);
 }
 
-/* Probe (RE #363): PlayerService-Kette live dumpen, um die Account-Struktur
- * zu bestaetigen. Gibt Pointer + Speicher-Fenster als JSON aus. */
+/* Probe (RE #363): PlayerService-Kette live dumpen. Gibt EINE
+ * probe_result-Zeile (Pointer, Speicher-Fenster, Hash-Scan, Account-Basket)
+ * als JSON zurueck (single-line, #653). */
 /* Forward-Decl (#655): probe_resources steht im File VOR der
  * Definition von scan_qword_instance. */
 static unsigned char *scan_qword_instance(uint64_t needle,
@@ -2915,16 +2935,22 @@ static void probe_resources(HANDLE hPipe) {
   size_t size = 0;
   const char *via = NULL;
   const unsigned char *execfn = NULL;
+  char out[RESP_BUF_SIZE];
+  jbuf_t jb;
+
+  jbuf_init(&jb, out, sizeof(out));
 
   if (!resolve_module(&base, &size, &via, &execfn)) {
-    send_line(hPipe, "{\"event\":\"probe\",\"error\":\"no_module\"}");
+    send_line(hPipe, "{\"event\":\"probe_result\",\"ok\":false,"
+                     "\"reason\":\"no_module\"}");
     return;
   }
 
   /* #479: Readiness-Gate — die Probe traversiert die PlayerService-Kette
    * (World-Nutzung) und darf erst nach fertiger Welt laufen. */
   if (!world_is_ready()) {
-    send_line(hPipe, "{\"event\":\"probe\",\"error\":\"world_not_ready\"}");
+    send_line(hPipe, "{\"event\":\"probe_result\",\"ok\":false,"
+                     "\"reason\":\"world_not_ready\"}");
     return;
   }
 
@@ -2935,38 +2961,43 @@ static void probe_resources(HANDLE hPipe) {
       (uint64_t)(uintptr_t)vftable, "probe");
 
   if (!ps) {
-    send_line(hPipe, "{\"event\":\"probe\",\"error\":\"no_playerservice\"}");
+    send_line(hPipe, "{\"event\":\"probe_result\",\"ok\":false,"
+                     "\"reason\":\"no_playerservice\"}");
     return;
   }
 
   uint64_t resource_system = 0;
   safe_read_u64(ps + 8, &resource_system);
-  /* Container ist EMBEDDED bei resource_system+0x30 (lea, kein Deref) -
-   * im Disasm 0x180c60050 / 0x180f1e700 belegt. */
+  /* Container ist EMBEDDED bei resource_system+0x30 (lea, kein Deref). */
   uint64_t container = resource_system ? resource_system + 0x30 : 0;
 
-  send_line(hPipe,
-            "{\"event\":\"probe\",\"playerservice\":\"0x%llx\","
-            "\"resource_system\":\"0x%llx\",\"container\":\"0x%llx\"}",
-            (unsigned long long)(uintptr_t)ps,
-            (unsigned long long)resource_system, (unsigned long long)container);
+  jbuf_appendf(&jb, "{\"event\":\"probe_result\",\"ok\":true,"
+               "\"playerservice\":\"0x%llx\",\"resource_system\":\"0x%llx\","
+               "\"container\":\"0x%llx\",\"dumps\":[",
+               (unsigned long long)(uintptr_t)ps,
+               (unsigned long long)resource_system,
+               (unsigned long long)container);
 
-  dump_qwords(hPipe, "playerservice", ps, 24);
-  if (resource_system)
-    dump_qwords(hPipe, "resource_system",
-                (const void *)(uintptr_t)resource_system, 24);
-  if (container)
-    dump_qwords(hPipe, "container", (const void *)(uintptr_t)container, 24);
+  dump_qwords_into(&jb, "playerservice", ps, 24);
+  if (resource_system) {
+    jbuf_appendf(&jb, ",");
+    dump_qwords_into(&jb, "resource_system",
+                     (const void *)(uintptr_t)resource_system, 24);
+  }
+  if (container) {
+    jbuf_appendf(&jb, ",");
+    dump_qwords_into(&jb, "container", (const void *)(uintptr_t)container, 24);
+  }
+  jbuf_appendf(&jb, "],");
 
   /* carbonium-Hash scannen (Cross-Check). */
-  scan_hash(hPipe, 0x659cc791, 24);
+  scan_hash_into(&jb, 0x659cc791, 24);
 
-  /* Account-Basket deterministisch dumpen: GetPlayerAccount(World*, 0) ->
-   * ResourceAccount*; account[+8] = sortiertes (StringHash, ResourceValue)-
-   * Array, account[+0x10] = Count (Disasm 0x2E04A0). */
+  /* Account-Basket deterministisch dumpen. */
   {
     uint64_t world = 0;
     safe_read_u64(ps + 8, &world);
+    jbuf_appendf(&jb, ",\"account\":");
     if (world) {
       void *(*gpa)(void *, unsigned int) =
           (void *(*)(void *, unsigned int))(uintptr_t)(base + 0xC60050);
@@ -2975,11 +3006,10 @@ static void probe_resources(HANDLE hPipe) {
         uint64_t arr = 0, count = 0;
         safe_read_u64((unsigned char *)account + 8, &arr);
         safe_read_u64((unsigned char *)account + 0x10, &count);
-        send_line(hPipe,
-                  "{\"event\":\"account\",\"account\":\"0x%llx\","
-                  "\"array\":\"0x%llx\",\"count\":%llu}",
-                  (unsigned long long)(uintptr_t)account,
-                  (unsigned long long)arr, (unsigned long long)count);
+        jbuf_appendf(&jb, "{\"account\":\"0x%llx\",\"array\":\"0x%llx\","
+                     "\"count\":%llu,\"basket\":[",
+                     (unsigned long long)(uintptr_t)account,
+                     (unsigned long long)arr, (unsigned long long)count);
         if (arr && count && count < 256) {
           for (unsigned long long i = 0; i < count; i++) {
             const unsigned char *e = (const unsigned char *)(uintptr_t)arr +
@@ -2987,22 +3017,24 @@ static void probe_resources(HANDLE hPipe) {
             uint64_t hv = 0, v = 0;
             safe_read_u64(e, &hv);
             safe_read_u64(e + 8, &v);
-            send_line(hPipe,
-                      "{\"event\":\"basket_entry\",\"i\":%llu,"
-                      "\"hash\":\"0x%08x\",\"value_hex\":\"0x%llx\","
-                      "\"value\":%llu}",
-                      i, (unsigned int)hv, (unsigned long long)v,
-                      (unsigned long long)v);
+            jbuf_appendf(&jb, "%s{\"hash\":\"0x%08x\",\"value\":%llu}",
+                         i ? "," : "", (unsigned int)hv,
+                         (unsigned long long)v);
           }
         }
+        jbuf_appendf(&jb, "]}");
       } else {
-        send_line(hPipe, "{\"event\":\"account\",\"error\":\"no_account\"}");
+        jbuf_appendf(&jb, "{\"error\":\"no_account\"}");
       }
     } else {
-      send_line(hPipe, "{\"event\":\"account\",\"error\":\"no_world\"}");
+      jbuf_appendf(&jb, "{\"error\":\"no_world\"}");
     }
   }
+
+  jbuf_appendf(&jb, "}");
+  send_line(hPipe, "%s", out);
 }
+
 
 
 /* get_state (Issue #363/#365, Ironium #401): liest den Account-Basket und
