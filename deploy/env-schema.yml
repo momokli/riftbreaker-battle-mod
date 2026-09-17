@@ -48,9 +48,10 @@ per_env:
   # --- Server-I/O-Tools (rbtools) -----------------------------------------
   rbtools_dir: [prod, test, staging]
   rbtools_staging_dir: [prod, test, staging]
-  # --- Sidecars (Session-Recorder + Referee-Egress) ------------------------
+  # --- Sidecars (Session-Recorder + Send-Tailer + Referee-Egress) ----------
   riftbreaker_sessions_container: [prod, test, staging]
   riftbreaker_sessions_dir: [prod, test, staging]
+  riftbreaker_send_tailer_container: [prod, test, staging]
 
   # --- Crash-Collector (Prod-Zwilling, Issue #481) -------------------------
   crash_collector_unit: [prod, staging]
