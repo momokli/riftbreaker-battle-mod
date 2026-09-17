@@ -2905,6 +2905,11 @@ static void scan_hash(HANDLE hPipe, uint32_t needle, int max_hits) {
 
 /* Probe (RE #363): PlayerService-Kette live dumpen, um die Account-Struktur
  * zu bestaetigen. Gibt Pointer + Speicher-Fenster als JSON aus. */
+/* Forward-Decl (#655): probe_resources steht im File VOR der
+ * Definition von scan_qword_instance. */
+static unsigned char *scan_qword_instance(uint64_t needle,
+                                           const char *name);
+
 static void probe_resources(HANDLE hPipe) {
   const unsigned char *base = NULL;
   size_t size = 0;
@@ -2923,33 +2928,11 @@ static void probe_resources(HANDLE hPipe) {
     return;
   }
 
-  /* PlayerService-vftable RVA 0x2e8e910 (RE #363, build-konsistent). */
+  /* PlayerService-vftable RVA 0x2e8e910 (RE #363, build-konsistent).
+   * Crash-sicher via scan_qword_instance (ReadProcessMemory, #655). */
   const unsigned char *vftable = base + 0x2e8e910;
-  const uint64_t needle = (uint64_t)(uintptr_t)vftable;
-  unsigned char *ps = NULL;
-  uintptr_t addr = 0;
-
-  for (;;) {
-    MEMORY_BASIC_INFORMATION mi;
-    if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
-      break;
-    uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
-    if (next <= addr)
-      break;
-    addr = next;
-    if (!is_readable_region(&mi))
-      continue;
-    const uint64_t *q = (const uint64_t *)mi.BaseAddress;
-    size_t nq = mi.RegionSize / sizeof(uint64_t);
-    for (size_t i = 0; i < nq; i++) {
-      if (q[i] == needle) {
-        ps = (unsigned char *)&q[i];
-        break;
-      }
-    }
-    if (ps)
-      break;
-  }
+  unsigned char *ps = scan_qword_instance(
+      (uint64_t)(uintptr_t)vftable, "probe");
 
   if (!ps) {
     send_line(hPipe, "{\"event\":\"probe\",\"error\":\"no_playerservice\"}");
@@ -3125,6 +3108,60 @@ static unsigned char *scan_qword_instance(uint64_t needle, const char *name)
          * FALSE statt eines Page-Faults -> Chunk ueberspringen, naechste
          * Region. MinGW-x64 stellt kein SEH (__try/__except, MSVC-only)
          * bereit. */
+        uint64_t buf[RBBRIDGE_SCAN_CHUNK / sizeof(uint64_t)];
+        size_t remaining = mi.RegionSize;
+        uintptr_t base = (uintptr_t)mi.BaseAddress;
+        while (remaining > 0) {
+            size_t chunk = remaining > sizeof(buf) ? sizeof(buf) : remaining;
+            SIZE_T nread = 0;
+            if (ReadProcessMemory(GetCurrentProcess(), (const void *)base, buf,
+                                  chunk, &nread) &&
+                nread >= sizeof(uint64_t)) {
+                size_t nq = nread / sizeof(uint64_t);
+                for (size_t i = 0; i < nq; i++) {
+                    if (buf[i] == needle) {
+                        candidates++;
+                        dbg("%s: done (regions=%d candidates=%d)", name,
+                            regions, candidates);
+                        return (unsigned char *)(base +
+                                                 i * sizeof(uint64_t));
+                    }
+                }
+            }
+            base += chunk;
+            remaining -= chunk;
+        }
+    }
+    dbg("%s: done (regions=%d candidates=%d)", name, regions, candidates);
+    return NULL;
+}
+
+/* Writable-Variante (Round-Reset #516): sucht die Instanz NUR in
+ * beschreibbaren Regionen (der Flag-Write [instance+0x52A]=1 setzt das
+ * voraus). Crash-sicher wie scan_qword_instance (ReadProcessMemory, #655). */
+static unsigned char *scan_qword_instance_writable(uint64_t needle,
+                                                   const char *name)
+{
+    uintptr_t addr = 0;
+    int regions = 0;
+    int candidates = 0;
+
+    dbg("%s: scan start (needle=0x%llx)", name, (unsigned long long)needle);
+
+    for (;;) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
+            break;
+        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
+        if (next <= addr)
+            break;
+        addr = next;
+        if (!is_writable_region(&mi))
+            continue;
+        regions++;
+        if ((regions & 0xFF) == 0)
+            dbg("%s: scan progress (regions=%d candidates=%d)", name, regions,
+                candidates);
         uint64_t buf[RBBRIDGE_SCAN_CHUNK / sizeof(uint64_t)];
         size_t remaining = mi.RegionSize;
         uintptr_t base = (uintptr_t)mi.BaseAddress;
@@ -3336,41 +3373,9 @@ static restart_cache_t g_restart;
  * Innerhalb der beschreibbaren Regionen gewinnt der erste Treffer. */
 static unsigned char *restart_scan_instance(uintptr_t vtable)
 {
-    uintptr_t addr = 0;
-    int regions = 0;
-    int candidates = 0;
-
-    dbg("resolve_restart: scan start (needle=0x%llx)",
-        (unsigned long long)vtable);
-
-    for (;;) {
-        MEMORY_BASIC_INFORMATION mi;
-        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
-            break;
-        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
-        if (next <= addr)
-            break;
-        addr = next;
-        if (!is_writable_region(&mi))
-            continue;
-        regions++;
-        if ((regions & 0xFF) == 0)
-            dbg("resolve_restart: scan progress (regions=%d candidates=%d)",
-                regions, candidates);
-        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
-        size_t nq = mi.RegionSize / sizeof(uint64_t);
-        for (size_t i = 0; i < nq; i++) {
-            if (q[i] == (uint64_t)vtable) {
-                candidates++;
-                dbg("resolve_restart: done (regions=%d candidates=%d)",
-                    regions, candidates);
-                return (unsigned char *)&q[i];
-            }
-        }
-    }
-    dbg("resolve_restart: done (regions=%d candidates=%d)", regions,
-        candidates);
-    return NULL;
+    /* Crash-sicher via scan_qword_instance_writable (ReadProcessMemory,
+     * kein roher q[i]-Deref - #655). */
+    return scan_qword_instance_writable((uint64_t)vtable, "resolve_restart");
 }
 
 /* Loest den nativen Round-Reset-Pfad auf (Signatur + vtable + Instance).
@@ -4663,33 +4668,11 @@ static void dispatch_get_state(HANDLE hPipe)
         }
     }
 
-    /* PlayerService-vftable RVA 0x2e8e910 (RE #363/#365). */
+    /* PlayerService-vftable RVA 0x2e8e910 (RE #363/#365). Crash-sicher via
+     * scan_qword_instance (ReadProcessMemory, kein roher q[i]-Deref - #655). */
     const unsigned char *vftable = base + 0x2e8e910;
-    const uint64_t needle = (uint64_t)(uintptr_t)vftable;
-    unsigned char *ps = NULL;
-    uintptr_t addr = 0;
-
-    for (;;) {
-        MEMORY_BASIC_INFORMATION mi;
-        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
-            break;
-        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
-        if (next <= addr)
-            break;
-        addr = next;
-        if (!is_readable_region(&mi))
-            continue;
-        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
-        size_t nq = mi.RegionSize / sizeof(uint64_t);
-        for (size_t i = 0; i < nq; i++) {
-            if (q[i] == needle) {
-                ps = (unsigned char *)&q[i];
-                break;
-            }
-        }
-        if (ps)
-            break;
-    }
+    unsigned char *ps = scan_qword_instance(
+        (uint64_t)(uintptr_t)vftable, "get_state");
 
     if (!ps) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
@@ -4876,32 +4859,11 @@ static void dispatch_add_resource(HANDLE hPipe, const char *resource_str,
     if (readiness_block(hPipe, "add_resource_result"))
         return;
 
-    /* PlayerService-Instanz per vftable-Scan (RVA 0x2e8e910, wie get_state). */
+    /* PlayerService-Instanz per vftable-Scan (RVA 0x2e8e910, wie get_state).
+     * Crash-sicher via scan_qword_instance (ReadProcessMemory, #655). */
     const unsigned char *vftable = base + 0x2e8e910;
-    const uint64_t needle = (uint64_t)(uintptr_t)vftable;
-    unsigned char *ps = NULL;
-    uintptr_t addr = 0;
-    for (;;) {
-        MEMORY_BASIC_INFORMATION mi;
-        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
-            break;
-        uintptr_t next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
-        if (next <= addr)
-            break;
-        addr = next;
-        if (!is_readable_region(&mi))
-            continue;
-        const uint64_t *q = (const uint64_t *)mi.BaseAddress;
-        size_t nq = mi.RegionSize / sizeof(uint64_t);
-        for (size_t i = 0; i < nq; i++) {
-            if (q[i] == needle) {
-                ps = (unsigned char *)&q[i];
-                break;
-            }
-        }
-        if (ps)
-            break;
-    }
+    unsigned char *ps = scan_qword_instance(
+        (uint64_t)(uintptr_t)vftable, "add_resource");
 
     if (!ps) {
         send_line(hPipe, "{\"event\":\"add_resource_result\",\"ok\":false,"
