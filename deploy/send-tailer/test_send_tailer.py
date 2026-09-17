@@ -8,7 +8,7 @@ mit einem Fake-Poster getestet — kein Netz, kein Spiel, kein DOM.
 
 import unittest
 
-from send_tailer import SendTailer, parse_send_order
+from send_tailer import LogTailer, SendTailer, parse_send_order
 
 
 class TestParseSendOrder(unittest.TestCase):
@@ -78,6 +78,43 @@ class TestSendTailer(unittest.TestCase):
         # Auch bei HTTP-Fehler liefert feed den Namen zurück (Logging übernimmt).
         tailer = self._tailer(lambda name, id: (503, '{"ok":false}'))
         self.assertEqual(tailer.feed("[RBBATTLE] button_chat sent: -send wave1 xyz"), "wave1")
+
+
+class _Collector:
+    def __init__(self):
+        self.lines = []
+
+    def feed(self, line):
+        self.lines.append(line)
+        return line
+
+
+class TestLogTailerCursor(unittest.TestCase):
+    """Regressionstest fuer den #713 Cursor-Bug: with from_start=False muss
+    der Tailer NEUE Zeilen lesen, obwohl der erste Read leer war."""
+
+    def test_from_start_false_reads_new_lines(self):
+        import os
+        import tempfile
+
+        fd, path = tempfile.mkstemp()
+        try:
+            with open(fd, "w") as fh:
+                fh.write("[RBBATTLE] button_chat sent: -send wave1 old\n")
+            collector = _Collector()
+            tailer = LogTailer(collector, [path], from_start=False)
+            # Erste Poll: ueberspringt den bestehenden Inhalt.
+            self.assertEqual(tailer.poll_once(), 0)
+            # Neue Zeile anhaengen.
+            with open(path, "a") as fh:
+                fh.write("[RBBATTLE] button_chat sent: -send wave1 new\n")
+            # Zweite Poll: muss die NEUE Zeile lesen.
+            self.assertEqual(tailer.poll_once(), 1)
+            self.assertEqual(
+                collector.lines, ["[RBBATTLE] button_chat sent: -send wave1 new"]
+            )
+        finally:
+            os.unlink(path)
 
 
 if __name__ == "__main__":
