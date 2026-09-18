@@ -118,28 +118,21 @@ fi
 SRCMOD="$ROOT/client-mod"
 outmod="$OUT_DIR/rbbattle.zip"
 
-# Build-Identitaet (Issue #499): ref in die Lua backen. Temp-Kopie, damit die
-# git-getrackte Quelle unveraendert bleibt (RBB_BUILD_REF -> echter ref).
+# Build-Identitaet (Issue #494): ref in Lua UND Manifest backen. Temp-Kopie,
+# damit die git-getrackte Quelle unveraendert bleibt (RBB_BUILD_REF -> echter ref).
 MOD_TMP="$OUT_DIR/.mod-tmp"
 rm -rf "$MOD_TMP"
 mkdir -p "$MOD_TMP"
 cp -R "$SRCMOD"/. "$MOD_TMP"/
-python3 - "$MOD_TMP/lua/rbbattle_autoexec.lua" "$REF" <<'PYEOF'
-import io, sys
-path, ref = sys.argv[1], sys.argv[2]
-s = io.open(path, encoding="utf-8").read()
-# Nur die Zuweisung ersetzen (Kommentar/Platzhalter-Doku bleibt erhalten).
-s = s.replace('RBB.ref = "RBB_BUILD_REF"', 'RBB.ref = "' + ref + '"')
-io.open(path, "w", encoding="utf-8", newline="\n").write(s)
-PYEOF
+python3 "$ROOT/scripts/bake_mod_ref.py" "$MOD_TMP" "$REF"
 
 zip_content_root "$MOD_TMP" "$outmod"
 rm -rf "$MOD_TMP"
 echo "NAME=rbbattle.zip ZIP=$outmod"
 
-# Einzel-Mod versioniert (Issue #119): die Mod-Version kommt aus den
-# Mod-Metadaten (client-mod/<GUID>.manifest, Feld `version`), nicht aus Git-SHA oder
-# Datum. rbbattle-v<version>.zip ist der kanonische, versionierte Download;
+# Einzel-Mod versioniert (Issue #119): die Mod-Version ist jetzt die
+# Build-Identitaet (SHA bzw. Tag, Issue #494) — identisch zu dem in Lua + Manifest
+# gebackenen Ref. rbbattle-v<ref>.zip ist der kanonische, versionierte Download;
 # rbbattle.zip bleibt der stabile Alias für die Deploy-Kette (md5-Parität +
 # Server-Extraktion), damit Download-Link und Server-Stand nie auseinanderlaufen.
 MOD_VERSION="$(bash "$ROOT/scripts/mod_version.sh")"
