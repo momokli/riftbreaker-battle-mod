@@ -1,0 +1,30 @@
+{
+  "_comment": "Platzhalter-Werte, KEINE Vanilla-Zahlen - siehe wave_scheduler.py Docstring. Keys sind Level (1..9) als String (JSON erlaubt keine int-Keys).",
+  "bridge_url": "http://127.0.0.1:9001",
+  "logic_template": "logic/dom/attack_level_{level}_entry.logic",
+  "spawn_point": "",
+  "start_level": 1,
+  "start_delay_s": 30,
+  "interval_s": {
+    "1": 90,
+    "2": 90,
+    "3": 80,
+    "4": 80,
+    "5": 70,
+    "6": 70,
+    "7": 60,
+    "8": 60,
+    "9": 60
+  },
+  "time_to_next_level_s": {
+    "1": 180,
+    "2": 180,
+    "3": 180,
+    "4": 180,
+    "5": 180,
+    "6": 180,
+    "7": 180,
+    "8": 180,
+    "9": 999999
+  }
+}
