@@ -263,8 +263,9 @@ class AttackCycle:
                     self.next_attack_at = now + self.interval_s
                     self.next_difficulty_at = now + self.difficulty_interval_s
                 print(
-                    f"[attack-cycle] HQ gebaut -> Zyklus gestartet "
-                    f"(Level 1, Angriff in {self.interval_s:.0f}s, naechste Difficulty in {self.difficulty_interval_s:.0f}s)",
+                    f"[attack-cycle] HQ gebaut -> Zyklus gestartet (Level 1, "
+                    f"Angriff in {self.interval_s:.0f}s, "
+                    f"naechste Difficulty in {self.difficulty_interval_s:.0f}s)",
                     flush=True,
                 )
                 return "started"
