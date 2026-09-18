@@ -1049,7 +1049,7 @@
                         }
                         var rows = [];
                         rows.push("level " + s.level + "  next in" + fmtCountdown(s.seconds_to_next_attack * 1000));
-                        var pending = s.pending || [];
+                        var pending = s.bought || [];
                         if (!pending.length) {
                             rows.push("gekauft: (keine)");
                         } else {

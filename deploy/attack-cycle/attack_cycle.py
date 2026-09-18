@@ -139,7 +139,8 @@ class AttackCycle:
         self.active = False
         self.level = 1
         self.next_attack_at: Optional[float] = None
-        self.pending: list = []
+        self.orders: list = []  # unbezahlte Buy-Orders (order list)
+        self.bought: list = []  # bezahlte Wellen (bought queue, feuert als naechstes)
         self.last_fire: Optional[Dict[str, Any]] = None
         self._reset_epoch = 0
 
@@ -181,41 +182,51 @@ class AttackCycle:
 
     # --- Kauf (aus /queue_send) ------------------------------------------
     def buy(self, level: int) -> tuple:
-        """Reiht die Welle SOFORT in pending ein und bezahlt asynchron.
+        """Reiht die Welle SOFORT in die Order-Liste ein (ohne try_spend).
 
-        Liefert sofort (http_status, payload_dict) — der try_spend laeuft im
-        Hintergrund, damit der HTTP-Handler nie auf den (langsamen) DLL-Scan
-        blockiert. Bei insufficient wird die Welle wieder aus pending entfernt.
+        Der Hintergrund-Resolver (_resolve_orders) bezahlt die Order via
+        try_spend und verschiebt sie in die bought-Queue. Der HTTP-Handler
+        blockiert dadurch nie. Liefert sofort (http_status, payload_dict).
         """
         if level not in WAVE_COST:
             return 400, {"ok": False, "reason": "unknown_wave"}
         cost = WAVE_COST[level]
         with self._lock:
-            self.pending.append(level)
-            queue_len = len(self.pending)
-        print(f"[attack-cycle] buy wave{level} -> queued (cost={cost}, queue={queue_len})", flush=True)
-        threading.Thread(target=self._pay, args=(level, cost), daemon=True).start()
-        return 200, {"ok": True, "queued_level": level, "queue_length": queue_len}
+            self.orders.append({"level": level, "cost": cost})
+            order_count = len(self.orders)
+        print(f"[attack-cycle] order wave{level} (cost={cost}, orders={order_count})", flush=True)
+        return 200, {"ok": True, "queued_level": level, "order_count": order_count}
 
-    def _pay(self, level: int, cost: int) -> None:
-        """Asynchroner Zahlungsversuch: try_spend; bei Fehler Welle entfernen."""
-        try:
-            status, ok, body = self._spend(cost)
-            if not (200 <= status < 300) or not ok:
-                with self._lock:
-                    if level in self.pending:
-                        self.pending.remove(level)
-                print(
-                    f"[attack-cycle] wave{level} ZAHLUNG fehlgeschlagen (status={status} ok={ok}): {body[:160]}",
-                    flush=True,
-                )
-            else:
-                print(f"[attack-cycle] wave{level} bezahlt (cost={cost})", flush=True)
-        except Exception as e:
-            with self._lock:
-                if level in self.pending:
-                    self.pending.remove(level)
-            print(f"[attack-cycle] wave{level} pay error: {e}", flush=True)
+    def _resolve_orders(self) -> None:
+        """Bezahlt alle offenen Orders (try_spend) und verschiebt sie nach bought.
+
+        Nur bezahlte Orders landen in bought -> die Welle feuert NUR, wenn der
+        Spieler das Carbonium wirklich HATTE (kein Optimistic-Spawn).
+        """
+        with self._lock:
+            orders = list(self.orders)
+            self.orders = []
+        for o in orders:
+            level, cost = o["level"], o["cost"]
+            try:
+                status, ok, body = self._spend(cost)
+                if 200 <= status < 300 and ok:
+                    with self._lock:
+                        self.bought.append(level)
+                    print(f"[attack-cycle] wave{level} bezahlt -> bought (cost={cost})", flush=True)
+                else:
+                    print(f"[attack-cycle] wave{level} verworfen (status={status} ok={ok}): {body[:160]}", flush=True)
+            except Exception as e:
+                print(f"[attack-cycle] wave{level} resolve error: {e}", flush=True)
+
+    def _resolver_loop(self) -> None:
+        """Hintergrund-Resolver: bezahlt kontinuierlich offene Orders."""
+        while True:
+            try:
+                self._resolve_orders()
+            except Exception:
+                pass
+            time.sleep(0.5)
 
     # --- Feuern -----------------------------------------------------------
     def _fire(self, level: int) -> None:
@@ -245,8 +256,8 @@ class AttackCycle:
             if self.next_attack_at is None or now < self.next_attack_at:
                 return None
             natural_level = self.level
-            sent_levels = list(self.pending)
-            self.pending = []
+            sent_levels = list(self.bought)
+            self.bought = []
             self.level = min(self.level + 1, self.max_level)
             self.next_attack_at = self.next_attack_at + self.interval_s
 
@@ -268,7 +279,8 @@ class AttackCycle:
                 "seconds_to_next_attack": (
                     max(0.0, self.next_attack_at - now) if self.next_attack_at is not None else None
                 ),
-                "pending": list(self.pending),
+                "bought": list(self.bought),
+                "orders": list(self.orders),
                 "interval_s": self.interval_s,
                 "max_level": self.max_level,
                 "last_fire": self.last_fire,
@@ -311,7 +323,8 @@ class AttackCycle:
             self.active = False
             self.level = 1
             self.next_attack_at = None
-            self.pending = []
+            self.orders = []
+            self.bought = []
             self.last_fire = None
         print("[attack-cycle] reset -> warte auf HQ-Bau", flush=True)
 
@@ -379,6 +392,8 @@ def run(
     httpd = build_control_server(control_bind, control_port, cycle)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
+    resolver = threading.Thread(target=cycle._resolver_loop, daemon=True)
+    resolver.start()
     print(
         f"[attack-cycle] control auf http://{control_bind}:{control_port} (GET /status, POST /queue_send)",
         flush=True,

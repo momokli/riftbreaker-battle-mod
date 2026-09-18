@@ -10,7 +10,7 @@ kein Netz, kein Spiel, kein DOM.
 import json
 import unittest
 
-from attack_cycle import WAVE_COST, AttackCycle, parse_hq_alive, parse_send_level
+from attack_cycle import AttackCycle, parse_hq_alive, parse_send_level
 
 
 class FakePoster:
@@ -124,6 +124,7 @@ class TestAttackCycle(unittest.TestCase):
         status, payload = cycle.buy(2)
         self.assertEqual(status, 200)
         self.assertEqual(payload["queued_level"], 2)
+        cycle._resolve_orders()  # pay -> bought
 
         clock.t = 420.0
         cycle.step()  # attack
@@ -139,15 +140,26 @@ class TestAttackCycle(unittest.TestCase):
         status, payload = cycle.buy(2)
         self.assertEqual(status, 200)
         self.assertEqual(payload["queued_level"], 2)
-        self.assertEqual(cycle.pending, [2])
+        self.assertEqual(len(cycle.orders), 1)
+        self.assertEqual(cycle.bought, [])
 
-    def test_pay_insufficient_removes(self):
+    def test_resolve_orders_pays(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        cycle = self._cycle(poster)
+        cycle.buy(2)
+        self.assertEqual(cycle.bought, [])
+        cycle._resolve_orders()
+        self.assertEqual(cycle.bought, [2])
+        self.assertEqual(cycle.orders, [])
+
+    def test_resolve_orders_rejects_insufficient(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         poster.spend_ok = False
         cycle = self._cycle(poster)
-        cycle.pending.append(2)
-        cycle._pay(2, WAVE_COST[2])
-        self.assertEqual(cycle.pending, [])
+        cycle.buy(2)
+        cycle._resolve_orders()
+        self.assertEqual(cycle.bought, [])
+        self.assertEqual(cycle.orders, [])
 
     def test_level_caps_at_max(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
@@ -166,6 +178,7 @@ class TestAttackCycle(unittest.TestCase):
         cycle.step()  # started
         cycle.buy(2)
         cycle.buy(2)
+        cycle._resolve_orders()  # pay -> bought = [2, 2]
         clock.t = 420.0
         cycle.step()
         logic_calls = [c for c in poster.calls if c[0] == "/activate_mission_flow"]
@@ -178,13 +191,15 @@ class TestAttackCycle(unittest.TestCase):
         cycle = self._cycle(poster, clock=clock)
         cycle.step()  # started
         cycle.buy(2)
+        cycle._resolve_orders()
         self.assertTrue(cycle.active)
-        self.assertEqual(cycle.pending, [2])
+        self.assertEqual(cycle.bought, [2])
         cycle.reset()
         self.assertFalse(cycle.active)
         self.assertEqual(cycle.level, 1)
         self.assertIsNone(cycle.next_attack_at)
-        self.assertEqual(cycle.pending, [])
+        self.assertEqual(cycle.bought, [])
+        self.assertEqual(cycle.orders, [])
 
     def test_sync_reset_resets_on_epoch_change(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
