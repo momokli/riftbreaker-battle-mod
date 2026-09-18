@@ -126,8 +126,8 @@ class TestAttackCycle(unittest.TestCase):
         cycle.step()  # attack
         logic_calls = [c for c in poster.calls if c[0] == "/activate_mission_flow"]
         logics = [json.loads(c[1].decode())["logic"] for c in logic_calls]
-        self.assertIn("logic/dom/attack_level_1_entry.logic", logics)  # natural
-        self.assertIn("logic/dom/attack_level_2_entry.logic", logics)  # sent
+        self.assertIn("logic/missions/survival/attack_level_1_entry.logic", logics)  # natural
+        self.assertIn("logic/missions/survival/attack_level_2_entry.logic", logics)  # sent
         self.assertEqual(len(logics), 2)
 
     def test_buy_insufficient_not_stacked(self):
@@ -160,7 +160,7 @@ class TestAttackCycle(unittest.TestCase):
         cycle.step()
         logic_calls = [c for c in poster.calls if c[0] == "/activate_mission_flow"]
         logics = [json.loads(c[1].decode())["logic"] for c in logic_calls]
-        self.assertEqual(logics.count("logic/dom/attack_level_2_entry.logic"), 2)
+        self.assertEqual(logics.count("logic/missions/survival/attack_level_2_entry.logic"), 2)
 
 
 if __name__ == "__main__":

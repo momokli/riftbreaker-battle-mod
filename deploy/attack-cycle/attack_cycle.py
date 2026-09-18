@@ -56,9 +56,23 @@ NAME_TO_LEVEL = {f"wave{lvl}": lvl for lvl in WAVE_COST}
 
 DEFAULT_MAX_LEVEL = 9
 DEFAULT_INTERVAL_S = 420.0  # 7 min
-DEFAULT_LOGIC_TEMPLATE = "logic/dom/attack_level_{level}_entry.logic"
 DEFAULT_BRIDGE_URL = "http://127.0.0.1:9001"
 DEFAULT_CONTROL_PORT = 9102
+
+# Logic-Pfad je Level (Spiegel der SEND-MENU-Presets im Cockpit, die live
+# Wellen spawnen). NICHT logic/dom/* — das loest nur "attack incoming" aus,
+# ohne Spawn (pauseAttacks=true in sandbox). wave9 teilt den Pool mit wave8 (#658).
+WAVE_LOGIC = {
+    1: "logic/missions/survival/attack_level_1_entry.logic",
+    2: "logic/missions/survival/attack_level_2_entry.logic",
+    3: "logic/missions/survival/attack_level_3_id_1.logic",
+    4: "logic/missions/survival/attack_level_4_id_1.logic",
+    5: "logic/missions/survival/attack_level_5_id_1.logic",
+    6: "logic/missions/survival/attack_level_6_id_1.logic",
+    7: "logic/missions/survival/attack_level_7_id_1.logic",
+    8: "logic/missions/survival/attack_level_8_id_1.logic",
+    9: "logic/missions/survival/attack_level_8_id_1.logic",
+}
 
 
 def parse_hq_alive(raw: str) -> bool:
@@ -108,7 +122,7 @@ class AttackCycle:
         base_url: str,
         interval_s: float = DEFAULT_INTERVAL_S,
         max_level: int = DEFAULT_MAX_LEVEL,
-        logic_template: str = DEFAULT_LOGIC_TEMPLATE,
+        wave_logic: Optional[Dict[int, str]] = None,
         timeout: float = 5.0,
         _poster: Optional[Callable[[str, bytes], tuple]] = None,
         _clock: Callable[[], float] = time.monotonic,
@@ -116,7 +130,7 @@ class AttackCycle:
         self.base_url = base_url.rstrip("/")
         self.interval_s = interval_s
         self.max_level = max_level
-        self.logic_template = logic_template
+        self.wave_logic = wave_logic or WAVE_LOGIC
         self.timeout = timeout
         self._poster = _poster or self._http_post
         self._clock = _clock
@@ -187,7 +201,7 @@ class AttackCycle:
 
     # --- Feuern -----------------------------------------------------------
     def _fire(self, level: int) -> None:
-        logic = self.logic_template.format(level=level)
+        logic = self.wave_logic.get(level, self.wave_logic.get(self.max_level, ""))
         status, body = self._post_json(
             "/activate_mission_flow",
             {"logic": logic, "mode": "default"},
@@ -331,7 +345,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--interval", type=float, default=DEFAULT_INTERVAL_S, help="Zyklus-Intervall in Sekunden (Default 420 = 7 min)"
     )
     p.add_argument("--max-level", type=int, default=DEFAULT_MAX_LEVEL, help="Max. natuerliches Level (Default 9)")
-    p.add_argument("--logic-template", default=DEFAULT_LOGIC_TEMPLATE, help="Logic-Pfad-Template mit {level}")
     p.add_argument("--control-bind", default="0.0.0.0", help="Bind-Adresse des Control-Servers")
     p.add_argument(
         "--control-port", type=int, default=DEFAULT_CONTROL_PORT, help="Port des Control-Servers (Default 9102)"
@@ -348,7 +361,6 @@ def main(argv: Optional[list] = None) -> int:
         args.bridge_url,
         interval_s=args.interval,
         max_level=args.max_level,
-        logic_template=args.logic_template,
         timeout=args.timeout,
     )
     run(cycle, args.control_bind, args.control_port, poll_interval=args.poll_interval, once=args.once)
