@@ -1,0 +1,65 @@
+---
+# Hermetischer Render-Selbsttest fuer config-vars.json.j2 (Issue #704).
+#
+# Laeuft LOKAL auf dem Control-Node/CI-Runner: kein Host-Fact, kein SSH, kein
+# Docker, kein Vault, keine Prod-Aktion. Rendert die ECHTE Vorlage der Rolle
+# server-control (kein Nachbau) mit Dummy-Werten und prueft mit `python3 -m
+# json.tool`, dass das Ergebnis gueltiges JSON ist -- exakt der Consumer-Pfad
+# von server_control.py `_config_vars()` (`json.load()`).
+#
+# Root Cause (#704): ein literaler "#"-Kommentarkopf (kein Jinja-`{# #}`) in
+# der Vorlage landete woertlich im Output und machte die Datei zu ungueltigem
+# JSON -- `POST /server/config` schlug seit Einfuehrung (#450) IMMER mit 503
+# config_unavailable fehl. Der bestehende Unit-Test
+# (deploy/server-control/test_server_control.py) haette das nicht gefangen:
+# er schreibt die Fixture per `json.dump()` direkt, ohne je die echte Vorlage
+# zu rendern. Dieser Test rendert die echte Vorlage.
+#
+# Aufruf: RB_SC_RENDER_DIR=$(mktemp -d) ansible-playbook deploy/tests/server-control-config-vars/main.yml
+- name: "Server-Control config-vars.json Render (Issue #704)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    riftbreaker_server_name: RBBattle
+    riftbreaker_server_password: "s3cret"
+    riftbreaker_server_rcon_password: ""
+    riftbreaker_server_max_players: 4
+    riftbreaker_server_broadcast_enabled: 1
+    riftbreaker_server_pause_game_when_empty: 0
+    riftbreaker_server_campaign: mp_survival
+    riftbreaker_server_mission: jungle
+    riftbreaker_server_difficulty: "{{ test_difficulty | default('coop_normal') }}"
+    render_dir: "{{ lookup('env', 'RB_SC_RENDER_DIR') | default('/tmp/rb-server-control-config-vars-render', true) }}"
+
+  tasks:
+    - name: Render-Verzeichnis sicherstellen
+      file:
+        path: "{{ render_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: config-vars.json rendern (echte Rollen-Vorlage)
+      template:
+        src: "{{ playbook_dir }}/../../roles/server-control/templates/config-vars.json.j2"
+        dest: "{{ render_dir }}/config-vars.json"
+        mode: "0600"
+
+    - name: >-
+        Gerenderte Datei ist gueltiges JSON (derselbe Pfad wie
+        server_control.py._config_vars(), json.load())
+      command: "python3 -m json.tool {{ render_dir }}/config-vars.json"
+      register: json_check
+      changed_when: false
+
+    - name: Erwartete Keys/Werte pruefen
+      vars:
+        parsed: "{{ lookup('file', render_dir ~ '/config-vars.json') | from_json }}"
+      assert:
+        that:
+          - parsed.riftbreaker_server_name == riftbreaker_server_name
+          - parsed.riftbreaker_server_difficulty == riftbreaker_server_difficulty
+          - parsed.riftbreaker_server_max_players == riftbreaker_server_max_players
+        fail_msg: "Gerenderte config-vars.json hat falsche/fehlende Werte."
+        success_msg: "config-vars.json: gueltiges JSON, erwartete Werte vorhanden."

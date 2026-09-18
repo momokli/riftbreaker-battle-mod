@@ -11,6 +11,7 @@ name: Deploy Check (local)
 #   * Deploy-Wiring + Provider-Unit-Tests (Issue #337)
 #   * Disk-Space-Gate-Selbsttest (Issue #310)
 #   * Server-Control-Auth hinter dem Caddy (Issue #454)
+#   * Server-Control config-vars.json Render (Issue #704)
 #   * /server/*-Route-Selbsttest (dev rendert sie, prod nicht; Issue #463)
 #   * Compose-Templates rendern + `docker compose config`
 #
@@ -235,6 +236,16 @@ jobs:
       - name: "Server-Control-Auth hinter dem Caddy (Issue #454)"
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/server-control-auth/run.sh
+
+      # config-vars.json Render (Issue #704): rendert die ECHTE Vorlage und
+      # prueft mit `python3 -m json.tool`, dass das Ergebnis gueltiges JSON
+      # ist -- derselbe Pfad wie server_control.py._config_vars(). Ein
+      # literaler "#"-Kommentarkopf statt Jinja-Kommentar machte die Datei
+      # zuvor zu ungueltigem JSON und liess POST /server/config seit
+      # Einfuehrung (#450) IMMER mit 503 config_unavailable fehlschlagen.
+      - name: "Server-Control config-vars.json Render (Issue #704)"
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
+        run: bash deploy/tests/server-control-config-vars/run.sh
 
       # Crash-Collector unit-Render (Issue #462/#480/#593): rendert die ECHTE
       # systemd-Unit-Vorlage der Rolle (ExecStart + RB_CRASH_*-Env inkl. der
