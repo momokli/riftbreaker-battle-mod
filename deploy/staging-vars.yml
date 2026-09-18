@@ -45,6 +45,7 @@ rbtools_staging_dir: "/opt/rbmods/rbtools/{{ rift_env }}/.staging"
 # getrennt bleiben.
 riftbreaker_sessions_container: riftbreaker-sessions-staging
 riftbreaker_send_tailer_container: riftbreaker-send-tailer-staging
+riftbreaker_match_loop_container: riftbreaker-match-loop-staging
 riftbreaker_sessions_dir: "/srv/rift-{{ rift_env }}/sessions"
 
 # Content kommt per Sync aus dem kanonischen Cache (wie dev/prod).
