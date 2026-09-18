@@ -76,7 +76,7 @@ jobs:
           # Over-inclusive bei jedem Diff-Problem: lieber einmal zu viel laufen
           # als einen relevanten Change fälschlich zu skippen (Gate bliebe
           # sonst fälschlich grün). Doku-PRs landen hier auf relevant=false.
-          CHANGED="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || true)"
+          CHANGED="$(git diff --name-only "$BASE_SHA...$HEAD_SHA" 2>/dev/null || true)"
           if printf '%s\n' "$CHANGED" \
              | grep -Eq '^(deploy/|server/(dll|pipe-bridge)/|scripts/(build_rbbridge_tools|package|package_mod|mod_version)\.sh|\.github/workflows/boot-test\.yml)'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
