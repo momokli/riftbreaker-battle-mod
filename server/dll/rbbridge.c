@@ -3513,6 +3513,11 @@ static unsigned char *scan_qword_instance_writable(uint64_t needle,
         addr = next;
         if (!is_writable_region(&mi))
             continue;
+        /* #757: MEM_IMAGE-Regionen (Modul-Images; hier: das eigene .data mit
+         * dem gecachten g_restart.vtable) enthalten keine Heap-Instanz ->
+         * ueberspringen, sonst false-positive Instanz-Aufloesung. */
+        if (mi.Type == MEM_IMAGE)
+            continue;
         regions++;
         if ((regions & 0xFF) == 0)
             dbg("%s: scan progress (regions=%d candidates=%d)", name, regions,
