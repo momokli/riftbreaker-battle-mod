@@ -480,6 +480,9 @@ static CRITICAL_SECTION g_attack_status_cs;
  * (POST /attack_interval). Default 420 = 7 min. */
 static int g_attack_interval_s = 420;
 static CRITICAL_SECTION g_attack_interval_cs;
+/* Attack-Cycle-Reset-Epoch (via POST /attack_reset {"reset":1}). */
+static int g_attack_reset_epoch = 0;
+static CRITICAL_SECTION g_attack_reset_cs;
 
 /* Broadcastet eine JSON-Zeile als SSE-Event an den (einen) Cockpit-Client. */
 static void sse_broadcast(const char *line)
@@ -1348,6 +1351,28 @@ static void handle_post_attack_interval(SOCKET c, const char *body)
     http_respond(c, 200, "OK", resp);
 }
 
+/* POST /attack_reset: erhoeht bei {"reset":1} die Reset-Epoch; liefert immer
+ * {"reset_epoch":N}. Der Sidecar pollt die Epoch und resettet bei Aenderung. */
+static void handle_post_attack_reset(SOCKET c, const char *body)
+{
+    double r = 0.0;
+    char resp[128];
+    int epoch;
+
+    if (json_get_number(body, "reset", &r) && r > 0.0) {
+        EnterCriticalSection(&g_attack_reset_cs);
+        g_attack_reset_epoch++;
+        LeaveCriticalSection(&g_attack_reset_cs);
+        blog("attack_reset -> epoch %d", g_attack_reset_epoch);
+    }
+
+    EnterCriticalSection(&g_attack_reset_cs);
+    epoch = g_attack_reset_epoch;
+    LeaveCriticalSection(&g_attack_reset_cs);
+    snprintf(resp, sizeof(resp), "{\"ok\":true,\"reset_epoch\":%d}", epoch);
+    http_respond(c, 200, "OK", resp);
+}
+
 static void handle_client(SOCKET c)
 {
     char *req = malloc(REQ_MAX + 1);
@@ -1439,6 +1464,16 @@ static void handle_client(SOCKET c)
             memcpy(b, body, (size_t)body_len);
             b[body_len] = '\0';
             handle_post_attack_interval(c, b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/attack_reset") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_post_attack_reset(c, b);
             free(b);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/probe") == 0) {
             handle_probe(c);
@@ -1575,6 +1610,7 @@ static int mode_server(void)
     InitializeCriticalSection(&g_sse_cs);
     InitializeCriticalSection(&g_attack_status_cs);
     InitializeCriticalSection(&g_attack_interval_cs);
+    InitializeCriticalSection(&g_attack_reset_cs);
     g_resp_ev = CreateEvent(NULL, FALSE, FALSE, NULL);
     CreateThread(NULL, 0, pipe_reader_main, NULL, 0, NULL);
 

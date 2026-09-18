@@ -19,6 +19,7 @@ class FakePoster:
         self.state_resp = state_resp
         self.spend_ok = True
         self.spend_resp = '{"ok":true,"balance":50000000}'
+        self.reset_epoch = 0
 
     def __call__(self, path, body):
         self.calls.append((path, body))
@@ -30,6 +31,8 @@ class FakePoster:
             return (200, '{"ok":false,"reason":"insufficient","balance":0}')
         if path == "/activate_mission_flow":
             return (200, '{"ok":true}')
+        if path == "/attack_reset":
+            return (200, '{"reset_epoch":%d}' % self.reset_epoch)
         return (404, '{"ok":false}')
 
 
@@ -161,6 +164,31 @@ class TestAttackCycle(unittest.TestCase):
         logic_calls = [c for c in poster.calls if c[0] == "/activate_mission_flow"]
         logics = [json.loads(c[1].decode())["logic"] for c in logic_calls]
         self.assertEqual(logics.count("logic/missions/survival/attack_level_2_entry.logic"), 2)
+
+    def test_reset_clears_state(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock=clock)
+        cycle.step()  # started
+        cycle.buy(2)
+        self.assertTrue(cycle.active)
+        self.assertEqual(cycle.pending, [2])
+        cycle.reset()
+        self.assertFalse(cycle.active)
+        self.assertEqual(cycle.level, 1)
+        self.assertIsNone(cycle.next_attack_at)
+        self.assertEqual(cycle.pending, [])
+
+    def test_sync_reset_resets_on_epoch_change(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock=clock)
+        cycle.step()  # started
+        self.assertTrue(cycle.active)
+        poster.reset_epoch = 1
+        cycle.sync_reset()
+        self.assertFalse(cycle.active)
+        self.assertEqual(cycle._reset_epoch, 1)
 
 
 if __name__ == "__main__":

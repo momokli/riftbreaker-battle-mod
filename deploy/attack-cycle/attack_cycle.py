@@ -141,6 +141,7 @@ class AttackCycle:
         self.next_attack_at: Optional[float] = None
         self.pending: list = []
         self.last_fire: Optional[Dict[str, Any]] = None
+        self._reset_epoch = 0
 
     # --- HTTP (urllib) ----------------------------------------------------
     def _http_post(self, path: str, body: bytes) -> tuple:
@@ -285,6 +286,31 @@ class AttackCycle:
         except Exception:
             pass
 
+    # --- Reset (WebUI) -----------------------------------------------------
+    def reset(self) -> None:
+        """Setzt den Zyklus zurueck: warte wieder auf HQ-Bau, Level 1,
+        Queue geleert, kein Countdown."""
+        with self._lock:
+            self.active = False
+            self.level = 1
+            self.next_attack_at = None
+            self.pending = []
+            self.last_fire = None
+        print("[attack-cycle] reset -> warte auf HQ-Bau", flush=True)
+
+    def sync_reset(self) -> None:
+        """Prueft einen Reset-Request von der Bridge (POST /attack_reset {})."""
+        try:
+            status, body = self._poster("/attack_reset", b"{}")
+            if not 200 <= status < 300:
+                return
+            epoch = json.loads(body).get("reset_epoch")
+            if isinstance(epoch, int) and epoch != self._reset_epoch:
+                self._reset_epoch = epoch
+                self.reset()
+        except Exception:
+            pass
+
 
 class ControlHandler(BaseHTTPRequestHandler):
     cycle: AttackCycle = None  # gesetzt von build_control_server()
@@ -344,6 +370,7 @@ def run(
         while True:
             cycle.step()
             cycle.sync_interval()
+            cycle.sync_reset()
             cycle.push_status()
             if once:
                 break

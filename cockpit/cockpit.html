@@ -710,6 +710,7 @@
                                 <span class="prop-label">interval (s)</span>
                                 <input id="attack_interval_input" class="mono" size="6" value="420" aria-label="Attack cycle interval in seconds" />
                                 <button id="attack_interval_set" class="btn-primary">set</button>
+                                <button id="attack_cycle_reset" class="btn-danger">reset</button>
                             </div>
                         </div>
                     </fieldset>
@@ -1075,6 +1076,14 @@
                     post("attack_interval", { interval_s: v }).then(function (r) {
                         $("attack_interval_input").value = (r && r.interval_s) || v;
                         $("buy_orders_msg").textContent = "";
+                    }).catch(function (e) {
+                        $("buy_orders_msg").textContent = "ERR " + e.message;
+                    });
+                };
+
+                $("attack_cycle_reset").onclick = function () {
+                    post("attack_reset", { reset: 1 }).then(function () {
+                        $("buy_orders_msg").textContent = "reset";
                     }).catch(function (e) {
                         $("buy_orders_msg").textContent = "ERR " + e.message;
                     });
