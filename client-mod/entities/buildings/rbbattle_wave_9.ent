@@ -1,14 +1,14 @@
 EntityBlueprint
 {
-	name  "buildings/decorations/rbbattle_button_unit_mid"
+	name  "buildings/decorations/rbbattle_wave_9"
 
 	BuildingDesc
 	{
-		name 				"rbbattle_button_unit_mid"
-		bp   				"buildings/decorations/rbbattle_button_unit_mid"
+		name 				"rbbattle_wave_9"
+		bp   				"buildings/decorations/rbbattle_wave_9"
 		category 			"decorations"
-		localization_id		"UNIT MID"
-		description			"UNIT MID"
+		localization_id		"send WAVE 9 | 3110"
+		description			"send WAVE 9 | 3110"
 		menu_icon			"gui/hud/building_icons/wind_turbine"
 		menu_action			"rbbattle_chat"
 		order				"0"

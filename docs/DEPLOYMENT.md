@@ -525,7 +525,7 @@ Rollback: Backup-`tar.gz` aus `/srv/riftbreaker/backups/` nach
 ## Environment-Isolation & Deploy-Identität (Issue #483)
 
 Jeder Deploy trägt **genau eine** Identität: `rift_env` (`dev`|`prod`|`test`|`staging`) +
-`rift_deploy_ref` (dev/test/staging = Checkout-SHA; prod = Git-Tag + SHA) →
+`rift_deploy_ref` (dev/test/staging = Checkout-SHA; prod = Git-Tag) →
 `rift_deploy_identity = "<env> · <ref>"`. Erzeugt wird sie in den `pre_tasks`
 (`deploy/tasks/deploy-identity.yml`); `rift_env` steht als **Play-Var** in
 `site.yml`/`deploy-prod.yml`/`test-deploy.yml`/`deploy-staging.yml` (Play-Vars schlagen
@@ -557,7 +557,7 @@ bei Lücke ab (Marker `ENV-ISOLATION-GATE`), aufgerufen aus
 | Bridge-Port | 9001 | 9002 | je Lauf (Fallback 9003) |
 | Tournament-Port | 8081 | 8082 | je Lauf |
 | rift-caddy | `rift-caddy` :8787, `/opt/rbmods/compose/rift-dev/caddy` | `rift-caddy-prod` :8788, `/opt/rbmods/compose/rift-prod/caddy` | — (keine website-Rolle im Boot-Test) |
-| Container-Env/Labels | `RBB_ENV=dev`/`RBB_REF=<sha>` | `prod`/`<tag>+<sha>` | `test`/`<sha>` |
+| Container-Env/Labels | `RBB_ENV=dev`/`RBB_REF=<sha>` | `prod`/`<tag>` | `test`/`<sha>` |
 
 **Ein Schema `-<env>` (Ziel B):** dev ist **kein** Sonderfall mehr — alle Envs
 leiten ihre Pfade aus `rift_env` ab: `/srv/rift-<env>/{game,backups,sessions}`,
@@ -665,7 +665,7 @@ sind pure Funktionen ohne I/O; die Quellen sind über `--sources-json` bzw.
 # dev: Checkout-SHA
 python3 tools/deploy-gate/attest_identity.py --env dev --ref <sha> --sources-json /tmp/attest-dev.json
 
-# prod: Tag (+ SHA)
+# prod: Tag
 python3 tools/deploy-gate/attest_identity.py --env prod --ref <tag> --sources-json /tmp/attest-prod.json
 ```
 
