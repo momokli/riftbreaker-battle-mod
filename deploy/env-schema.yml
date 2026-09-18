@@ -53,6 +53,7 @@ per_env:
   riftbreaker_sessions_dir: [prod, test, staging]
   riftbreaker_send_tailer_container: [prod, test, staging]
   riftbreaker_match_loop_container: [prod, test, staging]
+  riftbreaker_attack_cycle_container: [prod, test, staging]
 
   # --- Crash-Collector (Prod-Zwilling, Issue #481) -------------------------
   crash_collector_unit: [prod, staging]

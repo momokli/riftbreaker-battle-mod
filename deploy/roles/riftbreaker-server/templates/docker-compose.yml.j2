@@ -84,7 +84,7 @@ services:
       - /data/sessions
 
   # Send-Tailer (Issue #713): tailt exor_logs.txt (ro) und POSTet Send-Orders
-  # (-send waveN) an die Bridge (POST /order). Kein Port, nur ins Compose-Netz.
+  # (-send waveN) an den Attack-Cycle (/queue_send). Kein Port, nur ins Compose-Netz.
   {{ riftbreaker_send_tailer_container }}:
     image: "{{ riftbreaker_send_tailer_image }}"
     container_name: {{ riftbreaker_send_tailer_container }}
@@ -107,8 +107,8 @@ services:
       - /app/send_tailer.py
       - --wine-prefix
       - /data/.wine
-      - --bridge-url
-      - "{{ riftbreaker_send_tailer_bridge_url }}"
+      - --queue-url
+      - "{{ riftbreaker_send_tailer_queue_url }}"
 
   # Match-Loop (Issue #730): pollt get_state und schliesst den Solo-Round-Loop
   # (HQ zerstoert -> end_game(lose) -> 10 s -> restart_map). Kein Port, nur ins
@@ -135,6 +135,36 @@ services:
       - "{{ riftbreaker_match_loop_bridge_url }}"
       - --restart-delay
       - "10"
+
+  # Attack-Cycle (PoC): pollt get_state (HQ-Bau) und fuehrt den 7-min-Zyklus
+  # (natuerliche Welle 1..9 + gestapelte Kaeufe). Kein Host-Port; send-tailer
+  # erreicht /queue_send im Compose-Netz, der Cycle spricht zur Bridge.
+  {{ riftbreaker_attack_cycle_container }}:
+    image: "{{ riftbreaker_attack_cycle_image }}"
+    container_name: {{ riftbreaker_attack_cycle_container }}
+    restart: unless-stopped
+    depends_on:
+      - {{ riftbreaker_server_container }}
+    labels:
+      RBB_ENV: "{{ rift_env }}"
+      RBB_REF: "{{ rift_deploy_ref }}"
+    environment:
+      RBB_ENV: "{{ rift_env }}"
+      RBB_REF: "{{ rift_deploy_ref }}"
+    volumes:
+      - "{{ riftbreaker_attack_cycle_script }}:/app/attack_cycle.py:ro"
+    command:
+      - python3
+      - -u
+      - /app/attack_cycle.py
+      - --bridge-url
+      - "{{ riftbreaker_attack_cycle_bridge_url }}"
+      - --interval
+      - "{{ riftbreaker_attack_cycle_interval }}"
+      - --control-bind
+      - 0.0.0.0
+      - --control-port
+      - "{{ riftbreaker_attack_cycle_port }}"
 
 volumes:
   {{ riftbreaker_wine_volume }}:

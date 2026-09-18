@@ -4,8 +4,9 @@
 
 Tailt die Dedi-Logdatei `exor_logs.txt`, parst aus den Mod-Chat-Log-Zeilen
 (`button_chat sent: -send waveN` / `event=chat_send … text=-send waveN`) den
-Order-Namen und POSTet ihn an die Bridge (`POST /order`). Die Bridge (oder der
-Scheduler) zieht den Preis dann SOFORT ab und feuert die Welle nach 5 min.
+Order-Namen und POSTet ihn an den Attack-Cycle-Sidecar (`POST /queue_send`).
+Der Sidecar bezahlt SOFORT (try_spend) und stapelt die Welle in die naechste
+natuerliche Angriffswelle (7-min-Zyklus).
 
 Warum ein Tailer statt des C++-Chat-Detours: der Markt-Button sendet Chat
 **serverseitig** via `QueueEvent("PlayerChatRequest", …)` — das läuft NICHT
@@ -190,9 +191,9 @@ def build_parser():
     p.add_argument("--wine-prefix", default="/data/.wine", help="Wine-Prefix (Default: /data/.wine)")
     p.add_argument("--wine-user", default="steamuser", help="Wine-User (Default: steamuser)")
     p.add_argument(
-        "--bridge-url",
-        default=os.environ.get("RBB_BRIDGE_URL") or "http://127.0.0.1:9001/order",
-        help="Bridge-/order-Endpoint (Default: RBB_BRIDGE_URL oder http://127.0.0.1:9001/order)",
+        "--queue-url",
+        default=os.environ.get("RBB_ATTACK_CYCLE_URL") or "http://127.0.0.1:9102/queue_send",
+        help="Attack-Cycle-/queue_send-Endpoint (Default: RBB_ATTACK_CYCLE_URL oder http://127.0.0.1:9102/queue_send)",
     )
     p.add_argument("--poll-interval", type=float, default=1.0)
     p.add_argument(
@@ -210,7 +211,7 @@ def main(argv=None):
     paths = args.log or default_log_paths(args.wine_prefix, args.wine_user)
     run(
         paths,
-        args.bridge_url,
+        args.queue_url,
         poll_interval=args.poll_interval,
         from_start=args.from_start,
         once=args.once,
