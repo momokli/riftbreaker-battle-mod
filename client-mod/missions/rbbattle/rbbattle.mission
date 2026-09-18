@@ -1,0 +1,68 @@
+MissionDef
+{
+    map_size        "6"
+    biomes          "jungle"
+
+    tile_spawn_rules
+    {
+        biomes/jungle/tiles/jungle_plains_02/jungle_plains_02.tile
+        {
+            min_instances    2
+            random_weight    2.0
+        }
+        biomes/jungle/tiles/jungle_plains_03/jungle_plains_03.tile
+        {
+            min_instances    2
+            random_weight    2.0
+        }
+        biomes/jungle/tiles/jungle_canyons_02/jungle_canyons_02.tile
+        {
+            max_instances    1
+        }
+        biomes/jungle/tiles/jungle_canyons_03/jungle_canyons_03.tile
+        {
+            max_instances    1
+        }
+        biomes/jungle/tiles/jungle_lakes_01/jungle_lakes_01.tile
+        {
+            max_instances    1
+        }
+        biomes/jungle/tiles/jungle_lakes_02/jungle_lakes_02.tile
+        {
+            max_instances    1
+        }
+        biomes/jungle/tiles/jungle_lakes_03/jungle_lakes_03.tile
+        {
+            max_instances    1
+        }
+        biomes/jungle/tiles/jungle_lakes_04/jungle_lakes_04.tile
+        {
+            max_instances    1
+        }
+    }
+
+    ambient_creature_species
+    {
+        ground
+        {
+            species
+            {
+                CreatureVolume
+                {
+                    creature_species    "quelver"
+                }
+            }
+        }
+
+        air
+        {
+            species
+            {
+                CreatureVolume
+                {
+                    creature_species    "vesaurus"
+                }
+            }
+        }
+    }
+}
