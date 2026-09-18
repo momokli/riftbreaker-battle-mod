@@ -65,6 +65,11 @@ jobs:
       # fault_rva/thread/stack_rvas + _ok-false-Vertrag. Kein Docker, kein Netz.
       - name: Minidump-Parser-Unit (stdlib, planetfrei)
         run: tests/shell/minidump_meta.test.sh
+      # Red/Green-Beweis der Mod-Versions-Identitaet (Issue #494): keine
+      # hartcodierte Version im Mod, Platzhalter wird in Lua UND Manifest gebacken.
+      # Planetfrei (Fake-Ref), kein Docker/Netz/Vault.
+      - name: Mod-Versions-Identitaet (Fake-Ref, planetfrei)
+        run: tests/shell/mod-version.test.sh
 
       # --- python ---
       - uses: actions/setup-python@v5

@@ -25,7 +25,7 @@ on:
   push:
     branches: [main]
     tags:
-      - 'v*'
+      - "v*"
   pull_request:
 
 permissions:
@@ -89,7 +89,7 @@ jobs:
           fi
 
           if printf '%s\n' "$CHANGED" \
-             | grep -Eq '^(server/|cockpit/|client-mod/|scripts/(package|mod_version)\.sh|\.github/workflows/ci\.yml)'; then
+             | grep -Eq '^(server/|cockpit/|client-mod/|scripts/(package|mod_version|build_ref)\.sh|scripts/bake_mod_ref\.py|\.github/workflows/ci\.yml)'; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
             echo "build=false" >> "$GITHUB_OUTPUT"
@@ -143,6 +143,18 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         working-directory: deploy/session-recorder
         run: python3 -m unittest test_session_recorder -v
+      # Send-Tailer (#713): parst -send waveN aus Mod-Chat-Log-Zeilen und POSTet
+      # an /order. Hermetisch (Fake-Poster), kein Netz/Spiel. stdlib-only.
+      - name: Unit-Test Send-Tailer (Issue #713)
+        if: needs.changes.outputs.test == 'true'
+        working-directory: deploy/send-tailer
+        run: python3 -m unittest test_send_tailer -v
+      # Match-Loop (#730): pollt get_state, HQ zerstoert -> end_game(lose) ->
+      # restart_map. Hermetisch (Fake-Poster/-Clock), kein Netz/Spiel. stdlib-only.
+      - name: Unit-Test Match-Loop (Issue #730)
+        if: needs.changes.outputs.test == 'true'
+        working-directory: deploy/match-loop
+        run: python3 -m unittest test_match_loop -v
       - name: Unit-Test Core-IO-Probe RBBATTLE-Tag-Erkennung (Issue #696)
         if: needs.changes.outputs.test == 'true'
         working-directory: tests/core-io

@@ -41,8 +41,17 @@ Wahrheitsquelle, Events sind nur Benachrichtigungen.
 ```json
 {"cmd":"ping"}
 {"cmd":"exec","command":"rb_wave 3"}
+{"cmd":"try_spend","amount":"10"}
 ```
 
+- `try_spend` ist der **transaktionale Carbonium-Abzug** (Issue #694): zieht
+  `amount` (Display-Einheiten, String) NUR ab, wenn das Guthaben reicht.
+  `amount <= 0` → `bad_amount`. Antwort:
+  - Erfolg: `{"event":"try_spend_result","ok":true,"amount":"10","cost":<raw>,"balance":<raw>}`
+  - Zu wenig: `{"event":"try_spend_result","ok":false,"reason":"insufficient","amount":"10","cost":<raw>,"balance":<raw>}`
+  - Weitere `reason`: `no_module`, `bad_amount`, `no_playerservice`, `no_world`,
+    `no_account`, `world_not_ready`. `cost`/`balance` sind int64-Fixed-Point
+    x10^6 (wie der `carbonium`-Wert von `get_state`).
 - `exec` ist der **v0-Einheitskanal**: Beliebiges Spiel-Kommando als String.
   In der RE-Phase wird `dispatch_exec` an den echten Spiel-Console-Dienst
   angeschlossen (dann gilt `"ok":true`). Bis dahin antwortet die DLL mit
@@ -90,7 +99,7 @@ werden ignoriert (vorwärtskompatibel). Alle Events sind benachrichtigend
 | `round_start`   | Eigene Runde beginnt (Spiel-Seite bestätigt / startet Phase)    | `round`, `phase`                  | siehe unten |
 | `round_end`     | Eigene Runde ist vorbei (ausgewertet)                           | `round`, `score`, `survived`      | siehe unten |
 | `match_end`     | Partie entschieden                                              | `winner`, `reason`, `final_score` | siehe unten |
-| `player_chat`   | Spieler hat im Spiel-Chat geschrieben (Text aus Net-Request)     | `text`                            | siehe unten |
+| `player_chat`   | Spieler hat im Spiel-Chat geschrieben (Text aus Net-Request)    | `text`                            | siehe unten |
 
 ```json
 {"event":"score_update","t":882341,"score":1240,"resources":{"iron":320,"carbon":80},"wave":4}
@@ -120,13 +129,13 @@ werden ignoriert (vorwärtskompatibel). Alle Events sind benachrichtigend
 
 ## Wer erzeugt was im Spiel (Verdrahtung, teils RE)
 
-| Event                                                                   | Erzeuger im Spiel                                                                                                                              | Stand im Harness                                                                                                                                                                                                                 |
-| ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pong`, `exec_result`, `score_update`, `error`                          | `rbbridge.c` (Pipe-Server)                                                                                                                     | ✅ implementiert                                                                                                                                                                                                                 |
+| Event                                                                   | Erzeuger im Spiel                                                                                                                                 | Stand im Harness                                                                                                                                                                                                                 |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pong`, `exec_result`, `score_update`, `error`                          | `rbbridge.c` (Pipe-Server)                                                                                                                        | ✅ implementiert                                                                                                                                                                                                                 |
 | `player_chat`                                                           | `rbbridge.c` (Pipe-Server): inline Hook auf `OnNetPlayerChatRequest` liest den UtfString (`utfstring_to_cstr`) und gibt ihn in `send_state()` aus | ✅ implementiert (Build 2.0.58485, Prolog-verifiziert); **Live-Nachweis offen** (Player-Test, #549)                                                                                                                              |
-| `score_update`, `wave_received`, `round_*`, `match_end`                 | **TODO(RE):** Werte/Adressen per `scan/` finden bzw. Events aus Lua-Signalen (`[RBBATTLE] event=...` Log-Prefix im Mod, Experiment C) ableiten | offen (Struktur in `send_state()` verdrahtet, Werte Default bis RE)                                                                                                                                                              |
-| `wave_sent`                                                             | Lua-Mod beim Kauf der Welle (meldet über `exec`-Kanal / künftigen Event-Pfad)                                                                  | offen (Mod folgt aus Spike)                                                                                                                                                                                                      |
-| `round_start`, `incoming_wave`, `round_end`, `match_end` (Server→Spiel) | Empfang in DLL → Zustellung an Spiel/Lua                                                                                                       | ✅ `dispatch_exec` implementiert: `ConsoleService::ExecuteCommand` per AOB-Signatur + RTTI/vftable aufgelöst (keine festen RVAs); Lua-seitig registriert der Mod `rb_wave <level>` bereits (Spike). Offen nur Live-Beweis (#252) |
+| `score_update`, `wave_received`, `round_*`, `match_end`                 | **TODO(RE):** Werte/Adressen per `scan/` finden bzw. Events aus Lua-Signalen (`[RBBATTLE] event=...` Log-Prefix im Mod, Experiment C) ableiten    | offen (Struktur in `send_state()` verdrahtet, Werte Default bis RE)                                                                                                                                                              |
+| `wave_sent`                                                             | Lua-Mod beim Kauf der Welle (meldet über `exec`-Kanal / künftigen Event-Pfad)                                                                     | offen (Mod folgt aus Spike)                                                                                                                                                                                                      |
+| `round_start`, `incoming_wave`, `round_end`, `match_end` (Server→Spiel) | Empfang in DLL → Zustellung an Spiel/Lua                                                                                                          | ✅ `dispatch_exec` implementiert: `ConsoleService::ExecuteCommand` per AOB-Signatur + RTTI/vftable aufgelöst (keine festen RVAs); Lua-seitig registriert der Mod `rb_wave <level>` bereits (Spike). Offen nur Live-Beweis (#252) |
 
 ## Client-Verhalten (Empfehlung für späteren Pipe-Client/Server-Bridge)
 
