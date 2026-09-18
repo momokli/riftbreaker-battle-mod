@@ -860,6 +860,8 @@
                             <div class="flow-action-row">
                                 <button id="rr_reset" class="btn-primary" title="Setzt das Spiel-eigene Pending-Flag (GameplayState+0x52A) -> der Game-Thread faehrt den vollen Map-Restart (neue Runde, Economy 0, HQ-Placement)" aria-label="Native round reset (map restart)">reset round</button>
                                 <button id="rr_status" title="Liest den nativen Reset-Pfad: Aufloesung + Pending-Flag (read-only)" aria-label="Refresh native round reset status">status</button>
+                                <button id="rr_restart_game" title="Ruft GameplayState::RestartGame() (RVA 0x1A18B40) direkt auf — Game-Thread-Funktion, Test-Handle" aria-label="RestartGame (GameplayState)">restart game</button>
+                                <button id="rr_restart_game_server" title="Ruft ServerGameplayState::RestartGame() (RVA 0x1832CE0) direkt auf — Game-Thread-Funktion, Test-Handle" aria-label="RestartGame (ServerGameplayState)">restart game (server)</button>
                             </div>
                             <div class="flow-note">
                                 nativ (kein Lua): RequestRestart() setzt nur das
@@ -1254,6 +1256,22 @@
                 };
                 $("rr_status").onclick = function () {
                     roundReset("status");
+                };
+
+                async function restartGame(which) {
+                    try {
+                        var r = await post("restart_game", { which: which });
+                        $("out").textContent = r && r.ok ? "" : JSON.stringify(r);
+                    } catch (e) {
+                        $("out").textContent = "ERR " + e.message;
+                    }
+                }
+
+                $("rr_restart_game").onclick = function () {
+                    restartGame("game");
+                };
+                $("rr_restart_game_server").onclick = function () {
+                    restartGame("server");
                 };
 
                 refresh();
