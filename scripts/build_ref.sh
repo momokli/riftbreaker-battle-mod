@@ -17,5 +17,13 @@ cd "$(dirname "$0")/.."
 if [ -n "${RBB_BUILD_REF:-}" ]; then
     printf '%s\n' "$RBB_BUILD_REF"
 else
-    git -c safe.directory='*' rev-parse HEAD
+    # Ohne Override (lokales Packen, Deploy) dieselbe Semantik wie CI:
+    # Tag-Name (exact-match), sonst voller Commit-SHA. So ist prod == Tag,
+    # dev == SHA — auch wenn der Aufrufer kein RBB_BUILD_REF setzt.
+    tag="$(git -c safe.directory='*' describe --tags --exact-match HEAD 2>/dev/null || true)"
+    if [ -n "$tag" ]; then
+        printf '%s\n' "$tag"
+    else
+        git -c safe.directory='*' rev-parse HEAD
+    fi
 fi

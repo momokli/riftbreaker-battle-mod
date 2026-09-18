@@ -669,6 +669,22 @@
                         </div>
                     </fieldset>
 
+                    <!-- B2. BUY ORDERS (live queue) -->
+                    <fieldset class="q-groupbox" id="panel-buy-orders">
+                        <legend>Buy Orders</legend>
+                        <div class="flow-container">
+                            <div class="log-scroll-area buy-orders-area">
+                                <pre id="buy_orders">—</pre>
+                            </div>
+                            <div class="flow-note">
+                                aktuelle Buy-Order-Queue (roh, neueste zuerst).
+                                state = pending/paid/failed/fired/in-progress;
+                                Countdown bei paid.
+                                <span id="buy_orders_msg" aria-live="polite"></span>
+                            </div>
+                        </div>
+                    </fieldset>
+
                     <!-- C. MISSION FLOW (WAVE) -->
                     <fieldset class="q-groupbox" id="panel-mission">
                         <legend>Mission Flow (Wave)</legend>
@@ -968,6 +984,38 @@
                     }
                 }
 
+                function fmtCountdown(ms) {
+                    if (ms === undefined || ms === null) return "";
+                    var s = Math.ceil(ms / 1000);
+                    var m = Math.floor(s / 60);
+                    var r = s % 60;
+                    return " " + m + ":" + (r < 10 ? "0" : "") + r;
+                }
+
+                async function refreshOrders() {
+                    try {
+                        var r = await post("get_orders", {});
+                        var orders = (r && r.orders) || [];
+                        if (!orders.length) {
+                            $("buy_orders").textContent = "—";
+                            return;
+                        }
+                        var rows = [];
+                        for (var i = 0; i < orders.length; i++) {
+                            var o = orders[i];
+                            rows.push(
+                                o.name + "  " + (o.cost === undefined ? "" : o.cost) +
+                                "  [" + (o.state || "unknown") + "]" +
+                                fmtCountdown(o.time_left_ms)
+                            );
+                        }
+                        $("buy_orders").textContent = rows.join("\n");
+                        $("buy_orders_msg").textContent = "";
+                    } catch (e) {
+                        $("buy_orders").textContent = "ERR " + e.message;
+                    }
+                }
+
                 $("add").onclick = function () {
                     addResource(null, $("amount").value);
                 };
@@ -1181,6 +1229,9 @@
 
                 refresh();
                 setInterval(refresh, 1000);
+
+                refreshOrders();
+                setInterval(refreshOrders, 1000);
 
                 // --- send tracker (testable) ---
                 // Persistente Send-Liste (#527, 1.0-Send-Loop #517).
