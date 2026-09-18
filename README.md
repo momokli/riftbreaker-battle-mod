@@ -13,21 +13,24 @@ Runden-Duell 1v1: Beide Spieler spielen eine eigene Rift-Breaker-Partie. Pro Run
 
 ## Spielschleife (Core Loop)
 
-Der Kern des Mods ist ein fester **Angriffszyklus**:
+Der Kern des Mods ist ein fester **Angriffszyklus** mit zwei unabhängigen Timern:
 
 1. **HQ gebaut** → die Runde startet (Level 1).
-2. **Alle 7 Minuten** feuert genau **eine natürliche Welle** — das Level eskaliert von 1 bis 9.
-3. **Kaufen für die nächste Angriffswelle:** Spieler kaufen zusätzliche Wellen (Carbonium, sofort abgezogen). Die stapeln sich in einer Queue und feuern beim nächsten Tick **gemeinsam** mit der natürlichen Welle.
+2. **Difficulty:** alle **200 Sekunden** steigt das Wellen-Level um 1 (bis 9) —
+   rein zeitbasiert, unabhängig vom Feuern.
+3. **Angriff:** alle **7 Minuten** feuert eine natürliche Welle auf dem aktuellen
+   Level, **gemeinsam** mit den im Fenster gekauften Wellen (Carbonium, sofort abgezogen).
 
 ```mermaid
 flowchart TD
-    A["HQ gebaut: Zyklus startet (Level 1)"] --> B{"7-min-Tick?"}
-    B -- nein --> B
-    B -- ja --> C["1 natürliche Welle + gekaufte Wellen"]
-    C --> D["Level +1, nächster Tick"]
-    D --> B
+    A["HQ gebaut: Start (Level 1)"] --> D{"Difficulty: 200 s um?"}
+    D -- ja --> D1["Level +1 (Cap 9)"]
+    D1 --> D
+    A --> W{"Angriff: 7 min um?"}
+    W -- ja --> F["natürliche Welle + gekaufte Wellen"]
+    F --> W
     K["Kauf: send waveN"] --> Q["gekaufte Queue"]
-    Q --> B
+    Q --> W
 ```
 
 Details & Preistabelle: [docs/CORE_LOOP.md](docs/CORE_LOOP.md) · Code: [`deploy/attack-cycle/attack_cycle.py`](deploy/attack-cycle/attack_cycle.py)
