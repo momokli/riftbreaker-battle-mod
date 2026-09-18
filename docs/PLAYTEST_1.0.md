@@ -39,7 +39,7 @@ Ergebnis signiert wird.
   nicht in-game-Lua). Das ist der wichtigste Punkt der Baseline: Server starten
   → der Referee führt, das Spiel gehorcht, der Spieler sieht es.
 - **Echtes 1v1 mit zweitem Spieler ist NICHT Teil von 1.0** (S11 = `n/a`).
-- **Runde 2 / Round-Reset ist Core-Game-Loop und zwingend Muss** (M8).
+- **Runde 2 / Round-Reset (M8) ist 2026-09-19 nach 1.1 verschoben** — nicht 1.0-blockierend. Das Core-IO-Gate (#289) ebenfalls → 1.1.
 - **Telemetry (Session-Mitschnitt + Metriken, #280) ist Core-Dev-Feature von
   1.0 und zwingend Muss** (M10).
 - Der Website-Proxy (#322, Preflight P4) ist **erledigt**: PR #326 (eigener
@@ -53,7 +53,7 @@ Teil des 1.0-Presets, nicht „nice to have“:
 | Voraussetzung                                                                | Issue/PR                                               | Nachweis                                     |
 | ---------------------------------------------------------------------------- | ------------------------------------------------------ | -------------------------------------------- |
 | Website liefert `/tournament/*` (ein Host-Caddy-Eintrag, eigener Rift-Caddy) | **#322** ✅ PR #326 (gemergt 2026-09-12), Preflight P4 | `/tournament/health` → `200` (2026-09-13 ✅) |
-| Runde 2 / Round-Reset                                                        | **#281** (PR #285), M8                                 | Reset + saubere Runde 2                      |
+| Runde 2 / Round-Reset                                                        | **#281** (PR #285), M8 → **1.1** (2026-09-19)          | Reset + saubere Runde 2                      |
 | Telemetry / Session-Mitschnitt                                               | **#280** (PR #283), M10                                | Session-Artefakt liegt vor                   |
 | Welle 1–3 abgearbeitet                                                       | **#319**                                               | Release-Plan abgehakt                        |
 | Deployter Stand == Commit                                                    | —                                                      | Traceability-Block (Abschnitt 10)            |
@@ -90,7 +90,7 @@ Teil des 1.0-Presets, nicht „nice to have“:
 | ------------------------------------------------------------------------------- | ------------- |
 | Tag / Kandidat                                                                  | `v1.0.0`      |
 | Commit (SHA)                                                                    | `<ausfüllen>` |
-| Mod-Version (`client-mod/*.manifest` → `version`)                                      | `<ausfüllen>` |
+| Mod-Version (`client-mod/*.manifest` → `version`)                               | `<ausfüllen>` |
 | `rbbattle.zip` md5 (lokal == deployt == Download-URL)                           | `<ausfüllen>` |
 | Deployter Mod-Stand (`riftbreaker-dedicated`, `/opt/riftbreaker/mods/rbbattle`) | `<ausfüllen>` |
 | Tournament-Server (Binary-/Commit-Stand)                                        | `<ausfüllen>` |
@@ -156,7 +156,7 @@ Preflight-Punkt ist selbst ein 1.0-Blocker.
 | M5  | **Server-Wave sichtbar (Kern!):** Vom Server/Web-Knopf ausgelöster Spawn erzeugt Kreaturen, die der Spieler **sieht**                       | S5       | Log `event=wave level=3 status=done spawned>0` **und** Sicht-Check Momo                             |
 | M6  | **Egress/State:** Der Referee kennt den laufenden Spielzustand (Score/Wave/HQ)                                                              | S6       | `GET /state` zeigt plausible Werte; Feed-Einträge                                                   |
 | M7  | **HQ-Tod erkannt:** In-Game-HQ-Verlust endet das Match nachvollziehbar                                                                      | S7       | `event=hq_dead status=match_end` + `event=match_end reason=hq_destroyed`, `/state` `phase=finished` |
-| M8  | **Runde 2 spielbar (Core-Game-Loop, bestätigt):** Nach Niederlage Reset auf 0 und eine neue Runde startet sauber                            | S8       | Log `rb_reset`/Round-Reset + HQ wieder 100, Wave-Zähler zurück                                      |
+| M8  | **Runde 2 spielbar → 1.1 (2026-09-19):** Nach Niederlage Reset auf 0 und eine neue Runde startet sauber                                     | S8       | Log `rb_reset`/Round-Reset + HQ wieder 100, Wave-Zähler zurück                                      |
 | M9  | **Fehlerverhalten:** Toter Kanal/Timeout gibt eine klare Fehlermeldung statt Hänger oder Falsch-Erfolg                                      | S9       | `/wave` mit gestoppter Bridge → Fehlerantwort ≤ ~3 s, **kein** `ok:true`                            |
 | M10 | **Telemetry (Core-Dev, bestätigt):** Jede Spiel-Session wird persistent mitgeschnitten (Metriken), zuordenbar zu Match/Session              | S13      | Session-Artefakt (Log/Metrik-Datei) liegt vor + Pfad dokumentiert                                   |
 
@@ -487,7 +487,7 @@ Diese Punkte sind **belegt** und beeinflussen den Testablauf:
 - [ ] Muss-Kriterien offen / nicht happy → **Baseline nicht bestätigt**; Funde als
       Issues, nächster Kandidat (`v1.0.1`).
 
-**Sign-off (Tester):** Momo ********\_\_******** **Datum:** ****\_\_\_\_****
+**Sign-off (Tester):** Momo **\*\*\*\***\_\_**\*\*\*\*** **Datum:** \***\*\_\_\_\_\*\***
 
 **Angehängte Traceability:** Commit `____________` · Mod `________` ·
 `rbbattle.zip` md5 `____________` · Deployter Stand `____________`
@@ -515,7 +515,7 @@ Diese Punkte sind **belegt** und beeinflussen den Testablauf:
 
 1. **Scope:** 1.0 ist **solo** (ein Dedicated-Server + Tournament-Referee);
    Game-State + Control **müssen von extern** kommen. 1v1 nicht Teil von 1.0.
-2. **Round-Reset (#281):** Core-Game-Loop → **Muss** (M8).
+2. **Round-Reset (#281):** war Core-Game-Loop → **Muss** (M8) — **2026-09-19 nach 1.1 verschoben**.
 3. **Website-Proxy (#322):** ✅ erledigt — PR #326 gemergt (2026-09-12),
    eigener `rift-caddy`, P4 **grün** (2026-09-13).
 4. **Telemetry (#280):** Core-Dev-Feature 1.0 → **Muss** (M10).
