@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Additional Boss Wave</title>
+<style>
+  :root{
+    --bg:#f4f5f2;
+    --paper:#ffffff;
+    --ink:#1c2321;
+    --ink-soft:#4b544f;
+    --line:#dde1dc;
+    --line-strong:#c3c9c2;
+    --accent:#5a3d99;
+    --accent-soft:#b6a3d9;
+    --accent-bg:#efeaf9;
+    --warn:#7a1f1f;
+    --warn-bg:#f6e3e3;
+    --code-bg:#eef0ec;
+    --shadow: 0 1px 2px rgba(28,35,33,.06), 0 8px 24px rgba(28,35,33,.05);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#14171a;
+      --paper:#1b1f22;
+      --ink:#e9ece9;
+      --ink-soft:#a9b2ac;
+      --line:#2c3236;
+      --line-strong:#3a4046;
+      --accent:#b39ddb;
+      --accent-soft:#3a2f57;
+      --accent-bg:#211c33;
+      --warn:#e0605c;
+      --warn-bg:#2a1717;
+      --code-bg:#20252a;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
+    }
+  }
+  *{box-sizing:border-box;}
+  body{
+    background:var(--bg); color:var(--ink); margin:0;
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+    padding-block: 32px 64px;
+  }
+  code, .mono{ font-family: 'Consolas', 'SFMono-Regular', ui-monospace, Menlo, monospace; }
+  .wrap{ max-width: 1000px; margin: 0 auto; padding: 0 20px; }
+
+  .kicker{
+    font-family: 'Consolas', ui-monospace, monospace; font-size: 12px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--accent); display:flex; gap: 10px; align-items:center;
+    margin-bottom: 14px; flex-wrap: wrap;
+  }
+  .kicker .pill{ border:1px solid var(--line-strong); border-radius:999px; padding: 3px 10px; color: var(--ink-soft); }
+
+  h1{ font-size: clamp(26px, 4vw, 38px); line-height:1.15; margin: 0 0 8px; letter-spacing: -0.01em; }
+  .subtitle{ color: var(--ink-soft); font-size: 16px; max-width: 68ch; margin: 0 0 28px; line-height:1.55; }
+
+  .meta-strip{
+    display:grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap:1px;
+    background: var(--line); border:1px solid var(--line); border-radius:10px; overflow:hidden; margin-bottom: 36px;
+  }
+  .meta-cell{ background:var(--paper); padding: 12px 16px; }
+  .meta-cell .k{ font-family:'Consolas',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--ink-soft); margin-bottom:4px; }
+  .meta-cell .v{ font-size:14px; font-weight:600; }
+
+  .codeblock{
+    font-family:'Consolas',monospace; background: var(--code-bg); border:1px solid var(--line);
+    border-left: 3px solid var(--accent); border-radius: 8px; padding: 14px 18px;
+    font-size: 12.5px; color: var(--ink); margin: 16px 0 28px; overflow-x:auto; white-space:pre;
+  }
+
+  section{ margin-bottom: 46px; }
+  h2{ font-size: 20px; display:flex; align-items:baseline; gap:10px; margin: 0 0 6px; padding-bottom: 10px; border-bottom: 1px solid var(--line-strong); }
+  h2 .num{ font-family:'Consolas',monospace; color: var(--accent); }
+  h3{ font-size:14.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); margin: 24px 0 10px; }
+  p{ line-height:1.65; }
+  p.lede{ color: var(--ink-soft); margin-top:2px; }
+
+  .table-scroll{ overflow-x:auto; border:1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); background:var(--paper); }
+  table{ border-collapse:collapse; width:100%; font-size:13.5px; min-width: 480px; }
+  th, td{ padding: 9px 14px; text-align:left; border-bottom:1px solid var(--line); white-space:nowrap; font-variant-numeric: tabular-nums; }
+  thead th{ background: var(--code-bg); font-family:'Consolas',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); }
+  tbody tr:last-child td{ border-bottom:none; }
+  tbody tr:hover{ background: var(--code-bg); }
+  td.num, th.num{ text-align:right; font-family:'Consolas',monospace; }
+  td.strong{ font-weight:700; color:var(--accent); }
+  td.yes{ color: var(--accent); font-weight:700; }
+  td.no{ color: var(--ink-soft); }
+
+  .callout{ background: var(--accent-bg); border:1px solid var(--accent-soft); border-radius:10px; padding: 16px 20px; margin: 18px 0; font-size: 14.5px; line-height:1.6; }
+  .callout b{ color: var(--accent); }
+  .callout.warn{ background: var(--warn-bg); border-color: var(--warn); }
+  .callout.warn b{ color: var(--warn); }
+
+  .findings{ display:grid; gap:10px; }
+  .finding{ display:grid; grid-template-columns: 30px 1fr; gap: 12px; background: var(--paper); border:1px solid var(--line); border-radius:10px; padding: 14px 16px; box-shadow: var(--shadow); }
+  .finding .n{ font-family:'Consolas',monospace; color: var(--accent); font-weight:700; }
+  .finding p{ margin:0; font-size:14px; }
+
+  code.inline{ background: var(--code-bg); padding: 1px 5px; border-radius:4px; font-size: 0.92em; }
+  .refs{ font-family:'Consolas',monospace; font-size:12.5px; color: var(--ink-soft); padding-top: 16px; border-top:1px solid var(--line-strong); }
+  ul.plain{ margin:0; padding-left: 20px; line-height:1.7; }
+  ul.plain li{ margin-bottom:6px; }
+
+  .poolgrid{ display:grid; grid-template-columns: repeat(auto-fill, minmax(150px,1fr)); gap:8px; }
+  .poolitem{ background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:8px 12px; font-size:12.5px; box-shadow: var(--shadow); }
+  .poolitem .w{ font-family:'Consolas',monospace; color:var(--accent); font-weight:700; float:right; }
+  .poolitem.new{ border-color: var(--accent-soft); background: var(--accent-bg); }
+
+  @media (max-width:520px){ table{ min-width: 420px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">
+    <span class="pill">Neu entdeckt</span>
+    <span>Dritter Wellen-Kanal</span>
+  </div>
+
+  <h1>additionalWaves — der Kanal, den niemand kannte</h1>
+  <p class="subtitle">Neben dem Hauptpool (#736) und dem "stronger_attack"-Event (Hard-Doku) gibt es einen dritten, unabhängigen Mechanismus: ein zufälliger Extra-Boss, der je nach Spieleranzahl und Level parallel zur regulären Welle spawnt.</p>
+
+  <div class="meta-strip">
+    <div class="meta-cell"><div class="k">Stand</div><div class="v">2026-09-18</div></div>
+    <div class="meta-cell"><div class="k">Quelle</div><div class="v">00_win_data.zip</div></div>
+    <div class="meta-cell"><div class="k">Kanal 3 von 3</div><div class="v">multiplayerWaves</div></div>
+    <div class="meta-cell"><div class="k">Ziel-Issue</div><div class="v">#205</div></div>
+  </div>
+
+  <section>
+    <h2><span class="num">01</span> Drei unabhängige Wellen-Kanäle</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Kanal</th><th>Feld</th><th>Was spawnt</th><th>Trigger</th></tr></thead>
+        <tbody>
+          <tr><td>1 &mdash; Hauptpool</td><td class="mono">rules.waves</td><td>Schwarm-Wellen (canoptrix, kafferroceros, …)</td><td>Jede reguläre DOM-Eskalation</td></tr>
+          <tr><td>2 &mdash; Event</td><td class="mono">rules.extraWaves</td><td>Alpha-Schwarm-Wellen</td><td>"stronger_attack"-Event (extern getriggert)</td></tr>
+          <tr><td>3 &mdash; NEU</td><td class="mono strong">rules.multiplayerWaves</td><td class="strong">1 zufälliger Elite-Boss</td><td class="strong">Spieleranzahl + DOM-Level</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">02</span> Trigger-Formel &mdash; und ihre Abweichung vom eigenen Kommentar</h2>
+    <div class="codeblock">-- Kommentar im Spielcode selbst:
+additionalWaves = -1, -- Additional Waves count = 1 + additionalWaves - regardless of
+                       -- player number. Multiplayer Additional waves are disabled in
+                       -- single player mode.
+
+-- Tatsaechlicher Code (dom_manager.lua):
+function dom_mananger:GetMultiplayerAttackCount( currentDifficultyLevel )
+    local playersCounter = self:GetPlayersCounter()
+    if ( playersCounter > 1 ) then
+        return Clamp( self.rules.multiplayerWaves[currentDifficultyLevel].additionalWaves + 1, 0, 1 )
+    else
+        return Clamp( self.rules.multiplayerWaves[currentDifficultyLevel].additionalWaves, 0, 1 )
+    end
+end</div>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>additionalWaves</th><th>Multiplayer (2+)</th><th>Solo (1)</th></tr></thead>
+        <tbody>
+          <tr><td class="num">-1</td><td class="no">kein Extra-Boss</td><td class="no">kein Extra-Boss</td></tr>
+          <tr><td class="num">0</td><td class="yes">Extra-Boss</td><td class="no">kein Extra-Boss</td></tr>
+          <tr><td class="num">1</td><td class="yes">Extra-Boss</td><td class="yes strong">Extra-Boss!</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout warn"><b>Diskrepanz:</b> bei <code class="inline">additionalWaves = 1</code> feuert der Extra-Boss laut Code auch im Solo-Modus &mdash; entgegen der Kommentar-Behauptung "disabled in single player mode". Roh belegt, nicht weiter interpretiert.</div>
+  </section>
+
+  <section>
+    <h2><span class="num">03</span> Schwellenwerte je Regelwerk</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Regelwerk</th><th class="num">Extra-Boss ab Level (Multiplayer)</th><th class="num">Extra-Boss ab Level (Solo)</th></tr></thead>
+        <tbody>
+          <tr><td>Default</td><td class="num strong">2</td><td class="num strong">6</td></tr>
+          <tr><td>Normal</td><td class="num">5</td><td class="num">7</td></tr>
+          <tr><td>Hard</td><td class="num">2 <span style="color:var(--ink-soft);font-size:11px">(erbt Default)</span></td><td class="num">6 <span style="color:var(--ink-soft);font-size:11px">(erbt Default)</span></td></tr>
+          <tr><td>Brutal</td><td class="num">2 <span style="color:var(--ink-soft);font-size:11px">(erbt Default)</span></td><td class="num">6 <span style="color:var(--ink-soft);font-size:11px">(erbt Default)</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout"><b>Überraschend:</b> Normal ist bei diesem Mechanismus <i>milder</i> als Hard/Brutal &mdash; weil Hard/Brutal <code class="inline">rules.multiplayerWaves</code> nicht selbst überschreiben und auf Defaults strengere Werte zurückfallen, während Normal die Schwelle explizit nach hinten verschiebt.</div>
+  </section>
+
+  <section>
+    <h2><span class="num">04</span> Der Zufalls-Pool: 7 Familien, 27 gewichtete Einträge</h2>
+    <p class="lede"><code class="inline">scripts/units/creature_species_elite.kvp</code>, Abschnitt "RANDOM BIOME BOSSES", <code class="inline">boss_jungle_random</code>. Vier Familien (hervorgehoben) sind komplett neu für unsere gesamte Recherche-Reihe.</p>
+    <div class="poolgrid">
+      <div class="poolitem">arachnoid_elite <span class="w">0.40</span></div>
+      <div class="poolitem">baxmoth_elite <span class="w">0.40</span></div>
+      <div class="poolitem">gnerot_elite <span class="w">0.40</span></div>
+      <div class="poolitem new">hammeroceros_elite <span class="w">0.40</span></div>
+      <div class="poolitem new">krocoon_elite <span class="w">0.40</span></div>
+      <div class="poolitem new">mudroner_elite_* <span class="w">0.20</span></div>
+      <div class="poolitem new">phirian_elite <span class="w">0.40</span></div>
+    </div>
+    <p style="margin-top:14px; font-size:13px; color:var(--ink-soft);">Jede Familie hat zusätzlich bis zu 4 Elementar-Varianten (acid/cryo/energy/fire) im selben Pool, mit niedrigeren Einzelgewichten (0.10&ndash;0.13) &mdash; insgesamt 27 Einträge.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">05</span> Eine dritte, unabhängige HP-Skalierung</h2>
+    <p class="lede">Identisch für alle 7 Familien (<code class="inline">extra_unit_modifiers.health</code>, gestaffelt nach <code class="inline">min_difficulty_factor</code>):</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th class="num">Difficulty-Factor</th><th class="num">HP (alle 7 Familien identisch)</th></tr></thead>
+        <tbody>
+          <tr><td class="num">0</td><td class="num">2 500</td></tr>
+          <tr><td class="num">1</td><td class="num">5 000</td></tr>
+          <tr><td class="num">3</td><td class="num">8 000</td></tr>
+          <tr><td class="num">4</td><td class="num">12 000</td></tr>
+          <tr><td class="num">5</td><td class="num">16 000</td></tr>
+          <tr><td class="num">6</td><td class="num">20 000</td></tr>
+          <tr><td class="num">7</td><td class="num">25 000</td></tr>
+          <tr><td class="num">8</td><td class="num">32 000</td></tr>
+          <tr><td class="num">9</td><td class="num">40 000</td></tr>
+          <tr><td class="num">10</td><td class="num strong">50 000</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout"><b>Dritte unabhängige Skalierung:</b> weder die statische <code class="inline">.ent</code>-HP der Survival-Units (#736/Hard/Brutal) noch die Anoryxian-Tier-Tabelle &mdash; ein eigenes, universelles Override-System nur für diese 7 Elite-Boss-Familien.</div>
+  </section>
+
+  <section>
+    <h2><span class="num">06</span> Kernbefunde</h2>
+    <div class="findings">
+      <div class="finding"><div class="n">01</div><p>Dritter, bisher unbekannter Wellen-Kanal (<code class="inline">rules.multiplayerWaves</code>) spawnt einen zufälligen Elite-Boss zusätzlich zur regulären Welle.</p></div>
+      <div class="finding"><div class="n">02</div><p>Trigger-Code weicht vom eigenen Kommentar ab &mdash; Extra-Boss feuert bei <code class="inline">additionalWaves=1</code> auch solo.</p></div>
+      <div class="finding"><div class="n">03</div><p>Normal ist hier milder als Default/Hard/Brutal &mdash; einziger Fall in der gesamten Recherche, wo Hard/Brutal auf Default statt einer eigenen, strengeren Kurve zurückfallen.</p></div>
+      <div class="finding"><div class="n">04</div><p>Der Boss-Pool bringt 4 komplett neue Kreaturen-Familien (hammeroceros, krocoon, mudroner, phirian).</p></div>
+      <div class="finding"><div class="n">05</div><p>Eine dritte, unabhängige HP-Skalierung (2 500&ndash;50 000 über 11 Difficulty-Factor-Stufen) gilt identisch für alle 7 Familien.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">07</span> Offene Punkte</h2>
+    <ul class="plain">
+      <li>Was den <code class="inline">difficulty_factor</code>-Wert zur Laufzeit tatsächlich setzt (Enemy-Node-Parameter stehen immer auf 0).</li>
+      <li>HP-Ladder der Elementar-Varianten nur stichprobenartig bestätigt.</li>
+      <li>Biom-Zuordnung der <code class="inline">.kvp</code>-Dateistruktur nicht vollständig geklärt.</li>
+      <li>Andere Biome (<code class="inline">boss_caverns_random</code> etc.) nicht ausgewertet.</li>
+    </ul>
+  </section>
+
+  <div class="refs">Ref: #736 · #699 · #658 · #213 · #205 &mdash; Volldokument: <code class="inline">docs/research/multiplayer-additional-boss-wave.md</code></div>
+
+</div>
+</body>
+</html>
