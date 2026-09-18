@@ -38,7 +38,11 @@ STATE_FILE = ".state.json"
 INDEX_FILE = "index.jsonl"
 
 LOG_MARKER = "[RBBATTLE]"
-RE_MARKER = re.compile(r"\[\s*RBBATTLE\s*\]\s*(?P<rest>.*)$")
+# Optionaler Build-Suffix (Issue #696): seit 08bb0ca (#631) kann das Tag
+# "[RBBATTLE:<build>]" statt nur "[RBBATTLE]" lauten -- ohne den optionalen
+# Teil matchte diese Regex neuere Log-Zeilen nie und der Recorder schnitt
+# seit dem Commit stillschweigend gar keine Events mehr mit.
+RE_MARKER = re.compile(r"\[\s*RBBATTLE(?:\s*:[^\]]*)?\s*\]\s*(?P<rest>.*)$")
 RE_EVENT = re.compile(r"\bevent=(?P<event>\S+)")
 RE_FIELD = re.compile(r"\b(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<val>[^\s\"]+)")
 RE_INT = re.compile(r"^-?\d+$")

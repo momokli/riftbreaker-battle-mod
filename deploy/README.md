@@ -675,7 +675,7 @@ Repo versioniert (forced-command des deploy-Users). Der vorgesehene, noch nicht
 umgesetzte Umbau trennt sie je Env:
 
 - Checkout: `/opt/rbbattle-deploy/repo-<env>` (dev|prod|test|staging)
-- Marker: `.deploy-<env>.sha` (Checkout-SHA) und `.deploy-<env>.ref` (Tag+SHA)
+- Marker: `.deploy-<env>.sha` (Checkout-SHA) und `.deploy-<env>.ref` (Tag bzw. SHA)
 - Damit deployt jeder Lauf aus seinem eigenen Checkout statt alle aus einem
   gemeinsamen — Ziel des Issues, aber **eigener PR mit Rollback-Runbook**
   (Live-Eingriff auf prod). Bis dahin gilt: Host-Umbau = offen.
