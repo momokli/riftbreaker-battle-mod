@@ -216,7 +216,43 @@ Das ist der Wert, den ein Zufalls-Pool-Wurf **im Erwartungswert** liefert (jede
 
 ---
 
-## 8 · Offene Punkte / braucht Live-Test
+## 8 · Carbonium-Kostenkurven — 2 Varianten, Level 1 = 100 (Folge-Rechnung für #205)
+
+Auf Basis der §5b-Pool-Durchschnitte (`Ø HP Σ`, inkl. Solo-Gnerot-Ausreißer), normiert
+auf `Kosten(1) = 100`. Zwei Varianten, beide HP-basiert (keine reine Zähl-Kurve —
+die würde HP komplett ignorieren und beim Level-3-Solo-Gnerot-Einbruch einbrechen,
+siehe verworfener Zwischenstand in der #736-Konversation):
+
+```
+Normal(L)    = 100 · Ø HP Σ(L) / Ø HP Σ(1)                        (linear zur HP-Last)
+Gedaempft(L) = Normal(L) · (1 − ⅓ · t²),   t = (L−1) / 7           (quadratische Dämpfung)
+```
+
+Die gedämpfte Kurve ist bewusst so konstruiert, dass sie über die ersten Level fast
+deckungsgleich mit der normalen Kurve läuft und erst spät spürbar abweicht — der
+Dämpfungsfaktor wächst quadratisch mit dem Level, damit `Gedaempft(8) = ⅔ · Normal(8)`.
+Alle Werte auf die Zehnerstelle gerundet.
+
+| Level | Normal (linear zu HP) | Gedämpft (Ende ≈ ⅔) |
+| --- | --- | --- |
+| 1 | 100 | 100 |
+| 2 | 240 | 230 |
+| 3 | 460 | 450 |
+| 4 | 810 | 760 |
+| 5 | 1330 | 1180 |
+| 6 | 1790 | 1480 |
+| 7 | 2540 | 1920 |
+| 8 | 3220 | 2150 |
+
+**Caveat:** Eine dritte, sub-lineare (`√HP`) Kurve wurde im Rahmen dieser Recherche
+ebenfalls durchgerechnet, aber verworfen (zu große/zu früh einsetzende Abweichung von
+der normalen Kurve — Level 8 landete bei nur 570, ca. ⅙ des Normalwerts). Für #205
+sind aktuell nur die zwei obigen Kurven vorgesehen; eine dritte Variante ist offen und
+braucht eine konkrete Formel-Vorgabe, bevor sie nachgerechnet wird.
+
+---
+
+## 9 · Offene Punkte / braucht Live-Test
 
 1. **Kreaturen-Stärke-Skalierung zur Laufzeit** (`creatureDifficultyIncrementPerDOMDifficulty`,
    #213 §3) ist in den `.ent`-Basiswerten hier weiterhin nicht enthalten.
@@ -227,5 +263,6 @@ Das ist der Wert, den ein Zufalls-Pool-Wurf **im Erwartungswert** liefert (jede
 4. **#213-Richtwert-Formel-Neuberechnung** mit den hier korrigierten `W_raw`-Werten ist
    bewusst **nicht** Teil dieses Dokuments (reine Datenermittlung) — gehört in einen
    #205-Folgeschritt.
+5. **Dritte Carbonium-Kostenkurve** (§8): Formel-Vorgabe steht noch aus.
 
 **Ref:** #736 · #699 · #658 · #646 · #213 (`docs/research/213-wave-richtwert.md`) · #205.
