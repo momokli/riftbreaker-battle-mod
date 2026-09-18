@@ -137,8 +137,10 @@ services:
       - "10"
 
   # Attack-Cycle (PoC): pollt get_state (HQ-Bau) und fuehrt den 7-min-Zyklus
-  # (natuerliche Welle 1..9 + gestapelte Kaeufe). Kein Host-Port; send-tailer
-  # erreicht /queue_send im Compose-Netz, der Cycle spricht zur Bridge.
+  # (natuerliche Welle mit dem aktuellen Level + gestapelte Kaeufe). Das Level
+  # selbst steigt auf einem eigenen, entkoppelten 200s-Timer (Issue #778), nicht
+  # mehr pro Welle. Kein Host-Port; send-tailer erreicht /queue_send im
+  # Compose-Netz, der Cycle spricht zur Bridge.
   {{ riftbreaker_attack_cycle_container }}:
     image: "{{ riftbreaker_attack_cycle_image }}"
     container_name: {{ riftbreaker_attack_cycle_container }}
@@ -161,6 +163,8 @@ services:
       - "{{ riftbreaker_attack_cycle_bridge_url }}"
       - --interval
       - "{{ riftbreaker_attack_cycle_interval }}"
+      - --difficulty-interval
+      - "{{ riftbreaker_attack_cycle_difficulty_interval }}"
       - --control-bind
       - 0.0.0.0
       - --control-port

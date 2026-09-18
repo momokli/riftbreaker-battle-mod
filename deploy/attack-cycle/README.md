@@ -6,19 +6,24 @@ festen Zyklus gestapelt, der beim Bau des HQ startet.
 
 ```
 round start (HQ gebaut, hq_hp > 0)
-  └─ alle `interval` Sekunden (Default 7 min) EINE natürliche Welle
-       Level 1..9 (cap 9)
-       + alle in diesem Fenster gekauften Wellen (pending[])
+  └─ alle `interval` Sekunden (Default 7 min) EINE natürliche Welle mit dem
+       aktuellen Level (1..9, cap 9)
+       + alle in diesem Fenster gekauften Wellen (bought[])
+  └─ UNABHÄNGIG davon: alle `difficulty_interval` Sekunden (Default 200s,
+       Issue #778) steigt das Level selbst um 1 — eigener Timer, entkoppelt
+       vom Wellen-Feuer-Intervall. Wave 1 startet bei Level 1; nach 200s
+       Level 2; nach 400s Level 3; usw. (cap 9)
 
 Kauf (`-send waveN` → send-tailer → POST /queue_send {"name":"waveN"}):
   1. Cost-Tabelle → cost (Spiegel der client-mod .ent-Preise)
-  2. POST /try_spend {"amount":"<cost>"} → SOFORT bezahlt (nur wenn Guthaben reicht)
-  3. ok → in pending[] stapeln; insufficient → 402 (nicht gestapelt)
+  2. Order landet sofort in der Order-Liste; ein Hintergrund-Resolver bezahlt
+     sie via `POST /try_spend` und verschiebt sie in die bought-Queue
+     (nur bezahlte Wellen feuern — kein optimistischer Spawn)
 ```
 
 Feuern läuft ausschließlich über `POST /activate_mission_flow` (derselbe Kanal
 wie der Cockpit-Button „start wave“). Naturwelle und gekaufte Wellen eines
-Ticks feuern nacheinander.
+Ticks feuern nacheinander, jeweils mit dem zu diesem Zeitpunkt aktuellen Level.
 
 ## Warum ein Sidecar?
 
@@ -28,10 +33,10 @@ Ticks feuern nacheinander.
 
 ## Endpunkte
 
-| Route         | Methode | Zweck                                                     |
-| ------------- | ------- | --------------------------------------------------------- |
-| `/queue_send` | POST    | Welle kaufen (`{"name":"waveN"}` oder `{"level":N}`)      |
-| `/status`     | GET     | `active`, `level`, `seconds_to_next_attack`, `pending`, … |
+| Route         | Methode | Zweck                                                                                          |
+| ------------- | ------- | ------------------------------------------------------------------------------------------------ |
+| `/queue_send` | POST    | Welle kaufen (`{"name":"waveN"}` oder `{"level":N}`)                                            |
+| `/status`     | GET     | `active`, `level`, `seconds_to_next_attack`, `seconds_to_next_difficulty`, `bought`, `orders`, … |
 
 ## Test
 

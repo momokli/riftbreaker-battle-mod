@@ -1041,7 +1041,10 @@
                             return;
                         }
                         var rows = [];
-                        rows.push("level " + s.level + "  next in" + fmtCountdown(s.seconds_to_next_attack * 1000));
+                        rows.push("level " + s.level + "  next attack in" + fmtCountdown(s.seconds_to_next_attack * 1000));
+                        if (s.seconds_to_next_difficulty !== undefined && s.seconds_to_next_difficulty !== null) {
+                            rows.push("next difficulty in" + fmtCountdown(s.seconds_to_next_difficulty * 1000));
+                        }
                         var pending = s.bought || [];
                         if (!pending.length) {
                             rows.push("gekauft: (keine)");
