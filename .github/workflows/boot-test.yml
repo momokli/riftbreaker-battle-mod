@@ -196,6 +196,53 @@ jobs:
           ssh planet "rm -f '/etc/systemd/system/${U}.service' 2>/dev/null || true"
           ssh planet "systemctl daemon-reload 2>/dev/null || true"
 
+      # Leaked-Container-+-Networks-Sweep (Issue #719): "docker network rm"
+      # oben (wie auch im finalen Cleanup-Step) ist best-effort ("|| true")
+      # und je Lauf nur auf DAS EIGENE Netz "${P}_default" scoped. Schlaegt
+      # die Entfernung einmal fehl -- oder bricht ein vorheriger Lauf frueh
+      # ab, bevor er diesen Schritt je erreicht -- bleibt das Netz liegen,
+      # bis Dockers "predefined address pools" komplett aufgebraucht sind und
+      # JEDER weitere boot-test mit "all predefined address pools have been
+      # fully subnetted" abbricht (Live-Befund #719).
+      #
+      # Zwei vorherige, engere Versuche reichten live nicht:
+      #   1. Reiner Netz-Sweep: "docker network rm" verweigert sich, solange
+      #      noch ein Endpoint haengt -- ein liegen gebliebener Test-
+      #      CONTAINER (#719-Live-Befund: "Up 37h") haelt den fest.
+      #   2. Manueller Sweep nur ueber "rb-test-*"-benannte Netze: fand live
+      #      nur 6 Treffer und entfernte sie, der naechste Deploy schlug
+      #      trotzdem weiter mit demselben Pool-Fehler fehl -- es haengen
+      #      offenbar auch Netze OHNE dieses Namens-Praefix im Pool (aelteres,
+      #      vor #307 festes Test-Schema; Ad-hoc-Experimente auf planet).
+      #
+      # Deshalb jetzt zuerst alle Test-Container ausserhalb des aktuellen
+      # Laufs hart entfernen (damit sie keine Netz-Endpoints mehr halten),
+      # dann Dockers eigenes "network prune -f": das entfernt JEDES aktuell
+      # ungenutzte Netzwerk systemweit, unabhaengig vom Namen -- prueft dabei
+      # selbst zuverlaessig auf verbleibende Endpoints (verweigert sich fuer
+      # ein Netz mit noch angeschlossenem Container automatisch, egal ob
+      # Test oder Prod) und ist damit fuer laufende Prod-Netze inhaerent
+      # sicher, nicht auf einen Namens-Praefix angewiesen.
+      - name: "Leaked-Container-+-Networks-Sweep (Issue #719)"
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          ssh planet '
+            for prefix in riftbreaker-dedicated-test- riftbreaker-sessions-test- riftbreaker-egress-test-; do
+              docker ps -a --filter "name=${prefix}" --format "{{.Names}}" | \
+              while IFS= read -r c; do
+                [ -n "$c" ] || continue
+                echo "Entferne verwaisten Test-Container: $c"
+                docker rm -f "$c" 2>/dev/null || true
+              done
+            done
+            echo "Vor dem Prune:"
+            docker network ls --format "{{.Name}}" | wc -l
+            docker network prune -f
+            echo "Nach dem Prune:"
+            docker network ls --format "{{.Name}}" | wc -l
+          '
+
       - name: Test-Deploy (Dummy-Vault, kein Secret; je Lauf eindeutige Ressourcen)
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
@@ -286,3 +333,22 @@ jobs:
           # #318 auch fest benannt (riftbreaker-sessions-test) — mit entfernen.
           ssh planet "docker rm -f 'riftbreaker-sessions-test' 2>/dev/null || true"
           ssh planet "rm -rf '/srv/rbgame-test' '/srv/rbgame-test-backups' '/opt/rbmods/tournament-server-test' '/srv/rbmods-sessions-test' 2>/dev/null || true"
+          # Leaked-Container-+-Networks-Sweep (Issue #719): siehe ausfuehrliche
+          # Begruendung im "Leaked-Container-+-Networks-Sweep"-Step oben
+          # (zwei engere Versuche -- reiner Netz-Sweep, dann Netz-Sweep nur
+          # ueber "rb-test-*"-Namen -- reichten live beide nicht). Container
+          # zuerst hart entfernen (Endpoints freigeben), dann Dockers eigenes
+          # "network prune -f" (systemweit, name-unabhaengig, inhaerent sicher
+          # fuer laufende Prod-Netze). Der eigene Container dieses Laufs ist
+          # oben bereits explizit entfernt; alles was jetzt noch matcht ist
+          # verwaist.
+          ssh planet '
+            for prefix in riftbreaker-dedicated-test- riftbreaker-sessions-test- riftbreaker-egress-test-; do
+              docker ps -a --filter "name=${prefix}" --format "{{.Names}}" | \
+              while IFS= read -r c; do
+                [ -n "$c" ] || continue
+                docker rm -f "$c" 2>/dev/null || true
+              done
+            done
+            docker network prune -f
+          '
