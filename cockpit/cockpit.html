@@ -963,13 +963,17 @@
                     return typeof v === "number" ? v.toLocaleString() : String(v);
                 }
 
+                function fmtRes(v) {
+                    return typeof v === "number" ? (v / 1e6).toLocaleString() : String(v);
+                }
+
                 async function refresh() {
                     try {
                         var s = await post("get_state");
-                        $("carbonium").textContent = fmt(s.carbonium);
-                        $("carbonium_max").textContent = fmt(s.carbonium_max);
-                        $("ironium").textContent = fmt(s.ironium);
-                        $("ironium_max").textContent = fmt(s.ironium_max);
+                        $("carbonium").textContent = fmtRes(s.carbonium);
+                        $("carbonium_max").textContent = fmtRes(s.carbonium_max);
+                        $("ironium").textContent = fmtRes(s.ironium);
+                        $("ironium_max").textContent = fmtRes(s.ironium_max);
                         $("mission_flow").textContent = s.mission_flow || "—";
                         $("mission_flow_active").textContent =
                             s.mission_flow_active === undefined

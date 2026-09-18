@@ -181,24 +181,41 @@ class AttackCycle:
 
     # --- Kauf (aus /queue_send) ------------------------------------------
     def buy(self, level: int) -> tuple:
-        """Bezahlt SOFORT via try_spend und stapelt die Welle in pending.
+        """Reiht die Welle SOFORT in pending ein und bezahlt asynchron.
 
-        Liefert (http_status, payload_dict).
+        Liefert sofort (http_status, payload_dict) — der try_spend laeuft im
+        Hintergrund, damit der HTTP-Handler nie auf den (langsamen) DLL-Scan
+        blockiert. Bei insufficient wird die Welle wieder aus pending entfernt.
         """
         if level not in WAVE_COST:
             return 400, {"ok": False, "reason": "unknown_wave"}
         cost = WAVE_COST[level]
-        status, ok, body = self._spend(cost)
-        if not 200 <= status < 300:
-            return 502, {"ok": False, "reason": "bridge_unreachable", "status": status}
-        if not ok:
-            return 402, {"ok": False, "reason": "insufficient", "detail": body[:160]}
-
         with self._lock:
             self.pending.append(level)
             queue_len = len(self.pending)
-        print(f"[attack-cycle] buy wave{level} -> gestapelt (cost={cost}, queue={queue_len})", flush=True)
+        print(f"[attack-cycle] buy wave{level} -> queued (cost={cost}, queue={queue_len})", flush=True)
+        threading.Thread(target=self._pay, args=(level, cost), daemon=True).start()
         return 200, {"ok": True, "queued_level": level, "queue_length": queue_len}
+
+    def _pay(self, level: int, cost: int) -> None:
+        """Asynchroner Zahlungsversuch: try_spend; bei Fehler Welle entfernen."""
+        try:
+            status, ok, body = self._spend(cost)
+            if not (200 <= status < 300) or not ok:
+                with self._lock:
+                    if level in self.pending:
+                        self.pending.remove(level)
+                print(
+                    f"[attack-cycle] wave{level} ZAHLUNG fehlgeschlagen (status={status} ok={ok}): {body[:160]}",
+                    flush=True,
+                )
+            else:
+                print(f"[attack-cycle] wave{level} bezahlt (cost={cost})", flush=True)
+        except Exception as e:
+            with self._lock:
+                if level in self.pending:
+                    self.pending.remove(level)
+            print(f"[attack-cycle] wave{level} pay error: {e}", flush=True)
 
     # --- Feuern -----------------------------------------------------------
     def _fire(self, level: int) -> None:

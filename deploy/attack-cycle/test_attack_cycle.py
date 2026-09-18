@@ -10,7 +10,7 @@ kein Netz, kein Spiel, kein DOM.
 import json
 import unittest
 
-from attack_cycle import AttackCycle, parse_hq_alive, parse_send_level
+from attack_cycle import WAVE_COST, AttackCycle, parse_hq_alive, parse_send_level
 
 
 class FakePoster:
@@ -133,13 +133,20 @@ class TestAttackCycle(unittest.TestCase):
         self.assertIn("logic/missions/survival/attack_level_2_entry.logic", logics)  # sent
         self.assertEqual(len(logics), 2)
 
-    def test_buy_insufficient_not_stacked(self):
+    def test_buy_queues_immediately(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        cycle = self._cycle(poster)
+        status, payload = cycle.buy(2)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["queued_level"], 2)
+        self.assertEqual(cycle.pending, [2])
+
+    def test_pay_insufficient_removes(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         poster.spend_ok = False
         cycle = self._cycle(poster)
-        status, payload = cycle.buy(2)
-        self.assertEqual(status, 402)
-        self.assertFalse(payload["ok"])
+        cycle.pending.append(2)
+        cycle._pay(2, WAVE_COST[2])
         self.assertEqual(cycle.pending, [])
 
     def test_level_caps_at_max(self):
