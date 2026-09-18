@@ -1,5 +1,5 @@
 ---
-# Hermetischer Selbsttest des Disk-Space-Gates (Issue #310).
+# Hermetischer Selbsttest des Disk-Space-Gates (Issue #310/#586).
 #
 # Läuft LOKAL auf dem Control-Node/CI-Runner: keine Host-Facts, kein SSH,
 # keine Prod-Aktion. Stattdessen werden synthetische `ansible_mounts` injiziert
@@ -9,9 +9,25 @@
 # Aufruf über run.sh:
 #   ansible-playbook deploy/tests/disk-gate/main.yml -e disk_gate_test=pass
 #   ansible-playbook deploy/tests/disk-gate/main.yml -e disk_gate_test=fail
+#   ansible-playbook deploy/tests/disk-gate/main.yml -e disk_gate_test=df_fallback
+#   ansible-playbook deploy/tests/disk-gate/main.yml -e disk_gate_test=unknown_hardfail
+#   ansible-playbook deploy/tests/disk-gate/main.yml -e disk_gate_test=unknown_hardfail \
+#     -e riftbreaker_disk_skip_unknown=true   # -> unknown_skip
 #
-# Erwartung: pass -> exit 0 · fail -> exit != 0 mit "PLATZ-GATE" im Output.
-- name: "Disk-Gate Selbsttest (synthetische Mount-Facts, Issue #310)"
+# Erwartung:
+#   pass/df_fallback/unknown_skip -> exit 0
+#   fail/unknown_hardfail         -> exit != 0 (fail -> "PLATZ-GATE" im Output,
+#                                     unknown_hardfail -> "konnte nicht ermittelt
+#                                     werden" im Output)
+#
+# df_fallback und unknown_hardfail setzen ansible_mounts bewusst LEER (Issue
+# #586: das war der echte Live-Befund unter WSL2) und lassen den ECHTEN `df`-
+# Befehl der Preflight-Datei laufen (kein Mock) — df_fallback gegen "/" (muss
+# auf jedem Runner existieren), unknown_hardfail gegen einen garantiert
+# nichtexistenten Pfad, damit `df` selbst mit rc != 0 fehlschlaegt (Review-
+# Blocker 2: genau dieser Fall killte den Lauf vorher mit einem rohen
+# Modul-Fehler statt der eigenen Fail-Meldung).
+- name: "Disk-Gate Selbsttest (synthetische Mount-Facts, Issue #310/#586)"
   hosts: localhost
   connection: local
   gather_facts: false
@@ -19,14 +35,17 @@
   vars:
     # Defaults der Rolle (hier explizit, damit der Test ohne Rollen-Defaults
     # laeuft — die Preflight-Datei liest genau diese Variablen).
-    riftbreaker_disk_mount: "/"
     riftbreaker_disk_min_free_gb: 10
-    # pass: 100 GB frei (>= 10 GB) · fail: 1 GB frei (< 10 GB)
+    riftbreaker_disk_skip_unknown: false
     disk_gate_test: pass
-    ansible_mounts:
-      - mount: "/"
-        size_total: "{{ 200 * 1073741824 }}"
-        size_available: "{{ (100 * 1073741824) if disk_gate_test == 'pass' else 1073741824 }}"
+    # pass: 100 GB frei (>= 10 GB) · fail: 1 GB frei (< 10 GB) · df_fallback/
+    # unknown_*: ansible_mounts leer (echter #586-Live-Befund), df entscheidet.
+    riftbreaker_disk_mount: >-
+      {{ '/nonexistent_xyz123_disk_gate_test' if disk_gate_test.startswith('unknown') else '/' }}
+    ansible_mounts: >-
+      {{ [] if disk_gate_test in ['df_fallback', 'unknown_hardfail'] else
+         [{'mount': '/', 'size_total': (200 * 1073741824),
+           'size_available': ((100 * 1073741824) if disk_gate_test == 'pass' else 1073741824)}] }}
 
   tasks:
     - name: Preflight-Task der Rolle ausführen (echter Deploy-Code)

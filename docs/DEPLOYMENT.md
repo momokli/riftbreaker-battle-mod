@@ -346,8 +346,11 @@ Platz. Deshalb prüft ein **Preflight** den freien Platz auf `/` **bevor**
 `dedicated-server-image` baut und **bevor** der Mod-Backup-Tarball entsteht.
 
 - **Task:** `deploy/roles/riftbreaker-server/tasks/disk-preflight.yml` —
-  `assert` auf den Fact `ansible_mounts` (read-only → `--check`-fest, ändert
-  nichts).
+  ermittelt den freien Platz zuerst aus dem Fact `ansible_mounts`; liefert der
+  (auf manchen Systemen, beobachtet unter WSL2/Ubuntu — Issue #586) leer,
+  fällt die Task auf einen echten `df --output=avail`-Aufruf zurück. Erst
+  danach greift der eigentliche `assert` gegen die Schwelle — alles read-only
+  (→ `--check`-fest, ändert nichts).
 - **Aufruf:** als `include_role … tasks_from: disk-preflight` in den
   `pre_tasks` von `deploy/site.yml` **und** `deploy/test-deploy.yml` — also
   **vor** den Rollen (nicht innerhalb der Rolle, die erst nach dem Image-Build
@@ -358,6 +361,15 @@ Platz. Deshalb prüft ein **Preflight** den freien Platz auf `/` **bevor**
 - **Abbruch:** mit klarer `fail_msg` (nennt geforderten **und** tatsächlichen
   freien Platz + nächsten Schritt: erst aufräumen, siehe #301, dann erneut
   deployen).
+- **Wenn WEDER `ansible_mounts` NOCH `df` eine Zahl liefern** (z. B. `df`
+  schlägt selbst fehl — nichtexistenter Mount, `--output` auf dem Zielsystem
+  nicht unterstützt): kein stiller Fallback auf "genug Platz", stattdessen ein
+  ehrlicher Abbruch mit eigener Fehlermeldung (kein roher Modul-Fehler, siehe
+  Issue #586, Review-Blocker). Echter Notausgang dafür:
+  `riftbreaker_disk_skip_unknown=true` (Default `false`) — überspringt den
+  Größen-Check komplett und gibt nur eine laute Warnung aus. **Achtung:**
+  `riftbreaker_disk_min_free_gb=0` bewirkt in diesem Fall NICHTS, weil der
+  Abbruch unabhängig von der Schwelle ausgelöst wird.
 
 Das Gate ist ein **Not-Aus**, kein Ersatz fürs Aufräumen: erst Sichtbarkeit,
 dann Gate, plus Timer/Automatik — beides gehört zusammen (#301).
@@ -369,9 +381,12 @@ bash deploy/tests/disk-gate/run.sh
 ```
 
 Er injiziert synthetische `ansible_mounts` (100 GB frei → läuft durch, 1 GB frei
-→ Abbruch mit `PLATZ-GATE`, Schwelle 0 → durch) und ruft die **echte**
-Preflight-Task-Datei auf. Läuft zusätzlich in `deploy-check-local` auf dem
-GitHub-Hosted-Runner.
+→ Abbruch mit `PLATZ-GATE`, Schwelle 0 → durch), prüft mit leerem
+`ansible_mounts` den echten `df`-Fallback (gegen `/`, läuft durch), erzwingt
+mit leerem `ansible_mounts` **und** einem nichtexistenten Mount den
+"wirklich nichts ermittelbar"-Abbruch, und prüft `riftbreaker_disk_skip_unknown`
+als Bypass dafür — und ruft dabei immer die **echte** Preflight-Task-Datei auf.
+Läuft zusätzlich in `deploy-check-local` auf dem GitHub-Hosted-Runner.
 
 ## Continuous Deploy (CD) — Issue #91
 
