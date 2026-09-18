@@ -12,6 +12,14 @@ crash_collector_unit: rbmods-crash-collector
 crash_collector_bin: /usr/local/bin/rbmods-crash-collector.sh
 crash_collector_script_src: "{{ playbook_dir }}/crash-collector/crash_collector.sh"
 
+# Harte systemd-Abhaengigkeit von docker.service (Default true, planet-
+# Verhalten). Issue #593: unter WSL2 + Docker Desktop existiert KEINE
+# docker.service-Unit (die WSL-Integration haengt nur Socket/CLI rein) --
+# `Requires=docker.service` liesse den Start dort sofort mit "Unit
+# docker.service not found" scheitern, obwohl Docker laengst laeuft. Lokal
+# (local-vars.yml) auf false gesetzt.
+crash_collector_require_docker_service: true
+
 # Minidump-Parser (Issue #481): eigenstaendiger stdlib-Helper, den der Collector
 # per RB_CRASH_MINIDUMP_PY aufruft. Liegt bewusst NICHT als Geschwister des
 # Collector-Binaries (dieses heisst rbmods-crash-collector.sh) -> expliziter Pfad.

@@ -39,6 +39,9 @@
     rbtools_dir: /opt/rbmods/rbtools/dev
     crash_collector_rbbridge_dll: "{{ rbtools_dir }}/rbbridge.dll"
     render_dir: "{{ lookup('env', 'RB_CRASH_RENDER_DIR') | default('/tmp/rb-crash-collector-render', true) }}"
+    # Issue #593 (WSL2 + Docker Desktop): konfigurierbar, Default true = planet-
+    # Verhalten unveraendert. run.sh testet explizit auch false.
+    crash_collector_require_docker_service: "{{ test_require_docker_service | default(true) }}"
 
   tasks:
     - name: Render-Verzeichnis sicherstellen
@@ -77,9 +80,28 @@
           - ("RB_CRASH_MINIDUMP_PY=" ~ crash_collector_helper) in unit
           - "'Restart=always' in unit"
           - "'Type=simple' in unit"
-          - "'Requires=docker.service' in unit"
         fail_msg: >-
           Gerenderte systemd-Unit verletzt eine Invariante (ExecStart,
-          RB_CRASH_*-Env inkl. Symbolik #480 + RB_CRASH_MINIDUMP_PY, Restart=always,
-          Type=simple oder Requires=docker.service).
-        success_msg: "Unit-Render ok (ExecStart + Env + Symbolik + Parser + Restart + Docker)."
+          RB_CRASH_*-Env inkl. Symbolik #480 + RB_CRASH_MINIDUMP_PY, Restart=always
+          oder Type=simple).
+        success_msg: "Unit-Render ok (ExecStart + Env + Symbolik + Parser + Restart)."
+
+    # Issue #593: Requires=docker.service ist KEINE feste Invariante mehr,
+    # sondern folgt crash_collector_require_docker_service (Default true,
+    # planet-Verhalten unveraendert; local-vars.yml setzt false fuer WSL2 +
+    # Docker Desktop, wo docker.service als systemd-Unit gar nicht existiert).
+    - name: "Docker-Requires folgt dem Flag, keine verwaiste Leerzeile (Issue #593)"
+      assert:
+        that:
+          - ("Requires=docker.service" in unit) == (crash_collector_require_docker_service | bool)
+          - ("After=network-online.target docker.service" in unit) == (crash_collector_require_docker_service | bool)
+          - ("After=network-online.target" in unit)
+          - ("\n\nStartLimitIntervalSec" not in unit)
+        fail_msg: >-
+          crash_collector_require_docker_service={{ crash_collector_require_docker_service }}:
+          Requires=docker.service bzw. der docker.service-Teil von After= muss
+          exakt dem Flag folgen, und das Weglassen darf keine Leerzeile im
+          [Unit]-Block hinterlassen (Issue #593).
+        success_msg: >-
+          Docker-Requires korrekt (require_docker_service={{ crash_collector_require_docker_service }}),
+          keine verwaiste Leerzeile.

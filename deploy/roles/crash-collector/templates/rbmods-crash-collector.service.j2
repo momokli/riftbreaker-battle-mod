@@ -6,9 +6,11 @@
 [Unit]
 Description=RIFT BATTLE Crash-Collector — Crash-Artefakte sichern + symbolisieren (Issue #462/#480)
 Documentation=file:{{ crash_collector_bin }}
-After=network-online.target docker.service
+After=network-online.target{{ ' docker.service' if crash_collector_require_docker_service | default(true) | bool else '' }}
 Wants=network-online.target
+{% if crash_collector_require_docker_service | default(true) | bool %}
 Requires=docker.service
+{% endif %}
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
