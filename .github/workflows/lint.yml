@@ -18,6 +18,13 @@ on:
 permissions:
   contents: read
 
+# Per-Ref-Concurrency (Issue #751): cancelt den ueberholten Lauf desselben PRs
+# (Push-Kaskade), ohne wartende Laeufe anderer PRs zu verdraengen (#303-Starving
+# tritt nicht wieder auf).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     name: Lint
