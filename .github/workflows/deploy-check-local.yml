@@ -30,15 +30,61 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    # Path-Gate (Issue #746): billiger vorgelagerter Job, der per git diff
+    # bestimmt, ob ueberhaupt deploy-relevante Pfade geaendert wurden. Der
+    # eigentliche deploy-check-local-Job bleibt IMMER vorhanden (Required-Context
+    # nie „Expected"), ueberspringt aber seine Arbeit, wenn nichts Relevantes
+    # betroffen ist — Doku-/reine Code-PRs laufen so in Sekunden statt ~1m20s.
+    name: Relevante Pfade (Deploy-Check-Local)
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.decide.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Relevante Pfade bestimmen
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # workflow_dispatch: kein diff -> immer voll laufen lassen.
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CHANGED="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || true)"
+          # Diff-Probleme: over-inclusive laufen lassen (nie faelschlich skippen).
+          if [ -z "$CHANGED" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if printf '%s\n' "$CHANGED" \
+             | grep -Eq '^(deploy/|tools/deploy-gate/|\.github/workflows/)'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+          fi
+
   deploy-check-local:
     # Rein lokale Checks (yamllint + Compose-Render + `docker compose config`)
     # auf einem GitHub-Hosted-Runner — entlastet den planet-Runner (Issue #306).
     name: deploy-check-local
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Keine relevanten Pfade — Deploy-Check übersprungen (Gate bleibt grün)
+        if: needs.changes.outputs.relevant != 'true'
+        run: echo "Keine deploy-relevanten Pfade geändert — kein Deploy-Check nötig."
+
       - name: Fork-PR erkennen (Gate nur für Repo-eigene PRs)
         id: gate
+        if: needs.changes.outputs.relevant == 'true'
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "pull_request" ] \
@@ -48,30 +94,28 @@ jobs:
           fi
 
       - uses: actions/checkout@v4
-        if: steps.gate.outputs.skip != 'true'
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
 
-      # Statischer Wiring-Check + Provider-Tests (Issue #337, vormals #238):
-      # prueft den AKTUELLEN, gate-losen deploy.yml-Vertrag (push auf main,
+      # Statischer Wiring-Check (Issue #337, vormals #238): prueft den
+      # AKTUELLEN, gate-losen deploy.yml-Vertrag (push auf main,
       # workflow_dispatch, SSH-Deploy-Step, permissions contents: read,
-      # concurrency cd-dev) plus die Provider-Unit-Tests (inkl. Negativ-Semantik).
-      # Das #238-Park-Gate ist mit e8f7783 bewusst aus deploy.yml entfernt; ob es
-      # wiederkommt (#238/#327), entscheidet dieser Check nicht. Read-only,
-      # keine Secrets, keine Prod-Aktion.
-      - name: Deploy-Wiring + Provider-Tests
-        if: steps.gate.outputs.skip != 'true'
+      # concurrency cd-dev). Das #238-Park-Gate ist mit e8f7783 bewusst aus
+      # deploy.yml entfernt; ob es wiederkommt (#238/#327), entscheidet dieser
+      # Check nicht. Read-only, keine Secrets, keine Prod-Aktion.
+      #
+      # Die Provider-Unit-Tests (test_deploy_gate) laufen bereits in ci.yml
+      # `test` (Issue #746: Dedup, keine Doppel-Ausfuehrung mehr).
+      - name: Deploy-Wiring (statischer Vertrag)
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           python3 tools/deploy-gate/check_deploy_wiring.py
-          (
-            cd tools/deploy-gate
-            python3 -m unittest test_deploy_gate -v
-          )
 
       # Env-Isolation (Issue #483): statischer Schema-Audit (jede Variable ist
       # per-env oder shared-begruendet) + Unit-Tests + hermetische Identitaets-
       # und Gate-Laeufe. Rein lokal, kein Host, kein Vault, keine Prod-Aktion.
       - name: Env-Isolation (Issue #483)
-        if: steps.gate.outputs.skip != 'true'
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           python3 tools/deploy-gate/check_env_isolation.py --env dev
@@ -95,7 +139,7 @@ jobs:
       # Deploy); hier laeuft nur die reine Entscheidungslogik + CLI ueber
       # Fixtures. Rein lokal, kein planet, kein Netz, keine Secrets.
       - name: SOC-Attestation (Issue #504)
-        if: steps.gate.outputs.skip != 'true'
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           (
@@ -108,8 +152,23 @@ jobs:
       # geteilt, daher ist die einmalige Venv-Erstellung hier race-frei und
       # bleibt bewusst lokal. Nur der self-hosted `deploy-check`-Job bezieht
       # das Venv vom Host-Setup (.github/runner/setup.sh).
+      #
+      # pip-Cache (Issue #746): der ephemer $HOME laesst den pip-Download von
+      # ansible-core + yamllint sonst je Lauf neu anfallen (~20-30s). Statt das
+      # Venv selbst zu cachen (fragil: venv-Shebangs/pyvenv.cfg zeigen auf eine
+      # konkrete Python-Installation, die zwischen Image-Updates kippt), wird
+      # nur der pip-Download-Cache (~/.cache/pip) gecacht — robust, pip
+      # reinstalliert die Wheels dann offline aus dem Cache. Key auf die
+      # gepinnten Versionen.
+      - name: pip-Cache (ansible-core + yamllint)
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-deploy-check-${{ runner.os }}-2.19.0-1.35.1
+
       - name: Tooling bereitstellen (ansible-core + yamllint)
-        if: steps.gate.outputs.skip != 'true'
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           VENV="$HOME/.local/ansible-deploy-check"
@@ -123,7 +182,7 @@ jobs:
           "$VENV/bin/yamllint" --version
 
       - name: YAML-Lint (deploy/)
-        if: steps.gate.outputs.skip != 'true'
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: yamllint -c .yamllint deploy/
 
       # Playbook-Syntax aller Inventar-Playbooks (Issue #328/#329/#483): deckt
@@ -131,7 +190,7 @@ jobs:
       # test-deploy.yml (+ test-vars.yml) ab. --syntax-check parst nur, verbindet
       # NICHT und entschlüsselt das Vault nicht.
       - name: Playbook-Syntax (site.yml + deploy-prod.yml + test-deploy.yml + deploy-staging.yml)
-        if: steps.gate.outputs.skip != 'true'
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           ansible-playbook -i deploy/inventory deploy/site.yml --syntax-check
@@ -146,7 +205,7 @@ jobs:
       # Inventory (deploy/local-inventory.yml), außerhalb des
       # Env-Isolations-Schemas (siehe deploy/LOCAL_DEV.md).
       - name: Playbook-Syntax (local-deploy.yml)
-        if: steps.gate.outputs.skip != 'true'
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           ansible-playbook -i deploy/local-inventory.yml deploy/local-deploy.yml \
@@ -157,7 +216,7 @@ jobs:
       # wenig Platz MUSS der Lauf rot abbrechen (fail_msg "PLATZ-GATE"); der
       # Positiv-Fall + die Konfigurierbarkeit der Schwelle laufen ebenfalls.
       - name: "Disk-Space-Gate Selbsttest (Issue #310)"
-        if: steps.gate.outputs.skip != 'true'
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/disk-gate/run.sh
 
       # Auth-Selbsttest der /server/*-Route (Issue #454): rendert das ECHTE
@@ -167,7 +226,7 @@ jobs:
       # Agent sieht den von Caddy injizierten Bearer. Hermetisch (Dummy-Token,
       # keine planet-Verbindung, kein Vault); Docker kommt vom Runner.
       - name: "Server-Control-Auth hinter dem Caddy (Issue #454)"
-        if: steps.gate.outputs.skip != 'true'
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/server-control-auth/run.sh
 
       # Crash-Collector unit-Render (Issue #462/#480/#593): rendert die ECHTE
@@ -177,7 +236,7 @@ jobs:
       # crash_collector_require_docker_service (Issue #593, WSL2 + Docker
       # Desktop). Lokal, kein Host.
       - name: "Crash-Collector Unit-Render (Issue #462)"
-        if: steps.gate.outputs.skip != 'true'
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/crash-collector/run.sh
 
       # Server-Control unit-Render (Issue #424/#593): rendert die ECHTE
@@ -186,14 +245,14 @@ jobs:
       # server_control_require_docker_service (Issue #593, WSL2 + Docker
       # Desktop). Lokal, kein Host.
       - name: "Server-Control Unit-Render (Issue #593)"
-        if: steps.gate.outputs.skip != 'true'
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/server-control-service/run.sh
 
       # Legacy-rbtools-Symlink-Cleanup (Issue #606): laesst die ECHTE Task-Datei
       # gegen ein Wegwerf-Verzeichnis laufen — Symlink entfernt, echtes
       # Verzeichnis bleibt, idempotent. Lokal, kein Host.
       - name: "Legacy-rbtools-Symlink-Cleanup (Issue #606)"
-        if: steps.gate.outputs.skip != 'true'
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/legacy-symlink-cleanup/run.sh
 
       # /server/*-Route-Selbsttest (Issue #463): rendert die ECHTE
@@ -202,11 +261,11 @@ jobs:
       # false) darf sie NICHT enthalten. Sonst zeigt "Restart server" im
       # Prod-Cockpit auf den DEV-Agenten. Lokal, kein Host.
       - name: "/server/*-Route Selbsttest (Issue #463)"
-        if: steps.gate.outputs.skip != 'true'
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/server-control-route/run.sh
 
       - name: Compose-Templates rendern + `docker compose config`
-        if: steps.gate.outputs.skip != 'true'
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
           RENDER_DIR="$(mktemp -d)"
