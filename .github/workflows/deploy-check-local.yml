@@ -64,7 +64,7 @@ jobs:
             echo "relevant=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          CHANGED="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || true)"
+          CHANGED="$(git diff --name-only "$BASE_SHA...$HEAD_SHA" 2>/dev/null || true)"
           # Diff-Probleme: over-inclusive laufen lassen (nie faelschlich skippen).
           if [ -z "$CHANGED" ]; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
