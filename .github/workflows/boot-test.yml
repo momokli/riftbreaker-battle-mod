@@ -196,6 +196,36 @@ jobs:
           ssh planet "rm -f '/etc/systemd/system/${U}.service' 2>/dev/null || true"
           ssh planet "systemctl daemon-reload 2>/dev/null || true"
 
+      # Leaked-Networks-Sweep (Issue #719): "docker network rm" oben (wie auch
+      # im finalen Cleanup-Step) ist best-effort ("|| true") und je Lauf nur
+      # auf DAS EIGENE Netz "${P}_default" scoped. Schlaegt die Entfernung
+      # einmal fehl (z. B. weil ein Endpoint beim Aufruf noch kurz haengt,
+      # oder ein vorheriger Lauf frueh abgebrochen ist und diesen Schritt nie
+      # erreicht hat), bleibt das Netz UNSICHTBAR und FUER IMMER liegen -- bis
+      # Dockers "predefined address pools" komplett aufgebraucht sind und
+      # JEDER weitere boot-test-Lauf mit "all predefined address pools have
+      # been fully subnetted" abbricht (Live-Befund #719). Dieser Sweep laeuft
+      # VOR dem Deploy dieses Laufs und entfernt ALLE aktuell ungenutzten
+      # "rb-test-*"-Netze (nicht nur das eigene) -- "docker network rm"
+      # verweigert sich von selbst, wenn noch ein Endpoint haengt, ist also
+      # fuer ein zeitgleich laufendes Netz ein sicheres No-Op. Strikt auf den
+      # "rb-test-"-Praefix gescoped, damit Prod-Netze (andere Namen) nie
+      # angefasst werden.
+      - name: "Leaked-Networks-Sweep (alte rb-test-*-Netze, Issue #719)"
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          # Substring-Filter (Docker "name=" ist kein Regex/Anchor) + kompletter
+          # Loop in EINER ssh-Session (kein N+1-Roundtrip pro Netz).
+          ssh planet '
+            docker network ls --filter "name=rb-test-" --format "{{.Name}}" | \
+            while IFS= read -r net; do
+              [ -n "$net" ] || continue
+              echo "Entferne ungenutztes Test-Netz (falls kein Endpoint mehr haengt): $net"
+              docker network rm "$net" 2>/dev/null || true
+            done
+          '
+
       - name: Test-Deploy (Dummy-Vault, kein Secret; je Lauf eindeutige Ressourcen)
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
@@ -286,3 +316,18 @@ jobs:
           # #318 auch fest benannt (riftbreaker-sessions-test) — mit entfernen.
           ssh planet "docker rm -f 'riftbreaker-sessions-test' 2>/dev/null || true"
           ssh planet "rm -rf '/srv/rbgame-test' '/srv/rbgame-test-backups' '/opt/rbmods/tournament-server-test' '/srv/rbmods-sessions-test' 2>/dev/null || true"
+          # Leaked-Networks-Sweep (Issue #719): das gezielte "network rm" oben
+          # ist best-effort ("|| true") -- schlaegt es fehl, bleibt das Netz
+          # unsichtbar liegen, bis Dockers Adress-Pools aufgebraucht sind und
+          # JEDER folgende boot-test mit "all predefined address pools have
+          # been fully subnetted" abbricht. Zusaetzlicher Sweep ueber ALLE
+          # aktuell ungenutzten "rb-test-*"-Netze (nicht nur das eigene) als
+          # zweite Chance direkt nach diesem Lauf -- sicher, da "network rm"
+          # sich von selbst verweigert, solange noch ein Endpoint haengt.
+          ssh planet '
+            docker network ls --filter "name=rb-test-" --format "{{.Name}}" | \
+            while IFS= read -r net; do
+              [ -n "$net" ] || continue
+              docker network rm "$net" 2>/dev/null || true
+            done
+          '
