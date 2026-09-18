@@ -539,14 +539,10 @@ typedef struct {
     DWORD delay_ms;
 } order_spec_t;
 
-/* Zeitversatz zwischen Kauf (SPACE) und Wellen-Spawn: 5 Minuten, damit die
- * Welle zeitversetzt beim Gegner ankommt. */
-#define ORDER_DELAY_MS (5 * 60 * 1000)
-
-/* Cooldown zwischen zwei Buys (SPACE): 1 Sekunde. Global (PoC; pro-Spieler
- * folgt spaeter). */
-#define ORDER_COOLDOWN_MS 1000
-static DWORD g_last_order_ms = 0;
+/* Zeitversatz zwischen Kauf (SPACE) und Wellen-Spawn: 2 Minuten, damit die
+ * Welle zeitversetzt beim Gegner ankommt. Der 1s-Click-Cooldown liegt im
+ * Client-Mod (rbbattle_button.lua), NICHT hier. */
+#define ORDER_DELAY_MS (2 * 60 * 1000)
 
 /* Kostentabelle = Test-C-Kurve (#670); wave9 teilt den Pool mit wave8 (#658). */
 static const order_spec_t g_order_specs[] = {
@@ -844,13 +840,7 @@ static void route_pipe_line(HANDLE h, const char *line)
         json_get_string(line, "text", text, sizeof(text));
         if (parse_order_name(text, name, sizeof(name), id, sizeof(id)) &&
             lookup_order_spec(name, &spec)) {
-            DWORD now = GetTickCount();
-            if ((LONG)(now - g_last_order_ms) < ORDER_COOLDOWN_MS) {
-                blog("player_chat -send order: cooldown, ignoriert: %s id=%s",
-                     spec->name, id);
-            } else if (queue_order(spec, id)) {
-                g_last_order_ms = now;
-            }
+            queue_order(spec, id);
         } else {
             blog("player_chat (kein -send): %.120s", text);
             sse_broadcast(line);

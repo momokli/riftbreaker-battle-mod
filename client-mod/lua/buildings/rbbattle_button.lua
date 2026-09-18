@@ -23,6 +23,24 @@ function rbbattle_button:GetMessage()
     return msg
 end
 
+local BUTTON_COOLDOWN_SEC = 1.0
+
+-- 1s-Click-Cooldown pro Button: liefert false, wenn noch im Cooldown. Nutzt
+-- os.clock() (CPU-Zeit, monoton); ist die Sandbox ohne os.clock(), wird der
+-- Cooldown uebersprungen (kein Fehler).
+function rbbattle_button:TryCooldown()
+    local now = 0
+    local ok = pcall(function() now = os.clock() end)
+    if not ok then
+        return true
+    end
+    if (self.cooldown_until or 0) > now then
+        return false
+    end
+    self.cooldown_until = now + BUTTON_COOLDOWN_SEC
+    return true
+end
+
 -- Eindeutiger Buy-Request-Identifier (ULID-ähnlich, sortierbar; kein striktes
 -- Crockford-ULID). Format: <timestamp>-<zaehler>-<randomhex>.
 local function GenerateBuyId()
@@ -51,11 +69,19 @@ function rbbattle_button:SendChat()
 end
 
 function rbbattle_button:OnInteractWithEntityRequest(evt)
+    if not self:TryCooldown() then
+        LogService:Log("[RBBATTLE] button_interact: cooldown, ignoriert")
+        return
+    end
     LogService:Log("[RBBATTLE] button_interact (space)")
     self:SendChat()
 end
 
 function rbbattle_button:OnSpecialAction()
+    if not self:TryCooldown() then
+        LogService:Log("[RBBATTLE] button_special_action: cooldown, ignoriert")
+        return
+    end
     LogService:Log("[RBBATTLE] button_special_action (radial)")
     self:SendChat()
 end
