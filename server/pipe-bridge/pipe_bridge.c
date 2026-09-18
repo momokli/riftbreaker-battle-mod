@@ -544,17 +544,22 @@ typedef struct {
  * Client-Mod (rbbattle_button.lua), NICHT hier. */
 #define ORDER_DELAY_MS (2 * 60 * 1000)
 
-/* Kostentabelle = Test-C-Kurve (#670); wave9 teilt den Pool mit wave8 (#658). */
+/* Kostentabelle = Ø-Send-Ziel-Kurve (docs/research/send-boost-pricing-baseline.md,
+ * #205): Kosten(L) = k * Normal(L) * (M_avg - 1), M_avg aus dem geometrischen Mittel
+ * der Hard/Normal-Ratio ueber alle Level, verankert auf die echten 300 Start-Carbonium
+ * (logic/missions/survival/default.logic, live bestaetigt in f7ea0a4/496e2a6). Auf die
+ * naechsten 50 gerundet. Ersetzt die Test-C-Kurve aus #670. wave9 teilt den Pool mit
+ * wave8 (#658), Preis manuell ueber die Formel-Kurve hinaus angehoben (10500). */
 static const order_spec_t g_order_specs[] = {
-    { "wave1", "logic/missions/survival/attack_level_1_id_1.logic", 10, ORDER_DELAY_MS },
-    { "wave2", "logic/missions/survival/attack_level_2_id_1.logic", 110, ORDER_DELAY_MS },
-    { "wave3", "logic/missions/survival/attack_level_3_id_1.logic", 480, ORDER_DELAY_MS },
-    { "wave4", "logic/missions/survival/attack_level_4_id_1.logic", 960, ORDER_DELAY_MS },
-    { "wave5", "logic/missions/survival/attack_level_5_id_1.logic", 1590, ORDER_DELAY_MS },
-    { "wave6", "logic/missions/survival/attack_level_6_id_1.logic", 2250, ORDER_DELAY_MS },
-    { "wave7", "logic/missions/survival/attack_level_7_id_1.logic", 2800, ORDER_DELAY_MS },
-    { "wave8", "logic/missions/survival/attack_level_8_id_1.logic", 3060, ORDER_DELAY_MS },
-    { "wave9", "logic/missions/survival/attack_level_8_id_1.logic", 3110, ORDER_DELAY_MS },
+    { "wave1", "logic/missions/survival/attack_level_1_id_1.logic", 300, ORDER_DELAY_MS },
+    { "wave2", "logic/missions/survival/attack_level_2_id_1.logic", 700, ORDER_DELAY_MS },
+    { "wave3", "logic/missions/survival/attack_level_3_id_1.logic", 1400, ORDER_DELAY_MS },
+    { "wave4", "logic/missions/survival/attack_level_4_id_1.logic", 2450, ORDER_DELAY_MS },
+    { "wave5", "logic/missions/survival/attack_level_5_id_1.logic", 4000, ORDER_DELAY_MS },
+    { "wave6", "logic/missions/survival/attack_level_6_id_1.logic", 5350, ORDER_DELAY_MS },
+    { "wave7", "logic/missions/survival/attack_level_7_id_1.logic", 7600, ORDER_DELAY_MS },
+    { "wave8", "logic/missions/survival/attack_level_8_id_1.logic", 9650, ORDER_DELAY_MS },
+    { "wave9", "logic/missions/survival/attack_level_8_id_1.logic", 10500, ORDER_DELAY_MS },
 };
 #define G_ORDER_SPEC_COUNT (sizeof(g_order_specs) / sizeof(g_order_specs[0]))
 
