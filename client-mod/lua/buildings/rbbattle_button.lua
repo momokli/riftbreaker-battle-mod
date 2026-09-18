@@ -41,14 +41,9 @@ function rbbattle_button:TryCooldown()
     return true
 end
 
--- Eindeutiger Buy-Request-Identifier (ULID-ähnlich, sortierbar; kein striktes
--- Crockford-ULID). Format: <timestamp>-<zaehler>-<randomhex>.
+-- Kurzer zufaelliger Buy-Request-Identifier (reicht zum Tracing).
 local function GenerateBuyId()
-    _G.RBB_BUY_COUNT = (_G.RBB_BUY_COUNT or 0) + 1
-    local ts = 0
-    pcall(function() ts = os.time() end)
-    local r = math.floor(math.random(0, 0x7FFFFFFF))
-    return string.format("%010d-%06d-%08x", ts, _G.RBB_BUY_COUNT, r)
+    return string.format("%08x", math.floor(math.random(0, 0x7FFFFFFF)))
 end
 
 function rbbattle_button:SendChat()
