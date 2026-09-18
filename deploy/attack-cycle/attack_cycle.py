@@ -123,7 +123,7 @@ class AttackCycle:
         interval_s: float = DEFAULT_INTERVAL_S,
         max_level: int = DEFAULT_MAX_LEVEL,
         wave_logic: Optional[Dict[int, str]] = None,
-        timeout: float = 5.0,
+        timeout: float = 30.0,
         _poster: Optional[Callable[[str, bytes], tuple]] = None,
         _clock: Callable[[], float] = time.monotonic,
     ):
@@ -431,7 +431,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--control-port", type=int, default=DEFAULT_CONTROL_PORT, help="Port des Control-Servers (Default 9102)"
     )
     p.add_argument("--poll-interval", type=float, default=1.0)
-    p.add_argument("--timeout", type=float, default=5.0, help="HTTP-Timeout je Request")
+    p.add_argument("--timeout", type=float, default=30.0, help="HTTP-Timeout je Request")
     p.add_argument("--once", action="store_true", help="Einen Poll ausfuehren, dann beenden")
     return p
 

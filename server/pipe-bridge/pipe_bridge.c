@@ -62,7 +62,7 @@
 #define DEFAULT_PIPE_NAME    "\\\\.\\pipe\\rbbattle"
 #define DEFAULT_BIND         "0.0.0.0"
 #define DEFAULT_PORT         9001
-#define DEFAULT_TIMEOUT_MS   5000
+#define DEFAULT_TIMEOUT_MS   20000
 
 #define LINE_MAX             8192          /* max. Protokollzeile (Pipe)      */
 #define READ_BUF             (LINE_MAX * 2)
