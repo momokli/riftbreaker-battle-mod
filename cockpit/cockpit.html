@@ -593,6 +593,23 @@
                         </div>
                     </fieldset>
 
+                    <!-- A1. HQ HEALTH -->
+                    <fieldset class="q-groupbox" id="panel-hq">
+                        <legend>HQ Health</legend>
+                        <div class="flow-readouts">
+                            <div class="flow-prop">
+                                <span class="prop-label">hp</span>
+                                <span id="hq_hp" class="prop-val" title="current HP">—</span>
+                                <span class="prop-label">max</span>
+                                <span id="hq_hp_max" class="prop-val" title="max HP">—</span>
+                            </div>
+                            <div class="flow-prop">
+                                <span class="prop-label">status</span>
+                                <span id="hq_dead" class="prop-val" title="alive / dead">—</span>
+                            </div>
+                        </div>
+                    </fieldset>
+
                     <!-- A2. SEND MENU (#684): WAVE/BOSS-Presets -> activate_mission_flow,
                          kein Deduct, kein Chat (Preise/Balance folgen #205/#670). -->
                     <fieldset class="q-groupbox" id="panel-send-menu">
@@ -964,6 +981,18 @@
                             s.creatures_base_difficulty === null
                                 ? "—"
                                 : String(s.creatures_base_difficulty);
+                        $("hq_hp").textContent =
+                            s.hq_hp === undefined || s.hq_hp === null
+                                ? "—"
+                                : String(s.hq_hp);
+                        $("hq_hp_max").textContent =
+                            s.hq_hp_max === undefined || s.hq_hp_max === null
+                                ? "—"
+                                : String(s.hq_hp_max);
+                        $("hq_dead").textContent =
+                            s.hq_dead === undefined || s.hq_dead === null
+                                ? "—"
+                                : (s.hq_dead ? "DEAD" : "alive");
                         $("out").textContent = "";
                     } catch (e) {
                         $("out").textContent = "ERR " + e.message;

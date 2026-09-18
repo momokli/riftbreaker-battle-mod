@@ -2749,8 +2749,12 @@ static int connplayers_dealloc_target(const unsigned char *alloc,
 
 #define RBBRIDGE_HQ_INVALID_ENTITY 0xFFFFFFFFu
 
-/* vftables nur zur Instanz-Aufloesung (PDB-abgeleitet, Build 2.0.58485). */
-#define RBBRIDGE_HQ_RVA_FIND_VFTABLE   0x2E94C98u
+/* vftables nur zur Instanz-Aufloesung (PDB-abgeleitet, Build 2.0.58485).
+ * WICHTIG (#733): FindEntityByName liegt auf Exor::FindService, dessen
+ * vftable ??_7FindService@Exor@@6B@ bei 0x2E94CC8 liegt. 0x2E94C98 ist
+ * ??_7FindService2@Riftbreaker@@6B@ (falsche Klasse -> falscher Instanz-Scan
+ * -> Crash im Off-Thread-Map-Lookup). */
+#define RBBRIDGE_HQ_RVA_FIND_VFTABLE   0x2E94CC8u
 #define RBBRIDGE_HQ_RVA_HEALTH_VFTABLE 0x2E95760u
 
 /* Exor::FindService::FindEntityByName(char const*)  (RVA 0x1C0DF60)
@@ -4969,10 +4973,14 @@ static int read_hq_health(const unsigned char *base, size_t size, float *hp,
     if (!find_svc || !health_svc)
         return 0;
     {
-        uint64_t w0 = 0, w1 = 0;
-        if (!safe_read_u64(find_svc + 8, &w0) || !w0)
+        uint64_t name_map = 0, world = 0;
+        /* FindService (Exor) hat den Namens-Map-Pointer bei +0x10
+         * (FindEntityByName liest [this+0x10]). */
+        if (!safe_read_u64(find_svc + 0x10, &name_map) || !name_map)
             return 0;
-        if (!safe_read_u64(health_svc + 8, &w1) || !w1)
+        /* HealthService (Riftbreaker) hat World-/ECS-Pointer bei +0x08
+         * (GetHealth liest [this+0x08]). */
+        if (!safe_read_u64(health_svc + 0x08, &world) || !world)
             return 0;
     }
 
