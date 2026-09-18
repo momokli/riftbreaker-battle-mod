@@ -264,6 +264,27 @@ class AttackCycle:
         except Exception:
             pass
 
+    # --- Intervall von der Bridge ziehen (WebUI-Config) -----------------
+    def sync_interval(self) -> None:
+        """Holt das gewuenschte Intervall (POST /attack_interval {}) und
+        uebernimmt es, falls es sich geaendert hat (inkl. Countdown-Reset)."""
+        try:
+            status, body = self._poster("/attack_interval", b"{}")
+            if not 200 <= status < 300:
+                return
+            new = json.loads(body).get("interval_s")
+            if not isinstance(new, (int, float)) or new <= 0:
+                return
+            new = float(new)
+            with self._lock:
+                if new != self.interval_s:
+                    self.interval_s = new
+                    if self.active:
+                        self.next_attack_at = self._clock() + new
+                    print(f"[attack-cycle] interval -> {new:.0f}s", flush=True)
+        except Exception:
+            pass
+
 
 class ControlHandler(BaseHTTPRequestHandler):
     cycle: AttackCycle = None  # gesetzt von build_control_server()
@@ -322,6 +343,7 @@ def run(
     try:
         while True:
             cycle.step()
+            cycle.sync_interval()
             cycle.push_status()
             if once:
                 break

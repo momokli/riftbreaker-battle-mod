@@ -706,6 +706,11 @@
                                 Spieler gekauften Wellen (gestapelt).
                                 <span id="buy_orders_msg" aria-live="polite"></span>
                             </div>
+                            <div class="flow-action-row">
+                                <span class="prop-label">interval (s)</span>
+                                <input id="attack_interval_input" class="mono" size="6" value="420" aria-label="Attack cycle interval in seconds" />
+                                <button id="attack_interval_set" class="btn-primary">set</button>
+                            </div>
                         </div>
                     </fieldset>
 
@@ -1060,6 +1065,20 @@
                         $("buy_orders").textContent = "ERR " + e.message;
                     }
                 }
+
+                $("attack_interval_set").onclick = function () {
+                    var v = parseInt($("attack_interval_input").value, 10);
+                    if (!v || v <= 0) {
+                        $("buy_orders_msg").textContent = "invalid interval";
+                        return;
+                    }
+                    post("attack_interval", { interval_s: v }).then(function (r) {
+                        $("attack_interval_input").value = (r && r.interval_s) || v;
+                        $("buy_orders_msg").textContent = "";
+                    }).catch(function (e) {
+                        $("buy_orders_msg").textContent = "ERR " + e.message;
+                    });
+                };
 
                 $("add").onclick = function () {
                     addResource(null, $("amount").value);
