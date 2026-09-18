@@ -2868,11 +2868,15 @@ static int hq_health_from_calls(void *find_svc, void *health_svc,
         return 0;
 
     uint32_t entity = find_fn(find_svc, "headquarters");
-    if (entity == RBBRIDGE_HQ_INVALID_ENTITY)
+    if (entity == RBBRIDGE_HQ_INVALID_ENTITY) {
+        dbg("hq_health_from_calls: headquarters -> INVALID_ID (kein HQ)");
         return 0; /* HQ nicht gebaut -> null, KEIN Game-Call, nicht dead */
+    }
 
     float h = get_fn(health_svc, entity);
     float m = getmax_fn(health_svc, entity);
+    dbg("hq_health_from_calls: entity=%u hp=%.2f max=%.2f", entity,
+        (double)h, (double)m);
     /* #573: Health-Component (noch) nicht vorhanden -> GetHealth/GetMax
      * liefern 0/0. Nicht als "tot" fehldeuten. */
     if (h <= 0.0f && m <= 0.0f)
@@ -4870,10 +4874,15 @@ static int read_hq_health(const unsigned char *base, size_t size, float *hp,
     if (!find_svc || !health_svc)
         return 0;
     {
-        uint64_t w0 = 0, w1 = 0;
-        if (!safe_read_u64(find_svc + 8, &w0) || !w0)
+        uint64_t name_map = 0, world = 0;
+        /* FindService (Exor) hat den Namens-Map-Pointer bei +0x10
+         * (FindEntityByName liest [this+0x10]), NICHT bei +0x08 — die
+         * +0x08-Annahme war der #730-Bug (immer null trotz gebautem HQ). */
+        if (!safe_read_u64(find_svc + 0x10, &name_map) || !name_map)
             return 0;
-        if (!safe_read_u64(health_svc + 8, &w1) || !w1)
+        /* HealthService (Riftbreaker) hat World-/ECS-Pointer bei +0x08
+         * (GetHealth liest [this+0x08]). */
+        if (!safe_read_u64(health_svc + 0x08, &world) || !world)
             return 0;
     }
 
