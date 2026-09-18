@@ -1514,6 +1514,53 @@ static void handle_restart_map(SOCKET c, const char *body)
 /* POST /order: nimmt {"name":"wave1"} entgegen, schaut in der Cost-Tabelle
  * nach und reiht die Order ein. KEIN try_spend hier — der Scheduler bezahlt
  * sofort (Phase 1) und feuert nach Ablauf der Frist (Phase 2). */
+/* POST /get_orders: liefert die aktuelle Buy-Order-Queue (roh, neueste zuerst).
+ * Transparent: state bleibt der rohe Scheduler-Wert (pending/paid/failed/fired/
+ * in-progress); time_left_ms nur bei paid (Countdown bis Fire). */
+static const char *order_state_str(int state)
+{
+    switch (state) {
+        case 0: return "pending";
+        case 1: return "paid";
+        case 2: return "failed";
+        case 3: return "fired";
+        case 4: return "in-progress";
+        default: return "unknown";
+    }
+}
+
+static void handle_get_orders(SOCKET c)
+{
+    char resp[16384];
+    size_t off = 0;
+    int n = 0;
+    int i;
+
+    EnterCriticalSection(&g_orders_cs);
+    off += (size_t)snprintf(resp + off, sizeof(resp) - off, "{\"orders\":[");
+    /* neueste zuerst: reverse ueber g_orders[]. */
+    for (i = g_orders_n - 1; i >= 0; i--) {
+        const pending_order_t *o = &g_orders[i];
+        char tbuf[32] = "null";
+        if (o->state == 1) { /* paid -> Countdown bis Fire */
+            long long delta = (long long)o->fire_at - (long long)GetTickCount();
+            if (delta < 0)
+                delta = 0;
+            snprintf(tbuf, sizeof(tbuf), "%lld", delta);
+        }
+        off += (size_t)snprintf(resp + off, sizeof(resp) - off,
+                 "%s{\"name\":\"%s\",\"id\":\"%s\",\"cost\":%d,"
+                 "\"state\":\"%s\",\"time_left_ms\":%s}",
+                 n ? "," : "", o->name, o->id, o->cost,
+                 order_state_str(o->state), tbuf);
+        n++;
+    }
+    off += (size_t)snprintf(resp + off, sizeof(resp) - off, "]}");
+    LeaveCriticalSection(&g_orders_cs);
+
+    http_respond(c, 200, "OK", resp);
+}
+
 static void handle_order(SOCKET c, const char *body)
 {
     char name[64] = "";
@@ -1651,6 +1698,8 @@ static void handle_client(SOCKET c)
             handle_probe(c);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/get_state") == 0) {
             handle_get_state(c);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/get_orders") == 0) {
+            handle_get_orders(c);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/add_resource") == 0) {
             char *b = malloc((size_t)body_len + 1);
             if (!b) {
