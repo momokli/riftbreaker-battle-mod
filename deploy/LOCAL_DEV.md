@@ -28,6 +28,11 @@ Difficulty-Spikes (#508/#513): Server hochfahren, `POST /get_state` /
 ## Voraussetzungen
 
 - Docker + `docker compose`.
+- `unzip` — Ansibles `unarchive`-Modul braucht es fürs Mod-Zip
+  (`rbbattle.zip`, Rolle `riftbreaker-server`). Live-Befund (Issue #590,
+  WSL2/Ubuntu-Minimalinstallation): ohne `unzip` (und ohne die tar-Codecs
+  zstd/bzip2/xz) bricht der Deploy beim Entpacken ab. Debian/Ubuntu/WSL2:
+  `sudo apt install -y unzip`, Fedora/RHEL: `sudo dnf install -y unzip`.
 - `mingw-w64` ODER `zig` — cross-compiled die Server-I/O-Tools
   (`scripts/build_rbbridge_tools.sh`), kein Windows nötig.
 - `ansible-core` (≥ 2.19) auf deinem Rechner (Control-Node = Zielhost hier).

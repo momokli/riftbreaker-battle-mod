@@ -1,0 +1,1082 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wellen-Mechanik</title>
+<style>
+  :root {
+    --bg: #f3f1ec;
+    --surface: #ffffff;
+    --surface-2: #eae6dc;
+    --border: #d8d2c4;
+    --text: #1c1f1a;
+    --dim: #6b6a5e;
+    --accent: #c8571f;
+    --accent-2: #2f6e63;
+    --warn: #a5760a;
+    --warn-bg: #fbf0d9;
+    --confirmed-bg: #e9f1ec;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+    --sans: "IBM Plex Sans", system-ui, sans-serif;
+    --display: "Barlow Condensed", var(--sans);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14171a;
+      --surface: #1b1f22;
+      --surface-2: #21262a;
+      --border: #33393e;
+      --text: #ebeae4;
+      --dim: #9aa0a0;
+      --accent: #ff8a4d;
+      --accent-2: #5fc9ba;
+      --warn: #e8b93f;
+      --warn-bg: #2c2717;
+      --confirmed-bg: #182420;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14171a;
+    --surface: #1b1f22;
+    --surface-2: #21262a;
+    --border: #33393e;
+    --text: #ebeae4;
+    --dim: #9aa0a0;
+    --accent: #ff8a4d;
+    --accent-2: #5fc9ba;
+    --warn: #e8b93f;
+    --warn-bg: #2c2717;
+    --confirmed-bg: #182420;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.55;
+    padding-inline: 20px;
+    padding-block: 40px 80px;
+  }
+  img { max-width: 100%; }
+  .page {
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 22px;
+    height: 2px;
+    background: var(--accent);
+    display: inline-block;
+  }
+
+  h1 {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: clamp(34px, 6vw, 56px);
+    line-height: 1.05;
+    letter-spacing: 0.005em;
+    margin: 0 0 14px;
+    text-wrap: balance;
+  }
+  .subhead {
+    font-size: 18px;
+    color: var(--dim);
+    max-width: 62ch;
+    margin: 0 0 36px;
+  }
+
+  h2 {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: 30px;
+    letter-spacing: 0.005em;
+    margin: 0 0 6px;
+    text-wrap: balance;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+  }
+  h2 .num {
+    font-family: var(--mono);
+    color: var(--accent);
+    font-size: 16px;
+    font-weight: 500;
+  }
+  h3 {
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 16px;
+    margin: 0 0 8px;
+  }
+  p { margin: 0 0 14px; max-width: 68ch; }
+  .section-intro { color: var(--dim); max-width: 66ch; margin-bottom: 24px; }
+
+  section { margin-bottom: 64px; }
+  section + section { padding-top: 8px; border-top: 1px solid var(--border); padding-top: 48px; }
+
+  code, .path {
+    font-family: var(--mono);
+    font-size: 0.9em;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    white-space: nowrap;
+  }
+
+  /* status callouts */
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-weight: 600;
+  }
+  .tag-confirmed { background: var(--confirmed-bg); color: var(--accent-2); border: 1px solid color-mix(in srgb, var(--accent-2) 40%, transparent); }
+  .tag-open { background: var(--warn-bg); color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); }
+  .tag-dom { background: var(--confirmed-bg); color: var(--accent-2); border: 1px solid color-mix(in srgb, var(--accent-2) 40%, transparent); }
+  .tag-event { background: var(--warn-bg); color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); }
+  .tag-native { background: var(--surface-2); color: var(--dim); border: 1px solid var(--border); }
+
+  .system-steps { display: flex; flex-direction: column; gap: 2px; margin: 18px 0; }
+  .system-step {
+    display: grid;
+    grid-template-columns: 40px 1fr;
+    gap: 14px;
+    padding: 16px 4px;
+    border-bottom: 1px solid var(--border);
+  }
+  .system-step:first-child { padding-top: 4px; }
+  .system-step:last-child { border-bottom: none; }
+  .system-step .step-no {
+    font-family: var(--display);
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--border);
+    line-height: 1;
+  }
+  .system-step .step-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .system-step h4 { margin: 0; font-size: 15.5px; font-family: var(--sans); font-weight: 700; }
+  .system-step p { margin: 0 0 6px; font-size: 14px; max-width: 66ch; }
+  .system-step p:last-child { margin-bottom: 0; }
+
+  .callout {
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent-2);
+    background: var(--surface);
+    border-radius: 6px;
+    padding: 14px 18px;
+    margin: 18px 0;
+  }
+  .callout.open { border-left-color: var(--warn); }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout .tag { margin-bottom: 8px; }
+
+  /* diagram frame */
+  figure {
+    margin: 22px 0 8px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 22px 18px 16px;
+  }
+  figure svg { display: block; width: 100%; height: auto; max-width: 100%; }
+  figcaption {
+    font-size: 13px;
+    color: var(--dim);
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px dashed var(--border);
+  }
+  .svg-wrap { overflow-x: auto; }
+
+  /* comparison card */
+  .compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 18px 0;
+  }
+  .compare > div { background: var(--surface); padding: 16px 18px; }
+  .compare .col-head {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 10px;
+  }
+  .compare .lvl { font-family: var(--display); font-size: 26px; font-weight: 700; }
+  .compare.l9 .col-head:last-of-type { color: var(--accent); }
+  .compare ul { margin: 10px 0 0; padding-left: 18px; font-size: 14px; }
+  .compare li { margin-bottom: 6px; }
+  .compare li b { color: var(--accent); }
+  @media (max-width: 560px) {
+    .compare { grid-template-columns: 1fr; }
+  }
+
+  /* charts row */
+  .chart-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+  @media (max-width: 640px) {
+    .chart-row { grid-template-columns: 1fr; }
+  }
+
+  /* params table */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    margin: 18px 0;
+  }
+  th, td {
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--dim);
+    font-weight: 600;
+  }
+  td.param { font-weight: 700; white-space: nowrap; }
+
+  table.compact { font-size: 13px; }
+  table.compact td, table.compact th { padding: 7px 10px; }
+  td.num, th.num { text-align: right; font-family: var(--mono); }
+  tr.total td { font-weight: 700; border-top: 1px solid var(--border); border-bottom: none; }
+  tr.xref td { color: var(--dim); }
+  tr.xref td.variant::after {
+    content: "cross-ref";
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--warn);
+    border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+    border-radius: 4px;
+    padding: 1px 5px;
+    margin-left: 8px;
+  }
+
+  details.level-block {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 10px;
+    background: var(--surface);
+    overflow: hidden;
+  }
+  details.level-block[open] { border-color: var(--accent-2); }
+  details.level-block summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font-weight: 600;
+    user-select: none;
+  }
+  details.level-block summary::-webkit-details-marker { display: none; }
+  details.level-block summary::before {
+    content: "▸";
+    color: var(--accent-2);
+    font-size: 12px;
+    transition: transform 0.15s ease;
+  }
+  details.level-block[open] summary::before { transform: rotate(90deg); }
+  details.level-block summary .lvl-badge {
+    font-family: var(--display);
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--accent);
+    min-width: 30px;
+  }
+  details.level-block summary .lvl-meta {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--dim);
+    font-weight: 400;
+    margin-left: auto;
+  }
+  details.level-block .level-body {
+    padding: 0 16px 16px;
+    border-top: 1px dashed var(--border);
+  }
+  details.level-block .level-note {
+    font-size: 13px;
+    color: var(--dim);
+    margin: 10px 0 0;
+  }
+
+  footer {
+    margin-top: 60px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    color: var(--dim);
+    font-size: 13px;
+  }
+  footer .refs { font-family: var(--mono); font-size: 12px; margin-top: 6px; }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<div class="page">
+
+  <div class="eyebrow">Riftbreaker Battle Mod &middot; Wellen-Recherche</div>
+  <h1>Wie eine Welle entsteht &mdash; und warum Welle&nbsp;9 h&auml;rter ist als Welle&nbsp;8</h1>
+  <p class="subhead">
+    Alles hier ist aus dem echten Spiel-Code gelesen (Lua-Regeln + native C++-Disassembly),
+    nicht geraten. Wo etwas noch offen ist, steht das explizit dabei &mdash; nichts wird als
+    sicher verkauft, was es nicht ist.
+  </p>
+
+  <section>
+    <h2><span class="num">01</span> Wie das Spiel eine Welle ausw&auml;hlt und spawnt</h2>
+    <p class="section-intro">
+      Der Difficulty-Manager (<code>dom_mananger</code>) l&auml;uft in einem Zyklus. Bei jedem
+      Wellen-Trigger durchl&auml;uft er dieselben Schritte &mdash; und parallel dazu kann,
+      unabh&auml;ngig davon, noch ein Boss dazukommen.
+    </p>
+
+    <figure>
+      <div class="svg-wrap">
+        <svg viewBox="0 0 860 690" role="img" aria-label="Ablauf: DOM-Zyklus w&auml;hlt Difficulty-Level, zieht eine Wellen-Variante aus dem Pool, w&auml;hlt einen Spawnpunkt und startet die Welle nativ; parallel kann unabh&auml;ngig ein Boss dazu gewürfelt werden; der ganze Zyklus wiederholt sich attackCount(L)-mal pro Runde. Zwei Systeme sind farblich umrandet: DOM (dom_mananger) und der unabh&auml;ngige Event-Manager.">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"></path>
+            </marker>
+          </defs>
+          <g transform="translate(0,46)">
+          <rect x="44" y="6" width="412" height="556" rx="12" fill="none" stroke="var(--accent-2)" stroke-width="1.3" stroke-dasharray="2 3" opacity="0.7"></rect>
+          <text x="250" y="-6" text-anchor="middle" font-family="IBM Plex Mono" font-size="11" letter-spacing="0.04em" fill="var(--accent-2)">SYSTEM: DOM (dom_mananger)</text>
+          <rect x="504" y="166" width="292" height="234" rx="12" fill="none" stroke="var(--warn)" stroke-width="1.3" stroke-dasharray="2 3" opacity="0.7"></rect>
+          <text x="650" y="158" text-anchor="middle" font-family="IBM Plex Mono" font-size="11" letter-spacing="0.04em" fill="var(--warn)">SYSTEM: EVENT-MANAGER</text>
+          <g fill="none" stroke="currentColor" stroke-width="1.4" opacity="0.9">
+            <!-- main column arrows -->
+            <line x1="250" y1="66" x2="250" y2="96" marker-end="url(#arrow)"></line>
+            <line x1="250" y1="146" x2="250" y2="176" marker-end="url(#arrow)"></line>
+            <line x1="250" y1="230" x2="250" y2="256" marker-end="url(#arrow)"></line>
+            <line x1="250" y1="310" x2="250" y2="336" marker-end="url(#arrow)"></line>
+            <line x1="250" y1="390" x2="250" y2="416" marker-end="url(#arrow)"></line>
+            <line x1="250" y1="470" x2="250" y2="496" marker-end="url(#arrow)"></line>
+            <!-- side column arrows -->
+            <line x1="650" y1="230" x2="650" y2="256" marker-end="url(#arrow)"></line>
+            <line x1="650" y1="310" x2="650" y2="336" marker-end="url(#arrow)"></line>
+            <!-- side merges into main spawn box -->
+            <path d="M 570 366 L 470 526" marker-end="url(#arrow)"></path>
+            <!-- loop back -->
+            <path d="M 60 546 L 30 546 L 30 205 L 60 205" marker-end="url(#arrow)" stroke-dasharray="4 3"></path>
+          </g>
+
+          <!-- Row 0: DOM cycle -->
+          <rect x="60" y="16" width="380" height="50" rx="7" fill="none" stroke="currentColor" stroke-width="1.4"></rect>
+          <text x="250" y="46" text-anchor="middle" font-family="IBM Plex Mono" font-size="13" fill="currentColor">DOM-Update-Zyklus (l&auml;uft laufend)</text>
+
+          <!-- Row 1: Difficulty level -->
+          <rect x="60" y="96" width="380" height="50" rx="7" fill="var(--surface-2)" stroke="currentColor" stroke-width="1.4"></rect>
+          <text x="250" y="126" text-anchor="middle" font-family="IBM Plex Sans" font-weight="600" font-size="14" fill="currentColor">Difficulty-Level L (1&ndash;9)</text>
+
+          <!-- Row 2: pool -->
+          <rect x="60" y="176" width="380" height="54" rx="7" fill="none" stroke="currentColor" stroke-width="1.4"></rect>
+          <text x="250" y="199" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="currentColor">rules.waves["default"][L]</text>
+          <text x="250" y="217" text-anchor="middle" font-family="IBM Plex Sans" font-size="12" fill="var(--dim)">Pool aus 2&ndash;5 fertigen .logic-Dateien</text>
+
+          <!-- Row 3: random pick -->
+          <rect x="60" y="256" width="380" height="54" rx="7" fill="var(--surface-2)" stroke="currentColor" stroke-width="1.4"></rect>
+          <text x="250" y="279" text-anchor="middle" font-family="IBM Plex Sans" font-weight="600" font-size="13" fill="currentColor">Zuf&auml;llige Auswahl</text>
+          <text x="250" y="297" text-anchor="middle" font-family="IBM Plex Sans" font-size="12" fill="var(--dim)">1 von N Varianten aus dem Pool</text>
+
+          <!-- Row 4: spawn point -->
+          <rect x="60" y="336" width="380" height="54" rx="7" fill="none" stroke="currentColor" stroke-width="1.4"></rect>
+          <text x="250" y="359" text-anchor="middle" font-family="IBM Plex Sans" font-weight="600" font-size="13" fill="currentColor">Zuf&auml;lliger Spawnpunkt</text>
+          <text x="250" y="377" text-anchor="middle" font-family="IBM Plex Sans" font-size="12" fill="var(--dim)">1 von 16 Rand-Spawnern (4 Gruppen)</text>
+
+          <!-- Row 5: activate flow -->
+          <rect x="60" y="416" width="380" height="54" rx="7" fill="var(--surface-2)" stroke="currentColor" stroke-width="1.4"></rect>
+          <text x="250" y="439" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="currentColor">ActivateMissionFlow()</text>
+          <text x="250" y="457" text-anchor="middle" font-family="IBM Plex Sans" font-size="12" fill="var(--dim)">nativer C++-Aufruf, kein Lua</text>
+
+          <!-- Row 6: spawn units -->
+          <rect x="60" y="496" width="380" height="54" rx="7" stroke="var(--accent)" stroke-width="2" fill="none"></rect>
+          <text x="250" y="528" text-anchor="middle" font-family="IBM Plex Sans" font-weight="700" font-size="15" fill="var(--accent)">Einheiten spawnen</text>
+
+          <!-- loop label -->
+          <text x="16" y="380" font-family="IBM Plex Mono" font-size="11" fill="currentColor" transform="rotate(-90 16 380)" text-anchor="middle">&times; attackCount(L) pro Runde</text>
+
+          <!-- side branch header -->
+          <rect x="520" y="176" width="260" height="54" rx="7" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="3 3"></rect>
+          <text x="650" y="199" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="currentColor">rules.gameEvents</text>
+          <text x="650" y="217" text-anchor="middle" font-family="IBM Plex Sans" font-size="12" fill="var(--dim)">unabh&auml;ngiger Zufalls-Event-Pool</text>
+
+          <rect x="520" y="256" width="260" height="54" rx="7" fill="var(--warn-bg)" stroke="var(--warn)" stroke-width="1.4"></rect>
+          <text x="650" y="279" text-anchor="middle" font-family="IBM Plex Sans" font-weight="600" font-size="13" fill="var(--warn)">boss_attack Roll</text>
+          <text x="650" y="297" text-anchor="middle" font-family="IBM Plex Sans" font-size="12" fill="var(--dim)">nur ab Level &ge; 4 &uuml;berhaupt m&ouml;glich</text>
+
+          <rect x="520" y="336" width="260" height="54" rx="7" fill="none" stroke="currentColor" stroke-width="1.4"></rect>
+          <text x="650" y="368" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="currentColor">GetBossPool()</text>
+
+          <text x="650" y="410" text-anchor="middle" font-family="IBM Plex Sans" font-size="11.5" fill="var(--dim)">zus&auml;tzlich zur Welle,</text>
+          <text x="650" y="425" text-anchor="middle" font-family="IBM Plex Sans" font-size="11.5" fill="var(--dim)">nicht anstelle</text>
+
+          <!-- send button annotation -->
+          <rect x="480" y="580" width="360" height="46" rx="7" fill="var(--confirmed-bg)" stroke="var(--accent-2)" stroke-width="1.2"></rect>
+          <text x="660" y="600" text-anchor="middle" font-family="IBM Plex Sans" font-weight="600" font-size="12" fill="var(--accent-2)">Send-Mechanik (Cockpit-Buttons)</text>
+          <text x="660" y="616" text-anchor="middle" font-family="IBM Plex Sans" font-size="11" fill="var(--dim)">springt direkt zu Row 5, umgeht Pool-Zufall</text>
+          </g>
+        </svg>
+      </div>
+      <figcaption>
+        Der linke Pfad ist die nat&uuml;rliche Welle: Level &rarr; Pool &rarr; Zufallsvariante &rarr; Zufalls-Spawnpunkt &rarr; Spawn,
+        wiederholt <code>attackCount(L)</code>-mal pro Runde. Der rechte, gestrichelte Pfad ist der Boss: ein komplett
+        unabh&auml;ngiger Zufalls-Wurf, der ab Level&nbsp;4 <em>zus&auml;tzlich</em> zur normalen Welle feuern kann &mdash; nicht Teil
+        des Wellen-Pools. Im Cockpit springt der "Send"-Button direkt zur letzten Zeile und umgeht den Zufalls-Pool
+        (man w&auml;hlt eine feste Datei statt zu w&uuml;rfeln).
+      </figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2><span class="num">02</span> Die Systeme im Detail</h2>
+    <p class="section-intro">
+      Jeder Kasten im Diagramm oben ist tats&auml;chlich ein eigener Code-Bereich mit eigenem Verhalten &mdash;
+      hier einzeln aufgeschl&uuml;sselt, in derselben Reihenfolge wie im Flowchart. Zwei Systeme laufen dabei
+      komplett unabh&auml;ngig voneinander: <strong>DOM</strong> (die eigentliche Wellen-Uhr) und der
+      <strong>Event-Manager</strong> (der Zufalls-Ereignisse w&uuml;rfelt, u.a. Bosse). Beide rufen am Ende
+      dieselbe native Funktion auf, um Einheiten spawnen zu lassen.
+    </p>
+
+    <div class="system-steps">
+      <div class="system-step">
+        <div class="step-no">1</div>
+        <div>
+          <div class="step-head"><h4>DOM-Update-Zyklus</h4><span class="tag tag-dom">system: dom</span></div>
+          <p>
+            <code>dom_mananger</code> ist kein einmaliges Skript, sondern ein dauerhaft existierender
+            Zustandsautomat (State Machine), der f&uuml;r die gesamte Spieldauer l&auml;uft und jeden Frame
+            aktualisiert wird (<code>Update()</code>). Er merkt sich intern, in welchem Zustand er gerade ist
+            (u.a. <code>spawn</code> &mdash; genau der Zustand, der eine Welle ausl&ouml;st, via
+            <code>OnEnterSpawn</code>).
+          </p>
+          <p>
+            Er hat eine eigene Uhr: <code>GetPrepareSpawnTime()</code> bestimmt den Abstand zwischen
+            Angriffsrunden &mdash; standardm&auml;&szlig;ig <strong>480s</strong> (Preset A) oder
+            <strong>240s</strong> (Preset B). Er kann komplett pausiert werden
+            (<code>PauseDOM</code>/<code>SetSuspended(true)</code> &mdash; dann tickt gar nichts mehr) und
+            reagiert au&szlig;erdem auf mehrere native Spiel-Ereignisse: startet/endet irgendein Mission-Flow,
+            stirbt ein Spieler, schl&auml;gt ein Respawn fehl, beginnt ein Tech-Upgrade.
+          </p>
+        </div>
+      </div>
+
+      <div class="system-step">
+        <div class="step-no">2</div>
+        <div>
+          <div class="step-head"><h4>Difficulty-Level L</h4><span class="tag tag-dom">system: dom</span></div>
+          <p>
+            Ein simpler Z&auml;hlwert, den <code>dom_mananger</code> selbst mitf&uuml;hrt
+            (<code>currentDifficultyLevel</code>). Steigt im Lauf einer Runde. Dieser Wert entscheidet direkt,
+            welcher Zeile in der Pool-Tabelle (Schritt 3) und welchem Eintrag in <code>attackCount</code>
+            (Abschnitt 03) nachgeschlagen wird.
+          </p>
+        </div>
+      </div>
+
+      <div class="system-step">
+        <div class="step-no">3</div>
+        <div>
+          <div class="step-head"><h4>rules.waves["default"][L] &mdash; der Pool</h4><span class="tag tag-native">statische Lua-Tabelle</span></div>
+          <p>
+            Keine Berechnung, sondern eine fest von Hand geschriebene Liste in der Mission-Regeldatei
+            (<code>dom_survival_jungle_rules_default.lua</code>) &mdash; f&uuml;r jedes Level steht dort
+            schlicht eine Liste von Dateinamen. Die vollst&auml;ndige Liste f&uuml;r alle 9 Level steht in
+            Abschnitt 05.
+          </p>
+        </div>
+      </div>
+
+      <div class="system-step">
+        <div class="step-no">4</div>
+        <div>
+          <div class="step-head"><h4>Zuf&auml;llige Auswahl</h4><span class="tag tag-dom">system: dom</span></div>
+          <p>
+            Teil der DOM-eigenen Spawn-Routine (<code>SpawnWave</code>/<code>SpawnPreparedWave</code>): zieht
+            gleichverteilt zuf&auml;llig einen Dateinamen aus der Liste von Schritt 3. Jeder Wellen-Trigger
+            w&uuml;rfelt neu &mdash; keine Erinnerung an vorherige Ausw&auml;hlungen.
+          </p>
+        </div>
+      </div>
+
+      <div class="system-step">
+        <div class="step-no">5</div>
+        <div>
+          <div class="step-head"><h4>Zuf&auml;lliger Spawnpunkt</h4><span class="tag tag-dom">system: dom</span></div>
+          <p>
+            Die Karte hat 16 Rand-Spawner (Blueprint <code>logic/spawn_enemy</code>), einmalig beim
+            Missionsstart durch <code>mission_base:SelectWaveSpawnPoints</code> in 4 benannte Gruppen sortiert
+            (Nord/S&uuml;d/Ost/West). DOMs <code>RandomizeSpawnPoint</code> w&auml;hlt bei jeder Welle 1 Gruppe
+            + 1 Punkt daraus &mdash; das bestimmt nur <em>wo</em> die Welle auftaucht, nicht ihre St&auml;rke.
+          </p>
+        </div>
+      </div>
+
+      <div class="system-step">
+        <div class="step-no">6</div>
+        <div>
+          <div class="step-head"><h4>ActivateMissionFlow()</h4><span class="tag tag-native">nativ, C++</span></div>
+          <p>
+            Der eigentliche Flaschenhals: eine einzelne native Methode auf <code>MissionService</code>, die
+            <em>jeder</em> Weg zum Wellen-Ausl&ouml;sen am Ende aufruft &mdash; die nat&uuml;rliche Welle
+            genauso wie die Cockpit-Send-Buttons (Abschnitt 01, gestrichelte Abk&uuml;rzung). Sie bekommt nur
+            einen Dateipfad + Modus, wei&szlig; nichts von Difficulty-Levels oder Pools.
+          </p>
+        </div>
+      </div>
+
+      <div class="system-step">
+        <div class="step-no">7</div>
+        <div>
+          <div class="step-head"><h4>Einheiten spawnen</h4><span class="tag tag-native">Engine, FlowGraph</span></div>
+          <p>
+            Die <code>.logic</code>-Datei selbst ist ein kleines FlowGraph (Format v5) mit
+            <code>Enemy</code>-Knoten (<code>blueprint</code> + <code>count</code>). Ab hier trifft niemand
+            mehr eine Entscheidung &mdash; die Engine liest den Graphen einfach ab und erzeugt die Einheiten.
+          </p>
+        </div>
+      </div>
+
+      <div class="system-step">
+        <div class="step-no">8</div>
+        <div>
+          <div class="step-head"><h4>rules.gameEvents / Event-Manager</h4><span class="tag tag-event">system: event-manager</span></div>
+          <p>
+            Ein komplett eigenst&auml;ndiges Lua-System (<code>event_manager.lua</code>), das nichts mit DOMs
+            eigener Uhr zu tun hat. F&uuml;hrt eine gewichtete Zufalls-Liste von Ereignissen
+            (<code>rules.gameEvents</code>) &mdash; <code>boss_attack</code> ist nur eines davon, es gibt
+            weitere Eintr&auml;ge mit eigenen Gewichten, die hier nicht weiter untersucht wurden. Unter
+            <code>minEventLevel=4</code> ist <code>boss_attack</code> im W&uuml;rfel-Topf schlicht nicht
+            vorhanden.
+          </p>
+        </div>
+      </div>
+
+      <div class="system-step">
+        <div class="step-no">9</div>
+        <div>
+          <div class="step-head"><h4>GetBossPool()</h4><span class="tag tag-event">system: event-manager</span></div>
+          <p>
+            Wichtige Feinheit: wenn <code>boss_attack</code> w&uuml;rfelt, spawnt <strong>nicht sofort</strong>
+            ein Boss &mdash; der Event-Manager setzt nur ein Flag (<code>self.spawnBoss = true</code>) auf dem
+            DOM-Objekt. Erst beim <em>n&auml;chsten</em> natürlichen Wellen-Tick (Schritt 1&ndash;7 oben) liest
+            DOM dieses Flag, spawnt zus&auml;tzlich aus <code>rules.bosses[Level]</code> und l&ouml;scht das
+            Flag wieder. Ein gew&uuml;rfelter Boss kann also ein St&uuml;ck "in der Warteschlange" h&auml;ngen,
+            bis die n&auml;chste normale Welle f&auml;llig ist.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">03</span> Warum Welle&nbsp;9 h&auml;rter ist als Welle&nbsp;8</h2>
+    <p class="section-intro">
+      Drei <em>separate</em> Mechanismen addieren sich. Keiner davon ist eine "neue Wellen-Art" f&uuml;r
+      Level&nbsp;9 &mdash; es ist dieselbe Maschine, nur mit anderen Eingabewerten.
+    </p>
+
+    <h3>Faktor 1 &mdash; der Pool selbst ist fast identisch</h3>
+    <div class="compare l9">
+      <div>
+        <div class="col-head">Level 8</div>
+        <ul>
+          <li>5 Wellen-Varianten im Pool</li>
+          <li>"Schwarm"-Slot: <b>gnerot &times;8</b></li>
+        </ul>
+      </div>
+      <div>
+        <div class="col-head">Level 9</div>
+        <ul>
+          <li>Dieselben 4 Hauptvarianten wie Level 8</li>
+          <li>"Schwarm"-Slot: <b>gnerot &times;11</b></li>
+        </ul>
+      </div>
+    </div>
+    <p>
+      Level&nbsp;9 hat <em>keinen eigenen</em> Wellen-Pool &mdash; er verweist komplett auf die Dateien von
+      Level&nbsp;8. Der einzige Unterschied: der eine "Schwarm"-Slot im Pool zieht bei Level&nbsp;9 aus
+      einer etwas st&auml;rkeren Datei (11 statt 8 gnerot). Kleiner Effekt, aber real.
+    </p>
+
+    <h3>Faktor 2 &mdash; Level 9 feuert eine Welle mehr pro Runde</h3>
+    <div class="chart-row">
+      <figure>
+        <div class="svg-wrap">
+          <svg viewBox="0 0 380 230" role="img" aria-label="Balkendiagramm: attackCount pro Difficulty-Level, Standardwerte 1,2,2,3,3,3,3,3,4 &mdash; Level 9 springt auf 4.">
+            <g font-family="IBM Plex Mono" font-size="10.5" fill="var(--dim)">
+              <line x1="40" y1="20" x2="40" y2="180" stroke="currentColor" stroke-width="1" opacity="0.5"></line>
+              <line x1="40" y1="180" x2="360" y2="180" stroke="currentColor" stroke-width="1" opacity="0.5"></line>
+              <text x="34" y="184" text-anchor="end">0</text>
+              <text x="34" y="139" text-anchor="end">1</text>
+              <text x="34" y="99" text-anchor="end">2</text>
+              <text x="34" y="59" text-anchor="end">3</text>
+              <text x="34" y="24" text-anchor="end">4</text>
+            </g>
+            <!-- bars: baseline y=180, unit height 40px per count -->
+            <!-- L1=1 -->
+            <rect x="50" y="140" width="26" height="40" fill="var(--dim)" opacity="0.55"></rect>
+            <!-- L2=2 -->
+            <rect x="88" y="100" width="26" height="80" fill="var(--dim)" opacity="0.55"></rect>
+            <!-- L3=2 -->
+            <rect x="126" y="100" width="26" height="80" fill="var(--dim)" opacity="0.55"></rect>
+            <!-- L4=3 -->
+            <rect x="164" y="60" width="26" height="120" fill="var(--dim)" opacity="0.55"></rect>
+            <!-- L5=3 -->
+            <rect x="202" y="60" width="26" height="120" fill="var(--dim)" opacity="0.55"></rect>
+            <!-- L6=3 -->
+            <rect x="240" y="60" width="26" height="120" fill="var(--dim)" opacity="0.55"></rect>
+            <!-- L7=3 -->
+            <rect x="278" y="60" width="26" height="120" fill="var(--dim)" opacity="0.55"></rect>
+            <!-- L8=3 -->
+            <rect x="316" y="60" width="26" height="120" fill="var(--dim)" opacity="0.75"></rect>
+            <g font-family="IBM Plex Sans" font-size="11" text-anchor="middle" fill="var(--dim)">
+              <text x="63" y="196">1</text><text x="101" y="196">2</text><text x="139" y="196">3</text>
+              <text x="177" y="196">4</text><text x="215" y="196">5</text><text x="253" y="196">6</text>
+              <text x="291" y="196">7</text><text x="329" y="196">8</text>
+            </g>
+          </svg>
+        </div>
+      </figure>
+      <figure>
+        <div class="svg-wrap">
+          <svg viewBox="0 0 380 230" role="img" aria-label="Dasselbe Diagramm mit Level 9 hervorgehoben: attackCount springt von 3 auf 4, ein Drittel mehr Wellen pro Runde.">
+            <g font-family="IBM Plex Mono" font-size="10.5" fill="var(--dim)">
+              <line x1="40" y1="20" x2="40" y2="180" stroke="currentColor" stroke-width="1" opacity="0.5"></line>
+              <line x1="40" y1="180" x2="360" y2="180" stroke="currentColor" stroke-width="1" opacity="0.5"></line>
+              <text x="34" y="184" text-anchor="end">0</text>
+              <text x="34" y="139" text-anchor="end">1</text>
+              <text x="34" y="99" text-anchor="end">2</text>
+              <text x="34" y="59" text-anchor="end">3</text>
+              <text x="34" y="24" text-anchor="end">4</text>
+            </g>
+            <rect x="50" y="60" width="70" height="120" fill="var(--dim)" opacity="0.3"></rect>
+            <text x="85" y="200" text-anchor="middle" font-family="IBM Plex Sans" font-size="11" fill="var(--dim)">Level 4&ndash;8</text>
+            <text x="85" y="45" text-anchor="middle" font-family="IBM Plex Sans" font-size="12" fill="var(--dim)">3 Wellen/Runde</text>
+            <rect x="200" y="20" width="100" height="160" fill="var(--accent)" opacity="0.85"></rect>
+            <text x="250" y="200" text-anchor="middle" font-family="IBM Plex Sans" font-weight="700" font-size="13" fill="var(--accent)">Level 9</text>
+            <text x="250" y="16" text-anchor="middle" font-family="IBM Plex Sans" font-weight="700" font-size="13" fill="var(--accent)">4 Wellen/Runde</text>
+          </svg>
+        </div>
+      </figure>
+    </div>
+    <p>
+      Standardwerte: <code>attackCount = [1,2,2,3,3,3,3,3,4]</code>. Von Level&nbsp;4 bis Level&nbsp;8 bleibt es
+      konstant bei 3 Wellen pro Runde &mdash; bei Level&nbsp;9 springt es auf 4. Ein Drittel mehr Wellen,
+      unabh&auml;ngig davon, was in den einzelnen Wellen drinsteckt.
+    </p>
+
+    <h3>Faktor 3 &mdash; der additive Difficulty-Bonus (der gr&ouml;&szlig;te Sprung von allen)</h3>
+    <figure>
+      <div class="svg-wrap">
+        <svg viewBox="0 0 780 240" role="img" aria-label="Kumulativer Difficulty-Bonus je Level fuer Solo-Spieler: 0 von Level 1 bis 5, dann 0,5 bei Level 6, 1,0 bei Level 7, 1,5 bei Level 8, und ein Sprung auf 3,0 bei Level 9 -- der groesste Einzelsprung der ganzen Tabelle.">
+          <g font-family="IBM Plex Mono" font-size="11" fill="var(--dim)">
+            <line x1="60" y1="20" x2="60" y2="180" stroke="currentColor" stroke-width="1" opacity="0.5"></line>
+            <line x1="60" y1="180" x2="740" y2="180" stroke="currentColor" stroke-width="1" opacity="0.5"></line>
+            <text x="54" y="184" text-anchor="end">0.0</text>
+            <text x="54" y="140" text-anchor="end">1.0</text>
+            <text x="54" y="100" text-anchor="end">2.0</text>
+            <text x="54" y="60" text-anchor="end">3.0</text>
+          </g>
+          <!-- baseline y=180, scale: 1.0 -> 40px -->
+          <!-- L1-5 = 0 -->
+          <rect x="80" y="178" width="56" height="2" fill="var(--dim)" opacity="0.4"></rect>
+          <rect x="150" y="178" width="56" height="2" fill="var(--dim)" opacity="0.4"></rect>
+          <rect x="220" y="178" width="56" height="2" fill="var(--dim)" opacity="0.4"></rect>
+          <rect x="290" y="178" width="56" height="2" fill="var(--dim)" opacity="0.4"></rect>
+          <rect x="360" y="178" width="56" height="2" fill="var(--dim)" opacity="0.4"></rect>
+          <!-- L6 = 0.5 -> 20px -->
+          <rect x="430" y="160" width="56" height="20" fill="var(--dim)" opacity="0.55"></rect>
+          <!-- L7 = 1.0 -> 40px -->
+          <rect x="500" y="140" width="56" height="40" fill="var(--dim)" opacity="0.55"></rect>
+          <!-- L8 = 1.5 -> 60px -->
+          <rect x="570" y="120" width="56" height="60" fill="var(--dim)" opacity="0.7"></rect>
+          <!-- L9 = 3.0 -> 120px, accent -->
+          <rect x="640" y="60" width="56" height="120" fill="var(--accent)"></rect>
+          <text x="668" y="50" text-anchor="middle" font-family="IBM Plex Sans" font-weight="700" font-size="13" fill="var(--accent)">+3,0</text>
+
+          <g font-family="IBM Plex Sans" font-size="12" text-anchor="middle" fill="var(--dim)">
+            <text x="108" y="198">L1</text><text x="178" y="198">L2</text><text x="248" y="198">L3</text>
+            <text x="318" y="198">L4</text><text x="388" y="198">L5</text><text x="458" y="198">L6</text>
+            <text x="528" y="198">L7</text><text x="598" y="198">L8</text>
+            <text x="668" y="198" font-weight="700" fill="var(--accent)">L9</text>
+          </g>
+          <!-- jump annotation -->
+          <path d="M 626 118 C 640 90, 645 85, 650 62" fill="none" stroke="var(--accent)" stroke-width="1.2" stroke-dasharray="3 2"></path>
+          <text x="720" y="100" text-anchor="middle" font-family="IBM Plex Sans" font-size="11" fill="var(--accent)">dreimal so</text>
+          <text x="720" y="114" text-anchor="middle" font-family="IBM Plex Sans" font-size="11" fill="var(--accent)">gro&szlig;er Sprung</text>
+          <text x="720" y="128" text-anchor="middle" font-family="IBM Plex Sans" font-size="11" fill="var(--accent)">wie je zuvor</text>
+        </svg>
+      </div>
+      <figcaption>
+        Werte f&uuml;r 1 Spieler (Solo), kumulativ &uuml;ber alle Level. Jeder Schritt von L6 bis L8 ist
+        <code>+0,5</code>. Der Schritt L8&rarr;L9 ist <code>+1,5</code> &mdash; dreimal so gro&szlig; wie jeder
+        Schritt davor. Das ist der auff&auml;lligste Einzelfaktor, warum L9 sich hart anf&uuml;hlen d&uuml;rfte.
+      </figcaption>
+    </figure>
+
+    <div class="callout">
+      <span class="tag tag-confirmed">bestätigt &mdash; per Disassembly gelesen</span>
+      <p>
+        Die Funktion, die diesen Bonus einbaut (<code>CampaignService::IncreaseCreaturesBaseDifficulty</code>),
+        macht wortw&ouml;rtlich nur eine Addition auf ein Float-Feld: <code>creatures_base_difficulty&nbsp;+=&nbsp;delta</code>.
+        Kein Multiplikator, keine Prozentrechnung, keine versteckte Formel an dieser Stelle &mdash; nur reines Aufaddieren.
+      </p>
+    </div>
+    <div class="callout open">
+      <span class="tag tag-open">noch offen &mdash; wird weiter untersucht</span>
+      <p>
+        Was dieser aufaddierte Wert dann tats&auml;chlich an den gespawnten Kreaturen bewirkt (mehr HP? mehr
+        Schaden? beides?), ist <strong>noch nicht abschlie&szlig;end gekl&auml;rt</strong>. Die eine Stelle, die
+        den Wert bisher genauer verfolgt wurde, f&uuml;hrte zu einer Spawn-Distanz-Berechnung, nicht zu einem
+        HP-/Schadens-Feld &mdash; 6 von 9 Aufrufstellen dieser Funktion sind noch nicht untersucht. Es ist also
+        best&auml;tigt, <em>dass</em> der Wert additiv wächst &mdash; noch nicht, <em>was er am Ende bewirkt</em>.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">04</span> Alle Parameter, die eine Welle ver&auml;ndern</h2>
+    <p class="section-intro">Zusammengefasst &mdash; was tats&auml;chlich Einfluss auf St&auml;rke und Zusammensetzung hat.</p>
+    <table>
+      <thead>
+        <tr><th>Parameter</th><th>Wirkung</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="param">Difficulty-Level (1&ndash;9)</td>
+          <td>Bestimmt Pool, attackCount und den kumulativen Difficulty-Bonus.</td>
+          <td><span class="tag tag-confirmed">bestätigt</span></td>
+        </tr>
+        <tr>
+          <td class="param">Pool-Variante (Zufall)</td>
+          <td>Bei jedem Wellen-Trigger wird 1 von 2&ndash;5 fertigen Kompositionen zuf&auml;llig gezogen.</td>
+          <td><span class="tag tag-confirmed">bestätigt</span></td>
+        </tr>
+        <tr>
+          <td class="param">attackCount(L)</td>
+          <td>Wellen pro Runde: <code>[1,2,2,3,3,3,3,3,4]</code> &mdash; Sprung bei L9.</td>
+          <td><span class="tag tag-confirmed">bestätigt</span></td>
+        </tr>
+        <tr>
+          <td class="param">creatures_base_difficulty</td>
+          <td>Additiver, kumulativer Bonus ab L6. Speicherung bestätigt, Spielwirkung offen.</td>
+          <td><span class="tag tag-open">teilweise offen</span></td>
+        </tr>
+        <tr>
+          <td class="param">Boss-Roll</td>
+          <td>Unabh&auml;ngiges Zufallsereignis ab L4, zus&auml;tzlich zur normalen Welle. HP je nach Boss-Art 3000&ndash;5000.</td>
+          <td><span class="tag tag-confirmed">bestätigt</span></td>
+        </tr>
+        <tr>
+          <td class="param">Spielerzahl</td>
+          <td>Sowohl attackCount als auch der Difficulty-Bonus haben eigene Tabellen je Spielerzahl &mdash; hier gezeigt: Solo-Werte.</td>
+          <td><span class="tag tag-confirmed">bestätigt</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2><span class="num">05</span> Welche Dateien es gibt, und was drin ist</h2>
+    <p class="section-intro">
+      "Pool aus 2&ndash;5 fertigen Dateien" (Abschnitt 01) heißt konkret: pro Level gibt es 2 bis 5
+      fertige <code>.logic</code>-Dateien nach dem Muster
+      <code>logic/missions/survival/attack_level_&lt;Level&gt;_id_&lt;Variante&gt;.logic</code>, und das
+      Spiel w&uuml;rfelt bei jedem Wellen-Trigger genau eine davon aus. Hier sind alle 9 Pools einzeln
+      aufgeklappt, mit der vollst&auml;ndigen Einheiten-Zusammensetzung und der HP-Summe jeder Variante.
+    </p>
+
+    <h3>Basis-HP je Einheitentyp</h3>
+    <p>Alle Kompositionen unten bestehen aus diesen 6 Einheitentypen (echte Werte aus den Spieldateien):</p>
+    <table class="compact">
+      <thead><tr><th>Einheit</th><th class="num">HP</th></tr></thead>
+      <tbody>
+        <tr><td>canoptrix</td><td class="num">5</td></tr>
+        <tr><td>arachnoid_sentinel</td><td class="num">110</td></tr>
+        <tr><td>bomogan</td><td class="num">250</td></tr>
+        <tr><td>kafferroceros</td><td class="num">300</td></tr>
+        <tr><td>baxmoth</td><td class="num">1 000</td></tr>
+        <tr><td>gnerot</td><td class="num">2 000</td></tr>
+      </tbody>
+    </table>
+
+    <h3 style="margin-top: 22px;">Die 9 Pools</h3>
+
+    <details class="level-block">
+      <summary><span class="lvl-badge">L1</span> Level 1 <span class="lvl-meta">Pool: 2 Dateien &middot; &Oslash; 22,5 HP</span></summary>
+      <div class="level-body">
+        <table class="compact">
+          <thead><tr><th class="variant">Variante</th><th>Zusammensetzung</th><th class="num">Einheiten &Sigma;</th><th class="num">HP gesamt</th></tr></thead>
+          <tbody>
+            <tr><td class="variant">id_1</td><td>canoptrix&times;1</td><td class="num">1</td><td class="num">5</td></tr>
+            <tr><td class="variant">id_2</td><td>canoptrix&times;8</td><td class="num">8</td><td class="num">40</td></tr>
+            <tr class="total"><td colspan="3">Pool-Durchschnitt</td><td class="num">22,5</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+
+    <details class="level-block">
+      <summary><span class="lvl-badge">L2</span> Level 2 <span class="lvl-meta">Pool: 2 Dateien &middot; &Oslash; 250 HP</span></summary>
+      <div class="level-body">
+        <table class="compact">
+          <thead><tr><th class="variant">Variante</th><th>Zusammensetzung</th><th class="num">Einheiten &Sigma;</th><th class="num">HP gesamt</th></tr></thead>
+          <tbody>
+            <tr><td class="variant">id_1</td><td>arachnoid_sentinel&times;1, canoptrix&times;8</td><td class="num">9</td><td class="num">150</td></tr>
+            <tr><td class="variant">id_2</td><td>arachnoid_sentinel&times;3, canoptrix&times;4</td><td class="num">7</td><td class="num">350</td></tr>
+            <tr class="total"><td colspan="3">Pool-Durchschnitt</td><td class="num">250</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+
+    <details class="level-block">
+      <summary><span class="lvl-badge">L3</span> Level 3 <span class="lvl-meta">Pool: 2 Dateien &middot; &Oslash; 1 088 HP</span></summary>
+      <div class="level-body">
+        <table class="compact">
+          <thead><tr><th class="variant">Variante</th><th>Zusammensetzung</th><th class="num">Einheiten &Sigma;</th><th class="num">HP gesamt</th></tr></thead>
+          <tbody>
+            <tr><td class="variant">id_1</td><td>kafferroceros&times;1, arachnoid_sentinel&times;6, canoptrix&times;3</td><td class="num">10</td><td class="num">975</td></tr>
+            <tr><td class="variant">id_2</td><td>kafferroceros&times;4</td><td class="num">4</td><td class="num">1 200</td></tr>
+            <tr class="total"><td colspan="3">Pool-Durchschnitt</td><td class="num">1 088</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+
+    <details class="level-block">
+      <summary><span class="lvl-badge">L4</span> Level 4 <span class="lvl-meta">Pool: 3 Dateien &middot; &Oslash; 2 180 HP</span></summary>
+      <div class="level-body">
+        <table class="compact">
+          <thead><tr><th class="variant">Variante</th><th>Zusammensetzung</th><th class="num">Einheiten &Sigma;</th><th class="num">HP gesamt</th></tr></thead>
+          <tbody>
+            <tr><td class="variant">id_1</td><td>kafferroceros&times;5, arachnoid_sentinel&times;8, canoptrix&times;3</td><td class="num">16</td><td class="num">2 395</td></tr>
+            <tr><td class="variant">id_2</td><td>kafferroceros&times;7, canoptrix&times;6</td><td class="num">13</td><td class="num">2 130</td></tr>
+            <tr><td class="variant">id_4</td><td>kafferroceros&times;5, bomogan&times;2, canoptrix&times;3</td><td class="num">10</td><td class="num">2 015</td></tr>
+            <tr class="total"><td colspan="3">Pool-Durchschnitt</td><td class="num">2 180</td></tr>
+          </tbody>
+        </table>
+        <p class="level-note">
+          <code>id_3</code> fehlt hier bewusst &mdash; die Datei existiert, wird aber im Pool von Level&nbsp;5
+          verwendet (siehe dort). Dieses Muster zieht sich ab hier durch alle Level.
+        </p>
+      </div>
+    </details>
+
+    <details class="level-block">
+      <summary><span class="lvl-badge">L5</span> Level 5 <span class="lvl-meta">Pool: 4 Dateien &middot; &Oslash; 3 731 HP</span></summary>
+      <div class="level-body">
+        <table class="compact">
+          <thead><tr><th class="variant">Variante</th><th>Zusammensetzung</th><th class="num">Einheiten &Sigma;</th><th class="num">HP gesamt</th></tr></thead>
+          <tbody>
+            <tr><td class="variant">id_1</td><td>kafferroceros&times;9, arachnoid_sentinel&times;8, canoptrix&times;5</td><td class="num">22</td><td class="num">3 605</td></tr>
+            <tr><td class="variant">id_2</td><td>kafferroceros&times;11, canoptrix&times;9</td><td class="num">20</td><td class="num">3 345</td></tr>
+            <tr class="xref"><td class="variant">attack_level_4_id_3</td><td>gnerot&times;2</td><td class="num">2</td><td class="num">4 000</td></tr>
+            <tr><td class="variant">id_4</td><td>kafferroceros&times;9, bomogan&times;5, canoptrix&times;5</td><td class="num">19</td><td class="num">3 975</td></tr>
+            <tr class="total"><td colspan="3">Pool-Durchschnitt</td><td class="num">3 731</td></tr>
+          </tbody>
+        </table>
+        <p class="level-note">
+          Der "Schwarm"-Slot ist hier eine reine Gnerot-Welle aus Level&nbsp;4s Datei &mdash; klein an Zahl,
+          aber wegen Gnerots 2 000 HP trotzdem die zweitst&auml;rkste Variante im Pool.
+        </p>
+      </div>
+    </details>
+
+    <details class="level-block">
+      <summary><span class="lvl-badge">L6</span> Level 6 <span class="lvl-meta">Pool: 5 Dateien &middot; &Oslash; 5 582 HP</span></summary>
+      <div class="level-body">
+        <table class="compact">
+          <thead><tr><th class="variant">Variante</th><th>Zusammensetzung</th><th class="num">Einheiten &Sigma;</th><th class="num">HP gesamt</th></tr></thead>
+          <tbody>
+            <tr><td class="variant">id_1</td><td>kafferroceros&times;13, arachnoid_sentinel&times;8, canoptrix&times;9</td><td class="num">30</td><td class="num">4 825</td></tr>
+            <tr><td class="variant">id_2</td><td>kafferroceros&times;13, canoptrix&times;9</td><td class="num">22</td><td class="num">3 945</td></tr>
+            <tr class="xref"><td class="variant">attack_level_5_id_3</td><td>gnerot&times;4</td><td class="num">4</td><td class="num">8 000</td></tr>
+            <tr><td class="variant">id_4</td><td>kafferroceros&times;13, bomogan&times;5, canoptrix&times;9</td><td class="num">27</td><td class="num">5 195</td></tr>
+            <tr><td class="variant">id_5</td><td>kafferroceros&times;13, baxmoth&times;2, canoptrix&times;9</td><td class="num">24</td><td class="num">5 945</td></tr>
+            <tr class="total"><td colspan="3">Pool-Durchschnitt</td><td class="num">5 582</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+
+    <details class="level-block">
+      <summary><span class="lvl-badge">L7</span> Level 7 <span class="lvl-meta">Pool: 5 Dateien &middot; &Oslash; 7 648 HP</span></summary>
+      <div class="level-body">
+        <table class="compact">
+          <thead><tr><th class="variant">Variante</th><th>Zusammensetzung</th><th class="num">Einheiten &Sigma;</th><th class="num">HP gesamt</th></tr></thead>
+          <tbody>
+            <tr><td class="variant">id_1</td><td>kafferroceros&times;18, arachnoid_sentinel&times;10, canoptrix&times;12</td><td class="num">40</td><td class="num">6 560</td></tr>
+            <tr><td class="variant">id_2</td><td>kafferroceros&times;19, canoptrix&times;12</td><td class="num">31</td><td class="num">5 760</td></tr>
+            <tr class="xref"><td class="variant">attack_level_6_id_3</td><td>gnerot&times;5</td><td class="num">5</td><td class="num">10 000</td></tr>
+            <tr><td class="variant">id_4</td><td>kafferroceros&times;18, bomogan&times;8, canoptrix&times;12</td><td class="num">38</td><td class="num">7 460</td></tr>
+            <tr><td class="variant">id_5</td><td>kafferroceros&times;18, baxmoth&times;3, canoptrix&times;12</td><td class="num">33</td><td class="num">8 460</td></tr>
+            <tr class="total"><td colspan="3">Pool-Durchschnitt</td><td class="num">7 648</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+
+    <details class="level-block">
+      <summary><span class="lvl-badge">L8</span> Level 8 <span class="lvl-meta">Pool: 5 Dateien &middot; &Oslash; 9 312 HP</span></summary>
+      <div class="level-body">
+        <table class="compact">
+          <thead><tr><th class="variant">Variante</th><th>Zusammensetzung</th><th class="num">Einheiten &Sigma;</th><th class="num">HP gesamt</th></tr></thead>
+          <tbody>
+            <tr><td class="variant">id_1</td><td>kafferroceros&times;18, arachnoid_sentinel&times;12, canoptrix&times;12</td><td class="num">42</td><td class="num">6 780</td></tr>
+            <tr><td class="variant">id_2</td><td>kafferroceros&times;21, canoptrix&times;12</td><td class="num">33</td><td class="num">6 360</td></tr>
+            <tr class="xref"><td class="variant">attack_level_7_id_3</td><td>gnerot&times;8</td><td class="num">8</td><td class="num">16 000</td></tr>
+            <tr><td class="variant">id_4</td><td>kafferroceros&times;18, bomogan&times;10, canoptrix&times;12</td><td class="num">40</td><td class="num">7 960</td></tr>
+            <tr><td class="variant">id_5</td><td>kafferroceros&times;18, baxmoth&times;4, canoptrix&times;12</td><td class="num">34</td><td class="num">9 460</td></tr>
+            <tr class="total"><td colspan="3">Pool-Durchschnitt</td><td class="num">9 312</td></tr>
+          </tbody>
+        </table>
+        <p class="level-note">
+          Der Schwarm-Slot hier ist <code>attack_level_7_id_3</code> (gnerot&times;8) &mdash; <strong>nicht</strong>
+          die eigene <code>attack_level_8_id_3</code>-Datei. Die eigene <code>id_3</code>-Datei von Level&nbsp;8
+          (gnerot&times;11) wird stattdessen von Level&nbsp;9 verwendet, siehe unten.
+        </p>
+      </div>
+    </details>
+
+    <details class="level-block">
+      <summary><span class="lvl-badge">L9</span> Level 9 <span class="lvl-meta">Pool: 5 Dateien (= Level 8) &middot; &Oslash; 10 512 HP</span></summary>
+      <div class="level-body">
+        <table class="compact">
+          <thead><tr><th class="variant">Variante</th><th>Zusammensetzung</th><th class="num">Einheiten &Sigma;</th><th class="num">HP gesamt</th></tr></thead>
+          <tbody>
+            <tr class="xref"><td class="variant">attack_level_8_id_1</td><td>kafferroceros&times;18, arachnoid_sentinel&times;12, canoptrix&times;12</td><td class="num">42</td><td class="num">6 780</td></tr>
+            <tr class="xref"><td class="variant">attack_level_8_id_2</td><td>kafferroceros&times;21, canoptrix&times;12</td><td class="num">33</td><td class="num">6 360</td></tr>
+            <tr class="xref"><td class="variant">attack_level_8_id_3</td><td>gnerot&times;11</td><td class="num">11</td><td class="num">22 000</td></tr>
+            <tr class="xref"><td class="variant">attack_level_8_id_4</td><td>kafferroceros&times;18, bomogan&times;10, canoptrix&times;12</td><td class="num">40</td><td class="num">7 960</td></tr>
+            <tr class="xref"><td class="variant">attack_level_8_id_5</td><td>kafferroceros&times;18, baxmoth&times;4, canoptrix&times;12</td><td class="num">34</td><td class="num">9 460</td></tr>
+            <tr class="total"><td colspan="3">Pool-Durchschnitt</td><td class="num">10 512</td></tr>
+          </tbody>
+        </table>
+        <p class="level-note">
+          Level&nbsp;9 hat <strong>keine einzige eigene Wellen-Datei</strong> &mdash; der komplette Pool
+          verweist auf Level&nbsp;8s Dateien. Der einzige Grund, warum der Durchschnitt trotzdem h&ouml;her
+          liegt als bei Level&nbsp;8 (10 512 statt 9 312 HP): der Schwarm-Slot zieht hier aus
+          <code>attack_level_8_id_3</code> (gnerot&times;11, 22 000 HP) statt aus Level&nbsp;8s tats&auml;chlich
+          genutztem <code>attack_level_7_id_3</code> (gnerot&times;8, 16 000 HP) &mdash; siehe Faktor&nbsp;1 in
+          Abschnitt 03.
+        </p>
+      </div>
+    </details>
+  </section>
+
+  <section>
+    <h2><span class="num">06</span> Der Boss-Pool im Detail</h2>
+    <p class="section-intro">
+      Zur Erinnerung aus Abschnitt 01: Bosse sind kein Teil der Wellen-Pools oben, sondern ein
+      unabh&auml;ngiges Zufallsereignis ab Level&nbsp;4 (<code>rules.gameEvents</code>). Wenn es feuert,
+      wird eine Boss-Art aus diesem gewichteten 32-Eintr&auml;ge-Pool gezogen (<code>boss_jungle_random</code>).
+      Solo-Spawn, keine Begleit-Einheiten.
+    </p>
+    <table class="compact">
+      <thead><tr><th>Boss-Art</th><th>Element</th><th class="num">Gewicht</th><th class="num">HP</th></tr></thead>
+      <tbody>
+        <tr><td>arachnoid</td><td>physical</td><td class="num">0,40</td><td class="num">5 000</td></tr>
+        <tr><td>arachnoid</td><td>acid</td><td class="num">0,10</td><td class="num">&mdash;</td></tr>
+        <tr><td>arachnoid</td><td>cryo</td><td class="num">0,10</td><td class="num">&mdash;</td></tr>
+        <tr><td>arachnoid</td><td>energy</td><td class="num">0,10</td><td class="num">&mdash;</td></tr>
+        <tr><td>arachnoid</td><td>fire</td><td class="num">0,10</td><td class="num">&mdash;</td></tr>
+        <tr><td>baxmoth</td><td>physical</td><td class="num">0,40</td><td class="num">3 000</td></tr>
+        <tr><td>baxmoth</td><td>acid</td><td class="num">0,10</td><td class="num">3 000</td></tr>
+        <tr><td>baxmoth</td><td>cryo</td><td class="num">0,10</td><td class="num">3 000</td></tr>
+        <tr><td>baxmoth</td><td>energy</td><td class="num">0,10</td><td class="num">3 000</td></tr>
+        <tr><td>baxmoth</td><td>fire</td><td class="num">0,10</td><td class="num">3 000</td></tr>
+        <tr><td>gnerot</td><td>physical</td><td class="num">0,40</td><td class="num">5 000</td></tr>
+        <tr><td>gnerot</td><td>acid</td><td class="num">0,13</td><td class="num">5 000</td></tr>
+        <tr><td>gnerot</td><td>cryo</td><td class="num">0,13</td><td class="num">5 000</td></tr>
+        <tr><td>gnerot</td><td>fire</td><td class="num">0,13</td><td class="num">&mdash;</td></tr>
+        <tr><td>hammeroceros</td><td>physical</td><td class="num">0,40</td><td class="num">&mdash;</td></tr>
+        <tr><td>hammeroceros</td><td>acid</td><td class="num">0,10</td><td class="num">&mdash;</td></tr>
+        <tr><td>hammeroceros</td><td>cryo</td><td class="num">0,10</td><td class="num">&mdash;</td></tr>
+        <tr><td>hammeroceros</td><td>energy</td><td class="num">0,10</td><td class="num">&mdash;</td></tr>
+        <tr><td>hammeroceros</td><td>fire</td><td class="num">0,10</td><td class="num">&mdash;</td></tr>
+        <tr><td>krocoon</td><td>physical</td><td class="num">0,40</td><td class="num">5 000</td></tr>
+        <tr><td>krocoon</td><td>acid</td><td class="num">0,13</td><td class="num">5 000</td></tr>
+        <tr><td>krocoon</td><td>cryo</td><td class="num">0,13</td><td class="num">5 000</td></tr>
+        <tr><td>krocoon</td><td>fire</td><td class="num">0,13</td><td class="num">5 000</td></tr>
+        <tr><td>mudroner</td><td>acid</td><td class="num">0,20</td><td class="num">5 000</td></tr>
+        <tr><td>mudroner</td><td>cryo</td><td class="num">0,20</td><td class="num">5 000</td></tr>
+        <tr><td>mudroner</td><td>energy</td><td class="num">0,20</td><td class="num">5 000</td></tr>
+        <tr><td>mudroner</td><td>fire</td><td class="num">0,20</td><td class="num">5 000</td></tr>
+        <tr><td>phirian</td><td>physical</td><td class="num">0,40</td><td class="num">5 000</td></tr>
+        <tr><td>phirian</td><td>acid</td><td class="num">0,10</td><td class="num">5 000</td></tr>
+        <tr><td>phirian</td><td>cryo</td><td class="num">0,10</td><td class="num">5 000</td></tr>
+        <tr><td>phirian</td><td>energy</td><td class="num">0,10</td><td class="num">5 000</td></tr>
+        <tr><td>phirian</td><td>fire</td><td class="num">0,10</td><td class="num">5 000</td></tr>
+      </tbody>
+    </table>
+    <div class="callout open">
+      <span class="tag tag-open">L&uuml;cke &mdash; 10 von 32 Eintr&auml;gen</span>
+      <p>
+        F&uuml;r 10 Eintr&auml;ge (alle 4 arachnoid-Elementarvarianten, <code>gnerot_fire</code>, und
+        <strong>alle 5 hammeroceros-Varianten komplett</strong>) fehlt die <code>.ent</code>-Datei im
+        lokalen Pack &mdash; keine HP ermittelbar. <code>mudroner</code> hat bewusst keine physical-Variante,
+        nur Elementar-Typen. Au&szlig;er <code>baxmoth</code> (3 000 HP) liegen alle bekannten Bosse bei
+        exakt 5 000 HP.
+      </p>
+    </div>
+  </section>
+
+  <footer>
+    <div>Quelle: Lua-Regeln (<code>dom_manager.lua</code>, <code>dom_survival_jungle_rules_default.lua</code>) und native C++-Disassembly (<code>rbbridge.c</code>), aus dem laufenden Recherche-Thread von heute.</div>
+    <div class="refs">Refs &middot; #213 &middot; #646 &middot; #654 &middot; #658 &middot; #666 &middot; #670 &middot; #205</div>
+  </footer>
+
+</div>
+</body>
+</html>
