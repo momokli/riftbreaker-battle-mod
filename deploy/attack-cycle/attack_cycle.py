@@ -7,14 +7,22 @@ laeuft ein fester Zyklus, der beim Bau des HQ startet:
 
   round start (HQ gebaut)
     └─ alle `interval` Sekunden (Default 7 min) feuert EINE "natuerliche" Welle
-       mit steigendem Level 1..9 (cap 9). Der Spieler kann waehrend des Fensters
-       Wellen "kaufen" (`-send waveN`): jede wird SOFORT bezahlt (try_spend) und
-       in eine Queue gestapelt; beim naechsten Zyklus-Tick werden sie GLEICHZEITIG
-       mit der natuerlichen Welle gefeuert.
+       mit dem aktuellen Level (1..9, cap 9). Der Spieler kann waehrend des
+       Fensters Wellen "kaufen" (`-send waveN`): jede wird SOFORT bezahlt
+       (try_spend) und in eine Queue gestapelt; beim naechsten Zyklus-Tick
+       werden sie GLEICHZEITIG mit der natuerlichen Welle gefeuert.
 
-Ablauf je Zyklus-Tick:
-  fire natural(level) + pending[]  ueber POST /activate_mission_flow
-  level = min(level + 1, max_level), pending = [], next_attack_at += interval
+Difficulty-Level (Issue #778) laeuft auf einem EIGENEN, vom Wellen-Feuern
+entkoppelten Timer: alle `difficulty_interval` Sekunden (Default 200s) steigt
+das Level um 1 (cap 9) — unabhaengig davon, ob/wie oft in der Zwischenzeit
+Wellen feuern. Eine gefeuerte Welle nutzt einfach das zu diesem Zeitpunkt
+aktuelle Level, erhoeht es aber nicht mehr selbst (Vorbild:
+tools/wave-scheduler/wave_scheduler.py, das dasselbe Zwei-Timer-Muster nutzt).
+
+Ablauf:
+  alle `difficulty_interval` Sekunden: level = min(level + 1, max_level)
+  alle `interval` Sekunden: fire natural(level) + bought[] ueber
+    POST /activate_mission_flow, bought = []
 
 Kauf (`POST /queue_send {"name":"waveN"}`):
   1. Cost-Tabelle (Spiegel der client-mod .ent-Preise) → cost
@@ -56,6 +64,7 @@ NAME_TO_LEVEL = {f"wave{lvl}": lvl for lvl in WAVE_COST}
 
 DEFAULT_MAX_LEVEL = 9
 DEFAULT_INTERVAL_S = 420.0  # 7 min
+DEFAULT_DIFFICULTY_INTERVAL_S = 200.0  # Issue #778: eigener Timer, entkoppelt vom Wellen-Feuern
 DEFAULT_BRIDGE_URL = "http://127.0.0.1:9001"
 DEFAULT_CONTROL_PORT = 9102
 
@@ -122,6 +131,7 @@ class AttackCycle:
         self,
         base_url: str,
         interval_s: float = DEFAULT_INTERVAL_S,
+        difficulty_interval_s: float = DEFAULT_DIFFICULTY_INTERVAL_S,
         max_level: int = DEFAULT_MAX_LEVEL,
         wave_logic: Optional[Dict[int, str]] = None,
         timeout: float = 30.0,
@@ -130,6 +140,7 @@ class AttackCycle:
     ):
         self.base_url = base_url.rstrip("/")
         self.interval_s = interval_s
+        self.difficulty_interval_s = difficulty_interval_s
         self.max_level = max_level
         self.wave_logic = wave_logic or WAVE_LOGIC
         self.timeout = timeout
@@ -140,6 +151,7 @@ class AttackCycle:
         self.active = False
         self.level = 1
         self.next_attack_at: Optional[float] = None
+        self.next_difficulty_at: Optional[float] = None
         self.orders: list = []  # unbezahlte Buy-Orders (order list)
         self.bought: list = []  # bezahlte Wellen (bought queue, feuert als naechstes)
         self.last_fire: Optional[Dict[str, Any]] = None
@@ -249,9 +261,25 @@ class AttackCycle:
                     self.active = True
                     self.level = 1
                     self.next_attack_at = now + self.interval_s
-                print(f"[attack-cycle] HQ gebaut -> Zyklus gestartet (Level 1 in {self.interval_s:.0f}s)", flush=True)
+                    self.next_difficulty_at = now + self.difficulty_interval_s
+                print(
+                    f"[attack-cycle] HQ gebaut -> Zyklus gestartet "
+                    f"(Level 1, Angriff in {self.interval_s:.0f}s, naechste Difficulty in {self.difficulty_interval_s:.0f}s)",
+                    flush=True,
+                )
                 return "started"
             return None
+
+        # Difficulty-Timer (Issue #778): laeuft unabhaengig vom Wellen-Feuern.
+        with self._lock:
+            while (
+                self.next_difficulty_at is not None
+                and now >= self.next_difficulty_at
+                and self.level < self.max_level
+            ):
+                self.level += 1
+                self.next_difficulty_at += self.difficulty_interval_s
+                print(f"[attack-cycle] difficulty erhoeht -> level {self.level}", flush=True)
 
         with self._lock:
             if self.next_attack_at is None or now < self.next_attack_at:
@@ -259,7 +287,6 @@ class AttackCycle:
             natural_level = self.level
             sent_levels = list(self.bought)
             self.bought = []
-            self.level = min(self.level + 1, self.max_level)
             self.next_attack_at = self.next_attack_at + self.interval_s
 
         self._fire(natural_level)
@@ -280,9 +307,13 @@ class AttackCycle:
                 "seconds_to_next_attack": (
                     max(0.0, self.next_attack_at - now) if self.next_attack_at is not None else None
                 ),
+                "seconds_to_next_difficulty": (
+                    max(0.0, self.next_difficulty_at - now) if self.next_difficulty_at is not None else None
+                ),
                 "bought": list(self.bought),
                 "orders": list(self.orders),
                 "interval_s": self.interval_s,
+                "difficulty_interval_s": self.difficulty_interval_s,
                 "max_level": self.max_level,
                 "last_fire": self.last_fire,
             }
@@ -324,6 +355,7 @@ class AttackCycle:
             self.active = False
             self.level = 1
             self.next_attack_at = None
+            self.next_difficulty_at = None
             self.orders = []
             self.bought = []
             self.last_fire = None
@@ -426,6 +458,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--interval", type=float, default=DEFAULT_INTERVAL_S, help="Zyklus-Intervall in Sekunden (Default 420 = 7 min)"
     )
+    p.add_argument(
+        "--difficulty-interval",
+        type=float,
+        default=DEFAULT_DIFFICULTY_INTERVAL_S,
+        help="Difficulty-Timer in Sekunden, entkoppelt vom Wellen-Feuern (Default 200, Issue #778)",
+    )
     p.add_argument("--max-level", type=int, default=DEFAULT_MAX_LEVEL, help="Max. natuerliches Level (Default 9)")
     p.add_argument("--control-bind", default="0.0.0.0", help="Bind-Adresse des Control-Servers")
     p.add_argument(
@@ -442,6 +480,7 @@ def main(argv: Optional[list] = None) -> int:
     cycle = AttackCycle(
         args.bridge_url,
         interval_s=args.interval,
+        difficulty_interval_s=args.difficulty_interval,
         max_level=args.max_level,
         timeout=args.timeout,
     )

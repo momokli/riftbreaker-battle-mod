@@ -134,6 +134,9 @@ riftbreaker_attack_cycle_image: "python:3.12-slim"
 riftbreaker_attack_cycle_bridge_url: "http://{{ riftbreaker_server_container }}:{{ riftbreaker_bridge_container_port }}"
 # Zyklus-Intervall in Sekunden (Default 420 = 7 min).
 riftbreaker_attack_cycle_interval: 420
+# Difficulty-Timer in Sekunden (Issue #778): eigener, vom Wellen-Feuer-Intervall
+# entkoppelter Timer, der das Level unabhaengig alle N Sekunden erhoeht (Default 200).
+riftbreaker_attack_cycle_difficulty_interval: 200
 # Control-Port des Attack-Cycle (nur im Compose-Netz; send-tailer POSTet hierher).
 riftbreaker_attack_cycle_port: 9102
 # Script auf dem Host (bind-mount ro in den Sidecar).
