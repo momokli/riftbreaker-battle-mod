@@ -168,6 +168,12 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         working-directory: deploy/match-loop
         run: python3 -m unittest test_match_loop -v
+      # Attack-Cycle (PoC): 7-min-Zyklus, HQ-Bau-Erkennung, gestapelte Kaeufe.
+      # Hermetisch (Fake-Poster/-Clock), kein Netz/Spiel. stdlib-only.
+      - name: Unit-Test Attack-Cycle (PoC)
+        if: needs.changes.outputs.test == 'true'
+        working-directory: deploy/attack-cycle
+        run: python3 -m unittest test_attack_cycle -v
       - name: Unit-Test Core-IO-Probe RBBATTLE-Tag-Erkennung (Issue #696)
         if: needs.changes.outputs.test == 'true'
         working-directory: tests/core-io

@@ -97,14 +97,14 @@ riftbreaker_sessions_script_src: "{{ playbook_dir }}/session-recorder/session_re
 
 # --- Send-Tailer (Issue #713) ------------------------------------------------
 # Env-agnostischer Sidecar (analog session-recorder): tailt exor_logs.txt und
-# POSTet Mod-Chat-Send-Orders (-send waveN) an die Bridge (POST /order).
-# Kein Netz nach aussen, nur zur Bridge im selben Compose-Netz.
+# POSTet Mod-Chat-Send-Orders (-send waveN) an den Attack-Cycle (/queue_send).
+# Kein Netz nach aussen, nur zum Attack-Cycle im selben Compose-Netz.
 # container_name ist global -> prod/staging/test muessen ihn ueberschreiben
 # (prod-vars/staging-vars/test-vars.yml), sonst Kollision (analog sessions).
 riftbreaker_send_tailer_container: riftbreaker-send-tailer
 riftbreaker_send_tailer_image: "python:3.12-slim"
-# Bridge-/order-Endpoint im Compose-Netz (Server-Container + Container-Port).
-riftbreaker_send_tailer_bridge_url: "http://{{ riftbreaker_server_container }}:{{ riftbreaker_bridge_container_port }}/order"
+# Attack-Cycle-/queue_send-Endpoint im Compose-Netz (Attack-Cycle-Container + Port).
+riftbreaker_send_tailer_queue_url: "http://{{ riftbreaker_attack_cycle_container }}:{{ riftbreaker_attack_cycle_port }}/queue_send"
 # Script auf dem Host (bind-mount ro in den Sidecar).
 riftbreaker_send_tailer_script: "{{ riftbreaker_deploy_dir }}/send_tailer.py"
 riftbreaker_send_tailer_script_src: "{{ playbook_dir }}/send-tailer/send_tailer.py"
@@ -121,6 +121,24 @@ riftbreaker_match_loop_bridge_url: "http://{{ riftbreaker_server_container }}:{{
 # Script auf dem Host (bind-mount ro in den Sidecar).
 riftbreaker_match_loop_script: "{{ riftbreaker_deploy_dir }}/match_loop.py"
 riftbreaker_match_loop_script_src: "{{ playbook_dir }}/match-loop/match_loop.py"
+
+# --- Attack-Cycle (PoC, ersetzt 2-min-Order-Scheduler) ------------------------
+# Env-agnostischer Sidecar (analog match-loop): pollt get_state (HQ-Bau) und
+# fuehrt den 7-min-Angriffszyklus (natuerliche Welle 1..9 + gestapelte Kaeufe).
+# Spricht rein ueber HTTP zur Bridge (get_state/try_spend/activate_mission_flow);
+# der send-tailer POSTet Kaeufe an seinen /queue_send-Endpunkt (Port unten).
+# container_name ist global -> prod/staging/test muessen ihn ueberschreiben.
+riftbreaker_attack_cycle_container: riftbreaker-attack-cycle
+riftbreaker_attack_cycle_image: "python:3.12-slim"
+# Bridge-Basis-URL im Compose-Netz (ohne Pfad; der Cycle haengt Pfade selbst an).
+riftbreaker_attack_cycle_bridge_url: "http://{{ riftbreaker_server_container }}:{{ riftbreaker_bridge_container_port }}"
+# Zyklus-Intervall in Sekunden (Default 420 = 7 min).
+riftbreaker_attack_cycle_interval: 420
+# Control-Port des Attack-Cycle (nur im Compose-Netz; send-tailer POSTet hierher).
+riftbreaker_attack_cycle_port: 9102
+# Script auf dem Host (bind-mount ro in den Sidecar).
+riftbreaker_attack_cycle_script: "{{ riftbreaker_deploy_dir }}/attack_cycle.py"
+riftbreaker_attack_cycle_script_src: "{{ playbook_dir }}/attack-cycle/attack_cycle.py"
 
 # --- Sessions ---------------------------------------------------------------
 

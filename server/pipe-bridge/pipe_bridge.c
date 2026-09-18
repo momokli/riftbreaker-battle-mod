@@ -20,14 +20,14 @@
  *                                 Database*-Payload via spawn_point, #386)
  *   POST /deactivate_mission_flow -> Mission-Flow/Welle beenden (C++, #389)
  *   POST /end_game     -> Match nativ beenden, result=win|lose (C++, #519)
- *   POST /order        -> benannte Send-Order einreihen (Cost-Tabelle, #713);
- *                         try_spend passiert im Scheduler (sofort)
+ *   POST /try_spend    -> transaktionaler Carbonium-Abzug (C++, #694);
+ *                         ok:false/insufficient kommt als 200 mit Rohzeile
  *   POST /probe        -> Memory-Dump (PlayerService-Kette)
  *   sonst              -> 404 {"ok":false,"reason":"not_found"}
  *
  * Protokoll auf der Pipe (v0, siehe server/README.md):
- *   Kommandos: ping, probe, get_state, add_resource, activate_mission_flow,
- *   deactivate_mission_flow, end_game.
+ *   Kommandos: ping, probe, get_state, add_resource, try_spend,
+ *   activate_mission_flow, deactivate_mission_flow, end_game.
  *   Line-delimited JSON, max. 8 KiB pro Zeile (LINE_MAX).
  *
  * Umgebung:
@@ -311,47 +311,6 @@ static int json_get_number(const char *json, const char *key, double *out)
     return 0;
 }
 
-/* json_get_bool: findet "key":true ODER "key":false (nur diese Literale)
- * und liefert 1 bei Treffer, sonst 0. Der boolsche Wert wird in *out
- * geschrieben. Benoetigt fuer das "ok"-Feld von try_spend_result. */
-static int json_get_bool(const char *json, const char *key, int *out)
-{
-    if (!json || !key || !out)
-        return 0;
-
-    size_t key_len = strlen(key);
-    const char *p = json;
-
-    while ((p = strstr(p, key)) != NULL) {
-        if (p != json && p[-1] == '"' && p[key_len] == '"') {
-            const char *q = p + key_len + 1;
-            while (*q == ' ' || *q == '\t')
-                q++;
-            if (*q == ':') {
-                q++;
-                while (*q == ' ' || *q == '\t')
-                    q++;
-                if (strncmp(q, "true", 4) == 0 &&
-                    (q[4] == '\0' || q[4] == ',' || q[4] == '}' ||
-                     q[4] == ' ' || q[4] == '\t' || q[4] == '\r' ||
-                     q[4] == '\n')) {
-                    *out = 1;
-                    return 1;
-                }
-                if (strncmp(q, "false", 5) == 0 &&
-                    (q[5] == '\0' || q[5] == ',' || q[5] == '}' ||
-                     q[5] == ' ' || q[5] == '\t' || q[5] == '\r' ||
-                     q[5] == '\n')) {
-                    *out = 0;
-                    return 1;
-                }
-                return 0;
-            }
-        }
-        p += key_len;
-    }
-    return 0;
-}
 
 /* ------------------------------------------------------------------ */
 /* Named-Pipe-Client (\\.\pipe\rbbattle)                                */
@@ -513,6 +472,11 @@ static CRITICAL_SECTION g_cmd_cs;           /* serialisiert HTTP-Commands */
 static SOCKET g_sse_sock = INVALID_SOCKET;  /* der eine SSE-Client */
 static CRITICAL_SECTION g_sse_cs;           /* schuetzt den SSE-Client */
 
+/* Attack-Cycle-Status (PoC): der Sidecar POSTet seinen /status-JSON hierher;
+ * die WebUI pollt ihn via GET /attack_status. Kleiner Puffer + CS. */
+static char g_attack_status[8192];
+static CRITICAL_SECTION g_attack_status_cs;
+
 /* Broadcastet eine JSON-Zeile als SSE-Event an den (einen) Cockpit-Client. */
 static void sse_broadcast(const char *line)
 {
@@ -528,306 +492,6 @@ static void sse_broadcast(const char *line)
     LeaveCriticalSection(&g_sse_cs);
 }
 
-/* ------------------------------------------------------------------ */
-/* Benannte Orders (-send <name>)                                       */
-/* ------------------------------------------------------------------ */
-
-typedef struct {
-    const char *name;
-    const char *logic;
-    int cost;
-    DWORD delay_ms;
-} order_spec_t;
-
-/* Zeitversatz zwischen Kauf (SPACE) und Wellen-Spawn: 2 Minuten, damit die
- * Welle zeitversetzt beim Gegner ankommt. Der 1s-Click-Cooldown liegt im
- * Client-Mod (rbbattle_button.lua), NICHT hier. */
-#define ORDER_DELAY_MS (2 * 60 * 1000)
-
-/* Kostentabelle = Ø-Send-Ziel-Kurve (docs/research/send-boost-pricing-baseline.md,
- * #205): Kosten(L) = k * Normal(L) * (M_avg - 1), M_avg aus dem geometrischen Mittel
- * der Hard/Normal-Ratio ueber alle Level, verankert auf die echten 300 Start-Carbonium
- * (logic/missions/survival/default.logic, live bestaetigt in f7ea0a4/496e2a6). Auf die
- * naechsten 50 gerundet. Ersetzt die Test-C-Kurve aus #670. wave9 teilt den Pool mit
- * wave8 (#658), Preis manuell ueber die Formel-Kurve hinaus angehoben (10500). */
-static const order_spec_t g_order_specs[] = {
-    { "wave1", "logic/missions/survival/attack_level_1_id_1.logic", 300, ORDER_DELAY_MS },
-    { "wave2", "logic/missions/survival/attack_level_2_id_1.logic", 700, ORDER_DELAY_MS },
-    { "wave3", "logic/missions/survival/attack_level_3_id_1.logic", 1400, ORDER_DELAY_MS },
-    { "wave4", "logic/missions/survival/attack_level_4_id_1.logic", 2450, ORDER_DELAY_MS },
-    { "wave5", "logic/missions/survival/attack_level_5_id_1.logic", 4000, ORDER_DELAY_MS },
-    { "wave6", "logic/missions/survival/attack_level_6_id_1.logic", 5350, ORDER_DELAY_MS },
-    { "wave7", "logic/missions/survival/attack_level_7_id_1.logic", 7600, ORDER_DELAY_MS },
-    { "wave8", "logic/missions/survival/attack_level_8_id_1.logic", 9650, ORDER_DELAY_MS },
-    { "wave9", "logic/missions/survival/attack_level_8_id_1.logic", 10500, ORDER_DELAY_MS },
-};
-#define G_ORDER_SPEC_COUNT (sizeof(g_order_specs) / sizeof(g_order_specs[0]))
-
-static int lookup_order_spec(const char *name, const order_spec_t **out)
-{
-    size_t i;
-
-    if (!name || !out)
-        return 0;
-    for (i = 0; i < G_ORDER_SPEC_COUNT; i++) {
-        if (strcmp(g_order_specs[i].name, name) == 0) {
-            *out = &g_order_specs[i];
-            return 1;
-        }
-    }
-    return 0;
-}
-
-/* Liest "-send <name> [<id>]" — name = [A-Za-z0-9_], optionaler id-Token
- * ([A-Za-z0-9_-], z. B. ULID). id darf NULL sein (dann wird ein trailing
- * Token toleriert, aber nicht extrahiert). */
-static int parse_order_name(const char *text, char *name, size_t name_sz,
-                            char *id, size_t id_sz)
-{
-    const char *p = text;
-    size_t i;
-
-    if (!text || !name)
-        return 0;
-    while (*p == ' ' || *p == '\t')
-        p++;
-    if (strncmp(p, "-send", 5) != 0)
-        return 0;
-    p += 5;
-    if (*p != ' ' && *p != '\t')
-        return 0;
-    while (*p == ' ' || *p == '\t')
-        p++;
-    i = 0;
-    while (p[i] && ((p[i] >= 'a' && p[i] <= 'z') ||
-                    (p[i] >= 'A' && p[i] <= 'Z') ||
-                    (p[i] >= '0' && p[i] <= '9') || p[i] == '_'))
-        i++;
-    if (i == 0 || i + 1 >= name_sz)
-        return 0;
-    memcpy(name, p, i);
-    name[i] = '\0';
-    p += i;
-    while (*p == ' ' || *p == '\t')
-        p++;
-    if (id && id_sz > 0) {
-        size_t j = 0;
-        id[0] = '\0';
-        while (p[j] && ((p[j] >= 'a' && p[j] <= 'z') ||
-                        (p[j] >= 'A' && p[j] <= 'Z') ||
-                        (p[j] >= '0' && p[j] <= '9') ||
-                        p[j] == '_' || p[j] == '-'))
-            j++;
-        if (j + 1 >= id_sz)
-            return 0;
-        memcpy(id, p, j);
-        id[j] = '\0';
-        p += j;
-    }
-    while (*p == ' ' || *p == '\t')
-        p++;
-    if (*p != '\0')
-        return 0;
-    return 1;
-}
-
-#define PENDING_MAX 64
-typedef struct {
-    char name[64];
-    char id[64];
-    char logic[256];
-    int cost;
-    DWORD fire_at;
-    int state; /* 0=pending, 1=paid, 2=failed, 3=fired, 4=in-progress */
-} pending_order_t;
-
-static pending_order_t g_orders[PENDING_MAX];
-static int g_orders_n = 0;
-static CRITICAL_SECTION g_orders_cs;
-
-static int enqueue_order(const order_spec_t *spec, const char *id)
-{
-    if (!spec)
-        return 0;
-    EnterCriticalSection(&g_orders_cs);
-    if (g_orders_n >= PENDING_MAX) {
-        LeaveCriticalSection(&g_orders_cs);
-        return 0;
-    }
-    {
-        pending_order_t *o = &g_orders[g_orders_n];
-        strncpy(o->name, spec->name, sizeof(o->name) - 1);
-        o->name[sizeof(o->name) - 1] = '\0';
-        strncpy(o->id, id ? id : "", sizeof(o->id) - 1);
-        o->id[sizeof(o->id) - 1] = '\0';
-        strncpy(o->logic, spec->logic, sizeof(o->logic) - 1);
-        o->logic[sizeof(o->logic) - 1] = '\0';
-        o->cost = spec->cost;
-        o->fire_at = GetTickCount() + spec->delay_ms;
-        o->state = 0;
-        g_orders_n++;
-    }
-    LeaveCriticalSection(&g_orders_cs);
-    return 1;
-}
-
-static void set_order_state(int idx, int state)
-{
-    EnterCriticalSection(&g_orders_cs);
-    if (idx >= 0 && idx < g_orders_n)
-        g_orders[idx].state = state;
-    LeaveCriticalSection(&g_orders_cs);
-}
-
-/* Reiht eine Order aus der Cost-Tabelle ein (spec muss gueltig sein). Liefert
- * 1 bei Erfolg, 0 bei voller Queue. KEIN try_spend hier: der Scheduler
- * bezahlt SOFORT (Phase 1) und feuert nach Ablauf der Frist (Phase 2). */
-static int queue_order(const order_spec_t *spec, const char *id)
-{
-    char ev_line[LINE_MAX];
-
-    if (!spec)
-        return 0;
-    if (!enqueue_order(spec, id)) {
-        blog("order %s: Queue voll, verworfen", spec->name);
-        return 0;
-    }
-    snprintf(ev_line, sizeof(ev_line),
-             "{\"event\":\"order_queued\",\"name\":\"%s\",\"id\":\"%s\",\"cost\":%d}",
-             spec->name, id ? id : "", spec->cost);
-    sse_broadcast(ev_line);
-    blog("order %s id=%s -> queued (cost=%d, fire in %ums)", spec->name,
-         id ? id : "", spec->cost, spec->delay_ms);
-    return 1;
-}
-
-/* Forward-Deklaration: pipe_send_command ist weiter unten definiert, wird
- * aber vom Scheduler-Thread benoetigt. */
-static int pipe_send_command(const char *event, const char *payload,
-                             int timeout_ms, char *line_out, size_t line_out_sz);
-
-/* Scheduler-Thread: zwei Phasen.
- * Phase 1 (spend): bezahlt SOFORT alle pending Orders (try_spend) —
- *   state 0 -> 1 (paid) oder 2 (failed/insufficient).
- * Phase 2 (fire): feuert paid Orders nach Ablauf ihrer Frist EINMAL —
- *   state 1 -> 3 (fired).
- * Eigener Thread, damit pipe_send_command (blockiert auf g_resp_ev) den
- * Reader-Thread nicht blockiert; g_orders_cs wird waehrend des blockierenden
- * Calls NICHT gehalten. */
-static DWORD WINAPI scheduler_main(LPVOID unused)
-{
-    (void)unused;
-
-    for (;;) {
-        int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
-        char line[READ_BUF];
-        char payload[LINE_MAX];
-        char amt[64];
-        char esc_logic[512];
-        int ok = 0;
-
-        /* --- Phase 1: spend (sofort, beim Ordern) --- */
-        for (;;) {
-            pending_order_t ord = {0};
-            int idx = -1;
-            int have = 0;
-
-            EnterCriticalSection(&g_orders_cs);
-            {
-                int i;
-                for (i = 0; i < g_orders_n; i++) {
-                    if (g_orders[i].state == 0) {
-                        ord = g_orders[i];
-                        g_orders[i].state = 4; /* in-progress */
-                        idx = i;
-                        have = 1;
-                        break;
-                    }
-                }
-            }
-            LeaveCriticalSection(&g_orders_cs);
-
-            if (!have)
-                break;
-
-            snprintf(amt, sizeof(amt), "%d", ord.cost);
-            snprintf(payload, sizeof(payload),
-                     "{\"cmd\":\"try_spend\",\"amount\":\"%s\"}\n", amt);
-            blog("order %s: try_spend cost=%d", ord.name, ord.cost);
-
-            ok = 0;
-            double bal_dbl = 0.0;
-            if (pipe_send_command("try_spend_result", payload, timeout_ms,
-                                  line, sizeof(line)) == 0 &&
-                json_get_bool(line, "ok", &ok) && ok) {
-                json_get_number(line, "balance", &bal_dbl);
-                set_order_state(idx, 1);
-                blog("order %s id=%s: ACCEPT (needed=%d carbonium, balance=%.2f carbonium)",
-                     ord.name, ord.id, ord.cost, bal_dbl / 1000000.0);
-            } else {
-                json_get_number(line, "balance", &bal_dbl);
-                set_order_state(idx, 2);
-                {
-                    char ev_line[LINE_MAX];
-                    snprintf(ev_line, sizeof(ev_line),
-                             "{\"event\":\"order_failed\",\"name\":\"%s\",\"id\":\"%s\"}",
-                             ord.name, ord.id);
-                    sse_broadcast(ev_line);
-                }
-                blog("order %s id=%s: DROP insufficient (needed=%d carbonium, balance=%.2f carbonium)",
-                     ord.name, ord.id, ord.cost, bal_dbl / 1000000.0);
-            }
-        }
-
-        /* --- Phase 2: fire (einmal, nach Ablauf der Frist) --- */
-        for (;;) {
-            pending_order_t ord = {0};
-            int idx = -1;
-            int have = 0;
-
-            EnterCriticalSection(&g_orders_cs);
-            {
-                int i;
-                for (i = 0; i < g_orders_n; i++) {
-                    if (g_orders[i].state == 1 &&
-                        deadline_passed(g_orders[i].fire_at)) {
-                        ord = g_orders[i];
-                        g_orders[i].state = 4; /* in-progress */
-                        idx = i;
-                        have = 1;
-                        break;
-                    }
-                }
-            }
-            LeaveCriticalSection(&g_orders_cs);
-
-            if (!have)
-                break;
-
-            json_escape(ord.logic, esc_logic, sizeof(esc_logic));
-            snprintf(payload, sizeof(payload),
-                     "{\"cmd\":\"activate_mission_flow\",\"logic\":\"%s\","
-                     "\"mode\":\"default\"}\n",
-                     esc_logic);
-            blog("order %s: activate_mission_flow logic=%s",
-                 ord.name, ord.logic);
-            pipe_send_command("activate_mission_flow_result", payload,
-                              timeout_ms, line, sizeof(line));
-            set_order_state(idx, 3);
-            {
-                char ev_line[LINE_MAX];
-                snprintf(ev_line, sizeof(ev_line),
-                         "{\"event\":\"order_fired\",\"name\":\"%s\",\"id\":\"%s\"}",
-                         ord.name, ord.id);
-                sse_broadcast(ev_line);
-            }
-            blog("order %s id=%s: fired", ord.name, ord.id);
-        }
-
-        Sleep(100);
-    }
-    return 0;
-}
 
 /* Route eine Pipe-Zeile: Events -> Server-Handling, Responses -> Waiter. */
 static void route_pipe_line(HANDLE h, const char *line)
@@ -839,17 +503,9 @@ static void route_pipe_line(HANDLE h, const char *line)
 
     if (strcmp(ev, "player_chat") == 0) {
         char text[256] = "";
-        char name[64] = "";
-        char id[64] = "";
-        const order_spec_t *spec = NULL;
         json_get_string(line, "text", text, sizeof(text));
-        if (parse_order_name(text, name, sizeof(name), id, sizeof(id)) &&
-            lookup_order_spec(name, &spec)) {
-            queue_order(spec, id);
-        } else {
-            blog("player_chat (kein -send): %.120s", text);
-            sse_broadcast(line);
-        }
+        blog("player_chat: %.120s", text);
+        sse_broadcast(line);
         return;
     }
 
@@ -1212,6 +868,52 @@ static void handle_add_resource(SOCKET c, const char *body)
     http_respond(c, 200, "OK", line);
 }
 
+/* POST /try_spend: fuehrt {"cmd":"try_spend","amount":"..."} auf der Pipe
+ * aus (transaktionaler Carbonium-Abzug, Issue #694) und liefert die
+ * try_spend_result-Zeile. amount ist ein JSON-STRING (Display-Einheiten).
+ * ok:false + reason (z. B. "insufficient") kommt als 200 mit der Rohzeile; nur
+ * Transport-/Validierungsfehler (pipe weg, fehlender amount) werden auf 4xx/5xx
+ * gemappt. Der Attack-Cycle-Sidecar bezahlt darueber Sofort-Kaeufe. */
+static void handle_try_spend(SOCKET c, const char *body)
+{
+    char amount[64] = "";
+    char line[READ_BUF];
+    char payload[LINE_MAX];
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+
+    if (!json_get_string(body, "amount", amount, sizeof(amount)) || !amount[0]) {
+        blog("POST /try_spend ohne amount -> invalid_request");
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_request\"}");
+        return;
+    }
+
+    {
+        char esc[64 * 2];
+        json_escape(amount, esc, sizeof(esc));
+        snprintf(payload, sizeof(payload),
+                 "{\"cmd\":\"try_spend\",\"amount\":\"%s\"}\n", esc);
+    }
+
+    {
+        int rc = pipe_send_command("try_spend_result", payload, timeout_ms,
+                                   line, sizeof(line));
+        if (rc == -1) {
+            blog("POST /try_spend: Pipe nicht erreichbar -> pipe_unavailable");
+            http_respond(c, 503, "Service Unavailable",
+                         "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+            return;
+        }
+        if (rc != 0) {
+            http_respond(c, 500, "Internal Server Error",
+                         "{\"ok\":false,\"reason\":\"timeout\"}");
+            return;
+        }
+    }
+    log_response("/try_spend", line);
+    http_respond(c, 200, "OK", line);
+}
+
 /* POST /activate_mission_flow: fuehrt
  * {"cmd":"activate_mission_flow","logic":"...","mode":"..."} auf der
  * Pipe aus (WRITE, Issue #385) und liefert die
@@ -1516,91 +1218,6 @@ static void handle_restart_map(SOCKET c, const char *body)
     http_respond(c, 200, "OK", line);
 }
 
-/* POST /order: nimmt {"name":"wave1"} entgegen, schaut in der Cost-Tabelle
- * nach und reiht die Order ein. KEIN try_spend hier — der Scheduler bezahlt
- * sofort (Phase 1) und feuert nach Ablauf der Frist (Phase 2). */
-/* POST /get_orders: liefert die aktuelle Buy-Order-Queue (roh, neueste zuerst).
- * Transparent: state bleibt der rohe Scheduler-Wert (pending/paid/failed/fired/
- * in-progress); time_left_ms nur bei paid (Countdown bis Fire). */
-static const char *order_state_str(int state)
-{
-    switch (state) {
-        case 0: return "pending";
-        case 1: return "paid";
-        case 2: return "failed";
-        case 3: return "fired";
-        case 4: return "in-progress";
-        default: return "unknown";
-    }
-}
-
-static void handle_get_orders(SOCKET c)
-{
-    char resp[16384];
-    size_t off = 0;
-    int n = 0;
-    int i;
-
-    EnterCriticalSection(&g_orders_cs);
-    off += (size_t)snprintf(resp + off, sizeof(resp) - off, "{\"orders\":[");
-    /* neueste zuerst: reverse ueber g_orders[]. */
-    for (i = g_orders_n - 1; i >= 0; i--) {
-        const pending_order_t *o = &g_orders[i];
-        char tbuf[32] = "null";
-        if (o->state == 1) { /* paid -> Countdown bis Fire */
-            long long delta = (long long)o->fire_at - (long long)GetTickCount();
-            if (delta < 0)
-                delta = 0;
-            snprintf(tbuf, sizeof(tbuf), "%lld", delta);
-        }
-        off += (size_t)snprintf(resp + off, sizeof(resp) - off,
-                 "%s{\"name\":\"%s\",\"id\":\"%s\",\"cost\":%d,"
-                 "\"state\":\"%s\",\"time_left_ms\":%s}",
-                 n ? "," : "", o->name, o->id, o->cost,
-                 order_state_str(o->state), tbuf);
-        n++;
-    }
-    off += (size_t)snprintf(resp + off, sizeof(resp) - off, "]}");
-    LeaveCriticalSection(&g_orders_cs);
-
-    http_respond(c, 200, "OK", resp);
-}
-
-static void handle_order(SOCKET c, const char *body)
-{
-    char name[64] = "";
-    char id[64] = "";
-    const order_spec_t *spec = NULL;
-    char resp[LINE_MAX];
-
-    if (!json_get_string(body, "name", name, sizeof(name)) || !name[0]) {
-        blog("POST /order ohne name -> invalid_request");
-        http_respond(c, 400, "Bad Request",
-                     "{\"ok\":false,\"reason\":\"invalid_request\"}");
-        return;
-    }
-
-    /* Optionale ULID: identifiziert den Buy-Request (Dedup/Correlation). */
-    json_get_string(body, "id", id, sizeof(id));
-
-    if (!lookup_order_spec(name, &spec)) {
-        blog("POST /order: unbekannte Order %s", name);
-        http_respond(c, 400, "Bad Request",
-                     "{\"ok\":false,\"reason\":\"unknown_order\"}");
-        return;
-    }
-
-    if (!queue_order(spec, id)) {
-        http_respond(c, 503, "Service Unavailable",
-                     "{\"ok\":false,\"reason\":\"queue_full\"}");
-        return;
-    }
-
-    snprintf(resp, sizeof(resp),
-             "{\"ok\":true,\"name\":\"%s\",\"id\":\"%s\",\"cost\":%d,\"queued\":true}",
-             spec->name, id, spec->cost);
-    http_respond(c, 200, "OK", resp);
-}
 
 /* POST /spawn_hook: fuehrt {"cmd":"spawn_hook","op":"..."} auf der
  * persistenten Pipe aus (Read #508/#513, nativer Inline-Hook auf
@@ -1674,6 +1291,37 @@ static void handle_events(SOCKET c)
     blog("SSE client getrennt");
 }
 
+/* GET /attack_status: liefert den zuletzt vom Attack-Cycle-Sidecar gepushten
+ * Status-JSON (leer -> {"active":false}). Reine Anzeige, kein Game-Call. */
+static void handle_get_attack_status(SOCKET c)
+{
+    char body[8192];
+    EnterCriticalSection(&g_attack_status_cs);
+    if (g_attack_status[0]) {
+        strncpy(body, g_attack_status, sizeof(body) - 1);
+        body[sizeof(body) - 1] = '\0';
+    } else {
+        strcpy(body, "{\"active\":false}");
+    }
+    LeaveCriticalSection(&g_attack_status_cs);
+    http_respond(c, 200, "OK", body);
+}
+
+/* POST /attack_status: speichert den Status-JSON des Attack-Cycle-Sidecars. */
+static void handle_post_attack_status(SOCKET c, const char *body)
+{
+    if (!body || !body[0]) {
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_request\"}");
+        return;
+    }
+    EnterCriticalSection(&g_attack_status_cs);
+    strncpy(g_attack_status, body, sizeof(g_attack_status) - 1);
+    g_attack_status[sizeof(g_attack_status) - 1] = '\0';
+    LeaveCriticalSection(&g_attack_status_cs);
+    http_respond(c, 200, "OK", "{\"ok\":true}");
+}
+
 static void handle_client(SOCKET c)
 {
     char *req = malloc(REQ_MAX + 1);
@@ -1744,12 +1392,22 @@ static void handle_client(SOCKET c)
             handle_health(c);
         } else if (strcmp(method, "GET") == 0 && strcmp(path, "/events") == 0) {
             handle_events(c);
+        } else if (strcmp(method, "GET") == 0 && strcmp(path, "/attack_status") == 0) {
+            handle_get_attack_status(c);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/attack_status") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_post_attack_status(c, b);
+            free(b);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/probe") == 0) {
             handle_probe(c);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/get_state") == 0) {
             handle_get_state(c);
-        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/get_orders") == 0) {
-            handle_get_orders(c);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/add_resource") == 0) {
             char *b = malloc((size_t)body_len + 1);
             if (!b) {
@@ -1759,6 +1417,16 @@ static void handle_client(SOCKET c)
             memcpy(b, body, (size_t)body_len);
             b[body_len] = '\0';
             handle_add_resource(c, b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/try_spend") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_try_spend(c, b);
             free(b);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/activate_mission_flow") == 0) {
             char *b = malloc((size_t)body_len + 1);
@@ -1820,16 +1488,6 @@ static void handle_client(SOCKET c)
             b[body_len] = '\0';
             handle_restart_map(c, b);
             free(b);
-        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/order") == 0) {
-            char *b = malloc((size_t)body_len + 1);
-            if (!b) {
-                free(req);
-                return;
-            }
-            memcpy(b, body, (size_t)body_len);
-            b[body_len] = '\0';
-            handle_order(c, b);
-            free(b);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/spawn_hook") == 0) {
             char *b = malloc((size_t)body_len + 1);
             if (!b) {
@@ -1879,10 +1537,9 @@ static int mode_server(void)
     InitializeCriticalSection(&g_resp_cs);
     InitializeCriticalSection(&g_cmd_cs);
     InitializeCriticalSection(&g_sse_cs);
-    InitializeCriticalSection(&g_orders_cs);
+    InitializeCriticalSection(&g_attack_status_cs);
     g_resp_ev = CreateEvent(NULL, FALSE, FALSE, NULL);
     CreateThread(NULL, 0, pipe_reader_main, NULL, 0, NULL);
-    CreateThread(NULL, 0, scheduler_main, NULL, 0, NULL);
 
     const char *bind_addr = env_str("RBB_BRIDGE_BIND", DEFAULT_BIND);
     int port = env_int("RBB_BRIDGE_PORT", DEFAULT_PORT);
