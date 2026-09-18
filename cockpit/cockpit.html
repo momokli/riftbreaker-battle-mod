@@ -1089,6 +1089,15 @@
                     });
                 };
 
+                async function syncInterval() {
+                    try {
+                        var r = await post("attack_interval", {});
+                        if (r && r.interval_s) {
+                            $("attack_interval_input").value = r.interval_s;
+                        }
+                    } catch (e) {}
+                }
+
                 $("add").onclick = function () {
                     addResource(null, $("amount").value);
                 };
@@ -1324,6 +1333,8 @@
 
                 refreshOrders();
                 setInterval(refreshOrders, 1000);
+
+                syncInterval();
 
                 // --- send tracker (testable) ---
                 // Persistente Send-Liste (#527, 1.0-Send-Loop #517).
