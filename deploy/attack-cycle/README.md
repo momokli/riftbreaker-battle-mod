@@ -48,6 +48,6 @@ gegen Fake-Poster/Fake-Clock — kein Netz, kein Spiel, kein DOM.
 - Cost-Tabelle ist ein **Spiegel** der client-mod `.ent`-Preise und der ehemaligen
   Bridge-`g_order_specs` (bewusst dupliziert, wird später bereinigt).
 - Logic-Pfade je Level sind der **Spiegel der SEND-MENU-Presets**
-  (`logic/missions/survival/attack_level_N_{entry,id_1}.logic`) — `logic/dom/*`
-  loest nur „attack incoming“ aus, ohne Spawn.
+  (`logic/missions/survival/attack_level_N_id_1.logic`, raw spawn) — `logic/dom/*`
+  loest nur „attack incoming“ aus, ohne Spawn; `_entry` hat einen "attack incoming"-Delay.
 - Runden-Reset (HQ zerstört → neue Runde) ist noch NICHT behandelt (PoC).

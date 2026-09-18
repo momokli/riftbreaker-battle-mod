@@ -60,11 +60,12 @@ DEFAULT_BRIDGE_URL = "http://127.0.0.1:9001"
 DEFAULT_CONTROL_PORT = 9102
 
 # Logic-Pfad je Level (Spiegel der SEND-MENU-Presets im Cockpit, die live
-# Wellen spawnen). NICHT logic/dom/* — das loest nur "attack incoming" aus,
-# ohne Spawn (pauseAttacks=true in sandbox). wave9 teilt den Pool mit wave8 (#658).
+# Wellen spawnen). Durchgehend _id_1 = raw spawn (sofort), kein _entry
+# ("attack incoming"-Delay). NICHT logic/dom/* — das loest nur "attack incoming"
+# aus, ohne Spawn (pauseAttacks=true in sandbox). wave9 teilt den Pool mit wave8 (#658).
 WAVE_LOGIC = {
-    1: "logic/missions/survival/attack_level_1_entry.logic",
-    2: "logic/missions/survival/attack_level_2_entry.logic",
+    1: "logic/missions/survival/attack_level_1_id_1.logic",
+    2: "logic/missions/survival/attack_level_2_id_1.logic",
     3: "logic/missions/survival/attack_level_3_id_1.logic",
     4: "logic/missions/survival/attack_level_4_id_1.logic",
     5: "logic/missions/survival/attack_level_5_id_1.logic",
