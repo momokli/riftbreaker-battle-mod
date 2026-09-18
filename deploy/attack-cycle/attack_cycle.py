@@ -242,6 +242,14 @@ class AttackCycle:
                 "last_fire": self.last_fire,
             }
 
+    # --- Status an die Bridge pushen (WebUI) ----------------------------
+    def push_status(self) -> None:
+        """Pusht den Status-JSON an die Bridge (POST /attack_status)."""
+        try:
+            self._post_json("/attack_status", self.status())
+        except Exception:
+            pass
+
 
 class ControlHandler(BaseHTTPRequestHandler):
     cycle: AttackCycle = None  # gesetzt von build_control_server()
@@ -300,6 +308,7 @@ def run(
     try:
         while True:
             cycle.step()
+            cycle.push_status()
             if once:
                 break
             _sleep(poll_interval)

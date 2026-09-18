@@ -472,6 +472,11 @@ static CRITICAL_SECTION g_cmd_cs;           /* serialisiert HTTP-Commands */
 static SOCKET g_sse_sock = INVALID_SOCKET;  /* der eine SSE-Client */
 static CRITICAL_SECTION g_sse_cs;           /* schuetzt den SSE-Client */
 
+/* Attack-Cycle-Status (PoC): der Sidecar POSTet seinen /status-JSON hierher;
+ * die WebUI pollt ihn via GET /attack_status. Kleiner Puffer + CS. */
+static char g_attack_status[8192];
+static CRITICAL_SECTION g_attack_status_cs;
+
 /* Broadcastet eine JSON-Zeile als SSE-Event an den (einen) Cockpit-Client. */
 static void sse_broadcast(const char *line)
 {
@@ -1286,6 +1291,37 @@ static void handle_events(SOCKET c)
     blog("SSE client getrennt");
 }
 
+/* GET /attack_status: liefert den zuletzt vom Attack-Cycle-Sidecar gepushten
+ * Status-JSON (leer -> {"active":false}). Reine Anzeige, kein Game-Call. */
+static void handle_get_attack_status(SOCKET c)
+{
+    char body[8192];
+    EnterCriticalSection(&g_attack_status_cs);
+    if (g_attack_status[0]) {
+        strncpy(body, g_attack_status, sizeof(body) - 1);
+        body[sizeof(body) - 1] = '\0';
+    } else {
+        strcpy(body, "{\"active\":false}");
+    }
+    LeaveCriticalSection(&g_attack_status_cs);
+    http_respond(c, 200, "OK", body);
+}
+
+/* POST /attack_status: speichert den Status-JSON des Attack-Cycle-Sidecars. */
+static void handle_post_attack_status(SOCKET c, const char *body)
+{
+    if (!body || !body[0]) {
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_request\"}");
+        return;
+    }
+    EnterCriticalSection(&g_attack_status_cs);
+    strncpy(g_attack_status, body, sizeof(g_attack_status) - 1);
+    g_attack_status[sizeof(g_attack_status) - 1] = '\0';
+    LeaveCriticalSection(&g_attack_status_cs);
+    http_respond(c, 200, "OK", "{\"ok\":true}");
+}
+
 static void handle_client(SOCKET c)
 {
     char *req = malloc(REQ_MAX + 1);
@@ -1356,6 +1392,18 @@ static void handle_client(SOCKET c)
             handle_health(c);
         } else if (strcmp(method, "GET") == 0 && strcmp(path, "/events") == 0) {
             handle_events(c);
+        } else if (strcmp(method, "GET") == 0 && strcmp(path, "/attack_status") == 0) {
+            handle_get_attack_status(c);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/attack_status") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_post_attack_status(c, b);
+            free(b);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/probe") == 0) {
             handle_probe(c);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/get_state") == 0) {
@@ -1489,6 +1537,7 @@ static int mode_server(void)
     InitializeCriticalSection(&g_resp_cs);
     InitializeCriticalSection(&g_cmd_cs);
     InitializeCriticalSection(&g_sse_cs);
+    InitializeCriticalSection(&g_attack_status_cs);
     g_resp_ev = CreateEvent(NULL, FALSE, FALSE, NULL);
     CreateThread(NULL, 0, pipe_reader_main, NULL, 0, NULL);
 

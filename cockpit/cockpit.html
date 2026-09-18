@@ -693,17 +693,17 @@
                         </div>
                     </fieldset>
 
-                    <!-- B2. BUY ORDERS (live queue) -->
+                    <!-- B2. ATTACK CYCLE (7-min Zyklus + gestapelte Kaeufe) -->
                     <fieldset class="q-groupbox" id="panel-buy-orders">
-                        <legend>Buy Orders</legend>
+                        <legend>Attack Cycle</legend>
                         <div class="flow-container">
                             <div class="log-scroll-area buy-orders-area">
                                 <pre id="buy_orders">—</pre>
                             </div>
                             <div class="flow-note">
-                                aktuelle Buy-Order-Queue (roh, neueste zuerst).
-                                state = pending/paid/failed/fired/in-progress;
-                                Countdown bei paid.
+                                Angriffszyklus (Sidecar): natuerliche Welle (level) +
+                                Countdown bis zur naechsten Attack, plus die vom
+                                Spieler gekauften Wellen (gestapelt).
                                 <span id="buy_orders_msg" aria-live="polite"></span>
                             </div>
                         </div>
@@ -1030,20 +1030,29 @@
 
                 async function refreshOrders() {
                     try {
-                        var r = await post("get_orders", {});
-                        var orders = (r && r.orders) || [];
-                        if (!orders.length) {
+                        var res = await fetch("attack_status");
+                        var s = await res.json();
+                        if (!s || s.active !== true) {
                             $("buy_orders").textContent = "—";
+                            $("buy_orders_msg").textContent = "";
                             return;
                         }
                         var rows = [];
-                        for (var i = 0; i < orders.length; i++) {
-                            var o = orders[i];
-                            rows.push(
-                                o.name + "  " + (o.cost === undefined ? "" : o.cost) +
-                                "  [" + (o.state || "unknown") + "]" +
-                                fmtCountdown(o.time_left_ms)
-                            );
+                        rows.push("level " + s.level + "  next in" + fmtCountdown(s.seconds_to_next_attack * 1000));
+                        var pending = s.pending || [];
+                        if (!pending.length) {
+                            rows.push("gekauft: (keine)");
+                        } else {
+                            var counts = {};
+                            for (var i = 0; i < pending.length; i++) {
+                                var lv = pending[i];
+                                counts[lv] = (counts[lv] || 0) + 1;
+                            }
+                            var parts = [];
+                            for (var lv in counts) {
+                                parts.push("wave" + lv + " x" + counts[lv]);
+                            }
+                            rows.push("gekauft: " + parts.join(", "));
                         }
                         $("buy_orders").textContent = rows.join("\n");
                         $("buy_orders_msg").textContent = "";
