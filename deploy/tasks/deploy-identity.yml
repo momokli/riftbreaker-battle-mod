@@ -11,7 +11,6 @@
 # Ergebnis:
 #   rift_deploy_ref       dev/test/staging = Checkout-SHA (deploy_image_tag);
 #                         prod     = Git-Tag (git describe --tags --always)
-#                                    + Checkout-SHA
 #   rift_deploy_identity  "<env> · <ref>"   (Surface-Vertrag, US4)
 #
 # Read-only (check_mode: false), damit der Render-/Check-Gate denselben Stand
@@ -87,11 +86,12 @@
     rift_deploy_ref: >-
       {{ _rbbattle_prod_ref if rift_env == 'prod' else deploy_image_tag }}
   vars:
-    # Leerer/fehlender describe-Output (kein Tag, kein Git) faellt auf den
-    # Checkout-SHA zurueck — der Ref ist dann wenigstens nicht leer.
+    # prod = exakter Git-Tag (KEIN +sha mehr — Tag zeigt ohnehin auf den
+    # Commit). Leerer/fehlender describe-Output (kein Tag, kein Git) faellt auf
+    # den Checkout-SHA zurueck — der Ref ist dann wenigstens nicht leer.
     rbbattle_prod_tag: "{{ (rbbattle_deploy_describe.stdout | default('')) | trim }}"
     _rbbattle_prod_ref: >-
-      {{ (rbbattle_prod_tag ~ '+' ~ deploy_image_tag)
+      {{ rbbattle_prod_tag
          if (rbbattle_prod_tag | length > 0 and rbbattle_prod_tag != deploy_image_tag)
          else deploy_image_tag }}
   tags: always
@@ -112,6 +112,6 @@
     fail_msg: >-
       rift_deploy_ref/rift_deploy_identity fehlen oder verletzen den Vertrag
       (Issue #483, US1). dev/test muessen den Checkout-SHA (deploy_image_tag)
-      tragen, prod Tag+SHA; die Identitaet ist "<env> · <ref>".
+      tragen, prod den Git-Tag; die Identitaet ist "<env> · <ref>".
     success_msg: "Deploy-Identitaet={{ rift_deploy_identity }}."
   tags: always

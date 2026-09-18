@@ -170,6 +170,42 @@ static unsigned char *build_image(int with_sig, int with_rtti, int valid_col,
     return img;
 }
 
+/* --- #730: Stubs fuer hq_health_from_calls (reine Host-Logik) -------- */
+static uint32_t g_hq_stub_entity;
+static int g_hq_stub_find_calls;
+static int g_hq_stub_get_calls;
+static int g_hq_stub_getmax_calls;
+static float g_hq_stub_hp;
+static float g_hq_stub_hpmax;
+static char g_hq_stub_name[32];
+
+static uint32_t hq_stub_find(void *self, const char *name)
+{
+    (void)self;
+    g_hq_stub_find_calls++;
+    if (name) {
+        strncpy(g_hq_stub_name, name, sizeof(g_hq_stub_name) - 1);
+        g_hq_stub_name[sizeof(g_hq_stub_name) - 1] = '\0';
+    }
+    return g_hq_stub_entity;
+}
+
+static float hq_stub_get(void *self, uint32_t entity)
+{
+    (void)self;
+    (void)entity;
+    g_hq_stub_get_calls++;
+    return g_hq_stub_hp;
+}
+
+static float hq_stub_getmax(void *self, uint32_t entity)
+{
+    (void)self;
+    (void)entity;
+    g_hq_stub_getmax_calls++;
+    return g_hq_stub_hpmax;
+}
+
 int main(void)
 {
     /* Byte-Muster fuer die reinen Scan-Tests (ausserhalb .text). */
@@ -637,6 +673,29 @@ int main(void)
         check(basket_lookup_value(basket, 3, h1, NULL) == 1,
               "basket_lookup: out == NULL -> nur Existenz-Check");
     }
+
+    /* -------------------------------------------------------------- */
+    /* try_spend-Helfer: amount_to_raw + try_spend_afford (rein)       */
+    /* -------------------------------------------------------------- */
+    check(amount_to_raw(10.0) == 10000000LL,
+          "amount_to_raw: 10.0 -> 10000000");
+    check(amount_to_raw(0.5) == 500000LL,
+          "amount_to_raw: 0.5 -> 500000");
+    check(amount_to_raw(-3.0) == -3000000LL,
+          "amount_to_raw: -3.0 -> -3000000");
+
+    check(try_spend_afford(300000000, 10000000) == 1,
+          "try_spend_afford: genug -> 1");
+    check(try_spend_afford(10000000, 10000000) == 1,
+          "try_spend_afford: exakt genug -> 1");
+    check(try_spend_afford(9999999, 10000000) == 0,
+          "try_spend_afford: zu wenig -> 0");
+    check(try_spend_afford(0, 1) == 0,
+          "try_spend_afford: 0 < 1 -> 0");
+    check(try_spend_afford(0, 0) == 1,
+          "try_spend_afford: cost 0 -> 1 (kein Abzug)");
+    check(try_spend_afford(5, -10) == 1,
+          "try_spend_afford: negative cost -> 1 (kein Abzug)");
 
     /* -------------------------------------------------------------- */
     /* resource_internal_name (#421): Anzeigename -> interner Name      */
@@ -1168,6 +1227,66 @@ int main(void)
             check(is_writable_region(&mi) == 0,
                   "#516 is_writable_region: MEM_FREE -> 0");
         }
+    }
+
+    /* -------------------------------------------------------------- */
+    /* HQ-Core-Logik (hq_health_from_calls, Issue #730)               */
+    /* -------------------------------------------------------------- */
+    {
+        float hp = -1.0f, hpmax = -1.0f;
+        int dead = -1;
+
+        g_hq_stub_entity = 0x1234u;
+        g_hq_stub_hp = 850.5f;
+        g_hq_stub_hpmax = 1000.0f;
+        g_hq_stub_find_calls = g_hq_stub_get_calls = g_hq_stub_getmax_calls = 0;
+        g_hq_stub_name[0] = '\0';
+        check(hq_health_from_calls((void *)1, (void *)2, hq_stub_find,
+                                   hq_stub_get, hq_stub_getmax,
+                                   &hp, &hpmax, &dead) == 1 &&
+                  hp == 850.5f && hpmax == 1000.0f && dead == 0 &&
+                  strcmp(g_hq_stub_name, "headquarters") == 0 &&
+                  g_hq_stub_find_calls == 1 && g_hq_stub_get_calls == 1 &&
+                  g_hq_stub_getmax_calls == 1,
+              "hq core: HQ per Namen gefunden -> hp/hp_max/dead (#730)");
+
+        /* HQ noch NICHT gebaut (Entity INVALID_ID) -> kein Health-Call,
+         * Ergebnis "nicht verfuegbar" -> null (kein Crash). */
+        g_hq_stub_entity = RBBRIDGE_HQ_INVALID_ENTITY;
+        g_hq_stub_get_calls = g_hq_stub_getmax_calls = 0;
+        hp = -1.0f; hpmax = -1.0f; dead = -1;
+        check(hq_health_from_calls((void *)1, (void *)2, hq_stub_find,
+                                   hq_stub_get, hq_stub_getmax,
+                                   &hp, &hpmax, &dead) == 0 &&
+                  g_hq_stub_get_calls == 0 && g_hq_stub_getmax_calls == 0 &&
+                  hp == -1.0f,
+              "hq core: kein HQ -> kein Health-Call, graceful 0 (#730)");
+
+        /* Entity existiert, Health-Component (noch) nicht -> 0/0 -> NICHT
+         * "tot", sondern "nicht verfuegbar" (0) -> null. */
+        g_hq_stub_entity = 0x1234u;
+        g_hq_stub_hp = 0.0f;
+        g_hq_stub_hpmax = 0.0f;
+        check(hq_health_from_calls((void *)1, (void *)2, hq_stub_find,
+                                   hq_stub_get, hq_stub_getmax,
+                                   &hp, &hpmax, &dead) == 0,
+              "hq core: Component fehlt (0/0) -> 0, kein falsches dead (#730)");
+
+        /* HP 0 bei hp_max > 0 -> tot (Interface-Konvention hp <= 0). */
+        g_hq_stub_hp = 0.0f;
+        g_hq_stub_hpmax = 1000.0f;
+        check(hq_health_from_calls((void *)1, (void *)2, hq_stub_find,
+                                   hq_stub_get, hq_stub_getmax,
+                                   &hp, &hpmax, &dead) == 1 && dead == 1,
+              "hq core: hp==0 (max>0) -> dead=true (#730)");
+
+        /* Unvollstaendige Aufloesung -> 0, kein Call, kein Crash. */
+        check(hq_health_from_calls(NULL, (void *)2, hq_stub_find, hq_stub_get,
+                                   hq_stub_getmax, &hp, &hpmax, &dead) == 0,
+              "hq core: find_svc NULL -> 0 (graceful) (#730)");
+        check(hq_health_from_calls((void *)1, (void *)2, NULL, hq_stub_get,
+                                   hq_stub_getmax, &hp, &hpmax, &dead) == 0,
+              "hq core: find_fn NULL -> 0 (graceful) (#730)");
     }
 
     free(img);

@@ -52,6 +52,8 @@ rbtools_staging_dir: "/opt/rbmods/rbtools/{{ rift_env }}/.staging"
 # container_name-Werte (riftbreaker-sessions/-egress) würden sonst mit dem
 # dev-Stack kollidieren. Eigener Sessions-Dir, damit die JSONL getrennt bleiben.
 riftbreaker_sessions_container: riftbreaker-sessions-prod
+riftbreaker_send_tailer_container: riftbreaker-send-tailer-prod
+riftbreaker_match_loop_container: riftbreaker-match-loop-prod
 riftbreaker_sessions_dir: "/srv/rift-{{ rift_env }}/sessions"
 
 # Content kommt per Sync aus dem kanonischen Cache (wie dev).

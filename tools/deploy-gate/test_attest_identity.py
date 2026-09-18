@@ -97,7 +97,7 @@ class ExtractorsTest(unittest.TestCase):
 
     def test_mod_zip_name_parses_env_and_ref(self):
         self.assertEqual(att.extract_mod_zip("rbbattle-dev-abc123.zip"), ("dev", "abc123"))
-        self.assertEqual(att.extract_mod_zip("rbbattle-prod-v1.2.3+sha.zip"), ("prod", "v1.2.3+sha"))
+        self.assertEqual(att.extract_mod_zip("rbbattle-prod-v1.2.3.zip"), ("prod", "v1.2.3"))
         self.assertIsNone(att.extract_mod_zip("rbbattle.zip"))
 
 

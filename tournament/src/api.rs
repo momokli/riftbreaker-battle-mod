@@ -56,7 +56,7 @@ pub struct Config {
     /// Verzeichnis der statischen Web-UI.
     pub web_dir: PathBuf,
     /// Deploy-Identitaet (Issue #483, US4): Umgebung (dev|prod|test|staging) + Ref
-    /// (Checkout-SHA bzw. Tag+SHA), sichtbar in `GET /health`.
+    /// (Checkout-SHA bzw. Tag), sichtbar in `GET /health`.
     pub env: String,
     pub deploy_ref: String,
 }
