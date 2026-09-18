@@ -3808,6 +3808,39 @@ static void dispatch_restart_map(HANDLE hPipe, const char *op)
               (unsigned long long)(uintptr_t)g_restart.instance);
 }
 
+/* #730-Spike: native RestartGame-Calls als Low-Level-Test-Handles.
+ * GameplayState::RestartGame / ServerGameplayState::RestartGame (PDB).
+ * ACHTUNG: Game-Thread-Funktionen, NICHT threadsicher -> nur manuelles
+ * Testen auf dev, nicht fuer den Produktiv-Pfad. */
+#define RBBRIDGE_RVA_RESTARTGAME_GAMEPLAYSTATE 0x1A18B40u
+#define RBBRIDGE_RVA_RESTARTGAME_SERVERSTATE    0x1832CE0u
+
+static void dispatch_restart_game(HANDLE hPipe, const char *which)
+{
+    uint32_t rva;
+    if (strcmp(which, "server") == 0)
+        rva = RBBRIDGE_RVA_RESTARTGAME_SERVERSTATE;
+    else
+        rva = RBBRIDGE_RVA_RESTARTGAME_GAMEPLAYSTATE;
+
+    if (!resolve_restart()) {
+        send_line(hPipe, "{\"event\":\"restart_game_result\",\"ok\":false,"
+                         "\"reason\":\"not_resolvable\"}");
+        return;
+    }
+
+    typedef void (__fastcall *restart_game_fn)(void *self);
+    restart_game_fn fn = (restart_game_fn)(uintptr_t)(g_restart.base + rva);
+    dbg("restart_game: call rva=0x%x instance=%p", (unsigned)rva,
+        (void *)g_restart.instance);
+    fn(g_restart.instance);
+
+    send_line(hPipe, "{\"event\":\"restart_game_result\",\"ok\":true,"
+                     "\"rva\":\"0x%x\",\"instance\":\"0x%llx\"}",
+              (unsigned)rva,
+              (unsigned long long)(uintptr_t)g_restart.instance);
+}
+
 /* #386: zuletzt gebautes Exor::Database-Payload (Mission-Flow `data`) und
  * der darin gesetzte spawn_point. Geparkt fuer die Read-Leg in get_state;
  * absichtlich NICHT freigegeben (Lifetime bis Flow-Ende). Zugriff nur auf
@@ -5525,6 +5558,15 @@ static void handle_line(HANDLE hPipe, const char *line)
         char op[32] = "status";
         json_get_string(line, "op", op, sizeof(op));
         dispatch_restart_map(hPipe, op);
+        return;
+    }
+
+    /* restart_game (#730-Spike): native RestartGame-Call (Test-Handle).
+     * `which` = "game" (GameplayState) | "server" (ServerGameplayState). */
+    if (strcmp(cmd, "restart_game") == 0) {
+        char which[32] = "game";
+        json_get_string(line, "which", which, sizeof(which));
+        dispatch_restart_game(hPipe, which);
         return;
     }
 

@@ -1511,6 +1511,47 @@ static void handle_restart_map(SOCKET c, const char *body)
     http_respond(c, 200, "OK", line);
 }
 
+/* POST /restart_game: nativer RestartGame-Call (Test-Handle, #730-Spike).
+ * `which` = "game" | "server" (GameplayState bzw. ServerGameplayState). */
+static void handle_restart_game(SOCKET c, const char *body)
+{
+    char which[32] = "game";
+    char line[READ_BUF];
+    char payload[LINE_MAX];
+    char esc_which[32 * 2];
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+
+    json_get_string(body, "which", which, sizeof(which));
+    if (which[0] && strcmp(which, "game") != 0 && strcmp(which, "server") != 0) {
+        blog("POST /restart_game: unbekanntes which '%s'", which);
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_which\"}");
+        return;
+    }
+
+    json_escape(which, esc_which, sizeof(esc_which));
+    snprintf(payload, sizeof(payload),
+             "{\"cmd\":\"restart_game\",\"which\":\"%s\"}\n", esc_which);
+
+    {
+        int rc = pipe_send_command("restart_game_result", payload,
+                                   timeout_ms, line, sizeof(line));
+        if (rc == -1) {
+            blog("POST /restart_game: Pipe nicht erreichbar -> pipe_unavailable");
+            http_respond(c, 503, "Service Unavailable",
+                         "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+            return;
+        }
+        if (rc != 0) {
+            http_respond(c, 500, "Internal Server Error",
+                         "{\"ok\":false,\"reason\":\"timeout\"}");
+            return;
+        }
+    }
+    log_response("/restart_game", line);
+    http_respond(c, 200, "OK", line);
+}
+
 /* POST /order: nimmt {"name":"wave1"} entgegen, schaut in der Cost-Tabelle
  * nach und reiht die Order ein. KEIN try_spend hier — der Scheduler bezahlt
  * sofort (Phase 1) und feuert nach Ablauf der Frist (Phase 2). */
@@ -1769,6 +1810,16 @@ static void handle_client(SOCKET c)
             memcpy(b, body, (size_t)body_len);
             b[body_len] = '\0';
             handle_restart_map(c, b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/restart_game") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_restart_game(c, b);
             free(b);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/order") == 0) {
             char *b = malloc((size_t)body_len + 1);
