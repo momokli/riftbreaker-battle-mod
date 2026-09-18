@@ -634,6 +634,13 @@
                                 <button id="send_boss_high" class="send-preset" data-preset="boss_high" title="attack_boss_arachnoid (5000 HP)" aria-label="Send boss high">high</button>
                                 <button id="send_boss_random" class="send-preset" data-preset="boss_random" title="attack_boss_dynamic (vanilla Random-Boss)" aria-label="Send random boss">random</button>
                             </div>
+                            <div class="flow-action-row">
+                                <span class="prop-label">countdown</span>
+                                <input id="send_countdown_min" class="mono" size="3" value="0" min="0" max="999" inputmode="numeric" aria-label="Wave countdown minutes" title="Wave countdown minutes" />
+                                <span class="prop-label">min</span>
+                                <input id="send_countdown_sec" class="mono" size="3" value="10" min="0" max="59" inputmode="numeric" aria-label="Wave countdown seconds" title="Wave countdown seconds" />
+                                <span class="prop-label">sec</span>
+                            </div>
                             <div class="flow-readouts">
                                 <div class="flow-prop">
                                     <span class="prop-label">last send</span>
@@ -1091,8 +1098,8 @@
                 // Level 8 — Level 9 hat keinen eigenen Wellen-Pool, sondern teilt
                 // sich den von Level 8 (roh belegt in #658).
                 var SEND_PRESETS = {
-                    wave_1: "logic/missions/survival/attack_level_1_id_1.logic",
-                    wave_2: "logic/missions/survival/attack_level_2_id_1.logic",
+                    wave_1: "logic/missions/survival/attack_level_1_entry.logic",
+                    wave_2: "logic/missions/survival/attack_level_2_entry.logic",
                     wave_3: "logic/missions/survival/attack_level_3_id_1.logic",
                     wave_4: "logic/missions/survival/attack_level_4_id_1.logic",
                     wave_5: "logic/missions/survival/attack_level_5_id_1.logic",
@@ -1112,23 +1119,42 @@
                         $("out").textContent = "unknown preset: " + key;
                         return;
                     }
-                    try {
-                        var r = await post("activate_mission_flow", {
+
+                    // Countdown aus min+sec (Boundary-Check: min 0..999, sec 0..59).
+                    var min = parseInt($("send_countdown_min").value, 10);
+                    var sec = parseInt($("send_countdown_sec").value, 10);
+                    if (!(min >= 0)) min = 0;
+                    if (!(sec >= 0)) sec = 0;
+                    if (min > 999) min = 999;
+                    if (sec > 59) sec = 59;
+                    var totalSec = min * 60 + sec;
+
+                    var fire = function () {
+                        return post("activate_mission_flow", {
                             logic: logic,
                             mode: "default",
-                        });
-                        if (r && r.ok) {
-                            $("send_menu_last").textContent =
-                                key + " -> " + (r.flow || "ok");
-                            $("out").textContent = "";
-                        } else {
+                        }).then(function (r) {
+                            if (r && r.ok) {
+                                $("send_menu_last").textContent =
+                                    key + " -> " + (r.flow || "ok");
+                                $("out").textContent = "";
+                            } else {
+                                $("send_menu_last").textContent = "—";
+                                $("out").textContent = key + ": " + JSON.stringify(r);
+                            }
+                            refresh();
+                        }).catch(function (e) {
                             $("send_menu_last").textContent = "—";
-                            $("out").textContent = key + ": " + JSON.stringify(r);
-                        }
-                        refresh();
-                    } catch (e) {
-                        $("send_menu_last").textContent = "—";
-                        $("out").textContent = "ERR " + e.message;
+                            $("out").textContent = "ERR " + e.message;
+                        });
+                    };
+
+                    if (totalSec > 0) {
+                        $("send_menu_last").textContent =
+                            key + " in " + totalSec + "s ...";
+                        setTimeout(fire, totalSec * 1000);
+                    } else {
+                        fire();
                     }
                 }
 
