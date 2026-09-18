@@ -301,7 +301,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--logic-template", default=None,
                          help="Logic-Pfad-Template mit {level} (Default '%s')" % DEFAULT_LOGIC_TEMPLATE)
     parser.add_argument("--spawn-point", default=None,
-                         help="spawn_point-Wert (#386), wird an natuerliche UND gesendete Wellen desselben Ticks gehaengt")
+                         help="spawn_point-Wert (#386), wird an natuerliche UND gesendete "
+                              "Wellen desselben Ticks gehaengt")
     parser.add_argument("--start-level", type=int, default=None, help="Start-Difficulty-Level (Default 1)")
     parser.add_argument("--start-delay", type=float, default=None, help="Sekunden bis zur ersten Welle (Default 30)")
     parser.add_argument("--dry-run", action="store_true", help="nur loggen, keine echten HTTP-Calls an pipe_bridge")
