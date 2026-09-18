@@ -13,7 +13,11 @@ end
 function rbbattle_button:OnInit()
     self:RegisterHandler(self.entity, "InteractWithEntityRequest", "OnInteractWithEntityRequest")
     self:RegisterHandler(self.entity, "SpecialBuildingActionRequest", "OnSpecialAction")
+    self:RegisterHandler(self.entity, "TimerElapsedEvent", "OnTimerElapsedEvent")
     self.data:SetInt("is_special_action_enabled", 1)
+    -- Nativer Timer (wie trap.lua) für den 1s-Click-Cooldown.
+    EntityService:CreateComponent(self.entity, "TimerComponent")
+    self.cooldown = false
     LogService:Log("[RBBATTLE] rbbattle_button init")
 end
 
@@ -25,20 +29,16 @@ end
 
 local BUTTON_COOLDOWN_SEC = 1.0
 
--- 1s-Click-Cooldown pro Button: liefert false, wenn noch im Cooldown. Nutzt
--- os.clock() (CPU-Zeit, monoton); ist die Sandbox ohne os.clock(), wird der
--- Cooldown uebersprungen (kein Fehler).
-function rbbattle_button:TryCooldown()
-    local now = 0
-    local ok = pcall(function() now = os.clock() end)
-    if not ok then
-        return true
+-- Nativer Cooldown: SetTimerRequest -> TimerElapsedEvent (kein os.clock).
+function rbbattle_button:StartCooldown()
+    self.cooldown = true
+    QueueEvent("SetTimerRequest", self.entity, "BuyCooldown", BUTTON_COOLDOWN_SEC)
+end
+
+function rbbattle_button:OnTimerElapsedEvent(evt)
+    if evt:GetName() == "BuyCooldown" then
+        self.cooldown = false
     end
-    if (self.cooldown_until or 0) > now then
-        return false
-    end
-    self.cooldown_until = now + BUTTON_COOLDOWN_SEC
-    return true
 end
 
 -- Kurzer zufaelliger Buy-Request-Identifier (reicht zum Tracing).
@@ -64,19 +64,21 @@ function rbbattle_button:SendChat()
 end
 
 function rbbattle_button:OnInteractWithEntityRequest(evt)
-    if not self:TryCooldown() then
+    if self.cooldown then
         LogService:Log("[RBBATTLE] button_interact: cooldown, ignoriert")
         return
     end
+    self:StartCooldown()
     LogService:Log("[RBBATTLE] button_interact (space)")
     self:SendChat()
 end
 
 function rbbattle_button:OnSpecialAction()
-    if not self:TryCooldown() then
+    if self.cooldown then
         LogService:Log("[RBBATTLE] button_special_action: cooldown, ignoriert")
         return
     end
+    self:StartCooldown()
     LogService:Log("[RBBATTLE] button_special_action (radial)")
     self:SendChat()
 end
