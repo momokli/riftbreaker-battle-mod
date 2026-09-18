@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hard-Difficulty Wellen-HP-Pool</title>
+<style>
+  :root{
+    --bg:#f4f5f2;
+    --paper:#ffffff;
+    --ink:#1c2321;
+    --ink-soft:#4b544f;
+    --line:#dde1dc;
+    --line-strong:#c3c9c2;
+    --accent:#b4501f;
+    --accent-soft:#e9a374;
+    --accent-bg:#fbeee4;
+    --normal:#2f6f5e;
+    --normal-bg:#e6f1ec;
+    --hard:#9c2b2b;
+    --hard-bg:#f6e3e3;
+    --code-bg:#eef0ec;
+    --shadow: 0 1px 2px rgba(28,35,33,.06), 0 8px 24px rgba(28,35,33,.05);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#14171a;
+      --paper:#1b1f22;
+      --ink:#e9ece9;
+      --ink-soft:#a9b2ac;
+      --line:#2c3236;
+      --line-strong:#3a4046;
+      --accent:#e28143;
+      --accent-soft:#7a4322;
+      --accent-bg:#2a2019;
+      --normal:#5fb89b;
+      --normal-bg:#16241f;
+      --hard:#e07070;
+      --hard-bg:#2a1717;
+      --code-bg:#20252a;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
+    }
+  }
+  *{box-sizing:border-box;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    margin:0;
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+    padding-block: 32px 64px;
+  }
+  code, .mono{ font-family: 'Consolas', 'SFMono-Regular', ui-monospace, Menlo, monospace; }
+  .wrap{ max-width: 980px; margin: 0 auto; padding: 0 20px; }
+
+  .kicker{
+    font-family: 'Consolas', ui-monospace, monospace;
+    font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--accent); display:flex; gap: 10px; align-items:center;
+    margin-bottom: 14px; flex-wrap: wrap;
+  }
+  .kicker .pill{ border:1px solid var(--line-strong); border-radius:999px; padding: 3px 10px; color: var(--ink-soft); }
+
+  h1{ font-size: clamp(26px, 4vw, 38px); line-height:1.15; margin: 0 0 8px; letter-spacing: -0.01em; }
+  .subtitle{ color: var(--ink-soft); font-size: 16px; max-width: 68ch; margin: 0 0 28px; line-height:1.55; }
+
+  .meta-strip{
+    display:grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr));
+    gap:1px; background: var(--line); border:1px solid var(--line);
+    border-radius:10px; overflow:hidden; margin-bottom: 36px;
+  }
+  .meta-cell{ background:var(--paper); padding: 12px 16px; }
+  .meta-cell .k{ font-family:'Consolas',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--ink-soft); margin-bottom:4px; }
+  .meta-cell .v{ font-size:14px; font-weight:600; }
+
+  .codeblock{
+    font-family:'Consolas',monospace; background: var(--code-bg); border:1px solid var(--line);
+    border-left: 3px solid var(--accent); border-radius: 8px; padding: 14px 18px;
+    font-size: 13px; color: var(--ink); margin: 16px 0 28px; overflow-x:auto; white-space:pre;
+  }
+
+  section{ margin-bottom: 46px; }
+  h2{
+    font-size: 20px; display:flex; align-items:baseline; gap:10px;
+    margin: 0 0 6px; padding-bottom: 10px; border-bottom: 1px solid var(--line-strong);
+  }
+  h2 .num{ font-family:'Consolas',monospace; color: var(--accent); }
+  h3{ font-size:14.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); margin: 24px 0 10px; }
+  p{ line-height:1.65; }
+  p.lede{ color: var(--ink-soft); margin-top:2px; }
+
+  .table-scroll{ overflow-x:auto; border:1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); background:var(--paper); }
+  table{ border-collapse:collapse; width:100%; font-size:13.5px; min-width: 480px; }
+  th, td{ padding: 9px 14px; text-align:left; border-bottom:1px solid var(--line); white-space:nowrap; font-variant-numeric: tabular-nums; }
+  thead th{ background: var(--code-bg); font-family:'Consolas',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); }
+  tbody tr:last-child td{ border-bottom:none; }
+  tbody tr:hover{ background: var(--code-bg); }
+  td.num, th.num{ text-align:right; font-family:'Consolas',monospace; }
+  td.strong{ font-weight:700; color:var(--accent); }
+
+  .tag{ display:inline-block; font-family:'Consolas',monospace; font-size:10.5px; padding: 2px 8px; border-radius:5px; font-weight:600; }
+  .tag.normal{ background:var(--normal-bg); color:var(--normal); }
+  .tag.hard{ background:var(--hard-bg); color:var(--hard); }
+
+  .callout{
+    background: var(--accent-bg); border:1px solid var(--accent-soft);
+    border-radius:10px; padding: 16px 20px; margin: 18px 0; font-size: 14.5px; line-height:1.6;
+  }
+  .callout b{ color: var(--accent); }
+  .callout.warn{ background: var(--hard-bg); border-color: var(--hard); }
+  .callout.warn b{ color: var(--hard); }
+
+  .findings{ display:grid; gap:10px; }
+  .finding{
+    display:grid; grid-template-columns: 30px 1fr; gap: 12px;
+    background: var(--paper); border:1px solid var(--line); border-radius:10px;
+    padding: 14px 16px; box-shadow: var(--shadow);
+  }
+  .finding .n{ font-family:'Consolas',monospace; color: var(--accent); font-weight:700; }
+  .finding p{ margin:0; font-size:14px; }
+
+  code.inline{ background: var(--code-bg); padding: 1px 5px; border-radius:4px; font-size: 0.92em; }
+
+  .refs{ font-family:'Consolas',monospace; font-size:12.5px; color: var(--ink-soft); padding-top: 16px; border-top:1px solid var(--line-strong); }
+  ul.plain{ margin:0; padding-left: 20px; line-height:1.7; }
+  ul.plain li{ margin-bottom:6px; }
+
+  .arch{
+    display:flex; flex-direction:column; gap:6px; font-family:'Consolas',monospace; font-size:13px;
+    background: var(--code-bg); border:1px solid var(--line); border-radius:10px; padding:16px 20px;
+  }
+  .arch .base{ font-weight:700; }
+  .arch .child{ padding-left: 24px; color: var(--ink-soft); }
+  .arch .child b{ color: var(--ink); }
+
+  @media (max-width:520px){ table{ min-width: 420px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">
+    <span class="pill">Hard-Difficulty</span>
+    <span>Wellen-Recherche</span>
+    <span class="pill">Ergänzt #736</span>
+  </div>
+
+  <h1>Was sich bei Hard-Wellen wirklich ändert</h1>
+  <p class="subtitle">Hard ist kein globaler HP-Multiplikator. Es ist ein eigenes Regelwerk, das gezielt den Wellen-Pool, die Unit-Blueprints und ein paar Timing-Werte austauscht &mdash; die Gegner-<em>Anzahl</em> bleibt fast unverändert.</p>
+
+  <div class="meta-strip">
+    <div class="meta-cell"><div class="k">Stand</div><div class="v">2026-09-18</div></div>
+    <div class="meta-cell"><div class="k">Quelle</div><div class="v">00_win_data.zip</div></div>
+    <div class="meta-cell"><div class="k">Basis</div><div class="v">#736 (Normal)</div></div>
+    <div class="meta-cell"><div class="k">Ziel-Issue</div><div class="v">#205</div></div>
+  </div>
+
+  <section>
+    <h2><span class="num">01</span> Regelwerk-Architektur</h2>
+    <p class="lede">Jede Difficulty erbt von <code class="inline">default.lua</code> und überschreibt nur bestimmte Tabellen.</p>
+    <div class="arch">
+      <div class="base">dom_survival_jungle_rules_hard.lua</div>
+      <div class="child">local rules = <b>require("...default.lua")()</b></div>
+      <div class="child">rules.timeToNextDifficultyLevel &nbsp;<span class="tag normal">unverändert</span></div>
+      <div class="child">rules.prepareSpawnTime &nbsp;<span class="tag hard">überschrieben</span></div>
+      <div class="child">rules.creatureDifficultyIncrementPerDOMDifficulty &nbsp;<span class="tag hard">überschrieben</span></div>
+      <div class="child">rules.maxAttackCountPerDifficulty &nbsp;<span class="tag hard">überschrieben</span></div>
+      <div class="child">rules.waves["default"] &nbsp;<span class="tag hard">komplett neu</span></div>
+      <div class="child">rules.extraWaves &nbsp;<span class="tag normal">inhaltsgleich zu Normal</span></div>
+    </div>
+    <div class="callout"><b>Wichtig:</b> Normal überschreibt <code class="inline">rules.waves</code> selbst <b>nicht</b> &mdash; der Hauptpool bei Normal ist identisch zu Default (= #736). Nur Hard/Brutal ersetzen ihn komplett.</div>
+  </section>
+
+  <section>
+    <h2><span class="num">02</span> Alpha/Ultra sind eigene Blueprints, keine Biome</h2>
+    <p class="lede">Korrektur zu #213/#658/#736: <code class="inline">_alpha</code>/<code class="inline">_ultra</code> wurden bisher als Biom-Varianten angenommen und ausgeklammert. Tatsächlich sind es eigene, stärkere Unit-Blueprints mit eigener <code class="inline">.ent</code>-Basis-HP.</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Unit</th><th class="num">Basis</th><th class="num">Alpha</th><th class="num">Ultra</th></tr></thead>
+        <tbody>
+          <tr><td>canoptrix</td><td class="num">5</td><td class="num strong">25 (5×)</td><td class="num strong">125 (25×)</td></tr>
+          <tr><td>arachnoid_sentinel</td><td class="num">110</td><td class="num strong">330 (3×)</td><td class="num strong">990 (9×)</td></tr>
+          <tr><td>kafferroceros</td><td class="num">300</td><td class="num strong">900 (3×)</td><td class="num strong">1 800 (6×)</td></tr>
+          <tr><td>gnerot</td><td class="num">2 000</td><td class="num strong">3 000 (1,5×)</td><td class="num strong">4 000 (2×)</td></tr>
+          <tr><td>bomogan</td><td class="num">250</td><td class="num strong">300 (1,2×)</td><td class="num strong">400 (1,6×)</td></tr>
+          <tr><td>baxmoth</td><td class="num">1 000</td><td class="num strong">1 300 (1,3×)</td><td class="num strong">1 600 (1,6×)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout"><b>Der eigentliche Hebel:</b> <code class="inline">count</code> und <code class="inline">units_in_one_spawn</code> sind zwischen Plain- und Alpha/Ultra-Pendant identisch &mdash; nur der Blueprint-Name (und damit die HP) ändert sich. Hard bringt keine zusätzlichen Gegner, sondern zähere.</div>
+  </section>
+
+  <section>
+    <h2><span class="num">03</span> Der Haupt-Pool wächst und mischt Alpha rein</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Level</th><th class="num">Pool-Slots</th><th class="num">Unique</th><th>Auffälligkeit</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td class="num">4</td><td class="num">4</td><td>Plain ×2 + Alpha ×2</td></tr>
+          <tr><td>2</td><td class="num">4</td><td class="num">4</td><td>Plain ×2 + Alpha ×2</td></tr>
+          <tr><td>3</td><td class="num">4</td><td class="num">4</td><td>Plain ×2 + Alpha ×2</td></tr>
+          <tr><td>4</td><td class="num">6</td><td class="num">6</td><td>Plain ×3 + Alpha ×3</td></tr>
+          <tr><td>5</td><td class="num">8</td><td class="num">8</td><td>Plain ×4 + Alpha ×4</td></tr>
+          <tr><td>6</td><td class="num">12</td><td class="num">10</td><td>2 Einträge doppelt gewichtet</td></tr>
+          <tr><td>7</td><td class="num">12</td><td class="num">10</td><td>2 Einträge doppelt gewichtet</td></tr>
+          <tr><td>8</td><td class="num">12</td><td class="num">10</td><td>2 Einträge doppelt gewichtet</td></tr>
+          <tr><td>9</td><td class="num strong">27</td><td class="num">15</td><td class="strong">Eigener Pool, inkl. Ultra-Tier</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Level 9 ist bei Hard <b>kein Alias mehr für Level 8</b> (anders als Default/Normal, #213 §2) &mdash; sondern ein eigener, massiv gewichteter Pool mit <code class="inline">_ultra</code>-Varianten.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">04</span> Einheiten &amp; HP pro Welle &mdash; Hard-Pool-Durchschnitte</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Level</th><th class="num">Pool-Slots</th><th class="num">Ø Einheiten</th><th class="num">Ø HP-Σ</th><th class="num">Ø HP/Einheit</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td class="num">4</td><td class="num">170.0</td><td class="num">2 550</td><td class="num">15.0</td></tr>
+          <tr><td>2</td><td class="num">4</td><td class="num">190.0</td><td class="num">4 900</td><td class="num">25.8</td></tr>
+          <tr><td>3</td><td class="num">4</td><td class="num">92.5</td><td class="num">8 205</td><td class="num">88.7</td></tr>
+          <tr><td>4</td><td class="num">6</td><td class="num">171.5</td><td class="num">13 777</td><td class="num">80.3</td></tr>
+          <tr><td>5</td><td class="num">8</td><td class="num">270.9</td><td class="num">21 783</td><td class="num">80.4</td></tr>
+          <tr><td>6</td><td class="num">12</td><td class="num">418.8</td><td class="num">27 533</td><td class="num">65.7</td></tr>
+          <tr><td>7</td><td class="num">12</td><td class="num">560.6</td><td class="num">38 792</td><td class="num">69.2</td></tr>
+          <tr><td>8</td><td class="num">12</td><td class="num">566.3</td><td class="num">43 513</td><td class="num">76.8</td></tr>
+          <tr><td>9</td><td class="num strong">27</td><td class="num">553.7</td><td class="num strong">67 607</td><td class="num strong">122.1</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout warn"><b>Extremwert:</b> <code class="inline">attack_level_8_id_1_ultra</code> in Level 9 &mdash; <b>207 840 HP</b> bei nur 690 Einheiten. Der stärkste Einzelwert im gesamten Datensatz (Normal + Hard).</div>
+  </section>
+
+  <section>
+    <h2><span class="num">05</span> Vergleich Hard vs. Normal</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Level</th><th class="num">Ø Einh. Normal</th><th class="num">Ø Einh. Hard</th><th class="num">Ø HP Normal</th><th class="num">Ø HP Hard</th><th class="num">HP-Faktor</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td class="num"><span class="tag normal">170.0</span></td><td class="num"><span class="tag hard">170.0</span></td><td class="num">850</td><td class="num">2 550</td><td class="num strong">3.00×</td></tr>
+          <tr><td>2</td><td class="num"><span class="tag normal">190.0</span></td><td class="num"><span class="tag hard">190.0</span></td><td class="num">2 000</td><td class="num">4 900</td><td class="num strong">2.45×</td></tr>
+          <tr><td>3</td><td class="num"><span class="tag normal">62.3</span></td><td class="num"><span class="tag hard">92.5</span></td><td class="num">3 943</td><td class="num">8 205</td><td class="num strong">2.08×</td></tr>
+          <tr><td>4</td><td class="num"><span class="tag normal">171.8</span></td><td class="num"><span class="tag hard">171.5</span></td><td class="num">6 910</td><td class="num">13 777</td><td class="num strong">1.99×</td></tr>
+          <tr><td>5</td><td class="num"><span class="tag normal">269.8</span></td><td class="num"><span class="tag hard">270.9</span></td><td class="num">11 298</td><td class="num">21 783</td><td class="num strong">1.93×</td></tr>
+          <tr><td>6</td><td class="num"><span class="tag normal">401.6</span></td><td class="num"><span class="tag hard">418.8</span></td><td class="num">15 198</td><td class="num">27 533</td><td class="num strong">1.81×</td></tr>
+          <tr><td>7</td><td class="num"><span class="tag normal">538.0</span></td><td class="num"><span class="tag hard">560.6</span></td><td class="num">21 560</td><td class="num">38 792</td><td class="num strong">1.80×</td></tr>
+          <tr><td>8</td><td class="num"><span class="tag normal">544.2</span></td><td class="num"><span class="tag hard">566.3</span></td><td class="num">27 352</td><td class="num">43 513</td><td class="num strong">1.59×</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout"><b>Kernbefund:</b> Die Gegner-<i>Anzahl</i> ändert sich kaum (±wenige %). Der Unterschied ist fast ausschließlich HP pro Gegner &mdash; größter Sprung bei Level 1 (canoptrix dominiert, 5× Alpha-Multiplikator), abnehmend Richtung Level 8 (Mix verschiebt sich zu kafferroceros/gnerot mit milderem Multiplikator).</div>
+  </section>
+
+  <section>
+    <h2><span class="num">06</span> Der "stronger_attack"-Zusatz-Pool</h2>
+    <p class="lede"><code class="inline">rules.extraWaves</code>, konsumiert über <code class="inline">GetExtraWavePool()</code> (<code class="inline">dom_manager.lua</code>), ausgelöst durch das Event <code class="inline">"stronger_attack"</code> (<code class="inline">event_manager.lua</code>) &mdash; vermutlich die native Twitch-Integration, auf der dieser Mod aufbaut.</p>
+    <div class="codeblock">-- event_manager.lua
+elseif ( translatedEventName == "stronger_attack" ) then
+    self.extraAttacks = amount
+    self.participants = participants</div>
+    <div class="callout warn"><b>Kein Hard-Feature:</b> Der Pool ist <u>identisch</u> zwischen Normal und Hard (per Diff verifiziert) &mdash; ein aktiv von außen getriggerter Zusatz-Spawn, unabhängig von der gewählten Difficulty.</div>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Level</th><th class="num">Slots</th><th class="num">Ø Einheiten</th><th class="num">Ø HP-Σ</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td class="num">2</td><td class="num">170.0</td><td class="num">4 250</td></tr>
+          <tr><td>2</td><td class="num">2</td><td class="num">190.0</td><td class="num">7 800</td></tr>
+          <tr><td>3</td><td class="num">2</td><td class="num">92.5</td><td class="num">12 495</td></tr>
+          <tr><td>4</td><td class="num">3</td><td class="num">229.0</td><td class="num">24 807</td></tr>
+          <tr><td>5</td><td class="num">4</td><td class="num">271.5</td><td class="num">31 768</td></tr>
+          <tr><td>6</td><td class="num">5</td><td class="num">401.6</td><td class="num">43 214</td></tr>
+          <tr><td>7</td><td class="num">5</td><td class="num">537.2</td><td class="num">59 860</td></tr>
+          <tr><td>8</td><td class="num">5</td><td class="num">542.4</td><td class="num">64 906</td></tr>
+          <tr><td>9</td><td class="num">5</td><td class="num">543.2</td><td class="num">67 706</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">07</span> Timing &amp; Attack-Count</h2>
+    <h3>maxAttackCountPerDifficulty (Wellen pro Angriffsrunde)</h3>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Regelwerk</th><th class="num">L1</th><th class="num">L2</th><th class="num">L3</th><th class="num">L4</th><th class="num">L5</th><th class="num">L6</th><th class="num">L7</th><th class="num">L8</th><th class="num">L9</th></tr></thead>
+        <tbody>
+          <tr><td>Default</td><td class="num">1</td><td class="num">2</td><td class="num">2</td><td class="num">3</td><td class="num">3</td><td class="num">3</td><td class="num">3</td><td class="num">3</td><td class="num">4</td></tr>
+          <tr><td>Hard</td><td class="num">1</td><td class="num">2</td><td class="num">2</td><td class="num strong">2</td><td class="num strong">2</td><td class="num">3</td><td class="num">3</td><td class="num">3</td><td class="num">4</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h3>prepareSpawnTime &amp; timeToNextDifficultyLevel</h3>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th></th><th>prepareSpawnTime</th><th>timeToNextDifficultyLevel</th></tr></thead>
+        <tbody>
+          <tr><td>Default</td><td class="num">360s konstant</td><td class="num">200, 600×8</td></tr>
+          <tr><td>Hard</td><td class="num strong">420s konstant</td><td class="num">200, 600×8 <span class="tag normal">identisch</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout"><b>Gegenintuitiv:</b> Hard gibt <i>mehr</i> Vorbereitungszeit (420s statt 360s), obwohl die Wellen stärker sind. Die Eskalationsgeschwindigkeit selbst ändert sich nicht.</div>
+  </section>
+
+  <section>
+    <h2><span class="num">08</span> creatureDifficultyIncrementPerDOMDifficulty</h2>
+    <p class="lede">Vier Teiltabellen (vermutlich je Spieleranzahl 1&ndash;4), Wert pro DOM-Level 1&ndash;9. Rohwerte unterscheiden sich &mdash; die Mechanik selbst (was der Wert bewirkt) ist bewusst <b>nicht</b> entschlüsselt, wie in #213/#736 als offener Punkt vermerkt.</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Sub-Tabelle</th><th>Default (L1→9)</th><th>Hard (L1→9)</th></tr></thead>
+        <tbody>
+          <tr><td>[1]</td><td class="mono">0, 0, 0, 0, 0, 0.5, 0.5, 0.5, 1.5</td><td class="mono">0, 0, 0, <b>0.5, 0.5, 0.5, 0.5</b>, 0.5, 1.5</td></tr>
+          <tr><td>[2]</td><td class="mono">0, 2, 0, 1, 0, 1, 0, 1, 0</td><td class="mono">2, 0, 1, 1, 0, 1, 0, 1, 1</td></tr>
+          <tr><td>[3]</td><td class="mono">2, 0, 1, 0, 1, 0, 1, 0, 1</td><td class="mono">3, 0, 1, 0, 1, 0, 1, 1, 1</td></tr>
+          <tr><td>[4]</td><td class="mono">2, 1, 0, 1, 0, 1, 0, 1, 1</td><td class="mono">3, 0, 1, 1, 1, 0, 1, 1, 1</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Auffällig: <code class="inline">[1]</code> setzt den 0.5-Bump bei Hard schon ab Level 4 statt erst ab Level 6 bei Default &mdash; zwei Level früher.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">09</span> Carbonium-Kostenkurven auf Hard-Basis</h2>
+    <div class="codeblock">Normal(L)    = 100 · Ø HP Σ(L) / Ø HP Σ(1)
+Gedaempft(L) = Normal(L) · (1 − ⅓ · t²),   t = (L−1) / 7</div>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Level</th><th class="num">Normal (Hard-Basis)</th><th class="num">Gedämpft (Hard-Basis)</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td class="num">100</td><td class="num">100</td></tr>
+          <tr><td>2</td><td class="num">190</td><td class="num">190</td></tr>
+          <tr><td>3</td><td class="num">320</td><td class="num">310</td></tr>
+          <tr><td>4</td><td class="num">540</td><td class="num">510</td></tr>
+          <tr><td>5</td><td class="num">850</td><td class="num">760</td></tr>
+          <tr><td>6</td><td class="num">1 080</td><td class="num">900</td></tr>
+          <tr><td>7</td><td class="num">1 520</td><td class="num">1 150</td></tr>
+          <tr><td>8</td><td class="num strong">1 710</td><td class="num strong">1 140</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout"><b>Hinweis:</b> Beide Kurven-Sets (Normal-Basis aus #736 und Hard-Basis hier) sind unabhängig auf ihre jeweilige Level-1-Basis normiert (100) &mdash; ein direkter Preisvergleich zwischen den Difficulties bräuchte eine gemeinsame Normierung. Offener Punkt für #205.</div>
+  </section>
+
+  <section>
+    <h2><span class="num">10</span> Kernbefunde</h2>
+    <div class="findings">
+      <div class="finding"><div class="n">01</div><p><code class="inline">_alpha</code>/<code class="inline">_ultra</code> sind eigene Blueprints mit eigener <code class="inline">.ent</code>-HP, keine Biom-Varianten &mdash; Korrektur zur bisherigen Scope-Annahme.</p></div>
+      <div class="finding"><div class="n">02</div><p>Hard ändert die Gegner-Anzahl kaum &mdash; <code class="inline">count</code>/<code class="inline">units_in_one_spawn</code> bleiben zwischen Plain- und Alpha-Pendant identisch.</p></div>
+      <div class="finding"><div class="n">03</div><p>HP-Faktor Hard/Normal sinkt mit dem Level: 3,0× bei Level 1 auf 1,6× bei Level 8.</p></div>
+      <div class="finding"><div class="n">04</div><p>Level 9 ist bei Hard kein Alias für Level 8 mehr &mdash; eigener, 27 Slots großer Pool mit Ultra-Tier (207 840 HP Extremwert).</p></div>
+      <div class="finding"><div class="n">05</div><p><code class="inline">rules.extraWaves</code> ("stronger_attack") ist kein Hard-Feature &mdash; Pool identisch zu Normal, Event-getriggert statt Difficulty-abhängig.</p></div>
+      <div class="finding"><div class="n">06</div><p>Hard gibt mehr Vorbereitungszeit (420s vs. 360s), obwohl die Wellen stärker sind.</p></div>
+      <div class="finding"><div class="n">07</div><p><code class="inline">maxAttackCountPerDifficulty</code> ist bei Level 4&ndash;5 niedriger (2 statt 3 Wellen/Runde).</p></div>
+      <div class="finding"><div class="n">08</div><p><code class="inline">creatureDifficultyIncrementPerDOMDifficulty</code> unterscheidet sich numerisch &mdash; Mechanik bewusst nicht entschlüsselt.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">11</span> Offene Punkte</h2>
+    <ul class="plain">
+      <li><code class="inline">creatureDifficultyIncrementPerDOMDifficulty</code>-Semantik weiterhin ungeklärt.</li>
+      <li>Gemeinsame Normierung der Carbonium-Kurven über Difficulties hinweg &mdash; #205-Folgeschritt.</li>
+      <li>Easy/Brutal wurden für dieses Dokument nicht ausgewertet, gleiche Methodik übertragbar.</li>
+      <li>Biom-Varianten weiterhin außerhalb des Scopes, jetzt auch für Alpha/Ultra-Dateien.</li>
+    </ul>
+  </section>
+
+  <div class="refs">Ref: #736 · #699 · #658 · #213 · #205 &mdash; Volldokument: <code class="inline">docs/research/hard-difficulty-wellen-hp-pool.md</code></div>
+
+</div>
+</body>
+</html>
