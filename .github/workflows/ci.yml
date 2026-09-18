@@ -31,6 +31,16 @@ on:
 permissions:
   contents: read
 
+# Per-Ref-Concurrency (Issue #751): jeder Push auf einen PR-Branch legt sonst
+# einen kompletten Satz Jobs neu an, waehrend die vorherigen noch in der Queue
+# stehen (Push-Kaskade). Diese ref-scoped Group cancelt den ueberholten Lauf
+# desselben PRs (cancel-in-progress: true) und verdraengt dabei KEINE wartenden
+# Laeufe anderer PRs — das Starving-Problem aus #303 tritt nicht wieder auf
+# (das ist nicht die globale Gruppe aus #303/#305).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   changes:
     name: Relevante Pfade (CI)
