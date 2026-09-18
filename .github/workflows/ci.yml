@@ -105,7 +105,10 @@ jobs:
   test:
     name: Test (Unit-Tests + rbbridge host-test)
     needs: changes
-    runs-on: [self-hosted, planet]
+    # Hermetisch (unittest/npm test, Host-cc/gcc fuer den rbbridge-hosttest) —
+    # laeuft auf GitHub-Hosted und entlastet so den seriellen planet-Runner.
+    # build bleibt auf planet (MinGW/ccache); needs ist runner-agnostisch.
+    runs-on: ubuntu-latest
     steps:
       - name: Keine relevanten Pfade — Tests übersprungen (Gate bleibt grün)
         if: needs.changes.outputs.test != 'true'
