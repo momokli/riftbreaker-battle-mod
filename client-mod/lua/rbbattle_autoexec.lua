@@ -9,11 +9,13 @@
 -- ============================================================================
 
 local RBB = {}
-RBB.version = "0.35.3"
+-- Einheitliche Build-Identitaet (Issue #494): version == ref == SHA (dev) bzw.
+-- Tag (prod). Der Platzhalter wird beim Packen (package.sh) durch den echten
+-- Ref ersetzt. Keine hartcodierte Versionsnummer.
+RBB.version = "RBB_BUILD_REF"
 RBB.ref = "RBB_BUILD_REF"
-RBB.build = "20260917-market-wave"
 
-local LOG_TAG = "[RBBATTLE:" .. RBB.build .. "]"
+local LOG_TAG = "[RBBATTLE:" .. RBB.version .. "]"
 
 local function Log(fmt, ...)
     local okMsg, msg = pcall(string.format, fmt, ...)

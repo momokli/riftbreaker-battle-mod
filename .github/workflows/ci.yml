@@ -89,7 +89,7 @@ jobs:
           fi
 
           if printf '%s\n' "$CHANGED" \
-             | grep -Eq '^(server/|cockpit/|client-mod/|scripts/(package|mod_version)\.sh|\.github/workflows/ci\.yml)'; then
+             | grep -Eq '^(server/|cockpit/|client-mod/|scripts/(package|mod_version|build_ref)\.sh|scripts/bake_mod_ref\.py|\.github/workflows/ci\.yml)'; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
             echo "build=false" >> "$GITHUB_OUTPUT"
