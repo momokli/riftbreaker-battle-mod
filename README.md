@@ -11,6 +11,27 @@ Ein **Biter-Battles-artiger Runden-Duell-Modus** für _The Rift Breaker_ (EXOR S
 
 Runden-Duell 1v1: Beide Spieler spielen eine eigene Rift-Breaker-Partie. Pro Runde Punkte ansparen (Ressourcen, Kills), um damit **Kreaturen-Wellen zum Gegner zu schicken** oder die **eigene Defense auszubauen**. Gewonnen hat, wer die gegnerische Basis zerstört — oder am Ende die meisten Punkte hat.
 
+## Spielschleife (Core Loop)
+
+Der Kern des Mods ist ein fester **Angriffszyklus**:
+
+1. **HQ gebaut** → die Runde startet (Level 1).
+2. **Alle 7 Minuten** feuert genau **eine natürliche Welle** — das Level eskaliert von 1 bis 9.
+3. **Kaufen für die nächste Angriffswelle:** Spieler kaufen zusätzliche Wellen (Carbonium, sofort abgezogen). Die stapeln sich in einer Queue und feuern beim nächsten Tick **gemeinsam** mit der natürlichen Welle.
+
+```mermaid
+flowchart TD
+    A["HQ gebaut: Zyklus startet (Level 1)"] --> B{"7-min-Tick?"}
+    B -- nein --> B
+    B -- ja --> C["1 natürliche Welle + gekaufte Wellen"]
+    C --> D["Level +1, nächster Tick"]
+    D --> B
+    K["Kauf: send waveN"] --> Q["gekaufte Queue"]
+    Q --> B
+```
+
+Details & Preistabelle: [docs/CORE_LOOP.md](docs/CORE_LOOP.md) · Code: [`deploy/attack-cycle/attack_cycle.py`](deploy/attack-cycle/attack_cycle.py)
+
 ## Aktueller Stand
 
 Der Operator-Zugang läuft über das Cockpit
