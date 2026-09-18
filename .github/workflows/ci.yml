@@ -25,7 +25,7 @@ on:
   push:
     branches: [main]
     tags:
-      - 'v*'
+      - "v*"
   pull_request:
 
 permissions:
@@ -149,6 +149,12 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         working-directory: deploy/send-tailer
         run: python3 -m unittest test_send_tailer -v
+      # Match-Loop (#730): pollt get_state, HQ zerstoert -> end_game(lose) ->
+      # restart_map. Hermetisch (Fake-Poster/-Clock), kein Netz/Spiel. stdlib-only.
+      - name: Unit-Test Match-Loop (Issue #730)
+        if: needs.changes.outputs.test == 'true'
+        working-directory: deploy/match-loop
+        run: python3 -m unittest test_match_loop -v
       - name: Unit-Test Core-IO-Probe RBBATTLE-Tag-Erkennung (Issue #696)
         if: needs.changes.outputs.test == 'true'
         working-directory: tests/core-io
