@@ -62,7 +62,7 @@
 #define DEFAULT_PIPE_NAME    "\\\\.\\pipe\\rbbattle"
 #define DEFAULT_BIND         "0.0.0.0"
 #define DEFAULT_PORT         9001
-#define DEFAULT_TIMEOUT_MS   5000
+#define DEFAULT_TIMEOUT_MS   20000
 
 #define LINE_MAX             8192          /* max. Protokollzeile (Pipe)      */
 #define READ_BUF             (LINE_MAX * 2)
@@ -476,6 +476,13 @@ static CRITICAL_SECTION g_sse_cs;           /* schuetzt den SSE-Client */
  * die WebUI pollt ihn via GET /attack_status. Kleiner Puffer + CS. */
 static char g_attack_status[8192];
 static CRITICAL_SECTION g_attack_status_cs;
+/* Attack-Cycle-Intervall (Sekunden), via WebUI konfigurierbar
+ * (POST /attack_interval). Default 420 = 7 min. */
+static int g_attack_interval_s = 420;
+static CRITICAL_SECTION g_attack_interval_cs;
+/* Attack-Cycle-Reset-Epoch (via POST /attack_reset {"reset":1}). */
+static int g_attack_reset_epoch = 0;
+static CRITICAL_SECTION g_attack_reset_cs;
 
 /* Broadcastet eine JSON-Zeile als SSE-Event an den (einen) Cockpit-Client. */
 static void sse_broadcast(const char *line)
@@ -1322,6 +1329,50 @@ static void handle_post_attack_status(SOCKET c, const char *body)
     http_respond(c, 200, "OK", "{\"ok\":true}");
 }
 
+/* POST /attack_interval: setzt (falls interval_s > 0) und liefert das aktuelle
+ * Attack-Cycle-Intervall in Sekunden. Body {"interval_s":N} oder {}. */
+static void handle_post_attack_interval(SOCKET c, const char *body)
+{
+    double d = 0.0;
+    char resp[128];
+    int cur;
+
+    if (json_get_number(body, "interval_s", &d) && d > 0.0) {
+        EnterCriticalSection(&g_attack_interval_cs);
+        g_attack_interval_s = (int)d;
+        LeaveCriticalSection(&g_attack_interval_cs);
+        blog("attack_interval -> %d s", (int)d);
+    }
+
+    EnterCriticalSection(&g_attack_interval_cs);
+    cur = g_attack_interval_s;
+    LeaveCriticalSection(&g_attack_interval_cs);
+    snprintf(resp, sizeof(resp), "{\"ok\":true,\"interval_s\":%d}", cur);
+    http_respond(c, 200, "OK", resp);
+}
+
+/* POST /attack_reset: erhoeht bei {"reset":1} die Reset-Epoch; liefert immer
+ * {"reset_epoch":N}. Der Sidecar pollt die Epoch und resettet bei Aenderung. */
+static void handle_post_attack_reset(SOCKET c, const char *body)
+{
+    double r = 0.0;
+    char resp[128];
+    int epoch;
+
+    if (json_get_number(body, "reset", &r) && r > 0.0) {
+        EnterCriticalSection(&g_attack_reset_cs);
+        g_attack_reset_epoch++;
+        LeaveCriticalSection(&g_attack_reset_cs);
+        blog("attack_reset -> epoch %d", g_attack_reset_epoch);
+    }
+
+    EnterCriticalSection(&g_attack_reset_cs);
+    epoch = g_attack_reset_epoch;
+    LeaveCriticalSection(&g_attack_reset_cs);
+    snprintf(resp, sizeof(resp), "{\"ok\":true,\"reset_epoch\":%d}", epoch);
+    http_respond(c, 200, "OK", resp);
+}
+
 static void handle_client(SOCKET c)
 {
     char *req = malloc(REQ_MAX + 1);
@@ -1403,6 +1454,26 @@ static void handle_client(SOCKET c)
             memcpy(b, body, (size_t)body_len);
             b[body_len] = '\0';
             handle_post_attack_status(c, b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/attack_interval") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_post_attack_interval(c, b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/attack_reset") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_post_attack_reset(c, b);
             free(b);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/probe") == 0) {
             handle_probe(c);
@@ -1538,6 +1609,8 @@ static int mode_server(void)
     InitializeCriticalSection(&g_cmd_cs);
     InitializeCriticalSection(&g_sse_cs);
     InitializeCriticalSection(&g_attack_status_cs);
+    InitializeCriticalSection(&g_attack_interval_cs);
+    InitializeCriticalSection(&g_attack_reset_cs);
     g_resp_ev = CreateEvent(NULL, FALSE, FALSE, NULL);
     CreateThread(NULL, 0, pipe_reader_main, NULL, 0, NULL);
 

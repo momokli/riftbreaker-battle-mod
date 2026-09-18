@@ -28,10 +28,10 @@ Ticks feuern nacheinander.
 
 ## Endpunkte
 
-| Route            | Methode | Zweck                                                        |
-| ---------------- | ------- | ------------------------------------------------------------ |
-| `/queue_send`    | POST    | Welle kaufen (`{"name":"waveN"}` oder `{"level":N}`)         |
-| `/status`        | GET     | `active`, `level`, `seconds_to_next_attack`, `pending`, …    |
+| Route         | Methode | Zweck                                                     |
+| ------------- | ------- | --------------------------------------------------------- |
+| `/queue_send` | POST    | Welle kaufen (`{"name":"waveN"}` oder `{"level":N}`)      |
+| `/status`     | GET     | `active`, `level`, `seconds_to_next_attack`, `pending`, … |
 
 ## Test
 
@@ -47,6 +47,7 @@ gegen Fake-Poster/Fake-Clock — kein Netz, kein Spiel, kein DOM.
 
 - Cost-Tabelle ist ein **Spiegel** der client-mod `.ent`-Preise und der ehemaligen
   Bridge-`g_order_specs` (bewusst dupliziert, wird später bereinigt).
-- Nur `logic/dom/attack_level_1_entry.logic` ist live verifiziert (siehe
-  `tools/wave-scheduler/README.md`); Level 2–9 sind ein angenommenes Namensmuster.
+- Logic-Pfade je Level sind der **Spiegel der SEND-MENU-Presets**
+  (`logic/missions/survival/attack_level_N_id_1.logic`, raw spawn) — `logic/dom/*`
+  loest nur „attack incoming“ aus, ohne Spawn; `_entry` hat einen "attack incoming"-Delay.
 - Runden-Reset (HQ zerstört → neue Runde) ist noch NICHT behandelt (PoC).

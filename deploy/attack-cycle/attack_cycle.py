@@ -56,9 +56,24 @@ NAME_TO_LEVEL = {f"wave{lvl}": lvl for lvl in WAVE_COST}
 
 DEFAULT_MAX_LEVEL = 9
 DEFAULT_INTERVAL_S = 420.0  # 7 min
-DEFAULT_LOGIC_TEMPLATE = "logic/dom/attack_level_{level}_entry.logic"
 DEFAULT_BRIDGE_URL = "http://127.0.0.1:9001"
 DEFAULT_CONTROL_PORT = 9102
+
+# Logic-Pfad je Level (Spiegel der SEND-MENU-Presets im Cockpit, die live
+# Wellen spawnen). Durchgehend _id_1 = raw spawn (sofort), kein _entry
+# ("attack incoming"-Delay). NICHT logic/dom/* — das loest nur "attack incoming"
+# aus, ohne Spawn (pauseAttacks=true in sandbox). wave9 teilt den Pool mit wave8 (#658).
+WAVE_LOGIC = {
+    1: "logic/missions/survival/attack_level_1_id_1.logic",
+    2: "logic/missions/survival/attack_level_2_id_1.logic",
+    3: "logic/missions/survival/attack_level_3_id_1.logic",
+    4: "logic/missions/survival/attack_level_4_id_1.logic",
+    5: "logic/missions/survival/attack_level_5_id_1.logic",
+    6: "logic/missions/survival/attack_level_6_id_1.logic",
+    7: "logic/missions/survival/attack_level_7_id_1.logic",
+    8: "logic/missions/survival/attack_level_8_id_1.logic",
+    9: "logic/missions/survival/attack_level_8_id_1.logic",
+}
 
 
 def parse_hq_alive(raw: str) -> bool:
@@ -108,15 +123,15 @@ class AttackCycle:
         base_url: str,
         interval_s: float = DEFAULT_INTERVAL_S,
         max_level: int = DEFAULT_MAX_LEVEL,
-        logic_template: str = DEFAULT_LOGIC_TEMPLATE,
-        timeout: float = 5.0,
+        wave_logic: Optional[Dict[int, str]] = None,
+        timeout: float = 30.0,
         _poster: Optional[Callable[[str, bytes], tuple]] = None,
         _clock: Callable[[], float] = time.monotonic,
     ):
         self.base_url = base_url.rstrip("/")
         self.interval_s = interval_s
         self.max_level = max_level
-        self.logic_template = logic_template
+        self.wave_logic = wave_logic or WAVE_LOGIC
         self.timeout = timeout
         self._poster = _poster or self._http_post
         self._clock = _clock
@@ -125,8 +140,10 @@ class AttackCycle:
         self.active = False
         self.level = 1
         self.next_attack_at: Optional[float] = None
-        self.pending: list = []
+        self.orders: list = []  # unbezahlte Buy-Orders (order list)
+        self.bought: list = []  # bezahlte Wellen (bought queue, feuert als naechstes)
         self.last_fire: Optional[Dict[str, Any]] = None
+        self._reset_epoch = 0
 
     # --- HTTP (urllib) ----------------------------------------------------
     def _http_post(self, path: str, body: bytes) -> tuple:
@@ -166,28 +183,55 @@ class AttackCycle:
 
     # --- Kauf (aus /queue_send) ------------------------------------------
     def buy(self, level: int) -> tuple:
-        """Bezahlt SOFORT via try_spend und stapelt die Welle in pending.
+        """Reiht die Welle SOFORT in die Order-Liste ein (ohne try_spend).
 
-        Liefert (http_status, payload_dict).
+        Der Hintergrund-Resolver (_resolve_orders) bezahlt die Order via
+        try_spend und verschiebt sie in die bought-Queue. Der HTTP-Handler
+        blockiert dadurch nie. Liefert sofort (http_status, payload_dict).
         """
         if level not in WAVE_COST:
             return 400, {"ok": False, "reason": "unknown_wave"}
         cost = WAVE_COST[level]
-        status, ok, body = self._spend(cost)
-        if not 200 <= status < 300:
-            return 502, {"ok": False, "reason": "bridge_unreachable", "status": status}
-        if not ok:
-            return 402, {"ok": False, "reason": "insufficient", "detail": body[:160]}
-
         with self._lock:
-            self.pending.append(level)
-            queue_len = len(self.pending)
-        print(f"[attack-cycle] buy wave{level} -> gestapelt (cost={cost}, queue={queue_len})", flush=True)
-        return 200, {"ok": True, "queued_level": level, "queue_length": queue_len}
+            self.orders.append({"level": level, "cost": cost})
+            order_count = len(self.orders)
+        print(f"[attack-cycle] order wave{level} (cost={cost}, orders={order_count})", flush=True)
+        return 200, {"ok": True, "queued_level": level, "order_count": order_count}
+
+    def _resolve_orders(self) -> None:
+        """Bezahlt alle offenen Orders (try_spend) und verschiebt sie nach bought.
+
+        Nur bezahlte Orders landen in bought -> die Welle feuert NUR, wenn der
+        Spieler das Carbonium wirklich HATTE (kein Optimistic-Spawn).
+        """
+        with self._lock:
+            orders = list(self.orders)
+            self.orders = []
+        for o in orders:
+            level, cost = o["level"], o["cost"]
+            try:
+                status, ok, body = self._spend(cost)
+                if 200 <= status < 300 and ok:
+                    with self._lock:
+                        self.bought.append(level)
+                    print(f"[attack-cycle] wave{level} bezahlt -> bought (cost={cost})", flush=True)
+                else:
+                    print(f"[attack-cycle] wave{level} verworfen (status={status} ok={ok}): {body[:160]}", flush=True)
+            except Exception as e:
+                print(f"[attack-cycle] wave{level} resolve error: {e}", flush=True)
+
+    def _resolver_loop(self) -> None:
+        """Hintergrund-Resolver: bezahlt kontinuierlich offene Orders."""
+        while True:
+            try:
+                self._resolve_orders()
+            except Exception:
+                pass
+            time.sleep(0.5)
 
     # --- Feuern -----------------------------------------------------------
     def _fire(self, level: int) -> None:
-        logic = self.logic_template.format(level=level)
+        logic = self.wave_logic.get(level, self.wave_logic.get(self.max_level, ""))
         status, body = self._post_json(
             "/activate_mission_flow",
             {"logic": logic, "mode": "default"},
@@ -213,8 +257,8 @@ class AttackCycle:
             if self.next_attack_at is None or now < self.next_attack_at:
                 return None
             natural_level = self.level
-            sent_levels = list(self.pending)
-            self.pending = []
+            sent_levels = list(self.bought)
+            self.bought = []
             self.level = min(self.level + 1, self.max_level)
             self.next_attack_at = self.next_attack_at + self.interval_s
 
@@ -236,7 +280,8 @@ class AttackCycle:
                 "seconds_to_next_attack": (
                     max(0.0, self.next_attack_at - now) if self.next_attack_at is not None else None
                 ),
-                "pending": list(self.pending),
+                "bought": list(self.bought),
+                "orders": list(self.orders),
                 "interval_s": self.interval_s,
                 "max_level": self.max_level,
                 "last_fire": self.last_fire,
@@ -247,6 +292,53 @@ class AttackCycle:
         """Pusht den Status-JSON an die Bridge (POST /attack_status)."""
         try:
             self._post_json("/attack_status", self.status())
+        except Exception:
+            pass
+
+    # --- Intervall von der Bridge ziehen (WebUI-Config) -----------------
+    def sync_interval(self) -> None:
+        """Holt das gewuenschte Intervall (POST /attack_interval {}) und
+        uebernimmt es, falls es sich geaendert hat (inkl. Countdown-Reset)."""
+        try:
+            status, body = self._poster("/attack_interval", b"{}")
+            if not 200 <= status < 300:
+                return
+            new = json.loads(body).get("interval_s")
+            if not isinstance(new, (int, float)) or new <= 0:
+                return
+            new = float(new)
+            with self._lock:
+                if new != self.interval_s:
+                    self.interval_s = new
+                    if self.active:
+                        self.next_attack_at = self._clock() + new
+                    print(f"[attack-cycle] interval -> {new:.0f}s", flush=True)
+        except Exception:
+            pass
+
+    # --- Reset (WebUI) -----------------------------------------------------
+    def reset(self) -> None:
+        """Setzt den Zyklus zurueck: warte wieder auf HQ-Bau, Level 1,
+        Queue geleert, kein Countdown."""
+        with self._lock:
+            self.active = False
+            self.level = 1
+            self.next_attack_at = None
+            self.orders = []
+            self.bought = []
+            self.last_fire = None
+        print("[attack-cycle] reset -> warte auf HQ-Bau", flush=True)
+
+    def sync_reset(self) -> None:
+        """Prueft einen Reset-Request von der Bridge (POST /attack_reset {})."""
+        try:
+            status, body = self._poster("/attack_reset", b"{}")
+            if not 200 <= status < 300:
+                return
+            epoch = json.loads(body).get("reset_epoch")
+            if isinstance(epoch, int) and epoch != self._reset_epoch:
+                self._reset_epoch = epoch
+                self.reset()
         except Exception:
             pass
 
@@ -301,6 +393,8 @@ def run(
     httpd = build_control_server(control_bind, control_port, cycle)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
+    resolver = threading.Thread(target=cycle._resolver_loop, daemon=True)
+    resolver.start()
     print(
         f"[attack-cycle] control auf http://{control_bind}:{control_port} (GET /status, POST /queue_send)",
         flush=True,
@@ -308,6 +402,8 @@ def run(
     try:
         while True:
             cycle.step()
+            cycle.sync_interval()
+            cycle.sync_reset()
             cycle.push_status()
             if once:
                 break
@@ -331,13 +427,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--interval", type=float, default=DEFAULT_INTERVAL_S, help="Zyklus-Intervall in Sekunden (Default 420 = 7 min)"
     )
     p.add_argument("--max-level", type=int, default=DEFAULT_MAX_LEVEL, help="Max. natuerliches Level (Default 9)")
-    p.add_argument("--logic-template", default=DEFAULT_LOGIC_TEMPLATE, help="Logic-Pfad-Template mit {level}")
     p.add_argument("--control-bind", default="0.0.0.0", help="Bind-Adresse des Control-Servers")
     p.add_argument(
         "--control-port", type=int, default=DEFAULT_CONTROL_PORT, help="Port des Control-Servers (Default 9102)"
     )
     p.add_argument("--poll-interval", type=float, default=1.0)
-    p.add_argument("--timeout", type=float, default=5.0, help="HTTP-Timeout je Request")
+    p.add_argument("--timeout", type=float, default=30.0, help="HTTP-Timeout je Request")
     p.add_argument("--once", action="store_true", help="Einen Poll ausfuehren, dann beenden")
     return p
 
@@ -348,7 +443,6 @@ def main(argv: Optional[list] = None) -> int:
         args.bridge_url,
         interval_s=args.interval,
         max_level=args.max_level,
-        logic_template=args.logic_template,
         timeout=args.timeout,
     )
     run(cycle, args.control_bind, args.control_port, poll_interval=args.poll_interval, once=args.once)

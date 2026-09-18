@@ -634,13 +634,6 @@
                                 <button id="send_boss_high" class="send-preset" data-preset="boss_high" title="attack_boss_arachnoid (5000 HP)" aria-label="Send boss high">high</button>
                                 <button id="send_boss_random" class="send-preset" data-preset="boss_random" title="attack_boss_dynamic (vanilla Random-Boss)" aria-label="Send random boss">random</button>
                             </div>
-                            <div class="flow-action-row">
-                                <span class="prop-label">countdown</span>
-                                <input id="send_countdown_min" class="mono" size="3" value="0" min="0" max="999" inputmode="numeric" aria-label="Wave countdown minutes" title="Wave countdown minutes" />
-                                <span class="prop-label">min</span>
-                                <input id="send_countdown_sec" class="mono" size="3" value="10" min="0" max="59" inputmode="numeric" aria-label="Wave countdown seconds" title="Wave countdown seconds" />
-                                <span class="prop-label">sec</span>
-                            </div>
                             <div class="flow-readouts">
                                 <div class="flow-prop">
                                     <span class="prop-label">last send</span>
@@ -705,6 +698,12 @@
                                 Countdown bis zur naechsten Attack, plus die vom
                                 Spieler gekauften Wellen (gestapelt).
                                 <span id="buy_orders_msg" aria-live="polite"></span>
+                            </div>
+                            <div class="flow-action-row">
+                                <span class="prop-label">interval (s)</span>
+                                <input id="attack_interval_input" class="mono" size="6" value="420" aria-label="Attack cycle interval in seconds" />
+                                <button id="attack_interval_set" class="btn-primary">set</button>
+                                <button id="attack_cycle_reset" class="btn-danger">reset</button>
                             </div>
                         </div>
                     </fieldset>
@@ -957,13 +956,17 @@
                     return typeof v === "number" ? v.toLocaleString() : String(v);
                 }
 
+                function fmtRes(v) {
+                    return typeof v === "number" ? (v / 1e6).toLocaleString() : String(v);
+                }
+
                 async function refresh() {
                     try {
                         var s = await post("get_state");
-                        $("carbonium").textContent = fmt(s.carbonium);
-                        $("carbonium_max").textContent = fmt(s.carbonium_max);
-                        $("ironium").textContent = fmt(s.ironium);
-                        $("ironium_max").textContent = fmt(s.ironium_max);
+                        $("carbonium").textContent = fmtRes(s.carbonium);
+                        $("carbonium_max").textContent = fmtRes(s.carbonium_max);
+                        $("ironium").textContent = fmtRes(s.ironium);
+                        $("ironium_max").textContent = fmtRes(s.ironium_max);
                         $("mission_flow").textContent = s.mission_flow || "—";
                         $("mission_flow_active").textContent =
                             s.mission_flow_active === undefined
@@ -1039,7 +1042,7 @@
                         }
                         var rows = [];
                         rows.push("level " + s.level + "  next in" + fmtCountdown(s.seconds_to_next_attack * 1000));
-                        var pending = s.pending || [];
+                        var pending = s.bought || [];
                         if (!pending.length) {
                             rows.push("gekauft: (keine)");
                         } else {
@@ -1059,6 +1062,37 @@
                     } catch (e) {
                         $("buy_orders").textContent = "ERR " + e.message;
                     }
+                }
+
+                $("attack_interval_set").onclick = function () {
+                    var v = parseInt($("attack_interval_input").value, 10);
+                    if (!v || v <= 0) {
+                        $("buy_orders_msg").textContent = "invalid interval";
+                        return;
+                    }
+                    post("attack_interval", { interval_s: v }).then(function (r) {
+                        $("attack_interval_input").value = (r && r.interval_s) || v;
+                        $("buy_orders_msg").textContent = "";
+                    }).catch(function (e) {
+                        $("buy_orders_msg").textContent = "ERR " + e.message;
+                    });
+                };
+
+                $("attack_cycle_reset").onclick = function () {
+                    post("attack_reset", { reset: 1 }).then(function () {
+                        $("buy_orders_msg").textContent = "reset";
+                    }).catch(function (e) {
+                        $("buy_orders_msg").textContent = "ERR " + e.message;
+                    });
+                };
+
+                async function syncInterval() {
+                    try {
+                        var r = await post("attack_interval", {});
+                        if (r && r.interval_s) {
+                            $("attack_interval_input").value = r.interval_s;
+                        }
+                    } catch (e) {}
                 }
 
                 $("add").onclick = function () {
@@ -1107,8 +1141,8 @@
                 // Level 8 — Level 9 hat keinen eigenen Wellen-Pool, sondern teilt
                 // sich den von Level 8 (roh belegt in #658).
                 var SEND_PRESETS = {
-                    wave_1: "logic/missions/survival/attack_level_1_entry.logic",
-                    wave_2: "logic/missions/survival/attack_level_2_entry.logic",
+                    wave_1: "logic/missions/survival/attack_level_1_id_1.logic",
+                    wave_2: "logic/missions/survival/attack_level_2_id_1.logic",
                     wave_3: "logic/missions/survival/attack_level_3_id_1.logic",
                     wave_4: "logic/missions/survival/attack_level_4_id_1.logic",
                     wave_5: "logic/missions/survival/attack_level_5_id_1.logic",
@@ -1128,42 +1162,23 @@
                         $("out").textContent = "unknown preset: " + key;
                         return;
                     }
-
-                    // Countdown aus min+sec (Boundary-Check: min 0..999, sec 0..59).
-                    var min = parseInt($("send_countdown_min").value, 10);
-                    var sec = parseInt($("send_countdown_sec").value, 10);
-                    if (!(min >= 0)) min = 0;
-                    if (!(sec >= 0)) sec = 0;
-                    if (min > 999) min = 999;
-                    if (sec > 59) sec = 59;
-                    var totalSec = min * 60 + sec;
-
-                    var fire = function () {
-                        return post("activate_mission_flow", {
+                    try {
+                        var r = await post("activate_mission_flow", {
                             logic: logic,
                             mode: "default",
-                        }).then(function (r) {
-                            if (r && r.ok) {
-                                $("send_menu_last").textContent =
-                                    key + " -> " + (r.flow || "ok");
-                                $("out").textContent = "";
-                            } else {
-                                $("send_menu_last").textContent = "—";
-                                $("out").textContent = key + ": " + JSON.stringify(r);
-                            }
-                            refresh();
-                        }).catch(function (e) {
-                            $("send_menu_last").textContent = "—";
-                            $("out").textContent = "ERR " + e.message;
                         });
-                    };
-
-                    if (totalSec > 0) {
-                        $("send_menu_last").textContent =
-                            key + " in " + totalSec + "s ...";
-                        setTimeout(fire, totalSec * 1000);
-                    } else {
-                        fire();
+                        if (r && r.ok) {
+                            $("send_menu_last").textContent =
+                                key + " -> " + (r.flow || "ok");
+                            $("out").textContent = "";
+                        } else {
+                            $("send_menu_last").textContent = "—";
+                            $("out").textContent = key + ": " + JSON.stringify(r);
+                        }
+                        refresh();
+                    } catch (e) {
+                        $("send_menu_last").textContent = "—";
+                        $("out").textContent = "ERR " + e.message;
                     }
                 }
 
@@ -1296,6 +1311,8 @@
 
                 refreshOrders();
                 setInterval(refreshOrders, 1000);
+
+                syncInterval();
 
                 // --- send tracker (testable) ---
                 // Persistente Send-Liste (#527, 1.0-Send-Loop #517).
