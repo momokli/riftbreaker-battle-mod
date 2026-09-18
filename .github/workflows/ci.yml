@@ -80,7 +80,7 @@ jobs:
           # over-inclusive laufen lassen (nie fälschlich skippen -> Required-
           # Check bliebe sonst fälschlich grün).
           if [ "$EVENT_NAME" = "pull_request" ]; then
-            CHANGED="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || true)"
+            CHANGED="$(git diff --name-only "$BASE_SHA...$HEAD_SHA" 2>/dev/null || true)"
           else
             CHANGED="$(git diff --name-only "$BEFORE_SHA" "$AFTER_SHA" 2>/dev/null || true)"
           fi

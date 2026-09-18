@@ -2915,6 +2915,105 @@ static const void *resolve_hq_getmaxhealth_fn(const unsigned char *base,
                                          sizeof(RBBRIDGE_HQ_GETMAXHEALTH_SIG));
 }
 
+/* ------------------------------------------------------------------ */
+/* spawn_hook (Read, #508/#513 Wave-Recherche, PIVOT weg von count_units */
+/* nach dem #586-artigen Cross-Thread-Crash-Befund #590-lokal): statt    */
+/* nachtraeglich Entities zu zaehlen (Pipe-Thread liest World-State ->   */
+/* riskant, s. Live-Befund), hookt dieses Feature den NATIVEN Spawn-Call */
+/* direkt an seiner Quelle -- der Hook laeuft auf demselben Thread wie   */
+/* der Aufrufer (Lua/Main-Thread bei Wellen-Spawns), liest nur die       */
+/* bereits als Argumente uebergebenen Werte (kein Cross-Thread-Read      */
+/* fremder Container) und ruft danach den Original-Code unveraendert     */
+/* weiter (Trampolin) -- Verhalten des Spiels bleibt exakt gleich.       */
+/*                                                                      */
+/* Kette (Disasm Build 2.0.58485, lokal 2026-09-17):                     */
+/*   `EntityService::RegisterLua` registriert DREI Ueberladungen von     */
+/*   `SpawnEntity` unter demselben Lua-Namen "SpawnEntity" (luabind-     */
+/*   Overload-Resolution nach Argumenten) -- Kreuzreferenz der Funktions-*/
+/*   Zeiger in der Registrierung gegen alle bekannten SpawnEntity-RVAs    */
+/*   bestaetigt das (nicht geraten). ALLE DREI rufen dieselbe Kern-       */
+/*   Implementierung `RVA 0x1C1F3D0` per direktem `call` auf (keine       */
+/*   vtable) -- ein einziger Hook-Punkt deckt daher jede Lua-seitige      */
+/*   SpawnEntity-Variante ab, unabhaengig davon, welche der drei          */
+/*   Wrapper-Ueberladungen `dom_mananger`/`event_manager` tatsaechlich    */
+/*   aufruft (das war ohne Lua-Quelle nicht feststellbar -- per Disasm    */
+/*   umgangen statt geraten).                                            */
+/*                                                                        */
+/* Signatur der Kern-Funktion (17 Byte, KEINE Wildcards -- der Prolog     */
+/* enthaelt keinen Call/RIP-relativen Offset):                            */
+/*   40 55 53 41 56 48 8D 6C 24 C1 48 81 EC 90 00 00 00                   */
+/*   = push rbp(REX) / push rbx / push r14 / lea rbp,[rsp-0x3f] /         */
+/*     sub rsp,0x90 -- alle 17 Byte sind vollstaendige Instruktionen      */
+/*     (keine mittendrin abgeschnittene Instruktion), verifiziert per     */
+/*     capstone-Laengen-Summe. Eindeutig im kompletten .text (1 Treffer,  */
+/*     lokal 2026-09-17).                                                 */
+/*                                                                        */
+/* Calling Convention der Kern-Funktion (MSVC-x64, aus dem eigenen        */
+/* Prolog UND aus allen drei Aufrufstellen bestaetigt):                   */
+/*   RCX = this (EntityService*)                                         */
+/*   RDX = blueprint-Hash (uint32 -- die Wrapper haben den Namen VORHER   */
+/*         per `call 0x1825522d0` gehasht; der lesbare String ist an      */
+/*         dieser Stelle nicht mehr vorhanden, nur der Hash)              */
+/*   R8  = Vector3* (Position, 3 floats, 12 Byte, per Referenz)           */
+/*   R9  = Quaternion* (Rotation, 4 floats, 16 Byte, per Referenz --      */
+/*         fuer diese Recherche irrelevant, nur zum korrekten             */
+/*         Weiterreichen an den Trampolin-Aufruf gebraucht)               */
+/*   [rsp+0x28] (5. Arg, Stack) = TeamId (uint32-artig, per Wert)         */
+/*   Rueckgabe: uint32 (neue Entity-Id)                                   */
+/* ------------------------------------------------------------------ */
+
+static const unsigned char RBBRIDGE_SPAWNCORE_SIG[] = {
+    0x40, 0x55, 0x53, 0x41, 0x56, 0x48, 0x8D, 0x6C,
+    0x24, 0xC1, 0x48, 0x81, 0xEC, 0x90, 0x00, 0x00, 0x00
+};
+static const unsigned char RBBRIDGE_SPAWNCORE_SIG_MASK[] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+};
+#define RBBRIDGE_SPAWNCORE_PATCH_LEN 17u
+
+/* Loest die Spawn-Kernfunktion ueber ihre 17-Byte-AOB auf. Reine
+ * Scan-/Eindeutigkeitslogik, KEIN Aufruf, KEIN Patch. Rueckgabe 1 = genau
+ * EIN Treffer (out_fn gesetzt), 0 = nicht aufloesbar. */
+static int resolve_spawn_core(const unsigned char *base, size_t size,
+                              const unsigned char **out_fn)
+{
+    const unsigned char *text = NULL;
+    size_t text_len = 0;
+    const unsigned char *hit = NULL;
+
+    if (out_fn)
+        *out_fn = NULL;
+    if (!base || size == 0)
+        return 0;
+
+    if (!rbbridge_text_range(base, size, &text, &text_len)) {
+        text = base;
+        text_len = size;
+    }
+
+    hit = scan_bytes_mask(text, text_len, RBBRIDGE_SPAWNCORE_SIG,
+                          RBBRIDGE_SPAWNCORE_SIG_MASK,
+                          sizeof(RBBRIDGE_SPAWNCORE_SIG));
+    if (!hit) {
+        dbg("spawncore_resolve: AOB ohne Treffer -> kein Hook");
+        return 0;
+    }
+    if (scan_bytes_mask(hit + 1,
+                        (size_t)((text + text_len) - (hit + 1)),
+                        RBBRIDGE_SPAWNCORE_SIG,
+                        RBBRIDGE_SPAWNCORE_SIG_MASK,
+                        sizeof(RBBRIDGE_SPAWNCORE_SIG))) {
+        dbg("spawncore_resolve: AOB nicht eindeutig -> kein Hook");
+        return 0;
+    }
+    dbg("spawncore_resolve: SpawnEntity-Kern=%p (rva=%08lx)",
+        (const void *)hit, (unsigned long)(hit - base));
+    if (out_fn)
+        *out_fn = hit;
+    return 1;
+}
+
 #ifndef RBBRIDGE_HOSTTEST
 
 /* ------------------------------------------------------------------ */
@@ -5255,10 +5354,10 @@ static void dispatch_add_resource(HANDLE hPipe, const char *resource_str,
  */
 static void dispatch_try_spend(HANDLE hPipe, const char *amount_str)
 {
-    const unsigned char *base = NULL;
-    size_t size = 0;
-    const char *via = NULL;
-    const unsigned char *execfn = NULL;
+  const unsigned char *base = NULL;
+  size_t size = 0;
+  const char *via = NULL;
+  const unsigned char *execfn = NULL;
 
     if (!resolve_module(&base, &size, &via, &execfn)) {
         send_line(hPipe, "{\"event\":\"try_spend_result\",\"ok\":false,"
@@ -5372,6 +5471,256 @@ static void dispatch_try_spend(HANDLE hPipe, const char *amount_str)
               "\"amount\":\"%s\",\"cost\":%lld,\"balance\":%llu}",
               amount_str, (long long)cost, (unsigned long long)balance);
 }
+
+/* spawn_hook — Ring-Puffer der beobachteten SpawnEntity-Aufrufe.
+ * Einziger SCHREIBER ist der Hook selbst (laeuft synchron auf dem
+ * Thread, der SpawnEntity aufruft -- bei Wellen ist das der Lua/Main-
+ * Thread, s. o.); der Pipe-Thread ist LESER (dispatch_spawn_hook "read").
+ * Spinlock schuetzt NUR unsere eigene, simple Struktur -- kein Zugriff
+ * auf undurchsichtige Spielcontainer wie beim count_units-Crash. */
+#define RBBRIDGE_SPAWN_LOG_CAP 256u
+
+typedef struct {
+    unsigned int hash;
+    float x, y, z;
+    unsigned int team;
+} rbbridge_spawn_event_t;
+
+static rbbridge_spawn_event_t g_spawn_log[RBBRIDGE_SPAWN_LOG_CAP];
+static volatile LONG g_spawn_log_lock = 0;
+static unsigned long long g_spawn_log_total = 0;
+
+static void spawn_log_lock_acquire(void)
+{
+    while (InterlockedExchange(&g_spawn_log_lock, 1) != 0)
+        ; /* busy-wait: Kritischer Abschnitt ist wenige Instruktionen kurz */
+}
+
+static void spawn_log_lock_release(void)
+{
+    InterlockedExchange(&g_spawn_log_lock, 0);
+}
+
+static void spawn_log_push(unsigned int hash, float x, float y, float z,
+                           unsigned int team)
+{
+    spawn_log_lock_acquire();
+    {
+        unsigned long long slot = g_spawn_log_total % RBBRIDGE_SPAWN_LOG_CAP;
+        g_spawn_log[slot].hash = hash;
+        g_spawn_log[slot].x = x;
+        g_spawn_log[slot].y = y;
+        g_spawn_log[slot].z = z;
+        g_spawn_log[slot].team = team;
+        g_spawn_log_total++;
+    }
+    spawn_log_lock_release();
+}
+
+/* Trampolin + Patch-Zustand (einmalig installiert, danach dauerhaft
+ * aktiv bis Prozessende -- kein Uninstall, s. Doku bei dispatch_spawn_
+ * hook zum "install"-Op). */
+static void *g_spawn_orig_fn = NULL;    /* Trampolin-Einsprungpunkt */
+static void *g_spawn_target = NULL;     /* gepatchte Adresse (Info) */
+static int g_spawn_hook_installed = 0;
+
+typedef unsigned int(__fastcall *spawn_entity_fn_t)(void *this_svc,
+                                                    unsigned int hash,
+                                                    const float *pos,
+                                                    const void *quat,
+                                                    unsigned int team);
+
+/* Der eigentliche Hook: gleiche Signatur wie die Original-Kernfunktion
+ * (Compiler erzeugt damit automatisch die passende MSVC-x64-ABI --
+ * RCX/RDX/R8/R9/Stack-5.-Arg genau wie das Original erwartet). Reine
+ * Lese-Operation auf den EIGENEN Argumenten (keine fremden Container,
+ * kein Lua) + Log, dann unveraendertes Weiterreichen an den
+ * Trampolin-Aufruf. Kein Verhaltens-Unterschied zum ungehookten Spiel. */
+static unsigned int __fastcall spawn_entity_hook(void *this_svc,
+                                                 unsigned int hash,
+                                                 const float *pos,
+                                                 const void *quat,
+                                                 unsigned int team)
+{
+    if (pos)
+        spawn_log_push(hash, pos[0], pos[1], pos[2], team);
+    else
+        spawn_log_push(hash, 0.0f, 0.0f, 0.0f, team);
+    return ((spawn_entity_fn_t)g_spawn_orig_fn)(this_svc, hash, pos, quat,
+                                                team);
+}
+
+/* Baut das Trampolin (Original-Prolog + Ruecksprung) und patcht die
+ * Zieladresse mit einem absoluten Jump zu spawn_entity_hook. Idempotent
+ * (installed-Flag) -- ein zweiter Aufruf patcht NICHT erneut (die
+ * gepatchte Stelle enthaelt sonst keine gueltigen Original-Bytes mehr).
+ * Rueckgabe 1 = installiert (oder bereits installiert), 0 = Fehler
+ * (kein Patch versucht/durchgefuehrt). */
+static int install_spawn_hook(const unsigned char *base, size_t size)
+{
+    const unsigned char *target = NULL;
+    unsigned char *trampoline;
+    unsigned char patch[RBBRIDGE_SPAWNCORE_PATCH_LEN];
+    uintptr_t hook_addr, back_addr;
+    DWORD old_protect = 0;
+
+    if (g_spawn_hook_installed)
+        return 1;
+
+    if (!resolve_spawn_core(base, size, &target))
+        return 0;
+
+    /* Trampolin: [17 Byte Original-Prolog][absoluter jmp zurueck nach
+     * target+17]. `jmp qword ptr [rip+0]` (FF 25 00000000) + 8-Byte-
+     * Adresse = 14 Byte; 17+14 = 31, Puffer bewusst 64 (Reserve/Align). */
+    trampoline = (unsigned char *)VirtualAlloc(
+        NULL, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!trampoline) {
+        dbg("install_spawn_hook: VirtualAlloc(trampoline) fehlgeschlagen");
+        return 0;
+    }
+    memcpy(trampoline, target, RBBRIDGE_SPAWNCORE_PATCH_LEN);
+    trampoline[17] = 0xFF;
+    trampoline[18] = 0x25;
+    trampoline[19] = 0x00;
+    trampoline[20] = 0x00;
+    trampoline[21] = 0x00;
+    trampoline[22] = 0x00;
+    back_addr = (uintptr_t)(target + RBBRIDGE_SPAWNCORE_PATCH_LEN);
+    memcpy(trampoline + 23, &back_addr, sizeof(back_addr));
+
+    /* Patch: dieselben 17 Byte am Original mit einem absoluten Jump zum
+     * Hook ueberschreiben (14 Byte) + 3 Byte NOP-Fuellung (die restlichen
+     * 3 Byte der ueberschriebenen letzten Original-Instruktion werden nie
+     * ausgefuehrt -- der Jump davor ist unbedingt -- NOP nur fuer einen
+     * sauberen Disassemblat-Anblick, kein Funktionsbedarf). */
+    patch[0] = 0xFF;
+    patch[1] = 0x25;
+    patch[2] = 0x00;
+    patch[3] = 0x00;
+    patch[4] = 0x00;
+    patch[5] = 0x00;
+    hook_addr = (uintptr_t)&spawn_entity_hook;
+    memcpy(patch + 6, &hook_addr, sizeof(hook_addr));
+    patch[14] = 0x90;
+    patch[15] = 0x90;
+    patch[16] = 0x90;
+
+    if (!VirtualProtect((void *)target, RBBRIDGE_SPAWNCORE_PATCH_LEN,
+                        PAGE_EXECUTE_READWRITE, &old_protect)) {
+        dbg("install_spawn_hook: VirtualProtect(RW) fehlgeschlagen");
+        VirtualFree(trampoline, 0, MEM_RELEASE);
+        return 0;
+    }
+    g_spawn_orig_fn = trampoline; /* VOR dem Patch setzen: der Hook kann
+                                    * ab dem Patch jederzeit feuern. */
+    memcpy((void *)target, patch, RBBRIDGE_SPAWNCORE_PATCH_LEN);
+    VirtualProtect((void *)target, RBBRIDGE_SPAWNCORE_PATCH_LEN, old_protect,
+                   &old_protect);
+    FlushInstructionCache(GetCurrentProcess(), target,
+                          RBBRIDGE_SPAWNCORE_PATCH_LEN);
+
+    g_spawn_target = (void *)target;
+    g_spawn_hook_installed = 1;
+    dbg("install_spawn_hook: installiert an %p (Trampolin %p)",
+        (const void *)target, (void *)trampoline);
+    return 1;
+}
+
+/* spawn_hook (#508/#513): op=install|read|reset|status.
+ *   install -> patcht den nativen Spawn-Call (einmalig, danach dauerhaft
+ *              aktiv bis Prozessende -- KEIN Uninstall implementiert;
+ *              ein erneuter Container-Neustart ist der einzige Weg,
+ *              den Hook wieder loszuwerden).
+ *   read    -> letzte (bis zu RBBRIDGE_SPAWN_LOG_CAP) beobachtete Spawns
+ *              + total_calls (Gesamtzahl seit Install/letztem reset).
+ *   reset   -> total_calls/Puffer auf 0 (frisches Erfassungsfenster).
+ *   status  -> installed + total_calls, kein Read/Write. */
+static void dispatch_spawn_hook(HANDLE hPipe, const char *op)
+{
+  const unsigned char *base = NULL;
+  size_t size = 0;
+  const char *via = NULL;
+  const unsigned char *execfn = NULL;
+
+    if (!op || !op[0])
+        op = "status";
+
+    if (strcmp(op, "install") == 0) {
+        if (!resolve_module(&base, &size, &via, &execfn)) {
+            send_line(hPipe, "{\"event\":\"spawn_hook_result\","
+                             "\"ok\":false,\"reason\":\"no_module\"}");
+            return;
+        }
+        if (!install_spawn_hook(base, size)) {
+            send_line(hPipe, "{\"event\":\"spawn_hook_result\","
+                             "\"ok\":false,\"reason\":\"not_resolvable\"}");
+            return;
+        }
+        send_line(hPipe,
+                  "{\"event\":\"spawn_hook_result\",\"ok\":true,"
+                  "\"op\":\"install\",\"installed\":true}");
+        return;
+    }
+
+    if (strcmp(op, "reset") == 0) {
+        spawn_log_lock_acquire();
+        g_spawn_log_total = 0;
+        spawn_log_lock_release();
+        send_line(hPipe,
+                  "{\"event\":\"spawn_hook_result\",\"ok\":true,"
+                  "\"op\":\"reset\",\"installed\":%s}",
+                  g_spawn_hook_installed ? "true" : "false");
+        return;
+    }
+
+    if (strcmp(op, "status") == 0) {
+        send_line(hPipe,
+                  "{\"event\":\"spawn_hook_result\",\"ok\":true,"
+                  "\"op\":\"status\",\"installed\":%s,\"total_calls\":%llu}",
+                  g_spawn_hook_installed ? "true" : "false",
+                  g_spawn_log_total);
+        return;
+    }
+
+    if (strcmp(op, "read") == 0) {
+        char buf[RESP_BUF_SIZE];
+        size_t used = 0;
+        unsigned long long total;
+        unsigned long long shown, i;
+
+        spawn_log_lock_acquire();
+        total = g_spawn_log_total;
+        shown = total < RBBRIDGE_SPAWN_LOG_CAP ? total
+                                               : RBBRIDGE_SPAWN_LOG_CAP;
+        used = (size_t)snprintf(
+            buf, sizeof(buf),
+            "{\"event\":\"spawn_hook_result\",\"ok\":true,\"op\":\"read\","
+            "\"installed\":%s,\"total_calls\":%llu,\"events\":[",
+            g_spawn_hook_installed ? "true" : "false", total);
+        for (i = 0; i < shown && used + 160 < sizeof(buf); i++) {
+            const rbbridge_spawn_event_t *e = &g_spawn_log[i];
+            used += (size_t)snprintf(
+                buf + used, sizeof(buf) - used,
+                "%s{\"hash\":\"0x%08x\",\"x\":%.3f,\"y\":%.3f,\"z\":%.3f,"
+                "\"team\":%u}",
+                i == 0 ? "" : ",", e->hash, (double)e->x, (double)e->y,
+                (double)e->z, e->team);
+        }
+        spawn_log_lock_release();
+        if (used + 2 < sizeof(buf)) {
+            buf[used++] = ']';
+            buf[used++] = '}';
+            buf[used] = '\0';
+        }
+        send_line(hPipe, "%s", buf);
+        return;
+    }
+
+    send_line(hPipe, "{\"event\":\"spawn_hook_result\","
+                     "\"ok\":false,\"reason\":\"unknown_op\"}");
+}
+
 
 static void handle_line(HANDLE hPipe, const char *line)
 {
@@ -5517,6 +5866,16 @@ static void handle_line(HANDLE hPipe, const char *line)
         char op[32] = "status";
         json_get_string(line, "op", op, sizeof(op));
         dispatch_restart_map(hPipe, op);
+        return;
+    }
+
+    /* spawn_hook (#508/#513): op = install|read|reset|status (Default
+     * status). Nativer Inline-Hook auf den SpawnEntity-Kern statt
+     * nachtraeglichem Entity-Count (Pivot nach dem count_units-Crash). */
+    if (strcmp(cmd, "spawn_hook") == 0) {
+        char op[16] = "status";
+        json_get_string(line, "op", op, sizeof(op));
+        dispatch_spawn_hook(hPipe, op);
         return;
     }
 

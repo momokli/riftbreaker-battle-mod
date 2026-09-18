@@ -1597,6 +1597,51 @@ static void handle_order(SOCKET c, const char *body)
     http_respond(c, 200, "OK", resp);
 }
 
+/* POST /spawn_hook: fuehrt {"cmd":"spawn_hook","op":"..."} auf der
+ * persistenten Pipe aus (Read #508/#513, nativer Inline-Hook auf
+ * SpawnEntity statt nachtraeglichem Entity-Count) und liefert die
+ * spawn_hook_result-Zeile. `op` = install|read|reset|status (Default
+ * status). */
+static void handle_spawn_hook(SOCKET c, const char *body)
+{
+    char op[16] = "status";
+    char line[READ_BUF];
+    char payload[LINE_MAX];
+    char esc_op[16 * 2];
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+
+    json_get_string(body, "op", op, sizeof(op));
+    if (op[0] && strcmp(op, "status") != 0 && strcmp(op, "install") != 0 &&
+        strcmp(op, "read") != 0 && strcmp(op, "reset") != 0) {
+        blog("POST /spawn_hook: unbekanntes op '%s'", op);
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_op\"}");
+        return;
+    }
+
+    json_escape(op, esc_op, sizeof(esc_op));
+    snprintf(payload, sizeof(payload),
+             "{\"cmd\":\"spawn_hook\",\"op\":\"%s\"}\n", esc_op);
+
+    {
+        int rc = pipe_send_command("spawn_hook_result", payload, timeout_ms,
+                                   line, sizeof(line));
+        if (rc == -1) {
+            blog("POST /spawn_hook: Pipe nicht erreichbar -> pipe_unavailable");
+            http_respond(c, 503, "Service Unavailable",
+                         "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+            return;
+        }
+        if (rc != 0) {
+            http_respond(c, 500, "Internal Server Error",
+                         "{\"ok\":false,\"reason\":\"timeout\"}");
+            return;
+        }
+    }
+    log_response("/spawn_hook", line);
+    http_respond(c, 200, "OK", line);
+}
+
 /* GET /events: SSE-Stream. Haelt die Verbindung offen; der Reader-Thread
  * broadcastet Events direkt an diesen (einen) Client. */
 static void handle_events(SOCKET c)
@@ -1779,6 +1824,16 @@ static void handle_client(SOCKET c)
             memcpy(b, body, (size_t)body_len);
             b[body_len] = '\0';
             handle_order(c, b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/spawn_hook") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_spawn_hook(c, b);
             free(b);
         } else if (strcmp(method, "GET") == 0 &&
                    (strcmp(path, "/") == 0 ||
