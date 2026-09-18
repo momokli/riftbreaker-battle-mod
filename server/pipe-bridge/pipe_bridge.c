@@ -549,7 +549,7 @@ typedef struct {
  * der Hard/Normal-Ratio ueber alle Level, verankert auf die echten 300 Start-Carbonium
  * (logic/missions/survival/default.logic, live bestaetigt in f7ea0a4/496e2a6). Auf die
  * naechsten 50 gerundet. Ersetzt die Test-C-Kurve aus #670. wave9 teilt den Pool mit
- * wave8 (#658), Preis-Delta wie im bisherigen Platzhalter beibehalten (+50). */
+ * wave8 (#658), Preis manuell ueber die Formel-Kurve hinaus angehoben (10500). */
 static const order_spec_t g_order_specs[] = {
     { "wave1", "logic/missions/survival/attack_level_1_id_1.logic", 300, ORDER_DELAY_MS },
     { "wave2", "logic/missions/survival/attack_level_2_id_1.logic", 700, ORDER_DELAY_MS },
@@ -559,7 +559,7 @@ static const order_spec_t g_order_specs[] = {
     { "wave6", "logic/missions/survival/attack_level_6_id_1.logic", 5350, ORDER_DELAY_MS },
     { "wave7", "logic/missions/survival/attack_level_7_id_1.logic", 7600, ORDER_DELAY_MS },
     { "wave8", "logic/missions/survival/attack_level_8_id_1.logic", 9650, ORDER_DELAY_MS },
-    { "wave9", "logic/missions/survival/attack_level_8_id_1.logic", 9700, ORDER_DELAY_MS },
+    { "wave9", "logic/missions/survival/attack_level_8_id_1.logic", 10500, ORDER_DELAY_MS },
 };
 #define G_ORDER_SPEC_COUNT (sizeof(g_order_specs) / sizeof(g_order_specs[0]))
 
