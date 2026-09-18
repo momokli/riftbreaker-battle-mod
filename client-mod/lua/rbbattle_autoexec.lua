@@ -5,7 +5,8 @@
 -- Client/Single-Player: kein Spawn (Client rendert nur die Server-Entities).
 -- Jedes Gebäude: Space (InteractWithEntityRequest) -> Chat "-send waveN"
 --   (-> pipe_bridge: try_spend + activate_mission_flow nach 5 min, #694/#698).
--- Preise = Test-C-Kurve (#670), Label „send WAVE N | <preis>“ kommt aus der .ent.
+-- Preise = Oe-Send-Ziel-Kurve (docs/research/send-boost-pricing-baseline.md, #205),
+-- Label „send WAVE N | <preis>” kommt aus der .ent.
 -- ============================================================================
 
 local RBB = {}

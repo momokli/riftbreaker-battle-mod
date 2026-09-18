@@ -7,8 +7,8 @@ EntityBlueprint
 		name 				"rbbattle_wave_1"
 		bp   				"buildings/decorations/rbbattle_wave_1"
 		category 			"decorations"
-		localization_id		"send WAVE 1 | 10"
-		description			"send WAVE 1 | 10"
+		localization_id		"send WAVE 1 | 300"
+		description			"send WAVE 1 | 300"
 		menu_icon			"gui/hud/building_icons/wind_turbine"
 		menu_action			"rbbattle_chat"
 		order				"0"
@@ -24,7 +24,7 @@ EntityBlueprint
 				building_time 1
 				building_cost
 				{
-					carbonium 	"1"
+					carbonium 	"300"
 				}
 			}
 		}
