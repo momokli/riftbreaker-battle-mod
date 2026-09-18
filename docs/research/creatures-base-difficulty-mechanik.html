@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Creatures Base Difficulty</title>
+<style>
+  :root{
+    --bg:#f4f5f2;
+    --paper:#ffffff;
+    --ink:#1c2321;
+    --ink-soft:#4b544f;
+    --line:#dde1dc;
+    --line-strong:#c3c9c2;
+    --accent:#2f6f5e;
+    --accent-soft:#8fbfae;
+    --accent-bg:#e6f1ec;
+    --warn:#7a1f1f;
+    --warn-bg:#f6e3e3;
+    --code-bg:#eef0ec;
+    --shadow: 0 1px 2px rgba(28,35,33,.06), 0 8px 24px rgba(28,35,33,.05);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#14171a;
+      --paper:#1b1f22;
+      --ink:#e9ece9;
+      --ink-soft:#a9b2ac;
+      --line:#2c3236;
+      --line-strong:#3a4046;
+      --accent:#5fb89b;
+      --accent-soft:#2a4a3f;
+      --accent-bg:#16241f;
+      --warn:#e0605c;
+      --warn-bg:#2a1717;
+      --code-bg:#20252a;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
+    }
+  }
+  *{box-sizing:border-box;}
+  body{
+    background:var(--bg); color:var(--ink); margin:0;
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+    padding-block: 32px 64px;
+  }
+  code, .mono{ font-family: 'Consolas', 'SFMono-Regular', ui-monospace, Menlo, monospace; }
+  .wrap{ max-width: 980px; margin: 0 auto; padding: 0 20px; }
+
+  .kicker{
+    font-family: 'Consolas', ui-monospace, monospace; font-size: 12px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--accent); display:flex; gap: 10px; align-items:center;
+    margin-bottom: 14px; flex-wrap: wrap;
+  }
+  .kicker .pill{ border:1px solid var(--line-strong); border-radius:999px; padding: 3px 10px; color: var(--ink-soft); }
+
+  h1{ font-size: clamp(26px, 4vw, 38px); line-height:1.15; margin: 0 0 8px; letter-spacing: -0.01em; }
+  .subtitle{ color: var(--ink-soft); font-size: 16px; max-width: 68ch; margin: 0 0 28px; line-height:1.55; }
+
+  .meta-strip{
+    display:grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap:1px;
+    background: var(--line); border:1px solid var(--line); border-radius:10px; overflow:hidden; margin-bottom: 36px;
+  }
+  .meta-cell{ background:var(--paper); padding: 12px 16px; }
+  .meta-cell .k{ font-family:'Consolas',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--ink-soft); margin-bottom:4px; }
+  .meta-cell .v{ font-size:14px; font-weight:600; }
+
+  .codeblock{
+    font-family:'Consolas',monospace; background: var(--code-bg); border:1px solid var(--line);
+    border-left: 3px solid var(--accent); border-radius: 8px; padding: 14px 18px;
+    font-size: 12.5px; color: var(--ink); margin: 16px 0 28px; overflow-x:auto; white-space:pre;
+  }
+
+  section{ margin-bottom: 46px; }
+  h2{ font-size: 20px; display:flex; align-items:baseline; gap:10px; margin: 0 0 6px; padding-bottom: 10px; border-bottom: 1px solid var(--line-strong); }
+  h2 .num{ font-family:'Consolas',monospace; color: var(--accent); }
+  h3{ font-size:14.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); margin: 24px 0 10px; }
+  p{ line-height:1.65; }
+  p.lede{ color: var(--ink-soft); margin-top:2px; }
+
+  .table-scroll{ overflow-x:auto; border:1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); background:var(--paper); }
+  table{ border-collapse:collapse; width:100%; font-size:13.5px; min-width: 480px; }
+  th, td{ padding: 9px 14px; text-align:left; border-bottom:1px solid var(--line); white-space:nowrap; font-variant-numeric: tabular-nums; }
+  thead th{ background: var(--code-bg); font-family:'Consolas',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); }
+  tbody tr:last-child td{ border-bottom:none; }
+  tbody tr:hover{ background: var(--code-bg); }
+  td.num, th.num{ text-align:right; font-family:'Consolas',monospace; }
+  td.strong{ font-weight:700; color:var(--accent); }
+
+  .callout{ background: var(--accent-bg); border:1px solid var(--accent-soft); border-radius:10px; padding: 16px 20px; margin: 18px 0; font-size: 14.5px; line-height:1.6; }
+  .callout b{ color: var(--accent); }
+  .callout.solved{ background: var(--accent-bg); border-color: var(--accent-soft); }
+  .callout.solved b{ color: var(--accent); }
+
+  .findings{ display:grid; gap:10px; }
+  .finding{ display:grid; grid-template-columns: 30px 1fr; gap: 12px; background: var(--paper); border:1px solid var(--line); border-radius:10px; padding: 14px 16px; box-shadow: var(--shadow); }
+  .finding .n{ font-family:'Consolas',monospace; color: var(--accent); font-weight:700; }
+  .finding p{ margin:0; font-size:14px; }
+
+  code.inline{ background: var(--code-bg); padding: 1px 5px; border-radius:4px; font-size: 0.92em; }
+  .refs{ font-family:'Consolas',monospace; font-size:12.5px; color: var(--ink-soft); padding-top: 16px; border-top:1px solid var(--line-strong); }
+  ul.plain{ margin:0; padding-left: 20px; line-height:1.7; }
+  ul.plain li{ margin-bottom:6px; }
+
+  .flow{
+    display:flex; flex-direction:column; gap: 8px; font-family:'Consolas',monospace; font-size:13px;
+  }
+  .flow .step{
+    background: var(--paper); border:1px solid var(--line); border-radius:8px; padding: 10px 16px;
+    box-shadow: var(--shadow); display:flex; align-items:center; gap:10px;
+  }
+  .flow .arrow{ text-align:center; color: var(--ink-soft); font-size:16px; }
+  .flow .step b{ color: var(--accent); }
+
+  @media (max-width:520px){ table{ min-width: 420px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="kicker">
+    <span class="pill">Gelöst</span>
+    <span>Offener Punkt aus #213 / #736 / Hard / Brutal</span>
+  </div>
+
+  <h1>Was <code style="font-size:0.85em">creatureDifficultyIncrementPerDOMDifficulty</code> wirklich tut</h1>
+  <p class="subtitle">Der seit #213 mitgeschleppte Caveat ist geklärt: kein Multiplikator auf die Survival-Units, sondern ein globaler Zähler für einen einzigen DLC2-Kampagnenboss, der im Survival-Modus nie vorkommt.</p>
+
+  <div class="meta-strip">
+    <div class="meta-cell"><div class="k">Stand</div><div class="v">2026-09-18</div></div>
+    <div class="meta-cell"><div class="k">Quelle</div><div class="v">00_win_data.zip</div></div>
+    <div class="meta-cell"><div class="k">Löst</div><div class="v">#213 · #736 · Hard · Brutal</div></div>
+    <div class="meta-cell"><div class="k">Auswirkung auf Sigma-Werte</div><div class="v">Keine</div></div>
+  </div>
+
+  <section>
+    <h2><span class="num">01</span> Der Signalweg</h2>
+    <div class="flow">
+      <div class="step">DOM-Level eskaliert (1→9) &rarr; <b>dom_manager.lua:IncreaseCreaturesBaseDifficulty()</b></div>
+      <div class="arrow">&darr;</div>
+      <div class="step">Index = Spieleranzahl (1&ndash;4) &rarr; <b>creatureDifficultyIncrementPerDOMDifficulty[index][level]</b></div>
+      <div class="arrow">&darr;</div>
+      <div class="step">Delta addiert auf globalen Float &rarr; <b>CampaignService:IncreaseCreaturesBaseDifficulty(delta)</b></div>
+      <div class="arrow">&darr;</div>
+      <div class="step">Einziger Leser: <b>anoryxian_boss_base.lua:SetupDifficulty()</b></div>
+      <div class="arrow">&darr;</div>
+      <div class="step">floor+clamp(1,10) &rarr; <b>healthSetup[tier][spieler]</b> &rarr; absolute HP gesetzt</div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">02</span> Code-Belege</h2>
+    <h3>Der Schreiber (dom_manager.lua)</h3>
+    <div class="codeblock">function dom_mananger:IncreaseCreaturesBaseDifficulty()
+    local playersCounter = self:GetPlayersCounter()   -- #PlayerService:GetConnectedPlayers(), max 4
+    local index = Clamp( playersCounter, 1, #self.rules.creatureDifficultyIncrementPerDOMDifficulty )
+    CampaignService:IncreaseCreaturesBaseDifficulty(
+        self.rules.creatureDifficultyIncrementPerDOMDifficulty[index][self.currentDifficultyLevel]
+    )
+end</div>
+    <div class="callout solved"><b>Rätsel gelöst:</b> die vier Teiltabellen <code class="inline">[1]</code>&ndash;<code class="inline">[4]</code> aus #213/#736/Hard/Brutal sind exakt nach <b>Spieleranzahl</b> indiziert.</div>
+
+    <h3>Der (einzige) Leser (anoryxian_boss_base.lua)</h3>
+    <div class="codeblock">function anoryxian_base:SetupDifficulty()
+    local creaturesDifficulty = CampaignService:GetCreaturesBaseDifficulty()
+    local diff = math.max( 1, math.min( math.floor( creaturesDifficulty ), 10 ) )
+    local players = math.max( 1, math.min( playersCount, 4 ) )
+    local newHealth = self.healthSetup[diff][players]     -- absolute HP, kein Multiplikator
+    HealthService:SetMaxHealth( self.entity, newHealth )
+end</div>
+    <p>Corpus-weiter Grep über <b>alle</b> <code class="inline">lua/units/</code>-Dateien: nur dieser Boss (+ 2 Subklassen) liest <code class="inline">GetCreaturesBaseDifficulty</code>. Keine der 6 Survival-Units (canoptrix, kafferroceros, arachnoid_sentinel, gnerot, bomogan, baxmoth) referenziert es.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">03</span> Die HP-Tabellen des Anoryxian-Boss</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Tier</th><th class="num">1 Spieler</th><th class="num">2 Spieler</th><th class="num">3 Spieler</th><th class="num">4 Spieler</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td class="num">40 000</td><td class="num">70 000</td><td class="num">90 000</td><td class="num">110 000</td></tr>
+          <tr><td>3</td><td class="num">50 000</td><td class="num">88 000</td><td class="num">113 000</td><td class="num">138 000</td></tr>
+          <tr><td>6</td><td class="num">65 000</td><td class="num">114 000</td><td class="num">146 000</td><td class="num">179 000</td></tr>
+          <tr><td>10</td><td class="num strong">85 000</td><td class="num strong">149 000</td><td class="num strong">191 000</td><td class="num strong">234 000</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout"><b>Alpha-Variante:</b> exakt dieselbe Tabelle, nur um 5 Tiers nach oben verschoben (Alpha-Tier 1 = Basis-Tier 6) &mdash; reicht bis 289 000 HP bei Tier 10/4 Spieler. Dieselbe Reskin-Logik wie bei den <code class="inline">_alpha</code>/<code class="inline">_ultra</code>-Survival-Units, hier als komplette Zusatztabelle statt Blueprint-Wechsel.</div>
+  </section>
+
+  <section>
+    <h2><span class="num">04</span> Warum das für Survival egal ist</h2>
+    <p class="lede">Der Boss-Trigger im Survival-Modus (<code class="inline">attack_boss_dynamic.logic</code>) spawnt zufällige Species-Blueprints (<code class="inline">boss_jungle_random</code>, <code class="inline">boss_caverns_random</code>, …) aus <code class="inline">.kvp</code>-Species-Pools.</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Prüfung</th><th>Ergebnis</th></tr></thead>
+        <tbody>
+          <tr><td><code class="inline">anoryxian</code> in irgendeiner <code class="inline">creature_species*.kvp</code></td><td class="strong">0 Treffer</td></tr>
+          <tr><td><code class="inline">anoryxian</code> in allen 1184 Dateien unter <code class="inline">logic/missions/survival/</code></td><td class="strong">0 Treffer</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout solved"><b>Endgültig bestätigt:</b> Anoryxian ist eine rein skriptete DLC2-Höhlen-Kampagnenbegegnung (<code class="inline">entryLogic = "logic/missions/campaigns/dlc_2/caverns_boss_intro.logic"</code>) und im Survival-Modus &mdash; egal ob Default, Hard oder Brutal &mdash; strukturell unerreichbar.</div>
+  </section>
+
+  <section>
+    <h2><span class="num">05</span> Was das für #736/Hard/Brutal bedeutet</h2>
+    <div class="findings">
+      <div class="finding"><div class="n">01</div><p>Alle HP-Zahlen in #736, Hard- und Brutal-Dokument bleiben unverändert gültig &mdash; kein zusätzlicher Laufzeit-Multiplikator wirkt auf die 6 Survival-Units.</p></div>
+      <div class="finding"><div class="n">02</div><p>Der Caveat aus #213 §3 ("Kreaturen-Stärke skaliert zusätzlich, braucht Live-Test") ist geschlossen.</p></div>
+      <div class="finding"><div class="n">03</div><p>Die verglichenen Rohwert-Tabellen (Default/Hard/Brutal, Sub-Tabelle [1]) bleiben als Beleg korrekt, sind aber für die #205-Preisformel irrelevant.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">06</span> Verbleibend offen</h2>
+    <ul class="plain">
+      <li>Ob Elite-Spawner/-Türme (<code class="inline">creature_species_elite*.kvp</code>) über einen anderen Pfad mit skriptgebundenen Bossen interagieren &mdash; außerhalb des Scopes, nicht relevant für #205.</li>
+      <li>Exakter Startwert von <code class="inline">CreaturesBaseDifficulty</code> (0 oder 1) nicht isoliert verifiziert &mdash; durch das <code class="inline">math.max(1,...)</code>-Clamp praktisch irrelevant.</li>
+    </ul>
+  </section>
+
+  <div class="refs">Ref: #213 · #736 · #699 · #658 · #205 &mdash; Volldokument: <code class="inline">docs/research/creatures-base-difficulty-mechanik.md</code></div>
+
+</div>
+</body>
+</html>
