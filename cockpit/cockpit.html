@@ -708,6 +708,38 @@
                         </div>
                     </fieldset>
 
+                    <!-- B3. PERSONAS (SEND-PROFILE) + SELF-SEND -->
+                    <fieldset class="q-groupbox" id="panel-personas">
+                        <legend>Personas (Send-Profile)</legend>
+                        <div class="flow-container">
+                            <div class="flow-readouts">
+                                <span class="prop-label">active</span>
+                                <select id="persona_active" class="mono" aria-label="Active persona"></select>
+                                <button id="persona_refresh" class="btn-primary">refresh</button>
+                            </div>
+                            <div class="flow-action-row">
+                                <span class="prop-label">persona</span>
+                                <input id="persona_name" class="mono" size="10" placeholder="name" aria-label="Persona name" />
+                                <span class="prop-label">sends</span>
+                                <input id="persona_sends" class="mono" size="24" placeholder="3,5,7 (null = leer)" aria-label="Persona sends" />
+                                <button id="persona_save" class="btn-primary">save</button>
+                                <button id="persona_delete" class="btn-danger">del</button>
+                            </div>
+                            <div class="flow-action-row">
+                                <label class="prop-label" for="send_yourself">send yourself</label>
+                                <input id="send_yourself" type="checkbox" aria-label="Send yourself toggle" />
+                            </div>
+                            <div class="log-scroll-area">
+                                <pre id="personas_list">—</pre>
+                            </div>
+                            <div class="flow-note">
+                                Send-Profile (Extra-Wellen je Attack-Index, null = leer).
+                                Aktiv + send-yourself steuern den Attack-Cycle zur Laufzeit.
+                                <span id="personas_msg" aria-live="polite"></span>
+                            </div>
+                        </div>
+                    </fieldset>
+
                     <!-- C. MISSION FLOW (WAVE) -->
                     <fieldset class="q-groupbox" id="panel-mission">
                         <legend>Mission Flow (Wave)</legend>
@@ -1623,6 +1655,160 @@
                 };
                 sendTracker.render();
                 setInterval(sendTracker.poll, 10000);
+
+                // --- personas (testable) ---
+                function createPersonasController(deps) {
+                    var fetchFn = deps.fetch;
+                    var doc = deps.document;
+                    var DASH = "—";
+
+                    var state = { personas: {}, active: "", send_yourself: true };
+
+                    function $(id) { return doc.getElementById(id); }
+                    function setText(id, s) { var el = $(id); if (el) el.textContent = s; }
+
+                    function parseSends(str) {
+                        if (str === undefined || str === null) return [];
+                        var s = String(str).trim();
+                        if (s === "") return [];
+                        return s.split(",").map(function (t) {
+                            var v = t.trim();
+                            if (v === "" || v === "null" || v === "-") return null;
+                            var n = parseInt(v, 10);
+                            if (isNaN(n)) throw new Error("invalid level: " + v);
+                            return n;
+                        });
+                    }
+
+                    function formatSends(arr) {
+                        return (arr || []).map(function (v) { return v === null ? "null" : v; }).join(",");
+                    }
+
+                    function resp(res) {
+                        if (!res || res.ok === false) {
+                            throw new Error("HTTP " + (res ? res.status : "err"));
+                        }
+                        return res.json();
+                    }
+
+                    function render() {
+                        var names = Object.keys(state.personas || {}).sort();
+                        setText(
+                            "personas_list",
+                            names.length
+                                ? names.map(function (n) {
+                                    return (n === state.active ? "* " : "  ") + n + ": " + formatSends(state.personas[n]);
+                                }).join("\n")
+                                : DASH
+                        );
+                        var sel = $("persona_active");
+                        if (sel) {
+                            sel.innerHTML = "<option value=''>(none)</option>" +
+                                names.map(function (n) {
+                                    return "<option value='" + n + "'>" + n + "</option>";
+                                }).join("");
+                            sel.value = state.active || "";
+                        }
+                        var cb = $("send_yourself");
+                        if (cb) cb.checked = !!state.send_yourself;
+                    }
+
+                    function load() {
+                        return fetchFn("personas").then(resp).then(function (data) {
+                            state.personas = (data && data.personas) || {};
+                            state.active = (data && data.active) || "";
+                            state.send_yourself = !!(data && data.send_yourself);
+                            render();
+                            return state;
+                        });
+                    }
+
+                    function postJson(route, body) {
+                        return fetchFn(route, {
+                            method: "POST",
+                            headers: { "content-type": "application/json" },
+                            body: JSON.stringify(body),
+                        }).then(resp);
+                    }
+
+                    function save() {
+                        var nameEl = $("persona_name");
+                        var sendsEl = $("persona_sends");
+                        var name = ((nameEl && nameEl.value) || "").trim();
+                        var sends;
+                        try {
+                            sends = parseSends((sendsEl && sendsEl.value) || "");
+                        } catch (e) {
+                            setText("personas_msg", e.message);
+                            return Promise.resolve(state);
+                        }
+                        if (!name) {
+                            setText("personas_msg", "name fehlt");
+                            return Promise.resolve(state);
+                        }
+                        state.personas[name] = sends;
+                        return postJson("personas", state.personas).then(function () {
+                            setText("personas_msg", "");
+                            return load();
+                        });
+                    }
+
+                    function remove() {
+                        var nameEl = $("persona_name");
+                        var name = ((nameEl && nameEl.value) || "").trim() || state.active;
+                        if (!name || !state.personas[name]) {
+                            setText("personas_msg", "keine persona gewaehlt");
+                            return Promise.resolve(state);
+                        }
+                        delete state.personas[name];
+                        if (state.active === name) state.active = "";
+                        return postJson("personas", state.personas).then(function () {
+                            setText("personas_msg", "");
+                            return load();
+                        });
+                    }
+
+                    function setActive(name) {
+                        return postJson("persona_active", { name: name || "" }).then(function () {
+                            state.active = name || "";
+                            render();
+                            return state;
+                        });
+                    }
+
+                    function setSendYourself(on) {
+                        return postJson("send_yourself", { on: on ? 1 : 0 }).then(function () {
+                            state.send_yourself = !!on;
+                            render();
+                            return state;
+                        });
+                    }
+
+                    return {
+                        state: state,
+                        load: load,
+                        save: save,
+                        remove: remove,
+                        setActive: setActive,
+                        setSendYourself: setSendYourself,
+                        render: render,
+                        parseSends: parseSends,
+                        formatSends: formatSends,
+                    };
+                }
+                // --- end personas ---
+
+                var personasController = createPersonasController({
+                    document: document,
+                    fetch: window.fetch.bind(window),
+                });
+                $("persona_refresh").onclick = function () { personasController.load(); };
+                $("persona_save").onclick = function () { personasController.save(); };
+                $("persona_delete").onclick = function () { personasController.remove(); };
+                $("persona_active").onchange = function () { personasController.setActive(this.value); };
+                $("send_yourself").onchange = function () { personasController.setSendYourself(this.checked); };
+                personasController.load();
+                setInterval(personasController.load, 5000);
 
                 // --- server-control panel (testable) ---
                 function createServerControlPanel(deps) {

@@ -8,9 +8,17 @@ kein Netz, kein Spiel, kein DOM.
 """
 
 import json
+import os
+import tempfile
 import unittest
 
-from attack_cycle import AttackCycle, DEFAULT_DIFFICULTY_INTERVAL_S, parse_hq_alive, parse_send_level
+from attack_cycle import (
+    DEFAULT_DIFFICULTY_INTERVAL_S,
+    AttackCycle,
+    load_personas,
+    parse_hq_alive,
+    parse_send_level,
+)
 
 
 class FakePoster:
@@ -295,6 +303,218 @@ class TestAttackCycleDifficultyTimer(unittest.TestCase):
         s = cycle.status()
         self.assertEqual(s["seconds_to_next_difficulty"], 150.0)
         self.assertEqual(s["difficulty_interval_s"], 200.0)
+
+
+class TestPersona(unittest.TestCase):
+    """Persona = Folge von Extra-Wellen, indexiert nach Attack-Nummer,
+    geschichtet auf die Natural Waves. Laeuft aus (kein Loop)."""
+
+    def _cycle(self, poster, persona=None, clock=None):
+        return AttackCycle(
+            "http://127.0.0.1:9001",
+            interval_s=420.0,
+            difficulty_interval_s=1e9,
+            persona=persona,
+            _poster=poster,
+            _clock=clock or FakeClock(),
+        )
+
+    def _fire_logics(self, poster):
+        return [json.loads(c[1].decode())["logic"] for c in poster.calls if c[0] == "/activate_mission_flow"]
+
+    def test_persona_extra_fires_then_runs_out(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, persona=[3, 5], clock=clock)
+        cycle.step()  # started
+
+        clock.t = 420.0
+        cycle.step()  # attack 1
+        logics = self._fire_logics(poster)
+        self.assertEqual(
+            logics,
+            [
+                "logic/missions/survival/attack_level_1_id_1.logic",  # natural
+                "logic/missions/survival/attack_level_3_id_1.logic",  # persona wave3
+            ],
+        )
+
+        clock.t = 840.0
+        cycle.step()  # attack 2
+        logics = self._fire_logics(poster)
+        self.assertIn("logic/missions/survival/attack_level_5_id_1.logic", logics)
+
+        clock.t = 1260.0
+        cycle.step()  # attack 3 -> Persona laeuft aus
+        logics = self._fire_logics(poster)
+        self.assertEqual(len(logics), 5)  # 2 + 2 + 1: attack 3 ohne Extra
+        # Persona-Wave 3 kam nur in attack 1, nie wieder (ausgelaufen).
+        self.assertEqual(logics.count("logic/missions/survival/attack_level_3_id_1.logic"), 1)
+
+    def test_persona_none_entry_skips_extra(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, persona=[None, 2], clock=clock)
+        cycle.step()  # started
+
+        clock.t = 420.0
+        cycle.step()  # attack 1: kein Extra
+        self.assertEqual(len(self._fire_logics(poster)), 1)
+
+        clock.t = 840.0
+        cycle.step()  # attack 2: wave2
+        logics = self._fire_logics(poster)
+        self.assertIn("logic/missions/survival/attack_level_2_id_1.logic", logics)
+
+    def test_no_persona_fires_natural_only(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, persona=None, clock=clock)
+        cycle.step()
+        clock.t = 420.0
+        cycle.step()
+        self.assertEqual(len(self._fire_logics(poster)), 1)
+
+    def test_persona_resets_on_reset(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, persona=[3, 5], clock=clock)
+        cycle.step()
+        clock.t = 420.0
+        cycle.step()  # attack_index = 1
+        self.assertEqual(cycle.attack_index, 1)
+        cycle.reset()
+        self.assertEqual(cycle.attack_index, 0)
+
+
+class TestSendYourself(unittest.TestCase):
+    """Routing eigener Kaeufe: on = lokal feuern (Default), off = Carbonium
+    abziehen, aber Welle tracken statt lokal feuern (spaeter Server B)."""
+
+    def _cycle(self, poster, send_yourself=True, clock=None):
+        return AttackCycle(
+            "http://127.0.0.1:9001",
+            interval_s=420.0,
+            difficulty_interval_s=1e9,
+            send_yourself=send_yourself,
+            _poster=poster,
+            _clock=clock or FakeClock(),
+        )
+
+    def test_off_tracks_outgoing_instead_of_bought(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        cycle = self._cycle(poster, send_yourself=False)
+        cycle.step()  # started
+        cycle.buy(3)
+        cycle._resolve_orders()
+        self.assertEqual(cycle.bought, [])
+        self.assertEqual([o["level"] for o in cycle.outgoing], [3])
+
+    def test_off_still_deducts_carbonium(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        cycle = self._cycle(poster, send_yourself=False)
+        cycle.step()
+        cycle.buy(3)
+        cycle._resolve_orders()
+        spend_calls = [c for c in poster.calls if c[0] == "/try_spend"]
+        self.assertEqual(len(spend_calls), 1)
+
+    def test_off_does_not_fire_locally(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, send_yourself=False, clock=clock)
+        cycle.step()  # started
+        cycle.buy(3)
+        cycle._resolve_orders()
+        clock.t = 420.0
+        cycle.step()  # attack
+        logics = [json.loads(c[1].decode())["logic"] for c in poster.calls if c[0] == "/activate_mission_flow"]
+        self.assertEqual(logics, ["logic/missions/survival/attack_level_1_id_1.logic"])
+
+
+class TestLoadPersonas(unittest.TestCase):
+    def _write(self, content):
+        fd, path = tempfile.mkstemp(suffix=".json")
+        with os.fdopen(fd, "w") as fh:
+            fh.write(content)
+        return path
+
+    def test_load_valid(self):
+        path = self._write('{"personas": {"aggro": [3, 5, 7], "ruhig": [null, 2, null]}}')
+        try:
+            self.assertEqual(
+                load_personas(path),
+                {"aggro": [3, 5, 7], "ruhig": [None, 2, None]},
+            )
+        finally:
+            os.unlink(path)
+
+    def test_load_invalid_level(self):
+        path = self._write('{"personas": {"bad": [99]}}')
+        try:
+            with self.assertRaises(ValueError):
+                load_personas(path)
+        finally:
+            os.unlink(path)
+
+    def test_load_empty(self):
+        path = self._write('{"personas": {}}')
+        try:
+            self.assertEqual(load_personas(path), {})
+        finally:
+            os.unlink(path)
+
+    def test_load_missing_file(self):
+        with self.assertRaises(OSError):
+            load_personas("/nonexistent/personas.json")
+
+
+class TestSyncPersonas(unittest.TestCase):
+    """sync_personas(): pollt GET /personas (Bridge) und uebernimmt aktive
+    Persona + send_yourself zur Laufzeit (CLI-Flags nur Start-Fallback)."""
+
+    def _cycle(self, getter_resp, clock=None):
+        return AttackCycle(
+            "http://127.0.0.1:9001",
+            interval_s=420.0,
+            difficulty_interval_s=1e9,
+            _poster=FakePoster('{"ok":true,"hq_hp":100.0}'),
+            _getter=lambda path: (200, getter_resp),
+            _clock=clock or FakeClock(),
+        )
+
+    def test_applies_active_persona_and_send_yourself(self):
+        resp = '{"personas":{"aggro":[3,5],"ruhig":[null,2]},"active":"aggro","send_yourself":false}'
+        cycle = self._cycle(resp)
+        cycle.sync_personas()
+        self.assertEqual(cycle.persona, [3, 5])
+        self.assertEqual(cycle.persona_name, "aggro")
+        self.assertFalse(cycle.send_yourself)
+
+    def test_no_active_persona(self):
+        resp = '{"personas":{"aggro":[3,5]},"active":"","send_yourself":true}'
+        cycle = self._cycle(resp)
+        cycle.sync_personas()
+        self.assertIsNone(cycle.persona)
+        self.assertEqual(cycle.persona_name, "")
+        self.assertTrue(cycle.send_yourself)
+
+    def test_invalid_level_rejected(self):
+        resp = '{"personas":{"bad":[99]},"active":"bad","send_yourself":true}'
+        cycle = self._cycle(resp)
+        cycle.sync_personas()
+        self.assertIsNone(cycle.persona)
+        self.assertEqual(cycle.persona_name, "")
+
+    def test_non_200_ignored(self):
+        cycle = AttackCycle(
+            "http://127.0.0.1:9001",
+            _poster=FakePoster('{"ok":true,"hq_hp":100.0}'),
+            _getter=lambda path: (500, '{"ok":false}'),
+        )
+        cycle.sync_personas()
+        self.assertIsNone(cycle.persona)
+        self.assertTrue(cycle.send_yourself)
 
 
 if __name__ == "__main__":
