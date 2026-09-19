@@ -33,10 +33,47 @@ Ticks feuern nacheinander, jeweils mit dem zu diesem Zeitpunkt aktuellen Level.
 
 ## Endpunkte
 
-| Route         | Methode | Zweck                                                                                          |
+| Route         | Methode | Zweck                                                                                            |
 | ------------- | ------- | ------------------------------------------------------------------------------------------------ |
-| `/queue_send` | POST    | Welle kaufen (`{"name":"waveN"}` oder `{"level":N}`)                                            |
+| `/queue_send` | POST    | Welle kaufen (`{"name":"waveN"}` oder `{"level":N}`)                                             |
 | `/status`     | GET     | `active`, `level`, `seconds_to_next_attack`, `seconds_to_next_difficulty`, `bought`, `orders`, … |
+
+## Personas (Send-Profile)
+
+Eine Persona ist eine optionale Folge von **Extra-Wellen**, indexiert nach
+Attack-Nummer und geschichtet auf die Natural Waves — der simulierte
+„Gegner“, der „auch sendet“. Kein Loop: die Persona laeuft aus (wie im
+echten Spiel), und der Attack-Zaehler resettet bei Runden-Reset.
+
+```json
+{
+  "personas": {
+    "aggro": [3, 5, 7, 9, 9],
+    "ruhig": [null, 2, null, 2]
+  }
+}
+```
+
+- `aggro` Attack 1 -> natural + extra Wave 3, Attack 2 -> natural + extra Wave 5, …
+- `null` = keine Extra-Welle fuer diesen Index
+- Default `--persona none` -> nur Natural Waves
+
+Start:
+
+```bash
+python3 attack_cycle.py --persona aggro --persona-file personas.example.json
+```
+
+## send-yourself (Routing eigener Kaeufe)
+
+| Modus          | Verhalten                                                                                                                                                      |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `on` (Default) | eigener Kauf feuert lokal (heutiges Verhalten)                                                                                                                 |
+| `off`          | Carbonium wird trotzdem abgezogen (`try_spend`), die Welle feuert NICHT lokal, sondern wird als Outgoing-Send getrackt (`status().outgoing`, spaeter Server B) |
+
+```bash
+python3 attack_cycle.py --send-yourself off
+```
 
 ## Test
 
