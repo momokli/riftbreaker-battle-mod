@@ -484,6 +484,16 @@ static CRITICAL_SECTION g_attack_interval_cs;
 static int g_attack_reset_epoch = 0;
 static CRITICAL_SECTION g_attack_reset_cs;
 
+/* Personas (Send-Profile) + Self-Send (Issue #788), via WebUI editierbar.
+ * g_personas = roher JSON-Object-String {"name":[level|null,...],...};
+ * g_active_persona = aktiver Name ("" = none); g_send_yourself = Routing. */
+static char g_personas[8192];
+static CRITICAL_SECTION g_personas_cs;
+static char g_active_persona[64];
+static CRITICAL_SECTION g_active_persona_cs;
+static int g_send_yourself = 1;
+static CRITICAL_SECTION g_send_yourself_cs;
+
 /* Broadcastet eine JSON-Zeile als SSE-Event an den (einen) Cockpit-Client. */
 static void sse_broadcast(const char *line)
 {
@@ -1373,6 +1383,90 @@ static void handle_post_attack_reset(SOCKET c, const char *body)
     http_respond(c, 200, "OK", resp);
 }
 
+/* GET /personas: liefert Persona-Defs (roher JSON-Object), aktive Persona und
+ * Self-Send. Der Attack-Cycle-Sidecar pollt das; die WebUI liest/schreibt. */
+static void handle_get_personas(SOCKET c)
+{
+    char resp[8192];
+    char personas[8192];
+    char active[64];
+    int send_yourself;
+
+    EnterCriticalSection(&g_personas_cs);
+    if (g_personas[0]) {
+        strncpy(personas, g_personas, sizeof(personas) - 1);
+        personas[sizeof(personas) - 1] = '\0';
+    } else {
+        strcpy(personas, "{}");
+    }
+    LeaveCriticalSection(&g_personas_cs);
+
+    EnterCriticalSection(&g_active_persona_cs);
+    strncpy(active, g_active_persona, sizeof(active) - 1);
+    active[sizeof(active) - 1] = '\0';
+    LeaveCriticalSection(&g_active_persona_cs);
+
+    EnterCriticalSection(&g_send_yourself_cs);
+    send_yourself = g_send_yourself;
+    LeaveCriticalSection(&g_send_yourself_cs);
+
+    snprintf(resp, sizeof(resp),
+             "{\"personas\":%s,\"active\":\"%s\",\"send_yourself\":%s}",
+             personas, active, send_yourself ? "true" : "false");
+    http_respond(c, 200, "OK", resp);
+}
+
+/* POST /personas: ersetzt die Persona-Defs (Body = roher JSON-Object). */
+static void handle_post_personas(SOCKET c, const char *body)
+{
+    if (!body || !body[0]) {
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_request\"}");
+        return;
+    }
+    EnterCriticalSection(&g_personas_cs);
+    strncpy(g_personas, body, sizeof(g_personas) - 1);
+    g_personas[sizeof(g_personas) - 1] = '\0';
+    LeaveCriticalSection(&g_personas_cs);
+    blog("personas -> gesetzt (%d bytes)", (int)strlen(g_personas));
+    http_respond(c, 200, "OK", "{\"ok\":true}");
+}
+
+/* POST /persona_active: setzt die aktive Persona ("" = none). */
+static void handle_post_persona_active(SOCKET c, const char *body)
+{
+    char name[64] = "";
+    json_get_string(body, "name", name, sizeof(name));
+    EnterCriticalSection(&g_active_persona_cs);
+    strncpy(g_active_persona, name, sizeof(g_active_persona) - 1);
+    g_active_persona[sizeof(g_active_persona) - 1] = '\0';
+    LeaveCriticalSection(&g_active_persona_cs);
+    blog("persona_active -> '%s'", g_active_persona);
+    http_respond(c, 200, "OK", "{\"ok\":true}");
+}
+
+/* POST /send_yourself: setzt den Routing-Toggle ({"on":1} / {"on":0}). */
+static void handle_post_send_yourself(SOCKET c, const char *body)
+{
+    double d = 0.0;
+    char resp[128];
+    int cur;
+
+    if (json_get_number(body, "on", &d)) {
+        EnterCriticalSection(&g_send_yourself_cs);
+        g_send_yourself = (d != 0.0);
+        LeaveCriticalSection(&g_send_yourself_cs);
+        blog("send_yourself -> %s", g_send_yourself ? "on" : "off");
+    }
+
+    EnterCriticalSection(&g_send_yourself_cs);
+    cur = g_send_yourself;
+    LeaveCriticalSection(&g_send_yourself_cs);
+    snprintf(resp, sizeof(resp), "{\"ok\":true,\"send_yourself\":%s}",
+             cur ? "true" : "false");
+    http_respond(c, 200, "OK", resp);
+}
+
 static void handle_client(SOCKET c)
 {
     char *req = malloc(REQ_MAX + 1);
@@ -1474,6 +1568,38 @@ static void handle_client(SOCKET c)
             memcpy(b, body, (size_t)body_len);
             b[body_len] = '\0';
             handle_post_attack_reset(c, b);
+            free(b);
+        } else if (strcmp(method, "GET") == 0 && strcmp(path, "/personas") == 0) {
+            handle_get_personas(c);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/personas") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_post_personas(c, b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/persona_active") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_post_persona_active(c, b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/send_yourself") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_post_send_yourself(c, b);
             free(b);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/probe") == 0) {
             handle_probe(c);

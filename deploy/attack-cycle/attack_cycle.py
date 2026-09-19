@@ -183,6 +183,7 @@ class AttackCycle:
         send_yourself: bool = True,
         timeout: float = 30.0,
         _poster: Optional[Callable[[str, bytes], tuple]] = None,
+        _getter: Optional[Callable[[str], tuple]] = None,
         _clock: Callable[[], float] = time.monotonic,
     ):
         self.base_url = base_url.rstrip("/")
@@ -195,6 +196,7 @@ class AttackCycle:
         self.send_yourself = send_yourself
         self.timeout = timeout
         self._poster = _poster or self._http_post
+        self._getter = _getter or self._http_get
         self._clock = _clock
 
         self._lock = threading.Lock()
@@ -217,6 +219,16 @@ class AttackCycle:
             method="POST",
             headers={"Content-Type": "application/json"},
         )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                return resp.status, resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode("utf-8", errors="replace")
+        except (urllib.error.URLError, OSError) as e:
+            return 0, str(e)
+
+    def _http_get(self, path: str) -> tuple:
+        req = urllib.request.Request(self.base_url + path, method="GET")
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 return resp.status, resp.read().decode("utf-8", errors="replace")
@@ -455,6 +467,49 @@ class AttackCycle:
         except Exception:
             pass
 
+    def sync_personas(self) -> None:
+        """Pollt GET /personas und uebernimmt aktive Persona + send_yourself.
+
+        Die Bridge ist die Laufzeit-Quelle der Wahrheit; die CLI-Flags
+        --persona/--send-yourself sind nur der Start-Fallback. Die aktive
+        Persona liefert die Extra-Wellen-Folge (Liste von Level/null),
+        send_yourself das Routing eigener Kaeufe.
+        """
+        try:
+            status, body = self._getter("/personas")
+            if not 200 <= status < 300:
+                return
+            data = json.loads(body)
+            if not isinstance(data, dict):
+                return
+            personas = data.get("personas")
+            if not isinstance(personas, dict):
+                return
+            active = data.get("active") or ""
+            levels = None
+            if active:
+                sends = personas.get(active)
+                if isinstance(sends, list):
+                    parsed = []
+                    ok = True
+                    for entry in sends:
+                        if entry is None:
+                            parsed.append(None)
+                        elif isinstance(entry, int) and not isinstance(entry, bool) and entry in WAVE_COST:
+                            parsed.append(entry)
+                        else:
+                            ok = False
+                            break
+                    if ok:
+                        levels = parsed
+            send_yourself = bool(data.get("send_yourself", True))
+            with self._lock:
+                self.persona = levels
+                self.persona_name = active if levels is not None else ""
+                self.send_yourself = send_yourself
+        except Exception:
+            pass
+
 
 class ControlHandler(BaseHTTPRequestHandler):
     cycle: AttackCycle = None  # gesetzt von build_control_server()
@@ -517,6 +572,7 @@ def run(
             cycle.step()
             cycle.sync_interval()
             cycle.sync_reset()
+            cycle.sync_personas()
             cycle.push_status()
             if once:
                 break

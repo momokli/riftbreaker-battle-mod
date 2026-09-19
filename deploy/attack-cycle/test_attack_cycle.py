@@ -469,5 +469,53 @@ class TestLoadPersonas(unittest.TestCase):
             load_personas("/nonexistent/personas.json")
 
 
+class TestSyncPersonas(unittest.TestCase):
+    """sync_personas(): pollt GET /personas (Bridge) und uebernimmt aktive
+    Persona + send_yourself zur Laufzeit (CLI-Flags nur Start-Fallback)."""
+
+    def _cycle(self, getter_resp, clock=None):
+        return AttackCycle(
+            "http://127.0.0.1:9001",
+            interval_s=420.0,
+            difficulty_interval_s=1e9,
+            _poster=FakePoster('{"ok":true,"hq_hp":100.0}'),
+            _getter=lambda path: (200, getter_resp),
+            _clock=clock or FakeClock(),
+        )
+
+    def test_applies_active_persona_and_send_yourself(self):
+        resp = '{"personas":{"aggro":[3,5],"ruhig":[null,2]},"active":"aggro","send_yourself":false}'
+        cycle = self._cycle(resp)
+        cycle.sync_personas()
+        self.assertEqual(cycle.persona, [3, 5])
+        self.assertEqual(cycle.persona_name, "aggro")
+        self.assertFalse(cycle.send_yourself)
+
+    def test_no_active_persona(self):
+        resp = '{"personas":{"aggro":[3,5]},"active":"","send_yourself":true}'
+        cycle = self._cycle(resp)
+        cycle.sync_personas()
+        self.assertIsNone(cycle.persona)
+        self.assertEqual(cycle.persona_name, "")
+        self.assertTrue(cycle.send_yourself)
+
+    def test_invalid_level_rejected(self):
+        resp = '{"personas":{"bad":[99]},"active":"bad","send_yourself":true}'
+        cycle = self._cycle(resp)
+        cycle.sync_personas()
+        self.assertIsNone(cycle.persona)
+        self.assertEqual(cycle.persona_name, "")
+
+    def test_non_200_ignored(self):
+        cycle = AttackCycle(
+            "http://127.0.0.1:9001",
+            _poster=FakePoster('{"ok":true,"hq_hp":100.0}'),
+            _getter=lambda path: (500, '{"ok":false}'),
+        )
+        cycle.sync_personas()
+        self.assertIsNone(cycle.persona)
+        self.assertTrue(cycle.send_yourself)
+
+
 if __name__ == "__main__":
     unittest.main()

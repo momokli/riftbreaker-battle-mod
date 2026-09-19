@@ -209,6 +209,12 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         working-directory: tests/send-tracker
         run: npm test
+      # Personas (#788): Send-Profile (CRUD) + send-yourself-Toggle. Extrahierter
+      # Marker-Block aus cockpit.html, kein Netzwerk/DOM. Keine Dependencies.
+      - name: Unit-Test Personas (Issue #788)
+        if: needs.changes.outputs.test == 'true'
+        working-directory: tests/personas
+        run: npm test
 
   build:
     name: Build + Package (rbbridge.dll/exe, dist/*.zip)

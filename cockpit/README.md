@@ -32,6 +32,7 @@ und die Seite nur scannt:
 | `Mission Flow (Wave)` | Readouts (`flow`, `active`, `payload.spawn_point`) + Start- und Stop-Reihe |
 | `Creatures Base Difficulty` | Readout + `set` / `+ increase` / `− decrease` |
 | `Send Tracker (Carbonium)` | persistentes Send-Log (timestamp · resource · amount) + Summe/Anzahl, Filter, Quelle |
+| `Personas (Send-Profile)` | Send-Profile editieren (CRUD), aktive Persona setzen, send-yourself togglen — steuert den Attack-Cycle zur Laufzeit |
 | `Server Control (Plane B)` | Status-Strip, Lifecycle-Toolbar, Container-Log |
 
 Das **Container-Log** ist die einzige unbegrenzt wachsende, vertikal geformte
@@ -140,6 +141,7 @@ Fake-`document`, Fake-store/source):
 ```bash
 cd tests/server-control-panel && npm test
 cd tests/send-tracker && npm test
+cd tests/personas && npm test
 ```
 
 Geprüft wird das defensive Contract (immer `—`, nie werfen, nie
@@ -152,6 +154,7 @@ Filter-Query, Adapter-Kapselung und idempotentes Merge.
 - [x] Panel `server control (plane B)` (#422) + Node-Test `tests/server-control-panel`
 - [x] Qt-Stil-Layout: vier Gruppen, Log-Pane rechts, Statusleiste (#468)
 - [x] Send-Tracker-Panel: persistentes Send-Log + austauschbarer Quell-Adapter (#527); Node-Test `tests/send-tracker`
+- [x] Personas-Panel: Send-Profile editieren + send-yourself togglen (#788); Node-Test `tests/personas`
 - [ ] Send-Tracker an den finalen Transport anschließen (Adapter tauschen) — hängt an Spike #526
 - [ ] Schritt 2 (#474): Caddy serviert die UI statisch, proxyt nur die API-Pfade; `cockpit_html.inc` entfällt
 - [ ] Live-Daten des Plane-B-Panels brauchen gemergtes #424 (Agent + Caddy-Route `handle /server/*` + Bearer-Injektion)
