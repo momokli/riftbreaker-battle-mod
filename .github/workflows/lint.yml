@@ -40,7 +40,8 @@ jobs:
           shellcheck \
             scripts/*.sh \
             tests/shell/*.sh \
-            tools/headless-client/*.sh
+            tools/headless-client/*.sh \
+            tools/session-replay/*.sh
       # Dedicated-Server-Image-Scripts (Issue #241). Eigener Schritt statt
       # Einreihen in die Liste oben, um den Hunk von #254 (tests/shell) nicht
       # zu ueberlappen (parallele PRs, ein Datei-Block).
@@ -77,6 +78,13 @@ jobs:
       # Planetfrei (Fake-Ref), kein Docker/Netz/Vault.
       - name: Mod-Versions-Identitaet (Fake-Ref, planetfrei)
         run: tests/shell/mod-version.test.sh
+      # Red/Green-Beweis des Session-Replay-Skripts (Issue #784): Level-
+      # Reihenfolge/-Range, Level-9-teilt-sich-mit-Level-8 (#658), Validierung
+      # ungueltiger Optionen, fail-closed ohne COCKPIT_URL/COCKPIT_PASS, und der
+      # echte HTTP-Pfad (Basic-Auth, Ziel-URL, Logic-Pfade je Level) gegen einen
+      # Fake-curl im PATH. Kein Netz, kein echtes Cockpit.
+      - name: Session-Replay-Skript (Fake-curl, planetfrei)
+        run: tests/shell/replay-waves.test.sh
 
       # --- python ---
       - uses: actions/setup-python@v5
