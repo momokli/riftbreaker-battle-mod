@@ -16,6 +16,18 @@ const COCKPIT = path.join(__dirname, "..", "..", "cockpit", "cockpit.html");
 const BEGIN = "// --- persona editor (testable) ---";
 const END = "// --- end persona editor ---";
 
+const WAVE_COST = {
+  1: 300,
+  2: 700,
+  3: 1400,
+  4: 2450,
+  5: 4000,
+  6: 5350,
+  7: 7600,
+  8: 9650,
+  9: 10500,
+};
+
 function extractBlock() {
   const html = fs.readFileSync(COCKPIT, "utf8");
   const b = html.indexOf(BEGIN);
@@ -37,14 +49,33 @@ function makeFetch(personas, active) {
   const fn = (route, opts) => {
     calls.push({ route, opts: opts ? JSON.parse(opts.body) : undefined });
     if (route === "personas" && !opts) {
-      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ personas, active: active || "" }) });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ personas, active: active || "" }),
+      });
     }
     if (route === "personas" && opts) {
       saved = opts;
-      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ ok: true }),
+      });
     }
     if (route === "persona_active") {
-      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ ok: true }),
+      });
+    }
+    if (route === "attack_status") {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ wave_cost: WAVE_COST }),
+      });
     }
     return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) });
   };
@@ -123,6 +154,14 @@ test("setActive(): POST /persona_active", async () => {
   assert.equal(ed.state.active, "aggro");
   const call = fetch.calls.find((x) => x.route === "persona_active");
   assert.deepEqual(call.opts, { name: "aggro" });
+});
+
+test("totalCost(): Summe der Wellen-Kosten je Attack", () => {
+  const ed = loadBlock().createPersonaEditor({ document: {}, fetch: () => {} });
+  ed.state.cost = WAVE_COST;
+  // wave1 x1 + wave3 x2 = 300 + 2*1400 = 3100
+  assert.equal(ed.totalCost([1, 0, 2, 0, 0, 0, 0, 0, 0]), 3100);
+  assert.equal(ed.totalCost([0, 0, 0, 0, 0, 0, 0, 0, 0]), 0);
 });
 
 test("Defensiv: kein location.reload im Panel-Code", () => {

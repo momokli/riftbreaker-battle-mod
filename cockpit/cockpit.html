@@ -279,9 +279,18 @@
             }
             .persona-cell {
                 display: grid;
-                grid-template-columns: auto auto auto;
+                grid-template-columns: auto auto auto auto;
                 gap: 0 4px;
                 align-items: center;
+            }
+            .persona-cell .wave-amt { min-width: 16px; text-align: right; }
+            .persona-cell .wave-cost { color: var(--dim); text-align: right; min-width: 34px; }
+            .persona-cell .cell-total {
+                grid-column: 1 / -1;
+                border-top: 1px solid var(--line);
+                padding-top: 2px;
+                margin-top: 2px;
+                font-weight: 600;
             }
             .persona-cell .wave-label { color: var(--dim); }
             .persona-cell .wave-amt { min-width: 14px; text-align: right; }
@@ -1700,7 +1709,7 @@
                     var ATTACKS = 10;
                     var WAVES = 9;
 
-                    var state = { personas: {}, saved: {}, active: "" };
+                    var state = { personas: {}, saved: {}, active: "", cost: {} };
 
                     function $(id) { return doc.getElementById(id); }
                     function clone(p) { return JSON.parse(JSON.stringify(p)); }
@@ -1723,10 +1732,16 @@
                     }
 
                     function load() {
-                        return fetchFn("personas").then(resp).then(function (data) {
+                        return Promise.all([
+                            fetchFn("personas").then(resp),
+                            fetchFn("attack_status").then(resp),
+                        ]).then(function (results) {
+                            var data = results[0];
+                            var status = results[1];
                             state.personas = clone((data && data.personas) || {});
                             state.saved = clone(state.personas);
                             state.active = (data && data.active) || "";
+                            state.cost = (status && status.wave_cost) || {};
                             return state;
                         });
                     }
@@ -1770,6 +1785,14 @@
                         });
                     }
 
+                    function totalCost(attack) {
+                        var total = 0;
+                        for (var w = 0; w < (attack || []).length; w++) {
+                            total += (attack[w] || 0) * (state.cost[w + 1] || 0);
+                        }
+                        return total;
+                    }
+
                     return {
                         state: state,
                         load: load,
@@ -1780,6 +1803,7 @@
                         addPersona: addPersona,
                         removePersona: removePersona,
                         setActive: setActive,
+                        totalCost: totalCost,
                         emptyPersona: emptyPersona,
                     };
                 }
@@ -1808,10 +1832,13 @@
                             html.push('<td><div class="persona-cell">');
                             for (var w = 0; w < 9; w++) {
                                 var amt = personaEditor.state.personas[name][a2][w];
+                                var cost = personaEditor.state.cost[w + 1] || 0;
                                 html.push('<span class="wave-label">w' + (w + 1) + '</span>');
-                                html.push('<span class="wave-amt">' + amt + '</span>');
+                                html.push('<span class="wave-amt">×' + amt + '</span>');
+                                html.push('<span class="wave-cost">' + cost + '</span>');
                                 html.push('<span><button class="pe-btn" data-act="dec" data-name="' + name + '" data-attack="' + a2 + '" data-wave="' + w + '"' + (amt === 0 ? " disabled" : "") + ' aria-label="wave ' + (w + 1) + ' in attack ' + (a2 + 1) + ' fuer ' + name + ' verringern">−</button> <button class="pe-btn" data-act="inc" data-name="' + name + '" data-attack="' + a2 + '" data-wave="' + w + '" aria-label="wave ' + (w + 1) + ' in attack ' + (a2 + 1) + ' fuer ' + name + ' erhoehen">+</button></span>');
                             }
+                            html.push('<span class="cell-total">Σ ' + personaEditor.totalCost(personaEditor.state.personas[name][a2]) + '</span>');
                             html.push('</div></td>');
                         }
                         html.push('<td><button class="pe-btn" data-act="save" data-name="' + name + '">save</button> <button class="pe-btn" data-act="restore" data-name="' + name + '">restore</button></td></tr>');

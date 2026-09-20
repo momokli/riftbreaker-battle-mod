@@ -438,6 +438,7 @@ class AttackCycle:
                 "interval_s": self.interval_s,
                 "difficulty_interval_s": self.difficulty_interval_s,
                 "max_level": self.max_level,
+                "wave_cost": WAVE_COST,
                 "next_attack": {
                     "natural": self.level,
                     "self": list(self.bought),
