@@ -96,9 +96,11 @@ test("parseSends/formatSends: nested je Attack", () => {
   const mk = () =>
     m.createPersonasController({ document: makeDoc().document, fetch: () => {} });
   assert.deepEqual(mk().parseSends("1,3 / 5 / 9,9"), [[1, 3], [5], [9, 9]]);
+  assert.deepEqual(mk().parseSends("1,1,1"), [[1, 1, 1]]);
   assert.deepEqual(mk().parseSends("- / 2"), [[], [2]]);
   assert.deepEqual(mk().parseSends("  "), []);
   assert.equal(mk().formatSends([[3, 5], [], [7]]), "3,5 / - / 7");
+  assert.equal(mk().formatSends([[1, 1, 1]]), "1,1,1");
   assert.throws(() => mk().parseSends("3,abc"), /invalid level/);
 });
 

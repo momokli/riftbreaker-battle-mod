@@ -374,6 +374,22 @@ class TestPersona(unittest.TestCase):
         cycle.step()  # attack 2: natural + wave5
         self.assertEqual(len(self._fire_logics(poster)), 5)  # 3 + 2
 
+    def test_persona_duplicate_waves(self):
+        """Der Gegner kann dieselbe Welle mehrfach senden (z. B. wave1 3x) —
+        kein Dedup: jede Nennung feuert als eigener activate_mission_flow-Call."""
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, persona=[[1, 1, 1]], clock=clock)
+        cycle.step()  # started
+
+        clock.t = 420.0
+        cycle.step()  # attack 1: natural(level1) + wave1 x3
+        logics = self._fire_logics(poster)
+        self.assertEqual(
+            logics.count("logic/missions/survival/attack_level_1_id_1.logic"), 4
+        )  # 1 natural + 3 persona wave1
+        self.assertEqual(len(logics), 4)
+
     def test_persona_none_entry_skips_extra(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
