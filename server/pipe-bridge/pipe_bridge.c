@@ -485,9 +485,14 @@ static int g_attack_reset_epoch = 0;
 static CRITICAL_SECTION g_attack_reset_cs;
 
 /* Personas (Send-Profile) + Self-Send (Issue #788), via WebUI editierbar.
- * g_personas = roher JSON-Object-String {"name":[level|null,...],...};
+ * g_personas = roher JSON-Object-String {"name":[[level,...],...],...};
+ * mit 4 Default-Personas vorbelegt (PLATZHALTER-Werte, runtime editierbar).
  * g_active_persona = aktiver Name ("" = none); g_send_yourself = Routing. */
-static char g_personas[8192];
+static char g_personas[8192] =
+    "{\"aggro\":[[3,5],[7],[9,9]],"
+    "\"ruhig\":[[],[2],[],[2]],"
+    "\"build\":[[3,3,1,5],[1,1,1],[4,4,2,7],[6,6,2]],"
+    "\"zerg\":[[1,1,1],[1,1,1],[2,2],[3,3]]}";
 static CRITICAL_SECTION g_personas_cs;
 static char g_active_persona[64];
 static CRITICAL_SECTION g_active_persona_cs;

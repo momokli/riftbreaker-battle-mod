@@ -59,6 +59,9 @@ ALLE Wellen, die der Gegner fuer diese Attack gesendet hat.
 - `aggro` Attack 1 -> natural + Wave 3 + Wave 5, Attack 2 -> natural + Wave 7, …
 - `[]` = keine Extra-Wellen fuer diese Attack
 - Default `--persona none` -> nur Natural Waves
+- Die Bridge seedet 4 Default-Personas (Platzhalter-Werte, runtime editierbar):
+  `aggro`, `ruhig`, `build`, `zerg` — Werte spaeter auf echte, sinnige
+  Build-Orders anpassen.
 
 Start:
 
