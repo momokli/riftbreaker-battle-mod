@@ -647,40 +647,20 @@
                         </div>
                     </fieldset>
 
-                    <!-- B. SEND TRACKER (1.0-Send-Loop, #527) -->
+                    <!-- B. SEND TRACKER (SELF SENDS) -->
                     <fieldset class="q-groupbox" id="panel-send-tracker">
-                        <legend>Send Tracker (Carbonium)</legend>
+                        <legend>Send Tracker (Self)</legend>
                         <div class="flow-container">
-                            <div class="server-status-strip">
-                                <div class="status-pair">
-                                    <span class="prop-label">total</span>
-                                    <span id="send_total" class="prop-val">—</span>
-                                </div>
-                                <div class="status-pair">
-                                    <span class="prop-label">count</span>
-                                    <span id="send_count" class="prop-val">—</span>
-                                </div>
-                                <div class="status-pair">
-                                    <span class="prop-label">source</span>
-                                    <span id="send_source" class="prop-val">—</span>
-                                </div>
-                            </div>
                             <div class="flow-action-row">
-                                <input
-                                    id="send_query"
-                                    class="mono flow-grow"
-                                    placeholder="filter (resource / amount)"
-                                    aria-label="Send-Log filtern"
-                                />
-                                <button id="send_refresh" aria-label="Send-Log aktualisieren">refresh</button>
+                                <label class="prop-label" for="send_yourself">send yourself</label>
+                                <input id="send_yourself" type="checkbox" aria-label="Send yourself toggle" />
                             </div>
-                            <div class="log-scroll-area send-log-area">
+                            <div class="log-scroll-area">
                                 <pre id="send_log">—</pre>
                             </div>
                             <div class="flow-note">
-                                persistentes Send-Log (timestamp + amount). Die
-                                Quelle haengt an einem austauschbaren Adapter —
-                                der finale Transport folgt aus #526.
+                                Meine eigenen Sends. send-yourself on = feuert lokal,
+                                off = geht raus (spaeter Server B).
                                 <span id="send_tracker_msg" aria-live="polite"></span>
                             </div>
                         </div>
@@ -729,10 +709,6 @@
                                 <input id="persona_sends" class="mono" size="24" placeholder="1,3 / 5 / 9,9 (/ = Attack, , = Welle)" aria-label="Persona sends" />
                                 <button id="persona_save" class="btn-primary">save</button>
                                 <button id="persona_delete" class="btn-danger">del</button>
-                            </div>
-                            <div class="flow-action-row">
-                                <label class="prop-label" for="send_yourself">send yourself</label>
-                                <input id="send_yourself" type="checkbox" aria-label="Send yourself toggle" />
                             </div>
                             <div class="log-scroll-area">
                                 <pre id="personas_list">—</pre>
@@ -1068,6 +1044,11 @@
                     return " " + m + ":" + (r < 10 ? "0" : "") + r;
                 }
 
+                function fmtWaves(arr) {
+                    if (!arr || !arr.length) return "-";
+                    return arr.join(",");
+                }
+
                 async function refreshOrders() {
                     try {
                         var res = await fetch("attack_status");
@@ -1078,24 +1059,29 @@
                             return;
                         }
                         var rows = [];
-                        rows.push("level " + s.level + "  next attack in" + fmtCountdown(s.seconds_to_next_attack * 1000));
-                        if (s.seconds_to_next_difficulty !== undefined && s.seconds_to_next_difficulty !== null) {
-                            rows.push("next difficulty in" + fmtCountdown(s.seconds_to_next_difficulty * 1000));
-                        }
-                        var pending = s.bought || [];
-                        if (!pending.length) {
-                            rows.push("gekauft: (keine)");
-                        } else {
-                            var counts = {};
-                            for (var i = 0; i < pending.length; i++) {
-                                var lv = pending[i];
-                                counts[lv] = (counts[lv] || 0) + 1;
+                        rows.push(
+                            "difficulty " + s.level +
+                            "  (next +1 in" + fmtCountdown(s.seconds_to_next_difficulty * 1000) + ")"
+                        );
+                        var na = s.next_attack || {};
+                        rows.push("");
+                        rows.push("next attack in" + fmtCountdown(s.seconds_to_next_attack * 1000) + ":");
+                        rows.push("  natural wave" + na.natural);
+                        rows.push("  self   " + fmtWaves(na.self));
+                        rows.push("  enemy  " + fmtWaves(na.enemy));
+                        var hist = s.history || [];
+                        if (hist.length) {
+                            rows.push("");
+                            rows.push("history:");
+                            for (var i = hist.length - 1; i >= 0; i--) {
+                                var h = hist[i];
+                                rows.push(
+                                    "  #" + h.attack +
+                                    "  natural " + h.natural +
+                                    "  self " + fmtWaves(h.self) +
+                                    "  enemy " + fmtWaves(h.enemy)
+                                );
                             }
-                            var parts = [];
-                            for (var lv in counts) {
-                                parts.push("wave" + lv + " x" + counts[lv]);
-                            }
-                            rows.push("gekauft: " + parts.join(", "));
                         }
                         $("buy_orders").textContent = rows.join("\n");
                         $("buy_orders_msg").textContent = "";
@@ -1378,320 +1364,76 @@
                 syncInterval();
                 syncDifficultyInterval();
 
-                // --- send tracker (testable) ---
-                // Persistente Send-Liste (#527, 1.0-Send-Loop #517).
-                //
-                // Die QUELLE ist bewusst hinter `source` gekapselt und damit
-                // austauschbar: der Transport des Send-Signals (HUD-Button ->
-                // Web-UI) ist Gegenstand des Spikes #526 und hier NICHT
-                // endgueltig festgeschrieben. `createBridgeSendSource` ist nur
-                // der provisorische Default (Bridge-Route, analog zu den
-                // uebrigen IO-Kanal-Routen). #526 legt den finalen Pfad fest;
-                // dann wird ausschliesslich dieser Adapter getauscht.
-                function createLocalStorageStore(key, storage) {
-                    var mem = [];
-                    function backing() {
-                        if (storage) return storage;
-                        try {
-                            return typeof localStorage !== "undefined"
-                                ? localStorage
-                                : null;
-                        } catch (e) {
-                            return null;
-                        }
-                    }
-                    return {
-                        persistent: function () {
-                            return !!backing();
-                        },
-                        load: function () {
-                            var s = backing();
-                            if (!s) return mem.slice();
-                            try {
-                                var raw = s.getItem(key);
-                                if (!raw) return mem.slice();
-                                var parsed = JSON.parse(raw);
-                                return Array.isArray(parsed) ? parsed : [];
-                            } catch (e) {
-                                return mem.slice();
-                            }
-                        },
-                        save: function (entries) {
-                            mem = entries.slice();
-                            var s = backing();
-                            if (!s) return;
-                            try {
-                                s.setItem(key, JSON.stringify(mem));
-                            } catch (e) {
-                                // Quota/Privacy-Mode: In-Memory bleibt gueltig.
-                            }
-                        },
-                    };
-                }
-
-                function createBridgeSendSource(fetchFn, route) {
-                    var ROUTE = route || "get_send_log";
-                    return {
-                        name: "bridge:" + ROUTE,
-                        poll: async function (cursor) {
-                            var body =
-                                cursor === undefined || cursor === null
-                                    ? {}
-                                    : { since: cursor };
-                            var res = await fetchFn(ROUTE, {
-                                method: "POST",
-                                headers: { "content-type": "application/json" },
-                                body: JSON.stringify(body),
-                            });
-                            if (!res || !res.ok) {
-                                throw new Error("HTTP " + (res && res.status));
-                            }
-                            var data = await res.json();
-                            return {
-                                entries: (data && data.entries) || [],
-                                cursor:
-                                    data && data.cursor !== undefined
-                                        ? data.cursor
-                                        : cursor,
-                            };
-                        },
-                    };
-                }
-
-                function createSendTracker(deps) {
+                // --- self-send tracker (testable) ---
+                function createSelfSendTracker(deps) {
+                    var fetchFn = deps.fetch;
                     var doc = deps.document;
-                    var DASH = "—";
-                    var LOG_ID = "send_log";
-                    var TOTAL_ID = "send_total";
-                    var COUNT_ID = "send_count";
-                    var SOURCE_ID = "send_source";
-                    var QUERY_ID = "send_query";
-                    var MSG_ID = "send_tracker_msg";
-                    var store = deps.store || createLocalStorageStore("rbb.send_log");
-                    var source = deps.source || null;
-                    var cursor =
-                        deps.cursor === undefined ? null : deps.cursor;
-                    var entries = normalize(deps.entries || store.load());
 
-                    function el(id) {
-                        return doc ? doc.getElementById(id) : null;
+                    function $(id) { return doc.getElementById(id); }
+                    function setText(id, s) { var el = $(id); if (el) el.textContent = s; }
+
+                    function fmtWaves(arr) {
+                        return arr && arr.length ? arr.join(",") : "-";
                     }
 
-                    function setText(id, value) {
-                        var node = el(id);
-                        if (!node) return;
-                        node.textContent =
-                            value === undefined || value === null || value === ""
-                                ? DASH
-                                : String(value);
+                    function postJson(route, body) {
+                        return fetchFn(route, {
+                            method: "POST",
+                            headers: { "content-type": "application/json" },
+                            body: JSON.stringify(body),
+                        });
                     }
 
-                    function msg(text) {
-                        setText(MSG_ID, text || "");
+                    function render(state) {
+                        var cb = $("send_yourself");
+                        if (cb) cb.checked = !!state.send_yourself;
+                        var rows = [];
+                        rows.push("queued: " + fmtWaves(state.bought));
+                        rows.push("outgoing: " + fmtWaves(state.outgoing));
+                        setText("send_log", rows.join("\n"));
                     }
 
-                    // Nur valide Eintraege (timestamp + amount) uebernehmen;
-                    // alles andere wird verworfen statt zu werfen.
-                    function normalize(list) {
-                        var out = [];
-                        if (!Array.isArray(list)) return out;
-                        for (var i = 0; i < list.length; i++) {
-                            var e = list[i];
-                            if (!e || typeof e !== "object") continue;
-                            var amount = Number(e.amount);
-                            if (!isFinite(amount)) continue;
-                            if (e.timestamp === undefined || e.timestamp === null) {
-                                continue;
-                            }
-                            out.push({
-                                timestamp: e.timestamp,
-                                resource: e.resource || "carbonium",
-                                amount: amount,
-                            });
-                        }
-                        return out.sort(byTimestamp);
+                    function refresh() {
+                        return fetchFn("attack_status").then(function (res) {
+                            return res.json();
+                        }).then(function (s) {
+                            if (s && s.active === true) render(s);
+                            return s;
+                        });
                     }
 
-                    function byTimestamp(a, b) {
-                        var ta = Number(a.timestamp);
-                        var tb = Number(b.timestamp);
-                        if (isFinite(ta) && isFinite(tb) && ta !== tb) {
-                            return ta - tb;
-                        }
-                        return String(a.timestamp) < String(b.timestamp) ? -1 : 1;
-                    }
-
-                    function keyOf(e) {
-                        return e.timestamp + "|" + e.resource + "|" + e.amount;
-                    }
-
-                    // Neues anhaengen, Dubletten (gleiche ts/resource/amount)
-                    // verwerfen -> idempotent bei wiederholtem Poll.
-                    function merge(base, incoming) {
-                        var seen = {};
-                        var out = [];
-                        var all = base.concat(incoming);
-                        for (var i = 0; i < all.length; i++) {
-                            var k = keyOf(all[i]);
-                            if (seen[k]) continue;
-                            seen[k] = true;
-                            out.push(all[i]);
-                        }
-                        return out.sort(byTimestamp);
-                    }
-
-                    function fmtTs(ts) {
-                        var n = Number(ts);
-                        if (isFinite(n) && n > 0) {
-                            // Sekunden- vs. Millisekunden-Epoche robust deuten.
-                            var d = new Date(n < 1e12 ? n * 1000 : n);
-                            if (!isNaN(d.getTime())) {
-                                return d.toISOString().replace("T", " ").slice(0, 19);
-                            }
-                        }
-                        return String(ts);
-                    }
-
-                    function fmtEntry(e) {
-                        var sign = e.amount >= 0 ? "+" : "";
-                        return (
-                            fmtTs(e.timestamp) +
-                            "  " +
-                            e.resource +
-                            "  " +
-                            sign +
-                            e.amount
-                        );
-                    }
-
-                    function query() {
-                        var node = el(QUERY_ID);
-                        return node && typeof node.value === "string"
-                            ? node.value.trim().toLowerCase()
-                            : "";
-                    }
-
-                    function filtered() {
-                        var q = query();
-                        if (!q) return entries.slice();
-                        var out = [];
-                        for (var i = 0; i < entries.length; i++) {
-                            if (fmtEntry(entries[i]).toLowerCase().indexOf(q) !== -1) {
-                                out.push(entries[i]);
-                            }
-                        }
-                        return out;
-                    }
-
-                    function render() {
-                        var rows = filtered();
-                        if (!rows.length) {
-                            setText(LOG_ID, DASH);
-                        } else {
-                            var lines = [];
-                            for (var i = 0; i < rows.length; i++) {
-                                lines.push(fmtEntry(rows[i]));
-                            }
-                            setText(LOG_ID, lines.join("\n"));
-                        }
-                        var total = 0;
-                        for (var j = 0; j < rows.length; j++) {
-                            total += rows[j].amount;
-                        }
-                        setText(TOTAL_ID, rows.length ? String(total) : DASH);
-                        setText(COUNT_ID, String(rows.length));
-                        setText(
-                            SOURCE_ID,
-                            source && source.name ? source.name : "kein Adapter (#526)",
-                        );
-                        return rows;
-                    }
-
-                    // Persistentes Log: bei Reload aus dem Store, nicht transient.
-                    function poll() {
-                        if (!source || typeof source.poll !== "function") {
-                            msg("kein Send-Source-Adapter (#526)");
-                            render();
-                            return Promise.resolve({ entries: entries, added: 0 });
-                        }
-                        return source.poll(cursor).then(
-                            function (res) {
-                                var incoming = normalize(
-                                    res && res.entries ? res.entries : [],
-                                );
-                                var added = 0;
-                                if (incoming.length) {
-                                    var before = entries.length;
-                                    entries = merge(entries, incoming);
-                                    added = entries.length - before;
-                                    cursor =
-                                        res && res.cursor !== undefined
-                                            ? res.cursor
-                                            : cursor;
-                                    store.save(entries);
-                                } else if (res && res.cursor !== undefined) {
-                                    cursor = res.cursor;
-                                }
-                                msg("");
-                                render();
-                                return { entries: entries, added: added };
-                            },
-                            function (e) {
-                                // Defensiv: Anzeige bleibt (persistente Eintraege),
-                                // Fehler nur als Meldung.
-                                msg("send source unavailable");
-                                render();
-                                return {
-                                    entries: entries,
-                                    added: 0,
-                                    error: String((e && e.message) || e),
-                                };
-                            },
-                        );
+                    function setSendYourself(on) {
+                        return postJson("send_yourself", { on: on ? 1 : 0 }).then(function (res) {
+                            return res.json();
+                        }).then(function () {
+                            return refresh();
+                        });
                     }
 
                     return {
+                        refresh: refresh,
+                        setSendYourself: setSendYourself,
                         render: render,
-                        poll: poll,
-                        entries: function () {
-                            return entries.slice();
-                        },
-                        total: function () {
-                            var rows = filtered();
-                            var t = 0;
-                            for (var i = 0; i < rows.length; i++) t += rows[i].amount;
-                            return t;
-                        },
-                        add: function (entry) {
-                            entries = merge(entries, normalize([entry]));
-                            store.save(entries);
-                            return render();
-                        },
+                        fmtWaves: fmtWaves,
                     };
                 }
-                // --- end send tracker ---
+                // --- end self-send tracker ---
 
-                var sendTracker = createSendTracker({
+                var selfSendTracker = createSelfSendTracker({
                     document: document,
-                    store: createLocalStorageStore("rbb.send_log"),
-                    source: createBridgeSendSource(window.fetch.bind(window)),
+                    fetch: window.fetch.bind(window),
                 });
-                $("send_refresh").onclick = function () {
-                    sendTracker.poll();
-                };
-                $("send_query").oninput = function () {
-                    sendTracker.render();
-                };
-                sendTracker.render();
-                setInterval(sendTracker.poll, 10000);
+                $("send_yourself").onchange = function () { selfSendTracker.setSendYourself(this.checked); };
+                selfSendTracker.refresh();
+                setInterval(selfSendTracker.refresh, 5000);
 
-                // --- personas (testable) ---
+// --- personas (testable) ---
                 function createPersonasController(deps) {
                     var fetchFn = deps.fetch;
                     var doc = deps.document;
                     var DASH = "—";
 
-                    var state = { personas: {}, active: "", send_yourself: true };
+                    var state = { personas: {}, active: "" };
 
                     function $(id) { return doc.getElementById(id); }
                     function setText(id, s) { var el = $(id); if (el) el.textContent = s; }
@@ -1743,15 +1485,12 @@
                                 }).join("");
                             sel.value = state.active || "";
                         }
-                        var cb = $("send_yourself");
-                        if (cb) cb.checked = !!state.send_yourself;
                     }
 
                     function load() {
                         return fetchFn("personas").then(resp).then(function (data) {
                             state.personas = (data && data.personas) || {};
                             state.active = (data && data.active) || "";
-                            state.send_yourself = !!(data && data.send_yourself);
                             render();
                             return state;
                         });
@@ -1810,21 +1549,12 @@
                         });
                     }
 
-                    function setSendYourself(on) {
-                        return postJson("send_yourself", { on: on ? 1 : 0 }).then(function () {
-                            state.send_yourself = !!on;
-                            render();
-                            return state;
-                        });
-                    }
-
                     return {
                         state: state,
                         load: load,
                         save: save,
                         remove: remove,
                         setActive: setActive,
-                        setSendYourself: setSendYourself,
                         render: render,
                         parseSends: parseSends,
                         formatSends: formatSends,
@@ -1840,7 +1570,6 @@
                 $("persona_save").onclick = function () { personasController.save(); };
                 $("persona_delete").onclick = function () { personasController.remove(); };
                 $("persona_active").onchange = function () { personasController.setActive(this.value); };
-                $("send_yourself").onchange = function () { personasController.setSendYourself(this.checked); };
                 personasController.load();
                 setInterval(personasController.load, 5000);
 

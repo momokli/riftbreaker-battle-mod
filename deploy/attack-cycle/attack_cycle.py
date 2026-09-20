@@ -212,6 +212,7 @@ class AttackCycle:
         self.last_fire: Optional[Dict[str, Any]] = None
         self.attack_index = 0  # Anzahl gefeuerter Attacken (Persona-Indexierung)
         self.outgoing: list = []  # getrackte Outgoing-Sends (send_yourself off)
+        self.history: list = []  # letzte N gefeuerte Attacken (fuer Attack-Cycle-Tabelle)
         self._reset_epoch = 0
 
     # --- HTTP (urllib) ----------------------------------------------------
@@ -381,6 +382,16 @@ class AttackCycle:
                 "sent_levels": sent_levels,
                 "t": now,
             }
+            self.history.append(
+                {
+                    "attack": self.attack_index,
+                    "natural": natural_level,
+                    "self": sent_levels,
+                    "enemy": extra_levels,
+                    "t": now,
+                }
+            )
+            self.history = self.history[-10:]  # cap auf die letzten 10 Attacken
         print(
             f"[attack-cycle] attack: natural={natural_level} + persona={extra_levels} + sent={sent_levels}",
             flush=True,
@@ -418,6 +429,7 @@ class AttackCycle:
                         else []
                     ),
                 },
+                "history": list(self.history),
                 "last_fire": self.last_fire,
             }
 
@@ -483,6 +495,7 @@ class AttackCycle:
             self.bought = []
             self.attack_index = 0
             self.outgoing = []
+            self.history = []
             self.last_fire = None
         print("[attack-cycle] reset -> warte auf HQ-Bau", flush=True)
 

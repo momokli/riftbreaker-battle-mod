@@ -1,0 +1,9 @@
+{
+  "name": "self-send-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Web-UI-Test fuer das Cockpit-Panel send tracker (self sends): queued/outgoing + send-yourself-Toggle. Keine Dependencies, kein Netzwerk.",
+  "scripts": {
+    "test": "node --test"
+  }
+}

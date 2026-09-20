@@ -12,7 +12,6 @@
  *  - save(): upsert + POST /personas (ganze Defs)
  *  - remove(): loeschen + POST /personas
  *  - setActive(): POST /persona_active
- *  - setSendYourself(): POST /send_yourself
  *  - parseSends/formatSends: null-Handling, Validierung
  *  - defensives Contract: kein location.reload
  */
@@ -34,7 +33,6 @@ const IDS = [
   "persona_active",
   "persona_name",
   "persona_sends",
-  "send_yourself",
 ];
 
 function extractBlock() {
@@ -117,12 +115,10 @@ test("load(): GET /personas -> State + Render (Liste + Dropdown + Checkbox)", as
   await c.load();
   assert.deepEqual(c.state.personas, { aggro: [[3, 5], [7]], ruhig: [[], [2]] });
   assert.equal(c.state.active, "aggro");
-  assert.equal(c.state.send_yourself, false);
   const list = doc.els.personas_list.textContent;
   assert.ok(list.includes("* aggro: 3,5 / 7"), "aktive persona markiert");
   assert.ok(list.includes("ruhig: - / 2"), "zweite persona gelistet");
   assert.equal(doc.els.persona_active.value, "aggro");
-  assert.equal(doc.els.send_yourself.checked, false);
 });
 
 test("save(): upsert + POST /personas (ganze Defs)", async () => {
@@ -181,20 +177,6 @@ test("setActive(): POST /persona_active", async () => {
   assert.equal(c.state.active, "aggro");
   const call = fetch.calls.find((x) => x.route === "persona_active");
   assert.deepEqual(call.opts, { name: "aggro" });
-});
-
-test("setSendYourself(): POST /send_yourself (on=1/0)", async () => {
-  const fetch = fakeFetch({
-    personas: { personas: {}, active: "", send_yourself: true },
-    send_yourself: { ok: true },
-  });
-  const doc = makeDoc();
-  const c = loadBlock().createPersonasController({ document: doc.document, fetch });
-  await c.setSendYourself(false);
-  assert.equal(c.state.send_yourself, false);
-  const call = fetch.calls.find((x) => x.route === "send_yourself");
-  assert.deepEqual(call.opts, { on: 0 });
-  assert.equal(doc.els.send_yourself.checked, false);
 });
 
 test("Defensiv: kein location.reload im Panel-Code", () => {

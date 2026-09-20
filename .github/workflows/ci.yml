@@ -202,12 +202,12 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         working-directory: tests/server-control-panel
         run: npm test
-      # Send-Tracker (#527): persistente Send-Liste (timestamp+amount) +
-      # austauschbarer Quell-Adapter (offener Anschluss #526). Extrahierter
-      # Marker-Block aus cockpit.html, kein Netzwerk/DOM. Keine Dependencies.
-      - name: Unit-Test Send-Tracker (Issue #527)
+      # Self-Send-Tracker: zeigt die eigenen Sends (queued/outgoing) + den
+      # send-yourself-Toggle. Extrahierter Marker-Block aus cockpit.html,
+      # kein Netzwerk/DOM. Keine Dependencies. (Ersetzt das alte Send-Log #527.)
+      - name: Unit-Test Self-Send-Tracker
         if: needs.changes.outputs.test == 'true'
-        working-directory: tests/send-tracker
+        working-directory: tests/self-send-tracker
         run: npm test
       # Personas (#788): Send-Profile (CRUD) + send-yourself-Toggle. Extrahierter
       # Marker-Block aus cockpit.html, kein Netzwerk/DOM. Keine Dependencies.
