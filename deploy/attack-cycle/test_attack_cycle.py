@@ -563,5 +563,36 @@ class TestSyncPersonas(unittest.TestCase):
         self.assertTrue(cycle.send_yourself)
 
 
+class TestTimersAndPreview(unittest.TestCase):
+    def test_sync_difficulty_interval(self):
+        def poster(path, body):
+            if path == "/difficulty_interval":
+                return (200, '{"ok":true,"difficulty_interval_s":100}')
+            return (404, "{}")
+
+        cycle = AttackCycle("http://x", _poster=poster)
+        cycle.sync_difficulty_interval()
+        self.assertEqual(cycle.difficulty_interval_s, 100.0)
+
+    def test_status_next_attack_preview(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = AttackCycle(
+            "http://x",
+            interval_s=420.0,
+            difficulty_interval_s=1e9,
+            persona=[[2, 3], [5]],
+            _poster=poster,
+            _clock=clock,
+        )
+        cycle.step()  # started, attack_index=0
+        cycle.buy(1)
+        cycle._resolve_orders()  # bought=[1]
+        na = cycle.status()["next_attack"]
+        self.assertEqual(na["natural"], 1)
+        self.assertEqual(na["self"], [1])
+        self.assertEqual(na["enemy"], [2, 3])
+
+
 if __name__ == "__main__":
     unittest.main()

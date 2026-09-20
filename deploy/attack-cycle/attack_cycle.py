@@ -409,6 +409,15 @@ class AttackCycle:
                 "interval_s": self.interval_s,
                 "difficulty_interval_s": self.difficulty_interval_s,
                 "max_level": self.max_level,
+                "next_attack": {
+                    "natural": self.level,
+                    "self": list(self.bought),
+                    "enemy": (
+                        list(self.persona[self.attack_index] or [])
+                        if self.persona and self.attack_index < len(self.persona)
+                        else []
+                    ),
+                },
                 "last_fire": self.last_fire,
             }
 
@@ -438,6 +447,26 @@ class AttackCycle:
                     if self.active:
                         self.next_attack_at = self._clock() + new
                     print(f"[attack-cycle] interval -> {new:.0f}s", flush=True)
+        except Exception:
+            pass
+
+    def sync_difficulty_interval(self) -> None:
+        """Holt das Difficulty-Intervall (POST /difficulty_interval {}) und
+        uebernimmt es (Spiegel von sync_interval, entkoppelter Timer #778)."""
+        try:
+            status, body = self._poster("/difficulty_interval", b"{}")
+            if not 200 <= status < 300:
+                return
+            new = json.loads(body).get("difficulty_interval_s")
+            if not isinstance(new, (int, float)) or new <= 0:
+                return
+            new = float(new)
+            with self._lock:
+                if new != self.difficulty_interval_s:
+                    self.difficulty_interval_s = new
+                    if self.active:
+                        self.next_difficulty_at = self._clock() + new
+                    print(f"[attack-cycle] difficulty_interval -> {new:.0f}s", flush=True)
         except Exception:
             pass
 
@@ -580,6 +609,7 @@ def run(
         while True:
             cycle.step()
             cycle.sync_interval()
+            cycle.sync_difficulty_interval()
             cycle.sync_reset()
             cycle.sync_personas()
             cycle.push_status()

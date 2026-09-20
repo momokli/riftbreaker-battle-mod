@@ -480,6 +480,10 @@ static CRITICAL_SECTION g_attack_status_cs;
  * (POST /attack_interval). Default 420 = 7 min. */
 static int g_attack_interval_s = 420;
 static CRITICAL_SECTION g_attack_interval_cs;
+/* Difficulty-Intervall (Sekunden), via WebUI konfigurierbar
+ * (POST /difficulty_interval). Default 200 s (entkoppelter Timer #778). */
+static int g_difficulty_interval_s = 200;
+static CRITICAL_SECTION g_difficulty_interval_cs;
 /* Attack-Cycle-Reset-Epoch (via POST /attack_reset {"reset":1}). */
 static int g_attack_reset_epoch = 0;
 static CRITICAL_SECTION g_attack_reset_cs;
@@ -1366,6 +1370,28 @@ static void handle_post_attack_interval(SOCKET c, const char *body)
     http_respond(c, 200, "OK", resp);
 }
 
+/* POST /difficulty_interval: setzt (falls difficulty_interval_s > 0) und
+ * liefert das aktuelle Difficulty-Intervall. Spiegel von /attack_interval. */
+static void handle_post_difficulty_interval(SOCKET c, const char *body)
+{
+    double d = 0.0;
+    char resp[128];
+    int cur;
+
+    if (json_get_number(body, "difficulty_interval_s", &d) && d > 0.0) {
+        EnterCriticalSection(&g_difficulty_interval_cs);
+        g_difficulty_interval_s = (int)d;
+        LeaveCriticalSection(&g_difficulty_interval_cs);
+        blog("difficulty_interval -> %d s", (int)d);
+    }
+
+    EnterCriticalSection(&g_difficulty_interval_cs);
+    cur = g_difficulty_interval_s;
+    LeaveCriticalSection(&g_difficulty_interval_cs);
+    snprintf(resp, sizeof(resp), "{\"ok\":true,\"difficulty_interval_s\":%d}", cur);
+    http_respond(c, 200, "OK", resp);
+}
+
 /* POST /attack_reset: erhoeht bei {"reset":1} die Reset-Epoch; liefert immer
  * {"reset_epoch":N}. Der Sidecar pollt die Epoch und resettet bei Aenderung. */
 static void handle_post_attack_reset(SOCKET c, const char *body)
@@ -1563,6 +1589,16 @@ static void handle_client(SOCKET c)
             memcpy(b, body, (size_t)body_len);
             b[body_len] = '\0';
             handle_post_attack_interval(c, b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/difficulty_interval") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_post_difficulty_interval(c, b);
             free(b);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/attack_reset") == 0) {
             char *b = malloc((size_t)body_len + 1);
