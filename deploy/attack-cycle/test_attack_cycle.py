@@ -306,8 +306,9 @@ class TestAttackCycleDifficultyTimer(unittest.TestCase):
 
 
 class TestPersona(unittest.TestCase):
-    """Persona = Folge von Extra-Wellen, indexiert nach Attack-Nummer,
-    geschichtet auf die Natural Waves. Laeuft aus (kein Loop)."""
+    """Persona = Folge von Attacken; je Attack eine Liste der vom Gegner
+    gekauften Extra-Wellen (mehrere erlaubt). Geschichtet auf die Natural
+    Waves. Laeuft aus (kein Loop)."""
 
     def _cycle(self, poster, persona=None, clock=None):
         return AttackCycle(
@@ -325,7 +326,7 @@ class TestPersona(unittest.TestCase):
     def test_persona_extra_fires_then_runs_out(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
-        cycle = self._cycle(poster, persona=[3, 5], clock=clock)
+        cycle = self._cycle(poster, persona=[[3], [5]], clock=clock)
         cycle.step()  # started
 
         clock.t = 420.0
@@ -351,10 +352,32 @@ class TestPersona(unittest.TestCase):
         # Persona-Wave 3 kam nur in attack 1, nie wieder (ausgelaufen).
         self.assertEqual(logics.count("logic/missions/survival/attack_level_3_id_1.logic"), 1)
 
+    def test_persona_multiple_waves_per_attack(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, persona=[[2, 3], [5]], clock=clock)
+        cycle.step()  # started
+
+        clock.t = 420.0
+        cycle.step()  # attack 1: natural + wave2 + wave3
+        logics = self._fire_logics(poster)
+        self.assertEqual(
+            logics,
+            [
+                "logic/missions/survival/attack_level_1_id_1.logic",  # natural
+                "logic/missions/survival/attack_level_2_id_1.logic",  # persona wave2
+                "logic/missions/survival/attack_level_3_id_1.logic",  # persona wave3
+            ],
+        )
+
+        clock.t = 840.0
+        cycle.step()  # attack 2: natural + wave5
+        self.assertEqual(len(self._fire_logics(poster)), 5)  # 3 + 2
+
     def test_persona_none_entry_skips_extra(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
-        cycle = self._cycle(poster, persona=[None, 2], clock=clock)
+        cycle = self._cycle(poster, persona=[[], [2]], clock=clock)
         cycle.step()  # started
 
         clock.t = 420.0
@@ -378,7 +401,7 @@ class TestPersona(unittest.TestCase):
     def test_persona_resets_on_reset(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
-        cycle = self._cycle(poster, persona=[3, 5], clock=clock)
+        cycle = self._cycle(poster, persona=[[3], [5]], clock=clock)
         cycle.step()
         clock.t = 420.0
         cycle.step()  # attack_index = 1
@@ -440,17 +463,24 @@ class TestLoadPersonas(unittest.TestCase):
         return path
 
     def test_load_valid(self):
-        path = self._write('{"personas": {"aggro": [3, 5, 7], "ruhig": [null, 2, null]}}')
+        path = self._write('{"personas": {"aggro": [[3], [5], [7]], "ruhig": [[], [2], []]}}')
         try:
             self.assertEqual(
                 load_personas(path),
-                {"aggro": [3, 5, 7], "ruhig": [None, 2, None]},
+                {"aggro": [[3], [5], [7]], "ruhig": [[], [2], []]},
             )
         finally:
             os.unlink(path)
 
+    def test_load_multi_wave_attack(self):
+        path = self._write('{"personas": {"aggro": [[1, 3], [5]]}}')
+        try:
+            self.assertEqual(load_personas(path), {"aggro": [[1, 3], [5]]})
+        finally:
+            os.unlink(path)
+
     def test_load_invalid_level(self):
-        path = self._write('{"personas": {"bad": [99]}}')
+        path = self._write('{"personas": {"bad": [[99]]}}')
         try:
             with self.assertRaises(ValueError):
                 load_personas(path)
@@ -484,15 +514,15 @@ class TestSyncPersonas(unittest.TestCase):
         )
 
     def test_applies_active_persona_and_send_yourself(self):
-        resp = '{"personas":{"aggro":[3,5],"ruhig":[null,2]},"active":"aggro","send_yourself":false}'
+        resp = '{"personas":{"aggro":[[3],[5]],"ruhig":[[],[2]]},"active":"aggro","send_yourself":false}'
         cycle = self._cycle(resp)
         cycle.sync_personas()
-        self.assertEqual(cycle.persona, [3, 5])
+        self.assertEqual(cycle.persona, [[3], [5]])
         self.assertEqual(cycle.persona_name, "aggro")
         self.assertFalse(cycle.send_yourself)
 
     def test_no_active_persona(self):
-        resp = '{"personas":{"aggro":[3,5]},"active":"","send_yourself":true}'
+        resp = '{"personas":{"aggro":[[3],[5]]},"active":"","send_yourself":true}'
         cycle = self._cycle(resp)
         cycle.sync_personas()
         self.assertIsNone(cycle.persona)
@@ -500,7 +530,7 @@ class TestSyncPersonas(unittest.TestCase):
         self.assertTrue(cycle.send_yourself)
 
     def test_invalid_level_rejected(self):
-        resp = '{"personas":{"bad":[99]},"active":"bad","send_yourself":true}'
+        resp = '{"personas":{"bad":[[99]]},"active":"bad","send_yourself":true}'
         cycle = self._cycle(resp)
         cycle.sync_personas()
         self.assertIsNone(cycle.persona)

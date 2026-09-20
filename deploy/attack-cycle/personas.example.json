@@ -1,6 +1,6 @@
 {
   "personas": {
-    "aggro": [3, 5, 7, 9, 9, 9],
-    "ruhig": [null, 2, null, 2, null, 2]
+    "aggro": [[3, 5], [7], [9, 9]],
+    "ruhig": [[], [2], [], [2]]
   }
 }

@@ -33,10 +33,10 @@ Rein stdlib (HTTP via urllib), kein Netz-Dep im Test. Server-seitig (Sidecar),
 NICHT in der Website, NICHT in der DLL. Pattern wie deploy/match-loop (pollt
 get_state) + tools/wave-scheduler (Queue + activate_mission_flow).
 
-Persona (waehlbares Send-Profil): eine optionale Folge von Extra-Wellen,
-indexiert nach Attack-Nummer. ``[3, 5]`` = Attack 1 feuert natural + extra
-Wave 3, Attack 2 natural + extra Wave 5, danach laeuft die Persona aus (kein
-Loop, wie im echten Spiel). ``null`` = "keine Extra-Welle" fuer diesen Index.
+Persona (waehlbares Send-Profil): eine optionale Folge von Attacken, je
+Attack eine Liste der vom Gegner gekauften Extra-Wellen. ``[[3,5],[7]]`` =
+Attack 1 feuert natural + Wave 3 + Wave 5, Attack 2 natural + Wave 7, danach
+laeuft die Persona aus (kein Loop). Leere Liste = keine Extra-Wellen.
 
 send-yourself (Routing): ``on`` (Default) feuert eigene Kaeufe lokal (heute);
 ``off`` zieht das Carbonium trotzdem ab (try_spend), feuert die Welle aber
@@ -133,13 +133,14 @@ def parse_send_level(body: str) -> Optional[int]:
     return None
 
 
-def load_personas(path: str) -> Dict[str, List[Optional[int]]]:
+def load_personas(path: str) -> Dict[str, List[List[int]]]:
     """Laedt Persona-Definitionen aus einer JSON-Datei.
 
-    Erwartetes Format: ``{"personas": {"<name>": [<level|null>, ...]}}``.
-    Ein ``null``-Eintrag = "keine Extra-Welle" fuer diesen Attack-Index.
-    Liefert ``{name: [level|None, ...]}`` (leeres Dict, wenn keine Personas).
-    Wirft ValueError bei ungueltigem Format/Level (nur 1..9 erlaubt).
+    Erwartetes Format: ``{"personas": {"<name>": [[<level>,...], ...]}}``.
+    Jede Persona ist eine Liste von Attacken; jede Attack ist eine Liste der
+    vom Gegner fuer diese Attack gekauften Wellen (leer = keine). Laeuft aus
+    (kein Loop). Liefert ``{name: [[level,...], ...]}``. Wirft ValueError bei
+    ungueltigem Format/Level (nur 1..9 erlaubt).
     """
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
@@ -148,23 +149,25 @@ def load_personas(path: str) -> Dict[str, List[Optional[int]]]:
     raw = data.get("personas", {})
     if not isinstance(raw, dict):
         raise ValueError(f"persona file {path}: 'personas' muss ein Objekt sein")
-    personas: Dict[str, List[Optional[int]]] = {}
-    for name, sends in raw.items():
-        if not isinstance(sends, list):
+    personas: Dict[str, List[List[int]]] = {}
+    for name, attacks in raw.items():
+        if not isinstance(attacks, list):
             raise ValueError(f"persona '{name}': muss eine Liste sein")
-        levels: List[Optional[int]] = []
-        for entry in sends:
-            if entry is None:
-                levels.append(None)
-                continue
-            try:
-                lvl = int(entry)
-            except (ValueError, TypeError):
-                raise ValueError(f"persona '{name}': ungueltiges Level {entry!r}")
-            if lvl not in WAVE_COST:
-                raise ValueError(f"persona '{name}': Level {lvl} unbekannt (1..9)")
-            levels.append(lvl)
-        personas[name] = levels
+        persona: List[List[int]] = []
+        for attack in attacks:
+            if not isinstance(attack, list):
+                raise ValueError(f"persona '{name}': jede Attack muss eine Liste sein")
+            waves: List[int] = []
+            for entry in attack:
+                try:
+                    lvl = int(entry)
+                except (ValueError, TypeError):
+                    raise ValueError(f"persona '{name}': ungueltiges Level {entry!r}")
+                if lvl not in WAVE_COST:
+                    raise ValueError(f"persona '{name}': Level {lvl} unbekannt (1..9)")
+                waves.append(lvl)
+            persona.append(waves)
+        personas[name] = persona
     return personas
 
 
@@ -178,7 +181,7 @@ class AttackCycle:
         difficulty_interval_s: float = DEFAULT_DIFFICULTY_INTERVAL_S,
         max_level: int = DEFAULT_MAX_LEVEL,
         wave_logic: Optional[Dict[int, str]] = None,
-        persona: Optional[List[Optional[int]]] = None,
+        persona: Optional[List[List[int]]] = None,
         persona_name: str = "",
         send_yourself: bool = True,
         timeout: float = 30.0,
@@ -362,24 +365,24 @@ class AttackCycle:
             self.bought = []
             self.next_attack_at = self.next_attack_at + self.interval_s
             self.attack_index += 1
-            extra = None
+            extra_levels: List[int] = []
             if self.persona and self.attack_index - 1 < len(self.persona):
-                extra = self.persona[self.attack_index - 1]
+                extra_levels = list(self.persona[self.attack_index - 1] or [])
 
         self._fire(natural_level)
-        if extra is not None:
-            self._fire(extra)
+        for lvl in extra_levels:
+            self._fire(lvl)
         for lvl in sent_levels:
             self._fire(lvl)
         with self._lock:
             self.last_fire = {
                 "natural_level": natural_level,
-                "persona_level": extra,
+                "persona_levels": extra_levels,
                 "sent_levels": sent_levels,
                 "t": now,
             }
         print(
-            f"[attack-cycle] attack: natural={natural_level} + persona={extra} + sent={sent_levels}",
+            f"[attack-cycle] attack: natural={natural_level} + persona={extra_levels} + sent={sent_levels}",
             flush=True,
         )
         return "attack"
@@ -472,8 +475,8 @@ class AttackCycle:
 
         Die Bridge ist die Laufzeit-Quelle der Wahrheit; die CLI-Flags
         --persona/--send-yourself sind nur der Start-Fallback. Die aktive
-        Persona liefert die Extra-Wellen-Folge (Liste von Level/null),
-        send_yourself das Routing eigener Kaeufe.
+        Persona liefert die Extra-Wellen je Attack (Liste je Attack, mehrere
+        Wellen erlaubt), send_yourself das Routing eigener Kaeufe.
         """
         try:
             status, body = self._getter("/personas")
@@ -492,14 +495,20 @@ class AttackCycle:
                 if isinstance(sends, list):
                     parsed = []
                     ok = True
-                    for entry in sends:
-                        if entry is None:
-                            parsed.append(None)
-                        elif isinstance(entry, int) and not isinstance(entry, bool) and entry in WAVE_COST:
-                            parsed.append(entry)
-                        else:
+                    for attack in sends:
+                        if not isinstance(attack, list):
                             ok = False
                             break
+                        waves = []
+                        for entry in attack:
+                            if isinstance(entry, int) and not isinstance(entry, bool) and entry in WAVE_COST:
+                                waves.append(entry)
+                            else:
+                                ok = False
+                                break
+                        if not ok:
+                            break
+                        parsed.append(waves)
                     if ok:
                         levels = parsed
             send_yourself = bool(data.get("send_yourself", True))

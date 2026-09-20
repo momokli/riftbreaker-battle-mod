@@ -40,22 +40,24 @@ Ticks feuern nacheinander, jeweils mit dem zu diesem Zeitpunkt aktuellen Level.
 
 ## Personas (Send-Profile)
 
-Eine Persona ist eine optionale Folge von **Extra-Wellen**, indexiert nach
-Attack-Nummer und geschichtet auf die Natural Waves — der simulierte
-„Gegner“, der „auch sendet“. Kein Loop: die Persona laeuft aus (wie im
-echten Spiel), und der Attack-Zaehler resettet bei Runden-Reset.
+Eine Persona ist eine optionale Folge von **Attacken**; jede Attack ist eine
+Liste der vom Gegner gekauften **Extra-Wellen** (mehrere erlaubt), geschichtet
+auf die Natural Waves — der simulierte „Gegner“, der „auch sendet“. Kein Loop:
+die Persona laeuft aus (wie im echten Spiel), und der Attack-Zaehler resettet
+bei Runden-Reset. Natural Attack N = normale Welle (aktuelle Difficulty) +
+ALLE Wellen, die der Gegner fuer diese Attack gesendet hat.
 
 ```json
 {
   "personas": {
-    "aggro": [3, 5, 7, 9, 9],
-    "ruhig": [null, 2, null, 2]
+    "aggro": [[3, 5], [7], [9, 9]],
+    "ruhig": [[], [2], [], [2]]
   }
 }
 ```
 
-- `aggro` Attack 1 -> natural + extra Wave 3, Attack 2 -> natural + extra Wave 5, …
-- `null` = keine Extra-Welle fuer diesen Index
+- `aggro` Attack 1 -> natural + Wave 3 + Wave 5, Attack 2 -> natural + Wave 7, …
+- `[]` = keine Extra-Wellen fuer diese Attack
 - Default `--persona none` -> nur Natural Waves
 
 Start:

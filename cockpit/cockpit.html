@@ -721,7 +721,7 @@
                                 <span class="prop-label">persona</span>
                                 <input id="persona_name" class="mono" size="10" placeholder="name" aria-label="Persona name" />
                                 <span class="prop-label">sends</span>
-                                <input id="persona_sends" class="mono" size="24" placeholder="3,5,7 (null = leer)" aria-label="Persona sends" />
+                                <input id="persona_sends" class="mono" size="24" placeholder="1,3 / 5 / 9,9 (/ = Attack, , = Welle)" aria-label="Persona sends" />
                                 <button id="persona_save" class="btn-primary">save</button>
                                 <button id="persona_delete" class="btn-danger">del</button>
                             </div>
@@ -733,8 +733,8 @@
                                 <pre id="personas_list">—</pre>
                             </div>
                             <div class="flow-note">
-                                Send-Profile (Extra-Wellen je Attack-Index, null = leer).
-                                Aktiv + send-yourself steuern den Attack-Cycle zur Laufzeit.
+                                Send-Profile (je Attack eine Liste gekaufter Wellen, / trennt
+                                Attacken, - = leer). Aktiv + send-yourself steuern den Attack-Cycle.
                                 <span id="personas_msg" aria-live="polite"></span>
                             </div>
                         </div>
@@ -1671,17 +1671,22 @@
                         if (str === undefined || str === null) return [];
                         var s = String(str).trim();
                         if (s === "") return [];
-                        return s.split(",").map(function (t) {
-                            var v = t.trim();
-                            if (v === "" || v === "null" || v === "-") return null;
-                            var n = parseInt(v, 10);
-                            if (isNaN(n)) throw new Error("invalid level: " + v);
-                            return n;
+                        return s.split("/").map(function (attack) {
+                            var a = attack.trim();
+                            if (a === "" || a === "-") return [];
+                            return a.split(",").map(function (t) {
+                                var v = t.trim();
+                                var n = parseInt(v, 10);
+                                if (isNaN(n)) throw new Error("invalid level: " + v);
+                                return n;
+                            });
                         });
                     }
 
                     function formatSends(arr) {
-                        return (arr || []).map(function (v) { return v === null ? "null" : v; }).join(",");
+                        return (arr || []).map(function (waves) {
+                            return waves && waves.length ? waves.join(",") : "-";
+                        }).join(" / ");
                     }
 
                     function resp(res) {

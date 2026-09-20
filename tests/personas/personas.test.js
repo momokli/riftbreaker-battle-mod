@@ -91,45 +91,21 @@ test("Marker-Block exportiert createPersonasController", () => {
   assert.equal(typeof m.createPersonasController, "function");
 });
 
-test("parseSends/formatSends: null + Zahlen, leer", () => {
+test("parseSends/formatSends: nested je Attack", () => {
   const m = loadBlock();
-  assert.deepEqual(
-    m
-      .createPersonasController({ document: makeDoc().document, fetch: () => {} })
-      .parseSends("3,5,7"),
-    [3, 5, 7],
-  );
-  assert.deepEqual(
-    m
-      .createPersonasController({ document: makeDoc().document, fetch: () => {} })
-      .parseSends("null,2,null"),
-    [null, 2, null],
-  );
-  assert.deepEqual(
-    m
-      .createPersonasController({ document: makeDoc().document, fetch: () => {} })
-      .parseSends("  "),
-    [],
-  );
-  assert.equal(
-    m
-      .createPersonasController({ document: makeDoc().document, fetch: () => {} })
-      .formatSends([3, null, 7]),
-    "3,null,7",
-  );
-  assert.throws(
-    () =>
-      m
-        .createPersonasController({ document: makeDoc().document, fetch: () => {} })
-        .parseSends("3,abc"),
-    /invalid level/,
-  );
+  const mk = () =>
+    m.createPersonasController({ document: makeDoc().document, fetch: () => {} });
+  assert.deepEqual(mk().parseSends("1,3 / 5 / 9,9"), [[1, 3], [5], [9, 9]]);
+  assert.deepEqual(mk().parseSends("- / 2"), [[], [2]]);
+  assert.deepEqual(mk().parseSends("  "), []);
+  assert.equal(mk().formatSends([[3, 5], [], [7]]), "3,5 / - / 7");
+  assert.throws(() => mk().parseSends("3,abc"), /invalid level/);
 });
 
 test("load(): GET /personas -> State + Render (Liste + Dropdown + Checkbox)", async () => {
   const fetch = fakeFetch({
     personas: {
-      personas: { aggro: [3, 5], ruhig: [null, 2] },
+      personas: { aggro: [[3, 5], [7]], ruhig: [[], [2]] },
       active: "aggro",
       send_yourself: false,
     },
@@ -137,19 +113,19 @@ test("load(): GET /personas -> State + Render (Liste + Dropdown + Checkbox)", as
   const doc = makeDoc();
   const c = loadBlock().createPersonasController({ document: doc.document, fetch });
   await c.load();
-  assert.deepEqual(c.state.personas, { aggro: [3, 5], ruhig: [null, 2] });
+  assert.deepEqual(c.state.personas, { aggro: [[3, 5], [7]], ruhig: [[], [2]] });
   assert.equal(c.state.active, "aggro");
   assert.equal(c.state.send_yourself, false);
   const list = doc.els.personas_list.textContent;
-  assert.ok(list.includes("* aggro: 3,5"), "aktive persona markiert");
-  assert.ok(list.includes("ruhig: null,2"), "zweite persona gelistet");
+  assert.ok(list.includes("* aggro: 3,5 / 7"), "aktive persona markiert");
+  assert.ok(list.includes("ruhig: - / 2"), "zweite persona gelistet");
   assert.equal(doc.els.persona_active.value, "aggro");
   assert.equal(doc.els.send_yourself.checked, false);
 });
 
 test("save(): upsert + POST /personas (ganze Defs)", async () => {
   const fetch = fakeFetch({
-    personas: { personas: { aggro: [3, 5] }, active: "", send_yourself: true },
+    personas: { personas: { aggro: [[3, 5]] }, active: "", send_yourself: true },
   });
   const doc = makeDoc();
   const c = loadBlock().createPersonasController({ document: doc.document, fetch });
@@ -159,7 +135,7 @@ test("save(): upsert + POST /personas (ganze Defs)", async () => {
   await c.save();
   const postCall = fetch.calls.find((x) => x.route === "personas" && x.opts);
   assert.ok(postCall, "POST /personas gesendet");
-  assert.deepEqual(postCall.opts, { aggro: [3, 5], neu: [1, 2] });
+  assert.deepEqual(postCall.opts, { aggro: [[3, 5]], neu: [[1, 2]] });
 });
 
 test("save(): leerer Name -> Meldung, kein POST", async () => {
@@ -178,7 +154,7 @@ test("save(): leerer Name -> Meldung, kein POST", async () => {
 test("remove(): loescht + POST /personas", async () => {
   const fetch = fakeFetch({
     personas: {
-      personas: { aggro: [3, 5], ruhig: [null, 2] },
+      personas: { aggro: [[3, 5]], ruhig: [[], [2]] },
       active: "aggro",
       send_yourself: true,
     },
@@ -189,12 +165,12 @@ test("remove(): loescht + POST /personas", async () => {
   doc.els.persona_name.value = "aggro";
   await c.remove();
   const postCall = fetch.calls.find((x) => x.route === "personas" && x.opts);
-  assert.deepEqual(postCall.opts, { ruhig: [null, 2] });
+  assert.deepEqual(postCall.opts, { ruhig: [[], [2]] });
 });
 
 test("setActive(): POST /persona_active", async () => {
   const fetch = fakeFetch({
-    personas: { personas: { aggro: [3] }, active: "", send_yourself: true },
+    personas: { personas: { aggro: [[3]] }, active: "", send_yourself: true },
     persona_active: { ok: true },
   });
   const doc = makeDoc();
