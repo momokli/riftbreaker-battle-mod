@@ -32,6 +32,15 @@ Kauf (`POST /queue_send {"name":"waveN"}`):
 Rein stdlib (HTTP via urllib), kein Netz-Dep im Test. Server-seitig (Sidecar),
 NICHT in der Website, NICHT in der DLL. Pattern wie deploy/match-loop (pollt
 get_state) + tools/wave-scheduler (Queue + activate_mission_flow).
+
+Persona (waehlbares Send-Profil): eine optionale Folge von Attacken, je
+Attack eine Liste der vom Gegner gekauften Extra-Wellen. ``[[3,5],[7]]`` =
+Attack 1 feuert natural + Wave 3 + Wave 5, Attack 2 natural + Wave 7, danach
+laeuft die Persona aus (kein Loop). Leere Liste = keine Extra-Wellen.
+
+send-yourself (Routing): ``on`` (Default) feuert eigene Kaeufe lokal (heute);
+``off`` zieht das Carbonium trotzdem ab (try_spend), feuert die Welle aber
+NICHT lokal, sondern trackt sie als Outgoing-Send (spaeter Server B).
 """
 
 from __future__ import annotations
@@ -44,7 +53,7 @@ import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 # Cost-Tabelle (Spiegel der client-mod .ent-Preise; Stand main #770/#205).
 # Nur die Preise sind hier relevant; der Logic-Pfad ist ein einziges Template
@@ -124,6 +133,62 @@ def parse_send_level(body: str) -> Optional[int]:
     return None
 
 
+WAVE_COUNT = 9  # Wellen-Typen (wave1..wave9)
+
+
+def _normalize_counts(attack) -> Optional[List[int]]:
+    """Normalisiert eine Attack auf WAVE_COUNT Counts (wave1..wave9), 0-auffuellen.
+
+    Liefert eine Liste von WAVE_COUNT nicht-negativen ints, oder None bei
+    ungueltigem Format.
+    """
+    if not isinstance(attack, list):
+        return None
+    out: List[int] = []
+    for c in attack[:WAVE_COUNT]:
+        if isinstance(c, bool) or not isinstance(c, int) or c < 0:
+            return None
+        out.append(c)
+    return out + [0] * (WAVE_COUNT - len(out))
+
+
+def _expand_counts(counts) -> List[int]:
+    """9-Counts (wave1..wave9) -> Liste von Leveln (count>1 => mehrfach)."""
+    levels: List[int] = []
+    for wave, count in enumerate(counts or []):
+        levels.extend([wave + 1] * count)
+    return levels
+
+
+def load_personas(path: str) -> Dict[str, List[List[int]]]:
+    """Laedt Persona-Definitionen aus einer JSON-Datei.
+
+    Erwartetes Format: ``{"personas": {"<name>": [[c1..c9], ...]}}``.
+    Jede Persona ist eine Liste von Attacken; jede Attack ist eine Liste von
+    WAVE_COUNT Counts (wave1..wave9). Laeuft aus (kein Loop). Liefert
+    ``{name: [[counts], ...]}``. Wirft ValueError bei ungueltigem Format.
+    """
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    if not isinstance(data, dict):
+        raise ValueError(f"persona file {path}: top-level muss ein Objekt sein")
+    raw = data.get("personas", {})
+    if not isinstance(raw, dict):
+        raise ValueError(f"persona file {path}: 'personas' muss ein Objekt sein")
+    personas: Dict[str, List[List[int]]] = {}
+    for name, attacks in raw.items():
+        if not isinstance(attacks, list):
+            raise ValueError(f"persona '{name}': muss eine Liste sein")
+        persona: List[List[int]] = []
+        for attack in attacks:
+            norm = _normalize_counts(attack)
+            if norm is None:
+                raise ValueError(f"persona '{name}': ungueltige Attack (erwartet {WAVE_COUNT} Counts)")
+            persona.append(norm)
+        personas[name] = persona
+    return personas
+
+
 class AttackCycle:
     """Reine Zustandsmaschine + HTTP (injizierbarer Poster/Clock fuer Tests)."""
 
@@ -134,8 +199,12 @@ class AttackCycle:
         difficulty_interval_s: float = DEFAULT_DIFFICULTY_INTERVAL_S,
         max_level: int = DEFAULT_MAX_LEVEL,
         wave_logic: Optional[Dict[int, str]] = None,
+        persona: Optional[List[List[int]]] = None,
+        persona_name: str = "",
+        send_yourself: bool = True,
         timeout: float = 30.0,
         _poster: Optional[Callable[[str, bytes], tuple]] = None,
+        _getter: Optional[Callable[[str], tuple]] = None,
         _clock: Callable[[], float] = time.monotonic,
     ):
         self.base_url = base_url.rstrip("/")
@@ -143,8 +212,12 @@ class AttackCycle:
         self.difficulty_interval_s = difficulty_interval_s
         self.max_level = max_level
         self.wave_logic = wave_logic or WAVE_LOGIC
+        self.persona = persona
+        self.persona_name = persona_name
+        self.send_yourself = send_yourself
         self.timeout = timeout
         self._poster = _poster or self._http_post
+        self._getter = _getter or self._http_get
         self._clock = _clock
 
         self._lock = threading.Lock()
@@ -155,6 +228,9 @@ class AttackCycle:
         self.orders: list = []  # unbezahlte Buy-Orders (order list)
         self.bought: list = []  # bezahlte Wellen (bought queue, feuert als naechstes)
         self.last_fire: Optional[Dict[str, Any]] = None
+        self.attack_index = 0  # Anzahl gefeuerter Attacken (Persona-Indexierung)
+        self.outgoing: list = []  # getrackte Outgoing-Sends (send_yourself off)
+        self.history: list = []  # letzte N gefeuerte Attacken (fuer Attack-Cycle-Tabelle)
         self._reset_epoch = 0
 
     # --- HTTP (urllib) ----------------------------------------------------
@@ -165,6 +241,16 @@ class AttackCycle:
             method="POST",
             headers={"Content-Type": "application/json"},
         )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                return resp.status, resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode("utf-8", errors="replace")
+        except (urllib.error.URLError, OSError) as e:
+            return 0, str(e)
+
+    def _http_get(self, path: str) -> tuple:
+        req = urllib.request.Request(self.base_url + path, method="GET")
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 return resp.status, resp.read().decode("utf-8", errors="replace")
@@ -225,8 +311,18 @@ class AttackCycle:
                 status, ok, body = self._spend(cost)
                 if 200 <= status < 300 and ok:
                     with self._lock:
-                        self.bought.append(level)
-                    print(f"[attack-cycle] wave{level} bezahlt -> bought (cost={cost})", flush=True)
+                        if self.send_yourself:
+                            self.bought.append(level)
+                        else:
+                            self.outgoing.append({"level": level, "cost": cost})
+                    if self.send_yourself:
+                        print(f"[attack-cycle] wave{level} bezahlt -> bought (cost={cost})", flush=True)
+                    else:
+                        print(
+                            f"[attack-cycle] wave{level} bezahlt -> outgoing "
+                            f"(send_yourself=off, Carbonium abgezogen, Welle geht ins Leere)",
+                            flush=True,
+                        )
                 else:
                     print(f"[attack-cycle] wave{level} verworfen (status={status} ok={ok}): {body[:160]}", flush=True)
             except Exception as e:
@@ -274,9 +370,7 @@ class AttackCycle:
         # Difficulty-Timer (Issue #778): laeuft unabhaengig vom Wellen-Feuern.
         with self._lock:
             while (
-                self.next_difficulty_at is not None
-                and now >= self.next_difficulty_at
-                and self.level < self.max_level
+                self.next_difficulty_at is not None and now >= self.next_difficulty_at and self.level < self.max_level
             ):
                 self.level += 1
                 self.next_difficulty_at += self.difficulty_interval_s
@@ -289,13 +383,37 @@ class AttackCycle:
             sent_levels = list(self.bought)
             self.bought = []
             self.next_attack_at = self.next_attack_at + self.interval_s
+            self.attack_index += 1
+            extra_levels: List[int] = []
+            if self.persona and self.attack_index - 1 < len(self.persona):
+                extra_levels = _expand_counts(self.persona[self.attack_index - 1])
 
         self._fire(natural_level)
+        for lvl in extra_levels:
+            self._fire(lvl)
         for lvl in sent_levels:
             self._fire(lvl)
         with self._lock:
-            self.last_fire = {"natural_level": natural_level, "sent_levels": sent_levels, "t": now}
-        print(f"[attack-cycle] attack: natural={natural_level} + sent={sent_levels}", flush=True)
+            self.last_fire = {
+                "natural_level": natural_level,
+                "persona_levels": extra_levels,
+                "sent_levels": sent_levels,
+                "t": now,
+            }
+            self.history.append(
+                {
+                    "attack": self.attack_index,
+                    "natural": natural_level,
+                    "self": sent_levels,
+                    "enemy": extra_levels,
+                    "t": now,
+                }
+            )
+            self.history = self.history[-10:]  # cap auf die letzten 10 Attacken
+        print(
+            f"[attack-cycle] attack: natural={natural_level} + persona={extra_levels} + sent={sent_levels}",
+            flush=True,
+        )
         return "attack"
 
     # --- Status -----------------------------------------------------------
@@ -313,9 +431,24 @@ class AttackCycle:
                 ),
                 "bought": list(self.bought),
                 "orders": list(self.orders),
+                "persona": self.persona_name or None,
+                "attack_index": self.attack_index,
+                "send_yourself": self.send_yourself,
+                "outgoing": list(self.outgoing),
                 "interval_s": self.interval_s,
                 "difficulty_interval_s": self.difficulty_interval_s,
                 "max_level": self.max_level,
+                "wave_cost": WAVE_COST,
+                "next_attack": {
+                    "natural": self.level,
+                    "self": list(self.bought),
+                    "enemy": (
+                        _expand_counts(self.persona[self.attack_index])
+                        if self.persona and self.attack_index < len(self.persona)
+                        else []
+                    ),
+                },
+                "history": list(self.history),
                 "last_fire": self.last_fire,
             }
 
@@ -348,6 +481,26 @@ class AttackCycle:
         except Exception:
             pass
 
+    def sync_difficulty_interval(self) -> None:
+        """Holt das Difficulty-Intervall (POST /difficulty_interval {}) und
+        uebernimmt es (Spiegel von sync_interval, entkoppelter Timer #778)."""
+        try:
+            status, body = self._poster("/difficulty_interval", b"{}")
+            if not 200 <= status < 300:
+                return
+            new = json.loads(body).get("difficulty_interval_s")
+            if not isinstance(new, (int, float)) or new <= 0:
+                return
+            new = float(new)
+            with self._lock:
+                if new != self.difficulty_interval_s:
+                    self.difficulty_interval_s = new
+                    if self.active:
+                        self.next_difficulty_at = self._clock() + new
+                    print(f"[attack-cycle] difficulty_interval -> {new:.0f}s", flush=True)
+        except Exception:
+            pass
+
     # --- Reset (WebUI) -----------------------------------------------------
     def reset(self) -> None:
         """Setzt den Zyklus zurueck: warte wieder auf HQ-Bau, Level 1,
@@ -359,6 +512,9 @@ class AttackCycle:
             self.next_difficulty_at = None
             self.orders = []
             self.bought = []
+            self.attack_index = 0
+            self.outgoing = []
+            self.history = []
             self.last_fire = None
         print("[attack-cycle] reset -> warte auf HQ-Bau", flush=True)
 
@@ -372,6 +528,47 @@ class AttackCycle:
             if isinstance(epoch, int) and epoch != self._reset_epoch:
                 self._reset_epoch = epoch
                 self.reset()
+        except Exception:
+            pass
+
+    def sync_personas(self) -> None:
+        """Pollt GET /personas und uebernimmt aktive Persona + send_yourself.
+
+        Die Bridge ist die Laufzeit-Quelle der Wahrheit; die CLI-Flags
+        --persona/--send-yourself sind nur der Start-Fallback. Die aktive
+        Persona liefert die Extra-Wellen je Attack (Liste je Attack, mehrere
+        Wellen erlaubt), send_yourself das Routing eigener Kaeufe.
+        """
+        try:
+            status, body = self._getter("/personas")
+            if not 200 <= status < 300:
+                return
+            data = json.loads(body)
+            if not isinstance(data, dict):
+                return
+            personas = data.get("personas")
+            if not isinstance(personas, dict):
+                return
+            active = data.get("active") or ""
+            levels = None
+            if active:
+                sends = personas.get(active)
+                if isinstance(sends, list):
+                    parsed = []
+                    ok = True
+                    for attack in sends:
+                        norm = _normalize_counts(attack)
+                        if norm is None:
+                            ok = False
+                            break
+                        parsed.append(norm)
+                    if ok:
+                        levels = parsed
+            send_yourself = bool(data.get("send_yourself", True))
+            with self._lock:
+                self.persona = levels
+                self.persona_name = active if levels is not None else ""
+                self.send_yourself = send_yourself
         except Exception:
             pass
 
@@ -436,7 +633,9 @@ def run(
         while True:
             cycle.step()
             cycle.sync_interval()
+            cycle.sync_difficulty_interval()
             cycle.sync_reset()
+            cycle.sync_personas()
             cycle.push_status()
             if once:
                 break
@@ -466,6 +665,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Difficulty-Timer in Sekunden, entkoppelt vom Wellen-Feuern (Default 200, Issue #778)",
     )
     p.add_argument("--max-level", type=int, default=DEFAULT_MAX_LEVEL, help="Max. natuerliches Level (Default 9)")
+    p.add_argument(
+        "--persona",
+        default=None,
+        help="Name der aktiven Persona (Default none = nur Natural Waves); braucht --persona-file",
+    )
+    p.add_argument(
+        "--persona-file",
+        default=os.environ.get("RBB_PERSONA_FILE"),
+        help="Pfad zur personas.json (Default: RBB_PERSONA_FILE)",
+    )
+    p.add_argument(
+        "--send-yourself",
+        choices=["on", "off"],
+        default="on",
+        help="Eigene Kaeufe lokal feuern (on, Default) oder nur tracken/ins Leere (off)",
+    )
     p.add_argument("--control-bind", default="0.0.0.0", help="Bind-Adresse des Control-Servers")
     p.add_argument(
         "--control-port", type=int, default=DEFAULT_CONTROL_PORT, help="Port des Control-Servers (Default 9102)"
@@ -478,11 +693,32 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list] = None) -> int:
     args = build_parser().parse_args(argv)
+
+    persona = None
+    persona_name = ""
+    if args.persona:
+        if not args.persona_file:
+            print("[attack-cycle] Fehler: --persona braucht --persona-file (oder RBB_PERSONA_FILE)", flush=True)
+            return 2
+        try:
+            personas = load_personas(args.persona_file)
+        except (OSError, ValueError) as e:
+            print(f"[attack-cycle] Fehler beim Laden der Persona-Datei: {e}", flush=True)
+            return 2
+        if args.persona not in personas:
+            print(f"[attack-cycle] Fehler: unbekannte Persona '{args.persona}'", flush=True)
+            return 2
+        persona = personas[args.persona]
+        persona_name = args.persona
+
     cycle = AttackCycle(
         args.bridge_url,
         interval_s=args.interval,
         difficulty_interval_s=args.difficulty_interval,
         max_level=args.max_level,
+        persona=persona,
+        persona_name=persona_name,
+        send_yourself=(args.send_yourself == "on"),
         timeout=args.timeout,
     )
     run(cycle, args.control_bind, args.control_port, poll_interval=args.poll_interval, once=args.once)

@@ -8,9 +8,28 @@ kein Netz, kein Spiel, kein DOM.
 """
 
 import json
+import os
+import tempfile
 import unittest
 
-from attack_cycle import AttackCycle, DEFAULT_DIFFICULTY_INTERVAL_S, parse_hq_alive, parse_send_level
+from attack_cycle import (
+    AttackCycle,
+    DEFAULT_DIFFICULTY_INTERVAL_S,
+    WAVE_COUNT,
+    _expand_counts,
+    _normalize_counts,
+    load_personas,
+    parse_hq_alive,
+    parse_send_level,
+)
+
+
+def wave_count(*levels):
+    """Baue einen WAVE_COUNT-Count-Vektor aus Leveln (Duplikate = count)."""
+    counts = [0] * WAVE_COUNT
+    for lvl in levels:
+        counts[lvl - 1] += 1
+    return counts
 
 
 class FakePoster:
@@ -295,6 +314,315 @@ class TestAttackCycleDifficultyTimer(unittest.TestCase):
         s = cycle.status()
         self.assertEqual(s["seconds_to_next_difficulty"], 150.0)
         self.assertEqual(s["difficulty_interval_s"], 200.0)
+
+
+class TestPersona(unittest.TestCase):
+    """Persona = Folge von Attacken; je Attack eine Liste der vom Gegner
+    gekauften Extra-Wellen (mehrere erlaubt). Geschichtet auf die Natural
+    Waves. Laeuft aus (kein Loop)."""
+
+    def _cycle(self, poster, persona=None, clock=None):
+        return AttackCycle(
+            "http://127.0.0.1:9001",
+            interval_s=420.0,
+            difficulty_interval_s=1e9,
+            persona=persona,
+            _poster=poster,
+            _clock=clock or FakeClock(),
+        )
+
+    def _fire_logics(self, poster):
+        return [json.loads(c[1].decode())["logic"] for c in poster.calls if c[0] == "/activate_mission_flow"]
+
+    def test_persona_extra_fires_then_runs_out(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, persona=[wave_count(3), wave_count(5)], clock=clock)
+        cycle.step()  # started
+
+        clock.t = 420.0
+        cycle.step()  # attack 1
+        logics = self._fire_logics(poster)
+        self.assertEqual(
+            logics,
+            [
+                "logic/missions/survival/attack_level_1_id_1.logic",  # natural
+                "logic/missions/survival/attack_level_3_id_1.logic",  # persona wave3
+            ],
+        )
+
+        clock.t = 840.0
+        cycle.step()  # attack 2
+        logics = self._fire_logics(poster)
+        self.assertIn("logic/missions/survival/attack_level_5_id_1.logic", logics)
+
+        clock.t = 1260.0
+        cycle.step()  # attack 3 -> Persona laeuft aus
+        logics = self._fire_logics(poster)
+        self.assertEqual(len(logics), 5)  # 2 + 2 + 1: attack 3 ohne Extra
+        # Persona-Wave 3 kam nur in attack 1, nie wieder (ausgelaufen).
+        self.assertEqual(logics.count("logic/missions/survival/attack_level_3_id_1.logic"), 1)
+
+    def test_persona_multiple_waves_per_attack(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, persona=[wave_count(2, 3), wave_count(5)], clock=clock)
+        cycle.step()  # started
+
+        clock.t = 420.0
+        cycle.step()  # attack 1: natural + wave2 + wave3
+        logics = self._fire_logics(poster)
+        self.assertEqual(
+            logics,
+            [
+                "logic/missions/survival/attack_level_1_id_1.logic",  # natural
+                "logic/missions/survival/attack_level_2_id_1.logic",  # persona wave2
+                "logic/missions/survival/attack_level_3_id_1.logic",  # persona wave3
+            ],
+        )
+
+        clock.t = 840.0
+        cycle.step()  # attack 2: natural + wave5
+        self.assertEqual(len(self._fire_logics(poster)), 5)  # 3 + 2
+
+    def test_persona_duplicate_waves(self):
+        """Der Gegner kann dieselbe Welle mehrfach senden (z. B. wave1 3x) —
+        kein Dedup: jede Nennung feuert als eigener activate_mission_flow-Call."""
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, persona=[wave_count(1, 1, 1)], clock=clock)
+        cycle.step()  # started
+
+        clock.t = 420.0
+        cycle.step()  # attack 1: natural(level1) + wave1 x3
+        logics = self._fire_logics(poster)
+        self.assertEqual(
+            logics.count("logic/missions/survival/attack_level_1_id_1.logic"), 4
+        )  # 1 natural + 3 persona wave1
+        self.assertEqual(len(logics), 4)
+
+    def test_persona_none_entry_skips_extra(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, persona=[wave_count(), wave_count(2)], clock=clock)
+        cycle.step()  # started
+
+        clock.t = 420.0
+        cycle.step()  # attack 1: kein Extra
+        self.assertEqual(len(self._fire_logics(poster)), 1)
+
+        clock.t = 840.0
+        cycle.step()  # attack 2: wave2
+        logics = self._fire_logics(poster)
+        self.assertIn("logic/missions/survival/attack_level_2_id_1.logic", logics)
+
+    def test_no_persona_fires_natural_only(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, persona=None, clock=clock)
+        cycle.step()
+        clock.t = 420.0
+        cycle.step()
+        self.assertEqual(len(self._fire_logics(poster)), 1)
+
+    def test_persona_resets_on_reset(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, persona=[wave_count(3), wave_count(5)], clock=clock)
+        cycle.step()
+        clock.t = 420.0
+        cycle.step()  # attack_index = 1
+        self.assertEqual(cycle.attack_index, 1)
+        cycle.reset()
+        self.assertEqual(cycle.attack_index, 0)
+
+
+class TestSendYourself(unittest.TestCase):
+    """Routing eigener Kaeufe: on = lokal feuern (Default), off = Carbonium
+    abziehen, aber Welle tracken statt lokal feuern (spaeter Server B)."""
+
+    def _cycle(self, poster, send_yourself=True, clock=None):
+        return AttackCycle(
+            "http://127.0.0.1:9001",
+            interval_s=420.0,
+            difficulty_interval_s=1e9,
+            send_yourself=send_yourself,
+            _poster=poster,
+            _clock=clock or FakeClock(),
+        )
+
+    def test_off_tracks_outgoing_instead_of_bought(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        cycle = self._cycle(poster, send_yourself=False)
+        cycle.step()  # started
+        cycle.buy(3)
+        cycle._resolve_orders()
+        self.assertEqual(cycle.bought, [])
+        self.assertEqual([o["level"] for o in cycle.outgoing], [3])
+
+    def test_off_still_deducts_carbonium(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        cycle = self._cycle(poster, send_yourself=False)
+        cycle.step()
+        cycle.buy(3)
+        cycle._resolve_orders()
+        spend_calls = [c for c in poster.calls if c[0] == "/try_spend"]
+        self.assertEqual(len(spend_calls), 1)
+
+    def test_off_does_not_fire_locally(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, send_yourself=False, clock=clock)
+        cycle.step()  # started
+        cycle.buy(3)
+        cycle._resolve_orders()
+        clock.t = 420.0
+        cycle.step()  # attack
+        logics = [json.loads(c[1].decode())["logic"] for c in poster.calls if c[0] == "/activate_mission_flow"]
+        self.assertEqual(logics, ["logic/missions/survival/attack_level_1_id_1.logic"])
+
+
+class TestLoadPersonas(unittest.TestCase):
+    def _write(self, content):
+        fd, path = tempfile.mkstemp(suffix=".json")
+        with os.fdopen(fd, "w") as fh:
+            fh.write(content)
+        return path
+
+    def test_load_valid(self):
+        aggro = [wave_count(3), wave_count(5), wave_count(7)]
+        ruhig = [wave_count(), wave_count(2), wave_count()]
+        path = self._write(json.dumps({"personas": {"aggro": aggro, "ruhig": ruhig}}))
+        try:
+            self.assertEqual(load_personas(path), {"aggro": aggro, "ruhig": ruhig})
+        finally:
+            os.unlink(path)
+
+    def test_load_multi_wave_attack(self):
+        aggro = [wave_count(1, 3), wave_count(5)]
+        path = self._write(json.dumps({"personas": {"aggro": aggro}}))
+        try:
+            self.assertEqual(load_personas(path), {"aggro": aggro})
+        finally:
+            os.unlink(path)
+
+    def test_load_negative_count_rejected(self):
+        path = self._write('{"personas": {"bad": [[-1]]}}')
+        try:
+            with self.assertRaises(ValueError):
+                load_personas(path)
+        finally:
+            os.unlink(path)
+
+    def test_load_empty(self):
+        path = self._write('{"personas": {}}')
+        try:
+            self.assertEqual(load_personas(path), {})
+        finally:
+            os.unlink(path)
+
+    def test_load_missing_file(self):
+        with self.assertRaises(OSError):
+            load_personas("/nonexistent/personas.json")
+
+
+class TestSyncPersonas(unittest.TestCase):
+    """sync_personas(): pollt GET /personas (Bridge) und uebernimmt aktive
+    Persona + send_yourself zur Laufzeit (CLI-Flags nur Start-Fallback)."""
+
+    def _cycle(self, getter_resp, clock=None):
+        return AttackCycle(
+            "http://127.0.0.1:9001",
+            interval_s=420.0,
+            difficulty_interval_s=1e9,
+            _poster=FakePoster('{"ok":true,"hq_hp":100.0}'),
+            _getter=lambda path: (200, getter_resp),
+            _clock=clock or FakeClock(),
+        )
+
+    def test_applies_active_persona_and_send_yourself(self):
+        aggro = [wave_count(3), wave_count(5)]
+        ruhig = [wave_count(), wave_count(2)]
+        resp = json.dumps({"personas": {"aggro": aggro, "ruhig": ruhig}, "active": "aggro", "send_yourself": False})
+        cycle = self._cycle(resp)
+        cycle.sync_personas()
+        self.assertEqual(cycle.persona, aggro)
+        self.assertEqual(cycle.persona_name, "aggro")
+        self.assertFalse(cycle.send_yourself)
+
+    def test_no_active_persona(self):
+        aggro = [wave_count(3), wave_count(5)]
+        resp = json.dumps({"personas": {"aggro": aggro}, "active": "", "send_yourself": True})
+        cycle = self._cycle(resp)
+        cycle.sync_personas()
+        self.assertIsNone(cycle.persona)
+        self.assertEqual(cycle.persona_name, "")
+        self.assertTrue(cycle.send_yourself)
+
+    def test_invalid_level_rejected(self):
+        resp = '{"personas":{"bad":[[-1]]},"active":"bad","send_yourself":true}'
+        cycle = self._cycle(resp)
+        cycle.sync_personas()
+        self.assertIsNone(cycle.persona)
+        self.assertEqual(cycle.persona_name, "")
+
+    def test_non_200_ignored(self):
+        cycle = AttackCycle(
+            "http://127.0.0.1:9001",
+            _poster=FakePoster('{"ok":true,"hq_hp":100.0}'),
+            _getter=lambda path: (500, '{"ok":false}'),
+        )
+        cycle.sync_personas()
+        self.assertIsNone(cycle.persona)
+        self.assertTrue(cycle.send_yourself)
+
+
+class TestTimersAndPreview(unittest.TestCase):
+    def test_sync_difficulty_interval(self):
+        def poster(path, body):
+            if path == "/difficulty_interval":
+                return (200, '{"ok":true,"difficulty_interval_s":100}')
+            return (404, "{}")
+
+        cycle = AttackCycle("http://x", _poster=poster)
+        cycle.sync_difficulty_interval()
+        self.assertEqual(cycle.difficulty_interval_s, 100.0)
+
+    def test_status_next_attack_preview(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = AttackCycle(
+            "http://x",
+            interval_s=420.0,
+            difficulty_interval_s=1e9,
+            persona=[wave_count(2, 3), wave_count(5)],
+            _poster=poster,
+            _clock=clock,
+        )
+        cycle.step()  # started, attack_index=0
+        cycle.buy(1)
+        cycle._resolve_orders()  # bought=[1]
+        na = cycle.status()["next_attack"]
+        self.assertEqual(na["natural"], 1)
+        self.assertEqual(na["self"], [1])
+        self.assertEqual(na["enemy"], [2, 3])
+
+
+class TestCountHelpers(unittest.TestCase):
+    def test_normalize_pads_to_nine(self):
+        self.assertEqual(_normalize_counts([1, 2]), [1, 2, 0, 0, 0, 0, 0, 0, 0])
+
+    def test_normalize_rejects_negative(self):
+        self.assertIsNone(_normalize_counts([-1]))
+
+    def test_normalize_rejects_non_int(self):
+        self.assertIsNone(_normalize_counts(["a"]))
+
+    def test_expand_counts(self):
+        self.assertEqual(_expand_counts([3, 0, 1, 0, 0, 0, 0, 0, 0]), [1, 1, 1, 3])
+
+    def test_expand_empty(self):
+        self.assertEqual(_expand_counts([0, 0, 0, 0, 0, 0, 0, 0, 0]), [])
 
 
 if __name__ == "__main__":

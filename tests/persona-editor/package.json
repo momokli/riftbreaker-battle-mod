@@ -1,0 +1,9 @@
+{
+  "name": "persona-editor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Web-UI-Test fuer den Persona-Editor (10x9-Matrix): load/inc/dec/save/restore/add/remove/setActive. Keine Dependencies, kein Netzwerk.",
+  "scripts": {
+    "test": "node --test"
+  }
+}
