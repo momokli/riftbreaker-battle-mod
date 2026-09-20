@@ -1,9 +1,0 @@
-{
-  "name": "personas",
-  "version": "1.0.0",
-  "private": true,
-  "description": "Web-UI-Test fuer das Cockpit-Panel personas (Issue #788): Send-Profile editieren (CRUD), aktiv setzen, send-yourself toggeln. Keine Dependencies, kein Netzwerk.",
-  "scripts": {
-    "test": "node --test"
-  }
-}

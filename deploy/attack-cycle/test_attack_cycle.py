@@ -13,12 +13,23 @@ import tempfile
 import unittest
 
 from attack_cycle import (
-    DEFAULT_DIFFICULTY_INTERVAL_S,
     AttackCycle,
+    DEFAULT_DIFFICULTY_INTERVAL_S,
+    WAVE_COUNT,
+    _expand_counts,
+    _normalize_counts,
     load_personas,
     parse_hq_alive,
     parse_send_level,
 )
+
+
+def wave_count(*levels):
+    """Baue einen WAVE_COUNT-Count-Vektor aus Leveln (Duplikate = count)."""
+    counts = [0] * WAVE_COUNT
+    for lvl in levels:
+        counts[lvl - 1] += 1
+    return counts
 
 
 class FakePoster:
@@ -326,7 +337,7 @@ class TestPersona(unittest.TestCase):
     def test_persona_extra_fires_then_runs_out(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
-        cycle = self._cycle(poster, persona=[[3], [5]], clock=clock)
+        cycle = self._cycle(poster, persona=[wave_count(3), wave_count(5)], clock=clock)
         cycle.step()  # started
 
         clock.t = 420.0
@@ -355,7 +366,7 @@ class TestPersona(unittest.TestCase):
     def test_persona_multiple_waves_per_attack(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
-        cycle = self._cycle(poster, persona=[[2, 3], [5]], clock=clock)
+        cycle = self._cycle(poster, persona=[wave_count(2, 3), wave_count(5)], clock=clock)
         cycle.step()  # started
 
         clock.t = 420.0
@@ -379,7 +390,7 @@ class TestPersona(unittest.TestCase):
         kein Dedup: jede Nennung feuert als eigener activate_mission_flow-Call."""
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
-        cycle = self._cycle(poster, persona=[[1, 1, 1]], clock=clock)
+        cycle = self._cycle(poster, persona=[wave_count(1, 1, 1)], clock=clock)
         cycle.step()  # started
 
         clock.t = 420.0
@@ -393,7 +404,7 @@ class TestPersona(unittest.TestCase):
     def test_persona_none_entry_skips_extra(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
-        cycle = self._cycle(poster, persona=[[], [2]], clock=clock)
+        cycle = self._cycle(poster, persona=[wave_count(), wave_count(2)], clock=clock)
         cycle.step()  # started
 
         clock.t = 420.0
@@ -417,7 +428,7 @@ class TestPersona(unittest.TestCase):
     def test_persona_resets_on_reset(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
-        cycle = self._cycle(poster, persona=[[3], [5]], clock=clock)
+        cycle = self._cycle(poster, persona=[wave_count(3), wave_count(5)], clock=clock)
         cycle.step()
         clock.t = 420.0
         cycle.step()  # attack_index = 1
@@ -479,24 +490,24 @@ class TestLoadPersonas(unittest.TestCase):
         return path
 
     def test_load_valid(self):
-        path = self._write('{"personas": {"aggro": [[3], [5], [7]], "ruhig": [[], [2], []]}}')
+        aggro = [wave_count(3), wave_count(5), wave_count(7)]
+        ruhig = [wave_count(), wave_count(2), wave_count()]
+        path = self._write(json.dumps({"personas": {"aggro": aggro, "ruhig": ruhig}}))
         try:
-            self.assertEqual(
-                load_personas(path),
-                {"aggro": [[3], [5], [7]], "ruhig": [[], [2], []]},
-            )
+            self.assertEqual(load_personas(path), {"aggro": aggro, "ruhig": ruhig})
         finally:
             os.unlink(path)
 
     def test_load_multi_wave_attack(self):
-        path = self._write('{"personas": {"aggro": [[1, 3], [5]]}}')
+        aggro = [wave_count(1, 3), wave_count(5)]
+        path = self._write(json.dumps({"personas": {"aggro": aggro}}))
         try:
-            self.assertEqual(load_personas(path), {"aggro": [[1, 3], [5]]})
+            self.assertEqual(load_personas(path), {"aggro": aggro})
         finally:
             os.unlink(path)
 
-    def test_load_invalid_level(self):
-        path = self._write('{"personas": {"bad": [[99]]}}')
+    def test_load_negative_count_rejected(self):
+        path = self._write('{"personas": {"bad": [[-1]]}}')
         try:
             with self.assertRaises(ValueError):
                 load_personas(path)
@@ -530,15 +541,18 @@ class TestSyncPersonas(unittest.TestCase):
         )
 
     def test_applies_active_persona_and_send_yourself(self):
-        resp = '{"personas":{"aggro":[[3],[5]],"ruhig":[[],[2]]},"active":"aggro","send_yourself":false}'
+        aggro = [wave_count(3), wave_count(5)]
+        ruhig = [wave_count(), wave_count(2)]
+        resp = json.dumps({"personas": {"aggro": aggro, "ruhig": ruhig}, "active": "aggro", "send_yourself": False})
         cycle = self._cycle(resp)
         cycle.sync_personas()
-        self.assertEqual(cycle.persona, [[3], [5]])
+        self.assertEqual(cycle.persona, aggro)
         self.assertEqual(cycle.persona_name, "aggro")
         self.assertFalse(cycle.send_yourself)
 
     def test_no_active_persona(self):
-        resp = '{"personas":{"aggro":[[3],[5]]},"active":"","send_yourself":true}'
+        aggro = [wave_count(3), wave_count(5)]
+        resp = json.dumps({"personas": {"aggro": aggro}, "active": "", "send_yourself": True})
         cycle = self._cycle(resp)
         cycle.sync_personas()
         self.assertIsNone(cycle.persona)
@@ -546,7 +560,7 @@ class TestSyncPersonas(unittest.TestCase):
         self.assertTrue(cycle.send_yourself)
 
     def test_invalid_level_rejected(self):
-        resp = '{"personas":{"bad":[[99]]},"active":"bad","send_yourself":true}'
+        resp = '{"personas":{"bad":[[-1]]},"active":"bad","send_yourself":true}'
         cycle = self._cycle(resp)
         cycle.sync_personas()
         self.assertIsNone(cycle.persona)
@@ -581,7 +595,7 @@ class TestTimersAndPreview(unittest.TestCase):
             "http://x",
             interval_s=420.0,
             difficulty_interval_s=1e9,
-            persona=[[2, 3], [5]],
+            persona=[wave_count(2, 3), wave_count(5)],
             _poster=poster,
             _clock=clock,
         )
@@ -592,6 +606,23 @@ class TestTimersAndPreview(unittest.TestCase):
         self.assertEqual(na["natural"], 1)
         self.assertEqual(na["self"], [1])
         self.assertEqual(na["enemy"], [2, 3])
+
+
+class TestCountHelpers(unittest.TestCase):
+    def test_normalize_pads_to_nine(self):
+        self.assertEqual(_normalize_counts([1, 2]), [1, 2, 0, 0, 0, 0, 0, 0, 0])
+
+    def test_normalize_rejects_negative(self):
+        self.assertIsNone(_normalize_counts([-1]))
+
+    def test_normalize_rejects_non_int(self):
+        self.assertIsNone(_normalize_counts(["a"]))
+
+    def test_expand_counts(self):
+        self.assertEqual(_expand_counts([3, 0, 1, 0, 0, 0, 0, 0, 0]), [1, 1, 1, 3])
+
+    def test_expand_empty(self):
+        self.assertEqual(_expand_counts([0, 0, 0, 0, 0, 0, 0, 0, 0]), [])
 
 
 if __name__ == "__main__":

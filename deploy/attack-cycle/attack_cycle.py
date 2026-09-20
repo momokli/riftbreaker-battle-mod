@@ -133,14 +133,40 @@ def parse_send_level(body: str) -> Optional[int]:
     return None
 
 
+WAVE_COUNT = 9  # Wellen-Typen (wave1..wave9)
+
+
+def _normalize_counts(attack) -> Optional[List[int]]:
+    """Normalisiert eine Attack auf WAVE_COUNT Counts (wave1..wave9), 0-auffuellen.
+
+    Liefert eine Liste von WAVE_COUNT nicht-negativen ints, oder None bei
+    ungueltigem Format.
+    """
+    if not isinstance(attack, list):
+        return None
+    out: List[int] = []
+    for c in attack[:WAVE_COUNT]:
+        if isinstance(c, bool) or not isinstance(c, int) or c < 0:
+            return None
+        out.append(c)
+    return out + [0] * (WAVE_COUNT - len(out))
+
+
+def _expand_counts(counts) -> List[int]:
+    """9-Counts (wave1..wave9) -> Liste von Leveln (count>1 => mehrfach)."""
+    levels: List[int] = []
+    for wave, count in enumerate(counts or []):
+        levels.extend([wave + 1] * count)
+    return levels
+
+
 def load_personas(path: str) -> Dict[str, List[List[int]]]:
     """Laedt Persona-Definitionen aus einer JSON-Datei.
 
-    Erwartetes Format: ``{"personas": {"<name>": [[<level>,...], ...]}}``.
-    Jede Persona ist eine Liste von Attacken; jede Attack ist eine Liste der
-    vom Gegner fuer diese Attack gekauften Wellen (leer = keine). Laeuft aus
-    (kein Loop). Liefert ``{name: [[level,...], ...]}``. Wirft ValueError bei
-    ungueltigem Format/Level (nur 1..9 erlaubt).
+    Erwartetes Format: ``{"personas": {"<name>": [[c1..c9], ...]}}``.
+    Jede Persona ist eine Liste von Attacken; jede Attack ist eine Liste von
+    WAVE_COUNT Counts (wave1..wave9). Laeuft aus (kein Loop). Liefert
+    ``{name: [[counts], ...]}``. Wirft ValueError bei ungueltigem Format.
     """
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
@@ -155,18 +181,10 @@ def load_personas(path: str) -> Dict[str, List[List[int]]]:
             raise ValueError(f"persona '{name}': muss eine Liste sein")
         persona: List[List[int]] = []
         for attack in attacks:
-            if not isinstance(attack, list):
-                raise ValueError(f"persona '{name}': jede Attack muss eine Liste sein")
-            waves: List[int] = []
-            for entry in attack:
-                try:
-                    lvl = int(entry)
-                except (ValueError, TypeError):
-                    raise ValueError(f"persona '{name}': ungueltiges Level {entry!r}")
-                if lvl not in WAVE_COST:
-                    raise ValueError(f"persona '{name}': Level {lvl} unbekannt (1..9)")
-                waves.append(lvl)
-            persona.append(waves)
+            norm = _normalize_counts(attack)
+            if norm is None:
+                raise ValueError(f"persona '{name}': ungueltige Attack (erwartet {WAVE_COUNT} Counts)")
+            persona.append(norm)
         personas[name] = persona
     return personas
 
@@ -368,7 +386,7 @@ class AttackCycle:
             self.attack_index += 1
             extra_levels: List[int] = []
             if self.persona and self.attack_index - 1 < len(self.persona):
-                extra_levels = list(self.persona[self.attack_index - 1] or [])
+                extra_levels = _expand_counts(self.persona[self.attack_index - 1])
 
         self._fire(natural_level)
         for lvl in extra_levels:
@@ -424,7 +442,7 @@ class AttackCycle:
                     "natural": self.level,
                     "self": list(self.bought),
                     "enemy": (
-                        list(self.persona[self.attack_index] or [])
+                        _expand_counts(self.persona[self.attack_index])
                         if self.persona and self.attack_index < len(self.persona)
                         else []
                     ),
@@ -538,19 +556,11 @@ class AttackCycle:
                     parsed = []
                     ok = True
                     for attack in sends:
-                        if not isinstance(attack, list):
+                        norm = _normalize_counts(attack)
+                        if norm is None:
                             ok = False
                             break
-                        waves = []
-                        for entry in attack:
-                            if isinstance(entry, int) and not isinstance(entry, bool) and entry in WAVE_COST:
-                                waves.append(entry)
-                            else:
-                                ok = False
-                                break
-                        if not ok:
-                            break
-                        parsed.append(waves)
+                        parsed.append(norm)
                     if ok:
                         levels = parsed
             send_yourself = bool(data.get("send_yourself", True))

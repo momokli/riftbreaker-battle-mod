@@ -225,6 +225,81 @@
                 margin-left: 4px;
             }
 
+            /* Tabs (ARIA) */
+            .tabs {
+                display: flex;
+                gap: 2px;
+                padding: 4px 8px 0;
+                border-bottom: 1px solid var(--line);
+                background: var(--base);
+            }
+            .tab {
+                background: transparent;
+                color: var(--dim);
+                border: 1px solid transparent;
+                border-bottom: none;
+                border-radius: 3px 3px 0 0;
+                padding: 3px 12px;
+                cursor: pointer;
+            }
+            .tab[aria-selected="true"] {
+                color: var(--text);
+                background: var(--panel);
+                border-color: var(--line);
+                font-weight: 600;
+            }
+
+            /* Persona Editor */
+            .persona-editor {
+                flex: 1 1 auto;
+                overflow: auto;
+                padding: 8px;
+            }
+            .persona-table {
+                border-collapse: collapse;
+                font-family: var(--font-mono);
+                font-size: 11px;
+                min-width: 100%;
+            }
+            .persona-table th,
+            .persona-table td {
+                border: 1px solid var(--line);
+                padding: 2px 4px;
+                text-align: left;
+                vertical-align: top;
+                white-space: nowrap;
+            }
+            .persona-table thead th {
+                background: var(--panel);
+                position: sticky;
+                top: 0;
+            }
+            .persona-cell {
+                display: grid;
+                grid-template-columns: auto auto auto;
+                gap: 0 4px;
+                align-items: center;
+            }
+            .persona-cell .wave-label { color: var(--dim); }
+            .persona-cell .wave-amt { min-width: 14px; text-align: right; }
+            .pe-btn {
+                background: transparent;
+                border: 1px solid var(--line);
+                color: var(--text);
+                cursor: pointer;
+                padding: 0 3px;
+                height: 16px;
+                line-height: 14px;
+                font-size: 10px;
+            }
+            .pe-btn:disabled { opacity: 0.35; cursor: default; }
+            .pe-dirty { color: var(--accent); }
+            .visually-hidden {
+                position: absolute; width: 1px; height: 1px;
+                margin: -1px; padding: 0; overflow: hidden;
+                clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+            }
+
             /* Form Controls */
             input, button {
                 font-family: inherit;
@@ -566,8 +641,12 @@
                 <span class="title-badge">◆</span> RIFT BATTLE — OPERATOR COCKPIT
                 <span class="identity-badge">__RBB_IDENTITY__</span>
             </header>
+            <nav class="tabs" role="tablist" aria-label="Cockpit-Bereiche">
+                <button id="tab_operator" class="tab" role="tab" aria-selected="true" aria-controls="workspace">Operator</button>
+                <button id="tab_personas" class="tab" role="tab" aria-selected="false" aria-controls="persona_editor" tabindex="-1">Persona Editor</button>
+            </nav>
 
-            <main class="workspace">
+            <main id="workspace" class="workspace" role="tabpanel" aria-labelledby="tab_operator">
                 <div class="left-col">
                     <!-- A. RESOURCES -->
                     <fieldset class="q-groupbox" id="panel-resources">
@@ -693,35 +772,7 @@
                         </div>
                     </fieldset>
 
-                    <!-- B3. PERSONAS (SEND-PROFILE) + SELF-SEND -->
-                    <fieldset class="q-groupbox" id="panel-personas">
-                        <legend>Personas (Send-Profile)</legend>
-                        <div class="flow-container">
-                            <div class="flow-readouts">
-                                <span class="prop-label">active</span>
-                                <select id="persona_active" class="mono" aria-label="Active persona"></select>
-                                <button id="persona_refresh" class="btn-primary">refresh</button>
-                            </div>
-                            <div class="flow-action-row">
-                                <span class="prop-label">persona</span>
-                                <input id="persona_name" class="mono" size="10" placeholder="name" aria-label="Persona name" />
-                                <span class="prop-label">sends</span>
-                                <input id="persona_sends" class="mono" size="24" placeholder="1,3 / 5 / 9,9 (/ = Attack, , = Welle)" aria-label="Persona sends" />
-                                <button id="persona_save" class="btn-primary">save</button>
-                                <button id="persona_delete" class="btn-danger">del</button>
-                            </div>
-                            <div class="log-scroll-area">
-                                <pre id="personas_list">—</pre>
-                            </div>
-                            <div class="flow-note">
-                                Send-Profile (je Attack eine Liste gekaufter Wellen, / trennt
-                                Attacken, - = leer). Aktiv + send-yourself steuern den Attack-Cycle.
-                                <span id="personas_msg" aria-live="polite"></span>
-                            </div>
-                        </div>
-                    </fieldset>
-
-                    <!-- C. MISSION FLOW (WAVE) -->
+<!-- C. MISSION FLOW (WAVE) -->
                     <fieldset class="q-groupbox" id="panel-mission">
                         <legend>Mission Flow (Wave)</legend>
                         <div class="flow-container">
@@ -937,6 +988,15 @@
                     </fieldset>
                 </div>
             </main>
+
+            <!-- H. PERSONA EDITOR -->
+            <section id="persona_editor" class="persona-editor" role="tabpanel" aria-labelledby="tab_personas" hidden>
+                <div class="flow-action-row">
+                    <button id="pe_new" class="btn-primary">+ neue Persona</button>
+                    <span id="pe_msg" aria-live="polite"></span>
+                </div>
+                <div id="pe_table"></div>
+            </section>
 
             <!-- G. STATUS BAR -->
             <footer class="status-bar">
@@ -1427,153 +1487,7 @@
                 selfSendTracker.refresh();
                 setInterval(selfSendTracker.refresh, 5000);
 
-// --- personas (testable) ---
-                function createPersonasController(deps) {
-                    var fetchFn = deps.fetch;
-                    var doc = deps.document;
-                    var DASH = "—";
-
-                    var state = { personas: {}, active: "" };
-
-                    function $(id) { return doc.getElementById(id); }
-                    function setText(id, s) { var el = $(id); if (el) el.textContent = s; }
-
-                    function parseSends(str) {
-                        if (str === undefined || str === null) return [];
-                        var s = String(str).trim();
-                        if (s === "") return [];
-                        return s.split("/").map(function (attack) {
-                            var a = attack.trim();
-                            if (a === "" || a === "-") return [];
-                            return a.split(",").map(function (t) {
-                                var v = t.trim();
-                                var n = parseInt(v, 10);
-                                if (isNaN(n)) throw new Error("invalid level: " + v);
-                                return n;
-                            });
-                        });
-                    }
-
-                    function formatSends(arr) {
-                        return (arr || []).map(function (waves) {
-                            return waves && waves.length ? waves.join(",") : "-";
-                        }).join(" / ");
-                    }
-
-                    function resp(res) {
-                        if (!res || res.ok === false) {
-                            throw new Error("HTTP " + (res ? res.status : "err"));
-                        }
-                        return res.json();
-                    }
-
-                    function render() {
-                        var names = Object.keys(state.personas || {}).sort();
-                        setText(
-                            "personas_list",
-                            names.length
-                                ? names.map(function (n) {
-                                    return (n === state.active ? "* " : "  ") + n + ": " + formatSends(state.personas[n]);
-                                }).join("\n")
-                                : DASH
-                        );
-                        var sel = $("persona_active");
-                        if (sel) {
-                            sel.innerHTML = "<option value=''>(none)</option>" +
-                                names.map(function (n) {
-                                    return "<option value='" + n + "'>" + n + "</option>";
-                                }).join("");
-                            sel.value = state.active || "";
-                        }
-                    }
-
-                    function load() {
-                        return fetchFn("personas").then(resp).then(function (data) {
-                            state.personas = (data && data.personas) || {};
-                            state.active = (data && data.active) || "";
-                            render();
-                            return state;
-                        });
-                    }
-
-                    function postJson(route, body) {
-                        return fetchFn(route, {
-                            method: "POST",
-                            headers: { "content-type": "application/json" },
-                            body: JSON.stringify(body),
-                        }).then(resp);
-                    }
-
-                    function save() {
-                        var nameEl = $("persona_name");
-                        var sendsEl = $("persona_sends");
-                        var name = ((nameEl && nameEl.value) || "").trim();
-                        var sends;
-                        try {
-                            sends = parseSends((sendsEl && sendsEl.value) || "");
-                        } catch (e) {
-                            setText("personas_msg", e.message);
-                            return Promise.resolve(state);
-                        }
-                        if (!name) {
-                            setText("personas_msg", "name fehlt");
-                            return Promise.resolve(state);
-                        }
-                        state.personas[name] = sends;
-                        return postJson("personas", state.personas).then(function () {
-                            setText("personas_msg", "");
-                            return load();
-                        });
-                    }
-
-                    function remove() {
-                        var nameEl = $("persona_name");
-                        var name = ((nameEl && nameEl.value) || "").trim() || state.active;
-                        if (!name || !state.personas[name]) {
-                            setText("personas_msg", "keine persona gewaehlt");
-                            return Promise.resolve(state);
-                        }
-                        delete state.personas[name];
-                        if (state.active === name) state.active = "";
-                        return postJson("personas", state.personas).then(function () {
-                            setText("personas_msg", "");
-                            return load();
-                        });
-                    }
-
-                    function setActive(name) {
-                        return postJson("persona_active", { name: name || "" }).then(function () {
-                            state.active = name || "";
-                            render();
-                            return state;
-                        });
-                    }
-
-                    return {
-                        state: state,
-                        load: load,
-                        save: save,
-                        remove: remove,
-                        setActive: setActive,
-                        render: render,
-                        parseSends: parseSends,
-                        formatSends: formatSends,
-                    };
-                }
-                // --- end personas ---
-
-                var personasController = createPersonasController({
-                    document: document,
-                    fetch: window.fetch.bind(window),
-                });
-                $("persona_refresh").onclick = function () { personasController.load(); };
-                $("persona_save").onclick = function () { personasController.save(); };
-                $("persona_delete").onclick = function () { personasController.remove(); };
-                $("persona_active").onchange = function () { personasController.setActive(this.value); };
-                personasController.load();
-                setInterval(personasController.load, 5000);
-
-                // --- server-control panel (testable) ---
+// --- server-control panel (testable) ---
                 function createServerControlPanel(deps) {
                     var fetchFn = deps.fetch;
                     var doc = deps.document;
@@ -1750,6 +1664,193 @@
                 }
 
                 initEvents();
+
+                // --- tabs ---
+                var TABS = [
+                    ["tab_operator", "workspace"],
+                    ["tab_personas", "persona_editor"],
+                ];
+                function selectTab(id) {
+                    TABS.forEach(function (pair) {
+                        var btn = $(pair[0]);
+                        var panel = $(pair[1]);
+                        var selected = pair[0] === id;
+                        btn.setAttribute("aria-selected", selected ? "true" : "false");
+                        btn.tabIndex = selected ? 0 : -1;
+                        panel.hidden = !selected;
+                        if (selected) btn.focus();
+                    });
+                }
+                $("tab_operator").onclick = function () { selectTab("tab_operator"); };
+                $("tab_personas").onclick = function () { selectTab("tab_personas"); };
+                $("tab_operator").onkeydown = function (e) {
+                    if (e.key === "ArrowRight") selectTab("tab_personas");
+                };
+                $("tab_personas").onkeydown = function (e) {
+                    if (e.key === "ArrowLeft") selectTab("tab_operator");
+                };
+
+                // --- persona editor (testable) ---
+                function createPersonaEditor(deps) {
+                    var fetchFn = deps.fetch;
+                    var doc = deps.document;
+                    var ATTACKS = 10;
+                    var WAVES = 9;
+
+                    var state = { personas: {}, saved: {}, active: "" };
+
+                    function $(id) { return doc.getElementById(id); }
+                    function clone(p) { return JSON.parse(JSON.stringify(p)); }
+                    function emptyPersona() {
+                        var out = [];
+                        for (var a = 0; a < ATTACKS; a++) out.push(new Array(WAVES).fill(0));
+                        return out;
+                    }
+
+                    function resp(res) {
+                        if (!res || res.ok === false) throw new Error("HTTP " + (res ? res.status : "err"));
+                        return res.json();
+                    }
+                    function postJson(route, body) {
+                        return fetchFn(route, {
+                            method: "POST",
+                            headers: { "content-type": "application/json" },
+                            body: JSON.stringify(body),
+                        }).then(resp);
+                    }
+
+                    function load() {
+                        return fetchFn("personas").then(resp).then(function (data) {
+                            state.personas = clone((data && data.personas) || {});
+                            state.saved = clone(state.personas);
+                            state.active = (data && data.active) || "";
+                            return state;
+                        });
+                    }
+
+                    function inc(name, attack, wave) {
+                        if (state.personas[name] && state.personas[name][attack]) {
+                            state.personas[name][attack][wave] += 1;
+                        }
+                    }
+                    function dec(name, attack, wave) {
+                        if (state.personas[name] && state.personas[name][attack]) {
+                            var v = state.personas[name][attack][wave];
+                            if (v > 0) state.personas[name][attack][wave] = v - 1;
+                        }
+                    }
+                    function save(name) {
+                        return postJson("personas", state.personas).then(function () {
+                            state.saved = clone(state.personas);
+                        });
+                    }
+                    function restore(name) {
+                        if (name in state.saved) {
+                            state.personas[name] = clone(state.saved[name]);
+                        }
+                    }
+                    function addPersona(name) {
+                        name = String(name || "").trim();
+                        if (name && !(name in state.personas)) {
+                            state.personas[name] = emptyPersona();
+                            state.saved[name] = clone(state.personas[name]);
+                        }
+                    }
+                    function removePersona(name) {
+                        delete state.personas[name];
+                        delete state.saved[name];
+                        if (state.active === name) state.active = "";
+                    }
+                    function setActive(name) {
+                        return postJson("persona_active", { name: name || "" }).then(function () {
+                            state.active = name || "";
+                        });
+                    }
+
+                    return {
+                        state: state,
+                        load: load,
+                        inc: inc,
+                        dec: dec,
+                        save: save,
+                        restore: restore,
+                        addPersona: addPersona,
+                        removePersona: removePersona,
+                        setActive: setActive,
+                        emptyPersona: emptyPersona,
+                    };
+                }
+                // --- end persona editor ---
+
+                var personaEditor = createPersonaEditor({ document: document, fetch: window.fetch.bind(window) });
+
+                function peRender() {
+                    var names = Object.keys(personaEditor.state.personas).sort();
+                    var html = [];
+                    html.push('<table class="persona-table">');
+                    html.push('<caption class="visually-hidden">Persona-Editor: Zeilen sind Personas, Spalten sind Attacken 1-10</caption>');
+                    html.push('<thead><tr><th scope="col">Aktiv</th><th scope="col">Persona</th>');
+                    for (var a = 1; a <= 10; a++) html.push('<th scope="col">Attack ' + a + '</th>');
+                    html.push('<th scope="col">Aktionen</th></tr></thead><tbody>');
+
+                    html.push('<tr><td><input type="radio" name="active_persona" value="" data-name=""' + (personaEditor.state.active === "" ? " checked" : "") + ' aria-label="Keine aktive Persona"></td><th scope="row">(none)</th>');
+                    for (var e = 0; e < 10; e++) html.push('<td></td>');
+                    html.push('<td></td></tr>');
+
+                    names.forEach(function (name) {
+                        var dirty = JSON.stringify(personaEditor.state.personas[name]) !== JSON.stringify(personaEditor.state.saved[name]);
+                        html.push('<tr><td><input type="radio" name="active_persona" value="' + name + '" data-name="' + name + '"' + (personaEditor.state.active === name ? " checked" : "") + ' aria-label="Persona ' + name + ' aktivieren"></td>');
+                        html.push('<th scope="row">' + name + (dirty ? ' <span class="pe-dirty">*</span>' : "") + '</th>');
+                        for (var a2 = 0; a2 < 10; a2++) {
+                            html.push('<td><div class="persona-cell">');
+                            for (var w = 0; w < 9; w++) {
+                                var amt = personaEditor.state.personas[name][a2][w];
+                                html.push('<span class="wave-label">w' + (w + 1) + '</span>');
+                                html.push('<span class="wave-amt">' + amt + '</span>');
+                                html.push('<span><button class="pe-btn" data-act="dec" data-name="' + name + '" data-attack="' + a2 + '" data-wave="' + w + '"' + (amt === 0 ? " disabled" : "") + ' aria-label="wave ' + (w + 1) + ' in attack ' + (a2 + 1) + ' fuer ' + name + ' verringern">−</button> <button class="pe-btn" data-act="inc" data-name="' + name + '" data-attack="' + a2 + '" data-wave="' + w + '" aria-label="wave ' + (w + 1) + ' in attack ' + (a2 + 1) + ' fuer ' + name + ' erhoehen">+</button></span>');
+                            }
+                            html.push('</div></td>');
+                        }
+                        html.push('<td><button class="pe-btn" data-act="save" data-name="' + name + '">save</button> <button class="pe-btn" data-act="restore" data-name="' + name + '">restore</button></td></tr>');
+                    });
+                    html.push('</tbody></table>');
+                    $("pe_table").innerHTML = html.join("");
+                }
+
+                $("pe_table").addEventListener("click", function (e) {
+                    var el = e.target;
+                    if (!el || !el.getAttribute || !el.getAttribute("data-act")) return;
+                    var act = el.getAttribute("data-act");
+                    var name = el.getAttribute("data-name");
+                    var attack = parseInt(el.getAttribute("data-attack"), 10);
+                    var wave = parseInt(el.getAttribute("data-wave"), 10);
+                    if (act === "inc") personaEditor.inc(name, attack, wave);
+                    else if (act === "dec") personaEditor.dec(name, attack, wave);
+                    else if (act === "save") personaEditor.save(name).then(function () { $("pe_msg").textContent = "gespeichert"; peRender(); }).catch(function (err) { $("pe_msg").textContent = "ERR " + err.message; });
+                    else if (act === "restore") personaEditor.restore(name);
+                    peRender();
+                });
+
+                $("pe_table").addEventListener("change", function (e) {
+                    var el = e.target;
+                    if (el && el.name === "active_persona") {
+                        personaEditor.setActive(el.value).then(function () { peRender(); }).catch(function (err) { $("pe_msg").textContent = "ERR " + err.message; });
+                    }
+                });
+
+                $("pe_new").onclick = function () {
+                    var name = window.prompt("Name der neuen Persona:");
+                    if (name) {
+                        personaEditor.addPersona(name);
+                        peRender();
+                    }
+                };
+
+                function peRefresh() {
+                    personaEditor.load().then(function () { peRender(); }).catch(function (err) { $("pe_msg").textContent = "ERR " + err.message; });
+                }
+                peRefresh();
+                setInterval(peRefresh, 5000);
             })();
         </script>
     </body>
