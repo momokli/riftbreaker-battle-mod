@@ -1778,6 +1778,10 @@ static int mode_server(void)
     InitializeCriticalSection(&g_attack_status_cs);
     InitializeCriticalSection(&g_attack_interval_cs);
     InitializeCriticalSection(&g_attack_reset_cs);
+    InitializeCriticalSection(&g_difficulty_interval_cs);
+    InitializeCriticalSection(&g_personas_cs);
+    InitializeCriticalSection(&g_active_persona_cs);
+    InitializeCriticalSection(&g_send_yourself_cs);
     g_resp_ev = CreateEvent(NULL, FALSE, FALSE, NULL);
     CreateThread(NULL, 0, pipe_reader_main, NULL, 0, NULL);
 
