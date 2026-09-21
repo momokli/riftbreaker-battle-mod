@@ -69,6 +69,25 @@ bessere Key; der Name ist der Nutzer-sichtbare Komfort (Re-Route) und fuellt
 zugleich einen **Identity-Cache**, damit der zweite Join clean und ohne Replay
 ist.
 
+## Routen-Regeln (1.0)
+
+Routen sind **Daten** (`routes.example`); die Auswertung ist reine Logik in
+`route_rules.h` — host-getestet in der CI (`test_route_rules.cpp`), ohne Wine.
+
+```text
+*-dev     = 127.0.0.1:6324     # Suffix-Wildcard
+*-staging = 127.0.0.1:6323     # Suffix-Wildcard
+*         = 127.0.0.1:6322     # Default
+```
+
+Reihenfolge: **exakt** > **laengster Suffix** > **Default**. Damit waehlt der
+Spielername die Umgebung (`momo-staging` -> staging, `momo-dev` -> dev, sonst
+prod); die GNS-Identitaet bleibt als exakter Key und fuer den Identity-Cache
+erhalten.
+
+`dev` muss dafuer von 6321 auf einen freien Port umziehen (6324) — 6321 gehoert
+dem Relay.
+
 ## Betrieb
 
 ```bash
@@ -115,6 +134,8 @@ Default-Ziel darf ein Re-Route **nicht** ueberschreiben.
 | Datei                    | Zweck                                                    |
 | ------------------------ | -------------------------------------------------------- |
 | `gns_probe.cpp`          | Relay + Routing + Message-Dump (`--dial` fuer Diagnose)  |
+| `route_rules.h`          | Routing-Regeln (exakt / Suffix / Default), reine Logik   |
+| `test_route_rules.cpp`   | Host-Test der Regeln (CI: `g++ -std=c++17`)              |
 | `inspect_gns.py`         | findet `m_nAppID` (vtable-Slot-Scan) in der GNS-DLL      |
 | `pcap_flow.py`           | UDP-Payloads eines Flows in Reihenfolge aus einem pcap   |
 | `replay_first_packet.py` | Replay der ersten GNS-Nachricht (nur Schritt 1 sinnvoll) |
@@ -134,5 +155,7 @@ Sekunden auf (vorher sah es wie ein Timeout des Proxys aus).
 - [x] E3 Relay zum Backend (bidirektional, Flags erhalten, Backpressure)
 - [x] E4 Zielwahl: Identitaet (sofort) + Name (Re-Route) + Identity-Cache
 - [x] Live: 1v1-Match durch das Relay, Namens-Routing auf staging
+- [x] 1.0: Suffix-Routing (`-dev`/`-staging`) als Regeln + Host-Test (#843)
+- [ ] Deployment der Relay-Rolle + dev-Port-Umzug (#843)
 - [ ] `m_nAppID` in eigenen GNS-Build statt Runtime-Patch
 - [ ] Rust-Backend + Web-UI (Lobby) auf die Routen-Datei

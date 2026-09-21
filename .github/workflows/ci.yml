@@ -196,6 +196,13 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         working-directory: tools/gns-proxy
         run: python3 -m unittest test_pcap_flow -v
+      # Routing-Regeln des GNS-Entry-Relays (Issue #843): exakt > Suffix > Default.
+      # Reine Logik (route_rules.h) — host-compiliert, kein Wine/Windows/Spiel.
+      - name: Host-Test Routing-Regeln (Issue #843)
+        if: needs.changes.outputs.test == 'true'
+        run: |
+          g++ -std=c++17 -Wall -Wextra -O1 -o /tmp/test_route_rules tools/gns-proxy/test_route_rules.cpp
+          /tmp/test_route_rules
       # Server-Control-Host-Agent (Issue #459): Unit-/Integrationstests ohne
       # Docker, Netz oder Spiel (Fake-docker-Binary + echter Agent auf
       # Ephemeral-Port). Reiner Standardbibliothek-Code, daher kein npm ci.

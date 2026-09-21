@@ -33,6 +33,10 @@
 
 #include <windows.h>
 
+// Reine Routing-Logik (exakt / Suffix-Wildcard / Default) — host-testbar in der
+// CI, siehe route_rules.h und test_route_rules.cpp.
+#include "route_rules.h"
+
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
@@ -140,22 +144,23 @@ bool g_backendConnected = false;
 bool g_relayEnabled = false;
 uint32 g_backendIP = 0;
 uint16 g_backendPort = 0;
-// Konfigurierter Default (--forward bzw. erste Route).  Wird NIE durch ein
+// Aktuelles Ziel als Endpoint (fuer Vergleiche beim Re-Route).
+rbroute::Endpoint g_backendTarget;
+// Konfigurierter Default (--forward bzw. Default-Regel `*`).  Wird NIE durch ein
 // Re-Route ueberschrieben — sonst wandert der Default zu einem anderen Backend.
-uint32 g_defaultIP = 0;
-uint16 g_defaultPort = 0;
+rbroute::Endpoint g_defaultTarget;
 // --dial: nur Verbindungstest zu einem Backend (ohne Client), fuer Diagnose.
-uint32 g_dialIP = 0;
-uint16 g_dialPort = 0;
+rbroute::Endpoint g_dialTarget;
 
-// Routen: Key = Identitaetsstring (`str:…`) ODER Spielname -> Backend.
-std::map<std::string, std::pair<uint32, uint16>> g_routes;
+// Routen: Key = Identitaetsstring (`str:…`), Suffix-Wildcard (`*-dev`) oder
+// Default (`*`) -> Backend.  Auswertung: exakt > laengster Suffix > Default.
+rbroute::Table g_routes;
 // Gelernt zur Laufzeit: Identitaet -> Backend (aus dem Spielnamen).  Damit ist
 // der zweite Join clean und ohne Replay.
-std::map<std::string, std::pair<uint32, uint16>> g_learnedIdentity;
+std::map<std::string, rbroute::Endpoint> g_learnedIdentity;
 const char *g_mapFile = nullptr;
 std::string g_clientIdentity;
-std::string g_lastName;
+std::string g_lastRouteKey;
 
 // Historie aller Client->Server-Nachrichten (fuer Replay beim Re-Route) plus
 // Merker, wie viele davon schon an das *aktuelle* Backend gingen.
@@ -229,25 +234,7 @@ void hexDump(const unsigned char *data, int len) {
   }
 }
 
-// --- GNS-Callbacks -----------------------------------------------------------
-
-std::string ipStr(uint32 ip) {
-  char buf[32];
-  snprintf(buf, sizeof(buf), "%u.%u.%u.%u", (ip >> 24) & 255, (ip >> 16) & 255,
-           (ip >> 8) & 255, ip & 255);
-  return buf;
-}
-
-bool parseEndpoint(const char *spec, uint32 &ipOut, uint16 &portOut) {
-  unsigned a = 0, b = 0, c = 0, d = 0, port = 0;
-  if (sscanf(spec, "%u.%u.%u.%u:%u", &a, &b, &c, &d, &port) != 5 ||
-      a > 255 || b > 255 || c > 255 || d > 255 || port == 0 || port > 65535) {
-    return false;
-  }
-  ipOut = (a << 24) | (b << 16) | (c << 8) | d;
-  portOut = static_cast<uint16>(port);
-  return true;
-}
+// --- GNS-Callbacks ----------------------------------------------------------
 
 std::string trim(const std::string &s) {
   size_t b = s.find_first_not_of(" \t\r\n");
@@ -258,8 +245,9 @@ std::string trim(const std::string &s) {
   return s.substr(b, e - b + 1);
 }
 
-// Routen-Datei: `<key>=<ip:port>` je Zeile; `key` ist ein Identitaetsstring
-// (`str:…`) oder ein Spielername; `#` startet einen Kommentar.
+// Routen-Datei: `<key> = <ip:port>` je Zeile; `key` ist ein exakter Key
+// (Identitaet `str:…`, Spielname), eine Suffix-Wildcard (`*-dev`) oder der
+// Default (`*`); `#` startet einen Kommentar.
 void loadRoutes() {
   if (g_mapFile == nullptr) {
     return;
@@ -283,32 +271,32 @@ void loadRoutes() {
     }
     *eq = '\0';
     const std::string key = trim(line);
-    uint32 ip = 0;
-    uint16 port = 0;
-    if (key.empty() || !parseEndpoint(trim(eq + 1).c_str(), ip, port)) {
+    rbroute::Endpoint target;
+    if (key.empty() || !rbroute::parseEndpoint(trim(eq + 1), target)) {
+      logLine("route ignoriert (ungenueftig): '%s'", trim(line).c_str());
       continue;
     }
-    g_routes[key] = std::make_pair(ip, port);
+    g_routes.add(key, target);
     ++n;
   }
   fclose(f);
   logLine("routen geladen: %d aus '%s'", n, g_mapFile);
+  for (const rbroute::Rule &r : g_routes.rules()) {
+    logLine("  route %-16s -> %s", r.key.c_str(), r.target.str().c_str());
+  }
 }
 
-// Laengsten registrierten *Spielnamen* finden, der als ASCII im Payload steht
-// (Identitaets-Keys `str:…` sind keine Namen und werden ausgelassen).
-std::string pickName(const std::string &payload) {
-  std::string best;
-  for (const auto &kv : g_routes) {
-    if (kv.first.rfind("str:", 0) == 0 || kv.first.size() < 3) {
-      continue;
-    }
-    if (kv.first.size() > best.size() &&
-        payload.find(kv.first) != std::string::npos) {
-      best = kv.first;
+// Erste *spezifische* Regel finden, deren Key als Token im Payload steht
+// (der Spielername steht als laengenpraefixierter Klartext im BINSER-Handshake).
+// Der Default (`*`) zaehlt dabei nicht als Treffer.
+const rbroute::Rule *routeFromPayload(const std::string &payload) {
+  for (const std::string &token : rbroute::extractTokens(payload)) {
+    const rbroute::Rule *rule = g_routes.matchSpecific(token);
+    if (rule != nullptr) {
+      return rule;
     }
   }
-  return best;
+  return nullptr;
 }
 
 // Senden mit Backpressure: ist der GNS-Sende-Puffer des Ziels voll
@@ -363,13 +351,20 @@ void startBackendConnect() {
     logLine("relay: ConnectByIPAddress/SetIPv4-Export fehlt");
     return;
   }
+  uint32 ip = 0;
+  if (!rbroute::ipToU32(g_backendTarget.ip, ip)) {
+    logLine("relay: ungueltige Backend-IP '%s'", g_backendTarget.ip.c_str());
+    return;
+  }
+  g_backendIP = ip;
+  g_backendPort = g_backendTarget.port;
   SteamNetworkingIPAddr addr;
   memset(&addr, 0, sizeof(addr));
   pIPAddrSetIPv4(&addr, g_backendIP, g_backendPort);
   g_backendConn = pConnectByIPAddress(g_pInterface, &addr, 0, nullptr);
   if (g_backendConn == k_HSteamNetConnection_Invalid) {
-    logLine("backend-connect auf %s:%u FEHLGESCHLAGEN",
-            ipStr(g_backendIP).c_str(), g_backendPort);
+    logLine("backend-connect auf %s FEHLGESCHLAGEN",
+            g_backendTarget.str().c_str());
     return;
   }
   pSetConnectionPollGroup(g_pInterface, g_backendConn, g_backendPoll);
@@ -379,19 +374,18 @@ void startBackendConnect() {
     pSetConnConfigInt32(pUtilsAccessor(), g_backendConn,
                         k_ESteamNetworkingConfig_SendBufferSize, 8 * 1024 * 1024);
   }
-  logLine("backend-connect gestartet -> conn=%u (%s:%u)", g_backendConn,
-          ipStr(g_backendIP).c_str(), g_backendPort);
+  logLine("backend-connect gestartet -> conn=%u (%s)", g_backendConn,
+          g_backendTarget.str().c_str());
 }
 
-void routeTo(uint32 ip, uint16 port, const char *why) {
-  logLine("ROUTE (%s) -> %s:%u", why, ipStr(ip).c_str(), port);
+void routeTo(const rbroute::Endpoint &target, const char *why) {
+  logLine("ROUTE (%s) -> %s", why, target.str().c_str());
   if (g_backendConn != k_HSteamNetConnection_Invalid) {
     pCloseConnection(g_pInterface, g_backendConn, 0, nullptr, false);
     g_backendConn = k_HSteamNetConnection_Invalid;
     g_backendConnected = false;
   }
-  g_backendIP = ip;
-  g_backendPort = port;
+  g_backendTarget = target;
   // Alles Gesehene erneut an das (neue) Backend schicken — aber erst, wenn es
   // verbunden ist (siehe Callback), sonst flutet ein Replay den Handshake.
   g_toBackendQ.clear();
@@ -410,7 +404,7 @@ void resetClientState() {
   g_toClientBytes = 0;
   g_toBackendQ.clear();
   g_toBackendBytes = 0;
-  g_lastName.clear();
+  g_lastRouteKey.clear();
   g_clientIdentity.clear();
   g_backendConnected = false;
 }
@@ -468,16 +462,16 @@ void onConnectionStatusChanged(
         pIdentityToString(&info.m_identityRemote, ident, sizeof(ident));
       }
       g_clientIdentity = ident;
+      g_lastRouteKey.clear();
       logLine("client-identitaet: '%s'", g_clientIdentity.c_str());
-      const auto fixed = g_routes.find(g_clientIdentity);
+      const rbroute::Rule *rule = g_routes.matchSpecific(g_clientIdentity);
       const auto learned = g_learnedIdentity.find(g_clientIdentity);
-      if (fixed != g_routes.end()) {
-        routeTo(fixed->second.first, fixed->second.second, "identitaet (fix)");
+      if (rule != nullptr) {
+        routeTo(rule->target, "identitaet (fix)");
       } else if (learned != g_learnedIdentity.end()) {
-        routeTo(learned->second.first, learned->second.second,
-                "identitaet (gelernt)");
+        routeTo(learned->second, "identitaet (gelernt)");
       } else {
-        routeTo(g_defaultIP, g_defaultPort, "default (identitaet unbekannt)");
+        routeTo(g_defaultTarget, "default (identitaet unbekannt)");
       }
     }
     break;
@@ -544,27 +538,23 @@ void drainFrom(HSteamNetPollGroup group, bool fromClient) {
         logLine("  -> HISTORIE VOLL — nicht replay-faehig (%zu B)", size);
       }
       // Spielname lernen und bei Bedarf auf das richtige Backend umziehen.
-      const std::string name = pickName(payload);
-      if (!name.empty() && name != g_lastName) {
-        g_lastName = name;
-        const auto it = g_routes.find(name);
-        if (it != g_routes.end()) {
-          if (it->second.first != g_backendIP ||
-              it->second.second != g_backendPort) {
-            logLine("NAME GELERNT: '%s' -> %s:%u (re-route)", name.c_str(),
-                    ipStr(it->second.first).c_str(), it->second.second);
-            routeTo(it->second.first, it->second.second, "name");
-          } else {
-            logLine("NAME GELERNT: '%s' -> schon richtiges backend",
-                    name.c_str());
-          }
-          // Identitaet -> Backend merken: der zweite Join ist damit instant und
-          // braucht kein Replay mehr.
-          if (!g_clientIdentity.empty()) {
-            g_learnedIdentity[g_clientIdentity] = it->second;
-            logLine("  identity-cache: %s -> %s:%u", g_clientIdentity.c_str(),
-                    ipStr(it->second.first).c_str(), it->second.second);
-          }
+      const rbroute::Rule *rule = routeFromPayload(payload);
+      if (rule != nullptr && rule->key != g_lastRouteKey) {
+        g_lastRouteKey = rule->key;
+        if (!(rule->target == g_backendTarget)) {
+          logLine("NAME ROUTE: '%s' -> %s (re-route)", rule->key.c_str(),
+                  rule->target.str().c_str());
+          routeTo(rule->target, "name");
+        } else {
+          logLine("NAME ROUTE: '%s' -> schon richtiges backend %s",
+                  rule->key.c_str(), rule->target.str().c_str());
+        }
+        // Identitaet -> Backend merken: der zweite Join ist damit instant und
+        // braucht kein Replay mehr.
+        if (!g_clientIdentity.empty()) {
+          g_learnedIdentity[g_clientIdentity] = rule->target;
+          logLine("  identity-cache: %s -> %s", g_clientIdentity.c_str(),
+                  rule->target.str().c_str());
         }
       }
       queueHistoryDelta();
@@ -694,7 +684,7 @@ int main(int argc, char **argv) {
       g_appid = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--forward") == 0 && i + 1 < argc) {
       const char *spec = argv[++i];
-      if (!parseEndpoint(spec, g_backendIP, g_backendPort)) {
+      if (!rbroute::parseEndpoint(spec, g_defaultTarget)) {
         fprintf(stderr, "--forward braucht IPv4:port, bekam '%s'\n", spec);
         return 2;
       }
@@ -702,7 +692,7 @@ int main(int argc, char **argv) {
       g_mapFile = argv[++i];
     } else if (strcmp(argv[i], "--dial") == 0 && i + 1 < argc) {
       const char *spec = argv[++i];
-      if (!parseEndpoint(spec, g_dialIP, g_dialPort)) {
+      if (!rbroute::parseEndpoint(spec, g_dialTarget)) {
         fprintf(stderr, "--dial braucht IPv4:port, bekam '%s'\n", spec);
         return 2;
       }
@@ -770,13 +760,12 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  if (g_dialIP != 0) {
+  if (g_dialTarget.port != 0) {
     // Nur Verbindungstest (kein Listen-Socket) — sonst kollidiert der Test mit
     // dem laufenden Relay auf 6321.
-    logLine("DIAL-TEST -> %s:%u", ipStr(g_dialIP).c_str(), g_dialPort);
+    logLine("DIAL-TEST -> %s", g_dialTarget.str().c_str());
     g_backendPoll = pCreatePollGroup(g_pInterface);
-    g_backendIP = g_dialIP;
-    g_backendPort = g_dialPort;
+    g_backendTarget = g_dialTarget;
     startBackendConnect();
     for (int i = 0; i < 200 && !g_backendConnected; ++i) {
       pRunCallbacks(g_pInterface);
@@ -824,22 +813,24 @@ int main(int argc, char **argv) {
   }
   logLine("lauscht als GNS-Server auf 0.0.0.0:%u — warte auf Handshake", nPort);
   loadRoutes();
-  if (g_mapFile != nullptr || g_backendIP != 0) {
+  if (g_mapFile != nullptr || g_defaultTarget.port != 0) {
     g_relayEnabled = true;
-    if (g_backendIP == 0 && !g_routes.empty()) {
-      // Kein explizites Default angegeben: erste Route als Default nehmen, damit
+    if (g_defaultTarget.port == 0) {
+      // Kein --forward: Default-Regel (`*`) aus der Routen-Datei nehmen, damit
       // der Client ueberhaupt eine Handshake-Antwort bekommt und den Namen
       // nachliefern kann.
-      g_backendIP = g_routes.begin()->second.first;
-      g_backendPort = g_routes.begin()->second.second;
-      logLine("kein --forward gesetzt — Default = erste Route '%s' -> %s:%u",
-              g_routes.begin()->first.c_str(), ipStr(g_backendIP).c_str(),
-              g_backendPort);
+      const rbroute::Rule *fallback = g_routes.defaultRule();
+      if (fallback != nullptr) {
+        g_defaultTarget = fallback->target;
+        logLine("kein --forward gesetzt — Default = Regel '*' -> %s",
+                g_defaultTarget.str().c_str());
+      } else {
+        logLine("WARNUNG: kein --forward und keine Default-Regel '*' — Joins "
+                "ohne passende Route koennen nicht bedient werden");
+      }
     }
-    g_defaultIP = g_backendIP;
-    g_defaultPort = g_backendPort;
-    logLine("RELAY-MODUS: default-backend %s:%u | routen=%zu | identitaet(+cache)+name",
-            ipStr(g_defaultIP).c_str(), g_defaultPort, g_routes.size());
+    logLine("RELAY-MODUS: default %s | routen=%zu | identitaet(+cache)+name",
+            g_defaultTarget.str().c_str(), g_routes.size());
   }
   logLine("(E1: Status Connected erwarten | E2: Klartext-Nachrichten mit "
           "Spielernamen)");
