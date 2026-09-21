@@ -1,0 +1,18 @@
+# rbgns-Routen (Spike #831): <key>=<ip:port> je Zeile, '#' = Kommentar.
+#
+# Key ist entweder
+#   * ein Spielname (kommt NACH der Handshake-Antwort -> Re-Route), oder
+#   * ein GNS-Identitaetsstring `str:<hex>` (kommt SOFORT mit dem Connect,
+#     stabil pro Installation -> direktes Routing ohne Umweg).
+#
+# Backends auf planet (veroeffentlichte Host-Ports):
+#   prod    = 127.0.0.1:6322
+#   staging = 127.0.0.1:6323
+#   dev     = 6321 ist vom Relay selbst belegt -> dev muesste auf eigenem Port laufen
+#
+# Namen (Re-Route nach dem Handshake):
+momop = 127.0.0.1:6322
+momos = 127.0.0.1:6323
+
+# Identitaets-Routing (sofort, kein Re-Route) — Beispiel:
+# str:DD232D4F3A1B46F3B8E14B1CB12B4E4 = 127.0.0.1:6323

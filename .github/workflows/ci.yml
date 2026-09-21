@@ -184,6 +184,18 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         working-directory: tools/re
         run: python3 -m unittest test_rbpack -v
+      # L7-Router (Issue #825): userspace-UDP-Router fuer :6321, Namens-Lernen
+      # und Zielwechsel. Hermetisch (UDP auf Loopback, Fake-Clock).
+      - name: Unit-Test L7-Router (Issue #825)
+        if: needs.changes.outputs.test == 'true'
+        working-directory: tools/net-router
+        run: python3 -m unittest test_rbrouter -v
+      # GNS-Proxy (Issue #831): pcap-Flow-Parser fuer den Handshake-Mitschnitt
+      # (Client-Handshake -> Server-Antwort -> Name). Hermetisch (synthetische pcaps).
+      - name: Unit-Test GNS-Proxy pcap-Parser (Issue #831)
+        if: needs.changes.outputs.test == 'true'
+        working-directory: tools/gns-proxy
+        run: python3 -m unittest test_pcap_flow -v
       # Server-Control-Host-Agent (Issue #459): Unit-/Integrationstests ohne
       # Docker, Netz oder Spiel (Fake-docker-Binary + echter Agent auf
       # Ephemeral-Port). Reiner Standardbibliothek-Code, daher kein npm ci.
