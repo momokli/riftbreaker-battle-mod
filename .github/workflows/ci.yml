@@ -215,6 +215,13 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         working-directory: tests/persona-editor
         run: npm test
+      # Natural-Attacks-Editor (#819): Difficulty 1-9 x attack-count/boss
+      # (load/inc/dec/setBoss/setOffset/save/restore). Extrahierter Marker-Block,
+      # kein Netzwerk/DOM. Keine Dependencies.
+      - name: Unit-Test Natural-Attacks-Editor (#819)
+        if: needs.changes.outputs.test == 'true'
+        working-directory: tests/natural-attack-editor
+        run: npm test
 
   build:
     name: Build + Package (rbbridge.dll/exe, dist/*.zip)
