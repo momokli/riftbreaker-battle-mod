@@ -6,11 +6,14 @@ Ziel (PoC): anstatt jede gekaufte Welle 2 min nach dem Kauf einzeln zu feuern,
 laeuft ein fester Zyklus, der beim Bau des HQ startet:
 
   round start (HQ gebaut)
-    └─ alle `interval` Sekunden (Default 7 min) feuert EINE "natuerliche" Welle
-       mit dem aktuellen Level (1..9, cap 9). Der Spieler kann waehrend des
+    └─ alle `interval` Sekunden (Default 7 min) feuert der Zyklus die
+       Natural-Wellen des aktuellen Levels (1..9, cap 9): je Attack
+       `maxAttackCountPerDifficulty[level]` Wellen, ab Level 8/9 zusaetzlich
+       ein Boss (attack_boss_dynamic.logic) — Spiegel der Base-Game-DOM
+       (DIFFICULTY_RULES, docs/DOM_REPLICA.md). Der Spieler kann waehrend des
        Fensters Wellen "kaufen" (`-send waveN`): jede wird SOFORT bezahlt
        (try_spend) und in eine Queue gestapelt; beim naechsten Zyklus-Tick
-       werden sie GLEICHZEITIG mit der natuerlichen Welle gefeuert.
+       werden sie GLEICHZEITIG mit den Natural-Wellen gefeuert.
 
 Difficulty-Level (Issue #778) laeuft auf einem EIGENEN, vom Wellen-Feuern
 entkoppelten Timer — und folgt der Base-Game-Kurve (§3.1 DOM_REPLICA.md):
@@ -99,6 +102,48 @@ WAVE_LOGIC = {
     9: "logic/missions/survival/attack_level_8_id_1.logic",
 }
 
+# Boss-/Elite-Boss-Logic (rules.bosses bzw. rules.multiplayerWaves[level] ->
+# attack_boss_dynamic.logic; see research #750). Ein Aufruf = EIN Boss.
+BOSS_LOGIC = "logic/missions/survival/attack_boss_dynamic.logic"
+
+# Wellen-Feuer-Regeln je Difficulty-Level (1..9), Spiegel der Base-Game-DOM
+# (client-mod/lua/missions/survival/v2/dom_survival_jungle_rules_default.lua +
+# _normal.lua). Escalation/Timing lebt separat im Difficulty-Timer
+# (Issue #778/#800); hier nur die FEUER-Dimensionen.
+#
+#   max_attack_count  rules.maxAttackCountPerDifficulty — Natural-Wellen je Attack
+#   boss_min_level    ab diesem Level feuert zusaetzlich EIN Boss
+#                     (rules.bosses -> attack_boss_dynamic.logic). "ab 8/9" -> 8.
+#   extra_min_level   ab diesem Level feuern Extra-Wellen (rules.extraWaves,
+#                     "stronger_attack"-Event). None = aus (Event ist random,
+#                     Event-Manager-Spike noch offen, docs/DOM_REPLICA.md §7.2).
+#   extra_count       Anzahl Extra-Wellen je Attack (Base-Game-Event amount=2).
+#   mp_min_level      ab diesem Level feuert ein MP-Elite-Boss
+#                     (rules.multiplayerWaves). None = aus (Solo-first,
+#                     "MP-Wellen als spaeterer Schritt", §7.7). Solo-Schwellen
+#                     aus research #750 waeren default=6 / normal=7.
+#
+# Refs: docs/DOM_REPLICA.md §2/§3.3, docs/research/213-wave-richtwert.md,
+# docs/research/736-wellen-hp-pool-vollstaendig.md,
+# docs/research/multiplayer-additional-boss-wave.md.
+DIFFICULTY_RULES = {
+    "default": {
+        "max_attack_count": [1, 2, 2, 3, 3, 3, 3, 3, 4],
+        "boss_min_level": 8,
+        "extra_min_level": None,
+        "extra_count": 0,
+        "mp_min_level": None,
+    },
+    "normal": {
+        "max_attack_count": [1, 2, 2, 2, 2, 2, 3, 3, 3],
+        "boss_min_level": 8,
+        "extra_min_level": None,
+        "extra_count": 0,
+        "mp_min_level": None,
+    },
+}
+DEFAULT_DIFFICULTY_PROFILE = "default"
+
 
 def parse_hq_alive(raw: str) -> bool:
     """True, wenn get_state ok:true und hq_hp > 0 (HQ gebaut + lebt)."""
@@ -165,6 +210,55 @@ def _expand_counts(counts) -> List[int]:
         levels.extend([wave + 1] * count)
     return levels
 
+
+def _normalize_difficulty_rules(rules, max_level: int) -> Dict[str, Any]:
+    """Normalisiert eine Difficulty-Rules-Struktur auf den internen Shape.
+
+    Erwartet dict mit (optionalen) Schluesseln:
+      max_attack_count: Liste nicht-negativer ints (Natural-Wellen je Level;
+                        fehlende Eintraege werden mit dem letzten Wert aufgefuellt)
+      boss_min_level:   int|None (Boss feuert ab diesem Level)
+      extra_min_level:  int|None (Extra-Wellen feuern ab diesem Level)
+      extra_count:      int (Anzahl Extra-Wellen je Attack)
+      mp_min_level:     int|None (MP-Elite-Boss feuert ab diesem Level)
+
+    Liefert ein normalisiertes dict; wirft ValueError bei ungueltigem Format.
+    """
+    if not isinstance(rules, dict):
+        raise ValueError("difficulty_rules muss ein Objekt sein")
+
+    counts = rules.get("max_attack_count", [1])
+    if not isinstance(counts, (list, tuple)) or not counts:
+        raise ValueError("max_attack_count muss eine nicht-leere Liste sein")
+    norm_counts: List[int] = []
+    for c in counts:
+        if isinstance(c, bool) or not isinstance(c, int) or c < 0:
+            raise ValueError("max_attack_count: nur nicht-negative ints")
+        norm_counts.append(c)
+    if len(norm_counts) >= max_level:
+        norm_counts = norm_counts[:max_level]
+    else:
+        norm_counts = norm_counts + [norm_counts[-1]] * (max_level - len(norm_counts))
+
+    def _level_or_none(key: str):
+        v = rules.get(key)
+        if v is None:
+            return None
+        if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+            raise ValueError(f"{key} muss ein int >= 1 oder None sein")
+        return v
+
+    extra_count = rules.get("extra_count", 0)
+    if isinstance(extra_count, bool) or not isinstance(extra_count, int) or extra_count < 0:
+        raise ValueError("extra_count muss ein nicht-negativer int sein")
+
+    return {
+        "max_attack_count": norm_counts,
+        "boss_min_level": _level_or_none("boss_min_level"),
+        "extra_min_level": _level_or_none("extra_min_level"),
+        "extra_count": extra_count,
+        "mp_min_level": _level_or_none("mp_min_level"),
+    }
 
 def _normalize_difficulty_schedule(schedule, n_steps: int) -> Optional[List[float]]:
     """Normalisiert eine Liste von Schrittdauern auf `n_steps` positive floats.
@@ -239,6 +333,8 @@ class AttackCycle:
         persona_name: str = "",
         send_yourself: bool = True,
         timeout: float = 30.0,
+        difficulty_profile: str = DEFAULT_DIFFICULTY_PROFILE,
+        difficulty_rules: Optional[Dict[str, Any]] = None,
         _poster: Optional[Callable[[str, bytes], tuple]] = None,
         _getter: Optional[Callable[[str], tuple]] = None,
         _clock: Callable[[], float] = time.monotonic,
@@ -271,6 +367,14 @@ class AttackCycle:
         self.persona_name = persona_name
         self.send_yourself = send_yourself
         self.timeout = timeout
+        # Wellen-Feuer-Regeln (Attack-Count/Boss/Extra/MP), konfigurierbar.
+        # Ein explizites `difficulty_rules`-dict ueberschreibt das benannte
+        # Profil (`difficulty_profile`).
+        rules = difficulty_rules
+        if rules is None:
+            rules = DIFFICULTY_RULES.get(difficulty_profile, DIFFICULTY_RULES[DEFAULT_DIFFICULTY_PROFILE])
+        self.difficulty_profile = difficulty_profile if difficulty_rules is None else "<custom>"
+        self.difficulty_rules = _normalize_difficulty_rules(rules, max_level)
         self._poster = _poster or self._http_post
         self._getter = _getter or self._http_get
         self._clock = _clock
@@ -401,6 +505,36 @@ class AttackCycle:
         )
         print(f"[attack-cycle] fire wave{level} logic={logic} -> HTTP {status} {body[:120]}", flush=True)
 
+    def _fire_boss(self) -> None:
+        """Feuert einen Boss/Elite-Boss (attack_boss_dynamic.logic)."""
+        status, body = self._post_json(
+            "/activate_mission_flow",
+            {"logic": BOSS_LOGIC, "mode": "default"},
+        )
+        print(f"[attack-cycle] fire boss logic={BOSS_LOGIC} -> HTTP {status} {body[:120]}", flush=True)
+
+    def _wave_plan(self, level: int) -> Dict[str, Any]:
+        """Wellen-Komposition fuer EINE Attack auf `level` (Base-Game-DOM).
+
+        Liefert dict mit natural_count (Natural-Wellen), boss (bool),
+        extra_count (Extra-Wellen) und mp (bool, Elite-Boss). Die Schwellen
+        stammen aus self.difficulty_rules (konfigurierbar, s. DIFFICULTY_RULES).
+        """
+        rules = self.difficulty_rules
+        counts = rules["max_attack_count"]
+        natural_count = counts[min(level - 1, len(counts) - 1)]
+        boss = rules["boss_min_level"] is not None and level >= rules["boss_min_level"]
+        extra_min = rules["extra_min_level"]
+        extra = extra_min is not None and level >= extra_min
+        extra_count = rules["extra_count"] if extra else 0
+        mp = rules["mp_min_level"] is not None and level >= rules["mp_min_level"]
+        return {
+            "natural_count": natural_count,
+            "boss": boss,
+            "extra_count": extra_count,
+            "mp": mp,
+        }
+
     def _difficulty_duration(self, level: int) -> float:
         """Dauer fuer den naechsten Schritt ab `level` (1-basiert): level → level+1."""
         sched = self.difficulty_schedule
@@ -450,7 +584,15 @@ class AttackCycle:
             if self.persona and self.attack_index - 1 < len(self.persona):
                 extra_levels = _expand_counts(self.persona[self.attack_index - 1])
 
-        self._fire(natural_level)
+        plan = self._wave_plan(natural_level)
+        for _ in range(plan["natural_count"]):
+            self._fire(natural_level)
+        if plan["boss"]:
+            self._fire_boss()
+        for _ in range(plan["extra_count"]):
+            self._fire(natural_level)
+        if plan["mp"]:
+            self._fire_boss()
         for lvl in extra_levels:
             self._fire(lvl)
         for lvl in sent_levels:
@@ -458,6 +600,10 @@ class AttackCycle:
         with self._lock:
             self.last_fire = {
                 "natural_level": natural_level,
+                "natural_count": plan["natural_count"],
+                "boss": plan["boss"],
+                "extra_count": plan["extra_count"],
+                "mp": plan["mp"],
                 "persona_levels": extra_levels,
                 "sent_levels": sent_levels,
                 "t": now,
@@ -466,6 +612,9 @@ class AttackCycle:
                 {
                     "attack": self.attack_index,
                     "natural": natural_level,
+                    "natural_count": plan["natural_count"],
+                    "boss": plan["boss"],
+                    "mp": plan["mp"],
                     "self": sent_levels,
                     "enemy": extra_levels,
                     "t": now,
@@ -473,7 +622,9 @@ class AttackCycle:
             )
             self.history = self.history[-10:]  # cap auf die letzten 10 Attacken
         print(
-            f"[attack-cycle] attack: natural={natural_level} + persona={extra_levels} + sent={sent_levels}",
+            f"[attack-cycle] attack: natural={natural_level}x{plan['natural_count']} "
+            f"boss={plan['boss']} extra={plan['extra_count']} mp={plan['mp']} "
+            f"+ persona={extra_levels} + sent={sent_levels}",
             flush=True,
         )
         return "attack"
@@ -780,6 +931,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--max-level", type=int, default=DEFAULT_MAX_LEVEL, help="Max. natuerliches Level (Default 9)")
     p.add_argument(
+        "--difficulty-profile",
+        choices=sorted(DIFFICULTY_RULES.keys()),
+        default=DEFAULT_DIFFICULTY_PROFILE,
+        help=(
+            "Wellen-Feuer-Profil (Attack-Count/Boss/Extra/MP, s. DIFFICULTY_RULES). "
+            "Default: default."
+        ),
+    )
+    p.add_argument(
         "--persona",
         default=None,
         help="Name der aktiven Persona (Default none = nur Natural Waves); braucht --persona-file",
@@ -847,6 +1007,7 @@ def main(argv: Optional[list] = None) -> int:
         persona=persona,
         persona_name=persona_name,
         send_yourself=(args.send_yourself == "on"),
+        difficulty_profile=args.difficulty_profile,
         timeout=args.timeout,
     )
     run(cycle, args.control_bind, args.control_port, poll_interval=args.poll_interval, once=args.once)
