@@ -617,6 +617,73 @@ class TestSyncPersonas(unittest.TestCase):
         self.assertTrue(cycle.send_yourself)
 
 
+class TestSyncNaturalAttackRules(unittest.TestCase):
+    """sync_natural_attack_rules(): pollt GET /natural_attack_rules (Bridge)
+    und uebernimmt Attack-Count/Boss je Level + Creature-Events + Event-Offset
+    zur Laufzeit (Issue #819)."""
+
+    def _cycle(self, getter_resp):
+        return AttackCycle(
+            "http://127.0.0.1:9001",
+            interval_s=420.0,
+            difficulty_interval_first_s=1e9,
+            _poster=FakePoster('{"ok":true,"hq_hp":100.0}'),
+            _getter=lambda path: (200, getter_resp),
+            _clock=FakeClock(),
+        )
+
+    def _rules_json(self, **overrides):
+        base = {
+            "max_attack_count": [1, 1, 1, 1, 1, 1, 1, 1, 1],
+            "boss_min_level": 2,
+            "creature_events": [
+                {"name": "shegret_attack",
+                 "logic": "logic/event/shegret_attack.logic",
+                 "min_level": 2, "max_level": 4,
+                 "attack_strength": "normal", "weight": 3},
+            ],
+            "event_offset_fraction": 0.5,
+        }
+        base.update(overrides)
+        return json.dumps(base)
+
+    def test_applies_rules(self):
+        cycle = self._cycle(self._rules_json())
+        cycle.sync_natural_attack_rules()
+        self.assertEqual(cycle.difficulty_rules["max_attack_count"], [1] * 9)
+        self.assertEqual(cycle.difficulty_rules["boss_min_level"], 2)
+        self.assertEqual(len(cycle.creature_events), 1)
+        self.assertEqual(cycle.creature_events[0]["attack_strength"], "normal")
+        self.assertEqual(cycle.event_offset_s, 210.0)  # 420 * 0.5
+
+    def test_boss_none_supported(self):
+        cycle = self._cycle(self._rules_json(boss_min_level=None))
+        cycle.sync_natural_attack_rules()
+        self.assertIsNone(cycle.difficulty_rules["boss_min_level"])
+
+    def test_invalid_attack_count_ignored(self):
+        cycle = self._cycle(self._rules_json(max_attack_count="nope"))
+        before = cycle.difficulty_rules["max_attack_count"]
+        cycle.sync_natural_attack_rules()
+        self.assertEqual(cycle.difficulty_rules["max_attack_count"], before)
+
+    def test_invalid_events_ignored(self):
+        cycle = self._cycle(self._rules_json(creature_events="nope"))
+        before = len(cycle.creature_events)
+        cycle.sync_natural_attack_rules()
+        self.assertEqual(len(cycle.creature_events), before)
+
+    def test_non_200_ignored(self):
+        cycle = AttackCycle(
+            "http://127.0.0.1:9001",
+            _poster=FakePoster('{"ok":true,"hq_hp":100.0}'),
+            _getter=lambda path: (500, '{"ok":false}'),
+        )
+        before = cycle.difficulty_rules["max_attack_count"]
+        cycle.sync_natural_attack_rules()
+        self.assertEqual(cycle.difficulty_rules["max_attack_count"], before)
+
+
 class TestTimersAndPreview(unittest.TestCase):
     def test_sync_difficulty_interval(self):
         def poster(path, body):
