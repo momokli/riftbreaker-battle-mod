@@ -163,3 +163,17 @@
       docker logs {{ gns_relay_container }}.
     success_msg: "{{ gns_relay_container }} laeuft (network_mode host, UDP {{ gns_relay_port }})."
   when: not ansible_check_mode
+
+# Funktions-Check (Issue #843): ein Container kann „laufen“ UND trotzdem in einer
+# Restart-Schleife haengen (genau das passierte beim ersten Live-Deploy: frisches
+# Wine-Volume gehoerte root -> wine brach ab, der Running-Check war trotzdem
+# kurz wahr). Erst der gebundene Einstiegsport beweist, dass der Relay wirklich
+# lauscht. `ss` ist read-only.
+- name: "gns-relay lauscht auf :{{ gns_relay_port }} (bis zu 30 s)"
+  command: ss -H -uln
+  register: gns_relay_listen
+  until: gns_relay_listen.stdout is search(':' ~ (gns_relay_port | string) ~ ' ')
+  retries: 15
+  delay: 2
+  changed_when: false
+  when: not ansible_check_mode
