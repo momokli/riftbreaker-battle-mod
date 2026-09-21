@@ -732,6 +732,29 @@ int main(void)
           "mission_flow_mode_ok: \"default \" -> abgelehnt (kein Trim)");
 
     /* -------------------------------------------------------------- */
+    /* attack_strength_ok (#814): nur die drei Base-Game-Werte          */
+    /* -------------------------------------------------------------- */
+    /* Der Wert steuert logic_switch_on_value_1 im Creature-Attack-Event-
+     * Flow (shegret/kermon); ein unbekannter Wert trifft dort keine Route
+     * und verpufft stumm - deshalb schon hier ablehnen (analog mode #447). */
+    check(attack_strength_ok("normal") == 1,
+          "attack_strength_ok: \"normal\" -> erlaubt");
+    check(attack_strength_ok("hard") == 1,
+          "attack_strength_ok: \"hard\" -> erlaubt");
+    check(attack_strength_ok("very_hard") == 1,
+          "attack_strength_ok: \"very_hard\" -> erlaubt");
+    check(attack_strength_ok("") == 1,
+          "attack_strength_ok: leer -> erlaubt (kein Binding)");
+    check(attack_strength_ok(NULL) == 1,
+          "attack_strength_ok: NULL -> erlaubt (kein Binding)");
+    check(attack_strength_ok("Normal") == 0,
+          "attack_strength_ok: \"Normal\" -> abgelehnt (case-sensitiv)");
+    check(attack_strength_ok("easy") == 0,
+          "attack_strength_ok: \"easy\" -> abgelehnt (unbekannt)");
+    check(attack_strength_ok("normal ") == 0,
+          "attack_strength_ok: \"normal \" -> abgelehnt (kein Trim)");
+
+    /* -------------------------------------------------------------- */
     /* #549: Chat-Payload-Builder (json_escape_into + player_chat-Zeile) */
     /* -------------------------------------------------------------- */
     /* Rein, ohne Spielprozess: prueft Wire-Event-Form, Escaping von

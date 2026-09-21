@@ -15,17 +15,31 @@ import unittest
 from attack_cycle import (
     AttackCycle,
     BOSS_LOGIC,
+    CREATURE_ATTACK_EVENTS,
     DEFAULT_DIFFICULTY_PROFILE,
     DIFFICULTY_RULES,
     DEFAULT_DIFFICULTY_INTERVAL_FIRST_S,
+    DEFAULT_WARMUP_S,
+    STATE_GAME_OVER,
+    STATE_PAUSED,
+    STATE_RUNNING,
+    STATE_WARMUP,
     WAVE_COUNT,
     _expand_counts,
     _normalize_counts,
     _normalize_difficulty_rules,
+    _normalize_creature_events,
+    _normalize_toggles,
+    _pick_creature_event,
     load_personas,
     parse_hq_alive,
     parse_send_level,
 )
+
+
+# Tests, die nur den Feuer-/Difficulty-Pfad pruefen, setzen das Warmup auf 0s:
+# Start-Signal + Warmup-Ende fallen dann auf denselben Tick (t) -> RUNNING.
+WARMUP_OFF = 0.0
 
 
 def wave_count(*levels):
@@ -36,6 +50,16 @@ def wave_count(*levels):
     return counts
 
 
+def start_cycle(cycle):
+    """Start-Signal + Warmup-Ende (WARMUP_OFF) -> RUNNING.
+
+    Ersetzt das alte ``cycle.step()  # started`` (HQ-Trigger). Liefert die
+    step()-Aktion des Warmup-Endes zurueck ("started" oder "game_over").
+    """
+    cycle.signal_start()
+    return cycle.step()
+
+
 class FakePoster:
     def __init__(self, state_resp='{"ok":true,"hq_hp":100.0}'):
         self.calls = []
@@ -43,6 +67,9 @@ class FakePoster:
         self.spend_ok = True
         self.spend_resp = '{"ok":true,"balance":50000000}'
         self.reset_epoch = 0
+        # Antwort auf POST /start — wie die Bridge: quittiert JEDEN Aufruf
+        # mit start:true (pipe_bridge.c handle_post_start).
+        self.start_resp = '{"ok":true,"start":true}'
 
     def __call__(self, path, body):
         self.calls.append((path, body))
@@ -56,6 +83,8 @@ class FakePoster:
             return (200, '{"ok":true}')
         if path == "/attack_reset":
             return (200, '{"reset_epoch":%d}' % self.reset_epoch)
+        if path == "/start":
+            return (200, self.start_resp)
         return (404, '{"ok":false}')
 
 
@@ -65,6 +94,19 @@ class FakeClock:
 
     def __call__(self):
         return self.t
+
+
+class FakeGetter:
+    """GET-Gegenstueck zum FakePoster (liefert einen festen Body)."""
+
+    def __init__(self, body='{}', status=200):
+        self.body = body
+        self.status = status
+        self.calls = []
+
+    def __call__(self, path):
+        self.calls.append(path)
+        return (self.status, self.body)
 
 
 class TestParseHqAlive(unittest.TestCase):
@@ -107,31 +149,91 @@ class TestAttackCycle(unittest.TestCase):
     # (jetzt entkoppelten) Difficulty-Timer unberuehrt bleiben. Tests, die den
     # Timer selbst pruefen, ueberschreiben ihn explizit (siehe
     # TestAttackCycleDifficultyTimer unten).
-    def _cycle(self, poster, interval=420.0, difficulty_interval_first=1e9, difficulty_schedule=None, clock=None):
+    def _cycle(self, poster, interval=420.0, difficulty_interval_first=1e9, difficulty_schedule=None, clock=None,
+               warmup_s=WARMUP_OFF, **kwargs):
         return AttackCycle(
             "http://127.0.0.1:9001",
             interval_s=interval,
             difficulty_interval_first_s=difficulty_interval_first,
             difficulty_schedule=difficulty_schedule,
+            warmup_s=warmup_s,
             _poster=poster,
             _clock=clock or FakeClock(),
+            **kwargs,
         )
 
-    def test_not_built_does_not_start(self):
-        poster = FakePoster('{"ok":true,"hq_hp":null}')
-        cycle = self._cycle(poster)
-        self.assertIsNone(cycle.step())
-        self.assertFalse(cycle.active)
-
-    def test_hq_built_starts_cycle(self):
+    def test_paused_does_not_auto_start_on_hq(self):
+        """Der Server bootet PAUSED: das HQ ist NICHT mehr Start-Trigger und
+        in PAUSED wird nicht einmal get_state gepollt (keine Timer)."""
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
-        cycle = self._cycle(poster, clock=clock, difficulty_interval_first=DEFAULT_DIFFICULTY_INTERVAL_FIRST_S)
+        cycle = self._cycle(poster, clock=clock)
+        self.assertEqual(cycle.state, STATE_PAUSED)
+        self.assertIsNone(cycle.step())
+        clock.t = 10000.0
+        self.assertIsNone(cycle.step())
+        self.assertEqual(cycle.state, STATE_PAUSED)
+        self.assertFalse(cycle.active)
+        self.assertEqual(poster.calls, [])
+
+    def test_start_signal_enters_warmup(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock=clock, warmup_s=120.0)
+        self.assertTrue(cycle.signal_start())
+        self.assertEqual(cycle.state, STATE_WARMUP)
+        self.assertEqual(cycle.next_warmup_end, 120.0)
+        self.assertFalse(cycle.active)  # feuert erst in RUNNING
+        self.assertFalse(cycle.signal_start())  # idempotent
+        self.assertEqual(cycle.state, STATE_WARMUP)
+
+    def test_warmup_runs_full_then_running(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock=clock, warmup_s=120.0,
+                           difficulty_interval_first=DEFAULT_DIFFICULTY_INTERVAL_FIRST_S)
+        cycle.signal_start()
+        clock.t = 119.0
+        self.assertIsNone(cycle.step())  # Warmup laeuft IMMER voll
+        self.assertEqual(cycle.state, STATE_WARMUP)
+        clock.t = 120.0
         self.assertEqual(cycle.step(), "started")
+        self.assertEqual(cycle.state, STATE_RUNNING)
         self.assertTrue(cycle.active)
         self.assertEqual(cycle.level, 1)
-        self.assertEqual(cycle.next_attack_at, 420.0)
-        self.assertEqual(cycle.next_difficulty_at, 200.0)
+        self.assertEqual(cycle.next_attack_at, 540.0)  # 120 (Warmup) + 420
+        self.assertEqual(cycle.next_difficulty_at, 320.0)  # 120 + 200
+
+    def test_warmup_end_without_hq_game_over(self):
+        poster = FakePoster('{"ok":true,"hq_hp":null}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock=clock, warmup_s=120.0)
+        cycle.signal_start()
+        clock.t = 120.0
+        self.assertEqual(cycle.step(), "game_over")
+        self.assertEqual(cycle.state, STATE_GAME_OVER)
+        self.assertFalse(cycle.active)
+        self.assertIsNone(cycle.next_attack_at)
+        # GAME_OVER ist terminal bis reset().
+        clock.t = 1000.0
+        self.assertIsNone(cycle.step())
+        self.assertEqual(cycle.state, STATE_GAME_OVER)
+
+    def test_reset_from_game_over_back_to_paused(self):
+        poster = FakePoster('{"ok":true,"hq_hp":null}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock=clock, warmup_s=120.0)
+        cycle.signal_start()
+        clock.t = 120.0
+        cycle.step()  # game_over
+        cycle.reset()
+        self.assertEqual(cycle.state, STATE_PAUSED)
+        self.assertFalse(cycle.active)
+        self.assertIsNone(cycle.next_warmup_end)
+        self.assertFalse(cycle.ready)
+        # Neue Runde: wieder ueber das Start-Signal.
+        self.assertTrue(cycle.signal_start())
+        self.assertEqual(cycle.state, STATE_WARMUP)
 
     def test_fire_natural_wave_after_interval(self):
         """Ein Wellen-Feuer-Tick erhoeht das Level NICHT mehr selbst (Issue #778,
@@ -140,7 +242,7 @@ class TestAttackCycle(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, clock=clock)
-        cycle.step()  # started
+        self.assertEqual(start_cycle(cycle), "started")
         clock.t = 420.0
         self.assertEqual(cycle.step(), "attack")
         logic_calls = [c for c in poster.calls if c[0] == "/activate_mission_flow"]
@@ -148,11 +250,28 @@ class TestAttackCycle(unittest.TestCase):
         self.assertIn("attack_level_1_id_1.logic", logic_calls[0][1].decode())
         self.assertEqual(cycle.level, 1)
 
+    def test_hq_destroyed_in_running_game_over(self):
+        """HQ-Tod in RUNNING -> sofort game_over (D2, keine Gnadenfrist)."""
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock=clock)
+        start_cycle(cycle)
+        poster.state_resp = '{"ok":true,"hq_hp":0}'
+        clock.t = 10.0
+        self.assertEqual(cycle.step(), "game_over")
+        self.assertEqual(cycle.state, STATE_GAME_OVER)
+        self.assertFalse(cycle.active)
+        # Keine weitere Attack nach dem HQ-Tod.
+        clock.t = 420.0
+        self.assertIsNone(cycle.step())
+        logic_calls = [c for c in poster.calls if c[0] == "/activate_mission_flow"]
+        self.assertEqual(logic_calls, [])
+
     def test_buy_stacks_and_fires_with_natural(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, clock=clock)
-        cycle.step()  # started
+        start_cycle(cycle)
 
         status, payload = cycle.buy(2)
         self.assertEqual(status, 200)
@@ -198,7 +317,7 @@ class TestAttackCycle(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, clock=clock, difficulty_schedule=[1.0] * 8)
-        cycle.step()  # started (level 1)
+        start_cycle(cycle)  # started (level 1)
         for _ in range(20):
             clock.t += 1.0
             cycle.step()
@@ -208,7 +327,7 @@ class TestAttackCycle(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, clock=clock)
-        cycle.step()  # started
+        start_cycle(cycle)
         cycle.buy(2)
         cycle.buy(2)
         cycle._resolve_orders()  # pay -> bought = [2, 2]
@@ -222,13 +341,14 @@ class TestAttackCycle(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, clock=clock)
-        cycle.step()  # started
+        start_cycle(cycle)
         cycle.buy(2)
         cycle._resolve_orders()
         self.assertTrue(cycle.active)
         self.assertEqual(cycle.bought, [2])
         cycle.reset()
         self.assertFalse(cycle.active)
+        self.assertEqual(cycle.state, STATE_PAUSED)
         self.assertEqual(cycle.level, 1)
         self.assertIsNone(cycle.next_attack_at)
         self.assertIsNone(cycle.next_difficulty_at)
@@ -239,11 +359,12 @@ class TestAttackCycle(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, clock=clock)
-        cycle.step()  # started
+        start_cycle(cycle)
         self.assertTrue(cycle.active)
         poster.reset_epoch = 1
         cycle.sync_reset()
         self.assertFalse(cycle.active)
+        self.assertEqual(cycle.state, STATE_PAUSED)
         self.assertEqual(cycle._reset_epoch, 1)
 
 
@@ -258,6 +379,8 @@ class TestAttackCycleDifficultyTimer(unittest.TestCase):
             interval_s=interval,
             difficulty_interval_first_s=difficulty_interval_first,
             difficulty_schedule=difficulty_schedule,
+            creature_events=[],  # Event-Layer aus (reiner Difficulty-/Wellen-Pfad)
+            warmup_s=WARMUP_OFF,
             _poster=poster,
             _clock=clock or FakeClock(),
         )
@@ -275,7 +398,7 @@ class TestAttackCycleDifficultyTimer(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, clock=clock, interval=1e9)
-        cycle.step()  # started, level 1
+        start_cycle(cycle)  # started, level 1
         self.assertEqual(cycle.level, 1)
 
         clock.t = 199.0
@@ -302,7 +425,7 @@ class TestAttackCycleDifficultyTimer(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, clock=clock, interval=1e9, difficulty_schedule=[200.0] * 8)
-        cycle.step()  # started
+        start_cycle(cycle)
         clock.t = 200.0
         cycle.step()
         self.assertEqual(cycle.level, 2)
@@ -314,7 +437,7 @@ class TestAttackCycleDifficultyTimer(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, clock=clock, interval=1e9)
-        cycle.step()  # started
+        start_cycle(cycle)
         # 8 Schritte: 200 + 7*600 = 4400s bis Level 9.
         clock.t = 10000.0
         cycle.step()
@@ -326,7 +449,7 @@ class TestAttackCycleDifficultyTimer(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, clock=clock, interval=420.0)
-        cycle.step()  # started, level 1
+        start_cycle(cycle)  # started, level 1
 
         clock.t = 420.0
         self.assertEqual(cycle.step(), "attack")
@@ -342,7 +465,7 @@ class TestAttackCycleDifficultyTimer(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, clock=clock, interval=1e9)
-        cycle.step()  # started
+        start_cycle(cycle)
         clock.t = 50.0
         s = cycle.status()
         self.assertEqual(s["seconds_to_next_difficulty"], 150.0)
@@ -363,6 +486,7 @@ class TestPersona(unittest.TestCase):
             interval_s=420.0,
             difficulty_interval_first_s=1e9,
             persona=persona,
+            warmup_s=WARMUP_OFF,
             _poster=poster,
             _clock=clock or FakeClock(),
         )
@@ -374,7 +498,7 @@ class TestPersona(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, persona=[wave_count(3), wave_count(5)], clock=clock)
-        cycle.step()  # started
+        start_cycle(cycle)
 
         clock.t = 420.0
         cycle.step()  # attack 1
@@ -403,7 +527,7 @@ class TestPersona(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, persona=[wave_count(2, 3), wave_count(5)], clock=clock)
-        cycle.step()  # started
+        start_cycle(cycle)
 
         clock.t = 420.0
         cycle.step()  # attack 1: natural + wave2 + wave3
@@ -427,7 +551,7 @@ class TestPersona(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, persona=[wave_count(1, 1, 1)], clock=clock)
-        cycle.step()  # started
+        start_cycle(cycle)
 
         clock.t = 420.0
         cycle.step()  # attack 1: natural(level1) + wave1 x3
@@ -441,7 +565,7 @@ class TestPersona(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, persona=[wave_count(), wave_count(2)], clock=clock)
-        cycle.step()  # started
+        start_cycle(cycle)
 
         clock.t = 420.0
         cycle.step()  # attack 1: kein Extra
@@ -456,7 +580,7 @@ class TestPersona(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, persona=None, clock=clock)
-        cycle.step()
+        start_cycle(cycle)
         clock.t = 420.0
         cycle.step()
         self.assertEqual(len(self._fire_logics(poster)), 1)
@@ -465,7 +589,7 @@ class TestPersona(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, persona=[wave_count(3), wave_count(5)], clock=clock)
-        cycle.step()
+        start_cycle(cycle)
         clock.t = 420.0
         cycle.step()  # attack_index = 1
         self.assertEqual(cycle.attack_index, 1)
@@ -474,32 +598,50 @@ class TestPersona(unittest.TestCase):
 
 
 class TestSendYourself(unittest.TestCase):
-    """Routing eigener Kaeufe: on = lokal feuern (Default), off = Carbonium
-    abziehen, aber Welle tracken statt lokal feuern (spaeter Server B)."""
+    """Routing eigener Kaeufe (Toggles send_yourself/send_enemy): `buy` wird
+    IMMER ausgeloest + getrackt; beim Feuern entscheidet der Toggle, wohin die
+    gekaufte Welle geht. off = Carbonium abgezogen, nicht lokal feuern (sondern
+    tracken, spaeter Server B)."""
 
-    def _cycle(self, poster, send_yourself=True, clock=None):
+    def _cycle(self, poster, send_yourself=True, clock=None, toggles=None):
         return AttackCycle(
             "http://127.0.0.1:9001",
             interval_s=420.0,
             difficulty_interval_first_s=1e9,
             send_yourself=send_yourself,
+            toggles=toggles,
+            warmup_s=WARMUP_OFF,
             _poster=poster,
             _clock=clock or FakeClock(),
         )
 
-    def test_off_tracks_outgoing_instead_of_bought(self):
+    def test_off_still_tracks_bought(self):
+        """buy wird immer getrackt, auch wenn send_yourself off ist."""
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         cycle = self._cycle(poster, send_yourself=False)
-        cycle.step()  # started
         cycle.buy(3)
         cycle._resolve_orders()
+        self.assertEqual(cycle.bought, [3])
+        self.assertEqual(cycle.outgoing, [])  # erst beim Feuern geroutet
+
+    def test_off_tracks_outgoing_at_fire_time(self):
+        """send_yourself off: die bezahlte Welle wird beim Feuern nur in
+        `outgoing` getrackt und NICHT lokal gefeuert."""
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, send_yourself=False, clock=clock)
+        start_cycle(cycle)
+        cycle.buy(3)
+        cycle._resolve_orders()
+        clock.t = 420.0
+        cycle.step()  # attack
         self.assertEqual(cycle.bought, [])
         self.assertEqual([o["level"] for o in cycle.outgoing], [3])
+        self.assertEqual(cycle.enemy_outgoing, [])  # send_enemy default off
 
     def test_off_still_deducts_carbonium(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         cycle = self._cycle(poster, send_yourself=False)
-        cycle.step()
         cycle.buy(3)
         cycle._resolve_orders()
         spend_calls = [c for c in poster.calls if c[0] == "/try_spend"]
@@ -509,13 +651,306 @@ class TestSendYourself(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, send_yourself=False, clock=clock)
-        cycle.step()  # started
+        start_cycle(cycle)
         cycle.buy(3)
         cycle._resolve_orders()
         clock.t = 420.0
         cycle.step()  # attack
         logics = [json.loads(c[1].decode())["logic"] for c in poster.calls if c[0] == "/activate_mission_flow"]
         self.assertEqual(logics, ["logic/missions/survival/attack_level_1_id_1.logic"])
+
+    def test_on_fires_locally_not_enemy(self):
+        """send_yourself on + send_enemy off: lokal feuern, kein Gegner-Zaehler."""
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, send_yourself=True, clock=clock)
+        start_cycle(cycle)
+        cycle.buy(3)
+        cycle._resolve_orders()
+        clock.t = 420.0
+        cycle.step()
+        logics = [json.loads(c[1].decode())["logic"] for c in poster.calls if c[0] == "/activate_mission_flow"]
+        self.assertIn("logic/missions/survival/attack_level_3_id_1.logic", logics)
+        self.assertEqual(cycle.enemy_outgoing, [])
+        self.assertEqual(cycle.outgoing, [])
+
+    def test_enemy_only_fires_nowhere_but_counts(self):
+        """send_yourself off + send_enemy on: nicht lokal feuern, aber als
+        Gegner-Send zaehlen (SOLO: kein zweiter Server)."""
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(
+            poster,
+            clock=clock,
+            toggles={"send_yourself": False, "send_enemy": True},
+        )
+        start_cycle(cycle)
+        cycle.buy(3)
+        cycle._resolve_orders()
+        clock.t = 420.0
+        cycle.step()
+        logics = [json.loads(c[1].decode())["logic"] for c in poster.calls if c[0] == "/activate_mission_flow"]
+        self.assertEqual(logics, ["logic/missions/survival/attack_level_1_id_1.logic"])
+        self.assertEqual([o["level"] for o in cycle.enemy_outgoing], [3])
+        self.assertEqual([o["level"] for o in cycle.outgoing], [3])
+
+    def test_both_toggles_fire_and_count(self):
+        """Beide Toggles an (Spec C2): die Welle geht an sich selbst UND an den
+        Gegner — zwei unabhaengige Zaehler/Senken."""
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(
+            poster,
+            clock=clock,
+            toggles={"send_yourself": True, "send_enemy": True},
+        )
+        start_cycle(cycle)
+        cycle.buy(3)
+        cycle._resolve_orders()
+        clock.t = 420.0
+        cycle.step()
+        logics = [json.loads(c[1].decode())["logic"] for c in poster.calls if c[0] == "/activate_mission_flow"]
+        self.assertEqual(logics.count("logic/missions/survival/attack_level_3_id_1.logic"), 1)
+        self.assertEqual([o["level"] for o in cycle.enemy_outgoing], [3])
+        self.assertEqual(cycle.outgoing, [])  # lokal gefeuert -> kein outgoing
+
+
+class TestGameFlowToggles(unittest.TestCase):
+    """Die vier Toggles (Spec §3) steuern die Attack-Zusammensetzung —
+    unabhaengig voneinander. Der Attack-Timer laeuft dabei immer weiter."""
+
+    def _cycle(self, poster, clock, toggles=None, persona=None):
+        return AttackCycle(
+            "http://127.0.0.1:9001",
+            interval_s=420.0,
+            difficulty_interval_first_s=1e9,
+            persona=persona,
+            toggles=toggles,
+            warmup_s=WARMUP_OFF,
+            _poster=poster,
+            _clock=clock,
+            _rng=lambda: 0.0,
+        )
+
+    def _fire_calls(self, poster):
+        return [c for c in poster.calls if c[0] == "/activate_mission_flow"]
+
+    def _logics(self, poster):
+        return [json.loads(c[1].decode())["logic"] for c in self._fire_calls(poster)]
+
+    def test_defaults_are_natural_persona_self_on_enemy_off(self):
+        cycle = self._cycle(FakePoster(), FakeClock(0.0))
+        self.assertEqual(
+            cycle.toggles,
+            {"natural": True, "persona": True, "send_yourself": True, "send_enemy": False},
+        )
+        self.assertTrue(cycle.send_yourself)  # Legacy-Property = Toggle
+
+    def test_natural_off_fires_no_natural_wave_or_boss(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock, toggles={"natural": False})
+        start_cycle(cycle)
+        cycle.level = 9  # ohne Toggle: 3 Natural + Boss
+        clock.t = 420.0
+        self.assertEqual(cycle.step(), "attack")  # Timer laeuft weiter
+        self.assertEqual(self._fire_calls(poster), [])
+        self.assertEqual(cycle.last_fire["natural_count"], 0)
+        self.assertFalse(cycle.last_fire["boss"])
+
+    def test_natural_off_fires_no_creature_event(self):
+        """Das Event-Fenster (prepare) liegt bei 273s; natural off -> kein Event."""
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock, toggles={"natural": False})
+        start_cycle(cycle)
+        cycle.level = 2  # ohne Toggle: shegret normal
+        clock.t = 273.0
+        self.assertIsNone(cycle.step())
+        self.assertEqual(self._fire_calls(poster), [])
+        self.assertIsNone(cycle.last_event)
+
+    def test_natural_on_fires_creature_event(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock)  # natural default on
+        start_cycle(cycle)
+        cycle.level = 2
+        clock.t = 273.0
+        cycle.step()
+        self.assertEqual(self._logics(poster), ["logic/event/shegret_attack.logic"])
+        self.assertEqual(cycle.last_event["name"], "shegret_attack")
+
+    def test_persona_off_fires_no_persona_waves(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(
+            poster, clock, toggles={"persona": False}, persona=[wave_count(3), wave_count(5)]
+        )
+        start_cycle(cycle)
+        clock.t = 420.0
+        cycle.step()
+        self.assertEqual(self._logics(poster), ["logic/missions/survival/attack_level_1_id_1.logic"])
+        self.assertEqual(cycle.attack_index, 1)  # Attack zaehlt trotzdem
+        self.assertEqual(cycle.history[-1]["enemy"], [])
+
+    def test_persona_on_fires_persona_waves(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock, persona=[wave_count(3)])
+        start_cycle(cycle)
+        clock.t = 420.0
+        cycle.step()
+        self.assertIn("logic/missions/survival/attack_level_3_id_1.logic", self._logics(poster))
+
+    def test_all_off_keeps_attack_timer_running(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock, toggles={"natural": False, "persona": False})
+        start_cycle(cycle)
+        clock.t = 420.0
+        self.assertEqual(cycle.step(), "attack")
+        self.assertEqual(self._fire_calls(poster), [])
+        clock.t = 840.0
+        self.assertEqual(cycle.step(), "attack")  # kein Stillstand
+
+
+class TestGameConfigSync(unittest.TestCase):
+    """sync_game_config()/sync_start(): Bridge-Config (mode/warmup_s/Toggles) +
+    Start-Signal (start/start_epoch) defensiv uebernehmen."""
+
+    def _cycle(self, getter_resp, getter_status=200, poster=None, **kwargs):
+        return AttackCycle(
+            "http://127.0.0.1:9001",
+            interval_s=420.0,
+            difficulty_interval_first_s=1e9,
+            _poster=poster or FakePoster('{"ok":true,"hq_hp":100.0}'),
+            _getter=FakeGetter(getter_resp, getter_status),
+            _clock=FakeClock(0.0),
+            **kwargs,
+        )
+
+    def test_applies_mode_warmup_and_toggles(self):
+        body = json.dumps(
+            {
+                "mode": "vs",
+                "warmup_s": 60.5,
+                "natural": False,
+                "persona": False,
+                "send_yourself": False,
+                "send_enemy": True,
+            }
+        )
+        cycle = self._cycle(body)
+        cycle.sync_game_config()
+        self.assertEqual(cycle.mode, "vs")
+        self.assertEqual(cycle.warmup_s, 60.5)
+        self.assertFalse(cycle.toggles["natural"])
+        self.assertFalse(cycle.toggles["persona"])
+        self.assertFalse(cycle.toggles["send_yourself"])
+        self.assertTrue(cycle.toggles["send_enemy"])
+
+    def test_invalid_values_keep_old(self):
+        cycle = self._cycle('{"mode":"nope","warmup_s":"60","natural":"yes"}')
+        cycle.sync_game_config()
+        self.assertEqual(cycle.mode, "solo")
+        self.assertEqual(cycle.warmup_s, DEFAULT_WARMUP_S)
+        self.assertTrue(cycle.toggles["natural"])  # ungueltig -> unveraendert
+
+    def test_partial_payload_only_touches_given_fields(self):
+        cycle = self._cycle('{"warmup_s":5}')
+        cycle.sync_game_config()
+        self.assertEqual(cycle.warmup_s, 5.0)
+        self.assertEqual(cycle.mode, "solo")
+        self.assertEqual(cycle.toggles, {
+            "natural": True, "persona": True, "send_yourself": True, "send_enemy": False,
+        })
+
+    def test_non_200_ignored(self):
+        cycle = self._cycle('{"mode":"vs"}', getter_status=500)
+        cycle.sync_game_config()
+        self.assertEqual(cycle.mode, "solo")
+
+    def test_invalid_json_ignored(self):
+        cycle = self._cycle("not json")
+        cycle.sync_game_config()
+        self.assertEqual(cycle.mode, "solo")
+        self.assertEqual(cycle.state, STATE_PAUSED)
+
+    def test_start_flag_triggers_warmup(self):
+        cycle = self._cycle('{"start":true,"warmup_s":30}')
+        cycle.sync_game_config()
+        self.assertTrue(cycle.sync_start())
+        self.assertEqual(cycle.state, STATE_WARMUP)
+        self.assertEqual(cycle.next_warmup_end, 30.0)
+        # Signal ist verbraucht -> kein zweiter Uebergang.
+        self.assertFalse(cycle.sync_start())
+
+    def test_start_epoch_is_edge_triggered(self):
+        cycle = self._cycle('{"start_epoch":1}')
+        cycle.sync_game_config()
+        self.assertTrue(cycle.sync_start())
+        cycle.reset()
+        # gleicher epoch-Wert -> kein neues Signal
+        cycle.sync_game_config()
+        self.assertFalse(cycle.sync_start())
+        self.assertEqual(cycle.state, STATE_PAUSED)
+        # neuer Wert -> neues Start-Signal
+        cycle._getter = FakeGetter('{"start_epoch":2}')
+        cycle.sync_game_config()
+        self.assertTrue(cycle.sync_start())
+        self.assertEqual(cycle.state, STATE_WARMUP)
+
+    def test_ready_flag_does_not_start(self):
+        cycle = self._cycle('{"ready":true}')
+        cycle.sync_game_config()
+        self.assertTrue(cycle.ready)
+        self.assertFalse(cycle.sync_start())
+        self.assertEqual(cycle.state, STATE_PAUSED)
+
+    def test_poll_start_off_by_default(self):
+        """Die Bridge quittiert jeden POST /start mit start:true -> ohne
+        explizites poll_start darf NICHTS automatisch starten."""
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        cycle = self._cycle('{}', poster=poster)
+        cycle.sync_game_config()
+        self.assertFalse(cycle.sync_start())
+        self.assertEqual(cycle.state, STATE_PAUSED)
+        self.assertEqual([c for c in poster.calls if c[0] == "/start"], [])
+
+    def test_poll_start_when_enabled(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        poster.start_resp = '{"ok":true,"start":true}'
+        cycle = self._cycle('{}', poster=poster, poll_start=True)
+        cycle.sync_game_config()
+        self.assertTrue(cycle.sync_start())
+        self.assertEqual(cycle.state, STATE_WARMUP)
+        self.assertEqual([c for c in poster.calls if c[0] == "/start"], [("/start", b"{}")])
+
+    def test_status_reports_flow_fields(self):
+        cycle = self._cycle('{"mode":"vs","warmup_s":90,"ready":true,"send_enemy":true}')
+        cycle.sync_game_config()
+        st = cycle.status()
+        self.assertEqual(st["state"], STATE_PAUSED)
+        self.assertEqual(st["mode"], "vs")
+        self.assertEqual(st["warmup_s"], 90.0)
+        self.assertTrue(st["ready"])
+        self.assertTrue(st["toggles"]["send_enemy"])
+        self.assertIsNone(st["seconds_to_warmup_end"])
+
+    def test_set_ready_toggles_status(self):
+        cycle = self._cycle('{}')
+        self.assertFalse(cycle.status()["ready"])
+        self.assertTrue(cycle.set_ready(True))
+        self.assertTrue(cycle.status()["ready"])
+        self.assertFalse(cycle.set_ready(False))
+
+    def test_normalize_toggles_ignores_non_bool(self):
+        # 0/1/"yes" sind keine bool-Werte -> Default bleibt.
+        self.assertTrue(_normalize_toggles({"natural": 0})["natural"])
+        self.assertTrue(_normalize_toggles("nope")["natural"])
+        self.assertTrue(_normalize_toggles({"send_enemy": True})["send_enemy"])
+        self.assertFalse(_normalize_toggles({"send_yourself": False})["send_yourself"])
 
 
 class TestLoadPersonas(unittest.TestCase):
@@ -613,6 +1048,73 @@ class TestSyncPersonas(unittest.TestCase):
         self.assertTrue(cycle.send_yourself)
 
 
+class TestSyncNaturalAttackRules(unittest.TestCase):
+    """sync_natural_attack_rules(): pollt GET /natural_attack_rules (Bridge)
+    und uebernimmt Attack-Count/Boss je Level + Creature-Events + Event-Offset
+    zur Laufzeit (Issue #819)."""
+
+    def _cycle(self, getter_resp):
+        return AttackCycle(
+            "http://127.0.0.1:9001",
+            interval_s=420.0,
+            difficulty_interval_first_s=1e9,
+            _poster=FakePoster('{"ok":true,"hq_hp":100.0}'),
+            _getter=lambda path: (200, getter_resp),
+            _clock=FakeClock(),
+        )
+
+    def _rules_json(self, **overrides):
+        base = {
+            "max_attack_count": [1, 1, 1, 1, 1, 1, 1, 1, 1],
+            "boss_min_level": 2,
+            "creature_events": [
+                {"name": "shegret_attack",
+                 "logic": "logic/event/shegret_attack.logic",
+                 "min_level": 2, "max_level": 4,
+                 "attack_strength": "normal", "weight": 3},
+            ],
+            "event_offset_fraction": 0.5,
+        }
+        base.update(overrides)
+        return json.dumps(base)
+
+    def test_applies_rules(self):
+        cycle = self._cycle(self._rules_json())
+        cycle.sync_natural_attack_rules()
+        self.assertEqual(cycle.difficulty_rules["max_attack_count"], [1] * 9)
+        self.assertEqual(cycle.difficulty_rules["boss_min_level"], 2)
+        self.assertEqual(len(cycle.creature_events), 1)
+        self.assertEqual(cycle.creature_events[0]["attack_strength"], "normal")
+        self.assertEqual(cycle.event_offset_s, 210.0)  # 420 * 0.5
+
+    def test_boss_none_supported(self):
+        cycle = self._cycle(self._rules_json(boss_min_level=None))
+        cycle.sync_natural_attack_rules()
+        self.assertIsNone(cycle.difficulty_rules["boss_min_level"])
+
+    def test_invalid_attack_count_ignored(self):
+        cycle = self._cycle(self._rules_json(max_attack_count="nope"))
+        before = cycle.difficulty_rules["max_attack_count"]
+        cycle.sync_natural_attack_rules()
+        self.assertEqual(cycle.difficulty_rules["max_attack_count"], before)
+
+    def test_invalid_events_ignored(self):
+        cycle = self._cycle(self._rules_json(creature_events="nope"))
+        before = len(cycle.creature_events)
+        cycle.sync_natural_attack_rules()
+        self.assertEqual(len(cycle.creature_events), before)
+
+    def test_non_200_ignored(self):
+        cycle = AttackCycle(
+            "http://127.0.0.1:9001",
+            _poster=FakePoster('{"ok":true,"hq_hp":100.0}'),
+            _getter=lambda path: (500, '{"ok":false}'),
+        )
+        before = cycle.difficulty_rules["max_attack_count"]
+        cycle.sync_natural_attack_rules()
+        self.assertEqual(cycle.difficulty_rules["max_attack_count"], before)
+
+
 class TestTimersAndPreview(unittest.TestCase):
     def test_sync_difficulty_interval(self):
         def poster(path, body):
@@ -663,10 +1165,11 @@ class TestTimersAndPreview(unittest.TestCase):
             interval_s=420.0,
             difficulty_interval_first_s=1e9,
             persona=[wave_count(2, 3), wave_count(5)],
+            warmup_s=WARMUP_OFF,
             _poster=poster,
             _clock=clock,
         )
-        cycle.step()  # started, attack_index=0
+        start_cycle(cycle)  # started, attack_index=0
         cycle.buy(1)
         cycle._resolve_orders()  # bought=[1]
         na = cycle.status()["next_attack"]
@@ -752,6 +1255,8 @@ class TestWaveFiring(unittest.TestCase):
             difficulty_interval_subsequent_s=1e9,
             difficulty_profile=difficulty_profile,
             difficulty_rules=difficulty_rules,
+            creature_events=[],  # Event-Layer aus (reiner Wellen-Feuer-Pfad)
+            warmup_s=WARMUP_OFF,
             _poster=poster,
             _clock=clock or FakeClock(),
         )
@@ -764,7 +1269,7 @@ class TestWaveFiring(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, clock=clock)
-        cycle.step()  # started
+        start_cycle(cycle)
         cycle.level = 9
         clock.t = 420.0
         cycle.step()  # attack
@@ -778,7 +1283,7 @@ class TestWaveFiring(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, difficulty_profile="normal", clock=clock)
-        cycle.step()  # started
+        start_cycle(cycle)
         cycle.level = 2
         clock.t = 420.0
         cycle.step()  # attack
@@ -790,7 +1295,7 @@ class TestWaveFiring(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, clock=clock)
-        cycle.step()  # started
+        start_cycle(cycle)
         cycle.level = 5
         clock.t = 420.0
         cycle.step()  # attack
@@ -804,7 +1309,7 @@ class TestWaveFiring(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, clock=clock)
-        cycle.step()  # started
+        start_cycle(cycle)
         cycle.level = 4
         clock.t = 420.0
         cycle.step()  # attack
@@ -814,13 +1319,124 @@ class TestWaveFiring(unittest.TestCase):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, clock=clock)
-        cycle.step()  # started
+        start_cycle(cycle)
         cycle.level = 8
         clock.t = 420.0
         cycle.step()  # attack
         lf = cycle.last_fire
         self.assertEqual(lf["natural_count"], 3)
         self.assertTrue(lf["boss"])
+
+
+class TestCreatureAttackEvents(unittest.TestCase):
+    """Creature-Attack-Event-Layer (Issue #816): Auswahl + Eskalation + Timing."""
+
+    def _cycle(self, poster, clock=None, rng=None, creature_events=None):
+        return AttackCycle(
+            "http://127.0.0.1:9001",
+            interval_s=420.0,
+            difficulty_interval_first_s=1e9,
+            difficulty_interval_subsequent_s=1e9,
+            creature_events=creature_events,
+            warmup_s=WARMUP_OFF,
+            _poster=poster,
+            _clock=clock or FakeClock(),
+            _rng=rng or (lambda: 0.0),
+        )
+
+    def _fire_calls(self, poster):
+        return [json.loads(c[1].decode()) for c in poster.calls if c[0] == "/activate_mission_flow"]
+
+    # --- reine Auswahl-Funktion -------------------------------------
+
+    def test_level_1_no_event(self):
+        self.assertIsNone(_pick_creature_event(1, CREATURE_ATTACK_EVENTS, lambda: 0.0))
+
+    def test_level_2_shegret_normal_only(self):
+        # Level 2: nur shegret (normal) im Pool (kermon ab 4, phirian ab 3).
+        e = _pick_creature_event(2, CREATURE_ATTACK_EVENTS, lambda: 0.0)
+        self.assertEqual(e["name"], "shegret_attack")
+        self.assertEqual(e["attack_strength"], "normal")
+
+    def test_level_3_phirian_and_shegret(self):
+        # Level 3: shegret normal (w3) + phirian (w1). rng=0.9 -> phirian.
+        e = _pick_creature_event(3, CREATURE_ATTACK_EVENTS, lambda: 0.9)
+        self.assertEqual(e["name"], "phirian_attack")
+        self.assertIsNone(e["attack_strength"])
+
+    def test_level_6_escalates_to_hard(self):
+        # Level 6: shegret hard (L5-7) + kermon hard (L6-7) + phirian.
+        # rng=0.0 -> shegret (erstes im Pool, w3) -> hard.
+        e = _pick_creature_event(6, CREATURE_ATTACK_EVENTS, lambda: 0.0)
+        self.assertEqual(e["name"], "shegret_attack")
+        self.assertEqual(e["attack_strength"], "hard")
+
+    def test_level_8_escalates_to_very_hard(self):
+        e = _pick_creature_event(8, CREATURE_ATTACK_EVENTS, lambda: 0.0)
+        self.assertEqual(e["name"], "shegret_attack")
+        self.assertEqual(e["attack_strength"], "very_hard")
+
+    def test_no_normal_or_hard_strength_above_level_7(self):
+        # Ab Level 8 gibt es keinen normal/hard shegret/kermon mehr (nur very_hard + phirian).
+        for level in (8, 9):
+            pool = [e for e in CREATURE_ATTACK_EVENTS if e["min_level"] <= level <= e["max_level"]]
+            strengths = {e["attack_strength"] for e in pool if e["attack_strength"] is not None}
+            self.assertEqual(strengths, {"very_hard"})
+
+    def test_weighted_distribution(self):
+        # Level 3: shegret (w3) + phirian (w1). rng nahe 0 -> shegret, nahe 1 -> phirian.
+        self.assertEqual(_pick_creature_event(3, CREATURE_ATTACK_EVENTS, lambda: 0.01)["name"], "shegret_attack")
+        self.assertEqual(_pick_creature_event(3, CREATURE_ATTACK_EVENTS, lambda: 0.99)["name"], "phirian_attack")
+
+    def test_normalize_creature_events_rejects_bad(self):
+        with self.assertRaises(ValueError):
+            _normalize_creature_events("not a list")
+        with self.assertRaises(ValueError):
+            _normalize_creature_events([{"name": "x", "logic": "l", "min_level": 2, "max_level": 1}])
+        with self.assertRaises(ValueError):
+            _normalize_creature_events([
+                {"name": "x", "logic": "l", "min_level": 1, "max_level": 2,
+                 "attack_strength": "nope"},
+            ])
+
+    # --- Integration: Event-Timer im step ---------------------------
+
+    def test_event_fires_in_prepare_window_before_attack(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock=clock)
+        self.assertEqual(start_cycle(cycle), "started")
+        self.assertEqual(cycle.next_event_at, 420.0 - 0.35 * 420.0)  # 273.0
+        cycle.level = 2  # damit ein Event existiert (shegret normal)
+        clock.t = 273.0
+        self.assertIsNone(cycle.step())  # Event, aber KEIN Attack (erst bei 420)
+        calls = self._fire_calls(poster)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["logic"], "logic/event/shegret_attack.logic")
+        self.assertEqual(calls[0]["attack_strength"], "normal")
+        self.assertEqual(cycle.last_event["name"], "shegret_attack")
+
+    def test_no_event_before_prepare_window(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock=clock)
+        start_cycle(cycle)
+        cycle.level = 2
+        clock.t = 100.0  # vor dem prepare-Fenster (273.0)
+        cycle.step()
+        self.assertEqual(len(self._fire_calls(poster)), 0)
+
+    def test_event_reports_in_status(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock=clock)
+        start_cycle(cycle)
+        cycle.level = 2
+        clock.t = 273.0
+        cycle.step()
+        st = cycle.status()
+        self.assertIsNotNone(st["last_event"])
+        self.assertIsNotNone(st["seconds_to_next_event"])
 
 
 if __name__ == "__main__":
