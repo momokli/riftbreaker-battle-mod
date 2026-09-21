@@ -249,6 +249,14 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         working-directory: tests/game-config-editor
         run: npm test
+      # Cockpit Render-Test (#832): rendert cockpit.html im echten Chromium
+      # (Tab-Struktur + roving tabindex, Formulare, Docker-Log auto-tail, keine
+      # JS-Fehler). Playwright/Chromium sind nicht Teil des CI-Images -> der
+      # Test ueberspringt sich dann selbst (kein Hard-Fail).
+      - name: Render-Test Cockpit (#832)
+        if: needs.changes.outputs.test == 'true'
+        working-directory: tests/cockpit-render
+        run: npm test
 
   build:
     name: Build + Package (rbbridge.dll/exe, dist/*.zip)

@@ -18,11 +18,22 @@ const OUT = path.join(REPO, "docs", "screenshots", "ui");
 
 const html = fs.readFileSync(COCKPIT, "utf8");
 
+// Realistische Persona-Matrix (10 Attacken x 9 Wellen): der Renderer adressiert
+// [attack][wave] ueber den vollen Bereich — eine kuerzere Matrix wirft und
+// laesst die Persona-Tabelle leer.
+function personaMatrix(seed) {
+  const m = [];
+  for (let a = 0; a < 10; a++) m.push(new Array(9).fill(0));
+  m[seed % 10][(seed + 2) % 9] = 1;
+  m[(seed + 1) % 10][(seed + 6) % 9] = 1;
+  return m;
+}
+
 // Mock-Endpunkte: das Cockpit pollt all das; ohne Mock bliebe es leer.
 const ROUTES = {
   game_config: { mode: "solo", warmup_s: 120, natural: true, persona: true, send_yourself: true, send_enemy: false },
   personas: {
-    personas: { aggro: [[0, 0, 1, 0, 1, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 1, 0, 0]], ruhig: [[0, 1, 0, 0, 0, 0, 0, 0, 0]] },
+    personas: { aggro: personaMatrix(0), ruhig: personaMatrix(3) },
     active: "aggro", send_yourself: true,
   },
   attack_status: {
@@ -80,8 +91,10 @@ async function heuristics(page) {
         const k = "overflow:" + sel;
         if (!seen.has(k)) { seen.add(k); issues.push("ragt horizontal raus: <" + sel + "> left=" + Math.round(r.left) + " right=" + Math.round(r.right) + " (vw=" + vw + ")"); }
       }
-      // abgeschnittener Text (scrollWidth > clientWidth)
-      if (el.scrollWidth > el.clientWidth + 2 && (el.textContent || "").trim().length > 0 && el.children.length === 0) {
+      // abgeschnittener Text (scrollWidth > clientWidth). Bewusst screenreader-
+      // only Elemente (.visually-hidden) ausnehmen: deren 1px-Clip ist gewollt,
+      // kein abgeschnittener UI-Text.
+      if (el.scrollWidth > el.clientWidth + 2 && (el.textContent || "").trim().length > 0 && el.children.length === 0 && !(el.closest && el.closest(".visually-hidden"))) {
         const k = "clip:" + sel;
         if (!seen.has(k)) { seen.add(k); issues.push("Text abgeschnitten: <" + sel + "> \"" + (el.textContent || "").trim().slice(0, 30) + "\""); }
       }
