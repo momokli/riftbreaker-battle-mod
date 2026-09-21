@@ -13,14 +13,15 @@ laeuft ein fester Zyklus, der beim Bau des HQ startet:
        werden sie GLEICHZEITIG mit der natuerlichen Welle gefeuert.
 
 Difficulty-Level (Issue #778) laeuft auf einem EIGENEN, vom Wellen-Feuern
-entkoppelten Timer: alle `difficulty_interval` Sekunden (Default 200s) steigt
-das Level um 1 (cap 9) — unabhaengig davon, ob/wie oft in der Zwischenzeit
-Wellen feuern. Eine gefeuerte Welle nutzt einfach das zu diesem Zeitpunkt
-aktuelle Level, erhoeht es aber nicht mehr selbst (Vorbild:
-tools/wave-scheduler/wave_scheduler.py, das dasselbe Zwei-Timer-Muster nutzt).
+entkoppelten Timer — und folgt der Base-Game-Kurve (§3.1 DOM_REPLICA.md):
+erster Schritt 1→2 nach `difficulty_interval` Sekunden (Default 200s), jeder
+Folge-Schritt 2→3 … 8→9 nach fest 600s (cap 9). Eine gefeuerte Welle nutzt
+schlicht das zu diesem Zeitpunkt aktuelle Level, erhoeht es aber nicht mehr
+selbst (Vorbild: tools/wave-scheduler/wave_scheduler.py).
 
 Ablauf:
-  alle `difficulty_interval` Sekunden: level = min(level + 1, max_level)
+  Schritt 1→2 nach `difficulty_interval` Sekunden, danach je +600s:
+    level = min(level + 1, max_level)
   alle `interval` Sekunden: fire natural(level) + bought[] ueber
     POST /activate_mission_flow, bought = []
 
@@ -73,7 +74,10 @@ NAME_TO_LEVEL = {f"wave{lvl}": lvl for lvl in WAVE_COST}
 
 DEFAULT_MAX_LEVEL = 9
 DEFAULT_INTERVAL_S = 420.0  # 7 min
-DEFAULT_DIFFICULTY_INTERVAL_S = 200.0  # Issue #778: eigener Timer, entkoppelt vom Wellen-Feuern
+# Difficulty-Escalation folgt der Base-Game-Kurve (§3.1 DOM_REPLICA.md):
+# 200s fuer Schritt 1→2, danach fest 600s je Schritt (2→3 … 8→9).
+DEFAULT_DIFFICULTY_INTERVAL_S = 200.0  # erster Schritt (1→2); Back-Compat-Knopf
+DIFFICULTY_SUBSEQUENT_STEP_S = 600.0  # Folge-Schritte (2→3 … 8→9)
 DEFAULT_BRIDGE_URL = "http://127.0.0.1:9001"
 DEFAULT_CONTROL_PORT = 9102
 
@@ -160,6 +164,31 @@ def _expand_counts(counts) -> List[int]:
     return levels
 
 
+def _normalize_difficulty_schedule(schedule, n_steps: int) -> Optional[List[float]]:
+    """Normalisiert eine Liste von Schrittdauern auf `n_steps` positive floats.
+
+    Fehlende Eintraege werden mit dem letzten Wert aufgefuellt, ueberzaehlige
+    abgeschnitten. Liefert None bei ungueltigem Format (nicht-Liste, leer,
+    nicht-positive oder nicht-numerische Werte).
+    """
+    if not isinstance(schedule, (list, tuple)) or not schedule:
+        return None
+    out: List[float] = []
+    for v in schedule:
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+            return None
+        out.append(float(v))
+    if len(out) >= n_steps:
+        return out[:n_steps]
+    out.extend([out[-1]] * (n_steps - len(out)))
+    return out
+
+
+def _difficulty_schedule_from_first_step(first_step_s: float, n_steps: int) -> List[float]:
+    """Base-Game-Kurve: erster Schritt = first_step_s, alle Folge-Schritte 600s."""
+    return [float(first_step_s)] + [DIFFICULTY_SUBSEQUENT_STEP_S] * (n_steps - 1)
+
+
 def load_personas(path: str) -> Dict[str, List[List[int]]]:
     """Laedt Persona-Definitionen aus einer JSON-Datei.
 
@@ -197,6 +226,7 @@ class AttackCycle:
         base_url: str,
         interval_s: float = DEFAULT_INTERVAL_S,
         difficulty_interval_s: float = DEFAULT_DIFFICULTY_INTERVAL_S,
+        difficulty_schedule: Optional[List[float]] = None,
         max_level: int = DEFAULT_MAX_LEVEL,
         wave_logic: Optional[Dict[int, str]] = None,
         persona: Optional[List[List[int]]] = None,
@@ -209,8 +239,22 @@ class AttackCycle:
     ):
         self.base_url = base_url.rstrip("/")
         self.interval_s = interval_s
-        self.difficulty_interval_s = difficulty_interval_s
         self.max_level = max_level
+        self.difficulty_interval_s = float(difficulty_interval_s)
+        # Difficulty-Schedule: Dauer je Schritt (Index 0 = 1→2 … Index n-1 = 8→9).
+        # `difficulty_interval_s` ist der Back-Compat-Knopf fuer den ERSTEN Schritt;
+        # Folge-Schritte sind fest 600s (Base-Game-Kurve). Eine explizite volle
+        # Liste (`difficulty_schedule`) ueberschreibt die Kurve komplett.
+        n_steps = max(1, max_level - 1)
+        if difficulty_schedule is not None:
+            sched = _normalize_difficulty_schedule(difficulty_schedule, n_steps)
+            self.difficulty_schedule = (
+                sched
+                if sched is not None
+                else _difficulty_schedule_from_first_step(difficulty_interval_s, n_steps)
+            )
+        else:
+            self.difficulty_schedule = _difficulty_schedule_from_first_step(difficulty_interval_s, n_steps)
         self.wave_logic = wave_logic or WAVE_LOGIC
         self.persona = persona
         self.persona_name = persona_name
@@ -346,6 +390,12 @@ class AttackCycle:
         )
         print(f"[attack-cycle] fire wave{level} logic={logic} -> HTTP {status} {body[:120]}", flush=True)
 
+    def _difficulty_duration(self, level: int) -> float:
+        """Dauer fuer den naechsten Schritt ab `level` (1-basiert): level → level+1."""
+        sched = self.difficulty_schedule
+        idx = max(0, min(level - 1, len(sched) - 1))
+        return sched[idx]
+
     # --- Ein Poll/Tick-Schritt -------------------------------------------
     def step(self) -> Optional[str]:
         """Ein Iterationsschritt. Liefert eine Aktion ("started"/"attack") oder None."""
@@ -357,23 +407,24 @@ class AttackCycle:
                     self.active = True
                     self.level = 1
                     self.next_attack_at = now + self.interval_s
-                    self.next_difficulty_at = now + self.difficulty_interval_s
+                    self.next_difficulty_at = now + self._difficulty_duration(1)
                 print(
                     f"[attack-cycle] HQ gebaut -> Zyklus gestartet (Level 1, "
                     f"Angriff in {self.interval_s:.0f}s, "
-                    f"naechste Difficulty in {self.difficulty_interval_s:.0f}s)",
+                    f"naechste Difficulty in {self._difficulty_duration(1):.0f}s)",
                     flush=True,
                 )
                 return "started"
             return None
 
-        # Difficulty-Timer (Issue #778): laeuft unabhaengig vom Wellen-Feuern.
+        # Difficulty-Timer (Issue #778): laeuft unabhaengig vom Wellen-Feuern
+        # und folgt der Base-Game-Kurve (erster Schritt kurz, Rest 600s).
         with self._lock:
             while (
                 self.next_difficulty_at is not None and now >= self.next_difficulty_at and self.level < self.max_level
             ):
                 self.level += 1
-                self.next_difficulty_at += self.difficulty_interval_s
+                self.next_difficulty_at += self._difficulty_duration(self.level)
                 print(f"[attack-cycle] difficulty erhoeht -> level {self.level}", flush=True)
 
         with self._lock:
@@ -437,6 +488,7 @@ class AttackCycle:
                 "outgoing": list(self.outgoing),
                 "interval_s": self.interval_s,
                 "difficulty_interval_s": self.difficulty_interval_s,
+                "difficulty_schedule": list(self.difficulty_schedule),
                 "max_level": self.max_level,
                 "wave_cost": WAVE_COST,
                 "next_attack": {
@@ -483,21 +535,40 @@ class AttackCycle:
 
     def sync_difficulty_interval(self) -> None:
         """Holt das Difficulty-Intervall (POST /difficulty_interval {}) und
-        uebernimmt es (Spiegel von sync_interval, entkoppelter Timer #778)."""
+        uebernimmt es. Die Bridge liefert einen EINZELWERT (`difficulty_interval_s`)
+        = Dauer des ERSTEN Schritts (1→2); die Folge-Schritte bleiben fest 600s
+        (Base-Game-Kurve, §3.1 DOM_REPLICA.md). Optional akzeptiert die Bridge
+        eine volle Liste (`difficulty_schedule`) als komplette Kurve.
+
+        Der Bridge-Default (200) ergibt damit exakt die Base-Game-Kurve — ohne
+        den `sync_difficulty_interval`-Mechanismus oder das Cockpit anfassen zu
+        muessen.
+        """
         try:
             status, body = self._poster("/difficulty_interval", b"{}")
             if not 200 <= status < 300:
                 return
-            new = json.loads(body).get("difficulty_interval_s")
-            if not isinstance(new, (int, float)) or new <= 0:
+            data = json.loads(body)
+            if not isinstance(data, dict):
                 return
-            new = float(new)
+            n_steps = max(1, self.max_level - 1)
+            new_schedule = None
+            raw_sched = data.get("difficulty_schedule")
+            if isinstance(raw_sched, list):
+                new_schedule = _normalize_difficulty_schedule(raw_sched, n_steps)
+            if new_schedule is None:
+                new_first = data.get("difficulty_interval_s")
+                if isinstance(new_first, (int, float)) and not isinstance(new_first, bool) and new_first > 0:
+                    new_schedule = _difficulty_schedule_from_first_step(float(new_first), n_steps)
+            if new_schedule is None:
+                return
             with self._lock:
-                if new != self.difficulty_interval_s:
-                    self.difficulty_interval_s = new
+                if new_schedule != self.difficulty_schedule:
+                    self.difficulty_schedule = new_schedule
+                    self.difficulty_interval_s = new_schedule[0]
                     if self.active:
-                        self.next_difficulty_at = self._clock() + new
-                    print(f"[attack-cycle] difficulty_interval -> {new:.0f}s", flush=True)
+                        self.next_difficulty_at = self._clock() + self._difficulty_duration(self.level)
+                    print(f"[attack-cycle] difficulty_schedule -> {new_schedule}", flush=True)
         except Exception:
             pass
 
@@ -662,7 +733,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--difficulty-interval",
         type=float,
         default=DEFAULT_DIFFICULTY_INTERVAL_S,
-        help="Difficulty-Timer in Sekunden, entkoppelt vom Wellen-Feuern (Default 200, Issue #778)",
+        help=(
+            "Dauer des ERSTEN Difficulty-Schritts (1→2) in Sekunden; "
+            "Folge-Schritte fest 600s (Base-Game-Kurve). Default 200."
+        ),
+    )
+    p.add_argument(
+        "--difficulty-schedule",
+        default=None,
+        help=(
+            "Komma-separierte Schrittdauern (1→2,2→3,…8→9) als volle Kurve; "
+            "ueberschreibt --difficulty-interval. Default: Base-Game-Kurve "
+            "200,600,600,600,600,600,600,600."
+        ),
     )
     p.add_argument("--max-level", type=int, default=DEFAULT_MAX_LEVEL, help="Max. natuerliches Level (Default 9)")
     p.add_argument(
@@ -711,10 +794,23 @@ def main(argv: Optional[list] = None) -> int:
         persona = personas[args.persona]
         persona_name = args.persona
 
+    difficulty_schedule = None
+    if args.difficulty_schedule:
+        try:
+            difficulty_schedule = [float(x) for x in args.difficulty_schedule.split(",") if x.strip()]
+        except ValueError:
+            print(
+                f"[attack-cycle] Fehler: --difficulty-schedule '{args.difficulty_schedule}' "
+                "ist keine komma-separierte Zahlenliste",
+                flush=True,
+            )
+            return 2
+
     cycle = AttackCycle(
         args.bridge_url,
         interval_s=args.interval,
         difficulty_interval_s=args.difficulty_interval,
+        difficulty_schedule=difficulty_schedule,
         max_level=args.max_level,
         persona=persona,
         persona_name=persona_name,

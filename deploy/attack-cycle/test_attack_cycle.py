@@ -98,15 +98,17 @@ class TestParseSendLevel(unittest.TestCase):
 
 
 class TestAttackCycle(unittest.TestCase):
-    # difficulty_interval default hier bewusst riesig: die meisten Tests unten
-    # pruefen NUR den Wellen-Feuer-Pfad und sollen vom (jetzt entkoppelten)
-    # Difficulty-Timer unberuehrt bleiben. Tests, die den Timer selbst pruefen,
-    # ueberschreiben ihn explizit (siehe TestAttackCycleDifficultyTimer unten).
-    def _cycle(self, poster, interval=420.0, difficulty_interval=1e9, clock=None):
+    # difficulty_interval (erster Schritt) default hier bewusst riesig: die
+    # meisten Tests unten pruefen NUR den Wellen-Feuer-Pfad und sollen vom
+    # (jetzt entkoppelten) Difficulty-Timer unberuehrt bleiben. Tests, die den
+    # Timer selbst pruefen, ueberschreiben ihn explizit (siehe
+    # TestAttackCycleDifficultyTimer unten).
+    def _cycle(self, poster, interval=420.0, difficulty_interval=1e9, difficulty_schedule=None, clock=None):
         return AttackCycle(
             "http://127.0.0.1:9001",
             interval_s=interval,
             difficulty_interval_s=difficulty_interval,
+            difficulty_schedule=difficulty_schedule,
             _poster=poster,
             _clock=clock or FakeClock(),
         )
@@ -191,7 +193,7 @@ class TestAttackCycle(unittest.TestCase):
     def test_level_caps_at_max(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
-        cycle = self._cycle(poster, clock=clock, difficulty_interval=1.0)
+        cycle = self._cycle(poster, clock=clock, difficulty_schedule=[1.0] * 8)
         cycle.step()  # started (level 1)
         for _ in range(20):
             clock.t += 1.0
@@ -242,51 +244,76 @@ class TestAttackCycle(unittest.TestCase):
 
 
 class TestAttackCycleDifficultyTimer(unittest.TestCase):
-    """Issue #778: Difficulty-Level laeuft auf einem eigenen, vom
-    Wellen-Feuer-Intervall entkoppelten Timer."""
+    """Difficulty-Level laeuft auf einem eigenen, vom Wellen-Feuer-Intervall
+    entkoppelten Timer — und folgt der Base-Game-Kurve (§3.1 DOM_REPLICA.md):
+    200s fuer Schritt 1→2, danach 600s je Schritt (2→3 … 8→9)."""
 
-    def _cycle(self, poster, interval=420.0, difficulty_interval=200.0, clock=None):
+    def _cycle(self, poster, interval=420.0, difficulty_interval=200.0, difficulty_schedule=None, clock=None):
         return AttackCycle(
             "http://127.0.0.1:9001",
             interval_s=interval,
             difficulty_interval_s=difficulty_interval,
+            difficulty_schedule=difficulty_schedule,
             _poster=poster,
             _clock=clock or FakeClock(),
         )
 
-    def test_level_increases_every_200s_independent_of_wave_interval(self):
+    def test_default_schedule_is_base_game_curve(self):
+        cycle = AttackCycle("http://x", _poster=lambda *a: (200, "{}"))
+        self.assertEqual(
+            cycle.difficulty_schedule,
+            [200.0, 600.0, 600.0, 600.0, 600.0, 600.0, 600.0, 600.0],
+        )
+
+    def test_level_follows_base_game_curve(self):
         """Wellen-Feuer-Intervall bleibt riesig (feuert nie) -> jede
         Level-Erhoehung stammt garantiert vom Difficulty-Timer allein."""
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
-        cycle = self._cycle(poster, clock=clock, interval=1e9, difficulty_interval=200.0)
+        cycle = self._cycle(poster, clock=clock, interval=1e9)
         cycle.step()  # started, level 1
         self.assertEqual(cycle.level, 1)
 
         clock.t = 199.0
         cycle.step()
-        self.assertEqual(cycle.level, 1)
+        self.assertEqual(cycle.level, 1)  # 1→2 erst bei 200s
 
         clock.t = 200.0
         cycle.step()
         self.assertEqual(cycle.level, 2)
 
-        clock.t = 400.0
+        clock.t = 799.0
+        cycle.step()
+        self.assertEqual(cycle.level, 2)  # 2→3 erst bei 800s (200 + 600)
+
+        clock.t = 800.0
         cycle.step()
         self.assertEqual(cycle.level, 3)
 
-        clock.t = 600.0
+        clock.t = 1400.0
         cycle.step()
-        self.assertEqual(cycle.level, 4)
+        self.assertEqual(cycle.level, 4)  # 3→4 bei 1400s
+
+    def test_flat_schedule_override_still_works(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock=clock, interval=1e9, difficulty_schedule=[200.0] * 8)
+        cycle.step()  # started
+        clock.t = 200.0
+        cycle.step()
+        self.assertEqual(cycle.level, 2)
+        clock.t = 400.0
+        cycle.step()
+        self.assertEqual(cycle.level, 3)  # flach: +1 je 200s
 
     def test_difficulty_caps_at_max_level(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
-        cycle = self._cycle(poster, clock=clock, interval=1e9, difficulty_interval=200.0)
+        cycle = self._cycle(poster, clock=clock, interval=1e9)
         cycle.step()  # started
-        for _ in range(20):
-            clock.t += 200.0
-            cycle.step()
+        # 8 Schritte: 200 + 7*600 = 4400s bis Level 9.
+        clock.t = 10000.0
+        cycle.step()
         self.assertEqual(cycle.level, 9)
 
     def test_wave_fires_with_level_reached_via_difficulty_timer(self):
@@ -294,26 +321,29 @@ class TestAttackCycleDifficultyTimer(unittest.TestCase):
         zeitbasiert) gestiegene Level, ohne es selbst zu erhoehen."""
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
-        cycle = self._cycle(poster, clock=clock, interval=420.0, difficulty_interval=200.0)
+        cycle = self._cycle(poster, clock=clock, interval=420.0)
         cycle.step()  # started, level 1
 
         clock.t = 420.0
         self.assertEqual(cycle.step(), "attack")
-        # Bis t=420 sind zwei Difficulty-Ticks faellig (200, 400) -> Level 3.
-        self.assertEqual(cycle.level, 3)
+        # Bis t=420 ist ein Difficulty-Tick faellig (200) -> Level 2.
+        self.assertEqual(cycle.level, 2)
         logic_calls = [c for c in poster.calls if c[0] == "/activate_mission_flow"]
         self.assertEqual(len(logic_calls), 1)
-        self.assertIn("attack_level_3_id_1.logic", logic_calls[0][1].decode())
+        self.assertIn("attack_level_2_id_1.logic", logic_calls[0][1].decode())
 
     def test_status_reports_seconds_to_next_difficulty(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
-        cycle = self._cycle(poster, clock=clock, interval=1e9, difficulty_interval=200.0)
+        cycle = self._cycle(poster, clock=clock, interval=1e9)
         cycle.step()  # started
         clock.t = 50.0
         s = cycle.status()
         self.assertEqual(s["seconds_to_next_difficulty"], 150.0)
-        self.assertEqual(s["difficulty_interval_s"], 200.0)
+        self.assertEqual(
+            s["difficulty_schedule"],
+            [200.0, 600.0, 600.0, 600.0, 600.0, 600.0, 600.0, 600.0],
+        )
 
 
 class TestPersona(unittest.TestCase):
@@ -587,6 +617,24 @@ class TestTimersAndPreview(unittest.TestCase):
         cycle = AttackCycle("http://x", _poster=poster)
         cycle.sync_difficulty_interval()
         self.assertEqual(cycle.difficulty_interval_s, 100.0)
+        # Einzelwert = erster Schritt; Folge-Schritte bleiben 600s.
+        self.assertEqual(
+            cycle.difficulty_schedule,
+            [100.0, 600.0, 600.0, 600.0, 600.0, 600.0, 600.0, 600.0],
+        )
+
+    def test_sync_difficulty_schedule_full_list(self):
+        def poster(path, body):
+            if path == "/difficulty_interval":
+                return (200, '{"ok":true,"difficulty_schedule":[100,200,300,400,500,600,700,800]}')
+            return (404, "{}")
+
+        cycle = AttackCycle("http://x", _poster=poster)
+        cycle.sync_difficulty_interval()
+        self.assertEqual(
+            cycle.difficulty_schedule,
+            [100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0],
+        )
 
     def test_status_next_attack_preview(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
