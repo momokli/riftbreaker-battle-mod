@@ -958,6 +958,67 @@ class AttackCycle:
         except Exception:
             pass
 
+    def sync_natural_attack_rules(self) -> None:
+        """Pollt GET /natural_attack_rules und uebernimmt die Natural-Attack-
+        Dimensionen (Attack-Count/Boss je Level, Creature-Events, Event-Offset).
+
+        Die Bridge haelt die vollstaendig konfigurierbaren Dimensionen
+        (Issue #819); CLI-Flags/Profil sind nur der Start-Fallback. Jede
+        Dimension wird einzeln validiert und nur bei gueltigem Format
+        uebernommen (ungueltig -> alter Wert bleibt).
+        """
+        try:
+            status, body = self._getter("/natural_attack_rules")
+            if not 200 <= status < 300:
+                return
+            data = json.loads(body)
+            if not isinstance(data, dict):
+                return
+
+            # difficulty_rules: max_attack_count + boss_min_level.
+            new_rules = None
+            if "max_attack_count" in data:
+                try:
+                    new_rules = _normalize_difficulty_rules(
+                        {
+                            "max_attack_count": data.get("max_attack_count"),
+                            "boss_min_level": data.get("boss_min_level"),
+                        },
+                        self.max_level,
+                    )
+                except ValueError:
+                    new_rules = None
+
+            # creature_events: Liste von Event-Bändern.
+            new_events = None
+            raw_events = data.get("creature_events")
+            if isinstance(raw_events, list):
+                try:
+                    new_events = _normalize_creature_events(raw_events)
+                except ValueError:
+                    new_events = None
+
+            # event_offset_fraction: Anteil des Intervalls vor der Attack.
+            new_fraction = None
+            raw_fraction = data.get("event_offset_fraction")
+            if (
+                isinstance(raw_fraction, (int, float))
+                and not isinstance(raw_fraction, bool)
+                and 0.0 < raw_fraction < 1.0
+            ):
+                new_fraction = float(raw_fraction)
+
+            with self._lock:
+                if new_rules is not None:
+                    self.difficulty_rules = new_rules
+                    self.difficulty_profile = "<bridge>"
+                if new_events is not None:
+                    self.creature_events = new_events
+                if new_fraction is not None:
+                    self.event_offset_s = self.interval_s * new_fraction
+        except Exception:
+            pass
+
 
 class ControlHandler(BaseHTTPRequestHandler):
     cycle: AttackCycle = None  # gesetzt von build_control_server()
@@ -1022,6 +1083,7 @@ def run(
             cycle.sync_difficulty_interval()
             cycle.sync_reset()
             cycle.sync_personas()
+            cycle.sync_natural_attack_rules()
             cycle.push_status()
             if once:
                 break

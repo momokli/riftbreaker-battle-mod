@@ -503,6 +503,24 @@ static CRITICAL_SECTION g_active_persona_cs;
 static int g_send_yourself = 1;
 static CRITICAL_SECTION g_send_yourself_cs;
 
+/* Natural-Attack-Rules (#819): die vollstaendig konfigurierbaren Dimensionen
+ * der Natural-Attacks-Engine (Attack-Count/Boss je Level, Creature-Attack-
+ * Events, Event-Offset). roher JSON-Object-String, via WebUI editierbar.
+ * Default = Base-Game "normal"-Profil (docs/DOM_REPLICA.md §2/§3.3) + die
+ * Creature-Attack-Bänder (docs/research/798-event-level.md §4.2). */
+static char g_natural_attack_rules[8192] =
+    "{\"max_attack_count\":[1,2,2,2,2,2,3,3,3],\"boss_min_level\":5,"
+    "\"creature_events\":["
+    "{\"name\":\"shegret_attack\",\"logic\":\"logic/event/shegret_attack.logic\",\"min_level\":2,\"max_level\":4,\"attack_strength\":\"normal\",\"weight\":3},"
+    "{\"name\":\"shegret_attack\",\"logic\":\"logic/event/shegret_attack.logic\",\"min_level\":5,\"max_level\":7,\"attack_strength\":\"hard\",\"weight\":3},"
+    "{\"name\":\"shegret_attack\",\"logic\":\"logic/event/shegret_attack.logic\",\"min_level\":8,\"max_level\":9,\"attack_strength\":\"very_hard\",\"weight\":3},"
+    "{\"name\":\"kermon_attack\",\"logic\":\"logic/event/kermon_attack.logic\",\"min_level\":4,\"max_level\":5,\"attack_strength\":\"normal\",\"weight\":1},"
+    "{\"name\":\"kermon_attack\",\"logic\":\"logic/event/kermon_attack.logic\",\"min_level\":6,\"max_level\":7,\"attack_strength\":\"hard\",\"weight\":1},"
+    "{\"name\":\"kermon_attack\",\"logic\":\"logic/event/kermon_attack.logic\",\"min_level\":8,\"max_level\":9,\"attack_strength\":\"very_hard\",\"weight\":1},"
+    "{\"name\":\"phirian_attack\",\"logic\":\"logic/event/phirian_attack.logic\",\"min_level\":3,\"max_level\":9,\"attack_strength\":null,\"weight\":1}"
+    "],\"event_offset_fraction\":0.35}";
+static CRITICAL_SECTION g_natural_attack_rules_cs;
+
 /* Broadcastet eine JSON-Zeile als SSE-Event an den (einen) Cockpit-Client. */
 static void sse_broadcast(const char *line)
 {
@@ -1518,6 +1536,43 @@ static void handle_post_send_yourself(SOCKET c, const char *body)
     http_respond(c, 200, "OK", resp);
 }
 
+/* GET /natural_attack_rules: liefert die Natural-Attack-Rules als rohen
+ * JSON-Object (max_attack_count, boss_min_level, creature_events,
+ * event_offset_fraction). Der Attack-Cycle-Sidecar pollt das; die WebUI
+ * liest/schreibt. */
+static void handle_get_natural_attack_rules(SOCKET c)
+{
+    char rules[8192];
+
+    EnterCriticalSection(&g_natural_attack_rules_cs);
+    if (g_natural_attack_rules[0]) {
+        strncpy(rules, g_natural_attack_rules, sizeof(rules) - 1);
+        rules[sizeof(rules) - 1] = '\0';
+    } else {
+        strcpy(rules, "{}");
+    }
+    LeaveCriticalSection(&g_natural_attack_rules_cs);
+    http_respond(c, 200, "OK", rules);
+}
+
+/* POST /natural_attack_rules: ersetzt die Natural-Attack-Rules (Body = roher
+ * JSON-Object). */
+static void handle_post_natural_attack_rules(SOCKET c, const char *body)
+{
+    if (!body || !body[0]) {
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_request\"}");
+        return;
+    }
+    EnterCriticalSection(&g_natural_attack_rules_cs);
+    strncpy(g_natural_attack_rules, body, sizeof(g_natural_attack_rules) - 1);
+    g_natural_attack_rules[sizeof(g_natural_attack_rules) - 1] = '\0';
+    LeaveCriticalSection(&g_natural_attack_rules_cs);
+    blog("natural_attack_rules -> gesetzt (%d bytes)",
+         (int)strlen(g_natural_attack_rules));
+    http_respond(c, 200, "OK", "{\"ok\":true}");
+}
+
 static void handle_client(SOCKET c)
 {
     char *req = malloc(REQ_MAX + 1);
@@ -1662,6 +1717,18 @@ static void handle_client(SOCKET c)
             b[body_len] = '\0';
             handle_post_send_yourself(c, b);
             free(b);
+        } else if (strcmp(method, "GET") == 0 && strcmp(path, "/natural_attack_rules") == 0) {
+            handle_get_natural_attack_rules(c);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/natural_attack_rules") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_post_natural_attack_rules(c, b);
+            free(b);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/probe") == 0) {
             handle_probe(c);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/get_state") == 0) {
@@ -1803,6 +1870,7 @@ static int mode_server(void)
     InitializeCriticalSection(&g_personas_cs);
     InitializeCriticalSection(&g_active_persona_cs);
     InitializeCriticalSection(&g_send_yourself_cs);
+    InitializeCriticalSection(&g_natural_attack_rules_cs);
     g_resp_ev = CreateEvent(NULL, FALSE, FALSE, NULL);
     CreateThread(NULL, 0, pipe_reader_main, NULL, 0, NULL);
 
