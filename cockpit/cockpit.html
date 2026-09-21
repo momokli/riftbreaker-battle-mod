@@ -61,6 +61,9 @@
             }
 
             /* Main Layout */
+            [hidden] {
+                display: none !important;
+            }
             #app-root {
                 display: flex;
                 flex-direction: column;
@@ -223,6 +226,90 @@
                 text-transform: uppercase;
                 color: var(--dim);
                 margin-left: 4px;
+            }
+
+            /* Tabs (ARIA) */
+            .tabs {
+                display: flex;
+                gap: 2px;
+                padding: 4px 8px 0;
+                border-bottom: 1px solid var(--line);
+                background: var(--base);
+            }
+            .tab {
+                background: transparent;
+                color: var(--dim);
+                border: 1px solid transparent;
+                border-bottom: none;
+                border-radius: 3px 3px 0 0;
+                padding: 3px 12px;
+                cursor: pointer;
+            }
+            .tab[aria-selected="true"] {
+                color: var(--text);
+                background: var(--panel);
+                border-color: var(--line);
+                font-weight: 600;
+            }
+
+            /* Persona Editor */
+            .persona-editor {
+                flex: 1 1 auto;
+                overflow: auto;
+                padding: 8px;
+            }
+            .persona-table {
+                border-collapse: collapse;
+                font-family: var(--font-mono);
+                font-size: 11px;
+                min-width: 100%;
+            }
+            .persona-table th,
+            .persona-table td {
+                border: 1px solid var(--line);
+                padding: 2px 4px;
+                text-align: left;
+                vertical-align: top;
+                white-space: nowrap;
+            }
+            .persona-table thead th {
+                background: var(--panel);
+                position: sticky;
+                top: 0;
+            }
+            .persona-cell {
+                display: grid;
+                grid-template-columns: auto auto auto auto;
+                gap: 0 4px;
+                align-items: center;
+            }
+            .persona-cell .wave-amt { min-width: 16px; text-align: right; }
+            .persona-cell .wave-cost { color: var(--dim); text-align: right; min-width: 34px; }
+            .persona-cell .cell-total {
+                grid-column: 1 / -1;
+                border-top: 1px solid var(--line);
+                padding-top: 2px;
+                margin-top: 2px;
+                font-weight: 600;
+            }
+            .persona-cell .wave-label { color: var(--dim); }
+            .persona-cell .wave-amt { min-width: 14px; text-align: right; }
+            .pe-btn {
+                background: transparent;
+                border: 1px solid var(--line);
+                color: var(--text);
+                cursor: pointer;
+                padding: 0 3px;
+                height: 16px;
+                line-height: 14px;
+                font-size: 10px;
+            }
+            .pe-btn:disabled { opacity: 0.35; cursor: default; }
+            .pe-dirty { color: var(--accent); }
+            .visually-hidden {
+                position: absolute; width: 1px; height: 1px;
+                margin: -1px; padding: 0; overflow: hidden;
+                clip: rect(0 0 0 0); white-space: nowrap; border: 0;
             }
 
             /* Form Controls */
@@ -566,8 +653,12 @@
                 <span class="title-badge">◆</span> RIFT BATTLE — OPERATOR COCKPIT
                 <span class="identity-badge">__RBB_IDENTITY__</span>
             </header>
+            <nav class="tabs" role="tablist" aria-label="Cockpit-Bereiche">
+                <button id="tab_operator" class="tab" role="tab" aria-selected="true" aria-controls="workspace">Operator</button>
+                <button id="tab_personas" class="tab" role="tab" aria-selected="false" aria-controls="persona_editor" tabindex="-1">Persona Editor</button>
+            </nav>
 
-            <main class="workspace">
+            <main id="workspace" class="workspace" role="tabpanel" aria-labelledby="tab_operator">
                 <div class="left-col">
                     <!-- A. RESOURCES -->
                     <fieldset class="q-groupbox" id="panel-resources">
@@ -647,40 +738,20 @@
                         </div>
                     </fieldset>
 
-                    <!-- B. SEND TRACKER (1.0-Send-Loop, #527) -->
+                    <!-- B. SEND TRACKER (SELF SENDS) -->
                     <fieldset class="q-groupbox" id="panel-send-tracker">
-                        <legend>Send Tracker (Carbonium)</legend>
+                        <legend>Send Tracker (Self)</legend>
                         <div class="flow-container">
-                            <div class="server-status-strip">
-                                <div class="status-pair">
-                                    <span class="prop-label">total</span>
-                                    <span id="send_total" class="prop-val">—</span>
-                                </div>
-                                <div class="status-pair">
-                                    <span class="prop-label">count</span>
-                                    <span id="send_count" class="prop-val">—</span>
-                                </div>
-                                <div class="status-pair">
-                                    <span class="prop-label">source</span>
-                                    <span id="send_source" class="prop-val">—</span>
-                                </div>
-                            </div>
                             <div class="flow-action-row">
-                                <input
-                                    id="send_query"
-                                    class="mono flow-grow"
-                                    placeholder="filter (resource / amount)"
-                                    aria-label="Send-Log filtern"
-                                />
-                                <button id="send_refresh" aria-label="Send-Log aktualisieren">refresh</button>
+                                <label class="prop-label" for="send_yourself">send yourself</label>
+                                <input id="send_yourself" type="checkbox" aria-label="Send yourself toggle" />
                             </div>
-                            <div class="log-scroll-area send-log-area">
+                            <div class="log-scroll-area">
                                 <pre id="send_log">—</pre>
                             </div>
                             <div class="flow-note">
-                                persistentes Send-Log (timestamp + amount). Die
-                                Quelle haengt an einem austauschbaren Adapter —
-                                der finale Transport folgt aus #526.
+                                Meine eigenen Sends. send-yourself on = feuert lokal,
+                                off = geht raus (spaeter Server B).
                                 <span id="send_tracker_msg" aria-live="polite"></span>
                             </div>
                         </div>
@@ -705,10 +776,15 @@
                                 <button id="attack_interval_set" class="btn-primary">set</button>
                                 <button id="attack_cycle_reset" class="btn-danger">reset</button>
                             </div>
+                            <div class="flow-action-row">
+                                <span class="prop-label">difficulty (s)</span>
+                                <input id="difficulty_interval_input" class="mono" size="6" value="200" aria-label="Difficulty interval in seconds" />
+                                <button id="difficulty_interval_set" class="btn-primary">set</button>
+                            </div>
                         </div>
                     </fieldset>
 
-                    <!-- C. MISSION FLOW (WAVE) -->
+<!-- C. MISSION FLOW (WAVE) -->
                     <fieldset class="q-groupbox" id="panel-mission">
                         <legend>Mission Flow (Wave)</legend>
                         <div class="flow-container">
@@ -925,6 +1001,15 @@
                 </div>
             </main>
 
+            <!-- H. PERSONA EDITOR -->
+            <section id="persona_editor" class="persona-editor" role="tabpanel" aria-labelledby="tab_personas" hidden>
+                <div class="flow-action-row">
+                    <button id="pe_new" class="btn-primary">+ neue Persona</button>
+                    <span id="pe_msg" aria-live="polite"></span>
+                </div>
+                <div id="pe_table"></div>
+            </section>
+
             <!-- G. STATUS BAR -->
             <footer class="status-bar">
                 <div class="sb-cell left">
@@ -1031,6 +1116,11 @@
                     return " " + m + ":" + (r < 10 ? "0" : "") + r;
                 }
 
+                function fmtWaves(arr) {
+                    if (!arr || !arr.length) return "-";
+                    return arr.join(",");
+                }
+
                 async function refreshOrders() {
                     try {
                         var res = await fetch("attack_status");
@@ -1041,24 +1131,29 @@
                             return;
                         }
                         var rows = [];
-                        rows.push("level " + s.level + "  next attack in" + fmtCountdown(s.seconds_to_next_attack * 1000));
-                        if (s.seconds_to_next_difficulty !== undefined && s.seconds_to_next_difficulty !== null) {
-                            rows.push("next difficulty in" + fmtCountdown(s.seconds_to_next_difficulty * 1000));
-                        }
-                        var pending = s.bought || [];
-                        if (!pending.length) {
-                            rows.push("gekauft: (keine)");
-                        } else {
-                            var counts = {};
-                            for (var i = 0; i < pending.length; i++) {
-                                var lv = pending[i];
-                                counts[lv] = (counts[lv] || 0) + 1;
+                        rows.push(
+                            "difficulty " + s.level +
+                            "  (next +1 in" + fmtCountdown(s.seconds_to_next_difficulty * 1000) + ")"
+                        );
+                        var na = s.next_attack || {};
+                        rows.push("");
+                        rows.push("next attack in" + fmtCountdown(s.seconds_to_next_attack * 1000) + ":");
+                        rows.push("  natural wave" + na.natural);
+                        rows.push("  self   " + fmtWaves(na.self));
+                        rows.push("  enemy  " + fmtWaves(na.enemy));
+                        var hist = s.history || [];
+                        if (hist.length) {
+                            rows.push("");
+                            rows.push("history:");
+                            for (var i = hist.length - 1; i >= 0; i--) {
+                                var h = hist[i];
+                                rows.push(
+                                    "  #" + h.attack +
+                                    "  natural " + h.natural +
+                                    "  self " + fmtWaves(h.self) +
+                                    "  enemy " + fmtWaves(h.enemy)
+                                );
                             }
-                            var parts = [];
-                            for (var lv in counts) {
-                                parts.push("wave" + lv + " x" + counts[lv]);
-                            }
-                            rows.push("gekauft: " + parts.join(", "));
                         }
                         $("buy_orders").textContent = rows.join("\n");
                         $("buy_orders_msg").textContent = "";
@@ -1081,6 +1176,20 @@
                     });
                 };
 
+                $("difficulty_interval_set").onclick = function () {
+                    var v = parseInt($("difficulty_interval_input").value, 10);
+                    if (!v || v <= 0) {
+                        $("buy_orders_msg").textContent = "invalid interval";
+                        return;
+                    }
+                    post("difficulty_interval", { difficulty_interval_s: v }).then(function (r) {
+                        $("difficulty_interval_input").value = (r && r.difficulty_interval_s) || v;
+                        $("buy_orders_msg").textContent = "";
+                    }).catch(function (e) {
+                        $("buy_orders_msg").textContent = "ERR " + e.message;
+                    });
+                };
+
                 $("attack_cycle_reset").onclick = function () {
                     post("attack_reset", { reset: 1 }).then(function () {
                         $("buy_orders_msg").textContent = "reset";
@@ -1094,6 +1203,15 @@
                         var r = await post("attack_interval", {});
                         if (r && r.interval_s) {
                             $("attack_interval_input").value = r.interval_s;
+                        }
+                    } catch (e) {}
+                }
+
+                async function syncDifficultyInterval() {
+                    try {
+                        var r = await post("difficulty_interval", {});
+                        if (r && r.difficulty_interval_s) {
+                            $("difficulty_interval_input").value = r.difficulty_interval_s;
                         }
                     } catch (e) {}
                 }
@@ -1316,315 +1434,72 @@
                 setInterval(refreshOrders, 1000);
 
                 syncInterval();
+                syncDifficultyInterval();
 
-                // --- send tracker (testable) ---
-                // Persistente Send-Liste (#527, 1.0-Send-Loop #517).
-                //
-                // Die QUELLE ist bewusst hinter `source` gekapselt und damit
-                // austauschbar: der Transport des Send-Signals (HUD-Button ->
-                // Web-UI) ist Gegenstand des Spikes #526 und hier NICHT
-                // endgueltig festgeschrieben. `createBridgeSendSource` ist nur
-                // der provisorische Default (Bridge-Route, analog zu den
-                // uebrigen IO-Kanal-Routen). #526 legt den finalen Pfad fest;
-                // dann wird ausschliesslich dieser Adapter getauscht.
-                function createLocalStorageStore(key, storage) {
-                    var mem = [];
-                    function backing() {
-                        if (storage) return storage;
-                        try {
-                            return typeof localStorage !== "undefined"
-                                ? localStorage
-                                : null;
-                        } catch (e) {
-                            return null;
-                        }
-                    }
-                    return {
-                        persistent: function () {
-                            return !!backing();
-                        },
-                        load: function () {
-                            var s = backing();
-                            if (!s) return mem.slice();
-                            try {
-                                var raw = s.getItem(key);
-                                if (!raw) return mem.slice();
-                                var parsed = JSON.parse(raw);
-                                return Array.isArray(parsed) ? parsed : [];
-                            } catch (e) {
-                                return mem.slice();
-                            }
-                        },
-                        save: function (entries) {
-                            mem = entries.slice();
-                            var s = backing();
-                            if (!s) return;
-                            try {
-                                s.setItem(key, JSON.stringify(mem));
-                            } catch (e) {
-                                // Quota/Privacy-Mode: In-Memory bleibt gueltig.
-                            }
-                        },
-                    };
-                }
-
-                function createBridgeSendSource(fetchFn, route) {
-                    var ROUTE = route || "get_send_log";
-                    return {
-                        name: "bridge:" + ROUTE,
-                        poll: async function (cursor) {
-                            var body =
-                                cursor === undefined || cursor === null
-                                    ? {}
-                                    : { since: cursor };
-                            var res = await fetchFn(ROUTE, {
-                                method: "POST",
-                                headers: { "content-type": "application/json" },
-                                body: JSON.stringify(body),
-                            });
-                            if (!res || !res.ok) {
-                                throw new Error("HTTP " + (res && res.status));
-                            }
-                            var data = await res.json();
-                            return {
-                                entries: (data && data.entries) || [],
-                                cursor:
-                                    data && data.cursor !== undefined
-                                        ? data.cursor
-                                        : cursor,
-                            };
-                        },
-                    };
-                }
-
-                function createSendTracker(deps) {
+                // --- self-send tracker (testable) ---
+                function createSelfSendTracker(deps) {
+                    var fetchFn = deps.fetch;
                     var doc = deps.document;
-                    var DASH = "—";
-                    var LOG_ID = "send_log";
-                    var TOTAL_ID = "send_total";
-                    var COUNT_ID = "send_count";
-                    var SOURCE_ID = "send_source";
-                    var QUERY_ID = "send_query";
-                    var MSG_ID = "send_tracker_msg";
-                    var store = deps.store || createLocalStorageStore("rbb.send_log");
-                    var source = deps.source || null;
-                    var cursor =
-                        deps.cursor === undefined ? null : deps.cursor;
-                    var entries = normalize(deps.entries || store.load());
 
-                    function el(id) {
-                        return doc ? doc.getElementById(id) : null;
+                    function $(id) { return doc.getElementById(id); }
+                    function setText(id, s) { var el = $(id); if (el) el.textContent = s; }
+
+                    function fmtWaves(arr) {
+                        return arr && arr.length ? arr.join(",") : "-";
                     }
 
-                    function setText(id, value) {
-                        var node = el(id);
-                        if (!node) return;
-                        node.textContent =
-                            value === undefined || value === null || value === ""
-                                ? DASH
-                                : String(value);
+                    function postJson(route, body) {
+                        return fetchFn(route, {
+                            method: "POST",
+                            headers: { "content-type": "application/json" },
+                            body: JSON.stringify(body),
+                        });
                     }
 
-                    function msg(text) {
-                        setText(MSG_ID, text || "");
+                    function render(state) {
+                        var cb = $("send_yourself");
+                        if (cb) cb.checked = !!state.send_yourself;
+                        var rows = [];
+                        rows.push("queued: " + fmtWaves(state.bought));
+                        rows.push("outgoing: " + fmtWaves(state.outgoing));
+                        setText("send_log", rows.join("\n"));
                     }
 
-                    // Nur valide Eintraege (timestamp + amount) uebernehmen;
-                    // alles andere wird verworfen statt zu werfen.
-                    function normalize(list) {
-                        var out = [];
-                        if (!Array.isArray(list)) return out;
-                        for (var i = 0; i < list.length; i++) {
-                            var e = list[i];
-                            if (!e || typeof e !== "object") continue;
-                            var amount = Number(e.amount);
-                            if (!isFinite(amount)) continue;
-                            if (e.timestamp === undefined || e.timestamp === null) {
-                                continue;
-                            }
-                            out.push({
-                                timestamp: e.timestamp,
-                                resource: e.resource || "carbonium",
-                                amount: amount,
-                            });
-                        }
-                        return out.sort(byTimestamp);
+                    function refresh() {
+                        return fetchFn("attack_status").then(function (res) {
+                            return res.json();
+                        }).then(function (s) {
+                            if (s && s.active === true) render(s);
+                            return s;
+                        });
                     }
 
-                    function byTimestamp(a, b) {
-                        var ta = Number(a.timestamp);
-                        var tb = Number(b.timestamp);
-                        if (isFinite(ta) && isFinite(tb) && ta !== tb) {
-                            return ta - tb;
-                        }
-                        return String(a.timestamp) < String(b.timestamp) ? -1 : 1;
-                    }
-
-                    function keyOf(e) {
-                        return e.timestamp + "|" + e.resource + "|" + e.amount;
-                    }
-
-                    // Neues anhaengen, Dubletten (gleiche ts/resource/amount)
-                    // verwerfen -> idempotent bei wiederholtem Poll.
-                    function merge(base, incoming) {
-                        var seen = {};
-                        var out = [];
-                        var all = base.concat(incoming);
-                        for (var i = 0; i < all.length; i++) {
-                            var k = keyOf(all[i]);
-                            if (seen[k]) continue;
-                            seen[k] = true;
-                            out.push(all[i]);
-                        }
-                        return out.sort(byTimestamp);
-                    }
-
-                    function fmtTs(ts) {
-                        var n = Number(ts);
-                        if (isFinite(n) && n > 0) {
-                            // Sekunden- vs. Millisekunden-Epoche robust deuten.
-                            var d = new Date(n < 1e12 ? n * 1000 : n);
-                            if (!isNaN(d.getTime())) {
-                                return d.toISOString().replace("T", " ").slice(0, 19);
-                            }
-                        }
-                        return String(ts);
-                    }
-
-                    function fmtEntry(e) {
-                        var sign = e.amount >= 0 ? "+" : "";
-                        return (
-                            fmtTs(e.timestamp) +
-                            "  " +
-                            e.resource +
-                            "  " +
-                            sign +
-                            e.amount
-                        );
-                    }
-
-                    function query() {
-                        var node = el(QUERY_ID);
-                        return node && typeof node.value === "string"
-                            ? node.value.trim().toLowerCase()
-                            : "";
-                    }
-
-                    function filtered() {
-                        var q = query();
-                        if (!q) return entries.slice();
-                        var out = [];
-                        for (var i = 0; i < entries.length; i++) {
-                            if (fmtEntry(entries[i]).toLowerCase().indexOf(q) !== -1) {
-                                out.push(entries[i]);
-                            }
-                        }
-                        return out;
-                    }
-
-                    function render() {
-                        var rows = filtered();
-                        if (!rows.length) {
-                            setText(LOG_ID, DASH);
-                        } else {
-                            var lines = [];
-                            for (var i = 0; i < rows.length; i++) {
-                                lines.push(fmtEntry(rows[i]));
-                            }
-                            setText(LOG_ID, lines.join("\n"));
-                        }
-                        var total = 0;
-                        for (var j = 0; j < rows.length; j++) {
-                            total += rows[j].amount;
-                        }
-                        setText(TOTAL_ID, rows.length ? String(total) : DASH);
-                        setText(COUNT_ID, String(rows.length));
-                        setText(
-                            SOURCE_ID,
-                            source && source.name ? source.name : "kein Adapter (#526)",
-                        );
-                        return rows;
-                    }
-
-                    // Persistentes Log: bei Reload aus dem Store, nicht transient.
-                    function poll() {
-                        if (!source || typeof source.poll !== "function") {
-                            msg("kein Send-Source-Adapter (#526)");
-                            render();
-                            return Promise.resolve({ entries: entries, added: 0 });
-                        }
-                        return source.poll(cursor).then(
-                            function (res) {
-                                var incoming = normalize(
-                                    res && res.entries ? res.entries : [],
-                                );
-                                var added = 0;
-                                if (incoming.length) {
-                                    var before = entries.length;
-                                    entries = merge(entries, incoming);
-                                    added = entries.length - before;
-                                    cursor =
-                                        res && res.cursor !== undefined
-                                            ? res.cursor
-                                            : cursor;
-                                    store.save(entries);
-                                } else if (res && res.cursor !== undefined) {
-                                    cursor = res.cursor;
-                                }
-                                msg("");
-                                render();
-                                return { entries: entries, added: added };
-                            },
-                            function (e) {
-                                // Defensiv: Anzeige bleibt (persistente Eintraege),
-                                // Fehler nur als Meldung.
-                                msg("send source unavailable");
-                                render();
-                                return {
-                                    entries: entries,
-                                    added: 0,
-                                    error: String((e && e.message) || e),
-                                };
-                            },
-                        );
+                    function setSendYourself(on) {
+                        return postJson("send_yourself", { on: on ? 1 : 0 }).then(function (res) {
+                            return res.json();
+                        }).then(function () {
+                            return refresh();
+                        });
                     }
 
                     return {
+                        refresh: refresh,
+                        setSendYourself: setSendYourself,
                         render: render,
-                        poll: poll,
-                        entries: function () {
-                            return entries.slice();
-                        },
-                        total: function () {
-                            var rows = filtered();
-                            var t = 0;
-                            for (var i = 0; i < rows.length; i++) t += rows[i].amount;
-                            return t;
-                        },
-                        add: function (entry) {
-                            entries = merge(entries, normalize([entry]));
-                            store.save(entries);
-                            return render();
-                        },
+                        fmtWaves: fmtWaves,
                     };
                 }
-                // --- end send tracker ---
+                // --- end self-send tracker ---
 
-                var sendTracker = createSendTracker({
+                var selfSendTracker = createSelfSendTracker({
                     document: document,
-                    store: createLocalStorageStore("rbb.send_log"),
-                    source: createBridgeSendSource(window.fetch.bind(window)),
+                    fetch: window.fetch.bind(window),
                 });
-                $("send_refresh").onclick = function () {
-                    sendTracker.poll();
-                };
-                $("send_query").oninput = function () {
-                    sendTracker.render();
-                };
-                sendTracker.render();
-                setInterval(sendTracker.poll, 10000);
+                $("send_yourself").onchange = function () { selfSendTracker.setSendYourself(this.checked); };
+                selfSendTracker.refresh();
+                setInterval(selfSendTracker.refresh, 5000);
 
-                // --- server-control panel (testable) ---
+// --- server-control panel (testable) ---
                 function createServerControlPanel(deps) {
                     var fetchFn = deps.fetch;
                     var doc = deps.document;
@@ -1801,6 +1676,211 @@
                 }
 
                 initEvents();
+
+                // --- tabs ---
+                var TABS = [
+                    ["tab_operator", "workspace"],
+                    ["tab_personas", "persona_editor"],
+                ];
+                function selectTab(id) {
+                    TABS.forEach(function (pair) {
+                        var btn = $(pair[0]);
+                        var panel = $(pair[1]);
+                        var selected = pair[0] === id;
+                        btn.setAttribute("aria-selected", selected ? "true" : "false");
+                        btn.tabIndex = selected ? 0 : -1;
+                        panel.hidden = !selected;
+                        if (selected) btn.focus();
+                    });
+                }
+                $("tab_operator").onclick = function () { selectTab("tab_operator"); };
+                $("tab_personas").onclick = function () { selectTab("tab_personas"); };
+                $("tab_operator").onkeydown = function (e) {
+                    if (e.key === "ArrowRight") selectTab("tab_personas");
+                };
+                $("tab_personas").onkeydown = function (e) {
+                    if (e.key === "ArrowLeft") selectTab("tab_operator");
+                };
+
+                // --- persona editor (testable) ---
+                function createPersonaEditor(deps) {
+                    var fetchFn = deps.fetch;
+                    var doc = deps.document;
+                    var ATTACKS = 10;
+                    var WAVES = 9;
+
+                    var state = { personas: {}, saved: {}, active: "", cost: {} };
+
+                    function $(id) { return doc.getElementById(id); }
+                    function clone(p) { return JSON.parse(JSON.stringify(p)); }
+                    function emptyPersona() {
+                        var out = [];
+                        for (var a = 0; a < ATTACKS; a++) out.push(new Array(WAVES).fill(0));
+                        return out;
+                    }
+
+                    function resp(res) {
+                        if (!res || res.ok === false) throw new Error("HTTP " + (res ? res.status : "err"));
+                        return res.json();
+                    }
+                    function postJson(route, body) {
+                        return fetchFn(route, {
+                            method: "POST",
+                            headers: { "content-type": "application/json" },
+                            body: JSON.stringify(body),
+                        }).then(resp);
+                    }
+
+                    function load() {
+                        return Promise.all([
+                            fetchFn("personas").then(resp),
+                            fetchFn("attack_status").then(resp),
+                        ]).then(function (results) {
+                            var data = results[0];
+                            var status = results[1];
+                            state.personas = clone((data && data.personas) || {});
+                            state.saved = clone(state.personas);
+                            state.active = (data && data.active) || "";
+                            state.cost = (status && status.wave_cost) || {};
+                            return state;
+                        });
+                    }
+
+                    function inc(name, attack, wave) {
+                        if (state.personas[name] && state.personas[name][attack]) {
+                            state.personas[name][attack][wave] += 1;
+                        }
+                    }
+                    function dec(name, attack, wave) {
+                        if (state.personas[name] && state.personas[name][attack]) {
+                            var v = state.personas[name][attack][wave];
+                            if (v > 0) state.personas[name][attack][wave] = v - 1;
+                        }
+                    }
+                    function save(name) {
+                        return postJson("personas", state.personas).then(function () {
+                            state.saved = clone(state.personas);
+                        });
+                    }
+                    function restore(name) {
+                        if (name in state.saved) {
+                            state.personas[name] = clone(state.saved[name]);
+                        }
+                    }
+                    function addPersona(name) {
+                        name = String(name || "").trim();
+                        if (name && !(name in state.personas)) {
+                            state.personas[name] = emptyPersona();
+                            state.saved[name] = clone(state.personas[name]);
+                        }
+                    }
+                    function removePersona(name) {
+                        delete state.personas[name];
+                        delete state.saved[name];
+                        if (state.active === name) state.active = "";
+                    }
+                    function setActive(name) {
+                        return postJson("persona_active", { name: name || "" }).then(function () {
+                            state.active = name || "";
+                        });
+                    }
+
+                    function totalCost(attack) {
+                        var total = 0;
+                        for (var w = 0; w < (attack || []).length; w++) {
+                            total += (attack[w] || 0) * (state.cost[w + 1] || 0);
+                        }
+                        return total;
+                    }
+
+                    return {
+                        state: state,
+                        load: load,
+                        inc: inc,
+                        dec: dec,
+                        save: save,
+                        restore: restore,
+                        addPersona: addPersona,
+                        removePersona: removePersona,
+                        setActive: setActive,
+                        totalCost: totalCost,
+                        emptyPersona: emptyPersona,
+                    };
+                }
+                // --- end persona editor ---
+
+                var personaEditor = createPersonaEditor({ document: document, fetch: window.fetch.bind(window) });
+
+                function peRender() {
+                    var names = Object.keys(personaEditor.state.personas).sort();
+                    var html = [];
+                    html.push('<table class="persona-table">');
+                    html.push('<caption class="visually-hidden">Persona-Editor: Zeilen sind Personas, Spalten sind Attacken 1-10</caption>');
+                    html.push('<thead><tr><th scope="col">Aktiv</th><th scope="col">Persona</th>');
+                    for (var a = 1; a <= 10; a++) html.push('<th scope="col">Attack ' + a + '</th>');
+                    html.push('<th scope="col">Aktionen</th></tr></thead><tbody>');
+
+                    html.push('<tr><td><input type="radio" name="active_persona" value="" data-name=""' + (personaEditor.state.active === "" ? " checked" : "") + ' aria-label="Keine aktive Persona"></td><th scope="row">(none)</th>');
+                    for (var e = 0; e < 10; e++) html.push('<td></td>');
+                    html.push('<td></td></tr>');
+
+                    names.forEach(function (name) {
+                        var dirty = JSON.stringify(personaEditor.state.personas[name]) !== JSON.stringify(personaEditor.state.saved[name]);
+                        html.push('<tr><td><input type="radio" name="active_persona" value="' + name + '" data-name="' + name + '"' + (personaEditor.state.active === name ? " checked" : "") + ' aria-label="Persona ' + name + ' aktivieren"></td>');
+                        html.push('<th scope="row">' + name + (dirty ? ' <span class="pe-dirty">*</span>' : "") + '</th>');
+                        for (var a2 = 0; a2 < 10; a2++) {
+                            html.push('<td><div class="persona-cell">');
+                            for (var w = 0; w < 9; w++) {
+                                var amt = personaEditor.state.personas[name][a2][w];
+                                var cost = personaEditor.state.cost[w + 1] || 0;
+                                html.push('<span class="wave-label">w' + (w + 1) + '</span>');
+                                html.push('<span class="wave-amt">×' + amt + '</span>');
+                                html.push('<span class="wave-cost">' + cost + '</span>');
+                                html.push('<span><button class="pe-btn" data-act="dec" data-name="' + name + '" data-attack="' + a2 + '" data-wave="' + w + '"' + (amt === 0 ? " disabled" : "") + ' aria-label="wave ' + (w + 1) + ' in attack ' + (a2 + 1) + ' fuer ' + name + ' verringern">−</button> <button class="pe-btn" data-act="inc" data-name="' + name + '" data-attack="' + a2 + '" data-wave="' + w + '" aria-label="wave ' + (w + 1) + ' in attack ' + (a2 + 1) + ' fuer ' + name + ' erhoehen">+</button></span>');
+                            }
+                            html.push('<span class="cell-total">Σ ' + personaEditor.totalCost(personaEditor.state.personas[name][a2]) + '</span>');
+                            html.push('</div></td>');
+                        }
+                        html.push('<td><button class="pe-btn" data-act="save" data-name="' + name + '">save</button> <button class="pe-btn" data-act="restore" data-name="' + name + '">restore</button></td></tr>');
+                    });
+                    html.push('</tbody></table>');
+                    $("pe_table").innerHTML = html.join("");
+                }
+
+                $("pe_table").addEventListener("click", function (e) {
+                    var el = e.target;
+                    if (!el || !el.getAttribute || !el.getAttribute("data-act")) return;
+                    var act = el.getAttribute("data-act");
+                    var name = el.getAttribute("data-name");
+                    var attack = parseInt(el.getAttribute("data-attack"), 10);
+                    var wave = parseInt(el.getAttribute("data-wave"), 10);
+                    if (act === "inc") personaEditor.inc(name, attack, wave);
+                    else if (act === "dec") personaEditor.dec(name, attack, wave);
+                    else if (act === "save") personaEditor.save(name).then(function () { $("pe_msg").textContent = "gespeichert"; peRender(); }).catch(function (err) { $("pe_msg").textContent = "ERR " + err.message; });
+                    else if (act === "restore") personaEditor.restore(name);
+                    peRender();
+                });
+
+                $("pe_table").addEventListener("change", function (e) {
+                    var el = e.target;
+                    if (el && el.name === "active_persona") {
+                        personaEditor.setActive(el.value).then(function () { peRender(); }).catch(function (err) { $("pe_msg").textContent = "ERR " + err.message; });
+                    }
+                });
+
+                $("pe_new").onclick = function () {
+                    var name = window.prompt("Name der neuen Persona:");
+                    if (name) {
+                        personaEditor.addPersona(name);
+                        peRender();
+                    }
+                };
+
+                function peRefresh() {
+                    personaEditor.load().then(function () { peRender(); }).catch(function (err) { $("pe_msg").textContent = "ERR " + err.message; });
+                }
+                peRefresh();
+                setInterval(peRefresh, 5000);
             })();
         </script>
     </body>
