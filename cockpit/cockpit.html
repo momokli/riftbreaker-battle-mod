@@ -777,9 +777,14 @@
                                 <button id="attack_cycle_reset" class="btn-danger">reset</button>
                             </div>
                             <div class="flow-action-row">
-                                <span class="prop-label">difficulty (s)</span>
-                                <input id="difficulty_interval_input" class="mono" size="6" value="200" aria-label="Difficulty interval in seconds" />
-                                <button id="difficulty_interval_set" class="btn-primary">set</button>
+                                <span class="prop-label">difficulty first (s)</span>
+                                <input id="difficulty_interval_first_input" class="mono" size="6" value="200" aria-label="Difficulty first step in seconds" />
+                                <button id="difficulty_interval_first_set" class="btn-primary">set</button>
+                            </div>
+                            <div class="flow-action-row">
+                                <span class="prop-label">difficulty subsequent (s)</span>
+                                <input id="difficulty_interval_subsequent_input" class="mono" size="6" value="600" aria-label="Difficulty subsequent step in seconds" />
+                                <button id="difficulty_interval_subsequent_set" class="btn-primary">set</button>
                             </div>
                         </div>
                     </fieldset>
@@ -1178,14 +1183,28 @@
                     });
                 };
 
-                $("difficulty_interval_set").onclick = function () {
-                    var v = parseInt($("difficulty_interval_input").value, 10);
+                $("difficulty_interval_first_set").onclick = function () {
+                    var v = parseInt($("difficulty_interval_first_input").value, 10);
                     if (!v || v <= 0) {
                         $("buy_orders_msg").textContent = "invalid interval";
                         return;
                     }
-                    post("difficulty_interval", { difficulty_interval_s: v }).then(function (r) {
-                        $("difficulty_interval_input").value = (r && r.difficulty_interval_s) || v;
+                    post("difficulty_interval", { difficulty_interval_first_s: v }).then(function (r) {
+                        $("difficulty_interval_first_input").value = (r && r.difficulty_interval_first_s) || v;
+                        $("buy_orders_msg").textContent = "";
+                    }).catch(function (e) {
+                        $("buy_orders_msg").textContent = "ERR " + e.message;
+                    });
+                };
+
+                $("difficulty_interval_subsequent_set").onclick = function () {
+                    var v = parseInt($("difficulty_interval_subsequent_input").value, 10);
+                    if (!v || v <= 0) {
+                        $("buy_orders_msg").textContent = "invalid interval";
+                        return;
+                    }
+                    post("difficulty_interval", { difficulty_interval_subsequent_s: v }).then(function (r) {
+                        $("difficulty_interval_subsequent_input").value = (r && r.difficulty_interval_subsequent_s) || v;
                         $("buy_orders_msg").textContent = "";
                     }).catch(function (e) {
                         $("buy_orders_msg").textContent = "ERR " + e.message;
@@ -1212,8 +1231,11 @@
                 async function syncDifficultyInterval() {
                     try {
                         var r = await post("difficulty_interval", {});
-                        if (r && r.difficulty_interval_s) {
-                            $("difficulty_interval_input").value = r.difficulty_interval_s;
+                        if (r && r.difficulty_interval_first_s) {
+                            $("difficulty_interval_first_input").value = r.difficulty_interval_first_s;
+                        }
+                        if (r && r.difficulty_interval_subsequent_s) {
+                            $("difficulty_interval_subsequent_input").value = r.difficulty_interval_subsequent_s;
                         }
                     } catch (e) {}
                 }
