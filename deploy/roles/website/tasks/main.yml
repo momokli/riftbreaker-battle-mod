@@ -182,7 +182,8 @@
 
 # Zwei HTTP-Domain-Einträge ({{ landing_domain }} + {{ cockpit_domain }})
 # werden hier geroutet. Der Game-Server-Host läuft ausschliesslich über UDP
-# (riftbreaker_server_port_udp, dev 6321 / prod 6322) und bekommt KEINEN
+# (riftbreaker_server_port_udp, dev 6324 / prod 6322; der client-hardgewirete
+# Einstiegsport 6321 gehört seit #843 dem GNS-Entry-Relay) und bekommt KEINEN
 # Caddy-/HTTP-Eintrag — der Host-Caddy reicht nur Landing und Operator-Cockpit
 # (/contract, /tournament) durch.
 #

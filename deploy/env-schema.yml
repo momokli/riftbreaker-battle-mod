@@ -102,6 +102,19 @@ shared:
   dedicated_server_image: "Rendert den env-unabhaengigen Tag (image_name:deploy_image_tag); Env-Trennung laeuft ueber Container-Name/Pfade, nicht den Image-Namen."
   riftbreaker_server_image: "Alias auf dedicated_server_image — gleiche Begruendung (Tag = Deploy-SHA, kein Env-Praefix)."
   rift_caddy_image: "Upstream-Image caddy:2 — derselbe schlanke Caddy fuer jede Env, kein Env-Zustand."
+  # --- GNS-Entry-Relay (Issue #843) -----------------------------------------
+  # Der Relay ist ein SINGLETON auf planet: genau EIN Prozess besitzt den
+  # client-hardgewireten UDP-Einstiegsport 6321. Er routet anhand des
+  # Spielnamens auf die drei (per_env isolierten) Backends — er selbst ist KEIN
+  # Env-Praefix-Twin, daher host-konstant (shared) und nicht per_env (per_env
+  # wuerde prod/test/staging zwingen, Werte zu setzen, obwohl die Rolle dort
+  # gar nicht deployt wird).
+  gns_relay_container: "Container-Name des Relays (gns-relay) — ein Singleton auf planet, kein Env-Twin."
+  gns_relay_image: "Alias auf dedicated_server_image — Tag = Deploy-SHA (kein Env-Praefix), wie riftbreaker_server_image."
+  gns_relay_port: "Client-hardgewireter Einstiegsport 6321 — Host-Konstante (der Client waehlt ihn), kein Env-Port."
+  gns_relay_deploy_dir: "Compose-/Config-Verzeichnis des Relays (/opt/rbmods/compose/gns-relay) — Singleton, kein per-Env-Pfad."
+  gns_relay_bin_dir: "Ablage der gebauten gns_probe.exe (/opt/rbmods/gns-relay/bin) — Singleton, kein per-Env-Pfad."
+  gns_relay_wine_volume: "Eigenes Wine-Prefix-Volume des Relays (gns-relay-wine) — eindeutig (globaler Docker-Name), kein Env-Twin."
   website_host_caddy_container: "Geteilter Host-Caddy (mellon-caddy) hostet fremde Domains — EINER pro Host, kein Env-Praefix moeglich (#322)."
   website_host_caddyfile_path: "Pfad zum geteilten Host-Caddyfile (/home/momo/Caddyfile) — Host-Konstante, kein Env-Zustand."
   website_host_caddyfile_owner: "Owner des geteilten Host-Caddyfiles (momo) — Host-Konstante, kein Env-Zustand."
