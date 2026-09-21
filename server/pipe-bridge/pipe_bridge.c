@@ -521,6 +521,25 @@ static char g_natural_attack_rules[8192] =
     "],\"event_offset_fraction\":0.35}";
 static CRITICAL_SECTION g_natural_attack_rules_cs;
 
+/* Game-Config (#828, docs/GAME_FLOW.md): modus-unabhaengige Game-Flow-Konfig
+ * (mode, Warmup-Dauer und die vier Sende-Toggles) als roher JSON-Object-String,
+ * via WebUI editierbar. Default = Bootzustand SOLO. */
+static char g_game_config[4096] =
+    "{\"mode\":\"solo\",\"warmup_s\":120,\"natural\":true,\"persona\":true,"
+    "\"send_yourself\":true,\"send_enemy\":false}";
+static CRITICAL_SECTION g_game_config_cs;
+
+/* Ready-Flag (#828): der Referee wartet, bis alle Spieler ready sind, bevor
+ * er /start feuert (heute Cockpit-Klick, spaeter /ready im Chat). */
+static int g_ready = 0;
+static CRITICAL_SECTION g_ready_cs;
+
+/* Start-Signal (#828): POST /start inkrementiert diesen Zaehler; der attack_cycle
+ * pollt ihn via GET /game_config (`start_epoch`) und startet bei einem neuen
+ * Wert (Edge). So ist das Start-Signal LESBAR, nicht nur ein Ack. */
+static int g_start_epoch = 0;
+static CRITICAL_SECTION g_start_epoch_cs;
+
 /* Broadcastet eine JSON-Zeile als SSE-Event an den (einen) Cockpit-Client. */
 static void sse_broadcast(const char *line)
 {
@@ -1573,6 +1592,101 @@ static void handle_post_natural_attack_rules(SOCKET c, const char *body)
     http_respond(c, 200, "OK", "{\"ok\":true}");
 }
 
+/* GET /game_config: liefert die Game-Flow-Konfig als rohen JSON-Object
+ * (mode, warmup_s, natural/persona/send_yourself/send_enemy). Der Attack-Cycle
+ * pollt das; die WebUI liest/schreibt. */
+static void handle_get_game_config(SOCKET c)
+{
+    char cfg[4096];
+    char resp[4352];
+    int epoch;
+    int ready;
+
+    EnterCriticalSection(&g_game_config_cs);
+    if (g_game_config[0]) {
+        strncpy(cfg, g_game_config, sizeof(cfg) - 1);
+        cfg[sizeof(cfg) - 1] = '\0';
+    } else {
+        strcpy(cfg, "{}");
+    }
+    LeaveCriticalSection(&g_game_config_cs);
+
+    EnterCriticalSection(&g_start_epoch_cs);
+    epoch = g_start_epoch;
+    LeaveCriticalSection(&g_start_epoch_cs);
+    EnterCriticalSection(&g_ready_cs);
+    ready = g_ready;
+    LeaveCriticalSection(&g_ready_cs);
+
+    /* `start_epoch` + `ready` in das flache Config-Objekt haengen (vor die
+     * schliessende Klammer) -> der attack_cycle hat beides aus EINEM Poll. */
+    {
+        size_t len = strlen(cfg);
+        if (len > 0 && cfg[len - 1] == '}') {
+            cfg[len - 1] = '\0';
+            snprintf(resp, sizeof(resp),
+                     "%s,\"start_epoch\":%d,\"ready\":%s}",
+                     cfg, epoch, ready ? "true" : "false");
+        } else {
+            snprintf(resp, sizeof(resp),
+                     "{\"start_epoch\":%d,\"ready\":%s}",
+                     epoch, ready ? "true" : "false");
+        }
+    }
+    http_respond(c, 200, "OK", resp);
+}
+
+/* POST /game_config: ersetzt die Game-Flow-Konfig (Body = roher JSON-Object). */
+static void handle_post_game_config(SOCKET c, const char *body)
+{
+    if (!body || !body[0]) {
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_request\"}");
+        return;
+    }
+    EnterCriticalSection(&g_game_config_cs);
+    strncpy(g_game_config, body, sizeof(g_game_config) - 1);
+    g_game_config[sizeof(g_game_config) - 1] = '\0';
+    LeaveCriticalSection(&g_game_config_cs);
+    blog("game_config -> gesetzt (%d bytes)", (int)strlen(g_game_config));
+    http_respond(c, 200, "OK", "{\"ok\":true}");
+}
+
+/* POST /start: das eigentliche Start-Signal (Referee -> beide Server im VS,
+ * nur A im SOLO). Inkrementiert `start_epoch`; der attack_cycle erkennt den
+ * neuen Wert via GET /game_config und vollzieht PAUSED -> WARMUP. */
+static void handle_post_start(SOCKET c)
+{
+    int epoch;
+    char resp[96];
+
+    EnterCriticalSection(&g_start_epoch_cs);
+    g_start_epoch += 1;
+    epoch = g_start_epoch;
+    LeaveCriticalSection(&g_start_epoch_cs);
+    blog("start -> Signal empfangen (epoch %d)", epoch);
+    snprintf(resp, sizeof(resp),
+             "{\"ok\":true,\"start\":true,\"start_epoch\":%d}", epoch);
+    http_respond(c, 200, "OK", resp);
+}
+
+/* POST /ready: setzt das Ready-Flag (Body optional {"on":0|1}, Default 1). */
+static void handle_post_ready(SOCKET c, const char *body)
+{
+    double d = 0.0;
+    char resp[128];
+    int cur;
+
+    EnterCriticalSection(&g_ready_cs);
+    g_ready = json_get_number(body, "on", &d) ? (d != 0.0) : 1;
+    cur = g_ready;
+    LeaveCriticalSection(&g_ready_cs);
+    blog("ready -> %s", cur ? "on" : "off");
+    snprintf(resp, sizeof(resp), "{\"ok\":true,\"ready\":%s}",
+             cur ? "true" : "false");
+    http_respond(c, 200, "OK", resp);
+}
+
 static void handle_client(SOCKET c)
 {
     char *req = malloc(REQ_MAX + 1);
@@ -1729,6 +1843,30 @@ static void handle_client(SOCKET c)
             b[body_len] = '\0';
             handle_post_natural_attack_rules(c, b);
             free(b);
+        } else if (strcmp(method, "GET") == 0 && strcmp(path, "/game_config") == 0) {
+            handle_get_game_config(c);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/game_config") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_post_game_config(c, b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/start") == 0) {
+            handle_post_start(c);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/ready") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_post_ready(c, b);
+            free(b);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/probe") == 0) {
             handle_probe(c);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/get_state") == 0) {
@@ -1871,6 +2009,9 @@ static int mode_server(void)
     InitializeCriticalSection(&g_active_persona_cs);
     InitializeCriticalSection(&g_send_yourself_cs);
     InitializeCriticalSection(&g_natural_attack_rules_cs);
+    InitializeCriticalSection(&g_game_config_cs);
+    InitializeCriticalSection(&g_ready_cs);
+    InitializeCriticalSection(&g_start_epoch_cs);
     g_resp_ev = CreateEvent(NULL, FALSE, FALSE, NULL);
     CreateThread(NULL, 0, pipe_reader_main, NULL, 0, NULL);
 

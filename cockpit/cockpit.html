@@ -657,6 +657,7 @@
                 <button id="tab_operator" class="tab" role="tab" aria-selected="true" aria-controls="workspace">Operator</button>
                 <button id="tab_personas" class="tab" role="tab" aria-selected="false" aria-controls="persona_editor" tabindex="-1">Persona Editor</button>
                 <button id="tab_natural" class="tab" role="tab" aria-selected="false" aria-controls="natural_attack_editor" tabindex="-1">Natural Attacks</button>
+                <button id="tab_game_config" class="tab" role="tab" aria-selected="false" aria-controls="game_config_editor" tabindex="-1">Game Config</button>
             </nav>
 
             <main id="workspace" class="workspace" role="tabpanel" aria-labelledby="tab_operator">
@@ -1024,6 +1025,21 @@
                     <span id="na_msg" aria-live="polite"></span>
                 </div>
                 <div id="na_table"></div>
+            </section>
+
+            <!-- J. GAME CONFIG EDITOR -->
+            <section id="game_config_editor" class="persona-editor" role="tabpanel" aria-labelledby="tab_game_config" hidden>
+                <div class="flow-action-row">
+                    <button id="gc_save" class="btn-primary">save</button>
+                    <button id="gc_restore" class="btn-secondary">restore</button>
+                    <span id="gc_msg" aria-live="polite"></span>
+                </div>
+                <div id="gc_form"></div>
+                <div class="flow-action-row">
+                    <button id="gc_start" class="btn-primary">start</button>
+                    <button id="gc_ready" class="btn-secondary">ready</button>
+                    <span id="gc_state" aria-live="polite">state: —</span>
+                </div>
             </section>
 
             <!-- G. STATUS BAR -->
@@ -1715,6 +1731,7 @@
                     ["tab_operator", "workspace"],
                     ["tab_personas", "persona_editor"],
                     ["tab_natural", "natural_attack_editor"],
+                    ["tab_game_config", "game_config_editor"],
                 ];
                 function selectTab(id) {
                     TABS.forEach(function (pair) {
@@ -1730,6 +1747,7 @@
                 $("tab_operator").onclick = function () { selectTab("tab_operator"); };
                 $("tab_personas").onclick = function () { selectTab("tab_personas"); };
                 $("tab_natural").onclick = function () { selectTab("tab_natural"); };
+                $("tab_game_config").onclick = function () { selectTab("tab_game_config"); };
                 $("tab_operator").onkeydown = function (e) {
                     if (e.key === "ArrowRight") selectTab("tab_personas");
                 };
@@ -1739,6 +1757,10 @@
                 };
                 $("tab_natural").onkeydown = function (e) {
                     if (e.key === "ArrowLeft") selectTab("tab_personas");
+                    else if (e.key === "ArrowRight") selectTab("tab_game_config");
+                };
+                $("tab_game_config").onkeydown = function (e) {
+                    if (e.key === "ArrowLeft") selectTab("tab_natural");
                 };
 
                 // --- persona editor (testable) ---
@@ -1902,6 +1924,68 @@
                 }
                 // --- end natural attack editor ---
 
+                // --- game config editor (testable) ---
+                function createGameConfigEditor(deps) {
+                    var fetchFn = deps.fetch;
+                    var doc = deps.document;
+
+                    var state = { config: null, saved: null, status: null };
+
+                    function $(id) { return doc.getElementById(id); }
+                    function clone(p) { return JSON.parse(JSON.stringify(p)); }
+                    function resp(res) {
+                        if (!res || res.ok === false) throw new Error("HTTP " + (res ? res.status : "err"));
+                        return res.json();
+                    }
+                    function postJson(route, body) {
+                        return fetchFn(route, {
+                            method: "POST",
+                            headers: { "content-type": "application/json" },
+                            body: JSON.stringify(body),
+                        }).then(resp);
+                    }
+
+                    function load() {
+                        return fetchFn("game_config").then(resp).then(function (data) {
+                            state.config = clone(data || {});
+                            state.saved = clone(state.config);
+                            return state;
+                        });
+                    }
+                    function loadStatus() {
+                        return fetchFn("attack_status").then(resp).then(function (data) {
+                            state.status = data || {};
+                            return state.status;
+                        });
+                    }
+                    function setField(k, v) {
+                        if (!state.config) state.config = {};
+                        state.config[k] = v;
+                    }
+                    function save() {
+                        return postJson("game_config", state.config).then(function () {
+                            state.saved = clone(state.config);
+                        });
+                    }
+                    function restore() {
+                        if (state.saved) state.config = clone(state.saved);
+                    }
+
+                    function start() {
+                        return postJson("start", {});
+                    }
+                    function setReady(on) {
+                        return postJson("ready", { on: on ? 1 : 0 });
+                    }
+
+                    return {
+                        state: state, load: load, loadStatus: loadStatus,
+                        setField: setField, save: save, restore: restore,
+                        start: start, setReady: setReady,
+                    };
+                }
+                // --- end game config editor ---
+
                 var personaEditor = createPersonaEditor({ document: document, fetch: window.fetch.bind(window) });
 
                 function peRender() {
@@ -2035,6 +2119,79 @@
                 }
                 naRefresh();
                 setInterval(naRefresh, 5000);
+
+                var gameConfigEditor = createGameConfigEditor({ document: document, fetch: window.fetch.bind(window) });
+
+                function gcRender() {
+                    var c = gameConfigEditor.state.config || {};
+                    var mode = c.mode === "vs" ? "vs" : "solo";
+                    var warmup = (c.warmup_s === undefined || c.warmup_s === null) ? 120 : c.warmup_s;
+                    var html = [];
+                    html.push('<div class="flow-action-row"><label class="prop-label" for="gc_mode">mode</label>');
+                    html.push('<select id="gc_mode" class="mono" aria-label="Game mode">');
+                    html.push('<option value="solo"' + (mode === "solo" ? " selected" : "") + '>solo</option>');
+                    html.push('<option value="vs"' + (mode === "vs" ? " selected" : "") + '>vs</option>');
+                    html.push('</select></div>');
+                    html.push('<div class="flow-action-row"><label class="prop-label" for="gc_warmup">warmup (s)</label>');
+                    html.push('<input id="gc_warmup" class="mono" size="6" value="' + warmup + '" aria-label="Warmup seconds"></div>');
+                    var toggles = [
+                        ["natural", "natural"],
+                        ["persona", "persona"],
+                        ["send_yourself", "send yourself"],
+                        ["send_enemy", "send enemy"],
+                    ];
+                    toggles.forEach(function (pair) {
+                        var key = pair[0];
+                        html.push('<div class="flow-action-row"><label class="prop-label" for="gc_' + key + '">' + pair[1] + '</label>');
+                        html.push('<input id="gc_' + key + '" type="checkbox" data-key="' + key + '"' + (c[key] ? " checked" : "") + ' aria-label="' + pair[1] + ' toggle"></div>');
+                    });
+                    $("gc_form").innerHTML = html.join("");
+                }
+
+                function gcRenderState() {
+                    var s = gameConfigEditor.state.status || {};
+                    $("gc_state").textContent = "state: " + (s.state || "—");
+                }
+
+                $("gc_form").addEventListener("change", function (e) {
+                    var el = e.target;
+                    if (!el || !el.id) return;
+                    if (el.id === "gc_mode") {
+                        gameConfigEditor.setField("mode", el.value);
+                    } else if (el.id === "gc_warmup") {
+                        var v = parseFloat(el.value);
+                        if (!isNaN(v) && v >= 0) gameConfigEditor.setField("warmup_s", v);
+                    } else if (el.getAttribute("data-key")) {
+                        gameConfigEditor.setField(el.getAttribute("data-key"), !!el.checked);
+                    }
+                });
+
+                $("gc_save").onclick = function () {
+                    gameConfigEditor.save().then(function () { $("gc_msg").textContent = "gespeichert"; gcRender(); }).catch(function (err) { $("gc_msg").textContent = "ERR " + err.message; });
+                };
+                $("gc_restore").onclick = function () {
+                    gameConfigEditor.restore();
+                    gcRender();
+                };
+                $("gc_start").onclick = function () {
+                    gameConfigEditor.start().then(function () { $("gc_msg").textContent = "start gesendet"; }).catch(function (err) { $("gc_msg").textContent = "ERR " + err.message; });
+                };
+                $("gc_ready").onclick = function () {
+                    gameConfigEditor.setReady(true).then(function () { $("gc_msg").textContent = "ready gesendet"; }).catch(function (err) { $("gc_msg").textContent = "ERR " + err.message; });
+                };
+
+                function gcRefresh() {
+                    gameConfigEditor.load().then(function () {
+                        gcRender();
+                        return gameConfigEditor.loadStatus();
+                    }).then(function () {
+                        gcRenderState();
+                    }).catch(function (err) {
+                        $("gc_msg").textContent = "ERR " + err.message;
+                    });
+                }
+                gcRefresh();
+                setInterval(gcRefresh, 5000);
             })();
         </script>
     </body>
