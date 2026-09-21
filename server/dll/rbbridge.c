@@ -498,6 +498,22 @@ static int mission_flow_mode_ok(const char *mode)
     return strcmp(mode, "default") == 0;
 }
 
+/* Prueft den `attack_strength`-Parameter von activate_mission_flow (#814).
+ * Erlaubt sind nur die drei Base-Game-Werte ("normal"/"hard"/"very_hard")
+ * oder leer/NULL (kein Binding). Der Wert steuert logic_switch_on_value_1
+ * im Creature-Attack-Event-Flow (shegret/kermon) - ein unbekannter Wert
+ * trifft dort keine Route und wuerde den Event stumm verpuffen lassen; ihn
+ * schon hier abzulehnen ist der sicherere Pfad (analog mode #447). Reine
+ * Funktion -> host-testbar. Rueckgabe: 1 = erlaubt, 0 = ablehnen. */
+static int attack_strength_ok(const char *strength)
+{
+    if (!strength || !strength[0])
+        return 1;
+    return strcmp(strength, "normal") == 0
+        || strcmp(strength, "hard") == 0
+        || strcmp(strength, "very_hard") == 0;
+}
+
 /* MissionStatus-Werte (Disasm MissionService::RegisterLua @ 0xFA4DB0, die
  * vier Lua-Globals MISSION_STATUS_*): WIN=0, LOSE=1, IN_PROGRESS=2, NONE=3.
  * Hier VOR dem Parser definiert, damit der Parser host-testbar ist. */
@@ -3611,15 +3627,19 @@ typedef const void *(__fastcall *db_getstring_fn)(void *self,
                                                   const void *key);
 
 /* Baut ein frisches 0x60-Byte-Database-Objekt (Default-Ctor + SetString).
- * Fehlt eine Adresse -> NULL (kein Aufruf). Das Objekt wird bewusst NICHT
- * freigegeben: der Mission-Flow-Kern reicht den Zeiger durch (Lifetime bis
- * Flow-Ende). Rueckgabe = Objekt oder NULL. */
+ * Unterstuetzt bis zu zwei Felder (key1/value1 immer, key2/value2 optional;
+ * key2 == NULL oder value2 leer -> nur ein Feld). Fehlt eine Adresse -> NULL
+ * (kein Aufruf). Das Objekt wird bewusst NICHT freigegeben: der Mission-Flow-
+ * Kern reicht den Zeiger durch (Lifetime bis Flow-Ende). Rueckgabe = Objekt
+ * oder NULL. */
 static void *build_database_payload(const unsigned char *base,
                                     const void *ctor, const void *setstr,
-                                    const char *key, const char *value)
+                                    const char *key1, const char *value1,
+                                    const char *key2, const char *value2)
 {
     unsigned char *db;
-    unsigned char k[40], v[40];
+    unsigned char k[40], v[40], k2[40], v2[40];
+    int have_second = (key2 && value2 && value2[0]) ? 1 : 0;
 
     if (!base || !ctor || !setstr)
         return NULL;
@@ -3628,12 +3648,20 @@ static void *build_database_payload(const unsigned char *base,
         return NULL;
     memset(db, 0, 0x60);
     ((db_ctor_fn)(uintptr_t)ctor)((void *)db);
-    build_utfstring(base, key, k);
-    build_utfstring(base, value ? value : "", v);
+    build_utfstring(base, key1, k);
+    build_utfstring(base, value1 ? value1 : "", v);
     ((db_setstring_fn)(uintptr_t)setstr)((void *)db, (const void *)k,
                                          (const void *)v);
     destroy_utfstring(base, v);
     destroy_utfstring(base, k);
+    if (have_second) {
+        build_utfstring(base, key2, k2);
+        build_utfstring(base, value2, v2);
+        ((db_setstring_fn)(uintptr_t)setstr)((void *)db, (const void *)k2,
+                                             (const void *)v2);
+        destroy_utfstring(base, v2);
+        destroy_utfstring(base, k2);
+    }
     return db;
 }
 
@@ -3907,26 +3935,29 @@ static void dispatch_restart_map(HANDLE hPipe, const char *op)
               (unsigned long long)(uintptr_t)g_restart.instance);
 }
 
-/* #386: zuletzt gebautes Exor::Database-Payload (Mission-Flow `data`) und
- * der darin gesetzte spawn_point. Geparkt fuer die Read-Leg in get_state;
- * absichtlich NICHT freigegeben (Lifetime bis Flow-Ende). Zugriff nur auf
- * dem (einzigen) Pipe-Server-Thread -> kein Lock noetig. */
+/* #386/#814: zuletzt gebautes Exor::Database-Payload (Mission-Flow `data`) und
+ * die darin gesetzten Felder (spawn_point + attack_strength). Geparkt fuer die
+ * Read-Leg in get_state; absichtlich NICHT freigegeben (Lifetime bis Flow-
+ * Ende). Zugriff nur auf dem (einzigen) Pipe-Server-Thread -> kein Lock. */
 static void *g_mission_payload_db = NULL;
 static char g_mission_spawn[128] = "";
+static char g_mission_attack_strength[32] = "";
 
 /*
- * activate_mission_flow (Write #385/#386): startet einen Mission-Flow
- * direkt ueber den C++-Workhorse (AOB-aufgeloest). Ist `spawn_point`
- * gesetzt, wird zusaetzlich ein Exor::Database-Payload (#386) gebaut
- * (Default-Ctor + SetString("spawn_point", ...), beide AOB-aufgeloest)
- * und als `data`-Argument ([rsp+0x28]) durchgereicht. Events:
+ * activate_mission_flow (Write #385/#386/#814): startet einen Mission-Flow
+ * direkt ueber den C++-Workhorse (AOB-aufgeloest). Ist `spawn_point` oder
+ * `attack_strength` gesetzt, wird ein Exor::Database-Payload gebaut
+ * (Default-Ctor + SetString je Feld, AOB-aufgeloest) und als `data`-Argument
+ * ([rsp+0x28]) durchgereicht. `attack_strength` steuert den Creature-Attack-
+ * Event-Flow (logic_switch_on_value_1: normal/hard/very_hard, #814). Events:
  *   {"event":"activate_mission_flow_result","ok":true,"flow":"<id>",
- *    "spawn_point":"<sp>"}
+ *    "spawn_point":"<sp>","attack_strength":"<as>"}
  *   {"event":"activate_mission_flow_result","ok":false,"reason":"..."}
  */
 static void dispatch_activate_mission_flow(HANDLE hPipe, const char *logic,
                                            const char *mode,
-                                           const char *spawn_point)
+                                           const char *spawn_point,
+                                           const char *attack_strength)
 {
     const unsigned char *base = NULL;
     size_t size = 0;
@@ -3938,8 +3969,10 @@ static void dispatch_activate_mission_flow(HANDLE hPipe, const char *logic,
     char flow[192] = "";
     char esc[192 * 2];
     char esc_sp[128 * 2];
+    char esc_as[32 * 2];
     void *payload = NULL;
-    int want_payload = (spawn_point && spawn_point[0]) ? 1 : 0;
+    int want_payload = ((spawn_point && spawn_point[0])
+                        || (attack_strength && attack_strength[0])) ? 1 : 0;
 
     typedef void *(__fastcall *activate_fn)(void *self, void *retbuf,
                                             const void *name,
@@ -3960,6 +3993,17 @@ static void dispatch_activate_mission_flow(HANDLE hPipe, const char *logic,
             mode ? mode : "");
         send_line(hPipe, "{\"event\":\"activate_mission_flow_result\","
                          "\"ok\":false,\"reason\":\"bad_mode\"}");
+        return;
+    }
+
+    /* #814: nur bekannte attack_strength-Werte ans Spiel reichen; ein
+     * unbekannter Wert wuerde im logic_switch_on_value_1 keine Route treffen
+     * und den Event stumm verpuffen lassen. */
+    if (!attack_strength_ok(attack_strength)) {
+        dbg("activate_mission_flow: attack_strength '%s' abgelehnt",
+            attack_strength ? attack_strength : "");
+        send_line(hPipe, "{\"event\":\"activate_mission_flow_result\","
+                         "\"ok\":false,\"reason\":\"bad_attack_strength\"}");
         return;
     }
 
@@ -3993,9 +4037,9 @@ static void dispatch_activate_mission_flow(HANDLE hPipe, const char *logic,
         return;
     }
 
-    /* #386: Database-Payload nur bei gesetztem spawn_point bauen; die
-     * Adressen kommen aus AOB-Signaturen (KEIN festes RVA). Nicht-Fund ->
-     * ok:false, KEIN Aufruf. */
+    /* #386/#814: Database-Payload nur bei gesetztem spawn_point ODER
+     * attack_strength bauen; die Adressen kommen aus AOB-Signaturen (KEIN
+     * festes RVA). Nicht-Fund -> ok:false, KEIN Aufruf. */
     if (want_payload) {
         const void *db_ctor = resolve_db_ctor_fn(base, size);
         const void *db_setstr = resolve_db_setstring_fn(base, size);
@@ -4008,7 +4052,8 @@ static void dispatch_activate_mission_flow(HANDLE hPipe, const char *logic,
             return;
         }
         payload = build_database_payload(base, db_ctor, db_setstr,
-                                         "spawn_point", spawn_point);
+                                         "spawn_point", spawn_point,
+                                         "attack_strength", attack_strength);
         if (!payload) {
             send_line(hPipe,
                       "{\"event\":\"activate_mission_flow_result\","
@@ -4047,20 +4092,25 @@ static void dispatch_activate_mission_flow(HANDLE hPipe, const char *logic,
     if (payload) {
         g_mission_payload_db = payload;
         copy_cstr(g_mission_spawn, sizeof(g_mission_spawn), spawn_point);
+        copy_cstr(g_mission_attack_strength, sizeof(g_mission_attack_strength),
+                  attack_strength ? attack_strength : "");
     }
 
     json_escape_into(flow, esc, sizeof(esc));
     json_escape_into(g_mission_spawn, esc_sp, sizeof(esc_sp));
+    json_escape_into(g_mission_attack_strength, esc_as, sizeof(esc_as));
 
     dbg("activate_mission_flow: logic='%s' mode='%s' spawn_point='%s' "
-        "fn_rva=%08lx ms=%p payload=%p flow='%s'",
+        "attack_strength='%s' fn_rva=%08lx ms=%p payload=%p flow='%s'",
         logic, (mode && mode[0]) ? mode : "default", g_mission_spawn,
+        g_mission_attack_strength,
         (unsigned long)(uintptr_t)(fn - base), (void *)ms, payload, flow);
 
     send_line(hPipe,
               "{\"event\":\"activate_mission_flow_result\",\"ok\":true,"
-              "\"flow\":\"%s\",\"spawn_point\":\"%s\"}",
-              esc, esc_sp);
+              "\"flow\":\"%s\",\"spawn_point\":\"%s\","
+              "\"attack_strength\":\"%s\"}",
+              esc, esc_sp, esc_as);
 }
 
 /* Mission-Flow-Read fuer get_state: 1 wenn `flow` laut
@@ -5067,22 +5117,32 @@ static void dispatch_get_state(HANDLE hPipe)
     char payload_field[320];
     {
         char sp[128] = "";
+        char as[32] = "";
         int sp_ok = 0;
+        int as_ok = 0;
         if (g_mission_payload_db) {
             const void *gs = resolve_db_getstring_fn(base, size);
-            if (gs)
+            if (gs) {
                 sp_ok = database_get_string(base, g_mission_payload_db, gs,
                                             "spawn_point", sp, sizeof(sp));
+                as_ok = database_get_string(base, g_mission_payload_db, gs,
+                                            "attack_strength", as, sizeof(as));
+            }
         }
         if (!sp_ok)
             copy_cstr(sp, sizeof(sp), g_mission_spawn);
-        if (!g_mission_payload_db && !sp[0]) {
+        if (!as_ok)
+            copy_cstr(as, sizeof(as), g_mission_attack_strength);
+        if (!g_mission_payload_db && !sp[0] && !as[0]) {
             snprintf(payload_field, sizeof(payload_field), "null");
         } else {
             char esp[128 * 2];
+            char eas[32 * 2];
             json_escape_into(sp, esp, sizeof(esp));
+            json_escape_into(as, eas, sizeof(eas));
             snprintf(payload_field, sizeof(payload_field),
-                     "{\"spawn_point\":\"%s\"}", esp);
+                     "{\"spawn_point\":\"%s\",\"attack_strength\":\"%s\"}",
+                     esp, eas);
         }
     }
 
@@ -5796,6 +5856,7 @@ static void handle_line(HANDLE hPipe, const char *line)
         char logic[256] = "";
         char mode[64] = "default";
         char spawn[128] = "";
+        char strength[32] = "";
         if (!json_get_string(line, "logic", logic, sizeof(logic)) ||
             !logic[0]) {
             send_line(hPipe, "{\"event\":\"activate_mission_flow_result\","
@@ -5803,9 +5864,10 @@ static void handle_line(HANDLE hPipe, const char *line)
             return;
         }
         json_get_string(line, "mode", mode, sizeof(mode));
-        /* #386: optionaler spawn_point -> Database-Payload. */
+        /* #386/#814: optionale Binding-Felder -> Database-Payload. */
         json_get_string(line, "spawn_point", spawn, sizeof(spawn));
-        dispatch_activate_mission_flow(hPipe, logic, mode, spawn);
+        json_get_string(line, "attack_strength", strength, sizeof(strength));
+        dispatch_activate_mission_flow(hPipe, logic, mode, spawn, strength);
         return;
     }
 

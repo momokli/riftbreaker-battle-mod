@@ -951,11 +951,13 @@ static void handle_activate_mission_flow(SOCKET c, const char *body)
     char logic[256] = "";
     char mode[64] = "default";
     char spawn[128] = "";
+    char strength[32] = "";
     char line[READ_BUF];
     char payload[LINE_MAX];
     char esc_logic[256 * 2];
     char esc_mode[64 * 2];
     char esc_spawn[128 * 2];
+    char esc_strength[32 * 2];
     int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
 
     if (!json_get_string(body, "logic", logic, sizeof(logic)) || !logic[0]) {
@@ -967,18 +969,22 @@ static void handle_activate_mission_flow(SOCKET c, const char *body)
     json_get_string(body, "mode", mode, sizeof(mode));
     if (!mode[0])
         snprintf(mode, sizeof(mode), "default");
-    /* #386: optionaler spawn_point -> rbbridge baut ein Exor::Database-
+    /* #386/#814: optionale Binding-Felder -> rbbridge baut ein Exor::Database-
      * Payload (Default-Ctor + SetString, AOB-aufgeloest) und reicht es als
-     * `data` an den Mission-Flow durch. */
+     * `data` an den Mission-Flow durch. `attack_strength` steuert den
+     * Creature-Attack-Event-Flow (normal/hard/very_hard). */
     json_get_string(body, "spawn_point", spawn, sizeof(spawn));
+    json_get_string(body, "attack_strength", strength, sizeof(strength));
 
     json_escape(logic, esc_logic, sizeof(esc_logic));
     json_escape(mode, esc_mode, sizeof(esc_mode));
     json_escape(spawn, esc_spawn, sizeof(esc_spawn));
+    json_escape(strength, esc_strength, sizeof(esc_strength));
     snprintf(payload, sizeof(payload),
              "{\"cmd\":\"activate_mission_flow\",\"logic\":\"%s\","
-             "\"mode\":\"%s\",\"spawn_point\":\"%s\"}\n",
-             esc_logic, esc_mode, esc_spawn);
+             "\"mode\":\"%s\",\"spawn_point\":\"%s\","
+             "\"attack_strength\":\"%s\"}\n",
+             esc_logic, esc_mode, esc_spawn, esc_strength);
 
     {
         int rc = pipe_send_command("activate_mission_flow_result", payload,
