@@ -8,16 +8,17 @@
 
 ## Ziel-Stack (was IMMER betrieben wird)
 
-| Komponente                       | Host              | Container/Unit                                                     | Port                 | Zweck                                                                                          |
-| -------------------------------- | ----------------- | ------------------------------------------------------------------ | -------------------- | ---------------------------------------------------------------------------------------------- |
-| riftbreaker-dedicated            | planet            | docker (wine)                                                      | 6321/udp             | Dev-SP-Server: 1v1 „vs sich selbst" (SP-Mode; rbbattle-Mod + rbbridge)                         |
-| tournament-server                | planet            | systemd (Rust/axum, `tournament/`)                                 | 8081                 | Turnier 1v1: Lobby/Ready/GO/Wave-Routing/Score (2 Welten)                                      |
-| test-Instanzen                   | planet            | docker, on-demand                                                  | frei                 | Test-Server aller Art (Mod-Tests, Balance, Experimente)                                        |
-| Operator-Cockpit + Tournament-UI | planet            | **eigener** Caddy (`rift-caddy`, plain HTTP) hinter `mellon-caddy` | 443 → 127.0.0.1:8787 | `/contract/*` → IO-Bridge (basic_auth) · `/tournament/*` → tournament-server                   |
-| rbmods-image-retention.timer     | planet            | systemd                                                            | —                    | Alte Mod-Image-Tags aufräumen (Rollback-Stand + laufendes Image bleiben)                       |
-| rbmods-host-hygiene.timer        | planet            | systemd                                                            | —                    | wöchentlich dangling Docker-Images aufräumen (`docker image prune`, **kein** `-a`; Issue #308) |
-| rbmods-crash-collector           | planet            | systemd                                                            | —                    | Crash-Artefakte (Minidump + Trace + Log) sichern, Minidump parsen (Meta) + Retention (Issue #462/#481) |
-| rbbridge                         | in Mod-Containern | Prozess                                                            | —                    | Command-Injection (`exec_cmd_client`, Argument IMMER als EIN gequotierter String)              |
+| Komponente                       | Host              | Container/Unit                                                     | Port                 | Zweck                                                                                                                                                 |
+| -------------------------------- | ----------------- | ------------------------------------------------------------------ | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| riftbreaker-dedicated            | planet            | docker (wine)                                                      | 6324/udp             | Dev-SP-Server: 1v1 „vs sich selbst" (SP-Mode; rbbattle-Mod + rbbridge). Seit #843 von 6321 auf 6324 umgezogen — 6321 gehört dem Entry-Relay           |
+| gns-relay                        | planet            | docker (wine, `network_mode: host`)                                | 6321/udp             | GNS-Entry-Relay (Issue #843): terminiert GameNetworkingSockets, liest den Spielnamen und routet per Suffix auf prod :6322 / staging :6323 / dev :6324 |
+| tournament-server                | planet            | systemd (Rust/axum, `tournament/`)                                 | 8081                 | Turnier 1v1: Lobby/Ready/GO/Wave-Routing/Score (2 Welten)                                                                                             |
+| test-Instanzen                   | planet            | docker, on-demand                                                  | frei                 | Test-Server aller Art (Mod-Tests, Balance, Experimente)                                                                                               |
+| Operator-Cockpit + Tournament-UI | planet            | **eigener** Caddy (`rift-caddy`, plain HTTP) hinter `mellon-caddy` | 443 → 127.0.0.1:8787 | `/contract/*` → IO-Bridge (basic_auth) · `/tournament/*` → tournament-server                                                                          |
+| rbmods-image-retention.timer     | planet            | systemd                                                            | —                    | Alte Mod-Image-Tags aufräumen (Rollback-Stand + laufendes Image bleiben)                                                                              |
+| rbmods-host-hygiene.timer        | planet            | systemd                                                            | —                    | wöchentlich dangling Docker-Images aufräumen (`docker image prune`, **kein** `-a`; Issue #308)                                                        |
+| rbmods-crash-collector           | planet            | systemd                                                            | —                    | Crash-Artefakte (Minidump + Trace + Log) sichern, Minidump parsen (Meta) + Retention (Issue #462/#481)                                                |
+| rbbridge                         | in Mod-Containern | Prozess                                                            | —                    | Command-Injection (`exec_cmd_client`, Argument IMMER als EIN gequotierter String)                                                                     |
 
 ## Deployment-Plan (Ansible, inventory `planet`)
 
@@ -37,35 +38,40 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
    `vars.yml`). Konvergiert nach `rm -rf`; Fehlschlag ist laut.
 4. **riftbreaker-server** — Docker-Container + Server-Config (Welt
    `mp_survival`/`jungle`, `disable_steam`, Passwort aus Vault), Mod-Install
-   in `<game>/mods/rbbattle`; Restart-Handler bei Mod-/Config-Änderung.
-5. **tournament-server** — systemd-Unit, Env-Konfig (`RBBRIDGE_A_URL`/
+   in `<game>/mods/rbbattle`; Restart-Handler bei Mod-/Config-Änderung. Dev-Port
+   seit #843 `:6324` (6321 gehört dem gns-relay).
+5. **gns-relay** — GNS-Entry-Relay (Issue #843): Container `gns-relay`
+   (`network_mode: host`, UDP `:6321`), baut `gns_probe.exe` aus
+   `tools/gns-proxy` (MinGW-w64/zig) und routet per Spielnamen-Suffix auf
+   prod/staging/dev (Routen aus `roles/gns-relay/templates/routes.j2`).
+6. **tournament-server** — systemd-Unit, Env-Konfig (`RBBRIDGE_A_URL`/
    `RBBRIDGE_B_URL`), Binary + Web-UI aus `tournament/`.
-6. **website** — eigener **`rift-caddy`** (plain HTTP: Landing + `/mod.zip` +
+7. **website** — eigener **`rift-caddy`** (plain HTTP: Landing + `/mod.zip` +
    Cockpit `/contract/*` + `/tournament/*`) und **ZWEI** Einträge im geteilten
    Host-Caddy (`mellon-caddy`, Landing- + Cockpit-Domain). Details: „Website-Pfad“ unten.
-7. **image-retention** — systemd-Timer für
+8. **image-retention** — systemd-Timer für
    `deploy/image-retention/docker_image_tag_retention.sh`: entfernt alte
    `rb-dedicated`/`rb-headless-client`-Tags, behält das laufende Image und den
    Rollback-Stand (Issue #309, siehe unten).
-8. **host-hygiene** — wöchentlicher systemd-Timer (Issue #308): entfernt
+9. **host-hygiene** — wöchentlicher systemd-Timer (Issue #308): entfernt
    dangling Docker-Images (`docker image prune`, **kein** `-a`; der getaggte
    Rollback-Stand bleibt erhalten). Installiert `deploy/host-hygiene/host_hygiene.sh` +
    Unit/Timer; automatische Variante der manuellen Aufräum-Befehle in
    [`SERVER_SIZING.md`](SERVER_SIZING.md).
-9. **crash-collector** — systemd-*Dauer*-Dienst (Issue #462/#481): beobachtet
-   `docker logs -f` des Dedicated-Servers auf Crash-Marker (`CRASH:`,
-   `page fault`) und sichert das neueste `crash_info/<uuid>.{dmp,log,trace}`
-   als Bundle nach `/opt/rbmods/crashes/<ts>-<uuid>/` — zusammen mit
-   `context.log` (letzte N Container-Zeilen) und `meta.json`. Der Minidump wird
-   dabei von `rbmods-minidump-meta.py` minimal geparst (siehe „Crash-Bundles &
-   meta.json“ unten): Exception-Code/-Adresse, Modul, Modulbasis, Fault-RVA,
-   Fault-Thread und Stack-RVAs kommen aus dem Dump; fehlt/kaputt der Dump,
-   bleiben diese Felder `null` und `module_base`/`fault_address` fallen auf die
-   `module_range`-/`page fault`-Zeile DIESES Bundles zurück. Retention
-   (Default 20 Bundles) begrenzt auch das crash_info-Wachstum im Wine-Volume
-   (#462). Prod wird als **eigener Zwilling** mitbeobachtet (Unit
-   `rbmods-crash-collector-prod`, Bundle-Dir `/opt/rbmods/crashes-prod`,
-   Container `riftbreaker-dedicated-prod`, Issue #481).
+10. **crash-collector** — systemd-*Dauer*-Dienst (Issue #462/#481): beobachtet
+    `docker logs -f` des Dedicated-Servers auf Crash-Marker (`CRASH:`,
+    `page fault`) und sichert das neueste `crash_info/<uuid>.{dmp,log,trace}`
+    als Bundle nach `/opt/rbmods/crashes/<ts>-<uuid>/` — zusammen mit
+    `context.log` (letzte N Container-Zeilen) und `meta.json`. Der Minidump wird
+    dabei von `rbmods-minidump-meta.py` minimal geparst (siehe „Crash-Bundles &
+    meta.json“ unten): Exception-Code/-Adresse, Modul, Modulbasis, Fault-RVA,
+    Fault-Thread und Stack-RVAs kommen aus dem Dump; fehlt/kaputt der Dump,
+    bleiben diese Felder `null` und `module_base`/`fault_address` fallen auf die
+    `module_range`-/`page fault`-Zeile DIESES Bundles zurück. Retention
+    (Default 20 Bundles) begrenzt auch das crash_info-Wachstum im Wine-Volume
+    (#462). Prod wird als **eigener Zwilling** mitbeobachtet (Unit
+    `rbmods-crash-collector-prod`, Bundle-Dir `/opt/rbmods/crashes-prod`,
+    Container `riftbreaker-dedicated-prod`, Issue #481).
 
 Grundsätze:
 
@@ -392,7 +398,8 @@ Läuft zusätzlich in `deploy-check-local` auf dem GitHub-Hosted-Runner.
 
 Nach jedem Merge auf `main` deployt
 [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) automatisch auf
-den Solo-DEV-Server (planet, Port 6321) — **rolling**, immer der aktuelle Stand
+den Solo-DEV-Server (planet, `:6324`; der client-hardgewirete Einstiegsport
+`:6321` gehört dem GNS-Entry-Relay) — **rolling**, immer der aktuelle Stand
 zum Testen. Der Job läuft auf dem self-hosted Runner auf planet und verbindet
 sich per **SSH als dedizierter deploy-User** (`ssh rbd "<sha> <ref>"`); die
 forced command (`deploy/deploy-ssh.sh`) validiert die SHA, macht
@@ -400,14 +407,26 @@ forced command (`deploy/deploy-ssh.sh`) validiert die SHA, macht
 (enges sudoers). Kein Token, kein Polling. Installation/Migration:
 `deploy/README.md` → „CD: SSH-Deploy".
 
-Topologie (Stand Issue #328): **zwei** Instanzen, ein Dedi-Port. **DEV** läuft
-rolling auf `:6321` (dieser CD-Workflow, `deploy/site.yml`); **PROD** ist eine
-koexistierende zweite Instanz auf `:6322`, öffentlich erreichbar über den
-**Satellite-Relay** (eigene IPv4, inbound `:6321` → DNAT → planet `:6322`;
-`deploy/deploy-prod.yml` + `prod-vars.yml`). Ein Direct-IP-Server
-(`disable_steam "1"`) deckt beide Stores ab; der Client ist effektiv auf Port
-`:6321` hardgewired, daher der zweite öffentliche Zugang über eine zweite
-**Adresse** (den Satellite) statt eines zweiten Ports.
+Topologie (Stand Issue #328, GNS-Entry-Relay #843, Konsolidierung #846): **drei**
+Instanzen auf planet. **DEV** läuft rolling auf `:6324` (dieser CD-Workflow,
+`deploy/site.yml`); der client-hardgewirete Einstiegsport `:6321` gehört dem
+**GNS-Entry-Relay** (`gns-relay`, `deploy/site.yml`), das GNS terminiert und per
+Spielnamen-Suffix auf die Backends routet (`*-dev` → `:6324`, `*-staging` →
+`:6323`, sonst → `:6322`). **PROD** ist eine koexistierende zweite Instanz auf
+`:6322` und **STAGING** ein dritter Twin auf `:6323`. Beide werden seit Issue
+#846 **nicht mehr** über eigene DNAT-Relays (`satellite`/`sync`) angesprochen —
+es gibt **genau einen** öffentlichen Einstieg (`planet:6321`), und die Umgebung
+wählt der Spielname (Suffix). Ein Direct-IP-Server (`disable_steam "1"`) deckt
+beide Stores ab; der Client ist effektiv auf Port `:6321` hardgewired, daher der
+eine öffentliche Zugang statt mehrerer Ports/Adressen.
+
+Die beiden früheren Relay-Hosts (früher `satellite:6321 → planet:6322` bzw.
+`sync:6321 → planet:6323`) sind **retired**: `deploy/deploy-prod.yml` und
+`deploy/deploy-staging.yml` fahren die Rolle `satellite-relay` mit
+`satellite_relay_state: absent` und bauen die DNAT-Regeln/Units dort ab.
+Host-seitig (Cloudflare, **nicht repo-owned**) zeigen die A-Records
+`drift.projectmellon.de`, `rift.projectmellon.de` und
+`staging.projectmellon.de` alle auf `65.21.27.234` (planet).
 
 Der **Tag→prod-Kanal ist weiterhin nicht verdrahtet** (Follow-up):
 `tags: ['v*']` sind seit Issue #209 **reine Marker** (kein Tag-Trigger, keine
@@ -521,7 +540,6 @@ Rollback: Backup-`tar.gz` aus `/srv/riftbreaker/backups/` nach
   Runtime-Log.
 - SSH mesh-first (Tailscale), nie über Public-IPs.
 
-
 ## Environment-Isolation & Deploy-Identität (Issue #483)
 
 Jeder Deploy trägt **genau eine** Identität: `rift_env` (`dev`|`prod`|`test`|`staging`) +
@@ -541,23 +559,23 @@ der Kern des Issues. Das Gate `tools/deploy-gate/check_env_isolation.py` bricht
 bei Lücke ab (Marker `ENV-ISOLATION-GATE`), aufgerufen aus
 `deploy/tasks/env-assert.yml` in den `pre_tasks` — **vor** den Rollen.
 
-| Achse | dev (Basis) | prod (`prod-vars.yml`) | test (`test-vars.yml`) |
-| --- | --- | --- | --- |
-| `riftbreaker_game_dir` | `/srv/rift-dev/game` | `/srv/rift-prod/game` | `/srv/rift-test-<run>/game` |
-| `riftbreaker_backup_dir` | `/srv/rift-dev/backups` | `/srv/rift-prod/backups` | `/srv/rift-test-<run>/backups` |
-| `riftbreaker_sessions_dir` | `/srv/rift-dev/sessions` | `/srv/rift-prod/sessions` | `/srv/rift-test-<run>/sessions` |
-| `riftbreaker_deploy_dir` | `/opt/rbmods/compose/rift-dev/riftbreaker` | `/opt/rbmods/compose/rift-prod/riftbreaker` | `/opt/rbmods/compose/rift-test-<run>/riftbreaker` |
-| `riftbreaker_compose_project` | `riftbreaker-dedicated` | `riftbreaker-dedicated-prod` | `rb-test-<run>` |
-| `rbtools_dir` | `/opt/rbmods/rbtools/dev` | `/opt/rbmods/rbtools/prod` | `/opt/rbmods/rbtools/test-<run>` |
-| `rbtools_staging_dir` | `<rbtools_dir>/.staging` | `<rbtools_dir>/.staging` | `<rbtools_dir>/.staging` |
-| `website_docroot` | `/srv/rbmods-site` | `/srv/rbmods-site-prod` | `/srv/rbmods-site-test-<run>` |
-| `website_mods_dir` | `/srv/rbmods-site/mods` | `<docroot>/mods` | `/opt/rbbattle-deploy/test/mods-<run>` |
-| `mods_zip_dest` | `<mods_dir>/rbbattle.zip` | `<mods_dir>/rbbattle.zip` | (abgeleitet, isoliert) |
-| Game-Port (UDP) | 6321 | 6322 | ephemer (je Lauf) |
-| Bridge-Port | 9001 | 9002 | je Lauf (Fallback 9003) |
-| Tournament-Port | 8081 | 8082 | je Lauf |
-| rift-caddy | `rift-caddy` :8787, `/opt/rbmods/compose/rift-dev/caddy` | `rift-caddy-prod` :8788, `/opt/rbmods/compose/rift-prod/caddy` | — (keine website-Rolle im Boot-Test) |
-| Container-Env/Labels | `RBB_ENV=dev`/`RBB_REF=<sha>` | `prod`/`<tag>` | `test`/`<sha>` |
+| Achse                         | dev (Basis)                                              | prod (`prod-vars.yml`)                                         | test (`test-vars.yml`)                            |
+| ----------------------------- | -------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------- |
+| `riftbreaker_game_dir`        | `/srv/rift-dev/game`                                     | `/srv/rift-prod/game`                                          | `/srv/rift-test-<run>/game`                       |
+| `riftbreaker_backup_dir`      | `/srv/rift-dev/backups`                                  | `/srv/rift-prod/backups`                                       | `/srv/rift-test-<run>/backups`                    |
+| `riftbreaker_sessions_dir`    | `/srv/rift-dev/sessions`                                 | `/srv/rift-prod/sessions`                                      | `/srv/rift-test-<run>/sessions`                   |
+| `riftbreaker_deploy_dir`      | `/opt/rbmods/compose/rift-dev/riftbreaker`               | `/opt/rbmods/compose/rift-prod/riftbreaker`                    | `/opt/rbmods/compose/rift-test-<run>/riftbreaker` |
+| `riftbreaker_compose_project` | `riftbreaker-dedicated`                                  | `riftbreaker-dedicated-prod`                                   | `rb-test-<run>`                                   |
+| `rbtools_dir`                 | `/opt/rbmods/rbtools/dev`                                | `/opt/rbmods/rbtools/prod`                                     | `/opt/rbmods/rbtools/test-<run>`                  |
+| `rbtools_staging_dir`         | `<rbtools_dir>/.staging`                                 | `<rbtools_dir>/.staging`                                       | `<rbtools_dir>/.staging`                          |
+| `website_docroot`             | `/srv/rbmods-site`                                       | `/srv/rbmods-site-prod`                                        | `/srv/rbmods-site-test-<run>`                     |
+| `website_mods_dir`            | `/srv/rbmods-site/mods`                                  | `<docroot>/mods`                                               | `/opt/rbbattle-deploy/test/mods-<run>`            |
+| `mods_zip_dest`               | `<mods_dir>/rbbattle.zip`                                | `<mods_dir>/rbbattle.zip`                                      | (abgeleitet, isoliert)                            |
+| Game-Port (UDP)               | 6324                                                     | 6322                                                           | ephemer (je Lauf)                                 |
+| Bridge-Port                   | 9001                                                     | 9002                                                           | je Lauf (Fallback 9003)                           |
+| Tournament-Port               | 8081                                                     | 8082                                                           | je Lauf                                           |
+| rift-caddy                    | `rift-caddy` :8787, `/opt/rbmods/compose/rift-dev/caddy` | `rift-caddy-prod` :8788, `/opt/rbmods/compose/rift-prod/caddy` | — (keine website-Rolle im Boot-Test)              |
+| Container-Env/Labels          | `RBB_ENV=dev`/`RBB_REF=<sha>`                            | `prod`/`<tag>`                                                 | `test`/`<sha>`                                    |
 
 **Ein Schema `-<env>` (Ziel B):** dev ist **kein** Sonderfall mehr — alle Envs
 leiten ihre Pfade aus `rift_env` ab: `/srv/rift-<env>/{game,backups,sessions}`,
@@ -600,6 +618,7 @@ ansible-playbook -i deploy/inventory deploy/migrate-env-paths.yml -e rift_env=pr
 ```
 
 `deploy/tasks/env-path-migration.yml` macht pro Pfad:
+
 1. Ziel-Elternverzeichnis anlegen,
 2. `mv <alt> <neu>` (**kein** `cp` — eine Kopie verdoppelt die Daten und kann die
    Platte volllaufen lassen, #301),
@@ -637,19 +656,18 @@ gemounteten Ort.
 `.deploy-sha`/`-ref` + Checkout `repo/` bleiben erhalten und werden als
 Fallback gelesen.
 
-
 ### Identitäts-Surface-Vertrag (`<env> · <ref>`)
 
-| Surface | Feld / Ort | Wie sichtbar |
-| --- | --- | --- |
-| Landing (`website`) | `<meta name="rb-env">`/`rb-ref` + Badge | `deploy/roles/website/templates/index.html.j2` |
-| Tournament-API | `GET /health` → `env`,`ref` | `TOURNAMENT_ENV`/`TOURNAMENT_REF` (systemd-Unit) |
-| Tournament-UI | Header-Badge | `fetch(/health)` in `tournament/web/app.js` |
-| Server-Control | `GET /server/status` → `env`,`ref` | `SERVER_CONTROL_ENV`/`SERVER_CONTROL_REF` |
-| Session-Recorder | JSONL-Record `env`,`ref` | `RBB_ENV`/`RBB_REF` im Sidecar + CLI `--env/--ref` |
-| Referee-Egress | Event-Record `env`,`ref` | dito |
-| Container | Labels `RBB_ENV`/`RBB_REF` | `docker inspect` (ohne Log) |
-| Mod-Log | `event=mod_load … env=… ref=…` | `client-mod/lua/rbbattle_autoexec.lua` — **vorbereitet, im Live-Lauf nicht wirksam** (`env=unknown`, s. u.) |
+| Surface             | Feld / Ort                              | Wie sichtbar                                                                                                |
+| ------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Landing (`website`) | `<meta name="rb-env">`/`rb-ref` + Badge | `deploy/roles/website/templates/index.html.j2`                                                              |
+| Tournament-API      | `GET /health` → `env`,`ref`             | `TOURNAMENT_ENV`/`TOURNAMENT_REF` (systemd-Unit)                                                            |
+| Tournament-UI       | Header-Badge                            | `fetch(/health)` in `tournament/web/app.js`                                                                 |
+| Server-Control      | `GET /server/status` → `env`,`ref`      | `SERVER_CONTROL_ENV`/`SERVER_CONTROL_REF`                                                                   |
+| Session-Recorder    | JSONL-Record `env`,`ref`                | `RBB_ENV`/`RBB_REF` im Sidecar + CLI `--env/--ref`                                                          |
+| Referee-Egress      | Event-Record `env`,`ref`                | dito                                                                                                        |
+| Container           | Labels `RBB_ENV`/`RBB_REF`              | `docker inspect` (ohne Log)                                                                                 |
+| Mod-Log             | `event=mod_load … env=… ref=…`          | `client-mod/lua/rbbattle_autoexec.lua` — **vorbereitet, im Live-Lauf nicht wirksam** (`env=unknown`, s. u.) |
 
 ### SOC-Attestation nach Deploy (Issue #504)
 

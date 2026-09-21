@@ -1,0 +1,12 @@
+# Verwaltet von deploy/ role "gns-relay" (Jinja). NICHT manuell editieren.
+#
+# Routen der GNS-Einstiegs-Relay (Issue #843): `<key> = <ip:port>` je Zeile,
+# '#' = Kommentar. Auswertung: exakt > laengster Suffix-Treffer > Default.
+#
+# Der Spielname mit Suffix waehlt die Umgebung; alles ohne passenden Suffix
+# landet auf dem Default (prod). Die Ziele kommen aus den Rollen-Variablen
+# gns_relay_target_dev / _staging / _default (host_vars fuer planet; prod/
+# staging koennen auf andere Backends zeigen).
+*-dev     = {{ gns_relay_target_dev }}
+*-staging = {{ gns_relay_target_staging }}
+*         = {{ gns_relay_target_default }}

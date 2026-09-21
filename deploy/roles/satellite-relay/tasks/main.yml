@@ -5,20 +5,30 @@
 #   2. UFW inbound {{ satellite_relay_port }}/udp offen.
 #   3. UFW route/forward zu {{ satellite_relay_target_host }}:{{ satellite_relay_target_port }}.
 #   4. iptables-DNAT + MASQUERADE (idempotent, via systemd-Oneshot boot-fest).
+#
+# Zustandsschalter (Issue #846): `satellite_relay_state` (Default `present`).
+# `absent` baut das Relay wieder ab — der GNS-Entry-Relay auf planet:6321 ist
+# mit Suffix-Routing der einzige öffentliche Einstieg; die DNAT-Relays
+# (satellite/sync) werden nicht mehr gebraucht.
+
+# ---- Setup (nur bei state == 'present') -----------------------------------
 
 - name: ip_forward persistent (sysctl.d-Datei)
   copy:
     content: "net.ipv4.ip_forward = 1\n"
     dest: /etc/sysctl.d/99-rbbattle-satellite-relay.conf
     mode: "0644"
+  when: satellite_relay_state == 'present'
 
 - name: ip_forward sofort aktivieren
   command: sysctl -w net.ipv4.ip_forward=1
   changed_when: false
+  when: satellite_relay_state == 'present'
 
 - name: UFW inbound {{ satellite_relay_port }}/udp öffnen
   command: ufw allow {{ satellite_relay_port }}/udp
   changed_when: false
+  when: satellite_relay_state == 'present'
 
 - name: UFW route allow (forward) zu {{ satellite_relay_target_host }}:{{ satellite_relay_target_port }}
   command: >-
@@ -26,22 +36,26 @@
     out on {{ satellite_relay_interface }}
     to {{ satellite_relay_target_host }} port {{ satellite_relay_target_port }} proto udp
   changed_when: false
+  when: satellite_relay_state == 'present'
 
 - name: Relay-Script rendern (DNAT + MASQUERADE, idempotent)
   template:
     src: rbbattle-satellite-relay.sh.j2
     dest: /usr/local/bin/rbbattle-satellite-relay.sh
     mode: "0755"
+  when: satellite_relay_state == 'present'
 
 - name: systemd-Unit rendern (Oneshot, boot-fest)
   template:
     src: rbbattle-satellite-relay.service.j2
     dest: /etc/systemd/system/rbbattle-satellite-relay.service
     mode: "0644"
+  when: satellite_relay_state == 'present'
 
 - name: Relay-Regeln jetzt anwenden
   command: /usr/local/bin/rbbattle-satellite-relay.sh
   changed_when: false
+  when: satellite_relay_state == 'present'
 
 - name: systemd daemon-reload + Unit aktivieren/starten
   systemd:
@@ -51,4 +65,76 @@
     state: started
   # Check-Mode: die Unit-Datei wird im Check-Mode nicht geschrieben ->
   # state:started findet den Service nicht. Daher in --check überspringen.
-  when: not ansible_check_mode
+  when:
+    - satellite_relay_state == 'present'
+    - not ansible_check_mode
+
+# ---- Teardown (nur bei state == 'absent', Issue #846) ----------------------
+
+- name: Teardown — Relay-Script vorhanden?
+  stat:
+    path: /usr/local/bin/rbbattle-satellite-relay.sh
+  register: satellite_relay_script
+  when: satellite_relay_state == 'absent'
+
+- name: Teardown — DNAT/MASQUERADE-Regeln entfernen (Script `down`)
+  command: /usr/local/bin/rbbattle-satellite-relay.sh down
+  changed_when: false
+  when: >-
+    satellite_relay_state == 'absent'
+    and satellite_relay_script is defined
+    and satellite_relay_script.stat.exists
+
+- name: Teardown — systemd-Unit stoppen + deaktivieren
+  systemd:
+    name: rbbattle-satellite-relay.service
+    state: stopped
+    enabled: false
+  # Wie beim Start: die Unit-Datei ist im Check-Mode nicht zwingend vorhanden.
+  when:
+    - satellite_relay_state == 'absent'
+    - not ansible_check_mode
+
+- name: Teardown — Unit-Datei entfernen
+  file:
+    path: /etc/systemd/system/rbbattle-satellite-relay.service
+    state: absent
+  failed_when: false
+  when: satellite_relay_state == 'absent'
+
+- name: Teardown — Relay-Script entfernen
+  file:
+    path: /usr/local/bin/rbbattle-satellite-relay.sh
+    state: absent
+  failed_when: false
+  when: satellite_relay_state == 'absent'
+
+- name: Teardown — sysctl.d-Datei entfernen
+  file:
+    path: /etc/sysctl.d/99-rbbattle-satellite-relay.conf
+    state: absent
+  failed_when: false
+  when: satellite_relay_state == 'absent'
+
+- name: Teardown — UFW inbound-Regel zurücknehmen
+  command: ufw delete allow {{ satellite_relay_port }}/udp
+  # Die Regel kann bereits fehlen (z. B. Wiederholungslauf) -> tolerieren.
+  changed_when: false
+  failed_when: false
+  when: satellite_relay_state == 'absent'
+
+- name: Teardown — UFW route-Regel zurücknehmen
+  command: >-
+    ufw route delete allow in on {{ satellite_relay_interface }}
+    out on {{ satellite_relay_interface }}
+    to {{ satellite_relay_target_host }} port {{ satellite_relay_target_port }} proto udp
+  changed_when: false
+  failed_when: false
+  when: satellite_relay_state == 'absent'
+
+- name: Teardown — systemd daemon-reload (Unit-Entfernung übernehmen)
+  systemd:
+    daemon_reload: true
+  when:
+    - satellite_relay_state == 'absent'
+    - not ansible_check_mode

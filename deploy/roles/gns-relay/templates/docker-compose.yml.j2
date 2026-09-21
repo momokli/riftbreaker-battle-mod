@@ -1,0 +1,60 @@
+# Verwaltet von deploy/ role "gns-relay" (Jinja). NICHT manuell editieren.
+#
+# GNS-Einstiegs-Relay (Issue #843): terminiert GameNetworkingSockets auf dem
+# client-hardgewireten UDP-Port {{ gns_relay_port }} und routet anhand des
+# Spielnamens (Suffix) auf ein Backend (siehe gerenderte Routen-Datei). Mit
+# `network_mode: host` besitzt der Relay den Port direkt auf dem Host — es
+# braucht (und gibt) daher KEIN `ports:` — und erreicht die Backends unter
+# 127.0.0.1:<port>.
+#
+# Expliziter Compose-Projektname (wie der rift-caddy, Issue #483): ohne
+# `name:`/`-p` wuerde er aus dem Verzeichnis-Basename abgeleitet.
+name: "{{ gns_relay_compose_project }}"
+services:
+  {{ gns_relay_container }}:
+    image: "{{ gns_relay_image }}"
+    container_name: {{ gns_relay_container }}
+    restart: unless-stopped
+    network_mode: host
+    # Deploy-Identitaet sichtbar (Issue #483, US4) — wie beim Dedicated Server.
+    labels:
+      RBB_ENV: "{{ rift_env }}"
+      RBB_REF: "{{ rift_deploy_ref }}"
+    environment:
+      WINEPREFIX: "{{ gns_relay_wine_mount }}"
+      WINEDEBUG: "-all"
+      # Sync-Primitive AUS (wie der Dedicated Server): sonst Crash im
+      # Boost-Thread vor dem bind(). Der Relay laeuft im selben Wine-Image.
+      WINEESYNC: "0"
+      WINEFSYNC: "0"
+      DISPLAY: "{{ gns_relay_display }}"
+    volumes:
+      # Eigenes Wine-Prefix (nicht mit dem dev-Server geteilt).
+      - "{{ gns_relay_wine_volume }}:{{ gns_relay_wine_mount }}"
+      # Game-Bin (GameNetworkingSockets.dll) read-only.
+      - "{{ gns_relay_game_dir }}:{{ gns_relay_bin_mount }}:ro"
+      # Gerenderte Routen-Datei read-only.
+      - "{{ gns_relay_routes_file }}:{{ gns_relay_routes_container_path }}:ro"
+      # Gebaute gns_probe.exe read-only.
+      - "{{ gns_relay_probe_bin }}:{{ gns_relay_probe_container_path }}:ro"
+    # Xvfb starten (wine braucht ein X-Display), Wine-Prefix dem Container-User
+    # uebergeben (ein frisches Volume gehoert root; ohne chown bricht wine mit
+    # "'/data/.wine' is not owned by you" ab — im Dedicated Server macht das der
+    # Image-Entrypoint, den wir hier bewusst umgehen), dann den Probe als
+    # steamuser laufen lassen. cwd = Game-Bin, damit wine die GNS-DLL findet;
+    # --dll zeigt zusaetzlich explizit darauf.
+    entrypoint:
+      - /bin/bash
+      - -c
+    command:
+      - >-
+        Xvfb {{ gns_relay_display }} -screen 0 1280x720x24 >/dev/null 2>&1 & export DISPLAY={{ gns_relay_display }};
+        chown -R {{ gns_relay_container_user }}:{{ gns_relay_container_user }} {{ gns_relay_wine_mount }} 2>/dev/null || true;
+        cd {{ gns_relay_bin_mount }}/bin;
+        gosu {{ gns_relay_container_user }} wine {{ gns_relay_probe_container_path }}
+        --port {{ gns_relay_port }}
+        --map-file {{ gns_relay_routes_container_path }}
+        --dll {{ gns_relay_bin_mount }}/bin/GameNetworkingSockets.dll
+
+volumes:
+  {{ gns_relay_wine_volume }}:

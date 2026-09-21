@@ -10,26 +10,40 @@
 # Nur Core-Module (kein community.general-Dependency) — konsistent mit dem
 # Rest von deploy/.
 #
+# ABBAU (Issue #846): Der GNS-Entry-Relay auf planet:6321 (Rolle gns-relay,
+# #843) ist mit Suffix-Routing der EINZIGE öffentliche Einstieg. Die beiden
+# UDP-DNAT-Relays (satellite:6321 -> planet:6322, sync:6321 -> planet:6323)
+# werden deshalb abgebaut. `satellite_relay_state: absent` schaltet die Rolle
+# in den Teardown-Pfad (DNAT/MASQUERADE-Regeln entfernen, systemd-Unit +
+# Script + sysctl-Datei löschen, UFW-Regeln zurücknehmen); `present` (Default)
+# installiert wie bisher.
+#
 # EINZIGE QUELLE der satellite_relay_*-Werte (Issue #328, Review #329): bewusst
 # KEINE host_vars/satellite/, sonst würde host_vars die Defaults still
 # überschreiben (Precedence). Die Rolle lief ursprünglich nur gegen den Host
-# `satellite`; sie dient jetzt ZUSÄTZLICH dem Host `sync` als zweites UDP-
+# `satellite`; später diente sie ZUSÄTZLICH dem Host `sync` als zweites UDP-
 # Relay (sync:6321 -> planet:6323) — dort wird `satellite_relay_target_port`
-# auf Play-Ebene (deploy/deploy-staging.yml, Play 2) auf 6323 gesetzt,
-# während `satellite_relay_target_host` (65.21.27.234) und
-# `satellite_relay_interface` (eth0) die Rollen-Defaults bleiben (für sync
-# ebenfalls korrekt). Der Default `satellite_relay_target_port: 6322` bleibt
-# der satellite/prod-Wert. Falls host-spezifische Abweichungen nötig werden,
-# hier ändern.
+# auf Play-Ebene (deploy/deploy-staging.yml) auf 6323 gesetzt, während
+# `satellite_relay_target_host` (65.21.27.234) und `satellite_relay_interface`
+# (eth0) die Rollen-Defaults bleiben. Der Default `satellite_relay_target_port:
+# 6322` bleibt der satellite/prod-Wert. Beide Relays werden seit Issue #846
+# abgebaut; die Werte bleiben für den Teardown-Pfad erhalten und müssen zu den
+# ursprünglich angelegten Regeln passen, damit `down` sie trifft.
 #
 # Bewusste Design-Grenzen (nicht-blockierende Review-Hinweise #329):
-#   * Das Relay-Script fügt Regeln idempotent HINZU, entfernt aber keine
-#     veralteten: bei Port-/Ziel-Wechsel können alte PREROUTING/POSTROUTING-
-#     Regeln stehen bleiben. Für einen dedizierten „IP-Lender“ bewusst so.
+#   * Das Relay-Script fügt Regeln im `up`-Modus idempotent HINZU; der
+#     `down`-Modus (Issue #846) entfernt genau die eigenen DNAT/MASQUERADE-
+#     Regeln und toleriert deren Abwesenheit. Bei Port-/Ziel-Wechsel können
+#     alte PREROUTING/POSTROUTING-Regeln dennoch stehen bleiben.
 #   * DNAT-PREROUTING ist nicht auf Ingress-Interface/Source eingeschränkt und
 #     MASQUERADE nicht auf -o {{ satellite_relay_interface }} begrenzt — der Host
 #     ist ausschließlich Relay, daher bewusst ohne Einschränkung.
 #
+# Zustand der Rolle (Issue #846):
+#   present = Relay installieren/aufrechterhalten (Default).
+#   absent  = Relay abbauen (Teardown, idempotent).
+satellite_relay_state: present
+
 # Inbound-UDP-Port auf dem Satellite (der Port, den der Client anwählt).
 satellite_relay_port: 6321
 

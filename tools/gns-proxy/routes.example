@@ -1,0 +1,25 @@
+# rbgns-Routen (Issue #843): `<key> = <ip:port>` je Zeile, '#' = Kommentar.
+#
+# Key ist
+#   * eine Suffix-Wildcard `*-<suffix>`  -> greift, wenn der Spielname so endet,
+#   * ein exakter Key (Spielname oder GNS-Identitaet `str:<hex>`; die Identitaet
+#     kommt SOFORT mit dem Connect und ist stabil pro Installation), oder
+#   * `*`                                -> Default (immer, niedrigste Prioritaet).
+#
+# Auswertung: exakt > laengster Suffix-Treffer > Default.
+#
+# Backends auf planet (veroeffentlichte Host-Ports):
+#   prod    = 127.0.0.1:6322
+#   staging = 127.0.0.1:6323
+#   dev     = 127.0.0.1:6324   (muss von 6321 wegziehen: der Relay belegt 6321)
+#
+# 1.0-Routing: Spielername mit Suffix waehlt die Umgebung.
+*-dev     = 127.0.0.1:6324
+*-staging = 127.0.0.1:6323
+
+# Default: alles ohne passenden Suffix landet auf prod.
+*         = 127.0.0.1:6322
+
+# Exaktes Routing (Beispiel) — schlaegt jede Suffix-Regel:
+# momo-dev             = 127.0.0.1:6324
+# str:DD232D4F3A1B46F3B8E14B1CB12B4E4 = 127.0.0.1:6323
