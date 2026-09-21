@@ -37,3 +37,6 @@ Ohne lokale Installation (z. B. in CI mit geteiltem Store): `NODE_PATH=<pfad-zu-
 - Das Tool **bewertet nicht „schoen"** — es findet nur maschinelle Auffaelligkeiten. Die ästhetische Abnahme bleibt beim Menschen.
 - „kleines Klickziel" ist streng (24 px) — viele Treffer im Bestand sind historisch (`send_wave_*`, Checkboxen). Sie sind als **Backlog** zu behandeln, nicht als Blocker.
 - Die Mock-Endpunkte in `shoot.js` muessen mitwachsen, wenn das Cockpit neue Polls bekommt (sonst leere Panels).
+- Neue Tabs werden automatisch erkannt (`nav.tabs button`) — der Report listet sie oben (aktuell Operator/Game Config/Persona/Natural/Docker/Advanced).
+- Bewusst screenreader-only Elemente (`.visually-hidden`) sind von „abgeschnittener Text" ausgenommen (der 1px-Clip ist gewollt).
+- Dieses Tool ist der **manuelle** Optik-Post-Check. Der **funktionale** Render-Test (Tabs, Formulare, Docker-Log-Akkumulation, JS-Fehler) liegt in `tests/cockpit-render` (Playwright) und laeuft in CI (ueberspringt sich ohne Chromium).
