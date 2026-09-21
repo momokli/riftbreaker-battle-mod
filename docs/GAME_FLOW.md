@@ -9,16 +9,16 @@ Es gibt **eine** Game-Flow-Logik. Der Referee unterscheidet zwei Modi — **VS**
 (2 Welten) und **SOLO** (1 Welt) — handelt aber **im Kern identisch**. Der einzige
 Unterschied ist die **Send-Senke** (wohin ein gekaufter Send geht):
 
-| Modus | Welten | Gegner            | Send-Senke                        |
-| ----- | ------ | ----------------- | --------------------------------- |
-| SOLO  | 1      | Persona (emuliert) | an sich selbst / ins Leere        |
-| VS    | 2      | echter 2. Server   | an Server B                       |
+| Modus | Welten | Gegner             | Send-Senke                 |
+| ----- | ------ | ------------------ | -------------------------- |
+| SOLO  | 1      | Persona (emuliert) | an sich selbst / ins Leere |
+| VS    | 2      | echter 2. Server   | an Server B                |
 
 **SOLO ist Dev-Work.** Es ist das Test-/Experimentier-Bett, um dieselbe Logik ohne
 zweiten Server zu bauen und zu validieren — **nicht** das Zielprodukt. Die **Persona
 emuliert den VS-Gegner**: sie ist der Platzhalter für Server B, bis der 1v1-Referee
-existiert. `send_yourself off` ist die **Nahtstelle, wo Server B einrastet** — im VS
-wird aus „ins Leere" einfach „an Welt B". Nichts an State-Machine, Wellen oder
+existiert. `send_enemy` ist die **Nahtstelle, wo Server B einrastet** — im VS wird aus
+„an den (emulierten) Gegner" einfach „an Welt B". Nichts an State-Machine, Wellen oder
 Difficulty ändert sich dabei.
 
 **Konsequenz für die Umsetzung:** State-Machine, Wellen-Feuer, Difficulty, Sends —
@@ -31,55 +31,83 @@ desselben Codes.
 
 ```mermaid
 flowchart TD
-    PAUSED[PAUSED<br/>Server startet hier, alle Counter reset] -->|"configure + players ready + START"| WARMUP[WARMUP<br/>120s konfigurierbar, bauen + Sends kaufen]
+    PAUSED[PAUSED<br/>Server bootet hier, alle Counter reset] -->|"configure + ready + /start"| WARMUP[WARMUP<br/>120s konfigurierbar, bauen + Sends kaufen]
     WARMUP -->|"Warmup-Ende: HQ gebaut?"| RUNNING[RUNNING<br/>first attack + alle 420s attack]
     WARMUP -->|"HQ nicht gebaut"| GAMEOVER[GAME_OVER]
     RUNNING -->|"HQ destroyed"| GAMEOVER
-    GAMEOVER -->|"reset"| PAUSED
+    GAMEOVER -->|"reset → neue Runde"| PAUSED
 ```
 
-Text-Fassung:
-
 ```text
-[PAUSED]   Server startet hier: alle Counter reset, keine Timer
-    │  configure (Web-UI: enemy behaviour, game rules, send_yourself, …)
-    │  wait for all players ready
-    │  START-Signal
+[PAUSED]   Server bootet hier: alle Counter reset, keine Timer
+    │  configure (Web-UI: mode, warmup, natural/persona/self/enemy, …)
+    │  wait for all players ready (Cockpit-Klick, später /ready im Chat)
+    │  /start-Signal (Referee → beide Server im VS, nur A im SOLO)
     ▼
-[WARMUP]   120 s (konfigurierbar): bauen + Sends kaufen
+[WARMUP]   120 s (konfigurierbar): bauen + Sends kaufen — läuft IMMER voll
     │  Warmup-Ende
     │  ├─ HQ gebaut? ── nein ──> [GAME_OVER]
     │  └─ ja
     ▼
-[RUNNING]  first attack (natural + enemy/self/persona sends, je "if enabled")
+[RUNNING]  first attack (natural + enemy/self/persona, je "if enabled")
     │  alle 420 s next attack; difficulty 200 s (konfigurierbar) → dann 600 s
-    │  HQ destroyed ──> [GAME_OVER]
+    │  HQ destroyed ──> [GAME_OVER]  (sofort, keine Gnadenfrist)
     ▼
-[GAME_OVER] ── reset ──> [PAUSED]
+[GAME_OVER] ── reset → neue Runde ──> [PAUSED]
 ```
 
-**Send-Quellen beim Attack** (je „if enabled"): `natural` (Natural Waves) +
-`enemy`/`persona` (Gegner) + `self` (eigene Kaeufe). Im SOLO sind `enemy`/`persona`
-der emulierte Gegner, `self` läuft über `send_yourself`. Im VS sind `enemy` die echten
-Sends von Server B und `self` die eigenen, die zu B gehen.
+## 3. Send-Quellen & Toggles
 
-## 3. Gap zum heutigen `attack_cycle.py`
+Vier unabhängige ON/OFF-Toggles, die die Attack-Zusammensetzung steuern:
 
-| Heute | Ziel |
-| ----- | ---- |
-| `HQ gebaut` = Start-Trigger | **START-Signal** startet (HQ ist NICHT mehr Start-Trigger) |
-| kein Paused | **PAUSED** = initialer Zustand (Server startet paused, Counter reset) |
-| kein Warmup | **WARMUP** 120 s (konfigurierbar) vor dem ersten Attack |
-| HQ-Tod nicht im attack_cycle (match-loop separat) | **HQ destroyed → GAME_OVER** (nach Warmup ist HQ nur noch Game-Over-Trigger) |
-| nur `send_yourself`-Toggle | **„if enabled"-Toggles je Send-Quelle** (natural / enemy / self / persona) |
-| Difficulty 200→600 (konfigurierbar via #800/#819) | 200 s (konfigurierbar) → 600 s (konfigurierbar) — unverändert |
+| Toggle    | Bedeutung                                               |
+| --------- | ------------------------------------------------------- |
+| `natural` | Natural Waves feuern?                                   |
+| `persona` | Persona (emulierter Gegner) feuert?                     |
+| `self`    | eigene Kaeufe an sich selbst feuern? (`send_yourself`)  |
+| `enemy`   | eigene Kaeufe ZUSAETZLICH an den Gegner? (`send_enemy`) |
 
-## 4. Offene Fragen
+**Default je Modus** (per ENV beim START), danach in der Web-UI frei anpassbar —
+z. B. `self` im VS anmachen = der eigene Send geht an sich selbst UND an den Gegner.
 
-1. Warmup-Dauer (120 s) — im Cockpit editierbar machen (analog `interval_s`)?
-2. `START`-Signal: über die Bridge (`POST /start`) wie `attack_reset`?
-3. `wait for all players ready`: Solo-1-Spieler-Ready, oder echtes Multi-Ready?
-4. `GAME_OVER` → automatisch reset → PAUSED, oder manueller Rematch-Knopf?
+**Buy-/Send-Semantik:**
+
+- `buy` wird **immer** ausgelöst, wenn möglich (Carbonium reicht) — und **immer** getrackt, was gekauft wurde.
+- `send_yourself` (self): ob die gekauften Waves an sich selbst gehen.
+- `send_enemy` (enemy): ob sie **zusätzlich** an den Gegner gehen.
+- Beide können **gleichzeitig** an sein (Send an sich selbst UND an den Gegner).
+
+Im SOLO ist `enemy`/`persona` der emulierte Gegner; im VS ist `enemy` der echte
+Server B und `persona` entfällt (bzw. bleibt aus).
+
+## 4. Konfiguration
+
+`mode` (VS/SOLO), Warmup-Dauer, die vier Toggles, Difficulty-/Natural-Attack-Rules
+(vgl. #819): **ENV für den Default beim START**, in der **Web-UI anpassbar**.
+
+## 5. Gap zum heutigen `attack_cycle.py`
+
+| Heute                                             | Ziel                                                                       |
+| ------------------------------------------------- | -------------------------------------------------------------------------- |
+| `HQ gebaut` = Start-Trigger                       | **`/start`-Signal** startet (HQ ist NICHT mehr Start-Trigger)              |
+| kein Paused                                       | **PAUSED** = Boot-Zustand (Server bootet paused, Counter reset)            |
+| kein Warmup                                       | **WARMUP** 120 s (konfigurierbar), läuft immer voll                        |
+| HQ-Tod nicht im attack_cycle (match-loop separat) | **HQ destroyed → GAME_OVER** (sofort, keine Gnadenfrist)                   |
+| nur `send_yourself` (on/off)                      | **4 Toggles** natural/persona/self/enemy + `send_enemy` als eigener Toggle |
+| Difficulty 200→600 (konfigurierbar via #800/#819) | 200 s (konfigurierbar) → 600 s (konfigurierbar) — unverändert              |
+
+## 6. Entscheidungen (Interview, 2026-09-21)
+
+1. **Modus (A1):** Konfig in der Web-UI; ENV für den Default beim START, in der Web-UI anpassbar.
+2. **VS vs SOLO (A2):** sonst nichts anders (erstmal) — nur die Send-Senke.
+3. **Warmup (B1):** editierbar, ENV-Default + Web-UI.
+4. **START (B2):** Server bootet PAUSED; Referee sendet `/start` an beide Server (VS) bzw. nur A (SOLO).
+5. **Ready (B3):** erstmal Cockpit-Klick, später `/ready` im Chat.
+6. **GAME_OVER (B4):** automatisch reset → neue Runde.
+7. **Toggles (C1):** natural/persona/self/enemy je ON/OFF, Default je Modus, dann anpassbar.
+8. **Send-Semantik (C2):** buy immer (wenn möglich) + immer tracken; `send_yourself` (self) und `send_enemy` (enemy) sind zwei getrennte Toggles, beide können an sein.
+9. **Warmup läuft voll (D1):** ja, immer 120 s.
+10. **HQ destroyed (D2):** sofort vorbei, keine Gnadenfrist.
 
 ## Refs
 
