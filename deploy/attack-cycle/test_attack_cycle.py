@@ -893,7 +893,10 @@ class TestCreatureAttackEvents(unittest.TestCase):
         with self.assertRaises(ValueError):
             _normalize_creature_events([{"name": "x", "logic": "l", "min_level": 2, "max_level": 1}])
         with self.assertRaises(ValueError):
-            _normalize_creature_events([{"name": "x", "logic": "l", "min_level": 1, "max_level": 2, "attack_strength": "nope"}])
+            _normalize_creature_events([
+                {"name": "x", "logic": "l", "min_level": 1, "max_level": 2,
+                 "attack_strength": "nope"},
+            ])
 
     # --- Integration: Event-Timer im step ---------------------------
 
