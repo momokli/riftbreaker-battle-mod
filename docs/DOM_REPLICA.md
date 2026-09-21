@@ -20,21 +20,26 @@ heutige Lücke.)
 Der Difficulty-Level ist der **Index in parallel eskalierende Tabellen** — nicht „welche
 Welle", sondern ein konsistenter Schwierigkeits-Tier quer durch alle Dimensionen:
 
-| #   | Dimension        | Mechanik                                                                         | Beleg                                                |
-| --- | ---------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| 1   | **Escalation**   | `timeToNextDifficultyLevel[level]`                                               | `dom_manager.lua` `OnEnter/OnExitDifficultyIncrease` |
-| 2   | **Wave-Pool**    | `rules.waves[group][level]` — welche Units                                       | `GetWavePool` `:1035`                                |
-| 3   | **Attack-Count** | `maxAttackCountPerDifficulty[level]` — wie viele Wellen/Attack                   | `GetAttackCount` `:1111`                             |
-| 4   | **Boss**         | `rules.bosses[level]` + `attack_boss_dynamic.logic`                              | `GetBossPool` `:1080`                                |
-| 5   | **Extra-Wellen** | `rules.extraWaves[level]` (`stronger_attack`)                                    | `GetExtraWavePool`                                   |
-| 6   | **MP-Wellen**    | `rules.multiplayerWaves[level]` (Elite-Boss)                                     | `GetMultiplayerAttackCount` `:1116`                  |
-| 7   | **Timing**       | `cooldownAfterAttacks[level]` + `prepareSpawnTime[level]` + `idleTime[level]`    | `DumpDomProgress`                                    |
-| 8   | **Kreaturen-HP** | `creatureDifficultyIncrementPerDOMDifficulty[level]` → `CreaturesBaseDifficulty` | `IncreaseCreaturesBaseDifficulty` `:1180`            |
-| 9   | **Event-Level**  | `currentEventLevel` / `IncreamentEventLevel` → `event_manager` (Objectives)      | `:958`                                               |
+| #   | Dimension             | Mechanik                                                                                                       | Beleg                                                |
+| --- | --------------------- | -------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| 1   | **Escalation**        | `timeToNextDifficultyLevel[level]`                                                                             | `dom_manager.lua` `OnEnter/OnExitDifficultyIncrease` |
+| 2   | **Wave-Pool**         | `rules.waves[group][level]` — welche Units                                                                     | `GetWavePool` `:1035`                                |
+| 3   | **Attack-Count**      | `maxAttackCountPerDifficulty[level]` — wie viele Wellen/Attack                                                 | `GetAttackCount` `:1111`                             |
+| 4   | **Boss**              | `rules.multiplayerWaves[level]` → Elite-Boss (`attack_boss_dynamic.logic`), Coop ab L2 (default) / L5 (normal) | `GetMultiplayerAttackCount` `:1116`                  |
+| 5   | **Boss (Streaming)**  | `rules.bosses[level]` (`boss_attack`-Event) — nur Streaming-Session, ignorieren                                | `GetBossPool` `:1080`                                |
+| 6   | **Extra (Streaming)** | `rules.extraWaves[level]` (`stronger_attack`-Event) — nur Streaming-Session, ignorieren                        | `GetExtraWavePool`                                   |
+| 7   | **Timing**            | `cooldownAfterAttacks[level]` + `prepareSpawnTime[level]` + `idleTime[level]`                                  | `DumpDomProgress`                                    |
+| 8   | **Kreaturen-HP**      | `creatureDifficultyIncrementPerDOMDifficulty[level]` → `CreaturesBaseDifficulty`                               | `IncreaseCreaturesBaseDifficulty` `:1180`            |
+| 9   | **Event-Level**       | `currentEventLevel` / `IncreamentEventLevel` → `event_manager` (Objectives)                                    | `:958`                                               |
 
 > **#8 ist für Survival irrelevant:** einziger Konsument von `CreaturesBaseDifficulty`
 > ist der Anoryxian-Boss (DLC2-Campaign), der im Survival **nie** spawnbar ist
 > (`docs/research/creatures-base-difficulty-mechanik.md`). Bei der Replica weglassen.
+>
+> **Boss-Korrektur:** Der echte Non-Streaming-Boss ist `multiplayerWaves` (Elite-Boss,
+> Coop ab L2 default / L5 normal). `rules.bosses` (`boss_attack`) und `rules.extraWaves`
+> (`stronger_attack`) tragen `gameStates="…|STREAMING"` (STREAMING ohne NO_STREAMING)
+> → nur mit Streaming-Session, bei uns nicht. Siehe `docs/research/boss-spawn-mechanik.md`.
 
 ## 3. Timing-Werte (verifiziert, `dom_survival_jungle_rules_*.lua` + `dom_manager.lua`)
 
@@ -106,7 +111,7 @@ produzieren — er ist ein umständlicher Weg zu „attack N ≈ wave N".
 `spawner → wait` (→ `SetSuspended(true)`, wartet auf Warmup/HQ-Placement).
 
 **Wellen-Pick:** `OnEnterSpawn` → `SpawnWavesForDifficultyLevel(self.currentDifficultyLevel)`
-→ `GetWavePool(level)` + `GetAttackCount(level)` + `GetBossPool(level)`. **Wave-Level =
+→ `GetWavePool(level)` + `GetAttackCount(level)` + `GetMultiplayerWavePool(level)` (Boss). **Wave-Level =
 `currentDifficultyLevel`, nicht Attack-Nummer.**
 
 **Restart/Ende:** nativ via `restart_map` (Pending-Flag → In-Prozess-Map-Reload, Economy 0)
@@ -127,15 +132,15 @@ Die **Daten** (welche Units je Level, HP, Pools) sind weitgehend fertig dokument
 
 ## 6. Gap-Analyse — unser Mod vs. Base Game
 
-| Dimension                      | Base Game                         | Unser Mod (aktuell)       | Status      |
-| ------------------------------ | --------------------------------- | ------------------------- | ----------- |
-| Escalation                     | 200→600 (je Difficulty)           | 200 **flach**             | ❌          |
-| Wave-Pool je Level             | 9 Level × Pools (alle `id_*`)     | 1 Pool/Level, `WAVE_COST` | ⚠️          |
-| **Attack-Count**               | 1→4 Wellen/Attack                 | **1 Welle/Attack**        | ❌          |
-| **Boss**                       | Level 8/9 (`attack_boss_dynamic`) | —                         | ❌          |
-| **Extra-/MP-Wellen**           | `extraWaves`/`multiplayerWaves`   | —                         | ❌          |
-| **Event-Level**                | `event_manager` (Objectives)      | —                         | ❌          |
-| Personas/Enemy-Sends/Self-Send | —                                 | ✅ (unsere Erweiterung)   | nur bei uns |
+| Dimension                      | Base Game                                                        | Unser Mod (aktuell)       | Status       |
+| ------------------------------ | ---------------------------------------------------------------- | ------------------------- | ------------ |
+| Escalation                     | 200→600 (je Difficulty)                                          | 200 **flach**             | ❌           |
+| Wave-Pool je Level             | 9 Level × Pools (alle `id_*`)                                    | 1 Pool/Level, `WAVE_COST` | ⚠️           |
+| **Attack-Count**               | 1→4 Wellen/Attack                                                | **1 Welle/Attack**        | ❌           |
+| **Boss**                       | `multiplayerWaves` Elite-Boss, Coop L2+ (default) / L5+ (normal) | —                         | ❌           |
+| **Extra-Wellen**               | `extraWaves` (`stronger_attack`) — nur Streaming-Session         | —                         | ❌ (bewusst) |
+| **Event-Level**                | `event_manager` (Objectives)                                     | —                         | ❌           |
+| Personas/Enemy-Sends/Self-Send | —                                                                | ✅ (unsere Erweiterung)   | nur bei uns  |
 
 ## 7. Offene Fragen / Entscheidungen
 
@@ -155,8 +160,8 @@ Die **Daten** (welche Units je Level, HP, Pools) sind weitgehend fertig dokument
    `"0"` im Lua) — offen (#750 §7.1), vermutlich nativ.
 6. **Campaign-Pfad `upgradeHQ`** — Survival hat ihn nicht. Replica: weglassen, aber
    bewusst dokumentieren (nicht stillschweigend).
-7. **Solo vs. Koop** — `GetPlayersCounter()==1` ⇒ MP-Zweig tot. Replica: Solo-first,
-   MP-Wellen als späterer Schritt.
+7. **Coop-Survival (Target)** — `GetPlayersCounter()>1` ⇒ MP-Boss (`multiplayerWaves`)
+   feuert ab L2 (default) / L5 (normal). Replica-Target: Coop-Survival **ohne Streaming**.
 8. **Difficulty-Varianten** — easy/normal/hard/brutal als konfigurierbare Profile
    (statt Hardcode). Normal ist unser Ziel-Referenzwerk.
 
