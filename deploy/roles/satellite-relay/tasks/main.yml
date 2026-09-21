@@ -85,14 +85,24 @@
     and satellite_relay_script is defined
     and satellite_relay_script.stat.exists
 
+- name: Teardown — Unit-Datei vorhanden?
+  stat:
+    path: /etc/systemd/system/rbbattle-satellite-relay.service
+  register: satellite_relay_unit
+  when: satellite_relay_state == 'absent'
+
 - name: Teardown — systemd-Unit stoppen + deaktivieren
   systemd:
     name: rbbattle-satellite-relay.service
     state: stopped
     enabled: false
-  # Wie beim Start: die Unit-Datei ist im Check-Mode nicht zwingend vorhanden.
+  # Nur wenn die Unit-Datei (noch) existiert: fehlt sie, bricht das systemd-Modul
+  # mit "Could not find the requested service" ab. Live-Befund beim ersten
+  # Prod-Deploy (Issue #846): der Teardown war schon manuell gelaufen -> Datei
+  # weg -> roter CD-Lauf, obwohl der Host korrekt abgebaut war.
   when:
     - satellite_relay_state == 'absent'
+    - satellite_relay_unit.stat.exists | default(false)
     - not ansible_check_mode
 
 - name: Teardown — Unit-Datei entfernen
