@@ -20,17 +20,18 @@ heutige Lücke.)
 Der Difficulty-Level ist der **Index in parallel eskalierende Tabellen** — nicht „welche
 Welle", sondern ein konsistenter Schwierigkeits-Tier quer durch alle Dimensionen:
 
-| #   | Dimension             | Mechanik                                                                                                       | Beleg                                                |
-| --- | --------------------- | -------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| 1   | **Escalation**        | `timeToNextDifficultyLevel[level]`                                                                             | `dom_manager.lua` `OnEnter/OnExitDifficultyIncrease` |
-| 2   | **Wave-Pool**         | `rules.waves[group][level]` — welche Units                                                                     | `GetWavePool` `:1035`                                |
-| 3   | **Attack-Count**      | `maxAttackCountPerDifficulty[level]` — wie viele Wellen/Attack                                                 | `GetAttackCount` `:1111`                             |
-| 4   | **Boss**              | `rules.multiplayerWaves[level]` → Elite-Boss (`attack_boss_dynamic.logic`), Coop ab L2 (default) / L5 (normal) | `GetMultiplayerAttackCount` `:1116`                  |
-| 5   | **Boss (Streaming)**  | `rules.bosses[level]` (`boss_attack`-Event) — nur Streaming-Session, ignorieren                                | `GetBossPool` `:1080`                                |
-| 6   | **Extra (Streaming)** | `rules.extraWaves[level]` (`stronger_attack`-Event) — nur Streaming-Session, ignorieren                        | `GetExtraWavePool`                                   |
-| 7   | **Timing**            | `cooldownAfterAttacks[level]` + `prepareSpawnTime[level]` + `idleTime[level]`                                  | `DumpDomProgress`                                    |
-| 8   | **Kreaturen-HP**      | `creatureDifficultyIncrementPerDOMDifficulty[level]` → `CreaturesBaseDifficulty`                               | `IncreaseCreaturesBaseDifficulty` `:1180`            |
-| 9   | **Event-Level**       | `currentEventLevel` / `IncreamentEventLevel` → `event_manager` (Objectives)                                    | `:958`                                               |
+| #   | Dimension                  | Mechanik                                                                                                                                             | Beleg                                                |
+| --- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| 1   | **Escalation**             | `timeToNextDifficultyLevel[level]`                                                                                                                   | `dom_manager.lua` `OnEnter/OnExitDifficultyIncrease` |
+| 2   | **Wave-Pool**              | `rules.waves[group][level]` — welche Units                                                                                                           | `GetWavePool` `:1035`                                |
+| 3   | **Attack-Count**           | `maxAttackCountPerDifficulty[level]` — wie viele Wellen/Attack                                                                                       | `GetAttackCount` `:1111`                             |
+| 4   | **Boss**                   | `rules.multiplayerWaves[level]` → Elite-Boss (`attack_boss_dynamic.logic`), Coop ab L2 (default) / L5 (normal)                                       | `GetMultiplayerAttackCount` `:1116`                  |
+| 5   | **Boss (Streaming)**       | `rules.bosses[level]` (`boss_attack`-Event) — nur Streaming-Session, ignorieren                                                                      | `GetBossPool` `:1080`                                |
+| 6   | **Extra (Streaming)**      | `rules.extraWaves[level]` (`stronger_attack`-Event) — nur Streaming-Session, ignorieren                                                              | `GetExtraWavePool`                                   |
+| 7   | **Timing**                 | `cooldownAfterAttacks[level]` + `prepareSpawnTime[level]` + `idleTime[level]`                                                                        | `DumpDomProgress`                                    |
+| 8   | **Kreaturen-HP**           | `creatureDifficultyIncrementPerDOMDifficulty[level]` → `CreaturesBaseDifficulty`                                                                     | `IncreaseCreaturesBaseDifficulty` `:1180`            |
+| 9   | **Event-Level**            | `currentEventLevel` / `IncreamentEventLevel` → `event_manager` (Objectives)                                                                          | `:958`                                               |
+| 10  | **Creature-Attack-Events** | `rules.gameEvents` (`shegret`/`kermon`/`phirian`) — Mini-Kreaturen-Attacks in IDLE, `attack_strength` eskaliert bei L5/L6 → `hard`, L8 → `very_hard` | `dom_survival_jungle_rules_default.lua:38–55`        |
 
 > **#8 ist für Survival irrelevant:** einziger Konsument von `CreaturesBaseDifficulty`
 > ist der Anoryxian-Boss (DLC2-Campaign), der im Survival **nie** spawnbar ist
@@ -40,6 +41,17 @@ Welle", sondern ein konsistenter Schwierigkeits-Tier quer durch alle Dimensionen
 > Coop ab L2 default / L5 normal). `rules.bosses` (`boss_attack`) und `rules.extraWaves`
 > (`stronger_attack`) tragen `gameStates="…|STREAMING"` (STREAMING ohne NO_STREAMING)
 > → nur mit Streaming-Session, bei uns nicht. Siehe `docs/research/boss-spawn-mechanik.md`.
+>
+> **Creature-Attack-Events (der „Bonus ab Level 5/6/8"):** `rules.gameEvents` enthält
+> Mini-Kreaturen-Attacks (`shegret`/`kermon`/`phirian`), die in der **IDLE-Phase** (also
+> _zwischen_ den Haupt-Attacks) feuern und deren `attack_strength` mit dem Event-Level
+> eskaliert — `shegret`: `normal` L2–4 → `hard` L5–7 → `very_hard` L8–9; `kermon`:
+> `normal` L4–5 → `hard` L6–7 → `very_hard` L8–9; `phirian`: L3–9 ohne Strength-Band
+> (hard/very_hard auskommentiert). Der oft gesuchte „Bonus ab Attack 6" ist konkret der
+> `kermon_attack`-Sprung `normal`→`hard` bei Event-Level 6 (und L8 `→very_hard`). Beide
+> Varianten (STREAMING + NO_STREAMING) existieren → feuern **auch im Non-Streaming-Match**.
+> Dies ist KEIN Natural-Wave-Bonus und KEIN `creatureDifficultyIncrementPerDOMDifficulty`,
+> sondern der eigene Event-Layer. Beleg: `docs/research/798-event-level.md` §4.2.
 
 ## 3. Timing-Werte (verifiziert, `dom_survival_jungle_rules_*.lua` + `dom_manager.lua`)
 
@@ -139,7 +151,7 @@ Die **Daten** (welche Units je Level, HP, Pools) sind weitgehend fertig dokument
 | **Attack-Count**               | 1→4 Wellen/Attack                                                | **1 Welle/Attack**        | ❌           |
 | **Boss**                       | `multiplayerWaves` Elite-Boss, Coop L2+ (default) / L5+ (normal) | —                         | ❌           |
 | **Extra-Wellen**               | `extraWaves` (`stronger_attack`) — nur Streaming-Session         | —                         | ❌ (bewusst) |
-| **Event-Level**                | `event_manager` (Objectives)                                     | —                         | ❌           |
+| **Event-Level**                | `event_manager` (Objectives + Creature-Attack-Events)            | —                         | ❌           |
 | Personas/Enemy-Sends/Self-Send | —                                                                | ✅ (unsere Erweiterung)   | nur bei uns  |
 
 ## 7. Offene Fragen / Entscheidungen
@@ -151,8 +163,10 @@ Die **Daten** (welche Units je Level, HP, Pools) sind weitgehend fertig dokument
    Waves selbst). `attack N` = unser Scheduler-Tick. Keine Reconciliation nötig.
    Offen bleibt nur die **Natural-Wave-Seite**: welches Difficulty-Level die Natural
    Wave beim N-ten Tick hat (eigener Difficulty-Timer, nicht attack-indiziert).
-2. **Event-Level / `event_manager`** — Objectives/Belohnungen sind strukturell bekannt,
-   aber **noch nicht im Detail dokumentiert** (kein Research-Doc). Braucht eigenen Spike.
+2. **Event-Level / `event_manager`** — strukturell dokumentiert in
+   `docs/research/798-event-level.md` (Objectives §4.4, Creature-Attack-Events §4.2,
+   Weather §4.3, Reward/Meta §4.1). Offen ist nur noch die **Code-Implementierung**
+   (als eigener Event-Layer im Attack-Cycle), nicht das Research.
 3. **Biom-Varianten** (`_acid`/`_desert`/`_swamp`/…) — bewusst außerhalb bisheriger Scopes
    (#658/#736). Entscheiden: erst Jungle (Default) voll, Rest später.
 4. **`_alpha`/`_ultra`**-Wellen-Varianten — gleiche Frage.
