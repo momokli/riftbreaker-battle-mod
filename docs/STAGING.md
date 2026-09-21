@@ -10,9 +10,9 @@ stellt. Diese Datei ist zugleich das **Handoff-Dokument** für matheos Agent.
 > `syncthing` (Load 2.0) — **zu klein** für den Dedicated-Server (Minimum laut
 > `docs/SERVER_SIZING.md`: 2 vCPU · 4 GiB · 30 GB; der Server idlet bei ~1,5
 > Cores / ~1,4 GiB). Deshalb: **Staging läuft ko-lokiert auf `planet`** (20
-> vCPU / 62 GiB, Luft vorhanden), und die Sync-Kiste wird als **Relay** genutzt
-> (eigene IPv4 = öffentlicher 6321-Einstieg), exakt wie der bestehende
-> `satellite`.
+> vCPU / 62 GiB, Luft vorhanden). Die Sync-Kiste diente übergangsweise als
+> UDP-DNAT-Relay (eigene IPv4 = öffentlicher 6321-Einstieg); dieser Relay ist
+> seit Issue #846 **retired** (nur noch planet:6321 als GNS-Entry).
 
 ---
 
@@ -60,16 +60,17 @@ Release oder wöchentlich), dann die noch offenen Features erneut darauf mergen.
 ## 3. Topologie
 
 Staging ko-lokiert auf `planet` als dritter Twin (dev/prod sind schon dort).
-Der öffentliche 6321-Einstieg läuft über die Sync-Kiste als **Relay**
-(`sync:6321 → planet:6323`), identisch zum prod-Muster (`satellite:6321 →
-planet:6322`).
+Der öffentliche Einstieg läuft seit Issue #846 über den **einen** GNS-Entry-Relay
+auf planet:6321 (Spielnamen-Suffix `*-staging` → `:6323`); die früheren
+DNAT-Relays (`sync:6321 → planet:6323`, prod `satellite:6321 → planet:6322`)
+sind **retired und werden abgebaut**.
 
 |                   | `dev`                          | `prod`                        | **`staging` (neu)**                  |
 | ----------------- | ------------------------------ | ----------------------------- | ------------------------------------ |
 | Trigger           | push `main`                    | push Tag `v*`                 | **push `staging`**                   |
 | Host (Game-Stack) | planet                         | planet                        | **planet**                           |
-| Game-Port         | 6321                           | 6322                          | **6323**                             |
-| Öffentlich via    | 65.21.27.234:6321              | satellite:6321 → :6322        | **sync (65.21.253.64):6321 → :6323** |
+| Game-Port         | 6324                           | 6322                          | **6323**                             |
+| Öffentlich via    | planet:6321 (GNS, `*-dev`)     | planet:6321 (GNS, Default)    | **planet:6321 (GNS, `*-staging`)**   |
 | IO-Bridge         | 9001                           | 9002                          | **9003**                             |
 | Tournament        | 8081                           | 8082                          | **8083**                             |
 | Server-Control    | 8092                           | 8093                          | **8094**                             |
@@ -94,7 +95,7 @@ Identisch zu `deploy-prod.yml`:
 mods-zip → dedicated-server-image → game-content → rbtools
 → riftbreaker-server → tournament-server → server-control (Plane B)
 → website → crash-collector        [Play 1: planet]
-+ satellite-relay                  [Play 2: sync, DNAT 6321 → planet:6323]
++ satellite-relay                  [Play 2: sync, Teardown DNAT-Relay 6321 → planet:6323, #846]
 ```
 
 `image-retention`/`host-hygiene` bleiben planet-weit (ein Timer je Host, kein
@@ -133,7 +134,7 @@ push auf staging → deploy-staging-Job (Runner planet)
   → forced command: refs/heads/staging → env=staging
   → Wrapper: deploy-staging.yml -e @deploy/staging-vars.yml
        Play 1: planet (Staging-Stack)
-       Play 2: sync   (satellite-relay, 6321 → planet:6323)
+       Play 2: sync   (satellite-relay Teardown, DNAT 6321 → planet:6323, #846)
 ```
 
 Der Wrapper läuft als root auf planet; für Play 2 braucht planet SSH auf `sync`
@@ -148,18 +149,18 @@ der bestehende `satellite`-Zugang.
 
 ## 7. Konkrete Änderungen (Checkliste)
 
-| #   | Datei                                         | Änderung                                                                                                                                                          |
-| --- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | `deploy/deploy-staging.yml`                   | **neu** — Klon von `deploy-prod.yml`: Play 1 `hosts: planet`, `rift_env: staging`; Play 2 `hosts: sync` (Relay), `satellite_relay_target_port: 6323` als Play-Var |
-| 2   | `deploy/staging-vars.yml`                     | **neu** — Klon von `prod-vars.yml` (staging-Namen/Ports/Domains)                                                                                                  |
-| 3   | `deploy/inventory/hosts.yml`                  | Host `sync` (`ansible_host 65.21.253.64`) ergänzen                                                                                                                |
-| 4   | `deploy/inventory/host_vars/planet/vault.yml` | `vault_server_control_staging_token` + Staging-Passwort ergänzen                                                                                                  |
-| 5   | `deploy/tasks/deploy-identity.yml`            | `rift_env`-Allowlist um `staging` erweitern                                                                                                                       |
-| 6   | `deploy/env-schema.yml`                       | `staging` in die `per_env`-Listen (wie `prod`) aufnehmen                                                                                                          |
-| 7   | `deploy/deploy-ssh.sh`                        | `refs/heads/staging → env=staging`                                                                                                                                |
-| 8   | `deploy/deploy-wrapper.sh`                    | env-Case + Dispatch `refs/heads/staging → deploy-staging.yml -e @deploy/staging-vars.yml`                                                                         |
-| 9   | `.github/workflows/deploy.yml`                | Job `deploy-staging` (push `staging`)                                                                                                                             |
-| 10  | `deploy/roles/satellite-relay/`               | **keine Änderung nötig** — Ziel-Port kommt als Play-Var (`satellite_relay_target_port`), kein `host_vars/sync`                                                    |
+| #   | Datei                                         | Änderung                                                                                                                                                                                       |
+| --- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `deploy/deploy-staging.yml`                   | **neu** — Klon von `deploy-prod.yml`: Play 1 `hosts: planet`, `rift_env: staging`; Play 2 `hosts: sync` (Relay-Teardown, `satellite_relay_state: absent`, `satellite_relay_target_port: 6323`) |
+| 2   | `deploy/staging-vars.yml`                     | **neu** — Klon von `prod-vars.yml` (staging-Namen/Ports/Domains)                                                                                                                               |
+| 3   | `deploy/inventory/hosts.yml`                  | Host `sync` (`ansible_host 65.21.253.64`) ergänzen                                                                                                                                             |
+| 4   | `deploy/inventory/host_vars/planet/vault.yml` | `vault_server_control_staging_token` + Staging-Passwort ergänzen                                                                                                                               |
+| 5   | `deploy/tasks/deploy-identity.yml`            | `rift_env`-Allowlist um `staging` erweitern                                                                                                                                                    |
+| 6   | `deploy/env-schema.yml`                       | `staging` in die `per_env`-Listen (wie `prod`) aufnehmen                                                                                                                                       |
+| 7   | `deploy/deploy-ssh.sh`                        | `refs/heads/staging → env=staging`                                                                                                                                                             |
+| 8   | `deploy/deploy-wrapper.sh`                    | env-Case + Dispatch `refs/heads/staging → deploy-staging.yml -e @deploy/staging-vars.yml`                                                                                                      |
+| 9   | `.github/workflows/deploy.yml`                | Job `deploy-staging` (push `staging`)                                                                                                                                                          |
+| 10  | `deploy/roles/satellite-relay/`               | **retired (#846)** — `satellite_relay_state: absent` baut das Relay ab; Ziel-Port weiterhin als Play-Var (`satellite_relay_target_port`), kein `host_vars/sync`                                |
 
 ---
 
@@ -169,9 +170,11 @@ der bestehende `satellite`-Zugang.
    `cockpit.staging.projectmellon.de` → `65.21.27.234` (planet).
 2. **`mellon-caddy`:** zwei Einträge für die Staging-Domains → `127.0.0.1:8789`
    (die `website`-Rolle schreibt sie, wie für prod).
-3. **Sync-Kiste (Relay):** `deploy-staging.yml` Play 2 installiert die
+3. **Sync-Kiste (Relay, retired):** `deploy-staging.yml` Play 2 fuhr die
    `satellite-relay`-Rolle auf `sync` (iptables-DNAT 6321 → planet:6323,
-   reboot-fest). Benötigt nur: planet→`sync` SSH-Zugang (root, Key).
+   reboot-fest). Seit Issue #846 baut dasselbe Play den Relay wieder ab
+   (`satellite_relay_state: absent`). Benötigt nur: planet→`sync` SSH-Zugang
+   (root, Key).
 4. **Vault:** Staging-Passwort + Token in `host_vars/planet/vault.yml`.
 5. **Branches:** `staging` anlegen (von `main`), ggf. Branch-Protection.
 
@@ -179,7 +182,8 @@ der bestehende `satellite`-Zugang.
 
 ## 9. Handoff an matheos Agent
 
-**Voraussetzung:** SSH auf planet (+ sync für Relay) und/oder die CD läuft.
+**Voraussetzung:** SSH auf planet (+ sync für den Relay-Teardown, #846) und/oder
+die CD läuft.
 
 **Workflow pro Feature:**
 
@@ -199,7 +203,7 @@ ansible-playbook -i deploy/inventory deploy/deploy-staging.yml \
   -e @deploy/staging-vars.yml --ask-vault-pass
 
 # 5. Testen
-#    Spiel:    65.21.253.64:6321   (sync-Relay → planet:6323)
+#    Spiel:    65.21.27.234:6321   (GNS-Entry-Relay, Spielname *-staging → planet:6323)
 #    Cockpit:  https://cockpit.staging.projectmellon.de/contract/
 #    Landing:  https://www.staging.projectmellon.de/
 #    Logs:     ssh planet docker logs riftbreaker-dedicated-staging
@@ -222,10 +226,11 @@ ansible-playbook -i deploy/inventory deploy/deploy-staging.yml \
 
 ## 10. Offene Punkte / Entscheidungen
 
-1. **Relay-Ziel-Port pro Env** (gelöst) — `satellite_relay_target_port: 6323`
-   kommt als **Play-Var** aus `deploy-staging.yml` (Play 2); kein
-   `host_vars/sync/` und keine Rollen-Generalisierung nötig (die Rolle liest die
-   Var bereits, Default bleibt prod `:6322`).
+1. **Öffentlicher Einstieg** (gelöst, #846) — es gibt **einen** Einstieg
+   (planet:6321, `gns-relay` mit Spielnamen-Suffix-Routing `*-staging` →
+   `:6323`). Das frühere Sync-DNAT-Relay (`sync:6321 → planet:6323`) wird
+   abgebaut (`satellite_relay_state: absent`); DNS `staging.projectmellon.de`
+   → `65.21.27.234`.
 2. **Blast-Radius:** Staging teilt sich planet mit dev/prod (CD-Restart,
    Ressourcen). Für ein Test-/Staging-Env akzeptabel; echte Duelle gehören
    weiterhin nach prod.

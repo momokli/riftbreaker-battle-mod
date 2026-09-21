@@ -407,17 +407,26 @@ forced command (`deploy/deploy-ssh.sh`) validiert die SHA, macht
 (enges sudoers). Kein Token, kein Polling. Installation/Migration:
 `deploy/README.md` → „CD: SSH-Deploy".
 
-Topologie (Stand Issue #328 + GNS-Entry-Relay #843): **drei** Instanzen auf
-planet. **DEV** läuft rolling auf `:6324` (dieser CD-Workflow,
+Topologie (Stand Issue #328, GNS-Entry-Relay #843, Konsolidierung #846): **drei**
+Instanzen auf planet. **DEV** läuft rolling auf `:6324` (dieser CD-Workflow,
 `deploy/site.yml`); der client-hardgewirete Einstiegsport `:6321` gehört dem
 **GNS-Entry-Relay** (`gns-relay`, `deploy/site.yml`), das GNS terminiert und per
 Spielnamen-Suffix auf die Backends routet (`*-dev` → `:6324`, `*-staging` →
 `:6323`, sonst → `:6322`). **PROD** ist eine koexistierende zweite Instanz auf
-`:6322`, öffentlich erreichbar über den **Satellite-Relay** (eigene IPv4, inbound
-`:6321` → DNAT → planet `:6322`; `deploy/deploy-prod.yml` + `prod-vars.yml`). Ein
-Direct-IP-Server (`disable_steam "1"`) deckt beide Stores ab; der Client ist
-effektiv auf Port `:6321` hardgewired, daher der zweite öffentliche Zugang über
-eine zweite **Adresse** (den Satellite) statt eines zweiten Ports.
+`:6322` und **STAGING** ein dritter Twin auf `:6323`. Beide werden seit Issue
+#846 **nicht mehr** über eigene DNAT-Relays (`satellite`/`sync`) angesprochen —
+es gibt **genau einen** öffentlichen Einstieg (`planet:6321`), und die Umgebung
+wählt der Spielname (Suffix). Ein Direct-IP-Server (`disable_steam "1"`) deckt
+beide Stores ab; der Client ist effektiv auf Port `:6321` hardgewired, daher der
+eine öffentliche Zugang statt mehrerer Ports/Adressen.
+
+Die beiden früheren Relay-Hosts (früher `satellite:6321 → planet:6322` bzw.
+`sync:6321 → planet:6323`) sind **retired**: `deploy/deploy-prod.yml` und
+`deploy/deploy-staging.yml` fahren die Rolle `satellite-relay` mit
+`satellite_relay_state: absent` und bauen die DNAT-Regeln/Units dort ab.
+Host-seitig (Cloudflare, **nicht repo-owned**) zeigen die A-Records
+`drift.projectmellon.de`, `rift.projectmellon.de` und
+`staging.projectmellon.de` alle auf `65.21.27.234` (planet).
 
 Der **Tag→prod-Kanal ist weiterhin nicht verdrahtet** (Follow-up):
 `tags: ['v*']` sind seit Issue #209 **reine Marker** (kein Tag-Trigger, keine
