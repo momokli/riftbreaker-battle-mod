@@ -135,7 +135,7 @@ DIFFICULTY_RULES = {
         "boss_min_level": 5,
     },
 }
-DEFAULT_DIFFICULTY_PROFILE = "default"
+DEFAULT_DIFFICULTY_PROFILE = "normal"
 
 
 def parse_hq_alive(raw: str) -> bool:

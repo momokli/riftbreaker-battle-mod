@@ -334,8 +334,8 @@ class TestAttackCycleDifficultyTimer(unittest.TestCase):
         self.assertEqual(cycle.level, 2)
         logic_calls = [c for c in poster.calls if c[0] == "/activate_mission_flow"]
         # Attack-Count (#802): Level 2 feuert maxAttackCountPerDifficulty[2] = 2
-        # Natural-Wellen + 1 Elite-Boss (boss_min_level=2, coop).
-        self.assertEqual(len(logic_calls), 3)
+        # Natural-Wellen (normal: Boss erst ab L5).
+        self.assertEqual(len(logic_calls), 2)
         self.assertIn("attack_level_2_id_1.logic", logic_calls[0][1].decode())
 
     def test_status_reports_seconds_to_next_difficulty(self):
@@ -719,10 +719,14 @@ class TestDifficultyRules(unittest.TestCase):
             _normalize_difficulty_rules({"boss_min_level": 0}, max_level=9)
 
     def test_wave_plan_default_curve(self):
-        cycle = AttackCycle("http://x", _poster=lambda *a: (200, "{}"))
+        cycle = AttackCycle("http://x", difficulty_profile="default", _poster=lambda *a: (200, "{}"))
         self.assertEqual(cycle._wave_plan(1)["natural_count"], 1)
         self.assertEqual(cycle._wave_plan(2)["natural_count"], 2)
         self.assertEqual(cycle._wave_plan(9)["natural_count"], 4)
+
+    def test_wave_plan_normal_curve(self):
+        cycle = AttackCycle("http://x", _poster=lambda *a: (200, "{}"))
+        self.assertEqual(cycle._wave_plan(9)["natural_count"], 3)
 
     def test_wave_plan_boss_threshold(self):
         rules = {
@@ -765,10 +769,10 @@ class TestWaveFiring(unittest.TestCase):
         clock.t = 420.0
         cycle.step()  # attack
         logics = self._fire_logics(poster)
-        # 4 Natural-Wellen + 1 Boss (boss_min_level=2).
-        self.assertEqual(logics.count("logic/missions/survival/attack_level_8_id_1.logic"), 4)
+        # 3 Natural-Wellen + 1 Boss (normal: maxAttackCount[9]=3, Boss ab L5).
+        self.assertEqual(logics.count("logic/missions/survival/attack_level_8_id_1.logic"), 3)
         self.assertEqual(logics.count(BOSS_LOGIC), 1)
-        self.assertEqual(len(logics), 5)
+        self.assertEqual(len(logics), 4)
 
     def test_normal_profile_fires_two_waves_at_level_2(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
@@ -782,26 +786,26 @@ class TestWaveFiring(unittest.TestCase):
         self.assertEqual(len(logics), 2)
         self.assertEqual(logics.count("logic/missions/survival/attack_level_2_id_1.logic"), 2)
 
-    def test_fires_boss_at_level_2(self):
+    def test_fires_boss_at_level_5(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, clock=clock)
         cycle.step()  # started
-        cycle.level = 2
+        cycle.level = 5
         clock.t = 420.0
         cycle.step()  # attack
         logics = self._fire_logics(poster)
-        # Level 2 (coop default): 2 Natural-Wellen + 1 Elite-Boss.
+        # Level 5 (normal): 2 Natural-Wellen + 1 Elite-Boss.
         self.assertEqual(len(logics), 3)
         self.assertEqual(logics.count(BOSS_LOGIC), 1)
-        self.assertEqual(logics.count("logic/missions/survival/attack_level_2_id_1.logic"), 2)
+        self.assertEqual(logics.count("logic/missions/survival/attack_level_5_id_1.logic"), 2)
 
-    def test_no_boss_below_level_2(self):
+    def test_no_boss_below_level_5(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, clock=clock)
         cycle.step()  # started
-        cycle.level = 1
+        cycle.level = 4
         clock.t = 420.0
         cycle.step()  # attack
         self.assertEqual(self._fire_logics(poster).count(BOSS_LOGIC), 0)
