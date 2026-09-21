@@ -1,0 +1,91 @@
+---
+# Defaults der Rolle gns-relay (Issue #843) — GNS-Einstiegs-Relay.
+#
+# Der Riftbreaker-Client ist effektiv auf Port 6321 hardgewired (Format-String
+# `ip:%s:6321`; eine Eingabe MIT Port scheitert still). Das Relay LOEST das ohne
+# Drop/Kick/Reconnect, indem es die Client-Verbindung selbst TERMINIERT (es ist
+# der GNS-Gegenspieler), den Spielnamen liest und erst danach an ein Backend
+# weiterleitet:
+#
+#   Client --GNS/UDP:6321--> gns_relay (terminiert + routet) --> prod    :6322
+#                                                             --> staging :6323
+#                                                             --> dev     :6324
+#
+# Deshalb gehoert 6321 jetzt dem Relay; der dev-Server zieht von 6321 auf 6324
+# um (host_vars/planet `riftbreaker_server_port_udp`). prod (:6322) und staging
+# (:6323) sind unveraendert — sie haben ihren oeffentlichen Einstieg ueber die
+# DNAT-Relays (satellite/sync), der Relay hier ist der DEV-Einstieg auf planet.
+#
+# Die Rolle baut `gns_probe.exe` aus dem Repo-Checkout (tools/gns-proxy,
+# MinGW-w64/zig — wie die Rolle rbtools) und betreibt sie als Container auf dem
+# GETEILTEN Laufzeit-Image rb-dedicated:<deploy-sha> (Wine + Xvfb + gosu), mit
+# `network_mode: host`, damit der Relay den UDP-Port direkt auf dem Host besitzt.
+#
+# Nur Core-Module (kein community.general-Dependency) — konsistent mit deploy/.
+#
+# Planet-spezifische Werte (Container-/Pfad-/Port-Namen) stehen in
+# deploy/inventory/host_vars/planet/vars.yml; diese Defaults liefern nur
+# generische, env-agnostische Fallbacks.
+
+# Deploy-Identitaet (Issue #483, US4): Fallback fuer Renderer/Tests, die ohne
+# die Plays laufen. Die Plays setzen rift_env als Play-Var; rift_deploy_ref
+# kommt aus deploy/tasks/deploy-identity.yml (set_fact schlaegt diese Defaults).
+rift_env: unknown
+rift_deploy_ref: unknown
+
+# --- Container / Compose ----------------------------------------------------
+gns_relay_container: gns-relay
+# Expliziter Compose-Projektname (analog rift-caddy/riftbreaker-server): ohne
+# `name:`/`-p` wuerde er aus dem Verzeichnis-Basename abgeleitet.
+gns_relay_compose_project: gns-relay
+# Dasselbe Laufzeit-Image wie der Dedicated Server (bringt wine, Xvfb und
+# gosu/steamuser mit). Der Tag ist der Deploy-SHA (kein `latest`).
+gns_relay_image: "{{ dedicated_server_image }}"
+
+# --- Netz / Routing ---------------------------------------------------------
+# Client-hardgewireter Einstiegsport. Der Relay terminiert GNS hier selbst.
+gns_relay_port: 6321
+# Suffix-Routing (Issue #843): exakter Treffer > laengster Suffix > Default.
+# Der Spielname mit Suffix waehlt die Umgebung (`momo-staging` -> staging,
+# `momo-dev` -> dev), alles andere landet auf dem Default (prod).
+gns_relay_target_dev: "127.0.0.1:6324"
+gns_relay_target_staging: "127.0.0.1:6323"
+gns_relay_target_default: "127.0.0.1:6322"
+
+# --- Container-interne Pfade / Prozess --------------------------------------
+# Mount-Punkt der Game-DLLs (read-only). Der Probe laeuft aus
+# {{ gns_relay_bin_mount }}/bin und laedt dort die GameNetworkingSockets.dll.
+gns_relay_bin_mount: /opt/riftbreaker
+# Pfad der gerenderten Routen-Datei IM Container.
+gns_relay_routes_container_path: /etc/gns-relay/routes
+# Pfad der gemounteten gns_probe.exe IM Container.
+gns_relay_probe_container_path: /opt/gns-relay/gns_probe.exe
+# Xvfb-Display (wine braucht einen X-Server) und der nicht-privilegierte
+# Container-User, unter dem der Probe laeuft (Image bringt `gosu`).
+gns_relay_display: ":99"
+gns_relay_container_user: steamuser
+
+# --- Pfade auf dem Zielhost -------------------------------------------------
+# Quelle der GameNetworkingSockets.dll: der Game-Content des Environments
+# (Game-Bin-Verzeichnis, read-only gemountet). Fallback fuer Renderer/Tests,
+# die ohne die Plays laufen.
+gns_relay_game_dir: "{{ riftbreaker_game_dir | default('/srv/rift-dev/game') }}"
+# Compose-/Config-Verzeichnis des Relays (relay-eigene Routen-Datei).
+gns_relay_deploy_dir: /opt/rbmods/compose/gns-relay
+# Ablage der gebauten gns_probe.exe (analog rbtools: Build auf dem Zielhost).
+gns_relay_bin_dir: /opt/rbmods/gns-relay/bin
+# Eigenes Wine-Prefix-Volume (bewusst NICHT das des dev-Servers geteilt).
+gns_relay_wine_volume: gns-relay-wine
+
+# Gerenderte Routen-Datei + gemountete EXE (abgeleitet).
+gns_relay_routes_file: "{{ gns_relay_deploy_dir }}/routes"
+gns_relay_probe_bin: "{{ gns_relay_bin_dir }}/gns_probe.exe"
+gns_relay_staging_dir: "{{ gns_relay_bin_dir }}/.staging"
+
+# --- Build (Repo-Checkout auf dem Zielhost) ---------------------------------
+# WIE die Rolle rbtools: gebaut wird zur Deploy-Zeit aus dem Repo-Checkout,
+# kein Binary im Repo/Image. Quelle: tools/gns-proxy/gns_probe.cpp.
+gns_relay_repo_root: "{{ playbook_dir }}/.."
+gns_relay_source_dir: "{{ gns_relay_repo_root }}/tools/gns-proxy"
+gns_relay_source: "{{ gns_relay_source_dir }}/gns_probe.cpp"
+gns_relay_include_dir: "{{ gns_relay_source_dir }}/include"

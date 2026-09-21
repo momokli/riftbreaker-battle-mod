@@ -82,7 +82,7 @@ Was das Playbook selbst besitzt:
 
 - **Laufzeit-Image** (`dedicated-server-image`): baut
   `rb-dedicated:<deploy-sha>` auf dem Zielhost aus
-  `deploy/dedicated-server` (Wine-Laufzeit für :6321, Community-Rezept). Der Tag ist der
+  `deploy/dedicated-server` (Wine-Laufzeit für den Dedicated-Server, Community-Rezept). Der Tag ist der
   Deploy-SHA der ausgecheckten Revision; das gerenderte `docker-compose.yml`
   referenziert **exakt** diesen Tag (kein `latest`). Der Tag im Namen macht den
   Lauf trivially idempotent: unveränderter Stand → Image existiert → kein Build;
@@ -103,7 +103,7 @@ Was das Playbook selbst besitzt:
   md5-Marker; der Marker-Schreibvorgang **notifyt einen Restart-Handler**
   (`docker compose up -d --force-recreate`). Ohne den bliebe ein reines
   Mod-Update wirkungslos (Compose startet einen unveränderten Container nicht
-  neu) — Ziel: „Merge → Mod ist auf :6321 wirklich geladen".
+  neu) — Ziel: „Merge → Mod ist auf :6324 (dev) wirklich geladen".
 
 ### Prod-Instanz + Satellite-Relay (Issue #328)
 
@@ -149,19 +149,22 @@ unter `/etc/rbbattle-deploy/vault.pass`. **Nie** im Repo/Log.
 
 Nach jedem Merge auf `main` rollt der Workflow
 [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) den aktuellen
-Mod-Stand automatisch auf den Solo-**DEV**-Server aus (planet, Port 6321).
+Mod-Stand automatisch auf den Solo-**DEV**-Server aus (planet).
 
-Topologie (Issue #328 + staging): **drei** koexistierende Instanzen auf planet,
-ein Dedi-Port (`:6321`).
+Topologie (Issue #328 + staging + GNS-Entry-Relay #843): **drei** koexistierende
+Instanzen auf planet. Der client-hardgewirete Einstiegsport `:6321` gehört auf
+planet dem **GNS-Entry-Relay** (Rolle `gns-relay`), das GNS terminiert und per
+Spielnamen-Suffix auf die Backends routet.
 
-| Env     | Trigger        | Host   | Game-Port | Öffentlicher Einstieg              |
-| ------- | -------------- | ------ | --------- | ---------------------------------- |
-| DEV     | push `main`    | planet | `:6321`   | `65.21.27.234:6321`                |
-| PROD    | push Tag `v*`  | planet | `:6322`   | `satellite:6321 → :6322`           |
-| STAGING | push `staging` | planet | `:6323`   | `sync (65.21.253.64):6321 → :6323` |
+| Env     | Trigger        | Host   | Game-Port | Öffentlicher Einstieg                           |
+| ------- | -------------- | ------ | --------- | ----------------------------------------------- |
+| DEV     | push `main`    | planet | `:6324`   | `65.21.27.234:6321` → GNS-Entry-Relay → `:6324` |
+| PROD    | push Tag `v*`  | planet | `:6322`   | `satellite:6321 → :6322`                        |
+| STAGING | push `staging` | planet | `:6323`   | `sync (65.21.253.64):6321 → :6323`              |
 
-- **DEV** (planet, `:6321`): rolling, von diesem CD-Workflow deployt
-  (`deploy/site.yml`, Werte aus `inventory/host_vars/planet/`).
+- **DEV** (planet, `:6324`): rolling, von diesem CD-Workflow deployt
+  (`deploy/site.yml`, Werte aus `inventory/host_vars/planet/`). Der frühere
+  Dev-Port `:6321` ist an den GNS-Entry-Relay gegangen (Issue #843).
 - **PROD** (planet, `:6322`): koexistierende zweite Instanz
   (`riftbreaker-dedicated-prod`), öffentlich erreichbar über den
   **Satellite-Relay** (eigene IPv4, inbound `:6321` → DNAT → planet `:6322`).
@@ -176,6 +179,32 @@ Der Client ist effektiv auf Port `6321` hardgewired — die zusätzlichen
 öffentlichen Zugänge laufen deshalb über je eine zweite **Adresse** (den
 `satellite` für prod, den `sync` für staging), nicht über weitere Ports.
 
+### GNS-Entry-Relay + Suffix-Routing (Issue #843)
+
+Auf **planet** terminiert die Rolle **`gns-relay`** den hardgewireten Port `6321`
+selbst (Container `gns-relay`, `network_mode: host`, UDP `6321`): sie ist der
+GNS-Gegenspieler des Clients, liest den Spielnamen und **routet** anhand eines
+Suffix auf ein Backend — Regeln in `roles/gns-relay/templates/routes.j2`:
+
+```text
+*-dev     = 127.0.0.1:6324     # Suffix-Wildcard
+*-staging = 127.0.0.1:6323     # Suffix-Wildcard
+*         = 127.0.0.1:6322     # Default
+```
+
+Auswertung: **exakt** > **längster Suffix** > **Default**. Damit wählt der
+Spielname die Umgebung (`momo-staging` → staging, `momo-dev` → dev, sonst prod)
+— ohne Drop/Kick/Reconnect. Die `gns_probe.exe` wird zur Deploy-Zeit aus
+`tools/gns-proxy/` gebaut (MinGW-w64/zig, wie die Rolle `rbtools`) und auf
+demselben Laufzeit-Image `rb-dedicated:<sha>` betrieben; sie braucht die
+Game-DLLs (`GameNetworkingSockets.dll`) read-only gemountet und ein eigenes
+Wine-Prefix-Volume.
+
+Weil der Relay `6321` übernimmt, ist der **dev-Server von `6321` auf `6324`
+umgezogen** (`riftbreaker_server_port_udp`); prod (`:6322`) und staging (`:6323`)
+bleiben unverändert und behalten ihren öffentlichen Einstieg über die
+DNAT-Relays (`satellite`/`sync`).
+
 Der **Tag→prod- und Branch→staging-Kanal ist verdrahtet**: ein Tag-Push `v*`
 rollt `deploy/deploy-prod.yml` (+ `-e @deploy/prod-vars.yml`) auf prod aus, ein
 Push auf `staging` rollt `deploy/deploy-staging.yml` (+ `-e @deploy/staging-vars.yml`)
@@ -185,7 +214,7 @@ der `main` → `site.yml` (dev), `refs/tags/v*` → `deploy-prod.yml` (prod) und
 [„CD: SSH-Deploy"](#cd-ssh-deploy-dedizierter-deploy-user)).
 
 ```text
-push auf main          → deploy-dev     (site.yml,           dev     :6321)
+push auf main          → deploy-dev     (site.yml,           dev     :6324 via GNS-Entry-Relay :6321)
 push auf Tag v*        → deploy-prod    (deploy-prod.yml,    prod    :6322 via satellite)
 push auf staging       → deploy-staging (deploy-staging.yml, staging :6323 via sync-Relay)
 ```
@@ -458,10 +487,11 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 
 | Rolle                    | Typ                | Was                                                                                                                                                                                                                                                                                                                                 |
 | ------------------------ | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dedicated-server-image` | docker             | baut `rb-dedicated:<deploy-sha>` auf planet (Laufzeit :6321)                                                                                                                                                                                                                                                                        |
+| `dedicated-server-image` | docker             | baut `rb-dedicated:<deploy-sha>` auf planet (geteiltes Laufzeit-Image)                                                                                                                                                                                                                                                              |
 | `game-content`           | steamcmd/sync      | Dedicated-Server-Content (App 4114030) nach `riftbreaker_game_dir` (idempotent, fail loud)                                                                                                                                                                                                                                          |
-| `riftbreaker-server`     | docker             | Dev-SP-Server 6321 (1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation                                                                                                                                                                                             |
+| `riftbreaker-server`     | docker             | Dev-SP-Server 6324 (umgezogen von 6321, Issue #843; 1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation                                                                                                                                                             |
 | `satellite-relay`        | iptables + systemd | UDP-DNAT-Relay auf zwei Hosts: `satellite` (prod, `:6321 → :6322`) und `sync` (staging, `:6321 → :6323`); Ziel-Port je Relay als Play-Var (`satellite_relay_target_port`), reboot-fest, kein `host_vars`                                                                                                                            |
+| `gns-relay`              | docker             | GNS-Entry-Relay auf planet (`network_mode: host`, UDP `:6321`): terminiert GameNetworkingSockets, liest den Spielnamen und routet per Suffix auf prod/staging/dev; baut `gns_probe.exe` aus `tools/gns-proxy` (Issue #843)                                                                                                          |
 | `tournament-server`      | systemd            | Rust/axum Referee + Web-UI. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt)                                                                                                                                        |
 | `website`                | eigener Caddy      | eigener `rift-caddy` (plain HTTP: Landing + `/mod.zip` + Cockpit `/contract/*` + `/tournament/*`) + ZWEI Einträge im geteilten Host-Caddy (Issue #322); Host-Caddy-Reload deterministisch + fehlersichtbar, `rift-caddy` mit `admin off` (Issue #355); `/server/*` nur bei deploytem Agenten (`server_control_enabled`, Issue #463) |
 | `mods-zip`               | —                  | Paketierung + md5-Paritäts-Check (hart)                                                                                                                                                                                                                                                                                             |
@@ -506,7 +536,8 @@ deploy/
 └── roles/
     ├── dedicated-server-image/    # baut rb-dedicated:<sha>
     ├── game-content/              # Steam-Content (App 4114030) deklarativ
-    ├── riftbreaker-server/        # docker 6321 (+ Restart-Handler)
+    ├── riftbreaker-server/        # docker 6324 (+ Restart-Handler; 6321 → gns-relay, #843)
+    ├── gns-relay/                 # GNS-Entry-Relay (UDP 6321, Suffix-Routing; #843)
     ├── satellite-relay/           # UDP-DNAT-Relay (prod :6322 via satellite, staging :6323 via sync)
     ├── tournament-server/         # systemd
     ├── website/                   # eigener rift-caddy: Landing + Cockpit (Issue #322)

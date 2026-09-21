@@ -1,0 +1,178 @@
+---
+# Rolle: gns-relay (Issue #843) — GNS-Einstiegs-Relay auf planet.
+#
+# Terminiert GameNetworkingSockets auf dem client-hardgewireten UDP-Port
+# {{ gns_relay_port }}, liest den Spielnamen und routet (Suffix) auf ein
+# Backend (prod/staging/dev). Laeuft als Container mit `network_mode: host` auf
+# dem geteilten Laufzeit-Image rb-dedicated:<deploy-sha>.
+#
+# Ablauf: gns_probe.exe aus dem Repo-Checkout bauen (MinGW-w64/zig, wie die
+# Rolle rbtools), nach {{ gns_relay_bin_dir }} stagen (Change-Detection ueber
+# die Checksumme des copy-Moduls), Routen-Datei + Compose rendern und den
+# Container starten. Aendern sich Routen/Compose/EXE, wird der Container per
+# Handler neu erstellt (die Routen-Datei wird nur beim Start eingelesen).
+#
+# check_mode: Build + Copy werden uebersprungen, die Template-Tasks nur bei
+# existierendem Schreibziel geschrieben — `ansible-playbook --check --tags
+# server` (deploy-check) bleibt so gruen (Muster der Rolle riftbreaker-server).
+
+- name: gns-relay Bin-Verzeichnis sicherstellen
+  file:
+    path: "{{ gns_relay_bin_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: gns-relay Deploy-Verzeichnis sicherstellen
+  file:
+    path: "{{ gns_relay_deploy_dir }}"
+    state: directory
+    mode: "0755"
+
+# ---------------------------------------------------------------------------
+# Check-Mode-Schutz der Schreibkette (Muster riftbreaker-server, Issue #483):
+# die Template-Tasks schreiben in {{ gns_relay_deploy_dir }}. Im `--check` legt
+# der `file`-Task oben nichts real an (nur „would change") -> ein Template-Aufruf
+# braeche hart ab ("Destination directory … does not exist"). Deshalb nur
+# schreiben, wenn das Ziel existiert ODER wir nicht im Check-Mode sind.
+# ---------------------------------------------------------------------------
+- name: "Schreibziel pruefen (Check-Mode-Schutz)"
+  stat:
+    path: "{{ gns_relay_deploy_dir }}"
+  register: gns_relay_write_dir
+
+- name: "Schreibziel vorhanden?"
+  set_fact:
+    gns_relay_write_dirs_ready: "{{ gns_relay_write_dir.stat.exists | default(false) | bool }}"
+
+- name: "Hinweis: Schreibziel fehlt (im --check erwartet)"
+  debug:
+    msg: >-
+      Check-Mode: {{ gns_relay_deploy_dir }} existiert (noch) nicht — Routen-
+      und Compose-Datei werden nicht geschrieben.
+  when:
+    - ansible_check_mode
+    - not (gns_relay_write_dirs_ready | bool)
+
+# ---------------------------------------------------------------------------
+# gns_probe.exe bauen (Quelle tools/gns-proxy/gns_probe.cpp, MinGW-w64 wie die
+# Rolle rbtools). Das --no-insert-timestamp haelt Builds bei gleichem
+# Quellstand byte-identisch -> die copy-Change-Detection schlaegt nicht bei
+# jedem Deploy an (sonst wuerde der Container sinnlos recreated).
+# ---------------------------------------------------------------------------
+- name: Staging-Verzeichnis fuer den Build sicherstellen
+  file:
+    path: "{{ gns_relay_staging_dir }}"
+    state: directory
+    mode: "0755"
+  when: not ansible_check_mode
+
+- name: "gns_probe.exe bauen (mingw/zig auf dem Zielhost)"
+  shell: |
+    set -euo pipefail
+    if command -v x86_64-w64-mingw32-g++ >/dev/null 2>&1; then
+      CXX=x86_64-w64-mingw32-g++
+      LD_REPRO="-Wl,--no-insert-timestamp"
+    elif command -v zig >/dev/null 2>&1; then
+      CXX="zig c++ -target x86_64-windows-gnu"
+      LD_REPRO=""
+    else
+      echo "FEHLER: weder x86_64-w64-mingw32-g++ noch zig verfuegbar — gns_probe.exe kann nicht gebaut werden." >&2
+      exit 1
+    fi
+    # -static*: mingw-g++-EXEs brauchen sonst libstdc++-6.dll/libgcc_s_seh-1.dll
+    # aus dem Build-Env — die liegen im Wine-Prefix nicht.
+    $CXX -O2 -Wall -Wextra -std=c++17 -Wno-cast-function-type \
+      $LD_REPRO -I"{{ gns_relay_include_dir }}" \
+      -static -static-libgcc -static-libstdc++ \
+      -o "{{ gns_relay_staging_dir }}/gns_probe.exe" "{{ gns_relay_source }}"
+  args:
+    chdir: "{{ gns_relay_source_dir }}"
+  when: not ansible_check_mode
+  changed_when: true
+
+- name: gns_probe.exe nach {{ gns_relay_bin_dir }} kopieren (Change-Detection per Checksumme)
+  copy:
+    src: "{{ gns_relay_staging_dir }}/gns_probe.exe"
+    dest: "{{ gns_relay_probe_bin }}"
+    remote_src: true
+    mode: preserve
+  when: not ansible_check_mode
+  notify: restart gns-relay
+
+- name: gns_probe.exe pruefen (stat)
+  stat:
+    path: "{{ gns_relay_probe_bin }}"
+  register: gns_relay_probe_stat
+  when: not ansible_check_mode
+
+- name: gns_probe.exe vorhanden (assert)
+  assert:
+    that:
+      - gns_relay_probe_stat.stat.exists
+      - gns_relay_probe_stat.stat.size > 0
+    fail_msg: >-
+      gns_probe.exe fehlt/leer in {{ gns_relay_bin_dir }} — der Build ist nicht
+      durchgelaufen (Toolchain x86_64-w64-mingw32-g++ oder zig noetig).
+    quiet: true
+  when: not ansible_check_mode
+
+# ---------------------------------------------------------------------------
+# Routen-Datei + Compose rendern. Die Routen-Datei traegt die Suffix-Regeln;
+# eine Aenderung erfordert den Recreate des Containers (Handler).
+# ---------------------------------------------------------------------------
+- name: Routen-Datei rendern (Suffix-Routing)
+  template:
+    src: routes.j2
+    dest: "{{ gns_relay_routes_file }}"
+    mode: "0644"
+  when: (not ansible_check_mode) or (gns_relay_write_dirs_ready | bool)
+  notify: restart gns-relay
+
+- name: docker-compose.yml rendern
+  template:
+    src: docker-compose.yml.j2
+    dest: "{{ gns_relay_deploy_dir }}/docker-compose.yml"
+    mode: "0644"
+  when: (not ansible_check_mode) or (gns_relay_write_dirs_ready | bool)
+  notify: restart gns-relay
+
+# Container sicherstellen (idempotent): startet einen gestoppten/fehlenden
+# Container. Reine Config-Aenderungen erledigt der Handler (flush unten), der
+# mit --force-recreate neu erstellt.
+- name: gns-relay starten (idempotent)
+  command: >-
+    docker compose -p {{ gns_relay_compose_project }}
+    -f {{ gns_relay_deploy_dir }}/docker-compose.yml
+    up -d --remove-orphans
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Check-Mode-Hinweis (gns-relay)
+  debug:
+    msg: >-
+      check_mode: gns_probe.exe-Build, Copy und Container-Start uebersprungen —
+      {{ gns_relay_deploy_dir }} und {{ gns_relay_bin_dir }} bleiben unveraendert.
+  when: ansible_check_mode
+
+- name: Handlers flushen (Recreate bei geaenderter Routen-/Compose-Datei/EXE)
+  meta: flush_handlers
+
+# Post-Check: der Container MUSS laufen (kein stilles `ok` bei einem
+# fehlgeschlagenen Start). `docker inspect` ist read-only.
+- name: gns-relay laeuft? (docker inspect)
+  command: docker inspect --format '{{ "{{.State.Running}}" }}' {{ gns_relay_container }}
+  register: gns_relay_state
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: gns-relay laeuft (assert)
+  assert:
+    that:
+      - (gns_relay_state.stdout | default('') | trim) == 'true'
+    fail_msg: >-
+      Container {{ gns_relay_container }} laeuft nicht (docker inspect:
+      '{{ gns_relay_state.stdout | default('–') | trim }}'). Logs:
+      docker logs {{ gns_relay_container }}.
+    success_msg: "{{ gns_relay_container }} laeuft (network_mode host, UDP {{ gns_relay_port }})."
+  when: not ansible_check_mode
