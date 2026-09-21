@@ -44,7 +44,6 @@
 #include <cstring>
 #include <ctime>
 #include <deque>
-#include <map>
 #include <string>
 #include <thread>
 #include <utility>
@@ -154,10 +153,12 @@ rbroute::Endpoint g_dialTarget;
 
 // Routen: Key = Identitaetsstring (`str:…`), Suffix-Wildcard (`*-dev`) oder
 // Default (`*`) -> Backend.  Auswertung: exakt > laengster Suffix > Default.
+//
+// Bewusst KEIN gelerntes Identitaets->Backend-Caching mehr: die Identitaet ist
+// stabil pro Installation, der Spielname aber nicht.  Ein Cache fuehrte dazu,
+// dass ein Join OHNE Suffix nach einem frueheren `-staging`-Join wieder auf
+// staging landete (Default wurde ignoriert; live belegt, Issue #843).
 rbroute::Table g_routes;
-// Gelernt zur Laufzeit: Identitaet -> Backend (aus dem Spielnamen).  Damit ist
-// der zweite Join clean und ohne Replay.
-std::map<std::string, rbroute::Endpoint> g_learnedIdentity;
 const char *g_mapFile = nullptr;
 std::string g_clientIdentity;
 std::string g_lastRouteKey;
@@ -465,13 +466,10 @@ void onConnectionStatusChanged(
       g_lastRouteKey.clear();
       logLine("client-identitaet: '%s'", g_clientIdentity.c_str());
       const rbroute::Rule *rule = g_routes.matchSpecific(g_clientIdentity);
-      const auto learned = g_learnedIdentity.find(g_clientIdentity);
       if (rule != nullptr) {
-        routeTo(rule->target, "identitaet (fix)");
-      } else if (learned != g_learnedIdentity.end()) {
-        routeTo(learned->second, "identitaet (gelernt)");
+        routeTo(rule->target, "identitaet (explizite Regel)");
       } else {
-        routeTo(g_defaultTarget, "default (identitaet unbekannt)");
+        routeTo(g_defaultTarget, "default (bis der Name ihn ggf. umroutet)");
       }
     }
     break;
@@ -548,13 +546,6 @@ void drainFrom(HSteamNetPollGroup group, bool fromClient) {
         } else {
           logLine("NAME ROUTE: '%s' -> schon richtiges backend %s",
                   rule->key.c_str(), rule->target.str().c_str());
-        }
-        // Identitaet -> Backend merken: der zweite Join ist damit instant und
-        // braucht kein Replay mehr.
-        if (!g_clientIdentity.empty()) {
-          g_learnedIdentity[g_clientIdentity] = rule->target;
-          logLine("  identity-cache: %s -> %s", g_clientIdentity.c_str(),
-                  rule->target.str().c_str());
         }
       }
       queueHistoryDelta();
@@ -829,7 +820,7 @@ int main(int argc, char **argv) {
                 "ohne passende Route koennen nicht bedient werden");
       }
     }
-    logLine("RELAY-MODUS: default %s | routen=%zu | identitaet(+cache)+name",
+    logLine("RELAY-MODUS: default %s | routen=%zu | identitaet(exakt)+name",
             g_defaultTarget.str().c_str(), g_routes.size());
   }
   logLine("(E1: Status Connected erwarten | E2: Klartext-Nachrichten mit "
