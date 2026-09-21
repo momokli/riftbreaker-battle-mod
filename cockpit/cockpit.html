@@ -656,6 +656,7 @@
             <nav class="tabs" role="tablist" aria-label="Cockpit-Bereiche">
                 <button id="tab_operator" class="tab" role="tab" aria-selected="true" aria-controls="workspace">Operator</button>
                 <button id="tab_personas" class="tab" role="tab" aria-selected="false" aria-controls="persona_editor" tabindex="-1">Persona Editor</button>
+                <button id="tab_natural" class="tab" role="tab" aria-selected="false" aria-controls="natural_attack_editor" tabindex="-1">Natural Attacks</button>
             </nav>
 
             <main id="workspace" class="workspace" role="tabpanel" aria-labelledby="tab_operator">
@@ -1015,6 +1016,16 @@
                     <span id="pe_msg" aria-live="polite"></span>
                 </div>
                 <div id="pe_table"></div>
+            </section>
+
+            <!-- I. NATURAL ATTACKS EDITOR -->
+            <section id="natural_attack_editor" class="persona-editor" role="tabpanel" aria-labelledby="tab_natural" hidden>
+                <div class="flow-action-row">
+                    <button id="na_save" class="btn-primary">save</button>
+                    <button id="na_restore" class="btn-secondary">restore</button>
+                    <span id="na_msg" aria-live="polite"></span>
+                </div>
+                <div id="na_table"></div>
             </section>
 
             <!-- G. STATUS BAR -->
@@ -1721,6 +1732,7 @@
                 var TABS = [
                     ["tab_operator", "workspace"],
                     ["tab_personas", "persona_editor"],
+                    ["tab_natural", "natural_attack_editor"],
                 ];
                 function selectTab(id) {
                     TABS.forEach(function (pair) {
@@ -1735,11 +1747,16 @@
                 }
                 $("tab_operator").onclick = function () { selectTab("tab_operator"); };
                 $("tab_personas").onclick = function () { selectTab("tab_personas"); };
+                $("tab_natural").onclick = function () { selectTab("tab_natural"); };
                 $("tab_operator").onkeydown = function (e) {
                     if (e.key === "ArrowRight") selectTab("tab_personas");
                 };
                 $("tab_personas").onkeydown = function (e) {
                     if (e.key === "ArrowLeft") selectTab("tab_operator");
+                    else if (e.key === "ArrowRight") selectTab("tab_natural");
+                };
+                $("tab_natural").onkeydown = function (e) {
+                    if (e.key === "ArrowLeft") selectTab("tab_personas");
                 };
 
                 // --- persona editor (testable) ---
@@ -1849,6 +1866,60 @@
                 }
                 // --- end persona editor ---
 
+                // --- natural attack editor (testable) ---
+                function createNaturalAttackEditor(deps) {
+                    var fetchFn = deps.fetch;
+                    var doc = deps.document;
+                    var LEVELS = 9;
+
+                    var state = { rules: null, saved: null };
+
+                    function $(id) { return doc.getElementById(id); }
+                    function clone(p) { return JSON.parse(JSON.stringify(p)); }
+                    function resp(res) {
+                        if (!res || res.ok === false) throw new Error("HTTP " + (res ? res.status : "err"));
+                        return res.json();
+                    }
+                    function postJson(route, body) {
+                        return fetchFn(route, {
+                            method: "POST",
+                            headers: { "content-type": "application/json" },
+                            body: JSON.stringify(body),
+                        }).then(resp);
+                    }
+
+                    function load() {
+                        return fetchFn("natural_attack_rules").then(resp).then(function (data) {
+                            state.rules = clone(data || {});
+                            state.saved = clone(state.rules);
+                            return state;
+                        });
+                    }
+
+                    function ensureCounts() {
+                        if (!state.rules.max_attack_count || !state.rules.max_attack_count.length) {
+                            state.rules.max_attack_count = new Array(LEVELS).fill(0);
+                        }
+                    }
+                    function inc(i) { ensureCounts(); state.rules.max_attack_count[i] = (state.rules.max_attack_count[i] || 0) + 1; }
+                    function dec(i) { ensureCounts(); var v = state.rules.max_attack_count[i] || 0; if (v > 0) state.rules.max_attack_count[i] = v - 1; }
+                    function setBoss(level) { state.rules.boss_min_level = level; }
+                    function setOffset(v) { state.rules.event_offset_fraction = v; }
+                    function save() {
+                        return postJson("natural_attack_rules", state.rules).then(function () {
+                            state.saved = clone(state.rules);
+                        });
+                    }
+                    function restore() { state.rules = clone(state.saved); }
+
+                    return {
+                        state: state, load: load, inc: inc, dec: dec,
+                        setBoss: setBoss, setOffset: setOffset,
+                        save: save, restore: restore,
+                    };
+                }
+                // --- end natural attack editor ---
+
                 var personaEditor = createPersonaEditor({ document: document, fetch: window.fetch.bind(window) });
 
                 function peRender() {
@@ -1921,6 +1992,67 @@
                 }
                 peRefresh();
                 setInterval(peRefresh, 5000);
+
+                var naturalAttackEditor = createNaturalAttackEditor({ document: document, fetch: window.fetch.bind(window) });
+
+                function naRender() {
+                    var r = naturalAttackEditor.state.rules || {};
+                    var boss = (r.boss_min_level === null || r.boss_min_level === undefined) ? 0 : r.boss_min_level;
+                    var html = [];
+                    html.push('<table class="persona-table">');
+                    html.push('<caption class="visually-hidden">Natural Attacks: Difficulty-Level 1-9 mit Attack-Count und Boss</caption>');
+                    html.push('<thead><tr><th scope="col">Level</th><th scope="col">Attack Count</th><th scope="col">Boss ab</th></tr></thead><tbody>');
+                    for (var i = 0; i < 9; i++) {
+                        var level = i + 1;
+                        var amt = (r.max_attack_count && r.max_attack_count[i]) || 0;
+                        html.push('<tr><th scope="row">' + level + '</th>');
+                        html.push('<td><button class="pe-btn" data-act="dec" data-level="' + i + '"' + (amt === 0 ? " disabled" : "") + '>−</button> <span class="wave-amt">×' + amt + '</span> <button class="pe-btn" data-act="inc" data-level="' + i + '">+</button></td>');
+                        html.push('<td><select class="mono" data-act="boss" aria-label="Boss ab Level ' + level + '">');
+                        html.push('<option value=""' + (boss === 0 ? " selected" : "") + '>none</option>');
+                        for (var b = 1; b <= 9; b++) html.push('<option value="' + b + '"' + (boss === b ? " selected" : "") + '>' + b + '</option>');
+                        html.push('</select></td></tr>');
+                    }
+                    html.push('</tbody></table>');
+                    var off = (r.event_offset_fraction !== undefined && r.event_offset_fraction !== null) ? r.event_offset_fraction : 0.35;
+                    html.push('<div class="flow-action-row"><label class="prop-label" for="na_offset">event offset (fraction)</label><input id="na_offset" class="mono" size="6" value="' + off + '" aria-label="Event offset fraction"></div>');
+                    var nEvents = (r.creature_events && r.creature_events.length) || 0;
+                    html.push('<div class="flow-action-row"><span class="prop-label">creature events</span><span class="wave-amt">' + nEvents + ' Bänder</span></div>');
+                    $("na_table").innerHTML = html.join("");
+                }
+
+                $("na_table").addEventListener("click", function (e) {
+                    var el = e.target;
+                    if (!el || !el.getAttribute || !el.getAttribute("data-act")) return;
+                    var act = el.getAttribute("data-act");
+                    var level = parseInt(el.getAttribute("data-level"), 10);
+                    if (act === "inc") naturalAttackEditor.inc(level);
+                    else if (act === "dec") naturalAttackEditor.dec(level);
+                    naRender();
+                });
+
+                $("na_table").addEventListener("change", function (e) {
+                    var el = e.target;
+                    if (el && el.getAttribute && el.getAttribute("data-act") === "boss") {
+                        naturalAttackEditor.setBoss(el.value === "" ? null : parseInt(el.value, 10));
+                    } else if (el && el.id === "na_offset") {
+                        var v = parseFloat(el.value);
+                        if (!isNaN(v) && v > 0 && v < 1) naturalAttackEditor.setOffset(v);
+                    }
+                });
+
+                $("na_save").onclick = function () {
+                    naturalAttackEditor.save().then(function () { $("na_msg").textContent = "gespeichert"; }).catch(function (err) { $("na_msg").textContent = "ERR " + err.message; });
+                };
+                $("na_restore").onclick = function () {
+                    naturalAttackEditor.restore();
+                    naRender();
+                };
+
+                function naRefresh() {
+                    naturalAttackEditor.load().then(function () { naRender(); }).catch(function (err) { $("na_msg").textContent = "ERR " + err.message; });
+                }
+                naRefresh();
+                setInterval(naRefresh, 5000);
             })();
         </script>
     </body>

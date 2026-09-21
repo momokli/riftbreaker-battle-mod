@@ -1,0 +1,9 @@
+{
+  "name": "natural-attack-editor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Web-UI-Test fuer den Natural-Attacks-Editor (Difficulty 1-9 x attack-count/boss): load/inc/dec/setBoss/setOffset/save/restore. Keine Dependencies, kein Netzwerk.",
+  "scripts": {
+    "test": "node --test"
+  }
+}

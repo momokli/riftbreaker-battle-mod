@@ -53,6 +53,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import threading
 import time
 import urllib.error
@@ -106,43 +107,70 @@ WAVE_LOGIC = {
 # attack_boss_dynamic.logic; see research #750). Ein Aufruf = EIN Boss.
 BOSS_LOGIC = "logic/missions/survival/attack_boss_dynamic.logic"
 
+# Creature-Attack-Events (rules.gameEvents, jungle default; docs/research/
+# 798-event-level.md §4.2, docs/DOM_REPLICA.md §2 #10). Mini-Kreaturen-Attacks
+# (shegret/kermon/phirian), die in der IDLE-Phase (ZWISCHEN den Haupt-Attacks)
+# feuern; ihre `attack_strength` eskaliert mit dem Event-Level. Ein Eintrag = ein
+# (level-band, strength)-Paar; dieselbe logicFile mit anderem attack_strength
+# schaltet logic_switch_on_value_1 auf die haertere Route (der „Bonus ab
+# Level 5/6/8"). attack_strength=None = kein Binding (phirian).
+#
+#   name             Anzeigename (fuer Status/History)
+#   logic            logicFile (logic/event/<family>_attack.logic)
+#   min_level/max_level  Event-Level-Band (inclusive)
+#   attack_strength  "normal"|"hard"|"very_hard"|None
+#   weight           GetEventByWeight-Gewicht (weighted random)
+CREATURE_ATTACK_EVENTS = [
+    {"name": "shegret_attack", "logic": "logic/event/shegret_attack.logic",
+     "min_level": 2, "max_level": 4, "attack_strength": "normal", "weight": 3},
+    {"name": "shegret_attack", "logic": "logic/event/shegret_attack.logic",
+     "min_level": 5, "max_level": 7, "attack_strength": "hard", "weight": 3},
+    {"name": "shegret_attack", "logic": "logic/event/shegret_attack.logic",
+     "min_level": 8, "max_level": 9, "attack_strength": "very_hard", "weight": 3},
+    {"name": "kermon_attack", "logic": "logic/event/kermon_attack.logic",
+     "min_level": 4, "max_level": 5, "attack_strength": "normal", "weight": 1},
+    {"name": "kermon_attack", "logic": "logic/event/kermon_attack.logic",
+     "min_level": 6, "max_level": 7, "attack_strength": "hard", "weight": 1},
+    {"name": "kermon_attack", "logic": "logic/event/kermon_attack.logic",
+     "min_level": 8, "max_level": 9, "attack_strength": "very_hard", "weight": 1},
+    {"name": "phirian_attack", "logic": "logic/event/phirian_attack.logic",
+     "min_level": 3, "max_level": 9, "attack_strength": None, "weight": 1},
+]
+# Event feuert im prepare_spawn-Fenster bei 35% (Base Game: 126s von 360s,
+# dom_manager.lua idleTimeEventMul). Unser flacher interval_s ersetzt das
+# prepare-Fenster -> Event bei `next_attack_at - fraction * interval_s`.
+DEFAULT_EVENT_OFFSET_FRACTION = 0.35
+
 # Wellen-Feuer-Regeln je Difficulty-Level (1..9), Spiegel der Base-Game-DOM
 # (client-mod/lua/missions/survival/v2/dom_survival_jungle_rules_default.lua +
 # _normal.lua). Escalation/Timing lebt separat im Difficulty-Timer
 # (Issue #778/#800); hier nur die FEUER-Dimensionen.
 #
 #   max_attack_count  rules.maxAttackCountPerDifficulty — Natural-Wellen je Attack
-#   boss_min_level    ab diesem Level feuert zusaetzlich EIN Boss
-#                     (rules.bosses -> attack_boss_dynamic.logic). "ab 8/9" -> 8.
-#   extra_min_level   ab diesem Level feuern Extra-Wellen (rules.extraWaves,
-#                     "stronger_attack"-Event). None = aus (Event ist random,
-#                     Event-Manager-Spike noch offen, docs/DOM_REPLICA.md §7.2).
-#   extra_count       Anzahl Extra-Wellen je Attack (Base-Game-Event amount=2).
-#   mp_min_level      ab diesem Level feuert ein MP-Elite-Boss
-#                     (rules.multiplayerWaves). None = aus (Solo-first,
-#                     "MP-Wellen als spaeterer Schritt", §7.7). Solo-Schwellen
-#                     aus research #750 waeren default=6 / normal=7.
+#   boss_min_level    ab diesem Level feuert zusaetzlich EIN Elite-Boss
+#                     (rules.multiplayerWaves -> attack_boss_dynamic.logic),
+#                     Coop-Schwelle (playersCounter>1): default=2, normal=5
+#                     (GetMultiplayerAttackCount: clamp(additionalWaves+1,0,1)).
+#                     rules.bosses (boss_attack) und rules.extraWaves
+#                     (stronger_attack) tragen gameStates="ATTACK|STREAMING"
+#                     (STREAMING ohne NO_STREAMING) -> nur mit Streaming-Session
+#                     -> im Non-Streaming-Match NICHT gefeuert.
 #
-# Refs: docs/DOM_REPLICA.md §2/§3.3, docs/research/213-wave-richtwert.md,
+# Refs: docs/DOM_REPLICA.md §2/§3.3, docs/research/boss-spawn-mechanik.md,
+# docs/research/213-wave-richtwert.md,
 # docs/research/736-wellen-hp-pool-vollstaendig.md,
 # docs/research/multiplayer-additional-boss-wave.md.
 DIFFICULTY_RULES = {
     "default": {
         "max_attack_count": [1, 2, 2, 3, 3, 3, 3, 3, 4],
-        "boss_min_level": 8,
-        "extra_min_level": None,
-        "extra_count": 0,
-        "mp_min_level": None,
+        "boss_min_level": 2,
     },
     "normal": {
         "max_attack_count": [1, 2, 2, 2, 2, 2, 3, 3, 3],
-        "boss_min_level": 8,
-        "extra_min_level": None,
-        "extra_count": 0,
-        "mp_min_level": None,
+        "boss_min_level": 5,
     },
 }
-DEFAULT_DIFFICULTY_PROFILE = "default"
+DEFAULT_DIFFICULTY_PROFILE = "normal"
 
 
 def parse_hq_alive(raw: str) -> bool:
@@ -211,6 +239,74 @@ def _expand_counts(counts) -> List[int]:
     return levels
 
 
+def _normalize_creature_events(events) -> List[Dict[str, Any]]:
+    """Normalisiert eine Creature-Attack-Event-Liste auf den internen Shape.
+
+    Erwartet eine Liste von dicts mit: name (str), logic (str),
+    min_level/max_level (int >= 1, min <= max), attack_strength
+    ("normal"|"hard"|"very_hard"|None), weight (num > 0). Wirft ValueError bei
+    ungueltigem Format.
+    """
+    if not isinstance(events, (list, tuple)):
+        raise ValueError("creature_events muss eine Liste sein")
+    out: List[Dict[str, Any]] = []
+    for e in events:
+        if not isinstance(e, dict):
+            raise ValueError("creature_events: Eintrag muss ein Objekt sein")
+        name = e.get("name")
+        logic = e.get("logic")
+        if (not isinstance(name, str) or not name
+                or not isinstance(logic, str) or not logic):
+            raise ValueError("creature_events: name/logic muessen nicht-leere Strings sein")
+        lo = e.get("min_level")
+        hi = e.get("max_level")
+        if (isinstance(lo, bool) or not isinstance(lo, int)
+                or isinstance(hi, bool) or not isinstance(hi, int)
+                or lo < 1 or hi < lo):
+            raise ValueError("creature_events: min/max_level invalide")
+        strength = e.get("attack_strength")
+        if strength is not None and (
+            not isinstance(strength, str)
+            or strength not in ("normal", "hard", "very_hard")
+        ):
+            raise ValueError(
+                "creature_events: attack_strength muss normal/hard/very_hard/None sein"
+            )
+        w = e.get("weight", 1)
+        if isinstance(w, bool) or not isinstance(w, (int, float)) or w <= 0:
+            raise ValueError("creature_events: weight muss > 0 sein")
+        out.append({
+            "name": name,
+            "logic": logic,
+            "min_level": lo,
+            "max_level": hi,
+            "attack_strength": strength,
+            "weight": float(w),
+        })
+    return out
+
+
+def _pick_creature_event(level, events, rng) -> Optional[Dict[str, Any]]:
+    """Weighted-random Auswahl eines Creature-Attack-Events fuer `level`.
+
+    Filtert nach min_level <= level <= max_level und gewichtet per weight
+    (GetEventByWeight). Liefert None, wenn kein Event fuer dieses Level
+    existiert (z. B. Level 1). `rng` ist ein Callable -> float in [0,1)
+    (injizierbar fuer deterministische Tests).
+    """
+    pool = [e for e in events if e["min_level"] <= level <= e["max_level"]]
+    if not pool:
+        return None
+    total = sum(e["weight"] for e in pool)
+    r = rng() * total
+    acc = 0.0
+    for e in pool:
+        acc += e["weight"]
+        if r < acc:
+            return e
+    return pool[-1]
+
+
 def _normalize_difficulty_rules(rules, max_level: int) -> Dict[str, Any]:
     """Normalisiert eine Difficulty-Rules-Struktur auf den internen Shape.
 
@@ -248,16 +344,9 @@ def _normalize_difficulty_rules(rules, max_level: int) -> Dict[str, Any]:
             raise ValueError(f"{key} muss ein int >= 1 oder None sein")
         return v
 
-    extra_count = rules.get("extra_count", 0)
-    if isinstance(extra_count, bool) or not isinstance(extra_count, int) or extra_count < 0:
-        raise ValueError("extra_count muss ein nicht-negativer int sein")
-
     return {
         "max_attack_count": norm_counts,
         "boss_min_level": _level_or_none("boss_min_level"),
-        "extra_min_level": _level_or_none("extra_min_level"),
-        "extra_count": extra_count,
-        "mp_min_level": _level_or_none("mp_min_level"),
     }
 
 def _normalize_difficulty_schedule(schedule, n_steps: int) -> Optional[List[float]]:
@@ -335,9 +424,12 @@ class AttackCycle:
         timeout: float = 30.0,
         difficulty_profile: str = DEFAULT_DIFFICULTY_PROFILE,
         difficulty_rules: Optional[Dict[str, Any]] = None,
+        creature_events: Optional[List[Dict[str, Any]]] = None,
+        event_offset_fraction: float = DEFAULT_EVENT_OFFSET_FRACTION,
         _poster: Optional[Callable[[str, bytes], tuple]] = None,
         _getter: Optional[Callable[[str], tuple]] = None,
         _clock: Callable[[], float] = time.monotonic,
+        _rng: Callable[[], float] = random.random,
     ):
         self.base_url = base_url.rstrip("/")
         self.interval_s = interval_s
@@ -375,18 +467,27 @@ class AttackCycle:
             rules = DIFFICULTY_RULES.get(difficulty_profile, DIFFICULTY_RULES[DEFAULT_DIFFICULTY_PROFILE])
         self.difficulty_profile = difficulty_profile if difficulty_rules is None else "<custom>"
         self.difficulty_rules = _normalize_difficulty_rules(rules, max_level)
+        # Creature-Attack-Events (Event-Layer #816): konfigurierbar via
+        # `creature_events`, Default = die Base-Game-Bänder (jungle default).
+        self.creature_events = _normalize_creature_events(
+            creature_events if creature_events is not None else CREATURE_ATTACK_EVENTS
+        )
+        self.event_offset_s = interval_s * float(event_offset_fraction)
         self._poster = _poster or self._http_post
         self._getter = _getter or self._http_get
         self._clock = _clock
+        self._rng = _rng
 
         self._lock = threading.Lock()
         self.active = False
         self.level = 1
         self.next_attack_at: Optional[float] = None
         self.next_difficulty_at: Optional[float] = None
+        self.next_event_at: Optional[float] = None
         self.orders: list = []  # unbezahlte Buy-Orders (order list)
         self.bought: list = []  # bezahlte Wellen (bought queue, feuert als naechstes)
         self.last_fire: Optional[Dict[str, Any]] = None
+        self.last_event: Optional[Dict[str, Any]] = None
         self.attack_index = 0  # Anzahl gefeuerter Attacken (Persona-Indexierung)
         self.outgoing: list = []  # getrackte Outgoing-Sends (send_yourself off)
         self.history: list = []  # letzte N gefeuerte Attacken (fuer Attack-Cycle-Tabelle)
@@ -513,26 +614,38 @@ class AttackCycle:
         )
         print(f"[attack-cycle] fire boss logic={BOSS_LOGIC} -> HTTP {status} {body[:120]}", flush=True)
 
+    def _fire_event(self, logic: str, attack_strength: Optional[str]) -> None:
+        """Feuert einen Creature-Attack-Event (logic/event/<family>_attack.logic).
+
+        `attack_strength` (normal/hard/very_hard) wird als Binding-Parameter im
+        Database-Payload gesetzt (activate_mission_flow, #814) und schaltet
+        logic_switch_on_value_1 auf die haertere Route. None = kein Binding
+        (phirian).
+        """
+        payload: Dict[str, Any] = {"logic": logic, "mode": "default"}
+        if attack_strength:
+            payload["attack_strength"] = attack_strength
+        status, body = self._post_json("/activate_mission_flow", payload)
+        print(
+            f"[attack-cycle] fire event logic={logic} "
+            f"attack_strength={attack_strength or '-'} -> HTTP {status} {body[:120]}",
+            flush=True,
+        )
+
     def _wave_plan(self, level: int) -> Dict[str, Any]:
         """Wellen-Komposition fuer EINE Attack auf `level` (Base-Game-DOM).
 
-        Liefert dict mit natural_count (Natural-Wellen), boss (bool),
-        extra_count (Extra-Wellen) und mp (bool, Elite-Boss). Die Schwellen
-        stammen aus self.difficulty_rules (konfigurierbar, s. DIFFICULTY_RULES).
+        Liefert dict mit natural_count (Natural-Wellen) und boss (bool,
+        Elite-Boss via rules.multiplayerWaves). Die Schwellen stammen aus
+        self.difficulty_rules (konfigurierbar, s. DIFFICULTY_RULES).
         """
         rules = self.difficulty_rules
         counts = rules["max_attack_count"]
         natural_count = counts[min(level - 1, len(counts) - 1)]
         boss = rules["boss_min_level"] is not None and level >= rules["boss_min_level"]
-        extra_min = rules["extra_min_level"]
-        extra = extra_min is not None and level >= extra_min
-        extra_count = rules["extra_count"] if extra else 0
-        mp = rules["mp_min_level"] is not None and level >= rules["mp_min_level"]
         return {
             "natural_count": natural_count,
             "boss": boss,
-            "extra_count": extra_count,
-            "mp": mp,
         }
 
     def _difficulty_duration(self, level: int) -> float:
@@ -553,6 +666,7 @@ class AttackCycle:
                     self.level = 1
                     self.next_attack_at = now + self.interval_s
                     self.next_difficulty_at = now + self._difficulty_duration(1)
+                    self.next_event_at = now + self.interval_s - self.event_offset_s
                 print(
                     f"[attack-cycle] HQ gebaut -> Zyklus gestartet (Level 1, "
                     f"Angriff in {self.interval_s:.0f}s, "
@@ -572,6 +686,34 @@ class AttackCycle:
                 self.next_difficulty_at += self._difficulty_duration(self.level)
                 print(f"[attack-cycle] difficulty erhoeht -> level {self.level}", flush=True)
 
+        # Creature-Attack-Event-Layer (#816): ein Event pro Attack-Zyklus, im
+        # prepare-Fenster (event_offset_s vor der naechsten Attack). Das Event-
+        # Level = aktuelles Difficulty-Level (self.level), synchron wie
+        # currentEventLevel im Base Game (event_manager.lua / dom_manager.lua).
+        event = None
+        event_level = self.level
+        with self._lock:
+            if self.next_event_at is not None and now >= self.next_event_at:
+                event_level = self.level
+                event = _pick_creature_event(
+                    event_level, self.creature_events, self._rng
+                )
+                self.next_event_at += self.interval_s
+        if event is not None:
+            self._fire_event(event["logic"], event["attack_strength"])
+            with self._lock:
+                self.last_event = {
+                    "name": event["name"],
+                    "attack_strength": event["attack_strength"],
+                    "level": event_level,
+                    "t": now,
+                }
+            print(
+                f"[attack-cycle] event: {event['name']} "
+                f"strength={event['attack_strength'] or '-'} level={event_level}",
+                flush=True,
+            )
+
         with self._lock:
             if self.next_attack_at is None or now < self.next_attack_at:
                 return None
@@ -589,10 +731,6 @@ class AttackCycle:
             self._fire(natural_level)
         if plan["boss"]:
             self._fire_boss()
-        for _ in range(plan["extra_count"]):
-            self._fire(natural_level)
-        if plan["mp"]:
-            self._fire_boss()
         for lvl in extra_levels:
             self._fire(lvl)
         for lvl in sent_levels:
@@ -602,8 +740,6 @@ class AttackCycle:
                 "natural_level": natural_level,
                 "natural_count": plan["natural_count"],
                 "boss": plan["boss"],
-                "extra_count": plan["extra_count"],
-                "mp": plan["mp"],
                 "persona_levels": extra_levels,
                 "sent_levels": sent_levels,
                 "t": now,
@@ -614,7 +750,6 @@ class AttackCycle:
                     "natural": natural_level,
                     "natural_count": plan["natural_count"],
                     "boss": plan["boss"],
-                    "mp": plan["mp"],
                     "self": sent_levels,
                     "enemy": extra_levels,
                     "t": now,
@@ -623,7 +758,7 @@ class AttackCycle:
             self.history = self.history[-10:]  # cap auf die letzten 10 Attacken
         print(
             f"[attack-cycle] attack: natural={natural_level}x{plan['natural_count']} "
-            f"boss={plan['boss']} extra={plan['extra_count']} mp={plan['mp']} "
+            f"boss={plan['boss']} "
             f"+ persona={extra_levels} + sent={sent_levels}",
             flush=True,
         )
@@ -641,6 +776,9 @@ class AttackCycle:
                 ),
                 "seconds_to_next_difficulty": (
                     max(0.0, self.next_difficulty_at - now) if self.next_difficulty_at is not None else None
+                ),
+                "seconds_to_next_event": (
+                    max(0.0, self.next_event_at - now) if self.next_event_at is not None else None
                 ),
                 "bought": list(self.bought),
                 "orders": list(self.orders),
@@ -665,6 +803,7 @@ class AttackCycle:
                 },
                 "history": list(self.history),
                 "last_fire": self.last_fire,
+                "last_event": self.last_event,
             }
 
     # --- Status an die Bridge pushen (WebUI) ----------------------------
@@ -755,12 +894,14 @@ class AttackCycle:
             self.level = 1
             self.next_attack_at = None
             self.next_difficulty_at = None
+            self.next_event_at = None
             self.orders = []
             self.bought = []
             self.attack_index = 0
             self.outgoing = []
             self.history = []
             self.last_fire = None
+            self.last_event = None
         print("[attack-cycle] reset -> warte auf HQ-Bau", flush=True)
 
     def sync_reset(self) -> None:
@@ -814,6 +955,67 @@ class AttackCycle:
                 self.persona = levels
                 self.persona_name = active if levels is not None else ""
                 self.send_yourself = send_yourself
+        except Exception:
+            pass
+
+    def sync_natural_attack_rules(self) -> None:
+        """Pollt GET /natural_attack_rules und uebernimmt die Natural-Attack-
+        Dimensionen (Attack-Count/Boss je Level, Creature-Events, Event-Offset).
+
+        Die Bridge haelt die vollstaendig konfigurierbaren Dimensionen
+        (Issue #819); CLI-Flags/Profil sind nur der Start-Fallback. Jede
+        Dimension wird einzeln validiert und nur bei gueltigem Format
+        uebernommen (ungueltig -> alter Wert bleibt).
+        """
+        try:
+            status, body = self._getter("/natural_attack_rules")
+            if not 200 <= status < 300:
+                return
+            data = json.loads(body)
+            if not isinstance(data, dict):
+                return
+
+            # difficulty_rules: max_attack_count + boss_min_level.
+            new_rules = None
+            if "max_attack_count" in data:
+                try:
+                    new_rules = _normalize_difficulty_rules(
+                        {
+                            "max_attack_count": data.get("max_attack_count"),
+                            "boss_min_level": data.get("boss_min_level"),
+                        },
+                        self.max_level,
+                    )
+                except ValueError:
+                    new_rules = None
+
+            # creature_events: Liste von Event-Bändern.
+            new_events = None
+            raw_events = data.get("creature_events")
+            if isinstance(raw_events, list):
+                try:
+                    new_events = _normalize_creature_events(raw_events)
+                except ValueError:
+                    new_events = None
+
+            # event_offset_fraction: Anteil des Intervalls vor der Attack.
+            new_fraction = None
+            raw_fraction = data.get("event_offset_fraction")
+            if (
+                isinstance(raw_fraction, (int, float))
+                and not isinstance(raw_fraction, bool)
+                and 0.0 < raw_fraction < 1.0
+            ):
+                new_fraction = float(raw_fraction)
+
+            with self._lock:
+                if new_rules is not None:
+                    self.difficulty_rules = new_rules
+                    self.difficulty_profile = "<bridge>"
+                if new_events is not None:
+                    self.creature_events = new_events
+                if new_fraction is not None:
+                    self.event_offset_s = self.interval_s * new_fraction
         except Exception:
             pass
 
@@ -881,6 +1083,7 @@ def run(
             cycle.sync_difficulty_interval()
             cycle.sync_reset()
             cycle.sync_personas()
+            cycle.sync_natural_attack_rules()
             cycle.push_status()
             if once:
                 break

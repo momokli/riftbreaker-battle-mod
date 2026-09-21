@@ -15,6 +15,7 @@ import unittest
 from attack_cycle import (
     AttackCycle,
     BOSS_LOGIC,
+    CREATURE_ATTACK_EVENTS,
     DEFAULT_DIFFICULTY_PROFILE,
     DIFFICULTY_RULES,
     DEFAULT_DIFFICULTY_INTERVAL_FIRST_S,
@@ -22,6 +23,8 @@ from attack_cycle import (
     _expand_counts,
     _normalize_counts,
     _normalize_difficulty_rules,
+    _normalize_creature_events,
+    _pick_creature_event,
     load_personas,
     parse_hq_alive,
     parse_send_level,
@@ -258,6 +261,7 @@ class TestAttackCycleDifficultyTimer(unittest.TestCase):
             interval_s=interval,
             difficulty_interval_first_s=difficulty_interval_first,
             difficulty_schedule=difficulty_schedule,
+            creature_events=[],  # Event-Layer aus (reiner Difficulty-/Wellen-Pfad)
             _poster=poster,
             _clock=clock or FakeClock(),
         )
@@ -334,7 +338,7 @@ class TestAttackCycleDifficultyTimer(unittest.TestCase):
         self.assertEqual(cycle.level, 2)
         logic_calls = [c for c in poster.calls if c[0] == "/activate_mission_flow"]
         # Attack-Count (#802): Level 2 feuert maxAttackCountPerDifficulty[2] = 2
-        # Natural-Wellen (Default-Profil).
+        # Natural-Wellen (normal: Boss erst ab L5).
         self.assertEqual(len(logic_calls), 2)
         self.assertIn("attack_level_2_id_1.logic", logic_calls[0][1].decode())
 
@@ -613,6 +617,73 @@ class TestSyncPersonas(unittest.TestCase):
         self.assertTrue(cycle.send_yourself)
 
 
+class TestSyncNaturalAttackRules(unittest.TestCase):
+    """sync_natural_attack_rules(): pollt GET /natural_attack_rules (Bridge)
+    und uebernimmt Attack-Count/Boss je Level + Creature-Events + Event-Offset
+    zur Laufzeit (Issue #819)."""
+
+    def _cycle(self, getter_resp):
+        return AttackCycle(
+            "http://127.0.0.1:9001",
+            interval_s=420.0,
+            difficulty_interval_first_s=1e9,
+            _poster=FakePoster('{"ok":true,"hq_hp":100.0}'),
+            _getter=lambda path: (200, getter_resp),
+            _clock=FakeClock(),
+        )
+
+    def _rules_json(self, **overrides):
+        base = {
+            "max_attack_count": [1, 1, 1, 1, 1, 1, 1, 1, 1],
+            "boss_min_level": 2,
+            "creature_events": [
+                {"name": "shegret_attack",
+                 "logic": "logic/event/shegret_attack.logic",
+                 "min_level": 2, "max_level": 4,
+                 "attack_strength": "normal", "weight": 3},
+            ],
+            "event_offset_fraction": 0.5,
+        }
+        base.update(overrides)
+        return json.dumps(base)
+
+    def test_applies_rules(self):
+        cycle = self._cycle(self._rules_json())
+        cycle.sync_natural_attack_rules()
+        self.assertEqual(cycle.difficulty_rules["max_attack_count"], [1] * 9)
+        self.assertEqual(cycle.difficulty_rules["boss_min_level"], 2)
+        self.assertEqual(len(cycle.creature_events), 1)
+        self.assertEqual(cycle.creature_events[0]["attack_strength"], "normal")
+        self.assertEqual(cycle.event_offset_s, 210.0)  # 420 * 0.5
+
+    def test_boss_none_supported(self):
+        cycle = self._cycle(self._rules_json(boss_min_level=None))
+        cycle.sync_natural_attack_rules()
+        self.assertIsNone(cycle.difficulty_rules["boss_min_level"])
+
+    def test_invalid_attack_count_ignored(self):
+        cycle = self._cycle(self._rules_json(max_attack_count="nope"))
+        before = cycle.difficulty_rules["max_attack_count"]
+        cycle.sync_natural_attack_rules()
+        self.assertEqual(cycle.difficulty_rules["max_attack_count"], before)
+
+    def test_invalid_events_ignored(self):
+        cycle = self._cycle(self._rules_json(creature_events="nope"))
+        before = len(cycle.creature_events)
+        cycle.sync_natural_attack_rules()
+        self.assertEqual(len(cycle.creature_events), before)
+
+    def test_non_200_ignored(self):
+        cycle = AttackCycle(
+            "http://127.0.0.1:9001",
+            _poster=FakePoster('{"ok":true,"hq_hp":100.0}'),
+            _getter=lambda path: (500, '{"ok":false}'),
+        )
+        before = cycle.difficulty_rules["max_attack_count"]
+        cycle.sync_natural_attack_rules()
+        self.assertEqual(cycle.difficulty_rules["max_attack_count"], before)
+
+
 class TestTimersAndPreview(unittest.TestCase):
     def test_sync_difficulty_interval(self):
         def poster(path, body):
@@ -719,33 +790,28 @@ class TestDifficultyRules(unittest.TestCase):
             _normalize_difficulty_rules({"boss_min_level": 0}, max_level=9)
 
     def test_wave_plan_default_curve(self):
-        cycle = AttackCycle("http://x", _poster=lambda *a: (200, "{}"))
+        cycle = AttackCycle("http://x", difficulty_profile="default", _poster=lambda *a: (200, "{}"))
         self.assertEqual(cycle._wave_plan(1)["natural_count"], 1)
         self.assertEqual(cycle._wave_plan(2)["natural_count"], 2)
         self.assertEqual(cycle._wave_plan(9)["natural_count"], 4)
 
-    def test_wave_plan_boss_extra_mp_thresholds(self):
+    def test_wave_plan_normal_curve(self):
+        cycle = AttackCycle("http://x", _poster=lambda *a: (200, "{}"))
+        self.assertEqual(cycle._wave_plan(9)["natural_count"], 3)
+
+    def test_wave_plan_boss_threshold(self):
         rules = {
             "max_attack_count": [1] * 9,
-            "boss_min_level": 8,
-            "extra_min_level": 3,
-            "extra_count": 2,
-            "mp_min_level": 6,
+            "boss_min_level": 2,
         }
         cycle = AttackCycle("http://x", difficulty_rules=rules, _poster=lambda *a: (200, "{}"))
-        self.assertEqual(
-            cycle._wave_plan(7), {"natural_count": 1, "boss": False, "extra_count": 2, "mp": True}
-        )
-        self.assertEqual(
-            cycle._wave_plan(8), {"natural_count": 1, "boss": True, "extra_count": 2, "mp": True}
-        )
-        self.assertEqual(
-            cycle._wave_plan(2), {"natural_count": 1, "boss": False, "extra_count": 0, "mp": False}
-        )
+        self.assertEqual(cycle._wave_plan(1), {"natural_count": 1, "boss": False})
+        self.assertEqual(cycle._wave_plan(2), {"natural_count": 1, "boss": True})
+        self.assertEqual(cycle._wave_plan(9), {"natural_count": 1, "boss": True})
 
 
 class TestWaveFiring(unittest.TestCase):
-    """Feuer-Pfad: Attack-Count, Boss, Extra- und MP-Wellen (Issue #802).
+    """Feuer-Pfad: Attack-Count + Elite-Boss (Issue #802).
     Der Difficulty-Timer bleibt bewusst riesig (1e9); das Level wird pro Test
     direkt gesetzt, um die FEUER-Komposition deterministisch zu pruefen."""
 
@@ -757,6 +823,7 @@ class TestWaveFiring(unittest.TestCase):
             difficulty_interval_subsequent_s=1e9,
             difficulty_profile=difficulty_profile,
             difficulty_rules=difficulty_rules,
+            creature_events=[],  # Event-Layer aus (reiner Wellen-Feuer-Pfad)
             _poster=poster,
             _clock=clock or FakeClock(),
         )
@@ -774,10 +841,10 @@ class TestWaveFiring(unittest.TestCase):
         clock.t = 420.0
         cycle.step()  # attack
         logics = self._fire_logics(poster)
-        # 4 Natural-Wellen + 1 Boss (boss_min_level=8).
-        self.assertEqual(logics.count("logic/missions/survival/attack_level_8_id_1.logic"), 4)
+        # 3 Natural-Wellen + 1 Boss (normal: maxAttackCount[9]=3, Boss ab L5).
+        self.assertEqual(logics.count("logic/missions/survival/attack_level_8_id_1.logic"), 3)
         self.assertEqual(logics.count(BOSS_LOGIC), 1)
-        self.assertEqual(len(logics), 5)
+        self.assertEqual(len(logics), 4)
 
     def test_normal_profile_fires_two_waves_at_level_2(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
@@ -791,64 +858,29 @@ class TestWaveFiring(unittest.TestCase):
         self.assertEqual(len(logics), 2)
         self.assertEqual(logics.count("logic/missions/survival/attack_level_2_id_1.logic"), 2)
 
-    def test_fires_boss_at_level_8(self):
+    def test_fires_boss_at_level_5(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, clock=clock)
         cycle.step()  # started
-        cycle.level = 8
+        cycle.level = 5
         clock.t = 420.0
         cycle.step()  # attack
         logics = self._fire_logics(poster)
-        # Level 8: 3 Natural-Wellen + 1 Boss.
-        self.assertEqual(len(logics), 4)
+        # Level 5 (normal): 2 Natural-Wellen + 1 Elite-Boss.
+        self.assertEqual(len(logics), 3)
         self.assertEqual(logics.count(BOSS_LOGIC), 1)
-        self.assertEqual(logics.count("logic/missions/survival/attack_level_8_id_1.logic"), 3)
+        self.assertEqual(logics.count("logic/missions/survival/attack_level_5_id_1.logic"), 2)
 
-    def test_no_boss_below_level_8(self):
+    def test_no_boss_below_level_5(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
         cycle = self._cycle(poster, clock=clock)
         cycle.step()  # started
-        cycle.level = 7
+        cycle.level = 4
         clock.t = 420.0
         cycle.step()  # attack
         self.assertEqual(self._fire_logics(poster).count(BOSS_LOGIC), 0)
-
-    def test_fires_extra_and_mp_waves_when_configured(self):
-        rules = {
-            "max_attack_count": [1] * 9,
-            "boss_min_level": None,
-            "extra_min_level": 3,
-            "extra_count": 2,
-            "mp_min_level": 6,
-        }
-        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
-        clock = FakeClock(0.0)
-        cycle = self._cycle(poster, difficulty_rules=rules, clock=clock)
-        cycle.step()  # started
-        cycle.level = 7
-        clock.t = 420.0
-        cycle.step()  # attack
-        logics = self._fire_logics(poster)
-        # 1 Natural (level 7) + 2 Extra (level 7) + 1 MP-Elite-Boss.
-        self.assertEqual(len(logics), 4)
-        self.assertEqual(logics.count("logic/missions/survival/attack_level_7_id_1.logic"), 3)
-        self.assertEqual(logics.count(BOSS_LOGIC), 1)
-
-    def test_extra_and_mp_off_by_default(self):
-        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
-        clock = FakeClock(0.0)
-        cycle = self._cycle(poster, clock=clock)
-        cycle.step()  # started
-        cycle.level = 9
-        clock.t = 420.0
-        cycle.step()  # attack
-        logics = self._fire_logics(poster)
-        # Default-Profil: keine Extra-Wellen (random Event) und kein MP-Boss
-        # (Solo-first, spaeterer Schritt). Nur 4 Natural + 1 Boss (Level 9).
-        self.assertEqual(len(logics), 5)
-        self.assertEqual(logics.count(BOSS_LOGIC), 1)
 
     def test_last_fire_reports_wave_composition(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
@@ -861,8 +893,116 @@ class TestWaveFiring(unittest.TestCase):
         lf = cycle.last_fire
         self.assertEqual(lf["natural_count"], 3)
         self.assertTrue(lf["boss"])
-        self.assertEqual(lf["extra_count"], 0)
-        self.assertFalse(lf["mp"])
+
+
+class TestCreatureAttackEvents(unittest.TestCase):
+    """Creature-Attack-Event-Layer (Issue #816): Auswahl + Eskalation + Timing."""
+
+    def _cycle(self, poster, clock=None, rng=None, creature_events=None):
+        return AttackCycle(
+            "http://127.0.0.1:9001",
+            interval_s=420.0,
+            difficulty_interval_first_s=1e9,
+            difficulty_interval_subsequent_s=1e9,
+            creature_events=creature_events,
+            _poster=poster,
+            _clock=clock or FakeClock(),
+            _rng=rng or (lambda: 0.0),
+        )
+
+    def _fire_calls(self, poster):
+        return [json.loads(c[1].decode()) for c in poster.calls if c[0] == "/activate_mission_flow"]
+
+    # --- reine Auswahl-Funktion -------------------------------------
+
+    def test_level_1_no_event(self):
+        self.assertIsNone(_pick_creature_event(1, CREATURE_ATTACK_EVENTS, lambda: 0.0))
+
+    def test_level_2_shegret_normal_only(self):
+        # Level 2: nur shegret (normal) im Pool (kermon ab 4, phirian ab 3).
+        e = _pick_creature_event(2, CREATURE_ATTACK_EVENTS, lambda: 0.0)
+        self.assertEqual(e["name"], "shegret_attack")
+        self.assertEqual(e["attack_strength"], "normal")
+
+    def test_level_3_phirian_and_shegret(self):
+        # Level 3: shegret normal (w3) + phirian (w1). rng=0.9 -> phirian.
+        e = _pick_creature_event(3, CREATURE_ATTACK_EVENTS, lambda: 0.9)
+        self.assertEqual(e["name"], "phirian_attack")
+        self.assertIsNone(e["attack_strength"])
+
+    def test_level_6_escalates_to_hard(self):
+        # Level 6: shegret hard (L5-7) + kermon hard (L6-7) + phirian.
+        # rng=0.0 -> shegret (erstes im Pool, w3) -> hard.
+        e = _pick_creature_event(6, CREATURE_ATTACK_EVENTS, lambda: 0.0)
+        self.assertEqual(e["name"], "shegret_attack")
+        self.assertEqual(e["attack_strength"], "hard")
+
+    def test_level_8_escalates_to_very_hard(self):
+        e = _pick_creature_event(8, CREATURE_ATTACK_EVENTS, lambda: 0.0)
+        self.assertEqual(e["name"], "shegret_attack")
+        self.assertEqual(e["attack_strength"], "very_hard")
+
+    def test_no_normal_or_hard_strength_above_level_7(self):
+        # Ab Level 8 gibt es keinen normal/hard shegret/kermon mehr (nur very_hard + phirian).
+        for level in (8, 9):
+            pool = [e for e in CREATURE_ATTACK_EVENTS if e["min_level"] <= level <= e["max_level"]]
+            strengths = {e["attack_strength"] for e in pool if e["attack_strength"] is not None}
+            self.assertEqual(strengths, {"very_hard"})
+
+    def test_weighted_distribution(self):
+        # Level 3: shegret (w3) + phirian (w1). rng nahe 0 -> shegret, nahe 1 -> phirian.
+        self.assertEqual(_pick_creature_event(3, CREATURE_ATTACK_EVENTS, lambda: 0.01)["name"], "shegret_attack")
+        self.assertEqual(_pick_creature_event(3, CREATURE_ATTACK_EVENTS, lambda: 0.99)["name"], "phirian_attack")
+
+    def test_normalize_creature_events_rejects_bad(self):
+        with self.assertRaises(ValueError):
+            _normalize_creature_events("not a list")
+        with self.assertRaises(ValueError):
+            _normalize_creature_events([{"name": "x", "logic": "l", "min_level": 2, "max_level": 1}])
+        with self.assertRaises(ValueError):
+            _normalize_creature_events([
+                {"name": "x", "logic": "l", "min_level": 1, "max_level": 2,
+                 "attack_strength": "nope"},
+            ])
+
+    # --- Integration: Event-Timer im step ---------------------------
+
+    def test_event_fires_in_prepare_window_before_attack(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock=clock)
+        self.assertEqual(cycle.step(), "started")
+        self.assertEqual(cycle.next_event_at, 420.0 - 0.35 * 420.0)  # 273.0
+        cycle.level = 2  # damit ein Event existiert (shegret normal)
+        clock.t = 273.0
+        self.assertIsNone(cycle.step())  # Event, aber KEIN Attack (erst bei 420)
+        calls = self._fire_calls(poster)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["logic"], "logic/event/shegret_attack.logic")
+        self.assertEqual(calls[0]["attack_strength"], "normal")
+        self.assertEqual(cycle.last_event["name"], "shegret_attack")
+
+    def test_no_event_before_prepare_window(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock=clock)
+        cycle.step()  # started
+        cycle.level = 2
+        clock.t = 100.0  # vor dem prepare-Fenster (273.0)
+        cycle.step()
+        self.assertEqual(len(self._fire_calls(poster)), 0)
+
+    def test_event_reports_in_status(self):
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock=clock)
+        cycle.step()
+        cycle.level = 2
+        clock.t = 273.0
+        cycle.step()
+        st = cycle.status()
+        self.assertIsNotNone(st["last_event"])
+        self.assertIsNotNone(st["seconds_to_next_event"])
 
 
 if __name__ == "__main__":
