@@ -14,7 +14,7 @@ import unittest
 
 from attack_cycle import (
     AttackCycle,
-    DEFAULT_DIFFICULTY_INTERVAL_S,
+    DEFAULT_DIFFICULTY_INTERVAL_FIRST_S,
     WAVE_COUNT,
     _expand_counts,
     _normalize_counts,
@@ -103,11 +103,11 @@ class TestAttackCycle(unittest.TestCase):
     # (jetzt entkoppelten) Difficulty-Timer unberuehrt bleiben. Tests, die den
     # Timer selbst pruefen, ueberschreiben ihn explizit (siehe
     # TestAttackCycleDifficultyTimer unten).
-    def _cycle(self, poster, interval=420.0, difficulty_interval=1e9, difficulty_schedule=None, clock=None):
+    def _cycle(self, poster, interval=420.0, difficulty_interval_first=1e9, difficulty_schedule=None, clock=None):
         return AttackCycle(
             "http://127.0.0.1:9001",
             interval_s=interval,
-            difficulty_interval_s=difficulty_interval,
+            difficulty_interval_first_s=difficulty_interval_first,
             difficulty_schedule=difficulty_schedule,
             _poster=poster,
             _clock=clock or FakeClock(),
@@ -122,7 +122,7 @@ class TestAttackCycle(unittest.TestCase):
     def test_hq_built_starts_cycle(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)
-        cycle = self._cycle(poster, clock=clock, difficulty_interval=DEFAULT_DIFFICULTY_INTERVAL_S)
+        cycle = self._cycle(poster, clock=clock, difficulty_interval_first=DEFAULT_DIFFICULTY_INTERVAL_FIRST_S)
         self.assertEqual(cycle.step(), "started")
         self.assertTrue(cycle.active)
         self.assertEqual(cycle.level, 1)
@@ -248,11 +248,11 @@ class TestAttackCycleDifficultyTimer(unittest.TestCase):
     entkoppelten Timer — und folgt der Base-Game-Kurve (§3.1 DOM_REPLICA.md):
     200s fuer Schritt 1→2, danach 600s je Schritt (2→3 … 8→9)."""
 
-    def _cycle(self, poster, interval=420.0, difficulty_interval=200.0, difficulty_schedule=None, clock=None):
+    def _cycle(self, poster, interval=420.0, difficulty_interval_first=200.0, difficulty_schedule=None, clock=None):
         return AttackCycle(
             "http://127.0.0.1:9001",
             interval_s=interval,
-            difficulty_interval_s=difficulty_interval,
+            difficulty_interval_first_s=difficulty_interval_first,
             difficulty_schedule=difficulty_schedule,
             _poster=poster,
             _clock=clock or FakeClock(),
@@ -355,7 +355,7 @@ class TestPersona(unittest.TestCase):
         return AttackCycle(
             "http://127.0.0.1:9001",
             interval_s=420.0,
-            difficulty_interval_s=1e9,
+            difficulty_interval_first_s=1e9,
             persona=persona,
             _poster=poster,
             _clock=clock or FakeClock(),
@@ -475,7 +475,7 @@ class TestSendYourself(unittest.TestCase):
         return AttackCycle(
             "http://127.0.0.1:9001",
             interval_s=420.0,
-            difficulty_interval_s=1e9,
+            difficulty_interval_first_s=1e9,
             send_yourself=send_yourself,
             _poster=poster,
             _clock=clock or FakeClock(),
@@ -564,7 +564,7 @@ class TestSyncPersonas(unittest.TestCase):
         return AttackCycle(
             "http://127.0.0.1:9001",
             interval_s=420.0,
-            difficulty_interval_s=1e9,
+            difficulty_interval_first_s=1e9,
             _poster=FakePoster('{"ok":true,"hq_hp":100.0}'),
             _getter=lambda path: (200, getter_resp),
             _clock=clock or FakeClock(),
@@ -611,16 +611,29 @@ class TestTimersAndPreview(unittest.TestCase):
     def test_sync_difficulty_interval(self):
         def poster(path, body):
             if path == "/difficulty_interval":
-                return (200, '{"ok":true,"difficulty_interval_s":100}')
+                return (200, '{"ok":true,"difficulty_interval_first_s":100,"difficulty_interval_subsequent_s":600}')
             return (404, "{}")
 
         cycle = AttackCycle("http://x", _poster=poster)
         cycle.sync_difficulty_interval()
-        self.assertEqual(cycle.difficulty_interval_s, 100.0)
-        # Einzelwert = erster Schritt; Folge-Schritte bleiben 600s.
+        self.assertEqual(cycle.difficulty_interval_first_s, 100.0)
+        self.assertEqual(cycle.difficulty_interval_subsequent_s, 600.0)
         self.assertEqual(
             cycle.difficulty_schedule,
             [100.0, 600.0, 600.0, 600.0, 600.0, 600.0, 600.0, 600.0],
+        )
+
+    def test_sync_difficulty_two_values(self):
+        def poster(path, body):
+            if path == "/difficulty_interval":
+                return (200, '{"ok":true,"difficulty_interval_first_s":100,"difficulty_interval_subsequent_s":300}')
+            return (404, "{}")
+
+        cycle = AttackCycle("http://x", _poster=poster)
+        cycle.sync_difficulty_interval()
+        self.assertEqual(
+            cycle.difficulty_schedule,
+            [100.0, 300.0, 300.0, 300.0, 300.0, 300.0, 300.0, 300.0],
         )
 
     def test_sync_difficulty_schedule_full_list(self):
@@ -642,7 +655,7 @@ class TestTimersAndPreview(unittest.TestCase):
         cycle = AttackCycle(
             "http://x",
             interval_s=420.0,
-            difficulty_interval_s=1e9,
+            difficulty_interval_first_s=1e9,
             persona=[wave_count(2, 3), wave_count(5)],
             _poster=poster,
             _clock=clock,
