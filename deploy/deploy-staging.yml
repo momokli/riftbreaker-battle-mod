@@ -1,9 +1,12 @@
 ---
-# Staging-Instanz + zweites Relay — dritter Dedicated-Server (planet, :6323),
-# öffentlich erreichbar über das zweite UDP-Relay (sync:6321 -> :6323). Staging
-# ist ein Ko-Zwilling von prod auf planet: eigene Container-/Port-/Pfad-/
-# Volume-Namen (Suffix -staging), eigener server-control-Agent (:8094), eigene
-# Landing/Cockpit-Domains und eigener rift-caddy :8789.
+# Staging-Instanz auf planet (:6323) + Abbau des Sync-Relays (Issue #846).
+# Öffentlicher Einstieg ist seit Issue #843/#846 ausschließlich der
+# GNS-Entry-Relay auf planet:6321 (Suffix-Routing: `*-staging` -> :6323); das
+# alte UDP-DNAT-Relay (sync:6321 -> :6323) wird deshalb abgebaut (Play 2,
+# `satellite_relay_state: absent`). Staging ist ein Ko-Zwilling von prod auf
+# planet: eigene Container-/Port-/Pfad-/Volume-Namen (Suffix -staging), eigener
+# server-control-Agent (:8094), eigene Landing/Cockpit-Domains und eigener
+# rift-caddy :8789.
 #
 # Aufruf (analog deploy/deploy-prod.yml, Vault nötig für Server-Passwort):
 #   ansible-playbook -i deploy/inventory deploy/deploy-staging.yml \
@@ -84,11 +87,16 @@
     - role: crash-collector
       tags: [crash]
 
-- name: RIFT BATTLE — Satellite-Relay (sync → planet:6323)
+- name: RIFT BATTLE — Sync-Relay abbauen (sync)
   hosts: sync
   become: true
 
   vars:
+    # Issue #846: einziger öffentlicher Einstieg ist der GNS-Entry-Relay auf
+    # planet:6321 (Suffix `*-staging` -> :6323, #843). Der Ziel-Port bleibt
+    # gesetzt, damit der Teardown die ursprünglich angelegte MASQUERADE-Regel
+    # (Rückweg zu planet:6323) trifft.
+    satellite_relay_state: absent
     satellite_relay_target_port: 6323
 
   roles:

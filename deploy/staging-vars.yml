@@ -1,15 +1,17 @@
 ---
-# Staging-Instanz-Overrides — dritter Dedicated-Server auf planet, öffentlich
-# erreichbar über das zweite UDP-Relay (sync:6321 -> planet:6323).
+# Staging-Instanz-Overrides — dritter Dedicated-Server auf planet. Öffentlicher
+# Einstieg ist seit Issue #846 ausschließlich der GNS-Entry-Relay auf
+# planet:6321 (Suffix `*-staging` -> :6323); das frühere Sync-DNAT-Relay
+# (sync:6321 -> planet:6323) ist retired.
 #
 # Analog deploy/prod-vars.yml. Wird nur von deploy/deploy-staging.yml via
 # -e @deploy/staging-vars.yml benutzt.
 #
-# Staging läuft KOEXISTIEREND mit dev (main, :6321) und prod (:6322): eigene
+# Staging läuft KOEXISTIEREND mit dev (main, :6324) und prod (:6322): eigene
 # Container-/Port-/Pfad-/Volume-Namen, kein Clash. Der Image-Tag wird wie dev
 # aus dem Checkout-SHA abgeleitet.
 
-# Eigene Container-/Port-Namen (dev = 6321, prod = 6322 bleiben unberührt).
+# Eigene Container-/Port-Namen (dev = 6324, prod = 6322 bleiben unberührt).
 riftbreaker_server_container: riftbreaker-dedicated-staging
 riftbreaker_server_port_udp: 6323
 # Compose-Projekt EXPLIZIT (Issue #483, Ziel B): der Verzeichnis-Basename ist im

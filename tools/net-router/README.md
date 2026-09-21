@@ -1,5 +1,14 @@
 # tools/net-router — userspace-UDP-Router für `:6321` (Spike zu Issue #825)
 
+> **Abgeloest (Issue #843/#846):** Produktiv läuft inzwischen der
+> **terminierende** GNS-Proxy in [`tools/gns-proxy`](../gns-proxy/README.md)
+> (Rolle `deploy/roles/gns-relay`, Einstieg `planet:6321`, Suffix-Routing
+> `*-dev` / `*-staging` / Default prod). Er braucht **keinen** Reconnect — der
+> Client merkt vom Routing nichts. Dieser Router ist der Vorläufer-Spike: er
+> hält den Flow zurück bzw. hängt ihn um, weil er die Verbindung nicht
+> terminiert. **Die DNAT-Relays (satellite/sync) sind seit #846 abgebaut** —
+> Anleitungen unten, die sie voraussetzen, sind historisch.
+
 Löst das Kernproblem dieses Projekts: **der Client hängt den Port selbst an**
 (`ip:%s:6321` als Format-String in der DLL) und kann deshalb nur `IP:6321`
 erreichen. Dieser Router macht aus _einem_ Eingang viele Backends — und routet
