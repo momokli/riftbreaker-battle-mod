@@ -222,6 +222,14 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         working-directory: tests/natural-attack-editor
         run: npm test
+      # Game-Config-Editor (#827/#828): mode/warmup_s + Toggles
+      # (natural/persona/send_yourself/send_enemy) + start/ready + State
+      # (load/loadStatus/setField/save/restore/start/setReady). Extrahierter
+      # Marker-Block, kein Netzwerk/DOM. Keine Dependencies.
+      - name: Unit-Test Game-Config-Editor (#827)
+        if: needs.changes.outputs.test == 'true'
+        working-directory: tests/game-config-editor
+        run: npm test
 
   build:
     name: Build + Package (rbbridge.dll/exe, dist/*.zip)
