@@ -36,9 +36,14 @@ Die Oberfläche ist als dichtes, flaches Qt-/QML-artiges Desktop-Werkzeug gebaut
 
 Das **Container-Log** im `Docker`-Tab ist der einzige unbegrenzt wachsende Inhalt:
 Es füllt die volle Tab-Breite **und** -Höhe (eigener Scrollbereich, dessen Höhe
-nicht am Inhalt hängt — ein Log mit 300 Zeilen verschiebt also keine
-Bedienelemente) und läuft **auto-tailed** (pollt alle 2s; scrollt nur ans Ende,
-wenn man schon unten war). Kein Refresh-Klicken.
+nicht am Inhalt hängt — ein wachsender Log verschiebt also keine Bedienelemente)
+und läuft **auto-tailed** (pollt alle 2s; scrollt nur ans Ende, wenn man schon
+unten war). Kein Refresh-Klicken. Das Backend liefert pro Request nur ein
+Tail-Fenster (`server_control.py`, `MAX_TAIL = 5000`, kein Cursor): das Cockpit
+holt beim Öffnen das größte Fenster und **akkumuliert** danach nur die neuen
+Zeilen (`mergeTail`), sodass der Log über die Request-Grenze hinaus wächst
+(Session-Scope) statt auf ein Fenster beschränkt zu bleiben. Ein Zähler im Kopf
+zeigt die akkumulierte Zeilenzahl.
 
 **Lazy-Loading (#832):** nur der offene Tab pollt. Beim Tab-Wechsel werden die
 Timer des verlassenen Tabs gestoppt und die des neuen gestartet; der Docker-Log
@@ -85,7 +90,7 @@ Pfade auf derselben Origin (Bearer-Injektion macht die Caddy-Route):
 | Route | Zweck |
 |---|---|
 | `GET /server/status` | `state`/`health`/`uptime`/`started_at` (Poll ~5 s) |
-| `GET /server/logs?tail=N` | letzte N Log-Zeilen (N ≤ 5000, nur auf Knopf) |
+| `GET /server/logs?tail=N` | letzte N Log-Zeilen (N ≤ 5000); im Docker-Tab auto-tailed gepollt und client-seitig akkumuliert |
 | `POST /server/{restart,start,stop}` | Lifecycle (Body `{}`) |
 
 Ist der Agent nicht erreichbar (HTTP !ok, Parse-Fehler), zeigt das Panel nur

@@ -127,21 +127,37 @@ const ROUTES = {
     uptime: "01:23:45",
     started_at: "2026-09-21T12:00:00Z",
   },
-  "server/logs": {
-    ok: true,
-    lines: ["[12:00:01] server up", "[12:00:02] wave 1 fired", "[12:00:03] hq 100%"],
-  },
+  // "server/logs" wird dynamisch beantwortet (siehe startServer): dockers
+  // Log-Ring behaelt nur die letzten RETAIN Zeilen.
 };
 
 function startServer() {
   const html = fs.readFileSync(COCKPIT, "utf8");
   const hits = [];
+  const logCalls = [];
+  // Simuliert dockers Log-Ring: der Server behaelt nur die letzten RETAIN
+  // Zeilen. Der Client muss akkumulieren, sonst sieht er nur dieses Fenster.
+  const allLines = ["[12:00:01] server up"];
+  const RETAIN = 2;
   const server = http.createServer((req, res) => {
-    const url = (req.url || "/").split("?")[0].replace(/^\//, "");
+    const raw = req.url || "/";
+    const url = raw.split("?")[0].replace(/^\//, "");
     hits.push(url || "/");
     if (url === "" || url === "contract" || url === "contract/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(html);
+      return;
+    }
+    if (url === "server/logs") {
+      const tail = parseInt(raw.split("tail=")[1] || "", 10) || 0;
+      if (logCalls.length) {
+        allLines.push("[12:00:1" + logCalls.length + "] tick " + logCalls.length);
+      }
+      const retained = allLines.slice(-RETAIN);
+      const lines = tail > 0 ? retained.slice(-tail) : retained;
+      logCalls.push({ tail, lines });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, lines }));
       return;
     }
     const body = ROUTES[url];
@@ -155,7 +171,7 @@ function startServer() {
   });
   return new Promise((resolve) => {
     server.listen(0, "127.0.0.1", () =>
-      resolve({ server, hits, port: server.address().port }),
+      resolve({ server, hits, logCalls, port: server.address().port }),
     );
   });
 }
@@ -170,7 +186,7 @@ test("Cockpit rendert: Tabs, Formulare, Docker-Log tailt, keine JS-Fehler", asyn
     return;
   }
 
-  const { server, hits, port } = await startServer();
+  const { server, hits, logCalls, port } = await startServer();
   let browser;
   try {
     try {
@@ -279,11 +295,37 @@ test("Cockpit rendert: Tabs, Formulare, Docker-Log tailt, keine JS-Fehler", asyn
 
     // Auto-Tail: ohne Klicken wird laufend nachgeladen.
     const logsBefore = countHits(hits, "server/logs");
-    await page.waitForTimeout(2500);
+    await page.waitForTimeout(5200);
     const logsAfter = countHits(hits, "server/logs");
     assert.ok(
       logsAfter > logsBefore,
       "Log tailt laufend nach (" + logsBefore + " -> " + logsAfter + ")",
+    );
+
+    // Akkumulation: die erste Zeile ist aus dockers Ring (letzte 2 Zeilen)
+    // laengst herausgefallen, bleibt im Browser aber erhalten -> der Log waechst
+    // ueber das Request-/Ring-Fenster hinaus ("moeglichst unendlich").
+    const accLog = await page.locator("#server_logs").textContent();
+    assert.ok(
+      accLog.includes("server up"),
+      "frueher Log bleibt akkumuliert: " + accLog.slice(0, 90),
+    );
+    assert.ok((accLog.match(/tick/g) || []).length >= 1, "neue Ticks kommen laufend an");
+    const shownLines = accLog.split("\n").length;
+    const retained = logCalls.length ? logCalls[logCalls.length - 1].lines : [];
+    assert.ok(retained.length <= 2, "Server liefert nur sein kleines Ring-Fenster");
+    assert.ok(
+      shownLines > retained.length,
+      "Browser zeigt mehr Zeilen als das Server-Fenster (" +
+        shownLines +
+        " > " +
+        retained.length +
+        ")",
+    );
+    const meta = await page.locator("#docker_log_meta").textContent();
+    assert.ok(
+      /\d+ lines/.test(meta),
+      "Zeilen-Zaehler zeigt Wachstum: " + JSON.stringify(meta),
     );
 
     // Kein manueller Refresh-Knopf mehr im Docker-Tab.

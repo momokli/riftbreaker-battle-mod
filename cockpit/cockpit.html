@@ -966,6 +966,7 @@
                             <div class="server-logs-container">
                                 <div class="logs-header-bar">
                                     <span class="prop-label">logs (live tail · 2s)</span>
+                                    <span id="docker_log_meta" class="prop-label" aria-live="polite"></span>
                                 </div>
                                 <div class="log-scroll-area">
                                     <pre id="server_logs" aria-label="Server-Log (auto-tail)">—</pre>
@@ -1532,6 +1533,9 @@
                     ];
                     var LOG_ID = "server_logs";
                     var MSG_ID = "server_control_msg";
+                    // Deckungsgleich mit server_control.py (MAX_TAIL): das Backend
+                    // liefert pro Request nur ein Tail-Fenster, keinen Cursor.
+                    var MAX_TAIL = 5000;
 
                     function el(id) {
                         return doc ? doc.getElementById(id) : null;
@@ -1583,19 +1587,51 @@
                     function tailCount() {
                         var node = el("server_logs_tail");
                         var n = node ? parseInt(node.value, 10) : NaN;
-                        // Full-width Live-Log: ohne Tail-Feld ein groesserer
-                        // Default (das Feld entfaellt im Docker-Tab, #832).
-                        if (!isFinite(n) || n <= 0) n = 300;
-                        if (n > 5000) n = 5000;
+                        if (!isFinite(n) || n <= 0) n = 50;
+                        if (n > MAX_TAIL) n = MAX_TAIL;
                         return n;
                     }
 
-                    async function refreshLogs() {
+                    // Ein Tail-Fenster holen (wirft bei Fehler). Ohne maxLines wird
+                    // der (optionale) Tail-Feld-Wert genutzt, sonst maxLines.
+                    async function fetchLogs(maxLines) {
+                        var n = typeof maxLines === "number" && maxLines > 0
+                            ? maxLines
+                            : tailCount();
+                        if (n > MAX_TAIL) n = MAX_TAIL;
+                        var data = await getJson("/server/logs?tail=" + n);
+                        return (data && data.lines) || [];
+                    }
+
+                    // Zwei Tail-Fenster zusammenfuehren: anhaengen nur die Zeilen
+                    // nach der groessten Ueberlappung (Suffix(existing) ==
+                    // Prefix(incoming)). So waechst der Log im Browser ueber das
+                    // Einzel-Request-Limit hinaus, ohne Cursor-Support. Robust
+                    // gegen wiederholte Zeilen; keine Ueberlappung (Rotation) ->
+                    // Fenster anhaengen.
+                    function mergeTail(existing, incoming) {
+                        var have = existing || [];
+                        var next = incoming || [];
+                        if (!have.length) return next.slice();
+                        if (!next.length) return have.slice();
+                        var max = Math.min(have.length, next.length);
+                        for (var k = max; k > 0; k--) {
+                            var ok = true;
+                            for (var i = 0; i < k; i++) {
+                                if (have[have.length - k + i] !== next[i]) {
+                                    ok = false;
+                                    break;
+                                }
+                            }
+                            if (ok) return have.concat(next.slice(k));
+                        }
+                        return have.concat(next);
+                    }
+
+                    async function refreshLogs(maxLines) {
                         try {
-                            var n = tailCount();
-                            var data = await getJson("/server/logs?tail=" + n);
-                            var lines = data && data.lines;
-                            if (!lines || !lines.length) {
+                            var lines = await fetchLogs(maxLines);
+                            if (!lines.length) {
                                 setText(LOG_ID, DASH);
                                 return;
                             }
@@ -1639,6 +1675,9 @@
                     return {
                         refreshStatus: refreshStatus,
                         refreshLogs: refreshLogs,
+                        fetchLogs: fetchLogs,
+                        mergeTail: mergeTail,
+                        setMessage: msg,
                         control: control,
                     };
                 }
@@ -1649,16 +1688,8 @@
                     document: document,
                 });
 
-                $("server_restart").onclick = function () {
-                    serverPanel.control("restart");
-                };
-                $("server_start").onclick = function () {
-                    serverPanel.control("start");
-                };
-                $("server_stop").onclick = function () {
-                    serverPanel.control("stop");
-                };
-                // Status/Log-Polling startet lazy beim Tab-Open (Docker).
+                // Docker-Buttons + Status/Log-Polling werden lazy im Tab-Lifecycle
+                // unten verdrahtet (erst beim Oeffnen des Docker-Tabs).
 
                 function initEvents() {
                     if (typeof EventSource === "undefined") {
@@ -2223,23 +2254,77 @@
                 });
 
                 var dockerTimer = tabTimer();
-                // Auto-Tail: laufend nachladen; nur ans Ende scrollen, wenn der
-                // Nutzer schon unten war (Scroll-Position nicht klauen).
-                function dockerLogTick() {
+                // "Moeglichst ganzer Log, moeglichst unbegrenzt" (#832): das
+                // Backend liefert pro Request nur ein Tail-Fenster (server_control.py
+                // MAX_TAIL = 5000, kein Cursor). Der Tab holt beim Oeffnen das
+                // groesste Fenster und haengt danach bei jedem Poll nur die NEUEN
+                // Zeilen an -> der Log waechst ueber die Request-Grenze hinaus
+                // (Session-Scope) statt auf ein Fenster begrenzt zu bleiben.
+                var DOCKER_FULL_TAIL = 5000; // == MAX_TAIL des Agents
+                var DOCKER_WINDOW = 2000;    // Fenster pro Auto-Tail-Poll
+                var dockerLines = [];
+                var dockerRendered = false;
+
+                function updateDockerLogMeta() {
+                    var meta = $("docker_log_meta");
+                    if (meta) {
+                        meta.textContent = dockerLines.length
+                            ? dockerLines.length + " lines"
+                            : "";
+                    }
+                }
+
+                // Vollen akkumulierten Puffer rendern (ersetzt den Inhalt).
+                function renderDockerLog() {
+                    var pre = $("server_logs");
+                    if (!pre) return;
+                    pre.textContent = dockerLines.length ? dockerLines.join("\n") : "—";
+                    dockerRendered = true;
+                    updateDockerLogMeta();
+                }
+
+                // Auto-Tail: laufend nachladen und nur die neuen Zeilen anhaengen;
+                // nur ans Ende scrollen, wenn der Nutzer schon unten war.
+                function dockerTailTick() {
                     var pre = $("server_logs");
                     var atBottom = !!pre &&
                         (pre.scrollHeight - pre.scrollTop - pre.clientHeight <= 24);
-                    var p = serverPanel.refreshLogs();
-                    if (p && typeof p.then === "function") {
-                        p.then(function () {
-                            if (atBottom && pre) pre.scrollTop = pre.scrollHeight;
-                        });
-                    }
+                    var n = dockerRendered ? DOCKER_WINDOW : DOCKER_FULL_TAIL;
+                    return serverPanel.fetchLogs(n).then(function (lines) {
+                        if (!lines.length) {
+                            if (!dockerRendered) renderDockerLog();
+                            return;
+                        }
+                        var before = dockerLines.length;
+                        dockerLines = serverPanel.mergeTail(dockerLines, lines);
+                        if (!dockerRendered || before === 0) {
+                            renderDockerLog();
+                        } else if (dockerLines.length > before) {
+                            pre.textContent = pre.textContent +
+                                "\n" + dockerLines.slice(before).join("\n");
+                            updateDockerLogMeta();
+                        }
+                        if (atBottom && pre) pre.scrollTop = pre.scrollHeight;
+                    }).catch(function () {
+                        serverPanel.setMessage("server logs unavailable");
+                    });
                 }
+
+                function dockerControl(action) {
+                    // control() pollt Status+Log und setzt eine kurze Vorschau ->
+                    // danach den akkumulierten Puffer wiederherstellen.
+                    serverPanel.control(action).then(renderDockerLog, renderDockerLog);
+                }
+
                 registerTabLifecycle("tab_docker", {
+                    init: function () {
+                        $("server_restart").onclick = function () { dockerControl("restart"); };
+                        $("server_start").onclick = function () { dockerControl("start"); };
+                        $("server_stop").onclick = function () { dockerControl("stop"); };
+                    },
                     start: function () {
                         dockerTimer.every(serverPanel.refreshStatus, 5000);
-                        dockerTimer.every(dockerLogTick, 2000);
+                        dockerTimer.every(dockerTailTick, 2000);
                     },
                     stop: function () { dockerTimer.stop(); },
                 });
