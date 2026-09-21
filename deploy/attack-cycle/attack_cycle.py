@@ -6,21 +6,26 @@ Ziel (PoC): anstatt jede gekaufte Welle 2 min nach dem Kauf einzeln zu feuern,
 laeuft ein fester Zyklus, der beim Bau des HQ startet:
 
   round start (HQ gebaut)
-    └─ alle `interval` Sekunden (Default 7 min) feuert EINE "natuerliche" Welle
-       mit dem aktuellen Level (1..9, cap 9). Der Spieler kann waehrend des
+    └─ alle `interval` Sekunden (Default 7 min) feuert der Zyklus die
+       Natural-Wellen des aktuellen Levels (1..9, cap 9): je Attack
+       `maxAttackCountPerDifficulty[level]` Wellen, ab Level 8/9 zusaetzlich
+       ein Boss (attack_boss_dynamic.logic) — Spiegel der Base-Game-DOM
+       (DIFFICULTY_RULES, docs/DOM_REPLICA.md). Der Spieler kann waehrend des
        Fensters Wellen "kaufen" (`-send waveN`): jede wird SOFORT bezahlt
        (try_spend) und in eine Queue gestapelt; beim naechsten Zyklus-Tick
-       werden sie GLEICHZEITIG mit der natuerlichen Welle gefeuert.
+       werden sie GLEICHZEITIG mit den Natural-Wellen gefeuert.
 
 Difficulty-Level (Issue #778) laeuft auf einem EIGENEN, vom Wellen-Feuern
-entkoppelten Timer: alle `difficulty_interval` Sekunden (Default 200s) steigt
-das Level um 1 (cap 9) — unabhaengig davon, ob/wie oft in der Zwischenzeit
-Wellen feuern. Eine gefeuerte Welle nutzt einfach das zu diesem Zeitpunkt
-aktuelle Level, erhoeht es aber nicht mehr selbst (Vorbild:
-tools/wave-scheduler/wave_scheduler.py, das dasselbe Zwei-Timer-Muster nutzt).
+entkoppelten Timer — und folgt der Base-Game-Kurve (§3.1 DOM_REPLICA.md):
+erster Schritt 1→2 nach `difficulty_interval_first_s` Sekunden (Default 200s),
+jeder Folge-Schritt 2→3 … 8→9 nach `difficulty_interval_subsequent_s` (Default
+600s, cap 9). Beide Werte sind im Cockpit editierbar. Eine gefeuerte Welle
+nutzt schlicht das zu diesem Zeitpunkt aktuelle Level, erhoeht es aber nicht
+mehr selbst (Vorbild: tools/wave-scheduler/wave_scheduler.py).
 
 Ablauf:
-  alle `difficulty_interval` Sekunden: level = min(level + 1, max_level)
+  Schritt 1→2 nach first Sekunden, danach je +subsequent Sekunden:
+    level = min(level + 1, max_level)
   alle `interval` Sekunden: fire natural(level) + bought[] ueber
     POST /activate_mission_flow, bought = []
 
@@ -32,6 +37,15 @@ Kauf (`POST /queue_send {"name":"waveN"}`):
 Rein stdlib (HTTP via urllib), kein Netz-Dep im Test. Server-seitig (Sidecar),
 NICHT in der Website, NICHT in der DLL. Pattern wie deploy/match-loop (pollt
 get_state) + tools/wave-scheduler (Queue + activate_mission_flow).
+
+Persona (waehlbares Send-Profil): eine optionale Folge von Attacken, je
+Attack eine Liste der vom Gegner gekauften Extra-Wellen. ``[[3,5],[7]]`` =
+Attack 1 feuert natural + Wave 3 + Wave 5, Attack 2 natural + Wave 7, danach
+laeuft die Persona aus (kein Loop). Leere Liste = keine Extra-Wellen.
+
+send-yourself (Routing): ``on`` (Default) feuert eigene Kaeufe lokal (heute);
+``off`` zieht das Carbonium trotzdem ab (try_spend), feuert die Welle aber
+NICHT lokal, sondern trackt sie als Outgoing-Send (spaeter Server B).
 """
 
 from __future__ import annotations
@@ -44,7 +58,7 @@ import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 # Cost-Tabelle (Spiegel der client-mod .ent-Preise; Stand main #770/#205).
 # Nur die Preise sind hier relevant; der Logic-Pfad ist ein einziges Template
@@ -64,7 +78,11 @@ NAME_TO_LEVEL = {f"wave{lvl}": lvl for lvl in WAVE_COST}
 
 DEFAULT_MAX_LEVEL = 9
 DEFAULT_INTERVAL_S = 420.0  # 7 min
-DEFAULT_DIFFICULTY_INTERVAL_S = 200.0  # Issue #778: eigener Timer, entkoppelt vom Wellen-Feuern
+# Difficulty-Escalation folgt der Base-Game-Kurve (§3.1 DOM_REPLICA.md):
+# erster Schritt 1→2 Default 200s, Folge-Schritte 2→3 … 8→9 Default 600s.
+# Beide Werte sind im Cockpit editierbar (POST /difficulty_interval).
+DEFAULT_DIFFICULTY_INTERVAL_FIRST_S = 200.0  # erster Schritt (1→2)
+DEFAULT_DIFFICULTY_INTERVAL_SUBSEQUENT_S = 600.0  # Folge-Schritte (2→3 … 8→9)
 DEFAULT_BRIDGE_URL = "http://127.0.0.1:9001"
 DEFAULT_CONTROL_PORT = 9102
 
@@ -83,6 +101,48 @@ WAVE_LOGIC = {
     8: "logic/missions/survival/attack_level_8_id_1.logic",
     9: "logic/missions/survival/attack_level_8_id_1.logic",
 }
+
+# Boss-/Elite-Boss-Logic (rules.bosses bzw. rules.multiplayerWaves[level] ->
+# attack_boss_dynamic.logic; see research #750). Ein Aufruf = EIN Boss.
+BOSS_LOGIC = "logic/missions/survival/attack_boss_dynamic.logic"
+
+# Wellen-Feuer-Regeln je Difficulty-Level (1..9), Spiegel der Base-Game-DOM
+# (client-mod/lua/missions/survival/v2/dom_survival_jungle_rules_default.lua +
+# _normal.lua). Escalation/Timing lebt separat im Difficulty-Timer
+# (Issue #778/#800); hier nur die FEUER-Dimensionen.
+#
+#   max_attack_count  rules.maxAttackCountPerDifficulty — Natural-Wellen je Attack
+#   boss_min_level    ab diesem Level feuert zusaetzlich EIN Boss
+#                     (rules.bosses -> attack_boss_dynamic.logic). "ab 8/9" -> 8.
+#   extra_min_level   ab diesem Level feuern Extra-Wellen (rules.extraWaves,
+#                     "stronger_attack"-Event). None = aus (Event ist random,
+#                     Event-Manager-Spike noch offen, docs/DOM_REPLICA.md §7.2).
+#   extra_count       Anzahl Extra-Wellen je Attack (Base-Game-Event amount=2).
+#   mp_min_level      ab diesem Level feuert ein MP-Elite-Boss
+#                     (rules.multiplayerWaves). None = aus (Solo-first,
+#                     "MP-Wellen als spaeterer Schritt", §7.7). Solo-Schwellen
+#                     aus research #750 waeren default=6 / normal=7.
+#
+# Refs: docs/DOM_REPLICA.md §2/§3.3, docs/research/213-wave-richtwert.md,
+# docs/research/736-wellen-hp-pool-vollstaendig.md,
+# docs/research/multiplayer-additional-boss-wave.md.
+DIFFICULTY_RULES = {
+    "default": {
+        "max_attack_count": [1, 2, 2, 3, 3, 3, 3, 3, 4],
+        "boss_min_level": 8,
+        "extra_min_level": None,
+        "extra_count": 0,
+        "mp_min_level": None,
+    },
+    "normal": {
+        "max_attack_count": [1, 2, 2, 2, 2, 2, 3, 3, 3],
+        "boss_min_level": 8,
+        "extra_min_level": None,
+        "extra_count": 0,
+        "mp_min_level": None,
+    },
+}
+DEFAULT_DIFFICULTY_PROFILE = "default"
 
 
 def parse_hq_alive(raw: str) -> bool:
@@ -124,6 +184,139 @@ def parse_send_level(body: str) -> Optional[int]:
     return None
 
 
+WAVE_COUNT = 9  # Wellen-Typen (wave1..wave9)
+
+
+def _normalize_counts(attack) -> Optional[List[int]]:
+    """Normalisiert eine Attack auf WAVE_COUNT Counts (wave1..wave9), 0-auffuellen.
+
+    Liefert eine Liste von WAVE_COUNT nicht-negativen ints, oder None bei
+    ungueltigem Format.
+    """
+    if not isinstance(attack, list):
+        return None
+    out: List[int] = []
+    for c in attack[:WAVE_COUNT]:
+        if isinstance(c, bool) or not isinstance(c, int) or c < 0:
+            return None
+        out.append(c)
+    return out + [0] * (WAVE_COUNT - len(out))
+
+
+def _expand_counts(counts) -> List[int]:
+    """9-Counts (wave1..wave9) -> Liste von Leveln (count>1 => mehrfach)."""
+    levels: List[int] = []
+    for wave, count in enumerate(counts or []):
+        levels.extend([wave + 1] * count)
+    return levels
+
+
+def _normalize_difficulty_rules(rules, max_level: int) -> Dict[str, Any]:
+    """Normalisiert eine Difficulty-Rules-Struktur auf den internen Shape.
+
+    Erwartet dict mit (optionalen) Schluesseln:
+      max_attack_count: Liste nicht-negativer ints (Natural-Wellen je Level;
+                        fehlende Eintraege werden mit dem letzten Wert aufgefuellt)
+      boss_min_level:   int|None (Boss feuert ab diesem Level)
+      extra_min_level:  int|None (Extra-Wellen feuern ab diesem Level)
+      extra_count:      int (Anzahl Extra-Wellen je Attack)
+      mp_min_level:     int|None (MP-Elite-Boss feuert ab diesem Level)
+
+    Liefert ein normalisiertes dict; wirft ValueError bei ungueltigem Format.
+    """
+    if not isinstance(rules, dict):
+        raise ValueError("difficulty_rules muss ein Objekt sein")
+
+    counts = rules.get("max_attack_count", [1])
+    if not isinstance(counts, (list, tuple)) or not counts:
+        raise ValueError("max_attack_count muss eine nicht-leere Liste sein")
+    norm_counts: List[int] = []
+    for c in counts:
+        if isinstance(c, bool) or not isinstance(c, int) or c < 0:
+            raise ValueError("max_attack_count: nur nicht-negative ints")
+        norm_counts.append(c)
+    if len(norm_counts) >= max_level:
+        norm_counts = norm_counts[:max_level]
+    else:
+        norm_counts = norm_counts + [norm_counts[-1]] * (max_level - len(norm_counts))
+
+    def _level_or_none(key: str):
+        v = rules.get(key)
+        if v is None:
+            return None
+        if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+            raise ValueError(f"{key} muss ein int >= 1 oder None sein")
+        return v
+
+    extra_count = rules.get("extra_count", 0)
+    if isinstance(extra_count, bool) or not isinstance(extra_count, int) or extra_count < 0:
+        raise ValueError("extra_count muss ein nicht-negativer int sein")
+
+    return {
+        "max_attack_count": norm_counts,
+        "boss_min_level": _level_or_none("boss_min_level"),
+        "extra_min_level": _level_or_none("extra_min_level"),
+        "extra_count": extra_count,
+        "mp_min_level": _level_or_none("mp_min_level"),
+    }
+
+def _normalize_difficulty_schedule(schedule, n_steps: int) -> Optional[List[float]]:
+    """Normalisiert eine Liste von Schrittdauern auf `n_steps` positive floats.
+
+    Fehlende Eintraege werden mit dem letzten Wert aufgefuellt, ueberzaehlige
+    abgeschnitten. Liefert None bei ungueltigem Format (nicht-Liste, leer,
+    nicht-positive oder nicht-numerische Werte).
+    """
+    if not isinstance(schedule, (list, tuple)) or not schedule:
+        return None
+    out: List[float] = []
+    for v in schedule:
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+            return None
+        out.append(float(v))
+    if len(out) >= n_steps:
+        return out[:n_steps]
+    out.extend([out[-1]] * (n_steps - len(out)))
+    return out
+
+
+def _difficulty_schedule_from_steps(
+    first_step_s: float, subsequent_step_s: float, n_steps: int
+) -> List[float]:
+    """Kurve aus zwei Schrittdauern: erster Schritt = first_step_s, alle
+    Folge-Schritte = subsequent_step_s."""
+    return [float(first_step_s)] + [float(subsequent_step_s)] * (n_steps - 1)
+
+
+def load_personas(path: str) -> Dict[str, List[List[int]]]:
+    """Laedt Persona-Definitionen aus einer JSON-Datei.
+
+    Erwartetes Format: ``{"personas": {"<name>": [[c1..c9], ...]}}``.
+    Jede Persona ist eine Liste von Attacken; jede Attack ist eine Liste von
+    WAVE_COUNT Counts (wave1..wave9). Laeuft aus (kein Loop). Liefert
+    ``{name: [[counts], ...]}``. Wirft ValueError bei ungueltigem Format.
+    """
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    if not isinstance(data, dict):
+        raise ValueError(f"persona file {path}: top-level muss ein Objekt sein")
+    raw = data.get("personas", {})
+    if not isinstance(raw, dict):
+        raise ValueError(f"persona file {path}: 'personas' muss ein Objekt sein")
+    personas: Dict[str, List[List[int]]] = {}
+    for name, attacks in raw.items():
+        if not isinstance(attacks, list):
+            raise ValueError(f"persona '{name}': muss eine Liste sein")
+        persona: List[List[int]] = []
+        for attack in attacks:
+            norm = _normalize_counts(attack)
+            if norm is None:
+                raise ValueError(f"persona '{name}': ungueltige Attack (erwartet {WAVE_COUNT} Counts)")
+            persona.append(norm)
+        personas[name] = persona
+    return personas
+
+
 class AttackCycle:
     """Reine Zustandsmaschine + HTTP (injizierbarer Poster/Clock fuer Tests)."""
 
@@ -131,20 +324,59 @@ class AttackCycle:
         self,
         base_url: str,
         interval_s: float = DEFAULT_INTERVAL_S,
-        difficulty_interval_s: float = DEFAULT_DIFFICULTY_INTERVAL_S,
+        difficulty_interval_first_s: float = DEFAULT_DIFFICULTY_INTERVAL_FIRST_S,
+        difficulty_interval_subsequent_s: float = DEFAULT_DIFFICULTY_INTERVAL_SUBSEQUENT_S,
+        difficulty_schedule: Optional[List[float]] = None,
         max_level: int = DEFAULT_MAX_LEVEL,
         wave_logic: Optional[Dict[int, str]] = None,
+        persona: Optional[List[List[int]]] = None,
+        persona_name: str = "",
+        send_yourself: bool = True,
         timeout: float = 30.0,
+        difficulty_profile: str = DEFAULT_DIFFICULTY_PROFILE,
+        difficulty_rules: Optional[Dict[str, Any]] = None,
         _poster: Optional[Callable[[str, bytes], tuple]] = None,
+        _getter: Optional[Callable[[str], tuple]] = None,
         _clock: Callable[[], float] = time.monotonic,
     ):
         self.base_url = base_url.rstrip("/")
         self.interval_s = interval_s
-        self.difficulty_interval_s = difficulty_interval_s
         self.max_level = max_level
+        self.difficulty_interval_first_s = float(difficulty_interval_first_s)
+        self.difficulty_interval_subsequent_s = float(difficulty_interval_subsequent_s)
+        # Difficulty-Schedule: Dauer je Schritt (Index 0 = 1→2 … Index n-1 = 8→9).
+        # `difficulty_interval_first_s` + `difficulty_interval_subsequent_s` sind
+        # die zwei im Cockpit editierbaren Knoepfe; eine explizite volle Liste
+        # (`difficulty_schedule`) ueberschreibt die Kurve komplett.
+        n_steps = max(1, max_level - 1)
+        if difficulty_schedule is not None:
+            sched = _normalize_difficulty_schedule(difficulty_schedule, n_steps)
+            self.difficulty_schedule = (
+                sched
+                if sched is not None
+                else _difficulty_schedule_from_steps(
+                    difficulty_interval_first_s, difficulty_interval_subsequent_s, n_steps
+                )
+            )
+        else:
+            self.difficulty_schedule = _difficulty_schedule_from_steps(
+                difficulty_interval_first_s, difficulty_interval_subsequent_s, n_steps
+            )
         self.wave_logic = wave_logic or WAVE_LOGIC
+        self.persona = persona
+        self.persona_name = persona_name
+        self.send_yourself = send_yourself
         self.timeout = timeout
+        # Wellen-Feuer-Regeln (Attack-Count/Boss/Extra/MP), konfigurierbar.
+        # Ein explizites `difficulty_rules`-dict ueberschreibt das benannte
+        # Profil (`difficulty_profile`).
+        rules = difficulty_rules
+        if rules is None:
+            rules = DIFFICULTY_RULES.get(difficulty_profile, DIFFICULTY_RULES[DEFAULT_DIFFICULTY_PROFILE])
+        self.difficulty_profile = difficulty_profile if difficulty_rules is None else "<custom>"
+        self.difficulty_rules = _normalize_difficulty_rules(rules, max_level)
         self._poster = _poster or self._http_post
+        self._getter = _getter or self._http_get
         self._clock = _clock
 
         self._lock = threading.Lock()
@@ -155,6 +387,9 @@ class AttackCycle:
         self.orders: list = []  # unbezahlte Buy-Orders (order list)
         self.bought: list = []  # bezahlte Wellen (bought queue, feuert als naechstes)
         self.last_fire: Optional[Dict[str, Any]] = None
+        self.attack_index = 0  # Anzahl gefeuerter Attacken (Persona-Indexierung)
+        self.outgoing: list = []  # getrackte Outgoing-Sends (send_yourself off)
+        self.history: list = []  # letzte N gefeuerte Attacken (fuer Attack-Cycle-Tabelle)
         self._reset_epoch = 0
 
     # --- HTTP (urllib) ----------------------------------------------------
@@ -165,6 +400,16 @@ class AttackCycle:
             method="POST",
             headers={"Content-Type": "application/json"},
         )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                return resp.status, resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode("utf-8", errors="replace")
+        except (urllib.error.URLError, OSError) as e:
+            return 0, str(e)
+
+    def _http_get(self, path: str) -> tuple:
+        req = urllib.request.Request(self.base_url + path, method="GET")
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 return resp.status, resp.read().decode("utf-8", errors="replace")
@@ -225,8 +470,18 @@ class AttackCycle:
                 status, ok, body = self._spend(cost)
                 if 200 <= status < 300 and ok:
                     with self._lock:
-                        self.bought.append(level)
-                    print(f"[attack-cycle] wave{level} bezahlt -> bought (cost={cost})", flush=True)
+                        if self.send_yourself:
+                            self.bought.append(level)
+                        else:
+                            self.outgoing.append({"level": level, "cost": cost})
+                    if self.send_yourself:
+                        print(f"[attack-cycle] wave{level} bezahlt -> bought (cost={cost})", flush=True)
+                    else:
+                        print(
+                            f"[attack-cycle] wave{level} bezahlt -> outgoing "
+                            f"(send_yourself=off, Carbonium abgezogen, Welle geht ins Leere)",
+                            flush=True,
+                        )
                 else:
                     print(f"[attack-cycle] wave{level} verworfen (status={status} ok={ok}): {body[:160]}", flush=True)
             except Exception as e:
@@ -250,6 +505,42 @@ class AttackCycle:
         )
         print(f"[attack-cycle] fire wave{level} logic={logic} -> HTTP {status} {body[:120]}", flush=True)
 
+    def _fire_boss(self) -> None:
+        """Feuert einen Boss/Elite-Boss (attack_boss_dynamic.logic)."""
+        status, body = self._post_json(
+            "/activate_mission_flow",
+            {"logic": BOSS_LOGIC, "mode": "default"},
+        )
+        print(f"[attack-cycle] fire boss logic={BOSS_LOGIC} -> HTTP {status} {body[:120]}", flush=True)
+
+    def _wave_plan(self, level: int) -> Dict[str, Any]:
+        """Wellen-Komposition fuer EINE Attack auf `level` (Base-Game-DOM).
+
+        Liefert dict mit natural_count (Natural-Wellen), boss (bool),
+        extra_count (Extra-Wellen) und mp (bool, Elite-Boss). Die Schwellen
+        stammen aus self.difficulty_rules (konfigurierbar, s. DIFFICULTY_RULES).
+        """
+        rules = self.difficulty_rules
+        counts = rules["max_attack_count"]
+        natural_count = counts[min(level - 1, len(counts) - 1)]
+        boss = rules["boss_min_level"] is not None and level >= rules["boss_min_level"]
+        extra_min = rules["extra_min_level"]
+        extra = extra_min is not None and level >= extra_min
+        extra_count = rules["extra_count"] if extra else 0
+        mp = rules["mp_min_level"] is not None and level >= rules["mp_min_level"]
+        return {
+            "natural_count": natural_count,
+            "boss": boss,
+            "extra_count": extra_count,
+            "mp": mp,
+        }
+
+    def _difficulty_duration(self, level: int) -> float:
+        """Dauer fuer den naechsten Schritt ab `level` (1-basiert): level → level+1."""
+        sched = self.difficulty_schedule
+        idx = max(0, min(level - 1, len(sched) - 1))
+        return sched[idx]
+
     # --- Ein Poll/Tick-Schritt -------------------------------------------
     def step(self) -> Optional[str]:
         """Ein Iterationsschritt. Liefert eine Aktion ("started"/"attack") oder None."""
@@ -261,25 +552,24 @@ class AttackCycle:
                     self.active = True
                     self.level = 1
                     self.next_attack_at = now + self.interval_s
-                    self.next_difficulty_at = now + self.difficulty_interval_s
+                    self.next_difficulty_at = now + self._difficulty_duration(1)
                 print(
                     f"[attack-cycle] HQ gebaut -> Zyklus gestartet (Level 1, "
                     f"Angriff in {self.interval_s:.0f}s, "
-                    f"naechste Difficulty in {self.difficulty_interval_s:.0f}s)",
+                    f"naechste Difficulty in {self._difficulty_duration(1):.0f}s)",
                     flush=True,
                 )
                 return "started"
             return None
 
-        # Difficulty-Timer (Issue #778): laeuft unabhaengig vom Wellen-Feuern.
+        # Difficulty-Timer (Issue #778): laeuft unabhaengig vom Wellen-Feuern
+        # und folgt der Base-Game-Kurve (erster Schritt kurz, Rest 600s).
         with self._lock:
             while (
-                self.next_difficulty_at is not None
-                and now >= self.next_difficulty_at
-                and self.level < self.max_level
+                self.next_difficulty_at is not None and now >= self.next_difficulty_at and self.level < self.max_level
             ):
                 self.level += 1
-                self.next_difficulty_at += self.difficulty_interval_s
+                self.next_difficulty_at += self._difficulty_duration(self.level)
                 print(f"[attack-cycle] difficulty erhoeht -> level {self.level}", flush=True)
 
         with self._lock:
@@ -289,13 +579,54 @@ class AttackCycle:
             sent_levels = list(self.bought)
             self.bought = []
             self.next_attack_at = self.next_attack_at + self.interval_s
+            self.attack_index += 1
+            extra_levels: List[int] = []
+            if self.persona and self.attack_index - 1 < len(self.persona):
+                extra_levels = _expand_counts(self.persona[self.attack_index - 1])
 
-        self._fire(natural_level)
+        plan = self._wave_plan(natural_level)
+        for _ in range(plan["natural_count"]):
+            self._fire(natural_level)
+        if plan["boss"]:
+            self._fire_boss()
+        for _ in range(plan["extra_count"]):
+            self._fire(natural_level)
+        if plan["mp"]:
+            self._fire_boss()
+        for lvl in extra_levels:
+            self._fire(lvl)
         for lvl in sent_levels:
             self._fire(lvl)
         with self._lock:
-            self.last_fire = {"natural_level": natural_level, "sent_levels": sent_levels, "t": now}
-        print(f"[attack-cycle] attack: natural={natural_level} + sent={sent_levels}", flush=True)
+            self.last_fire = {
+                "natural_level": natural_level,
+                "natural_count": plan["natural_count"],
+                "boss": plan["boss"],
+                "extra_count": plan["extra_count"],
+                "mp": plan["mp"],
+                "persona_levels": extra_levels,
+                "sent_levels": sent_levels,
+                "t": now,
+            }
+            self.history.append(
+                {
+                    "attack": self.attack_index,
+                    "natural": natural_level,
+                    "natural_count": plan["natural_count"],
+                    "boss": plan["boss"],
+                    "mp": plan["mp"],
+                    "self": sent_levels,
+                    "enemy": extra_levels,
+                    "t": now,
+                }
+            )
+            self.history = self.history[-10:]  # cap auf die letzten 10 Attacken
+        print(
+            f"[attack-cycle] attack: natural={natural_level}x{plan['natural_count']} "
+            f"boss={plan['boss']} extra={plan['extra_count']} mp={plan['mp']} "
+            f"+ persona={extra_levels} + sent={sent_levels}",
+            flush=True,
+        )
         return "attack"
 
     # --- Status -----------------------------------------------------------
@@ -313,9 +644,26 @@ class AttackCycle:
                 ),
                 "bought": list(self.bought),
                 "orders": list(self.orders),
+                "persona": self.persona_name or None,
+                "attack_index": self.attack_index,
+                "send_yourself": self.send_yourself,
+                "outgoing": list(self.outgoing),
                 "interval_s": self.interval_s,
-                "difficulty_interval_s": self.difficulty_interval_s,
+                "difficulty_interval_first_s": self.difficulty_interval_first_s,
+                "difficulty_interval_subsequent_s": self.difficulty_interval_subsequent_s,
+                "difficulty_schedule": list(self.difficulty_schedule),
                 "max_level": self.max_level,
+                "wave_cost": WAVE_COST,
+                "next_attack": {
+                    "natural": self.level,
+                    "self": list(self.bought),
+                    "enemy": (
+                        _expand_counts(self.persona[self.attack_index])
+                        if self.persona and self.attack_index < len(self.persona)
+                        else []
+                    ),
+                },
+                "history": list(self.history),
                 "last_fire": self.last_fire,
             }
 
@@ -348,6 +696,56 @@ class AttackCycle:
         except Exception:
             pass
 
+    def sync_difficulty_interval(self) -> None:
+        """Holt die zwei Difficulty-Schrittdauern (POST /difficulty_interval {})
+        und baut daraus den Schedule [first, subsequent, subsequent, …].
+
+        Die Bridge liefert zwei Werte (`difficulty_interval_first_s` fuer Schritt
+        1→2, `difficulty_interval_subsequent_s` fuer alle Folge-Schritte
+        2→3 … 8→9); optional eine volle Liste (`difficulty_schedule`) als
+        komplette Kurve.
+        """
+        try:
+            status, body = self._poster("/difficulty_interval", b"{}")
+            if not 200 <= status < 300:
+                return
+            data = json.loads(body)
+            if not isinstance(data, dict):
+                return
+            n_steps = max(1, self.max_level - 1)
+            new_schedule = None
+            raw_sched = data.get("difficulty_schedule")
+            if isinstance(raw_sched, list):
+                new_schedule = _normalize_difficulty_schedule(raw_sched, n_steps)
+            if new_schedule is None:
+                new_first = data.get("difficulty_interval_first_s")
+                new_subsequent = data.get("difficulty_interval_subsequent_s")
+                if (
+                    isinstance(new_first, (int, float))
+                    and not isinstance(new_first, bool)
+                    and new_first > 0
+                    and isinstance(new_subsequent, (int, float))
+                    and not isinstance(new_subsequent, bool)
+                    and new_subsequent > 0
+                ):
+                    new_schedule = _difficulty_schedule_from_steps(
+                        float(new_first), float(new_subsequent), n_steps
+                    )
+            if new_schedule is None:
+                return
+            with self._lock:
+                if new_schedule != self.difficulty_schedule:
+                    self.difficulty_schedule = new_schedule
+                    self.difficulty_interval_first_s = new_schedule[0]
+                    self.difficulty_interval_subsequent_s = (
+                        new_schedule[1] if len(new_schedule) > 1 else new_schedule[0]
+                    )
+                    if self.active:
+                        self.next_difficulty_at = self._clock() + self._difficulty_duration(self.level)
+                    print(f"[attack-cycle] difficulty_schedule -> {new_schedule}", flush=True)
+        except Exception:
+            pass
+
     # --- Reset (WebUI) -----------------------------------------------------
     def reset(self) -> None:
         """Setzt den Zyklus zurueck: warte wieder auf HQ-Bau, Level 1,
@@ -359,6 +757,9 @@ class AttackCycle:
             self.next_difficulty_at = None
             self.orders = []
             self.bought = []
+            self.attack_index = 0
+            self.outgoing = []
+            self.history = []
             self.last_fire = None
         print("[attack-cycle] reset -> warte auf HQ-Bau", flush=True)
 
@@ -372,6 +773,47 @@ class AttackCycle:
             if isinstance(epoch, int) and epoch != self._reset_epoch:
                 self._reset_epoch = epoch
                 self.reset()
+        except Exception:
+            pass
+
+    def sync_personas(self) -> None:
+        """Pollt GET /personas und uebernimmt aktive Persona + send_yourself.
+
+        Die Bridge ist die Laufzeit-Quelle der Wahrheit; die CLI-Flags
+        --persona/--send-yourself sind nur der Start-Fallback. Die aktive
+        Persona liefert die Extra-Wellen je Attack (Liste je Attack, mehrere
+        Wellen erlaubt), send_yourself das Routing eigener Kaeufe.
+        """
+        try:
+            status, body = self._getter("/personas")
+            if not 200 <= status < 300:
+                return
+            data = json.loads(body)
+            if not isinstance(data, dict):
+                return
+            personas = data.get("personas")
+            if not isinstance(personas, dict):
+                return
+            active = data.get("active") or ""
+            levels = None
+            if active:
+                sends = personas.get(active)
+                if isinstance(sends, list):
+                    parsed = []
+                    ok = True
+                    for attack in sends:
+                        norm = _normalize_counts(attack)
+                        if norm is None:
+                            ok = False
+                            break
+                        parsed.append(norm)
+                    if ok:
+                        levels = parsed
+            send_yourself = bool(data.get("send_yourself", True))
+            with self._lock:
+                self.persona = levels
+                self.persona_name = active if levels is not None else ""
+                self.send_yourself = send_yourself
         except Exception:
             pass
 
@@ -436,7 +878,9 @@ def run(
         while True:
             cycle.step()
             cycle.sync_interval()
+            cycle.sync_difficulty_interval()
             cycle.sync_reset()
+            cycle.sync_personas()
             cycle.push_status()
             if once:
                 break
@@ -462,10 +906,55 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--difficulty-interval",
         type=float,
-        default=DEFAULT_DIFFICULTY_INTERVAL_S,
-        help="Difficulty-Timer in Sekunden, entkoppelt vom Wellen-Feuern (Default 200, Issue #778)",
+        default=DEFAULT_DIFFICULTY_INTERVAL_FIRST_S,
+        help=(
+            "Dauer des ERSTEN Difficulty-Schritts (1→2) in Sekunden "
+            "(Default 200)."
+        ),
+    )
+    p.add_argument(
+        "--difficulty-interval-subsequent",
+        type=float,
+        default=DEFAULT_DIFFICULTY_INTERVAL_SUBSEQUENT_S,
+        help=(
+            "Dauer jedes Folge-Schritts (2→3 … 8→9) in Sekunden (Default 600)."
+        ),
+    )
+    p.add_argument(
+        "--difficulty-schedule",
+        default=None,
+        help=(
+            "Komma-separierte Schrittdauern (1→2,2→3,…8→9) als volle Kurve; "
+            "ueberschreibt --difficulty-interval/--difficulty-interval-subsequent. "
+            "Default: Base-Game-Kurve 200,600,600,600,600,600,600,600."
+        ),
     )
     p.add_argument("--max-level", type=int, default=DEFAULT_MAX_LEVEL, help="Max. natuerliches Level (Default 9)")
+    p.add_argument(
+        "--difficulty-profile",
+        choices=sorted(DIFFICULTY_RULES.keys()),
+        default=DEFAULT_DIFFICULTY_PROFILE,
+        help=(
+            "Wellen-Feuer-Profil (Attack-Count/Boss/Extra/MP, s. DIFFICULTY_RULES). "
+            "Default: default."
+        ),
+    )
+    p.add_argument(
+        "--persona",
+        default=None,
+        help="Name der aktiven Persona (Default none = nur Natural Waves); braucht --persona-file",
+    )
+    p.add_argument(
+        "--persona-file",
+        default=os.environ.get("RBB_PERSONA_FILE"),
+        help="Pfad zur personas.json (Default: RBB_PERSONA_FILE)",
+    )
+    p.add_argument(
+        "--send-yourself",
+        choices=["on", "off"],
+        default="on",
+        help="Eigene Kaeufe lokal feuern (on, Default) oder nur tracken/ins Leere (off)",
+    )
     p.add_argument("--control-bind", default="0.0.0.0", help="Bind-Adresse des Control-Servers")
     p.add_argument(
         "--control-port", type=int, default=DEFAULT_CONTROL_PORT, help="Port des Control-Servers (Default 9102)"
@@ -478,11 +967,47 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list] = None) -> int:
     args = build_parser().parse_args(argv)
+
+    persona = None
+    persona_name = ""
+    if args.persona:
+        if not args.persona_file:
+            print("[attack-cycle] Fehler: --persona braucht --persona-file (oder RBB_PERSONA_FILE)", flush=True)
+            return 2
+        try:
+            personas = load_personas(args.persona_file)
+        except (OSError, ValueError) as e:
+            print(f"[attack-cycle] Fehler beim Laden der Persona-Datei: {e}", flush=True)
+            return 2
+        if args.persona not in personas:
+            print(f"[attack-cycle] Fehler: unbekannte Persona '{args.persona}'", flush=True)
+            return 2
+        persona = personas[args.persona]
+        persona_name = args.persona
+
+    difficulty_schedule = None
+    if args.difficulty_schedule:
+        try:
+            difficulty_schedule = [float(x) for x in args.difficulty_schedule.split(",") if x.strip()]
+        except ValueError:
+            print(
+                f"[attack-cycle] Fehler: --difficulty-schedule '{args.difficulty_schedule}' "
+                "ist keine komma-separierte Zahlenliste",
+                flush=True,
+            )
+            return 2
+
     cycle = AttackCycle(
         args.bridge_url,
         interval_s=args.interval,
-        difficulty_interval_s=args.difficulty_interval,
+        difficulty_interval_first_s=args.difficulty_interval,
+        difficulty_interval_subsequent_s=args.difficulty_interval_subsequent,
+        difficulty_schedule=difficulty_schedule,
         max_level=args.max_level,
+        persona=persona,
+        persona_name=persona_name,
+        send_yourself=(args.send_yourself == "on"),
+        difficulty_profile=args.difficulty_profile,
         timeout=args.timeout,
     )
     run(cycle, args.control_bind, args.control_port, poll_interval=args.poll_interval, once=args.once)
