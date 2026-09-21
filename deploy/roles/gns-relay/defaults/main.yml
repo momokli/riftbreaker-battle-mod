@@ -56,6 +56,8 @@ gns_relay_target_default: "127.0.0.1:6322"
 # Mount-Punkt der Game-DLLs (read-only). Der Probe laeuft aus
 # {{ gns_relay_bin_mount }}/bin und laedt dort die GameNetworkingSockets.dll.
 gns_relay_bin_mount: /opt/riftbreaker
+# Mount-Punkt des Wine-Prefix IM Container (Volume-Target).
+gns_relay_wine_mount: /data/.wine
 # Pfad der gerenderten Routen-Datei IM Container.
 gns_relay_routes_container_path: /etc/gns-relay/routes
 # Pfad der gemounteten gns_probe.exe IM Container.
