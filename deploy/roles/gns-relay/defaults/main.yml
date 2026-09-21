@@ -84,8 +84,8 @@ gns_relay_staging_dir: "{{ gns_relay_bin_dir }}/.staging"
 
 # --- Build (Repo-Checkout auf dem Zielhost) ---------------------------------
 # WIE die Rolle rbtools: gebaut wird zur Deploy-Zeit aus dem Repo-Checkout,
-# kein Binary im Repo/Image. Quelle: tools/gns-proxy/gns_probe.cpp.
+# kein Binary im Repo/Image. Aufgerufen wird tools/gns-proxy/build.sh — EINE
+# Quelle fuer die Build-Kommandos (Toolchain-Wahl und reproducible-Link-Flag
+# liegen dort, nicht im Task).
 gns_relay_repo_root: "{{ playbook_dir }}/.."
 gns_relay_source_dir: "{{ gns_relay_repo_root }}/tools/gns-proxy"
-gns_relay_source: "{{ gns_relay_source_dir }}/gns_probe.cpp"
-gns_relay_include_dir: "{{ gns_relay_source_dir }}/include"
