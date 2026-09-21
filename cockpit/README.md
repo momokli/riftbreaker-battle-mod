@@ -22,33 +22,35 @@ und **lädt die Seite nie neu** (defensives Contract, s. Tests).
 
 Die Oberfläche ist als dichtes, flaches Qt-/QML-artiges Desktop-Werkzeug gebaut
 (1px-Haarlinien, 3px-Radius, Gruppen als `fieldset` im QGroupBox-Stil, 4px-Raster,
-25px-Controlhöhe, `tabular-nums` für alle Zahlen). Vier Gruppen, geschnitten nach
-Änderungsrate — das Kriterium für einen Operator, der parallel im Spiel arbeitet
-und die Seite nur scannt:
+25px-Controlhöhe, `tabular-nums` für alle Zahlen). Sechs **Tabs** trennen die
+Änderungsrate bzw. die Rolle der Bereiche (#832):
 
-| Gruppe | Inhalt |
+| Tab | Inhalt |
 |---|---|
-| `Resources` | Carbonium + Ironium als *eine* ausgerichtete Tabelle (Wert / Max / Menge / `+` / `−`) |
-| `Mission Flow (Wave)` | Readouts (`flow`, `active`, `payload.spawn_point`) + Start- und Stop-Reihe |
-| `Creatures Base Difficulty` | Readout + `set` / `+ increase` / `− decrease` |
-| `Send Tracker (Carbonium)` | persistentes Send-Log (timestamp · resource · amount) + Summe/Anzahl, Filter, Quelle |
-| `Personas (Send-Profile)` | Send-Profile editieren (CRUD), aktive Persona setzen, send-yourself togglen — steuert den Attack-Cycle zur Laufzeit |
-| `Server Control (Plane B)` | Status-Strip, Lifecycle-Toolbar, Container-Log |
+| `Operator` | Resources (Carbonium/Ironium), HQ Health, Send Menu, Send Tracker, Attack Cycle — die aktiven Steuer-Dinge |
+| `Game Config` | Game-Config-Editor (`mode` / `warmup_s` / Toggles) + `start` / `ready` |
+| `Persona Editor` | Send-Profile editieren (CRUD), aktive Persona setzen |
+| `Natural Attacks` | Natural-Attack-Rules (Difficulty 1-9, Attack-Count/Boss, Event-Offset) |
+| `Docker` | Server-Control (Plane B): Status-Strip, Lifecycle-Toolbar, full-width Container-Log |
+| `Advanced` | Low-Level-Debug: Mission Flow, Match End, Creatures Base Difficulty, Natural Waves (Vanilla), Round Reset |
 
-Das **Container-Log** ist die einzige unbegrenzt wachsende, vertikal geformte
-Inhaltstrommel: Es sitzt deshalb in einer rechten Spalte über die volle Höhe, mit
-eigenem Scrollbereich, dessen Höhe nicht am Inhalt hängt — ein Log mit 300 Zeilen
-verschiebt also keine Bedienelemente. Kein Auto-Scroll; geladen wird nur auf
-Knopf (s. Konsum-Pfad 2).
+Das **Container-Log** im `Docker`-Tab ist der einzige unbegrenzt wachsende Inhalt:
+Es füllt die volle Tab-Breite **und** -Höhe (eigener Scrollbereich, dessen Höhe
+nicht am Inhalt hängt — ein Log mit 300 Zeilen verschiebt also keine
+Bedienelemente) und läuft **auto-tailed** (pollt alle 2s; scrollt nur ans Ende,
+wenn man schon unten war). Kein Refresh-Klicken.
+
+**Lazy-Loading (#832):** nur der offene Tab pollt. Beim Tab-Wechsel werden die
+Timer des verlassenen Tabs gestoppt und die des neuen gestartet; der Docker-Log
+wird erst beim Öffnen des Docker-Tabs geladen (vorher kein `/server/*`-Poll).
 
 Eine **Statusleiste** über die volle Breite (24px, Höhe reserviert) trägt die
 beiden Meldungs-Slots `#out` (Bridge-/Kommando-Fehler) und
 `#server_control_msg` (Server-Panel-Meldungen) — Fehler landen damit an einer
 vorhersagbaren Stelle statt verstreut pro Panel.
 
-Responsiv: eine Spalte unter 980px (Log dann max. 40vh, eigenes Scrollen), zwei
-Spalten ab 980px (links gestapelte Gruppen, rechts Server + Log), drei Spalten ab
-1400px.
+Responsiv: einspaltig unter 980px; mehrspaltiges Karten-Raster (auto-fill) ab
+980px; der `Docker`-Tab bleibt eine Spalte, das Log füllt die Höhe.
 
 Der id-/JS-Vertrag ist unabhängig vom Layout: gleiche ids, gleiche Endpunkte und
 Request-Bodies, gleiches Polling, weiterhin kein Reload — der Node-Test
@@ -133,20 +135,26 @@ verhaltensneutral verschoben (dieser Baustein).
 
 ## Wie testen
 
-Die Panels `server control (plane B)` und `send tracker` sind ohne
-Netzwerk/DOM testbar: der jeweilige testbare Marker-Block wird aus
-`cockpit.html` extrahiert und in einem `vm`-Kontext ausgewertet (Fake-`fetch`,
-Fake-`document`, Fake-store/source):
+Die testbaren Panels/Editoren sind ohne Netzwerk testbar: der jeweilige
+Marker-Block wird aus `cockpit.html` extrahiert und in einem `vm`-Kontext
+ausgewertet (Fake-`fetch`, Fake-`document`):
 
 ```bash
 cd tests/server-control-panel && npm test
-cd tests/send-tracker && npm test
-cd tests/personas && npm test
+cd tests/self-send-tracker && npm test
+cd tests/persona-editor && npm test
+cd tests/natural-attack-editor && npm test
+cd tests/game-config-editor && npm test
 ```
 
 Geprüft wird das defensive Contract (immer `—`, nie werfen, nie
-`location.reload`) und beim Send-Tracker zusätzlich Persistenz über den Store,
-Filter-Query, Adapter-Kapselung und idempotentes Merge.
+`location.reload`) und beim Self-Send-Tracker zusätzlich der send-yourself-Toggle.
+
+Zusätzlich rendert `tests/cockpit-render` die ganze UI im echten Chromium
+(Playwright): Tab-Struktur + roving tabindex, dass Formulare rendern, dass der
+Docker-Log auto-tailt (lazy geladen) und dass keine JS-Fehler auftreten. Ohne
+Playwright/Chromium überspringt sich der Test selbst. Für Layout-/Optik-Review
+per Screenshot siehe `tools/cockpit-ui-review/` (Skill `cockpit-ui-review`).
 
 ## Status
 
@@ -154,7 +162,8 @@ Filter-Query, Adapter-Kapselung und idempotentes Merge.
 - [x] Panel `server control (plane B)` (#422) + Node-Test `tests/server-control-panel`
 - [x] Qt-Stil-Layout: vier Gruppen, Log-Pane rechts, Statusleiste (#468)
 - [x] Send-Tracker-Panel: persistentes Send-Log + austauschbarer Quell-Adapter (#527); Node-Test `tests/send-tracker`
-- [x] Personas-Panel: Send-Profile editieren + send-yourself togglen (#788); Node-Test `tests/personas`
+- [x] Personas-Panel: Send-Profile editieren + send-yourself togglen (#788); Node-Test `tests/persona-editor`
+- [x] Cockpit-Refactor (#832): 6 Tabs (Operator/Game Config/Persona/Natural/Docker/Advanced), Docker-Log full-width + auto-tail, Lazy-Polling pro Tab; Render-Test `tests/cockpit-render`
 - [ ] Send-Tracker an den finalen Transport anschließen (Adapter tauschen) — hängt an Spike #526
 - [ ] Schritt 2 (#474): Caddy serviert die UI statisch, proxyt nur die API-Pfade; `cockpit_html.inc` entfällt
 - [ ] Live-Daten des Plane-B-Panels brauchen gemergtes #424 (Agent + Caddy-Route `handle /server/*` + Bearer-Injektion)
