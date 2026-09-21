@@ -66,8 +66,14 @@ Client-Handshake (`BINSER…`, enthaelt `EXE: <n> DATA: <n>`) antwortet der Serv
 _erst dann_ sendet der Client seinen Namen (laengenpraefixierter Klartext, in
 unserem Mitschnitt `00 04 6d 6f 6d 6f` = `momo`). Deshalb ist die Identitaet der
 bessere Key; der Name ist der Nutzer-sichtbare Komfort (Re-Route) und fuellt
-zugleich einen **Identity-Cache**, damit der zweite Join clean und ohne Replay
-ist.
+zugleich die Grundlage fuer den Default, falls kein Suffix passt.
+
+> **Kein Identity-Cache (Issue #843).** Ein gelerntes „Identitaet → Backend“
+> wurde wieder entfernt: die GNS-Identitaet ist stabil pro Installation, der
+> Spielname aber nicht. Live belegt: nach einem `-staging`-Join landete ein
+> spaeterer Join **ohne** Suffix wieder auf staging statt auf dem Default. Der
+> Name entscheidet jetzt bei jedem Join neu; nur **explizite** Identitaets-Regeln
+> (`str:… = …` in der Routen-Datei) routen ohne Umweg.
 
 ## Routen-Regeln (1.0)
 
@@ -82,7 +88,7 @@ Routen sind **Daten** (`routes.example`); die Auswertung ist reine Logik in
 
 Reihenfolge: **exakt** > **laengster Suffix** > **Default**. Damit waehlt der
 Spielername die Umgebung (`momo-staging` -> staging, `momo-dev` -> dev, sonst
-prod); die GNS-Identitaet bleibt als exakter Key und fuer den Identity-Cache
+prod); die GNS-Identitaet bleibt als exakter Key fuer bewusst gesetzte Regeln
 erhalten.
 
 `dev` muss dafuer von 6321 auf einen freien Port umziehen (6324) — 6321 gehoert
@@ -153,7 +159,8 @@ Sekunden auf (vorher sah es wie ein Timeout des Proxys aus).
 - [x] E1 GNS-Terminierung (Client akzeptiert fremden Server)
 - [x] AppID-Blockade gefunden + gefixt
 - [x] E3 Relay zum Backend (bidirektional, Flags erhalten, Backpressure)
-- [x] E4 Zielwahl: Identitaet (sofort) + Name (Re-Route) + Identity-Cache
+- [x] E4 Zielwahl: explizite Identitaets-Regel (sofort) + Name per Re-Route
+      (kein gelerntes Caching — Ursache einer Fehlroute, s. Routen-Regeln)
 - [x] Live: 1v1-Match durch das Relay, Namens-Routing auf staging
 - [x] 1.0: Suffix-Routing (`-dev`/`-staging`) als Regeln + Host-Test (#843)
 - [ ] Deployment der Relay-Rolle + dev-Port-Umzug (#843)
