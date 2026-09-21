@@ -480,10 +480,13 @@ static CRITICAL_SECTION g_attack_status_cs;
  * (POST /attack_interval). Default 420 = 7 min. */
 static int g_attack_interval_s = 420;
 static CRITICAL_SECTION g_attack_interval_cs;
-/* Difficulty-Intervall (Sekunden), via WebUI konfigurierbar
- * (POST /difficulty_interval). Default 200 s (entkoppelter Timer #778). */
-static int g_difficulty_interval_s = 200;
-static CRITICAL_SECTION g_difficulty_interval_cs;
+/* Difficulty-Escalation (Sekunden), via WebUI konfigurierbar
+ * (POST /difficulty_interval): erster Schritt 1→2 Default 200 s,
+ * Folge-Schritte 2→3 … 8→9 Default 600 s (Base-Game-Kurve, §3.1). */
+static int g_difficulty_interval_first_s = 200;
+static CRITICAL_SECTION g_difficulty_interval_first_cs;
+static int g_difficulty_interval_subsequent_s = 600;
+static CRITICAL_SECTION g_difficulty_interval_subsequent_cs;
 /* Attack-Cycle-Reset-Epoch (via POST /attack_reset {"reset":1}). */
 static int g_attack_reset_epoch = 0;
 static CRITICAL_SECTION g_attack_reset_cs;
@@ -493,7 +496,7 @@ static CRITICAL_SECTION g_attack_reset_cs;
  * mit 4 Default-Personas vorbelegt (PLATZHALTER-Werte, runtime editierbar).
  * g_active_persona = aktiver Name ("" = none); g_send_yourself = Routing. */
 static char g_personas[8192] =
-    "{\"aggro\":[[0,0,1,0,1,0,0,0,0],[0,0,0,0,0,0,1,0,0],[0,0,0,0,0,0,0,0,2],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]],\"ruhig\":[[0,0,0,0,0,0,0,0,0],[0,1,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,1,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]],\"build\":[[1,0,2,0,1,0,0,0,0],[3,0,0,0,0,0,0,0,0],[0,1,0,2,0,0,1,0,0],[0,1,0,0,0,2,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]],\"zerg\":[[3,0,0,0,0,0,0,0,0],[3,0,0,0,0,0,0,0,0],[0,2,0,0,0,0,0,0,0],[0,0,2,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]],\"matheo\":[[2,2,0,0,0,0,0,0,0],[0,5,0,0,0,0,0,0,0],[0,0,0,0,0,2,0,0,0],[0,0,2,2,0,0,0,0,0],[0,1,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]]}";
+    "{\"aggro\":[[0,0,1,0,1,0,0,0,0],[0,0,0,0,0,0,1,0,0],[0,0,0,0,0,0,0,0,2],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]],\"ruhig\":[[0,0,0,0,0,0,0,0,0],[0,1,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,1,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]],\"build\":[[1,0,2,0,1,0,0,0,0],[3,0,0,0,0,0,0,0,0],[0,1,0,2,0,0,1,0,0],[0,1,0,0,0,2,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]],\"zerg\":[[3,0,0,0,0,0,0,0,0],[3,0,0,0,0,0,0,0,0],[0,2,0,0,0,0,0,0,0],[0,0,2,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]],\"matheo\":[[1,0,0,0,0,0,0,0,0],[0,5,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,1,1,1,0,1,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]]}";
 static CRITICAL_SECTION g_personas_cs;
 static char g_active_persona[64];
 static CRITICAL_SECTION g_active_persona_cs;
@@ -1367,25 +1370,39 @@ static void handle_post_attack_interval(SOCKET c, const char *body)
     http_respond(c, 200, "OK", resp);
 }
 
-/* POST /difficulty_interval: setzt (falls difficulty_interval_s > 0) und
- * liefert das aktuelle Difficulty-Intervall. Spiegel von /attack_interval. */
+/* POST /difficulty_interval: setzt (falls > 0) und liefert die zwei
+ * Difficulty-Schrittdauern: erster Schritt (difficulty_interval_first_s,
+ * Default 200) und Folge-Schritte (difficulty_interval_subsequent_s,
+ * Default 600). Der Attack-Cycle baut daraus den Schedule
+ * [first, subsequent, …] (8 Schritte). */
 static void handle_post_difficulty_interval(SOCKET c, const char *body)
 {
     double d = 0.0;
-    char resp[128];
-    int cur;
+    char resp[192];
+    int first, subsequent;
 
-    if (json_get_number(body, "difficulty_interval_s", &d) && d > 0.0) {
-        EnterCriticalSection(&g_difficulty_interval_cs);
-        g_difficulty_interval_s = (int)d;
-        LeaveCriticalSection(&g_difficulty_interval_cs);
-        blog("difficulty_interval -> %d s", (int)d);
+    if (json_get_number(body, "difficulty_interval_first_s", &d) && d > 0.0) {
+        EnterCriticalSection(&g_difficulty_interval_first_cs);
+        g_difficulty_interval_first_s = (int)d;
+        LeaveCriticalSection(&g_difficulty_interval_first_cs);
+        blog("difficulty_interval_first -> %d s", (int)d);
+    }
+    if (json_get_number(body, "difficulty_interval_subsequent_s", &d) && d > 0.0) {
+        EnterCriticalSection(&g_difficulty_interval_subsequent_cs);
+        g_difficulty_interval_subsequent_s = (int)d;
+        LeaveCriticalSection(&g_difficulty_interval_subsequent_cs);
+        blog("difficulty_interval_subsequent -> %d s", (int)d);
     }
 
-    EnterCriticalSection(&g_difficulty_interval_cs);
-    cur = g_difficulty_interval_s;
-    LeaveCriticalSection(&g_difficulty_interval_cs);
-    snprintf(resp, sizeof(resp), "{\"ok\":true,\"difficulty_interval_s\":%d}", cur);
+    EnterCriticalSection(&g_difficulty_interval_first_cs);
+    first = g_difficulty_interval_first_s;
+    LeaveCriticalSection(&g_difficulty_interval_first_cs);
+    EnterCriticalSection(&g_difficulty_interval_subsequent_cs);
+    subsequent = g_difficulty_interval_subsequent_s;
+    LeaveCriticalSection(&g_difficulty_interval_subsequent_cs);
+    snprintf(resp, sizeof(resp),
+             "{\"ok\":true,\"difficulty_interval_first_s\":%d,\"difficulty_interval_subsequent_s\":%d}",
+             first, subsequent);
     http_respond(c, 200, "OK", resp);
 }
 
@@ -1775,7 +1792,8 @@ static int mode_server(void)
     InitializeCriticalSection(&g_attack_status_cs);
     InitializeCriticalSection(&g_attack_interval_cs);
     InitializeCriticalSection(&g_attack_reset_cs);
-    InitializeCriticalSection(&g_difficulty_interval_cs);
+    InitializeCriticalSection(&g_difficulty_interval_first_cs);
+    InitializeCriticalSection(&g_difficulty_interval_subsequent_cs);
     InitializeCriticalSection(&g_personas_cs);
     InitializeCriticalSection(&g_active_persona_cs);
     InitializeCriticalSection(&g_send_yourself_cs);
