@@ -3,9 +3,10 @@
 """attack-cycle — 7-Minuten-Angriffszyklus (PoC, ersetzt den 2-min-Order-Scheduler).
 
 Ziel (PoC): anstatt jede gekaufte Welle 2 min nach dem Kauf einzeln zu feuern,
-laeuft ein fester Zyklus, der beim Bau des HQ startet:
+laeuft ein fester Zyklus. Gestartet wird er durch das **Start-Signal** (das HQ
+ist nicht mehr Start-Trigger, s. Game-Flow unten):
 
-  round start (HQ gebaut)
+  start signal -> warmup (immer voll, Default 120s) -> HQ gebaut?
     └─ alle `interval` Sekunden (Default 7 min) feuert der Zyklus die
        Natural-Wellen des aktuellen Levels (1..9, cap 9): je Attack
        `maxAttackCountPerDifficulty[level]` Wellen, ab Level 8/9 zusaetzlich
@@ -43,9 +44,28 @@ Attack eine Liste der vom Gegner gekauften Extra-Wellen. ``[[3,5],[7]]`` =
 Attack 1 feuert natural + Wave 3 + Wave 5, Attack 2 natural + Wave 7, danach
 laeuft die Persona aus (kein Loop). Leere Liste = keine Extra-Wellen.
 
-send-yourself (Routing): ``on`` (Default) feuert eigene Kaeufe lokal (heute);
-``off`` zieht das Carbonium trotzdem ab (try_spend), feuert die Welle aber
-NICHT lokal, sondern trackt sie als Outgoing-Send (spaeter Server B).
+send-yourself (Routing, jetzt der Toggle ``send_yourself``): ``on`` (Default)
+feuert eigene Kaeufe lokal (heute); ``off`` zieht das Carbonium trotzdem ab
+(try_spend), feuert die Welle aber NICHT lokal, sondern trackt sie in
+``outgoing`` (spaeter Server B).
+
+Game-Flow (docs/GAME_FLOW.md, Issues #826/#827/#828): der Zyklus ist eine
+Zustandsmaschine PAUSED -> WARMUP -> RUNNING -> GAME_OVER. Der Server bootet in
+PAUSED (alle Counter reset, keine Timer) — das HQ ist NICHT mehr Start-Trigger.
+Gestartet wird nur durch ein Start-Signal (`signal_start`; Quelle: ``start``/
+``start_epoch`` aus GET /game_config bzw. ``POST /start`` am Control-Port).
+Danach laeuft WARMUP immer voll (``warmup_s``, Default 120s); am Warmup-Ende
+entscheidet das HQ: gebaut -> RUNNING (erste Attack + alle ``interval``), sonst
+GAME_OVER. Ein HQ-Tod in RUNNING ist sofort GAME_OVER (keine Gnadenfrist).
+GAME_OVER ist terminal bis ``reset()`` -> PAUSED (neue Runde).
+
+Vier unabhaengige Toggles (GET /game_config via ``sync_game_config``) steuern die
+Attack-Zusammensetzung: ``natural`` (Natural Waves + Boss + Creature-Events),
+``persona`` (emulierter Gegner), ``send_yourself`` (eigene Kaeufe lokal feuern),
+``send_enemy`` (eigene Kaeufe ZUSAETZLICH an den Gegner). ``buy`` wird immer
+ausgeloest (wenn das Carbonium reicht) und immer getrackt; im SOLO ist
+``send_enemy`` nur ein Zaehler (``enemy_outgoing``) — im VS wird daraus der echte
+Versand an Welt B (#361).
 """
 
 from __future__ import annotations
@@ -86,6 +106,35 @@ DEFAULT_DIFFICULTY_INTERVAL_FIRST_S = 200.0  # erster Schritt (1→2)
 DEFAULT_DIFFICULTY_INTERVAL_SUBSEQUENT_S = 600.0  # Folge-Schritte (2→3 … 8→9)
 DEFAULT_BRIDGE_URL = "http://127.0.0.1:9001"
 DEFAULT_CONTROL_PORT = 9102
+
+# --- Game-Flow (docs/GAME_FLOW.md, Issues #826/#827/#828) --------------------
+# Modus: SOLO (1 Welt, Persona emuliert den Gegner) vs VS (2 Welten, echter
+# Server B als Send-Senke). Der Flow selbst ist modus-unabhaengig (Ein-Code-
+# Prinzip) — nur die ``send_enemy``-Senke unterscheidet sich.
+MODE_SOLO = "solo"
+MODE_VS = "vs"
+MODES = (MODE_SOLO, MODE_VS)
+DEFAULT_MODE = MODE_SOLO
+
+# Zustandsmaschine PAUSED -> WARMUP -> RUNNING -> GAME_OVER.
+STATE_PAUSED = "paused"
+STATE_WARMUP = "warmup"
+STATE_RUNNING = "running"
+STATE_GAME_OVER = "game_over"
+STATES = (STATE_PAUSED, STATE_WARMUP, STATE_RUNNING, STATE_GAME_OVER)
+
+# Warmup laeuft IMMER voll (Entscheidung D1), Default 120s, konfigurierbar.
+DEFAULT_WARMUP_S = 120.0
+
+# Vier unabhaengige Toggles (Spec §3). Default: Natural Waves + Persona an,
+# eigene Kaeufe an sich selbst, (noch) nicht an den Gegner.
+TOGGLE_KEYS = ("natural", "persona", "send_yourself", "send_enemy")
+DEFAULT_TOGGLES = {
+    "natural": True,
+    "persona": True,
+    "send_yourself": True,
+    "send_enemy": False,
+}
 
 # Logic-Pfad je Level (Spiegel der SEND-MENU-Presets im Cockpit, die live
 # Wellen spawnen). Durchgehend _id_1 = raw spawn (sofort), kein _entry
@@ -171,6 +220,37 @@ DIFFICULTY_RULES = {
     },
 }
 DEFAULT_DIFFICULTY_PROFILE = "normal"
+
+
+def _normalize_toggles(raw: Any, base: Optional[Dict[str, bool]] = None) -> Dict[str, bool]:
+    """Uebernimmt die vier Game-Flow-Toggles aus `raw` (nur bool-Werte).
+
+    Fehlende oder ungueltige Felder behalten den Wert aus `base` (Default:
+    DEFAULT_TOGGLES). Damit ist ``sync_game_config`` je Feld defensiv.
+    """
+    toggles = dict(DEFAULT_TOGGLES if base is None else base)
+    if isinstance(raw, dict):
+        for key in TOGGLE_KEYS:
+            if not isinstance(raw.get(key), bool):
+                continue
+            toggles[key] = raw[key]
+    return toggles
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """ENV-Default fuer einen Toggle (1/on/true/yes -> True)."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "on", "true", "yes")
+
+
+def _env_float(name: str, default: float) -> float:
+    """ENV-Default fuer eine Zahl; ungueltige Werte -> `default`."""
+    try:
+        return float(os.environ[name])
+    except (KeyError, ValueError):
+        return default
 
 
 def parse_hq_alive(raw: str) -> bool:
@@ -421,6 +501,10 @@ class AttackCycle:
         persona: Optional[List[List[int]]] = None,
         persona_name: str = "",
         send_yourself: bool = True,
+        mode: str = DEFAULT_MODE,
+        warmup_s: float = DEFAULT_WARMUP_S,
+        toggles: Optional[Dict[str, bool]] = None,
+        poll_start: bool = False,
         timeout: float = 30.0,
         difficulty_profile: str = DEFAULT_DIFFICULTY_PROFILE,
         difficulty_rules: Optional[Dict[str, Any]] = None,
@@ -457,7 +541,17 @@ class AttackCycle:
         self.wave_logic = wave_logic or WAVE_LOGIC
         self.persona = persona
         self.persona_name = persona_name
-        self.send_yourself = send_yourself
+        # Toggles (Game-Flow): `send_yourself` bleibt als Legacy-Flag/CLI-Flag
+        # erhalten und ist der Default des gleichnamigen Toggles.
+        base_toggles = dict(DEFAULT_TOGGLES)
+        base_toggles["send_yourself"] = bool(send_yourself)
+        self.toggles = _normalize_toggles(toggles, base_toggles)
+        self.mode = mode if mode in MODES else DEFAULT_MODE
+        self.warmup_s = float(warmup_s) if warmup_s >= 0 else DEFAULT_WARMUP_S
+        # Start-Signal defensiv (s. sync_start): Poll auf POST /start ist per
+        # Default aus, weil die Bridge jeden /start-Aufruf quittiert.
+        self.poll_start = bool(poll_start)
+        self.ready = False
         self.timeout = timeout
         # Wellen-Feuer-Regeln (Attack-Count/Boss/Extra/MP), konfigurierbar.
         # Ein explizites `difficulty_rules`-dict ueberschreibt das benannte
@@ -480,18 +574,91 @@ class AttackCycle:
 
         self._lock = threading.Lock()
         self.active = False
+        self.state = STATE_PAUSED
         self.level = 1
         self.next_attack_at: Optional[float] = None
         self.next_difficulty_at: Optional[float] = None
         self.next_event_at: Optional[float] = None
+        self.next_warmup_end: Optional[float] = None
         self.orders: list = []  # unbezahlte Buy-Orders (order list)
         self.bought: list = []  # bezahlte Wellen (bought queue, feuert als naechstes)
         self.last_fire: Optional[Dict[str, Any]] = None
         self.last_event: Optional[Dict[str, Any]] = None
         self.attack_index = 0  # Anzahl gefeuerter Attacken (Persona-Indexierung)
-        self.outgoing: list = []  # getrackte Outgoing-Sends (send_yourself off)
+        self.outgoing: list = []  # getrackte Sends ohne lokalen Absender (send_yourself off)
+        self.enemy_outgoing: list = []  # Sends "an den Gegner" (SOLO: Zaehler; VS: Welt B)
         self.history: list = []  # letzte N gefeuerte Attacken (fuer Attack-Cycle-Tabelle)
         self._reset_epoch = 0
+        self._start_epoch: Optional[int] = None  # Edge-Erkennung fuer start_epoch
+        self._start_signaled = False  # Start-Signal gesehen (noch nicht angewandt)
+
+    # --- Toggles ----------------------------------------------------------
+    @property
+    def send_yourself(self) -> bool:
+        """Legacy-Zugriff auf den Toggle ``send_yourself`` (gleiche Quelle)."""
+        return bool(self.toggles.get("send_yourself", True))
+
+    @send_yourself.setter
+    def send_yourself(self, value: Any) -> None:
+        self.toggles["send_yourself"] = bool(value)
+
+    # --- Game-Flow / Zustandsmaschine -------------------------------------
+    def _set_state(self, state: str) -> None:
+        """Setzt den Flow-Zustand und haelt das Legacy-Feld ``active`` synchron."""
+        self.state = state
+        self.active = state == STATE_RUNNING
+        print(f"[attack-cycle] state -> {state}", flush=True)
+
+    def _clear_round(self) -> None:
+        """Counter, Queues und Timer einer Runde zuruecksetzen (PAUSED-Basis)."""
+        self.level = 1
+        self.next_attack_at = None
+        self.next_difficulty_at = None
+        self.next_event_at = None
+        self.next_warmup_end = None
+        self.orders = []
+        self.bought = []
+        self.attack_index = 0
+        self.outgoing = []
+        self.enemy_outgoing = []
+        self.history = []
+        self.last_fire = None
+        self.last_event = None
+
+    def _enter_game_over(self) -> None:
+        """WARMUP/RUNNING -> GAME_OVER (Terminal bis reset(); Timer aus)."""
+        self.next_attack_at = None
+        self.next_difficulty_at = None
+        self.next_event_at = None
+        self.next_warmup_end = None
+        self._set_state(STATE_GAME_OVER)
+
+    def signal_start(self) -> bool:
+        """Start-Signal anwenden: PAUSED -> WARMUP (idempotent, nur aus PAUSED).
+
+        Das HQ ist NICHT mehr der Start-Trigger (Spec §5). Rueckgabe: True, wenn
+        der Uebergang stattgefunden hat.
+        """
+        with self._lock:
+            if self.state != STATE_PAUSED:
+                return False
+            self._clear_round()
+            self._set_state(STATE_WARMUP)
+            self.next_warmup_end = self._clock() + self.warmup_s
+            warmup_end = self.next_warmup_end
+        print(
+            f"[attack-cycle] start-Signal -> warmup ({self.warmup_s:.0f}s, "
+            f"Ende bei t={warmup_end:.0f})",
+            flush=True,
+        )
+        return True
+
+    def set_ready(self, on: bool = True) -> bool:
+        """Ready-Flag setzen (POST /ready; heute Cockpit-Klick, spaeter Chat)."""
+        with self._lock:
+            self.ready = bool(on)
+        print(f"[attack-cycle] ready -> {'on' if self.ready else 'off'}", flush=True)
+        return self.ready
 
     # --- HTTP (urllib) ----------------------------------------------------
     def _http_post(self, path: str, body: bytes) -> tuple:
@@ -560,7 +727,10 @@ class AttackCycle:
         """Bezahlt alle offenen Orders (try_spend) und verschiebt sie nach bought.
 
         Nur bezahlte Orders landen in bought -> die Welle feuert NUR, wenn der
-        Spieler das Carbonium wirklich HATTE (kein Optimistic-Spawn).
+        Spieler das Carbonium wirklich HATTE (kein Optimistic-Spawn). Jeder
+        bezahlte Kauf wird IMMER getrackt; wohin er geht (an sich selbst /
+        zusaetzlich an den Gegner / ins Leere), entscheiden die Toggles erst
+        beim Feuern (Spec §3).
         """
         with self._lock:
             orders = list(self.orders)
@@ -571,18 +741,8 @@ class AttackCycle:
                 status, ok, body = self._spend(cost)
                 if 200 <= status < 300 and ok:
                     with self._lock:
-                        if self.send_yourself:
-                            self.bought.append(level)
-                        else:
-                            self.outgoing.append({"level": level, "cost": cost})
-                    if self.send_yourself:
-                        print(f"[attack-cycle] wave{level} bezahlt -> bought (cost={cost})", flush=True)
-                    else:
-                        print(
-                            f"[attack-cycle] wave{level} bezahlt -> outgoing "
-                            f"(send_yourself=off, Carbonium abgezogen, Welle geht ins Leere)",
-                            flush=True,
-                        )
+                        self.bought.append(level)
+                    print(f"[attack-cycle] wave{level} bezahlt -> bought (cost={cost})", flush=True)
                 else:
                     print(f"[attack-cycle] wave{level} verworfen (status={status} ok={ok}): {body[:160]}", flush=True)
             except Exception as e:
@@ -656,25 +816,49 @@ class AttackCycle:
 
     # --- Ein Poll/Tick-Schritt -------------------------------------------
     def step(self) -> Optional[str]:
-        """Ein Iterationsschritt. Liefert eine Aktion ("started"/"attack") oder None."""
+        """Ein Iterationsschritt der Game-Flow-Zustandsmaschine.
+
+        Liefert eine Aktion oder None:
+          "started"    WARMUP -> RUNNING (HQ gebaut, erste Attack geplant)
+          "attack"     eine Attack wurde gefeuert (RUNNING)
+          "game_over"  kein HQ am Warmup-Ende bzw. HQ-Tod in RUNNING
+        """
         now = self._clock()
 
-        if not self.active:
-            if self._hq_alive():
-                with self._lock:
-                    self.active = True
-                    self.level = 1
-                    self.next_attack_at = now + self.interval_s
-                    self.next_difficulty_at = now + self._difficulty_duration(1)
-                    self.next_event_at = now + self.interval_s - self.event_offset_s
-                print(
-                    f"[attack-cycle] HQ gebaut -> Zyklus gestartet (Level 1, "
-                    f"Angriff in {self.interval_s:.0f}s, "
-                    f"naechste Difficulty in {self._difficulty_duration(1):.0f}s)",
-                    flush=True,
-                )
-                return "started"
+        # PAUSED: hier bootet der Server — keine Timer, kein HQ-Trigger.
+        if self.state == STATE_PAUSED or self.state == STATE_GAME_OVER:
             return None
+
+        if self.state == STATE_WARMUP:
+            if self.next_warmup_end is None or now < self.next_warmup_end:
+                return None
+            # Das Warmup laeuft IMMER voll (D1); erst danach zaehlt das HQ.
+            if not self._hq_alive():
+                with self._lock:
+                    self._enter_game_over()
+                print("[attack-cycle] warmup-Ende ohne HQ -> game_over", flush=True)
+                return "game_over"
+            with self._lock:
+                self._set_state(STATE_RUNNING)
+                self.level = 1
+                self.next_attack_at = now + self.interval_s
+                self.next_difficulty_at = now + self._difficulty_duration(1)
+                self.next_event_at = now + self.interval_s - self.event_offset_s
+            print(
+                f"[attack-cycle] warmup-Ende + HQ -> running (Level 1, "
+                f"Angriff in {self.interval_s:.0f}s, "
+                f"naechste Difficulty in {self._difficulty_duration(1):.0f}s)",
+                flush=True,
+            )
+            return "started"
+
+        # --- RUNNING ------------------------------------------------------
+        # HQ destroyed -> sofort game_over (D2, keine Gnadenfrist).
+        if not self._hq_alive():
+            with self._lock:
+                self._enter_game_over()
+            print("[attack-cycle] HQ zerstoert -> game_over", flush=True)
+            return "game_over"
 
         # Difficulty-Timer (Issue #778): laeuft unabhaengig vom Wellen-Feuern
         # und folgt der Base-Game-Kurve (erster Schritt kurz, Rest 600s).
@@ -690,14 +874,16 @@ class AttackCycle:
         # prepare-Fenster (event_offset_s vor der naechsten Attack). Das Event-
         # Level = aktuelles Difficulty-Level (self.level), synchron wie
         # currentEventLevel im Base Game (event_manager.lua / dom_manager.lua).
+        # Teil der Natural-Attack-Dimensionen (#819) -> natural-Toggle.
         event = None
         event_level = self.level
         with self._lock:
             if self.next_event_at is not None and now >= self.next_event_at:
                 event_level = self.level
-                event = _pick_creature_event(
-                    event_level, self.creature_events, self._rng
-                )
+                if self.toggles.get("natural", True):
+                    event = _pick_creature_event(
+                        event_level, self.creature_events, self._rng
+                    )
                 self.next_event_at += self.interval_s
         if event is not None:
             self._fire_event(event["logic"], event["attack_strength"])
@@ -723,43 +909,73 @@ class AttackCycle:
             self.next_attack_at = self.next_attack_at + self.interval_s
             self.attack_index += 1
             extra_levels: List[int] = []
-            if self.persona and self.attack_index - 1 < len(self.persona):
+            persona_on = bool(self.toggles.get("persona", True))
+            if persona_on and self.persona and self.attack_index - 1 < len(self.persona):
                 extra_levels = _expand_counts(self.persona[self.attack_index - 1])
+            natural_on = bool(self.toggles.get("natural", True))
+            self_on = bool(self.toggles.get("send_yourself", True))
+            enemy_on = bool(self.toggles.get("send_enemy", False))
 
         plan = self._wave_plan(natural_level)
-        for _ in range(plan["natural_count"]):
-            self._fire(natural_level)
-        if plan["boss"]:
-            self._fire_boss()
+        natural_count = plan["natural_count"] if natural_on else 0
+        boss = bool(plan["boss"]) and natural_on
+        if natural_on:
+            for _ in range(plan["natural_count"]):
+                self._fire(natural_level)
+            if plan["boss"]:
+                self._fire_boss()
         for lvl in extra_levels:
             self._fire(lvl)
-        for lvl in sent_levels:
-            self._fire(lvl)
+        if self_on:
+            for lvl in sent_levels:
+                self._fire(lvl)
+        elif sent_levels:
+            # send_yourself off: Carbonium abgezogen, Welle geht NICHT lokal
+            # raus -> nur tracken (spaeter Server B).
+            with self._lock:
+                self.outgoing.extend({"level": lvl} for lvl in sent_levels)
+            print(
+                f"[attack-cycle] send_yourself=off -> {sent_levels} nur getrackt (outgoing)",
+                flush=True,
+            )
+        if enemy_on and sent_levels:
+            # send_enemy: ZUSAETZLICH an den Gegner. Im SOLO gibt es keinen
+            # zweiten Server -> nur zaehlen (enemy_outgoing); im VS wird daraus
+            # der echte Versand an Welt B (#361).
+            with self._lock:
+                self.enemy_outgoing.extend({"level": lvl} for lvl in sent_levels)
+            print(
+                f"[attack-cycle] send_enemy=on -> {sent_levels} an den Gegner "
+                f"(mode={self.mode}, kein zweiter Server -> nur Zaehler)",
+                flush=True,
+            )
         with self._lock:
             self.last_fire = {
                 "natural_level": natural_level,
-                "natural_count": plan["natural_count"],
-                "boss": plan["boss"],
+                "natural_count": natural_count,
+                "boss": boss,
                 "persona_levels": extra_levels,
-                "sent_levels": sent_levels,
+                "sent_levels": sent_levels if self_on else [],
+                "enemy_levels": sent_levels if enemy_on else [],
                 "t": now,
             }
             self.history.append(
                 {
                     "attack": self.attack_index,
                     "natural": natural_level,
-                    "natural_count": plan["natural_count"],
-                    "boss": plan["boss"],
-                    "self": sent_levels,
+                    "natural_count": natural_count,
+                    "boss": boss,
+                    "self": sent_levels if self_on else [],
                     "enemy": extra_levels,
+                    "enemy_outgoing": sent_levels if enemy_on else [],
                     "t": now,
                 }
             )
             self.history = self.history[-10:]  # cap auf die letzten 10 Attacken
         print(
-            f"[attack-cycle] attack: natural={natural_level}x{plan['natural_count']} "
-            f"boss={plan['boss']} "
-            f"+ persona={extra_levels} + sent={sent_levels}",
+            f"[attack-cycle] attack: natural={natural_level}x{natural_count} "
+            f"boss={boss} + persona={extra_levels} + sent={sent_levels} "
+            f"(self={self_on} enemy={enemy_on})",
             flush=True,
         )
         return "attack"
@@ -770,6 +986,11 @@ class AttackCycle:
         with self._lock:
             return {
                 "active": self.active,
+                "state": self.state,
+                "mode": self.mode,
+                "warmup_s": self.warmup_s,
+                "toggles": dict(self.toggles),
+                "ready": self.ready,
                 "level": self.level,
                 "seconds_to_next_attack": (
                     max(0.0, self.next_attack_at - now) if self.next_attack_at is not None else None
@@ -780,12 +1001,16 @@ class AttackCycle:
                 "seconds_to_next_event": (
                     max(0.0, self.next_event_at - now) if self.next_event_at is not None else None
                 ),
+                "seconds_to_warmup_end": (
+                    max(0.0, self.next_warmup_end - now) if self.next_warmup_end is not None else None
+                ),
                 "bought": list(self.bought),
                 "orders": list(self.orders),
                 "persona": self.persona_name or None,
                 "attack_index": self.attack_index,
                 "send_yourself": self.send_yourself,
                 "outgoing": list(self.outgoing),
+                "enemy_outgoing": list(self.enemy_outgoing),
                 "interval_s": self.interval_s,
                 "difficulty_interval_first_s": self.difficulty_interval_first_s,
                 "difficulty_interval_subsequent_s": self.difficulty_interval_subsequent_s,
@@ -887,22 +1112,16 @@ class AttackCycle:
 
     # --- Reset (WebUI) -----------------------------------------------------
     def reset(self) -> None:
-        """Setzt den Zyklus zurueck: warte wieder auf HQ-Bau, Level 1,
-        Queue geleert, kein Countdown."""
+        """Neue Runde: Counter/Timer zurueck, Zustand PAUSED (kein Auto-Start).
+
+        Ausgang aus GAME_OVER (Spec §2): erst ``reset()``, dann ein neues
+        Start-Signal — das HQ allein startet nie wieder.
+        """
         with self._lock:
-            self.active = False
-            self.level = 1
-            self.next_attack_at = None
-            self.next_difficulty_at = None
-            self.next_event_at = None
-            self.orders = []
-            self.bought = []
-            self.attack_index = 0
-            self.outgoing = []
-            self.history = []
-            self.last_fire = None
-            self.last_event = None
-        print("[attack-cycle] reset -> warte auf HQ-Bau", flush=True)
+            self._clear_round()
+            self.ready = False
+            self._set_state(STATE_PAUSED)
+        print("[attack-cycle] reset -> paused (warte auf Start-Signal)", flush=True)
 
     def sync_reset(self) -> None:
         """Prueft einen Reset-Request von der Bridge (POST /attack_reset {})."""
@@ -917,13 +1136,99 @@ class AttackCycle:
         except Exception:
             pass
 
+    # --- Game-Flow-Config von der Bridge (WebUI) --------------------------
+    def sync_game_config(self) -> None:
+        """Pollt GET /game_config und uebernimmt mode, warmup_s + die 4 Toggles.
+
+        Die Bridge ist die Laufzeit-Quelle der Wahrheit (WebUI-Editor); CLI/ENV
+        sind nur der Start-Fallback. Jedes Feld wird einzeln validiert —
+        ungueltige oder fehlende Felder lassen den alten Wert stehen.
+
+        Zusaetzlich defensiv gelesen (falls die Bridge es mitliefert):
+          ``ready``       -> self.ready (Status; startet NICHT allein)
+          ``start``       -> sticky Start-Signal (true -> PAUSED -> WARMUP)
+          ``start_epoch`` -> Start-Signal per Edge (Wert != letzter Wert, > 0)
+        """
+        try:
+            status, body = self._getter("/game_config")
+            if not 200 <= status < 300:
+                return
+            data = json.loads(body)
+            if not isinstance(data, dict):
+                return
+            with self._lock:
+                mode = data.get("mode")
+                if mode in MODES:
+                    self.mode = mode
+                warmup = data.get("warmup_s")
+                if isinstance(warmup, (int, float)) and not isinstance(warmup, bool) and warmup >= 0:
+                    self.warmup_s = float(warmup)
+                self.toggles = _normalize_toggles(data, self.toggles)
+                ready = data.get("ready")
+                if isinstance(ready, bool):
+                    self.ready = ready
+                self._note_start_signal(data)
+        except Exception:
+            pass
+
+    def _note_start_signal(self, data: Dict[str, Any]) -> None:
+        """Merkt ein Start-Signal aus einem Payload (start/start_epoch).
+
+        ``start_epoch`` gewinnt (Edge-Erkennung: nur ein *neuer* Wert > 0 zaehlt),
+        sonst sticky ``start: true``. Wird von ``sync_start`` angewandt.
+        """
+        epoch = data.get("start_epoch")
+        if isinstance(epoch, int) and not isinstance(epoch, bool):
+            if epoch > 0 and epoch != self._start_epoch:
+                self._start_epoch = epoch
+                self._start_signaled = True
+            return
+        if data.get("start") is True:
+            self._start_signaled = True
+
+    def sync_start(self) -> bool:
+        """Prueft ein Start-Signal und wendet es an (PAUSED -> WARMUP).
+
+        Primaerquelle ist ``sync_game_config`` (``start``/``start_epoch`` aus
+        GET /game_config). Nur wenn konfiguriert (``poll_start``), wird
+        zusaetzlich defensiv ``POST /start {}`` gepollt und dessen Antwort auf
+        ``start``/``started`` geprueft.
+
+        ACHTUNG (Beleg: server/pipe-bridge/pipe_bridge.c handle_post_start): die
+        Bridge quittiert JEDEN /start-Aufruf mit ``{"ok":true,"start":true}``
+        und haelt keinen Start-State — ein Poll wuerde also sofort starten.
+        Darum ist ``poll_start`` per Default aus.
+        """
+        signaled = self._start_signaled
+        if not signaled and self.poll_start:
+            signaled = self._poll_start_status()
+        if not signaled:
+            return False
+        self._start_signaled = False
+        return self.signal_start()
+
+    def _poll_start_status(self) -> bool:
+        """Defensiver Fallback: POST /start {} und Antwort auf start/started."""
+        try:
+            status, body = self._poster("/start", b"{}")
+            if not 200 <= status < 300:
+                return False
+            data = json.loads(body)
+            if not isinstance(data, dict):
+                return False
+            return data.get("start") is True or data.get("started") is True
+        except Exception:
+            return False
+
     def sync_personas(self) -> None:
         """Pollt GET /personas und uebernimmt aktive Persona + send_yourself.
 
         Die Bridge ist die Laufzeit-Quelle der Wahrheit; die CLI-Flags
         --persona/--send-yourself sind nur der Start-Fallback. Die aktive
         Persona liefert die Extra-Wellen je Attack (Liste je Attack, mehrere
-        Wellen erlaubt), send_yourself das Routing eigener Kaeufe.
+        Wellen erlaubt), send_yourself das Routing eigener Kaeufe. Beide Werte
+        werden gegen die Toggle-Quelle (GET /game_config) nur uebernommen, wenn
+        die Bridge sie wirklich liefert.
         """
         try:
             status, body = self._getter("/personas")
@@ -950,11 +1255,12 @@ class AttackCycle:
                         parsed.append(norm)
                     if ok:
                         levels = parsed
-            send_yourself = bool(data.get("send_yourself", True))
+            send_yourself = data.get("send_yourself")
             with self._lock:
                 self.persona = levels
                 self.persona_name = active if levels is not None else ""
-                self.send_yourself = send_yourself
+                if isinstance(send_yourself, bool):
+                    self.send_yourself = send_yourself
         except Exception:
             pass
 
@@ -1041,17 +1347,45 @@ class ControlHandler(BaseHTTPRequestHandler):
             self._write_json(404, {"ok": False, "reason": "not_found"})
 
     def do_POST(self) -> None:  # noqa: N802
+        length = int(self.headers.get("content-length", "0") or "0")
+        raw = self.rfile.read(length) if length else b"{}"
+        # Game-Flow-Signale lokal (gleiche Semantik wie die Bridge-Endpunkte):
+        # POST /start -> Start-Signal, POST /ready -> Ready-Flag.
+        if self.path == "/start":
+            started = self.cycle.signal_start()
+            self._write_json(200, {"ok": True, "started": started, "state": self.cycle.state})
+            return
+        if self.path == "/ready":
+            on = self._parse_on(raw)
+            if on is None:
+                self._write_json(400, {"ok": False, "reason": "invalid_request"})
+                return
+            self._write_json(200, {"ok": True, "ready": self.cycle.set_ready(on)})
+            return
         if self.path != "/queue_send":
             self._write_json(404, {"ok": False, "reason": "not_found"})
             return
-        length = int(self.headers.get("content-length", "0") or "0")
-        raw = self.rfile.read(length) if length else b"{}"
         level = parse_send_level(raw.decode("utf-8") or "{}")
         if level is None:
             self._write_json(400, {"ok": False, "reason": "invalid_request"})
             return
         status, payload = self.cycle.buy(level)
         self._write_json(status, payload)
+
+    def _parse_on(self, raw: bytes) -> Optional[bool]:
+        """Liest das Ready-Flag ({"on":0|1}, Default 1) aus dem Request-Body."""
+        try:
+            data = json.loads(raw.decode("utf-8") or "{}")
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        on = data.get("on", True)
+        if isinstance(on, bool):
+            return on
+        if isinstance(on, (int, float)):
+            return on != 0
+        return None
 
 
 def build_control_server(bind: str, port: int, cycle: AttackCycle) -> ThreadingHTTPServer:
@@ -1073,11 +1407,19 @@ def run(
     resolver = threading.Thread(target=cycle._resolver_loop, daemon=True)
     resolver.start()
     print(
-        f"[attack-cycle] control auf http://{control_bind}:{control_port} (GET /status, POST /queue_send)",
+        f"[attack-cycle] control auf http://{control_bind}:{control_port} "
+        f"(GET /status, POST /queue_send, POST /start, POST /ready)",
+        flush=True,
+    )
+    print(
+        f"[attack-cycle] state={cycle.state} mode={cycle.mode} "
+        f"warmup={cycle.warmup_s:.0f}s toggles={cycle.toggles}",
         flush=True,
     )
     try:
         while True:
+            cycle.sync_game_config()
+            cycle.sync_start()
             cycle.step()
             cycle.sync_interval()
             cycle.sync_difficulty_interval()
@@ -1156,7 +1498,33 @@ def build_parser() -> argparse.ArgumentParser:
         "--send-yourself",
         choices=["on", "off"],
         default="on",
-        help="Eigene Kaeufe lokal feuern (on, Default) oder nur tracken/ins Leere (off)",
+        help="Toggle send_yourself: eigene Kaeufe lokal feuern (on, Default) oder nur tracken (off)",
+    )
+    p.add_argument(
+        "--send-enemy",
+        choices=["on", "off"],
+        default="on" if _env_bool("RBB_SEND_ENEMY", False) else "off",
+        help="Toggle send_enemy: eigene Kaeufe ZUSAETZLICH an den Gegner (Default off; ENV RBB_SEND_ENEMY)",
+    )
+    p.add_argument(
+        "--mode",
+        choices=list(MODES),
+        default=os.environ.get("RBB_MODE") or DEFAULT_MODE,
+        help="Game-Flow-Modus solo|vs (Default RBB_MODE oder solo); vs = 2 Welten",
+    )
+    p.add_argument(
+        "--warmup",
+        type=float,
+        default=None,
+        help=f"Warmup-Dauer in Sekunden (Default RBB_WARMUP_S oder {DEFAULT_WARMUP_S:.0f})",
+    )
+    p.add_argument(
+        "--poll-start",
+        action="store_true",
+        help=(
+            "Defensiv POST /start {} pollen (Start-Signal). Default aus: die Bridge "
+            "quittiert jeden /start-Aufruf mit start:true -> wuerde sofort starten."
+        ),
     )
     p.add_argument("--control-bind", default="0.0.0.0", help="Bind-Adresse des Control-Servers")
     p.add_argument(
@@ -1200,6 +1568,8 @@ def main(argv: Optional[list] = None) -> int:
             )
             return 2
 
+    warmup_s = args.warmup if args.warmup is not None else _env_float("RBB_WARMUP_S", DEFAULT_WARMUP_S)
+
     cycle = AttackCycle(
         args.bridge_url,
         interval_s=args.interval,
@@ -1210,6 +1580,15 @@ def main(argv: Optional[list] = None) -> int:
         persona=persona,
         persona_name=persona_name,
         send_yourself=(args.send_yourself == "on"),
+        mode=args.mode,
+        warmup_s=warmup_s,
+        toggles={
+            "natural": _env_bool("RBB_NATURAL", True),
+            "persona": _env_bool("RBB_PERSONA", True),
+            "send_yourself": args.send_yourself == "on",
+            "send_enemy": args.send_enemy == "on",
+        },
+        poll_start=args.poll_start,
         difficulty_profile=args.difficulty_profile,
         timeout=args.timeout,
     )
