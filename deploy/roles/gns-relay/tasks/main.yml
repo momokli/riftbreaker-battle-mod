@@ -67,25 +67,12 @@
   when: not ansible_check_mode
 
 - name: "gns_probe.exe bauen (mingw/zig auf dem Zielhost)"
-  shell: |
-    set -euo pipefail
-    if command -v x86_64-w64-mingw32-g++ >/dev/null 2>&1; then
-      CXX=x86_64-w64-mingw32-g++
-      LD_REPRO="-Wl,--no-insert-timestamp"
-    elif command -v zig >/dev/null 2>&1; then
-      CXX="zig c++ -target x86_64-windows-gnu"
-      LD_REPRO=""
-    else
-      echo "FEHLER: weder x86_64-w64-mingw32-g++ noch zig verfuegbar — gns_probe.exe kann nicht gebaut werden." >&2
-      exit 1
-    fi
-    # -static*: mingw-g++-EXEs brauchen sonst libstdc++-6.dll/libgcc_s_seh-1.dll
-    # aus dem Build-Env — die liegen im Wine-Prefix nicht.
-    $CXX -O2 -Wall -Wextra -std=c++17 -Wno-cast-function-type \
-      $LD_REPRO -I"{{ gns_relay_include_dir }}" \
-      -static -static-libgcc -static-libstdc++ \
-      -o "{{ gns_relay_staging_dir }}/gns_probe.exe" "{{ gns_relay_source }}"
-  args:
+  # Bewusst ueber `bash <script>` (wie die Rolle rbtools) statt `shell:`: das
+  # shell-Modul laeuft unter /bin/sh = dash und kennt `set -o pipefail` nicht
+  # -> Live-Fehler im ersten CD-Lauf ("set: Illegal option -o pipefail").
+  # EINE Quelle fuer die Build-Kommandos: tools/gns-proxy/build.sh.
+  command:
+    cmd: bash {{ gns_relay_source_dir }}/build.sh {{ gns_relay_staging_dir }}
     chdir: "{{ gns_relay_source_dir }}"
   when: not ansible_check_mode
   changed_when: true
