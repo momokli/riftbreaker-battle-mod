@@ -27,7 +27,7 @@ Die Oberfläche ist als dichtes, flaches Qt-/QML-artiges Desktop-Werkzeug gebaut
 
 | Tab | Inhalt |
 |---|---|
-| `Operator` | Resources (Carbonium/Ironium), HQ Health, Send Menu, Send Tracker, Attack Cycle — die aktiven Steuer-Dinge |
+| `Operator` | Resources (Carbonium/Ironium), HQ Health, Send Menu, Send Tracker, Attack Cycle (inkl. Zustand/Warmup-Countdown + „new round") — die aktiven Steuer-Dinge |
 | `Game Config` | Game-Config-Editor (`mode` / `warmup_s` / Toggles) + `start` / `ready` |
 | `Persona Editor` | Send-Profile editieren (CRUD), aktive Persona setzen |
 | `Natural Attacks` | Natural-Attack-Rules (Difficulty 1-9, Attack-Count/Boss, Event-Offset) |
@@ -78,6 +78,8 @@ exec-Zeilen auf die rbbridge-Named-Pipe:
 | `creatures_difficulty` | Kreaturen-Basis-Difficulty lesen/setzen/erhöhen/senken |
 | `end_game` | Match-Ende setzen (`{result:"win"|"lose"}`) — Readout `end_game` aus `get_state` (`null` \| `{result,status}`) |
 | `probe` | Bridge-/Pipe-Erreichbarkeit (API-Fläche der Bridge) |
+| `attack_reset` | Attack-Cycle-Reset (`{reset:1}`) → `PAUSED` (Counter zurück) |
+| `round_reset` | Round-Reset-Wrapper (#854): Cycle-`reset`+`start` (auch aus `game_over`) + nativer `restart_map` |
 
 `GET /health` der Bridge gehört ebenfalls zur API-Fläche. Details und
 Verdrahtung: `docs/INGRESS_IO.md`, `server/README.md`.
@@ -170,6 +172,7 @@ per Screenshot siehe `tools/cockpit-ui-review/` (Skill `cockpit-ui-review`).
 - [x] Personas-Panel: Send-Profile editieren (#788); Node-Test `tests/persona-editor`
 - [x] `send yourself` hat nur noch eine Quelle: Game-Config-Toggle (#851); Alt-Pfad `/send_yourself` + `/personas.send_yourself` stillgelegt
 - [x] Cockpit-Refactor (#832): 6 Tabs (Operator/Game Config/Persona/Natural/Docker/Advanced), Docker-Log full-width + auto-tail, Lazy-Polling pro Tab; Render-Test `tests/cockpit-render`
+- [x] Round-Reset-Wrapper (#854) + Warmup-Countdown (#855): „new round"-Button (Cycle-`reset`+`start` + Map-Restart) und Zustand/Countdown im Attack-Cycle-Panel
 - [ ] Send-Tracker an den finalen Transport anschließen (Adapter tauschen) — hängt an Spike #526
 - [ ] Schritt 2 (#474): Caddy serviert die UI statisch, proxyt nur die API-Pfade; `cockpit_html.inc` entfällt
 - [ ] Live-Daten des Plane-B-Panels brauchen gemergtes #424 (Agent + Caddy-Route `handle /server/*` + Bearer-Injektion)

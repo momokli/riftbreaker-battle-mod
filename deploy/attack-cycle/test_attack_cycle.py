@@ -1056,6 +1056,64 @@ class TestSyncPersonas(unittest.TestCase):
         self.assertTrue(cycle.send_yourself)
 
 
+class TestSyncRoundReset(unittest.TestCase):
+    """sync_round_reset() (#854): POST /round_reset -> reset()+start atomar.
+
+    Aus jedem Zustand (auch GAME_OVER) direkt nach WARMUP; Edge-Erkennung ueber
+    round_reset_epoch (Wiederholung loest nicht erneut aus)."""
+
+    class _Poster:
+        def __init__(self, epoch):
+            self.epoch = epoch
+            self.calls = 0
+
+        def __call__(self, _path, _body):
+            self.calls += 1
+            return (200, json.dumps({"ok": True, "round_reset_epoch": self.epoch}))
+
+    def _cycle(self, epoch):
+        poster = self._Poster(epoch)
+        cycle = AttackCycle(
+            "http://127.0.0.1:9001",
+            interval_s=420.0,
+            difficulty_interval_first_s=1e9,
+            _poster=poster,
+            _getter=lambda path: (200, "{}"),
+            _clock=FakeClock(),
+        )
+        return cycle, poster
+
+    def test_game_over_to_warmup(self):
+        """Aus GAME_OVER (terminal) startet der Wrapper eine neue Runde."""
+        cycle, _poster = self._cycle(1)
+        cycle._set_state(STATE_GAME_OVER)
+        cycle.next_attack_at = 123.0
+        cycle.sync_round_reset()
+        self.assertEqual(cycle.state, STATE_WARMUP)
+        self.assertIsNotNone(cycle.next_warmup_end)
+        self.assertIsNone(cycle.next_attack_at, "Counter wurde zurueckgesetzt")
+
+    def test_epoch_edge_only_once(self):
+        """Gleiche Epoch -> kein erneuter Reset (Edge-Erkennung)."""
+        cycle, poster = self._cycle(1)
+        cycle._set_state(STATE_GAME_OVER)
+        cycle.sync_round_reset()
+        self.assertEqual(cycle.state, STATE_WARMUP)
+        cycle.sync_round_reset()
+        self.assertEqual(cycle.state, STATE_WARMUP)
+        self.assertEqual(poster.calls, 2)
+
+    def test_non_200_ignored(self):
+        cycle = AttackCycle(
+            "http://127.0.0.1:9001",
+            _poster=lambda path, body: (500, "{}"),
+            _getter=lambda path: (200, "{}"),
+        )
+        cycle._set_state(STATE_GAME_OVER)
+        cycle.sync_round_reset()
+        self.assertEqual(cycle.state, STATE_GAME_OVER)
+
+
 class TestSyncNaturalAttackRules(unittest.TestCase):
     """sync_natural_attack_rules(): pollt GET /natural_attack_rules (Bridge)
     und uebernimmt Attack-Count/Boss je Level + Creature-Events + Event-Offset

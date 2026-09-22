@@ -589,6 +589,7 @@ class AttackCycle:
         self.enemy_outgoing: list = []  # Sends "an den Gegner" (SOLO: Zaehler; VS: Welt B)
         self.history: list = []  # letzte N gefeuerte Attacken (fuer Attack-Cycle-Tabelle)
         self._reset_epoch = 0
+        self._round_reset_epoch = 0  # Edge-Erkennung Round-Reset-Wrapper (#854)
         self._start_epoch: Optional[int] = None  # Edge-Erkennung fuer start_epoch
         self._start_signaled = False  # Start-Signal gesehen (noch nicht angewandt)
 
@@ -1132,6 +1133,26 @@ class AttackCycle:
         except Exception:
             pass
 
+    def sync_round_reset(self) -> None:
+        """Round-Reset-Wrapper (#854): POST /round_reset {} von der Bridge.
+
+        Wendet ``reset()`` + ``signal_start()`` ATOMAR an — aus jedem Zustand
+        (auch GAME_OVER) direkt nach WARMUP (neue Runde). Den nativen Map-Restart
+        stoesst die Bridge selbst an (restart_map). Edge-Erkennung ueber
+        ``round_reset_epoch`` (Wiederholung loest nicht erneut aus).
+        """
+        try:
+            status, body = self._poster("/round_reset", b"{}")
+            if not 200 <= status < 300:
+                return
+            epoch = json.loads(body).get("round_reset_epoch")
+            if isinstance(epoch, int) and epoch != self._round_reset_epoch:
+                self._round_reset_epoch = epoch
+                self.reset()
+                self.signal_start()
+        except Exception:
+            pass
+
     # --- Game-Flow-Config von der Bridge (WebUI) --------------------------
     def sync_game_config(self) -> None:
         """Pollt GET /game_config und uebernimmt mode, warmup_s + die 4 Toggles.
@@ -1416,6 +1437,7 @@ def run(
             cycle.sync_interval()
             cycle.sync_difficulty_interval()
             cycle.sync_reset()
+            cycle.sync_round_reset()
             cycle.sync_personas()
             cycle.sync_natural_attack_rules()
             cycle.push_status()

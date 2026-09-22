@@ -733,6 +733,10 @@
                                 <button id="attack_cycle_reset" class="btn-danger">reset</button>
                             </div>
                             <div class="flow-action-row">
+                                <span class="prop-label">round</span>
+                                <button id="attack_round_reset" class="btn-primary" title="Neue Runde in einem Schritt (#854): attack-cycle reset+start (auch aus game_over) + nativer Map-Restart (Economy 0)" aria-label="Start a new round (reset cycle + restart map)">new round</button>
+                            </div>
+                            <div class="flow-action-row">
                                 <span class="prop-label">difficulty first (s)</span>
                                 <input id="difficulty_interval_first_input" class="mono" size="6" value="200" aria-label="Difficulty first step in seconds" />
                                 <button id="difficulty_interval_first_set" class="btn-primary">set</button>
@@ -1124,16 +1128,35 @@
                     return arr.join(",");
                 }
 
+                // Zustand + Warmup-Countdown (#855): nur in WARMUP und nur, wenn
+                // das Backend den Wert liefert (status().seconds_to_warmup_end).
+                function stateCountdown(s) {
+                    if (!s || s.state !== "warmup") return "";
+                    if (s.seconds_to_warmup_end === null || s.seconds_to_warmup_end === undefined) {
+                        return "";
+                    }
+                    return "  (warmup endet in" + fmtCountdown(s.seconds_to_warmup_end * 1000) + ")";
+                }
+
                 async function refreshOrders() {
                     try {
                         var res = await fetch("attack_status");
                         var s = await res.json();
-                        if (!s || s.active !== true) {
+                        if (!s) {
                             $("buy_orders").textContent = "—";
                             $("buy_orders_msg").textContent = "";
                             return;
                         }
+                        if (s.active !== true) {
+                            // Nicht RUNNING (paused/warmup/game_over): Zustand zeigen
+                            // statt "—" — hier lebt der Warmup-Countdown (#855).
+                            $("buy_orders").textContent =
+                                "state " + (s.state || "—") + stateCountdown(s);
+                            $("buy_orders_msg").textContent = "";
+                            return;
+                        }
                         var rows = [];
+                        rows.push("state " + (s.state || "running") + stateCountdown(s));
                         rows.push(
                             "difficulty " + s.level +
                             "  (next +1 in" + fmtCountdown(s.seconds_to_next_difficulty * 1000) + ")"
@@ -1210,6 +1233,17 @@
                 $("attack_cycle_reset").onclick = function () {
                     post("attack_reset", { reset: 1 }).then(function () {
                         $("buy_orders_msg").textContent = "reset";
+                    }).catch(function (e) {
+                        $("buy_orders_msg").textContent = "ERR " + e.message;
+                    });
+                };
+
+                // Round-Reset-Wrapper (#854): neue Runde in einem Schritt.
+                $("attack_round_reset").onclick = function () {
+                    post("round_reset", {}).then(function (r) {
+                        $("buy_orders_msg").textContent = r && r.ok
+                            ? "new round (map: " + (r.restart_map || "?") + ")"
+                            : JSON.stringify(r);
                     }).catch(function (e) {
                         $("buy_orders_msg").textContent = "ERR " + e.message;
                     });
@@ -2152,7 +2186,7 @@
 
                 function gcRenderState() {
                     var s = gameConfigEditor.state.status || {};
-                    $("gc_state").textContent = "state: " + (s.state || "—");
+                    $("gc_state").textContent = "state: " + (s.state || "—") + stateCountdown(s);
                 }
 
                 $("gc_form").addEventListener("change", function (e) {

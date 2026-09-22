@@ -94,6 +94,17 @@ Zur Laufzeit fuehrt **`game_config.send_yourself`** (Cockpit-Tab „Game Config"
 python3 attack_cycle.py --send-yourself off
 ```
 
+## Round-Reset (neue Runde, #854)
+
+Ein Match endet in `GAME_OVER` (terminal). Ein `docker restart` des **Spielservers**
+aendert daran nichts — der Attack-Cycle laeuft im **eigenen Container** und bleibt in
+`GAME_OVER`. Fuer „neue Runde in einem Schritt" gibt es den Wrapper:
+
+`POST /round_reset` (Bridge) erhoeht `round_reset_epoch` und stoesst den nativen
+`restart_map`-Reset an. Der Cycle pollt `POST /round_reset {}` (`sync_round_reset`)
+und wendet **atomar** `reset()` **+** `signal_start()` an → aus jedem Zustand (auch
+`GAME_OVER`) direkt nach `WARMUP`. Cockpit: Button „new round" im Attack-Cycle-Panel.
+
 ## Test
 
 ```bash

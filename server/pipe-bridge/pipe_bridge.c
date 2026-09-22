@@ -491,6 +491,11 @@ static CRITICAL_SECTION g_difficulty_interval_subsequent_cs;
 static int g_attack_reset_epoch = 0;
 static CRITICAL_SECTION g_attack_reset_cs;
 
+/* Round-Reset-Epoch (via POST /round_reset, Issue #854): der Sidecar wendet
+ * reset()+start atomar an (neue Runde, auch aus GAME_OVER). */
+static int g_round_reset_epoch = 0;
+static CRITICAL_SECTION g_round_reset_cs;
+
 /* Personas (Send-Profile) + Self-Send (Issue #788), via WebUI editierbar.
  * g_personas = roher JSON-Object-String {"name":[[level,...],...],...};
  * mit 4 Default-Personas vorbelegt (PLATZHALTER-Werte, runtime editierbar).
@@ -1470,6 +1475,46 @@ static void handle_post_attack_reset(SOCKET c, const char *body)
     http_respond(c, 200, "OK", resp);
 }
 
+/* POST /round_reset: Round-Reset-Wrapper (Issue #854). Erhoeht die
+ * Round-Reset-Epoch (der Sidecar wendet reset()+start atomar an -> neue Runde,
+ * auch aus GAME_OVER) UND stoesst den nativen restart_map-Reset an (Economy 0,
+ * HQ-Placement). Body optional: {"map":0} laesst den nativen Reset aus. */
+static void handle_post_round_reset(SOCKET c, const char *body)
+{
+    double map_flag = 1.0;
+    char resp[256];
+    char line[READ_BUF];
+    const char *map_status = "skipped";
+    int epoch;
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+
+    EnterCriticalSection(&g_round_reset_cs);
+    g_round_reset_epoch++;
+    epoch = g_round_reset_epoch;
+    LeaveCriticalSection(&g_round_reset_cs);
+    blog("round_reset -> epoch %d", epoch);
+
+    json_get_number(body, "map", &map_flag);
+    if (map_flag != 0.0) {
+        int rc = pipe_send_command("restart_map_result",
+                                   "{\"cmd\":\"restart_map\",\"op\":\"reset\"}\n",
+                                   timeout_ms, line, sizeof(line));
+        if (rc == -1) {
+            map_status = "pipe_unavailable";
+        } else if (rc != 0) {
+            map_status = "timeout";
+        } else {
+            map_status = "ok";
+            log_response("/round_reset", line);
+        }
+    }
+
+    snprintf(resp, sizeof(resp),
+             "{\"ok\":true,\"round_reset_epoch\":%d,\"restart_map\":\"%s\"}",
+             epoch, map_status);
+    http_respond(c, 200, "OK", resp);
+}
+
 /* GET /personas: liefert Persona-Defs (roher JSON-Object) und die aktive
  * Persona. Der Attack-Cycle-Sidecar pollt das; die WebUI liest/schreibt.
  * `send_yourself` lebt seit #851 ausschliesslich in `game_config`. */
@@ -1772,6 +1817,16 @@ static void handle_client(SOCKET c)
             b[body_len] = '\0';
             handle_post_attack_reset(c, b);
             free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/round_reset") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_post_round_reset(c, b);
+            free(b);
         } else if (strcmp(method, "GET") == 0 && strcmp(path, "/personas") == 0) {
             handle_get_personas(c);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/personas") == 0) {
@@ -1966,6 +2021,7 @@ static int mode_server(void)
     InitializeCriticalSection(&g_attack_status_cs);
     InitializeCriticalSection(&g_attack_interval_cs);
     InitializeCriticalSection(&g_attack_reset_cs);
+    InitializeCriticalSection(&g_round_reset_cs);
     InitializeCriticalSection(&g_difficulty_interval_first_cs);
     InitializeCriticalSection(&g_difficulty_interval_subsequent_cs);
     InitializeCriticalSection(&g_personas_cs);
