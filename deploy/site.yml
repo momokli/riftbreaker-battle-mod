@@ -16,7 +16,8 @@
 #   4. rbtools              Windows-x64-Server-I/O-Tools bauen+stagen
 #      (/opt/rbmods/rbtools -> /opt/rbtools:ro im Container, Issue #265)
 #   5. gns-relay            GNS-Entry-Relay auf UDP 6321 (terminiert + routet
-#      per Spielname-Suffix auf prod/staging/dev; Issue #843)
+#      per Spielname-Suffix auf prod/staging/dev; haelt seit #857 unentschiedene
+#      Joins und routet sie per lokaler Web-UI; Issue #843/#857)
 #   6. riftbreaker-server   Dev-SP-Server 6324 (Mod-Install + Restart-Handler);
 #      6321 gehoert jetzt dem gns-relay -> dev zieht von 6321 auf 6324 um
 #   7. tournament-server    systemd (Rust/axum)

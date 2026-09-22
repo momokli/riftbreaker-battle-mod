@@ -203,6 +203,13 @@ jobs:
         run: |
           g++ -std=c++17 -Wall -Wextra -O1 -o /tmp/test_route_rules tools/gns-proxy/test_route_rules.cpp
           /tmp/test_route_rules
+      # API-Helfer des GNS-Entry-Relays (Issue #857): Target-Spec + JSON lesen /
+      # escapen. Reine Logik (api_util.h) — host-compiliert, kein Wine/Windows.
+      - name: Host-Test Relay-API-Helfer (Issue #857)
+        if: needs.changes.outputs.test == 'true'
+        run: |
+          g++ -std=c++17 -Wall -Wextra -O1 -o /tmp/test_api_util tools/gns-proxy/test_api_util.cpp
+          /tmp/test_api_util
       # Server-Control-Host-Agent (Issue #459): Unit-/Integrationstests ohne
       # Docker, Netz oder Spiel (Fake-docker-Binary + echter Agent auf
       # Ephemeral-Port). Reiner Standardbibliothek-Code, daher kein npm ci.

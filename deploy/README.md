@@ -230,6 +230,15 @@ demselben Laufzeit-Image `rb-dedicated:<sha>` betrieben; sie braucht die
 Game-DLLs (`GameNetworkingSockets.dll`) read-only gemountet und ein eigenes
 Wine-Prefix-Volume.
 
+Seit Issue #857 läuft der Relay im **Hold-Modus**: unentschiedene Joins werden
+gehalten (kein Backend-Aufbau), der Client bleibt im Loading; ein Operator sieht
+sie in einer Web-UI und schickt sie per Klick auf ein Ziel (`--target
+NAME=ip:port`). Die UI ist **öffentlich** unter
+**https://proxy.rift.projectmellon.de** erreichbar (Host-Caddy → `127.0.0.1:9200`,
+basic_auth `operator`), ihr `--api-port` selbst bindet nur `127.0.0.1`. Lokal ohne
+Domain: `ssh -L 9200:127.0.0.1:9200 planet`. Suffix-/Identitäts-Regeln haben
+weiter Vorrang.
+
 Weil der Relay `6321` übernimmt, ist der **dev-Server von `6321` auf `6324`
 umgezogen** (`riftbreaker_server_port_udp`); prod (`:6322`) und staging (`:6323`)
 bleiben unverändert, haben aber seit Issue #846 **keinen** eigenen Relay mehr —
@@ -516,18 +525,18 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 
 ## Rollen
 
-| Rolle                    | Typ                | Was                                                                                                                                                                                                                                                                                                                                   |
-| ------------------------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dedicated-server-image` | docker             | baut `rb-dedicated:<deploy-sha>` auf planet (geteiltes Laufzeit-Image)                                                                                                                                                                                                                                                                |
-| `game-content`           | steamcmd/sync      | Dedicated-Server-Content (App 4114030) nach `riftbreaker_game_dir` (idempotent, fail loud)                                                                                                                                                                                                                                            |
-| `riftbreaker-server`     | docker             | Dev-SP-Server 6324 (umgezogen von 6321, Issue #843; 1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation                                                                                                                                                               |
-| `satellite-relay`        | iptables + systemd | UDP-DNAT-Relay — **retired (Issue #846)**: `satellite_relay_state` (Default `present`) schaltet zwischen Aufbau und Teardown (`absent`) der früheren Relays `satellite` (prod, `:6321 → :6322`) und `sync` (staging, `:6321 → :6323`); Ziel-Port je Relay als Play-Var (`satellite_relay_target_port`), reboot-fest, kein `host_vars` |
-| `gns-relay`              | docker             | GNS-Entry-Relay auf planet (`network_mode: host`, UDP `:6321`): terminiert GameNetworkingSockets, liest den Spielnamen und routet per Suffix auf prod/staging/dev; baut `gns_probe.exe` aus `tools/gns-proxy` (Issue #843)                                                                                                            |
-| `tournament-server`      | systemd            | Rust/axum Referee + Web-UI. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt)                                                                                                                                          |
-| `website`                | eigener Caddy      | eigener `rift-caddy` (plain HTTP: Landing + `/mod.zip` + Cockpit `/contract/*` + `/tournament/*`) + ZWEI Einträge im geteilten Host-Caddy (Issue #322); Host-Caddy-Reload deterministisch + fehlersichtbar, `rift-caddy` mit `admin off` (Issue #355); `/server/*` nur bei deploytem Agenten (`server_control_enabled`, Issue #463)   |
-| `mods-zip`               | —                  | Paketierung + md5-Paritäts-Check (hart)                                                                                                                                                                                                                                                                                               |
-| `host-hygiene`           | systemd            | wöchentlicher Timer: entfernt **dangling** Docker-Images (`docker image prune`, **kein** `-a`; Issue #308)                                                                                                                                                                                                                            |
-| `crash-collector`        | systemd            | Dauer-Dienst: sichert bei Crash-Markern das neueste `crash_info/<uuid>.{dmp,log,trace}` als Bundle nach `/opt/rbmods/crashes/` (+ Kontext/Meta, Retention; Issue #462)                                                                                                                                                                |
+| Rolle                    | Typ                | Was                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ------------------------ | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dedicated-server-image` | docker             | baut `rb-dedicated:<deploy-sha>` auf planet (geteiltes Laufzeit-Image)                                                                                                                                                                                                                                                                                                                                                       |
+| `game-content`           | steamcmd/sync      | Dedicated-Server-Content (App 4114030) nach `riftbreaker_game_dir` (idempotent, fail loud)                                                                                                                                                                                                                                                                                                                                   |
+| `riftbreaker-server`     | docker             | Dev-SP-Server 6324 (umgezogen von 6321, Issue #843; 1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation                                                                                                                                                                                                                                                      |
+| `satellite-relay`        | iptables + systemd | UDP-DNAT-Relay — **retired (Issue #846)**: `satellite_relay_state` (Default `present`) schaltet zwischen Aufbau und Teardown (`absent`) der früheren Relays `satellite` (prod, `:6321 → :6322`) und `sync` (staging, `:6321 → :6323`); Ziel-Port je Relay als Play-Var (`satellite_relay_target_port`), reboot-fest, kein `host_vars`                                                                                        |
+| `gns-relay`              | docker             | GNS-Entry-Relay auf planet (`network_mode: host`, UDP `:6321`): terminiert GameNetworkingSockets und routet per Suffix auf prod/staging/dev; hält seit #857 unentschiedene Joins und lässt sie per Web-UI (`--api-port`, lokal) auf ein Ziel routen; baut `gns_probe.exe` aus `tools/gns-proxy` (Issue #843/#857)                                                                                                            |
+| `tournament-server`      | systemd            | Rust/axum Referee + Web-UI. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt)                                                                                                                                                                                                                                 |
+| `website`                | eigener Caddy      | eigener `rift-caddy` (plain HTTP: Landing + `/mod.zip` + Cockpit `/contract/*` + `/tournament/*`) + Host-Caddy-Einträge (Issue #322) — Landing + Cockpit je Env, plus die env-unabhängige GNS-Lobby (`proxy.rift.projectmellon.de`, Issue #857); Host-Caddy-Reload deterministisch + fehlersichtbar, `rift-caddy` mit `admin off` (Issue #355); `/server/*` nur bei deploytem Agenten (`server_control_enabled`, Issue #463) |
+| `mods-zip`               | —                  | Paketierung + md5-Paritäts-Check (hart)                                                                                                                                                                                                                                                                                                                                                                                      |
+| `host-hygiene`           | systemd            | wöchentlicher Timer: entfernt **dangling** Docker-Images (`docker image prune`, **kein** `-a`; Issue #308)                                                                                                                                                                                                                                                                                                                   |
+| `crash-collector`        | systemd            | Dauer-Dienst: sichert bei Crash-Markern das neueste `crash_info/<uuid>.{dmp,log,trace}` als Bundle nach `/opt/rbmods/crashes/` (+ Kontext/Meta, Retention; Issue #462)                                                                                                                                                                                                                                                       |
 
 ## Host-Caddy-Reload (Issue #355)
 
@@ -571,7 +580,7 @@ deploy/
     ├── gns-relay/                 # GNS-Entry-Relay (UDP 6321, Suffix-Routing; #843)
     ├── satellite-relay/           # UDP-DNAT-Relay, state present|absent (retired, #846)
     ├── tournament-server/         # systemd
-    ├── website/                   # eigener rift-caddy: Landing + Cockpit (Issue #322)
+    ├── website/                   # eigener rift-caddy: Landing + Cockpit + GNS-Lobby (Issue #322/#857)
     ├── mods-zip/                  # Paketierung + md5-Parität
     ├── host-hygiene/              # systemd-Timer (dangling Images, #308)
     └── crash-collector/           # systemd-Dienst (Crash-Artefakte, #462)
@@ -670,7 +679,7 @@ ausführen, danach `df -h /` zum Messen.
 
 **Owned von der Pipeline (`deploy/`):** Laufzeit-Image (`rb-dedicated:<sha>`),
 Spiel-Content (Steam-App 4114030), Compose-Rendering + Containerstart der
-Server-Rollen, Mod-Auslieferung + Restart, eigener `rift-caddy` (Landing + `/mod.zip` + Cockpit `/contract/*` + `/tournament/*`) + ZWEI Host-Caddy-Einträge,
+Server-Rollen, Mod-Auslieferung + Restart, eigener `rift-caddy` (Landing + `/mod.zip` + Cockpit `/contract/*` + `/tournament/*`) + Host-Caddy-Einträge,
 systemd-Unit/Timer (tournament/hygiene), md5-Parität des Mod-Zips.
 
 **Nicht owned (bewusst host-seitig/manuell):** Vault-Passwort

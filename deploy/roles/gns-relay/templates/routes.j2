@@ -10,3 +10,6 @@
 *-dev     = {{ gns_relay_target_dev }}
 *-staging = {{ gns_relay_target_staging }}
 *         = {{ gns_relay_target_default }}
+{% for line in gns_relay_extra_routes %}
+{{ line }}
+{% endfor %}

@@ -36,7 +36,9 @@ fi
 # aus dem Build-Environment — die liegen im Wine-Prefix nicht (Symptom: Wine
 # beendet sich mit Exit 53 und ohne Ausgabe).
 # shellcheck disable=SC2086
+# -lws2_32: Winsock fuer den HTTP-Listener der Steuer-API/Web-UI (Issue #857).
 $CXX -O2 -Wall -Wextra -std=c++17 -Wno-cast-function-type $LD_REPRO \
-  -Iinclude -static -static-libgcc -static-libstdc++ -o "$OUT" gns_probe.cpp
+  -Iinclude -static -static-libgcc -static-libstdc++ -o "$OUT" gns_probe.cpp \
+  -lws2_32
 
 ls -la "$OUT"
