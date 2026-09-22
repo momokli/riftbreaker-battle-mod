@@ -998,8 +998,9 @@ class TestLoadPersonas(unittest.TestCase):
 
 
 class TestSyncPersonas(unittest.TestCase):
-    """sync_personas(): pollt GET /personas (Bridge) und uebernimmt aktive
-    Persona + send_yourself zur Laufzeit (CLI-Flags nur Start-Fallback)."""
+    """sync_personas(): pollt GET /personas (Bridge) und uebernimmt die aktive
+    Persona zur Laufzeit (CLI-Flags nur Start-Fallback). `send_yourself` kommt
+    seit #851 nur noch aus `game_config` (sync_game_config)."""
 
     def _cycle(self, getter_resp, clock=None):
         return AttackCycle(
@@ -1011,19 +1012,26 @@ class TestSyncPersonas(unittest.TestCase):
             _clock=clock or FakeClock(),
         )
 
-    def test_applies_active_persona_and_send_yourself(self):
+    def test_applies_active_persona(self):
         aggro = [wave_count(3), wave_count(5)]
         ruhig = [wave_count(), wave_count(2)]
-        resp = json.dumps({"personas": {"aggro": aggro, "ruhig": ruhig}, "active": "aggro", "send_yourself": False})
+        resp = json.dumps({"personas": {"aggro": aggro, "ruhig": ruhig}, "active": "aggro"})
         cycle = self._cycle(resp)
         cycle.sync_personas()
         self.assertEqual(cycle.persona, aggro)
         self.assertEqual(cycle.persona_name, "aggro")
-        self.assertFalse(cycle.send_yourself)
+
+    def test_ignores_send_yourself_from_personas(self):
+        """#851: `send_yourself` kommt nur noch aus `game_config`, nicht aus
+        `/personas` — ein Alt-Wert im Payload wird bewusst ignoriert."""
+        resp = json.dumps({"personas": {"aggro": [wave_count(3)]}, "active": "aggro", "send_yourself": False})
+        cycle = self._cycle(resp)
+        cycle.sync_personas()
+        self.assertTrue(cycle.send_yourself, "send_yourself aus /personas wird ignoriert")
 
     def test_no_active_persona(self):
         aggro = [wave_count(3), wave_count(5)]
-        resp = json.dumps({"personas": {"aggro": aggro}, "active": "", "send_yourself": True})
+        resp = json.dumps({"personas": {"aggro": aggro}, "active": ""})
         cycle = self._cycle(resp)
         cycle.sync_personas()
         self.assertIsNone(cycle.persona)
@@ -1031,7 +1039,7 @@ class TestSyncPersonas(unittest.TestCase):
         self.assertTrue(cycle.send_yourself)
 
     def test_invalid_level_rejected(self):
-        resp = '{"personas":{"bad":[[-1]]},"active":"bad","send_yourself":true}'
+        resp = '{"personas":{"bad":[[-1]]},"active":"bad"}'
         cycle = self._cycle(resp)
         cycle.sync_personas()
         self.assertIsNone(cycle.persona)

@@ -69,14 +69,21 @@ Start:
 python3 attack_cycle.py --persona aggro --persona-file personas.example.json
 ```
 
-Zur Laufzeit werden Personas + send-yourself ueber die **Bridge** gesteuert
-(statt CLI-Flag): die Bridge haelt die Defs (`GET/POST /personas`), die aktive
-Persona (`POST /persona_active`) und den Toggle (`POST /send_yourself`). Der
-Cycle pollt `GET /personas` (`sync_personas`) und uebernimmt den State — die
-CLI-Flags sind nur der Start-Fallback, bis der erste Poll greift. Das Cockpit
-editiert das alles im Panel „Personas (Send-Profile)".
+Zur Laufzeit werden die Personas ueber die **Bridge** gesteuert (statt
+CLI-Flag): die Bridge haelt die Defs (`GET/POST /personas`) und die aktive
+Persona (`POST /persona_active`). Der Cycle pollt `GET /personas`
+(`sync_personas`) und uebernimmt den State — die CLI-Flags sind nur der
+Start-Fallback, bis der erste Poll greift. Das Cockpit editiert Personas im Tab
+„Persona Editor".
+
+Der Toggle `send_yourself` gehoert seit #851 zur **Game-Config**, nicht mehr zu
+`/personas`: einzige Quelle ist `GET /game_config` (`sync_game_config`), der
+Cockpit-Tab „Game Config" schreibt ihn.
 
 ## send-yourself (Routing eigener Kaeufe)
+
+Zur Laufzeit fuehrt **`game_config.send_yourself`** (Cockpit-Tab „Game Config",
+`sync_game_config`); das CLI-Flag ist nur der Start-Fallback (#851).
 
 | Modus          | Verhalten                                                                                                                                                      |
 | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
