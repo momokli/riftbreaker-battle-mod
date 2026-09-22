@@ -33,6 +33,7 @@ from attack_cycle import (
     _pick_creature_event,
     load_personas,
     parse_hq_alive,
+    parse_hq_confirmed,
     parse_send_level,
 )
 
@@ -61,9 +62,10 @@ def start_cycle(cycle):
 
 
 class FakePoster:
-    def __init__(self, state_resp='{"ok":true,"hq_hp":100.0}'):
+    def __init__(self, state_resp='{"ok":true,"hq_hp":100.0}', state_status=200):
         self.calls = []
         self.state_resp = state_resp
+        self.state_status = state_status
         self.spend_ok = True
         self.spend_resp = '{"ok":true,"balance":50000000}'
         self.reset_epoch = 0
@@ -74,7 +76,7 @@ class FakePoster:
     def __call__(self, path, body):
         self.calls.append((path, body))
         if path == "/get_state":
-            return (200, self.state_resp)
+            return (self.state_status, self.state_resp)
         if path == "/try_spend":
             if self.spend_ok:
                 return (200, self.spend_resp)
@@ -124,6 +126,26 @@ class TestParseHqAlive(unittest.TestCase):
 
     def test_not_json(self):
         self.assertFalse(parse_hq_alive("not json"))
+
+
+class TestParseHqConfirmed(unittest.TestCase):
+    """#860: ein Poll-Fehler (kein/ungueltiges JSON, ok:false) ist None, kein
+    bestaetigter Nicht-Lebend-Status — nur ok:true entscheidet lebt/tot."""
+
+    def test_alive(self):
+        self.assertTrue(parse_hq_confirmed('{"ok":true,"hq_hp":100.0}'))
+
+    def test_confirmed_not_built(self):
+        self.assertFalse(parse_hq_confirmed('{"ok":true,"hq_hp":null}'))
+
+    def test_confirmed_dead(self):
+        self.assertFalse(parse_hq_confirmed('{"ok":true,"hq_hp":0}'))
+
+    def test_not_ok_is_unknown(self):
+        self.assertIsNone(parse_hq_confirmed('{"ok":false}'))
+
+    def test_not_json_is_unknown(self):
+        self.assertIsNone(parse_hq_confirmed("not json"))
 
 
 class TestParseSendLevel(unittest.TestCase):
@@ -266,6 +288,53 @@ class TestAttackCycle(unittest.TestCase):
         self.assertIsNone(cycle.step())
         logic_calls = [c for c in poster.calls if c[0] == "/activate_mission_flow"]
         self.assertEqual(logic_calls, [])
+
+    def test_running_get_state_poll_error_does_not_trigger_game_over(self):
+        """#860: ein Transport-Fehler auf /get_state waehrend RUNNING darf
+        NICHT wie ein HQ-Tod behandelt werden (bisher: jedes False aus
+        _hq_alive() -> sofort GAME_OVER, auch bei einem blossen Poll-Fehler)."""
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock=clock)
+        start_cycle(cycle)
+        poster.state_status = 500
+        clock.t = 10.0
+        self.assertIsNone(cycle.step())
+        self.assertEqual(cycle.state, STATE_RUNNING)
+        self.assertTrue(cycle.active)
+        # Bridge erholt sich -> die Runde laeuft normal weiter (Attack kommt).
+        poster.state_status = 200
+        clock.t = 420.0
+        self.assertEqual(cycle.step(), "attack")
+        self.assertEqual(cycle.state, STATE_RUNNING)
+
+    def test_running_get_state_not_ok_does_not_trigger_game_over(self):
+        """#860: ok:false (z. B. Bridge kurz nicht bereit) ist ebenfalls kein
+        bestaetigter HQ-Tod."""
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock=clock)
+        start_cycle(cycle)
+        poster.state_resp = '{"ok":false}'
+        clock.t = 10.0
+        self.assertIsNone(cycle.step())
+        self.assertEqual(cycle.state, STATE_RUNNING)
+        self.assertTrue(cycle.active)
+
+    def test_warmup_end_poll_error_retries_instead_of_game_over(self):
+        """#860: ein Poll-Fehler GENAU am Warmup-Ende ist kein bestaetigtes
+        "HQ nicht gebaut" -> retry statt GAME_OVER."""
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}', state_status=500)
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock=clock, warmup_s=120.0)
+        cycle.signal_start()
+        clock.t = 120.0
+        self.assertIsNone(cycle.step())
+        self.assertEqual(cycle.state, STATE_WARMUP)
+        # Bridge antwortet wieder -> HQ ist da -> RUNNING startet regulaer.
+        poster.state_status = 200
+        self.assertEqual(cycle.step(), "started")
+        self.assertEqual(cycle.state, STATE_RUNNING)
 
     def test_buy_stacks_and_fires_with_natural(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')

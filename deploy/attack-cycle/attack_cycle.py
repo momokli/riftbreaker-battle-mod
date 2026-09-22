@@ -265,6 +265,25 @@ def parse_hq_alive(raw: str) -> bool:
     return isinstance(hp, (int, float)) and hp > 0
 
 
+def parse_hq_confirmed(raw: str) -> Optional[bool]:
+    """Bestaetigter HQ-Status aus get_state, oder None bei Poll-Fehler.
+
+    True/False = ok:true, hq_hp ausgewertet (>0 lebt; <=0 oder null == nicht
+    lebend/nicht gebaut). None = die Antwort selbst ist nicht auswertbar
+    (kein/ungueltiges JSON oder ok:false) — das ist ein Poll-/Kommunikations-
+    Fehler, KEIN bestaetigter HQ-Tod (#860: `step()` darf daraus kein
+    GAME_OVER ableiten).
+    """
+    try:
+        obj = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(obj, dict) or not obj.get("ok"):
+        return None
+    hp = obj.get("hq_hp")
+    return isinstance(hp, (int, float)) and hp > 0
+
+
 def parse_send_level(body: str) -> Optional[int]:
     """Extrahiert das Wave-Level aus einem /queue_send-Body.
 
@@ -690,11 +709,16 @@ class AttackCycle:
         return self._poster(path, json.dumps(payload).encode("utf-8"))
 
     # --- get_state / HQ-Erkennung ----------------------------------------
-    def _hq_alive(self) -> bool:
+    def _hq_status(self) -> Optional[bool]:
+        """True=lebt, False=bestaetigt nicht lebend, None=Status nicht auslesbar.
+
+        Ein reiner Transport-Fehler (nicht-2xx) liefert None; die JSON-/ok-
+        Auswertung selbst uebernimmt `parse_hq_confirmed` (#860).
+        """
         status, body = self._poster("/get_state", b"{}")
         if not 200 <= status < 300:
-            return False
-        return parse_hq_alive(body)
+            return None
+        return parse_hq_confirmed(body)
 
     # --- try_spend (Kauf) -------------------------------------------------
     def _spend(self, cost: int) -> tuple:
@@ -833,7 +857,12 @@ class AttackCycle:
             if self.next_warmup_end is None or now < self.next_warmup_end:
                 return None
             # Das Warmup laeuft IMMER voll (D1); erst danach zaehlt das HQ.
-            if not self._hq_alive():
+            hq_status = self._hq_status()
+            if hq_status is None:
+                # Poll-Fehler != bestaetigter Nicht-Bau (#860): retry beim naechsten step().
+                print("[attack-cycle] warmup-Ende: HQ-Status nicht auslesbar, retry", flush=True)
+                return None
+            if not hq_status:
                 with self._lock:
                     self._enter_game_over()
                 print("[attack-cycle] warmup-Ende ohne HQ -> game_over", flush=True)
@@ -853,8 +882,14 @@ class AttackCycle:
             return "started"
 
         # --- RUNNING ------------------------------------------------------
-        # HQ destroyed -> sofort game_over (D2, keine Gnadenfrist).
-        if not self._hq_alive():
+        # HQ destroyed -> sofort game_over (D2, keine Gnadenfrist) — aber nur
+        # bei BESTAETIGTEM Tod, nicht bei einem blossen Poll-Fehler (#860):
+        # ein transienter /get_state-Fehler laesst den State unveraendert und
+        # wird beim naechsten step() erneut geprueft.
+        hq_status = self._hq_status()
+        if hq_status is None:
+            print("[attack-cycle] HQ-Status nicht auslesbar (Poll-Fehler) -> kein game_over, retry", flush=True)
+        elif not hq_status:
             with self._lock:
                 self._enter_game_over()
             print("[attack-cycle] HQ zerstoert -> game_over", flush=True)
