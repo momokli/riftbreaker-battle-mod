@@ -34,7 +34,7 @@ const ROUTES = {
   game_config: { mode: "solo", warmup_s: 120, natural: true, persona: true, send_yourself: true, send_enemy: false },
   personas: {
     personas: { aggro: personaMatrix(0), ruhig: personaMatrix(3) },
-    active: "aggro", send_yourself: true,
+    active: "aggro",
   },
   attack_status: {
     active: true, state: "running", level: 3, seconds_to_next_attack: 187,

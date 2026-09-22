@@ -56,7 +56,6 @@ const ROUTES = {
   personas: {
     personas: { aggro: personaMatrix(), ruhig: personaMatrix() },
     active: "aggro",
-    send_yourself: true,
   },
   attack_status: {
     active: true,
@@ -226,6 +225,14 @@ test("Cockpit rendert: Tabs, Formulare, Docker-Log tailt, keine JS-Fehler", asyn
     assert.equal(await page.locator("#advanced_editor").isVisible(), false);
     assert.equal(await page.locator("#docker_editor").isVisible(), false);
 
+    // #851: `send yourself` ist nur noch der Game-Config-Toggle — die
+    // Send-Tracker-Checkbox im Operator-Tab ist entfernt.
+    assert.equal(
+      await page.locator("#send_yourself").count(),
+      0,
+      "keine send-yourself-Checkbox im Send Tracker",
+    );
+
     // --- Lazy-Loading: vor dem Oeffnen des Docker-Tabs kein Server-Poll ---
     assert.equal(
       countHits(hits, "server/status"),
@@ -258,6 +265,11 @@ test("Cockpit rendert: Tabs, Formulare, Docker-Log tailt, keine JS-Fehler", asyn
       await page.locator("#gc_form #gc_mode").count(),
       1,
       "Game-Config-Formular rendert",
+    );
+    assert.equal(
+      await page.locator("#gc_form #gc_send_yourself").count(),
+      1,
+      "send-yourself-Toggle lebt im Game Config (#851)",
     );
 
     await page.click("#tab_natural");

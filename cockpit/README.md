@@ -153,7 +153,7 @@ cd tests/game-config-editor && npm test
 ```
 
 Geprüft wird das defensive Contract (immer `—`, nie werfen, nie
-`location.reload`) und beim Self-Send-Tracker zusätzlich der send-yourself-Toggle.
+`location.reload`).
 
 Zusätzlich rendert `tests/cockpit-render` die ganze UI im echten Chromium
 (Playwright): Tab-Struktur + roving tabindex, dass Formulare rendern, dass der
@@ -167,7 +167,8 @@ per Screenshot siehe `tools/cockpit-ui-review/` (Skill `cockpit-ui-review`).
 - [x] Panel `server control (plane B)` (#422) + Node-Test `tests/server-control-panel`
 - [x] Qt-Stil-Layout: vier Gruppen, Log-Pane rechts, Statusleiste (#468)
 - [x] Send-Tracker-Panel: persistentes Send-Log + austauschbarer Quell-Adapter (#527); Node-Test `tests/send-tracker`
-- [x] Personas-Panel: Send-Profile editieren + send-yourself togglen (#788); Node-Test `tests/persona-editor`
+- [x] Personas-Panel: Send-Profile editieren (#788); Node-Test `tests/persona-editor`
+- [x] `send yourself` hat nur noch eine Quelle: Game-Config-Toggle (#851); Alt-Pfad `/send_yourself` + `/personas.send_yourself` stillgelegt
 - [x] Cockpit-Refactor (#832): 6 Tabs (Operator/Game Config/Persona/Natural/Docker/Advanced), Docker-Log full-width + auto-tail, Lazy-Polling pro Tab; Render-Test `tests/cockpit-render`
 - [ ] Send-Tracker an den finalen Transport anschließen (Adapter tauschen) — hängt an Spike #526
 - [ ] Schritt 2 (#474): Caddy serviert die UI statisch, proxyt nur die API-Pfade; `cockpit_html.inc` entfällt

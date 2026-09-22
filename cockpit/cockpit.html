@@ -702,16 +702,13 @@
                     <fieldset class="q-groupbox" id="panel-send-tracker">
                         <legend>Send Tracker (Self)</legend>
                         <div class="flow-container">
-                            <div class="flow-action-row">
-                                <label class="prop-label" for="send_yourself">send yourself</label>
-                                <input id="send_yourself" type="checkbox" aria-label="Send yourself toggle" />
-                            </div>
                             <div class="log-scroll-area">
                                 <pre id="send_log">—</pre>
                             </div>
                             <div class="flow-note">
-                                Meine eigenen Sends. send-yourself on = feuert lokal,
-                                off = geht raus (spaeter Server B).
+                                Meine eigenen Sends (queued/outgoing). "send yourself"
+                                (Kaeufe lokal feuern oder nur tracken) steuert der
+                                Game-Config-Tab (#851).
                             </div>
                         </div>
                     </fieldset>
@@ -1464,17 +1461,7 @@
                         return arr && arr.length ? arr.join(",") : "-";
                     }
 
-                    function postJson(route, body) {
-                        return fetchFn(route, {
-                            method: "POST",
-                            headers: { "content-type": "application/json" },
-                            body: JSON.stringify(body),
-                        });
-                    }
-
                     function render(state) {
-                        var cb = $("send_yourself");
-                        if (cb) cb.checked = !!state.send_yourself;
                         var rows = [];
                         rows.push("queued: " + fmtWaves(state.bought));
                         rows.push("outgoing: " + fmtWaves(state.outgoing));
@@ -1490,17 +1477,8 @@
                         });
                     }
 
-                    function setSendYourself(on) {
-                        return postJson("send_yourself", { on: on ? 1 : 0 }).then(function (res) {
-                            return res.json();
-                        }).then(function () {
-                            return refresh();
-                        });
-                    }
-
                     return {
                         refresh: refresh,
-                        setSendYourself: setSendYourself,
                         render: render,
                         fmtWaves: fmtWaves,
                     };
@@ -1511,7 +1489,6 @@
                     document: document,
                     fetch: window.fetch.bind(window),
                 });
-                $("send_yourself").onchange = function () { selfSendTracker.setSendYourself(this.checked); };
 
 // --- server-control panel (testable) ---
                 function createServerControlPanel(deps) {
