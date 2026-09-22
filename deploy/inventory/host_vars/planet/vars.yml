@@ -27,7 +27,12 @@ dedicated_server_image_name: rb-dedicated
 dedicated_server_image: "{{ dedicated_server_image_name }}:{{ deploy_image_tag }}"
 riftbreaker_server_image: "{{ dedicated_server_image }}"
 riftbreaker_server_container: riftbreaker-dedicated
-riftbreaker_server_port_udp: 6321
+# Dev-SP-Server jetzt auf 6324 (Issue #843): der client-hardgewirete Einstiegsport
+# 6321 gehoert dem GNS-Entry-Relay (Rolle gns-relay), das dev/staging/prod unter
+# DER Adresse terminiert und anhand des Spielnamens routet. Container-seitig
+# bindet der Server weiter 6321 (Compose: "6324:6321/udp"); nur der HOST-Port
+# wandert. prod (:6322)/staging (:6323) bleiben unveraendert.
+riftbreaker_server_port_udp: 6324
 # Compose-Projekt EXPLIZIT je Env (Issue #483, Ziel B): der Verzeichnis-Basename
 # ist im neuen Schema ueberall "riftbreaker" (/opt/rbmods/compose/rift-<env>/
 # riftbreaker) — die projekt-abgeleitete Kollision wird so vermieden und dev/
@@ -52,6 +57,20 @@ riftbreaker_sessions_dir: "/srv/rift-{{ rift_env }}/sessions"
 riftbreaker_server_campaign: mp_survival/mp_survival
 riftbreaker_server_mission: survival/jungle
 riftbreaker_server_difficulty: coop_normal
+
+# --- GNS-Entry-Relay (Issue #843) --------------------------------------------
+# Terminiert GameNetworkingSockets auf dem client-hardgewireten UDP-Port 6321
+# und routet (Spielname-Suffix) auf prod :6322 / staging :6323 / dev :6324.
+# `network_mode: host` -> der Relay besitzt 6321 direkt auf dem Host. Der Relay
+# ist ein SINGLETON auf planet (genau ein 6321-Einstieg), daher sind seine
+# Werte host-konstant (env-schema: shared). Er laeuft auf demselben
+# Laufzeit-Image wie der Dedicated Server.
+gns_relay_container: gns-relay
+gns_relay_image: "{{ dedicated_server_image }}"
+gns_relay_port: 6321
+gns_relay_deploy_dir: /opt/rbmods/compose/gns-relay
+gns_relay_bin_dir: /opt/rbmods/gns-relay/bin
+gns_relay_wine_volume: gns-relay-wine
 
 # --- Tournament-Server (systemd, Rust/axum aus tournament/) ------------------
 tournament_install_dir: /opt/rbmods/tournament-server

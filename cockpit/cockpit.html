@@ -105,73 +105,42 @@
                 white-space: nowrap;
             }
 
-            /* Workspace Grid */
+            /* Operator-Tab: kompakte Karten in einem responsiven Raster */
             main.workspace {
                 flex: 1 1 auto;
                 display: grid;
                 padding: 8px;
                 gap: 8px;
-                overflow: hidden;
-                /* Default 980-1399px: two columns */
-                grid-template-columns: minmax(360px, 480px) minmax(400px, 1fr);
-                grid-template-rows: 1fr;
-            }
-
-            .left-col {
-                display: flex;
-                flex-direction: column;
-                gap: 8px;
                 overflow-y: auto;
-                min-width: 0;
+                align-content: start;
+                align-items: start;
+                grid-auto-rows: min-content;
+                grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
             }
 
-            .right-col {
+            /* Advanced-Tab: Low-Level-Panels (Mission Flow, Match End, ...) */
+            .advanced-editor {
+                flex: 1 1 auto;
+                min-height: 0;
+                overflow-y: auto;
+                padding: 8px;
+                display: grid;
+                gap: 8px;
+                align-content: start;
+                align-items: start;
+                grid-auto-rows: min-content;
+                grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+            }
+
+            /* Docker-Tab: Status + Toolbar oben, Log fuellt den Rest (full-width) */
+            .docker-editor {
+                flex: 1 1 auto;
+                min-height: 0;
                 display: flex;
                 flex-direction: column;
-                min-width: 0;
-                height: 100%;
+                padding: 8px;
+                gap: 8px;
                 overflow: hidden;
-            }
-
-            /* >= 1400px: three columns */
-            @media (min-width: 1400px) {
-                main.workspace {
-                    grid-template-columns: minmax(360px, 400px) minmax(440px, 560px) minmax(420px, 1fr);
-                    grid-template-rows: auto 1fr;
-                }
-                .left-col {
-                    display: contents;
-                }
-                #panel-resources {
-                    grid-column: 1;
-                    grid-row: 1;
-                    align-self: start;
-                }
-                #panel-creatures {
-                    grid-column: 1;
-                    grid-row: 2;
-                    align-self: start;
-                }
-                #panel-mission {
-                    grid-column: 2;
-                    grid-row: 1;
-                    align-self: start;
-                }
-                #panel-send-tracker {
-                    grid-column: 1;
-                    grid-row: 3;
-                    align-self: start;
-                }
-                #panel-send-menu {
-                    grid-column: 2;
-                    grid-row: 2;
-                    align-self: start;
-                }
-                .right-col {
-                    grid-column: 3;
-                    grid-row: 1 / span 2;
-                    min-height: 0;
-                }
             }
 
             /* < 980px: single column */
@@ -184,21 +153,15 @@
                     min-height: 100vh;
                     overflow: visible;
                 }
-                main.workspace {
+                main.workspace, .advanced-editor {
                     display: flex;
                     flex-direction: column;
                     height: auto;
                     overflow: visible;
                 }
-                .left-col {
-                    overflow: visible;
-                }
-                .right-col {
+                .docker-editor {
                     height: auto;
                     overflow: visible;
-                }
-                #panel-server {
-                    height: auto !important;
                 }
                 .log-scroll-area {
                     height: 340px !important;
@@ -512,16 +475,10 @@
             }
 
             /* Group C: Server Control (Plane B) */
-            /* Send tracker (#527): persistentes Send-Log (timestamp+amount).
-               Feste Hoehe, damit ein wachsendes Log keine Bedienelemente schiebt. */
-            .send-log-area {
-                height: 170px;
-            }
-
             #panel-server {
                 display: flex;
                 flex-direction: column;
-                height: 100%;
+                flex: 1 1 auto;
                 min-height: 0;
             }
 
@@ -655,11 +612,14 @@
             </header>
             <nav class="tabs" role="tablist" aria-label="Cockpit-Bereiche">
                 <button id="tab_operator" class="tab" role="tab" aria-selected="true" aria-controls="workspace">Operator</button>
+                <button id="tab_game_config" class="tab" role="tab" aria-selected="false" aria-controls="game_config_editor" tabindex="-1">Game Config</button>
                 <button id="tab_personas" class="tab" role="tab" aria-selected="false" aria-controls="persona_editor" tabindex="-1">Persona Editor</button>
+                <button id="tab_natural" class="tab" role="tab" aria-selected="false" aria-controls="natural_attack_editor" tabindex="-1">Natural Attacks</button>
+                <button id="tab_docker" class="tab" role="tab" aria-selected="false" aria-controls="docker_editor" tabindex="-1">Docker</button>
+                <button id="tab_advanced" class="tab" role="tab" aria-selected="false" aria-controls="advanced_editor" tabindex="-1">Advanced</button>
             </nav>
 
             <main id="workspace" class="workspace" role="tabpanel" aria-labelledby="tab_operator">
-                <div class="left-col">
                     <!-- A. RESOURCES -->
                     <fieldset class="q-groupbox" id="panel-resources">
                         <legend>Resources</legend>
@@ -742,17 +702,13 @@
                     <fieldset class="q-groupbox" id="panel-send-tracker">
                         <legend>Send Tracker (Self)</legend>
                         <div class="flow-container">
-                            <div class="flow-action-row">
-                                <label class="prop-label" for="send_yourself">send yourself</label>
-                                <input id="send_yourself" type="checkbox" aria-label="Send yourself toggle" />
-                            </div>
                             <div class="log-scroll-area">
                                 <pre id="send_log">—</pre>
                             </div>
                             <div class="flow-note">
-                                Meine eigenen Sends. send-yourself on = feuert lokal,
-                                off = geht raus (spaeter Server B).
-                                <span id="send_tracker_msg" aria-live="polite"></span>
+                                Meine eigenen Sends (queued/outgoing). "send yourself"
+                                (Kaeufe lokal feuern oder nur tracken) steuert der
+                                Game-Config-Tab (#851).
                             </div>
                         </div>
                     </fieldset>
@@ -761,7 +717,7 @@
                     <fieldset class="q-groupbox" id="panel-buy-orders">
                         <legend>Attack Cycle</legend>
                         <div class="flow-container">
-                            <div class="log-scroll-area buy-orders-area">
+                            <div class="log-scroll-area">
                                 <pre id="buy_orders">—</pre>
                             </div>
                             <div class="flow-note">
@@ -777,6 +733,10 @@
                                 <button id="attack_cycle_reset" class="btn-danger">reset</button>
                             </div>
                             <div class="flow-action-row">
+                                <span class="prop-label">round</span>
+                                <button id="attack_round_reset" class="btn-primary" title="Neue Runde in einem Schritt (#854): attack-cycle reset+start (auch aus game_over) + nativer Map-Restart (Economy 0)" aria-label="Start a new round (reset cycle + restart map)">new round</button>
+                            </div>
+                            <div class="flow-action-row">
                                 <span class="prop-label">difficulty first (s)</span>
                                 <input id="difficulty_interval_first_input" class="mono" size="6" value="200" aria-label="Difficulty first step in seconds" />
                                 <button id="difficulty_interval_first_set" class="btn-primary">set</button>
@@ -788,7 +748,10 @@
                             </div>
                         </div>
                     </fieldset>
+                </main>
 
+                <!-- Advanced / Low-Level: native + Lua-Debug-Panels (#832) -->
+                <section id="advanced_editor" class="advanced-editor" role="tabpanel" aria-labelledby="tab_advanced" hidden>
 <!-- C. MISSION FLOW (WAVE) -->
                     <fieldset class="q-groupbox" id="panel-mission">
                         <legend>Mission Flow (Wave)</legend>
@@ -956,9 +919,10 @@
                             </div>
                         </div>
                     </fieldset>
-                </div>
+                </section>
 
-                <div class="right-col">
+                <!-- Docker: Server-Lifecycle + full-width auto-tailed Log (#832) -->
+                <section id="docker_editor" class="docker-editor" role="tabpanel" aria-labelledby="tab_docker" hidden>
                     <!-- F. SERVER CONTROL (PLANE B) -->
                     <fieldset class="q-groupbox" id="panel-server">
                         <legend>Server Control (Plane B)</legend>
@@ -990,21 +954,21 @@
                                 <button id="server_stop" class="btn-danger">Stop</button>
                             </div>
 
-                            <!-- Log Viewer with independent scroll container -->
+                            <!-- Full-width Log mit eigenem Scrollbereich. Auto-Tail:
+                                 pollt laufend, kein Refresh-Klicken; lazy erst beim
+                                 Oeffnen des Docker-Tabs (#832). -->
                             <div class="server-logs-container">
                                 <div class="logs-header-bar">
-                                    <label for="server_logs_tail" class="prop-label">logs (tail)</label>
-                                    <input id="server_logs_tail" class="mono" size="6" style="width: 55px; text-align: right;" value="50" aria-label="Log lines tail count" />
-                                    <button id="server_logs_refresh">refresh logs</button>
+                                    <span class="prop-label">logs (live tail · 2s)</span>
+                                    <span id="docker_log_meta" class="prop-label" aria-live="polite"></span>
                                 </div>
                                 <div class="log-scroll-area">
-                                    <pre id="server_logs">—</pre>
+                                    <pre id="server_logs" aria-label="Server-Log (auto-tail)">—</pre>
                                 </div>
                             </div>
                         </div>
                     </fieldset>
-                </div>
-            </main>
+                </section>
 
             <!-- H. PERSONA EDITOR -->
             <section id="persona_editor" class="persona-editor" role="tabpanel" aria-labelledby="tab_personas" hidden>
@@ -1013,6 +977,31 @@
                     <span id="pe_msg" aria-live="polite"></span>
                 </div>
                 <div id="pe_table"></div>
+            </section>
+
+            <!-- I. NATURAL ATTACKS EDITOR -->
+            <section id="natural_attack_editor" class="persona-editor" role="tabpanel" aria-labelledby="tab_natural" hidden>
+                <div class="flow-action-row">
+                    <button id="na_save" class="btn-primary">save</button>
+                    <button id="na_restore" class="btn-secondary">restore</button>
+                    <span id="na_msg" aria-live="polite"></span>
+                </div>
+                <div id="na_table"></div>
+            </section>
+
+            <!-- J. GAME CONFIG EDITOR -->
+            <section id="game_config_editor" class="persona-editor" role="tabpanel" aria-labelledby="tab_game_config" hidden>
+                <div class="flow-action-row">
+                    <button id="gc_save" class="btn-primary">save</button>
+                    <button id="gc_restore" class="btn-secondary">restore</button>
+                    <span id="gc_msg" aria-live="polite"></span>
+                </div>
+                <div id="gc_form"></div>
+                <div class="flow-action-row">
+                    <button id="gc_start" class="btn-primary">start</button>
+                    <button id="gc_ready" class="btn-secondary">ready</button>
+                    <span id="gc_state" aria-live="polite">state: —</span>
+                </div>
             </section>
 
             <!-- G. STATUS BAR -->
@@ -1050,6 +1039,8 @@
                     return typeof v === "number" ? (v / 1e6).toLocaleString() : String(v);
                 }
 
+                // Operator-Daten (Resources + HQ). Pollt nur bei offenem
+                // Operator-Tab (Lazy-Polling, s. Tab-Lifecycle unten).
                 async function refresh() {
                     try {
                         var s = await post("get_state");
@@ -1057,6 +1048,30 @@
                         $("carbonium_max").textContent = fmtRes(s.carbonium_max);
                         $("ironium").textContent = fmtRes(s.ironium);
                         $("ironium_max").textContent = fmtRes(s.ironium_max);
+                        $("hq_hp").textContent =
+                            s.hq_hp === undefined || s.hq_hp === null
+                                ? "—"
+                                : String(s.hq_hp);
+                        $("hq_hp_max").textContent =
+                            s.hq_hp_max === undefined || s.hq_hp_max === null
+                                ? "—"
+                                : String(s.hq_hp_max);
+                        $("hq_dead").textContent =
+                            s.hq_dead === undefined || s.hq_dead === null
+                                ? "—"
+                                : (s.hq_dead ? "DEAD" : "alive");
+                        $("out").textContent = "";
+                    } catch (e) {
+                        $("out").textContent = "ERR " + e.message;
+                    }
+                }
+
+                // Advanced-/Low-Level-Readouts (Mission Flow, Match End,
+                // Creatures Base Difficulty, Players). Eigener Poll nur bei
+                // offenem Advanced-Tab.
+                async function refreshAdvanced() {
+                    try {
+                        var s = await post("get_state");
                         $("mission_flow").textContent = s.mission_flow || "—";
                         $("mission_flow_active").textContent =
                             s.mission_flow_active === undefined
@@ -1081,19 +1096,6 @@
                             s.creatures_base_difficulty === null
                                 ? "—"
                                 : String(s.creatures_base_difficulty);
-                        $("hq_hp").textContent =
-                            s.hq_hp === undefined || s.hq_hp === null
-                                ? "—"
-                                : String(s.hq_hp);
-                        $("hq_hp_max").textContent =
-                            s.hq_hp_max === undefined || s.hq_hp_max === null
-                                ? "—"
-                                : String(s.hq_hp_max);
-                        $("hq_dead").textContent =
-                            s.hq_dead === undefined || s.hq_dead === null
-                                ? "—"
-                                : (s.hq_dead ? "DEAD" : "alive");
-                        $("out").textContent = "";
                     } catch (e) {
                         $("out").textContent = "ERR " + e.message;
                     }
@@ -1126,16 +1128,35 @@
                     return arr.join(",");
                 }
 
+                // Zustand + Warmup-Countdown (#855): nur in WARMUP und nur, wenn
+                // das Backend den Wert liefert (status().seconds_to_warmup_end).
+                function stateCountdown(s) {
+                    if (!s || s.state !== "warmup") return "";
+                    if (s.seconds_to_warmup_end === null || s.seconds_to_warmup_end === undefined) {
+                        return "";
+                    }
+                    return "  (warmup endet in" + fmtCountdown(s.seconds_to_warmup_end * 1000) + ")";
+                }
+
                 async function refreshOrders() {
                     try {
                         var res = await fetch("attack_status");
                         var s = await res.json();
-                        if (!s || s.active !== true) {
+                        if (!s) {
                             $("buy_orders").textContent = "—";
                             $("buy_orders_msg").textContent = "";
                             return;
                         }
+                        if (s.active !== true) {
+                            // Nicht RUNNING (paused/warmup/game_over): Zustand zeigen
+                            // statt "—" — hier lebt der Warmup-Countdown (#855).
+                            $("buy_orders").textContent =
+                                "state " + (s.state || "—") + stateCountdown(s);
+                            $("buy_orders_msg").textContent = "";
+                            return;
+                        }
                         var rows = [];
+                        rows.push("state " + (s.state || "running") + stateCountdown(s));
                         rows.push(
                             "difficulty " + s.level +
                             "  (next +1 in" + fmtCountdown(s.seconds_to_next_difficulty * 1000) + ")"
@@ -1217,6 +1238,17 @@
                     });
                 };
 
+                // Round-Reset-Wrapper (#854): neue Runde in einem Schritt.
+                $("attack_round_reset").onclick = function () {
+                    post("round_reset", {}).then(function (r) {
+                        $("buy_orders_msg").textContent = r && r.ok
+                            ? "new round (map: " + (r.restart_map || "?") + ")"
+                            : JSON.stringify(r);
+                    }).catch(function (e) {
+                        $("buy_orders_msg").textContent = "ERR " + e.message;
+                    });
+                };
+
                 async function syncInterval() {
                     try {
                         var r = await post("attack_interval", {});
@@ -1266,7 +1298,7 @@
                             spawn_point: $("flow_spawn").value,
                         });
                         $("out").textContent = r && r.ok ? "" : JSON.stringify(r);
-                        refresh();
+                        refreshAdvanced();
                     } catch (e) {
                         $("out").textContent = "ERR " + e.message;
                     }
@@ -1341,7 +1373,7 @@
                         }
                         var r = await post("deactivate_mission_flow", body);
                         $("out").textContent = r && r.ok ? "" : JSON.stringify(r);
-                        refresh();
+                        refreshAdvanced();
                     } catch (e) {
                         $("out").textContent = "ERR " + e.message;
                     }
@@ -1354,7 +1386,7 @@
                             value: parseFloat($("cbd_value").value) || 0,
                         });
                         $("out").textContent = r && r.ok ? "" : JSON.stringify(r);
-                        refresh();
+                        refreshAdvanced();
                     } catch (e) {
                         $("out").textContent = "ERR " + e.message;
                     }
@@ -1368,7 +1400,7 @@
                     try {
                         var r = await post("end_game", { result: result });
                         $("out").textContent = r && r.ok ? "" : JSON.stringify(r);
-                        refresh();
+                        refreshAdvanced();
                     } catch (e) {
                         $("out").textContent = "ERR " + e.message;
                     }
@@ -1449,14 +1481,7 @@
                     roundReset("status");
                 };
 
-                refresh();
-                setInterval(refresh, 1000);
-
-                refreshOrders();
-                setInterval(refreshOrders, 1000);
-
-                syncInterval();
-                syncDifficultyInterval();
+                // Operator-Polling startet lazy beim Tab-Open (Tab-Lifecycle unten).
 
                 // --- self-send tracker (testable) ---
                 function createSelfSendTracker(deps) {
@@ -1470,17 +1495,7 @@
                         return arr && arr.length ? arr.join(",") : "-";
                     }
 
-                    function postJson(route, body) {
-                        return fetchFn(route, {
-                            method: "POST",
-                            headers: { "content-type": "application/json" },
-                            body: JSON.stringify(body),
-                        });
-                    }
-
                     function render(state) {
-                        var cb = $("send_yourself");
-                        if (cb) cb.checked = !!state.send_yourself;
                         var rows = [];
                         rows.push("queued: " + fmtWaves(state.bought));
                         rows.push("outgoing: " + fmtWaves(state.outgoing));
@@ -1496,17 +1511,8 @@
                         });
                     }
 
-                    function setSendYourself(on) {
-                        return postJson("send_yourself", { on: on ? 1 : 0 }).then(function (res) {
-                            return res.json();
-                        }).then(function () {
-                            return refresh();
-                        });
-                    }
-
                     return {
                         refresh: refresh,
-                        setSendYourself: setSendYourself,
                         render: render,
                         fmtWaves: fmtWaves,
                     };
@@ -1517,9 +1523,6 @@
                     document: document,
                     fetch: window.fetch.bind(window),
                 });
-                $("send_yourself").onchange = function () { selfSendTracker.setSendYourself(this.checked); };
-                selfSendTracker.refresh();
-                setInterval(selfSendTracker.refresh, 5000);
 
 // --- server-control panel (testable) ---
                 function createServerControlPanel(deps) {
@@ -1534,6 +1537,9 @@
                     ];
                     var LOG_ID = "server_logs";
                     var MSG_ID = "server_control_msg";
+                    // Deckungsgleich mit server_control.py (MAX_TAIL): das Backend
+                    // liefert pro Request nur ein Tail-Fenster, keinen Cursor.
+                    var MAX_TAIL = 5000;
 
                     function el(id) {
                         return doc ? doc.getElementById(id) : null;
@@ -1586,16 +1592,50 @@
                         var node = el("server_logs_tail");
                         var n = node ? parseInt(node.value, 10) : NaN;
                         if (!isFinite(n) || n <= 0) n = 50;
-                        if (n > 5000) n = 5000;
+                        if (n > MAX_TAIL) n = MAX_TAIL;
                         return n;
                     }
 
-                    async function refreshLogs() {
+                    // Ein Tail-Fenster holen (wirft bei Fehler). Ohne maxLines wird
+                    // der (optionale) Tail-Feld-Wert genutzt, sonst maxLines.
+                    async function fetchLogs(maxLines) {
+                        var n = typeof maxLines === "number" && maxLines > 0
+                            ? maxLines
+                            : tailCount();
+                        if (n > MAX_TAIL) n = MAX_TAIL;
+                        var data = await getJson("/server/logs?tail=" + n);
+                        return (data && data.lines) || [];
+                    }
+
+                    // Zwei Tail-Fenster zusammenfuehren: anhaengen nur die Zeilen
+                    // nach der groessten Ueberlappung (Suffix(existing) ==
+                    // Prefix(incoming)). So waechst der Log im Browser ueber das
+                    // Einzel-Request-Limit hinaus, ohne Cursor-Support. Robust
+                    // gegen wiederholte Zeilen; keine Ueberlappung (Rotation) ->
+                    // Fenster anhaengen.
+                    function mergeTail(existing, incoming) {
+                        var have = existing || [];
+                        var next = incoming || [];
+                        if (!have.length) return next.slice();
+                        if (!next.length) return have.slice();
+                        var max = Math.min(have.length, next.length);
+                        for (var k = max; k > 0; k--) {
+                            var ok = true;
+                            for (var i = 0; i < k; i++) {
+                                if (have[have.length - k + i] !== next[i]) {
+                                    ok = false;
+                                    break;
+                                }
+                            }
+                            if (ok) return have.concat(next.slice(k));
+                        }
+                        return have.concat(next);
+                    }
+
+                    async function refreshLogs(maxLines) {
                         try {
-                            var n = tailCount();
-                            var data = await getJson("/server/logs?tail=" + n);
-                            var lines = data && data.lines;
-                            if (!lines || !lines.length) {
+                            var lines = await fetchLogs(maxLines);
+                            if (!lines.length) {
                                 setText(LOG_ID, DASH);
                                 return;
                             }
@@ -1639,6 +1679,9 @@
                     return {
                         refreshStatus: refreshStatus,
                         refreshLogs: refreshLogs,
+                        fetchLogs: fetchLogs,
+                        mergeTail: mergeTail,
+                        setMessage: msg,
                         control: control,
                     };
                 }
@@ -1649,22 +1692,8 @@
                     document: document,
                 });
 
-                $("server_restart").onclick = function () {
-                    serverPanel.control("restart");
-                };
-                $("server_start").onclick = function () {
-                    serverPanel.control("start");
-                };
-                $("server_stop").onclick = function () {
-                    serverPanel.control("stop");
-                };
-                $("server_logs_refresh").onclick = function () {
-                    serverPanel.refreshLogs();
-                };
-
-                serverPanel.refreshStatus();
-                serverPanel.refreshLogs();
-                setInterval(serverPanel.refreshStatus, 5000);
+                // Docker-Buttons + Status/Log-Polling werden lazy im Tab-Lifecycle
+                // unten verdrahtet (erst beim Oeffnen des Docker-Tabs).
 
                 function initEvents() {
                     if (typeof EventSource === "undefined") {
@@ -1699,12 +1728,42 @@
 
                 initEvents();
 
-                // --- tabs ---
+                // --- tabs (roving tabindex + lazy Tab-Lifecycle) ---
                 var TABS = [
                     ["tab_operator", "workspace"],
+                    ["tab_game_config", "game_config_editor"],
                     ["tab_personas", "persona_editor"],
+                    ["tab_natural", "natural_attack_editor"],
+                    ["tab_docker", "docker_editor"],
+                    ["tab_advanced", "advanced_editor"],
                 ];
-                function selectTab(id) {
+                var TAB_LIFECYCLE = {};
+                function registerTabLifecycle(id, lc) {
+                    TAB_LIFECYCLE[id] = lc;
+                }
+                // every() feuert sofort + danach im Intervall; stop() raeumt alle
+                // Timer eines Tabs ab. So pollt nur der offene Tab (#832).
+                function tabTimer() {
+                    var handles = [];
+                    return {
+                        every: function (fn, ms) {
+                            fn();
+                            handles.push(setInterval(fn, ms));
+                        },
+                        stop: function () {
+                            handles.forEach(function (h) { clearInterval(h); });
+                            handles = [];
+                        },
+                    };
+                }
+                var startedTabs = {};
+                var activeTabId = null;
+                // moveFocus === false beim Initial-Aufruf (kein Fokus-Klau beim Laden).
+                function selectTab(id, moveFocus) {
+                    var prev = activeTabId;
+                    if (prev && TAB_LIFECYCLE[prev] && TAB_LIFECYCLE[prev].stop) {
+                        TAB_LIFECYCLE[prev].stop();
+                    }
                     TABS.forEach(function (pair) {
                         var btn = $(pair[0]);
                         var panel = $(pair[1]);
@@ -1712,17 +1771,35 @@
                         btn.setAttribute("aria-selected", selected ? "true" : "false");
                         btn.tabIndex = selected ? 0 : -1;
                         panel.hidden = !selected;
-                        if (selected) btn.focus();
+                        if (selected && moveFocus !== false) btn.focus();
                     });
+                    activeTabId = id;
+                    var lc = TAB_LIFECYCLE[id];
+                    if (!lc) {
+                        return;
+                    }
+                    if (!startedTabs[id] && lc.init) {
+                        lc.init();
+                    }
+                    startedTabs[id] = true;
+                    if (lc.start) lc.start();
                 }
-                $("tab_operator").onclick = function () { selectTab("tab_operator"); };
-                $("tab_personas").onclick = function () { selectTab("tab_personas"); };
-                $("tab_operator").onkeydown = function (e) {
-                    if (e.key === "ArrowRight") selectTab("tab_personas");
-                };
-                $("tab_personas").onkeydown = function (e) {
-                    if (e.key === "ArrowLeft") selectTab("tab_operator");
-                };
+                TABS.forEach(function (pair, i) {
+                    var btn = $(pair[0]);
+                    btn.onclick = function () { selectTab(pair[0]); };
+                    btn.onkeydown = function (e) {
+                        var n = TABS.length;
+                        if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+                            selectTab(TABS[(i + 1) % n][0]);
+                        } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+                            selectTab(TABS[(i - 1 + n) % n][0]);
+                        } else if (e.key === "Home") {
+                            selectTab(TABS[0][0]);
+                        } else if (e.key === "End") {
+                            selectTab(TABS[n - 1][0]);
+                        }
+                    };
+                });
 
                 // --- persona editor (testable) ---
                 function createPersonaEditor(deps) {
@@ -1831,6 +1908,122 @@
                 }
                 // --- end persona editor ---
 
+                // --- natural attack editor (testable) ---
+                function createNaturalAttackEditor(deps) {
+                    var fetchFn = deps.fetch;
+                    var doc = deps.document;
+                    var LEVELS = 9;
+
+                    var state = { rules: null, saved: null };
+
+                    function $(id) { return doc.getElementById(id); }
+                    function clone(p) { return JSON.parse(JSON.stringify(p)); }
+                    function resp(res) {
+                        if (!res || res.ok === false) throw new Error("HTTP " + (res ? res.status : "err"));
+                        return res.json();
+                    }
+                    function postJson(route, body) {
+                        return fetchFn(route, {
+                            method: "POST",
+                            headers: { "content-type": "application/json" },
+                            body: JSON.stringify(body),
+                        }).then(resp);
+                    }
+
+                    function load() {
+                        return fetchFn("natural_attack_rules").then(resp).then(function (data) {
+                            state.rules = clone(data || {});
+                            state.saved = clone(state.rules);
+                            return state;
+                        });
+                    }
+
+                    function ensureCounts() {
+                        if (!state.rules.max_attack_count || !state.rules.max_attack_count.length) {
+                            state.rules.max_attack_count = new Array(LEVELS).fill(0);
+                        }
+                    }
+                    function inc(i) { ensureCounts(); state.rules.max_attack_count[i] = (state.rules.max_attack_count[i] || 0) + 1; }
+                    function dec(i) { ensureCounts(); var v = state.rules.max_attack_count[i] || 0; if (v > 0) state.rules.max_attack_count[i] = v - 1; }
+                    function setBoss(level) { state.rules.boss_min_level = level; }
+                    function setOffset(v) { state.rules.event_offset_fraction = v; }
+                    function save() {
+                        return postJson("natural_attack_rules", state.rules).then(function () {
+                            state.saved = clone(state.rules);
+                        });
+                    }
+                    function restore() { state.rules = clone(state.saved); }
+
+                    return {
+                        state: state, load: load, inc: inc, dec: dec,
+                        setBoss: setBoss, setOffset: setOffset,
+                        save: save, restore: restore,
+                    };
+                }
+                // --- end natural attack editor ---
+
+                // --- game config editor (testable) ---
+                function createGameConfigEditor(deps) {
+                    var fetchFn = deps.fetch;
+                    var doc = deps.document;
+
+                    var state = { config: null, saved: null, status: null };
+
+                    function $(id) { return doc.getElementById(id); }
+                    function clone(p) { return JSON.parse(JSON.stringify(p)); }
+                    function resp(res) {
+                        if (!res || res.ok === false) throw new Error("HTTP " + (res ? res.status : "err"));
+                        return res.json();
+                    }
+                    function postJson(route, body) {
+                        return fetchFn(route, {
+                            method: "POST",
+                            headers: { "content-type": "application/json" },
+                            body: JSON.stringify(body),
+                        }).then(resp);
+                    }
+
+                    function load() {
+                        return fetchFn("game_config").then(resp).then(function (data) {
+                            state.config = clone(data || {});
+                            state.saved = clone(state.config);
+                            return state;
+                        });
+                    }
+                    function loadStatus() {
+                        return fetchFn("attack_status").then(resp).then(function (data) {
+                            state.status = data || {};
+                            return state.status;
+                        });
+                    }
+                    function setField(k, v) {
+                        if (!state.config) state.config = {};
+                        state.config[k] = v;
+                    }
+                    function save() {
+                        return postJson("game_config", state.config).then(function () {
+                            state.saved = clone(state.config);
+                        });
+                    }
+                    function restore() {
+                        if (state.saved) state.config = clone(state.saved);
+                    }
+
+                    function start() {
+                        return postJson("start", {});
+                    }
+                    function setReady(on) {
+                        return postJson("ready", { on: on ? 1 : 0 });
+                    }
+
+                    return {
+                        state: state, load: load, loadStatus: loadStatus,
+                        setField: setField, save: save, restore: restore,
+                        start: start, setReady: setReady,
+                    };
+                }
+                // --- end game config editor ---
+
                 var personaEditor = createPersonaEditor({ document: document, fetch: window.fetch.bind(window) });
 
                 function peRender() {
@@ -1901,8 +2094,253 @@
                 function peRefresh() {
                     personaEditor.load().then(function () { peRender(); }).catch(function (err) { $("pe_msg").textContent = "ERR " + err.message; });
                 }
-                peRefresh();
-                setInterval(peRefresh, 5000);
+                // Polling lazy beim Tab-Open (s. Tab-Lifecycle unten).
+
+                var naturalAttackEditor = createNaturalAttackEditor({ document: document, fetch: window.fetch.bind(window) });
+
+                function naRender() {
+                    var r = naturalAttackEditor.state.rules || {};
+                    var boss = (r.boss_min_level === null || r.boss_min_level === undefined) ? 0 : r.boss_min_level;
+                    var html = [];
+                    html.push('<table class="persona-table">');
+                    html.push('<caption class="visually-hidden">Natural Attacks: Difficulty-Level 1-9 mit Attack-Count und Boss</caption>');
+                    html.push('<thead><tr><th scope="col">Level</th><th scope="col">Attack Count</th><th scope="col">Boss ab</th></tr></thead><tbody>');
+                    for (var i = 0; i < 9; i++) {
+                        var level = i + 1;
+                        var amt = (r.max_attack_count && r.max_attack_count[i]) || 0;
+                        html.push('<tr><th scope="row">' + level + '</th>');
+                        html.push('<td><button class="pe-btn" data-act="dec" data-level="' + i + '"' + (amt === 0 ? " disabled" : "") + '>−</button> <span class="wave-amt">×' + amt + '</span> <button class="pe-btn" data-act="inc" data-level="' + i + '">+</button></td>');
+                        html.push('<td><select class="mono" data-act="boss" aria-label="Boss ab Level ' + level + '">');
+                        html.push('<option value=""' + (boss === 0 ? " selected" : "") + '>none</option>');
+                        for (var b = 1; b <= 9; b++) html.push('<option value="' + b + '"' + (boss === b ? " selected" : "") + '>' + b + '</option>');
+                        html.push('</select></td></tr>');
+                    }
+                    html.push('</tbody></table>');
+                    var off = (r.event_offset_fraction !== undefined && r.event_offset_fraction !== null) ? r.event_offset_fraction : 0.35;
+                    html.push('<div class="flow-action-row"><label class="prop-label" for="na_offset">event offset (fraction)</label><input id="na_offset" class="mono" size="6" value="' + off + '" aria-label="Event offset fraction"></div>');
+                    var nEvents = (r.creature_events && r.creature_events.length) || 0;
+                    html.push('<div class="flow-action-row"><span class="prop-label">creature events</span><span class="wave-amt">' + nEvents + ' Bänder</span></div>');
+                    $("na_table").innerHTML = html.join("");
+                }
+
+                $("na_table").addEventListener("click", function (e) {
+                    var el = e.target;
+                    if (!el || !el.getAttribute || !el.getAttribute("data-act")) return;
+                    var act = el.getAttribute("data-act");
+                    var level = parseInt(el.getAttribute("data-level"), 10);
+                    if (act === "inc") naturalAttackEditor.inc(level);
+                    else if (act === "dec") naturalAttackEditor.dec(level);
+                    naRender();
+                });
+
+                $("na_table").addEventListener("change", function (e) {
+                    var el = e.target;
+                    if (el && el.getAttribute && el.getAttribute("data-act") === "boss") {
+                        naturalAttackEditor.setBoss(el.value === "" ? null : parseInt(el.value, 10));
+                    } else if (el && el.id === "na_offset") {
+                        var v = parseFloat(el.value);
+                        if (!isNaN(v) && v > 0 && v < 1) naturalAttackEditor.setOffset(v);
+                    }
+                });
+
+                $("na_save").onclick = function () {
+                    naturalAttackEditor.save().then(function () { $("na_msg").textContent = "gespeichert"; }).catch(function (err) { $("na_msg").textContent = "ERR " + err.message; });
+                };
+                $("na_restore").onclick = function () {
+                    naturalAttackEditor.restore();
+                    naRender();
+                };
+
+                function naRefresh() {
+                    naturalAttackEditor.load().then(function () { naRender(); }).catch(function (err) { $("na_msg").textContent = "ERR " + err.message; });
+                }
+                // Polling lazy beim Tab-Open (s. Tab-Lifecycle unten).
+
+                var gameConfigEditor = createGameConfigEditor({ document: document, fetch: window.fetch.bind(window) });
+
+                function gcRender() {
+                    var c = gameConfigEditor.state.config || {};
+                    var mode = c.mode === "vs" ? "vs" : "solo";
+                    var warmup = (c.warmup_s === undefined || c.warmup_s === null) ? 120 : c.warmup_s;
+                    var html = [];
+                    html.push('<div class="flow-action-row"><label class="prop-label" for="gc_mode">mode</label>');
+                    html.push('<select id="gc_mode" class="mono" aria-label="Game mode">');
+                    html.push('<option value="solo"' + (mode === "solo" ? " selected" : "") + '>solo</option>');
+                    html.push('<option value="vs"' + (mode === "vs" ? " selected" : "") + '>vs</option>');
+                    html.push('</select></div>');
+                    html.push('<div class="flow-action-row"><label class="prop-label" for="gc_warmup">warmup (s)</label>');
+                    html.push('<input id="gc_warmup" class="mono" size="6" value="' + warmup + '" aria-label="Warmup seconds"></div>');
+                    var toggles = [
+                        ["natural", "natural"],
+                        ["persona", "persona"],
+                        ["send_yourself", "send yourself"],
+                        ["send_enemy", "send enemy"],
+                    ];
+                    toggles.forEach(function (pair) {
+                        var key = pair[0];
+                        html.push('<div class="flow-action-row"><label class="prop-label" for="gc_' + key + '">' + pair[1] + '</label>');
+                        html.push('<input id="gc_' + key + '" type="checkbox" data-key="' + key + '"' + (c[key] ? " checked" : "") + ' aria-label="' + pair[1] + ' toggle"></div>');
+                    });
+                    $("gc_form").innerHTML = html.join("");
+                }
+
+                function gcRenderState() {
+                    var s = gameConfigEditor.state.status || {};
+                    $("gc_state").textContent = "state: " + (s.state || "—") + stateCountdown(s);
+                }
+
+                $("gc_form").addEventListener("change", function (e) {
+                    var el = e.target;
+                    if (!el || !el.id) return;
+                    if (el.id === "gc_mode") {
+                        gameConfigEditor.setField("mode", el.value);
+                    } else if (el.id === "gc_warmup") {
+                        var v = parseFloat(el.value);
+                        if (!isNaN(v) && v >= 0) gameConfigEditor.setField("warmup_s", v);
+                    } else if (el.getAttribute("data-key")) {
+                        gameConfigEditor.setField(el.getAttribute("data-key"), !!el.checked);
+                    }
+                });
+
+                $("gc_save").onclick = function () {
+                    gameConfigEditor.save().then(function () { $("gc_msg").textContent = "gespeichert"; gcRender(); }).catch(function (err) { $("gc_msg").textContent = "ERR " + err.message; });
+                };
+                $("gc_restore").onclick = function () {
+                    gameConfigEditor.restore();
+                    gcRender();
+                };
+                $("gc_start").onclick = function () {
+                    gameConfigEditor.start().then(function () { $("gc_msg").textContent = "start gesendet"; }).catch(function (err) { $("gc_msg").textContent = "ERR " + err.message; });
+                };
+                $("gc_ready").onclick = function () {
+                    gameConfigEditor.setReady(true).then(function () { $("gc_msg").textContent = "ready gesendet"; }).catch(function (err) { $("gc_msg").textContent = "ERR " + err.message; });
+                };
+
+                function gcRefresh() {
+                    gameConfigEditor.load().then(function () {
+                        gcRender();
+                        return gameConfigEditor.loadStatus();
+                    }).then(function () {
+                        gcRenderState();
+                    }).catch(function (err) {
+                        $("gc_msg").textContent = "ERR " + err.message;
+                    });
+                }
+                // ---- Tab-Lifecycle: Lazy-Init + Polling nur fuer den offenen Tab ----
+                var operatorTimer = tabTimer();
+                registerTabLifecycle("tab_operator", {
+                    start: function () {
+                        operatorTimer.every(refresh, 1000);
+                        operatorTimer.every(refreshOrders, 1000);
+                        syncInterval();
+                        syncDifficultyInterval();
+                        operatorTimer.every(selfSendTracker.refresh, 5000);
+                    },
+                    stop: function () { operatorTimer.stop(); },
+                });
+
+                var gcTimer = tabTimer();
+                registerTabLifecycle("tab_game_config", {
+                    start: function () { gcTimer.every(gcRefresh, 5000); },
+                    stop: function () { gcTimer.stop(); },
+                });
+
+                var peTimer = tabTimer();
+                registerTabLifecycle("tab_personas", {
+                    start: function () { peTimer.every(peRefresh, 5000); },
+                    stop: function () { peTimer.stop(); },
+                });
+
+                var naTimer = tabTimer();
+                registerTabLifecycle("tab_natural", {
+                    start: function () { naTimer.every(naRefresh, 5000); },
+                    stop: function () { naTimer.stop(); },
+                });
+
+                var dockerTimer = tabTimer();
+                // "Moeglichst ganzer Log, moeglichst unbegrenzt" (#832): das
+                // Backend liefert pro Request nur ein Tail-Fenster (server_control.py
+                // MAX_TAIL = 5000, kein Cursor). Der Tab holt beim Oeffnen das
+                // groesste Fenster und haengt danach bei jedem Poll nur die NEUEN
+                // Zeilen an -> der Log waechst ueber die Request-Grenze hinaus
+                // (Session-Scope) statt auf ein Fenster begrenzt zu bleiben.
+                var DOCKER_FULL_TAIL = 5000; // == MAX_TAIL des Agents
+                var DOCKER_WINDOW = 2000;    // Fenster pro Auto-Tail-Poll
+                var dockerLines = [];
+                var dockerRendered = false;
+
+                function updateDockerLogMeta() {
+                    var meta = $("docker_log_meta");
+                    if (meta) {
+                        meta.textContent = dockerLines.length
+                            ? dockerLines.length + " lines"
+                            : "";
+                    }
+                }
+
+                // Vollen akkumulierten Puffer rendern (ersetzt den Inhalt).
+                function renderDockerLog() {
+                    var pre = $("server_logs");
+                    if (!pre) return;
+                    pre.textContent = dockerLines.length ? dockerLines.join("\n") : "—";
+                    dockerRendered = true;
+                    updateDockerLogMeta();
+                }
+
+                // Auto-Tail: laufend nachladen und nur die neuen Zeilen anhaengen;
+                // nur ans Ende scrollen, wenn der Nutzer schon unten war.
+                function dockerTailTick() {
+                    var pre = $("server_logs");
+                    var atBottom = !!pre &&
+                        (pre.scrollHeight - pre.scrollTop - pre.clientHeight <= 24);
+                    var n = dockerRendered ? DOCKER_WINDOW : DOCKER_FULL_TAIL;
+                    return serverPanel.fetchLogs(n).then(function (lines) {
+                        if (!lines.length) {
+                            if (!dockerRendered) renderDockerLog();
+                            return;
+                        }
+                        var before = dockerLines.length;
+                        dockerLines = serverPanel.mergeTail(dockerLines, lines);
+                        if (!dockerRendered || before === 0) {
+                            renderDockerLog();
+                        } else if (dockerLines.length > before) {
+                            pre.textContent = pre.textContent +
+                                "\n" + dockerLines.slice(before).join("\n");
+                            updateDockerLogMeta();
+                        }
+                        if (atBottom && pre) pre.scrollTop = pre.scrollHeight;
+                    }).catch(function () {
+                        serverPanel.setMessage("server logs unavailable");
+                    });
+                }
+
+                function dockerControl(action) {
+                    // control() pollt Status+Log und setzt eine kurze Vorschau ->
+                    // danach den akkumulierten Puffer wiederherstellen.
+                    serverPanel.control(action).then(renderDockerLog, renderDockerLog);
+                }
+
+                registerTabLifecycle("tab_docker", {
+                    init: function () {
+                        $("server_restart").onclick = function () { dockerControl("restart"); };
+                        $("server_start").onclick = function () { dockerControl("start"); };
+                        $("server_stop").onclick = function () { dockerControl("stop"); };
+                    },
+                    start: function () {
+                        dockerTimer.every(serverPanel.refreshStatus, 5000);
+                        dockerTimer.every(dockerTailTick, 2000);
+                    },
+                    stop: function () { dockerTimer.stop(); },
+                });
+
+                var advancedTimer = tabTimer();
+                registerTabLifecycle("tab_advanced", {
+                    start: function () { advancedTimer.every(refreshAdvanced, 1000); },
+                    stop: function () { advancedTimer.stop(); },
+                });
+
+                // Operator ist der Default-Tab.
+                selectTab("tab_operator", false);
             })();
         </script>
     </body>

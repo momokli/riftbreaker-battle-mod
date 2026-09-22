@@ -2,9 +2,10 @@
 
 /*
  * Tests fuer das Cockpit-Panel "send tracker (self)" — die eigenen Sends
- * (queued/outgoing) + der send-yourself-Toggle. Ersetzt den alten
- * Carbonium-Log (Issue #527); der testbare Marker-Block wird aus cockpit.html
- * extrahiert und in einem vm-Kontext ausgewertet. Kein Netz, kein DOM.
+ * (queued/outgoing). Ersetzt den alten Carbonium-Log (Issue #527); der testbare
+ * Marker-Block wird aus cockpit.html extrahiert und in einem vm-Kontext
+ * ausgewertet. Kein Netz, kein DOM. (`send yourself` ist seit #851 ein
+ * Game-Config-Toggle — s. tests/game-config-editor + tests/cockpit-render.)
  */
 
 const { test } = require("node:test");
@@ -17,7 +18,7 @@ const COCKPIT = path.join(__dirname, "..", "..", "cockpit", "cockpit.html");
 const BEGIN = "// --- self-send tracker (testable) ---";
 const END = "// --- end self-send tracker ---";
 
-const IDS = ["send_log", "send_yourself"];
+const IDS = ["send_log"];
 
 function extractBlock() {
   const html = fs.readFileSync(COCKPIT, "utf8");
@@ -62,16 +63,15 @@ test("Marker-Block exportiert createSelfSendTracker", () => {
   assert.equal(typeof loadBlock().createSelfSendTracker, "function");
 });
 
-test("refresh(): attack_status -> queued/outgoing + Checkbox", async () => {
+test("refresh(): attack_status -> queued/outgoing", async () => {
   const fetch = fakeFetch({
-    attack_status: { active: true, bought: [1, 2], outgoing: [], send_yourself: true },
+    attack_status: { active: true, bought: [1, 2], outgoing: [] },
   });
   const doc = makeDoc();
   const t = loadBlock().createSelfSendTracker({ document: doc.document, fetch });
   await t.refresh();
   assert.ok(doc.els.send_log.textContent.includes("queued: 1,2"));
   assert.ok(doc.els.send_log.textContent.includes("outgoing: -"));
-  assert.equal(doc.els.send_yourself.checked, true);
 });
 
 test("refresh(): nicht aktiv -> kein Render", async () => {
@@ -80,18 +80,6 @@ test("refresh(): nicht aktiv -> kein Render", async () => {
   const t = loadBlock().createSelfSendTracker({ document: doc.document, fetch });
   await t.refresh();
   assert.equal(doc.els.send_log.textContent, "");
-});
-
-test("setSendYourself(): POST /send_yourself (on=1/0)", async () => {
-  const fetch = fakeFetch({
-    send_yourself: { ok: true },
-    attack_status: { active: true, bought: [], outgoing: [], send_yourself: false },
-  });
-  const doc = makeDoc();
-  const t = loadBlock().createSelfSendTracker({ document: doc.document, fetch });
-  await t.setSendYourself(false);
-  const call = fetch.calls.find((x) => x.route === "send_yourself");
-  assert.deepEqual(call.opts, { on: 0 });
 });
 
 test("fmtWaves: leer -> '-'", () => {

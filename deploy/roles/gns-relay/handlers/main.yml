@@ -1,0 +1,18 @@
+---
+# Handler der Rolle gns-relay (Issue #843).
+#
+# `docker compose up -d` recreated einen LAUFENDEN Container bei reiner
+# Config-/Datei-Aenderung NICHT — der Bind-Mount zeigt die neue Datei, der
+# laufende Prozess laedt sie aber erst beim Recreate (die Routen-Datei wird
+# beim Start eingelesen). Deshalb recreate NUR, wenn sich Compose, Routen-Datei
+# oder die gns_probe.exe geaendert haben (notify aus tasks/main.yml).
+#
+# Check-Mode: im `--check` wird nichts geschrieben, also auch nichts neu
+# gestartet (der Guard haelt den deploy-check gruen).
+- name: restart gns-relay
+  command: >-
+    docker compose -p {{ gns_relay_compose_project }}
+    -f {{ gns_relay_deploy_dir }}/docker-compose.yml
+    up -d --force-recreate --remove-orphans
+  changed_when: false
+  when: not ansible_check_mode

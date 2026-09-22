@@ -19,7 +19,7 @@ Alle Routen liegen unter `/server/*` und verlangen **immer** `Authorization: Bea
 | Route | Wirkung |
 |---|---|
 | `GET  /server/status` | `{state, restarting, health, uptime, uptime_seconds, started_at}` (aus `docker inspect`) |
-| `GET  /server/logs?tail=N` | `{lines: [...], tail: N}` (`docker logs --tail N`, `N` ≤ 5000) |
+| `GET  /server/logs?tail=N` | `{lines: [...], tail: N}` (`docker logs --tail N`, `N` ≤ 5000). Das Cockpit holt im Docker-Tab das groesste Fenster und akkumuliert danach client-seitig nur die neuen Zeilen zu einer wachsenden Ansicht (#832) — pro Request bleibt es beim Tail-Fenster. |
 | `POST /server/restart` | `docker restart <container>` |
 | `POST /server/start` | `docker start <container>` |
 | `POST /server/stop` | `docker stop <container>` |

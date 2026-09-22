@@ -30,6 +30,10 @@ riftbreaker_backup_dir: "{{ riftbreaker_local_root }}/backups"
 riftbreaker_deploy_dir: "{{ riftbreaker_local_root }}/compose/riftbreaker"
 riftbreaker_config_dir: "{{ riftbreaker_deploy_dir }}/config"
 riftbreaker_sessions_dir: "{{ riftbreaker_local_root }}/sessions"
+# Lokal gibt es keinen GNS-Entry-Relay (der ist ein planet-Singleton, #843) —
+# der Dev-Server darf hier weiter den client-hardgewireten Port 6321 binden.
+# Explizit gesetzt, weil der Rollen-Default auf 6324 umgezogen ist (planet).
+riftbreaker_server_port_udp: 6321
 
 # Server-Passwort: rein lokal (127.0.0.1-Bridge/Direct-IP), kein Vault nötig.
 # Beliebig überschreibbar (-e riftbreaker_server_password=...), falls der

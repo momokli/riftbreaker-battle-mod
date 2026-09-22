@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Verwaltet von deploy/ role satellite-relay (Jinja). NICHT manuell editieren.
-# Wendet die UDP-DNAT/MASQUERADE-Regeln idempotent an (Issue #328).
+# Wendet die UDP-DNAT/MASQUERADE-Regeln idempotent an (Issue #328; Default,
+# ohne Argument) bzw. entfernt sie wieder (`down`, Issue #846).
 set -euo pipefail
 
 # iptables liegt unter /usr/sbin; PATH defensiv setzen (systemd-ExecStart + ansible-command).
@@ -9,6 +10,20 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 PORT="{{ satellite_relay_port }}"
 TARGET_HOST="{{ satellite_relay_target_host }}"
 TARGET_PORT="{{ satellite_relay_target_port }}"
+
+# Ohne Argument = `up` (bestehendes Verhalten, byte-kompatibel).
+MODE="${1:-up}"
+
+# Teardown (Issue #846): die eigenen DNAT/MASQUERADE-Regeln entfernen. -D auf
+# eine nicht vorhandene Regel schlägt fehl -> Abwesenheit tolerieren (`|| true`),
+# damit der Aufruf idempotent bleibt.
+if [[ "${MODE}" == "down" ]]; then
+  iptables -t nat -D PREROUTING -p udp --dport "${PORT}" \
+    -j DNAT --to-destination "${TARGET_HOST}:${TARGET_PORT}" 2>/dev/null || true
+  iptables -t nat -D POSTROUTING -p udp -d "${TARGET_HOST}" \
+    --dport "${TARGET_PORT}" -j MASQUERADE 2>/dev/null || true
+  exit 0
+fi
 
 # DNAT: inbound UDP PORT -> TARGET_HOST:TARGET_PORT
 if ! iptables -t nat -C PREROUTING -p udp --dport "${PORT}" \

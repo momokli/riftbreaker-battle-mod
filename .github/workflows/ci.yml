@@ -184,6 +184,32 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         working-directory: tools/re
         run: python3 -m unittest test_rbpack -v
+      # L7-Router (Issue #825): userspace-UDP-Router fuer :6321, Namens-Lernen
+      # und Zielwechsel. Hermetisch (UDP auf Loopback, Fake-Clock).
+      - name: Unit-Test L7-Router (Issue #825)
+        if: needs.changes.outputs.test == 'true'
+        working-directory: tools/net-router
+        run: python3 -m unittest test_rbrouter -v
+      # GNS-Proxy (Issue #831): pcap-Flow-Parser fuer den Handshake-Mitschnitt
+      # (Client-Handshake -> Server-Antwort -> Name). Hermetisch (synthetische pcaps).
+      - name: Unit-Test GNS-Proxy pcap-Parser (Issue #831)
+        if: needs.changes.outputs.test == 'true'
+        working-directory: tools/gns-proxy
+        run: python3 -m unittest test_pcap_flow -v
+      # Routing-Regeln des GNS-Entry-Relays (Issue #843): exakt > Suffix > Default.
+      # Reine Logik (route_rules.h) — host-compiliert, kein Wine/Windows/Spiel.
+      - name: Host-Test Routing-Regeln (Issue #843)
+        if: needs.changes.outputs.test == 'true'
+        run: |
+          g++ -std=c++17 -Wall -Wextra -O1 -o /tmp/test_route_rules tools/gns-proxy/test_route_rules.cpp
+          /tmp/test_route_rules
+      # API-Helfer des GNS-Entry-Relays (Issue #857): Target-Spec + JSON lesen /
+      # escapen. Reine Logik (api_util.h) — host-compiliert, kein Wine/Windows.
+      - name: Host-Test Relay-API-Helfer (Issue #857)
+        if: needs.changes.outputs.test == 'true'
+        run: |
+          g++ -std=c++17 -Wall -Wextra -O1 -o /tmp/test_api_util tools/gns-proxy/test_api_util.cpp
+          /tmp/test_api_util
       # Server-Control-Host-Agent (Issue #459): Unit-/Integrationstests ohne
       # Docker, Netz oder Spiel (Fake-docker-Binary + echter Agent auf
       # Ephemeral-Port). Reiner Standardbibliothek-Code, daher kein npm ci.
@@ -214,6 +240,29 @@ jobs:
       - name: Unit-Test Persona-Editor (Issue #788)
         if: needs.changes.outputs.test == 'true'
         working-directory: tests/persona-editor
+        run: npm test
+      # Natural-Attacks-Editor (#819): Difficulty 1-9 x attack-count/boss
+      # (load/inc/dec/setBoss/setOffset/save/restore). Extrahierter Marker-Block,
+      # kein Netzwerk/DOM. Keine Dependencies.
+      - name: Unit-Test Natural-Attacks-Editor (#819)
+        if: needs.changes.outputs.test == 'true'
+        working-directory: tests/natural-attack-editor
+        run: npm test
+      # Game-Config-Editor (#827/#828): mode/warmup_s + Toggles
+      # (natural/persona/send_yourself/send_enemy) + start/ready + State
+      # (load/loadStatus/setField/save/restore/start/setReady). Extrahierter
+      # Marker-Block, kein Netzwerk/DOM. Keine Dependencies.
+      - name: Unit-Test Game-Config-Editor (#827)
+        if: needs.changes.outputs.test == 'true'
+        working-directory: tests/game-config-editor
+        run: npm test
+      # Cockpit Render-Test (#832): rendert cockpit.html im echten Chromium
+      # (Tab-Struktur + roving tabindex, Formulare, Docker-Log auto-tail, keine
+      # JS-Fehler). Playwright/Chromium sind nicht Teil des CI-Images -> der
+      # Test ueberspringt sich dann selbst (kein Hard-Fail).
+      - name: Render-Test Cockpit (#832)
+        if: needs.changes.outputs.test == 'true'
+        working-directory: tests/cockpit-render
         run: npm test
 
   build:

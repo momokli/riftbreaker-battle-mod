@@ -8,6 +8,10 @@ Thumbs.db
 .idea/
 .vscode/
 
+# Cockpit-UI-Post-Check: Scratch-Output von tools/cockpit-ui-review/shoot.js
+# (generisch pro Lauf). Review-Evidence pro Issue unter docs/screenshots/<issue>/.
+docs/screenshots/ui/
+
 # Node
 node_modules/
 
