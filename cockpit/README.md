@@ -32,7 +32,7 @@ Die Oberfläche ist als dichtes, flaches Qt-/QML-artiges Desktop-Werkzeug gebaut
 | `Persona Editor` | Send-Profile editieren (CRUD), aktive Persona setzen |
 | `Natural Attacks` | Natural-Attack-Rules (Difficulty 1-9, Attack-Count/Boss, Event-Offset) |
 | `Docker` | Server-Control (Plane B): Status-Strip, Lifecycle-Toolbar, full-width Container-Log |
-| `Advanced` | Low-Level-Debug: Mission Flow, Match End, Creatures Base Difficulty, Natural Waves (Vanilla), Round Reset |
+| `Advanced` | Low-Level-Debug: Mission Flow, Match End, Creatures Base Difficulty, Natural Waves (Vanilla), Round Reset, DOM Freeze (pause/resume, #520) |
 
 Das **Container-Log** im `Docker`-Tab ist der einzige unbegrenzt wachsende Inhalt:
 Es füllt die volle Tab-Breite **und** -Höhe (eigener Scrollbereich, dessen Höhe
@@ -80,6 +80,8 @@ exec-Zeilen auf die rbbridge-Named-Pipe:
 | `probe` | Bridge-/Pipe-Erreichbarkeit (API-Fläche der Bridge) |
 | `attack_reset` | Attack-Cycle-Reset (`{reset:1}`) → `PAUSED` (Counter zurück) |
 | `round_reset` | Round-Reset-Wrapper (#854): nur mit `{reset:1}` Cycle-`reset`+`start` (auch aus game_over) + nativer `restart_map`; `{}` = read-only Epoch-Poll des Sidecars (#868) |
+| `pause_dom` | Nativer DOM-Freeze: `LuaGraphNode::SetSuspended(true)` am `dom_mananger`-Node (`{pause_dom_result}`) — kein Lua/Console (#520) |
+| `resume_dom` | DOM-Freeze aufheben: `SetSuspended(false)` (`{resume_dom_result}`) (#520) |
 
 `GET /health` der Bridge gehört ebenfalls zur API-Fläche. Details und
 Verdrahtung: `docs/INGRESS_IO.md`, `server/README.md`.
