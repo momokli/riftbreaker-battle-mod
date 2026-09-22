@@ -4,10 +4,12 @@ Ersetzt den ehemaligen 2-Minuten-Order-Scheduler der Bridge: eine gekaufte
 Welle feuert nicht mehr 2 min nach dem Kauf einzeln, sondern wird in einen
 festen Zyklus gestapelt, der beim Bau des HQ startet.
 
-```
-round start (HQ gebaut, hq_hp > 0)
-  └─ alle `interval` Sekunden (Default 7 min) EINE natürliche Welle mit dem
-       aktuellen Level (1..9, cap 9)
+```text
+round start (Start-Signal -> WARMUP, Default 120s -> RUNNING, HQ gebaut)
+  └─ erste natürliche Welle SOFORT mit dem Warmup-Ende (#859): das Warmup IST
+       die Vorlaufzeit, nicht das erste Intervall
+  └─ danach alle `interval` Sekunden (Default 7 min) EINE natürliche Welle mit
+       dem aktuellen Level (1..9, cap 9)
        + alle in diesem Fenster gekauften Wellen (bought[])
   └─ UNABHÄNGIG davon: alle `difficulty_interval` Sekunden (Default 200s,
        Issue #778) steigt das Level selbst um 1 — eigener Timer, entkoppelt

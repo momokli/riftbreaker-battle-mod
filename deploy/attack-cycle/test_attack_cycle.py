@@ -223,8 +223,27 @@ class TestAttackCycle(unittest.TestCase):
         self.assertEqual(cycle.state, STATE_RUNNING)
         self.assertTrue(cycle.active)
         self.assertEqual(cycle.level, 1)
-        self.assertEqual(cycle.next_attack_at, 540.0)  # 120 (Warmup) + 420
+        self.assertEqual(cycle.next_attack_at, 120.0)  # erste Attack sofort bei Warmup-Ende (#859)
         self.assertEqual(cycle.next_difficulty_at, 320.0)  # 120 + 200
+
+    def test_first_attack_fires_immediately_after_warmup(self):
+        """#859: die erste Attack kommt mit dem Warmup-Ende (nicht erst nach
+        einem vollen interval_s); danach alle interval_s."""
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(poster, clock=clock, warmup_s=120.0)
+        cycle.signal_start()
+        clock.t = 120.0
+        self.assertEqual(cycle.step(), "started")
+        # Faellig genau am Warmup-Ende (gleicher Zeitstempel), nicht 420s spaeter.
+        self.assertEqual(cycle.next_attack_at, 120.0)
+        self.assertEqual(cycle.step(), "attack")
+        # Die naechste Attack ist ein volles Intervall spaeter faellig.
+        self.assertEqual(cycle.next_attack_at, 540.0)
+        clock.t = 539.0
+        self.assertIsNone(cycle.step())
+        clock.t = 540.0
+        self.assertEqual(cycle.step(), "attack")
 
     def test_warmup_end_without_hq_game_over(self):
         poster = FakePoster('{"ok":true,"hq_hp":null}')
@@ -299,7 +318,9 @@ class TestAttackCycle(unittest.TestCase):
         start_cycle(cycle)
         poster.state_status = 500
         clock.t = 10.0
-        self.assertIsNone(cycle.step())
+        # Poll-Fehler -> KEIN game_over. Die erste Attack ist seit #859 sofort
+        # faellig; der State bleibt in jedem Fall RUNNING.
+        self.assertNotEqual(cycle.step(), "game_over")
         self.assertEqual(cycle.state, STATE_RUNNING)
         self.assertTrue(cycle.active)
         # Bridge erholt sich -> die Runde laeuft normal weiter (Attack kommt).
@@ -317,7 +338,7 @@ class TestAttackCycle(unittest.TestCase):
         start_cycle(cycle)
         poster.state_resp = '{"ok":false}'
         clock.t = 10.0
-        self.assertIsNone(cycle.step())
+        self.assertNotEqual(cycle.step(), "game_over")
         self.assertEqual(cycle.state, STATE_RUNNING)
         self.assertTrue(cycle.active)
 
@@ -834,6 +855,8 @@ class TestGameFlowToggles(unittest.TestCase):
         cycle = self._cycle(poster, clock, toggles={"natural": False})
         start_cycle(cycle)
         cycle.level = 2  # ohne Toggle: shegret normal
+        clock.t = 1.0
+        cycle.step()  # erste Attack sofort (#859)
         clock.t = 273.0
         self.assertIsNone(cycle.step())
         self.assertEqual(self._fire_calls(poster), [])
@@ -845,9 +868,14 @@ class TestGameFlowToggles(unittest.TestCase):
         cycle = self._cycle(poster, clock)  # natural default on
         start_cycle(cycle)
         cycle.level = 2
+        # Erste Attack sofort (#859) abarbeiten, damit bei t=273 nur noch das
+        # Event feuert (Fenster vor der ZWEITEN Attack).
+        clock.t = 1.0
+        cycle.step()
+        before = len(self._fire_calls(poster))
         clock.t = 273.0
         cycle.step()
-        self.assertEqual(self._logics(poster), ["logic/event/shegret_attack.logic"])
+        self.assertEqual(self._logics(poster)[before:], ["logic/event/shegret_attack.logic"])
         self.assertEqual(cycle.last_event["name"], "shegret_attack")
 
     def test_persona_off_fires_no_persona_waves(self):
@@ -1543,9 +1571,12 @@ class TestCreatureAttackEvents(unittest.TestCase):
         self.assertEqual(start_cycle(cycle), "started")
         self.assertEqual(cycle.next_event_at, 420.0 - 0.35 * 420.0)  # 273.0
         cycle.level = 2  # damit ein Event existiert (shegret normal)
+        clock.t = 1.0
+        cycle.step()  # erste Attack sofort (#859)
+        before = len(self._fire_calls(poster))
         clock.t = 273.0
-        self.assertIsNone(cycle.step())  # Event, aber KEIN Attack (erst bei 420)
-        calls = self._fire_calls(poster)
+        self.assertIsNone(cycle.step())  # nur Event, kein Attack (erst bei 420)
+        calls = self._fire_calls(poster)[before:]
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["logic"], "logic/event/shegret_attack.logic")
         self.assertEqual(calls[0]["attack_strength"], "normal")
@@ -1557,9 +1588,13 @@ class TestCreatureAttackEvents(unittest.TestCase):
         cycle = self._cycle(poster, clock=clock)
         start_cycle(cycle)
         cycle.level = 2
+        clock.t = 1.0
+        cycle.step()  # erste Attack sofort (#859)
         clock.t = 100.0  # vor dem prepare-Fenster (273.0)
         cycle.step()
-        self.assertEqual(len(self._fire_calls(poster)), 0)
+        logics = [c["logic"] for c in self._fire_calls(poster)]
+        self.assertNotIn("logic/event/shegret_attack.logic", logics)
+        self.assertIsNone(cycle.last_event)
 
     def test_event_reports_in_status(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
