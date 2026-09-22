@@ -79,7 +79,7 @@ exec-Zeilen auf die rbbridge-Named-Pipe:
 | `end_game` | Match-Ende setzen (`{result:"win"|"lose"}`) — Readout `end_game` aus `get_state` (`null` \| `{result,status}`) |
 | `probe` | Bridge-/Pipe-Erreichbarkeit (API-Fläche der Bridge) |
 | `attack_reset` | Attack-Cycle-Reset (`{reset:1}`) → `PAUSED` (Counter zurück) |
-| `round_reset` | Round-Reset-Wrapper (#854): Cycle-`reset`+`start` (auch aus `game_over`) + nativer `restart_map` |
+| `round_reset` | Round-Reset-Wrapper (#854): nur mit `{reset:1}` Cycle-`reset`+`start` (auch aus game_over) + nativer `restart_map`; `{}` = read-only Epoch-Poll des Sidecars (#868) |
 
 `GET /health` der Bridge gehört ebenfalls zur API-Fläche. Details und
 Verdrahtung: `docs/INGRESS_IO.md`, `server/README.md`.

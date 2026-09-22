@@ -1475,37 +1475,47 @@ static void handle_post_attack_reset(SOCKET c, const char *body)
     http_respond(c, 200, "OK", resp);
 }
 
-/* POST /round_reset: Round-Reset-Wrapper (Issue #854). Erhoeht die
- * Round-Reset-Epoch (der Sidecar wendet reset()+start atomar an -> neue Runde,
- * auch aus GAME_OVER) UND stoesst den nativen restart_map-Reset an (Economy 0,
- * HQ-Placement). Body optional: {"map":0} laesst den nativen Reset aus. */
+/* POST /round_reset: Round-Reset-Wrapper (Issue #854). Nur bei {"reset":1}
+ * wird die Round-Reset-Epoch erhoeht UND der native restart_map-Reset
+ * angestossen (Economy 0, HQ-Placement). Ohne den Guard ist der Endpoint NICHT
+ * poll-sicher: der attack-cycle-Sidecar liest die Epoch per `POST /round_reset
+ * {}` im Sekundentakt — jedes bedingungslose Epoch++ haette daraus einen
+ * Endlos-Reset gemacht (Issue #868). Gleiches Muster wie /attack_reset.
+ * Body: {"reset":1, "map":0} laesst den nativen Map-Reset aus. */
 static void handle_post_round_reset(SOCKET c, const char *body)
 {
+    double reset_flag = 0.0;
     double map_flag = 1.0;
     char resp[256];
     char line[READ_BUF];
     const char *map_status = "skipped";
     int epoch;
     int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+    int trigger = json_get_number(body, "reset", &reset_flag) && reset_flag > 0.0;
 
     EnterCriticalSection(&g_round_reset_cs);
-    g_round_reset_epoch++;
+    if (trigger) {
+        g_round_reset_epoch++;
+    }
     epoch = g_round_reset_epoch;
     LeaveCriticalSection(&g_round_reset_cs);
-    blog("round_reset -> epoch %d", epoch);
 
-    json_get_number(body, "map", &map_flag);
-    if (map_flag != 0.0) {
-        int rc = pipe_send_command("restart_map_result",
-                                   "{\"cmd\":\"restart_map\",\"op\":\"reset\"}\n",
-                                   timeout_ms, line, sizeof(line));
-        if (rc == -1) {
-            map_status = "pipe_unavailable";
-        } else if (rc != 0) {
-            map_status = "timeout";
-        } else {
-            map_status = "ok";
-            log_response("/round_reset", line);
+    if (trigger) {
+        blog("round_reset -> epoch %d", epoch);
+
+        json_get_number(body, "map", &map_flag);
+        if (map_flag != 0.0) {
+            int rc = pipe_send_command("restart_map_result",
+                                       "{\"cmd\":\"restart_map\",\"op\":\"reset\"}\n",
+                                       timeout_ms, line, sizeof(line));
+            if (rc == -1) {
+                map_status = "pipe_unavailable";
+            } else if (rc != 0) {
+                map_status = "timeout";
+            } else {
+                map_status = "ok";
+                log_response("/round_reset", line);
+            }
         }
     }
 

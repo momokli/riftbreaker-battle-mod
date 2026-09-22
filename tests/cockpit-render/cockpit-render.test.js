@@ -200,6 +200,14 @@ test("Cockpit rendert: Tabs, Formulare, Docker-Log tailt, keine JS-Fehler", asyn
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     const errors = [];
     page.on("pageerror", (e) => errors.push(e.message));
+    // #868: POST-Bodies von /round_reset mitschneiden, um das Pflicht-Flag
+    // `reset:1` zu pruefen (ohne das Flag ist der Aufruf der read-only Poll des
+    // Sidecars und darf keine neue Runde ausloesen).
+    const roundResetBodies = [];
+    page.on("request", (r) => {
+      if ((r.url() || "").endsWith("/round_reset"))
+        roundResetBodies.push(r.postData() || "");
+    });
 
     await page.goto("http://127.0.0.1:" + port + "/", { waitUntil: "load" });
     await page.waitForTimeout(700);
@@ -238,13 +246,27 @@ test("Cockpit rendert: Tabs, Formulare, Docker-Log tailt, keine JS-Fehler", asyn
     // #855: Zustand + Warmup-Countdown im Attack-Cycle-Panel (auch ohne RUNNING).
     const orders = await page.locator("#buy_orders").textContent();
     assert.ok(orders.includes("warmup"), "Zustand sichtbar: " + orders.slice(0, 60));
-    assert.ok(orders.includes("1:35"), "Warmup-Countdown sichtbar: " + orders.slice(0, 60));
+    assert.ok(
+      orders.includes("1:35"),
+      "Warmup-Countdown sichtbar: " + orders.slice(0, 60),
+    );
 
-    // #854: Round-Reset-Wrapper-Button postet /round_reset.
+    // #854/#868: Round-Reset-Wrapper-Button postet /round_reset MIT `reset:1`.
     assert.equal(await page.locator("#attack_round_reset").count(), 1);
     await page.click("#attack_round_reset");
     await page.waitForTimeout(300);
     assert.ok(countHits(hits, "round_reset") >= 1, "new round -> POST /round_reset");
+    assert.ok(
+      roundResetBodies.some((b) => {
+        try {
+          return JSON.parse(b).reset === 1;
+        } catch (e) {
+          return false;
+        }
+      }),
+      "new round sendet {reset:1} (sonst als Poll fehlinterpretiert): " +
+        JSON.stringify(roundResetBodies),
+    );
 
     // --- Lazy-Loading: vor dem Oeffnen des Docker-Tabs kein Server-Poll ---
     assert.equal(
