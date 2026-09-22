@@ -55,6 +55,10 @@ services:
         --port {{ gns_relay_port }}
         --map-file {{ gns_relay_routes_container_path }}
         --dll {{ gns_relay_bin_mount }}/bin/GameNetworkingSockets.dll
+        --api-host {{ gns_relay_api_host }}
+        --api-port {{ gns_relay_api_port }}{% if gns_relay_hold %}
+        --hold{% endif %}{% for t in gns_relay_targets %}
+        --target {{ t }}{% endfor %}
 
 volumes:
   {{ gns_relay_wine_volume }}:

@@ -56,11 +56,11 @@ const ROUTES = {
   personas: {
     personas: { aggro: personaMatrix(), ruhig: personaMatrix() },
     active: "aggro",
-    send_yourself: true,
   },
   attack_status: {
-    active: true,
-    state: "running",
+    active: false,
+    state: "warmup",
+    seconds_to_warmup_end: 95,
     level: 3,
     seconds_to_next_attack: 187,
     seconds_to_next_difficulty: 412,
@@ -120,6 +120,7 @@ const ROUTES = {
     players: 1,
   },
   probe: { ok: true },
+  round_reset: { ok: true, round_reset_epoch: 1, restart_map: "ok" },
   "server/status": {
     ok: true,
     state: "running",
@@ -226,6 +227,25 @@ test("Cockpit rendert: Tabs, Formulare, Docker-Log tailt, keine JS-Fehler", asyn
     assert.equal(await page.locator("#advanced_editor").isVisible(), false);
     assert.equal(await page.locator("#docker_editor").isVisible(), false);
 
+    // #851: `send yourself` ist nur noch der Game-Config-Toggle — die
+    // Send-Tracker-Checkbox im Operator-Tab ist entfernt.
+    assert.equal(
+      await page.locator("#send_yourself").count(),
+      0,
+      "keine send-yourself-Checkbox im Send Tracker",
+    );
+
+    // #855: Zustand + Warmup-Countdown im Attack-Cycle-Panel (auch ohne RUNNING).
+    const orders = await page.locator("#buy_orders").textContent();
+    assert.ok(orders.includes("warmup"), "Zustand sichtbar: " + orders.slice(0, 60));
+    assert.ok(orders.includes("1:35"), "Warmup-Countdown sichtbar: " + orders.slice(0, 60));
+
+    // #854: Round-Reset-Wrapper-Button postet /round_reset.
+    assert.equal(await page.locator("#attack_round_reset").count(), 1);
+    await page.click("#attack_round_reset");
+    await page.waitForTimeout(300);
+    assert.ok(countHits(hits, "round_reset") >= 1, "new round -> POST /round_reset");
+
     // --- Lazy-Loading: vor dem Oeffnen des Docker-Tabs kein Server-Poll ---
     assert.equal(
       countHits(hits, "server/status"),
@@ -258,6 +278,15 @@ test("Cockpit rendert: Tabs, Formulare, Docker-Log tailt, keine JS-Fehler", asyn
       await page.locator("#gc_form #gc_mode").count(),
       1,
       "Game-Config-Formular rendert",
+    );
+    assert.equal(
+      await page.locator("#gc_form #gc_send_yourself").count(),
+      1,
+      "send-yourself-Toggle lebt im Game Config (#851)",
+    );
+    assert.ok(
+      (await page.locator("#gc_state").textContent()).includes("1:35"),
+      "Game-Config-State zeigt den Warmup-Countdown (#855)",
     );
 
     await page.click("#tab_natural");

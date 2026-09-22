@@ -1067,8 +1067,9 @@ class TestLoadPersonas(unittest.TestCase):
 
 
 class TestSyncPersonas(unittest.TestCase):
-    """sync_personas(): pollt GET /personas (Bridge) und uebernimmt aktive
-    Persona + send_yourself zur Laufzeit (CLI-Flags nur Start-Fallback)."""
+    """sync_personas(): pollt GET /personas (Bridge) und uebernimmt die aktive
+    Persona zur Laufzeit (CLI-Flags nur Start-Fallback). `send_yourself` kommt
+    seit #851 nur noch aus `game_config` (sync_game_config)."""
 
     def _cycle(self, getter_resp, clock=None):
         return AttackCycle(
@@ -1080,19 +1081,26 @@ class TestSyncPersonas(unittest.TestCase):
             _clock=clock or FakeClock(),
         )
 
-    def test_applies_active_persona_and_send_yourself(self):
+    def test_applies_active_persona(self):
         aggro = [wave_count(3), wave_count(5)]
         ruhig = [wave_count(), wave_count(2)]
-        resp = json.dumps({"personas": {"aggro": aggro, "ruhig": ruhig}, "active": "aggro", "send_yourself": False})
+        resp = json.dumps({"personas": {"aggro": aggro, "ruhig": ruhig}, "active": "aggro"})
         cycle = self._cycle(resp)
         cycle.sync_personas()
         self.assertEqual(cycle.persona, aggro)
         self.assertEqual(cycle.persona_name, "aggro")
-        self.assertFalse(cycle.send_yourself)
+
+    def test_ignores_send_yourself_from_personas(self):
+        """#851: `send_yourself` kommt nur noch aus `game_config`, nicht aus
+        `/personas` — ein Alt-Wert im Payload wird bewusst ignoriert."""
+        resp = json.dumps({"personas": {"aggro": [wave_count(3)]}, "active": "aggro", "send_yourself": False})
+        cycle = self._cycle(resp)
+        cycle.sync_personas()
+        self.assertTrue(cycle.send_yourself, "send_yourself aus /personas wird ignoriert")
 
     def test_no_active_persona(self):
         aggro = [wave_count(3), wave_count(5)]
-        resp = json.dumps({"personas": {"aggro": aggro}, "active": "", "send_yourself": True})
+        resp = json.dumps({"personas": {"aggro": aggro}, "active": ""})
         cycle = self._cycle(resp)
         cycle.sync_personas()
         self.assertIsNone(cycle.persona)
@@ -1100,7 +1108,7 @@ class TestSyncPersonas(unittest.TestCase):
         self.assertTrue(cycle.send_yourself)
 
     def test_invalid_level_rejected(self):
-        resp = '{"personas":{"bad":[[-1]]},"active":"bad","send_yourself":true}'
+        resp = '{"personas":{"bad":[[-1]]},"active":"bad"}'
         cycle = self._cycle(resp)
         cycle.sync_personas()
         self.assertIsNone(cycle.persona)
@@ -1115,6 +1123,64 @@ class TestSyncPersonas(unittest.TestCase):
         cycle.sync_personas()
         self.assertIsNone(cycle.persona)
         self.assertTrue(cycle.send_yourself)
+
+
+class TestSyncRoundReset(unittest.TestCase):
+    """sync_round_reset() (#854): POST /round_reset -> reset()+start atomar.
+
+    Aus jedem Zustand (auch GAME_OVER) direkt nach WARMUP; Edge-Erkennung ueber
+    round_reset_epoch (Wiederholung loest nicht erneut aus)."""
+
+    class _Poster:
+        def __init__(self, epoch):
+            self.epoch = epoch
+            self.calls = 0
+
+        def __call__(self, _path, _body):
+            self.calls += 1
+            return (200, json.dumps({"ok": True, "round_reset_epoch": self.epoch}))
+
+    def _cycle(self, epoch):
+        poster = self._Poster(epoch)
+        cycle = AttackCycle(
+            "http://127.0.0.1:9001",
+            interval_s=420.0,
+            difficulty_interval_first_s=1e9,
+            _poster=poster,
+            _getter=lambda path: (200, "{}"),
+            _clock=FakeClock(),
+        )
+        return cycle, poster
+
+    def test_game_over_to_warmup(self):
+        """Aus GAME_OVER (terminal) startet der Wrapper eine neue Runde."""
+        cycle, _poster = self._cycle(1)
+        cycle._set_state(STATE_GAME_OVER)
+        cycle.next_attack_at = 123.0
+        cycle.sync_round_reset()
+        self.assertEqual(cycle.state, STATE_WARMUP)
+        self.assertIsNotNone(cycle.next_warmup_end)
+        self.assertIsNone(cycle.next_attack_at, "Counter wurde zurueckgesetzt")
+
+    def test_epoch_edge_only_once(self):
+        """Gleiche Epoch -> kein erneuter Reset (Edge-Erkennung)."""
+        cycle, poster = self._cycle(1)
+        cycle._set_state(STATE_GAME_OVER)
+        cycle.sync_round_reset()
+        self.assertEqual(cycle.state, STATE_WARMUP)
+        cycle.sync_round_reset()
+        self.assertEqual(cycle.state, STATE_WARMUP)
+        self.assertEqual(poster.calls, 2)
+
+    def test_non_200_ignored(self):
+        cycle = AttackCycle(
+            "http://127.0.0.1:9001",
+            _poster=lambda path, body: (500, "{}"),
+            _getter=lambda path: (200, "{}"),
+        )
+        cycle._set_state(STATE_GAME_OVER)
+        cycle.sync_round_reset()
+        self.assertEqual(cycle.state, STATE_GAME_OVER)
 
 
 class TestSyncNaturalAttackRules(unittest.TestCase):

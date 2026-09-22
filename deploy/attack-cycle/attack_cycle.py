@@ -560,8 +560,8 @@ class AttackCycle:
         self.wave_logic = wave_logic or WAVE_LOGIC
         self.persona = persona
         self.persona_name = persona_name
-        # Toggles (Game-Flow): `send_yourself` bleibt als Legacy-Flag/CLI-Flag
-        # erhalten und ist der Default des gleichnamigen Toggles.
+        # Toggles (Game-Flow): das CLI-Flag `--send-yourself` ist nur der
+        # Start-Fallback; zur Laufzeit fuehrt `game_config.send_yourself` (#851).
         base_toggles = dict(DEFAULT_TOGGLES)
         base_toggles["send_yourself"] = bool(send_yourself)
         self.toggles = _normalize_toggles(toggles, base_toggles)
@@ -608,18 +608,15 @@ class AttackCycle:
         self.enemy_outgoing: list = []  # Sends "an den Gegner" (SOLO: Zaehler; VS: Welt B)
         self.history: list = []  # letzte N gefeuerte Attacken (fuer Attack-Cycle-Tabelle)
         self._reset_epoch = 0
+        self._round_reset_epoch = 0  # Edge-Erkennung Round-Reset-Wrapper (#854)
         self._start_epoch: Optional[int] = None  # Edge-Erkennung fuer start_epoch
         self._start_signaled = False  # Start-Signal gesehen (noch nicht angewandt)
 
     # --- Toggles ----------------------------------------------------------
     @property
     def send_yourself(self) -> bool:
-        """Legacy-Zugriff auf den Toggle ``send_yourself`` (gleiche Quelle)."""
+        """Lese-Zugriff auf ``send_yourself`` (Quelle: ``game_config``, #851)."""
         return bool(self.toggles.get("send_yourself", True))
-
-    @send_yourself.setter
-    def send_yourself(self, value: Any) -> None:
-        self.toggles["send_yourself"] = bool(value)
 
     # --- Game-Flow / Zustandsmaschine -------------------------------------
     def _set_state(self, state: str) -> None:
@@ -1171,6 +1168,26 @@ class AttackCycle:
         except Exception:
             pass
 
+    def sync_round_reset(self) -> None:
+        """Round-Reset-Wrapper (#854): POST /round_reset {} von der Bridge.
+
+        Wendet ``reset()`` + ``signal_start()`` ATOMAR an — aus jedem Zustand
+        (auch GAME_OVER) direkt nach WARMUP (neue Runde). Den nativen Map-Restart
+        stoesst die Bridge selbst an (restart_map). Edge-Erkennung ueber
+        ``round_reset_epoch`` (Wiederholung loest nicht erneut aus).
+        """
+        try:
+            status, body = self._poster("/round_reset", b"{}")
+            if not 200 <= status < 300:
+                return
+            epoch = json.loads(body).get("round_reset_epoch")
+            if isinstance(epoch, int) and epoch != self._round_reset_epoch:
+                self._round_reset_epoch = epoch
+                self.reset()
+                self.signal_start()
+        except Exception:
+            pass
+
     # --- Game-Flow-Config von der Bridge (WebUI) --------------------------
     def sync_game_config(self) -> None:
         """Pollt GET /game_config und uebernimmt mode, warmup_s + die 4 Toggles.
@@ -1256,14 +1273,13 @@ class AttackCycle:
             return False
 
     def sync_personas(self) -> None:
-        """Pollt GET /personas und uebernimmt aktive Persona + send_yourself.
+        """Pollt GET /personas und uebernimmt die aktive Persona.
 
         Die Bridge ist die Laufzeit-Quelle der Wahrheit; die CLI-Flags
         --persona/--send-yourself sind nur der Start-Fallback. Die aktive
         Persona liefert die Extra-Wellen je Attack (Liste je Attack, mehrere
-        Wellen erlaubt), send_yourself das Routing eigener Kaeufe. Beide Werte
-        werden gegen die Toggle-Quelle (GET /game_config) nur uebernommen, wenn
-        die Bridge sie wirklich liefert.
+        Wellen erlaubt). `send_yourself` wird seit #851 NICHT mehr hierher
+        uebernommen — die einzige Quelle ist ``game_config`` (sync_game_config).
         """
         try:
             status, body = self._getter("/personas")
@@ -1290,12 +1306,9 @@ class AttackCycle:
                         parsed.append(norm)
                     if ok:
                         levels = parsed
-            send_yourself = data.get("send_yourself")
             with self._lock:
                 self.persona = levels
                 self.persona_name = active if levels is not None else ""
-                if isinstance(send_yourself, bool):
-                    self.send_yourself = send_yourself
         except Exception:
             pass
 
@@ -1459,6 +1472,7 @@ def run(
             cycle.sync_interval()
             cycle.sync_difficulty_interval()
             cycle.sync_reset()
+            cycle.sync_round_reset()
             cycle.sync_personas()
             cycle.sync_natural_attack_rules()
             cycle.push_status()

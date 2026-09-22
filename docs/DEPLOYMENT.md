@@ -43,7 +43,10 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
 5. **gns-relay** — GNS-Entry-Relay (Issue #843): Container `gns-relay`
    (`network_mode: host`, UDP `:6321`), baut `gns_probe.exe` aus
    `tools/gns-proxy` (MinGW-w64/zig) und routet per Spielnamen-Suffix auf
-   prod/staging/dev (Routen aus `roles/gns-relay/templates/routes.j2`).
+   prod/staging/dev (Routen aus `roles/gns-relay/templates/routes.j2`). Seit
+   #857 im **Hold-Modus**: unentschiedene Joins werden gehalten und über die
+   öffentliche Web-UI **https://proxy.rift.projectmellon.de** (Host-Caddy →
+   `127.0.0.1:9200`, basic_auth) auf ein Ziel geroutet.
 6. **tournament-server** — systemd-Unit, Env-Konfig (`RBBRIDGE_A_URL`/
    `RBBRIDGE_B_URL`), Binary + Web-UI aus `tournament/`.
 7. **website** — eigener **`rift-caddy`** (plain HTTP: Landing + `/mod.zip` +
@@ -58,7 +61,7 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
    Rollback-Stand bleibt erhalten). Installiert `deploy/host-hygiene/host_hygiene.sh` +
    Unit/Timer; automatische Variante der manuellen Aufräum-Befehle in
    [`SERVER_SIZING.md`](SERVER_SIZING.md).
-10. **crash-collector** — systemd-*Dauer*-Dienst (Issue #462/#481): beobachtet
+10. **crash-collector** — systemd-_Dauer_-Dienst (Issue #462/#481): beobachtet
     `docker logs -f` des Dedicated-Servers auf Crash-Marker (`CRASH:`,
     `page fault`) und sichert das neueste `crash_info/<uuid>.{dmp,log,trace}`
     als Bundle nach `/opt/rbmods/crashes/<ts>-<uuid>/` — zusammen mit

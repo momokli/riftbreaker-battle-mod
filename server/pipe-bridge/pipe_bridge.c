@@ -491,17 +491,21 @@ static CRITICAL_SECTION g_difficulty_interval_subsequent_cs;
 static int g_attack_reset_epoch = 0;
 static CRITICAL_SECTION g_attack_reset_cs;
 
+/* Round-Reset-Epoch (via POST /round_reset, Issue #854): der Sidecar wendet
+ * reset()+start atomar an (neue Runde, auch aus GAME_OVER). */
+static int g_round_reset_epoch = 0;
+static CRITICAL_SECTION g_round_reset_cs;
+
 /* Personas (Send-Profile) + Self-Send (Issue #788), via WebUI editierbar.
  * g_personas = roher JSON-Object-String {"name":[[level,...],...],...};
  * mit 4 Default-Personas vorbelegt (PLATZHALTER-Werte, runtime editierbar).
- * g_active_persona = aktiver Name ("" = none); g_send_yourself = Routing. */
+ * g_active_persona = aktiver Name ("" = none). Der Toggle `send_yourself`
+ * lebt seit #851 ausschliesslich in `game_config` (g_game_config). */
 static char g_personas[8192] =
     "{\"aggro\":[[0,0,1,0,1,0,0,0,0],[0,0,0,0,0,0,1,0,0],[0,0,0,0,0,0,0,0,2],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]],\"ruhig\":[[0,0,0,0,0,0,0,0,0],[0,1,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,1,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]],\"build\":[[1,0,2,0,1,0,0,0,0],[3,0,0,0,0,0,0,0,0],[0,1,0,2,0,0,1,0,0],[0,1,0,0,0,2,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]],\"zerg\":[[3,0,0,0,0,0,0,0,0],[3,0,0,0,0,0,0,0,0],[0,2,0,0,0,0,0,0,0],[0,0,2,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]],\"matheo\":[[1,0,0,0,0,0,0,0,0],[0,5,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,1,1,1,0,1,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]]}";
 static CRITICAL_SECTION g_personas_cs;
 static char g_active_persona[64];
 static CRITICAL_SECTION g_active_persona_cs;
-static int g_send_yourself = 1;
-static CRITICAL_SECTION g_send_yourself_cs;
 
 /* Natural-Attack-Rules (#819): die vollstaendig konfigurierbaren Dimensionen
  * der Natural-Attacks-Engine (Attack-Count/Boss je Level, Creature-Attack-
@@ -1471,14 +1475,54 @@ static void handle_post_attack_reset(SOCKET c, const char *body)
     http_respond(c, 200, "OK", resp);
 }
 
-/* GET /personas: liefert Persona-Defs (roher JSON-Object), aktive Persona und
- * Self-Send. Der Attack-Cycle-Sidecar pollt das; die WebUI liest/schreibt. */
+/* POST /round_reset: Round-Reset-Wrapper (Issue #854). Erhoeht die
+ * Round-Reset-Epoch (der Sidecar wendet reset()+start atomar an -> neue Runde,
+ * auch aus GAME_OVER) UND stoesst den nativen restart_map-Reset an (Economy 0,
+ * HQ-Placement). Body optional: {"map":0} laesst den nativen Reset aus. */
+static void handle_post_round_reset(SOCKET c, const char *body)
+{
+    double map_flag = 1.0;
+    char resp[256];
+    char line[READ_BUF];
+    const char *map_status = "skipped";
+    int epoch;
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+
+    EnterCriticalSection(&g_round_reset_cs);
+    g_round_reset_epoch++;
+    epoch = g_round_reset_epoch;
+    LeaveCriticalSection(&g_round_reset_cs);
+    blog("round_reset -> epoch %d", epoch);
+
+    json_get_number(body, "map", &map_flag);
+    if (map_flag != 0.0) {
+        int rc = pipe_send_command("restart_map_result",
+                                   "{\"cmd\":\"restart_map\",\"op\":\"reset\"}\n",
+                                   timeout_ms, line, sizeof(line));
+        if (rc == -1) {
+            map_status = "pipe_unavailable";
+        } else if (rc != 0) {
+            map_status = "timeout";
+        } else {
+            map_status = "ok";
+            log_response("/round_reset", line);
+        }
+    }
+
+    snprintf(resp, sizeof(resp),
+             "{\"ok\":true,\"round_reset_epoch\":%d,\"restart_map\":\"%s\"}",
+             epoch, map_status);
+    http_respond(c, 200, "OK", resp);
+}
+
+/* GET /personas: liefert Persona-Defs (roher JSON-Object) und die aktive
+ * Persona. Der Attack-Cycle-Sidecar pollt das; die WebUI liest/schreibt.
+ * `send_yourself` lebt seit #851 ausschliesslich in `game_config`. */
 static void handle_get_personas(SOCKET c)
 {
     char resp[8192];
     char personas[8192];
     char active[64];
-    int send_yourself;
 
     EnterCriticalSection(&g_personas_cs);
     if (g_personas[0]) {
@@ -1494,13 +1538,9 @@ static void handle_get_personas(SOCKET c)
     active[sizeof(active) - 1] = '\0';
     LeaveCriticalSection(&g_active_persona_cs);
 
-    EnterCriticalSection(&g_send_yourself_cs);
-    send_yourself = g_send_yourself;
-    LeaveCriticalSection(&g_send_yourself_cs);
-
     snprintf(resp, sizeof(resp),
-             "{\"personas\":%s,\"active\":\"%s\",\"send_yourself\":%s}",
-             personas, active, send_yourself ? "true" : "false");
+             "{\"personas\":%s,\"active\":\"%s\"}",
+             personas, active);
     http_respond(c, 200, "OK", resp);
 }
 
@@ -1531,28 +1571,6 @@ static void handle_post_persona_active(SOCKET c, const char *body)
     LeaveCriticalSection(&g_active_persona_cs);
     blog("persona_active -> '%s'", g_active_persona);
     http_respond(c, 200, "OK", "{\"ok\":true}");
-}
-
-/* POST /send_yourself: setzt den Routing-Toggle ({"on":1} / {"on":0}). */
-static void handle_post_send_yourself(SOCKET c, const char *body)
-{
-    double d = 0.0;
-    char resp[128];
-    int cur;
-
-    if (json_get_number(body, "on", &d)) {
-        EnterCriticalSection(&g_send_yourself_cs);
-        g_send_yourself = (d != 0.0);
-        LeaveCriticalSection(&g_send_yourself_cs);
-        blog("send_yourself -> %s", g_send_yourself ? "on" : "off");
-    }
-
-    EnterCriticalSection(&g_send_yourself_cs);
-    cur = g_send_yourself;
-    LeaveCriticalSection(&g_send_yourself_cs);
-    snprintf(resp, sizeof(resp), "{\"ok\":true,\"send_yourself\":%s}",
-             cur ? "true" : "false");
-    http_respond(c, 200, "OK", resp);
 }
 
 /* GET /natural_attack_rules: liefert die Natural-Attack-Rules als rohen
@@ -1799,6 +1817,16 @@ static void handle_client(SOCKET c)
             b[body_len] = '\0';
             handle_post_attack_reset(c, b);
             free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/round_reset") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_post_round_reset(c, b);
+            free(b);
         } else if (strcmp(method, "GET") == 0 && strcmp(path, "/personas") == 0) {
             handle_get_personas(c);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/personas") == 0) {
@@ -1820,16 +1848,6 @@ static void handle_client(SOCKET c)
             memcpy(b, body, (size_t)body_len);
             b[body_len] = '\0';
             handle_post_persona_active(c, b);
-            free(b);
-        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/send_yourself") == 0) {
-            char *b = malloc((size_t)body_len + 1);
-            if (!b) {
-                free(req);
-                return;
-            }
-            memcpy(b, body, (size_t)body_len);
-            b[body_len] = '\0';
-            handle_post_send_yourself(c, b);
             free(b);
         } else if (strcmp(method, "GET") == 0 && strcmp(path, "/natural_attack_rules") == 0) {
             handle_get_natural_attack_rules(c);
@@ -2003,11 +2021,11 @@ static int mode_server(void)
     InitializeCriticalSection(&g_attack_status_cs);
     InitializeCriticalSection(&g_attack_interval_cs);
     InitializeCriticalSection(&g_attack_reset_cs);
+    InitializeCriticalSection(&g_round_reset_cs);
     InitializeCriticalSection(&g_difficulty_interval_first_cs);
     InitializeCriticalSection(&g_difficulty_interval_subsequent_cs);
     InitializeCriticalSection(&g_personas_cs);
     InitializeCriticalSection(&g_active_persona_cs);
-    InitializeCriticalSection(&g_send_yourself_cs);
     InitializeCriticalSection(&g_natural_attack_rules_cs);
     InitializeCriticalSection(&g_game_config_cs);
     InitializeCriticalSection(&g_ready_cs);
