@@ -1,10 +1,11 @@
 ---
 # Rolle: website — eigener Rift-Caddy-Container (Landing: file_server +
-# /mod.zip; Cockpit: /contract/* + /tournament/*) + ZWEI Einträge im geteilten
-# Host-Caddy. Idempotent. Die Rolle ist per-Environment als "Twin"
+# /mod.zip; Cockpit: /contract/* + /tournament/*) + Host-Einträge im geteilten
+# Caddy. Idempotent. Die Rolle ist per-Environment als "Twin"
 # parametriert: {{ landing_domain }}, {{ cockpit_domain }},
 # {{ rift_caddy_container }} und {{ rift_caddy_port }} kommen aus den Env-Vars
-# (dev und prod je eigener Container/Port/Domain).
+# (dev und prod je eigener Container/Port/Domain). Der Lobby-Eintrag
+# ({{ proxy_domain }}, Issue #857) ist dagegen env-UNABHAENGIG (Relay-Singleton).
 #
 # Architektur (Issue #322):
 #   {{ landing_domain }} → Host-Caddy (mellon-caddy)
@@ -148,10 +149,11 @@
   when: not ansible_check_mode
 
 # ---------------------------------------------------------------------------
-# Geteilter Host-Caddy: genau ZWEI Einträge (Landing + Cockpit). Alte manuelle
-# Rift-Definition, verwaiste operator.*-Einträge und die Snippet-Import-Zeile
-# zuerst entfernen (sonst kollidiert die Domain bzw. schlägt der Glob-Import
-# ins leere Verzeichnis fehl).
+# Geteilter Host-Caddy: Eintraege fuer Landing + Cockpit (per Env) und die
+# GNS-Lobby (env-unabhaengig, Issue #857). Alte manuelle Rift-Definition,
+# erwaiste operator.*-Eintraege und die Snippet-Import-Zeile zuerst entfernen
+# (sonst kollidiert die Domain bzw. schlaegt der Glob-Import ins leere
+# Verzeichnis fehl).
 #
 # Reload deterministisch + fehlersichtbar (Issue #355): Der Reload hing zuvor
 # NUR als Handler am `changed` der Datei-Tasks. Ein beim ersten Deploy
@@ -222,6 +224,27 @@
       }
   register: host_caddy_cockpit_block
 
+# GNS-Lobby (Issue #857): die Operator-Web-UI des Relay-Singletons, direkt auf
+# die Relay-API ({{ proxy_upstream }}) — NICHT ueber einen per-Env rift-caddy.
+# Der Block ist env-unabhaengig ({{ proxy_domain }} ist fix) und wird daher von
+# jedem Play identisch gepflegt (idempotent, ein einziger Marker). basic_auth,
+# weil die Relay-API selbst keinen Auth hat.
+- name: "Host-Caddy-Eintrag sicherstellen (GNS-Lobby, Issue #857)"
+  blockinfile:
+    path: "{{ website_host_caddyfile_path }}"
+    marker: "# {mark} RIFT {{ proxy_domain }} (managed by deploy/roles/website)"
+    owner: "{{ website_host_caddyfile_owner }}"
+    group: "{{ website_host_caddyfile_group }}"
+    mode: "0644"
+    block: |
+      {{ proxy_domain }} {
+          basic_auth {
+              operator {{ proxy_basic_auth_hash }}
+          }
+          reverse_proxy {{ proxy_upstream }}
+      }
+  register: host_caddy_proxy_block
+
 # In-place-Sync (Host-Caddy-Reload, Issue #322/#355): Ansibles blockinfile/replace/lineinfile schreiben
 # atomar (temp + rename) und brechen damit den SINGLE-FILE-Bind-Mount des
 # geteilten Host-Caddys ({{ website_host_caddy_container }}): der Container zeigt
@@ -256,9 +279,11 @@
          or (host_caddy_operator_cleanup is changed)
          or (host_caddy_landing_block is changed)
          or (host_caddy_cockpit_block is changed)
+         or (host_caddy_proxy_block is changed)
          or ((host_caddy_live.rc | default(1) | int) != 0)
          or (landing_domain not in (host_caddy_live.stdout | default('')))
-         or (cockpit_domain not in (host_caddy_live.stdout | default(''))) }}
+         or (cockpit_domain not in (host_caddy_live.stdout | default('')))
+         or (proxy_domain not in (host_caddy_live.stdout | default(''))) }}
   when: not ansible_check_mode
 
 - name: Host-Caddy — Config validieren (vor dem Reload)
@@ -273,8 +298,8 @@
   changed_when: true
   when: not ansible_check_mode and (host_caddy_needs_reload | default(false) | bool)
 
-# Post-Check: nach dem Reload MUSS der Eintrag live sein. Fehlt er (oder war die
-# Admin-API nicht lesbar), schlaegt der Deploy hier sichtbar fehl.
+# Post-Check: nach dem Reload MUESSEN die Eintraege live sein. Fehlt einer (oder
+# war die Admin-API nicht lesbar), schlaegt der Deploy hier sichtbar fehl.
 - name: Host-Caddy — Reload wirksam? (Domains müssen JETZT live sein)
   command: docker exec {{ website_host_caddy_container }} wget -qO- http://localhost:2019/config/
   register: host_caddy_live_after
@@ -283,4 +308,5 @@
     (host_caddy_live_after.rc | default(1) | int) != 0
     or (landing_domain not in (host_caddy_live_after.stdout | default('')))
     or (cockpit_domain not in (host_caddy_live_after.stdout | default('')))
+    or (proxy_domain not in (host_caddy_live_after.stdout | default('')))
   when: not ansible_check_mode and (host_caddy_needs_reload | default(false) | bool)

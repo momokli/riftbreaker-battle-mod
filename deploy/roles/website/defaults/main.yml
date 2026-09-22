@@ -1,12 +1,15 @@
 ---
-# Defaults der Rolle website (eigener rift-caddy + ZWEI Host-Eintraege: Landing + Cockpit).
+# Defaults der Rolle website (eigener rift-caddy + Host-Eintraege: Landing +
+# Cockpit + GNS-Lobby).
 #
 # Issue #322: Der Riftbreaker-Stack hat einen EIGENEN Caddy-Container
 # (`rift-caddy`, plain HTTP, reines Durchreichen) für die statische Landing
 # (+ /mod.zip) und die /tournament/*-/contract/*-Proxies. Der geteilte
 # Host-Caddy (`mellon-caddy`) bekommt genau ZWEI Eintraege
-# (`landing_domain` + `cockpit_domain` → reverse_proxy 127.0.0.1:<port>) —
-# kein `Caddyfile.d`-Mount, keine Snippet-Import-Zeile mehr.
+# `landing_domain` + `cockpit_domain` → reverse_proxy 127.0.0.1:<port>) —
+# kein `Caddyfile.d`-Mount, keine Snippet-Import-Zeile mehr. Dazu (Issue #857)
+# ein DRITTER, env-unabhaengiger Eintrag `proxy_domain` (GNS-Lobby) direkt auf
+# die Relay-API.
 #
 # Die planet-spezifischen Werte (Domains, Pfade, Ports, Container-Namen) stehen
 # in deploy/inventory/host_vars/planet/vars.yml; diese Defaults liefern nur
@@ -14,6 +17,18 @@
 
 landing_domain: www.rift.projectmellon.de
 cockpit_domain: cockpit.rift.projectmellon.de
+
+# GNS-Lobby (Issue #857): die Operator-Web-UI des GNS-Entry-Relays auf planet.
+# Der Relay ist ein SINGLETON (ein Prozess besitzt den client-hardgewireten
+# Einstiegsport 6321) — daher EINE feste Domain, identisch in dev/prod/staging,
+# mit identischem Host-Caddy-Block (idempotent, kein Env-Twin). Der Block zeigt
+# DIREKT auf die Relay-API ({{ proxy_upstream }}, 127.0.0.1), NICHT ueber einen
+# per-Env rift-caddy: die Lobby gehoert dem Relay, nicht einem Environment.
+# Trotzdem geschuetzt (basic_auth), weil der Relay hinter dem Entry-Port sitzt
+# und die API selbst keine Auth hat.
+proxy_domain: proxy.rift.projectmellon.de
+proxy_upstream: "127.0.0.1:9200"
+proxy_basic_auth_hash: "{{ contract_basic_auth_hash }}"
 website_docroot: /srv/rbmods-site
 website_mods_dir: "{{ website_docroot }}/mods"
 

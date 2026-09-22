@@ -113,6 +113,54 @@ Routen-Datei (`<key>=<ip:port>`, `#` = Kommentar) siehe `routes.example`.
 Optional: `--appid N` (Default 780310), `--identity`, `--unencrypted 1`,
 `--allow-without-auth {0,1,2}`, `--port`, `--dll`.
 
+## Hold + Operator-UI (Issue #857, PoC)
+
+Statt unentschiedene Joins automatisch auf den Default zu schicken, kann der
+Relay sie **halten**; ein Operator sieht sie in einer kleinen Web-UI und schickt
+sie per Klick auf ein Ziel:
+
+```bash
+gns_probe.exe --port 6321 --map-file /etc/rbgns/routes --hold \
+  --api-host 127.0.0.1 --api-port 9200 \
+  --target PROD=127.0.0.1:6322 --target STAGING=127.0.0.1:6323 --target DEV=127.0.0.1:6324
+```
+
+| Flag         | Bedeutung                                            |
+| ------------ | ---------------------------------------------------- |
+| `--hold`     | unentschiedene Sessions halten (kein Backend-Aufbau) |
+| `--api-port` | HTTP-Port der UI/API (Default-Bind nur `127.0.0.1`)  |
+| `--api-host` | Bind-Adresse der UI/API (Default `127.0.0.1`)        |
+| `--target`   | `NAME=ip:port`, wiederholbar — die Buttons der UI    |
+
+Suffix-/Identitaets-Regeln aus der Routen-Datei haben **Vorrang**: wer
+`*-dev`/`*-staging` heisst oder eine exakte Identitaets-Regel trifft, wird
+automatisch geroutet; nur der Rest wartet.
+
+Endpunkte (der Relay selbst hat **keinen** Auth — er bindet daher nur lokal; die
+öffentliche Lobby-Domain setzt davor der Host-Caddy mit basic_auth):
+`GET /` (Single-File-UI), `GET /sessions` (JSON: wer wartet),
+`GET /targets` (JSON: die Buttons), `POST /route`
+`{"identitaet":"…","target":"NAME"}`.
+
+Im Deploy läuft die Rolle `website` die Lobby öffentlich aus:
+**https://proxy.rift.projectmellon.de** (Host-Caddy → `127.0.0.1:9200`, basic_auth
+`operator`). Lokal ohne Domain: `ssh -L 9200:127.0.0.1:9200 planet`.
+
+**Verhalten:** Der Client bleibt im Loading; seine Nachrichten laufen in die
+bestehende Historie. Der Klick baut den Backend-Connect auf und **replayed** die
+Historie (derselbe Pfad wie beim Namens-Re-Route). Die Entscheidung wird als
+**Pin pro Identitaet** gemerkt — noetig, weil der Client nach ~20 s ohne Antwort
+selbst schliesst und neu verbindet; der Pin ueberlebt den Reconnect. Die
+**Halte-Dauer** wird beim Trennen geloggt (Kernfrage des PoC).
+
+**Leitplanke:** Der GNS-Zustand bleibt single-threaded — der HTTP-Thread liest
+einen mutex-geschuetzten Snapshot (`/sessions`) und schreibt Befehle in eine
+Queue, die die Hauptschleife abarbeitet (Muster `server/dll/rbbridge.c`).
+
+> **Grenze:** Der Relay terminiert und relayt die Sitzung fuer ihre ganze Dauer;
+> er bedient damit **einen Client zur Zeit**. Mehrere parallele Matches brauchen
+> mehrere Sitzungen im Relay (offenes Follow-up).
+
 ## Backpressure (wichtig)
 
 Riftbreaker schickt Weltzustaende von ~500 KiB pro Nachricht. Ohne Gegenmassnahme
@@ -137,15 +185,17 @@ Default-Ziel darf ein Re-Route **nicht** ueberschreiben.
 
 ## Werkzeuge
 
-| Datei                    | Zweck                                                    |
-| ------------------------ | -------------------------------------------------------- |
-| `gns_probe.cpp`          | Relay + Routing + Message-Dump (`--dial` fuer Diagnose)  |
-| `route_rules.h`          | Routing-Regeln (exakt / Suffix / Default), reine Logik   |
-| `test_route_rules.cpp`   | Host-Test der Regeln (CI: `g++ -std=c++17`)              |
-| `inspect_gns.py`         | findet `m_nAppID` (vtable-Slot-Scan) in der GNS-DLL      |
-| `pcap_flow.py`           | UDP-Payloads eines Flows in Reihenfolge aus einem pcap   |
-| `replay_first_packet.py` | Replay der ersten GNS-Nachricht (nur Schritt 1 sinnvoll) |
-| `routes.example`         | Vorlage der Routen-Datei                                 |
+| Datei                    | Zweck                                                            |
+| ------------------------ | ---------------------------------------------------------------- |
+| `gns_probe.cpp`          | Relay + Routing + Message-Dump + Hold/Web-UI (`--dial` Diagnose) |
+| `api_util.h`             | reine API-Helfer (Target-Spec, JSON lesen/escapen)               |
+| `test_api_util.cpp`      | Host-Test der API-Helfer (CI: `g++ -std=c++17`)                  |
+| `route_rules.h`          | Routing-Regeln (exakt / Suffix / Default), reine Logik           |
+| `test_route_rules.cpp`   | Host-Test der Regeln (CI: `g++ -std=c++17`)                      |
+| `inspect_gns.py`         | findet `m_nAppID` (vtable-Slot-Scan) in der GNS-DLL              |
+| `pcap_flow.py`           | UDP-Payloads eines Flows in Reihenfolge aus einem pcap           |
+| `replay_first_packet.py` | Replay der ersten GNS-Nachricht (nur Schritt 1 sinnvoll)         |
+| `routes.example`         | Vorlage der Routen-Datei                                         |
 
 ## Betriebsbefund (eigenes Follow-up)
 
@@ -163,6 +213,8 @@ Sekunden auf (vorher sah es wie ein Timeout des Proxys aus).
       (kein gelerntes Caching — Ursache einer Fehlroute, s. Routen-Regeln)
 - [x] Live: 1v1-Match durch das Relay, Namens-Routing auf staging
 - [x] 1.0: Suffix-Routing (`-dev`/`-staging`) als Regeln + Host-Test (#843)
-- [ ] Deployment der Relay-Rolle + dev-Port-Umzug (#843)
+- [x] Deployment der Relay-Rolle + dev-Port-Umzug (#843)
+- [x] Hold + Operator-Web-UI (#857, PoC): Spieler halten, per Klick routen
 - [ ] `m_nAppID` in eigenen GNS-Build statt Runtime-Patch
-- [ ] Rust-Backend + Web-UI (Lobby) auf die Routen-Datei
+- [ ] Mehrere Sitzungen im Relay (parallele Matches hinter einer IPv4)
+- [ ] Rust-Backend/Launcher auf die JSON-API aufsetzen
