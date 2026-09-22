@@ -1239,8 +1239,11 @@
                 };
 
                 // Round-Reset-Wrapper (#854): neue Runde in einem Schritt.
+                // `reset:1` ist PFLICHT (#868): ohne das Flag ist POST
+                // /round_reset der read-only Poll des Sidecars und loest nichts
+                // aus (sonst Endlos-Reset).
                 $("attack_round_reset").onclick = function () {
-                    post("round_reset", {}).then(function (r) {
+                    post("round_reset", { reset: 1 }).then(function (r) {
                         $("buy_orders_msg").textContent = r && r.ok
                             ? "new round (map: " + (r.restart_map || "?") + ")"
                             : JSON.stringify(r);

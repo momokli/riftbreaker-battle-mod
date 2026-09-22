@@ -102,10 +102,16 @@ Ein Match endet in `GAME_OVER` (terminal). Ein `docker restart` des **Spielserve
 aendert daran nichts — der Attack-Cycle laeuft im **eigenen Container** und bleibt in
 `GAME_OVER`. Fuer „neue Runde in einem Schritt" gibt es den Wrapper:
 
-`POST /round_reset` (Bridge) erhoeht `round_reset_epoch` und stoesst den nativen
-`restart_map`-Reset an. Der Cycle pollt `POST /round_reset {}` (`sync_round_reset`)
-und wendet **atomar** `reset()` **+** `signal_start()` an → aus jedem Zustand (auch
-`GAME_OVER`) direkt nach `WARMUP`. Cockpit: Button „new round" im Attack-Cycle-Panel.
+`POST /round_reset {"reset":1}` (Bridge) erhoeht `round_reset_epoch` und stoesst
+den nativen `restart_map`-Reset an. Der Cycle pollt `POST /round_reset {}`
+(`sync_round_reset`) und wendet **atomar** `reset()` **+** `signal_start()` an →
+aus jedem Zustand (auch `GAME_OVER`) direkt nach `WARMUP`. Cockpit: Button
+„new round" im Attack-Cycle-Panel (sendet `{"reset":1}`).
+
+> **`reset:1` ist Pflicht (#868).** Der Sidecar pollt denselben Endpoint
+> sekündlich mit `{}`; ohne das Flag ist der Aufruf **read-only** (nur Epoch
+> lesen) — sonst würde jeder Poll eine neue Runde auslösen. Gleiches Muster wie
+> `/attack_reset`.
 
 ## Test
 

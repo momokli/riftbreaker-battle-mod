@@ -1181,6 +1181,10 @@ class AttackCycle:
         (auch GAME_OVER) direkt nach WARMUP (neue Runde). Den nativen Map-Restart
         stoesst die Bridge selbst an (restart_map). Edge-Erkennung ueber
         ``round_reset_epoch`` (Wiederholung loest nicht erneut aus).
+
+        Der Aufruf mit ``{}`` ist READ-ONLY (#868): die Bridge erhoeht die Epoch
+        nur bei ``{"reset":1}`` (sonst wuerde dieser Sekunden-Poll selbst eine
+        neue Runde ausloesen).
         """
         try:
             status, body = self._poster("/round_reset", b"{}")
