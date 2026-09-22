@@ -101,11 +101,18 @@
           - "('*         = ' ~ gns_relay_target_default) in gns_routes"
           - "'network_mode: host' in gns_compose"
           - "(gns_relay_port | string) in gns_compose"
+          # Hold + Steuer-API (Issue #857): halten statt auto-routen, Buttons aus
+          # gns_relay_targets, API nur lokal.
+          - "'--hold' in gns_compose"
+          - "('--api-port ' ~ (gns_relay_api_port | string)) in gns_compose"
+          - "('--api-host ' ~ gns_relay_api_host) in gns_compose"
+          - "('--target ' ~ gns_relay_targets[0]) in gns_compose"
         fail_msg: >-
-          gns-relay.Render ist falsch (Issue #843): die Routen-Datei muss die
-          drei Suffix-Regeln (dev/staging/default) tragen und das Compose
-          `network_mode: host` + den Einstiegsport.
-        success_msg: "gns-relay: Suffix-Routen + host-Netzwerk + Port korrekt (Issue #843)."
+          gns-relay.Render ist falsch (Issue #843/#857): die Routen-Datei muss
+          die drei Suffix-Regeln (dev/staging/default) tragen und das Compose
+          `network_mode: host`, den Einstiegsport sowie Hold + API-Flags
+          (--hold/--api-host/--api-port/--target).
+        success_msg: "gns-relay: Suffix-Routen + host-Netzwerk + Port + Hold/API korrekt (Issue #843/#857)."
 
     # Deploy-Identitaet sichtbar (Issue #483, US4): die Landing-HTML wird aus
     # dem echten Rollen-Template gerendert; meta rb-env/rb-ref + Badge muessen

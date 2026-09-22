@@ -115,6 +115,12 @@ shared:
   gns_relay_deploy_dir: "Compose-/Config-Verzeichnis des Relays (/opt/rbmods/compose/gns-relay) — Singleton, kein per-Env-Pfad."
   gns_relay_bin_dir: "Ablage der gebauten gns_probe.exe (/opt/rbmods/gns-relay/bin) — Singleton, kein per-Env-Pfad."
   gns_relay_wine_volume: "Eigenes Wine-Prefix-Volume des Relays (gns-relay-wine) — eindeutig (globaler Docker-Name), kein Env-Twin."
+  # Hold + Steuer-API/UI (Issue #857).
+  gns_relay_hold: "Spieler halten statt auto-routen (PoC-Web-UI) — Singleton-Verhalten des Relays, kein Env-Twin."
+  gns_relay_api_host: "Bind-Adresse der Steuer-API (127.0.0.1) — kein Auth, daher host-lokal."
+  gns_relay_api_port: "HTTP-Port der Steuer-API/UI (9200) — Relay-Singleton, kein Env-Port."
+  gns_relay_targets: "Buttons/Targets der UI (NAME=ip:port) — aus den drei Backend-Zielen abgeleitet, kein Env-Twin."
+  gns_relay_extra_routes: "Zusaetzliche Routen-Zeilen fuer die gerenderte Routen-Datei (deploy-feste Pins)."
   website_host_caddy_container: "Geteilter Host-Caddy (mellon-caddy) hostet fremde Domains — EINER pro Host, kein Env-Praefix moeglich (#322)."
   website_host_caddyfile_path: "Pfad zum geteilten Host-Caddyfile (/home/momo/Caddyfile) — Host-Konstante, kein Env-Zustand."
   website_host_caddyfile_owner: "Owner des geteilten Host-Caddyfiles (momo) — Host-Konstante, kein Env-Zustand."

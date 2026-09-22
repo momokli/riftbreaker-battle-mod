@@ -31,11 +31,19 @@
 // vtable-Reihenfolge haengen).
 #include <steam/isteamnetworkingsockets.h>
 
+// Winsock2 MUSS vor windows.h stehen (windows.h zieht sonst die alte winsock.h
+// und es gibt Typ-Konflikte). Die Steuer-API/Web-UI (Issue #857) braucht
+// TCP-Sockets fuer den HTTP-Listener.
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 
 // Reine Routing-Logik (exakt / Suffix-Wildcard / Default) — host-testbar in der
 // CI, siehe route_rules.h und test_route_rules.cpp.
 #include "route_rules.h"
+// Reine Helfer fuer die Steuer-API (Target-Spec, JSON) — host-testbar in der CI
+// (test_api_util.cpp).
+#include "api_util.h"
 
 #include <chrono>
 #include <cstdarg>
@@ -44,6 +52,8 @@
 #include <cstring>
 #include <ctime>
 #include <deque>
+#include <map>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -99,6 +109,8 @@ typedef void (*fn_IPAddrSetIPv4)(SteamNetworkingIPAddr *, uint32, uint16);
 typedef void (*fn_IdentityToString)(const SteamNetworkingIdentity *, char *,
                                     size_t);
 typedef bool (*fn_SetConnConfigInt32)(void *, HSteamNetConnection, int, int32);
+typedef void (*fn_IPAddrToString)(const SteamNetworkingIPAddr *, char *, size_t,
+                                  bool);
 
 fn_SteamNetworkingSockets_v009 pAccessor = nullptr;
 fn_Init pInit = nullptr;
@@ -122,6 +134,7 @@ fn_SendMessageToConnection pSendMessageToConnection = nullptr;
 fn_IPAddrSetIPv4 pIPAddrSetIPv4 = nullptr;
 fn_IdentityToString pIdentityToString = nullptr;
 fn_SetConnConfigInt32 pSetConnConfigInt32 = nullptr;
+fn_IPAddrToString pIPAddrToString = nullptr;
 
 ISteamNetworkingSockets *g_pInterface = nullptr;
 HSteamNetPollGroup g_hPollGroup = k_HSteamNetPollGroup_Invalid;
@@ -192,11 +205,70 @@ bool g_useIdentity = false;
 // vtable-Slot 26 = `mov eax,[rcx+8]; ret`).
 int g_appid = 780310;
 
+// --- Operator-UI + Steuer-API (Issue #857) -----------------------------------
+// PoC: statt automatisch auf den Default zu routen, kann der Relay einen Client
+// HALTEN und einen Operator in einer kleinen Web-UI entscheiden lassen
+// (PROD/DEV/STAGING). Der GNS-Zustand bleibt single-threaded: der HTTP-Thread
+// liest einen mutex-geschuetzten Snapshot und schreibt Befehle in eine Queue,
+// die die Hauptschleife abarbeitet (Muster server/dll/rbbridge.c).
+//
+// `--hold`       unentschiedene Sessions halten (kein Backend-Aufbau)
+// `--api-port N` HTTP-Listener der UI/API (Default nur an 127.0.0.1)
+// `--target NAME=ip:port` (wiederholbar) — die Buttons der UI
+bool g_hold = false;
+int g_apiPort = 0;
+std::string g_apiHost = "127.0.0.1";
+std::vector<std::pair<std::string, rbroute::Endpoint>> g_targets;
+// Operator-Pin pro Identitaet — ueberlebt Reconnects (der Client schliesst nach
+// ~20 s ohne Antwort selbst und verbindet neu). NUR vom Hauptloop beruehrt.
+std::map<std::string, rbroute::Endpoint> g_pins;
+
+// Anzeige-Snapshot (HTTP-Thread liest, Hauptloop schreibt) + Befehls-Queue.
+struct SessionInfo {
+  std::string identity;
+  std::string ip;
+  std::string name;
+  std::string state;  // connected | held | waiting | routed | closed
+  std::string target; // Endpoint des gewaehlten Backends (oder leer)
+  size_t messages = 0;
+  long long ageSeconds = 0;
+  long long heldSeconds = 0;
+  bool connected = false;
+  bool pinned = false;
+};
+struct ApiCommand {
+  std::string identity;
+  std::string target;
+};
+std::mutex g_apiMutex;
+std::vector<SessionInfo> g_sessionsSnapshot;
+std::deque<ApiCommand> g_apiCommands;
+
+// Laufende Session-Buchfuehrung (NUR Hauptloop). Ein Eintrag pro Identitaet,
+// damit ein Reconnect denselben Spieler weiterfuehrt.
+struct SessionRecord {
+  std::string identity;
+  std::string ip;
+  std::string name;
+  std::string targetStr;
+  std::string state = "connected";
+  size_t messages = 0;
+  std::chrono::steady_clock::time_point firstSeen;
+  std::chrono::steady_clock::time_point heldSince;
+  bool connected = false;
+  bool held = false;
+};
+std::map<std::string, SessionRecord> g_sessions;
+
+// Logging serialisieren — logLine() wird jetzt auch aus dem HTTP-Thread gerufen.
+std::mutex g_logMutex;
+
 void logLine(const char *fmt, ...) {
   char stamp[32];
   time_t now = time(nullptr);
   struct tm *lt = localtime(&now);
   strftime(stamp, sizeof(stamp), "%H:%M:%S", lt);
+  std::lock_guard<std::mutex> lock(g_logMutex);
   fprintf(stdout, "[%s] gns_probe: ", stamp);
   va_list args;
   va_start(args, fmt);
@@ -289,11 +361,16 @@ void loadRoutes() {
 
 // Erste *spezifische* Regel finden, deren Key als Token im Payload steht
 // (der Spielername steht als laengenpraefixierter Klartext im BINSER-Handshake).
-// Der Default (`*`) zaehlt dabei nicht als Treffer.
-const rbroute::Rule *routeFromPayload(const std::string &payload) {
+// Der Default (`*`) zaehlt dabei nicht als Treffer. Ueber `matchedName` kommt
+// der tatsaechlich passende Token zurueck (der gelernte Spielname fuer die UI).
+const rbroute::Rule *routeFromPayload(const std::string &payload,
+                                      std::string *matchedName = nullptr) {
   for (const std::string &token : rbroute::extractTokens(payload)) {
     const rbroute::Rule *rule = g_routes.matchSpecific(token);
     if (rule != nullptr) {
+      if (matchedName != nullptr) {
+        *matchedName = token;
+      }
       return rule;
     }
   }
@@ -408,6 +485,58 @@ void resetClientState() {
   g_lastRouteKey.clear();
   g_clientIdentity.clear();
   g_backendConnected = false;
+  // Kein Backend gewaehlt, bis der Connect-Pfad entscheidet (Regel/Pin/Default)
+  // oder bewusst haelt (--hold).
+  g_backendTarget = rbroute::Endpoint{};
+}
+
+// --- Session-Buchfuehrung (Issue #857) ---------------------------------------
+
+// Eintrag pro Identitaet anlegen/finden — ein Reconnect fuehrt denselben Spieler
+// weiter (die Identitaet ist stabil pro Installation).
+SessionRecord &sessionFor(const std::string &identity) {
+  std::map<std::string, SessionRecord>::iterator it = g_sessions.find(identity);
+  if (it == g_sessions.end()) {
+    SessionRecord rec;
+    rec.identity = identity;
+    rec.firstSeen = std::chrono::steady_clock::now();
+    it = g_sessions.emplace(identity, rec).first;
+  }
+  return it->second;
+}
+
+// Snapshot fuer den HTTP-Thread bauen (NUR Hauptloop ruft das).
+void refreshSnapshot() {
+  const std::chrono::steady_clock::time_point now =
+      std::chrono::steady_clock::now();
+  std::vector<SessionInfo> snap;
+  snap.reserve(g_sessions.size());
+  for (std::map<std::string, SessionRecord>::const_iterator it =
+           g_sessions.begin();
+       it != g_sessions.end(); ++it) {
+    const SessionRecord &rec = it->second;
+    SessionInfo s;
+    s.identity = rec.identity;
+    s.ip = rec.ip;
+    s.name = rec.name;
+    s.state = rec.state;
+    s.target = rec.targetStr;
+    s.messages = rec.messages;
+    s.connected = rec.connected;
+    s.pinned = g_pins.find(rec.identity) != g_pins.end();
+    s.ageSeconds = std::chrono::duration_cast<std::chrono::seconds>(
+                       now - rec.firstSeen)
+                       .count();
+    s.heldSeconds =
+        rec.held
+            ? std::chrono::duration_cast<std::chrono::seconds>(now -
+                                                               rec.heldSince)
+                  .count()
+            : 0;
+    snap.push_back(s);
+  }
+  std::lock_guard<std::mutex> lock(g_apiMutex);
+  g_sessionsSnapshot.swap(snap);
 }
 
 // GNS' eigene Diagnose-Ausgabe (via SetDebugOutputFunction) — zeigt, warum ein
@@ -462,13 +591,45 @@ void onConnectionStatusChanged(
       if (pIdentityToString != nullptr) {
         pIdentityToString(&info.m_identityRemote, ident, sizeof(ident));
       }
+      char remote[64] = {0};
+      if (pIPAddrToString != nullptr) {
+        pIPAddrToString(&info.m_addrRemote, remote, sizeof(remote), true);
+      }
       g_clientIdentity = ident;
       g_lastRouteKey.clear();
-      logLine("client-identitaet: '%s'", g_clientIdentity.c_str());
+      logLine("client-identitaet: '%s' (%s)", g_clientIdentity.c_str(), remote);
+
+      // Session-Buchfuehrung (fuer die Operator-UI, Issue #857).
+      SessionRecord &rec = sessionFor(g_clientIdentity);
+      rec.ip = remote;
+      rec.connected = true;
+      rec.held = false;
+      rec.state = "connected";
+
+      const std::map<std::string, rbroute::Endpoint>::iterator pin =
+          g_pins.find(g_clientIdentity);
       const rbroute::Rule *rule = g_routes.matchSpecific(g_clientIdentity);
-      if (rule != nullptr) {
+      if (pin != g_pins.end()) {
+        // Operator hat diese Identitaet bereits festgelegt -> ueberlebt Reconnect.
+        rec.state = "routed";
+        rec.targetStr = pin->second.str();
+        routeTo(pin->second, "operator-pin");
+      } else if (rule != nullptr) {
+        rec.state = "routed";
+        rec.targetStr = rule->target.str();
         routeTo(rule->target, "identitaet (explizite Regel)");
+      } else if (g_hold) {
+        // Halten: KEIN Backend-Aufbau. Der Client bleibt im Loading, seine
+        // Nachrichten laufen in die Historie; der Operator entscheidet spaeter.
+        rec.held = true;
+        rec.heldSince = std::chrono::steady_clock::now();
+        rec.state = "held";
+        g_backendTarget = rbroute::Endpoint{};
+        logLine("HOLD: halte '%s' (%s) — warte auf Operator (Ziel-Buttons: %zu)",
+                g_clientIdentity.c_str(), remote, g_targets.size());
       } else {
+        rec.state = "routed";
+        rec.targetStr = g_defaultTarget.str();
         routeTo(g_defaultTarget, "default (bis der Name ihn ggf. umroutet)");
       }
     }
@@ -483,6 +644,24 @@ void onConnectionStatusChanged(
     } else {
       logLine("client beendet (state=%d) — aufraeumen",
               static_cast<int>(info.m_eState));
+      // Halte-Dauer messen (Kernfrage des PoC: wie lange toleriert der Client
+      // das Warten?) und die Session fuer die UI als wartend/geschlossen zeigen.
+      if (!g_clientIdentity.empty()) {
+        SessionRecord &rec = sessionFor(g_clientIdentity);
+        rec.connected = false;
+        if (rec.held) {
+          const long long held =
+              std::chrono::duration_cast<std::chrono::seconds>(
+                  std::chrono::steady_clock::now() - rec.heldSince)
+                  .count();
+          logLine("HOLD: '%s' nach %llds getrennt (Client-Timeout) — wartet "
+                  "auf Reconnect (Pin ueberlebt)",
+                  g_clientIdentity.c_str(), held);
+          rec.state = "waiting";
+        } else {
+          rec.state = "closed";
+        }
+      }
       g_clientConn = k_HSteamNetConnection_Invalid;
       if (g_backendConn != k_HSteamNetConnection_Invalid) {
         pCloseConnection(g_pInterface, g_backendConn, 0, nullptr, false);
@@ -535,8 +714,21 @@ void drainFrom(HSteamNetPollGroup group, bool fromClient) {
       } else {
         logLine("  -> HISTORIE VOLL — nicht replay-faehig (%zu B)", size);
       }
+      // Session-Buchfuehrung fuer die UI (Issue #857): Nachrichten zaehlen.
+      std::map<std::string, SessionRecord>::iterator rec =
+          g_sessions.find(g_clientIdentity);
+      if (rec != g_sessions.end()) {
+        ++rec->second.messages;
+      }
       // Spielname lernen und bei Bedarf auf das richtige Backend umziehen.
-      const rbroute::Rule *rule = routeFromPayload(payload);
+      std::string learnedName;
+      const rbroute::Rule *rule = routeFromPayload(payload, &learnedName);
+      if (rec != g_sessions.end() && !learnedName.empty() &&
+          learnedName.compare(0, 4, "str:") != 0 &&
+          learnedName.compare(0, 8, "steamid:") != 0 &&
+          rec->second.name.empty()) {
+        rec->second.name = learnedName;
+      }
       if (rule != nullptr && rule->key != g_lastRouteKey) {
         g_lastRouteKey = rule->key;
         if (!(rule->target == g_backendTarget)) {
@@ -546,6 +738,11 @@ void drainFrom(HSteamNetPollGroup group, bool fromClient) {
         } else {
           logLine("NAME ROUTE: '%s' -> schon richtiges backend %s",
                   rule->key.c_str(), rule->target.str().c_str());
+        }
+        if (rec != g_sessions.end()) {
+          rec->second.state = "routed";
+          rec->second.held = false;
+          rec->second.targetStr = rule->target.str();
         }
       }
       queueHistoryDelta();
@@ -558,6 +755,376 @@ void drainFrom(HSteamNetPollGroup group, bool fromClient) {
         g_toBackendBytes >= kQueueSoftLimit) {
       break;
     }
+  }
+}
+
+// --- Steuer-API + Web-UI (Issue #857) ---------------------------------------
+//
+// Ein einzelner HTTP-Thread bedient `/`, `/sessions`, `/targets` und
+// `/route`. Er teilt sich mit der GNS-Hauptschleife NUR ueber den
+// mutex-geschuetzten Snapshot (lesen) und die Command-Queue (schreiben) — der
+// GNS-Zustand bleibt single-threaded (Muster server/dll/rbbridge.c).
+//
+// Bewusst ohne Auth und standardmaessig nur an 127.0.0.1 gebunden: wer die API
+// erreicht, darf routen. Zugriff von aussen per SSH-Tunnel.
+
+void processApiCommands() {
+  std::deque<ApiCommand> cmds;
+  {
+    std::lock_guard<std::mutex> lock(g_apiMutex);
+    if (g_apiCommands.empty()) {
+      return;
+    }
+    cmds.swap(g_apiCommands);
+  }
+  for (std::deque<ApiCommand>::const_iterator it = cmds.begin();
+       it != cmds.end(); ++it) {
+    rbroute::Endpoint target;
+    bool found = false;
+    for (std::size_t i = 0; i < g_targets.size(); ++i) {
+      if (g_targets[i].first == it->target) {
+        target = g_targets[i].second;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      logLine("API: unbekanntes Ziel '%s' — ignoriert", it->target.c_str());
+      continue;
+    }
+    // Pin pro Identitaet: greift auch beim naechsten Connect.
+    g_pins[it->identity] = target;
+    logLine("API: pin '%s' -> %s", it->identity.c_str(), target.str().c_str());
+    if (it->identity == g_clientIdentity &&
+        g_clientConn != k_HSteamNetConnection_Invalid) {
+      routeTo(target, "operator (web-ui)");
+      SessionRecord &rec = sessionFor(it->identity);
+      rec.state = "routed";
+      rec.held = false;
+      rec.targetStr = target.str();
+    }
+  }
+}
+
+std::string buildSessionsJson() {
+  std::vector<SessionInfo> snap;
+  {
+    std::lock_guard<std::mutex> lock(g_apiMutex);
+    snap = g_sessionsSnapshot;
+  }
+  std::string json = "[";
+  bool first = true;
+  for (std::vector<SessionInfo>::const_iterator it = snap.begin();
+       it != snap.end(); ++it) {
+    if (!first) {
+      json += ",";
+    }
+    first = false;
+    json += "{\"identity\":\"" + rbapi::jsonEscape(it->identity) + "\"";
+    json += ",\"ip\":\"" + rbapi::jsonEscape(it->ip) + "\"";
+    json += ",\"name\":\"" + rbapi::jsonEscape(it->name) + "\"";
+    json += ",\"state\":\"" + rbapi::jsonEscape(it->state) + "\"";
+    json += ",\"target\":\"" + rbapi::jsonEscape(it->target) + "\"";
+    json += std::string(",\"connected\":") + (it->connected ? "true" : "false");
+    json += std::string(",\"pinned\":") + (it->pinned ? "true" : "false");
+    json += ",\"messages\":" + std::to_string(it->messages);
+    json += ",\"age_seconds\":" + std::to_string(it->ageSeconds);
+    json += ",\"held_seconds\":" + std::to_string(it->heldSeconds);
+    json += "}";
+  }
+  json += "]";
+  return json;
+}
+
+std::string buildTargetsJson() {
+  std::string json = "[";
+  bool first = true;
+  for (std::size_t i = 0; i < g_targets.size(); ++i) {
+    if (!first) {
+      json += ",";
+    }
+    first = false;
+    json += "{\"name\":\"" + rbapi::jsonEscape(g_targets[i].first) + "\"";
+    json += ",\"endpoint\":\"" + rbapi::jsonEscape(g_targets[i].second.str()) +
+            "\"}";
+  }
+  json += "]";
+  return json;
+}
+
+// Single-File-UI (eingebettet, kein Auth — PoC). Pollt /sessions und postet
+// die Zielwahl an /route.
+const char kUiHtml[] = R"HTML(<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Riftbreaker Relay - Lobby</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 24px; font: 14px/1.4 system-ui, sans-serif;
+         background: #14161a; color: #e6e8eb; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.sub { margin: 0 0 20px; color: #8b929c; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #262a31;
+           vertical-align: middle; }
+  th { color: #8b929c; font-weight: 600; font-size: 12px;
+       text-transform: uppercase; letter-spacing: .04em; }
+  code { color: #c9d1d9; }
+  .muted { color: #6b7280; }
+  .state { display: inline-block; padding: 2px 8px; border-radius: 10px;
+           font-size: 12px; background: #23272e; }
+  .state.held { background: #4a3a12; color: #f2c14e; }
+  .state.waiting { background: #3a2222; color: #f08a8a; }
+  .state.routed { background: #16351f; color: #7ee2a8; }
+  button { font: inherit; padding: 5px 12px; margin-right: 6px; cursor: pointer;
+           border: 1px solid #3a4048; border-radius: 6px;
+           background: #1d2127; color: #e6e8eb; }
+  button:hover { background: #262c34; }
+  button:disabled { opacity: .5; cursor: default; }
+</style>
+</head>
+<body>
+<h1>Riftbreaker Relay - Lobby</h1>
+<p class="sub">Wartende Spieler dem Ziel zuweisen. Der Client bleibt im Loading,
+bis ein Ziel geklickt wird (Pin pro Identitaet ueberlebt Reconnects).</p>
+<table>
+  <thead><tr><th>Name</th><th>Identitaet</th><th>IP</th><th>Zustand</th>
+    <th>Backend</th><th>Wartezeit</th><th>Aktion</th></tr></thead>
+  <tbody id="rows"><tr><td colspan="7" class="muted">lade...</td></tr></tbody>
+</table>
+<script>
+let TARGETS = [];
+function td(text) { const c = document.createElement('td'); c.textContent = text; return c; }
+async function loadTargets() {
+  try { TARGETS = await (await fetch('/targets')).json(); } catch (e) { TARGETS = []; }
+}
+async function route(identity, target, btn) {
+  btn.disabled = true;
+  try {
+    await fetch('/route', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identitaet: identity, target: target }) });
+  } catch (e) {}
+  setTimeout(loadSessions, 300);
+}
+async function loadSessions() {
+  let rows;
+  try { rows = await (await fetch('/sessions')).json(); }
+  catch (e) { return; }
+  const tbody = document.getElementById('rows');
+  tbody.innerHTML = '';
+  if (!rows.length) {
+    const tr = document.createElement('tr');
+    const c = td('niemand verbunden'); c.className = 'muted'; c.colSpan = 7;
+    tr.appendChild(c); tbody.appendChild(tr); return;
+  }
+  for (const s of rows) {
+    const tr = document.createElement('tr');
+    tr.appendChild(td(s.name || '-'));
+    const idc = document.createElement('td');
+    const code = document.createElement('code');
+    code.textContent = s.identity; idc.appendChild(code);
+    tr.appendChild(idc);
+    tr.appendChild(td(s.ip || '-'));
+    const st = document.createElement('td');
+    const badge = document.createElement('span');
+    badge.className = 'state ' + s.state;
+    badge.textContent = s.state + (s.pinned ? ' - pin' : '');
+    st.appendChild(badge); tr.appendChild(st);
+    const bc = document.createElement('td');
+    const bcode = document.createElement('code'); bcode.textContent = s.target || '-';
+    bc.appendChild(bcode); tr.appendChild(bc);
+    tr.appendChild(td(s.held_seconds ? s.held_seconds + ' s' : (s.connected ? '-' : 'offline')));
+    const act = document.createElement('td');
+    for (const t of TARGETS) {
+      const b = document.createElement('button');
+      b.textContent = t.name; b.title = t.endpoint;
+      b.onclick = () => route(s.identity, t.name, b);
+      act.appendChild(b);
+    }
+    if (!TARGETS.length) act.appendChild(td('keine --target gesetzt'));
+    tr.appendChild(act);
+    tbody.appendChild(tr);
+  }
+}
+loadTargets().then(loadSessions);
+setInterval(loadSessions, 1500);
+</script>
+</body>
+</html>
+)HTML";
+
+void httpSendAll(SOCKET s, const std::string &data) {
+  std::size_t off = 0;
+  while (off < data.size()) {
+    const int n = send(s, data.data() + off,
+                       static_cast<int>(data.size() - off), 0);
+    if (n <= 0) {
+      break;
+    }
+    off += static_cast<std::size_t>(n);
+  }
+}
+
+void httpRespond(SOCKET s, int code, const char *status, const char *ctype,
+                 const std::string &body) {
+  std::string head = "HTTP/1.1 " + std::to_string(code) + " " + status + "\r\n";
+  head += "Content-Type: " + std::string(ctype) + "\r\n";
+  head += "Content-Length: " + std::to_string(body.size()) + "\r\n";
+  head += "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
+  httpSendAll(s, head);
+  httpSendAll(s, body);
+}
+
+void httpRespondJson(SOCKET s, int code, const char *status,
+                     const std::string &body) {
+  httpRespond(s, code, status, "application/json; charset=utf-8", body);
+}
+
+void httpHandle(SOCKET s) {
+  DWORD timeout = 3000;
+  setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&timeout),
+             sizeof(timeout));
+
+  std::string req;
+  char buf[4096];
+  for (;;) {
+    const int n = recv(s, buf, sizeof(buf), 0);
+    if (n <= 0) {
+      break;
+    }
+    req.append(buf, static_cast<std::size_t>(n));
+    if (req.find("\r\n\r\n") != std::string::npos) {
+      break;
+    }
+    if (req.size() > (1u << 20)) {
+      break;
+    }
+  }
+
+  const std::size_t sp1 = req.find(' ');
+  if (sp1 == std::string::npos) {
+    httpRespond(s, 400, "Bad Request", "text/plain; charset=utf-8",
+                "bad request\n");
+    closesocket(s);
+    return;
+  }
+  const std::size_t sp2 = req.find(' ', sp1 + 1);
+  const std::string method = req.substr(0, sp1);
+  std::string path = (sp2 == std::string::npos)
+                         ? req.substr(sp1 + 1)
+                         : req.substr(sp1 + 1, sp2 - sp1 - 1);
+  const std::size_t query = path.find('?');
+  if (query != std::string::npos) {
+    path = path.substr(0, query);
+  }
+
+  // Content-Length (case-insensitiv) bestimmen und den Body vollstaendig lesen.
+  std::string lower = req;
+  for (std::size_t i = 0; i < lower.size(); ++i) {
+    if (lower[i] >= 'A' && lower[i] <= 'Z') {
+      lower[i] = static_cast<char>(lower[i] - 'A' + 'a');
+    }
+  }
+  std::size_t contentLength = 0;
+  const std::size_t clPos = lower.find("content-length:");
+  if (clPos != std::string::npos) {
+    contentLength =
+        static_cast<std::size_t>(strtoul(req.c_str() + clPos + 15, nullptr, 10));
+  }
+  const std::size_t hdrEnd = req.find("\r\n\r\n");
+  std::string body = (hdrEnd == std::string::npos) ? std::string()
+                                                   : req.substr(hdrEnd + 4);
+  while (body.size() < contentLength) {
+    const int n = recv(s, buf, sizeof(buf), 0);
+    if (n <= 0) {
+      break;
+    }
+    body.append(buf, static_cast<std::size_t>(n));
+  }
+
+  if (method == "GET" && path == "/") {
+    httpRespond(s, 200, "OK", "text/html; charset=utf-8", kUiHtml);
+  } else if (method == "GET" && path == "/sessions") {
+    httpRespondJson(s, 200, "OK", buildSessionsJson());
+  } else if (method == "GET" && path == "/targets") {
+    httpRespondJson(s, 200, "OK", buildTargetsJson());
+  } else if (method == "POST" && path == "/route") {
+    std::string identity;
+    std::string target;
+    if (!rbapi::jsonStringField(body, "identitaet", identity) ||
+        !rbapi::jsonStringField(body, "target", target)) {
+      httpRespondJson(s, 400, "Bad Request",
+                      "{\"ok\":false,\"error\":\"identitaet/target fehlt\"}");
+    } else {
+      {
+        std::lock_guard<std::mutex> lock(g_apiMutex);
+        ApiCommand cmd;
+        cmd.identity = identity;
+        cmd.target = target;
+        g_apiCommands.push_back(cmd);
+      }
+      logLine("API: route '%s' -> '%s' angefordert", identity.c_str(),
+              target.c_str());
+      httpRespondJson(s, 200, "OK", "{\"ok\":true}");
+    }
+  } else {
+    httpRespond(s, 404, "Not Found", "text/plain; charset=utf-8",
+                "not found\n");
+  }
+  closesocket(s);
+}
+
+void httpServerLoop() {
+  WSADATA wsa;
+  if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+    logLine("API: WSAStartup fehlgeschlagen — UI/API aus");
+    return;
+  }
+  SOCKET listenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (listenSocket == INVALID_SOCKET) {
+    logLine("API: socket() fehlgeschlagen (err=%d)", WSAGetLastError());
+    WSACleanup();
+    return;
+  }
+  int yes = 1;
+  setsockopt(listenSocket, SOL_SOCKET, SO_REUSEADDR,
+             reinterpret_cast<const char *>(&yes), sizeof(yes));
+  sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(static_cast<u_short>(g_apiPort));
+  if (inet_pton(AF_INET, g_apiHost.c_str(), &addr.sin_addr) != 1) {
+    logLine("API: ungueltiger --api-host '%s'", g_apiHost.c_str());
+    closesocket(listenSocket);
+    WSACleanup();
+    return;
+  }
+  if (bind(listenSocket, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) ==
+      SOCKET_ERROR) {
+    logLine("API: bind %s:%d fehlgeschlagen (err=%d)", g_apiHost.c_str(),
+            g_apiPort, WSAGetLastError());
+    closesocket(listenSocket);
+    WSACleanup();
+    return;
+  }
+  if (listen(listenSocket, SOMAXCONN) == SOCKET_ERROR) {
+    logLine("API: listen fehlgeschlagen (err=%d)", WSAGetLastError());
+    closesocket(listenSocket);
+    WSACleanup();
+    return;
+  }
+  logLine("API/UI hoert auf http://%s:%d (kein Auth — nur lokal binden)",
+          g_apiHost.c_str(), g_apiPort);
+  for (;;) {
+    SOCKET client = accept(listenSocket, nullptr, nullptr);
+    if (client == INVALID_SOCKET) {
+      Sleep(50);
+      continue;
+    }
+    std::thread(httpHandle, client).detach();
   }
 }
 
@@ -631,6 +1198,8 @@ bool resolveDll(const char *explicitPath) {
       lib, "SteamAPI_SteamNetworkingIdentity_ToString"));
   pSetConnConfigInt32 = reinterpret_cast<fn_SetConnConfigInt32>(GetProcAddress(
       lib, "SteamAPI_ISteamNetworkingUtils_SetConnectionConfigValueInt32"));
+  pIPAddrToString = reinterpret_cast<fn_IPAddrToString>(
+      GetProcAddress(lib, "SteamAPI_SteamNetworkingIPAddr_ToString"));
 
   const bool ok =
       pAccessor && pInit && pKill && pCreateListenSocketIP && pIdentityClear &&
@@ -639,7 +1208,7 @@ bool resolveDll(const char *explicitPath) {
       pCreatePollGroup && pSetConnectionPollGroup && pAcceptConnection &&
       pCloseConnection && pRunCallbacks && pReceiveMessagesOnPollGroup &&
       pConnectByIPAddress && pSendMessageToConnection && pIPAddrSetIPv4 &&
-      pIdentityToString && pSetConnConfigInt32;
+      pIdentityToString && pSetConnConfigInt32 && pIPAddrToString;
   if (!ok) {
     logLine("mindestens ein Export fehlt (Accessor=%p Init=%p Listen=%p)",
             reinterpret_cast<void *>(pAccessor),
@@ -687,6 +1256,21 @@ int main(int argc, char **argv) {
         fprintf(stderr, "--dial braucht IPv4:port, bekam '%s'\n", spec);
         return 2;
       }
+    } else if (strcmp(argv[i], "--hold") == 0) {
+      g_hold = true;
+    } else if (strcmp(argv[i], "--api-port") == 0 && i + 1 < argc) {
+      g_apiPort = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--api-host") == 0 && i + 1 < argc) {
+      g_apiHost = argv[++i];
+    } else if (strcmp(argv[i], "--target") == 0 && i + 1 < argc) {
+      const char *spec = argv[++i];
+      std::string name;
+      rbroute::Endpoint endpoint;
+      if (!rbapi::parseTargetSpec(spec, name, endpoint)) {
+        fprintf(stderr, "--target braucht NAME=IPv4:port, bekam '%s'\n", spec);
+        return 2;
+      }
+      g_targets.emplace_back(name, endpoint);
     }
   }
 
@@ -804,12 +1388,14 @@ int main(int argc, char **argv) {
   }
   logLine("lauscht als GNS-Server auf 0.0.0.0:%u — warte auf Handshake", nPort);
   loadRoutes();
-  if (g_mapFile != nullptr || g_defaultTarget.port != 0) {
+  const bool wantRelay =
+      g_mapFile != nullptr || g_defaultTarget.port != 0 || g_hold || g_apiPort != 0;
+  if (wantRelay) {
     g_relayEnabled = true;
-    if (g_defaultTarget.port == 0) {
+    if (g_defaultTarget.port == 0 && !g_hold) {
       // Kein --forward: Default-Regel (`*`) aus der Routen-Datei nehmen, damit
       // der Client ueberhaupt eine Handshake-Antwort bekommt und den Namen
-      // nachliefern kann.
+      // nachliefern kann. Im HOLD-Modus gibt es bewusst keinen Default.
       const rbroute::Rule *fallback = g_routes.defaultRule();
       if (fallback != nullptr) {
         g_defaultTarget = fallback->target;
@@ -820,12 +1406,25 @@ int main(int argc, char **argv) {
                 "ohne passende Route koennen nicht bedient werden");
       }
     }
-    logLine("RELAY-MODUS: default %s | routen=%zu | identitaet(exakt)+name",
-            g_defaultTarget.str().c_str(), g_routes.size());
+    logLine("RELAY-MODUS: %s | default %s | routen=%zu | identitaet(exakt)+name",
+            g_hold ? "HOLD" : "auto",
+            g_defaultTarget.port != 0 ? g_defaultTarget.str().c_str()
+                                      : "(keiner)",
+            g_routes.size());
+    if (g_hold && g_targets.empty()) {
+      logLine("WARNUNG: --hold ohne --target — niemand kann einen wartenden "
+              "Spieler routen");
+    }
+  }
+  // Steuer-API + Web-UI (Issue #857): eigener HTTP-Thread, Standardbind nur
+  // 127.0.0.1 (kein Auth). Faellt der Bind aus, laeuft der Relay trotzdem.
+  if (g_apiPort > 0) {
+    std::thread(httpServerLoop).detach();
   }
   logLine("(E1: Status Connected erwarten | E2: Klartext-Nachrichten mit "
           "Spielernamen)");
 
+  std::chrono::steady_clock::time_point lastSnapshot{};
   while (true) {
     pRunCallbacks(g_pInterface);
     if (!g_relayEnabled) {
@@ -840,6 +1439,17 @@ int main(int argc, char **argv) {
       }
       flushQueue(g_toClientQ, g_toClientBytes, g_clientConn);
       flushQueue(g_toBackendQ, g_toBackendBytes, g_backendConn);
+    }
+    if (g_apiPort > 0) {
+      // Befehle des HTTP-Threads abarbeiten und den Anzeige-Snapshot, den
+      // /sessions liest, gedrosselt aktualisieren.
+      processApiCommands();
+      const std::chrono::steady_clock::time_point now =
+          std::chrono::steady_clock::now();
+      if (now - lastSnapshot >= std::chrono::milliseconds(250)) {
+        lastSnapshot = now;
+        refreshSnapshot();
+      }
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }

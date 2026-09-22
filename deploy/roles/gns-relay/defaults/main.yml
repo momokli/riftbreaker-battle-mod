@@ -52,6 +52,27 @@ gns_relay_target_dev: "127.0.0.1:6324"
 gns_relay_target_staging: "127.0.0.1:6323"
 gns_relay_target_default: "127.0.0.1:6322"
 
+# --- Operator-UI + Hold (Issue #857) ----------------------------------------
+# Statt unentschiedene Joins automatisch auf den Default zu routen, HAELT der
+# Relay sie; ein Operator sieht sie in einer kleinen Web-UI und schickt sie per
+# Klick auf ein Ziel. Suffix-/Identitaets-Regeln (oben) haben weiter Vorrang;
+# `--hold` greift nur fuer den Rest.
+#
+gns_relay_hold: true
+# Die API/UI bindet standardmaessig NUR an 127.0.0.1 — sie hat keine Auth, wer
+# sie erreicht, darf routen. Zugriff von aussen per SSH-Tunnel.
+gns_relay_api_host: "127.0.0.1"
+gns_relay_api_port: 9200
+# Die Buttons der UI: `NAME=ip:port` (wird als `--target` uebergeben).
+gns_relay_targets:
+  - "PROD={{ gns_relay_target_default }}"
+  - "STAGING={{ gns_relay_target_staging }}"
+  - "DEV={{ gns_relay_target_dev }}"
+# Zusaetzliche Routen-Zeilen (z. B. feste Identitaets-Pins), die der Deploy in
+# die Routen-Datei schreibt — sonst wuerde Handarbeit beim naechsten Deploy
+# ueberschrieben. Beispiel: "str:AB12 = 127.0.0.1:6323".
+gns_relay_extra_routes: []
+
 # --- Container-interne Pfade / Prozess --------------------------------------
 # Mount-Punkt der Game-DLLs (read-only). Der Probe laeuft aus
 # {{ gns_relay_bin_mount }}/bin und laedt dort die GameNetworkingSockets.dll.
