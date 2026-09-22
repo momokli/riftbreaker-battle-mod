@@ -867,12 +867,18 @@ class AttackCycle:
             with self._lock:
                 self._set_state(STATE_RUNNING)
                 self.level = 1
-                self.next_attack_at = now + self.interval_s
+                # Erste Attack SOFORT beim Eintritt in RUNNING (#859): das Warmup
+                # IST die Vorlaufzeit — nicht das erste Intervall. Danach plant
+                # die Feuer-Logik jede weitere Attack via `+= interval_s`.
+                self.next_attack_at = now
                 self.next_difficulty_at = now + self._difficulty_duration(1)
+                # Creature-Event (#816) liegt im prepare-Fenster VOR seiner Attack.
+                # Fuer die sofortige erste Attack gibt es kein Fenster -> das erste
+                # Event gehoert zum zweiten Zyklus (offset vor now+interval).
                 self.next_event_at = now + self.interval_s - self.event_offset_s
             print(
                 f"[attack-cycle] warmup-Ende + HQ -> running (Level 1, "
-                f"Angriff in {self.interval_s:.0f}s, "
+                f"erste Attack sofort, "
                 f"naechste Difficulty in {self._difficulty_duration(1):.0f}s)",
                 flush=True,
             )
