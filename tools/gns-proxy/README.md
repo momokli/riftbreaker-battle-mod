@@ -136,10 +136,15 @@ Suffix-/Identitaets-Regeln aus der Routen-Datei haben **Vorrang**: wer
 `*-dev`/`*-staging` heisst oder eine exakte Identitaets-Regel trifft, wird
 automatisch geroutet; nur der Rest wartet.
 
-Endpunkte (kein Auth — daher nur lokal binden, Zugriff per SSH-Tunnel):
+Endpunkte (der Relay selbst hat **keinen** Auth — er bindet daher nur lokal; die
+öffentliche Lobby-Domain setzt davor der Host-Caddy mit basic_auth):
 `GET /` (Single-File-UI), `GET /sessions` (JSON: wer wartet),
 `GET /targets` (JSON: die Buttons), `POST /route`
 `{"identitaet":"…","target":"NAME"}`.
+
+Im Deploy läuft die Rolle `website` die Lobby öffentlich aus:
+**https://proxy.rift.projectmellon.de** (Host-Caddy → `127.0.0.1:9200`, basic_auth
+`operator`). Lokal ohne Domain: `ssh -L 9200:127.0.0.1:9200 planet`.
 
 **Verhalten:** Der Client bleibt im Loading; seine Nachrichten laufen in die
 bestehende Historie. Der Klick baut den Backend-Connect auf und **replayed** die

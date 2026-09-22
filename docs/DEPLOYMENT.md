@@ -44,8 +44,9 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
    (`network_mode: host`, UDP `:6321`), baut `gns_probe.exe` aus
    `tools/gns-proxy` (MinGW-w64/zig) und routet per Spielnamen-Suffix auf
    prod/staging/dev (Routen aus `roles/gns-relay/templates/routes.j2`). Seit
-   #857 im **Hold-Modus**: unentschiedene Joins werden gehalten und per lokaler
-   Web-UI (`--api-port 9200`, SSH-Tunnel) auf ein Ziel geroutet.
+   #857 im **Hold-Modus**: unentschiedene Joins werden gehalten und über die
+   öffentliche Web-UI **https://proxy.rift.projectmellon.de** (Host-Caddy →
+   `127.0.0.1:9200`, basic_auth) auf ein Ziel geroutet.
 6. **tournament-server** — systemd-Unit, Env-Konfig (`RBBRIDGE_A_URL`/
    `RBBRIDGE_B_URL`), Binary + Web-UI aus `tournament/`.
 7. **website** — eigener **`rift-caddy`** (plain HTTP: Landing + `/mod.zip` +

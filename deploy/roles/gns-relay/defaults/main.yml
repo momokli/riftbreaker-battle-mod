@@ -60,7 +60,9 @@ gns_relay_target_default: "127.0.0.1:6322"
 #
 gns_relay_hold: true
 # Die API/UI bindet standardmaessig NUR an 127.0.0.1 — sie hat keine Auth, wer
-# sie erreicht, darf routen. Zugriff von aussen per SSH-Tunnel.
+# sie erreicht, darf routen. Oeffentlich erreichbar ist die Lobby ueber die
+# Rolle `website` (Host-Caddy: proxy.rift.projectmellon.de ->
+# 127.0.0.1:<gns_relay_api_port>, basic_auth). Ohne Domain per SSH-Tunnel.
 gns_relay_api_host: "127.0.0.1"
 gns_relay_api_port: 9200
 # Die Buttons der UI: `NAME=ip:port` (wird als `--target` uebergeben).

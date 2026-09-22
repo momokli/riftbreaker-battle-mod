@@ -859,96 +859,153 @@ const char kUiHtml[] = R"HTML(<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Riftbreaker Relay - Lobby</title>
+<title>Riftbreaker Proxy - Lobby</title>
 <style>
-  :root { color-scheme: dark; }
-  body { margin: 0; padding: 24px; font: 14px/1.4 system-ui, sans-serif;
-         background: #14161a; color: #e6e8eb; }
-  h1 { font-size: 18px; margin: 0 0 4px; }
-  p.sub { margin: 0 0 20px; color: #8b929c; }
-  table { border-collapse: collapse; width: 100%; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #262a31;
-           vertical-align: middle; }
-  th { color: #8b929c; font-weight: 600; font-size: 12px;
-       text-transform: uppercase; letter-spacing: .04em; }
-  code { color: #c9d1d9; }
-  .muted { color: #6b7280; }
-  .state { display: inline-block; padding: 2px 8px; border-radius: 10px;
-           font-size: 12px; background: #23272e; }
-  .state.held { background: #4a3a12; color: #f2c14e; }
-  .state.waiting { background: #3a2222; color: #f08a8a; }
-  .state.routed { background: #16351f; color: #7ee2a8; }
-  button { font: inherit; padding: 5px 12px; margin-right: 6px; cursor: pointer;
-           border: 1px solid #3a4048; border-radius: 6px;
-           background: #1d2127; color: #e6e8eb; }
-  button:hover { background: #262c34; }
-  button:disabled { opacity: .5; cursor: default; }
+  :root {
+    color-scheme: dark;
+    --bg:#0e1013; --panel:#171a1f; --panel2:#1d2127; --line:#272c34;
+    --fg:#e7eaee; --muted:#8b939f; --accent:#4ea1ff;
+    --held:#f2c14e; --waiting:#f08a8a; --routed:#5fd39a;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; color:var(--fg);
+    background: radial-gradient(1200px 600px at 70% -10%, #1a2230 0%, var(--bg) 55%);
+    font: 15px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display:flex; align-items:center; gap:14px; padding:18px 28px;
+    border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5;
+    background:rgba(14,16,19,.85); backdrop-filter:blur(8px); }
+  h1 { font-size:17px; margin:0; font-weight:650; letter-spacing:.2px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--routed);
+    box-shadow:0 0 0 4px rgba(95,211,154,.15); }
+  .dot.off { background:var(--waiting); box-shadow:0 0 0 4px rgba(240,138,138,.15); }
+  .sub { color:var(--muted); font-size:13px; }
+  .grow { flex:1; }
+  .stats { display:flex; gap:18px; font-size:13px; color:var(--muted); }
+  .stats b { color:var(--fg); font-weight:650; }
+  main { padding:24px 28px 60px; max-width:1200px; margin:0 auto; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(340px, 1fr)); gap:16px; }
+  .card { border:1px solid var(--line); border-radius:14px; padding:16px 16px 14px;
+    background:linear-gradient(180deg, var(--panel), #14171b);
+    box-shadow:0 8px 24px rgba(0,0,0,.25); }
+  .card.held { border-color:rgba(242,193,78,.45); }
+  .card.waiting { opacity:.85; }
+  .row { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+  .who { flex:1; font-size:14px; font-weight:600; overflow:hidden;
+    text-overflow:ellipsis; white-space:nowrap;
+    font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .badge { font-size:11px; letter-spacing:.06em; text-transform:uppercase;
+    padding:3px 9px; border-radius:999px; white-space:nowrap;
+    background:var(--panel2); color:var(--muted); }
+  .badge.held { background:rgba(242,193,78,.16); color:var(--held); }
+  .badge.waiting { background:rgba(240,138,138,.16); color:var(--waiting); }
+  .badge.routed { background:rgba(95,211,154,.16); color:var(--routed); }
+  .meta { display:flex; flex-wrap:wrap; gap:6px 16px; margin-bottom:12px;
+    color:var(--muted); font-size:12.5px; }
+  .meta b { color:var(--fg); font-weight:600; }
+  .actions { display:flex; gap:8px; flex-wrap:wrap; }
+  button { flex:1; min-width:88px; padding:10px 12px; cursor:pointer;
+    font:600 13px/1 inherit; color:#dbe6f5; border:1px solid #2f3a49;
+    border-radius:10px; background:#1b2129; transition:background .12s, border-color .12s; }
+  button:hover { background:#232c38; border-color:var(--accent); }
+  button:active { transform:translateY(1px); }
+  button:disabled { opacity:.45; cursor:default; }
+  .empty { text-align:center; padding:80px 20px; color:var(--muted);
+    border:1px dashed var(--line); border-radius:14px; }
+  .tick { font-variant-numeric:tabular-nums; }
 </style>
 </head>
 <body>
-<h1>Riftbreaker Relay - Lobby</h1>
-<p class="sub">Wartende Spieler dem Ziel zuweisen. Der Client bleibt im Loading,
-bis ein Ziel geklickt wird (Pin pro Identitaet ueberlebt Reconnects).</p>
-<table>
-  <thead><tr><th>Name</th><th>Identitaet</th><th>IP</th><th>Zustand</th>
-    <th>Backend</th><th>Wartezeit</th><th>Aktion</th></tr></thead>
-  <tbody id="rows"><tr><td colspan="7" class="muted">lade...</td></tr></tbody>
-</table>
+<header>
+  <span class="dot" id="dot"></span>
+  <h1>Riftbreaker Proxy - Lobby</h1>
+  <span class="sub">Wartende Spieler einem Server zuweisen</span>
+  <span class="grow"></span>
+  <div class="stats">
+    <span>wartend <b id="n-wait">0</b></span>
+    <span>verbunden <b id="n-conn">0</b></span>
+    <span>geroutet <b id="n-routed">0</b></span>
+  </div>
+</header>
+<main>
+  <div class="grid" id="grid"><div class="empty">lade...</div></div>
+</main>
 <script>
 let TARGETS = [];
-function td(text) { const c = document.createElement('td'); c.textContent = text; return c; }
+const ORDER = { held: 0, waiting: 1, connected: 2, closed: 3, routed: 4 };
+const LABEL = { held: "wartet", waiting: "getrennt", connected: "verbunden", closed: "getrennt", routed: "geroutet" };
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+};
+
 async function loadTargets() {
-  try { TARGETS = await (await fetch('/targets')).json(); } catch (e) { TARGETS = []; }
+  try { TARGETS = await (await fetch("/targets")).json(); } catch (e) { TARGETS = []; }
 }
+
 async function route(identity, target, btn) {
   btn.disabled = true;
   try {
-    await fetch('/route', { method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    await fetch("/route", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ identitaet: identity, target: target }) });
   } catch (e) {}
-  setTimeout(loadSessions, 300);
+  setTimeout(loadSessions, 250);
 }
+
+function card(s) {
+  const c = el("div", "card " + s.state);
+  const top = el("div", "row");
+  top.appendChild(el("span", "who", s.name || s.identity));
+  const badge = el("span", "badge " + s.state, LABEL[s.state] || s.state);
+  if (s.pinned) badge.textContent += " - pin";
+  top.appendChild(badge);
+  c.appendChild(top);
+
+  const m1 = el("div", "meta");
+  const a = el("span"); a.append("ID ", el("b", null, s.identity)); m1.appendChild(a);
+  const b = el("span"); b.append("IP ", el("b", null, s.ip || "-")); m1.appendChild(b);
+  c.appendChild(m1);
+
+  const m2 = el("div", "meta");
+  const f = el("span"); f.append("Frames ", el("b", null, String(s.messages))); m2.appendChild(f);
+  const age = el("span"); age.append("seit ", el("b", "tick", (s.age_seconds || 0) + "s")); m2.appendChild(age);
+  if (s.state === "held" || s.state === "waiting") {
+    const h = el("span"); h.append("haelt ", el("b", "tick", (s.held_seconds || 0) + "s")); m2.appendChild(h);
+  }
+  if (s.target) { const t = el("span"); t.append("Ziel ", el("b", null, s.target)); m2.appendChild(t); }
+  c.appendChild(m2);
+
+  const act = el("div", "actions");
+  for (const t of TARGETS) {
+    const btn = el("button", null, t.name);
+    btn.title = t.endpoint;
+    btn.onclick = () => route(s.identity, t.name, btn);
+    act.appendChild(btn);
+  }
+  if (!TARGETS.length) act.appendChild(el("span", "sub", "keine --target gesetzt"));
+  c.appendChild(act);
+  return c;
+}
+
 async function loadSessions() {
   let rows;
-  try { rows = await (await fetch('/sessions')).json(); }
-  catch (e) { return; }
-  const tbody = document.getElementById('rows');
-  tbody.innerHTML = '';
-  if (!rows.length) {
-    const tr = document.createElement('tr');
-    const c = td('niemand verbunden'); c.className = 'muted'; c.colSpan = 7;
-    tr.appendChild(c); tbody.appendChild(tr); return;
-  }
-  for (const s of rows) {
-    const tr = document.createElement('tr');
-    tr.appendChild(td(s.name || '-'));
-    const idc = document.createElement('td');
-    const code = document.createElement('code');
-    code.textContent = s.identity; idc.appendChild(code);
-    tr.appendChild(idc);
-    tr.appendChild(td(s.ip || '-'));
-    const st = document.createElement('td');
-    const badge = document.createElement('span');
-    badge.className = 'state ' + s.state;
-    badge.textContent = s.state + (s.pinned ? ' - pin' : '');
-    st.appendChild(badge); tr.appendChild(st);
-    const bc = document.createElement('td');
-    const bcode = document.createElement('code'); bcode.textContent = s.target || '-';
-    bc.appendChild(bcode); tr.appendChild(bc);
-    tr.appendChild(td(s.held_seconds ? s.held_seconds + ' s' : (s.connected ? '-' : 'offline')));
-    const act = document.createElement('td');
-    for (const t of TARGETS) {
-      const b = document.createElement('button');
-      b.textContent = t.name; b.title = t.endpoint;
-      b.onclick = () => route(s.identity, t.name, b);
-      act.appendChild(b);
-    }
-    if (!TARGETS.length) act.appendChild(td('keine --target gesetzt'));
-    tr.appendChild(act);
-    tbody.appendChild(tr);
-  }
+  try { rows = await (await fetch("/sessions")).json(); }
+  catch (e) { $("dot").classList.add("off"); return; }
+  $("dot").classList.remove("off");
+  rows.sort((x, y) => (ORDER[x.state] ?? 9) - (ORDER[y.state] ?? 9));
+
+  $("n-wait").textContent = rows.filter(r => r.state === "held" || r.state === "waiting").length;
+  $("n-conn").textContent = rows.filter(r => r.connected).length;
+  $("n-routed").textContent = rows.filter(r => r.state === "routed").length;
+
+  const g = $("grid");
+  g.innerHTML = "";
+  if (!rows.length) { g.appendChild(el("div", "empty", "niemand verbunden - warte auf Joins")); return; }
+  for (const s of rows) g.appendChild(card(s));
 }
+
 loadTargets().then(loadSessions);
 setInterval(loadSessions, 1500);
 </script>
