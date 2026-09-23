@@ -757,6 +757,59 @@ static size_t chat_build_player_chat(const char *text, char *out, size_t n)
     return (size_t)len;
 }
 
+/* #392: liest den String-Wert `"session"` aus einer Request-Zeile (die
+ * Bridge haengt ihn zentral an JEDEN Command an). Reine Funktion ->
+ * host-testbar (tests/rbbridge-hosttest). Rueckgabe 1 = gefunden und nicht
+ * leer; sonst 0 (out = ""). Robust gegen fehlenden Key, Nicht-String-Werte,
+ * NULL und zu kleinen Puffer (kein Crash). */
+static int session_from_line(const char *line, char *out, size_t n)
+{
+    const char *p;
+    size_t k = 0;
+
+    if (!line || !out || n == 0)
+        return 0;
+    out[0] = '\0';
+    for (p = line; (p = strstr(p, "\"session\"")) != NULL; p += 9) {
+        const char *q = p + 9;
+        while (*q == ' ' || *q == '\t')
+            q++;
+        if (*q != ':')
+            continue;
+        q++;
+        while (*q == ' ' || *q == '\t')
+            q++;
+        if (*q != '"')
+            continue;
+        q++;
+        while (*q && *q != '"' && k + 1 < n)
+            out[k++] = *q++;
+        out[k] = '\0';
+        return (*q == '"' && k > 0) ? 1 : 0;
+    }
+    return 0;
+}
+
+/* #392: rendert die EINE Request-Logzeile `req cmd=<name> session=<id>`.
+ * Leere/NULL-Werte -> `-`. Reine Funktion -> host-testbar. Rueckgabe =
+ * Laenge der Zeile ohne NUL; 0 = Puffer zu klein (out = ""). */
+static size_t req_log_format(const char *cmd, const char *session,
+                             char *out, size_t n)
+{
+    int len;
+
+    if (!out || n == 0)
+        return 0;
+    len = snprintf(out, n, "req cmd=%s session=%s",
+                   (cmd && cmd[0]) ? cmd : "-",
+                   (session && session[0]) ? session : "-");
+    if (len < 0 || (size_t)len >= n) {
+        out[0] = '\0';
+        return 0;
+    }
+    return (size_t)len;
+}
+
 /* #549: kleine Single-Producer/Single-Consumer-Ring-Queue fuer eingehenden
  * Chat. Bewusst REINE Logik (kein Lock, keine Windows-API) -> host-testbar
  * (tests/rbbridge-hosttest). Die Produktions-Caller halten g_chat_cs (siehe
@@ -6095,6 +6148,18 @@ static void handle_line(HANDLE hPipe, const char *line)
             send_line(hPipe, "{\"event\":\"error\",\"error\":\"missing_cmd\"}");
         }
         return;
+    }
+
+    /* #392: pro Request GENAU EINE Logzeile vor dem Dispatch (auch ping/
+     * get_state/probe), damit ein Crash ohne Dump dem Kommando + Session
+     * zuordenbar ist. */
+    {
+        char sess[64];
+        char loglin[192];
+        if (!session_from_line(line, sess, sizeof(sess)))
+            snprintf(sess, sizeof(sess), "-");
+        if (req_log_format(cmd, sess, loglin, sizeof(loglin)) > 0)
+            dbg("%s", loglin);
     }
 
     if (strcmp(cmd, "ping") == 0) {
