@@ -153,21 +153,26 @@ grep -E '^\s*SystemMaxUse' /etc/systemd/journald.conf
 journalctl --disk-usage
 ```
 
-**Die reale, unverwaltete Lücke sind die Docker-`json-file`-Container-Logs.**
-Der Docker-Daemon hat (Stand der Messung) kein globales `log-opts`-Limit
-(`max-size`/`max-file`) und der Compose-Stack setzt auch kein per-Container
-Log-Opting — die `*-json.log` je Container wachsen also unbegrenzt, bis jemand
-aufräumt. Nachprüfen (read-only):
+**Die Docker-`json-file`-Container-Logs sind jetzt im Stack begrenzt.**
+Frühere Fassungen (bis #301) hielten fest, dass der Compose-Stack *kein*
+per-Container Log-Opting setzt und die `*-json.log` je Container unbegrenzt
+wachsen. Das ist mit **Issue #301** geschlossen: jedes Compose-Template des
+Repos (`riftbreaker-server`, `gns-relay`, `website`/rift-caddy) setzt für
+**jeden** Service einen json-file-Treiber mit Rotation —
+`logging: {driver: json-file, options: {max-size: '10m', max-file: '3'}}`.
+Die Werte sind konfigurierbar über die Rollen-Defaults bzw. `-e`:
+`riftbreaker_log_max_size`/`riftbreaker_log_max_file`,
+`gns_relay_log_max_size`/`gns_relay_log_max_file`,
+`rift_caddy_log_max_size`/`rift_caddy_log_max_file`.
+
+Ein globales `log-opts` in `daemon.json` ist damit **optional** — es würde
+zusätzlich Container außerhalb dieses Stacks (oder ad-hoc `docker run`)
+begrenzen, ist aber kein Stack-Default. Nachprüfen (read-only):
 
 ```bash
 du -sh /var/lib/docker/containers/*/*-json.log | sort -h | tail
 docker inspect --format '{{.Name}} {{.HostConfig.LogConfig.Type}} {{.HostConfig.LogConfig.Config}}' $(docker ps -q)
 ```
-
-Gegenmaßnahme: `logging: {driver: json-file, options: {max-size: '10m', max-file: '3'}}`
-im Compose-Stack (bzw. `log-opts` in `daemon.json`) — **nicht** über eine hier
-behauptete Automatik (die gibt es in diesem Repo noch nicht; die Begrenzung ist
-ein bewusster Operator-/Stack-Schritt).
 
 > Hinweis: `journald`-/`logrotate`-Beschreibungen unten sind read-only
 > Nachseh-Befehle. Eine *Änderung* an `SystemMaxUse` oder `logrotate` ist ein

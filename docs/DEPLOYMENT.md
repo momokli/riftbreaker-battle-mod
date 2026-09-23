@@ -248,9 +248,40 @@ Overlap-Guard bricht laut ab, Idempotenz (`changed=0`), `--check` entfernt
 nichts real, `riftbreaker_backup_keep=0` entfernt alles, und der stat-Guard ist
 load-bearing (Negativ-Probe). Läuft zusätzlich in `deploy-check-local`.
 
-> **Nicht in diesem Issue:** Container-Logs (reale Lücke, s.
-> [`SERVER_SIZING.md`](SERVER_SIZING.md) → „Host-Hygiene“) und weniger Müll
-> erzeugen (→ #247).
+> **Nicht in diesem Issue:** weniger Müll erzeugen (→ #247).
+
+## Compose-Log-Limit (Issue #301)
+
+Die Docker-`json-file`-Container-Logs
+(`/var/lib/docker/containers/*/*-json.log`) waren die reale, unverwaltete
+Disk-Lücke: ohne Limit wachsen sie unbegrenzt. Mit #301 setzt **jedes**
+Compose-Template des Repos für **jeden** Service einen json-file-Treiber mit
+Rotation:
+
+- **Templates:** `deploy/roles/riftbreaker-server/templates/docker-compose.yml.j2`
+  (dedicated, sessions, send-tailer, match-loop, attack-cycle),
+  `deploy/roles/gns-relay/templates/docker-compose.yml.j2`,
+  `deploy/roles/website/templates/docker-compose.yml.j2` (rift-caddy).
+- **Block:** `logging: {driver: json-file, options: {max-size: <n>, max-file: <n>}}`.
+- **Variablen (Defaults 10m/3, konfigurierbar per host_vars/`-e`):**
+  `riftbreaker_log_max_size`/`riftbreaker_log_max_file`,
+  `gns_relay_log_max_size`/`gns_relay_log_max_file`,
+  `rift_caddy_log_max_size`/`rift_caddy_log_max_file`.
+
+Ein globales `log-opts` in `daemon.json` ist damit **optional** (deckt nur
+Container außerhalb dieses Stacks ab) — der Stack-Default ist das per-Service-
+Limit.
+
+**Selbsttest (hermetisch, ohne Host/Docker-Start):**
+
+```bash
+bash deploy/tests/compose-logging/run.sh
+```
+
+Rendert die ECHTEN Templates über Ansible und prüft via
+`docker compose config --format json`, dass jeder Service `max-size` UND
+`max-file` trägt und die Werte per `-e` konfigurierbar sind; Negativ-Probe
+(ohne `logging`-Block rot). Läuft zusätzlich in `deploy-check-local`.
 
 ## Website-Pfad — eigener Rift-Caddy + ZWEI Host-Einträge (Landing + Cockpit, Issue #322)
 

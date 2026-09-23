@@ -172,6 +172,16 @@ riftbreaker_disk_min_free_gb: 10
 # ausgelassen (es gibt ja keine Zahl zum Vergleichen). Default false.
 riftbreaker_disk_skip_unknown: false
 
+# --- Container-Log-Limit (Issue #301) ---------------------------------------
+# Jeder Service im Compose-Stack bekommt einen json-file-Log-Treiber mit
+# Rotation. Ohne Limit wachsen die Docker-Container-Logs
+# (/var/lib/docker/containers/*/*-json.log) unbegrenzt, bis die Platte voll ist
+# (reale, unverwaltete Luecke aus der Host-Hygiene-Messung). max-size = Groesse
+# je Log-Datei vor der Rotation, max-file = Anzahl rotierter Dateien. Beide
+# konfigurierbar (host_vars / `-e`); die Werte sind Compose-Strings.
+riftbreaker_log_max_size: "10m"
+riftbreaker_log_max_file: "3"
+
 # Deploy-Identitaet (Issue #483, US4): Fallback fuer die Compose-Vorlage, damit
 # sie auch ohne die Plays renderbar bleibt (check-render, Hermetik-Tests). Die
 # Plays setzen rift_env als Play-Var; rift_deploy_ref kommt aus

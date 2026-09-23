@@ -490,7 +490,7 @@ nur `deploy-check-local`**:
   lokal: `yamllint` über `deploy/`, Playbook-`--syntax-check` für `site.yml` +
   `deploy-prod.yml` (prod-Playbook, Issue #328), die hermetischen
   Rollen-Selbsttests (`deploy/tests/`: Disk-Gate #310,
-  `/server/*`-Route #463), Compose-Templates rendern (`check-render.yml`) und
+  `/server/*`-Route #463, Compose-Log-Limit #301), Compose-Templates rendern (`check-render.yml`) und
   jedes gerenderte Compose-File durch `docker compose config`. Kein
   Host-/SSH-Zugriff, keine Secrets. Läuft damit immer, auch wenn der
   planet-Runner gerade nicht erreichbar ist.
@@ -674,6 +674,23 @@ journalctl -u rbmods-host-hygiene.timer -n 20         # letzter Timer-Lauf
 Der **Einmal-Lauf** über die bereits liegenden ~88,9 GB ist ein
 Operator-Schritt (nicht Teil des Deploys): auf planet `docker image prune`
 ausführen, danach `df -h /` zum Messen.
+
+### Container-Logs (Issue #301)
+
+Die Docker-`json-file`-Logs (`/var/lib/docker/containers/*/*-json.log`) sind
+kein Operator-Schritt mehr: **jedes** Compose-Template des Repos setzt für
+**jeden** Service `logging: {driver: json-file, options: {max-size, max-file}}`
+(Default 10m/3, konfigurierbar über `riftbreaker_log_max_*` /
+`gns_relay_log_max_*` / `rift_caddy_log_max_*`). Ein globales `log-opts` in
+`daemon.json` ist damit optional (deckt nur Container außerhalb dieses Stacks).
+Nachsehen (read-only):
+
+```bash
+du -sh /var/lib/docker/containers/*/*-json.log | sort -h | tail
+```
+
+Selbsttest: `bash deploy/tests/compose-logging/run.sh` (rendert die echten
+Templates, prüft per `docker compose config`; Negativ-Probe).
 
 ## Logs
 

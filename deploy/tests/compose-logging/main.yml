@@ -1,0 +1,57 @@
+---
+# Hermetischer Render-Test des Compose-LOG-LIMITS (Issue #301).
+#
+# Rendert die ECHTEN Compose-Templates der drei Rollen (riftbreaker-server,
+# gns-relay, website) nach render_dir. run.sh prueft danach via
+# `docker compose config --format json`, dass JEDER Service einen json-file-
+# Log-Treiber mit max-size UND max-file traegt und die Werte per `-e`
+# konfigurierbar sind (Override). Damit ist die reale, unverwaltete Luecke
+# (unbegrenzte /var/lib/docker/containers/*/*-json.log) geschlossen und
+# bleibt es (Regression-Guard).
+#
+# Lokal (localhost), kein Host, kein Vault, kein Docker-Start (nur
+# `docker compose config`).
+- name: RIFT BATTLE — Compose-Log-Limit Render (Issue 301)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../../inventory/host_vars/planet/vars.yml
+    # Rollen-Defaults (Reihenfolge wie check-render.yml) — liefern die
+    # Log-Limit-Variablen + die uebrigen Compose-Werte fuer den Render.
+    - ../../roles/riftbreaker-server/defaults/main.yml
+    - ../../roles/website/defaults/main.yml
+    - ../../roles/gns-relay/defaults/main.yml
+
+  vars:
+    deploy_image_tag: check
+    riftbreaker_server_password: check-dummy
+    vault_solo_basic_auth_hash: ""
+    vault_server_control_token: check-dummy-token
+    render_dir: "{{ lookup('env', 'RBBATTLE_RENDER_DIR') | default('/tmp/rbbattle-compose-logging', true) }}"
+
+  tasks:
+    - name: Render-Verzeichnis sicherstellen
+      file:
+        path: "{{ render_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: riftbreaker-server Compose rendern
+      template:
+        src: ../../roles/riftbreaker-server/templates/docker-compose.yml.j2
+        dest: "{{ render_dir }}/riftbreaker-server.yml"
+        mode: "0644"
+
+    - name: gns-relay Compose rendern
+      template:
+        src: ../../roles/gns-relay/templates/docker-compose.yml.j2
+        dest: "{{ render_dir }}/gns-relay.yml"
+        mode: "0644"
+
+    - name: rift-caddy (website) Compose rendern
+      template:
+        src: ../../roles/website/templates/docker-compose.yml.j2
+        dest: "{{ render_dir }}/rift-caddy.yml"
+        mode: "0644"
