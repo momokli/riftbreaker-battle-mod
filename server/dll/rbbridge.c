@@ -2880,6 +2880,267 @@ static void *resolve_dom_node(const unsigned char *base)
 }
 
 /* ------------------------------------------------------------------ */
+/* #880: pause_game / resume_game — nativer Dedi-Pause (GameplayState)  */
+/*                                                                    */
+/* Spike #880: echter Welt-/Server-Freeze (nicht DOM). Nativ (kein      */
+/* exec/Console). Einstieg sind die ARGLOSEN Server-Overrides           */
+/*   ServerGameplayState::OnPauseGameRequest  (RVA 0x1825F20, Build     */
+/*     2.0.58485):  mov byte ptr [rcx+0x534], 1 ; jmp rel32             */
+/*   ServerGameplayState::OnResumeGameRequest (RVA 0x1828590):          */
+/*     mov byte ptr [rcx+0x534], 0 ; jmp rel32                          */
+/* (rcx = this). Sie setzen das Pause-Request-Flag +0x534 und springen  */
+/* in den gemeinsamen Handler (RVA 0x1810130), der die eigentliche      */
+/* Arbeit macht. GameplayState::PauseGame (RVA 0x1A130F0) erwartet      */
+/* dagegen einen UtfString -> als nativer Einstieg ungeeignet; darum    */
+/* die arglosen Request-Overrides.                                      */
+/*                                                                    */
+/* Instanz: ServerGameplayState-Primary-vftable                         */
+/*   RVA 0x2F0C5A0 (PDB `??_7ServerGameplayState@Riftbreaker@@6B@`)     */
+/* -> vftable-Scan wie resolve_dom_node. Readback des Pause-Flags       */
+/* +0x534 (0/1).                                                       */
+/*                                                                    */
+/* Thread-Modell (#880, live belegt): ein direkter Aufruf der Engine-Fn vom
+ * PIPE-Thread crasht; der Schreib-/Aufruf-Punkt laeuft daher auf dem
+ * GAME-Thread (Detour, siehe dispatch_pause_game/install_game_pause_hook).  */
+/* ------------------------------------------------------------------ */
+
+#define RBBRIDGE_SGS_VFTABLE_RVA   0x2F0C5A0u /* ??_7ServerGameplayState@Riftbreaker@@6B@ */
+#define RBBRIDGE_SGS_PAUSEFLAG_OFF 0x534u     /* Ist-Zustand: 1 = pausiert */
+
+/* #880-Marshalling: GameplayState::UpdateGameplayLogic(float,float,u64) ist der
+ * GAME-Thread-Logik-Update (er konsumiert z.B. das restart_map-Pending-Flag in
+ * GameplayState::OnRestart) und damit der sichere Konsumpunkt fuer den Pause-/
+ * Resume-Request — ein direkter Aufruf der Server-Overrides vom PIPE-Thread
+ * crasht (live nachgewiesen). Prolog ist 36 Byte instruction-aligned:
+ *   mov rax,rsp; mov [rax+0x10],rbx; mov [rax+0x20],r9;
+ *   push rbp/rsi/rdi/r12/r13/r14/r15; lea rbp,[rax-0x108]; sub rsp,0x1D0
+ * -> Patch-Laenge 36. Die AOB (55 Byte) ist im .text genau EINMAL vorhanden;
+ * die ersten 36 Byte (die der Detour ueberschreibt) bindet der Selfcheck. */
+#define RBBRIDGE_RVA_GAMEPLAY_UPDLOGIC       0x1A1C100u
+#define RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN 36u
+static const unsigned char RBBRIDGE_GAMEPLAY_UPDLOGIC_SIG[] = {
+    0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x10, 0x4C, 0x89, 0x48, 0x20, 0x55,
+    0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D,
+    0xA8, 0xF8, 0xFE, 0xFF, 0xFF, 0x48, 0x81, 0xEC, 0xD0, 0x01, 0x00, 0x00,
+    0x0F, 0x29, 0x70, 0xB8, 0x0F, 0x29, 0x78, 0xA8, 0x44, 0x0F, 0x29, 0x40,
+    0x98, 0x44, 0x0F, 0x29, 0x48, 0x88, 0x0F
+};
+
+/* Selfcheck (host-testbar): Laenge == 55 und die ersten 36 Byte (die der
+ * Detour ueberschreibt) sind instruction-aligned der erwartete Prolog. */
+static int gameplay_updlogic_sig_selfcheck(void)
+{
+    static const unsigned char expect36[] = {
+        0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x10, 0x4C, 0x89, 0x48, 0x20,
+        0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+        0x48, 0x8D, 0xA8, 0xF8, 0xFE, 0xFF, 0xFF, 0x48, 0x81, 0xEC, 0xD0,
+        0x01, 0x00, 0x00
+    };
+    if (sizeof(RBBRIDGE_GAMEPLAY_UPDLOGIC_SIG) != 55)
+        return 0;
+    if (RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN != sizeof(expect36))
+        return 0;
+    if (memcmp(RBBRIDGE_GAMEPLAY_UPDLOGIC_SIG, expect36, sizeof(expect36)) != 0)
+        return 0;
+    return 1;
+}
+
+/* Loest GameplayState::UpdateGameplayLogic per AOB auf — nur bei EINEM Treffer. */
+static const unsigned char *resolve_gameplay_updlogic_fn(const unsigned char *base,
+                                                         size_t size)
+{
+    if (!gameplay_updlogic_sig_selfcheck())
+        return NULL;
+    if (sig_count_in_image(base, size, RBBRIDGE_GAMEPLAY_UPDLOGIC_SIG,
+                           sizeof(RBBRIDGE_GAMEPLAY_UPDLOGIC_SIG)) != 1)
+        return NULL;
+    return scan_bytes(base, size, RBBRIDGE_GAMEPLAY_UPDLOGIC_SIG,
+                      sizeof(RBBRIDGE_GAMEPLAY_UPDLOGIC_SIG));
+}
+
+/* #880: die ECHTEN Aufrufer-Pfade der Engine (per `git`-freier Disasm-Analyse
+ * von ServerGameplayState::UpdateWorldPauseState): PauseGame wird dort als
+ * `PauseGame(this, &reason, false, WorldType=3)` gerufen, ResumeGame als
+ * `ResumeGame(this)` (arglos). Beide Fn-Entries ueber ihre Prolog-AOB (unique)
+ * aufloesen. Der reason ist ein STATISCHES UtfString-Objekt in .data
+ * (RVA 0x47936E0) — wir benutzen genau dasselbe. */
+#define RBBRIDGE_RVA_PAUSE_REASON 0x47936E0u
+static const unsigned char RBBRIDGE_PAUSEGAME_SIG[] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x48, 0x89,
+    0x7C, 0x24, 0x20, 0x44, 0x88, 0x44, 0x24, 0x18, 0x55, 0x41, 0x54, 0x41,
+    0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC, 0x24, 0xF0, 0xFD, 0xFF,
+    0xFF, 0x48, 0x81, 0xEC, 0x10, 0x03, 0x00, 0x00, 0x45, 0x8B, 0xE1
+};
+static const unsigned char RBBRIDGE_RESUMEGAME_SIG[] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x48, 0x89,
+    0x7C, 0x24, 0x18, 0x55, 0x48, 0x8D, 0xAC, 0x24, 0x50, 0xFE, 0xFF, 0xFF,
+    0x48, 0x81, 0xEC, 0xB0, 0x02, 0x00, 0x00, 0x48, 0x8B, 0xF9, 0x48, 0x8D,
+    0x05, 0x7F, 0xCC, 0x50, 0x01, 0x48, 0x89, 0x44, 0x24, 0x40, 0xC7, 0x44,
+    0x24, 0x48, 0x83, 0x06, 0x00, 0x00
+};
+
+/* Loest eine Fn ueber ihre AOB auf — nur bei genau EINEM Treffer. */
+static const unsigned char *resolve_unique_fn(const unsigned char *base,
+                                              size_t size,
+                                              const unsigned char *sig, size_t n)
+{
+    if (!base || !sig || !n)
+        return NULL;
+    if (sig_count_in_image(base, size, sig, n) != 1)
+        return NULL;
+    return scan_bytes(base, size, sig, n);
+}
+
+/* Byte lesen, nur aus committed+lesbarer Region (kein Crash). Eigener Helfer,
+ * weil safe_read_u8 erst weiter unten (natural_waves-Block) definiert ist und
+ * dieser Resolver-Block davor steht (host-testbar). */
+static int game_read_u8(const void *addr, unsigned char *out)
+{
+    MEMORY_BASIC_INFORMATION mi;
+    if (!addr || !out)
+        return 0;
+    if (!VirtualQuery(addr, &mi, sizeof(mi)))
+        return 0;
+    if (!is_readable_region(&mi))
+        return 0;
+    if ((uintptr_t)addr + 1 > (uintptr_t)mi.BaseAddress + mi.RegionSize)
+        return 0;
+    memcpy(out, addr, 1);
+    return 1;
+}
+
+/* Byte schreiben, nur in committed+schreibbarer Region (kein Crash). */
+static int game_write_u8(void *addr, unsigned char val)
+{
+    MEMORY_BASIC_INFORMATION mi;
+    if (!addr)
+        return 0;
+    if (!VirtualQuery(addr, &mi, sizeof(mi)))
+        return 0;
+    if (mi.State != MEM_COMMIT || (mi.Protect & PAGE_GUARD))
+        return 0;
+    switch (mi.Protect & 0xFF) {
+    case PAGE_READWRITE:
+    case PAGE_WRITECOPY:
+    case PAGE_EXECUTE_READWRITE:
+    case PAGE_EXECUTE_WRITECOPY:
+        break;
+    default:
+        return 0;
+    }
+    if ((uintptr_t)addr + 1 > (uintptr_t)mi.BaseAddress + mi.RegionSize)
+        return 0;
+    memcpy(addr, &val, 1);
+    return 1;
+}
+
+/* --- #880: Pause-Request-Bitfeld ----------------------------------------- */
+/* ServerGameplayState::UpdateWorldPauseState (Game-Thread) berechnet den
+ * Soll-Pause-Zustand u.a. aus dem Dword-Feld [this+0x35CC] (Bit 0x10); ruft
+ * dann selbst PauseGame/ResumeGame. Operationen setzen/loeschen dieses Bit. */
+#define RBBRIDGE_SGS_PAUSEBITS_OFF       0x35CCu
+#define RBBRIDGE_SGS_PAUSE_BIT           0x02u  /* "Pause gewuenscht" */
+#define RBBRIDGE_SGS_PAUSE_BIT0          0x01u
+#define RBBRIDGE_SGS_PAUSE_BIT10         0x10u
+#define RBBRIDGE_SGS_PAUSETIMER_OFF      0x35D0u /* Grace-Timer aktiv? */
+
+static int game_read_u32(const void *addr, uint32_t *out)
+{
+    MEMORY_BASIC_INFORMATION mi;
+    if (!addr || !out)
+        return 0;
+    if (!VirtualQuery(addr, &mi, sizeof(mi)))
+        return 0;
+    if (!is_readable_region(&mi))
+        return 0;
+    if ((uintptr_t)addr + 4 > (uintptr_t)mi.BaseAddress + mi.RegionSize)
+        return 0;
+    memcpy(out, addr, 4);
+    return 1;
+}
+
+static int game_write_u32(void *addr, uint32_t val)
+{
+    MEMORY_BASIC_INFORMATION mi;
+    if (!addr)
+        return 0;
+    if (!VirtualQuery(addr, &mi, sizeof(mi)))
+        return 0;
+    if (mi.State != MEM_COMMIT || (mi.Protect & PAGE_GUARD))
+        return 0;
+    switch (mi.Protect & 0xFF) {
+    case PAGE_READWRITE:
+    case PAGE_WRITECOPY:
+    case PAGE_EXECUTE_READWRITE:
+    case PAGE_EXECUTE_WRITECOPY:
+        break;
+    default:
+        return 0;
+    }
+    if ((uintptr_t)addr + 4 > (uintptr_t)mi.BaseAddress + mi.RegionSize)
+        return 0;
+    memcpy(addr, &val, 4);
+    return 1;
+}
+
+/* Findet die ServerGameplayState-Instanz per Primary-vftable-Scan. Reine
+ * Leseoperation, graceful NULL. Bevorzugt eine Instanz, deren Pause-Flag
+ * +0x534 lesbar und 0/1 ist; sonst der erste Treffer. */
+static void *resolve_sgs_instance(const unsigned char *base, size_t size)
+{
+    uint64_t needle;
+    uintptr_t addr = 0;
+    uintptr_t img_lo, img_hi;
+    unsigned char *fallback = NULL;
+
+    if (!base)
+        return NULL;
+    needle = (uint64_t)(uintptr_t)(base + RBBRIDGE_SGS_VFTABLE_RVA);
+    img_lo = (uintptr_t)base;
+    img_hi = img_lo + size;
+
+    for (;;) {
+        MEMORY_BASIC_INFORMATION mi;
+        uintptr_t next;
+        const uint64_t *q;
+        size_t nq, i;
+
+        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
+            break;
+        next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
+        if (next <= addr)
+            break;
+        addr = next;
+        if (!is_readable_region(&mi))
+            continue;
+        q = (const uint64_t *)mi.BaseAddress;
+        nq = mi.RegionSize / sizeof(uint64_t);
+        for (i = 0; i < nq; i++) {
+            unsigned char *inst;
+            uintptr_t a;
+            unsigned char flag = 0xFF;
+            if (q[i] != needle)
+                continue;
+            inst = (unsigned char *)&q[i];
+            a = (uintptr_t)inst;
+            /* In-Image-Treffer (RTTI/COL/vtable-Selbstreferenz) sind KEINE
+             * Heap-Instanz -> verwerfen; sonst bogener `this` + Execute-Fault. */
+            if (a >= img_lo && a < img_hi)
+                continue;
+            if (!game_read_u8(inst + RBBRIDGE_SGS_PAUSEFLAG_OFF, &flag))
+                continue;
+            dbg("resolve_sgs_instance: candidate inst=%p flag=%d",
+                inst, (int)flag);
+            if (flag <= 1)
+                return inst;      /* plausibel: Pause-Flag 0/1 */
+            if (!fallback)
+                fallback = inst;  /* behalten, falls kein besserer Treffer */
+        }
+    }
+    return fallback;
+}
+
+/* ------------------------------------------------------------------ */
 /* #512: Spielerzahl-Resolver (rein, host-testbar)                      */
 /* ------------------------------------------------------------------ */
 
@@ -5229,6 +5490,221 @@ static RBBRIDGE_NOINLINE void dispatch_pause_dom(HANDLE hPipe, int pause)
               (unsigned long long)(uintptr_t)inst);
 }
 
+/* pause_game / resume_game (Write #880): echter Welt-/Server-Freeze nativ
+ * ueber die arglosen ServerGameplayState-Request-Overrides (kein DOM/exec/Lua).
+ *
+ * Drei Wege (`op`):
+ *   marshalled (Default) — Request wird hinterlegt und im GAME-Thread-Detour
+ *     (GameplayState::UpdateGameplayLogic) via PauseGame/ResumeGame ausgefuehrt
+ *     (thread-sicher, WIRKSAM).
+ *   flag    — nur [this+0x534] schreiben (thread-sicher, aber ohne Wirkung:
+ *     der Handler macht die Arbeit — live belegt).
+ *   call    — direkter Aufruf vom PIPE-Thread (crasht: falscher Thread) —
+ *     nur fuer den A/B-Nachweis.
+ *
+ * Events:
+ *   {"event":"pause_game_result","ok":true,"paused":true,"via":"marshalled",
+ *    "consumed":true,"flag":1}
+ *   {"event":"..._result","ok":false,"reason":
+ *    "no_module"|"signature_not_found"|"instance_not_found"|"hook_not_installable"}
+ */
+/* --- Pending-Zustand + OnUpdate-Detour (Game-Thread) ---------------------- */
+typedef void (__fastcall *gameplay_updlogic_fn_t)(
+    void *self, float a, float b, unsigned long long c,
+    unsigned long long d);
+
+static void *g_gameplay_updlogic_orig = NULL; /* Trampolin */
+static void *g_gameplay_updlogic_target = NULL;
+static int g_game_pause_hook_installed = 0;
+static volatile LONG g_game_req = 0;        /* 0 keins, 1 Pause, 2 Resume */
+static volatile LONG g_game_req_done = 0;   /* 1 = vom Game-Thread ausgefuehrt */
+static volatile LONG g_game_last_flag = -1; /* Readback [this+0x534] */
+static volatile LONG g_game_want = -1;  /* Operator-Override: -1 auto, 0 run, 1 pause */
+static const unsigned char *g_game_base = NULL;
+static const unsigned char *g_game_pausegame_fn = NULL;  /* GameplayState::PauseGame */
+static const unsigned char *g_game_resumegame_fn = NULL; /* GameplayState::ResumeGame */
+
+typedef void (__fastcall *game_pausegame_fn_t)(void *self, void *reason,
+                                               unsigned char b, int world_type);
+typedef void (__fastcall *game_resumegame_fn_t)(void *self);
+
+/* Laeuft auf dem GAME-Thread. Fuehrt einen anstehenden Pause/Resume-Request
+ * hier aus (richtiger Thread) und ruft danach unveraendert das Original. */
+static void __fastcall gameplay_updlogic_hook(
+    void *self, float a, float b, unsigned long long c,
+    unsigned long long d)
+{
+    LONG want = InterlockedCompareExchange(&g_game_want, 0, 0);
+    if (want >= 0) {
+        unsigned char state = 0xFF;
+        unsigned char zero = 0;
+        uint32_t bits = 0;
+        /* Quell-Flags passend setzen + Grace-Timer aus, damit
+         * UpdateWorldPauseState denselben Soll-Zustand ableitet. */
+        if (game_read_u32((unsigned char *)self + RBBRIDGE_SGS_PAUSEBITS_OFF,
+                          &bits)) {
+            uint32_t nv = (want == 1)
+                ? (bits | RBBRIDGE_SGS_PAUSE_BIT)
+                : (bits & ~(RBBRIDGE_SGS_PAUSE_BIT |
+                            RBBRIDGE_SGS_PAUSE_BIT0 |
+                            RBBRIDGE_SGS_PAUSE_BIT10));
+            if (nv != bits)
+                game_write_u32(
+                    (unsigned char *)self + RBBRIDGE_SGS_PAUSEBITS_OFF, nv);
+        }
+        game_write_u8((unsigned char *)self + RBBRIDGE_SGS_PAUSETIMER_OFF, zero);
+        /* Nur bei Abweichung den echten Engine-Call machen. */
+        if (game_read_u8((unsigned char *)self + RBBRIDGE_SGS_PAUSEFLAG_OFF,
+                         &state)) {
+            if (want == 1 && state == 0 && g_game_pausegame_fn && g_game_base) {
+                ((game_pausegame_fn_t)(uintptr_t)g_game_pausegame_fn)(
+                    self,
+                    (void *)(uintptr_t)(g_game_base +
+                                        RBBRIDGE_RVA_PAUSE_REASON),
+                    (unsigned char)0, 3);
+            } else if (want == 0 && state != 0 && g_game_resumegame_fn) {
+                ((game_resumegame_fn_t)(uintptr_t)g_game_resumegame_fn)(self);
+            }
+        }
+        if (game_read_u8((unsigned char *)self + RBBRIDGE_SGS_PAUSEFLAG_OFF,
+                         &state))
+            InterlockedExchange(&g_game_last_flag, (LONG)state);
+        InterlockedExchange(&g_game_req_done, 1);
+    }
+    ((gameplay_updlogic_fn_t)g_gameplay_updlogic_orig)(self, a, b, c, d);
+}
+
+/* Trampolin + Prolog-Patch (Muster install_spawn_hook). Idempotent. */
+static int install_game_pause_hook(const unsigned char *base, size_t size)
+{
+    const unsigned char *target;
+    unsigned char *trampoline;
+    unsigned char patch[RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN];
+    uintptr_t hook_addr, back_addr;
+    DWORD old_protect = 0;
+    size_t i;
+
+    if (g_game_pause_hook_installed)
+        return 1;
+
+    target = resolve_gameplay_updlogic_fn(base, size);
+    if (!target) {
+        dbg("install_game_pause_hook: UpdateGameplayLogic-AOB fehlt/mehrdeutig");
+        return 0;
+    }
+    g_game_pausegame_fn = resolve_unique_fn(base, size, RBBRIDGE_PAUSEGAME_SIG,
+                                            sizeof(RBBRIDGE_PAUSEGAME_SIG));
+    g_game_resumegame_fn = resolve_unique_fn(base, size,
+                                             RBBRIDGE_RESUMEGAME_SIG,
+                                             sizeof(RBBRIDGE_RESUMEGAME_SIG));
+    if (!g_game_pausegame_fn || !g_game_resumegame_fn) {
+        dbg("install_game_pause_hook: PauseGame/ResumeGame-AOB fehlt/mehrdeutig");
+        return 0;
+    }
+    g_game_base = base;
+
+    trampoline = (unsigned char *)VirtualAlloc(
+        NULL, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!trampoline) {
+        dbg("install_game_pause_hook: VirtualAlloc fehlgeschlagen");
+        return 0;
+    }
+    memcpy(trampoline, target, RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN);
+    trampoline[RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN + 0] = 0xFF;
+    trampoline[RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN + 1] = 0x25;
+    trampoline[RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN + 2] = 0x00;
+    trampoline[RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN + 3] = 0x00;
+    trampoline[RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN + 4] = 0x00;
+    trampoline[RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN + 5] = 0x00;
+    back_addr = (uintptr_t)(target + RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN);
+    memcpy(trampoline + RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN + 6, &back_addr,
+           sizeof(back_addr));
+
+    patch[0] = 0xFF;
+    patch[1] = 0x25;
+    patch[2] = 0x00;
+    patch[3] = 0x00;
+    patch[4] = 0x00;
+    patch[5] = 0x00;
+    hook_addr = (uintptr_t)&gameplay_updlogic_hook;
+    memcpy(patch + 6, &hook_addr, sizeof(hook_addr));
+    for (i = 14; i < RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN; i++)
+        patch[i] = 0x90;
+
+    if (!VirtualProtect((void *)target, RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN,
+                        PAGE_EXECUTE_READWRITE, &old_protect)) {
+        dbg("install_game_pause_hook: VirtualProtect fehlgeschlagen");
+        VirtualFree(trampoline, 0, MEM_RELEASE);
+        return 0;
+    }
+    g_gameplay_updlogic_orig = trampoline; /* VOR dem Patch setzen */
+    memcpy((void *)target, patch, RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN);
+    VirtualProtect((void *)target, RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN,
+                   old_protect, &old_protect);
+    FlushInstructionCache(GetCurrentProcess(), target,
+                          RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN);
+
+    g_gameplay_updlogic_target = (void *)target;
+    g_game_pause_hook_installed = 1;
+    dbg("install_game_pause_hook: installiert an %p (Trampolin %p)",
+        (const void *)target, (void *)trampoline);
+    return 1;
+}
+
+static RBBRIDGE_NOINLINE void dispatch_pause_game(HANDLE hPipe, int pause,
+                                                  int auto_release)
+{
+    const char *ev = pause ? "pause_game_result" : "resume_game_result";
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    const char *via = NULL;
+    const unsigned char *execfn = NULL;
+    unsigned char rb = 0xFF;
+    int i, done;
+
+    if (auto_release) {
+        /* auto: Operator-Override aufheben (Engine steuert wieder selbst). */
+        InterlockedExchange(&g_game_want, -1);
+        dbg("pause_game: auto -> Override geloescht");
+        send_line(hPipe, "{\"event\":\"%s\",\"ok\":true,\"via\":\"auto\"}", ev);
+        return;
+    }
+    if (!resolve_module(&base, &size, &via, &execfn)) {
+        dbg("pause_game: Modul nicht aufloesbar");
+        send_line(hPipe,
+                  "{\"event\":\"%s\",\"ok\":false,\"reason\":\"no_module\"}", ev);
+        return;
+    }
+    if (!install_game_pause_hook(base, size)) {
+        dbg("pause_game: Hook nicht installierbar");
+        send_line(hPipe,
+                  "{\"event\":\"%s\",\"ok\":false,"
+                  "\"reason\":\"hook_not_installable\"}",
+                  ev);
+        return;
+    }
+    /* Persistenten Operator-Soll-Zustand setzen; der GAME-Thread-Hook setzt
+     * ihn jede Frame durch. Kurz warten (~3 s), dann Ist-Zustand (+0x534). */
+    InterlockedExchange(&g_game_req_done, 0);
+    InterlockedExchange(&g_game_last_flag, -1);
+    InterlockedExchange(&g_game_want, pause ? 1 : 0);
+    for (i = 0; i < 300 && !g_game_req_done; i++)
+        Sleep(10);
+    done = (int)g_game_req_done;
+    rb = (unsigned char)(g_game_last_flag < 0 ? 0 : g_game_last_flag);
+    dbg("pause_game: %s want=%d consumed=%d state=%d",
+        pause ? "pause" : "resume", pause ? 1 : 0, done, (int)rb);
+    send_line(hPipe,
+              "{\"event\":\"%s\",\"ok\":true,\"paused\":%s,"
+              "\"readback\":\"%s\",\"flag\":%d,\"want\":%d,"
+              "\"via\":\"marshalled\",\"consumed\":%s}",
+              ev,
+              done ? (rb ? "true" : "false") : (pause ? "true" : "false"),
+              done ? "ok" : "pending", done ? (int)rb : -1, pause ? 1 : 0,
+              done ? "true" : "false");
+}
+
+
 /* Gibt den Rueckgabe-Vektor frei - exakt die Semantik von
  * `Exor::Vector<uint32,StlAllocatorProxy<uint32>>::~Vector`
  * (Disasm RVA 0x26F340):
@@ -5443,6 +5919,21 @@ static void dispatch_get_state(HANDLE hPipe)
             snprintf(dom_field, sizeof(dom_field), "null");
     }
 
+    /* #880: echter Server-Pause-Zustand (ServerGameplayState+0x534), plus der
+     * Operator-Override (want). Beides graceful null. */
+    char gp_field[8];
+    char want_field[8];
+    {
+        void *gi = resolve_sgs_instance(base, size);
+        unsigned char gb = 0;
+        if (gi && game_read_u8((unsigned char *)gi +
+                               RBBRIDGE_SGS_PAUSEFLAG_OFF, &gb))
+            snprintf(gp_field, sizeof(gp_field), "%s", gb ? "true" : "false");
+        else
+            snprintf(gp_field, sizeof(gp_field), "null");
+    }
+    snprintf(want_field, sizeof(want_field), "%d", (int)g_game_want);
+
     /* Spielerzahl (Read #512, nativ C++): GetConnectedPlayers(World*).
      * Default `null` (nicht aufloesbar / keine Welt) - nur bei Erfolg eine
      * Zahl. Solo: 1, kein Spieler: 0. */
@@ -5499,10 +5990,10 @@ static void dispatch_get_state(HANDLE hPipe)
                          "\"mission_flow_active\":%s,"
                          "\"mission_flow_payload\":%s,"
                          "\"creatures_base_difficulty\":%s,"
-                         "\"end_game\":%s,\"players\":%s,%s}",
+                         "\"end_game\":%s,\"players\":%s,%s,\"game_paused\":%s,\"pause_want\":%s}",
                   dom_field, flow_esc, flow_active ? "true" : "false",
                   payload_field, diff_field, end_field, players_field,
-                  hq_field);
+                  hq_field, gp_field, want_field);
         return;
     }
 
@@ -5516,10 +6007,10 @@ static void dispatch_get_state(HANDLE hPipe)
                          "\"mission_flow_active\":%s,"
                          "\"mission_flow_payload\":%s,"
                          "\"creatures_base_difficulty\":%s,"
-                         "\"end_game\":%s,\"players\":%s,%s}",
+                         "\"end_game\":%s,\"players\":%s,%s,\"game_paused\":%s,\"pause_want\":%s}",
                   dom_field, flow_esc, flow_active ? "true" : "false",
                   payload_field, diff_field, end_field, players_field,
-                  hq_field);
+                  hq_field, gp_field, want_field);
         return;
     }
 
@@ -5534,10 +6025,10 @@ static void dispatch_get_state(HANDLE hPipe)
                          "\"mission_flow_active\":%s,"
                          "\"mission_flow_payload\":%s,"
                          "\"creatures_base_difficulty\":%s,"
-                         "\"end_game\":%s,\"players\":%s,%s}",
+                         "\"end_game\":%s,\"players\":%s,%s,\"game_paused\":%s,\"pause_want\":%s}",
                   dom_field, flow_esc, flow_active ? "true" : "false",
                   payload_field, diff_field, end_field, players_field,
-                  hq_field);
+                  hq_field, gp_field, want_field);
         return;
     }
 
@@ -5625,11 +6116,11 @@ static void dispatch_get_state(HANDLE hPipe)
               "\"mission_flow\":\"%s\",\"mission_flow_active\":%s,"
               "\"mission_flow_payload\":%s,"
               "\"creatures_base_difficulty\":%s,"
-              "\"end_game\":%s,\"players\":%s,%s}",
+              "\"end_game\":%s,\"players\":%s,%s,\"game_paused\":%s,\"pause_want\":%s}",
               (unsigned long long)carbonium, (long long)carbonium_max,
               (unsigned long long)ironium, (long long)ironium_max,
               resources, dom_field, flow_esc, flow_active ? "true" : "false",
-              payload_field, diff_field, end_field, players_field, hq_field);
+              payload_field, diff_field, end_field, players_field, hq_field, gp_field, want_field);
 }
 
 
@@ -6299,6 +6790,18 @@ static void handle_line(HANDLE hPipe, const char *line)
 
     if (strcmp(cmd, "resume_dom") == 0) {
         dispatch_pause_dom(hPipe, 0);
+        return;
+    }
+
+    /* pause_game / resume_game (Write #880): echter Welt-/Server-Freeze nativ
+     * via ServerGameplayState::On{Pause,Resume}GameRequest (kein DOM/exec). */
+    if (strcmp(cmd, "pause_game") == 0 || strcmp(cmd, "resume_game") == 0) {
+        char op[16] = "marshalled";
+        int auto_release = 0;
+        json_get_string(line, "op", op, sizeof(op));
+        if (strcmp(op, "auto") == 0)
+            auto_release = 1;
+        dispatch_pause_game(hPipe, cmd[0] == 'p', auto_release);
         return;
     }
 

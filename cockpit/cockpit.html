@@ -771,6 +771,14 @@
                                     <span id="dom_paused" class="prop-val">—</span>
                                 </div>
                                 <div class="flow-prop">
+                                    <span class="prop-label">game paused</span>
+                                    <span id="game_paused" class="prop-val" title="echter Server-Pause-Zustand (ServerGameplayState+0x534, #880)">—</span>
+                                </div>
+                                <div class="flow-prop">
+                                    <span class="prop-label">pause want</span>
+                                    <span id="pause_want" class="prop-val" title="Operator-Override: -1 auto, 0 run, 1 pause (#880)">—</span>
+                                </div>
+                                <div class="flow-prop">
                                     <span class="prop-label">payload.spawn_point</span>
                                     <span id="mission_flow_spawn" class="prop-val">—</span>
                                 </div>
@@ -824,6 +832,13 @@
                             <div class="flow-action-row">
                                 <button id="dom_pause" title="LuaGraphNode::SetSuspended(true) am dom_mananger-Node — eigener C++-Write, kein Lua/Console" aria-label="Pause the DOM (freeze game loop node)">pause dom</button>
                                 <button id="dom_resume" title="LuaGraphNode::SetSuspended(false) am dom_mananger-Node" aria-label="Resume the DOM">resume dom</button>
+                            </div>
+
+                            <!-- Row 4b: Act (echter Welt-Pause, #880) -->
+                            <div class="flow-action-row">
+                                <button id="game_pause" title="nativer Welt-Pause (PauseGame, Game-Thread-Marshalling) — #880" aria-label="Pause the running world">pause game</button>
+                                <button id="game_resume" title="nativer Welt-Resume (ResumeGame) — #880" aria-label="Resume the world">resume game</button>
+                                <button id="game_auto" title="Operator-Override aufheben — Engine steuert wieder selbst" aria-label="Release pause override">auto</button>
                             </div>
                         </div>
                     </fieldset>
@@ -1093,6 +1108,16 @@
                                 : s.dom_paused
                                   ? "yes"
                                   : "no";
+                        $("game_paused").textContent =
+                            s.game_paused === undefined || s.game_paused === null
+                                ? "—"
+                                : s.game_paused
+                                  ? "yes"
+                                  : "no";
+                        $("pause_want").textContent =
+                            s.pause_want === undefined || s.pause_want === null
+                                ? "—"
+                                : String(s.pause_want);
                         var mfp = s.mission_flow_payload;
                         $("mission_flow_spawn").textContent = mfp &&
                             mfp.spawn_point !== undefined
@@ -1441,6 +1466,34 @@
                 };
                 $("dom_resume").onclick = function () {
                     domSuspend("resume_dom");
+                };
+
+                async function gamePause(action, body) {
+                    try {
+                        var r = await post(action, body || {});
+                        if (r && r.ok) {
+                            $("game_paused").textContent = r.paused
+                                ? "yes"
+                                : "no";
+                            $("pause_want").textContent =
+                                r.want === undefined ? "—" : String(r.want);
+                            $("out").textContent = "";
+                        } else {
+                            $("out").textContent = JSON.stringify(r);
+                        }
+                    } catch (e) {
+                        $("out").textContent = "ERR " + e.message;
+                    }
+                }
+
+                $("game_pause").onclick = function () {
+                    gamePause("pause_game");
+                };
+                $("game_resume").onclick = function () {
+                    gamePause("resume_game");
+                };
+                $("game_auto").onclick = function () {
+                    gamePause("resume_game", { op: "auto" });
                 };
 
                 async function endGame(result) {
