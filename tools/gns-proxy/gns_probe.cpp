@@ -53,6 +53,7 @@
 #include <ctime>
 #include <deque>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -87,6 +88,8 @@ typedef HSteamListenSocket (*fn_CreateListenSocketIP)(
 typedef bool (*fn_CloseListenSocket)(ISteamNetworkingSockets *,
                                      HSteamListenSocket);
 typedef HSteamNetPollGroup (*fn_CreatePollGroup)(ISteamNetworkingSockets *);
+typedef bool (*fn_DestroyPollGroup)(ISteamNetworkingSockets *,
+                                   HSteamNetPollGroup);
 typedef bool (*fn_SetConnectionPollGroup)(ISteamNetworkingSockets *,
                                           HSteamNetConnection,
                                           HSteamNetPollGroup);
@@ -124,6 +127,9 @@ fn_Kill pKill = nullptr;
 fn_CreateListenSocketIP pCreateListenSocketIP = nullptr;
 fn_CloseListenSocket pCloseListenSocket = nullptr;
 fn_CreatePollGroup pCreatePollGroup = nullptr;
+// Optional (nicht in der Pflichtliste): fehlt der Export, bleiben die
+// Poll-Gruppen bis zum Prozessende belegt (Issue #877).
+fn_DestroyPollGroup pDestroyPollGroup = nullptr;
 fn_SetConnectionPollGroup pSetConnectionPollGroup = nullptr;
 fn_AcceptConnection pAcceptConnection = nullptr;
 fn_CloseConnection pCloseConnection = nullptr;
@@ -137,12 +143,13 @@ fn_SetConnConfigInt32 pSetConnConfigInt32 = nullptr;
 fn_IPAddrToString pIPAddrToString = nullptr;
 
 ISteamNetworkingSockets *g_pInterface = nullptr;
-HSteamNetPollGroup g_hPollGroup = k_HSteamNetPollGroup_Invalid;
 int g_msgCount = 0;
 
-// --- Relay (E3/E4) -----------------------------------------------------------
-// Terminierendes Relay: der Client haengt an g_clientConn, ein neuer GNS-Client
-// am Backend an g_backendConn.  Nachrichten werden 1:1 weitergereicht.
+// --- Relay (E3/E4) — Multi-Session (Issue #877) ------------------------------
+// Terminierendes Relay: JEDER Client bekommt eine eigene Session (Client-Conn +
+// optionaler Backend-Conn).  Nachrichten werden 1:1 weitergereicht.  Frueher
+// lagen Verbindung/Queues/Historie in globalen Singletonen — ein zweiter Client
+// ueberschrieb sie und die Sitzung des ersten kollabierte (Blocker fuer 1v1).
 //
 // Routing (E4): der GNS-*Identitaetsstring* des Clients kommt mit dem Connect
 // (`str:<hex>`, stabil pro Installation) und ist damit sofort verfuegbar — damit
@@ -150,14 +157,55 @@ int g_msgCount = 0;
 // Spielname kommt erst nach der Handshake-Antwort; er wird daher aus dem
 // durchgereichten Strom gelernt und loest bei Abweichung ein **Re-Route**
 // (Replay des bis dahin Gesehenen auf das richtige Backend) aus.
-HSteamNetConnection g_clientConn = k_HSteamNetConnection_Invalid;
-HSteamNetConnection g_backendConn = k_HSteamNetConnection_Invalid;
-bool g_backendConnected = false;
+struct Session {
+  HSteamNetConnection clientConn = k_HSteamNetConnection_Invalid;
+  HSteamNetConnection backendConn = k_HSteamNetConnection_Invalid;
+  bool backendConnected = false;
+  // Aktuelles Ziel als Endpoint (fuer Vergleiche beim Re-Route).
+  rbroute::Endpoint backendTarget;
+  // GNS-Identitaet (`str:<hex>`, stabil pro Installation) und die zuletzt
+  // angewandte Namens-Regel (fuer die Re-Route-Erkennung).
+  std::string identity;
+  std::string lastRouteKey;
+  // Historie aller Client->Server-Nachrichten (fuer Replay beim Re-Route) plus
+  // Merker, wie viele davon schon an das *aktuelle* Backend gingen.
+  std::vector<std::pair<std::string, int>> history;
+  size_t historyBytes = 0;
+  size_t historyForwarded = 0;
+  // Sende-Queues + Backpressure pro Session: GNS liefert
+  // `k_EResultLimitExceeded`, wenn der Sende-Puffer des Ziels voll ist (typisch:
+  // 500-KB-Weltzustand vom lokalen Backend ueber eine langsame Client-Leitung).
+  // Dann wird gepuffert und von der Quelle nur so lange gelesen, wie die Queue
+  // der Gegenseite unter dem Soft-Limit liegt.
+  std::deque<std::pair<std::string, int>> toClientQ;
+  std::deque<std::pair<std::string, int>> toBackendQ;
+  size_t toClientBytes = 0;
+  size_t toBackendBytes = 0;
+  // Eine Poll-Gruppe je Session und Richtung: GNS kennt nur
+  // ReceiveMessagesOnPollGroup (kein *.OnConnection); globales Lesen wuerde die
+  // Backpressure einer Session an alle anderen koppeln.
+  HSteamNetPollGroup clientPoll = k_HSteamNetPollGroup_Invalid;
+  HSteamNetPollGroup backendPoll = k_HSteamNetPollGroup_Invalid;
+};
+
+// Registry: die Client-Map *besitzt* die Session, die Backend-Map zeigt nur
+// darauf.  Lookup beim Dispatching ueber `pMsg->m_conn` bzw. im Status-Callback.
+std::map<HSteamNetConnection, std::unique_ptr<Session>> g_clientSessions;
+std::map<HSteamNetConnection, Session *> g_backendSessions;
+
+Session *sessionForClient(HSteamNetConnection conn) {
+  std::map<HSteamNetConnection, std::unique_ptr<Session>>::iterator it =
+      g_clientSessions.find(conn);
+  return it == g_clientSessions.end() ? nullptr : it->second.get();
+}
+
+Session *sessionForBackend(HSteamNetConnection conn) {
+  std::map<HSteamNetConnection, Session *>::iterator it =
+      g_backendSessions.find(conn);
+  return it == g_backendSessions.end() ? nullptr : it->second;
+}
+
 bool g_relayEnabled = false;
-uint32 g_backendIP = 0;
-uint16 g_backendPort = 0;
-// Aktuelles Ziel als Endpoint (fuer Vergleiche beim Re-Route).
-rbroute::Endpoint g_backendTarget;
 // Konfigurierter Default (--forward bzw. Default-Regel `*`).  Wird NIE durch ein
 // Re-Route ueberschrieben — sonst wandert der Default zu einem anderen Backend.
 rbroute::Endpoint g_defaultTarget;
@@ -173,26 +221,10 @@ rbroute::Endpoint g_dialTarget;
 // staging landete (Default wurde ignoriert; live belegt, Issue #843).
 rbroute::Table g_routes;
 const char *g_mapFile = nullptr;
-std::string g_clientIdentity;
-std::string g_lastRouteKey;
-
-// Historie aller Client->Server-Nachrichten (fuer Replay beim Re-Route) plus
-// Merker, wie viele davon schon an das *aktuelle* Backend gingen.
-std::vector<std::pair<std::string, int>> g_history;
-size_t g_historyBytes = 0;
-size_t g_historyForwarded = 0;
+// Grenzen pro Session: Obergrenze der Replay-Historie und Soft-Limit der
+// Sende-Queue (Backpressure, siehe Session-Kommentar).
 const size_t kMaxHistoryBytes = 8u * 1024 * 1024;
-
-// Sende-Queues + Backpressure.  GNS liefert `k_EResultLimitExceeded`, wenn der
-// Sende-Puffer des Ziels voll ist (typisch: 500-KB-Weltzustand vom lokalen
-// Backend ueber eine langsame Client-Leitung).  Dann wird gepuffert und von der
-// Quelle nur so lange gelesen, wie die Queue der Gegenseite unter dem Limit ist.
-std::deque<std::pair<std::string, int>> g_toClientQ;
-std::deque<std::pair<std::string, int>> g_toBackendQ;
-size_t g_toClientBytes = 0;
-size_t g_toBackendBytes = 0;
 const size_t kQueueSoftLimit = 2u * 1024 * 1024;
-HSteamNetPollGroup g_backendPoll = k_HSteamNetPollGroup_Invalid;
 
 // --- Logging -----------------------------------------------------------------
 
@@ -409,85 +441,107 @@ bool flushQueue(std::deque<std::pair<std::string, int>> &q, size_t &bytes,
 
 // Alles, was der Client geschickt hat und dem *aktuellen* Backend noch nicht
 // vorliegt, in die Backend-Queue schieben (Backlog bzw. Replay nach Re-Route).
-void queueHistoryDelta() {
+void queueHistoryDelta(Session &s) {
   size_t n = 0;
-  while (g_historyForwarded < g_history.size()) {
-    const std::pair<std::string, int> &m = g_history[g_historyForwarded];
-    g_toBackendQ.push_back(m);
-    g_toBackendBytes += m.first.size();
-    ++g_historyForwarded;
+  while (s.historyForwarded < s.history.size()) {
+    const std::pair<std::string, int> &m = s.history[s.historyForwarded];
+    s.toBackendQ.push_back(m);
+    s.toBackendBytes += m.first.size();
+    ++s.historyForwarded;
     ++n;
   }
   if (n > 0) {
     logLine("replay/backlog: %zu Nachricht(en) -> backend-queue (%zu offen)",
-            n, g_toBackendQ.size());
+            n, s.toBackendQ.size());
   }
 }
 
-void startBackendConnect() {
+void startBackendConnect(Session &s) {
   if (pConnectByIPAddress == nullptr || pIPAddrSetIPv4 == nullptr) {
     logLine("relay: ConnectByIPAddress/SetIPv4-Export fehlt");
     return;
   }
   uint32 ip = 0;
-  if (!rbroute::ipToU32(g_backendTarget.ip, ip)) {
-    logLine("relay: ungueltige Backend-IP '%s'", g_backendTarget.ip.c_str());
+  if (!rbroute::ipToU32(s.backendTarget.ip, ip)) {
+    logLine("relay: ungueltige Backend-IP '%s'", s.backendTarget.ip.c_str());
     return;
   }
-  g_backendIP = ip;
-  g_backendPort = g_backendTarget.port;
+  if (s.backendPoll == k_HSteamNetPollGroup_Invalid) {
+    s.backendPoll = pCreatePollGroup(g_pInterface);
+  }
   SteamNetworkingIPAddr addr;
   memset(&addr, 0, sizeof(addr));
-  pIPAddrSetIPv4(&addr, g_backendIP, g_backendPort);
-  g_backendConn = pConnectByIPAddress(g_pInterface, &addr, 0, nullptr);
-  if (g_backendConn == k_HSteamNetConnection_Invalid) {
+  pIPAddrSetIPv4(&addr, ip, s.backendTarget.port);
+  s.backendConn = pConnectByIPAddress(g_pInterface, &addr, 0, nullptr);
+  if (s.backendConn == k_HSteamNetConnection_Invalid) {
     logLine("backend-connect auf %s FEHLGESCHLAGEN",
-            g_backendTarget.str().c_str());
+            s.backendTarget.str().c_str());
     return;
   }
-  pSetConnectionPollGroup(g_pInterface, g_backendConn, g_backendPoll);
+  g_backendSessions[s.backendConn] = &s;
+  pSetConnectionPollGroup(g_pInterface, s.backendConn, s.backendPoll);
   if (pSetConnConfigInt32 != nullptr) {
     // Default ist 512 KiB — ein einzelner Weltzustand ist ~500 KiB, mit
     // vorangehenden Nachrichten laeuft der Puffer sonst sofort voll.
-    pSetConnConfigInt32(pUtilsAccessor(), g_backendConn,
+    pSetConnConfigInt32(pUtilsAccessor(), s.backendConn,
                         k_ESteamNetworkingConfig_SendBufferSize, 8 * 1024 * 1024);
   }
-  logLine("backend-connect gestartet -> conn=%u (%s)", g_backendConn,
-          g_backendTarget.str().c_str());
+  logLine("backend-connect gestartet -> conn=%u (%s)", s.backendConn,
+          s.backendTarget.str().c_str());
 }
 
-void routeTo(const rbroute::Endpoint &target, const char *why) {
+void routeTo(Session &s, const rbroute::Endpoint &target, const char *why) {
   logLine("ROUTE (%s) -> %s", why, target.str().c_str());
-  if (g_backendConn != k_HSteamNetConnection_Invalid) {
-    pCloseConnection(g_pInterface, g_backendConn, 0, nullptr, false);
-    g_backendConn = k_HSteamNetConnection_Invalid;
-    g_backendConnected = false;
+  if (s.backendConn != k_HSteamNetConnection_Invalid) {
+    g_backendSessions.erase(s.backendConn);
+    pCloseConnection(g_pInterface, s.backendConn, 0, nullptr, false);
+    s.backendConn = k_HSteamNetConnection_Invalid;
+    s.backendConnected = false;
   }
-  g_backendTarget = target;
+  s.backendTarget = target;
   // Alles Gesehene erneut an das (neue) Backend schicken — aber erst, wenn es
   // verbunden ist (siehe Callback), sonst flutet ein Replay den Handshake.
-  g_toBackendQ.clear();
-  g_toBackendBytes = 0;
-  g_historyForwarded = 0;
-  startBackendConnect();
+  s.toBackendQ.clear();
+  s.toBackendBytes = 0;
+  s.historyForwarded = 0;
+  startBackendConnect(s);
 }
 
-// Pro Client aufraeumen — sonst wird die Historie des vorigen Matches beim
-// naechsten Join ans neue Backend geflutet.
-void resetClientState() {
-  g_history.clear();
-  g_historyBytes = 0;
-  g_historyForwarded = 0;
-  g_toClientQ.clear();
-  g_toClientBytes = 0;
-  g_toBackendQ.clear();
-  g_toBackendBytes = 0;
-  g_lastRouteKey.clear();
-  g_clientIdentity.clear();
-  g_backendConnected = false;
-  // Kein Backend gewaehlt, bis der Connect-Pfad entscheidet (Regel/Pin/Default)
-  // oder bewusst haelt (--hold).
-  g_backendTarget = rbroute::Endpoint{};
+// Neue Session fuer einen akzeptierten Client — frischer Zustand (Historie und
+// Queues leer), damit das vorige Match nicht in das neue Backend flutet.
+Session &createClientSession(HSteamNetConnection clientConn) {
+  std::unique_ptr<Session> owned(new Session());
+  owned->clientConn = clientConn;
+  owned->clientPoll = pCreatePollGroup(g_pInterface);
+  Session *s = owned.get();
+  g_clientSessions[clientConn] = std::move(owned);
+  return *s;
+}
+
+// Session eines beendeten Clients aufraeumen: Backend schliessen, Poll-Gruppen
+// freigeben (Export optional — s. pDestroyPollGroup) und die Session loeschen.
+void destroyClientSession(HSteamNetConnection clientConn) {
+  std::map<HSteamNetConnection, std::unique_ptr<Session>>::iterator it =
+      g_clientSessions.find(clientConn);
+  if (it == g_clientSessions.end()) {
+    return;
+  }
+  Session &s = *it->second;
+  if (s.backendConn != k_HSteamNetConnection_Invalid) {
+    g_backendSessions.erase(s.backendConn);
+    pCloseConnection(g_pInterface, s.backendConn, 0, nullptr, false);
+    s.backendConn = k_HSteamNetConnection_Invalid;
+    s.backendConnected = false;
+  }
+  if (pDestroyPollGroup != nullptr) {
+    if (s.clientPoll != k_HSteamNetPollGroup_Invalid) {
+      pDestroyPollGroup(g_pInterface, s.clientPoll);
+    }
+    if (s.backendPoll != k_HSteamNetPollGroup_Invalid) {
+      pDestroyPollGroup(g_pInterface, s.backendPoll);
+    }
+  }
+  g_clientSessions.erase(it);
 }
 
 // --- Session-Buchfuehrung (Issue #857) ---------------------------------------
@@ -553,8 +607,8 @@ void onConnectionStatusChanged(
           info.m_szConnectionDescription, info.m_eEndReason, info.m_szEndDebug);
 
   switch (info.m_eState) {
-  case k_ESteamNetworkingConnectionState_Connecting:
-    if (pInfo->m_hConn == g_backendConn) {
+  case k_ESteamNetworkingConnectionState_Connecting: {
+    if (sessionForBackend(pInfo->m_hConn) != nullptr) {
       logLine("backend: Connecting (ausgehend)");
       break;
     }
@@ -563,122 +617,134 @@ void onConnectionStatusChanged(
       pCloseConnection(g_pInterface, pInfo->m_hConn, 0, nullptr, false);
       break;
     }
-    g_clientConn = pInfo->m_hConn;
-    resetClientState();
-    if (!pSetConnectionPollGroup(g_pInterface, pInfo->m_hConn, g_hPollGroup)) {
+    Session &s = createClientSession(pInfo->m_hConn);
+    if (!pSetConnectionPollGroup(g_pInterface, pInfo->m_hConn, s.clientPoll)) {
       logLine("SetConnectionPollGroup FEHLGESCHLAGEN (weiter trotzdem)");
     }
     if (pSetConnConfigInt32 != nullptr) {
-      pSetConnConfigInt32(pUtilsAccessor(), g_clientConn,
+      pSetConnConfigInt32(pUtilsAccessor(), pInfo->m_hConn,
                           k_ESteamNetworkingConfig_SendBufferSize,
                           8 * 1024 * 1024);
     }
-    logLine("E1: Verbindung AKZEPTIERT (Handshake laeuft)");
+    logLine("E1: Verbindung AKZEPTIERT (Handshake laeuft) — %zu Session(s)",
+            g_clientSessions.size());
     break;
-  case k_ESteamNetworkingConnectionState_Connected:
-    if (pInfo->m_hConn == g_backendConn) {
+  }
+  case k_ESteamNetworkingConnectionState_Connected: {
+    Session *backendSess = sessionForBackend(pInfo->m_hConn);
+    if (backendSess != nullptr) {
       logLine("backend: Connected");
-      g_backendConnected = true;
-      queueHistoryDelta();
+      backendSess->backendConnected = true;
+      queueHistoryDelta(*backendSess);
       break;
     }
     logLine("E1 GRUEN: state=Connected — der Client akzeptiert einen fremden "
             "GNS-Server");
-    if (g_relayEnabled) {
-      // Identitaet kommt sofort mit dem Connect und ist stabil pro Installation
-      // -> damit koennen wir direkt routen, ohne auf den Spielnamen zu warten.
-      char ident[256] = {0};
-      if (pIdentityToString != nullptr) {
-        pIdentityToString(&info.m_identityRemote, ident, sizeof(ident));
-      }
-      char remote[64] = {0};
-      if (pIPAddrToString != nullptr) {
-        pIPAddrToString(&info.m_addrRemote, remote, sizeof(remote), true);
-      }
-      g_clientIdentity = ident;
-      g_lastRouteKey.clear();
-      logLine("client-identitaet: '%s' (%s)", g_clientIdentity.c_str(), remote);
+    Session *s = sessionForClient(pInfo->m_hConn);
+    if (s == nullptr || !g_relayEnabled) {
+      break;
+    }
+    // Identitaet kommt sofort mit dem Connect und ist stabil pro Installation
+    // -> damit koennen wir direkt routen, ohne auf den Spielnamen zu warten.
+    char ident[256] = {0};
+    if (pIdentityToString != nullptr) {
+      pIdentityToString(&info.m_identityRemote, ident, sizeof(ident));
+    }
+    char remote[64] = {0};
+    if (pIPAddrToString != nullptr) {
+      pIPAddrToString(&info.m_addrRemote, remote, sizeof(remote), true);
+    }
+    s->identity = ident;
+    s->lastRouteKey.clear();
+    logLine("client-identitaet: '%s' (%s) — %zu parallele Session(s)",
+            s->identity.c_str(), remote, g_clientSessions.size());
 
-      // Session-Buchfuehrung (fuer die Operator-UI, Issue #857).
-      SessionRecord &rec = sessionFor(g_clientIdentity);
-      rec.ip = remote;
-      rec.connected = true;
-      rec.held = false;
-      rec.state = "connected";
+    // Session-Buchfuehrung (fuer die Operator-UI, Issue #857).
+    SessionRecord &rec = sessionFor(s->identity);
+    rec.ip = remote;
+    rec.connected = true;
+    rec.held = false;
+    rec.state = "connected";
 
-      const std::map<std::string, rbroute::Endpoint>::iterator pin =
-          g_pins.find(g_clientIdentity);
-      const rbroute::Rule *rule = g_routes.matchSpecific(g_clientIdentity);
-      if (pin != g_pins.end()) {
-        // Operator hat diese Identitaet bereits festgelegt -> ueberlebt Reconnect.
-        rec.state = "routed";
-        rec.targetStr = pin->second.str();
-        routeTo(pin->second, "operator-pin");
-      } else if (rule != nullptr) {
-        rec.state = "routed";
-        rec.targetStr = rule->target.str();
-        routeTo(rule->target, "identitaet (explizite Regel)");
-      } else if (g_hold) {
-        // Halten: KEIN Backend-Aufbau. Der Client bleibt im Loading, seine
-        // Nachrichten laufen in die Historie; der Operator entscheidet spaeter.
-        rec.held = true;
-        rec.heldSince = std::chrono::steady_clock::now();
-        rec.state = "held";
-        g_backendTarget = rbroute::Endpoint{};
-        logLine("HOLD: halte '%s' (%s) — warte auf Operator (Ziel-Buttons: %zu)",
-                g_clientIdentity.c_str(), remote, g_targets.size());
-      } else {
-        rec.state = "routed";
-        rec.targetStr = g_defaultTarget.str();
-        routeTo(g_defaultTarget, "default (bis der Name ihn ggf. umroutet)");
-      }
+    const std::map<std::string, rbroute::Endpoint>::iterator pin =
+        g_pins.find(s->identity);
+    const rbroute::Rule *rule = g_routes.matchSpecific(s->identity);
+    if (pin != g_pins.end()) {
+      // Operator hat diese Identitaet bereits festgelegt -> ueberlebt Reconnect.
+      rec.state = "routed";
+      rec.targetStr = pin->second.str();
+      routeTo(*s, pin->second, "operator-pin");
+    } else if (rule != nullptr) {
+      rec.state = "routed";
+      rec.targetStr = rule->target.str();
+      routeTo(*s, rule->target, "identitaet (explizite Regel)");
+    } else if (g_hold) {
+      // Halten: KEIN Backend-Aufbau. Der Client bleibt im Loading, seine
+      // Nachrichten laufen in die Historie; der Operator entscheidet spaeter.
+      rec.held = true;
+      rec.heldSince = std::chrono::steady_clock::now();
+      rec.state = "held";
+      s->backendTarget = rbroute::Endpoint{};
+      logLine("HOLD: halte '%s' (%s) — warte auf Operator (Ziel-Buttons: %zu)",
+              s->identity.c_str(), remote, g_targets.size());
+    } else {
+      rec.state = "routed";
+      rec.targetStr = g_defaultTarget.str();
+      routeTo(*s, g_defaultTarget, "default (bis der Name ihn ggf. umroutet)");
     }
     break;
+  }
   case k_ESteamNetworkingConnectionState_ClosedByPeer:
-  case k_ESteamNetworkingConnectionState_ProblemDetectedLocally:
-    if (pInfo->m_hConn == g_backendConn) {
-      logLine("backend beendet (state=%d) — client schliessen",
+  case k_ESteamNetworkingConnectionState_ProblemDetectedLocally: {
+    Session *backendSess = sessionForBackend(pInfo->m_hConn);
+    if (backendSess != nullptr) {
+      logLine("backend beendet (state=%d) — Client bleibt, Session kann neu "
+              "routen",
               static_cast<int>(info.m_eState));
-      g_backendConn = k_HSteamNetConnection_Invalid;
-      g_backendConnected = false;
-    } else {
-      logLine("client beendet (state=%d) — aufraeumen",
-              static_cast<int>(info.m_eState));
-      // Halte-Dauer messen (Kernfrage des PoC: wie lange toleriert der Client
-      // das Warten?) und die Session fuer die UI als wartend/geschlossen zeigen.
-      if (!g_clientIdentity.empty()) {
-        SessionRecord &rec = sessionFor(g_clientIdentity);
-        rec.connected = false;
-        if (rec.held) {
-          const long long held =
-              std::chrono::duration_cast<std::chrono::seconds>(
-                  std::chrono::steady_clock::now() - rec.heldSince)
-                  .count();
-          logLine("HOLD: '%s' nach %llds getrennt (Client-Timeout) — wartet "
-                  "auf Reconnect (Pin ueberlebt)",
-                  g_clientIdentity.c_str(), held);
-          rec.state = "waiting";
-        } else {
-          rec.state = "closed";
-        }
-      }
-      g_clientConn = k_HSteamNetConnection_Invalid;
-      if (g_backendConn != k_HSteamNetConnection_Invalid) {
-        pCloseConnection(g_pInterface, g_backendConn, 0, nullptr, false);
-        g_backendConn = k_HSteamNetConnection_Invalid;
-        g_backendConnected = false;
+      g_backendSessions.erase(pInfo->m_hConn);
+      backendSess->backendConn = k_HSteamNetConnection_Invalid;
+      backendSess->backendConnected = false;
+      pCloseConnection(g_pInterface, pInfo->m_hConn, 0, nullptr, false);
+      break;
+    }
+    Session *s = sessionForClient(pInfo->m_hConn);
+    if (s == nullptr) {
+      pCloseConnection(g_pInterface, pInfo->m_hConn, 0, nullptr, false);
+      break;
+    }
+    logLine("client beendet (state=%d) — Session aufraeumen",
+            static_cast<int>(info.m_eState));
+    // Halte-Dauer messen (Kernfrage des PoC: wie lange toleriert der Client
+    // das Warten?) und die Session fuer die UI als wartend/geschlossen zeigen.
+    if (!s->identity.empty()) {
+      SessionRecord &rec = sessionFor(s->identity);
+      rec.connected = false;
+      if (rec.held) {
+        const long long held =
+            std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - rec.heldSince)
+                .count();
+        logLine("HOLD: '%s' nach %llds getrennt (Client-Timeout) — wartet "
+                "auf Reconnect (Pin ueberlebt)",
+                s->identity.c_str(), held);
+        rec.state = "waiting";
+      } else {
+        rec.state = "closed";
       }
     }
+    destroyClientSession(pInfo->m_hConn);
     pCloseConnection(g_pInterface, pInfo->m_hConn, 0, nullptr, false);
     break;
+  }
   default:
     break;
   }
 }
 
 // Nachrichten einer Richtung einsammeln und in die Queue der Gegenseite legen.
-// `fromClient` = true: Client -> Backend, false: Backend -> Client.
-void drainFrom(HSteamNetPollGroup group, bool fromClient) {
+// Die Poll-Gruppe gehoert genau einer Session — `fromClient` = true: Client ->
+// Backend, false: Backend -> Client.
+void drainFrom(Session &s, HSteamNetPollGroup group, bool fromClient) {
   for (;;) {
     SteamNetworkingMessage_t *pMsg = nullptr;
     const int count =
@@ -707,16 +773,16 @@ void drainFrom(HSteamNetPollGroup group, bool fromClient) {
       continue;
     }
     if (fromClient) {
-      // Historie fuer Replay (Backlog UND spaeteres Re-Route) fuehren.
-      if (g_historyBytes + size <= kMaxHistoryBytes) {
-        g_history.emplace_back(payload, flags);
-        g_historyBytes += size;
+      // Historie fuer Replay (Backlog UND spaeteres Re-Route) der Session fuehren.
+      if (s.historyBytes + size <= kMaxHistoryBytes) {
+        s.history.emplace_back(payload, flags);
+        s.historyBytes += size;
       } else {
         logLine("  -> HISTORIE VOLL — nicht replay-faehig (%zu B)", size);
       }
       // Session-Buchfuehrung fuer die UI (Issue #857): Nachrichten zaehlen.
       std::map<std::string, SessionRecord>::iterator rec =
-          g_sessions.find(g_clientIdentity);
+          g_sessions.find(s.identity);
       if (rec != g_sessions.end()) {
         ++rec->second.messages;
       }
@@ -729,12 +795,12 @@ void drainFrom(HSteamNetPollGroup group, bool fromClient) {
           rec->second.name.empty()) {
         rec->second.name = learnedName;
       }
-      if (rule != nullptr && rule->key != g_lastRouteKey) {
-        g_lastRouteKey = rule->key;
-        if (!(rule->target == g_backendTarget)) {
+      if (rule != nullptr && rule->key != s.lastRouteKey) {
+        s.lastRouteKey = rule->key;
+        if (!(rule->target == s.backendTarget)) {
           logLine("NAME ROUTE: '%s' -> %s (re-route)", rule->key.c_str(),
                   rule->target.str().c_str());
-          routeTo(rule->target, "name");
+          routeTo(s, rule->target, "name");
         } else {
           logLine("NAME ROUTE: '%s' -> schon richtiges backend %s",
                   rule->key.c_str(), rule->target.str().c_str());
@@ -745,14 +811,14 @@ void drainFrom(HSteamNetPollGroup group, bool fromClient) {
           rec->second.targetStr = rule->target.str();
         }
       }
-      queueHistoryDelta();
+      queueHistoryDelta(s);
     } else {
-      g_toClientQ.emplace_back(payload, flags);
-      g_toClientBytes += size;
+      s.toClientQ.emplace_back(payload, flags);
+      s.toClientBytes += size;
     }
     // Quelle anhalten, wenn die Gegenseite schon genug Daten hat.
-    if (g_toClientBytes >= kQueueSoftLimit ||
-        g_toBackendBytes >= kQueueSoftLimit) {
+    if (s.toClientBytes >= kQueueSoftLimit ||
+        s.toBackendBytes >= kQueueSoftLimit) {
       break;
     }
   }
@@ -795,9 +861,17 @@ void processApiCommands() {
     // Pin pro Identitaet: greift auch beim naechsten Connect.
     g_pins[it->identity] = target;
     logLine("API: pin '%s' -> %s", it->identity.c_str(), target.str().c_str());
-    if (it->identity == g_clientIdentity &&
-        g_clientConn != k_HSteamNetConnection_Invalid) {
-      routeTo(target, "operator (web-ui)");
+    // Alle Sessions dieser Identitaet umziehen — bei einem kurzen
+    // Reconnect-Race koennen zwei gleichzeitig leben.
+    for (std::map<HSteamNetConnection, std::unique_ptr<Session>>::iterator st =
+             g_clientSessions.begin();
+         st != g_clientSessions.end(); ++st) {
+      Session &s = *st->second;
+      if (s.identity != it->identity ||
+          s.clientConn == k_HSteamNetConnection_Invalid) {
+        continue;
+      }
+      routeTo(s, target, "operator (web-ui)");
       SessionRecord &rec = sessionFor(it->identity);
       rec.state = "routed";
       rec.held = false;
@@ -1232,6 +1306,8 @@ bool resolveDll(const char *explicitPath) {
       lib, "SteamAPI_ISteamNetworkingSockets_CloseListenSocket"));
   pCreatePollGroup = reinterpret_cast<fn_CreatePollGroup>(
       GetProcAddress(lib, "SteamAPI_ISteamNetworkingSockets_CreatePollGroup"));
+  pDestroyPollGroup = reinterpret_cast<fn_DestroyPollGroup>(
+      GetProcAddress(lib, "SteamAPI_ISteamNetworkingSockets_DestroyPollGroup"));
   pSetConnectionPollGroup =
       reinterpret_cast<fn_SetConnectionPollGroup>(GetProcAddress(
           lib, "SteamAPI_ISteamNetworkingSockets_SetConnectionPollGroup"));
@@ -1396,17 +1472,19 @@ int main(int argc, char **argv) {
     // Nur Verbindungstest (kein Listen-Socket) — sonst kollidiert der Test mit
     // dem laufenden Relay auf 6321.
     logLine("DIAL-TEST -> %s", g_dialTarget.str().c_str());
-    g_backendPoll = pCreatePollGroup(g_pInterface);
-    g_backendTarget = g_dialTarget;
-    startBackendConnect();
-    for (int i = 0; i < 200 && !g_backendConnected; ++i) {
+    // Eigene Wegwerf-Session ohne Client — nur Verbindungstest (Issue #831).
+    Session dialSess;
+    dialSess.backendTarget = g_dialTarget;
+    startBackendConnect(dialSess);
+    for (int i = 0; i < 200 && !dialSess.backendConnected; ++i) {
       pRunCallbacks(g_pInterface);
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     logLine("DIAL %s",
-            g_backendConnected ? "OK (Connected)" : "FEHLGESCHLAGEN (Timeout)");
+            dialSess.backendConnected ? "OK (Connected)"
+                                      : "FEHLGESCHLAGEN (Timeout)");
     pKill();
-    return g_backendConnected ? 0 : 1;
+    return dialSess.backendConnected ? 0 : 1;
   }
 
   SteamNetworkingIPAddr serverLocalAddr;
@@ -1433,15 +1511,17 @@ int main(int argc, char **argv) {
     logLine("CreateListenSocketIP auf Port %u FEHLGESCHLAGEN", nPort);
     return 1;
   }
-  g_hPollGroup = pCreatePollGroup(g_pInterface);
-  if (g_hPollGroup == k_HSteamNetPollGroup_Invalid) {
-    logLine("CreatePollGroup FEHLGESCHLAGEN");
+  // Die Poll-Gruppen entstehen pro Session (Issue #877) — je Richtung eine,
+  // sonst koppelt globales Lesen die Backpressure aller Sessions. Der Probe-
+  // Aufruf haelt das alte Fail-Fast: kann gar keine Poll-Gruppe erzeugt werden,
+  // wuerde sonst jede Session still nichts relayen.
+  const HSteamNetPollGroup probePoll = pCreatePollGroup(g_pInterface);
+  if (probePoll == k_HSteamNetPollGroup_Invalid) {
+    logLine("CreatePollGroup FEHLGESCHLAGEN (Export/Interface pruefen)");
     return 1;
   }
-  g_backendPoll = pCreatePollGroup(g_pInterface);
-  if (g_backendPoll == k_HSteamNetPollGroup_Invalid) {
-    logLine("CreatePollGroup (backend) FEHLGESCHLAGEN");
-    return 1;
+  if (pDestroyPollGroup != nullptr) {
+    pDestroyPollGroup(g_pInterface, probePoll);
   }
   logLine("lauscht als GNS-Server auf 0.0.0.0:%u — warte auf Handshake", nPort);
   loadRoutes();
@@ -1485,17 +1565,33 @@ int main(int argc, char **argv) {
   while (true) {
     pRunCallbacks(g_pInterface);
     if (!g_relayEnabled) {
-      drainFrom(g_hPollGroup, true);
+      for (std::map<HSteamNetConnection, std::unique_ptr<Session>>::iterator it =
+               g_clientSessions.begin();
+           it != g_clientSessions.end(); ++it) {
+        if (it->second->clientPoll == k_HSteamNetPollGroup_Invalid) {
+          continue;
+        }
+        drainFrom(*it->second, it->second->clientPoll, true);
+      }
     } else {
-      // Backpressure: nur lesen, solange die Queue der Gegenseite noch Luft hat.
-      if (g_toClientBytes < kQueueSoftLimit) {
-        drainFrom(g_backendPoll, false);
+      // Jede Session unabhaengig bedienen: Backpressure bleibt pro Session
+      // (nur lesen, solange die Queue der Gegenseite Luft hat), damit eine
+      // langsame Leitung die andere Session nicht ausbremst.
+      for (std::map<HSteamNetConnection, std::unique_ptr<Session>>::iterator it =
+               g_clientSessions.begin();
+           it != g_clientSessions.end(); ++it) {
+        Session &s = *it->second;
+        if (s.toClientBytes < kQueueSoftLimit &&
+            s.backendPoll != k_HSteamNetPollGroup_Invalid) {
+          drainFrom(s, s.backendPoll, false);
+        }
+        if (s.toBackendBytes < kQueueSoftLimit &&
+            s.clientPoll != k_HSteamNetPollGroup_Invalid) {
+          drainFrom(s, s.clientPoll, true);
+        }
+        flushQueue(s.toClientQ, s.toClientBytes, s.clientConn);
+        flushQueue(s.toBackendQ, s.toBackendBytes, s.backendConn);
       }
-      if (g_toBackendBytes < kQueueSoftLimit) {
-        drainFrom(g_hPollGroup, true);
-      }
-      flushQueue(g_toClientQ, g_toClientBytes, g_clientConn);
-      flushQueue(g_toBackendQ, g_toBackendBytes, g_backendConn);
     }
     if (g_apiPort > 0) {
       // Befehle des HTTP-Threads abarbeiten und den Anzeige-Snapshot, den
