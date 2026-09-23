@@ -388,10 +388,68 @@ static int safe_read_u32(const void *addr, uint32_t *out)
 #define RBBRIDGE_OWN_IMAGE_BASE() ((const unsigned char *)NULL)
 #endif
 
+#include <setjmp.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
+/* ------------------------------------------------------------------ */
+/* VEH-Guard (#623): Zustandslogik (host-testbar)                      */
+/* ------------------------------------------------------------------ */
+/*
+ * MinGW-x64 hat kein SEH (__try/__except, MSVC-only). Ein Access
+ * Violation im Pipe-Thread (TOCTOU zwischen VirtualQuery-Check und
+ * Zugriff, oder Game-Call ueber Zeiger mit this aus Scan) killt den
+ * Thread. Fangnetz: AddVectoredExceptionHandler (reine Win-API, unter
+ * MinGW verfuegbar). Der Handler verschluckt NUR Access Violations aus
+ * einem thread-lokal markierten Bereich (t_guard_jmp); sonst
+ * EXCEPTION_CONTINUE_SEARCH -> fremde Threads/AVs bleiben unberuehrt.
+ *
+ * Diese Zustandslogik steht bewusst AUSSERHALB des
+ * #ifndef-RBBRIDGE_HOSTTEST-Blocks und ist damit host-testbar (US4).
+ */
+#define RBBRIDGE_GUARD_OK  0
+#define RBBRIDGE_GUARD_AV (-1)
+
+#ifdef RBBRIDGE_HOSTTEST
+#define RBBRIDGE_EXCEPTION_ACCESS_VIOLATION 0xC0000005UL
+#else
+#define RBBRIDGE_EXCEPTION_ACCESS_VIOLATION \
+    ((unsigned long)EXCEPTION_ACCESS_VIOLATION)
+#endif
+
+/* Aktiver Rettungspunkt des laufenden Threads (NULL = kein Guard).
+ * __thread -> andere Threads des Spielprozesses bleiben unberuehrt. */
+static __thread jmp_buf *t_guard_jmp = NULL;
+
+/* push: setzt einen neuen Rettungspunkt und liefert den vorherigen
+ * (fuer pop/Restore -> Nesting moeglich). noinline, damit der lokale
+ * Rueckgabewert nicht in einen setjmp-Kontext des Aufrufers gezogen
+ * wird (sonst -Wclobbered). */
+#if defined(__GNUC__)
+#define RBBRIDGE_GUARD_NOINLINE __attribute__((noinline))
+#else
+#define RBBRIDGE_GUARD_NOINLINE
+#endif
+
+static RBBRIDGE_GUARD_NOINLINE jmp_buf *rbbridge_guard_push(jmp_buf *jb)
+{
+    jmp_buf *prev = t_guard_jmp;
+    t_guard_jmp = jb;
+    return prev;
+}
+
+/* pop: stellt den vorherigen Rettungspunkt wieder her (NULL = aus). */
+static void rbbridge_guard_pop(jmp_buf *prev) { t_guard_jmp = prev; }
+
+/* Soll der VEH-Handler diesen Exception-Code behandeln?
+ * Nur EXCEPTION_ACCESS_VIOLATION UND nur bei aktivem TLS-Guard. */
+static int rbbridge_veh_should_handle(unsigned long code)
+{
+    return code == RBBRIDGE_EXCEPTION_ACCESS_VIOLATION &&
+           t_guard_jmp != NULL;
+}
 
 /* ------------------------------------------------------------------ */
 /* Konstanten                                                          */
@@ -824,6 +882,12 @@ static HANDLE g_thread = NULL;     /* Handle des Pipe-Server-Threads     */
 static LONG g_thread_started = 0;  /* verhindert doppelte Attach-Threads */
 static CRITICAL_SECTION g_log_cs;  /* schuetzt das Datei-Log             */
 
+/* VEH-Guard (#623): Zaehler gefangener Access Violations (prozessweit)
+ * + Registrierungs-Handle des Vectored Exception Handlers. */
+static volatile LONG g_veh_hits = 0;
+static PVOID g_veh_handle = NULL;
+static void rbbridge_veh_note(const char *msg); /* Definition weiter unten */
+
 /* Chat-Detour (#549): OnNetPlayerChatRequest (RVA 0x1821B50) inline-
  * gehakt. Der Spieler tippt Chat (vanilla Client), die DLL liest den Text
  * und stellt ihn der Pipe als player_chat-Event bereit. */
@@ -1090,6 +1154,38 @@ static void send_state(HANDLE hPipe)
 /* AOB/RTTI-Aufloesung liefert exakt die frueheren festen RVAs         */
 /* (vftable 0x2F23C80, execfn 0x1C0BEF0) - die RVAs sind damit nur     */
 /* noch Verifikations-Notiz, keine Laufzeitadresse.                    */
+/* ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ */
+/* VEH-Guard (#623): Access-Violation-Fangnetz fuer den Pipe-Thread    */
+/*                                                                    */
+/* MinGW-x64 stellt kein SEH bereit (__try/__except ist MSVC-only),   */
+/* deshalb kann ein Access Violation im Pipe-Thread nicht ueber ein   */
+/* Compiler-Feature gefangen werden. Statdessen:                      */
+/*   - AddVectoredExceptionHandler(1, rbbridge_veh) einmalig in       */
+/*     rbbridge_start() VOR dem CreateThread des Pipe-Threads;        */
+/*     Abmeldung per RemoveVectoredExceptionHandler in rbbridge_stop().*/
+/*   - Der Handler reagiert NUR auf EXCEPTION_ACCESS_VIOLATION UND    */
+/*     nur, wenn der faultende Thread einen Guard gesetzt hat         */
+/*     (thread-lokal t_guard_jmp). Sonst EXCEPTION_CONTINUE_SEARCH    */
+/*     -> fremde Threads/AVs bleiben unberuehrt.                      */
+/*   - Zwei Guard-Ebenen: Ebene 1 = Dispatch in handle_line (saubere  */
+/*     Fehlantwort reason="access_violation" statt Crash); Ebene 2 =  */
+/*     Loop in serve_client (send_state) und pipe_server_main         */
+/*     (install_chat_hook) -> der Thread ueberlebt.                   */
+/*   - Reason-Code "access_violation" ist bewusst von                 */
+/*     "pipe_unavailable" (pipe_bridge.c) und "no_module"             */
+/*     (dispatch_get_state) unterscheidbar: die DLL lebt, aber der    */
+/*     konkrete Lese-/Call-Pfad faultete.                             */
+/*   - Logging im Handler ist LOCK-FREI (rohes WriteFile auf stderr,  */
+/*     NICHT dbg(): dbg() nimmt g_log_cs und kann deadlocken, wenn    */
+/*     der AV in einem Abschnitt auftrat, der dieselbe CS haelt).     */
+/*   - longjmp aus dem Handler ist zulaessig: der Handler laeuft auf  */
+/*     dem faultenden Thread, das jmp_buf liegt auf dessen Stack.     */
+/*   - Defense in Depth: die bestehenden safe_read_* / VirtualQuery-   */
+/*     gepruefen Scans bleiben unveraendert; der VEH-Guard ist NUR     */
+/*     das letzte Netz fuer die Faelle, die ein VOR-Check nicht        */
+/*     abfangen kann.                                                 */
 /* ------------------------------------------------------------------ */
 
 #define RBBRIDGE_MODULE_NAME   "riftbreaker_dll_win_release.dll"
@@ -6064,6 +6160,29 @@ static void dispatch_spawn_hook(HANDLE hPipe, const char *op)
 }
 
 
+/* Dispatch unter VEH-Guard (#623). cmd wurde bereits geparst; hier wird
+ * nur der Dispatch-Aufruf in die Guard-Klammer gelegt. Bei Access
+ * Violation antwortet der Aufrufer mit reason="access_violation" statt
+ * den Pipe-Thread zu killen.
+ * Rueckgabe 1 = ok, 0 = AV gefangen. */
+static void handle_line_dispatch(HANDLE hPipe, const char *line,
+                                 const char *cmd);
+static int handle_line_dispatch_guarded(HANDLE hPipe, const char *line,
+                                        const char *cmd)
+{
+    jmp_buf jb;
+    jmp_buf *saved = rbbridge_guard_push(&jb);
+
+    if (setjmp(jb) != 0) {
+        /* Rueckkehr aus dem VEH-Handler = AV gefangen. */
+        rbbridge_guard_pop(saved);
+        return 0;
+    }
+    handle_line_dispatch(hPipe, line, cmd);
+    rbbridge_guard_pop(saved);
+    return 1;
+}
+
 static void handle_line(HANDLE hPipe, const char *line)
 {
     char cmd[64] = "";
@@ -6078,6 +6197,21 @@ static void handle_line(HANDLE hPipe, const char *line)
         return;
     }
 
+    if (!handle_line_dispatch_guarded(hPipe, line, cmd)) {
+        /* Access Violation im Dispatch: DLL lebt, Request schlaegt fehl
+         * (bewusst unterscheidbar von "pipe_unavailable"/"no_module"). */
+        char ev[160];
+        snprintf(ev, sizeof(ev),
+                 "{\"event\":\"%s_result\",\"ok\":false,"
+                 "\"reason\":\"access_violation\"}",
+                 cmd);
+        send_line(hPipe, "%s", ev);
+    }
+}
+
+static void handle_line_dispatch(HANDLE hPipe, const char *line,
+                                 const char *cmd)
+{
     if (strcmp(cmd, "ping") == 0) {
         /* TODO(spaeter): ggf. "t" mitgeben, damit der Client Latenz messen
          * kann - v0 bewusst minimal. */
@@ -6304,11 +6438,22 @@ static int serve_client(HANDLE hPipe)
             }
         }
 
-        /* State-Heartbeat (score_update, Egress Issue #13), nur bei Client */
+        /* State-Heartbeat (score_update, Egress Issue #13), nur bei Client.
+         * #623: unter VEH-Guard -> ein AV im Heartbeat killt den Thread
+         * nicht mehr (Fangnetz-Ebene 2). */
         DWORD now = GetTickCount();
         if (last_beat == 0 || now - last_beat >= HEARTBEAT_MS) {
+            jmp_buf hb_jb;
+            jmp_buf *hb_saved;
             last_beat = now;
-            send_state(hPipe);
+            hb_saved = rbbridge_guard_push(&hb_jb);
+            if (setjmp(hb_jb) == 0) {
+                send_state(hPipe);
+            } else {
+                rbbridge_veh_note(
+                    "[veh] heartbeat guarded call failed (access_violation)\n");
+            }
+            rbbridge_guard_pop(hb_saved);
         }
 
         /* #636: pending Chat sofort pushen (persistente Pipe, kein get_chat-
@@ -6329,6 +6474,18 @@ static int serve_client(HANDLE hPipe)
             }
         }
 
+        /* #623: gefangene AVs ausserhalb des Guards zentral loggen
+         * (dbg() nimmt g_log_cs -> nicht im Handler). */
+        {
+            static LONG s_last_veh_hits = 0;
+            LONG hits = g_veh_hits;
+            if (hits != s_last_veh_hits) {
+                dbg("serve_client: veh_hits=%ld (guarded calls failed)",
+                    (long)hits);
+                s_last_veh_hits = hits;
+            }
+        }
+
         Sleep(POLL_MS);
     }
 }
@@ -6345,8 +6502,21 @@ static DWORD WINAPI pipe_server_main(LPVOID unused)
 
     /* Chat-Detour (#549): best effort; ohne Modul/Fehler kein Crash.
      * Bewusst NICHT im DllMain-/Loader-Lock-Kontext (resolve_module kann
-     * als Fallback LoadLibrary aufrufen), sondern hier im Pipe-Thread. */
-    install_chat_hook();
+     * als Fallback LoadLibrary aufrufen), sondern hier im Pipe-Thread.
+     * #623: unter VEH-Guard -> ein AV im Hook-Install killt den Thread
+     * nicht mehr (Fangnetz-Ebene 2). */
+    {
+        jmp_buf hook_jb;
+        jmp_buf *hook_saved = rbbridge_guard_push(&hook_jb);
+        if (setjmp(hook_jb) == 0) {
+            install_chat_hook();
+        } else {
+            rbbridge_veh_note(
+                "[veh] chat hook install guarded call failed "
+                "(access_violation)\n");
+        }
+        rbbridge_guard_pop(hook_saved);
+    }
 
     while (!g_stop) {
         HANDLE hPipe = CreateNamedPipeA(
@@ -6567,6 +6737,76 @@ static int install_chat_hook(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* VEH-Guard (#623): Windows-Handler (nur echter Windows-Build)         */
+/*                                                                    */
+/* Lock-freies AV-Log: bewusst NICHT dbg() - das nimmt g_log_cs und    */
+/* koennte im Handler deadlocken (AV in einem Abschnitt, der dieselbe  */
+/* CS haelt). Stattdessen rohes WriteFile auf stderr.                  */
+/* ------------------------------------------------------------------ */
+static void rbbridge_veh_note(const char *msg)
+{
+    if (!msg)
+        return;
+    DWORD n = (DWORD)strlen(msg);
+    DWORD written = 0;
+    HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
+    if (h && h != INVALID_HANDLE_VALUE)
+        WriteFile(h, msg, n, &written, NULL);
+}
+
+/* Vectored Exception Handler (#623). Reagiert NUR auf Access Violations
+ * aus einem thread-lokal markierten Guard-Bereich; sonst
+ * EXCEPTION_CONTINUE_SEARCH. longjmp ist zulaessig: der Handler laeuft
+ * auf dem faultenden Thread, jmp_buf liegt auf dessen Stack. */
+static LONG CALLBACK rbbridge_veh(EXCEPTION_POINTERS *ep)
+{
+    EXCEPTION_RECORD *er;
+    if (!ep || !(er = ep->ExceptionRecord))
+        return EXCEPTION_CONTINUE_SEARCH;
+    if (!rbbridge_veh_should_handle((unsigned long)er->ExceptionCode))
+        return EXCEPTION_CONTINUE_SEARCH;
+
+    InterlockedIncrement(&g_veh_hits);
+
+    /* Lock-freies Log: RIP, Fault-Adresse, Zugriffsart, Thread-Id. */
+    {
+        const char *op = "exec";
+        void *addr = NULL;
+        void *rip = NULL;
+        char buf[256];
+        int n;
+        if (er->NumberParameters >= 1) {
+            if (er->ExceptionInformation[0] == 0)
+                op = "read";
+            else if (er->ExceptionInformation[0] == 1)
+                op = "write";
+        }
+        if (er->NumberParameters >= 2)
+            addr = (void *)er->ExceptionInformation[1];
+        if (ep->ContextRecord)
+            rip = (void *)ep->ContextRecord->Rip;
+        n = snprintf(buf, sizeof(buf),
+                     "[veh] access_violation caught tid=%lu rip=%p addr=%p "
+                     "op=%s hits=%ld\n",
+                     (unsigned long)GetCurrentThreadId(), rip, addr, op,
+                     (long)g_veh_hits);
+        if (n > 0) {
+            DWORD written = 0;
+            HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
+            if (h && h != INVALID_HANDLE_VALUE)
+                WriteFile(h, buf, (DWORD)n, &written, NULL);
+        }
+    }
+
+    {
+        jmp_buf *jb = t_guard_jmp;
+        t_guard_jmp = NULL; /* alten Stackframe nicht erneut treffen */
+        longjmp(*jb, 1);
+    }
+    return EXCEPTION_CONTINUE_SEARCH; /* unerreichbar */
+}
+
+/* ------------------------------------------------------------------ */
 /* Gemeinsame Start-/Stopp-API (DLL-Attach UND Standalone-main)        */
 /* ------------------------------------------------------------------ */
 
@@ -6595,6 +6835,14 @@ int rbbridge_start(void)
     chat_queue_init(&g_chat_q);
 
     dbg("rbbridge_start: ref=%s", RBBRIDGE_REF);
+
+    /* VEH-Guard (#623) VOR dem CreateThread des Pipe-Threads registrieren.
+     * AddVectoredExceptionHandler ist eine reine Win-API (kein LoadLibrary)
+     * -> im DllMain-/Loader-Lock-Kontext unkritisch. First=1 -> unser
+     * Handler laeuft vor Debugger/Default-Handling. */
+    g_veh_handle = AddVectoredExceptionHandler(1, rbbridge_veh);
+    if (!g_veh_handle)
+        dbg("rbbridge_start: AddVectoredExceptionHandler fehlgeschlagen");
 
     /* WICHTIG (DLL-Fall): Hier laeuft das ggf. im DllMain-Kontext
      * (Loader-Lock) - nie blockieren/kein LoadLibrary, wir starten nur
@@ -6643,6 +6891,13 @@ void rbbridge_stop(void)
         CloseHandle(g_thread);
         g_thread = NULL;
     }
+
+    /* VEH-Guard (#623) abmelden (nach Thread-Ende). */
+    if (g_veh_handle) {
+        RemoveVectoredExceptionHandler(g_veh_handle);
+        g_veh_handle = NULL;
+    }
+
     DeleteCriticalSection(&g_log_cs);
     InterlockedExchange(&g_thread_started, 0);
 }
