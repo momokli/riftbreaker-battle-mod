@@ -1351,6 +1351,47 @@ static void handle_dom_suspend(SOCKET c, const char *cmd, const char *event)
     http_respond(c, 200, "OK", line);
 }
 
+/* POST /pause_game + /resume_game (Write, Issue #880): echter Welt-/Server-
+ * Freeze nativ via ServerGameplayState::On{Pause,Resume}GameRequest. Kein
+ * Body. Liefert die pause_game_result-/resume_game_result-Zeile der Bridge. */
+static void handle_game_pause(SOCKET c, const char *cmd, const char *event,
+                             const char *body)
+{
+    char op[16] = "marshalled";
+    char esc_op[16 * 2];
+    char line[READ_BUF];
+    char payload[LINE_MAX];
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+    int rc;
+
+    if (body)
+        json_get_string(body, "op", op, sizeof(op));
+    if (op[0] && strcmp(op, "marshalled") != 0 && strcmp(op, "auto") != 0) {
+        blog("POST /%s: unbekanntes op '%s'", cmd, op);
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_op\"}");
+        return;
+    }
+    json_escape(op, esc_op, sizeof(esc_op));
+    snprintf(payload, sizeof(payload),
+             "{\"cmd\":\"%s\",\"op\":\"%s\"}\n", cmd, esc_op);
+
+    rc = pipe_send_command(event, payload, timeout_ms, line, sizeof(line));
+    if (rc == -1) {
+        blog("POST /%s: Pipe nicht erreichbar -> pipe_unavailable", cmd);
+        http_respond(c, 503, "Service Unavailable",
+                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+        return;
+    }
+    if (rc != 0) {
+        http_respond(c, 500, "Internal Server Error",
+                     "{\"ok\":false,\"reason\":\"timeout\"}");
+        return;
+    }
+    log_response(event, line);
+    http_respond(c, 200, "OK", line);
+}
+
 /* POST /restart_map: nativer Round-Reset (Read/Write, Issue #516) ueber die
  * Pipe. Body:
  *   {"op":"status|reset"}   (op optional, Default status)
@@ -2080,6 +2121,26 @@ static void handle_client(SOCKET c)
             handle_dom_suspend(c, "pause_dom", "pause_dom_result");
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/resume_dom") == 0) {
             handle_dom_suspend(c, "resume_dom", "resume_dom_result");
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/pause_game") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_game_pause(c, "pause_game", "pause_game_result", b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/resume_game") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_game_pause(c, "resume_game", "resume_game_result", b);
+            free(b);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/restart_map") == 0) {
             char *b = malloc((size_t)body_len + 1);
             if (!b) {

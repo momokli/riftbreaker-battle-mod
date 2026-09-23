@@ -1114,6 +1114,12 @@ int main(void)
               "SetSuspended-Sig: Selfcheck gruen (+0xF1, 0xC3, Hash)");
     }
 
+    {
+        /* #880: Selfcheck der UpdateGameplayLogic-Signatur (Game-Thread-Detour). */
+        check(gameplay_updlogic_sig_selfcheck() == 1,
+              "UpdLogic-Sig: Selfcheck gruen (36B-Prolog instruction-aligned)");
+    }
+
     /* resolve_set_suspended_fn: genau ein Treffer -> Adresse; zwei Treffer
      * (mehrdeutig) -> NULL (kein Aufruf) — analog zum Live-Gegencheck. */
     {
