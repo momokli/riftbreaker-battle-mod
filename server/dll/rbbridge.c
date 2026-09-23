@@ -881,6 +881,7 @@ static volatile LONG g_stop = 0;   /* 1 = Thread soll sich beenden       */
 static HANDLE g_thread = NULL;     /* Handle des Pipe-Server-Threads     */
 static LONG g_thread_started = 0;  /* verhindert doppelte Attach-Threads */
 static CRITICAL_SECTION g_log_cs;  /* schuetzt das Datei-Log             */
+static CRITICAL_SECTION g_dbg_cs;  /* schuetzt den stderr-Write (#688)   */
 
 /* VEH-Guard (#623): Zaehler gefangener Access Violations (prozessweit)
  * + Registrierungs-Handle des Vectored Exception Handlers. */
@@ -924,14 +925,31 @@ static void dbg(const char *fmt, ...)
     OutputDebugStringA(buf);
 
     /* Konsolen-/docker-Log (#392): gleicher Stream wie das Spiel (stderr ->
-     * docker), mit Zeitstempel fuer Korrelation mit bridge + exor_logs. */
+     * docker), mit Zeitstempel fuer Korrelation mit bridge + exor_logs.
+     *
+     * Bewusst direkter Handle-Write statt fprintf(stderr, ...): mingw
+     * leitet fprintf ueber den CRT-Slot __imp___acrt_iob_func in der
+     * writable .data-Section auf; ist dieser Slot korrumpiert, springt
+     * der Call in Nicht-Funktions-Code (Execute-Fault/DEP, #688). Der
+     * Handle-Write below hat diese Indirektion nicht. */
     {
+        char line[1152];
         SYSTEMTIME st;
         GetLocalTime(&st);
-        fprintf(stderr, "[%02d:%02d:%02d.%03d] [rbbridge] [tid=%lu] %s\n",
-                st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
-                (unsigned long)GetCurrentThreadId(), buf);
-        fflush(stderr);
+        int n = snprintf(line, sizeof(line),
+                         "[%02d:%02d:%02d.%03d] [rbbridge] [tid=%lu] %s\n",
+                         st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+                         (unsigned long)GetCurrentThreadId(), buf);
+        if (n > 0) {
+            HANDLE herr = GetStdHandle(STD_ERROR_HANDLE);
+            if (herr != NULL && herr != INVALID_HANDLE_VALUE) {
+                EnterCriticalSection(&g_dbg_cs);
+                DWORD written = 0;
+                WriteFile(herr, line, (DWORD)n, &written, NULL);
+                FlushFileBuffers(herr);
+                LeaveCriticalSection(&g_dbg_cs);
+            }
+        }
     }
 
     if (!g_file_log)
@@ -6829,6 +6847,7 @@ int rbbridge_start(void)
     }
 
     InitializeCriticalSection(&g_log_cs);
+    InitializeCriticalSection(&g_dbg_cs);
     g_stop = 0;
 
     InitializeCriticalSection(&g_chat_cs);
@@ -6856,6 +6875,7 @@ int rbbridge_start(void)
         GetLastError());
     InterlockedExchange(&g_thread_started, 0);
     DeleteCriticalSection(&g_log_cs);
+    DeleteCriticalSection(&g_dbg_cs);
     return -1;
 }
 
@@ -6899,6 +6919,7 @@ void rbbridge_stop(void)
     }
 
     DeleteCriticalSection(&g_log_cs);
+    DeleteCriticalSection(&g_dbg_cs);
     InterlockedExchange(&g_thread_started, 0);
 }
 
