@@ -822,6 +822,7 @@ static int g_file_log = 1;
 static volatile LONG g_stop = 0;   /* 1 = Thread soll sich beenden       */
 static HANDLE g_thread = NULL;     /* Handle des Pipe-Server-Threads     */
 static LONG g_thread_started = 0;  /* verhindert doppelte Attach-Threads */
+static LONG g_initialized = 0;     /* CS/Queue einmalig initen (#902/US3) */
 static CRITICAL_SECTION g_log_cs;  /* schuetzt das Datei-Log             */
 static CRITICAL_SECTION g_dbg_cs;  /* schuetzt den stderr-Write (#688)   */
 
@@ -6606,12 +6607,16 @@ int rbbridge_start(void)
         g_file_log = 0;
     }
 
-    InitializeCriticalSection(&g_log_cs);
-    InitializeCriticalSection(&g_dbg_cs);
+    /* Critical-Section-/Queue-Init EINMALIG (#902/US3): ein Re-Start nach
+     * totem Thread (rbbridge_ensure_server) darf die Critical Sections NICHT
+     * erneut initialisieren (Leck/UB). */
+    if (InterlockedCompareExchange(&g_initialized, 1, 0) == 0) {
+        InitializeCriticalSection(&g_log_cs);
+        InitializeCriticalSection(&g_dbg_cs);
+        InitializeCriticalSection(&g_chat_cs);
+        chat_queue_init(&g_chat_q);
+    }
     g_stop = 0;
-
-    InitializeCriticalSection(&g_chat_cs);
-    chat_queue_init(&g_chat_q);
 
     dbg("rbbridge_start: ref=%s", RBBRIDGE_REF);
 
@@ -6626,9 +6631,46 @@ int rbbridge_start(void)
     dbg("rbbridge_start: CreateThread fehlgeschlagen (GLE=%lu)",
         GetLastError());
     InterlockedExchange(&g_thread_started, 0);
-    DeleteCriticalSection(&g_log_cs);
-    DeleteCriticalSection(&g_dbg_cs);
+    /* CS bleiben initialisiert (einmalig, s.o.) -> hier kein Delete. */
     return -1;
+}
+
+/*
+ * Issue #902/US3: Selbstheilung auf DLL-Seite.
+ * Prueft, ob der Pipe-Server-Thread noch lebt, und setzt ihn nach einem
+ * abgebrochenen Thread OHNE Re-Inject neu auf. Der Host-Watchdog ruft das
+ * ueber `injector.exe --call ... rbbridge_ensure_server` auf.
+ * Rueckgabe: 0 = Thread laeuft (No-op) bzw. erfolgreich neu gestartet;
+ *            -1 = Neustart fehlgeschlagen.
+ *
+ * WICHTIG: Export UNBEDINGT via __declspec(dllexport) - die DLL wird mit
+ * `-shared` und OHNE .def gebaut, daher findet GetProcAddress den Entry nur
+ * mit dieser Markierung.
+ */
+__declspec(dllexport) int rbbridge_ensure_server(void)
+{
+    if (!g_thread_started)
+        return rbbridge_start(); /* noch nie gestartet -> Erststart */
+
+    /* Thread tot, wenn Handle NULL ist oder der Thread beendet wurde.
+     * WaitForSingleObject(h, 0) erkennt ein Thread-Ende nur, solange der
+     * Handle im laufenden Betrieb offen bleibt (hier der Fall). */
+    if (g_thread == NULL ||
+        WaitForSingleObject(g_thread, 0) == WAIT_OBJECT_0) {
+        DWORD exit_code = 0;
+        if (g_thread) {
+            GetExitCodeThread(g_thread, &exit_code);
+            CloseHandle(g_thread);
+        }
+        dbg("rbbridge_ensure_server: toter Pipe-Server-Thread "
+            "(exit=%lu) -> Neustart", (unsigned long)exit_code);
+        g_thread = NULL;
+        InterlockedExchange(&g_thread_started, 0);
+        return rbbridge_start();
+    }
+
+    dbg("rbbridge_ensure_server: Thread lebt -> No-op");
+    return 0; /* Thread laeuft weiter */
 }
 
 /*
