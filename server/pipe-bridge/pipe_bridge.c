@@ -11,8 +11,12 @@
  *   Kein Fremd-Dep, nur Win32 (Winsock) - laeuft unter Wine.
  *
  * Endpunkte (HTTP/1.1, Antwort immer application/json, Connection: close):
- *   GET  /health       -> 200 {"ok":true,"pipe":<bool>}
- *                         (<pipe> = Pipe-Verbindung moeglich, Probe-Connect)
+ *   GET  /health       -> Proxy-Connect (500ms): 200 {"ok":true,"pipe":true}
+ *                         bei toter Pipe 503 {"ok":false,"pipe":false,
+ *                         "reason":"pipe_unavailable"} (Issue #902)
+ *   GET  /health?deep=1 -> zusaetzlich DLL-Ping; schlaegt der fehl -> 503
+ *                         {"ok":false,"pipe":true,"ping":false,
+ *                         "reason":"ping_failed"}
  *   GET  /             -> Web-UI (cockpit.html, nur C++-Direktfunktionen)
  *   POST /get_state    -> carbonium/max/resources/HQ (C++)
  *   POST /add_resource -> carbonium direkt aendern (C++)
@@ -56,6 +60,9 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+
+/* Windows-freie Statuscode-/Body-Wahl fuer /health (Issue #902, host-testbar). */
+#include "health_logic.h"
 
 #define BRIDGE_NAME          "pipe_bridge"
 
@@ -815,19 +822,50 @@ static const char *find_icase(const char *hay, const char *needle)
     return NULL;
 }
 
-static void handle_health(SOCKET c)
+/* DLL-Ping ueber eine frische Pipe-Instanz: verbindet, sendet
+ * {"cmd":"ping"} und wartet auf die pong-Zeile. 1 = pong empfangen. */
+static int pipe_ping(int timeout_ms)
 {
-    char body[128];
+    char line[READ_BUF];
+    HANDLE h = pipe_connect(timeout_ms);
+    int rc;
+
+    if (h == INVALID_HANDLE_VALUE)
+        return 0;
+    if (!pipe_write_all(h, "{\"cmd\":\"ping\"}\n")) {
+        CloseHandle(h);
+        return 0;
+    }
+    rc = pipe_wait_line(h, "pong", NULL, timeout_ms, line, sizeof(line));
+    CloseHandle(h);
+    return rc == 0 ? 1 : 0;
+}
+
+/* GET /health[?deep=1]: Connect-Probe (immer kurz), optional DLL-Ping.
+ * Statuscode/Body kommen aus health_logic.h - ehrlich statt "immer 200"
+ * (Issue #902). Bei pipe_ok=1 bleibt der Default-Body bitgleich zu vorher. */
+static void handle_health(SOCKET c, int deep)
+{
+    char body[192];
     int pipe_ok = 0;
+    int ping_ok = 0;
+    int code;
+
     /* Kurzes Fenster: /health ist ein Probe-Connect, der nie lange warten darf. */
     HANDLE h = pipe_connect(500);
     if (h != INVALID_HANDLE_VALUE) {
         pipe_ok = 1;
         CloseHandle(h);
     }
-    snprintf(body, sizeof(body), "{\"ok\":true,\"pipe\":%s}",
-             pipe_ok ? "true" : "false");
-    http_respond(c, 200, "OK", body);
+
+    /* Deep nur sinnvoll, wenn die Pipe ueberhaupt steht (sonst kein Ping-Ziel). */
+    if (deep && pipe_ok)
+        ping_ok = pipe_ping(2000);
+
+    code = deep ? bridge_health_status_deep(pipe_ok, ping_ok)
+                : bridge_health_status(pipe_ok);
+    bridge_health_body(pipe_ok, ping_ok, deep, body, sizeof(body));
+    http_respond(c, code, code == 200 ? "OK" : "Service Unavailable", body);
 }
 
 
@@ -1814,8 +1852,10 @@ static void handle_client(SOCKET c)
 
         log_request(method, path, body, body_len);
 
-        if (strcmp(method, "GET") == 0 && strcmp(path, "/health") == 0) {
-            handle_health(c);
+        if (strcmp(method, "GET") == 0 &&
+            (strcmp(path, "/health") == 0 ||
+             strncmp(path, "/health?", 8) == 0)) {
+            handle_health(c, strstr(path, "deep=1") != NULL);
         } else if (strcmp(method, "GET") == 0 && strcmp(path, "/events") == 0) {
             handle_events(c);
         } else if (strcmp(method, "GET") == 0 && strcmp(path, "/attack_status") == 0) {

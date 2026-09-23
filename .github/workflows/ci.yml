@@ -221,6 +221,12 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         working-directory: tests/rbbridge-hosttest
         run: npm ci && npm test
+      # pipe_bridge /health-Logik (Issue #902): Statuscode+Body aus
+      # health_logic.h host-kompiliert. "Pipe trennen" = pipe_ok=0 -> 503.
+      - name: pipe-bridge host-test (Issue #902)
+        if: needs.changes.outputs.test == 'true'
+        working-directory: tests/pipe-bridge-hosttest
+        run: npm ci && npm test
       # Server-Control-Panel (#422): extrahiert den testbaren Marker-Block aus
       # cockpit.html und prueft das defensive Contract (immer "—", nie werfen,
       # nie location.reload). Keine Dependencies, daher kein npm ci noetig.
