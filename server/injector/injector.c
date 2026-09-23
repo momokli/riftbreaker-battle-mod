@@ -34,6 +34,10 @@
  *
  * Aufruf:
  *   injector.exe <pid|prozessname> <pfad\zu\rbbridge.dll>
+ *     -> klassische Injection (LoadLibraryW im Ziel).
+ *   injector.exe --call <pid|prozessname> <pfad\zu\rbbridge.dll> <export>
+ *     -> ruft einen bereits geladenen Export der DLL im Zielprozess auf
+ *        (Issue #902: Selbstheilung, z.B. rbbridge_ensure_server).
  */
 
 #define WIN32_LEAN_AND_MEAN
@@ -210,6 +214,102 @@ static int inject_into(HANDLE hProc, const wchar_t *dll_path)
     return 0;
 }
 
+/*
+ * Issue #902/US3: ruft einen bereits GELADENEN Export der DLL im Ziel-
+ * prozess auf (statt LoadLibraryW). Notwendig, weil Re-Injection einer
+ * laufenden DLL ein LoadLibrary-No-op ist.
+ *
+ * Ablauf:
+ *   1) Remote-Modulbasis per Toolhelp-Snapshot der Module ermitteln
+ *      (Pflicht wegen ASLR: die reale Basis im Ziel ist unbekannt).
+ *   2) Lokal die DLL laden, GetProcAddress(export) -> Export-RVA relativ
+ *      zur lokalen Modulbasis.
+ *   3) CreateRemoteThread auf remoteBase + RVA, warten, Exitcode pruefen.
+ */
+static int call_export(HANDLE hProc, const wchar_t *dll_path,
+                       const wchar_t *export_w)
+{
+    /* Exportname ist ASCII -> nach ANSI (fuer GetProcAddress). */
+    char export_a[256];
+    int n = WideCharToMultiByte(CP_ACP, 0, export_w, -1, export_a,
+                                (int)sizeof(export_a), NULL, NULL);
+    if (n <= 0) {
+        printf("[-] Exportname ungueltig: %ls\n", export_w);
+        return 1;
+    }
+
+    /* DLL-Basisname (z.B. rbbridge.dll) fuer den Modulabgleich. */
+    const wchar_t *base = wcsrchr(dll_path, L'\\');
+    base = base ? base + 1 : dll_path;
+
+    /* 1) Remote-Modulbasis suchen. */
+    HANDLE snap = CreateToolhelp32Snapshot(
+        TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, GetProcessId(hProc));
+    if (snap == INVALID_HANDLE_VALUE) {
+        printf("[-] CreateToolhelp32Snapshot(Module) fehlgeschlagen (GLE=%lu)\n",
+               GetLastError());
+        return 1;
+    }
+    MODULEENTRY32W me;
+    me.dwSize = sizeof(me);
+    BYTE *remote_base = NULL;
+    for (BOOL ok = Module32FirstW(snap, &me); ok; ok = Module32NextW(snap, &me)) {
+        if (_wcsicmp(me.szModule, base) == 0 || _wcsicmp(me.szExePath, dll_path) == 0) {
+            remote_base = me.modBaseAddr;
+            break;
+        }
+    }
+    CloseHandle(snap);
+    if (!remote_base) {
+        wprintf(L"[-] Modul '%ls' nicht im Zielprozess geladen\n", base);
+        return 1;
+    }
+
+    /* 2) Lokale Basis + Export-RVA. */
+    HMODULE hLocal = LoadLibraryW(dll_path);
+    if (!hLocal) {
+        printf("[-] LoadLibraryW(lokal) fehlgeschlagen (GLE=%lu)\n", GetLastError());
+        return 1;
+    }
+    FARPROC fn = GetProcAddress(hLocal, export_a);
+    if (!fn) {
+        printf("[-] Export '%s' nicht gefunden (GLE=%lu)\n", export_a, GetLastError());
+        FreeLibrary(hLocal);
+        return 1;
+    }
+    DWORD_PTR rva = (DWORD_PTR)fn - (DWORD_PTR)hLocal;
+    void *remote_fn = (void *)(remote_base + rva);
+    wprintf(L"[+] Modulbasis remote=0x%p RVA=0x%llx -> fn=0x%p\n",
+            (void *)remote_base, (unsigned long long)rva, remote_fn);
+
+    /* 3) Aufruf im Zielprozess. */
+    HANDLE hThread = CreateRemoteThread(hProc, NULL, 0,
+                                        (LPTHREAD_START_ROUTINE)remote_fn,
+                                        NULL, 0, NULL);
+    if (!hThread) {
+        printf("[-] CreateRemoteThread(--call) fehlgeschlagen (GLE=%lu)\n",
+               GetLastError());
+        FreeLibrary(hLocal);
+        return 1;
+    }
+    DWORD wait = WaitForSingleObject(hThread, INJECT_TIMEOUT_MS);
+    DWORD rc = 1;
+    if (wait == WAIT_TIMEOUT) {
+        printf("[!] Export-Aufruf nach %u ms noch aktiv\n", INJECT_TIMEOUT_MS);
+    } else {
+        DWORD exit_code = 0;
+        if (GetExitCodeThread(hThread, &exit_code)) {
+            wprintf(L"[+] %ls -> ExitCode=%lu\n", export_w, (unsigned long)exit_code);
+            rc = (exit_code == 0) ? 0 : 1;
+        } else {
+            printf("[-] GetExitCodeThread fehlgeschlagen (GLE=%lu)\n", GetLastError());
+        }
+    }
+    CloseHandle(hThread);
+    FreeLibrary(hLocal);
+    return (int)rc;
+}
+
 /* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
@@ -217,10 +317,13 @@ static int inject_into(HANDLE hProc, const wchar_t *dll_path)
 static void usage(const wchar_t *prog)
 {
     wprintf(L"Usage: %ls <pid|prozessname> <pfad\\zu\\rbbridge.dll>\n"
+            L"       %ls --call <pid|prozessname> <pfad\\zu\\rbbridge.dll> <export>\n"
             L"  Bsp. : %ls 4821  server\\dll\\rbbridge.dll\n"
             L"         %ls riftbreaker.exe server\\dll\\rbbridge.dll\n"
+            L"         %ls --call DedicatedServer.exe Z:\\opt\\rbtools\\rbbridge.dll "
+            L"rbbridge_ensure_server\n"
             L"  (Prozessname ohne/mit .exe; Gross-/Kleinschreibung egal)\n",
-            prog, prog, prog);
+            prog, prog, prog, prog, prog);
 }
 
 int main(void)
@@ -234,13 +337,23 @@ int main(void)
     printf("[injector] ref=%s\n", RBBRIDGE_REF);
 
     int rc = 2;
-    if (argc != 3) {
+    int call_mode = 0;
+    const wchar_t *target = NULL;
+    const wchar_t *dll_path_arg = NULL;
+    const wchar_t *export_arg = NULL;
+
+    if (argc == 5 && wcscmp(argv[1], L"--call") == 0) {
+        call_mode = 1;
+        target = argv[2];
+        dll_path_arg = argv[3];
+        export_arg = argv[4];
+    } else if (argc == 3) {
+        target = argv[1];
+        dll_path_arg = argv[2];
+    } else {
         usage(argc > 0 ? argv[0] : L"injector.exe");
         goto out;
     }
-
-    const wchar_t *target = argv[1];
-    const wchar_t *dll_path_arg = argv[2];
 
     /* PID oder Name? */
     DWORD pid = 0;
@@ -298,8 +411,14 @@ int main(void)
         goto out;
     }
 
-    wprintf(L"[+] Injiziere: %ls\n", dll_path);
-    rc = inject_into(hProc, dll_path);
+    if (call_mode) {
+        wprintf(L"[+] Rufe Export '%ls' in pid=%lu auf\n", export_arg,
+                (unsigned long)pid);
+        rc = call_export(hProc, dll_path, export_arg);
+    } else {
+        wprintf(L"[+] Injiziere: %ls\n", dll_path);
+        rc = inject_into(hProc, dll_path);
+    }
 
     CloseHandle(hProc);
 
