@@ -52,6 +52,15 @@ riftbreaker_mods_dir: "{{ riftbreaker_game_dir }}/mods"
 riftbreaker_backup_dir: "{{ riftbreaker_game_dir }}-backups"
 riftbreaker_mods_guard_autofix: true
 
+# Anzahl der in {{ riftbreaker_backup_dir }} behaltenen Backups je Gruppe
+# (`rbbattle-*.tar.gz` bzw. `stray-*/`). Aeltere werden bei jedem Deploy
+# entfernt (Issue #312, tasks/backup-retention.yml). "Neueste" ist
+# lexikographisch der groesste Namens-Zeitstempel (iso8601_basic_short,
+# YYYYMMDDTHHMMSS) — NIE mtime. Es werden nur die zwei Muster oben angefasst;
+# {{ riftbreaker_mods_dir }} (mods/-Guard #212) nie; ein Backup-Dir auf/unter
+# mods/ bricht laut ab. Uebersteuerbar per host_vars oder `-e`.
+riftbreaker_backup_keep: 5
+
 # Quelle für den Post-Deploy-Runtime-Log-Check (best effort; genau eine
 # mod_load-Zeile, erwartete Version, keine handler_errors). NICHT der harte
 # Gate — der ist der Artefakt-Check in tasks/main.yml (Manifest- + RBB.version

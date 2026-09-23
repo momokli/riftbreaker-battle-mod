@@ -18,6 +18,7 @@
 | rbmods-image-retention.timer     | planet            | systemd                                                            | —                    | Alte Mod-Image-Tags aufräumen (Rollback-Stand + laufendes Image bleiben)                                                                              |
 | rbmods-host-hygiene.timer        | planet            | systemd                                                            | —                    | wöchentlich dangling Docker-Images aufräumen (`docker image prune`, **kein** `-a`; Issue #308)                                                        |
 | rbmods-crash-collector           | planet            | systemd                                                            | —                    | Crash-Artefakte (Minidump + Trace + Log) sichern, Minidump parsen (Meta) + Retention (Issue #462/#481)                                                |
+| riftbreaker-server (Retention)   | planet            | Rolle (`tasks/backup-retention.yml`)                               | —                    | begrenzt `{{ riftbreaker_backup_dir }}` auf je N neueste `rbbattle-*.tar.gz` + `stray-*/` (Default 5; Issue #312, fasst `mods/` nie an)               |
 | rbbridge                         | in Mod-Containern | Prozess                                                            | —                    | Command-Injection (`exec_cmd_client`, Argument IMMER als EIN gequotierter String)                                                                     |
 
 ## Deployment-Plan (Ansible, inventory `planet`)
@@ -39,7 +40,9 @@ Rollen in `deploy/roles/` (Details: `deploy/README.md`):
 4. **riftbreaker-server** — Docker-Container + Server-Config (Welt
    `mp_survival`/`jungle`, `disable_steam`, Passwort aus Vault), Mod-Install
    in `<game>/mods/rbbattle`; Restart-Handler bei Mod-/Config-Änderung. Dev-Port
-   seit #843 `:6324` (6321 gehört dem gns-relay).
+   seit #843 `:6324` (6321 gehört dem gns-relay). Am Ende der Rolle läuft die
+   **Backup-/Stray-Retention** (`tasks/backup-retention.yml`, Issue #312) —
+   begrenzt `{{ riftbreaker_backup_dir }}` auf die N neuesten Backups.
 5. **gns-relay** — GNS-Entry-Relay (Issue #843): Container `gns-relay`
    (`network_mode: host`, UDP `:6321`), baut `gns_probe.exe` aus
    `tools/gns-proxy` (MinGW-w64/zig) und routet per Spielnamen-Suffix auf
@@ -208,6 +211,46 @@ Red/Green-Test (kein Docker nötig) liegt in
 
 **Nicht in diesem Issue:** ungetaggte Dangling-Layer (→ #308) und weniger Müll
 erzeugen (→ #247, reproduzierbare Builds in GHCR).
+
+## Backup-/Stray-Retention (Issue #312)
+
+Die Rolle `riftbreaker-server` schreibt bei jedem Mod-Update einen
+Backup-Tarball (`rbbattle-<ts>.tar.gz`) und schiebt bei einem Guard-Eingriff
+Fremd-Ordner nach `stray-<ts>/` — beide **außerhalb** von `mods/`. Bis #312
+räumte das niemand auf → unbegrenztes Wachstum: die #312-Automatik begrenzt es.
+
+- **Task:** `deploy/roles/riftbreaker-server/tasks/backup-retention.yml` —
+  läuft am **Ende** von `tasks/main.yml`.
+- **Ziel:** ausschließlich `{{ riftbreaker_backup_dir }}`. Es bleiben je die
+  **N neuesten** `rbbattle-*.tar.gz` und die **N neuesten** `stray-*/`; alles
+  Ältere wird entfernt.
+- **Variable:** `riftbreaker_backup_keep` (Default **5**), übersteuerbar per
+  `host_vars` oder `-e riftbreaker_backup_keep=<n>` (`0` = alle Kandidaten).
+- **Determinismus:** „neuste“ = lexikographisch größter Namens-Zeitstempel
+  (`iso8601_basic_short`, `YYYYMMDDTHHMMSS`), **nie** `mtime` — kein Risiko
+  durch kopierte/umgezogene Dateien.
+- **Sicherheit:** `mods/` wird **nie** angefasst (mods/-Guard #212). Ein
+  `asssert` bricht **laut** ab, falls `riftbreaker_backup_dir` == `mods/` ist
+  oder darunter liegt (fail loud statt Löschen).
+- **Check-Mode/hermetisch:** existiert `riftbreaker_backup_dir` nicht (z. B.
+  `--check` gegen einen noch nicht migrierten `<env>`-Pfadbaum), ist der Block
+  ein sauberer No-Op (stat-Guard) — `find` fasst fehlende Pfade nicht an.
+
+**Selbsttest (hermetisch, ohne Host/Prod-Zugriff):**
+
+```bash
+bash deploy/tests/backup-retention/run.sh
+```
+
+Ruft die ECHTE Task-Datei gegen ein Wegwerf-Fixture auf und prüft: genau die N
+neuesten bleiben (deterministisch), Fremd-Dateien und `mods/` unberührt, der
+Overlap-Guard bricht laut ab, Idempotenz (`changed=0`), `--check` entfernt
+nichts real, `riftbreaker_backup_keep=0` entfernt alles, und der stat-Guard ist
+load-bearing (Negativ-Probe). Läuft zusätzlich in `deploy-check-local`.
+
+> **Nicht in diesem Issue:** Container-Logs (reale Lücke, s.
+> [`SERVER_SIZING.md`](SERVER_SIZING.md) → „Host-Hygiene“) und weniger Müll
+> erzeugen (→ #247).
 
 ## Website-Pfad — eigener Rift-Caddy + ZWEI Host-Einträge (Landing + Cockpit, Issue #322)
 
