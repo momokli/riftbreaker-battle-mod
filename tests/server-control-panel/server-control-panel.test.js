@@ -169,3 +169,41 @@ test("Fall D: Panel-Block referenziert location/reload nicht (No-Reload-Garantie
   assert.ok(!/\blocation\b/.test(block), "Panel-Block darf location nicht referenzieren");
   assert.ok(!/\breload\b/.test(block), "Panel-Block darf reload nicht aufrufen");
 });
+
+test("Fall E: mergeTail haengt nur neue Zeilen an (Ueberlappung/Rotation)", () => {
+  const { document } = makeDoc();
+  const panel = loadPanel()({ fetch: async () => resp({}), document });
+
+  // neue Zeilen -> nur die Differenz anhaengen
+  assert.deepEqual(panel.mergeTail(["1", "2", "3"], ["2", "3", "4"]), ["1", "2", "3", "4"]);
+  // keine neuen Zeilen -> unveraendert (keine Duplikate)
+  assert.deepEqual(panel.mergeTail(["1", "2", "3"], ["1", "2", "3"]), ["1", "2", "3"]);
+  // leeres existing / leeres incoming
+  assert.deepEqual(panel.mergeTail([], ["x", "y"]), ["x", "y"]);
+  assert.deepEqual(panel.mergeTail(["x"], []), ["x"]);
+  // keine Ueberlappung (Log-Rotation) -> Fenster anhaengen statt verwerfen
+  assert.deepEqual(panel.mergeTail(["1", "2"], ["8", "9"]), ["1", "2", "8", "9"]);
+  // wiederholte Zeilen: groesste Ueberlappung gewinnt
+  assert.deepEqual(panel.mergeTail(["a", "b", "a"], ["a", "b", "a", "b"]), ["a", "b", "a", "b"]);
+});
+
+test("Fall F: fetchLogs liefert Zeilen, clampt auf MAX_TAIL und wirft bei Fehler", async () => {
+  const { document } = makeDoc();
+  const urls = [];
+  const panel = loadPanel()({
+    fetch: async (url) => {
+      urls.push(url);
+      return resp({ lines: ["a", "b"] });
+    },
+    document,
+  });
+
+  assert.deepEqual(await panel.fetchLogs(10), ["a", "b"]);
+  assert.equal(urls[urls.length - 1], "/server/logs?tail=10");
+
+  await panel.fetchLogs(999999);
+  assert.equal(urls[urls.length - 1], "/server/logs?tail=5000", "auf MAX_TAIL geclampt");
+
+  const bad = loadPanel()({ fetch: async () => resp({}, false), document });
+  await assert.rejects(() => bad.fetchLogs(10), "fetchLogs wirft (Aufrufer faengt)");
+});

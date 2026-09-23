@@ -32,6 +32,16 @@ services:
       # seit Issue #307), der Container-Port bleibt 9001.
       RBB_BRIDGE_BIND: "0.0.0.0"
       RBB_BRIDGE_PORT: "{{ riftbreaker_bridge_container_port }}"
+    # Healthcheck spiegelt den Pipe-Status (Issue #902/US5): Compose UEBERSCHREIBT
+    # den Dockerfile-Healthcheck -> konsistent halten. pgrep UND /health (200 nur
+    # bei lebender Pipe, US1). Port in-Container = {{ riftbreaker_bridge_container_port }}
+    # (immer 9001). start_period grosszuegig (300s) gegen Flapping in der Startphase.
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f DedicatedServer.exe >/dev/null && curl -fsS --max-time 4 http://127.0.0.1:{{ riftbreaker_bridge_container_port }}/health >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      start_period: 300s
+      retries: 5
     ports:
 {% if riftbreaker_server_port_udp | default('') %}
       - "{{ riftbreaker_server_port_udp }}:6321/udp"

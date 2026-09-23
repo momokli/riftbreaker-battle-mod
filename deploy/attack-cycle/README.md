@@ -4,10 +4,12 @@ Ersetzt den ehemaligen 2-Minuten-Order-Scheduler der Bridge: eine gekaufte
 Welle feuert nicht mehr 2 min nach dem Kauf einzeln, sondern wird in einen
 festen Zyklus gestapelt, der beim Bau des HQ startet.
 
-```
-round start (HQ gebaut, hq_hp > 0)
-  └─ alle `interval` Sekunden (Default 7 min) EINE natürliche Welle mit dem
-       aktuellen Level (1..9, cap 9)
+```text
+round start (Start-Signal -> WARMUP, Default 120s -> RUNNING, HQ gebaut)
+  └─ erste natürliche Welle SOFORT mit dem Warmup-Ende (#859): das Warmup IST
+       die Vorlaufzeit, nicht das erste Intervall
+  └─ danach alle `interval` Sekunden (Default 7 min) EINE natürliche Welle mit
+       dem aktuellen Level (1..9, cap 9)
        + alle in diesem Fenster gekauften Wellen (bought[])
   └─ UNABHÄNGIG davon: alle `difficulty_interval` Sekunden (Default 200s,
        Issue #778) steigt das Level selbst um 1 — eigener Timer, entkoppelt
@@ -69,14 +71,21 @@ Start:
 python3 attack_cycle.py --persona aggro --persona-file personas.example.json
 ```
 
-Zur Laufzeit werden Personas + send-yourself ueber die **Bridge** gesteuert
-(statt CLI-Flag): die Bridge haelt die Defs (`GET/POST /personas`), die aktive
-Persona (`POST /persona_active`) und den Toggle (`POST /send_yourself`). Der
-Cycle pollt `GET /personas` (`sync_personas`) und uebernimmt den State — die
-CLI-Flags sind nur der Start-Fallback, bis der erste Poll greift. Das Cockpit
-editiert das alles im Panel „Personas (Send-Profile)".
+Zur Laufzeit werden die Personas ueber die **Bridge** gesteuert (statt
+CLI-Flag): die Bridge haelt die Defs (`GET/POST /personas`) und die aktive
+Persona (`POST /persona_active`). Der Cycle pollt `GET /personas`
+(`sync_personas`) und uebernimmt den State — die CLI-Flags sind nur der
+Start-Fallback, bis der erste Poll greift. Das Cockpit editiert Personas im Tab
+„Persona Editor".
+
+Der Toggle `send_yourself` gehoert seit #851 zur **Game-Config**, nicht mehr zu
+`/personas`: einzige Quelle ist `GET /game_config` (`sync_game_config`), der
+Cockpit-Tab „Game Config" schreibt ihn.
 
 ## send-yourself (Routing eigener Kaeufe)
+
+Zur Laufzeit fuehrt **`game_config.send_yourself`** (Cockpit-Tab „Game Config",
+`sync_game_config`); das CLI-Flag ist nur der Start-Fallback (#851).
 
 | Modus          | Verhalten                                                                                                                                                      |
 | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -86,6 +95,23 @@ editiert das alles im Panel „Personas (Send-Profile)".
 ```bash
 python3 attack_cycle.py --send-yourself off
 ```
+
+## Round-Reset (neue Runde, #854)
+
+Ein Match endet in `GAME_OVER` (terminal). Ein `docker restart` des **Spielservers**
+aendert daran nichts — der Attack-Cycle laeuft im **eigenen Container** und bleibt in
+`GAME_OVER`. Fuer „neue Runde in einem Schritt" gibt es den Wrapper:
+
+`POST /round_reset {"reset":1}` (Bridge) erhoeht `round_reset_epoch` und stoesst
+den nativen `restart_map`-Reset an. Der Cycle pollt `POST /round_reset {}`
+(`sync_round_reset`) und wendet **atomar** `reset()` **+** `signal_start()` an →
+aus jedem Zustand (auch `GAME_OVER`) direkt nach `WARMUP`. Cockpit: Button
+„new round" im Attack-Cycle-Panel (sendet `{"reset":1}`).
+
+> **`reset:1` ist Pflicht (#868).** Der Sidecar pollt denselben Endpoint
+> sekündlich mit `{}`; ohne das Flag ist der Aufruf **read-only** (nur Epoch
+> lesen) — sonst würde jeder Poll eine neue Runde auslösen. Gleiches Muster wie
+> `/attack_reset`.
 
 ## Test
 

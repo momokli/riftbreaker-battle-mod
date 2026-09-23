@@ -11,8 +11,15 @@
  *   Kein Fremd-Dep, nur Win32 (Winsock) - laeuft unter Wine.
  *
  * Endpunkte (HTTP/1.1, Antwort immer application/json, Connection: close):
- *   GET  /health       -> 200 {"ok":true,"pipe":<bool>}
- *                         (<pipe> = Pipe-Verbindung moeglich, Probe-Connect)
+ *   GET  /health       -> Readiness aus der BESTEHENDEN persistenten
+ *                         Verbindung (g_pipe), KEIN Zweit-Connect (#902):
+ *                         200 {"ok":true,"pipe":true}; ist keine
+ *                         persistente Verbindung da 503 {"ok":false,
+ *                         "pipe":false,"reason":"pipe_unavailable"}.
+ *   GET  /health?deep=1 -> zusaetzlich DLL-Ping ueber dieselbe bestehende
+ *                         Verbindung (pipe_send_command, kein frischer
+ *                         Connect); schlaegt der fehl -> 503 {"ok":false,
+ *                         "pipe":true,"ping":false,"reason":"ping_failed"}
  *   GET  /             -> Web-UI (cockpit.html, nur C++-Direktfunktionen)
  *   POST /get_state    -> carbonium/max/resources/HQ (C++)
  *   POST /add_resource -> carbonium direkt aendern (C++)
@@ -56,6 +63,9 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+
+/* Windows-freie Statuscode-/Body-Wahl fuer /health (Issue #902, host-testbar). */
+#include "health_logic.h"
 
 #define BRIDGE_NAME          "pipe_bridge"
 
@@ -491,17 +501,21 @@ static CRITICAL_SECTION g_difficulty_interval_subsequent_cs;
 static int g_attack_reset_epoch = 0;
 static CRITICAL_SECTION g_attack_reset_cs;
 
+/* Round-Reset-Epoch (via POST /round_reset, Issue #854): der Sidecar wendet
+ * reset()+start atomar an (neue Runde, auch aus GAME_OVER). */
+static int g_round_reset_epoch = 0;
+static CRITICAL_SECTION g_round_reset_cs;
+
 /* Personas (Send-Profile) + Self-Send (Issue #788), via WebUI editierbar.
  * g_personas = roher JSON-Object-String {"name":[[level,...],...],...};
  * mit 4 Default-Personas vorbelegt (PLATZHALTER-Werte, runtime editierbar).
- * g_active_persona = aktiver Name ("" = none); g_send_yourself = Routing. */
+ * g_active_persona = aktiver Name ("" = none). Der Toggle `send_yourself`
+ * lebt seit #851 ausschliesslich in `game_config` (g_game_config). */
 static char g_personas[8192] =
     "{\"aggro\":[[0,0,1,0,1,0,0,0,0],[0,0,0,0,0,0,1,0,0],[0,0,0,0,0,0,0,0,2],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]],\"ruhig\":[[0,0,0,0,0,0,0,0,0],[0,1,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,1,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]],\"build\":[[1,0,2,0,1,0,0,0,0],[3,0,0,0,0,0,0,0,0],[0,1,0,2,0,0,1,0,0],[0,1,0,0,0,2,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]],\"zerg\":[[3,0,0,0,0,0,0,0,0],[3,0,0,0,0,0,0,0,0],[0,2,0,0,0,0,0,0,0],[0,0,2,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]],\"matheo\":[[1,0,0,0,0,0,0,0,0],[0,5,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,1,1,1,0,1,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]]}";
 static CRITICAL_SECTION g_personas_cs;
 static char g_active_persona[64];
 static CRITICAL_SECTION g_active_persona_cs;
-static int g_send_yourself = 1;
-static CRITICAL_SECTION g_send_yourself_cs;
 
 /* Natural-Attack-Rules (#819): die vollstaendig konfigurierbaren Dimensionen
  * der Natural-Attacks-Engine (Attack-Count/Boss je Level, Creature-Attack-
@@ -520,6 +534,25 @@ static char g_natural_attack_rules[8192] =
     "{\"name\":\"phirian_attack\",\"logic\":\"logic/event/phirian_attack.logic\",\"min_level\":3,\"max_level\":9,\"attack_strength\":null,\"weight\":1}"
     "],\"event_offset_fraction\":0.35}";
 static CRITICAL_SECTION g_natural_attack_rules_cs;
+
+/* Game-Config (#828, docs/GAME_FLOW.md): modus-unabhaengige Game-Flow-Konfig
+ * (mode, Warmup-Dauer und die vier Sende-Toggles) als roher JSON-Object-String,
+ * via WebUI editierbar. Default = Bootzustand SOLO. */
+static char g_game_config[4096] =
+    "{\"mode\":\"solo\",\"warmup_s\":120,\"natural\":true,\"persona\":true,"
+    "\"send_yourself\":true,\"send_enemy\":false}";
+static CRITICAL_SECTION g_game_config_cs;
+
+/* Ready-Flag (#828): der Referee wartet, bis alle Spieler ready sind, bevor
+ * er /start feuert (heute Cockpit-Klick, spaeter /ready im Chat). */
+static int g_ready = 0;
+static CRITICAL_SECTION g_ready_cs;
+
+/* Start-Signal (#828): POST /start inkrementiert diesen Zaehler; der attack_cycle
+ * pollt ihn via GET /game_config (`start_epoch`) und startet bei einem neuen
+ * Wert (Edge). So ist das Start-Signal LESBAR, nicht nur ein Ack. */
+static int g_start_epoch = 0;
+static CRITICAL_SECTION g_start_epoch_cs;
 
 /* Broadcastet eine JSON-Zeile als SSE-Event an den (einen) Cockpit-Client. */
 static void sse_broadcast(const char *line)
@@ -697,6 +730,21 @@ static int pipe_send_command(const char *event, const char *payload,
     return 0;
 }
 
+/* Readiness der Pipe aus der BESTEHENDEN persistenten Verbindung (#902).
+ * Liest g_pipe unter g_pipe_cs und liefert 1, wenn ein gueltiges Handle da
+ * ist, sonst 0. Es wird bewusst KEIN neuer Connect geoeffnet: rbbridge.dll
+ * erzeugt die Pipe mit nMaxInstances=1, der pipe_reader-Thread haelt die
+ * einzige Instanz -> jeder zusaetzliche Connect traefe ERROR_PIPE_BUSY und
+ * meldete die Pipe faelschlich als tot. 0/1 zurueck. */
+static int pipe_ready(void)
+{
+    int ok;
+    EnterCriticalSection(&g_pipe_cs);
+    ok = (g_pipe != INVALID_HANDLE_VALUE);
+    LeaveCriticalSection(&g_pipe_cs);
+    return ok ? 1 : 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* HTTP                                                                */
 /* ------------------------------------------------------------------ */
@@ -792,19 +840,34 @@ static const char *find_icase(const char *hay, const char *needle)
     return NULL;
 }
 
-static void handle_health(SOCKET c)
+/* GET /health[?deep=1]: Readiness aus der BESTEHENDEN persistenten
+ * Verbindung (#902), KEIN Zweit-Connect mehr. Ist eine Verbindung da,
+ * gilt die Pipe als bereit; der optionale Deep-Ping laeuft ueber dieselbe
+ * Verbindung (pipe_send_command). Statuscode/Body kommen aus health_logic.h
+ * - ehrlich statt "immer 200". Bei pipe_ok=1 bleibt der Default-Body
+ * bitgleich zu vorher. */
+static void handle_health(SOCKET c, int deep)
 {
-    char body[128];
-    int pipe_ok = 0;
-    /* Kurzes Fenster: /health ist ein Probe-Connect, der nie lange warten darf. */
-    HANDLE h = pipe_connect(500);
-    if (h != INVALID_HANDLE_VALUE) {
-        pipe_ok = 1;
-        CloseHandle(h);
-    }
-    snprintf(body, sizeof(body), "{\"ok\":true,\"pipe\":%s}",
-             pipe_ok ? "true" : "false");
-    http_respond(c, 200, "OK", body);
+    char body[192];
+    char line[READ_BUF];
+    int pipe_ok;
+    int ping_ok = 0;
+    int code;
+
+    /* Readiness aus der persistenten Verbindung: kein frischer Connect, sonst
+     * ERROR_PIPE_BUSY gegen die eine DLL-Pipe-Instanz (nMaxInstances=1). */
+    pipe_ok = pipe_ready();
+
+    /* Deep-Ping ueber die BESTEHENDE Verbindung (kein neuer Connect).
+     * pipe_send_command schreibt auf g_pipe und wartet auf die pong-Zeile. */
+    if (deep && pipe_ok)
+        ping_ok = (pipe_send_command("pong", "{\"cmd\":\"ping\"}\n",
+                                     2000, line, sizeof(line)) == 0);
+
+    code = deep ? bridge_health_status_deep(pipe_ok, ping_ok)
+                : bridge_health_status(pipe_ok);
+    bridge_health_body(pipe_ok, ping_ok, deep, body, sizeof(body));
+    http_respond(c, code, code == 200 ? "OK" : "Service Unavailable", body);
 }
 
 
@@ -1223,6 +1286,39 @@ static void handle_natural_waves(SOCKET c, const char *body)
     http_respond(c, 200, "OK", line);
 }
 
+/* POST /pause_dom + /resume_dom (Write, Issue #520): natives
+ * LuaGraphNode::SetSuspended des DOM-Nodes ueber die Pipe. Kein Body.
+ * Liefert die pause_dom_result-/resume_dom_result-Zeile der Bridge. */
+static void handle_dom_suspend(SOCKET c, const char *cmd, const char *event)
+{
+    char line[READ_BUF];
+    char payload[LINE_MAX];
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+
+    snprintf(payload, sizeof(payload), "{\"cmd\":\"%s\"}\n", cmd);
+
+    /* Kanonischer Pfad (Issue #881): dieselbe PERSISTENTE Pipe + der
+     * geteilte Response-Slot wie alle anderen Handler. Eine eigene
+     * pipe_connect-Verbindung scheitert (dwShareMode 0 -> ERROR_PIPE_BUSY)
+     * und meldet faelschlich pipe_unavailable. */
+    {
+        int rc = pipe_send_command(event, payload, timeout_ms, line, sizeof(line));
+        if (rc == -1) {
+            blog("POST /%s: Pipe nicht erreichbar -> pipe_unavailable", cmd);
+            http_respond(c, 503, "Service Unavailable",
+                         "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+            return;
+        }
+        if (rc != 0) {
+            http_respond(c, 500, "Internal Server Error",
+                         "{\"ok\":false,\"reason\":\"timeout\"}");
+            return;
+        }
+    }
+    log_response("/dom_suspend", line);
+    http_respond(c, 200, "OK", line);
+}
+
 /* POST /restart_map: nativer Round-Reset (Read/Write, Issue #516) ueber die
  * Pipe. Body:
  *   {"op":"status|reset"}   (op optional, Default status)
@@ -1493,14 +1589,64 @@ static void handle_post_attack_reset(SOCKET c, const char *body)
     http_respond(c, 200, "OK", resp);
 }
 
-/* GET /personas: liefert Persona-Defs (roher JSON-Object), aktive Persona und
- * Self-Send. Der Attack-Cycle-Sidecar pollt das; die WebUI liest/schreibt. */
+/* POST /round_reset: Round-Reset-Wrapper (Issue #854). Nur bei {"reset":1}
+ * wird die Round-Reset-Epoch erhoeht UND der native restart_map-Reset
+ * angestossen (Economy 0, HQ-Placement). Ohne den Guard ist der Endpoint NICHT
+ * poll-sicher: der attack-cycle-Sidecar liest die Epoch per `POST /round_reset
+ * {}` im Sekundentakt — jedes bedingungslose Epoch++ haette daraus einen
+ * Endlos-Reset gemacht (Issue #868). Gleiches Muster wie /attack_reset.
+ * Body: {"reset":1, "map":0} laesst den nativen Map-Reset aus. */
+static void handle_post_round_reset(SOCKET c, const char *body)
+{
+    double reset_flag = 0.0;
+    double map_flag = 1.0;
+    char resp[256];
+    char line[READ_BUF];
+    const char *map_status = "skipped";
+    int epoch;
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+    int trigger = json_get_number(body, "reset", &reset_flag) && reset_flag > 0.0;
+
+    EnterCriticalSection(&g_round_reset_cs);
+    if (trigger) {
+        g_round_reset_epoch++;
+    }
+    epoch = g_round_reset_epoch;
+    LeaveCriticalSection(&g_round_reset_cs);
+
+    if (trigger) {
+        blog("round_reset -> epoch %d", epoch);
+
+        json_get_number(body, "map", &map_flag);
+        if (map_flag != 0.0) {
+            int rc = pipe_send_command("restart_map_result",
+                                       "{\"cmd\":\"restart_map\",\"op\":\"reset\"}\n",
+                                       timeout_ms, line, sizeof(line));
+            if (rc == -1) {
+                map_status = "pipe_unavailable";
+            } else if (rc != 0) {
+                map_status = "timeout";
+            } else {
+                map_status = "ok";
+                log_response("/round_reset", line);
+            }
+        }
+    }
+
+    snprintf(resp, sizeof(resp),
+             "{\"ok\":true,\"round_reset_epoch\":%d,\"restart_map\":\"%s\"}",
+             epoch, map_status);
+    http_respond(c, 200, "OK", resp);
+}
+
+/* GET /personas: liefert Persona-Defs (roher JSON-Object) und die aktive
+ * Persona. Der Attack-Cycle-Sidecar pollt das; die WebUI liest/schreibt.
+ * `send_yourself` lebt seit #851 ausschliesslich in `game_config`. */
 static void handle_get_personas(SOCKET c)
 {
     char resp[8192];
     char personas[8192];
     char active[64];
-    int send_yourself;
 
     EnterCriticalSection(&g_personas_cs);
     if (g_personas[0]) {
@@ -1516,13 +1662,9 @@ static void handle_get_personas(SOCKET c)
     active[sizeof(active) - 1] = '\0';
     LeaveCriticalSection(&g_active_persona_cs);
 
-    EnterCriticalSection(&g_send_yourself_cs);
-    send_yourself = g_send_yourself;
-    LeaveCriticalSection(&g_send_yourself_cs);
-
     snprintf(resp, sizeof(resp),
-             "{\"personas\":%s,\"active\":\"%s\",\"send_yourself\":%s}",
-             personas, active, send_yourself ? "true" : "false");
+             "{\"personas\":%s,\"active\":\"%s\"}",
+             personas, active);
     http_respond(c, 200, "OK", resp);
 }
 
@@ -1553,28 +1695,6 @@ static void handle_post_persona_active(SOCKET c, const char *body)
     LeaveCriticalSection(&g_active_persona_cs);
     blog("persona_active -> '%s'", g_active_persona);
     http_respond(c, 200, "OK", "{\"ok\":true}");
-}
-
-/* POST /send_yourself: setzt den Routing-Toggle ({"on":1} / {"on":0}). */
-static void handle_post_send_yourself(SOCKET c, const char *body)
-{
-    double d = 0.0;
-    char resp[128];
-    int cur;
-
-    if (json_get_number(body, "on", &d)) {
-        EnterCriticalSection(&g_send_yourself_cs);
-        g_send_yourself = (d != 0.0);
-        LeaveCriticalSection(&g_send_yourself_cs);
-        blog("send_yourself -> %s", g_send_yourself ? "on" : "off");
-    }
-
-    EnterCriticalSection(&g_send_yourself_cs);
-    cur = g_send_yourself;
-    LeaveCriticalSection(&g_send_yourself_cs);
-    snprintf(resp, sizeof(resp), "{\"ok\":true,\"send_yourself\":%s}",
-             cur ? "true" : "false");
-    http_respond(c, 200, "OK", resp);
 }
 
 /* GET /natural_attack_rules: liefert die Natural-Attack-Rules als rohen
@@ -1612,6 +1732,101 @@ static void handle_post_natural_attack_rules(SOCKET c, const char *body)
     blog("natural_attack_rules -> gesetzt (%d bytes)",
          (int)strlen(g_natural_attack_rules));
     http_respond(c, 200, "OK", "{\"ok\":true}");
+}
+
+/* GET /game_config: liefert die Game-Flow-Konfig als rohen JSON-Object
+ * (mode, warmup_s, natural/persona/send_yourself/send_enemy). Der Attack-Cycle
+ * pollt das; die WebUI liest/schreibt. */
+static void handle_get_game_config(SOCKET c)
+{
+    char cfg[4096];
+    char resp[4352];
+    int epoch;
+    int ready;
+
+    EnterCriticalSection(&g_game_config_cs);
+    if (g_game_config[0]) {
+        strncpy(cfg, g_game_config, sizeof(cfg) - 1);
+        cfg[sizeof(cfg) - 1] = '\0';
+    } else {
+        strcpy(cfg, "{}");
+    }
+    LeaveCriticalSection(&g_game_config_cs);
+
+    EnterCriticalSection(&g_start_epoch_cs);
+    epoch = g_start_epoch;
+    LeaveCriticalSection(&g_start_epoch_cs);
+    EnterCriticalSection(&g_ready_cs);
+    ready = g_ready;
+    LeaveCriticalSection(&g_ready_cs);
+
+    /* `start_epoch` + `ready` in das flache Config-Objekt haengen (vor die
+     * schliessende Klammer) -> der attack_cycle hat beides aus EINEM Poll. */
+    {
+        size_t len = strlen(cfg);
+        if (len > 0 && cfg[len - 1] == '}') {
+            cfg[len - 1] = '\0';
+            snprintf(resp, sizeof(resp),
+                     "%s,\"start_epoch\":%d,\"ready\":%s}",
+                     cfg, epoch, ready ? "true" : "false");
+        } else {
+            snprintf(resp, sizeof(resp),
+                     "{\"start_epoch\":%d,\"ready\":%s}",
+                     epoch, ready ? "true" : "false");
+        }
+    }
+    http_respond(c, 200, "OK", resp);
+}
+
+/* POST /game_config: ersetzt die Game-Flow-Konfig (Body = roher JSON-Object). */
+static void handle_post_game_config(SOCKET c, const char *body)
+{
+    if (!body || !body[0]) {
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_request\"}");
+        return;
+    }
+    EnterCriticalSection(&g_game_config_cs);
+    strncpy(g_game_config, body, sizeof(g_game_config) - 1);
+    g_game_config[sizeof(g_game_config) - 1] = '\0';
+    LeaveCriticalSection(&g_game_config_cs);
+    blog("game_config -> gesetzt (%d bytes)", (int)strlen(g_game_config));
+    http_respond(c, 200, "OK", "{\"ok\":true}");
+}
+
+/* POST /start: das eigentliche Start-Signal (Referee -> beide Server im VS,
+ * nur A im SOLO). Inkrementiert `start_epoch`; der attack_cycle erkennt den
+ * neuen Wert via GET /game_config und vollzieht PAUSED -> WARMUP. */
+static void handle_post_start(SOCKET c)
+{
+    int epoch;
+    char resp[96];
+
+    EnterCriticalSection(&g_start_epoch_cs);
+    g_start_epoch += 1;
+    epoch = g_start_epoch;
+    LeaveCriticalSection(&g_start_epoch_cs);
+    blog("start -> Signal empfangen (epoch %d)", epoch);
+    snprintf(resp, sizeof(resp),
+             "{\"ok\":true,\"start\":true,\"start_epoch\":%d}", epoch);
+    http_respond(c, 200, "OK", resp);
+}
+
+/* POST /ready: setzt das Ready-Flag (Body optional {"on":0|1}, Default 1). */
+static void handle_post_ready(SOCKET c, const char *body)
+{
+    double d = 0.0;
+    char resp[128];
+    int cur;
+
+    EnterCriticalSection(&g_ready_cs);
+    g_ready = json_get_number(body, "on", &d) ? (d != 0.0) : 1;
+    cur = g_ready;
+    LeaveCriticalSection(&g_ready_cs);
+    blog("ready -> %s", cur ? "on" : "off");
+    snprintf(resp, sizeof(resp), "{\"ok\":true,\"ready\":%s}",
+             cur ? "true" : "false");
+    http_respond(c, 200, "OK", resp);
 }
 
 static void handle_client(SOCKET c)
@@ -1680,8 +1895,10 @@ static void handle_client(SOCKET c)
 
         log_request(method, path, body, body_len);
 
-        if (strcmp(method, "GET") == 0 && strcmp(path, "/health") == 0) {
-            handle_health(c);
+        if (strcmp(method, "GET") == 0 &&
+            (strcmp(path, "/health") == 0 ||
+             strncmp(path, "/health?", 8) == 0)) {
+            handle_health(c, strstr(path, "deep=1") != NULL);
         } else if (strcmp(method, "GET") == 0 && strcmp(path, "/events") == 0) {
             handle_events(c);
         } else if (strcmp(method, "GET") == 0 && strcmp(path, "/attack_status") == 0) {
@@ -1726,6 +1943,16 @@ static void handle_client(SOCKET c)
             b[body_len] = '\0';
             handle_post_attack_reset(c, b);
             free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/round_reset") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_post_round_reset(c, b);
+            free(b);
         } else if (strcmp(method, "GET") == 0 && strcmp(path, "/personas") == 0) {
             handle_get_personas(c);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/personas") == 0) {
@@ -1748,16 +1975,6 @@ static void handle_client(SOCKET c)
             b[body_len] = '\0';
             handle_post_persona_active(c, b);
             free(b);
-        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/send_yourself") == 0) {
-            char *b = malloc((size_t)body_len + 1);
-            if (!b) {
-                free(req);
-                return;
-            }
-            memcpy(b, body, (size_t)body_len);
-            b[body_len] = '\0';
-            handle_post_send_yourself(c, b);
-            free(b);
         } else if (strcmp(method, "GET") == 0 && strcmp(path, "/natural_attack_rules") == 0) {
             handle_get_natural_attack_rules(c);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/natural_attack_rules") == 0) {
@@ -1769,6 +1986,30 @@ static void handle_client(SOCKET c)
             memcpy(b, body, (size_t)body_len);
             b[body_len] = '\0';
             handle_post_natural_attack_rules(c, b);
+            free(b);
+        } else if (strcmp(method, "GET") == 0 && strcmp(path, "/game_config") == 0) {
+            handle_get_game_config(c);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/game_config") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_post_game_config(c, b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/start") == 0) {
+            handle_post_start(c);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/ready") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_post_ready(c, b);
             free(b);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/probe") == 0) {
             handle_probe(c);
@@ -1844,6 +2085,10 @@ static void handle_client(SOCKET c)
             b[body_len] = '\0';
             handle_natural_waves(c, b);
             free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/pause_dom") == 0) {
+            handle_dom_suspend(c, "pause_dom", "pause_dom_result");
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/resume_dom") == 0) {
+            handle_dom_suspend(c, "resume_dom", "resume_dom_result");
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/restart_map") == 0) {
             char *b = malloc((size_t)body_len + 1);
             if (!b) {
@@ -1916,12 +2161,15 @@ static int mode_server(void)
     InitializeCriticalSection(&g_attack_status_cs);
     InitializeCriticalSection(&g_attack_interval_cs);
     InitializeCriticalSection(&g_attack_reset_cs);
+    InitializeCriticalSection(&g_round_reset_cs);
     InitializeCriticalSection(&g_difficulty_interval_first_cs);
     InitializeCriticalSection(&g_difficulty_interval_subsequent_cs);
     InitializeCriticalSection(&g_personas_cs);
     InitializeCriticalSection(&g_active_persona_cs);
-    InitializeCriticalSection(&g_send_yourself_cs);
     InitializeCriticalSection(&g_natural_attack_rules_cs);
+    InitializeCriticalSection(&g_game_config_cs);
+    InitializeCriticalSection(&g_ready_cs);
+    InitializeCriticalSection(&g_start_epoch_cs);
     g_resp_ev = CreateEvent(NULL, FALSE, FALSE, NULL);
     CreateThread(NULL, 0, pipe_reader_main, NULL, 0, NULL);
 

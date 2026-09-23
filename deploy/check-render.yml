@@ -20,6 +20,8 @@
     # server-control: liefert server_control_port fuer den /server/*-Proxy im
     # rift-caddy-Caddyfile (Issue #424).
     - roles/server-control/defaults/main.yml
+    # gns-relay: liefert die Relay-Targets fuer den Compose-Render (Issue #843).
+    - roles/gns-relay/defaults/main.yml
 
   vars:
     # Dummy-Werte nur fürs Rendern (kein Secret).
@@ -74,6 +76,44 @@
         dest: "{{ render_dir }}/rift-caddy.yml"
         mode: "0644"
 
+    # GNS-Entry-Relay (Issue #843): Compose + Routen-Datei rendern, damit der
+    # deploy-check-local `docker compose config` den Relay-Container mitprueft.
+    - name: gns-relay Compose rendern (Issue 843)
+      template:
+        src: roles/gns-relay/templates/docker-compose.yml.j2
+        dest: "{{ render_dir }}/gns-relay.yml"
+        mode: "0644"
+
+    - name: gns-relay Routen-Datei rendern (Issue 843)
+      template:
+        src: roles/gns-relay/templates/routes.j2
+        dest: "{{ render_dir }}/gns-relay.routes"
+        mode: "0644"
+
+    - name: gns-relay — Suffix-Routing + Port im Render (Issue 843)
+      vars:
+        gns_routes: "{{ lookup('file', render_dir ~ '/gns-relay.routes') }}"
+        gns_compose: "{{ lookup('file', render_dir ~ '/gns-relay.yml') }}"
+      assert:
+        that:
+          - "('*-dev     = ' ~ gns_relay_target_dev) in gns_routes"
+          - "('*-staging = ' ~ gns_relay_target_staging) in gns_routes"
+          - "('*         = ' ~ gns_relay_target_default) in gns_routes"
+          - "'network_mode: host' in gns_compose"
+          - "(gns_relay_port | string) in gns_compose"
+          # Hold + Steuer-API (Issue #857): halten statt auto-routen, Buttons aus
+          # gns_relay_targets, API nur lokal.
+          - "'--hold' in gns_compose"
+          - "('--api-port ' ~ (gns_relay_api_port | string)) in gns_compose"
+          - "('--api-host ' ~ gns_relay_api_host) in gns_compose"
+          - "('--target ' ~ gns_relay_targets[0]) in gns_compose"
+        fail_msg: >-
+          gns-relay.Render ist falsch (Issue #843/#857): die Routen-Datei muss
+          die drei Suffix-Regeln (dev/staging/default) tragen und das Compose
+          `network_mode: host`, den Einstiegsport sowie Hold + API-Flags
+          (--hold/--api-host/--api-port/--target).
+        success_msg: "gns-relay: Suffix-Routen + host-Netzwerk + Port + Hold/API korrekt (Issue #843/#857)."
+
     # Deploy-Identitaet sichtbar (Issue #483, US4): die Landing-HTML wird aus
     # dem echten Rollen-Template gerendert; meta rb-env/rb-ref + Badge muessen
     # den dev-Kontext tragen. Rein lokal (hermetischer Render-Test).
@@ -88,8 +128,8 @@
         landing: "{{ lookup('file', render_dir ~ '/index.html') }}"
       assert:
         that:
-          - "'<meta name=\"rb-env\" content=\"dev\">' in landing"
-          - "('<meta name=\"rb-ref\" content=\"' ~ rift_deploy_ref ~ '\">') in landing"
+          - '''<meta name="rb-env" content="dev">'' in landing'
+          - '(''<meta name="rb-ref" content="'' ~ rift_deploy_ref ~ ''">'') in landing'
           - "'rb-identity' in landing"
           - "('dev · ' ~ rift_deploy_ref) in landing"
         fail_msg: >-

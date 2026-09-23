@@ -1,0 +1,13 @@
+{
+  "name": "cockpit-ui-review",
+  "version": "1.0.0",
+  "private": true,
+  "description": "UI-Post-Check fuers Cockpit: rendert cockpit.html im echten Chromium, shootet alle Tabs und meldet Layout-Heuristiken (Overflow/Ueberlappung/abgeschnittene Texte/kleine Klickziele) als 'clunky'-Indikatoren.",
+  "type": "module",
+  "scripts": {
+    "shoot": "node shoot.js"
+  },
+  "dependencies": {
+    "playwright": "^1.63.0"
+  }
+}

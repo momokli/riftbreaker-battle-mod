@@ -1061,6 +1061,75 @@ int main(void)
         }
     }
 
+    /* -------------------------------------------------------------- */
+    /* #520: pause_dom/resume_dom (SetSuspended nativ)                 */
+    /* -------------------------------------------------------------- */
+    {
+        /* FNV-1a-32: bekannte Vektoren + der auf planet live verifizierte
+         * TypeHash des DOM-Skriptpfads (LuaGraphNode::+0x30). */
+        check(rbbridge_fnv1a32("") == 0x811c9dc5u,
+              "fnv1a32: leerer String -> Offset-Basis");
+        check(rbbridge_fnv1a32("a") == 0xe40c292cu,
+              "fnv1a32: 'a' -> 0xe40c292c");
+        check(rbbridge_fnv1a32(RBBRIDGE_DOM_SCRIPT) == 0x76aad119u,
+              "fnv1a32: DOM-Skriptpfad -> TypeHash 0x76aad119 (#520)");
+        check(rbbridge_fnv1a32(RBBRIDGE_DOM_SCRIPT) == RBBRIDGE_DOM_SCRIPT_HASH,
+              "fnv1a32: Konstante == Laufzeit-Hash (Resolver-Determinismus)");
+
+        /* Signatur-Selfcheck: Laenge/Ret-Opcode/Flag-Offset konsistent. */
+        check(set_suspended_sig_selfcheck() == 1,
+              "SetSuspended-Sig: Selfcheck gruen (+0xF1, 0xC3, Hash)");
+    }
+
+    /* resolve_set_suspended_fn: genau ein Treffer -> Adresse; zwei Treffer
+     * (mehrdeutig) -> NULL (kein Aufruf) — analog zum Live-Gegencheck. */
+    {
+        unsigned char *si = build_image(0, 0, 0, 0, 0);
+        ht_set_module(si, IMG_SIZE);
+        check(resolve_set_suspended_fn(si, IMG_SIZE) == NULL,
+              "SetSuspended-AOB: ohne Muster -> NULL (graceful)");
+        memcpy(si + 0x1380, RBBRIDGE_SET_SUSPENDED_SIG,
+               sizeof(RBBRIDGE_SET_SUSPENDED_SIG));
+        check(resolve_set_suspended_fn(si, IMG_SIZE) == si + 0x1380,
+              "SetSuspended-AOB: genau 1 Treffer -> Adresse");
+        memcpy(si + 0x1390, RBBRIDGE_SET_SUSPENDED_SIG,
+               sizeof(RBBRIDGE_SET_SUSPENDED_SIG));
+        check(resolve_set_suspended_fn(si, IMG_SIZE) == NULL,
+              "SetSuspended-AOB: 2 Treffer -> NULL (mehrdeutig, kein Aufruf)");
+        free(si);
+    }
+
+    /* resolve_dom_node: vftable-Scan + TypeHash-Filter. */
+    {
+        unsigned char *ni = build_image(0, 0, 0, 0, 0);
+        const uint32_t dom_hash = rbbridge_fnv1a32(RBBRIDGE_DOM_SCRIPT);
+        const uint64_t vf =
+            (uint64_t)(uintptr_t)(ni + RBBRIDGE_LUAGRAPHNODE_VFTABLE_RVA);
+
+        ht_set_module(ni, IMG_SIZE);
+        check(resolve_dom_node(ni) == NULL,
+              "dom_node: leeres Image -> NULL (graceful)");
+
+        /* Fremder LuaGraphNode (falscher TypeHash) -> verworfen. */
+        wr64(ni + 0x1900, vf);
+        wr64(ni + 0x1900 + RBBRIDGE_LUAGRAPHNODE_L_OFF, 0x1234u);
+        wr32(ni + 0x1900 + RBBRIDGE_LUAGRAPHNODE_REF_OFF, 5u);
+        wr32(ni + 0x1900 + RBBRIDGE_LUAGRAPHNODE_TYPEHASH_OFF, 0xdeadbeefu);
+        check(resolve_dom_node(ni) == NULL,
+              "dom_node: falscher TypeHash -> NULL (Pool/Mission-Node)");
+
+        /* dom_mananger-Node (TypeHash == fnv1a(DOM-Skript)) -> Treffer. */
+        wr32(ni + 0x1900 + RBBRIDGE_LUAGRAPHNODE_TYPEHASH_OFF, dom_hash);
+        check(resolve_dom_node(ni) == ni + 0x1900,
+              "dom_node: TypeHash == fnv1a(DOM-Skript) -> Instanz gefunden");
+
+        /* Fehlender luabind-Objekt-Zeiger (L == 0) -> verworfen. */
+        wr64(ni + 0x1900 + RBBRIDGE_LUAGRAPHNODE_L_OFF, 0u);
+        check(resolve_dom_node(ni) == NULL,
+              "dom_node: L == NULL -> NULL (kein luabind-Objekt)");
+        free(ni);
+    }
+
     /* #479: Readiness-Gate — reiner Log-Marker-Test (host-testbar)     */
     /* -------------------------------------------------------------- */
     {

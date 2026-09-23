@@ -11,7 +11,10 @@ riftbreaker_compose_project: "{{ riftbreaker_deploy_dir | basename }}"
 # Der Server startet mit `cli=1 config=config.cfg` — die Config wird hier aus
 # config.cfg.j2 gerendert (Datei-Rechte 0644, steamuser-lesbar; Passwort aus dem Vault).
 riftbreaker_server_container: riftbreaker-dedicated
-riftbreaker_server_port_udp: 6321
+# Dev-SP-Server-Host-Port: 6324 statt 6321 (Issue #843) — der client-hardgewirete
+# Einstiegsport 6321 gehoert jetzt dem GNS-Entry-Relay (Rolle gns-relay).
+# Container-seitig bindet der Server weiter 6321 (Compose: "6324:6321/udp").
+riftbreaker_server_port_udp: 6324
 
 riftbreaker_server_name: RBBattle
 riftbreaker_server_max_players: 4

@@ -1,0 +1,9 @@
+{
+  "name": "game-config-editor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Web-UI-Test fuer den Game-Config-Editor (mode/warmup_s/natural/persona/send_yourself/send_enemy + start/ready + state): load/loadStatus/setField/save/restore/start/setReady. Keine Dependencies, kein Netzwerk.",
+  "scripts": {
+    "test": "node --test"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "cockpit-render",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Render-/Funktions-Test fuers Cockpit (#832): rendert cockpit/cockpit.html im echten Chromium (Playwright), prueft Tab-Struktur + roving tabindex, dass Formulare rendern, dass der Docker-Log auto-tailt (laufend, kein Refresh-Klicken) und dass keine JS-Fehler auftreten.",
+  "scripts": {
+    "test": "node --test"
+  }
+}
