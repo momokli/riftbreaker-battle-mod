@@ -267,7 +267,7 @@ jobs:
 
   build:
     name: Build + Package (rbbridge.dll/exe, dist/*.zip)
-    needs: [changes, test]
+    needs: [changes]
     runs-on: [self-hosted, planet]
     steps:
       - name: Keine relevanten Pfade — Build übersprungen (Gate bleibt grün)
