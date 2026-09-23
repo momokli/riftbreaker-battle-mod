@@ -11,12 +11,15 @@
  *   Kein Fremd-Dep, nur Win32 (Winsock) - laeuft unter Wine.
  *
  * Endpunkte (HTTP/1.1, Antwort immer application/json, Connection: close):
- *   GET  /health       -> Proxy-Connect (500ms): 200 {"ok":true,"pipe":true}
- *                         bei toter Pipe 503 {"ok":false,"pipe":false,
- *                         "reason":"pipe_unavailable"} (Issue #902)
- *   GET  /health?deep=1 -> zusaetzlich DLL-Ping; schlaegt der fehl -> 503
- *                         {"ok":false,"pipe":true,"ping":false,
- *                         "reason":"ping_failed"}
+ *   GET  /health       -> Readiness aus der BESTEHENDEN persistenten
+ *                         Verbindung (g_pipe), KEIN Zweit-Connect (#902):
+ *                         200 {"ok":true,"pipe":true}; ist keine
+ *                         persistente Verbindung da 503 {"ok":false,
+ *                         "pipe":false,"reason":"pipe_unavailable"}.
+ *   GET  /health?deep=1 -> zusaetzlich DLL-Ping ueber dieselbe bestehende
+ *                         Verbindung (pipe_send_command, kein frischer
+ *                         Connect); schlaegt der fehl -> 503 {"ok":false,
+ *                         "pipe":true,"ping":false,"reason":"ping_failed"}
  *   GET  /             -> Web-UI (cockpit.html, nur C++-Direktfunktionen)
  *   POST /get_state    -> carbonium/max/resources/HQ (C++)
  *   POST /add_resource -> carbonium direkt aendern (C++)
@@ -727,6 +730,21 @@ static int pipe_send_command(const char *event, const char *payload,
     return 0;
 }
 
+/* Readiness der Pipe aus der BESTEHENDEN persistenten Verbindung (#902).
+ * Liest g_pipe unter g_pipe_cs und liefert 1, wenn ein gueltiges Handle da
+ * ist, sonst 0. Es wird bewusst KEIN neuer Connect geoeffnet: rbbridge.dll
+ * erzeugt die Pipe mit nMaxInstances=1, der pipe_reader-Thread haelt die
+ * einzige Instanz -> jeder zusaetzliche Connect traefe ERROR_PIPE_BUSY und
+ * meldete die Pipe faelschlich als tot. 0/1 zurueck. */
+static int pipe_ready(void)
+{
+    int ok;
+    EnterCriticalSection(&g_pipe_cs);
+    ok = (g_pipe != INVALID_HANDLE_VALUE);
+    LeaveCriticalSection(&g_pipe_cs);
+    return ok ? 1 : 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* HTTP                                                                */
 /* ------------------------------------------------------------------ */
@@ -822,45 +840,29 @@ static const char *find_icase(const char *hay, const char *needle)
     return NULL;
 }
 
-/* DLL-Ping ueber eine frische Pipe-Instanz: verbindet, sendet
- * {"cmd":"ping"} und wartet auf die pong-Zeile. 1 = pong empfangen. */
-static int pipe_ping(int timeout_ms)
-{
-    char line[READ_BUF];
-    HANDLE h = pipe_connect(timeout_ms);
-    int rc;
-
-    if (h == INVALID_HANDLE_VALUE)
-        return 0;
-    if (!pipe_write_all(h, "{\"cmd\":\"ping\"}\n")) {
-        CloseHandle(h);
-        return 0;
-    }
-    rc = pipe_wait_line(h, "pong", NULL, timeout_ms, line, sizeof(line));
-    CloseHandle(h);
-    return rc == 0 ? 1 : 0;
-}
-
-/* GET /health[?deep=1]: Connect-Probe (immer kurz), optional DLL-Ping.
- * Statuscode/Body kommen aus health_logic.h - ehrlich statt "immer 200"
- * (Issue #902). Bei pipe_ok=1 bleibt der Default-Body bitgleich zu vorher. */
+/* GET /health[?deep=1]: Readiness aus der BESTEHENDEN persistenten
+ * Verbindung (#902), KEIN Zweit-Connect mehr. Ist eine Verbindung da,
+ * gilt die Pipe als bereit; der optionale Deep-Ping laeuft ueber dieselbe
+ * Verbindung (pipe_send_command). Statuscode/Body kommen aus health_logic.h
+ * - ehrlich statt "immer 200". Bei pipe_ok=1 bleibt der Default-Body
+ * bitgleich zu vorher. */
 static void handle_health(SOCKET c, int deep)
 {
     char body[192];
-    int pipe_ok = 0;
+    char line[READ_BUF];
+    int pipe_ok;
     int ping_ok = 0;
     int code;
 
-    /* Kurzes Fenster: /health ist ein Probe-Connect, der nie lange warten darf. */
-    HANDLE h = pipe_connect(500);
-    if (h != INVALID_HANDLE_VALUE) {
-        pipe_ok = 1;
-        CloseHandle(h);
-    }
+    /* Readiness aus der persistenten Verbindung: kein frischer Connect, sonst
+     * ERROR_PIPE_BUSY gegen die eine DLL-Pipe-Instanz (nMaxInstances=1). */
+    pipe_ok = pipe_ready();
 
-    /* Deep nur sinnvoll, wenn die Pipe ueberhaupt steht (sonst kein Ping-Ziel). */
+    /* Deep-Ping ueber die BESTEHENDE Verbindung (kein neuer Connect).
+     * pipe_send_command schreibt auf g_pipe und wartet auf die pong-Zeile. */
     if (deep && pipe_ok)
-        ping_ok = pipe_ping(2000);
+        ping_ok = (pipe_send_command("pong", "{\"cmd\":\"ping\"}\n",
+                                     2000, line, sizeof(line)) == 0);
 
     code = deep ? bridge_health_status_deep(pipe_ok, ping_ok)
                 : bridge_health_status(pipe_ok);
