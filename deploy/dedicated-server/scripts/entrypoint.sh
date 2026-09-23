@@ -47,6 +47,25 @@ GAMEPLAY_WAIT_SECS="${GAMEPLAY_WAIT_SECS:-120}"
 # Command-Substitution-Deadlock (siehe FIX unten).
 INJECT_CMD_TIMEOUT_SECS="${INJECT_CMD_TIMEOUT_SECS:-60}"
 
+# Selbstheilung im Betrieb (Issue #902/US4): Watchdog pollt die Bridge-/health
+# und setzt bei toter Pipe den DLL-Server-Thread neu auf (--call).
+RBB_BRIDGE_SELFHEAL="${RBB_BRIDGE_SELFHEAL:-1}"          # 0 = Heilung aus
+BRIDGE_HEALTH_INTERVAL_SECS="${BRIDGE_HEALTH_INTERVAL_SECS:-15}"
+BRIDGE_HEALTH_URL="${BRIDGE_HEALTH_URL:-http://127.0.0.1:9001/health}"
+
+# bridge_health_ok: 2xx nur bei lebender Pipe (US1: pipe:false -> HTTP 503).
+# curl -f laesst non-2xx scheitern; wget als Fallback. Kein HTTP-Client im
+# Image -> "ok" melden (nicht flappen; US5 installiert curl nach).
+bridge_health_ok() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS --max-time 4 "${BRIDGE_HEALTH_URL}" >/dev/null 2>&1
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -T 4 -O /dev/null "${BRIDGE_HEALTH_URL}" >/dev/null 2>&1
+  else
+    return 0
+  fi
+}
+
 copy_server_config() {
   local dest="$1"
   mkdir -p "$(dirname "${dest}")"
@@ -176,13 +195,52 @@ start_ingress_supervisor() {
       echo "[entrypoint] ingress: WARNUNG: Injection nach ${INJECT_TIMEOUT_SECS}s nicht erfolgreich — Bridge startet trotzdem" >&2
     fi
 
-    echo "[entrypoint] ingress: starte pipe_bridge.exe (HTTP 9001 -> Named-Pipe rbbattle)"
     # NICHT exec'en: die Subshell soll das vorzeitige Ende der Bridge loggen
     # koennen, ohne den Supervisor (set +e) zu crashen.
-    "${WINE}" "${tools_dir}/pipe_bridge.exe" 2>&1 &
-    bridge_pid=$!
-    wait "${bridge_pid}"
-    echo "[entrypoint] ingress: WARNUNG: pipe_bridge.exe beendet (rc=$?) — Server laeuft weiter" >&2
+    # Issue #902/US4: Watchdog-Schleife statt einmaligem wait.
+    #   - stirbt pipe_bridge.exe -> Schleife startet sie neu
+    #   - non-2xx/pipe:false auf /health -> injector --call rbbridge_ensure_server
+    #     (DLL-seitiges Neu-Aufsetzen, Retry/Backoff), dann weiter beobachten.
+    while :; do
+      echo "[entrypoint] ingress: starte pipe_bridge.exe (HTTP 9001 -> Named-Pipe rbbattle)"
+      "${WINE}" "${tools_dir}/pipe_bridge.exe" 2>&1 &
+      bridge_pid=$!
+      echo "[entrypoint] ingress: pipe_bridge.exe gestartet (pid=${bridge_pid})"
+
+      # Startphase respektieren: erst wenn /health einmal 2xx liefert (oder
+      # die Bridge stirbt), wird geheilt. Max. ~60s Wartezeit.
+      for _ in $(seq 1 20); do
+        kill -0 "${bridge_pid}" 2>/dev/null || break
+        bridge_health_ok && break
+        sleep 3
+      done
+
+      heal_attempt=0
+      while kill -0 "${bridge_pid}" 2>/dev/null; do
+        sleep "${BRIDGE_HEALTH_INTERVAL_SECS}"
+        kill -0 "${bridge_pid}" 2>/dev/null || break
+        if [[ "${RBB_BRIDGE_SELFHEAL}" == "1" ]] && ! bridge_health_ok; then
+          heal_attempt=$((heal_attempt + 1))
+          echo "[entrypoint] ingress: selfheal: /health nicht ok (Versuch ${heal_attempt}) — rufe rbbridge_ensure_server"
+          ilog=/tmp/rbtools-selfheal.log
+          if timeout "${INJECT_CMD_TIMEOUT_SECS}" "${WINE}" "${tools_dir}/injector.exe" \
+               --call DedicatedServer.exe "${RBBRIDGE_DLL_WIN}" rbbridge_ensure_server >"$ilog" 2>&1; then rc=0; else rc=$?; fi
+          sed 's/^/[rbtools] /' "$ilog"
+          if (( rc == 0 )); then
+            echo "[entrypoint] ingress: selfheal: rbbridge_ensure_server rc=0 — pruefe erneut"
+            sleep 3
+          else
+            if (( heal_attempt < 5 )); then backoff=$((heal_attempt * 2)); else backoff=10; fi
+            echo "[entrypoint] ingress: selfheal: rc=${rc}, Backoff ${backoff}s"
+            sleep "${backoff}"
+          fi
+        fi
+      done
+
+      wait "${bridge_pid}" 2>/dev/null
+      echo "[entrypoint] ingress: WARNUNG: pipe_bridge.exe beendet (rc=$?) — starte neu" >&2
+      sleep 2
+    done
   ) &
 }
 

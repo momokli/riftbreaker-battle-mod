@@ -11,8 +11,15 @@
  *   Kein Fremd-Dep, nur Win32 (Winsock) - laeuft unter Wine.
  *
  * Endpunkte (HTTP/1.1, Antwort immer application/json, Connection: close):
- *   GET  /health       -> 200 {"ok":true,"pipe":<bool>}
- *                         (<pipe> = Pipe-Verbindung moeglich, Probe-Connect)
+ *   GET  /health       -> Readiness aus der BESTEHENDEN persistenten
+ *                         Verbindung (g_pipe), KEIN Zweit-Connect (#902):
+ *                         200 {"ok":true,"pipe":true}; ist keine
+ *                         persistente Verbindung da 503 {"ok":false,
+ *                         "pipe":false,"reason":"pipe_unavailable"}.
+ *   GET  /health?deep=1 -> zusaetzlich DLL-Ping ueber dieselbe bestehende
+ *                         Verbindung (pipe_send_command, kein frischer
+ *                         Connect); schlaegt der fehl -> 503 {"ok":false,
+ *                         "pipe":true,"ping":false,"reason":"ping_failed"}
  *   GET  /             -> Web-UI (cockpit.html, nur C++-Direktfunktionen)
  *   POST /get_state    -> carbonium/max/resources/HQ (C++)
  *   POST /add_resource -> carbonium direkt aendern (C++)
@@ -57,6 +64,9 @@
 #include <stdarg.h>
 #include <string.h>
 
+/* Windows-freie Statuscode-/Body-Wahl fuer /health (Issue #902, host-testbar). */
+#include "health_logic.h"
+
 #define BRIDGE_NAME          "pipe_bridge"
 
 #define DEFAULT_PIPE_NAME    "\\\\.\\pipe\\rbbattle"
@@ -90,6 +100,30 @@ static void init_session_id(void)
     GetLocalTime(&st);
     snprintf(g_session_id, sizeof(g_session_id), "%04d%02d%02d-%02d%02d%02d",
              st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+}
+
+/* #392: haengt `,"session":"<id>"` vor das schliessende `}` eines
+ * Command-Payloads (`{...}\n`). Reine Funktion -> zentral in
+ * pipe_send_command nutzbar (keine Call-Site-Aenderung).
+ * Rueckgabe 1 = out gesetzt; 0 = kein JSON-Objekt / Puffer zu klein
+ * (der Aufrufer schreibt dann payload unveraendert). */
+static int attach_session_field(const char *payload, const char *session,
+                                char *out, size_t n)
+{
+    size_t len, brace;
+
+    if (!payload || !session || !out || n == 0)
+        return 0;
+    len = strlen(payload);
+    while (len > 0 && (payload[len - 1] == '\n' || payload[len - 1] == '\r'))
+        len--;                              /* Trailing-Newline ignorieren */
+    if (len < 2 || payload[0] != '{' || payload[len - 1] != '}')
+        return 0;
+    brace = len - 1;                        /* Index des schliessenden `}` */
+    if (snprintf(out, n, "%.*s,\"session\":\"%s\"}\n",
+                 (int)brace, payload, session) >= (int)n)
+        return 0;                           /* Puffer zu klein -> unveraendert */
+    return 1;
 }
 
 static void blog(const char *fmt, ...)
@@ -677,6 +711,14 @@ static int pipe_send_command(const char *event, const char *payload,
                              int timeout_ms, char *line_out, size_t line_out_sz)
 {
     int w;
+    char wire[LINE_MAX];
+    const char *out_payload = payload;
+
+    /* #392: Session-/Boot-ID zentral an JEDEN Command haengen (nicht pro
+     * Call-Site). Payloads sind immer ein JSON-Objekt; sonst bleibt
+     * out_payload == payload (defensiv, kein Crash). */
+    if (attach_session_field(payload, g_session_id, wire, sizeof(wire)))
+        out_payload = wire;
 
     /* Serialisierung: der HTTP-Server ist jetzt multi-threaded (PR B), aber
      * Pipe + pending-Response-Slot sind single. */
@@ -695,7 +737,7 @@ static int pipe_send_command(const char *event, const char *payload,
     LeaveCriticalSection(&g_resp_cs);
 
     EnterCriticalSection(&g_pipe_cs);
-    w = pipe_write_all(g_pipe, payload);
+    w = pipe_write_all(g_pipe, out_payload);
     LeaveCriticalSection(&g_pipe_cs);
     if (!w) {
         LeaveCriticalSection(&g_cmd_cs);
@@ -718,6 +760,21 @@ static int pipe_send_command(const char *event, const char *payload,
     LeaveCriticalSection(&g_resp_cs);
     LeaveCriticalSection(&g_cmd_cs);
     return 0;
+}
+
+/* Readiness der Pipe aus der BESTEHENDEN persistenten Verbindung (#902).
+ * Liest g_pipe unter g_pipe_cs und liefert 1, wenn ein gueltiges Handle da
+ * ist, sonst 0. Es wird bewusst KEIN neuer Connect geoeffnet: rbbridge.dll
+ * erzeugt die Pipe mit nMaxInstances=1, der pipe_reader-Thread haelt die
+ * einzige Instanz -> jeder zusaetzliche Connect traefe ERROR_PIPE_BUSY und
+ * meldete die Pipe faelschlich als tot. 0/1 zurueck. */
+static int pipe_ready(void)
+{
+    int ok;
+    EnterCriticalSection(&g_pipe_cs);
+    ok = (g_pipe != INVALID_HANDLE_VALUE);
+    LeaveCriticalSection(&g_pipe_cs);
+    return ok ? 1 : 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -815,19 +872,34 @@ static const char *find_icase(const char *hay, const char *needle)
     return NULL;
 }
 
-static void handle_health(SOCKET c)
+/* GET /health[?deep=1]: Readiness aus der BESTEHENDEN persistenten
+ * Verbindung (#902), KEIN Zweit-Connect mehr. Ist eine Verbindung da,
+ * gilt die Pipe als bereit; der optionale Deep-Ping laeuft ueber dieselbe
+ * Verbindung (pipe_send_command). Statuscode/Body kommen aus health_logic.h
+ * - ehrlich statt "immer 200". Bei pipe_ok=1 bleibt der Default-Body
+ * bitgleich zu vorher. */
+static void handle_health(SOCKET c, int deep)
 {
-    char body[128];
-    int pipe_ok = 0;
-    /* Kurzes Fenster: /health ist ein Probe-Connect, der nie lange warten darf. */
-    HANDLE h = pipe_connect(500);
-    if (h != INVALID_HANDLE_VALUE) {
-        pipe_ok = 1;
-        CloseHandle(h);
-    }
-    snprintf(body, sizeof(body), "{\"ok\":true,\"pipe\":%s}",
-             pipe_ok ? "true" : "false");
-    http_respond(c, 200, "OK", body);
+    char body[192];
+    char line[READ_BUF];
+    int pipe_ok;
+    int ping_ok = 0;
+    int code;
+
+    /* Readiness aus der persistenten Verbindung: kein frischer Connect, sonst
+     * ERROR_PIPE_BUSY gegen die eine DLL-Pipe-Instanz (nMaxInstances=1). */
+    pipe_ok = pipe_ready();
+
+    /* Deep-Ping ueber die BESTEHENDE Verbindung (kein neuer Connect).
+     * pipe_send_command schreibt auf g_pipe und wartet auf die pong-Zeile. */
+    if (deep && pipe_ok)
+        ping_ok = (pipe_send_command("pong", "{\"cmd\":\"ping\"}\n",
+                                     2000, line, sizeof(line)) == 0);
+
+    code = deep ? bridge_health_status_deep(pipe_ok, ping_ok)
+                : bridge_health_status(pipe_ok);
+    bridge_health_body(pipe_ok, ping_ok, deep, body, sizeof(body));
+    http_respond(c, code, code == 200 ? "OK" : "Service Unavailable", body);
 }
 
 
@@ -1254,32 +1326,28 @@ static void handle_dom_suspend(SOCKET c, const char *cmd, const char *event)
     char line[READ_BUF];
     char payload[LINE_MAX];
     int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
-    HANDLE h = pipe_connect(2500);
-
-    if (h == INVALID_HANDLE_VALUE) {
-        blog("POST /%s: Pipe nicht erreichbar -> pipe_unavailable", cmd);
-        http_respond(c, 503, "Service Unavailable",
-                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
-        return;
-    }
 
     snprintf(payload, sizeof(payload), "{\"cmd\":\"%s\"}\n", cmd);
-    if (!pipe_write_all(h, payload)) {
-        CloseHandle(h);
-        http_respond(c, 500, "Internal Server Error",
-                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
-        return;
-    }
 
+    /* Kanonischer Pfad (Issue #881): dieselbe PERSISTENTE Pipe + der
+     * geteilte Response-Slot wie alle anderen Handler. Eine eigene
+     * pipe_connect-Verbindung scheitert (dwShareMode 0 -> ERROR_PIPE_BUSY)
+     * und meldet faelschlich pipe_unavailable. */
     {
-        int rc = pipe_wait_line(h, event, NULL, timeout_ms, line, sizeof(line));
-        CloseHandle(h);
+        int rc = pipe_send_command(event, payload, timeout_ms, line, sizeof(line));
+        if (rc == -1) {
+            blog("POST /%s: Pipe nicht erreichbar -> pipe_unavailable", cmd);
+            http_respond(c, 503, "Service Unavailable",
+                         "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+            return;
+        }
         if (rc != 0) {
             http_respond(c, 500, "Internal Server Error",
                          "{\"ok\":false,\"reason\":\"timeout\"}");
             return;
         }
     }
+    log_response("/dom_suspend", line);
     http_respond(c, 200, "OK", line);
 }
 
@@ -1818,8 +1886,10 @@ static void handle_client(SOCKET c)
 
         log_request(method, path, body, body_len);
 
-        if (strcmp(method, "GET") == 0 && strcmp(path, "/health") == 0) {
-            handle_health(c);
+        if (strcmp(method, "GET") == 0 &&
+            (strcmp(path, "/health") == 0 ||
+             strncmp(path, "/health?", 8) == 0)) {
+            handle_health(c, strstr(path, "deep=1") != NULL);
         } else if (strcmp(method, "GET") == 0 && strcmp(path, "/events") == 0) {
             handle_events(c);
         } else if (strcmp(method, "GET") == 0 && strcmp(path, "/attack_status") == 0) {

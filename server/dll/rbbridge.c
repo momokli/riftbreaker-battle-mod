@@ -757,6 +757,59 @@ static size_t chat_build_player_chat(const char *text, char *out, size_t n)
     return (size_t)len;
 }
 
+/* #392: liest den String-Wert `"session"` aus einer Request-Zeile (die
+ * Bridge haengt ihn zentral an JEDEN Command an). Reine Funktion ->
+ * host-testbar (tests/rbbridge-hosttest). Rueckgabe 1 = gefunden und nicht
+ * leer; sonst 0 (out = ""). Robust gegen fehlenden Key, Nicht-String-Werte,
+ * NULL und zu kleinen Puffer (kein Crash). */
+static int session_from_line(const char *line, char *out, size_t n)
+{
+    const char *p;
+    size_t k = 0;
+
+    if (!line || !out || n == 0)
+        return 0;
+    out[0] = '\0';
+    for (p = line; (p = strstr(p, "\"session\"")) != NULL; p += 9) {
+        const char *q = p + 9;
+        while (*q == ' ' || *q == '\t')
+            q++;
+        if (*q != ':')
+            continue;
+        q++;
+        while (*q == ' ' || *q == '\t')
+            q++;
+        if (*q != '"')
+            continue;
+        q++;
+        while (*q && *q != '"' && k + 1 < n)
+            out[k++] = *q++;
+        out[k] = '\0';
+        return (*q == '"' && k > 0) ? 1 : 0;
+    }
+    return 0;
+}
+
+/* #392: rendert die EINE Request-Logzeile `req cmd=<name> session=<id>`.
+ * Leere/NULL-Werte -> `-`. Reine Funktion -> host-testbar. Rueckgabe =
+ * Laenge der Zeile ohne NUL; 0 = Puffer zu klein (out = ""). */
+static size_t req_log_format(const char *cmd, const char *session,
+                             char *out, size_t n)
+{
+    int len;
+
+    if (!out || n == 0)
+        return 0;
+    len = snprintf(out, n, "req cmd=%s session=%s",
+                   (cmd && cmd[0]) ? cmd : "-",
+                   (session && session[0]) ? session : "-");
+    if (len < 0 || (size_t)len >= n) {
+        out[0] = '\0';
+        return 0;
+    }
+    return (size_t)len;
+}
+
 /* #549: kleine Single-Producer/Single-Consumer-Ring-Queue fuer eingehenden
  * Chat. Bewusst REINE Logik (kein Lock, keine Windows-API) -> host-testbar
  * (tests/rbbridge-hosttest). Die Produktions-Caller halten g_chat_cs (siehe
@@ -822,7 +875,9 @@ static int g_file_log = 1;
 static volatile LONG g_stop = 0;   /* 1 = Thread soll sich beenden       */
 static HANDLE g_thread = NULL;     /* Handle des Pipe-Server-Threads     */
 static LONG g_thread_started = 0;  /* verhindert doppelte Attach-Threads */
+static LONG g_initialized = 0;     /* CS/Queue einmalig initen (#902/US3) */
 static CRITICAL_SECTION g_log_cs;  /* schuetzt das Datei-Log             */
+static CRITICAL_SECTION g_dbg_cs;  /* schuetzt den stderr-Write (#688)   */
 
 /* Chat-Detour (#549): OnNetPlayerChatRequest (RVA 0x1821B50) inline-
  * gehakt. Der Spieler tippt Chat (vanilla Client), die DLL liest den Text
@@ -860,14 +915,31 @@ static void dbg(const char *fmt, ...)
     OutputDebugStringA(buf);
 
     /* Konsolen-/docker-Log (#392): gleicher Stream wie das Spiel (stderr ->
-     * docker), mit Zeitstempel fuer Korrelation mit bridge + exor_logs. */
+     * docker), mit Zeitstempel fuer Korrelation mit bridge + exor_logs.
+     *
+     * Bewusst direkter Handle-Write statt fprintf(stderr, ...): mingw
+     * leitet fprintf ueber den CRT-Slot __imp___acrt_iob_func in der
+     * writable .data-Section auf; ist dieser Slot korrumpiert, springt
+     * der Call in Nicht-Funktions-Code (Execute-Fault/DEP, #688). Der
+     * Handle-Write below hat diese Indirektion nicht. */
     {
+        char line[1152];
         SYSTEMTIME st;
         GetLocalTime(&st);
-        fprintf(stderr, "[%02d:%02d:%02d.%03d] [rbbridge] [tid=%lu] %s\n",
-                st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
-                (unsigned long)GetCurrentThreadId(), buf);
-        fflush(stderr);
+        int n = snprintf(line, sizeof(line),
+                         "[%02d:%02d:%02d.%03d] [rbbridge] [tid=%lu] %s\n",
+                         st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+                         (unsigned long)GetCurrentThreadId(), buf);
+        if (n > 0) {
+            HANDLE herr = GetStdHandle(STD_ERROR_HANDLE);
+            if (herr != NULL && herr != INVALID_HANDLE_VALUE) {
+                EnterCriticalSection(&g_dbg_cs);
+                DWORD written = 0;
+                WriteFile(herr, line, (DWORD)n, &written, NULL);
+                FlushFileBuffers(herr);
+                LeaveCriticalSection(&g_dbg_cs);
+            }
+        }
     }
 
     if (!g_file_log)
@@ -6078,6 +6150,18 @@ static void handle_line(HANDLE hPipe, const char *line)
         return;
     }
 
+    /* #392: pro Request GENAU EINE Logzeile vor dem Dispatch (auch ping/
+     * get_state/probe), damit ein Crash ohne Dump dem Kommando + Session
+     * zuordenbar ist. */
+    {
+        char sess[64];
+        char loglin[192];
+        if (!session_from_line(line, sess, sizeof(sess)))
+            snprintf(sess, sizeof(sess), "-");
+        if (req_log_format(cmd, sess, loglin, sizeof(loglin)) > 0)
+            dbg("%s", loglin);
+    }
+
     if (strcmp(cmd, "ping") == 0) {
         /* TODO(spaeter): ggf. "t" mitgeben, damit der Client Latenz messen
          * kann - v0 bewusst minimal. */
@@ -6588,11 +6672,16 @@ int rbbridge_start(void)
         g_file_log = 0;
     }
 
-    InitializeCriticalSection(&g_log_cs);
+    /* Critical-Section-/Queue-Init EINMALIG (#902/US3): ein Re-Start nach
+     * totem Thread (rbbridge_ensure_server) darf die Critical Sections NICHT
+     * erneut initialisieren (Leck/UB). */
+    if (InterlockedCompareExchange(&g_initialized, 1, 0) == 0) {
+        InitializeCriticalSection(&g_log_cs);
+        InitializeCriticalSection(&g_dbg_cs);
+        InitializeCriticalSection(&g_chat_cs);
+        chat_queue_init(&g_chat_q);
+    }
     g_stop = 0;
-
-    InitializeCriticalSection(&g_chat_cs);
-    chat_queue_init(&g_chat_q);
 
     dbg("rbbridge_start: ref=%s", RBBRIDGE_REF);
 
@@ -6607,8 +6696,46 @@ int rbbridge_start(void)
     dbg("rbbridge_start: CreateThread fehlgeschlagen (GLE=%lu)",
         GetLastError());
     InterlockedExchange(&g_thread_started, 0);
-    DeleteCriticalSection(&g_log_cs);
+    /* CS bleiben initialisiert (einmalig, s.o.) -> hier kein Delete. */
     return -1;
+}
+
+/*
+ * Issue #902/US3: Selbstheilung auf DLL-Seite.
+ * Prueft, ob der Pipe-Server-Thread noch lebt, und setzt ihn nach einem
+ * abgebrochenen Thread OHNE Re-Inject neu auf. Der Host-Watchdog ruft das
+ * ueber `injector.exe --call ... rbbridge_ensure_server` auf.
+ * Rueckgabe: 0 = Thread laeuft (No-op) bzw. erfolgreich neu gestartet;
+ *            -1 = Neustart fehlgeschlagen.
+ *
+ * WICHTIG: Export UNBEDINGT via __declspec(dllexport) - die DLL wird mit
+ * `-shared` und OHNE .def gebaut, daher findet GetProcAddress den Entry nur
+ * mit dieser Markierung.
+ */
+__declspec(dllexport) int rbbridge_ensure_server(void)
+{
+    if (!g_thread_started)
+        return rbbridge_start(); /* noch nie gestartet -> Erststart */
+
+    /* Thread tot, wenn Handle NULL ist oder der Thread beendet wurde.
+     * WaitForSingleObject(h, 0) erkennt ein Thread-Ende nur, solange der
+     * Handle im laufenden Betrieb offen bleibt (hier der Fall). */
+    if (g_thread == NULL ||
+        WaitForSingleObject(g_thread, 0) == WAIT_OBJECT_0) {
+        DWORD exit_code = 0;
+        if (g_thread) {
+            GetExitCodeThread(g_thread, &exit_code);
+            CloseHandle(g_thread);
+        }
+        dbg("rbbridge_ensure_server: toter Pipe-Server-Thread "
+            "(exit=%lu) -> Neustart", (unsigned long)exit_code);
+        g_thread = NULL;
+        InterlockedExchange(&g_thread_started, 0);
+        return rbbridge_start();
+    }
+
+    dbg("rbbridge_ensure_server: Thread lebt -> No-op");
+    return 0; /* Thread laeuft weiter */
 }
 
 /*
@@ -6644,6 +6771,7 @@ void rbbridge_stop(void)
         g_thread = NULL;
     }
     DeleteCriticalSection(&g_log_cs);
+    DeleteCriticalSection(&g_dbg_cs);
     InterlockedExchange(&g_thread_started, 0);
 }
 

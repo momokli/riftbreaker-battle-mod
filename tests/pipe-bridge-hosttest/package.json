@@ -1,0 +1,9 @@
+{
+  "name": "pipe-bridge-hosttest",
+  "version": "1.0.0",
+  "private": true,
+  "description": "pipe_bridge host-test: kompiliert health_logic.h (/health-Statuscode+Body) mit dem Host-CC (kein Windows/Spiel).",
+  "scripts": {
+    "test": "node --test"
+  }
+}
