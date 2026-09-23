@@ -102,6 +102,30 @@ static void init_session_id(void)
              st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
 }
 
+/* #392: haengt `,"session":"<id>"` vor das schliessende `}` eines
+ * Command-Payloads (`{...}\n`). Reine Funktion -> zentral in
+ * pipe_send_command nutzbar (keine Call-Site-Aenderung).
+ * Rueckgabe 1 = out gesetzt; 0 = kein JSON-Objekt / Puffer zu klein
+ * (der Aufrufer schreibt dann payload unveraendert). */
+static int attach_session_field(const char *payload, const char *session,
+                                char *out, size_t n)
+{
+    size_t len, brace;
+
+    if (!payload || !session || !out || n == 0)
+        return 0;
+    len = strlen(payload);
+    while (len > 0 && (payload[len - 1] == '\n' || payload[len - 1] == '\r'))
+        len--;                              /* Trailing-Newline ignorieren */
+    if (len < 2 || payload[0] != '{' || payload[len - 1] != '}')
+        return 0;
+    brace = len - 1;                        /* Index des schliessenden `}` */
+    if (snprintf(out, n, "%.*s,\"session\":\"%s\"}\n",
+                 (int)brace, payload, session) >= (int)n)
+        return 0;                           /* Puffer zu klein -> unveraendert */
+    return 1;
+}
+
 static void blog(const char *fmt, ...)
 {
     char buf[1024];
@@ -687,6 +711,14 @@ static int pipe_send_command(const char *event, const char *payload,
                              int timeout_ms, char *line_out, size_t line_out_sz)
 {
     int w;
+    char wire[LINE_MAX];
+    const char *out_payload = payload;
+
+    /* #392: Session-/Boot-ID zentral an JEDEN Command haengen (nicht pro
+     * Call-Site). Payloads sind immer ein JSON-Objekt; sonst bleibt
+     * out_payload == payload (defensiv, kein Crash). */
+    if (attach_session_field(payload, g_session_id, wire, sizeof(wire)))
+        out_payload = wire;
 
     /* Serialisierung: der HTTP-Server ist jetzt multi-threaded (PR B), aber
      * Pipe + pending-Response-Slot sind single. */
@@ -705,7 +737,7 @@ static int pipe_send_command(const char *event, const char *payload,
     LeaveCriticalSection(&g_resp_cs);
 
     EnterCriticalSection(&g_pipe_cs);
-    w = pipe_write_all(g_pipe, payload);
+    w = pipe_write_all(g_pipe, out_payload);
     LeaveCriticalSection(&g_pipe_cs);
     if (!w) {
         LeaveCriticalSection(&g_cmd_cs);
