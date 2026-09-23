@@ -1381,6 +1381,68 @@ int main(void)
               "hq core: find_fn NULL -> 0 (graceful) (#730)");
     }
 
+    /* -------------------------------------------------------------- */
+    /* VEH-Guard-Zustandslogik (#623)                                 */
+    /* -------------------------------------------------------------- */
+    {
+        jmp_buf jb;
+        jmp_buf *prev;
+
+        rbbridge_guard_pop(NULL); /* sauberer Start */
+
+        /* Wahrheitstabelle: kein Guard -> nie behandeln. */
+        check(!rbbridge_veh_should_handle(
+                  RBBRIDGE_EXCEPTION_ACCESS_VIOLATION),
+              "#623 guard: kein Guard -> AV nicht behandeln");
+        check(!rbbridge_veh_should_handle(0x80000003UL),
+              "#623 guard: kein Guard -> Fremdcode nicht behandeln");
+
+        /* Guard + AV -> true; Guard + Fremdcode -> false. */
+        prev = rbbridge_guard_push(&jb);
+        check(rbbridge_veh_should_handle(
+                  RBBRIDGE_EXCEPTION_ACCESS_VIOLATION),
+              "#623 guard: Guard + AV -> behandeln");
+        check(!rbbridge_veh_should_handle(0x80000003UL),
+              "#623 guard: Guard + Fremdcode (BREAKPOINT) -> nicht behandeln");
+
+        /* Nesting: innerer push/pop stellt den aeusseren Guard wieder her. */
+        {
+            jmp_buf jb2;
+            jmp_buf *prev2 = rbbridge_guard_push(&jb2);
+            check(t_guard_jmp == &jb2 &&
+                      rbbridge_veh_should_handle(
+                          RBBRIDGE_EXCEPTION_ACCESS_VIOLATION),
+                  "#623 guard: verschachtelter Guard aktiv");
+            rbbridge_guard_pop(prev2);
+            check(t_guard_jmp == &jb,
+                  "#623 guard: pop stellt aeusseren Guard wieder her");
+        }
+        rbbridge_guard_pop(prev);
+        check(t_guard_jmp == NULL,
+              "#623 guard: pop auf leer -> kein Guard mehr aktiv");
+
+        /* Simulierter longjmp-Rettungspfad (ohne echtes Fault/Windows):
+         * ein "AV" macht genau das, was der VEH-Handler macht -
+         * t_guard_jmp leeren + longjmp zurueck in den setjmp-Punkt. */
+        {
+            volatile int rescued = 0;
+            prev = rbbridge_guard_push(&jb);
+            if (setjmp(jb) == 0) {
+                jmp_buf *j = t_guard_jmp;
+                if (j) {
+                    t_guard_jmp = NULL; /* wie im Handler */
+                    longjmp(*j, 1);
+                }
+                check(0, "#623 guard: longjmp ohne Guard (Testfehler)");
+            } else {
+                rescued = 1;
+            }
+            rbbridge_guard_pop(prev);
+            check(rescued == 1 && t_guard_jmp == NULL,
+                  "#623 guard: simulierter AV -> Rettung + Guard geraeumt");
+        }
+    }
+
     free(img);
 
     printf("HOSTTEST_PASS=%d HOSTTEST_FAIL=%d\n", g_pass, g_fail);
