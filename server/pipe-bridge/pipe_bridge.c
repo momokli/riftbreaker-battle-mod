@@ -1254,32 +1254,28 @@ static void handle_dom_suspend(SOCKET c, const char *cmd, const char *event)
     char line[READ_BUF];
     char payload[LINE_MAX];
     int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
-    HANDLE h = pipe_connect(2500);
-
-    if (h == INVALID_HANDLE_VALUE) {
-        blog("POST /%s: Pipe nicht erreichbar -> pipe_unavailable", cmd);
-        http_respond(c, 503, "Service Unavailable",
-                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
-        return;
-    }
 
     snprintf(payload, sizeof(payload), "{\"cmd\":\"%s\"}\n", cmd);
-    if (!pipe_write_all(h, payload)) {
-        CloseHandle(h);
-        http_respond(c, 500, "Internal Server Error",
-                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
-        return;
-    }
 
+    /* Kanonischer Pfad (Issue #881): dieselbe PERSISTENTE Pipe + der
+     * geteilte Response-Slot wie alle anderen Handler. Eine eigene
+     * pipe_connect-Verbindung scheitert (dwShareMode 0 -> ERROR_PIPE_BUSY)
+     * und meldet faelschlich pipe_unavailable. */
     {
-        int rc = pipe_wait_line(h, event, NULL, timeout_ms, line, sizeof(line));
-        CloseHandle(h);
+        int rc = pipe_send_command(event, payload, timeout_ms, line, sizeof(line));
+        if (rc == -1) {
+            blog("POST /%s: Pipe nicht erreichbar -> pipe_unavailable", cmd);
+            http_respond(c, 503, "Service Unavailable",
+                         "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+            return;
+        }
         if (rc != 0) {
             http_respond(c, 500, "Internal Server Error",
                          "{\"ok\":false,\"reason\":\"timeout\"}");
             return;
         }
     }
+    log_response("/dom_suspend", line);
     http_respond(c, 200, "OK", line);
 }
 
