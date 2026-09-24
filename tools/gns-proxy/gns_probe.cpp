@@ -280,6 +280,23 @@ std::string g_capsuleToken;
 // ~20 s ohne Antwort selbst und verbindet neu). NUR vom Hauptloop beruehrt.
 std::map<std::string, rbroute::Endpoint> g_pins;
 
+// Solo-Claim pro Identitaet (Issue #930): gemerkt wird, WELCHE Parked-Instanz
+// geclaimt wurde — auch OHNE verbundenen Client (dann existiert kein
+// SessionRecord). NUR vom Hauptloop beruehrt; der HTTP-Thread reicht den Claim
+// ueber die Command-Queue ein.
+struct SoloClaim {
+  std::string instance;
+  rbroute::Endpoint endpoint;
+  long long claimedAtMs = 0;  // steady_clock-Millisekunden (nur Anzeige)
+};
+std::map<std::string, SoloClaim> g_soloClaims;
+
+// Vom HTTP-Thread gefuellter Pause-Cache: Parked-Instanz -> Spiel angehalten?
+// Quelle ist der Parked-`GET /status` (nur wenn `--parked-url` gesetzt).
+// Fehlt ein Eintrag, faellt die Phase sicher auf Underway/Running zurueck.
+// Unter g_apiMutex gelesen/geschrieben.
+std::map<std::string, bool> g_parkedPaused;
+
 // Anzeige-Snapshot (HTTP-Thread liest, Hauptloop schreibt) + Befehls-Queue.
 struct SessionInfo {
   std::string identity;
@@ -292,6 +309,11 @@ struct SessionInfo {
   long long heldSeconds = 0;
   bool connected = false;
   bool pinned = false;
+  // Solo-Status (Issue #930, additiv): nur gesetzt, wenn fuer die Identitaet
+  // ein Parked-Claim existiert (g_soloClaims).
+  std::string soloInstance;
+  std::string soloPhase;   // provisioned | underway | in_game_paused | running
+  std::string soloEndpoint;
 };
 struct ApiCommand {
   // Was die Hauptschleife tun soll (die Registry `g_targets` gehoert NUR ihr).
@@ -305,6 +327,8 @@ struct ApiCommand {
   std::string identity;  // bei Route-Befehlen
   std::string target;    // Backend-*Name* (RouteByName) bzw. Name (Add/Delete)
   rbroute::Endpoint endpoint;  // bei Add / RouteByEndpoint
+  std::string instance;  // Parked-Instanzname (RouteByEndpoint, /solo)
+  bool selfSend = true;  // /solo: Client automatisch auf die Instanz schicken?
 };
 std::mutex g_apiMutex;
 std::vector<SessionInfo> g_sessionsSnapshot;
@@ -325,6 +349,7 @@ struct SessionRecord {
   std::chrono::steady_clock::time_point heldSince;
   bool connected = false;
   bool held = false;
+  bool backendConnected = false;  // Issue #930: fuer die Phasen-Ableitung
 };
 std::map<std::string, SessionRecord> g_sessions;
 
@@ -526,6 +551,10 @@ void startBackendConnect(Session &s) {
           s.backendTarget.str().c_str());
 }
 
+// Vorwaerts-Deklaration: sessionFor() steht weiter unten, routeTo() braucht es
+// aber schon fuer die Backend-Status-Buchfuehrung (Issue #930).
+SessionRecord &sessionFor(const std::string &identity);
+
 void routeTo(Session &s, const rbroute::Endpoint &target, const char *why) {
   logLine("ROUTE (%s) -> %s", why, target.str().c_str());
   if (s.backendConn != k_HSteamNetConnection_Invalid) {
@@ -535,6 +564,10 @@ void routeTo(Session &s, const rbroute::Endpoint &target, const char *why) {
     s.backendConnected = false;
   }
   s.backendTarget = target;
+  if (!s.identity.empty()) {
+    SessionRecord &rec = sessionFor(s.identity);
+    rec.backendConnected = false;
+  }
   // Alles Gesehene erneut an das (neue) Backend schicken — aber erst, wenn es
   // verbunden ist (siehe Callback), sonst flutet ein Replay den Handshake.
   s.toBackendQ.clear();
@@ -599,31 +632,75 @@ SessionRecord &sessionFor(const std::string &identity) {
 void refreshSnapshot() {
   const std::chrono::steady_clock::time_point now =
       std::chrono::steady_clock::now();
+  // Pause-Cache des HTTP-Threads einmal kopieren (unter g_apiMutex).
+  std::map<std::string, bool> parkedPaused;
+  {
+    std::lock_guard<std::mutex> lock(g_apiMutex);
+    parkedPaused = g_parkedPaused;
+  }
   std::vector<SessionInfo> snap;
-  snap.reserve(g_sessions.size());
+  snap.reserve(g_sessions.size() + g_soloClaims.size());
+  // Vereinigung: Session-Buchfuehrung + geclaimte Identitaeten OHNE Session
+  // (Issue #930 — nach dem Solo-Claim existiert noch kein SessionRecord).
+  std::map<std::string, bool> seen;
+  const auto fill = [&](const std::string &identity) {
+    if (seen[identity]) {
+      return;
+    }
+    seen[identity] = true;
+    SessionInfo s;
+    s.identity = identity;
+    std::map<std::string, SessionRecord>::const_iterator rit =
+        g_sessions.find(identity);
+    const bool hasRec = rit != g_sessions.end();
+    if (hasRec) {
+      const SessionRecord &rec = rit->second;
+      s.ip = rec.ip;
+      s.name = rec.name;
+      s.state = rec.state;
+      s.target = rec.targetStr;
+      s.messages = rec.messages;
+      s.connected = rec.connected;
+      s.ageSeconds = std::chrono::duration_cast<std::chrono::seconds>(
+                         now - rec.firstSeen)
+                         .count();
+      s.heldSeconds =
+          rec.held
+              ? std::chrono::duration_cast<std::chrono::seconds>(now -
+                                                                 rec.heldSince)
+                    .count()
+              : 0;
+    } else {
+      s.state = "waiting";  // geclaimt, aber (noch) kein Client
+    }
+    s.pinned = g_pins.find(identity) != g_pins.end();
+    std::map<std::string, SoloClaim>::const_iterator cit =
+        g_soloClaims.find(identity);
+    if (cit != g_soloClaims.end()) {
+      const SoloClaim &claim = cit->second;
+      s.soloInstance = claim.instance;
+      s.soloEndpoint = claim.endpoint.str();
+      bool gamePaused = false;
+      std::map<std::string, bool>::const_iterator pit =
+          parkedPaused.find(claim.instance);
+      if (pit != parkedPaused.end()) {
+        gamePaused = pit->second;
+      }
+      s.soloPhase = rbapi::soloPhaseName(rbapi::deriveSoloPhase(
+          true, hasRec && s.connected,
+          hasRec && rit->second.backendConnected, gamePaused));
+    }
+    snap.push_back(s);
+  };
   for (std::map<std::string, SessionRecord>::const_iterator it =
            g_sessions.begin();
        it != g_sessions.end(); ++it) {
-    const SessionRecord &rec = it->second;
-    SessionInfo s;
-    s.identity = rec.identity;
-    s.ip = rec.ip;
-    s.name = rec.name;
-    s.state = rec.state;
-    s.target = rec.targetStr;
-    s.messages = rec.messages;
-    s.connected = rec.connected;
-    s.pinned = g_pins.find(rec.identity) != g_pins.end();
-    s.ageSeconds = std::chrono::duration_cast<std::chrono::seconds>(
-                       now - rec.firstSeen)
-                       .count();
-    s.heldSeconds =
-        rec.held
-            ? std::chrono::duration_cast<std::chrono::seconds>(now -
-                                                               rec.heldSince)
-                  .count()
-            : 0;
-    snap.push_back(s);
+    fill(it->first);
+  }
+  for (std::map<std::string, SoloClaim>::const_iterator it =
+           g_soloClaims.begin();
+       it != g_soloClaims.end(); ++it) {
+    fill(it->first);
   }
   std::lock_guard<std::mutex> lock(g_apiMutex);
   g_sessionsSnapshot.swap(snap);
@@ -671,6 +748,9 @@ void onConnectionStatusChanged(
     if (backendSess != nullptr) {
       logLine("backend: Connected");
       backendSess->backendConnected = true;
+      if (!backendSess->identity.empty()) {
+        sessionFor(backendSess->identity).backendConnected = true;
+      }
       queueHistoryDelta(*backendSess);
       break;
     }
@@ -740,6 +820,9 @@ void onConnectionStatusChanged(
       g_backendSessions.erase(pInfo->m_hConn);
       backendSess->backendConn = k_HSteamNetConnection_Invalid;
       backendSess->backendConnected = false;
+      if (!backendSess->identity.empty()) {
+        sessionFor(backendSess->identity).backendConnected = false;
+      }
       pCloseConnection(g_pInterface, pInfo->m_hConn, 0, nullptr, false);
       break;
     }
@@ -755,6 +838,7 @@ void onConnectionStatusChanged(
     if (!s->identity.empty()) {
       SessionRecord &rec = sessionFor(s->identity);
       rec.connected = false;
+      rec.backendConnected = false;
       if (rec.held) {
         const long long held =
             std::chrono::duration_cast<std::chrono::seconds>(
@@ -949,10 +1033,25 @@ void processApiCommands() {
                 it->target.c_str());
       }
       break;
-    case ApiCommand::kRouteByEndpoint:
+    case ApiCommand::kRouteByEndpoint: {
       // /solo: Ziel kommt aufgeloest vom Parked-Dienst (GNS-UDP-Endpoint).
-      pinIdentityTo(it->identity, it->endpoint, "solo (parked)");
+      // Claim IMMER merken (ueberlebt Reconnects / listet ohne Client); nur
+      // bei self_send=true zusaetzlich sofort pinnen (heutiges Verhalten).
+      SoloClaim claim;
+      claim.instance = it->instance;
+      claim.endpoint = it->endpoint;
+      claim.claimedAtMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now().time_since_epoch())
+                              .count();
+      g_soloClaims[it->identity] = claim;
+      if (it->selfSend) {
+        pinIdentityTo(it->identity, it->endpoint, "solo (parked)");
+      } else {
+        logLine("API: solo '%s' -> %s (self_send=off, nur reserviert)",
+                it->identity.c_str(), it->endpoint.str().c_str());
+      }
       break;
+    }
     case ApiCommand::kRouteByName: {
       rbroute::Endpoint target;
       bool found = false;
@@ -999,6 +1098,12 @@ std::string buildSessionsJson() {
     json += ",\"messages\":" + std::to_string(it->messages);
     json += ",\"age_seconds\":" + std::to_string(it->ageSeconds);
     json += ",\"held_seconds\":" + std::to_string(it->heldSeconds);
+    // Solo-Status (Issue #930, additiv — nur wenn ein Claim existiert).
+    if (!it->soloPhase.empty()) {
+      json += ",\"soloPhase\":\"" + rbapi::jsonEscape(it->soloPhase) + "\"";
+      json += ",\"soloInstance\":\"" + rbapi::jsonEscape(it->soloInstance) + "\"";
+      json += ",\"soloEndpoint\":\"" + rbapi::jsonEscape(it->soloEndpoint) + "\"";
+    }
     json += "}";
   }
   json += "]";
@@ -1073,6 +1178,13 @@ const char kUiHtml[] = R"HTML(<!doctype html>
   .badge.held { background:rgba(242,193,78,.16); color:var(--held); }
   .badge.waiting { background:rgba(240,138,138,.16); color:var(--waiting); }
   .badge.routed { background:rgba(95,211,154,.16); color:var(--routed); }
+  .badge.solo-provisioned { background:rgba(78,161,255,.16); color:var(--accent); }
+  .badge.solo-underway { background:rgba(242,193,78,.16); color:var(--held); }
+  .badge.solo-in_game_paused { background:rgba(240,138,138,.16); color:var(--waiting); }
+  .badge.solo-running { background:rgba(95,211,154,.16); color:var(--routed); }
+  .solo { display:flex; gap:8px; margin-top:10px; }
+  .solo .toggle.on { border-color:var(--accent); background:#1b2735; }
+  .hint { margin-top:8px; font-size:12px; color:var(--waiting); }
   .meta { display:flex; flex-wrap:wrap; gap:6px 16px; margin-bottom:12px;
     color:var(--muted); font-size:12.5px; }
   .meta b { color:var(--fg); font-weight:600; }
@@ -1105,8 +1217,11 @@ const char kUiHtml[] = R"HTML(<!doctype html>
 </main>
 <script>
 let TARGETS = [];
+const SOLO_SELF = {}; // Identitaet -> self-send an/aus (Default: an)
 const ORDER = { held: 0, waiting: 1, connected: 2, closed: 3, routed: 4 };
 const LABEL = { held: "wartet", waiting: "getrennt", connected: "verbunden", closed: "getrennt", routed: "geroutet" };
+const PHASE = { provisioned: "provisioniert", underway: "Spieler unterwegs",
+  in_game_paused: "im Spiel (paused)", running: "laeuft" };
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
   const e = document.createElement(tag);
@@ -1128,6 +1243,32 @@ async function route(identity, target, btn) {
   setTimeout(loadSessions, 250);
 }
 
+function hint(cardEl, text) {
+  let h = cardEl.querySelector(".hint");
+  if (!h) { h = el("div", "hint"); cardEl.appendChild(h); }
+  h.textContent = text;
+}
+
+// Solo: claim + self-send in einem Schritt (POST /solo {identitaet, self_send}).
+async function solo(identity, btn, cardEl) {
+  btn.disabled = true;
+  const selfSend = SOLO_SELF[identity] !== false;
+  try {
+    const r = await fetch("/solo", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identitaet: identity, self_send: selfSend }) });
+    if (!r.ok) {
+      const j = await r.json().catch(() => null);
+      const reason = (j && j.reason) ? j.reason : ("http " + r.status);
+      const MSG = { none_parked: "keine geparkte Instanz frei",
+        backend_starting: "Backend startet noch - gleich erneut",
+        parked_unconfigured: "Parked-Dienst nicht konfiguriert",
+        not_claimable: "Instanz nicht claimbar" };
+      hint(cardEl, MSG[reason] || reason);
+    }
+  } catch (e) { hint(cardEl, "Netzwerkfehler"); }
+  setTimeout(loadSessions, 300);
+}
+
 function card(s) {
   const c = el("div", "card " + s.state);
   const top = el("div", "row");
@@ -1136,6 +1277,13 @@ function card(s) {
   if (s.pinned) badge.textContent += " - pin";
   top.appendChild(badge);
   c.appendChild(top);
+
+  if (s.soloPhase) {
+    const srow = el("div", "row");
+    srow.appendChild(el("span", "badge solo-" + s.soloPhase, PHASE[s.soloPhase] || s.soloPhase));
+    if (s.soloInstance) srow.appendChild(el("span", "sub", s.soloInstance));
+    c.appendChild(srow);
+  }
 
   const m1 = el("div", "meta");
   const a = el("span"); a.append("ID ", el("b", null, s.identity)); m1.appendChild(a);
@@ -1160,6 +1308,17 @@ function card(s) {
   }
   if (!TARGETS.length) act.appendChild(el("span", "sub", "keine --target gesetzt"));
   c.appendChild(act);
+
+  const selfSend = SOLO_SELF[s.identity] !== false;
+  const soloRow = el("div", "solo");
+  const sbtn = el("button", null, "solo");
+  sbtn.onclick = () => solo(s.identity, sbtn, c);
+  const tog = el("button", "toggle" + (selfSend ? " on" : ""),
+    selfSend ? "self-send on" : "self-send off");
+  tog.onclick = () => { SOLO_SELF[s.identity] = !selfSend; loadSessions(); };
+  soloRow.appendChild(sbtn);
+  soloRow.appendChild(tog);
+  c.appendChild(soloRow);
   return c;
 }
 
@@ -1225,7 +1384,8 @@ struct OutboundResult {
   std::string body;
 };
 
-OutboundResult outboundHttpPost(const std::string &host, int port,
+OutboundResult outboundHttpCall(const std::string &method,
+                                const std::string &host, int port,
                                 const std::string &path,
                                 const std::string &payload,
                                 const std::string &bearer,
@@ -1284,7 +1444,7 @@ OutboundResult outboundHttpPost(const std::string &host, int port,
              reinterpret_cast<const char *>(&sendTimeout),
              sizeof(sendTimeout));
 
-  std::string req = "POST " + path + " HTTP/1.1\r\n";
+  std::string req = method + " " + path + " HTTP/1.1\r\n";
   req += "Host: " + host + ":" + std::to_string(port) + "\r\n";
   req += "Content-Type: application/json\r\n";
   req += "Content-Length: " + std::to_string(payload.size()) + "\r\n";
@@ -1329,6 +1489,79 @@ OutboundResult outboundHttpPost(const std::string &host, int port,
   return result;
 }
 
+// POST-Variante fuer den /solo-Claim (duenne Huelle um outboundHttpCall).
+OutboundResult outboundHttpPost(const std::string &host, int port,
+                                const std::string &path,
+                                const std::string &payload,
+                                const std::string &bearer,
+                                int connectTimeoutMs, int recvTimeoutMs) {
+  return outboundHttpCall("POST", host, port, path, payload, bearer,
+                          connectTimeoutMs, recvTimeoutMs);
+}
+
+// Parked-`GET /status` abfragen und den Pause-Cache (Instanz -> angehalten?)
+// aktualisieren. Laeuft best-effort im HTTP-Request-Thread, gedrosselt per TTL,
+// und blockiert daher NIE den GNS-Hauptloop. Fehler = stiller No-Op (die Phase
+// faellt dann sicher auf Underway/Running zurueck).
+void refreshParkedGameState() {
+  if (!g_parkedConfigured) {
+    return;
+  }
+  {
+    static std::chrono::steady_clock::time_point lastPoll;
+    const std::chrono::steady_clock::time_point now =
+        std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lock(g_apiMutex);
+    if (lastPoll.time_since_epoch().count() != 0 &&
+        now - lastPoll < std::chrono::milliseconds(1500)) {
+      return;
+    }
+    lastPoll = now;
+  }
+  const OutboundResult r = outboundHttpCall("GET", g_parkedHost, g_parkedPort,
+                                            "/status", std::string(),
+                                            g_parkedToken, 400, 600);
+  if (r.status != 200) {
+    return;
+  }
+  // entries[] ist eine flache Liste von {instance,…,state,…}. Wir lesen je
+  // `"instance":"X"` den folgenden `"state":"Y"` (Reihenfolge aus to_dict).
+  std::map<std::string, bool> fresh;
+  const std::string instanceKey = "\"instance\":\"";
+  std::size_t pos = r.body.find("\"entries\"");
+  if (pos == std::string::npos) {
+    pos = 0;
+  }
+  while ((pos = r.body.find(instanceKey, pos)) != std::string::npos) {
+    std::size_t start = pos + instanceKey.size();
+    const std::size_t iend = r.body.find('"', start);
+    if (iend == std::string::npos) {
+      break;
+    }
+    const std::string instance = r.body.substr(start, iend - start);
+    const std::size_t stateKey = r.body.find("\"state\":\"", iend);
+    if (stateKey == std::string::npos ||
+        stateKey > r.body.find("\"instance\":\"", iend)) {
+      break;
+    }
+    start = stateKey + 9;
+    const std::size_t send = r.body.find('"', start);
+    if (send == std::string::npos) {
+      break;
+    }
+    const std::string state = r.body.substr(start, send - start);
+    // Nur die Parked-Phasen ohne Welt-Fortschritt gelten als angehalten.
+    const bool paused =
+        (state == "parked" || state == "recycling" || state == "warming");
+    fresh[instance] = paused;
+    pos = send;
+  }
+  if (!fresh.empty()) {
+    std::lock_guard<std::mutex> lock(g_apiMutex);
+    g_parkedPaused = fresh;
+  }
+}
+
 // POST /solo: Parked `POST /claim` aufrufen (Bearer), Ziel von dort holen und
 // die Identitaet per Command-Queue darauf pinnen. Retry/Backoff nur HIER im
 // Request-Thread (transiente Fehler: Backend faehrt noch hoch).
@@ -1342,6 +1575,8 @@ void handleSolo(SOCKET s, const std::string &requestBody) {
     return;
   }
   rbapi::jsonStringField(requestBody, "env", env);
+  bool selfSend = true;
+  rbapi::parseSoloSelfSend(requestBody, selfSend);
 
   if (!g_capsuleConfigured && !g_parkedConfigured) {
     httpRespondJson(s, 503, "Service Unavailable",
@@ -1397,16 +1632,20 @@ void handleSolo(SOCKET s, const std::string &requestBody) {
       ApiCommand cmd;
       cmd.kind = ApiCommand::kRouteByEndpoint;
       cmd.identity = identity;
+      cmd.instance = outcome.instance;
+      cmd.selfSend = selfSend;
       rbroute::parseEndpoint(outcome.endpoint, cmd.endpoint);
       g_apiCommands.push_back(cmd);
     }
-    logLine("API: solo '%s' -> %s (instance=%s)", identity.c_str(),
-            outcome.endpoint.c_str(), outcome.instance.c_str());
+    logLine("API: solo '%s' -> %s (instance=%s, self_send=%s)", identity.c_str(),
+            outcome.endpoint.c_str(), outcome.instance.c_str(),
+            selfSend ? "on" : "off");
     std::string out = "{\"ok\":true,\"identitaet\":\"" +
                       rbapi::jsonEscape(identity) + "\",\"target\":\"" +
                       rbapi::jsonEscape(outcome.endpoint) +
                       "\",\"instance\":\"" +
-                      rbapi::jsonEscape(outcome.instance) + "\"}";
+                      rbapi::jsonEscape(outcome.instance) + "\",\"self_send\":" +
+                      (selfSend ? "true" : "false") + "}";
     httpRespondJson(s, 200, "OK", out);
     return;
   }
@@ -1488,6 +1727,9 @@ void httpHandle(SOCKET s) {
   if (method == "GET" && path == "/") {
     httpRespond(s, 200, "OK", "text/html; charset=utf-8", kUiHtml);
   } else if (method == "GET" && path == "/sessions") {
+    // Best-effort Pause-Quelle aktualisieren (gedrosselt, blockiert nicht den
+    // Hauptloop); danach den Snapshot ausgeben (Issue #930).
+    refreshParkedGameState();
     httpRespondJson(s, 200, "OK", buildSessionsJson());
   } else if (method == "GET" && path == "/targets") {
     httpRespondJson(s, 200, "OK", buildTargetsJson());
