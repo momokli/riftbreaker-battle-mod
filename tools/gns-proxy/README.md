@@ -183,7 +183,7 @@ Zwei neue Endpunkte ergaenzen die statischen `--target`-Buttons:
 | `POST /backends` | `{"name":"…","endpoint":"ip:port"}` | Backend registrieren/aktualisieren (Name ist der Schluessel; doppelter Name aktualisiert). `200`; `400` bei fehlendem `name`/ungueltigem `endpoint`. |
 | `DELETE /backends?name=NAME` | — | Backend abmelden. `200`; `400` ohne `name`; `404` bei unbekanntem Namen. |
 | `GET /targets` | — | listet die **dynamische** Registry (ohne Relay-Neustart). |
-| `POST /solo` | `{"identitaet":"str:…","env"?}` | fragt den Parked-Pool nach einer geparkten Solo-Instanz, pinnt die Identitaet automatisch auf deren **GNS-UDP-Endpoint** und antwortet mit dem Ziel. Kein Operator-Klick. |
+| `POST /solo` | `{"identitaet":"str:…","env"?,"self_send"?}` | fragt den Parked-Pool nach einer geparkten Solo-Instanz, pinnt die Identitaet automatisch auf deren **GNS-UDP-Endpoint** und antwortet mit dem Ziel. Kein Operator-Klick. `self_send` (JSON-Bool, Default `true`) steuert, ob der Spieler sofort mitgeschickt wird. |
 
 ```bash
 curl -s -X POST 127.0.0.1:9200/backends -d '{"name":"T","endpoint":"127.0.0.1:6324"}'
@@ -217,6 +217,51 @@ Der Retry laeuft **ausschliesslich im HTTP-Request-Thread** — der GNS-Hauptloo
 wird nie blockiert. Die Registry (`g_targets`) wird ebenfalls nur in der
 Hauptschleife mutiert; `GET /targets` liest einen mutex-geschuetzten Snapshot.
 Die dynamische Registry ist bewusst **fluechtig** (Parked ist Source of Truth).
+
+### Solo-Button `[ solo | self-send on ]` (#930)
+
+Jede Session-Karte in der Lobby bekommt einen **solo**-Button mit einem
+`self-send`-Toggle daneben. Der Klick ruft `POST /solo {identitaet, self_send}`
+und macht beides in einem Schritt: Instanz claimen **und** den Spieler
+hinschicken (ohne separaten Ziel-Klick).
+
+- **self-send on** (Default) — wie heute: Claim + sofortiger Pin. Der Client wird
+  umgezogen (schon verbunden) bzw. beim Reconnect automatisch geroutet.
+- **self-send off** — nur claimen/reservieren: der Relay merkt sich Instanz +
+  Endpoint (`g_soloClaims`), pinnt aber **nicht**. Ein spaeterer Ziel-Button
+  (`POST /route`) oder ein erneutes `solo` mit `self_send:true` routet dann.
+- Fehlende `self_send` im Body = **Default `true`** (heutiges Verhalten, keine
+  Breaking-Change; Pfad/Methode/Pflichtfelder von `/solo` unveraendert).
+
+Der Claim-Zustand wird pro Identitaet gehalten (nicht pro Session) und ueberlebt
+Reconnects. `/sessions` gibt ihn additiv aus — bestehende Felder bleiben
+unveraendert:
+
+| Feld | Bedeutung |
+| --- | --- |
+| `soloPhase` | `provisioned` / `underway` / `in_game_paused` / `running` |
+| `soloInstance` | Name der geclaimten Parked-Instanz |
+| `soloEndpoint` | GNS-UDP-Endpoint der Instanz (`ip:port`) |
+
+Phasen (reine Logik in `api_util.h`, host-getestet):
+
+| `soloPhase` | Anzeige | Bedingung |
+| --- | --- | --- |
+| `provisioned` | provisioniert | geclaimt, aber (noch) kein Client verbunden |
+| `underway` | Spieler unterwegs | Client verbunden, Backend-Connect laeuft |
+| `in_game_paused` | im Spiel (paused) | Client + Backend verbunden, Spiel angehalten |
+| `running` | laeuft | Client + Backend verbunden, Spiel laeuft |
+
+Auch **geclaimte Identitaeten ohne verbundenen Client** werden in `/sessions`
+gelistet (eigener Zweig, `state:"waiting"`) — vorher waren sie unsichtbar.
+
+**Pause-Quelle (bevorzugt ohne Deploy-Aenderung):** Ist `--parked-url` gesetzt,
+fragt der Relay beim `/sessions`-Poll gedrosselt (TTL 1,5 s, im HTTP-Thread)
+den Parked-`GET /status` ab und leitet `in_game_paused` aus dem Instanzzustand ab
+(nur Phasen ohne Welt-Fortschritt = angehalten). Fehlt die Quelle, faellt die
+Phase sicher auf `provisioned`/`underway`/`running` zurueck (kein Haenger, kein
+Crash). `self_send` ist eine reine UI-/Body-Auswahl und aendert die
+Parked-Semantik nicht.
 
 
 Der Relay bedient **N parallele Sessions**: jeder akzeptierte Client bekommt
@@ -299,5 +344,6 @@ Sekunden auf (vorher sah es wie ein Timeout des Proxys aus).
 - [x] Hold + Operator-Web-UI (#857, PoC): Spieler halten, per Klick routen
 - [x] Multi-Session (#877): N parallele Sessions (eigene Queues/Backpressure)
 - [x] Dynamische Backend-Registry + `POST /solo` (Claim + Auto-Pin, Retry) (#929)
+- [x] Lobby-Solo-Button `[ solo | self-send on ]` + `/sessions`-Solo-Status (#930)
 - [ ] `m_nAppID` in eigenen GNS-Build statt Runtime-Patch
 - [ ] Rust-Backend/Launcher auf die JSON-API aufsetzen
