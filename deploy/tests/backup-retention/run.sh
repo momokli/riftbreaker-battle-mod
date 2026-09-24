@@ -11,11 +11,14 @@
 #   Fall 4:  --check entfernt NICHTS real.
 #   Fall 5:  keep=0 (per -e) -> alle Kandidaten weg (konfigurierbar).
 #   Fall 6:  Negativ-Probe (red-before-green) des stat-Guards: die Kopie der
-#            Task-Datei OHNE den stat-Guard fasst einen NICHT existierenden
-#            Backup-Pfad per `find` an (Warnung "is not a directory" bzw.
-#            harter Fehler) — der geschützte Lauf tut das nicht. Ohne den Guard
-#            wäre die Hermetik (check-mode-paths) auf Ansible-Versionen mit
-#            hart fehlschlagendem `find` gebrochen.
+#            Task-Datei OHNE die when-Bedingungen des stat-Guards fasst einen
+#            NICHT existierenden Backup-Pfad per `find` an und meldet die
+#            Modulwarnung "is not a directory" (rc bleibt 0) bzw. schlägt hart
+#            fehl — der geschützte Lauf tut das nicht. Die Negativ-Variante wird
+#            vorab als gültiges YAML validiert und ein YAML-Parser-Fehler gilt
+#            NIE als "Guard erkannt". Ohne den Guard wäre die Hermetik
+#            (check-mode-paths) auf Ansible-Versionen mit hart fehlschlagendem
+#            `find` gebrochen.
 #
 # Kein Host, kein SSH, kein Vault, kein Docker. Läuft in deploy-check-local.
 set -euo pipefail
@@ -141,9 +144,17 @@ echo "   -- ungeschuetzter Lauf (stat-Guard entfernt) MUSS ihn anfassen --"
 ng="$base/noguard"
 mkdir -p "$ng"
 cp "$task" "$ng/backup-retention.yml"
-# stat-Guard-Bedingungen entfernen -> find laeuft ungeschuetzt auf fehlendem Pfad.
-sed -i '/riftbreaker_backup_dir_stat\.stat\.isdir/d' "$ng/backup-retention.yml"
-sed -i '/Retention — Backup-Verzeichnis pruefen/d' "$ng/backup-retention.yml"
+# NUR die stat-Guard-when-Bedingungen entfernen; die Task-Zeilen (stat:/path:/
+# register:) bleiben intakt -> valides YAML. Dann laeuft `find` ungeschuetzt
+# auf dem fehlenden Pfad.
+sed -i '/when: riftbreaker_backup_dir_stat\.stat\.isdir/d' "$ng/backup-retention.yml"
+# Negativ-Variante muss gueltiges YAML sein: ein Parse-Fehler darf nie als
+# "Guard erkannt" durchgehen.
+python3 -c "import yaml; list(yaml.safe_load_all(open('$ng/backup-retention.yml')))" \
+  || fail "Negativ-Variante ist kein gueltiges YAML (Testaufbau kaputt)."
+if grep -qiE 'yaml\.(parser|scanner|composer)\.' "$ng/backup-retention.yml"; then
+  fail "Negativ-Variante enthaelt YAML-Parser-Fehler (Testaufbau kaputt)."
+fi
 cat > "$ng/play.yml" <<'YAML'
 - hosts: localhost
   connection: local
@@ -159,12 +170,23 @@ set +e
 out="$(ansible-playbook "$ng/play.yml" -e "ng_root=$base/ngroot" 2>&1)"
 rc=$?
 set -e
-# Rot-before-green: ohne Guard muss der fehlende Pfad sichtbar werden — entweder
-# als harter Fehler (rc != 0) oder als "is not a directory"-Warnung von `find`.
-if [ "$rc" -eq 0 ] && ! grep -qi "is not a directory" <<<"$out"; then
+# Ein Parser-Fehler in der Ausgabe bedeutet: der Testaufbau ist kaputt — niemals
+# als "Guard erkannt" verbuchen.
+if grep -qiE 'yaml\.(parser|scanner|composer)\.' <<<"$out"; then
+  printf '%s\n' "$out"
+  fail "Negativ-Probe: YAML-Parser-Fehler (Testaufbau kaputt) — kein Guard-Nachweis."
+fi
+# Rot-before-green: ohne Guard MUSS der fehlende Pfad sichtbar werden. Der
+# ungeschuetzte `find` auf dem fehlenden Pfad liefert rc=0, aber die Warnung
+# "is not a directory" (bzw. auf manchen Ansible-Versionen einen harten
+# Modulfehler). Fehlt beides, ist der Guard-Nachweis nicht erbracht.
+if grep -qi "is not a directory" <<<"$out"; then
+  echo "   Negativ-Probe erkannt (find meldet 'is not a directory' ohne stat-Guard)."
+elif [ "$rc" -ne 0 ]; then
+  echo "   Negativ-Probe erkannt (ungeschuetzter Lauf schlaegt hart fehl, rc=$rc)."
+else
   printf '%s\n' "$out"
   fail "Negativ-Probe: ungeschuetzter Lauf fasst den fehlenden Pfad NICHT an (Test erkennt den fehlenden stat-Guard nicht)."
 fi
-echo "   Negativ-Probe erkannt (fehlender Pfad wird ohne Guard angefasst)."
 
-echo "OK: Backup-/Stray-Retention begrenzt deterministisch auf die N neuesten, ist idempotent, --check-fest, konfigurierbar (keep=0), fasst mods/ nie an (#212, inkl. fail-loud-Overlap-Guard) und ist ohne stat-Guard nachweislich nicht hermetikfest."
+echo "OK: Backup-/Stray-Retention begrenzt deterministisch auf die N neuesten, ist idempotent, --check-fest, konfigurierbar (keep=0), fasst mods/ nie an (#212, inkl. fail-loud-Overlap-Guard) und der stat-Guard ist load-bearing: ohne die when-Bedingungen fasst `find` den fehlenden Pfad an ('is not a directory') — die Negativ-Variante ist dabei gueltiges YAML."

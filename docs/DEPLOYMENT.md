@@ -230,7 +230,7 @@ räumte das niemand auf → unbegrenztes Wachstum: die #312-Automatik begrenzt e
   (`iso8601_basic_short`, `YYYYMMDDTHHMMSS`), **nie** `mtime` — kein Risiko
   durch kopierte/umgezogene Dateien.
 - **Sicherheit:** `mods/` wird **nie** angefasst (mods/-Guard #212). Ein
-  `asssert` bricht **laut** ab, falls `riftbreaker_backup_dir` == `mods/` ist
+  `assert` bricht **laut** ab, falls `riftbreaker_backup_dir` == `mods/` ist
   oder darunter liegt (fail loud statt Löschen).
 - **Check-Mode/hermetisch:** existiert `riftbreaker_backup_dir` nicht (z. B.
   `--check` gegen einen noch nicht migrierten `<env>`-Pfadbaum), ist der Block
