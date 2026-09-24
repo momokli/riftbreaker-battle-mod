@@ -329,7 +329,7 @@ class RecycleTests(PoolHarness):
         self.assertIsNone(recycled.gns_endpoint)  # gestoppt -> Endpoint weg
 
     def test_recycle_keep_warm_keeps_gns_endpoint(self):
-        entry = self.pool.warm_up(env="test", instance_id="r1")
+        self.pool.warm_up(env="test", instance_id="r1")
         self.pool.claim(env="test", instance_id="r1")
         recycled = self.pool.recycle(env="test", instance_id="r1", keep_warm=True)
         self.assertEqual(recycled.gns_endpoint, "127.0.0.1:41001")
