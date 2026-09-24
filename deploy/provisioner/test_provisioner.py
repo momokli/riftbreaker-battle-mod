@@ -85,7 +85,7 @@ elif cmd == "port":
         sys.stderr.write("Error: No such container\n")
         sys.exit(1)
     print("6321/udp -> 127.0.0.1:32768")
-    print("8080/tcp -> 127.0.0.1:%d" % containers[name].get("bridge_port", 0))
+    print("9001/tcp -> 127.0.0.1:%d" % containers[name].get("bridge_port", 0))
 elif cmd == "image" and sub == "inspect":
     if args[-1] in IMAGES:
         print("[]")
@@ -230,6 +230,18 @@ class BaseFixture(unittest.TestCase):
         self.base_dir = os.path.join(self.tmp, "srv")
         os.makedirs(self.base_dir)
 
+        # Reale Image-Quellen (US2/R3): Preflight prueft deren Existenz, also
+        # muessen die Fixtures echte Pfade bereitstellen statt zu brechen.
+        self.sources = os.path.join(self.tmp, "sources")
+        os.makedirs(self.sources)
+        self.game_source = os.path.join(self.sources, "game")
+        os.makedirs(self.game_source)
+        self.rbtools_dir = os.path.join(self.sources, "rbtools")
+        os.makedirs(self.rbtools_dir)
+        self.config_cfg = os.path.join(self.sources, "config.cfg")
+        with open(self.config_cfg, "w", encoding="utf-8") as handle:
+            handle.write("# test config\n")
+
         os.environ["FAKE_DOCKER_LOG"] = self.log_file
         os.environ["FAKE_DOCKER_STATE_DIR"] = self.state_dir
         os.environ["FAKE_DOCKER_IMAGES"] = IMAGE
@@ -252,6 +264,9 @@ class BaseFixture(unittest.TestCase):
             health_interval=0.0,
             min_free_gb=0.0,
             bridge_port_base=bridge,
+            game_source=self.game_source,
+            config_cfg=self.config_cfg,
+            rbtools_dir=self.rbtools_dir,
             instance_id="0",
         )
         self.docker = prov.DockerCli(self.docker_bin, 30)
@@ -343,6 +358,27 @@ class InstanceSpecTestCase(BaseFixture):
             with self.assertRaises(prov.ProvisionError, msg=bad):
                 prov.InstanceSpec("test", bad, self.cfg)
 
+    def test_env_placeholder_substitution(self):
+        cfg = prov.Config(
+            env="dev",
+            image=IMAGE,
+            base_dir=self.base_dir,
+            bridge_container_port=9001,
+        )
+        spec = prov.InstanceSpec("dev", "0", cfg)
+        self.assertEqual(spec.game_source, "/srv/rift-dev/game")
+        self.assertEqual(
+            spec.config_cfg,
+            "/opt/rbmods/compose/rift-dev/riftbreaker/config/config.cfg",
+        )
+        self.assertEqual(spec.rbtools_dir, "/opt/rbmods/rbtools/dev")
+        self.assertEqual(spec.bridge_container_port, 9001)
+        payload = spec.to_dict()
+        self.assertEqual(payload["game_source"], "/srv/rift-dev/game")
+        self.assertEqual(payload["config_cfg"], spec.config_cfg)
+        self.assertEqual(payload["rbtools_dir"], spec.rbtools_dir)
+        self.assertEqual(payload["bridge_container_port"], 9001)
+
     def test_non_numeric_suffix_stable(self):
         a = prov.InstanceSpec("test", "local", self.cfg)
         b = prov.InstanceSpec("test", "local", self.cfg)
@@ -394,6 +430,55 @@ class ConfigTestCase(BaseFixture):
     def test_json_missing_file_fails_closed(self):
         with self.assertRaises(prov.ConfigError):
             prov.load_config({"PROVISIONER_CONFIG": os.path.join(self.tmp, "nope.json")})
+
+    def test_new_field_defaults(self):
+        cfg = prov.load_config({"PROVISIONER_IMAGE": IMAGE})
+        self.assertEqual(cfg.bridge_container_port, 9001)
+        self.assertEqual(
+            cfg.config_cfg,
+            "/opt/rbmods/compose/rift-{env}/riftbreaker/config/config.cfg",
+        )
+        self.assertEqual(cfg.rbtools_dir, "/opt/rbmods/rbtools/{env}")
+        self.assertEqual(cfg.game_source, "/srv/rift-{env}/game")
+
+    def test_new_env_overrides(self):
+        cfg = prov.load_config({
+            "PROVISIONER_IMAGE": IMAGE,
+            "PROVISIONER_BRIDGE_CONTAINER_PORT": "9100",
+            "PROVISIONER_CONFIG_CFG": "/tmp/c/config.cfg",
+            "PROVISIONER_RBTOOLS_DIR": "/tmp/c/rbtools",
+            "PROVISIONER_GAME_SOURCE": "/tmp/c/game",
+        })
+        self.assertEqual(cfg.bridge_container_port, 9100)
+        self.assertEqual(cfg.config_cfg, "/tmp/c/config.cfg")
+        self.assertEqual(cfg.rbtools_dir, "/tmp/c/rbtools")
+        self.assertEqual(cfg.game_source, "/tmp/c/game")
+
+    def test_new_json_and_env_precedence(self):
+        path = os.path.join(self.tmp, "cfg-new.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({
+                "image": IMAGE,
+                "bridge_container_port": 9002,
+                "config_cfg": "/from/file.cfg",
+                "game_source": "/from/file/game",
+            }, handle)
+        cfg = prov.load_config({
+            "PROVISIONER_CONFIG": path,
+            "PROVISIONER_CONFIG_CFG": "/from/env.cfg",
+        })
+        self.assertEqual(cfg.bridge_container_port, 9002)
+        self.assertEqual(cfg.config_cfg, "/from/env.cfg")  # Env > Datei
+        self.assertEqual(cfg.game_source, "/from/file/game")
+        self.assertEqual(cfg.rbtools_dir, "/opt/rbmods/rbtools/{env}")
+
+    def test_invalid_bridge_container_port_fails_closed(self):
+        for bad in ("0", "70000", "notaport", "-1"):
+            with self.assertRaises(prov.ConfigError, msg=bad):
+                prov.load_config({
+                    "PROVISIONER_IMAGE": IMAGE,
+                    "PROVISIONER_BRIDGE_CONTAINER_PORT": bad,
+                })
 
     def test_http_health_ok_against_stub(self):
         self.assertTrue(prov.http_health_ok(self.stub.url))
@@ -480,6 +565,38 @@ class StartTestCase(BaseFixture):
         self.assertIn(["network", "rm", spec.network], calls)
         self.assertEqual(self.run_calls(), [])
 
+    def test_run_args_real_image_layout(self):
+        self.provisioner().start("test", "solo", "0")
+        spec = self.spec("0")
+        self.assertEqual(len(self.run_calls()), 1)
+        run = self.run_calls()[0]
+        # Host-Port = spec.bridge_port, Container-Port = 9001.
+        self.assertIn("127.0.0.1:%d:9001" % spec.bridge_port, run)
+        self.assertIn("127.0.0.1::6321/udp", run)
+        # Genau die fuenf realen Mounts (inkl. der :ro-Quellen).
+        self.assertIn("%s:/opt/riftbreaker" % spec.game_source, run)
+        self.assertIn("%s:/data/.wine" % spec.wine_volume, run)
+        self.assertIn("%s:/data/saves" % spec.saves_volume, run)
+        self.assertIn("%s:/data/config/config.cfg:ro" % spec.config_cfg, run)
+        self.assertIn("%s:/opt/rbtools:ro" % spec.rbtools_dir, run)
+        # Bridge-Bind/-Port im Container + Rig-Sync-Env (sonst Crash vor bind()).
+        self.assertIn("RBB_BRIDGE_BIND=0.0.0.0", run)
+        self.assertIn("RBB_BRIDGE_PORT=9001", run)
+        self.assertIn("WINEESYNC=0", run)
+        self.assertIn("WINEFSYNC=0", run)
+        # Image bleibt das letzte Argument.
+        self.assertEqual(run[-1], IMAGE)
+
+    def test_missing_sources_fail_loud(self):
+        for override in (
+            {"game_source": os.path.join(self.tmp, "nope-game")},
+            {"config_cfg": os.path.join(self.tmp, "nope.cfg")},
+            {"rbtools_dir": os.path.join(self.tmp, "nope-rbtools")},
+        ):
+            with self.assertRaises(prov.ProvisionError, msg=override):
+                self.provisioner(**override).start("test", "solo", "0")
+        self.assertEqual(self.run_calls(), [])
+
     def test_start_forwards_mode_and_run_scope_labels(self):
         # Issue-Signatur ist start(env, mode): ``mode`` MUSS im Container ankommen
         # (RIFTBREAKER_MODE) und die Instanz run-scoped gelabelt sein.
@@ -494,7 +611,7 @@ class StartTestCase(BaseFixture):
         spec = self.spec("0")
         self.docker.run_or_fail([
             "run", "-d", "--name", spec.container, "--network", spec.network,
-            "-p", "127.0.0.1:%d:8080" % spec.bridge_port, IMAGE,
+            "-p", "127.0.0.1:%d:9001" % spec.bridge_port, IMAGE,
         ])
         self.stub.server.ok = False
         with self.assertRaises(prov.ProvisionError):
@@ -505,7 +622,7 @@ class StartTestCase(BaseFixture):
         spec = self.spec("0")
         self.docker.run_or_fail([
             "run", "-d", "--name", spec.container, "--network", spec.network,
-            "-p", "127.0.0.1:%d:8080" % spec.bridge_port, IMAGE,
+            "-p", "127.0.0.1:%d:9001" % spec.bridge_port, IMAGE,
         ])
         self.docker.stop(spec.container)
         status = self.provisioner().start("test", "solo", "0")
@@ -561,7 +678,7 @@ class StopStatusTestCase(BaseFixture):
         status = provisioner.status("0", "test")
         self.assertTrue(status["running"])
         self.assertEqual(status["health"], "healthy")
-        self.assertIn("8080/tcp", status["ports"]["docker"])
+        self.assertIn("9001/tcp", status["ports"]["docker"])
 
     def test_status_starting_when_health_not_ok(self):
         provisioner = self.provisioner()

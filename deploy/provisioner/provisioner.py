@@ -75,6 +75,10 @@ class Config:
     health_interval: float = 3.0
     min_free_gb: float = 10.0
     bridge_port_base: int = 30000
+    bridge_container_port: int = 9001
+    config_cfg: str = "/opt/rbmods/compose/rift-{env}/riftbreaker/config/config.cfg"
+    rbtools_dir: str = "/opt/rbmods/rbtools/{env}"
+    game_source: str = "/srv/rift-{env}/game"
     image_build_dir: str = ""
     instance_id: str = "local"
 
@@ -90,6 +94,10 @@ _JSON_KEYS = {
     "health_interval": "health_interval",
     "min_free_gb": "min_free_gb",
     "bridge_port_base": "bridge_port_base",
+    "bridge_container_port": "bridge_container_port",
+    "config_cfg": "config_cfg",
+    "rbtools_dir": "rbtools_dir",
+    "game_source": "game_source",
     "image_build_dir": "image_build_dir",
     "instance_id": "instance_id",
 }
@@ -104,11 +112,15 @@ _ENV_KEYS = {
     "PROVISIONER_HEALTH_INTERVAL": "health_interval",
     "PROVISIONER_MIN_FREE_GB": "min_free_gb",
     "PROVISIONER_BRIDGE_PORT_BASE": "bridge_port_base",
+    "PROVISIONER_BRIDGE_CONTAINER_PORT": "bridge_container_port",
+    "PROVISIONER_CONFIG_CFG": "config_cfg",
+    "PROVISIONER_RBTOOLS_DIR": "rbtools_dir",
+    "PROVISIONER_GAME_SOURCE": "game_source",
     "PROVISIONER_IMAGE_BUILD_DIR": "image_build_dir",
     "PROVISIONER_INSTANCE_ID": "instance_id",
 }
 
-_INT_FIELDS = ("timeout", "bridge_port_base")
+_INT_FIELDS = ("timeout", "bridge_port_base", "bridge_container_port")
 _FLOAT_FIELDS = ("health_deadline", "health_interval", "min_free_gb")
 
 
@@ -170,6 +182,11 @@ def load_config(env: Optional[Dict[str, str]] = None, path: Optional[str] = None
             "PROVISIONER_INSTANCE_ID '%s' ist ungueltig (erlaubt: %s)"
             % (cfg.instance_id, INSTANCE_ID_RE.pattern)
         )
+    if not (1 <= cfg.bridge_container_port <= 65535):
+        raise ConfigError(
+            "bridge_container_port %r ist ungueltig (erlaubt: 1..65535)"
+            % (cfg.bridge_container_port,)
+        )
     return cfg
 
 
@@ -208,6 +225,11 @@ class InstanceSpec(object):
         self.sessions_dir = os.path.join(run_root, "sessions")
         self.bridge_port_base = cfg.bridge_port_base
         self.bridge_port = cfg.bridge_port_base + (self._numeric_suffix() % 20000)
+        # Reale Image-Quellen (Platzhalter {env} wird durch das Env-Segment ersetzt).
+        self.bridge_container_port = cfg.bridge_container_port
+        self.config_cfg = cfg.config_cfg.replace("{env}", env)
+        self.rbtools_dir = cfg.rbtools_dir.replace("{env}", env)
+        self.game_source = cfg.game_source.replace("{env}", env)
 
     def _numeric_suffix(self) -> int:
         """Stabiler Zahlenwert fuer die Port-Ableitung.
@@ -239,6 +261,10 @@ class InstanceSpec(object):
             "backups_dir": self.backups_dir,
             "sessions_dir": self.sessions_dir,
             "bridge_port": self.bridge_port,
+            "bridge_container_port": self.bridge_container_port,
+            "config_cfg": self.config_cfg,
+            "rbtools_dir": self.rbtools_dir,
+            "game_source": self.game_source,
         }
 
 
@@ -521,6 +547,17 @@ class Provisioner(object):
             )
         if not self.docker.image_exists(self.cfg.image):
             raise ProvisionError("Image fehlt: %s (docker image inspect -> rc!=0)" % self.cfg.image)
+        missing = []
+        if not os.path.isdir(spec.game_source):
+            missing.append("game_source=%s" % spec.game_source)
+        if not os.path.isfile(spec.config_cfg):
+            missing.append("config_cfg=%s" % spec.config_cfg)
+        if not os.path.isdir(spec.rbtools_dir):
+            missing.append("rbtools_dir=%s" % spec.rbtools_dir)
+        if missing:
+            raise ProvisionError(
+                "Quellen fehlen (Mounts wuerden ins Leere zeigen): %s" % ", ".join(missing)
+            )
 
     @staticmethod
     def _port_in_use(port: int, host: str = "127.0.0.1") -> bool:
@@ -571,12 +608,18 @@ class Provisioner(object):
             "--network", spec.network,
             "--label", "rb.provisioner.env=%s" % spec.env,
             "--label", "rb.provisioner.instance=%s" % spec.instance_id,
-            "-p", "127.0.0.1:%d:8080" % spec.bridge_port,
+            "-p", "127.0.0.1:%d:%d" % (spec.bridge_port, spec.bridge_container_port),
             "-p", "127.0.0.1::6321/udp",
-            "-v", "%s:/wine" % spec.wine_volume,
-            "-v", "%s:/saves" % spec.saves_volume,
-            "-v", "%s:/srv/game" % spec.game_dir,
+            "-v", "%s:/opt/riftbreaker" % spec.game_source,
+            "-v", "%s:/data/.wine" % spec.wine_volume,
+            "-v", "%s:/data/saves" % spec.saves_volume,
+            "-v", "%s:/data/config/config.cfg:ro" % spec.config_cfg,
+            "-v", "%s:/opt/rbtools:ro" % spec.rbtools_dir,
             "-e", "RIFTBREAKER_MODE=%s" % mode,
+            "-e", "RBB_BRIDGE_BIND=0.0.0.0",
+            "-e", "RBB_BRIDGE_PORT=%d" % spec.bridge_container_port,
+            "-e", "WINEESYNC=0",
+            "-e", "WINEFSYNC=0",
             self.cfg.image,
         ]
         self.docker.run_or_fail(args)
