@@ -19,12 +19,15 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import logging
 import os
 import sys
 import time
 from typing import Any, Callable, Dict, Optional, Sequence
 
 from parked_pool import ParkedPool
+
+LOG = logging.getLogger("parked.measure")
 
 
 def _load_provisioner_module():
@@ -55,15 +58,50 @@ def measure_parked_handover(pool: Any, clock: Callable[[], float] = time.monoton
     return clock() - start
 
 
+def cleanup(provisioner: Any, pool: Any, env: Optional[str] = None,
+            cold_instance_id: Optional[str] = None,
+            parked_instance_id: Optional[str] = None) -> None:
+    """Mess-Ressourcen restfrei abraeumen (NIT 1 — kein Container-Leak).
+
+    Die Cold-Instanz wird gestoppt; die geparkte Instanz wird recycelt
+    (``keep_warm=False`` -> ``stop``). Scheitert das Recyceln (z. B. weil der
+    ``warm_up`` vorzeitig abbrach), wird die geparkte Instanz direkt gestoppt.
+    Fehler werden geloggt, aber NICHT geworfen: der Messfehler (falls es einen
+    gab) bleibt sichtbar.
+    """
+    if cold_instance_id is not None:
+        try:
+            provisioner.stop(instance_id=cold_instance_id, env=env)
+        except Exception as exc:  # pragma: no cover - nur Log
+            LOG.warning("cleanup: cold stop %s fehlgeschlagen: %s", cold_instance_id, exc)
+    if parked_instance_id is not None:
+        try:
+            pool.recycle(env=env, instance_id=parked_instance_id, keep_warm=False)
+        except Exception as exc:
+            LOG.warning("cleanup: recycle %s fehlgeschlagen: %s", parked_instance_id, exc)
+            try:
+                provisioner.stop(instance_id=parked_instance_id, env=env)
+            except Exception as stop_exc:  # pragma: no cover - nur Log
+                LOG.warning("cleanup: stop %s fehlgeschlagen: %s", parked_instance_id, stop_exc)
+
+
 def run_measurement(provisioner: Any, pool: Any, clock: Callable[[], float] = time.monotonic,
                     env: Optional[str] = None, cold_instance_id: Optional[str] = None,
                     parked_instance_id: Optional[str] = None) -> Dict[str, Any]:
-    """Cold-Boot vs. Parked-Handover messen und die Ersparnis ausrechnen."""
+    """Cold-Boot vs. Parked-Handover messen und die Ersparnis ausrechnen.
+
+    ``try/finally``: Cold-Instanz wird IMMER gestoppt und die geparkte Instanz
+    IMMER recycelt (``keep_warm=False``) — auch wenn die Messung scheitert.
+    """
     cold = measure_cold_boot(provisioner, clock, env=env, instance_id=cold_instance_id)
-    warm_pool = pool
-    if parked_instance_id is not None:
-        warm_pool.warm_up(env=env, instance_id=parked_instance_id)
-    handover = measure_parked_handover(warm_pool, clock, env=env, instance_id=parked_instance_id)
+    try:
+        warm_pool = pool
+        if parked_instance_id is not None:
+            warm_pool.warm_up(env=env, instance_id=parked_instance_id)
+        handover = measure_parked_handover(warm_pool, clock, env=env, instance_id=parked_instance_id)
+    finally:
+        cleanup(provisioner, pool, env=env, cold_instance_id=cold_instance_id,
+                parked_instance_id=parked_instance_id)
     return {
         "cold_boot_seconds": cold,
         "parked_handover_seconds": handover,

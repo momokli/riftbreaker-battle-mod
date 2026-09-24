@@ -23,11 +23,16 @@ class AdvancingProvisioner(object):
         self.clock = clock
         self.boot_seconds = boot_seconds
         self.starts = []
+        self.stops = []
 
     def start(self, env=None, instance_id=None):
         self.starts.append(instance_id)
         self.clock.advance(self.boot_seconds)
         return {"instance": instance_id, "container": "c", "ports": {"bridge": 40001}}
+
+    def stop(self, instance_id=None, env=None):
+        self.stops.append(instance_id)
+        return {"instance": instance_id, "removed": {}}
 
 
 class AdvancingPool(object):
@@ -38,6 +43,7 @@ class AdvancingPool(object):
         self.handover_seconds = handover_seconds
         self.claims = []
         self.warmups = []
+        self.recycled = []
 
     def warm_up(self, env=None, instance_id=None):
         self.warmups.append(instance_id)
@@ -47,6 +53,17 @@ class AdvancingPool(object):
         self.claims.append(instance_id)
         self.clock.advance(self.handover_seconds)
         return {"instance": instance_id, "state": "claimed", "handover_seconds": self.handover_seconds}
+
+    def recycle(self, env=None, instance_id=None, keep_warm=True, result=None):
+        self.recycled.append((instance_id, keep_warm))
+        return instance_id
+
+
+class FailingClaimPool(AdvancingPool):
+    """Fake-Pool, dessen ``claim`` knallt — fuer den Cleanup-im-Fehlerfall-Test."""
+
+    def claim(self, env=None, instance_id=None):
+        raise RuntimeError("claim exploded")
 
 
 class MeasureBootTests(unittest.TestCase):
@@ -81,6 +98,25 @@ class MeasureBootTests(unittest.TestCase):
         pool = AdvancingPool(self.clock, handover_seconds=0.13)
         measure_boot.run_measurement(provisioner, pool, self.clock)
         self.assertEqual(pool.warmups, [])
+
+    def test_run_measurement_cleans_up_cold_and_parked(self):
+        # NIT 1: kein Container-Leak — Cold gestoppt, Parked recycelt (keep_warm=False).
+        provisioner = AdvancingProvisioner(self.clock, boot_seconds=15.2)
+        pool = AdvancingPool(self.clock, handover_seconds=0.13)
+        measure_boot.run_measurement(provisioner, pool, self.clock,
+                                     cold_instance_id="c", parked_instance_id="p")
+        self.assertEqual(provisioner.stops, ["c"])
+        self.assertEqual(pool.recycled, [("p", False)])
+
+    def test_run_measurement_cleans_up_even_when_claim_fails(self):
+        # try/finally: Cleanup laeuft auch, wenn die Handover-Messung knallt.
+        provisioner = AdvancingProvisioner(self.clock, boot_seconds=15.2)
+        pool = FailingClaimPool(self.clock, handover_seconds=0.13)
+        with self.assertRaises(RuntimeError):
+            measure_boot.run_measurement(provisioner, pool, self.clock,
+                                         cold_instance_id="c", parked_instance_id="p")
+        self.assertEqual(provisioner.stops, ["c"])
+        self.assertEqual(pool.recycled, [("p", False)])
 
 
 if __name__ == "__main__":
