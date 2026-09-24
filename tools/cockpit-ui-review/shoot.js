@@ -53,6 +53,10 @@ const ROUTES = {
   difficulty_interval: { ok: true, difficulty_interval_first_s: 200, difficulty_interval_subsequent_s: 600 },
   attack_interval: { ok: true, interval_s: 420 },
   get_state: { ok: true, hq_hp: 100, hq_hp_max: 100, carbonium: 50000000, carbonium_max: 90000000, ironium: 10000000, ironium_max: 20000000, mission_flow: "attack_level_3_id_1.logic", mission_flow_active: true, players: 1 },
+  // Kapsel-Flow (Issue #931, US8): das Cockpit pollt /capsule/status fuer den
+  // Phase-Readout. Ohne Mock bliebe "capsule: —" (Fallback) und der Review
+  // wuerde die neue Anzeige nicht abdecken.
+  "capsule/status": { phase: "running", env: "solo", instance: "parked-1", bridge_url: "http://127.0.0.1:40001", gns_endpoint: "127.0.0.1:41001", round: 0, cycle: { state: "running" } },
   probe: { ok: true },
   "server/status": { ok: true, state: "running", uptime: "01:23:45", started_at: "2026-09-21T12:00:00Z" },
   "server/logs": { ok: true, lines: ["[12:00:01] server up", "[12:00:02] wave 1 fired", "[12:00:03] hq 100%"] },
