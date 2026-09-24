@@ -552,6 +552,120 @@
                 width: 100%;
             }
 
+            /* Chat (#935): Verlauf + Eingabe */
+            .chat-messages {
+                flex: 1 1 auto;
+                width: 100%;
+                height: 100%;
+                overflow-y: auto;
+                padding: 6px 8px;
+                display: flex;
+                flex-direction: column;
+                gap: 3px;
+                font-size: 12px;
+            }
+            .chat-empty {
+                color: var(--dim);
+                font-size: 11px;
+            }
+            .chat-msg {
+                display: flex;
+                gap: 6px;
+                min-width: 0;
+            }
+            .chat-msg .chat-src {
+                flex: 0 0 auto;
+                width: 62px;
+                font-family: var(--font-mono);
+                font-size: 10px;
+                letter-spacing: 0.05em;
+                text-transform: uppercase;
+                color: var(--dim);
+            }
+            .chat-msg .chat-text {
+                min-width: 0;
+                overflow-wrap: anywhere;
+            }
+            .chat-msg.player .chat-src {
+                color: var(--accent);
+            }
+            .chat-msg.operator .chat-src {
+                color: var(--good);
+            }
+            .chat-msg.operator .chat-text {
+                color: var(--dim);
+            }
+
+            /* Style-Guide (#935): sichtbare Referenz, volle Breite im Operator-Raster */
+            .sg-panel {
+                grid-column: 1 / -1;
+            }
+            .sg-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+                gap: 8px;
+                align-items: start;
+            }
+            .sg-stack {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+            }
+            .sg-row {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 8px;
+            }
+            .sg-swatches {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+                gap: 8px;
+            }
+            .sg-swatch {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                min-width: 0;
+            }
+            .sg-chip {
+                flex: 0 0 auto;
+                width: 24px;
+                height: 24px;
+                border-radius: 3px;
+                border: 1px solid var(--line);
+                background: var(--base);
+            }
+            .sg-token {
+                min-width: 0;
+            }
+            .sg-name {
+                display: block;
+                font-family: var(--font-mono);
+                font-size: 11px;
+                color: var(--text);
+                overflow-wrap: anywhere;
+            }
+            .sg-val {
+                display: block;
+                font-family: var(--font-mono);
+                font-size: 10px;
+                color: var(--dim);
+                overflow-wrap: anywhere;
+            }
+            .sg-code {
+                margin: 0;
+                padding: 6px 8px;
+                background: var(--base);
+                border: 1px solid var(--line);
+                border-radius: 3px;
+                font-family: var(--font-mono);
+                font-size: 11px;
+                color: #cdd3da;
+                white-space: pre-wrap;
+                overflow-wrap: anywhere;
+            }
+
             /* Group D: Status Bar */
             footer.status-bar {
                 flex: 0 0 24px;
@@ -746,6 +860,101 @@
                                 <input id="difficulty_interval_subsequent_input" class="mono" size="6" value="600" aria-label="Difficulty subsequent step in seconds" />
                                 <button id="difficulty_interval_subsequent_set" class="btn-primary">set</button>
                             </div>
+                        </div>
+                    </fieldset>
+
+                    <!-- B3. CHAT (#935): Spieler-Chat anzeigen + Server-Nachricht senden. -->
+                    <fieldset class="q-groupbox" id="panel-chat">
+                        <legend>Chat</legend>
+                        <div class="flow-container">
+                            <div class="log-scroll-area">
+                                <div id="chat_log" class="chat-messages" role="log" aria-live="polite" aria-label="Chat-Verlauf">
+                                    <span class="chat-empty">noch keine Nachrichten</span>
+                                </div>
+                            </div>
+                            <div class="flow-action-row">
+                                <input id="chat_input" class="mono flow-grow" maxlength="200" placeholder="Nachricht an die Spieler ..." aria-label="Chat-Nachricht" />
+                                <button id="chat_send" class="btn-primary">send</button>
+                            </div>
+                            <div class="flow-note">
+                                Spieler-Chat aus dem Spiel erscheint hier; "send" schickt
+                                eine Server-Nachricht in den Spiel-Chat. Enter sendet,
+                                leerer Text wird nicht gesendet (#935).
+                            </div>
+                        </div>
+                    </fieldset>
+                    <!-- K. STYLE GUIDE (#935): sichtbare Referenz des Design-Systems (volle Breite) -->
+                    <fieldset class="q-groupbox sg-panel" id="panel-style-guide">
+                        <legend>Style Guide</legend>
+                        <div class="sg-grid">
+                            <fieldset class="q-groupbox" id="panel-sg-tokens">
+                                <legend>Design Tokens</legend>
+                                <div class="flow-container">
+                                    <div id="sg_colors" class="sg-swatches"></div>
+                                    <div id="sg_fonts" class="sg-stack"></div>
+                                    <div class="flow-note">
+                                        Werte werden live aus dem Stylesheet gelesen
+                                        (<span class="mono">getComputedStyle</span>) — die Variablen
+                                        im <span class="mono">:root</span>-Block sind die einzige Quelle.
+                                    </div>
+                                </div>
+                            </fieldset>
+
+                            <fieldset class="q-groupbox" id="panel-sg-components">
+                                <legend>Komponenten</legend>
+                                <div class="flow-container">
+                                    <div class="sg-row">
+                                        <button class="btn-primary">btn-primary</button>
+                                        <button>default</button>
+                                        <button class="btn-danger">btn-danger</button>
+                                    </div>
+                                    <fieldset class="q-groupbox">
+                                        <legend>q-groupbox</legend>
+                                        <div class="flow-note">Panel-Rahmen mit Legende.</div>
+                                    </fieldset>
+                                    <div class="flow-action-row">
+                                        <span class="prop-label">label</span>
+                                        <input class="mono" size="6" value="420" aria-label="Beispiel-Eingabe" />
+                                        <button class="btn-primary">set</button>
+                                    </div>
+                                    <div class="flow-readouts">
+                                        <div class="flow-prop">
+                                            <span class="prop-label">prop-label</span>
+                                            <span class="prop-val">prop-val</span>
+                                        </div>
+                                    </div>
+                                    <div class="log-scroll-area">
+                                        <pre class="mono">log-scroll-area
+monospace · tabular-nums · autoscroll</pre>
+                                    </div>
+                                    <div class="flow-note">
+                                        flow-note: dezente Beschreibung / Hinweis unter Aktionen.
+                                    </div>
+                                </div>
+                            </fieldset>
+
+                            <fieldset class="q-groupbox" id="panel-sg-recipe">
+                                <legend>Neues Panel bauen</legend>
+                                <div class="flow-container">
+                                    <pre class="sg-code">&lt;fieldset class="q-groupbox" id="panel-x"&gt;
+    &lt;legend&gt;Titel&lt;/legend&gt;
+    &lt;div class="flow-container"&gt;
+        &lt;div class="flow-action-row"&gt;
+            &lt;span class="prop-label"&gt;label&lt;/span&gt;
+            &lt;button class="btn-primary"&gt;run&lt;/button&gt;
+        &lt;/div&gt;
+        &lt;div class="flow-note"&gt;Kurzer Hinweis.&lt;/div&gt;
+    &lt;/div&gt;
+&lt;/fieldset&gt;</pre>
+                                    <div class="flow-note">
+                                        fieldset.q-groupbox = Karte · legend = Titel ·
+                                        flow-container = vertikaler Stapel · flow-action-row =
+                                        Zeile aus Controls · prop-label/prop-val = Auslese-Paar ·
+                                        flow-note = Hinweis · log-scroll-area = Log-Fenster ·
+                                        Inhalte immer per textContent (kein innerHTML).
+                                    </div>
+                                </div>
+                            </fieldset>
                         </div>
                     </fieldset>
                 </main>
@@ -1764,6 +1973,120 @@
                 // Docker-Buttons + Status/Log-Polling werden lazy im Tab-Lifecycle
                 // unten verdrahtet (erst beim Oeffnen des Docker-Tabs).
 
+                // --- Chat (#935): Verlauf + Senden ---
+                var CHAT_MAX = 200;
+                function chatAppend(src, text) {
+                    var log = $("chat_log");
+                    if (!log || !text) {
+                        return;
+                    }
+                    var empty = log.querySelector(".chat-empty");
+                    if (empty) {
+                        empty.remove();
+                    }
+                    var row = document.createElement("div");
+                    row.className = "chat-msg " + (src === "operator" ? "operator" : "player");
+                    var who = document.createElement("span");
+                    who.className = "chat-src";
+                    who.textContent = src === "operator" ? "operator" : "player";
+                    var body = document.createElement("span");
+                    body.className = "chat-text";
+                    body.textContent = text;
+                    row.appendChild(who);
+                    row.appendChild(body);
+                    log.appendChild(row);
+                    while (log.children.length > CHAT_MAX) {
+                        log.removeChild(log.firstChild);
+                    }
+                    log.scrollTop = log.scrollHeight;
+                }
+
+                async function chatSend() {
+                    var input = $("chat_input");
+                    var text = (input.value || "").trim();
+                    if (!text) {
+                        return;
+                    }
+                    var btn = $("chat_send");
+                    btn.disabled = true;
+                    try {
+                        var r = await post("/send_chat", { text: text });
+                        if (r && r.ok) {
+                            input.value = "";
+                            chatAppend("operator", r.text || text);
+                            $("out").textContent = "chat gesendet";
+                        } else {
+                            $("out").textContent = "chat fehlgeschlagen: " + ((r && r.reason) || "unbekannt");
+                        }
+                    } catch (e) {
+                        $("out").textContent = "chat fehlgeschlagen: " + ((e && e.message) || "netzwerkfehler");
+                    } finally {
+                        btn.disabled = false;
+                    }
+                }
+
+                $("chat_send").onclick = chatSend;
+                $("chat_input").addEventListener("keydown", function (e) {
+                    if (e.key === "Enter") {
+                        e.preventDefault();
+                        chatSend();
+                    }
+                });
+
+                // --- Style-Guide (#935): Tokens live aus dem Stylesheet lesen ---
+                function initStyleGuide() {
+                    var host = $("sg_colors");
+                    if (!host) {
+                        return;
+                    }
+                    var cs = getComputedStyle(document.documentElement);
+                    var colors = [
+                        "win", "panel", "base", "line", "text", "dim",
+                        "accent", "good", "warn", "bad", "btn-hover", "btn-active",
+                    ];
+                    colors.forEach(function (name) {
+                        var wrap = document.createElement("div");
+                        wrap.className = "sg-swatch";
+                        var chip = document.createElement("span");
+                        chip.className = "sg-chip";
+                        chip.style.background = "var(--" + name + ")";
+                        var tok = document.createElement("span");
+                        tok.className = "sg-token";
+                        var nm = document.createElement("span");
+                        nm.className = "sg-name";
+                        nm.textContent = "--" + name;
+                        var vv = document.createElement("span");
+                        vv.className = "sg-val";
+                        vv.textContent = cs.getPropertyValue("--" + name).trim() || "—";
+                        tok.appendChild(nm);
+                        tok.appendChild(vv);
+                        wrap.appendChild(chip);
+                        wrap.appendChild(tok);
+                        host.appendChild(wrap);
+                    });
+                    var fontHost = $("sg_fonts");
+                    if (!fontHost) {
+                        return;
+                    }
+                    [
+                        ["font-ui", "The quick brown fox — 0123"],
+                        ["font-mono", "if (x) { return 0x1F; }"],
+                    ].forEach(function (pair) {
+                        var wrap = document.createElement("div");
+                        wrap.className = "sg-stack";
+                        var sample = document.createElement("span");
+                        sample.className = "sg-name";
+                        sample.style.fontFamily = "var(--" + pair[0] + ")";
+                        sample.textContent = pair[1];
+                        var nm = document.createElement("span");
+                        nm.className = "sg-val";
+                        nm.textContent = "--" + pair[0] + ": " + (cs.getPropertyValue("--" + pair[0]).trim() || "—");
+                        wrap.appendChild(sample);
+                        wrap.appendChild(nm);
+                        fontHost.appendChild(wrap);
+                    });
+                }
+
                 function initEvents() {
                     if (typeof EventSource === "undefined") {
                         return;
@@ -1788,6 +2111,7 @@
                             refresh();
                         } else if (d && d.event === "player_chat" && d.text) {
                             $("out").textContent = "chat: " + d.text;
+                            chatAppend("player", d.text);
                         }
                     };
                     es.onerror = function () {
@@ -1796,6 +2120,7 @@
                 }
 
                 initEvents();
+                initStyleGuide();
 
                 // --- tabs (roving tabindex + lazy Tab-Lifecycle) ---
                 var TABS = [
