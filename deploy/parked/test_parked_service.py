@@ -88,6 +88,10 @@ class FakeProvisioner(object):
         self.starts = []
         self.stops = []
         self.fail_start = False
+        # GNS-UDP-Host-Endpoint, den `status` liefert (simuliert `docker port`
+        # 6321/udp). Tests duerfen ihn aendern (Container-Neustart) oder auf None
+        # setzen (Mapping weg).
+        self.gns = "127.0.0.1:%d" % (self._BASE_PORT + 1001)
 
     def start(self, env=None, mode="solo", instance_id=None):
         if self.fail_start:
@@ -98,8 +102,18 @@ class FakeProvisioner(object):
             "instance": instance_id,
             "container": "riftbreaker-dedicated-%s-%s" % (env or self.cfg.env, instance_id),
             "running": True,
-            "ports": {"bridge": port},
+            "ports": {"bridge": port, "gns": "127.0.0.1:%d" % (port + 1000)},
             "created": True,
+        }
+
+    def status(self, instance_id=None, env=None):
+        # Erste Instanz: bridge=40001, gns=41001 (siehe start). Der GNS-UDP-Port
+        # kommt hier AUS DEM MAPPING (simuliert `docker port` 6321/udp).
+        return {
+            "running": True,
+            "health": "healthy",
+            "ports": {"bridge": self._BASE_PORT + 1, "gns": self.gns},
+            "container": "riftbreaker-dedicated-%s-%s" % (env or self.cfg.env, instance_id),
         }
 
     def stop(self, instance_id=None, env=None):
@@ -406,12 +420,59 @@ class HttpTests(HttpHarness):
         self.assertTrue(body["ok"])
         self.assertEqual(body["state"], "claimed")
         self.assertAlmostEqual(body["handover_seconds"], 0.13, places=9)
+        # Issue #929: die Claim-Antwort traegt den GNS-UDP-Endpoint (Relay-Ziel).
+        self.assertEqual(body["gns_endpoint"], "127.0.0.1:41001")
 
     def test_claim_empty_pool_409(self):
         status, body = self.post("/claim", {})
         self.assertEqual(status, 409)
         self.assertFalse(body["ok"])
         self.assertEqual(body["reason"], "none_parked")
+
+    def test_status_entry_carries_gns_endpoint(self):
+        # Issue #929 (durchgaengig): provisioner ports.gns -> ParkedEntry -> /status.
+        self.controller.maintain_once()
+        status, body = self.get("/status")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["entries"][0]["gns_endpoint"], "127.0.0.1:41001")
+
+    def test_claim_gns_endpoint_fresh_after_restart(self):
+        # Nach einem Container-Neustart wechselt der Host-UDP-Port: /claim liest
+        # ihn FRISCH vom Provisioner (nicht den warm_up-Cache) und liefert ihn als
+        # Relay-Ziel in der HTTP-Antwort.
+        self.controller.maintain_once()
+        self.provisioner.gns = "127.0.0.1:55999"
+        status, body = self.post("/claim", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["gns_endpoint"], "127.0.0.1:55999")
+        # /status spiegelt denselben frischen Endpoint (Quelle fuer Abnahme).
+        _s, snapshot = self.get("/status")
+        self.assertEqual(snapshot["entries"][0]["gns_endpoint"], "127.0.0.1:55999")
+
+    def test_claim_without_gns_mapping_is_none(self):
+        # Fehlt das 6321/udp-Mapping, ist gns_endpoint None — kein Crash, die
+        # uebrigen Claim-Felder bleiben intakt.
+        self.controller.maintain_once()
+        self.provisioner.gns = None
+        status, body = self.post("/claim", {})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+        self.assertIsNone(body["gns_endpoint"])
+        self.assertIn("bridge_url", body)
+
+    def test_recycle_cold_releases_gns_endpoint(self):
+        # Ein kalter Recycle (Stop) entfernt den Endpoint wieder (toter Port).
+        self.controller.maintain_once()
+        _s, claimed = self.post("/claim", {})
+        status, body = self.post(
+            "/recycle", {"instance_id": claimed["instance"], "keep_warm": False}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body["state"], "stopped")
+        _s, snapshot = self.get("/status")
+        stopped = [r for r in snapshot["entries"] if r["state"] == "stopped"]
+        self.assertEqual(len(stopped), 1)
+        self.assertIsNone(stopped[0]["gns_endpoint"])
 
     def test_double_claim_409(self):
         self.controller.maintain_once()

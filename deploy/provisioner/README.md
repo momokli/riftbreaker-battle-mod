@@ -73,7 +73,7 @@ ersetzt (z. B. `/srv/rift-dev/game`). `bridge_container_port` wird auf
 | Aspekt | Wert |
 |---|---|
 | Host-Publish Bridge | `127.0.0.1:<spec.bridge_port>:<bridge_container_port>` (Container-Default `9001`) |
-| Game-UDP | `127.0.0.1::6321/udp` |
+| Game-UDP | `127.0.0.1::6321/udp` (ephemerer Host-Port; als `ports["gns"]` surface, s. u., Issue #929) |
 | Game | `<game_source>:/opt/riftbreaker` |
 | Wine | `<wine_volume>:/data/.wine` |
 | Saves | `<saves_volume>:/data/saves` |
@@ -101,6 +101,12 @@ Preflight prüft fail-loud VOR dem Container, dass `game_source` (Dir),
   volumes, dirs}}` — idempotent; fehlende Ressourcen sind **kein** Fehler.
 - `status(instance_id=None, env=None) -> {running, health, ports, container}`
   — fehlt der Container: `running=False`, `health="unreachable"`, kein Fehler.
+
+  `ports` ist `{bridge, gns, docker}` (Issue #929): `bridge` = der Bridge-Host-Port,
+  `gns` = der **GNS-UDP-Host:Port** der Instanz aus dem `6321/udp`-Mapping
+  (`"127.0.0.1:32768"`, `null` wenn kein UDP-Mapping vorhanden — kein Crash),
+  `docker` = das vollständige `docker port`-Dict. `start(...)` liefert dieselbe
+  `ports`-Form.
 
 CLI:
 

@@ -39,10 +39,17 @@ CLAIMED --round_reset (+end_game bei result)--> RECYCLING --pause_game--> PARKED
 | Methode | Zweck | Rückgabe |
 |---|---|---|
 | `warm_up(env=None, instance_id=None)` | Provisioner `start()` → `pause_game()` → `PARKED`. **Idempotent**: schon `PARKED` → kein zweiter Start. | `ParkedEntry` |
-| `claim(env=None, instance_id=None)` | Health prüfen, `resume_game()`, Handover messen → `CLAIMED`. | `{instance, env, bridge_url, state, handover_seconds}` |
+| `claim(env=None, instance_id=None)` | Health prüfen, `resume_game()`, Handover messen → `CLAIMED`. Endpoint (`gns_endpoint`) wird vorher **frisch** über `provisioner.status()` gelesen (Port wechselt bei Container-Neustart). | `{instance, env, bridge_url, gns_endpoint, state, handover_seconds}` |
 | `recycle(env=None, instance_id=None, keep_warm=True, result=None)` | `round_reset()` + `pause_game()` → wieder `PARKED`. `end_game(result)` **nur** wenn `result` (`win`/`lose`) mitgegeben ist: die Bridge verlangt ein Pflicht-`result`, `end_game(None)` ist immer `400 invalid_request`. Ohne Ergebnis ist `round_reset` + `pause_game` der gültige, weltunabhängige Pfad. `keep_warm=False` → `stop()` → `STOPPED`. | `ParkedEntry` |
 | `reap(max_park_seconds)` | Auslaufschutz: zu lange geparkte Instanzen sauber stoppen. | `list[ParkedEntry]` |
 | `status()` | Snapshot aller Einträge. | `list[dict]` |
+
+`ParkedEntry` trägt seit #929 zusätzlich `gns_endpoint` — den **GNS-UDP**-Host:Port
+der Instanz (`"127.0.0.1:32768"`) aus `ports["gns"]` des Provisioners. Er wird
+beim `warm_up` gespeichert, beim `claim` frisch gelesen, und bei `stop`/`reap`
+(Container weg) wieder `None`. `to_dict()`/`GET /status` und die `claim()`-Antwort
+enthalten das Feld. `bridge_url` bleibt die **HTTP-Bridge** (Steuerung);
+`gns_endpoint` ist das Relay-/`/solo`-Ziel.
 
 `BridgeClient(base_url, timeout=5.0, opener=None)` — dünner stdlib-HTTP-Client:
 `health_ok()` (`GET /health`), `pause_game()`, `resume_game()`, `round_reset()`,
@@ -73,7 +80,7 @@ Antwort immer JSON; Fehlerformat `{"ok":false,"reason":…,"detail":…}`.
 |---|---|---|---|---|
 | `GET` | `/health` | — | `200 {"ok":true,"env":…}` | Liveness des Dienstes (nicht der Instanzen). |
 | `GET` | `/status` | — | `200 {counters, entries}` | Zaehler + `pool.status()`-Snapshot. |
-| `POST` | `/claim` | `{"env"?,"instance_id"?}` | `200` / `409` / `503` | `pool.claim()`; ohne `instance_id` aelteste `PARKED` (FIFO). Keine `PARKED` ⇒ `409 none_parked`; Bridge unhealthy ⇒ `503 bridge_unhealthy`. |
+| `POST` | `/claim` | `{"env"?,"instance_id"?}` | `200` / `409` / `503` | `pool.claim()`; ohne `instance_id` aelteste `PARKED` (FIFO). Keine `PARKED` ⇒ `409 none_parked`; Bridge unhealthy ⇒ `503 bridge_unhealthy`. Antwort enthält `gns_endpoint` (#929). |
 | `POST` | `/recycle` | `{"instance_id","keep_warm"?=true,"result"?}` | `200` / `400` / `409` | nach Rundenende wieder `PARKED`; `result` (`win`/`lose`) wird durchgereicht und löst `end_game(result)` aus (ohne `result` kein `end_game`); `keep_warm=false` ⇒ `stop()`; Nicht-`CLAIMED` ⇒ `409`; fehlendes `instance_id` oder `keep_warm` kein JSON-Boolean ⇒ `400`. |
 | `POST` | `/reap` | `{"max_park_seconds"?}` | `200 {stopped:[…]}` | manueller Auslaufschutz-Lauf. |
 
