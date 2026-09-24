@@ -1359,14 +1359,20 @@ static void handle_dom_suspend(SOCKET c, const char *cmd, const char *event)
 static void handle_send_chat(SOCKET c, const char *body)
 {
     char text[256] = "";
+    char ty[16] = "system";
+    char prefix[64] = "";
+    char esc_pfx[64 * 2];
     char esc[256 * 2];
     char line[READ_BUF];
     char payload[LINE_MAX];
     int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
     int rc;
 
-    if (body)
+    if (body) {
         json_get_string(body, "text", text, sizeof(text));
+        json_get_string(body, "type", ty, sizeof(ty));
+        json_get_string(body, "prefix", prefix, sizeof(prefix));
+    }
     if (!text[0]) {
         blog("POST /send_chat ohne text -> invalid_request");
         http_respond(c, 400, "Bad Request",
@@ -1374,8 +1380,11 @@ static void handle_send_chat(SOCKET c, const char *body)
         return;
     }
     json_escape(text, esc, sizeof(esc));
+    json_escape(prefix, esc_pfx, sizeof(esc_pfx));
     snprintf(payload, sizeof(payload),
-             "{\"cmd\":\"send_chat\",\"text\":\"%s\"}\n", esc);
+             "{\"cmd\":\"send_chat\",\"text\":\"%s\",\"type\":\"%s\","
+             "\"prefix\":\"%s\"}\n",
+             esc, ty, esc_pfx);
     rc = pipe_send_command("send_chat_result", payload, timeout_ms, line,
                            sizeof(line));
     if (rc == -1) {

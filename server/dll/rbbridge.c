@@ -5555,6 +5555,7 @@ static volatile LONG g_game_want = -1;  /* Operator-Override: -1 auto, 0 run, 1 
 static volatile LONG g_chat_out_pending = 0;
 static volatile LONG g_chat_out_done = 0;
 static char g_chat_out_text[256];
+static volatile LONG g_chat_out_type = 8; /* ChatMessageType: 2=SYSTEM, 4=ANNOUNCEMENT, 8=MESSAGE */
 static const unsigned char *g_chat_broadcast_fn = NULL;
 typedef void (__fastcall *broadcastchat_fn_t)(void *sessions, void *ack,
                                               int transfer, void *conn);
@@ -5582,7 +5583,7 @@ static void send_chat_now(void *state)
     *(unsigned int *)(ack + RBBRIDGE_CHAT_OFF_PLAYER) = RBBRIDGE_CHAT_PLAYER_SERVER;
     ((utfstring_ctor_fn_t)(uintptr_t)(g_game_base + RBBRIDGE_RVA_UTFSTRING_CTOR))(
         ack + RBBRIDGE_CHAT_OFF_MESSAGE, g_chat_out_text);
-    ack[RBBRIDGE_CHAT_OFF_TYPE] = RBBRIDGE_CHAT_TYPE_MESSAGE;
+    ack[RBBRIDGE_CHAT_OFF_TYPE] = (unsigned char)g_chat_out_type;
     ((broadcastchat_fn_t)(uintptr_t)g_chat_broadcast_fn)(
         sessions, ack, RBBRIDGE_CHAT_TRANSFER_UNRELIABLE, NULL);
     ((utfstring_dtor_fn_t)(uintptr_t)(g_game_base + RBBRIDGE_RVA_UTFSTRING_DTOR))(
@@ -5723,7 +5724,8 @@ static int install_game_pause_hook(const unsigned char *base, size_t size)
  * Broadcast laeuft im GAME-Thread-Hook (Race bei Spieler-Join/-Leave).
  * Event: {"event":"send_chat_result","ok":true,"text":".."} bzw. ok:false
  * mit reason no_module|hook_not_installable|no_broadcast_fn|invalid_text. */
-static RBBRIDGE_NOINLINE void dispatch_send_chat(HANDLE hPipe, const char *text)
+static RBBRIDGE_NOINLINE void dispatch_send_chat(HANDLE hPipe, const char *text,
+                                                  int type, const char *prefix)
 {
     const unsigned char *base = NULL;
     size_t size = 0;
@@ -5756,7 +5758,10 @@ static RBBRIDGE_NOINLINE void dispatch_send_chat(HANDLE hPipe, const char *text)
     }
     /* Text kopieren (NUL-terminiert; Rest nullt die fixe Puffergroesse). */
     memset(g_chat_out_text, 0, sizeof(g_chat_out_text));
-    strncpy(g_chat_out_text, text, sizeof(g_chat_out_text) - 1);
+    /* prefix (falls gesetzt) + text, NUL-terminiert, gekappt. */
+    snprintf(g_chat_out_text, sizeof(g_chat_out_text), "%s%s",
+             (prefix && prefix[0]) ? prefix : "", text);
+    InterlockedExchange(&g_chat_out_type, (LONG)type);
     InterlockedExchange(&g_chat_out_done, 0);
     InterlockedExchange(&g_chat_out_pending, 1);
     for (i = 0; i < 300 && !g_chat_out_done; i++)
@@ -6915,8 +6920,21 @@ static void handle_line(HANDLE hPipe, const char *line)
      * via ServerGameplayState::On{Pause,Resume}GameRequest (kein DOM/exec). */
     if (strcmp(cmd, "send_chat") == 0) {
         char text[256] = "";
+        char ty[16] = "system";
+        char prefix[64] = "";
+        int type = 2; /* Default SYSTEM: rendert ohne Spieler-Sender-Label */
         json_get_string(line, "text", text, sizeof(text));
-        dispatch_send_chat(hPipe, text);
+        json_get_string(line, "type", ty, sizeof(ty));
+        json_get_string(line, "prefix", prefix, sizeof(prefix));
+        if (strcmp(ty, "message") == 0)
+            type = 8;
+        else if (strcmp(ty, "announcement") == 0)
+            type = 4;
+        else if (strcmp(ty, "system") == 0)
+            type = 2;
+        else
+            type = atoi(ty) ? atoi(ty) : 2;
+        dispatch_send_chat(hPipe, text, type, prefix);
         return;
     }
 
