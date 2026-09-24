@@ -189,4 +189,4 @@ else
   fail "Negativ-Probe: ungeschuetzter Lauf fasst den fehlenden Pfad NICHT an (Test erkennt den fehlenden stat-Guard nicht)."
 fi
 
-echo "OK: Backup-/Stray-Retention begrenzt deterministisch auf die N neuesten, ist idempotent, --check-fest, konfigurierbar (keep=0), fasst mods/ nie an (#212, inkl. fail-loud-Overlap-Guard) und der stat-Guard ist load-bearing: ohne die when-Bedingungen fasst `find` den fehlenden Pfad an ('is not a directory') — die Negativ-Variante ist dabei gueltiges YAML."
+echo "OK: Backup-/Stray-Retention begrenzt deterministisch auf die N neuesten, ist idempotent, --check-fest, konfigurierbar (keep=0), fasst mods/ nie an (#212, inkl. fail-loud-Overlap-Guard) und der stat-Guard ist load-bearing: ohne die when-Bedingungen fasst find den fehlenden Pfad an ('is not a directory') — die Negativ-Variante ist dabei gueltiges YAML."
