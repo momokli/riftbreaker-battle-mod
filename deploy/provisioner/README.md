@@ -139,13 +139,41 @@ Validierung/`{env}`-Substitution, Config fail-closed (inkl. `bridge_container_po
   Reste.
 - Löschen toleriert fehlende Ressourcen (wie `|| true` im Boot-Test-Cleanup).
 
-## Offener Punkt
+## Live-Beweis gegen das reale Image (gefuehrt, #918)
 
 Der **Live-Beweis** auf planet (echter `start` gegen das reale Image,
 Bridge-`/health` → `ok:true` innerhalb der Deadline, realer `stop` ohne Reste)
-ist umgebungs-/spielabhängig und **nicht** Teil der hermetischen Suite. Er wird
-im Rahmen von **#918** (Stage 5) geführt: dort wird der Provisioner mit
-kollisionsfreier `bridge_port_base` gegen `rb-dedicated:<sha>` gestartet und
-Kommando + beobachtete Ausgabe (`/health`, `docker ps -a`/`volume ls`/`network ls`)
-dokumentiert. Die Details liefert Stage 5; bis dahin gilt der Live-Beweis als
-offen (nicht als erledigt).
+ist umgebungs-/spielabhängig und **nicht** Teil der hermetischen Suite. Er wurde
+im Rahmen von **#918** (Stage 5, 2026-09-24) gegen `rb-dedicated:cb69b20db7b2`
+geführt und ist hier dokumentiert.
+
+```bash
+export PROVISIONER_IMAGE=rb-dedicated:cb69b20db7b2 \
+       PROVISIONER_GAME_SOURCE=/srv/rift-dev/game \
+       PROVISIONER_CONFIG_CFG=/opt/rbmods/compose/rift-dev/riftbreaker/config/config.cfg \
+       PROVISIONER_RBTOOLS_DIR=/opt/rbmods/rbtools/dev \
+       PROVISIONER_BRIDGE_PORT_BASE=31000 PROVISIONER_INSTANCE_ID=918live \
+       PROVISIONER_HEALTH_DEADLINE=360 PROVISIONER_ENV=test
+cd deploy/provisioner
+python3 provisioner.py --check      # configuration OK ...
+python3 provisioner.py start        # running=true, health=healthy, created=true
+curl -sS http://127.0.0.1:48059/health   # {"ok":true,"pipe":true}
+python3 provisioner.py status       # running=true, health=healthy
+python3 provisioner.py stop         # removed: container/network/volumes/dirs=true
+```
+
+Beobachtetes Ergebnis (planet):
+
+- `--check` → `configuration OK (env=test image=rb-dedicated:cb69b20db7b2 ... health_deadline=360.0s)`, EXIT 0.
+- `start` → Container-Publish `127.0.0.1:48059:9001`, alle fünf realen Mounts
+  (`/opt/riftbreaker`, `/data/.wine`, `/data/saves`, `/data/config/config.cfg:ro`,
+  `/opt/rbtools:ro`), Env `RBB_BRIDGE_BIND=0.0.0.0`/`RBB_BRIDGE_PORT=9001` sowie
+  `WINEESYNC=0`/`WINEFSYNC=0`; `running=true`, `health=healthy`, `created=true`.
+- **Bootdauer ≈ 12 s** bis `healthy` (Deadline 360 s) — realer Cold-Boot.
+- `curl http://127.0.0.1:48059/health` → `{"ok":true,"pipe":true}`.
+- `stop` → `{container, network, volumes, dirs}` alle `true`; danach keine
+  Reste: `docker ps -a`/`volume ls`/`network ls` ohne `918live`, Host-Port frei,
+  kein `/srv/rift-test-918live`.
+
+Der Live-Pfad ist damit als geführt dokumentiert (nicht mehr offen);
+Reproduktion über obige Kommandos mit kollisionsfreier `bridge_port_base`.

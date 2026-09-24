@@ -213,3 +213,195 @@ PR-Body MUSS `Closes #918` enthalten.
 - **R7 (niedrig) — Fake-Docker-Parsing:** Der Fake leitet `bridge_port` aus
   `-p`-Feld 2 ab; nach US3 bleibt Feld 2 der Host-Port, Feld 3 = 9001. Test für
   `9001/tcp` in `port`-Ausgabe stellen.
+## Verify (Stage 4)
+
+**Verdikt: PASS** — Diff `cb69b20..HEAD` (`deploy/provisioner/`, Commit `1620731`) ist
+korrekt gegen das reale Deploy-Layout, sicher und ohne Regressionen. Hermetische Suite
+grün: `44 tests OK` (`python3 -m unittest test_provisioner -v`).
+
+### Prüfpunkte (alle bestanden)
+
+1. **Layout-Parität** (`provisioner.py:610-625` vs. `docker-compose.yml.j2` +
+   `defaults/main.yml`): Host-Publish `127.0.0.1:<bridge_port>:<bridge_container_port>`
+   == Compose `127.0.0.1:{{ riftbreaker_bridge_port }}:{{ riftbreaker_bridge_container_port }}`
+   (Default 9001). Die **fünf** Mounts stimmen exakt:
+   `<game_source>:/opt/riftbreaker`, `<wine_volume>:/data/.wine`,
+   `<saves_volume>:/data/saves`, `<config_cfg>:/data/config/config.cfg:ro`,
+   `<rbtools_dir>:/opt/rbtools:ro`. Env exakt: `RBB_BRIDGE_BIND=0.0.0.0`,
+   `RBB_BRIDGE_PORT=<container_port>`, `WINEESYNC=0`, `WINEFSYNC=0` (+ `RIFTBREAKER_MODE`,
+   aus #908). Defaults `config_cfg`/`rbtools_dir`/`game_source` treffen die realen
+   host_vars-Pfade (`/opt/rbmods/compose/rift-<env>/...`, `/opt/rbmods/rbtools/<env>`,
+   `/srv/rift-<env>/game`).
+2. **Health-Pfad** (`provisioner.py:247-248`): `health_url()` bleibt
+   `http://127.0.0.1:<bridge_port>/health`; Host-Publish mappt `bridge_port`→9001.
+   Konsistent.
+3. **Config/InstanceSpec** (`provisioner.py:75-78,97-101,115-118,185-189,225-234`):
+   neue Felder + `{env}`-Substitution in `config_cfg`/`rbtools_dir`/`game_source`;
+   Env>Datei-Precedence; `bridge_container_port` in `_INT_FIELDS` und auf 1..65535
+   validiert (`ConfigError`). `InstanceSpec` rein rechnend/deterministisch.
+4. **Sicherheit** (`provisioner.py:287-301,605-625`): `docker` weiter als Argumentliste
+   (`subprocess.run(cmd, ...)`, kein `shell=True`/`os.system`); alle Namen aus
+   `InstanceSpec`; keine Shell-/Injektionsfläche über `{env}`/Pfade/Mounts.
+5. **Regressionen**: Preflight-Reihenfolge korrekt — Idempotenz-Check, dann
+   `_preflight` (Port/Disk/Image/**Quellen**) VOR `_create_dirs`/Netz/Volumes/Container
+   (`provisioner.py:449-476`); fehlende Quellen → `ProvisionError` ohne Container.
+   Idempotenz/Rollback unverändert grün.
+6. **Testqualität**: kein `8080` mehr im Modul (grep: none); Fake-Docker-`port`-Ausgabe
+   auf `9001/tcp`; `test_run_args_real_image_layout` prüft Host:Container-Port, UDP,
+   alle fünf Mounts (inkl. `:ro`) und die Bridge-/Sync-Env. Keine abgeschwächten
+   Assertions gefunden.
+
+### Restrisiken / Hinweise (kein Blocker)
+
+- **Niedrig — TCP-Publish-Parität** (`provisioner.py:611`): Compose publiziert neben
+  `6321/udp` auch `6321/tcp`; der Provisioner nur UDP. Pre-existing (vor #918), kein
+  Regressionsrisiko für den Dedicated-Server (bindet UDP).
+- **Niedrig — `spec.game_dir` jetzt ungenutzt** (`provisioner.py:223,509,587`): wird noch
+  angelegt/entfernt, aber nach dem Mount-Umstieg auf `game_source` nirgends mehr gemountet
+  → toter Pfad (Cleanup-Kandidat, kein Funktionsfehler).
+- **Mittel — Deadline vs. Cold-Boot (R5, weiterhin offen):**
+  `PROVISIONER_HEALTH_DEADLINE`-Default 180s < Compose `start_period: 300s`. Live-
+  Kalibrierung in Stage 5; ggf. Default anheben.
+- **Cosmetisch:** README endet ohne Trailing-Newline.
+
+→ Stage 5 (Live-Beweis) kann starten.
+
+## Test (Stage 5)
+
+**Datum:** 2026-09-24 · **Host:** planet · **Branch:** fix/918-provisioner-real-image (HEAD 1620731)
+
+### A) Hermetisch (Pflicht-Gate) — PASS
+
+```
+$ cd deploy/provisioner && python3 -m unittest test_provisioner -v
+Ran 44 tests in 24.639s
+OK
+
+$ cd deploy/parked && python3 -m unittest test_measure_boot test_parked_pool test_parked_vs
+Ran 52 tests in 0.003s
+OK
+```
+
+Fake-Docker-`run`-Aufruf belegt das reale Layout (Auszug):
+```
+docker run -d --name riftbreaker-dedicated-test-0 --network rb-test-0_default \
+  --label rb.provisioner.env=test --label rb.provisioner.instance=0 \
+  -p 127.0.0.1:54459:9001 -p 127.0.0.1::6321/udp \
+  -v /tmp/.../sources/game:/opt/riftbreaker \
+  -v rb-test-wine-0:/data/.wine -v rb-test-saves-0:/data/saves \
+  -v /tmp/.../sources/config.cfg:/data/config/config.cfg:ro \
+  -v /tmp/.../sources/rbtools:/opt/rbtools:ro \
+  -e RIFTBREAKER_MODE=solo -e RBB_BRIDGE_BIND=0.0.0.0 -e RBB_BRIDGE_PORT=9001 \
+  -e WINEESYNC=0 -e WINEFSYNC=0 test-image:latest
+```
+→ Container-Port **9001**, Host-Publish = `bridge_port`, alle fünf Mounts inkl. `:ro`,
+Env-Paare und Sync-Env (R2) vorhanden. Kein `8080` mehr.
+
+### B) LIVE-Integrationsnachweis (reales Image) — PASS
+
+Quellen-Vorprüfung (alle vorhanden):
+```
+/srv/rift-dev/game                                  (Verzeichnis, Content ok)
+/opt/rbmods/compose/rift-dev/riftbreaker/config/config.cfg   (File, 532 B)
+/opt/rbmods/rbtools/dev                             (Directory, pipe_bridge.exe/rbbridge.dll)
+docker images | grep rb-dedicated:cb69b20db7b2      -> 5.14GB (main HEAD-Tag)
+```
+
+Env (host_vars planet, dev):
+```
+PROVISIONER_IMAGE=rb-dedicated:cb69b20db7b2
+PROVISIONER_GAME_SOURCE=/srv/rift-dev/game
+PROVISIONER_CONFIG_CFG=/opt/rbmods/compose/rift-dev/riftbreaker/config/config.cfg
+PROVISIONER_RBTOOLS_DIR=/opt/rbmods/rbtools/dev
+PROVISIONER_BRIDGE_PORT_BASE=31000
+PROVISIONER_INSTANCE_ID=918live
+PROVISIONER_HEALTH_DEADLINE=360
+PROVISIONER_ENV=test
+```
+
+**1) `--check`** → `configuration OK (env=test image=rb-dedicated:cb69b20db7b2 base_dir=/srv min_free_gb=10.0 health_deadline=360.0s)` (EXIT=0)
+
+**2) `start`** (15:50:17 → healthy 15:50:29, **Bootdauer ≈ 12 s** ≪ 360 s Deadline):
+Der erzeugte `docker run` nutzte exakt das reale Layout:
+```
+docker run -d --name riftbreaker-dedicated-test-918live --network rb-test-918live_default \
+  --label rb.provisioner.env=test --label rb.provisioner.instance=918live \
+  -p 127.0.0.1:48059:9001 -p 127.0.0.1::6321/udp \
+  -v /srv/rift-dev/game:/opt/riftbreaker \
+  -v rb-test-wine-918live:/data/.wine -v rb-test-saves-918live:/data/saves \
+  -v /opt/rbmods/compose/rift-dev/riftbreaker/config/config.cfg:/data/config/config.cfg:ro \
+  -v /opt/rbmods/rbtools/dev:/opt/rbtools:ro \
+  -e RIFTBREAKER_MODE=solo -e RBB_BRIDGE_BIND=0.0.0.0 -e RBB_BRIDGE_PORT=9001 \
+  -e WINEESYNC=0 -e WINEFSYNC=0 rb-dedicated:cb69b20db7b2
+```
+Start-Ergebnis:
+```json
+{"instance": "918live", "container": "riftbreaker-dedicated-test-918live", "running": true, "health": "healthy", "ports": {"bridge": 48059, "docker": {"6321/udp": "127.0.0.1:32987", "9001/tcp": "127.0.0.1:48059"}}, "created": true}
+```
+
+**3) direkter Health-Check** → `curl -sS http://127.0.0.1:48059/health`:
+```json
+{"ok":true,"pipe":true}
+```
+Container-Log belegt realen Boot (Auszug):
+```
+[RBBATTLE:cb69b20db7b2...] event=mod_load version=cb69b20db7b2... status=ok mode=server
+[entrypoint] Server entered ServerGameplayState — config loaded successfully
+[entrypoint] UDP port 6321 is open — server should accept connections
+```
+`docker ps` während Lauf: `riftbreaker-dedicated-test-918live  Up 11 seconds (healthy)`.
+
+**4) `status`** →
+```json
+{"running": true, "health": "healthy", "ports": {"bridge": 48059, "docker": {"6321/udp": "127.0.0.1:32987", "9001/tcp": "127.0.0.1:48059"}}, "container": "riftbreaker-dedicated-test-918live"}
+```
+
+**5) `stop`** → `{"instance": "918live", "removed": {"container": true, "network": true, "volumes": true, "dirs": true}}` (EXIT=0)
+
+**Restfreiheits-Belege nach `stop`:**
+```
+$ docker ps -a | grep 918live        -> (leer)
+$ docker volume ls | grep 918live    -> (keine rb-test-*-918live)
+$ docker network ls | grep 918live   -> (keine 918live-Netze)
+$ ss -ltn | grep -E ':48[0-9]{3}|:31[0-9]{3}'  -> (Port frei)
+$ ls /srv | grep 918live             -> (kein /srv/rift-test-918live)
+```
+Kein Container am Ende hinterlassen.
+
+### Evidence-Snippet (kopierbar für README/PR)
+
+````markdown
+### Live-Beweis gegen das reale Image (planet, 2026-09-24)
+
+```bash
+export PROVISIONER_IMAGE=rb-dedicated:cb69b20db7b2 \
+       PROVISIONER_GAME_SOURCE=/srv/rift-dev/game \
+       PROVISIONER_CONFIG_CFG=/opt/rbmods/compose/rift-dev/riftbreaker/config/config.cfg \
+       PROVISIONER_RBTOOLS_DIR=/opt/rbmods/rbtools/dev \
+       PROVISIONER_BRIDGE_PORT_BASE=31000 PROVISIONER_INSTANCE_ID=918live \
+       PROVISIONER_HEALTH_DEADLINE=360 PROVISIONER_ENV=test
+cd deploy/provisioner
+python3 provisioner.py --check      # configuration OK ...
+python3 provisioner.py start        # running=true, health=healthy, created=true
+curl -sS http://127.0.0.1:48059/health   # {"ok":true,"pipe":true}
+python3 provisioner.py status       # running=true, health=healthy
+python3 provisioner.py stop         # removed: container/network/volumes/dirs=true
+```
+
+Ergebnis: echter Cold-Boot gegen `rb-dedicated:cb69b20db7b2` erreicht
+`/health {"ok":true,"pipe":true}` in ≈12 s (Deadline 360 s); `stop()` restfrei
+(kein Container/Volume/Netz/Port/Pfad).
+````
+
+### Fallstricke / Beobachtungen
+
+- **R5 (Deadline):** Der reale Cold-Boot war mit ≈12 s sehr schnell; die Default-Deadline
+  180 s hätte gereicht. 360 s bleibt als sicherer Puffer (Compose `start_period: 300s`).
+- **R6 (Entrypoint):** Image-Default-Entrypoint läuft korrekt ohne Command/Args und liest
+  `/data/config/config.cfg` + `/opt/rbtools` (Log: `ServerGameplayState — config loaded`).
+- **R1 (Game-Mount):** `game_source` zeigt korrekt auf `/srv/rift-dev/game`; der run-scoped
+  `run_root` (`/srv/rift-test-918live`) wird angelegt, aber NICHT als `/opt/riftbreaker`
+  gemountet — kein Overshadowing des Image-Contents.
+- **R4 (Port):** `bridge_port_base=31000` kollisionsfrei; effektiver Host-Port 48059
+  (31000 + crc32('918live')%20000), keine Kollision mit 9001–9004.
+
