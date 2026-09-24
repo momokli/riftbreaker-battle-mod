@@ -263,6 +263,15 @@ Phase sicher auf `provisioned`/`underway`/`running` zurueck (kein Haenger, kein
 Crash). `self_send` ist eine reine UI-/Body-Auswahl und aendert die
 Parked-Semantik nicht.
 
+**Reichweite von `in_game_paused` (ehrlich):** Die Pause-Quelle leitet „angehalten"
+nur aus den Parked-Zustaenden `parked` / `recycling` / `warming` ab
+(`gns_probe.cpp`, `refreshParkedGameState`). Eine **geclaimte** Instanz steht aber
+auf `claimed` → `gamePaused=false` → Phase `running`. `in_game_paused` ist damit
+im Normalpfad praktisch **nur transient** erreichbar (z. B. waehrend `recycling`);
+die Ableitung degradiert sicher, ueberzeichnet aber die Erreichbarkeit. Ein echter
+In-Game-Pause-Nachweis braucht einen Live-Client (Playtest) oder eine neue
+Pause-Quelle.
+
 
 Der Relay bedient **N parallele Sessions**: jeder akzeptierte Client bekommt
 Client-Conn, Backend-Conn, Historie, Sende-Queues und Backpressure **eigen**.
