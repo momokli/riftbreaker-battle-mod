@@ -53,6 +53,82 @@ CLAIMED --end_game/round_reset--> RECYCLING --pause_game--> PARKED
 brechen **laut** mit `ParkedError` ab — nie ein halber Zustand. Scheitert
 `pause_game` nach dem Start, wird die Instanz zurückgerollt und gestoppt.
 
+## Dienst `parked_service.py` (#928)
+
+Der **fehlende Dienst** ueber `ParkedPool` (#909): haelt N Instanzen warm
+(Zielzustand `PARKED`), bietet `claim()` als Anfrage-Schnittstelle an (fuer den
+Proxy-Claim #929), recycelt nach Rundenende, reapt periodisch (Auslaufschutz)
+und liefert Status/Health. Ein Dienst **pro Env** (systemd `rbmods-parked-<env>`)
+ueber die Ansible-Rolle [`../roles/parked-pool`](../roles/parked-pool).
+`main()` (argparse, `--check`, `SIGTERM`/`SIGINT` ⇒ sauberes `httpd.shutdown()`
++ Loop-Stop) startet einen `ThreadingHTTPServer` (Bind `127.0.0.1`).
+
+### HTTP-API
+
+Bind `127.0.0.1:$PARKED_PORT` (Default 8092). `PARKED_TOKEN` gesetzt ⇒ **jeder**
+Request braucht `Authorization: Bearer …` (sonst `401` + `WWW-Authenticate`).
+Antwort immer JSON; Fehlerformat `{"ok":false,"reason":…,"detail":…}`.
+
+| Methode | Pfad | Body | Antwort | Semantik |
+|---|---|---|---|---|
+| `GET` | `/health` | — | `200 {"ok":true,"env":…}` | Liveness des Dienstes (nicht der Instanzen). |
+| `GET` | `/status` | — | `200 {counters, entries}` | Zaehler + `pool.status()`-Snapshot. |
+| `POST` | `/claim` | `{"env"?,"instance_id"?}` | `200` / `409` / `503` | `pool.claim()`; ohne `instance_id` aelteste `PARKED` (FIFO). Keine `PARKED` ⇒ `409 none_parked`; Bridge unhealthy ⇒ `503 bridge_unhealthy`. |
+| `POST` | `/recycle` | `{"instance_id","keep_warm"?=true,"result"?}` | `200` / `409` | nach Rundenende wieder `PARKED`; `keep_warm=false` ⇒ `stop()`; Nicht-`CLAIMED` ⇒ `409`. |
+| `POST` | `/reap` | `{"max_park_seconds"?}` | `200 {stopped:[…]}` | manueller Auslaufschutz-Lauf. |
+
+Unbekannte Route ⇒ `404 {"ok":false,"reason":"not_found"}`; falsche Methode
+auf bekannter Route ⇒ `405`.
+
+### Zaehler (`counters` in `/status`)
+
+Aus `pool.status()`: `parked`, `claimed`, `warming`, `recycling`, `stopped`,
+`total`. Laufzeit-Lifetime: `claims`, `recycles`, `reaps`, `warm_failures`,
+`handover_last_seconds`, `handover_avg_seconds` (rollierendes Fenster).
+**Invariante:** `parked+claimed+warming+recycling+stopped == total`.
+
+### Env-Konfiguration (`PARKED_*`)
+
+| Var | Default | Bedeutung |
+|---|---|---|
+| `PARKED_ENV` | `PROVISIONER_ENV`/`test` | Env-Namensraum |
+| `PARKED_BIND` | `127.0.0.1` | Bind-Adresse |
+| `PARKED_PORT` | `8092` | Port (Proxy #929 proxyt dorthin) |
+| `PARKED_POOL_SIZE` | `1` | N warme Instanzen |
+| `PARKED_MAX_PARK_SECONDS` | `900` | Reap-Auslaufschwelle |
+| `PARKED_REAP_INTERVAL` | `30` | Sekunden zwischen Maintain-Laeufen |
+| `PARKED_INSTANCE_PREFIX` | `parked` | Praefix der `instance_id` |
+| `PARKED_TOKEN` | `` (leer) | Bearer-Token; nicht-leer ⇒ Pflicht |
+| `PARKED_LOG_LEVEL` | `INFO` | Logging |
+| `PROVISIONER_*` | — | an `provisioner.load_config()` durchgereicht (`PROVISIONER_IMAGE` Pflicht) |
+
+`PARKED_PORT`/`POOL_SIZE`/`MAX_PARK_SECONDS`/`REAP_INTERVAL` fail-closed
+validiert (Zahl > 0); Fehlkonfiguration ⇒ Start bricht ab (`ParkedConfigError`).
+Fehlendes `PROVISIONER_IMAGE` ⇒ ebenfalls laut (`build_provisioner`).
+
+### Dienst-DoD-Mapping (#928)
+
+| DoD (#928) | Umsetzung | Nachweis |
+|---|---|---|
+| Pool warm halten bis N | `ParkedController.maintain_once` (`_fill` bis `pool_size`) | `test_parked_service.ControllerFillTests` |
+| Claim als Anfrage-Schnittstelle | `POST /claim` (FIFO aelteste `PARKED`), `handover_seconds` | `HttpTests.test_claim_ok_with_handover` |
+| Recycle nach Rundenende → wieder `PARKED` | `POST /recycle` (`keep_warm`) | `HttpTests.test_recycle_returns_to_parked` |
+| Periodischer Reap / Auslaufschutz | `reap_due()` + `_reap()`, `POST /reap` | `ControllerReapTests`, `HttpTests.test_reap_endpoint` |
+| Status/Health-Endpoint (PARKED/CLAIMED-Zaehler) | `GET /status`/`GET /health` + Invariante | `HttpTests.test_status_has_counters_and_entries` |
+| Bearer-Auth fail-closed | `401` + `WWW-Authenticate` wenn Token gesetzt; Rolle erzwingt Token | `AuthTests`, Rolle `parked-pool` |
+| Kein Weltfortschritt im PARKED | `pause_game` beim Parken (Pool #909) | `test_parked_pool.WorldProgressInvariantTests` |
+
+### Live-Nachweis (#928)
+
+[`evidence/928-live-2026-09-24.txt`](evidence/928-live-2026-09-24.txt):
+**REAL** belegt — Dienst-Treiber gegen den echten Provisioner/Image: warm
+(cold boot + `pause_game`) ⇒ `PARKED`, `claim` (health + `resume_game`,
+`handover_seconds` gemessen), Bridge healthy, restfreies `stop` (kein Leak).
+**PENDING** — `recycle` → `PARKED` ueber 2 Zyklen: auf planet laeuft keine reale
+Welt, `POST /end_game` antwortet `400 invalid_request` (`get_state`:
+`reason:"no_world"`). Dieselbe Umgebungs-Klasse wie #919; Repro-Kommandos in
+der Evidenz. Hermetisch ist recycle (inkl. zweitem Zyklus) belegt.
+
 ## Parked VS (#910)
 
 Zusätzlich zum Solo-Warm-Pool (`ParkedPool`, #909) gibt es `ParkedVSPool`
@@ -194,6 +270,14 @@ verlangt `PARKED` + healthy, recycle warm/kalt, reap stoppt nur Überfällige un
 stoppt bei einem `stop`-Fehler die übrigen trotzdem (aggregierter
 `ParkedError`), status, Fehler → `ParkedError`, `measure_boot` liefert Differenz
 und räumt Cold+Parked auf (kein Container-Leak).
+
+**Dienst (#928)** zusätzlich (`test_parked_service.py`, hermetisch + echter
+`ThreadingHTTPServer` auf `127.0.0.1:0`): Config-Validierung (`PARKED_*`
+fail-closed, fehlendes `PROVISIONER_IMAGE`), Controller-Auffüllen/Idempotenz/
+Backoff+`warm_failures`/Reap/Zähler-Invariante/FIFO-Claim, alle HTTP-Routen
+(`/health`, `/status`, `/claim` ok+`409`, `/recycle` → `PARKED`/`stopped`,
+`/reap`, `401`+`WWW-Authenticate`, `404`, `405`, Doppel-Claim `409`,
+Bridge-unhealthy `503`).
 
 **VS (#910)** zusätzlich: `ReadyGateTests` (erst beide beigetreten + beide
 `ready` lösen genau **ein** `resume_game` aus; kein `resume` nach Join 1/2 bzw.
