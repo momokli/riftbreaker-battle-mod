@@ -13,9 +13,13 @@ using rbapi::jsonEscape;
 using rbapi::jsonStringField;
 using rbapi::parseHttpResponse;
 using rbapi::parseHttpStatusLine;
+using rbapi::deriveSoloPhase;
 using rbapi::parseQueryParam;
+using rbapi::parseSoloSelfSend;
 using rbapi::parseTargetSpec;
 using rbapi::parseUrlHostPort;
+using rbapi::SoloPhase;
+using rbapi::soloPhaseName;
 using rbapi::retryDelayMs;
 using rbapi::runSoloClaim;
 using rbapi::SoloBudget;
@@ -177,6 +181,69 @@ static void testUrlDecode() {
   // Ungueltige Prozentfolge bleibt tolerant stehen (kein Crash).
   checkEq(urlDecode("%zz"), "%zz", "ungueltig bleibt");
   checkEq(urlDecode("trailing%"), "trailing%", "einsames %");
+}
+
+// --- Solo-Phasenmodell + self_send (Issue #930) -----------------------------
+
+static void testDeriveSoloPhase() {
+  // !claimed -> None (alle anderen Eingaben egal).
+  check(deriveSoloPhase(false, false, false, false) == SoloPhase::None,
+        "nicht geclaimt -> None");
+  check(deriveSoloPhase(false, true, true, true) == SoloPhase::None,
+        "nicht geclaimt (verbunden) -> None");
+  // claimed && !client -> Provisioned.
+  check(deriveSoloPhase(true, false, false, false) == SoloPhase::Provisioned,
+        "geclaimt ohne client -> Provisioned");
+  check(deriveSoloPhase(true, false, true, true) == SoloPhase::Provisioned,
+        "geclaimt ohne client (paused) -> Provisioned");
+  // claimed && client && !backend -> Underway.
+  check(deriveSoloPhase(true, true, false, false) == SoloPhase::Underway,
+        "client, kein backend -> Underway");
+  check(deriveSoloPhase(true, true, false, true) == SoloPhase::Underway,
+        "client, kein backend (paused) -> Underway");
+  // claimed && client && backend && paused -> InGamePaused.
+  check(deriveSoloPhase(true, true, true, true) == SoloPhase::InGamePaused,
+        "verbunden + paused -> InGamePaused");
+  // sonst -> Running.
+  check(deriveSoloPhase(true, true, true, false) == SoloPhase::Running,
+        "verbunden + laeuft -> Running");
+}
+
+static void testSoloPhaseName() {
+  checkEq(soloPhaseName(SoloPhase::None), "", "None -> leer");
+  checkEq(soloPhaseName(SoloPhase::Provisioned), "provisioned",
+          "Provisioned Name");
+  checkEq(soloPhaseName(SoloPhase::Underway), "underway", "Underway Name");
+  checkEq(soloPhaseName(SoloPhase::InGamePaused), "in_game_paused",
+          "InGamePaused Name");
+  checkEq(soloPhaseName(SoloPhase::Running), "running", "Running Name");
+}
+
+static void testParseSoloSelfSend() {
+  bool out = false;
+  // Feld fehlt -> Default true, kein Treffer.
+  check(!parseSoloSelfSend("{\"identitaet\":\"str:A\"}", out),
+        "fehlendes self_send -> false");
+  check(out, "fehlendes self_send -> Default true");
+  check(!parseSoloSelfSend("", out), "leerer Body -> false");
+  check(out, "leerer Body -> Default true");
+  // Explizites true/false.
+  check(parseSoloSelfSend("{\"self_send\":true}", out), "true gefunden");
+  check(out, "true -> out true");
+  check(parseSoloSelfSend("{\"self_send\":false}", out), "false gefunden");
+  check(!out, "false -> out false");
+  // Whitespace tolerant.
+  check(parseSoloSelfSend("{ \"self_send\" :  false }", out),
+        "Whitespace + false");
+  check(!out, "Whitespace false -> out false");
+  // Nicht-Bool (String/Zahl) -> kein Treffer, Default bleibt.
+  out = false;
+  check(!parseSoloSelfSend("{\"self_send\":\"no\"}", out),
+        "String -> kein Bool");
+  check(out, "String -> Default true");
+  out = false;
+  check(!parseSoloSelfSend("{\"self_send\":1}", out), "Zahl -> kein Bool");
+  check(out, "Zahl -> Default true");
 }
 
 // --- /solo-Claim (Issue #929) -----------------------------------------------
@@ -446,6 +513,9 @@ int main() {
   testParseHttpResponse();
   testRetryDecision();
   testUrlDecode();
+  testDeriveSoloPhase();
+  testSoloPhaseName();
+  testParseSoloSelfSend();
   testSoloSuccess();
   testSoloEnvPayload();
   testSoloClaimPathConfigurable();

@@ -311,6 +311,78 @@ inline std::string jsonEscape(const std::string &s) {
   return out;
 }
 
+// --- Solo-Phasenmodell + /solo-Body (Issue #930) -----------------------------
+//
+// Reine, host-testbare Ableitung des sichtbaren Solo-Status aus dem, was der
+// Relay ohnehin weiss (Claim-Zustand + Client-/Backend-Verbindung + Pause-
+// Signal). Bewusst OHNE Socket/Win32 — laeuft als Host-Test in der CI.
+
+enum class SoloPhase {
+  None,          // nicht geclaimt
+  Provisioned,   // geclaimt, aber (noch) kein Client verbunden
+  Underway,      // Client verbunden, Backend-Connect laeuft noch
+  InGamePaused,  // Client + Backend verbunden, Spiel angehalten
+  Running,       // Client + Backend verbunden, Spiel laeuft
+};
+
+// Reihenfolge der Pruefungen = die Uebergaenge im Solo-Leben. `gamePaused`
+// wird nur ausgewertet, wenn Client UND Backend verbunden sind.
+inline SoloPhase deriveSoloPhase(bool claimed, bool clientConnected,
+                                 bool backendConnected, bool gamePaused) {
+  if (!claimed) {
+    return SoloPhase::None;
+  }
+  if (!clientConnected) {
+    return SoloPhase::Provisioned;
+  }
+  if (!backendConnected) {
+    return SoloPhase::Underway;
+  }
+  return gamePaused ? SoloPhase::InGamePaused : SoloPhase::Running;
+}
+
+// Stabile JSON-Strings fuer die UI (leer bei None).
+inline const char *soloPhaseName(SoloPhase phase) {
+  switch (phase) {
+  case SoloPhase::Provisioned: return "provisioned";
+  case SoloPhase::Underway: return "underway";
+  case SoloPhase::InGamePaused: return "in_game_paused";
+  case SoloPhase::Running: return "running";
+  case SoloPhase::None: break;
+  }
+  return "";
+}
+
+// `"self_send": true|false` aus dem /solo-Body lesen. Fehlt das Feld (oder ist
+// es kein JSON-Bool), gilt der Default `true` = heutiges Verhalten
+// (claim + pin). Rueckgabe true nur, wenn ein echtes JSON-Bool gefunden wurde.
+inline bool parseSoloSelfSend(const std::string &body, bool &out) {
+  out = true;  // Default: heutiges Verhalten
+  const std::string needle = "\"self_send\"";
+  const std::size_t pos = body.find(needle);
+  if (pos == std::string::npos) {
+    return false;
+  }
+  std::size_t p = body.find(':', pos + needle.size());
+  if (p == std::string::npos) {
+    return false;
+  }
+  ++p;
+  while (p < body.size() && (body[p] == ' ' || body[p] == '\t' ||
+                             body[p] == '\n' || body[p] == '\r')) {
+    ++p;
+  }
+  if (body.compare(p, 4, "true") == 0) {
+    out = true;
+    return true;
+  }
+  if (body.compare(p, 5, "false") == 0) {
+    out = false;
+    return true;
+  }
+  return false;  // Nicht-Bool -> Default bleibt stehen
+}
+
 // --- /solo-Orchestrierung (Issue #929) --------------------------------------
 //
 // Reine (socket-freie) Abbildung des Relay-`/solo`-Pfads: Claim-Aufruf per
