@@ -1120,6 +1120,12 @@ int main(void)
               "UpdLogic-Sig: Selfcheck gruen (36B-Prolog instruction-aligned)");
     }
 
+    {
+        /* #934: Selfcheck der Broadcast-Chat-Signatur. */
+        check(broadcastchat_sig_selfcheck() == 1,
+              "BroadcastChat-Sig: Selfcheck gruen (38 B, unique im .text)");
+    }
+
     /* resolve_set_suspended_fn: genau ein Treffer -> Adresse; zwei Treffer
      * (mehrdeutig) -> NULL (kein Aufruf) — analog zum Live-Gegencheck. */
     {
