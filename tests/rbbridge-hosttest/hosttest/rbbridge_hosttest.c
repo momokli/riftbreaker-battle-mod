@@ -1420,6 +1420,32 @@ int main(void)
               "hq core: find_fn NULL -> 0 (graceful) (#730)");
     }
 
+    /* #436: resolve_dom_node scannt jetzt crash-sicher per ReadProcessMemory
+     * (HOSTTEST: Shim) statt mit rohen q[i]-Derefs — der rohe Deref crashte
+     * `get_state` (ACCESS_VIOLATION beim Heap-Churn). Positiv + graceful. */
+    {
+        const uint32_t DOM_INST_OFF = 0x1A00; /* frei (PAT_OFF=0x1800) */
+        unsigned char *dimg = build_image(0, 0, 0, 0, 0);
+        ht_set_module(dimg, IMG_SIZE);
+
+        check(resolve_dom_node(dimg) == NULL,
+              "resolve_dom_node: kein Node -> NULL (graceful, #436)");
+        check(resolve_dom_node(NULL) == NULL,
+              "resolve_dom_node: base NULL -> NULL (#436)");
+
+        /* Synthetischer dom_mananger-Knoten: QWORD == base+VFTABLE_RVA an
+         * DOM_INST_OFF, Felder (+0x20 L, +0x28 ref, +0x30 typehash) gesetzt. */
+        wr64(dimg + DOM_INST_OFF,
+             (uint64_t)(uintptr_t)(dimg + RBBRIDGE_LUAGRAPHNODE_VFTABLE_RVA));
+        wr32(dimg + DOM_INST_OFF + RBBRIDGE_LUAGRAPHNODE_TYPEHASH_OFF,
+             rbbridge_fnv1a32(RBBRIDGE_DOM_SCRIPT));
+        wr64(dimg + DOM_INST_OFF + RBBRIDGE_LUAGRAPHNODE_L_OFF, 0x1234u);
+        wr32(dimg + DOM_INST_OFF + RBBRIDGE_LUAGRAPHNODE_REF_OFF, 1u);
+        check(resolve_dom_node(dimg) == (void *)(dimg + DOM_INST_OFF),
+              "resolve_dom_node: Node gefunden (RPM-Pfad, #436)");
+        free(dimg);
+    }
+
     free(img);
 
     printf("HOSTTEST_PASS=%d HOSTTEST_FAIL=%d\n", g_pass, g_fail);
