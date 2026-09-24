@@ -338,9 +338,16 @@ class ParkedPool(object):
 
     def reap(self, max_park_seconds: float) -> List[ParkedEntry]:
         """Auslaufschutz: geparkte Instanzen, die laenger als ``max_park_seconds``
-        geparkt sind, sauber stoppen."""
+        geparkt sind, sauber stoppen.
+
+        Ein ``stop``-Fehler bei EINER Instanz bricht die Schleife NICHT ab:
+        alle uebrigen ueberfaelligen Instanzen werden trotzdem gestoppt (der
+        Auslaufschutz greift vollstaendig). Am Ende wird ein aggregierter
+        :class:`ParkedError` geworfen, wenn mindestens ein ``stop`` scheiterte.
+        """
         now = self.clock()
         stopped: List[ParkedEntry] = []
+        errors: List[str] = []
         for entry in list(self._entries.values()):
             if entry.state != ParkedState.PARKED or entry.parked_since is None:
                 continue
@@ -349,10 +356,13 @@ class ParkedPool(object):
             try:
                 self.provisioner.stop(instance_id=entry.instance_id, env=entry.env)
             except Exception as exc:
-                raise ParkedError("reap: stop von %s fehlgeschlagen: %s" % (entry.instance_id, exc))
+                errors.append("reap: stop von %s fehlgeschlagen: %s" % (entry.instance_id, exc))
+                continue
             entry.state = ParkedState.STOPPED
             entry.parked_since = None
             stopped.append(entry)
+        if errors:
+            raise ParkedError("; ".join(errors))
         return stopped
 
     def status(self) -> List[Dict[str, Any]]:
