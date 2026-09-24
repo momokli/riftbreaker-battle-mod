@@ -481,6 +481,27 @@ class StartTestCase(BaseFixture):
         self.assertIn(["network", "rm", spec.network], calls)
         self.assertEqual(self.run_calls(), [])
 
+    def test_start_forwards_mode_and_run_scope_labels(self):
+        # Issue-Signatur ist start(env, mode): ``mode`` MUSS im Container ankommen
+        # (RIFTBREAKER_MODE) und die Instanz run-scoped gelabelt sein.
+        self.provisioner().start("test", "campaign", "0")
+        run = self.run_calls()[0]
+        self.assertEqual(run[run.index("-e") + 1], "RIFTBREAKER_MODE=campaign")
+        self.assertIn("rb.provisioner.env=test", run)
+        self.assertIn("rb.provisioner.instance=0", run)
+
+    def test_idempotent_start_with_unhealthy_existing_fails_loud(self):
+        # Laeuft der Container schon, aber /health nie ok -> laut, KEIN zweiter Container.
+        spec = self.spec("0")
+        self.docker.run_or_fail([
+            "run", "-d", "--name", spec.container, "--network", spec.network,
+            "-p", "127.0.0.1:%d:8080" % spec.bridge_port, IMAGE,
+        ])
+        self.stub.server.ok = False
+        with self.assertRaises(prov.ProvisionError):
+            self.provisioner(health_deadline=0.0).start("test", "solo", "0")
+        self.assertEqual(len(self.run_calls()), 1)
+
     def test_existing_stopped_container_is_restarted_not_recreated(self):
         spec = self.spec("0")
         self.docker.run_or_fail([
