@@ -62,8 +62,8 @@ PR-Body MUSS `Closes #918` enthalten.
 | 3 developer | pending | |
 | 4 verifier | pending | |
 | 5 tester | pending | |
-| 6 developer (PR) | pending | |
-| 7 reviewer | pending | |
+| 6 developer (PR) | done | PR #932 |
+| 7 reviewer | done | APPROVE (CI-Boot-Checks noch pending) |
 
 ## Plan (Stage 1)
 
@@ -404,4 +404,88 @@ Ergebnis: echter Cold-Boot gegen `rb-dedicated:cb69b20db7b2` erreicht
   gemountet — kein Overshadowing des Image-Contents.
 - **R4 (Port):** `bridge_port_base=31000` kollisionsfrei; effektiver Host-Port 48059
   (31000 + crc32('918live')%20000), keine Kollision mit 9001–9004.
+
+## Review (Stage 7)
+
+**Datum:** 2026-09-24 · **Reviewer:** feature-dev-reviewer · **PR #932** (main ← `fix/918-provisioner-real-image`, HEAD `7f9eeb2`) · **Diff-Basis:** `cb69b20..HEAD`
+
+### Verdikt: **APPROVE** (Code/DoD) — Merge ausgesetzt bis CI-Checks grün
+
+Kein Merge, keine Code-Änderung, kein Commit durch den Reviewer.
+
+### 1) DoD des Issues — erfüllt
+
+- **Reales Layout 9001 + Deploy-Mounts/Env:** `_create_container` publiziert
+  `127.0.0.1:<bridge_port>:<bridge_container_port>` (Default 9001) und mountet exakt die
+  fünf realen Ziele `game_source:/opt/riftbreaker`,
+  `wine_volume:/data/.wine`, `saves_volume:/data/saves`,
+  `config_cfg:/data/config/config.cfg:ro`, `rbtools_dir:/opt/rbtools:ro`; Env
+  `RBB_BRIDGE_BIND=0.0.0.0`, `RBB_BRIDGE_PORT=9001`, `WINEESYNC=0`, `WINEFSYNC=0`
+  (+ `RIFTBREAKER_MODE`). Deckt die Issue-Root-Cause (8080 statt 9001, falsche Mounts).
+- **Integrationsnachweis gegen reales Image:** `rb-dedicated:cb69b20db7b2`, `start()` →
+  `health=healthy` in ≈12 s, `curl /health` → `{"ok":true,"pipe":true}`,
+  `stop()` restfrei (kein Container/Volume/Netz, Port frei, kein `/srv/rift-test-918live`).
+  In `progress-issue-918.md` (Stage 5) und README ausgeführt dokumentiert.
+
+### 2) PR-Konvention — erfüllt
+
+- **Erste Body-Zeile `Closes #918`** vorhanden (Closing-Keyword; CI-Check
+  „Issue-Referenz im PR" = pass).
+- **Autor:** `app/momo-clanker` (Bot, `is_bot:true`) — entspricht `momo-clanker[bot]`.
+- Branch → main, nicht draft, `mergeable: MERGEABLE`.
+
+### 3) Diff-Qualität — sauber
+
+- `cb69b20..HEAD`: 4 Dateien, +646/−18 (README, provisioner.py, test_provisioner.py,
+  progress). Keine Debug-Reste (`print(` nur im CLI-Ausgabepfad, kein `TODO`/`pdb`/`breakpoint`).
+- Kein `8080` mehr in `deploy/provisioner/*.py` (grep: none). Fake-Docker-Portausgabe auf
+  `9001/tcp`.
+- Doku konsistent: README-Config-Tabelle um die vier neuen `PROVISIONER_*`-Felder ergänzt,
+  neuer Abschnitt „Container-Layout (reales Image)", `{env}`-Substitution und
+  `1..65535`-Validierung beschrieben. Der frühere Abschnitt **„Offener Punkt" ist jetzt
+  als geführter Live-Beweis** dokumentiert (nicht mehr „ungeprüft").
+- Tests aussagekräftig: `test_run_args_real_image_layout` prüft Host:Container-Port, UDP,
+  alle fünf Mounts inkl. `:ro`, Bridge-/Sync-Env und Image-als-letztes-Argument;
+  `test_missing_sources_fail_loud`, `{env}`-Substitution, Env>Datei, `ConfigError`.
+  **Lokal reproduziert: `Ran 44 tests ... OK`** (`python3 -m unittest test_provisioner`).
+
+### 4) CI-Status (Stand 15:54)
+
+| Check | Status |
+|---|---|
+| Test (Unit-Tests + rbbridge host-test) | pass |
+| Build + Package | pass |
+| Conventional-Commit-Titel | pass |
+| Issue-Referenz im PR | pass |
+| Lint | pass |
+| deploy-check | pass |
+| Relevante Pfade (CI/Boot-Gate/Deploy) | pass |
+| Test tournament-server (Rust) | skipping (pfad-bedingt) |
+| **boot-test** | **pending** |
+| **deploy-check-local** | **pending** |
+
+`mergeStateStatus: BLOCKED` (pending Checks). **Beobachtung, kein eigenmächtiger Merge** —
+vor dem Merge müssen `boot-test` und `deploy-check-local` grün sein.
+
+### 5) Restrisiken — akzeptabel (kein Blocker)
+
+- **TCP-Publish-Parität:** Compose publiziert zusätzlich `6321/tcp`, Provisioner nur UDP.
+  **Pre-existing** (nicht von #918 eingeführt), Dedicated-Server bindet UDP → kein
+  Regressionsrisiko. Akzeptabel.
+- **Ungenutzter `spec.game_dir`:** wird weiter angelegt/entfernt, aber nach dem Umstieg auf
+  `game_source` nirgends gemountet. Toter Pfad, **kein Funktionsfehler** — Cleanup-Kandidat
+  (kein Merge-Blocker; als Nacharbeit/Issue optional).
+- **Deadline-Default 180 s < Compose `start_period` 300 s:** realer Cold-Boot war ≈12 s
+  (Benchmark Stage 5), 180 s Default deckt das mit großem Puffer. Der Live-Beweis nutzte 360 s.
+  Akzeptabel; eine spätere Kalibrierung/Erhöhung ist optional, kein Blocker.
+
+### Nacharbeiten — keine (blockierenden)
+
+Empfehlungen (nicht blockierend, können als Folge-Issue geführt werden):
+1. Toten `game_dir`-Pfad entfernen (Cleanup).
+2. `6321/tcp`-Publish für volle Compose-Parität prüfen (niedrige Prio).
+3. Optional `PROVISIONER_HEALTH_DEADLINE`-Default an Compose `start_period` annähern.
+
+**Fazit:** Code, Doku und Live-Nachweis erfüllen die DoD; Konvention und Diff sind sauber.
+APPROVE. Merge erst nach grünen `boot-test`/`deploy-check-local` (nicht Teil dieses Auftrags).
 
