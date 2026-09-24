@@ -15,6 +15,13 @@ services:
     image: "{{ gns_relay_image }}"
     container_name: {{ gns_relay_container }}
     restart: unless-stopped
+    # Container-Log begrenzen (Issue #301): json-file-Logs wachsen sonst
+    # unbegrenzt. Werte konfigurierbar (Rollen-Defaults).
+    logging:
+      driver: json-file
+      options:
+        max-size: "{{ gns_relay_log_max_size }}"
+        max-file: "{{ gns_relay_log_max_file }}"
     network_mode: host
     # Deploy-Identitaet sichtbar (Issue #483, US4) — wie beim Dedicated Server.
     labels:

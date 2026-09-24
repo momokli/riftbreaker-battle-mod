@@ -1,0 +1,98 @@
+---
+# Backup-/Stray-Retention (Issue #312) — begrenzt das Wachstum in
+# {{ riftbreaker_backup_dir }}:
+#   * nur die N neuesten `rbbattle-<ts>.tar.gz` bleiben,
+#   * nur die N neuesten `stray-<ts>/`-Ordner bleiben,
+#   * alles Aeltere wird entfernt (N = riftbreaker_backup_keep, Default 5).
+#
+# "Neueste" ist DETERMINISTISCH ueber den Zeitstempel IM NAMEN
+# (ansible_date_time.iso8601_basic_short = YYYYMMDDTHHMMSS; lexikographisch
+# == chronologisch) — NICHT ueber mtime (kein Risiko durch kopierte/umgezogene
+# Dateien).
+#
+# SICHERHEIT: es wird ausschliesslich {{ riftbreaker_backup_dir }} angefasst,
+# NIE {{ riftbreaker_mods_dir }} (mods/-Guard #212 — ein Backup-Ordner in
+# mods/ wuerde als eigene Mod geladen). Liegt das Backup-Dir selbst auf/unter
+# mods/, bricht ein Assert LAUT ab statt zu loeschen.
+#
+# Check-Mode/Hermetik: existiert {{ riftbreaker_backup_dir }} nicht (z. B.
+# --check gegen einen noch nicht migrierten <env>-Pfadbaum), ist der ganze
+# Block ein sauberer No-Op — `find` auf einem fehlenden Pfad waere sonst ein
+# harter Modul-Fehler (Regression in deploy/tests/check-mode-paths).
+
+- name: "Retention — Backup-Verzeichnis pruefen (#312)"
+  stat:
+    path: "{{ riftbreaker_backup_dir }}"
+  register: riftbreaker_backup_dir_stat
+
+- name: "Retention — Guard: Backup-Dir darf nicht mods/ sein oder darunter liegen (#212/#312)"
+  assert:
+    that:
+      - riftbreaker_backup_dir != riftbreaker_mods_dir
+      - not (riftbreaker_backup_dir.startswith(riftbreaker_mods_dir ~ '/'))
+    fail_msg: >-
+      RETENTION-GUARD: riftbreaker_backup_dir ({{ riftbreaker_backup_dir }})
+      ist identisch mit oder liegt unter riftbreaker_mods_dir
+      ({{ riftbreaker_mods_dir }}). Dort wird NICHTS geloescht (mods/-Guard
+      #212). Deploy abgebrochen — Backup-Ziel korrigieren.
+    success_msg: >-
+      Retention-Ziel {{ riftbreaker_backup_dir }} liegt ausserhalb von
+      {{ riftbreaker_mods_dir }}.
+
+- name: "Retention — vorhandene Backup-Tarballs finden (#312)"
+  find:
+    paths: "{{ riftbreaker_backup_dir }}"
+    patterns: "rbbattle-*.tar.gz"
+    file_type: file
+  register: riftbreaker_backup_tarballs
+  when: riftbreaker_backup_dir_stat.stat.isdir | default(false)
+
+- name: "Retention — vorhandene Stray-Ordner finden (#312)"
+  find:
+    paths: "{{ riftbreaker_backup_dir }}"
+    patterns: "stray-*"
+    file_type: directory
+  register: riftbreaker_backup_stray_dirs
+  when: riftbreaker_backup_dir_stat.stat.isdir | default(false)
+
+- name: "Retention — zu entfernende Kandidaten deterministisch ermitteln (#312)"
+  vars:
+    # Negative Keep-Werte auf 0 klemmen (nie negativ: "alles entfernen").
+    keep: "{{ [riftbreaker_backup_keep | int, 0] | max }}"
+    # Sortierung ueber den NAMENS-Zeitstempel (lexikographisch == chronologisch).
+    tarballs_sorted: >-
+      {{ (riftbreaker_backup_tarballs.files | default([]))
+         | map(attribute='path') | sort | list }}
+    strays_sorted: >-
+      {{ (riftbreaker_backup_stray_dirs.files | default([]))
+         | map(attribute='path') | sort | list }}
+  set_fact:
+    riftbreaker_backup_prune_tarballs: >-
+      {{ tarballs_sorted[: (tarballs_sorted | length - keep)]
+         if (tarballs_sorted | length) > keep else [] }}
+    riftbreaker_backup_prune_strays: >-
+      {{ strays_sorted[: (strays_sorted | length - keep)]
+         if (strays_sorted | length) > keep else [] }}
+  when: riftbreaker_backup_dir_stat.stat.isdir | default(false)
+
+- name: "Retention — alte Backup-Tarballs entfernen (#312)"
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ riftbreaker_backup_prune_tarballs | default([]) }}"
+
+- name: "Retention — alte Stray-Ordner entfernen (#312)"
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ riftbreaker_backup_prune_strays | default([]) }}"
+
+- name: "Retention — Ergebnis sichtbar machen (#312)"
+  debug:
+    msg: >-
+      Retention (#312): behalte je {{ riftbreaker_backup_keep }} neueste —
+      entfernt {{ riftbreaker_backup_prune_tarballs | default([]) | length }}
+      Backup-Tarball(s) und
+      {{ riftbreaker_backup_prune_strays | default([]) | length }}
+      Stray-Ordner in {{ riftbreaker_backup_dir }}.
+  when: riftbreaker_backup_dir_stat.stat.isdir | default(false)
