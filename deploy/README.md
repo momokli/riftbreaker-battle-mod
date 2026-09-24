@@ -9,6 +9,8 @@ läuft der CD (main→dev) per **SSH über einen dedizierten deploy-User** auf
 planet (Abschnitt [„CD: SSH-Deploy"](#cd-ssh-deploy-dedizierter-deploy-user));
 die forced command führt genau dieses Playbook aus.
 
+On-demand-Dedi-Provisioner (kalter Pfad): [`deploy/provisioner/`](provisioner/) — startet/stoppt je Spielwunsch eine run-scoped Instanz (Issue #908).
+
 ## Voraussetzungen
 
 - `ansible` (core ≥ 2.19) auf dem Control-Node (dem Rechner, von dem du deployst; beim CD ist das planet selbst, als root — siehe CD-Abschnitt).
