@@ -429,6 +429,31 @@ class HttpTests(HttpHarness):
         self.assertFalse(body["ok"])
         self.assertEqual(body["reason"], "none_parked")
 
+    def test_claim_resume_false_keeps_world_paused(self):
+        # #931: POST /claim {"resume": false} reicht durch -> Welt bleibt pausiert.
+        self.controller.maintain_once()
+        entry = self.pool.status()[0]
+        bridge = self.bridges[entry["bridge_url"]]
+        status, body = self.post("/claim", {"resume": False})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["state"], "claimed")
+        self.assertFalse(body["resumed"])
+        self.assertNotIn("resume_game", bridge.calls)
+        self.assertTrue(bridge.paused)
+
+    def test_claim_resume_default_true(self):
+        self.controller.maintain_once()
+        status, body = self.post("/claim", {})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["resumed"])
+
+    def test_claim_non_bool_resume_400(self):
+        # `resume` kein JSON-Boolean -> 400 bad_request (kein Truthy-Koerzieren).
+        self.controller.maintain_once()
+        status, body = self.post("/claim", {"resume": 1})
+        self.assertEqual(status, 400)
+        self.assertEqual(body["reason"], "bad_request")
+
     def test_status_entry_carries_gns_endpoint(self):
         # Issue #929 (durchgaengig): provisioner ports.gns -> ParkedEntry -> /status.
         self.controller.maintain_once()
