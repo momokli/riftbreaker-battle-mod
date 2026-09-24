@@ -30,16 +30,29 @@ class FakeClock(object):
 
 
 class FakeBridge(object):
-    """Fake-Bridge: protokolliert Aufrufe, kann Fehler und Zustand simulieren."""
+    """Fake-Bridge: protokolliert Aufrufe, modelliert einen Welt-Tick.
+
+    Die Bridge fuehrt einen **simulierten Welt-Tick** (``world_tick`` in
+    Sekunden Weltzeit). Er waechst NUR, solange die Welt NICHT pausiert ist:
+    ``pause_game`` setzt ``paused=True``, ``resume_game`` ``paused=False``.
+    ``get_state`` liefert den Fingerprint und rueckt den Tick nur vor, wenn
+    nicht pausiert — damit ist ``get_state`` die echte Invarianten-Quelle.
+    ``pause_noop=True`` simuliert eine kaputte (No-op-)``pause_game`` fuer den
+    Red-before-green-Beleg.
+    """
 
     def __init__(self, url: str, clock: FakeClock, handover_seconds: float = 0.0,
-                 healthy: bool = True) -> None:
+                 healthy: bool = True, pause_noop: bool = False) -> None:
         self.url = url
         self.clock = clock
         self.handover_seconds = handover_seconds
         self.healthy = healthy
+        self.pause_noop = pause_noop
         self.calls = []
         self.fail_on = set()
+        self.paused = False
+        self.world_tick = 0.0
+        self._last_tick_at = clock()
 
     def _guard(self, name: str) -> None:
         self.calls.append(name)
@@ -52,12 +65,15 @@ class FakeBridge(object):
 
     def pause_game(self):
         self._guard("pause_game")
-        return {"ok": True}
+        if not self.pause_noop:
+            self.paused = True
+        return {"ok": True, "game_paused": self.paused, "pause_want": 1 if self.paused else 0}
 
     def resume_game(self):
         self._guard("resume_game")
+        self.paused = False
         self.clock.advance(self.handover_seconds)
-        return {"ok": True}
+        return {"ok": True, "game_paused": self.paused, "pause_want": 0}
 
     def round_reset(self):
         self._guard("round_reset")
@@ -69,7 +85,16 @@ class FakeBridge(object):
 
     def get_state(self):
         self._guard("get_state")
-        return {"ok": True}
+        now = self.clock()
+        if not self.paused:
+            self.world_tick += now - self._last_tick_at
+        self._last_tick_at = now
+        return {
+            "ok": True,
+            "game_paused": self.paused,
+            "pause_want": 1 if self.paused else 0,
+            "world_tick": self.world_tick,
+        }
 
 
 class FakeProvisioner(object):
@@ -81,6 +106,7 @@ class FakeProvisioner(object):
         self.cfg = SimpleNamespace(env=env)
         self.starts = []
         self.stops = []
+        self.fail_stop = set()
 
     def start(self, env=None, mode="solo", instance_id=None):
         self.starts.append((env or self.cfg.env, instance_id))
@@ -96,6 +122,8 @@ class FakeProvisioner(object):
 
     def stop(self, instance_id=None, env=None):
         self.stops.append((env or self.cfg.env, instance_id))
+        if instance_id in self.fail_stop:
+            raise RuntimeError("fake stop %s exploded" % instance_id)
         return {"instance": instance_id, "removed": {}}
 
 
@@ -235,6 +263,66 @@ class ReapTests(PoolHarness):
         self.clock.advance(1000.0)
         self.assertEqual(self.pool.reap(max_park_seconds=1.0), [])
         self.assertEqual(self.provisioner.stops, [])
+
+
+class WorldProgressInvariantTests(PoolHarness):
+    """Blocker 1b: DoD „kein Weltfortschritt im Parked-Zustand".
+
+    Die Invariante wird ueber ``get_state`` (echte Quelle) geprueft, nicht nur
+    ueber „pause_game wurde aufgerufen".
+    """
+
+    def test_no_world_progress_while_parked(self):
+        entry = self.pool.warm_up(env="test", instance_id="r1")
+        bridge = self.bridge_for(entry)
+        before = bridge.get_state()["world_tick"]
+        self.clock.advance(30.0)  # Parked-Intervall
+        after = bridge.get_state()["world_tick"]
+        self.assertEqual(before, after)  # kein Welt-Tick im PARKED-Zustand
+        self.assertIn("get_state", bridge.calls)  # echte Invarianten-Quelle
+        self.assertTrue(bridge.paused)
+
+    def test_world_progress_resumes_after_claim(self):
+        entry = self.pool.warm_up(env="test", instance_id="r1")
+        bridge = self.bridge_for(entry)
+        self.pool.claim(env="test", instance_id="r1")
+        before = bridge.get_state()["world_tick"]
+        self.clock.advance(10.0)
+        after = bridge.get_state()["world_tick"]
+        self.assertGreater(after, before)  # nach resume laeuft die Welt wieder
+        self.assertIn("get_state", bridge.calls)
+
+    def test_pause_is_load_bearing_red_before_green(self):
+        # Red-before-green: eine No-op-`pause_game` laesst den Welt-Tick laufen
+        # -> die Invariante aus test_no_world_progress_while_parked schlaegt fehl.
+        def factory(url):
+            bridge = FakeBridge(url, self.clock, pause_noop=True)
+            self.bridges[url] = bridge
+            return bridge
+
+        self.pool.bridge_factory = factory
+        entry = self.pool.warm_up(env="test", instance_id="r1")
+        bridge = self.bridge_for(entry)
+        before = bridge.get_state()["world_tick"]
+        self.clock.advance(30.0)
+        after = bridge.get_state()["world_tick"]
+        self.assertNotEqual(before, after)  # kaputtes Parken -> Welt laeuft weiter
+
+
+class ReapFailureTests(PoolHarness):
+    def test_reap_continues_after_stop_failure_and_raises_aggregated(self):
+        self.pool.warm_up(env="test", instance_id="a")
+        self.pool.warm_up(env="test", instance_id="b")
+        self.clock.advance(30.0)
+        self.provisioner.fail_stop.add("a")
+        with self.assertRaises(ParkedError) as ctx:
+            self.pool.reap(max_park_seconds=10.0)
+        self.assertIn("a", str(ctx.exception))
+        # Trotz Fehler bei 'a' wurde 'b' weiterhin gestoppt (Auslaufschutz komplett).
+        self.assertIn(("test", "b"), self.provisioner.stops)
+        states = {row["instance"]: row["state"] for row in self.pool.status()}
+        self.assertEqual(states["b"], ParkedState.STOPPED.value)
+        self.assertEqual(states["a"], ParkedState.PARKED.value)
 
 
 class StatusTests(PoolHarness):
