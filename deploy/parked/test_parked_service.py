@@ -19,7 +19,7 @@ import urllib.error
 import urllib.request
 from types import SimpleNamespace
 
-from parked_pool import ParkedError, ParkedPool, ParkedState
+from parked_pool import ParkedPool, ParkedState
 from parked_service import (
     ParkedConfigError,
     ParkedController,
@@ -438,6 +438,13 @@ class HttpTests(HttpHarness):
         status, body = self.post("/recycle", {"instance_id": claimed["instance"], "keep_warm": False})
         self.assertEqual(status, 200)
         self.assertEqual(body["state"], "stopped")
+
+    def test_recycle_non_bool_keep_warm_400(self):
+        self.controller.maintain_once()
+        _status, claimed = self.post("/claim", {})
+        status, body = self.post("/recycle", {"instance_id": claimed["instance"], "keep_warm": "false"})
+        self.assertEqual(status, 400)
+        self.assertEqual(body["reason"], "bad_request")
 
     def test_reap_endpoint(self):
         self.controller.maintain_once()

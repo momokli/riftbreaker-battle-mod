@@ -74,7 +74,7 @@ Antwort immer JSON; Fehlerformat `{"ok":false,"reason":…,"detail":…}`.
 | `GET` | `/health` | — | `200 {"ok":true,"env":…}` | Liveness des Dienstes (nicht der Instanzen). |
 | `GET` | `/status` | — | `200 {counters, entries}` | Zaehler + `pool.status()`-Snapshot. |
 | `POST` | `/claim` | `{"env"?,"instance_id"?}` | `200` / `409` / `503` | `pool.claim()`; ohne `instance_id` aelteste `PARKED` (FIFO). Keine `PARKED` ⇒ `409 none_parked`; Bridge unhealthy ⇒ `503 bridge_unhealthy`. |
-| `POST` | `/recycle` | `{"instance_id","keep_warm"?=true,"result"?}` | `200` / `409` | nach Rundenende wieder `PARKED`; `result` (`win`/`lose`) wird durchgereicht und löst `end_game(result)` aus (ohne `result` kein `end_game`); `keep_warm=false` ⇒ `stop()`; Nicht-`CLAIMED` ⇒ `409`. |
+| `POST` | `/recycle` | `{"instance_id","keep_warm"?=true,"result"?}` | `200` / `400` / `409` | nach Rundenende wieder `PARKED`; `result` (`win`/`lose`) wird durchgereicht und löst `end_game(result)` aus (ohne `result` kein `end_game`); `keep_warm=false` ⇒ `stop()`; Nicht-`CLAIMED` ⇒ `409`; fehlendes `instance_id` oder `keep_warm` kein JSON-Boolean ⇒ `400`. |
 | `POST` | `/reap` | `{"max_park_seconds"?}` | `200 {stopped:[…]}` | manueller Auslaufschutz-Lauf. |
 
 Unbekannte Route ⇒ `404 {"ok":false,"reason":"not_found"}`; falsche Methode

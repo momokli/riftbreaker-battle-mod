@@ -24,7 +24,7 @@ os.environ.setdefault("PROVISIONER_HEALTH_DEADLINE", "240")
 os.environ.setdefault("PROVISIONER_HEALTH_INTERVAL", "3")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from parked_pool import BridgeClient, ParkedError  # noqa: E402
+from parked_pool import BridgeClient  # noqa: E402
 from parked_service import ParkedController, build_provisioner  # noqa: E402
 
 
@@ -40,7 +40,8 @@ def snapshot():
 
 
 def main():
-    print("### env PROVISIONER_IMAGE=%s PROVISIONER_ENV=%s INSTANCE=%s" % (IMAGE, os.environ["PROVISIONER_ENV"], INSTANCE))
+    print("### env PROVISIONER_IMAGE=%s PROVISIONER_ENV=%s INSTANCE=%s"
+          % (IMAGE, os.environ["PROVISIONER_ENV"], INSTANCE))
     provisioner = build_provisioner_from_env()
     pool = ParkedPoolFor(provisioner)
     controller = ParkedController(pool, pool_size=1, max_park_seconds=900.0,
@@ -56,7 +57,8 @@ def main():
     rows = controller.pool.status()
     print("### pool entries=%s" % json.dumps(rows))
     if not rows or rows[0]["state"] != "parked":
-        print("### FAIL: kein PARKED nach maintain_once"); return 1
+        print("### FAIL: kein PARKED nach maintain_once")
+        return 1
     bridge_url = rows[0]["bridge_url"]
     print("### bridge get_state (paused?) = %s" % json.dumps(_safe_get_state(bridge_url)))
     print("### docker inspect bridge-port = %s" % sh(["docker", "port", rows[0]["container"]]))
@@ -72,8 +74,8 @@ def main():
 
     ps_after, vol_after = snapshot()
     print("### docker ps (after)", )
-    leaked_ps = [l for l in ps_after.splitlines() if l not in ps_before.splitlines()]
-    leaked_vol = [l for l in vol_after.splitlines() if l not in vol_before.splitlines()]
+    leaked_ps = [ln for ln in ps_after.splitlines() if ln not in ps_before.splitlines()]
+    leaked_vol = [ln for ln in vol_after.splitlines() if ln not in vol_before.splitlines()]
     print("### ps delta: %s" % json.dumps(leaked_ps))
     print("### volume delta: %s" % json.dumps(leaked_vol))
 

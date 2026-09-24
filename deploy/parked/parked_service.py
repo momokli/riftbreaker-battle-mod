@@ -45,7 +45,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence
 from urllib.parse import urlsplit
 
 from parked_pool import ParkedError, ParkedPool, ParkedState
@@ -490,10 +490,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, dict({"ok": True}, **result))
             elif method == "POST" and path == "/recycle":
                 payload = self._read_json()
+                keep_warm = payload.get("keep_warm", True)
+                if not isinstance(keep_warm, bool):
+                    raise ServiceError(400, "bad_request", "keep_warm muss ein JSON-Boolean sein")
                 result = self.controller.recycle(
                     env=payload.get("env"),
                     instance_id=payload.get("instance_id"),
-                    keep_warm=payload.get("keep_warm", True),
+                    keep_warm=keep_warm,
                     result=payload.get("result"),
                 )
                 self._send_json(200, dict({"ok": True}, **result))

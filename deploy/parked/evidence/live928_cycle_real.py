@@ -71,8 +71,8 @@ def main():
 
         ps_after = sh(["docker", "ps", "--format", "{{.Names}}\t{{.Image}}"])
         vol_after = sh(["docker", "volume", "ls", "--format", "{{.Name}}"])
-        ps_delta = [l for l in ps_after.splitlines() if l not in ps_before.splitlines()]
-        vol_delta = [l for l in vol_after.splitlines() if l not in vol_before.splitlines()]
+        ps_delta = [ln for ln in ps_after.splitlines() if ln not in ps_before.splitlines()]
+        vol_delta = [ln for ln in vol_after.splitlines() if ln not in vol_before.splitlines()]
         print("### ps delta=%s" % json.dumps(ps_delta))
         print("### volume delta=%s" % json.dumps(vol_delta))
     finally:
