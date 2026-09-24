@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdio>
+#include <functional>
 #include <string>
 
 namespace rbapi {
@@ -315,6 +316,106 @@ inline std::string jsonEscape(const std::string &s) {
       }
     }
   }
+  return out;
+}
+
+// --- /solo-Orchestrierung (Issue #929) --------------------------------------
+//
+// Reine (socket-freie) Abbildung des Relay-`/solo`-Pfads: Claim-Aufruf per
+// Callback, Retry/Backoff bei transienten Fehlern, Fehler-Mapping auf die
+// Parked-Semantik. In gns_probe.cpp liefert der Callback den WinSock-Outbound-
+// POST; im Host-Test ein Fake (Fake-Parked-Dienst). Retry-Erschoepfung und das
+// 409/503/502-Mapping sind damit hermetisch testbar (test_api_util.cpp).
+
+struct HttpResp {
+  int status = -1;  // -1 = Verbindungs-/Timeout-Fehler (transient)
+  std::string body;
+};
+
+struct SoloOutcome {
+  int httpCode = 502;
+  std::string body;      // Antwort-Body (bei Erfolg leer — baut der Aufrufer)
+  bool pinIdentity = false;  // true -> Identitaet auf `endpoint` pinnen
+  std::string endpoint;  // GNS-UDP-Ziel im Erfolgsfall
+  std::string instance;  // Parked-Instanzname (falls geliefert)
+  std::string reason;    // "backend_starting" bei Retry-Erschoepfung, sonst Grund
+};
+
+// Claim-Callback liefert (status, body) eines Parked-`POST /claim`; `sleepFn`
+// bekommt die Wartezeit in ms (im Host-Test eine Aufzeichnung, unter Wine
+// `Sleep`). Identitaet/env sind bereits geprueft — hier nur Claim + Mapping.
+inline SoloOutcome runSoloClaim(
+    const std::string &env,
+    const std::function<HttpResp(const std::string &path,
+                                const std::string &payload)> &claim,
+    int maxAttempts, const std::function<void(int)> &sleepFn) {
+  const std::string claimBody =
+      env.empty() ? std::string("{}")
+                  : "{\"env\":\"" + jsonEscape(env) + "\"}";
+  int status = -1;
+  std::string respBody;
+  std::string reason;
+  std::string endpointStr;
+  std::string instance;
+  rbroute::Endpoint endpoint;
+  bool haveEndpoint = false;
+
+  for (int attempt = 1; attempt <= maxAttempts; ++attempt) {
+    const HttpResp r = claim("/claim", claimBody);
+    status = r.status;
+    respBody = r.body;
+    reason.clear();
+    jsonStringField(respBody, "reason", reason);
+    haveEndpoint = false;
+    if (status == 200) {
+      if (jsonStringField(respBody, "gns_endpoint", endpointStr) &&
+          !endpointStr.empty() && rbroute::parseEndpoint(endpointStr, endpoint)) {
+        jsonStringField(respBody, "instance", instance);
+        haveEndpoint = true;
+        break;
+      }
+      // 200 ohne brauchbares Ziel ist nicht retryfaehig (Fehlkonfiguration).
+      status = -2;
+      reason = "no_endpoint";
+      break;
+    }
+    if (!shouldRetryClaim(attempt, maxAttempts, status, reason)) {
+      break;
+    }
+    if (sleepFn) {
+      sleepFn(retryDelayMs(attempt));
+    }
+  }
+
+  SoloOutcome out;
+  if (haveEndpoint) {
+    out.httpCode = 200;
+    out.pinIdentity = true;
+    out.endpoint = endpoint.str();
+    out.instance = instance;
+    return out;
+  }
+  if (isTransientClaimStatus(status, reason)) {
+    // Budget erschoepft und letzter Fehler war transient -> Backend startet
+    // noch; der Client darf es erneut versuchen.
+    out.httpCode = 503;
+    out.reason = "backend_starting";
+    out.body = "{\"ok\":false,\"reason\":\"backend_starting\",\"retry\":true}";
+    return out;
+  }
+  // Endgueltige Fehler auf die Parked-Semantik abbilden.
+  int outStatus = 502;
+  std::string outReason = "bad_gateway";
+  if (status == 409) {
+    outStatus = 409;
+    outReason = reason.empty() ? std::string("not_claimable") : reason;
+  } else if (status == 503) {
+    outStatus = 503;
+    outReason = reason.empty() ? std::string("bridge_unhealthy") : reason;
+  }
+  out.httpCode = outStatus;
+  out.reason = outReason;
+  out.body = "{\"ok\":false,\"reason\":\"" + jsonEscape(outReason) + "\"}";
   return out;
 }
 

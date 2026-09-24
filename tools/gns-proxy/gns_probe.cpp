@@ -1335,90 +1335,48 @@ void handleSolo(SOCKET s, const std::string &requestBody) {
     return;
   }
 
-  const std::string claimBody =
-      env.empty() ? std::string("{}")
-                  : "{\"env\":\"" + rbapi::jsonEscape(env) + "\"}";
-  const int kMaxAttempts = 4;
-  int status = -1;
-  std::string respBody;
-  std::string reason;
-  std::string endpointStr;
-  std::string instance;
-  rbroute::Endpoint endpoint;
-  bool haveEndpoint = false;
+  // Claim + Retry/Backoff + Fehler-Mapping liegen als reine, host-testbare
+  // Funktion in api_util.h (runSoloClaim). Der Callback ist der Outbound-POST
+  // (WinSock, im Request-Thread — der GNS-Hauptloop bleibt unberuehrt).
+  const rbapi::SoloOutcome outcome = rbapi::runSoloClaim(
+      env,
+      [](const std::string &path, const std::string &payload) -> rbapi::HttpResp {
+        const OutboundResult r = outboundHttpPost(g_parkedHost, g_parkedPort,
+                                                  path, payload, g_parkedToken,
+                                                  2000, 2000);
+        return rbapi::HttpResp{r.status, r.body};
+      },
+      4, [](int ms) { Sleep(static_cast<DWORD>(ms)); });
 
-  for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
-    const OutboundResult r =
-        outboundHttpPost(g_parkedHost, g_parkedPort, "/claim", claimBody,
-                         g_parkedToken, 2000, 2000);
-    status = r.status;
-    respBody = r.body;
-    reason.clear();
-    rbapi::jsonStringField(respBody, "reason", reason);
-    haveEndpoint = false;
-    if (status == 200) {
-      if (rbapi::jsonStringField(respBody, "gns_endpoint", endpointStr) &&
-          !endpointStr.empty() && rbroute::parseEndpoint(endpointStr, endpoint)) {
-        rbapi::jsonStringField(respBody, "instance", instance);
-        haveEndpoint = true;
-        break;
-      }
-      // 200 ohne brauchbares Ziel ist nicht retryfaehig (Fehlkonfiguration).
-      status = -2;
-      reason = "no_endpoint";
-      break;
-    }
-    if (!rbapi::shouldRetryClaim(attempt, kMaxAttempts, status, reason)) {
-      break;
-    }
-    logLine("solo: claim transient (status=%d reason='%s') — Retry %d/%d in %dms",
-            status, reason.c_str(), attempt + 1, kMaxAttempts,
-            rbapi::retryDelayMs(attempt));
-    Sleep(static_cast<DWORD>(rbapi::retryDelayMs(attempt)));
-  }
-
-  if (haveEndpoint) {
+  if (outcome.pinIdentity) {
     {
       std::lock_guard<std::mutex> lock(g_apiMutex);
       ApiCommand cmd;
       cmd.kind = ApiCommand::kRouteByEndpoint;
       cmd.identity = identity;
-      cmd.endpoint = endpoint;
+      rbroute::parseEndpoint(outcome.endpoint, cmd.endpoint);
       cmd.hasEndpoint = true;
       g_apiCommands.push_back(cmd);
     }
     logLine("API: solo '%s' -> %s (instance=%s)", identity.c_str(),
-            endpoint.str().c_str(), instance.c_str());
+            outcome.endpoint.c_str(), outcome.instance.c_str());
     std::string out = "{\"ok\":true,\"identitaet\":\"" +
                       rbapi::jsonEscape(identity) + "\",\"target\":\"" +
-                      rbapi::jsonEscape(endpoint.str()) +
-                      "\",\"instance\":\"" + rbapi::jsonEscape(instance) +
-                      "\"}";
+                      rbapi::jsonEscape(outcome.endpoint) +
+                      "\",\"instance\":\"" +
+                      rbapi::jsonEscape(outcome.instance) + "\"}";
     httpRespondJson(s, 200, "OK", out);
     return;
   }
 
   // Budget erschoepft und letzter Fehler war transient -> Backend startet noch.
-  if (rbapi::isTransientClaimStatus(status, reason)) {
-    logLine("solo: claim-Budget erschoepft (status=%d reason='%s') — 503 backend_starting",
-            status, reason.c_str());
-    httpRespondJson(s, 503, "Service Unavailable",
-                    "{\"ok\":false,\"reason\":\"backend_starting\",\"retry\":true}");
+  if (outcome.reason == "backend_starting") {
+    logLine("solo: claim-Budget erschoepft — 503 backend_starting");
+    httpRespondJson(s, 503, "Service Unavailable", outcome.body);
     return;
   }
-  // Endgueltige Fehler auf die Parked-Semantik abbilden.
-  int outStatus = 502;
-  std::string outReason = "bad_gateway";
-  if (status == 409) {
-    outStatus = 409;
-    outReason = reason.empty() ? std::string("not_claimable") : reason;
-  } else if (status == 503) {
-    outStatus = 503;
-    outReason = reason.empty() ? std::string("bridge_unhealthy") : reason;
-  }
-  httpRespondJson(s, outStatus, outStatus == 409 ? "Conflict" : "Error",
-                  "{\"ok\":false,\"reason\":\"" +
-                      rbapi::jsonEscape(outReason) + "\"}");
+  httpRespondJson(s, outcome.httpCode,
+                  outcome.httpCode == 409 ? "Conflict" : "Error", outcome.body);
 }
 
 void httpHandle(SOCKET s) {

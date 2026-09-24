@@ -5,7 +5,9 @@
 
 #include <cstdio>
 #include <string>
+#include <vector>
 
+using rbapi::HttpResp;
 using rbapi::isTransientClaimStatus;
 using rbapi::jsonEscape;
 using rbapi::jsonStringField;
@@ -15,7 +17,10 @@ using rbapi::parseQueryParam;
 using rbapi::parseTargetSpec;
 using rbapi::parseUrlHostPort;
 using rbapi::retryDelayMs;
+using rbapi::runSoloClaim;
 using rbapi::shouldRetryClaim;
+using rbapi::SoloOutcome;
+using rbapi::urlDecode;
 using rbroute::Endpoint;
 
 static int g_failures = 0;
@@ -172,6 +177,148 @@ static void testRetryDecision() {
   check(retryDelayMs(1) + retryDelayMs(2) + retryDelayMs(3) < 5000, "budget < 5s");
 }
 
+static void testUrlDecode() {
+  checkEq(urlDecode("plain"), "plain", "urlDecode plain");
+  checkEq(urlDecode("a%2Fb"), "a/b", "%2F");
+  checkEq(urlDecode("a+b"), "a b", "+ -> space");
+  checkEq(urlDecode("%41%42"), "AB", "hex");
+  // Ungueltige Prozentfolge bleibt tolerant stehen (kein Crash).
+  checkEq(urlDecode("%zz"), "%zz", "ungueltig bleibt");
+  checkEq(urlDecode("trailing%"), "trailing%", "einsames %");
+}
+
+// Fake-Parked-Dienst: liefert eine vorgegebene (status, body)-Folge und
+// protokolliert Aufrufe + Body. Ersetzt den echten WinSock-Outbound-POST.
+struct FakeClaim {
+  std::vector<HttpResp> responses;
+  std::size_t idx = 0;
+  int calls = 0;
+  std::vector<std::string> payloads;
+  HttpResp operator()(const std::string &, const std::string &payload) {
+    ++calls;
+    payloads.push_back(payload);
+    if (idx < responses.size()) {
+      return responses[idx++];
+    }
+    return HttpResp{-1, ""};  // unerwarteter Extra-Aufruf -> Verbindungsfehler
+  }
+};
+
+static std::vector<int> g_sleeps;
+static void collectSleep(int ms) { g_sleeps.push_back(ms); }
+
+static SoloOutcome runSolo(const std::string &env, FakeClaim &claim,
+                           int maxAttempts = 4) {
+  g_sleeps.clear();
+  return runSoloClaim(env, std::ref(claim), maxAttempts, collectSleep);
+}
+
+static void testSoloSuccess() {
+  FakeClaim claim;
+  claim.responses.push_back(
+      HttpResp{200, "{\"ok\":true,\"instance\":\"parked-1\","
+                    "\"gns_endpoint\":\"127.0.0.1:32768\"}"});
+  SoloOutcome out = runSolo("", claim);
+  check(out.httpCode == 200, "solo ok -> 200");
+  check(out.pinIdentity, "solo ok -> pin");
+  checkEq(out.endpoint, "127.0.0.1:32768", "solo ziel");
+  checkEq(out.instance, "parked-1", "solo instanz");
+  check(claim.calls == 1, "solo ok -> 1 claim");
+  check(g_sleeps.empty(), "solo ok -> kein sleep");
+  checkEq(claim.payloads[0], "{}", "leerer env -> {} Body");
+}
+
+static void testSoloEnvPayload() {
+  FakeClaim claim;
+  claim.responses.push_back(
+      HttpResp{200, "{\"gns_endpoint\":\"127.0.0.1:32100\"}"});
+  SoloOutcome out = runSolo("staging", claim);
+  check(out.pinIdentity, "env-Lauf pinnt");
+  checkEq(claim.payloads[0], "{\"env\":\"staging\"}", "env im Body");
+  checkEq(out.instance, "", "ohne instance-Feld leer");
+}
+
+static void testSoloRetryThenSuccess() {
+  FakeClaim claim;
+  claim.responses.push_back(HttpResp{503, "{\"reason\":\"bridge_unhealthy\"}"});
+  claim.responses.push_back(HttpResp{503, "{\"reason\":\"bridge_unhealthy\"}"});
+  claim.responses.push_back(
+      HttpResp{200, "{\"instance\":\"p\",\"gns_endpoint\":\"127.0.0.1:40000\"}"});
+  SoloOutcome out = runSolo("", claim);
+  check(out.pinIdentity, "retry->erfolg pinnt");
+  checkEq(out.endpoint, "127.0.0.1:40000", "retry ziel");
+  check(claim.calls == 3, "retry -> 3 claims");
+  check(g_sleeps.size() == 2, "retry -> 2 sleeps");
+  check(g_sleeps[0] == 250 && g_sleeps[1] == 500, "backoff 250/500");
+}
+
+static void testSoloExhaustion() {
+  // 409 none_parked bleibt transient -> alle 4 Versuche, dann 503 retry:true.
+  FakeClaim claim;
+  for (int i = 0; i < 4; ++i) {
+    claim.responses.push_back(HttpResp{409, "{\"reason\":\"none_parked\"}"});
+  }
+  SoloOutcome out = runSolo("", claim);
+  check(out.httpCode == 503, "erschoepft -> 503");
+  check(!out.pinIdentity, "erschoepft -> kein pin");
+  checkEq(out.reason, "backend_starting", "erschoepft reason");
+  check(out.body.find("\"retry\":true") != std::string::npos,
+        "erschoepft retry:true");
+  check(claim.calls == 4, "erschoepft -> 4 claims");
+  check(g_sleeps.size() == 3, "erschoepft -> 3 sleeps");
+  check(g_sleeps[2] == 1000, "letzter backoff 1000");
+}
+
+static void testSoloConnectionErrorExhaustion() {
+  // -1 (Connect-/Timeout-Fehler) ist transient -> ebenfalls 503 retry:true.
+  FakeClaim claim;
+  SoloOutcome out = runSolo("", claim);  // keine Antworten -> immer -1
+  check(out.httpCode == 503, "connect-fehler erschoepft -> 503");
+  checkEq(out.reason, "backend_starting", "connect reason");
+  check(claim.calls == 4, "connect -> 4 claims");
+}
+
+static void testSoloTerminalErrors() {
+  // 409 not_claimable ist endgueltig -> genau 1 Versuch, 409.
+  FakeClaim claim;
+  claim.responses.push_back(HttpResp{409, "{\"reason\":\"not_claimable\"}"});
+  SoloOutcome out = runSolo("", claim);
+  check(out.httpCode == 409, "not_claimable -> 409");
+  checkEq(out.reason, "not_claimable", "not_claimable reason");
+  check(claim.calls == 1, "not_claimable -> kein retry");
+  check(g_sleeps.empty(), "not_claimable -> kein sleep");
+
+  // 200 ohne brauchbares Ziel -> 502 bad_gateway, kein Retry.
+  FakeClaim claim2;
+  claim2.responses.push_back(HttpResp{200, "{\"ok\":true}"});
+  SoloOutcome out2 = runSolo("", claim2);
+  check(out2.httpCode == 502, "200 ohne ziel -> 502");
+  checkEq(out2.reason, "bad_gateway", "200 ohne ziel reason");
+  check(claim2.calls == 1, "200 ohne ziel -> kein retry");
+
+  // 200 mit ungueltigem Endpoint (Port 0) -> 502.
+  FakeClaim claim3;
+  claim3.responses.push_back(HttpResp{200, "{\"gns_endpoint\":\"127.0.0.1:0\"}"});
+  SoloOutcome out3 = runSolo("", claim3);
+  check(out3.httpCode == 502, "port 0 -> 502");
+
+  // 401 (falscher/fehlender Token) ist keine Parked-Semantik -> 502.
+  FakeClaim claim4;
+  claim4.responses.push_back(HttpResp{401, "{\"reason\":\"unauthorized\"}"});
+  SoloOutcome out4 = runSolo("", claim4);
+  check(out4.httpCode == 502, "401 -> 502");
+  check(claim4.calls == 1, "401 -> kein retry");
+}
+
+static void testSoloBudgetVariant() {
+  // maxAttempts=2: nach 2 transienten Fehlern Erschoepfung (1 Sleep).
+  FakeClaim claim;
+  SoloOutcome out = runSolo("", claim, 2);
+  check(claim.calls == 2, "maxAttempts=2 -> 2 claims");
+  check(g_sleeps.size() == 1, "maxAttempts=2 -> 1 sleep");
+  check(out.httpCode == 503, "maxAttempts=2 erschoepft -> 503");
+}
+
 int main() {
   testParseTargetSpec();
   testJsonStringField();
@@ -180,6 +327,14 @@ int main() {
   testParseUrlHostPort();
   testParseHttpResponse();
   testRetryDecision();
+  testUrlDecode();
+  testSoloSuccess();
+  testSoloEnvPayload();
+  testSoloRetryThenSuccess();
+  testSoloExhaustion();
+  testSoloConnectionErrorExhaustion();
+  testSoloTerminalErrors();
+  testSoloBudgetVariant();
 
   if (g_failures == 0) {
     std::printf("test_api_util: %d Checks OK\n", g_checks);
