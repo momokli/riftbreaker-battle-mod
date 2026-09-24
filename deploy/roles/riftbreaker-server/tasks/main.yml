@@ -554,3 +554,14 @@
 
 - name: Handlers flushen (falls Config/Compose ohne Mod-Änderung geändert wurden)
   meta: flush_handlers
+
+# ---------------------------------------------------------------------------
+# Backup-/Stray-Retention (Issue #312) — begrenzt das Wachstum in
+# {{ riftbreaker_backup_dir }}: nur die N neuesten `rbbattle-*.tar.gz` und
+# `stray-*/` bleiben (N = riftbreaker_backup_keep, Default 5). Deterministisch
+# ueber den Namens-Zeitstempel, nie mtime. Fasst NIE {{ riftbreaker_mods_dir }}
+# an (mods/-Guard #212). Am ENDE, damit alle Backups/Strays DIESES Laufs
+# bereits liegen.
+# ---------------------------------------------------------------------------
+- name: "Backup-/Stray-Retention anwenden (Issue #312)"
+  include_tasks: backup-retention.yml

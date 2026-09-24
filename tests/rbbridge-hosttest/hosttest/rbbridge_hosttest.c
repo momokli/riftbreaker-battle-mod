@@ -799,6 +799,39 @@ int main(void)
     }
 
     /* -------------------------------------------------------------- */
+    /* #392: Request-Logzeile (session-Trace) - reine Helfer           */
+    /* -------------------------------------------------------------- */
+    /* prueft session_from_line (session-Wert aus der Request-Zeile) und
+     * req_log_format (die EINE Zeile `req cmd=<name> session=<id>`), inkl.
+     * der graceful-Faelle (fehlend/NULL/zu kleiner Puffer). */
+    {
+        char s[64];
+        char lg[192];
+
+        check(session_from_line("{\"cmd\":\"get_state\",\"session\":\"20260923-204900\"}",
+                                s, sizeof(s)) == 1 &&
+              strcmp(s, "20260923-204900") == 0,
+              "session_from_line: session-Wert geparst (#392)");
+        check(session_from_line("{\"cmd\":\"ping\"}", s, sizeof(s)) == 0,
+              "session_from_line: ohne session -> 0 (#392)");
+        check(session_from_line(NULL, s, sizeof(s)) == 0,
+              "session_from_line: NULL -> 0 (kein Crash) (#392)");
+        check(session_from_line("{\"session\":\"\"}", s, sizeof(s)) == 0,
+              "session_from_line: leerer Wert -> 0 (#392)");
+        check(req_log_format("get_state", "20260923-204900", lg, sizeof(lg)) > 0 &&
+              strcmp(lg, "req cmd=get_state session=20260923-204900") == 0,
+              "req_log_format: cmd+session formatiert (#392)");
+        check(req_log_format("rollout", NULL, lg, sizeof(lg)) > 0 &&
+              strcmp(lg, "req cmd=rollout session=-") == 0,
+              "req_log_format: fehlende session -> '-' (#392)");
+        check(req_log_format(NULL, NULL, lg, sizeof(lg)) > 0 &&
+              strcmp(lg, "req cmd=- session=-") == 0,
+              "req_log_format: cmd/session NULL -> '-' (#392)");
+        check(req_log_format("x", "y", lg, 8) == 0,
+              "req_log_format: Puffer zu klein -> 0 (#392)");
+    }
+
+    /* -------------------------------------------------------------- */
     /* #549: Chat-Ring-Queue (chat_queue_*) - pure Logik               */
     /* -------------------------------------------------------------- */
     {
@@ -1079,6 +1112,12 @@ int main(void)
         /* Signatur-Selfcheck: Laenge/Ret-Opcode/Flag-Offset konsistent. */
         check(set_suspended_sig_selfcheck() == 1,
               "SetSuspended-Sig: Selfcheck gruen (+0xF1, 0xC3, Hash)");
+    }
+
+    {
+        /* #880: Selfcheck der UpdateGameplayLogic-Signatur (Game-Thread-Detour). */
+        check(gameplay_updlogic_sig_selfcheck() == 1,
+              "UpdLogic-Sig: Selfcheck gruen (36B-Prolog instruction-aligned)");
     }
 
     /* resolve_set_suspended_fn: genau ein Treffer -> Adresse; zwei Treffer

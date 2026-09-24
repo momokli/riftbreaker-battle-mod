@@ -138,7 +138,8 @@ automatisch geroutet; nur der Rest wartet.
 
 Endpunkte (der Relay selbst hat **keinen** Auth — er bindet daher nur lokal; die
 öffentliche Lobby-Domain setzt davor der Host-Caddy mit basic_auth):
-`GET /` (Single-File-UI), `GET /sessions` (JSON: wer wartet),
+`GET /` (Single-File-UI), `GET /sessions` (JSON: wer wartet — jetzt alle
+parallelen Sessions),
 `GET /targets` (JSON: die Buttons), `POST /route`
 `{"identitaet":"…","target":"NAME"}`.
 
@@ -157,9 +158,31 @@ selbst schliesst und neu verbindet; der Pin ueberlebt den Reconnect. Die
 einen mutex-geschuetzten Snapshot (`/sessions`) und schreibt Befehle in eine
 Queue, die die Hauptschleife abarbeitet (Muster `server/dll/rbbridge.c`).
 
-> **Grenze:** Der Relay terminiert und relayt die Sitzung fuer ihre ganze Dauer;
-> er bedient damit **einen Client zur Zeit**. Mehrere parallele Matches brauchen
-> mehrere Sitzungen im Relay (offenes Follow-up).
+## Multi-Session (Issue #877)
+
+Der Relay bedient **N parallele Sessions**: jeder akzeptierte Client bekommt
+Client-Conn, Backend-Conn, Historie, Sende-Queues und Backpressure **eigen**.
+Vorher lagen diese in globalen Singletonen — ein zweiter Client ueberschrieb sie
+und die Sitzung des ersten kollabierte (Blocker fuer 1v1/VS, #875).
+
+```text
+Client A --GNS--> gns_relay --+--> prod A   (Session 1: eigene Queues/Backpressure)
+Client B --GNS--> gns_relay --+--> prod B   (Session 2: eigene Queues/Backpressure)
+```
+
+| Baustein                | je Session | Bemerkung                                                              |
+| ----------------------- | ---------- | ---------------------------------------------------------------------- |
+| Client-/Backend-Conn    | ja         | die Client-Verbindung besitzt die Session, der Backend zeigt nur drauf |
+| Historie (Replay)       | ja         | Re-Route/Backlog flutet nur die eigene Session                         |
+| Sende-Queues + Limits   | ja         | die Backpressure einer langsamen Leitung bremst nur sie                |
+| Poll-Gruppe je Richtung | ja         | es gibt kein `ReceiveMessagesOnConnection`                             |
+| Pin pro Identitaet      | nein       | `g_pins` bleibt global und ueberlebt Reconnects                        |
+
+Eine Poll-Gruppe **je Session und Richtung** ist noetig, weil GNS kein
+`ReceiveMessagesOnConnection` exportiert: globales Lesen wuerde die Backpressure
+aller Sessions an die langsamste koppeln. `POST /route` pinnt weiter pro
+Identitaet und zieht **alle** Sessions dieser Identitaet um; `GET /sessions`
+listet sie parallel auf.
 
 ## Backpressure (wichtig)
 
@@ -215,6 +238,6 @@ Sekunden auf (vorher sah es wie ein Timeout des Proxys aus).
 - [x] 1.0: Suffix-Routing (`-dev`/`-staging`) als Regeln + Host-Test (#843)
 - [x] Deployment der Relay-Rolle + dev-Port-Umzug (#843)
 - [x] Hold + Operator-Web-UI (#857, PoC): Spieler halten, per Klick routen
+- [x] Multi-Session (#877): N parallele Sessions (eigene Queues/Backpressure)
 - [ ] `m_nAppID` in eigenen GNS-Build statt Runtime-Patch
-- [ ] Mehrere Sitzungen im Relay (parallele Matches hinter einer IPv4)
 - [ ] Rust-Backend/Launcher auf die JSON-API aufsetzen

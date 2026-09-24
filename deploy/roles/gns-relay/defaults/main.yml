@@ -41,6 +41,11 @@ gns_relay_compose_project: gns-relay
 # Dasselbe Laufzeit-Image wie der Dedicated Server (bringt wine, Xvfb und
 # gosu/steamuser mit). Der Tag ist der Deploy-SHA (kein `latest`).
 gns_relay_image: "{{ dedicated_server_image }}"
+# Container-Log-Limit (Issue #301): json-file-Rotation, damit die
+# Container-Logs (/var/lib/docker/containers/*/*-json.log) nicht unbegrenzt
+# wachsen. Konfigurierbar per host_vars / `-e`.
+gns_relay_log_max_size: "10m"
+gns_relay_log_max_file: "3"
 
 # --- Netz / Routing ---------------------------------------------------------
 # Client-hardgewireter Einstiegsport. Der Relay terminiert GNS hier selbst.

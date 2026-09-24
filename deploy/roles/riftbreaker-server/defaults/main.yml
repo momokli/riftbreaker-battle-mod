@@ -52,6 +52,15 @@ riftbreaker_mods_dir: "{{ riftbreaker_game_dir }}/mods"
 riftbreaker_backup_dir: "{{ riftbreaker_game_dir }}-backups"
 riftbreaker_mods_guard_autofix: true
 
+# Anzahl der in {{ riftbreaker_backup_dir }} behaltenen Backups je Gruppe
+# (`rbbattle-*.tar.gz` bzw. `stray-*/`). Aeltere werden bei jedem Deploy
+# entfernt (Issue #312, tasks/backup-retention.yml). "Neueste" ist
+# lexikographisch der groesste Namens-Zeitstempel (iso8601_basic_short,
+# YYYYMMDDTHHMMSS) — NIE mtime. Es werden nur die zwei Muster oben angefasst;
+# {{ riftbreaker_mods_dir }} (mods/-Guard #212) nie; ein Backup-Dir auf/unter
+# mods/ bricht laut ab. Uebersteuerbar per host_vars oder `-e`.
+riftbreaker_backup_keep: 5
+
 # Quelle für den Post-Deploy-Runtime-Log-Check (best effort; genau eine
 # mod_load-Zeile, erwartete Version, keine handler_errors). NICHT der harte
 # Gate — der ist der Artefakt-Check in tasks/main.yml (Manifest- + RBB.version
@@ -162,6 +171,16 @@ riftbreaker_disk_min_free_gb: 10
 # statt eines Fails zu einer lauten Warnung + der Groessen-Check wird
 # ausgelassen (es gibt ja keine Zahl zum Vergleichen). Default false.
 riftbreaker_disk_skip_unknown: false
+
+# --- Container-Log-Limit (Issue #301) ---------------------------------------
+# Jeder Service im Compose-Stack bekommt einen json-file-Log-Treiber mit
+# Rotation. Ohne Limit wachsen die Docker-Container-Logs
+# (/var/lib/docker/containers/*/*-json.log) unbegrenzt, bis die Platte voll ist
+# (reale, unverwaltete Luecke aus der Host-Hygiene-Messung). max-size = Groesse
+# je Log-Datei vor der Rotation, max-file = Anzahl rotierter Dateien. Beide
+# konfigurierbar (host_vars / `-e`); die Werte sind Compose-Strings.
+riftbreaker_log_max_size: "10m"
+riftbreaker_log_max_file: "3"
 
 # Deploy-Identitaet (Issue #483, US4): Fallback fuer die Compose-Vorlage, damit
 # sie auch ohne die Plays renderbar bleibt (check-render, Hermetik-Tests). Die

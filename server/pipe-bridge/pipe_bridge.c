@@ -102,6 +102,30 @@ static void init_session_id(void)
              st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
 }
 
+/* #392: haengt `,"session":"<id>"` vor das schliessende `}` eines
+ * Command-Payloads (`{...}\n`). Reine Funktion -> zentral in
+ * pipe_send_command nutzbar (keine Call-Site-Aenderung).
+ * Rueckgabe 1 = out gesetzt; 0 = kein JSON-Objekt / Puffer zu klein
+ * (der Aufrufer schreibt dann payload unveraendert). */
+static int attach_session_field(const char *payload, const char *session,
+                                char *out, size_t n)
+{
+    size_t len, brace;
+
+    if (!payload || !session || !out || n == 0)
+        return 0;
+    len = strlen(payload);
+    while (len > 0 && (payload[len - 1] == '\n' || payload[len - 1] == '\r'))
+        len--;                              /* Trailing-Newline ignorieren */
+    if (len < 2 || payload[0] != '{' || payload[len - 1] != '}')
+        return 0;
+    brace = len - 1;                        /* Index des schliessenden `}` */
+    if (snprintf(out, n, "%.*s,\"session\":\"%s\"}\n",
+                 (int)brace, payload, session) >= (int)n)
+        return 0;                           /* Puffer zu klein -> unveraendert */
+    return 1;
+}
+
 static void blog(const char *fmt, ...)
 {
     char buf[1024];
@@ -687,6 +711,14 @@ static int pipe_send_command(const char *event, const char *payload,
                              int timeout_ms, char *line_out, size_t line_out_sz)
 {
     int w;
+    char wire[LINE_MAX];
+    const char *out_payload = payload;
+
+    /* #392: Session-/Boot-ID zentral an JEDEN Command haengen (nicht pro
+     * Call-Site). Payloads sind immer ein JSON-Objekt; sonst bleibt
+     * out_payload == payload (defensiv, kein Crash). */
+    if (attach_session_field(payload, g_session_id, wire, sizeof(wire)))
+        out_payload = wire;
 
     /* Serialisierung: der HTTP-Server ist jetzt multi-threaded (PR B), aber
      * Pipe + pending-Response-Slot sind single. */
@@ -705,7 +737,7 @@ static int pipe_send_command(const char *event, const char *payload,
     LeaveCriticalSection(&g_resp_cs);
 
     EnterCriticalSection(&g_pipe_cs);
-    w = pipe_write_all(g_pipe, payload);
+    w = pipe_write_all(g_pipe, out_payload);
     LeaveCriticalSection(&g_pipe_cs);
     if (!w) {
         LeaveCriticalSection(&g_cmd_cs);
@@ -1316,6 +1348,47 @@ static void handle_dom_suspend(SOCKET c, const char *cmd, const char *event)
         }
     }
     log_response("/dom_suspend", line);
+    http_respond(c, 200, "OK", line);
+}
+
+/* POST /pause_game + /resume_game (Write, Issue #880): echter Welt-/Server-
+ * Freeze nativ via ServerGameplayState::On{Pause,Resume}GameRequest. Kein
+ * Body. Liefert die pause_game_result-/resume_game_result-Zeile der Bridge. */
+static void handle_game_pause(SOCKET c, const char *cmd, const char *event,
+                             const char *body)
+{
+    char op[16] = "marshalled";
+    char esc_op[16 * 2];
+    char line[READ_BUF];
+    char payload[LINE_MAX];
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+    int rc;
+
+    if (body)
+        json_get_string(body, "op", op, sizeof(op));
+    if (op[0] && strcmp(op, "marshalled") != 0 && strcmp(op, "auto") != 0) {
+        blog("POST /%s: unbekanntes op '%s'", cmd, op);
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_op\"}");
+        return;
+    }
+    json_escape(op, esc_op, sizeof(esc_op));
+    snprintf(payload, sizeof(payload),
+             "{\"cmd\":\"%s\",\"op\":\"%s\"}\n", cmd, esc_op);
+
+    rc = pipe_send_command(event, payload, timeout_ms, line, sizeof(line));
+    if (rc == -1) {
+        blog("POST /%s: Pipe nicht erreichbar -> pipe_unavailable", cmd);
+        http_respond(c, 503, "Service Unavailable",
+                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+        return;
+    }
+    if (rc != 0) {
+        http_respond(c, 500, "Internal Server Error",
+                     "{\"ok\":false,\"reason\":\"timeout\"}");
+        return;
+    }
+    log_response(event, line);
     http_respond(c, 200, "OK", line);
 }
 
@@ -2089,6 +2162,26 @@ static void handle_client(SOCKET c)
             handle_dom_suspend(c, "pause_dom", "pause_dom_result");
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/resume_dom") == 0) {
             handle_dom_suspend(c, "resume_dom", "resume_dom_result");
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/pause_game") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_game_pause(c, "pause_game", "pause_game_result", b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/resume_game") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_game_pause(c, "resume_game", "resume_game_result", b);
+            free(b);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/restart_map") == 0) {
             char *b = malloc((size_t)body_len + 1);
             if (!b) {

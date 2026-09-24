@@ -1,0 +1,132 @@
+### seeding wine volume (image-baked prefix) + saves volume
+wine-seeded
+saves-chowned
+### docker run rc=0 started_at=2026-09-24T07:20:23Z
+### HEALTHY cold_boot_seconds=9.353 at 2026-09-24T07:20:32Z body={"ok":true,"pipe":true}
+### container state: running/starting
+### pause dt=3.605 body={"event":"pause_game_result","ok":true,"paused":true,"readback":"pending","flag":-1,"want":1,"via":"marshalled","consumed":false}
+### resume(handover) dt=3.104 body={"event":"resume_game_result","ok":true,"paused":false,"readback":"pending","flag":-1,"want":0,"via":"marshalled","consumed":false}
+### get_state={"event":"get_state_result","ok":false,"reason":"no_world","dom_paused":null,"mission_flow":"","mission_flow_active":false,"mission_flow_payload":null,"creatures_base_difficulty":0.0000,"end_game":null,"players":null,"hq_hp":null,"hq_hp_max":null,"hq_dead":null,"game_paused":false,"pause_want":0}
+### LOGS-START
+[server] [07:20:25.557] [info] SignInState.cpp:118 -  * uniform_debug_float_2 : 0
+[server] [07:20:25.557] [info] SignInState.cpp:118 -  * uniform_debug_float_3 : 0
+[server] [07:20:25.557] [info] SignInState.cpp:118 -  * uniform_debug_int_0 : 0
+[server] [07:20:25.557] [info] SignInState.cpp:118 -  * uniform_debug_int_1 : 0
+[server] [07:20:25.557] [info] SignInState.cpp:118 -  * uniform_debug_int_2 : 0
+[server] [07:20:25.557] [info] SignInState.cpp:118 -  * uniform_debug_int_3 : 0
+[server] [07:20:25.557] [info] SignInState.cpp:118 -  * user_config_version : 5
+[server] [07:20:25.557] [info] SignInState.cpp:118 -  * vibration : 1
+[server] [07:20:25.557] [info] SignInState.cpp:118 -  * video_adapter : 
+[server] [07:20:25.557] [info] SignInState.cpp:118 -  * video_mode : 
+[server] [07:20:25.557] [info] SignInState.cpp:118 -  * volume_announcement : 1
+[server] [07:20:25.557] [info] SignInState.cpp:118 -  * volume_dialog : 1
+[server] [07:20:25.557] [info] SignInState.cpp:118 -  * volume_event : 1
+[server] [07:20:25.557] [info] SignInState.cpp:118 -  * volume_master : 0.900000036
+[server] [07:20:25.557] [info] SignInState.cpp:118 -  * volume_music : 1
+[server] [07:20:25.557] [info] SignInState.cpp:118 -  * volume_sfx : 1
+[server] [07:20:25.557] [info] SignInState.cpp:118 -  * vsync : 0
+[server] [07:20:25.606] [warning] ExternalContentModio.cpp:41 - modio: ERROR[ 21250 ]='Invalid user'
+[server] [07:20:25.666] [info] RiftbreakerApp.cpp:436 - ['dlc_1'] mounting external content: '' - '.'
+[server] [07:20:25.666] [info] RiftbreakerApp.cpp:436 - ['dlc_2'] mounting external content: '' - '.'
+[server] [07:20:25.666] [info] RiftbreakerApp.cpp:436 - ['dlc_3'] mounting external content: '' - '.'
+[server] [07:20:25.666] [info] RiftbreakerApp.cpp:436 - ['rbbattle'] mounting external content: 'rbbattle' - '97cf392bfed4a2c3fa51baea521906245fcaeb20.'
+[server] [07:20:25.673] [info] TeamManager.cpp:22 - Creating team relation escape id :0
+[server] [07:20:25.673] [info] TeamManager.cpp:22 - Creating team relation hostility id :1
+[server] [07:20:25.696] [info] VfsZipArchive.cpp:170 - [VFS] mounting: `Z:\opt\riftbreaker\bin\..\packs\00_win_data.zip` as `/`
+[server] [07:20:25.754] [info] VfsZipArchive.cpp:170 - [VFS] mounting: `Z:\opt\riftbreaker\bin\..\packs\99_win_shaders_cache.zip` as `/`
+[server] [07:20:25.755] [info] VfsZipArchive.cpp:170 - [VFS] mounting: `Z:\opt\riftbreaker\bin\..\packs\dlc_1\99_win_placeholder_dlc_1.zip` as `/`
+[server] [07:20:25.755] [info] VfsZipArchive.cpp:170 - [VFS] mounting: `Z:\opt\riftbreaker\bin\..\packs\dlc_2\99_win_placeholder_dlc_2.zip` as `/`
+[server] [07:20:25.755] [info] VfsZipArchive.cpp:170 - [VFS] mounting: `Z:\opt\riftbreaker\bin\..\packs\dlc_3\99_win_placeholder_dlc_3.zip` as `/`
+[server] [07:20:25.755] [info] VfsNativeArchive.cpp:56 - [VFS] mounting: `Z:\opt\riftbreaker\bin\..\mods\rbbattle` as `/`
+[entrypoint] ingress: Spiel bereit (GameplayState/mod_load im Log)
+[entrypoint] ingress: injiziere rbbridge.dll in DedicatedServer.exe (bis 180s)
+[07:20:32.052] [rbbridge] [tid=580] rbbridge_start: ref=880-spike
+[07:20:32.052] [rbbridge] [tid=580] rbbridge_start: Pipe-Server-Thread laeuft
+[07:20:32.053] [rbbridge] [tid=584] pipe_server_main: Start (Pipe \\.\pipe\rbbattle)
+[07:20:32.053] [rbbridge] [tid=584] module_range: via=getmodulehandle base=00006ffff6da0000 size=78778368 execfn=0000000000000000
+[07:20:32.053] [rbbridge] [tid=584] install_chat_hook: Detour installiert (target=00006ffff85c1b50 tramp=000074c764100000)
+[rbtools] [injector] ref=880-spike
+[rbtools] [+] Prozess 'DedicatedServer.exe' gefunden: pid=212
+[rbtools] [+] Injiziere: Z:\opt\rbtools\rbbridge.dll
+[rbtools] [+] rbbridge.dll geladen: HMODULE=0x00000000f3210000 (pid laeuft weiter)
+[entrypoint] ingress: Injection erfolgreich (Versuch 1)
+[entrypoint] ingress: starte pipe_bridge.exe (HTTP 9001 -> Named-Pipe rbbattle)
+[entrypoint] ingress: pipe_bridge.exe gestartet (pid=292)
+[07:20:32.113] [pipe_bridge] session start 20260924-072032
+[07:20:32.113] [pipe_bridge] pipe_bridge ref=880-spike
+[07:20:32.113] [pipe_bridge] pipe_reader: Pipe verbunden
+[07:20:32.113] [rbbridge] [tid=584] serve_client: Client verbunden
+[07:20:32.113] [pipe_bridge] HTTP-Bridge lauscht auf 0.0.0.0:9001 (Pipe \\.\pipe\rbbattle, Timeout 20000 ms)
+[server] [07:20:31.802] [info] RiftbreakerApp.cpp:131 - The Riftbreaker EXE: 1186 DATA: 847 MOD 
+[server] [07:20:31.802] [info] ControllerState.cpp:667 - OnMainResourcesInitialized
+[server] [07:20:31.819] [info] RenderingState.cpp:343 - ReleaseRenderingAccess
+[server] [07:20:31.822] [info] FileBasedSave.cpp:566 - FileBasedSave::Save : Update completed
+[server] [07:20:31.824] [info] FileBasedSave.cpp:566 - FileBasedSave::Save : Update completed
+[server] [07:20:31.837] [warning] CmdParser.cpp:14 - [WARNING] Console command already registered: refresh_gui_text_items
+[server] [07:20:31.837] [info] ControllerState.cpp:521 - [ControllerState] activating: ServerGameplayState
+[server] [07:20:31.837] [info] ControllerState.cpp:437 - [ControllerState] activating: ServerGameplayState
+[server] [07:20:31.850] [info] RiftbreakerApp.cpp:418 - PushExternalContentForGame: 'rbbattle' ( '97cf392bfed4a2c3fa51baea521906245fcaeb20', 'rbbattle' )
+[server] [07:20:31.850] [info] RiftbreakerApp.cpp:131 - The Riftbreaker EXE: 1186 DATA: 847 MOD 
+[server] [07:20:31.850] [info] GuiMovie.cpp:62 - GuiMovie::SetMaterial gui/logos/riftbreaker_logo_loop
+[server] [07:20:31.851] [info] NetServerGNS.cpp:173 - [NetServerGNS] listening for P2P connection as 'ip:::1'
+[server] [07:20:31.851] [info] NetServerGNS.cpp:182 - [NetServerGNS] running as: ip:[::]:6321
+[server] [07:20:31.851] [info] ServerGameplayState.cpp:690 - ServerState::OnEnter
+[server] [07:20:31.968] [warning] CmdParser.cpp:14 - [WARNING] Console command already registered: refresh_gui_text_items
+[server] [07:20:32.388] [info] LogService.cpp:71 - [LUA 'lua/rbbattle_autoexec.lua']: [RBBATTLE:97cf392bfed4a2c3fa51baea521906245fcaeb20] event=mod_load version=97cf392bfed4a2c3fa51baea521906245fcaeb20 status=ok ref=97cf392bfed4a2c3fa51baea521906245fcaeb20 mode=server
+[server] [07:20:32.395] [info] MapGenerator.cpp:371 - [MapGenerator]: generator seed: `1790234431`
+[server] [07:20:32.395] [info] MapGenerator.cpp:372 - [MapGenerator]: map size: `6x6`
+[server] [07:20:32.395] [info] MapGenerator.cpp:373 - [MapGenerator]: mission file: `missions/survival/jungle.mission`
+[server] [07:20:32.395] [info] MapGenerator.cpp:375 - [MapGenerator]: mission script: `lua/missions/survival/survival_jungle.lua`
+[07:20:32.699] [pipe_bridge] GET /health body=-
+[07:20:32.745] [pipe_bridge] POST /pause_game body=-
+[07:20:32.814] [rbbridge] [tid=584] req cmd=pause_game session=20260924-072032
+[07:20:32.814] [rbbridge] [tid=584] module_range: via=getmodulehandle base=00006ffff6da0000 size=78778368 execfn=0000000000000000
+[07:20:33.314] [rbbridge] [tid=584] install_game_pause_hook: installiert an 00006ffff87bc100 (Trampolin 000074c764020000)
+[entrypoint] Server entered ServerGameplayState — config loaded successfully
+[07:20:33.725] [pipe_bridge] GET /health body=-
+[entrypoint] UDP port 6321 is open — server should accept connections
+[server] [07:20:34.440] [info] SkeletonDef.cpp:273 - Attachment already added
+[07:20:35.072] [pipe_bridge] GET /health body=-
+[server] [07:20:34.697] [info] MapGenerator.cpp:976 - ExecuteBuffers took: 2 ms
+[07:20:36.336] [rbbridge] [tid=584] pause_game: pause via=marshalled want=1 consumed=0 state=0
+[07:20:36.340] [pipe_bridge] resp pause_game_result body={"event":"pause_game_result","ok":true,"paused":true,"readback":"pending","flag":-1,"want":1,"via":"marshalled","consumed":false}
+[07:20:36.367] [pipe_bridge] POST /resume_game body=-
+[07:20:36.436] [rbbridge] [tid=584] req cmd=resume_game session=20260924-072032
+[07:20:36.437] [rbbridge] [tid=584] module_range: via=getmodulehandle base=00006ffff6da0000 size=78778368 execfn=0000000000000000
+[server] [07:20:38.365] [info] MapGenerator.cpp:828 - InstantiateMap took: 5887 ms
+[server] [07:20:38.441] [info] NavigationGraph.cpp:249 - NavigationGraph::Generate - Starting graph creation
+[server] [07:20:38.441] [info] NavigationGraph.cpp:275 - NavigationGraph::Generate - Cell size : 2
+[server] [07:20:38.441] [info] NavigationGraph.cpp:276 - NavigationGraph::Generate - Region size : 64
+[server] [07:20:38.441] [info] NavigationGraph.cpp:277 - NavigationGraph::Generate - Region count in x axis : 15
+[server] [07:20:38.441] [info] NavigationGraph.cpp:278 - NavigationGraph::Generate - Region count in z axis : 15
+[07:20:39.455] [rbbridge] [tid=584] pause_game: resume via=marshalled want=0 consumed=0 state=0
+[07:20:39.463] [pipe_bridge] resp resume_game_result body={"event":"resume_game_result","ok":true,"paused":false,"readback":"pending","flag":-1,"want":0,"via":"marshalled","consumed":false}
+[07:20:39.493] [pipe_bridge] POST /get_state body=-
+[07:20:39.556] [rbbridge] [tid=584] req cmd=get_state session=20260924-072032
+[07:20:39.560] [rbbridge] [tid=584] module_range: via=getmodulehandle base=00006ffff6da0000 size=78778368 execfn=0000000000000000
+[server] [07:20:39.039] [info] NavigationGraph.cpp:342 - NavigationGraph::Generate - Async grid creation 0.5975633 sec.
+[server] [07:20:39.041] [info] NavigationGraph.cpp:383 - NavigationGraph::Generate - Fill gaps in the grid 0.0008488 sec.
+[server] [07:20:39.080] [info] NavigationGraph.cpp:424 - NavigationGraph::Generate - Sparse graph creation 0.0390234 sec.
+[server] [07:20:39.223] [info] NavigationGraph.cpp:456 - NavigationGraph::Generate - Navmesh creation 0.1423039 sec.
+[server] [07:20:39.228] [info] NavigationGraph.cpp:462 - NavigationGraph::Generate - Graph generated in 0.786835 sec.
+[server] [07:20:39.228] [info] NavigationGraph.cpp:464 - NavigationGraph::Generate - Total nodes count : 155514
+[server] [07:20:39.228] [info] NavigationGraph.cpp:465 - NavigationGraph::Generate - Total nodes edges count : 0
+[server] [07:20:39.228] [info] NavigationGraph.cpp:466 - NavigationGraph::Generate - Total navmesh count : 4764
+[server] [07:20:39.228] [info] NavigationGraph.cpp:467 - NavigationGraph::Generate - Total navmesh edges count : 21666
+[server] [07:20:39.228] [info] NavigationGraph.cpp:249 - NavigationGraph::Generate - Starting graph creation
+[server] [07:20:39.228] [info] NavigationGraph.cpp:275 - NavigationGraph::Generate - Cell size : 2
+[server] [07:20:39.228] [info] NavigationGraph.cpp:276 - NavigationGraph::Generate - Region size : 64
+[server] [07:20:39.228] [info] NavigationGraph.cpp:277 - NavigationGraph::Generate - Region count in x axis : 15
+[server] [07:20:39.228] [info] NavigationGraph.cpp:278 - NavigationGraph::Generate - Region count in z axis : 15
+[server] [07:20:39.566] [info] NavigationGraph.cpp:342 - NavigationGraph::Generate - Async grid creation 0.3381836 sec.
+[server] [07:20:39.569] [info] NavigationGraph.cpp:383 - NavigationGraph::Generate - Fill gaps in the grid 0.00073579996 sec.
+[server] [07:20:39.607] [info] NavigationGraph.cpp:424 - NavigationGraph::Generate - Sparse graph creation 0.037233498 sec.
+[07:20:39.679] [rbbridge] [tid=584] resolve_campaign_diff: scan start (needle=0x6ffff9c3c340)
+[07:20:39.693] [rbbridge] [tid=584] resolve_campaign_diff: done (regions=53 candidates=1)
+[07:20:39.931] [rbbridge] [tid=584] resolve_sgs_instance: candidate inst=0000000102dfea48 flag=199
+[07:20:39.956] [rbbridge] [tid=584] resolve_sgs_instance: candidate inst=000074bf8bcde738 flag=0
+[07:20:39.956] [rbbridge] [tid=584] get_state: scan start (needle=0x6ffff9c2e910)
+[07:20:39.959] [rbbridge] [tid=584] get_state: done (regions=53 candidates=1)
+[07:20:39.959] [pipe_bridge] resp /get_state body={"event":"get_state_result","ok":false,"reason":"no_world","dom_paused":null,"mission_flow":"","mission_flow_active":false,"mission_flow_pay
+### LOGS-END
+EXIT=0
