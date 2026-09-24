@@ -1,0 +1,104 @@
+---
+# Hermetischer Render-Selbsttest der Rolle capsule-flow (Issue #931).
+#
+# Läuft LOKAL auf dem Control-Node/CI-Runner: keine Host-Facts, kein SSH,
+# kein Docker, kein Vault, keine Prod-Aktion. Gerendert werden die ECHTEN
+# Vorlagen der Rolle (kein Nachbau) mit Dummy-Werten; geprüft werden die
+# Invarianten von systemd-Unit und EnvironmentFile.
+#
+# Aufruf über run.sh (oder direkt):
+#   RB_CAPSULE_RENDER_DIR=$(mktemp -d) ansible-playbook deploy/tests/capsule-flow/main.yml
+- name: "Capsule-Flow Unit-/Env-Render (Issue #931)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    # Rollen-Defaults hier explizit (der Test laeuft ohne Rollen-Defaults).
+    capsule_flow_env: dev
+    capsule_flow_install_dir: /opt/rbmods/capsule-flow-dev
+    capsule_flow_bind: 127.0.0.1
+    capsule_flow_port: 8093
+    capsule_flow_python: /usr/bin/python3
+    capsule_flow_bin: "{{ capsule_flow_install_dir }}/capsule_service.py"
+    capsule_flow_env_file: /etc/rbmods/capsule-dev.env
+    capsule_flow_parked_url: "http://127.0.0.1:8095"
+    capsule_flow_parked_token: dummy-parked-token
+    capsule_flow_cycle_url: "http://127.0.0.1:9102"
+    capsule_flow_timeout: 5
+    capsule_flow_log_level: INFO
+    capsule_flow_token: dummy-capsule-token
+    capsule_flow_require_docker_service: "{{ test_require_docker_service | default(false) }}"
+    render_dir: >-
+      {{ lookup('env', 'RB_CAPSULE_RENDER_DIR')
+         | default('/tmp/rb-capsule-render', true) }}
+
+  tasks:
+    - name: Render-Verzeichnis sicherstellen
+      file:
+        path: "{{ render_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: systemd-Unit rendern (echte Rollen-Vorlage)
+      template:
+        src: "{{ playbook_dir }}/../../roles/capsule-flow/templates/rbmods-capsule.service.j2"
+        dest: "{{ render_dir }}/rbmods-capsule-dev.service"
+        mode: "0644"
+
+    - name: EnvironmentFile rendern (echte Rollen-Vorlage)
+      template:
+        src: "{{ playbook_dir }}/../../roles/capsule-flow/templates/rbmods-capsule.env.j2"
+        dest: "{{ render_dir }}/rbmods-capsule-dev.env"
+        mode: "0600"
+
+    - name: Gerenderte Unit + Env laden
+      set_fact:
+        unit: "{{ lookup('file', render_dir ~ '/rbmods-capsule-dev.service') }}"
+        env_file: "{{ lookup('file', render_dir ~ '/rbmods-capsule-dev.env') }}"
+
+    - name: Unit-Invarianten pruefen (ExecStart + EnvironmentFile + Restart)
+      assert:
+        that:
+          - ("ExecStart=" ~ capsule_flow_python ~ " " ~ capsule_flow_bin) in unit
+          - ("EnvironmentFile=" ~ capsule_flow_env_file) in unit
+          - ("WorkingDirectory=" ~ capsule_flow_install_dir) in unit
+          - "'Restart=on-failure' in unit"
+          - "'Type=simple' in unit"
+        fail_msg: >-
+          Gerenderte systemd-Unit verletzt eine Invariante (ExecStart,
+          EnvironmentFile, WorkingDirectory, Restart=on-failure oder
+          Type=simple).
+        success_msg: "Unit-Render ok (ExecStart + EnvironmentFile + Restart)."
+
+    - name: Env-Datei-Invarianten pruefen (Token + Nachbarn + Bind/Port)
+      assert:
+        that:
+          - ("CAPSULE_TOKEN=dummy-capsule-token") in env_file
+          - ("CAPSULE_PARKED_TOKEN=dummy-parked-token") in env_file
+          - ("CAPSULE_BIND=" ~ capsule_flow_bind) in env_file
+          - ("CAPSULE_PORT=" ~ capsule_flow_port) in env_file
+          - ("CAPSULE_PARKED_URL=" ~ capsule_flow_parked_url) in env_file
+          - ("CAPSULE_CYCLE_URL=" ~ capsule_flow_cycle_url) in env_file
+        fail_msg: >-
+          Gerenderte EnvironmentFile verletzt eine Invariante (Token, Parked-
+          Token, Bind/Port, Parked-/Cycle-URL).
+        success_msg: "Env-Render ok (Token + Nachbarn + Bind/Port)."
+
+    # capsule_flow_require_docker_service ist KEINE feste Invariante: Default
+    # false (der Kapsel-Dienst spricht nur HTTP); true rendert die Abhaengigkeit.
+    - name: "Docker-Requires folgt dem Flag, keine verwaiste Leerzeile"
+      assert:
+        that:
+          - ("Requires=docker.service" in unit) == (capsule_flow_require_docker_service | bool)
+          - ("After=network-online.target docker.service" in unit) == (capsule_flow_require_docker_service | bool)
+          - ("After=network-online.target" in unit)
+          - ("\n\nStartLimitIntervalSec" not in unit)
+        fail_msg: >-
+          capsule_flow_require_docker_service={{ capsule_flow_require_docker_service }}:
+          Requires=docker.service bzw. der docker.service-Teil von After= muss
+          exakt dem Flag folgen, und das Weglassen darf keine Leerzeile im
+          [Unit]-Block hinterlassen.
+        success_msg: >-
+          Docker-Requires korrekt (require_docker_service={{ capsule_flow_require_docker_service }}),
+          keine verwaiste Leerzeile.

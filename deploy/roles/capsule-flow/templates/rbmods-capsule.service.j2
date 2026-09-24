@@ -1,0 +1,27 @@
+# Verwaltet von deploy/ role "capsule-flow" (Jinja). NICHT manuell editieren.
+#
+# Kapsel-Flow-Dienst pro Env (Issue #931). Bindet ausschliesslich
+# {{ capsule_flow_bind }}:{{ capsule_flow_port }}; Bearer-Token PFLICHT
+# (Env-Datei).
+[Unit]
+Description=RIFT BATTLE Kapsel-Flow-Dienst ({{ capsule_flow_env }})
+After=network-online.target{{ ' docker.service' if capsule_flow_require_docker_service | default(false) | bool else '' }}
+Wants=network-online.target
+{% if capsule_flow_require_docker_service | default(false) | bool %}
+Requires=docker.service
+{% endif %}
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory={{ capsule_flow_install_dir }}
+# Token + Nachbar-URLs aus 0600-Datei (nicht aus Environment=).
+EnvironmentFile={{ capsule_flow_env_file }}
+ExecStart={{ capsule_flow_python }} {{ capsule_flow_bin }}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
