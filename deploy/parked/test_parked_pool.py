@@ -109,18 +109,46 @@ class FakeProvisioner(object):
         self.starts = []
         self.stops = []
         self.fail_stop = set()
+        # instance_id -> (bridge_port, gns_endpoint); status liest hieraus.
+        self._ports = {}
+
+    def _gns_for(self, instance_id):
+        known = self._ports.get(instance_id)
+        if known is None:
+            return None
+        return known[1]
 
     def start(self, env=None, mode="solo", instance_id=None):
         self.starts.append((env or self.cfg.env, instance_id))
         port = self._BASE_PORT + len(self.starts)
+        # Issue #929: der GNS-UDP-Host-Port kommt aus dem 6321/udp-Mapping.
+        gns = "127.0.0.1:%d" % (port + 1000)
+        self._ports[instance_id] = (port, gns)
         return {
             "instance": instance_id,
             "container": "riftbreaker-dedicated-%s-%s" % (env or self.cfg.env, instance_id),
             "running": True,
             "health": "healthy",
-            "ports": {"bridge": port},
+            "ports": {"bridge": port, "gns": gns},
             "created": True,
         }
+
+    def status(self, instance_id=None, env=None):
+        known = self._ports.get(instance_id)
+        port, gns = known if known else (self._BASE_PORT, None)
+        return {
+            "running": True,
+            "health": "healthy",
+            "ports": {"bridge": port, "gns": gns},
+            "container": "riftbreaker-dedicated-%s-%s" % (env or self.cfg.env, instance_id),
+        }
+
+    def set_gns_endpoint(self, instance_id, endpoint):
+        """Testhilfe: den GNS-UDP-Port einer Instanz nachtraeglich aendern
+        (Container-Neustart) bzw. entfernen (endpoint=None)."""
+        known = self._ports.get(instance_id)
+        bridge = known[0] if known else self._BASE_PORT
+        self._ports[instance_id] = (bridge, endpoint)
 
     def stop(self, instance_id=None, env=None):
         self.stops.append((env or self.cfg.env, instance_id))
@@ -173,6 +201,11 @@ class WarmUpTests(PoolHarness):
         self.assertNotEqual(a.instance_id, b.instance_id)
         self.assertEqual(len(self.provisioner.starts), 2)
 
+    def test_warm_up_records_gns_endpoint(self):
+        # Issue #929: der GNS-UDP-Endpoint aus dem start-Ergebnis wird gespeichert.
+        entry = self.pool.warm_up(env="test", instance_id="r1")
+        self.assertEqual(entry.gns_endpoint, "127.0.0.1:41001")
+
     def test_warm_up_pause_failure_rolls_back_loudly(self):
         # Bridge kennt die URL erst nach start; pause_game soll knallen.
         original_factory = self.pool.bridge_factory
@@ -216,6 +249,33 @@ class ClaimTests(PoolHarness):
         with self.assertRaises(ParkedError):
             self.pool.claim(env="test", instance_id="r1")
         self.assertEqual(self.pool.status()[0]["state"], ParkedState.PARKED.value)
+
+    def test_claim_returns_gns_endpoint(self):
+        # Issue #929: die Claim-Antwort traegt den GNS-UDP-Endpoint der Instanz.
+        self.pool.warm_up(env="test", instance_id="r1")
+        result = self.pool.claim(env="test", instance_id="r1")
+        self.assertEqual(result["gns_endpoint"], "127.0.0.1:41001")
+
+    def test_claim_reads_gns_endpoint_fresh(self):
+        # Nach einem Container-Neustart wechselt der Host-UDP-Port -> claim liest
+        # ihn FRISCH ueber provisioner.status (nicht den warm_up-Cache).
+        self.pool.warm_up(env="test", instance_id="r1")
+        self.provisioner.set_gns_endpoint("r1", "127.0.0.1:55555")
+        result = self.pool.claim(env="test", instance_id="r1")
+        self.assertEqual(result["gns_endpoint"], "127.0.0.1:55555")
+
+    def test_claim_without_gns_mapping_is_none(self):
+        self.pool.warm_up(env="test", instance_id="r1")
+        self.provisioner.set_gns_endpoint("r1", None)
+        result = self.pool.claim(env="test", instance_id="r1")
+        self.assertIsNone(result["gns_endpoint"])
+
+    def test_claim_survives_provisioner_without_status(self):
+        # Provisioner ohne ``status`` -> claim faellt auf den warm_up-Wert zurueck.
+        self.provisioner.status = None
+        self.pool.warm_up(env="test", instance_id="r1")
+        result = self.pool.claim(env="test", instance_id="r1")
+        self.assertEqual(result["gns_endpoint"], "127.0.0.1:41001")
 
 
 class RecycleTests(PoolHarness):
@@ -266,6 +326,13 @@ class RecycleTests(PoolHarness):
         recycled = self.pool.recycle(env="test", instance_id="r1", keep_warm=False)
         self.assertEqual(recycled.state, ParkedState.STOPPED)
         self.assertEqual(len(self.provisioner.stops), 1)
+        self.assertIsNone(recycled.gns_endpoint)  # gestoppt -> Endpoint weg
+
+    def test_recycle_keep_warm_keeps_gns_endpoint(self):
+        entry = self.pool.warm_up(env="test", instance_id="r1")
+        self.pool.claim(env="test", instance_id="r1")
+        recycled = self.pool.recycle(env="test", instance_id="r1", keep_warm=True)
+        self.assertEqual(recycled.gns_endpoint, "127.0.0.1:41001")
 
     def test_recycle_before_claim_fails(self):
         self.pool.warm_up(env="test", instance_id="r1")
@@ -365,6 +432,7 @@ class StatusTests(PoolHarness):
         self.assertEqual(row["state"], ParkedState.PARKED.value)
         self.assertAlmostEqual(row["parked_seconds"], 7.5, places=9)
         self.assertIn("bridge_url", row)
+        self.assertEqual(row["gns_endpoint"], "127.0.0.1:41001")
 
     def test_status_empty_pool(self):
         self.assertEqual(self.pool.status(), [])

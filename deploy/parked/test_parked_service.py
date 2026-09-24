@@ -98,8 +98,17 @@ class FakeProvisioner(object):
             "instance": instance_id,
             "container": "riftbreaker-dedicated-%s-%s" % (env or self.cfg.env, instance_id),
             "running": True,
-            "ports": {"bridge": port},
+            "ports": {"bridge": port, "gns": "127.0.0.1:%d" % (port + 1000)},
             "created": True,
+        }
+
+    def status(self, instance_id=None, env=None):
+        # Erste Instanz: bridge=40001, gns=41001 (siehe start).
+        return {
+            "running": True,
+            "health": "healthy",
+            "ports": {"bridge": self._BASE_PORT + 1, "gns": "127.0.0.1:%d" % (self._BASE_PORT + 1001)},
+            "container": "riftbreaker-dedicated-%s-%s" % (env or self.cfg.env, instance_id),
         }
 
     def stop(self, instance_id=None, env=None):
@@ -406,6 +415,8 @@ class HttpTests(HttpHarness):
         self.assertTrue(body["ok"])
         self.assertEqual(body["state"], "claimed")
         self.assertAlmostEqual(body["handover_seconds"], 0.13, places=9)
+        # Issue #929: die Claim-Antwort traegt den GNS-UDP-Endpoint (Relay-Ziel).
+        self.assertEqual(body["gns_endpoint"], "127.0.0.1:41001")
 
     def test_claim_empty_pool_409(self):
         status, body = self.post("/claim", {})
