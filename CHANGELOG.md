@@ -1,3 +1,9 @@
+[Unreleased]
+Date: 24. 09. 2026
+
+  Features:
+    - Provisioner — Dedi-Instanz on-demand starten/stoppen (`deploy/provisioner/`, Issue #908): `start` erzeugt genau eine run-scoped Solo-Instanz (Container/Netz/Volumes/Pfade nach Boot-Test-Muster) und wartet auf Bridge-`/health` `ok:true`; idempotent, fail-loud mit Rollback (Port belegt/Disk voll/Image fehlt/Health-Timeout). `stop` raeumt restfrei und idempotent, `status` liefert Lauf-/Health-/Port-Status. Nur Standardbibliothek.
+
 Version: 1.0.1
 Date: 23. 09. 2026
 
