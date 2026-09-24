@@ -320,9 +320,18 @@ class ParkedPool(object):
         entry.parked_since = self.clock()
         return entry
 
-    def claim(self, env: Optional[str] = None, instance_id: Optional[str] = None) -> Dict[str, Any]:
-        """Geparkte Instanz an ein Spiel uebergeben (``resume_game``) und die
-        Handover-Dauer messen."""
+    def claim(self, env: Optional[str] = None, instance_id: Optional[str] = None,
+              resume: bool = True) -> Dict[str, Any]:
+        """Geparkte Instanz an ein Spiel uebergeben und die Handover-Dauer messen.
+
+        ``resume=True`` (Default, rueckwaerts-kompatibel): ``resume_game`` und
+        Zeitmessung des Handovers (Welt laeuft danach). ``resume=False``: die
+        Instanz wird uebergeben, die Welt bleibt aber PAUSIERT (``#931``
+        Kapsel-Flow: der Spieler sieht ein pausiertes Spiel; erst ``ready``
+        resumed). In beiden Faellen wird die Bridge-Health geprueft und der
+        Eintrag -> ``CLAIMED``; ``handover_seconds`` ist bei ``resume=False``
+        ~0 (kein Resume gemessen).
+        """
         entry = self._require(env, instance_id, ParkedState.PARKED, "claim")
         # Der Host-UDP-Port kann seit dem warm_up gewechselt haben -> frisch lesen.
         self._refresh_gns_endpoint(entry)
@@ -330,10 +339,13 @@ class ParkedPool(object):
         if not bridge.health_ok():
             raise ParkedError("claim: Bridge %s nicht healthy" % entry.bridge_url)
         start = self.clock()
-        try:
-            bridge.resume_game()
-        except Exception as exc:
-            raise ParkedError("claim: resume_game von %s fehlgeschlagen: %s" % (entry.instance_id, exc))
+        if resume:
+            try:
+                bridge.resume_game()
+            except Exception as exc:
+                raise ParkedError(
+                    "claim: resume_game von %s fehlgeschlagen: %s" % (entry.instance_id, exc)
+                )
         handover = self.clock() - start
         entry.state = ParkedState.CLAIMED
         entry.claimed_at = self.clock()
@@ -344,6 +356,7 @@ class ParkedPool(object):
             "bridge_url": entry.bridge_url,
             "gns_endpoint": entry.gns_endpoint,
             "state": entry.state.value,
+            "resumed": bool(resume),
             "handover_seconds": handover,
         }
 

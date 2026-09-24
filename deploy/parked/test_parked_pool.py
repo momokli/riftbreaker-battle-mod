@@ -277,6 +277,35 @@ class ClaimTests(PoolHarness):
         result = self.pool.claim(env="test", instance_id="r1")
         self.assertEqual(result["gns_endpoint"], "127.0.0.1:41001")
 
+    def test_claim_without_resume_keeps_world_paused(self):
+        # #931: resume=False uebergibt die Instanz, laesst die Welt aber PAUSIERT
+        # (kein resume_game); handover_seconds ~ 0 (nichts resumed).
+        entry = self.pool.warm_up(env="test", instance_id="r1")
+        bridge = self.bridge_for(entry)
+        result = self.pool.claim(env="test", instance_id="r1", resume=False)
+        self.assertEqual(result["state"], ParkedState.CLAIMED.value)
+        self.assertFalse(result["resumed"])
+        self.assertAlmostEqual(result["handover_seconds"], 0.0, places=9)
+        self.assertNotIn("resume_game", bridge.calls)
+        self.assertTrue(bridge.paused)  # Welt bleibt pausiert bis `ready`
+        self.assertEqual(self.pool.status()[0]["state"], ParkedState.CLAIMED.value)
+
+    def test_claim_default_still_resumes(self):
+        # Rueckwaerts-kompatibel: ohne resume-Flag wird resumed (Default True).
+        entry = self.pool.warm_up(env="test", instance_id="r1")
+        bridge = self.bridge_for(entry)
+        result = self.pool.claim(env="test", instance_id="r1")
+        self.assertTrue(result["resumed"])
+        self.assertIn("resume_game", bridge.calls)
+        self.assertFalse(bridge.paused)
+
+    def test_claim_without_resume_requires_parked(self):
+        # Kein halber Zustand: resume=False auf einer nicht-PARKED-Instanz -> Fehler.
+        self.pool.warm_up(env="test", instance_id="r1")
+        self.pool.claim(env="test", instance_id="r1")
+        with self.assertRaises(ParkedError):
+            self.pool.claim(env="test", instance_id="r1", resume=False)
+
 
 class RecycleTests(PoolHarness):
     def test_recycle_keep_warm_returns_to_parked(self):

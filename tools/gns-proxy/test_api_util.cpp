@@ -188,14 +188,16 @@ struct FakeClaim {
   std::vector<HttpResp> responses;
   std::size_t idx = 0;
   int calls = 0;
+  std::vector<std::string> paths;
   std::vector<std::string> payloads;
   std::vector<int> timeouts;
   long long *clock = nullptr;   // Fake-Clock, die der Claim vorspult
   long long consumeMs = -1;     // <0 = volles timeoutMs verbrauchen
 
-  HttpResp operator()(const std::string &, const std::string &payload,
+  HttpResp operator()(const std::string &path, const std::string &payload,
                       int timeoutMs) {
     ++calls;
+    paths.push_back(path);
     payloads.push_back(payload);
     timeouts.push_back(timeoutMs);
     if (clock != nullptr) {
@@ -215,10 +217,13 @@ struct FakeClaim {
 static std::vector<int> g_sleeps;
 
 // Fuehrt runSoloClaim mit Fake-Clock aus: Claim und Sleep spulen dieselbe Uhr
-// vor, sodass die Wall-Clock exakt nachvollziehbar ist.
+// vor, sodass die Wall-Clock exakt nachvollziehbar ist. `claimPath` ist der
+// konfigurierbare Claim-Pfad (Default Parked `/claim`; #931 Kapsel
+// `/capsule/open`).
 static SoloOutcome runSolo(const std::string &env, FakeClaim &claim,
                            long long &clock,
-                           const SoloBudget &budget = SoloBudget{}) {
+                           const SoloBudget &budget = SoloBudget{},
+                           const std::string &claimPath = "/claim") {
   g_sleeps.clear();
   claim.clock = &clock;
   const auto nowMs = [&clock]() -> long long { return clock; };
@@ -226,7 +231,7 @@ static SoloOutcome runSolo(const std::string &env, FakeClaim &claim,
     g_sleeps.push_back(ms);
     clock += ms;
   };
-  return runSoloClaim(env, std::ref(claim), budget, nowMs, sleepFn);
+  return runSoloClaim(env, std::ref(claim), budget, nowMs, sleepFn, claimPath);
 }
 
 static void testSoloSuccess() {
@@ -258,6 +263,32 @@ static void testSoloEnvPayload() {
   check(out.pinIdentity, "env-Lauf pinnt");
   checkEq(claim.payloads[0], "{\"env\":\"staging\"}", "env im Body");
   checkEq(out.instance, "", "ohne instance-Feld leer");
+}
+
+// Issue #931: der Claim-Pfad ist konfigurierbar. Default bleibt Parked
+// `/claim`; mit Kapsel-URL ruft der Relay `/capsule/open` (Claim ohne resume).
+static void testSoloClaimPathConfigurable() {
+  FakeClaim parked;
+  parked.consumeMs = 10;
+  parked.responses.push_back(
+      HttpResp{200, "{\"ok\":true,\"instance\":\"parked-1\","
+                    "\"gns_endpoint\":\"127.0.0.1:32768\"}"});
+  long long clock = 0;
+  runSolo("", parked, clock);
+  checkEq(parked.paths[0], "/claim", "Default-Pfad bleibt /claim (#929)");
+
+  FakeClaim capsule;
+  capsule.consumeMs = 10;
+  capsule.responses.push_back(
+      HttpResp{200, "{\"ok\":true,\"phase\":\"claimed\","
+                    "\"instance\":\"parked-2\","
+                    "\"gns_endpoint\":\"127.0.0.1:41001\"}"});
+  long long clock2 = 0;
+  SoloOutcome out = runSolo("", capsule, clock2, SoloBudget{}, "/capsule/open");
+  checkEq(capsule.paths[0], "/capsule/open", "Kapsel-Pfad /capsule/open");
+  check(out.pinIdentity, "Kapsel-200 pinnt");
+  checkEq(out.endpoint, "127.0.0.1:41001", "Kapsel-Ziel");
+  checkEq(out.instance, "parked-2", "Kapsel-instance");
 }
 
 static void testSoloRetryThenSuccess() {
@@ -417,6 +448,7 @@ int main() {
   testUrlDecode();
   testSoloSuccess();
   testSoloEnvPayload();
+  testSoloClaimPathConfigurable();
   testSoloRetryThenSuccess();
   testSoloExhaustion();
   testSoloConnectionErrorExhaustion();

@@ -265,6 +265,17 @@ int g_parkedPort = 8095;
 // (Outbound-Client = inet_pton), nicht `localhost`/DNS-Namen.
 bool g_parkedConfigured = false;
 std::string g_parkedToken;
+
+// --- Capsule-Anbindung fuer POST /solo (Issue #931) --------------------------
+// Ist der Kapsel-Dienst konfiguriert (`--capsule-url` ODER `RBB_CAPSULE_URL`),
+// ruft `POST /solo` `POST /capsule/open` auf (Claim OHNE resume: der Spieler
+// landet in einem PAUSIERTEN Spiel) und pinnt auf das gelieferte
+// `gns_endpoint`. `instance` wird durchgereicht. Ohne Kapsel bleibt der
+// bisherige Parked-Pfad (#929) unveraendert. Token aus `RBB_CAPSULE_TOKEN`.
+std::string g_capsuleHost = "127.0.0.1";
+int g_capsulePort = 8093;
+bool g_capsuleConfigured = false;
+std::string g_capsuleToken;
 // Operator-Pin pro Identitaet — ueberlebt Reconnects (der Client schliesst nach
 // ~20 s ohne Antwort selbst und verbindet neu). NUR vom Hauptloop beruehrt.
 std::map<std::string, rbroute::Endpoint> g_pins;
@@ -1332,11 +1343,19 @@ void handleSolo(SOCKET s, const std::string &requestBody) {
   }
   rbapi::jsonStringField(requestBody, "env", env);
 
-  if (!g_parkedConfigured) {
+  if (!g_capsuleConfigured && !g_parkedConfigured) {
     httpRespondJson(s, 503, "Service Unavailable",
                     "{\"ok\":false,\"reason\":\"parked_unconfigured\",\"retry\":false}");
     return;
   }
+
+  // Ziel waehlen: konfigurierte Kapsel (#931) hat Vorrang und claimt ohne
+  // resume (`/capsule/open`); sonst der bisherige Parked-Pfad (#929, `/claim`).
+  const bool useCapsule = g_capsuleConfigured;
+  const std::string claimHost = useCapsule ? g_capsuleHost : g_parkedHost;
+  const int claimPort = useCapsule ? g_capsulePort : g_parkedPort;
+  const std::string claimToken = useCapsule ? g_capsuleToken : g_parkedToken;
+  const std::string claimPath = useCapsule ? "/capsule/open" : "/claim";
 
   // Claim + Retry/Backoff + Fehler-Mapping liegen als reine, host-testbare
   // Funktion in api_util.h (runSoloClaim). Der Callback ist der Outbound-POST
@@ -1351,8 +1370,9 @@ void handleSolo(SOCKET s, const std::string &requestBody) {
   };
   const rbapi::SoloOutcome outcome = rbapi::runSoloClaim(
       env,
-      [](const std::string &path, const std::string &payload,
-         int timeoutMs) -> rbapi::HttpResp {
+      [claimHost, claimPort, claimToken](const std::string &path,
+                                         const std::string &payload,
+                                         int timeoutMs) -> rbapi::HttpResp {
         // Ein Versuch <= timeoutMs: connect und recv teilen sich das Budget.
         int connectMs = timeoutMs / 2;
         if (connectMs < 1) {
@@ -1362,13 +1382,14 @@ void handleSolo(SOCKET s, const std::string &requestBody) {
         if (recvMs < 1) {
           recvMs = 1;
         }
-        const OutboundResult r = outboundHttpPost(g_parkedHost, g_parkedPort,
-                                                  path, payload, g_parkedToken,
+        const OutboundResult r = outboundHttpPost(claimHost, claimPort,
+                                                  path, payload, claimToken,
                                                   connectMs, recvMs);
         return rbapi::HttpResp{r.status, r.body};
       },
       rbapi::SoloBudget{}, nowMs,
-      [](int ms) { Sleep(static_cast<DWORD>(ms)); });
+      [](int ms) { Sleep(static_cast<DWORD>(ms)); },
+      claimPath);
 
   if (outcome.pinIdentity) {
     {
@@ -1774,6 +1795,25 @@ int main(int argc, char **argv) {
       g_parkedHost = host;
       g_parkedPort = port;
       g_parkedConfigured = true;
+    } else if (strcmp(argv[i], "--capsule-url") == 0 && i + 1 < argc) {
+      // Kapsel-Flow-Dienst fuer POST /solo (Issue #931). Token NUR per Env
+      // (RBB_CAPSULE_TOKEN), damit er nicht in der Prozessliste steht.
+      // Nur IPv4-Literal (Outbound-Client = inet_pton), kein Hostname/DNS.
+      const char *spec = argv[++i];
+      std::string host;
+      int port = 0;
+      rbroute::Endpoint parsed;
+      if (!rbapi::parseUrlHostPort(spec, host, port) ||
+          !rbroute::parseEndpoint(host + ":" + std::to_string(port), parsed)) {
+        fprintf(stderr,
+                "--capsule-url braucht http://<IPv4>:port (kein Hostname), "
+                "bekam '%s'\n",
+                spec);
+        return 2;
+      }
+      g_capsuleHost = host;
+      g_capsulePort = port;
+      g_capsuleConfigured = true;
     }
   }
 
@@ -1803,11 +1843,41 @@ int main(int argc, char **argv) {
   if (parkedToken != nullptr) {
     g_parkedToken = parkedToken;
   }
+
+  // `RBB_CAPSULE_URL` schaltet den Kapsel-Pfad scharf (argv hat Vorrang);
+  // `POST /solo` ruft dann `POST /capsule/open` (Claim OHNE resume, #931).
+  if (!g_capsuleConfigured) {
+    const char *capsuleUrl = getenv("RBB_CAPSULE_URL");
+    if (capsuleUrl != nullptr && *capsuleUrl != '\0') {
+      std::string host;
+      int port = 0;
+      rbroute::Endpoint parsed;
+      if (rbapi::parseUrlHostPort(capsuleUrl, host, port) &&
+          rbroute::parseEndpoint(host + ":" + std::to_string(port), parsed)) {
+        g_capsuleHost = host;
+        g_capsulePort = port;
+        g_capsuleConfigured = true;
+      } else {
+        fprintf(stderr,
+                "RBB_CAPSULE_URL ungueltig (braucht http://<IPv4>:port): '%s'\n",
+                capsuleUrl);
+      }
+    }
+  }
+  const char *capsuleToken = getenv("RBB_CAPSULE_TOKEN");
+  if (capsuleToken != nullptr) {
+    g_capsuleToken = capsuleToken;
+  }
+
+  if (g_capsuleConfigured) {
+    logLine("capsule fuer /solo: %s:%d (token=%s)", g_capsuleHost.c_str(),
+            g_capsulePort, g_capsuleToken.empty() ? "kein" : "gesetzt");
+  }
   if (g_parkedConfigured) {
     logLine("parked fuer /solo: %s:%d (token=%s)", g_parkedHost.c_str(),
             g_parkedPort, g_parkedToken.empty() ? "kein" : "gesetzt");
-  } else {
-    logLine("parked fuer /solo: NICHT konfiguriert -> 503 parked_unconfigured");
+  } else if (!g_capsuleConfigured) {
+    logLine("parked/capsule fuer /solo: NICHT konfiguriert -> 503 parked_unconfigured");
   }
 
   logLine("gns_probe (Spike #831, E1/E2) — port=%u", nPort);

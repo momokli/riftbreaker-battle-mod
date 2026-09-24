@@ -1,0 +1,14 @@
+---
+- name: restart capsule-flow
+  systemd:
+    name: "{{ capsule_flow_unit }}"
+    state: restarted
+    daemon_reload: true
+  register: capsule_flow_handler
+  # Wie im Task: beim allerersten Deploy kennt systemd den Service noch nicht
+  # (die Unit wird im --check nicht geschrieben). Nur dieser eine Fall im
+  # Check-Modus wird toleriert.
+  failed_when: >-
+    capsule_flow_handler is failed and not
+    (ansible_check_mode | bool and
+     'Could not find the requested service' in (capsule_flow_handler.msg | default('')))

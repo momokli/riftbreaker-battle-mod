@@ -280,15 +280,20 @@ class ParkedController(object):
 
         return max(rows, key=key)["instance"]
 
-    def claim(self, env: Optional[str] = None, instance_id: Optional[str] = None) -> Dict[str, Any]:
-        """Instanz uebergeben. Ohne ``instance_id`` die aelteste ``PARKED`` (FIFO)."""
+    def claim(self, env: Optional[str] = None, instance_id: Optional[str] = None,
+              resume: bool = True) -> Dict[str, Any]:
+        """Instanz uebergeben. Ohne ``instance_id`` die aelteste ``PARKED`` (FIFO).
+
+        ``resume=False`` reicht durch an :meth:`ParkedPool.claim`: die Welt
+        bleibt nach der Uebergabe PAUSIERT (#931, Kapsel-Claim).
+        """
         with self._lock:
             if instance_id is None:
                 instance_id = self._oldest_parked()
                 if instance_id is None:
                     raise ServiceError(409, "none_parked", "keine PARKED-Instanz im Pool")
             try:
-                result = self.pool.claim(env=env, instance_id=instance_id)
+                result = self.pool.claim(env=env, instance_id=instance_id, resume=bool(resume))
             except ParkedError as exc:
                 detail = str(exc)
                 if "healthy" in detail:
@@ -484,8 +489,12 @@ class Handler(BaseHTTPRequestHandler):
                 )
             elif method == "POST" and path == "/claim":
                 payload = self._read_json()
+                resume = payload.get("resume", True)
+                if not isinstance(resume, bool):
+                    raise ServiceError(400, "bad_request", "resume muss ein JSON-Boolean sein")
                 result = self.controller.claim(
-                    env=payload.get("env"), instance_id=payload.get("instance_id")
+                    env=payload.get("env"), instance_id=payload.get("instance_id"),
+                    resume=resume,
                 )
                 self._send_json(200, dict({"ok": True}, **result))
             elif method == "POST" and path == "/recycle":

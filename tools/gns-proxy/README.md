@@ -132,14 +132,22 @@ gns_probe.exe --port 6321 --map-file /etc/rbgns/routes --hold \
 | `--api-host` | Bind-Adresse der UI/API (Default `127.0.0.1`)        |
 | `--target`   | `NAME=ip:port`, wiederholbar — die Buttons der UI    |
 | `--parked-url` | Ziel des Parked-Pool-Dienstes fuer `POST /solo` (Default: **nicht gesetzt**). **Nur IPv4-Literal** (`http://<IPv4>:port`) — der Outbound-Client nutzt `inet_pton`, also kein Hostname/DNS (`localhost` funktioniert nicht). |
+| `--capsule-url` | Ziel des **Kapsel-Flow-Dienstes** fuer `POST /solo` (Issue #931, Default: **nicht gesetzt**). Ist er gesetzt (argv oder `RBB_CAPSULE_URL`), ruft `/solo` `POST /capsule/open` (Claim **ohne** resume → pausiertes Spiel) statt `POST /claim`; ebenfalls nur IPv4-Literal. |
 
 Der Parked-Pfad ist nur aktiv, wenn `--parked-url` **oder** die Umgebungsvariable
 `RBB_PARKED_URL` gesetzt ist (argv hat Vorrang); ohne beides antwortet
 `POST /solo` mit `503 parked_unconfigured`. `RBB_PARKED_URL` akzeptiert
 ebenso nur ein IPv4-Literal.
 
-`RBB_PARKED_TOKEN` (Env, **nicht** argv) ist der Bearer-Token fuer den
-Parked-Dienst; leer = kein Auth-Header.
+**Kapsel-Vorrang (Issue #931):** Ist `--capsule-url` **oder** `RBB_CAPSULE_URL`
+gesetzt, hat der Kapsel-Dienst Vorrang: `POST /solo` ruft `POST /capsule/open`
+an ihm (Claim ohne resume, der Spieler landet in einem **pausierten** Spiel) und
+pinnt auf das gelieferte `gns_endpoint`. Ohne Kapsel bleibt der bisherige
+Parked-Pfad (#929) unveraendert. Nur wenn **weder** Kapsel **noch** Parked
+konfiguriert ist, antwortet `/solo` mit `503 parked_unconfigured`.
+
+`RBB_PARKED_TOKEN` bzw. `RBB_CAPSULE_TOKEN` (Env, **nicht** argv) sind die
+Bearer-Token fuer den jeweiligen Dienst; leer = kein Auth-Header.
 
 Suffix-/Identitaets-Regeln aus der Routen-Datei haben **Vorrang**: wer
 `*-dev`/`*-staging` heisst oder eine exakte Identitaets-Regel trifft, wird
@@ -185,11 +193,14 @@ curl -s -X POST 127.0.0.1:9200/solo -d '{"identitaet":"str:<id>"}'
 # -> {"ok":true,"identitaet":"str:<id>","target":"127.0.0.1:32768","instance":"parked-1"}
 ```
 
-**Ablauf `/solo`:** Der Relay ruft `POST /claim` am Parked-Dienst (Bearer aus
-`RBB_PARKED_TOKEN`) und liest daraus `gns_endpoint` (der **GNS-UDP**-Host:Port
-der Instanz — nicht die HTTP-Bridge). Das Ziel wird per Command-Queue in die
-Hauptschleife gegeben und als **Pin fuer die Identitaet** gesetzt (gleiche
-Semantik wie `POST /route`, aber mit aufgeloestem Endpoint).
+**Ablauf `/solo`:** Der Relay ruft `POST /capsule/open` am Kapsel-Dienst (#931,
+Bearer aus `RBB_CAPSULE_TOKEN`) **oder** — wenn keine Kapsel konfiguriert ist —
+`POST /claim` am Parked-Dienst (Bearer aus `RBB_PARKED_TOKEN`) und liest daraus
+`gns_endpoint` (der **GNS-UDP**-Host:Port der Instanz — nicht die HTTP-Bridge).
+Das Ziel wird per Command-Queue in die Hauptschleife gegeben und als **Pin fuer
+die Identitaet** gesetzt (gleiche Semantik wie `POST /route`, aber mit
+aufgeloestem Endpoint). Der Claim-Pfad ist dabei konfigurierbar
+(in `runSoloClaim(..., claimPath)` parametrisiert).
 
 **Fehlercodes `/solo`** (Parked-Semantik wird abgebildet):
 
@@ -200,7 +211,7 @@ Semantik wie `POST /route`, aber mit aufgeloestem Endpoint).
 | Parked `409 none_parked` / `503 bridge_unhealthy` / Connect-Fehler (transient) | Retry mit hartem Latenz-Budget: Deadline-getrieben, Gesamt-Wall-Clock ≤ 4,5 s (`SoloBudget{totalMs=4500, attemptMs=1500, minAttemptMs=250}`), Backoff 250 ms→1 s gegen das Rest-Budget geprueft; nach Erschoepfung `503 {ok:false,reason:"backend_starting",retry:true}` |
 | Parked `409 not_claimable` | `409` |
 | alles andere (401/500/…, oder 200 ohne `gns_endpoint`) | `502` |
-| Parked nicht konfiguriert (weder `--parked-url` noch `RBB_PARKED_URL`) | `503 {reason:"parked_unconfigured",retry:false}` |
+| Parked nicht konfiguriert (weder `--parked-url` noch `RBB_PARKED_URL`, und keine Kapsel) | `503 {reason:"parked_unconfigured",retry:false}` |
 
 Der Retry laeuft **ausschliesslich im HTTP-Request-Thread** — der GNS-Hauptloop
 wird nie blockiert. Die Registry (`g_targets`) wird ebenfalls nur in der

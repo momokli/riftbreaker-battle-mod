@@ -15,7 +15,7 @@ Duplikation der Docker-Logik.
 |---|---|---|
 | `WARMING` | Container startet, noch nicht geparkt | (Boot) |
 | `PARKED` | läuft, `pause_game` aktiv | **nein** |
-| `CLAIMED` | an ein Spiel übergeben (`resume_game`) | ja |
+| `CLAIMED` | an ein Spiel übergeben (Welt läuft nur bei `resume=True`) | ja (`resume=True`) / nein (`resume=False`) |
 | `RECYCLING` | nach Spielende: `round_reset` (bzw. `end_game`, s. u.) laufen | nein |
 | `STOPPED` | Container gestoppt bzw. entfernt | — |
 
@@ -32,6 +32,12 @@ CLAIMED --round_reset (+end_game bei result)--> RECYCLING --pause_game--> PARKED
 {*, PARKED} --stop--> STOPPED
 ```
 
+**`claim(resume=False)` (#931):** Die Instanz wird übergeben (`CLAIMED`), die
+Welt bleibt aber **pausiert** (kein `resume_game`) — der Kapsel-Flow zeigt dem
+Spieler zuerst ein pausiertes Spiel; erst `ready` resumed. `CLAIMED` heißt damit
+„an ein Spiel übergeben"; ob die Welt läuft, sagt `claim(resume)` bzw. das
+`resumed`-Feld der Antwort. Default ist `resume=True` (bisheriges Verhalten).
+
 ## API
 
 `ParkedPool(provisioner, bridge_factory=None, clock=time.monotonic, sleep=time.sleep)`
@@ -39,7 +45,7 @@ CLAIMED --round_reset (+end_game bei result)--> RECYCLING --pause_game--> PARKED
 | Methode | Zweck | Rückgabe |
 |---|---|---|
 | `warm_up(env=None, instance_id=None)` | Provisioner `start()` → `pause_game()` → `PARKED`. **Idempotent**: schon `PARKED` → kein zweiter Start. | `ParkedEntry` |
-| `claim(env=None, instance_id=None)` | Health prüfen, `resume_game()`, Handover messen → `CLAIMED`. Endpoint (`gns_endpoint`) wird vorher **frisch** über `provisioner.status()` gelesen (Port wechselt bei Container-Neustart). | `{instance, env, bridge_url, gns_endpoint, state, handover_seconds}` |
+| `claim(env=None, instance_id=None, resume=True)` | Health prüfen → `CLAIMED`. `resume=True` (Default): `resume_game()` + Handover messen. `resume=False` (#931): **kein** `resume_game`, Welt bleibt pausiert, `handover_seconds` ≈ 0. Endpoint (`gns_endpoint`) wird vorher **frisch** über `provisioner.status()` gelesen (Port wechselt bei Container-Neustart). | `{instance, env, bridge_url, gns_endpoint, state, resumed, handover_seconds}` |
 | `recycle(env=None, instance_id=None, keep_warm=True, result=None)` | `round_reset()` + `pause_game()` → wieder `PARKED`. `end_game(result)` **nur** wenn `result` (`win`/`lose`) mitgegeben ist: die Bridge verlangt ein Pflicht-`result`, `end_game(None)` ist immer `400 invalid_request`. Ohne Ergebnis ist `round_reset` + `pause_game` der gültige, weltunabhängige Pfad. `keep_warm=False` → `stop()` → `STOPPED`. | `ParkedEntry` |
 | `reap(max_park_seconds)` | Auslaufschutz: zu lange geparkte Instanzen sauber stoppen. | `list[ParkedEntry]` |
 | `status()` | Snapshot aller Einträge. | `list[dict]` |
@@ -80,7 +86,7 @@ Antwort immer JSON; Fehlerformat `{"ok":false,"reason":…,"detail":…}`.
 |---|---|---|---|---|
 | `GET` | `/health` | — | `200 {"ok":true,"env":…}` | Liveness des Dienstes (nicht der Instanzen). |
 | `GET` | `/status` | — | `200 {counters, entries}` | Zaehler + `pool.status()`-Snapshot. |
-| `POST` | `/claim` | `{"env"?,"instance_id"?}` | `200` / `409` / `503` | `pool.claim()`; ohne `instance_id` aelteste `PARKED` (FIFO). Keine `PARKED` ⇒ `409 none_parked`; Bridge unhealthy ⇒ `503 bridge_unhealthy`. Antwort enthält `gns_endpoint` (#929). |
+| `POST` | `/claim` | `{"env"?,"instance_id"?,"resume"?}` | `200` / `400` / `409` / `503` | `pool.claim()`; ohne `instance_id` aelteste `PARKED` (FIFO). `resume` (#931) Default `true`; `resume=false` uebergibt die Instanz bei **pausierter** Welt, `resume` kein JSON-Boolean ⇒ `400`. Keine `PARKED` ⇒ `409 none_parked`; Bridge unhealthy ⇒ `503 bridge_unhealthy`. Antwort enthält `gns_endpoint` (#929) und `resumed`. |
 | `POST` | `/recycle` | `{"instance_id","keep_warm"?=true,"result"?}` | `200` / `400` / `409` | nach Rundenende wieder `PARKED`; `result` (`win`/`lose`) wird durchgereicht und löst `end_game(result)` aus (ohne `result` kein `end_game`); `keep_warm=false` ⇒ `stop()`; Nicht-`CLAIMED` ⇒ `409`; fehlendes `instance_id` oder `keep_warm` kein JSON-Boolean ⇒ `400`. |
 | `POST` | `/reap` | `{"max_park_seconds"?}` | `200 {stopped:[…]}` | manueller Auslaufschutz-Lauf. |
 
