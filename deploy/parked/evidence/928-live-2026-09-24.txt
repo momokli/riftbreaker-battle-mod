@@ -5,11 +5,15 @@ Image: rb-dedicated:fbe485640bfb (real, laeuft auch als dev-/prod-/staging-Stack
 Provisioner: deploy/provisioner (#908, Live-Pfad #918 gemergt fbe4856)
 Instanz: instance_id=live928-1 (Container riftbreaker-dedicated-dev-live928-1)
 
-**Status: REAL (warm+claim) / REAL mit Fix (recycle->PARKED ueber 2 Zyklen, Nachtrag C).**
+**Status: REAL (warm+claim) / REAL (recycle->PARKED ueber 2 Zyklen, Nachtrag C mit Shim, Nachtrag E OHNE Shim).**
 Kein Fake-Nachweis: die REAL belegten Schritte stehen unten mit Rohdaten. Der
 urspruenglich als PENDING gefuehrte recycle-Schritt ist mit dem Produktfix
-(`end_game` nur bei `result`) live belegt (Nachtrag C, 2 Zyklen, leakfrei);
-der Harness-Shim dort entspricht exakt dem Produktfix.
+(`end_game` nur bei `result`) live belegt. Nachtrag C belegt den Fix noch MIT
+Harness-Shim; **Nachtrag E belegt denselben 2-Zyklen-Lauf OHNE jeden Shim am
+echten Produktcode** (`ParkedPool.recycle` ungepatcht, `end_game(None)` wird nun
+im Produkt uebersprungen statt gepatcht): warm->claim->recycle->PARKED x2,
+rounds=2, kein HTTP-400, leakfrei. Der recycle-Teil ist damit **REAL, nicht mehr
+PENDING**.
 
 ## Vorgehen
 
@@ -221,3 +225,57 @@ als separates Issue dokumentiert — NICHT als Produktfehler.
 
 Hinweis: der Dienst-/HTTP-Layer ist korrekt; kein Fix an
 `parked_service.py`/Controller noetig.
+
+===============================================================================
+NACHTRAG E (Tester, Runde 2, 2026-09-24 ~16:30 GMT+2) — recycle OHNE Shim, REAL
+===============================================================================
+
+Re-Test nach Produktfix `cbede49` (`recycle` ruft `end_game` nur bei `result`).
+Treiber `deploy/parked/evidence/live928_cycle_real.py`: **kein** Patch am
+Produktcode (`BridgeClient.end_game` unangetastet; der echte
+`ParkedPool.recycle()` laeuft). Echter Provisioner + echte Bridge, Env dev,
+Image `rb-dedicated:fbe485640bfb`, `instance_id=live928real`.
+
+Hermetisch (PFLICHT) davor:
+
+    $ cd deploy/parked && python3 -m unittest -v \
+        test_parked_pool.py test_measure_boot.py test_parked_service.py
+    Ran 66 tests in 7.548s
+    OK
+    $ python3 evidence/hermetic928.py
+    ### RESULT: PASS   (alle Checks OK; claims=2 recycles=2 reaps=1)
+
+Live-Rohdaten (Auszug, vollstaendig in /tmp/live928real.out):
+
+    ### SHIM=none (echter Produktcode, ParkedPool.recycle ungepatcht)
+    ### image=rb-dedicated:fbe485640bfb env=dev instance=live928real
+    ### docker ps before lines=77, volumes before lines=442
+    ### warm dt=14.60s state=parked bridge=http://127.0.0.1:46192
+    ### cycle1 claim state=claimed handover=3.1122s
+    ### cycle1 recycle state=parked rounds=1
+    ### cycle2 claim state=claimed handover=0.2309s
+    ### cycle2 recycle state=parked rounds=2
+    ### pool status=[{"instance": "live928real", "env": "dev",
+        "container": "riftbreaker-dedicated-dev-live928real",
+        "bridge_url": "http://127.0.0.1:46192", "state": "parked",
+        "rounds": 2, "parked_seconds": 2.35e-05}]
+    ### ps delta=["riftbreaker-dedicated-dev-live928real\trb-dedicated:fbe485640bfb"]
+    ### volume delta=["rb-dev-saves-live928real", "rb-dev-wine-live928real"]
+    ### stop={"instance": "live928real",
+        "removed": {"container": true, "network": true,
+                    "volumes": true, "dirs": true}}
+    ### leftover container=False volumes=[]
+
+Ergebnis:
+- **2 Zyklen warm->claim->recycle->PARKED OHNE Shim erreicht** (rounds=2, wieder
+  PARKED, handover cycle2 0.2309 s). **Kein HTTP-400** — der Produktcode ruft
+  `end_game` ohne `result` gar nicht mehr auf (Fix `cbede49` wirkt live).
+- Deltas sind AUSSCHLIESSLICH die verwalteten Pool-Ressourcen (1 Container +
+  2 Volumes); `stop` raeumt Container+Netz+2 Volumes+Pfade restfrei ->
+  **kein Leak** (leftover container=False, volumes=[]).
+
+=> recycle->PARKED ueber 2 Zyklen ist mit dem committeten Produktstand **REAL
+   (ohne Shim)** belegt; der PENDING-Status ist damit abschliessend aufgehoben.
+Offener Punkt (unveraendert, Umgebung): `end_game` MIT `result` haengt auf
+planet ohne reale Welt (vgl. #919) — separates Umgebungs-Issue, kein
+Produktfehler.

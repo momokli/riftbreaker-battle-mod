@@ -124,10 +124,12 @@ Fehlendes `PROVISIONER_IMAGE` ⇒ ebenfalls laut (`build_provisioner`).
 **REAL** belegt — Dienst-Treiber gegen den echten Provisioner/Image: warm
 (cold boot + `pause_game`) ⇒ `PARKED`, `claim` (health + `resume_game`,
 `handover_seconds` gemessen), Bridge healthy, restfreies `stop` (kein Leak).
-**REAL belegt (mit Fix)** — `recycle` → `PARKED` ueber 2 Zyklen (Nachtrag
-Abschnitt C in der Evidenz): `recycle` ruft `end_game` nur bei mitgegebenem
-`result`; ohne Ergebnis ist `round_reset` + `pause_game` der gueltige,
-weltunabhaengige Pfad (live: rounds=2, wieder `PARKED`, leakfrei). Der zuvor
+**REAL belegt (mit Fix, ohne Shim)** — `recycle` → `PARKED` ueber 2 Zyklen
+(Nachtrag C mit Fix-Shim, **Nachtrag E OHNE Shim** am echten Produktcode in der
+Evidenz): `recycle` ruft `end_game` nur bei mitgegebenem `result`; ohne Ergebnis
+ist `round_reset` + `pause_game` der gueltige, weltunabhaengige Pfad (live:
+`live928_cycle_real.py` → warm→claim→recycle→PARKED x2, rounds=2, handover
+cycle2 0.23 s, kein HTTP-400, leakfrei). Der zuvor
 beobachtete `400 invalid_request` (`end_game(None)`) war eine
 Vertragsverletzung im Client (`parked_pool.py`), kein Dienst-Bug. Der
 verbleibende Aspekt (`end_game` MIT `result` haengt ohne Welt) ist ein
