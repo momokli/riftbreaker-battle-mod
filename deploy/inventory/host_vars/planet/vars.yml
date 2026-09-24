@@ -71,6 +71,10 @@ gns_relay_port: 6321
 gns_relay_deploy_dir: /opt/rbmods/compose/gns-relay
 gns_relay_bin_dir: /opt/rbmods/gns-relay/bin
 gns_relay_wine_volume: gns-relay-wine
+# POST /solo (Issue #929) spricht den env-Parked-Dienst an. Das Rollen-Default
+# zeigt auf den dev-Port 8095; staging/prod setzen dort den isolierten
+# parked_pool_port (ENV-ISOLATION-GATE) und muessen gns_relay_parked_url
+# entsprechend mitsetzen.
 
 # --- Tournament-Server (systemd, Rust/axum aus tournament/) ------------------
 tournament_install_dir: /opt/rbmods/tournament-server
