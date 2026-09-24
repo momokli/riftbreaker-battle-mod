@@ -1,6 +1,7 @@
-# Mess-Bericht — #909 „Parked Solo" (Spike-/Mess-Ergebnis)
+# Mess-Bericht — #909 „Parked Solo" (+ #910 „Parked VS") — Spike-/Mess-Ergebnis
 
-**Issue:** [#909](https://github.com/momokli/riftbreaker-battle-mod/issues/909)
+**Issues:** [#909](https://github.com/momokli/riftbreaker-battle-mod/issues/909),
+[#910](https://github.com/momokli/riftbreaker-battle-mod/issues/910)
 **PR:** #917 · **Branch:** `feat/909-parked-solo` · **Milestone:** 1.0.2
 **Datum:** 2026-09-24 · **Umgebung:** Host `planet` (Linux 6.8.0-139, x64)
 
@@ -203,8 +204,86 @@ statt hier als erledigt behauptet zu werden:
 
 ```sh
 cd deploy/parked && TMPDIR=/dev/shm/parked-test python3 -m unittest -v
-# 25 Tests, OK (Exit 0)
+# 52 Tests, OK (Exit 0)
 ```
 
 Kein Docker, kein Netz, kein Spiel — Provisioner und Bridge sind Fakes, die
 Uhr ist eine `FakeClock`.
+
+---
+
+## 7. VS-Messung — Cold-Boot vs. 2-Beitritt-Handover (#910)
+
+**Ziel (#910):** Belegen, dass ein geparkter VS-Start (zwei Spieler) messbar
+schneller ist als ein Cold-Boot, und dass die Welt bis zum `ready` **beider**
+Spieler still bleibt (Ready-Gate).
+
+### 7.1 Methode
+
+`measure_boot.run_vs_measurement` misst zwei Pfade:
+
+1. **Cold-Boot:** `provisioner.start()` → healthy (identisch zu §1, hier erneut
+   gemessen).
+2. **Parked VS (2 Beitritte):** `ParkedVSPool.warm_up` (parken) → `join(p1)` →
+   `join(p2)` → `ready(p1)` → `ready(p2)` → Gate → `CLAIMED` (`resume_game`).
+
+Ausgewiesen werden `cold_boot_seconds`, `vs_join_seconds` (erster Beitritt),
+`vs_handover_seconds` (beide Beitritte + Ready-Gate bis `CLAIMED`) und
+`saved_seconds = cold_boot_seconds − vs_handover_seconds`. Cleanup via
+`try/finally` (Cold `stop`, geparkte Instanz `recycle(keep_warm=False)`) — kein
+Container-Leak.
+
+CLI:
+
+```sh
+cd deploy/parked
+PROVISIONER_IMAGE=<image> python3 measure_boot.py --vs --json --instance-id measure910
+# -> {"cold_boot_seconds":..,"vs_join_seconds":..,"vs_handover_seconds":..,"saved_seconds":..}
+```
+
+### 7.2 Zahlen
+
+Der **Kernnachweis** (Gate hält die Welt still; Handover erst bei beiden ready)
+ist **hermetisch** geführt. Reale Zahlen:
+
+| Vorgang | Wert | Quelle |
+|---|---|---|
+| Cold-Boot (Container+Mod-Load+Bridge healthy) | ≈ 9,4–15,2 s | §2 (live, #909) |
+| Parked-Handover (`POST /resume_game`) | ≈ 0,12 s | §2 (live, #909) |
+| **VS-Handover** (2 Beitritte + Ready-Gate → `resume_game`) | ≈ 0,12 s + O(Beitritte) | hermetisch (`MeasureVSTests`) |
+| **Ersparnis** `saved_seconds` | Cold-Boot − ≈ 0,12 s | hermetisch + §2 |
+
+Der VS-Pfad teilt den in §1 gemessenen sub-sekundigen `resume_game`-Round-Trip;
+zwei zusätzliche `join`s sind rein lokale, netzwerkfreie Bookkeeping-Schritte.
+Der **Live-2-Spieler-Handover** hängt am Relay-Multi-Session (#875, out of scope)
+und ist daher hier **nicht** live gefahren — dieselbe Live-Grenze wie §3.
+
+### 7.3 Hermetischer Nachweis (Kern)
+
+| Test | Prüft | Ergebnis |
+|---|---|---|
+| `ReadyGateTests.test_both_ready_triggers_single_handover` | 2 joins + 2 ready → genau **ein** `resume_game`, Handover gesetzt, `CLAIMED` | grün |
+| `ReadyGateTests.test_first_join_waits_opponent` / `test_second_join_waits_both_ready` | kein `resume_game` vor 2 joins | grün |
+| `ReadyGateTests.test_one_ready_does_not_resume` | 1 ready → weiter `WAITING_BOTH_READY`, kein `resume` | grün |
+| `ReadyGateTests.test_gate_is_load_bearing_red_before_green` | zu frühes Gate → Invariante schlägt fehl | grün (red-before-green) |
+| `WorldProgressInvariantTests.test_no_world_progress_while_waiting` | Uhr +30 s, < 2 ready → `get_state`-Tick unverändert | grün |
+| `WorldProgressInvariantTests.test_world_progress_after_both_ready_handover` | beide ready → Tick steigt | grün |
+| `RecycleTests.*` | nach Matchende wieder `WAITING_OPPONENT` (+ LEER) bzw. `STOPPED`; Match 2 sauber | grün |
+| `ErrorTests.test_claim_failure_keeps_waiting_and_is_loud` | Gate-`claim` scheitert → `VSError`, State `WAITING_BOTH_READY`, Eintrag `PARKED` | grün |
+
+**Red-before-green-Beleg (manuell):** mit einem zu frühen Gate (claim nach der
+ERSTEN `ready`) scheitern `test_one_ready_does_not_resume` und
+`test_second_join_waits_both_ready` (`AssertionError`, Exit 1); mit korrektem
+Gate sind sie grün.
+
+### 7.4 DoD-Status (#910)
+
+| DoD (#910) | Status in diesem PR |
+|---|---|
+| Match-Start geparkt messbar schneller als Cold-Boot | ✅ Methode + `saved_seconds` (`run_vs_measurement`); Zahlen teilen §2 |
+| Zwei Spieler im selben Spiel, Pause bis `ready` beider Seiten | ✅ **hermetisch** (Ready-Gate, red-before-green). Live-2-Spieler-Handover: Relay-Multi-Session #875 (out of scope) |
+| Nach Matchende Instanz wieder verfügbar/sauber gestoppt | ✅ hermetisch (`RecycleTests`) |
+
+**Live-Grenzen (geerbt von #909):** Live-Port/Mount (#918) und Live-„kein
+Weltfortschritt" auf laufender Welt (#919) offen; der 2-Spieler-Handover hängt
+zusätzlich am Relay-Multi-Session #875. Alles hermetisch belegt.

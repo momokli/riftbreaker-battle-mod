@@ -366,6 +366,28 @@ static int safe_read_u32(const void *addr, uint32_t *out)
     return 1;
 }
 
+/* ReadProcessMemory-Shim (#436): liest nur INNERHALB der synthetischen
+ * Region direkt; ausserhalb -> FALSE. Spiegelt das reale Verhalten
+ * "unlesbar -> FALSE statt Page-Fault" und haelt resolve_dom_node host-testbar. */
+static BOOL ht_ReadProcessMemory(HANDLE proc, const void *addr, LPVOID out,
+                                 SIZE_T n, SIZE_T *nread)
+{
+    uintptr_t a = (uintptr_t)addr;
+    uintptr_t b = (uintptr_t)g_ht_region_base;
+    uintptr_t e = b + (uintptr_t)g_ht_region_size;
+    (void)proc;
+    if (!g_ht_region_base || a < b || a + n > e) {
+        if (nread)
+            *nread = 0;
+        return 0;
+    }
+    memcpy(out, addr, n);
+    if (nread)
+        *nread = n;
+    return 1;
+}
+#define ReadProcessMemory ht_ReadProcessMemory
+
 #else /* !RBBRIDGE_HOSTTEST: echter Windows-Build */
 
 #ifndef _WIN32_WINNT
@@ -2830,6 +2852,12 @@ static const unsigned char *resolve_set_suspended_fn(const unsigned char *base,
 
 /* Findet den DOM-Node (dom_mananger): vftable-Scan + TypeHash-Filter.
  * Reine Leseoperation, kein Aufruf — graceful NULL. */
+/* Blockgroesse (Byte) fuer das crash-sichere ReadProcessMemory-Kopieren
+ * der Region in einen lokalen Stack-Puffer (klein gehalten, damit der
+ * Pipe-Thread-Stack nicht gesprengt wird). Von resolve_dom_node UND
+ * scan_qword_instance genutzt. */
+#define RBBRIDGE_SCAN_CHUNK (64u * 1024u)
+
 static void *resolve_dom_node(const unsigned char *base)
 {
     uint32_t want;
@@ -2844,8 +2872,6 @@ static void *resolve_dom_node(const unsigned char *base)
     for (;;) {
         MEMORY_BASIC_INFORMATION mi;
         uintptr_t next;
-        const uint64_t *q;
-        size_t nq, i;
         if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
             break;
         next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
@@ -2854,26 +2880,48 @@ static void *resolve_dom_node(const unsigned char *base)
         addr = next;
         if (!is_readable_region(&mi))
             continue;
-        q = (const uint64_t *)mi.BaseAddress;
-        nq = mi.RegionSize / sizeof(uint64_t);
-        for (i = 0; i < nq; i++) {
-            unsigned char *inst;
-            uint32_t th = 0, ref32 = 0;
-            uint64_t L = 0;
-            if (q[i] != needle)
-                continue;
-            inst = (unsigned char *)&q[i];
-            if (!safe_read_u32(inst + RBBRIDGE_LUAGRAPHNODE_TYPEHASH_OFF, &th))
-                continue;
-            if (th != want)
-                continue; /* anderer LuaGraphNode (Pool/Mission) */
-            if (!safe_read_u64(inst + RBBRIDGE_LUAGRAPHNODE_L_OFF, &L) || !L)
-                continue;
-            if (!safe_read_u32(inst + RBBRIDGE_LUAGRAPHNODE_REF_OFF, &ref32))
-                continue;
-            if ((int32_t)ref32 < 0)
-                continue;
-            return inst;
+        /* Crash-sicher (#436): Region chunkweise per ReadProcessMemory in
+         * einen lokalen Puffer kopieren und DORT scannen — kein roher
+         * q[i]-Deref. Wird die Region zwischen VirtualQuery und dem Lesen
+         * freigegeben (Heap-Churn / Player-Join), liefert ReadProcessMemory
+         * FALSE statt eines Page-Faults (#655-Muster). Der frühere rohe
+         * q[i]-Deref crashte `get_state` (Crash-Bundles: FAULT in
+         * resolve_dom_node <- dispatch_get_state, ACCESS_VIOLATION). */
+        uint64_t buf[RBBRIDGE_SCAN_CHUNK / sizeof(uint64_t)];
+        size_t remaining = mi.RegionSize;
+        uintptr_t rbase = (uintptr_t)mi.BaseAddress;
+        while (remaining > 0) {
+            size_t chunk = remaining > sizeof(buf) ? sizeof(buf) : remaining;
+            SIZE_T nread = 0;
+            if (ReadProcessMemory(GetCurrentProcess(), (const void *)rbase,
+                                  buf, chunk, &nread) &&
+                nread >= sizeof(uint64_t)) {
+                size_t nq = nread / sizeof(uint64_t);
+                for (size_t i = 0; i < nq; i++) {
+                    unsigned char *inst;
+                    uint32_t th = 0, ref32 = 0;
+                    uint64_t L = 0;
+                    if (buf[i] != needle)
+                        continue;
+                    inst = (unsigned char *)(rbase + i * sizeof(uint64_t));
+                    if (!safe_read_u32(inst +
+                                       RBBRIDGE_LUAGRAPHNODE_TYPEHASH_OFF, &th))
+                        continue;
+                    if (th != want)
+                        continue; /* anderer LuaGraphNode (Pool/Mission) */
+                    if (!safe_read_u64(inst + RBBRIDGE_LUAGRAPHNODE_L_OFF, &L) ||
+                        !L)
+                        continue;
+                    if (!safe_read_u32(inst + RBBRIDGE_LUAGRAPHNODE_REF_OFF,
+                                       &ref32))
+                        continue;
+                    if ((int32_t)ref32 < 0)
+                        continue;
+                    return inst;
+                }
+            }
+            rbase += chunk;
+            remaining -= chunk;
         }
     }
     return NULL;
@@ -3081,63 +3129,6 @@ static int game_write_u32(void *addr, uint32_t val)
         return 0;
     memcpy(addr, &val, 4);
     return 1;
-}
-
-/* Findet die ServerGameplayState-Instanz per Primary-vftable-Scan. Reine
- * Leseoperation, graceful NULL. Bevorzugt eine Instanz, deren Pause-Flag
- * +0x534 lesbar und 0/1 ist; sonst der erste Treffer. */
-static void *resolve_sgs_instance(const unsigned char *base, size_t size)
-{
-    uint64_t needle;
-    uintptr_t addr = 0;
-    uintptr_t img_lo, img_hi;
-    unsigned char *fallback = NULL;
-
-    if (!base)
-        return NULL;
-    needle = (uint64_t)(uintptr_t)(base + RBBRIDGE_SGS_VFTABLE_RVA);
-    img_lo = (uintptr_t)base;
-    img_hi = img_lo + size;
-
-    for (;;) {
-        MEMORY_BASIC_INFORMATION mi;
-        uintptr_t next;
-        const uint64_t *q;
-        size_t nq, i;
-
-        if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
-            break;
-        next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
-        if (next <= addr)
-            break;
-        addr = next;
-        if (!is_readable_region(&mi))
-            continue;
-        q = (const uint64_t *)mi.BaseAddress;
-        nq = mi.RegionSize / sizeof(uint64_t);
-        for (i = 0; i < nq; i++) {
-            unsigned char *inst;
-            uintptr_t a;
-            unsigned char flag = 0xFF;
-            if (q[i] != needle)
-                continue;
-            inst = (unsigned char *)&q[i];
-            a = (uintptr_t)inst;
-            /* In-Image-Treffer (RTTI/COL/vtable-Selbstreferenz) sind KEINE
-             * Heap-Instanz -> verwerfen; sonst bogener `this` + Execute-Fault. */
-            if (a >= img_lo && a < img_hi)
-                continue;
-            if (!game_read_u8(inst + RBBRIDGE_SGS_PAUSEFLAG_OFF, &flag))
-                continue;
-            dbg("resolve_sgs_instance: candidate inst=%p flag=%d",
-                inst, (int)flag);
-            if (flag <= 1)
-                return inst;      /* plausibel: Pause-Flag 0/1 */
-            if (!fallback)
-                fallback = inst;  /* behalten, falls kein besserer Treffer */
-        }
-    }
-    return fallback;
 }
 
 /* ------------------------------------------------------------------ */
@@ -3956,10 +3947,8 @@ static int64_t read_resource_max(const unsigned char *base,
 /* Scannt den eigenen Adressraum (nur MEM_COMMIT + lesbar, kein PAGE_GUARD)
  * nach einem 8-Byte-alignierten QWORD == needle. Reine Leseoperation, kein
  * Aufruf; Rueckgabe = Fundstelle (erstes Vorkommen) oder NULL. */
-/* Blockgroesse (Byte) fuer das crash-sichere ReadProcessMemory-Kopieren
- * der Region in einen lokalen Stack-Puffer (klein gehalten, damit der
- * Pipe-Thread-Stack nicht gesprengt wird). */
-#define RBBRIDGE_SCAN_CHUNK (64u * 1024u)
+/* RBBRIDGE_SCAN_CHUNK ist oben (vor resolve_dom_node) definiert — beide
+ * Scanner (resolve_dom_node + scan_qword_instance) nutzen denselben Chunk. */
 
 static unsigned char *scan_qword_instance(uint64_t needle, const char *name)
 {
@@ -5943,33 +5932,14 @@ static void dispatch_get_state(HANDLE hPipe)
     snprintf(hq_field, sizeof(hq_field),
              "\"hq_hp\":null,\"hq_hp_max\":null,\"hq_dead\":null");
 
-    /* DOM-Suspend-Flag (Read #520): nativ aus dem dom_mananger-Node
-     * (LuaGraphNode::+0xF1) — unabhaengig vom Spieler-Account. Nicht
-     * aufloesbar -> null (graceful). */
-    char dom_field[8];
-    {
-        void *dn = resolve_dom_node(base);
-        unsigned char sb = 0;
-        if (dn && safe_read_u8((unsigned char *)dn +
-                               RBBRIDGE_LUAGRAPHNODE_SUSPENDED_OFF, &sb))
-            snprintf(dom_field, sizeof(dom_field), "%s", sb ? "true" : "false");
-        else
-            snprintf(dom_field, sizeof(dom_field), "null");
-    }
-
-    /* #880: echter Server-Pause-Zustand (ServerGameplayState+0x534), plus der
-     * Operator-Override (want). Beides graceful null. */
-    char gp_field[8];
+    /* #436: KEIN `dom_paused`/`game_paused` mehr in get_state. Beide kamen aus
+     * vollen Adressraum-Scans (resolve_dom_node / resolve_sgs_instance) und
+     * crashten genau diesen Pfad: get_state laeuft 1 Hz (match-loop + Cockpit),
+     * resolve_dom_node las die Regionen mit rohen q[i]-Derefs -> ACCESS_VIOLATION
+     * beim Heap-Churn (Crash-Bundles dev+staging: FAULT resolve_dom_node <-
+     * dispatch_get_state). Beide Felder liest ausserdem niemand (kein Cockpit,
+     * kein Skript). `pause_want` ist der Operator-Override (Global, kein Scan). */
     char want_field[8];
-    {
-        void *gi = resolve_sgs_instance(base, size);
-        unsigned char gb = 0;
-        if (gi && game_read_u8((unsigned char *)gi +
-                               RBBRIDGE_SGS_PAUSEFLAG_OFF, &gb))
-            snprintf(gp_field, sizeof(gp_field), "%s", gb ? "true" : "false");
-        else
-            snprintf(gp_field, sizeof(gp_field), "null");
-    }
     snprintf(want_field, sizeof(want_field), "%d", (int)g_game_want);
 
     /* Spielerzahl (Read #512, nativ C++): GetConnectedPlayers(World*).
@@ -6023,15 +5993,14 @@ static void dispatch_get_state(HANDLE hPipe)
     if (!ps) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
                          "\"reason\":\"no_playerservice\","
-                         "\"dom_paused\":%s,"
                          "\"mission_flow\":\"%s\","
                          "\"mission_flow_active\":%s,"
                          "\"mission_flow_payload\":%s,"
                          "\"creatures_base_difficulty\":%s,"
-                         "\"end_game\":%s,\"players\":%s,%s,\"game_paused\":%s,\"pause_want\":%s}",
-                  dom_field, flow_esc, flow_active ? "true" : "false",
+                         "\"end_game\":%s,\"players\":%s,%s,\"pause_want\":%s}",
+                  flow_esc, flow_active ? "true" : "false",
                   payload_field, diff_field, end_field, players_field,
-                  hq_field, gp_field, want_field);
+                  hq_field, want_field);
         return;
     }
 
@@ -6040,15 +6009,14 @@ static void dispatch_get_state(HANDLE hPipe)
     if (!world) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
                          "\"reason\":\"no_world\","
-                         "\"dom_paused\":%s,"
                          "\"mission_flow\":\"%s\","
                          "\"mission_flow_active\":%s,"
                          "\"mission_flow_payload\":%s,"
                          "\"creatures_base_difficulty\":%s,"
-                         "\"end_game\":%s,\"players\":%s,%s,\"game_paused\":%s,\"pause_want\":%s}",
-                  dom_field, flow_esc, flow_active ? "true" : "false",
+                         "\"end_game\":%s,\"players\":%s,%s,\"pause_want\":%s}",
+                  flow_esc, flow_active ? "true" : "false",
                   payload_field, diff_field, end_field, players_field,
-                  hq_field, gp_field, want_field);
+                  hq_field, want_field);
         return;
     }
 
@@ -6058,15 +6026,14 @@ static void dispatch_get_state(HANDLE hPipe)
     if (!account) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
                          "\"reason\":\"no_account\","
-                         "\"dom_paused\":%s,"
                          "\"mission_flow\":\"%s\","
                          "\"mission_flow_active\":%s,"
                          "\"mission_flow_payload\":%s,"
                          "\"creatures_base_difficulty\":%s,"
-                         "\"end_game\":%s,\"players\":%s,%s,\"game_paused\":%s,\"pause_want\":%s}",
-                  dom_field, flow_esc, flow_active ? "true" : "false",
+                         "\"end_game\":%s,\"players\":%s,%s,\"pause_want\":%s}",
+                  flow_esc, flow_active ? "true" : "false",
                   payload_field, diff_field, end_field, players_field,
-                  hq_field, gp_field, want_field);
+                  hq_field, want_field);
         return;
     }
 
@@ -6150,15 +6117,14 @@ static void dispatch_get_state(HANDLE hPipe)
               "{\"event\":\"get_state_result\",\"ok\":true,"
               "\"carbonium\":%llu,\"carbonium_max\":%lld,"
               "\"ironium\":%llu,\"ironium_max\":%lld,\"resources\":%s,"
-              "\"dom_paused\":%s,"
               "\"mission_flow\":\"%s\",\"mission_flow_active\":%s,"
               "\"mission_flow_payload\":%s,"
               "\"creatures_base_difficulty\":%s,"
-              "\"end_game\":%s,\"players\":%s,%s,\"game_paused\":%s,\"pause_want\":%s}",
+              "\"end_game\":%s,\"players\":%s,%s,\"pause_want\":%s}",
               (unsigned long long)carbonium, (long long)carbonium_max,
               (unsigned long long)ironium, (long long)ironium_max,
-              resources, dom_field, flow_esc, flow_active ? "true" : "false",
-              payload_field, diff_field, end_field, players_field, hq_field, gp_field, want_field);
+              resources, flow_esc, flow_active ? "true" : "false",
+              payload_field, diff_field, end_field, players_field, hq_field, want_field);
 }
 
 
