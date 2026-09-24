@@ -1,8 +1,13 @@
-[Unreleased]
+Version: 1.0.3
 Date: 24. 09. 2026
 
   Features:
-    - GNS-Entry-Relay: Backends zur Laufzeit registrieren/abmelden (`POST`/`DELETE /backends`) und Spieler per `POST /solo` automatisch einer geparkten Solo-Instanz zuweisen (#929).
+    - Spielkapsel-Flow: `[ solo | self-send on ]` -> provisioniertes, pausiertes Solo-Spiel -> `ready` -> Runde laeuft -> Ergebnis sichtbar -> Server zurueck in den Pool (#931, PR #949).
+    - GNS-Entry-Relay: Backends zur Laufzeit registrieren/abmelden (`POST`/`DELETE /backends`) und Spieler per `POST /solo` automatisch einer geparkten Solo-Instanz zuweisen (#929, PR #938).
+    - Parked-Pool-Dienst: Solo-Warmserver warm halten, claimen, recyceln, reap (#928, PR #933).
+
+  Bugfixes:
+    - Provisioner Live-Pfad: Container-Port auf 9001 korrigiert + reale Deploy-Mounts -> Health-Timeout gegen das reale Image behoben (#918, PR #932).
 
 Version: 1.0.2
 Date: 24. 09. 2026
