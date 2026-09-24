@@ -1,0 +1,14 @@
+---
+- name: restart parked-pool
+  systemd:
+    name: "{{ parked_pool_unit }}"
+    state: restarted
+    daemon_reload: true
+  register: parked_pool_handler
+  # Wie im Task: beim allerersten Deploy kennt systemd den Service noch nicht
+  # (die Unit wird im --check nicht geschrieben). Nur dieser eine Fall im
+  # Check-Modus wird toleriert.
+  failed_when: >-
+    parked_pool_handler is failed and not
+    (ansible_check_mode | bool and
+     'Could not find the requested service' in (parked_pool_handler.msg | default('')))

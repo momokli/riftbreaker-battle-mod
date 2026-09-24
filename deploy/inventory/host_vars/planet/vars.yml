@@ -86,6 +86,18 @@ tournament_bridge_b_url: "http://127.0.0.1:9001/exec"
 # (vault_server_control_token); ohne ihn bricht die Rolle ab (fail-closed).
 server_control_port: 8092
 
+# --- Parked-Pool-Dienst (Warm-Pool, Issue #928) ------------------------------
+# Haelt N Dedicated-Instanzen "geparkt" (Container + Bridge laufen, Welt
+# angehalten) und bietet claim()/recycle()/reap() per HTTP an (Bearer aus dem
+# Vault: vault_parked_pool_token). dev deployt die Rolle ueber site.yml — die
+# isolierten Werte stehen deshalb hier explizit (ENV-ISOLATION-GATE).
+# Port 8095, weil der dev-server-control bereits 127.0.0.1:8092 belegt.
+parked_pool_unit: rbmods-parked-dev
+parked_pool_port: 8095
+parked_pool_pool_size: 1
+parked_pool_install_dir: /opt/rbmods/parked-pool-dev
+parked_pool_env_file: /etc/rbmods/parked-pool-dev.env
+
 # --- Website (Landing + Cockpit, eigener rift-caddy) -------------------------
 # Architektur (Issue #322): Der Riftbreaker-Stack betreibt einen EIGENEN,
 # schlanken Caddy-Container (`rift-caddy`, plain HTTP, reines Durchreichen):

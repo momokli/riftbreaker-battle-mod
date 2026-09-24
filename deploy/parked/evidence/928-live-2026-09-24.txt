@@ -1,0 +1,281 @@
+# 928-live-2026-09-24 — Live-Nachweis Parked-Pool-Dienst (#928) auf planet
+
+Datum: 2026-09-24 (~16:11–16:13 GMT+2) · Host: planet · Env: dev
+Image: rb-dedicated:fbe485640bfb (real, laeuft auch als dev-/prod-/staging-Stack)
+Provisioner: deploy/provisioner (#908, Live-Pfad #918 gemergt fbe4856)
+Instanz: instance_id=live928-1 (Container riftbreaker-dedicated-dev-live928-1)
+
+**Status: REAL (warm+claim) / REAL (recycle->PARKED ueber 2 Zyklen, Nachtrag C mit Shim, Nachtrag E OHNE Shim).**
+Kein Fake-Nachweis: die REAL belegten Schritte stehen unten mit Rohdaten. Der
+urspruenglich als PENDING gefuehrte recycle-Schritt ist mit dem Produktfix
+(`end_game` nur bei `result`) live belegt. Nachtrag C belegt den Fix noch MIT
+Harness-Shim; **Nachtrag E belegt denselben 2-Zyklen-Lauf OHNE jeden Shim am
+echten Produktcode** (`ParkedPool.recycle` ungepatcht, `end_game(None)` wird nun
+im Produkt uebersprungen statt gepatcht): warm->claim->recycle->PARKED x2,
+rounds=2, kein HTTP-400, leakfrei. Der recycle-Teil ist damit **REAL, nicht mehr
+PENDING**.
+
+## Vorgehen
+
+Service-Treiber `deploy/parked/evidence/live928.py` (nutzt `ParkedController`
+gegen den ECHTEN `Provisioner`, kein systemd, kein Fake):
+
+    cd deploy/parked
+    PROVISIONER_IMAGE=rb-dedicated:fbe485640bfb \
+      timeout 600 python3 evidence/live928.py
+
+## REAL belegt — warm (cold boot + Parken)
+
+    ### env PROVISIONER_IMAGE=rb-dedicated:fbe485640bfb PROVISIONER_ENV=dev INSTANCE=live928
+    ### docker ps (before), lines=77
+    ### docker volume ls (before), lines=442
+    ### warm dt=16.04s counters={"parked": 1, "claimed": 0, "warming": 0,
+        "recycling": 0, "stopped": 0, "total": 1, "claims": 0, "recycles": 0,
+        "reaps": 0, "warm_failures": 0, "handover_last_seconds": null,
+        "handover_avg_seconds": null}
+    ### pool entries=[{"instance": "live928-1", "env": "dev",
+        "container": "riftbreaker-dedicated-dev-live928-1",
+        "bridge_url": "http://127.0.0.1:45094", "state": "parked", "rounds": 0,
+        "parked_seconds": 8.4e-05}]
+    ### docker inspect bridge-port =
+        6321/udp -> 127.0.0.1:32990
+        9001/tcp -> 127.0.0.1:45094
+
+=> Der Dienst hat eine reale Dedicated-Instanz gestartet (`provisioner.start`),
+   die Bridge war healthy (`GET /health` -> `{"ok":true,"pipe":true}`) und die
+   Instanz wurde geparkt (`POST /pause_game`); Zustand im Pool `PARKED`,
+   Zaehler-Invariante erfuellt (total=1=parked).
+
+## REAL belegt — claim (Handover)
+
+    ### cycle1 claim={"instance": "live928-1", "env": "dev",
+        "bridge_url": "http://127.0.0.1:45094", "state": "claimed",
+        "handover_seconds": 3.1090600970201194} (wall 3.11s)
+
+=> `pool.claim()` (health + `POST /resume_game`) hat die geparkte Instanz an
+   ein Spiel uebergeben; `handover_seconds` gemessen (3.11 s Wall inkl.
+   Health-Check; der reine `resume_game`-Roundtrip liegt laut #909 bei ~0.12 s).
+   Die Instanz ist `CLAIMED` (nicht mehr `PARKED`).
+
+## BLOCKER — recycle -> PARKED (urspruenglich PENDING, mit Fix geloest: siehe Nachtrag C)
+
+    File ".../parked_pool.py", line 317, in recycle
+        bridge.end_game(result)
+    ... HTTP Error 400: Bad Request
+    parked_pool.ParkedError: recycle: live928-1 fehlgeschlagen: POST /end_game -> HTTP 400
+
+Direkte Bridge-Probe auf der laufenden Instanz (Port 45094):
+
+    --- get_state (no body) ---  200 {"event":"get_state_result","ok":false,"reason":"no_world", ...}
+    --- end_game (no body) ---   400 {"ok":false,"reason":"invalid_request"}
+    --- end_game with body ---   400 {"ok":false,"reason":"invalid_request"}
+    --- round_reset (no body) --- 200 {"ok":true,"round_reset_epoch":0,"restart_map":"skipped"}
+    --- pause_game (no body) ---  200 {"event":"pause_game_result","ok":true,"paused":false,...}
+    --- resume_game (no body) --  200 {"event":"resume_game_result","ok":true,"paused":true,...}
+    --- health ---                200 {"ok":true,"pipe":true}
+
+Root Cause: Auf planet laeuft **keine reale Welt/Runde** in der geparkten
+Instanz (`get_state` -> `reason:"no_world"`). Der Bridge-Endpunkt `POST /end_game`
+wertet ohne aktive Welt als `invalid_request` (400) und lehnt ab — unabhaengig
+vom Body. `ParkedPool.recycle` (#909) beginnt mit `end_game()`; ohne laufende
+Welt ist der Recyclen-Schritt damit hard blockiert. Das ist dieselbe
+Umgebungs-Klasse wie der offene Live-get_state-Nachweis aus #909
+(`MEASUREMENT.md` §3/§5, Follow-up #919: auf planet keine Welt mit
+Spieler/Tick verfuegbar). **Kein Dienst-/Controller-Bug**: die hermetische
+Suite belegt recycle (inkl. zweiter Zyklus) mit Fake-Bridge vollstaendig.
+
+## PENDING — exakte Repro-Kommandos (sobald eine reale Welt/Spieler da ist)
+
+    cd deploy/parked
+    PROVISIONER_IMAGE=rb-dedicated:fbe485640bfb PROVISIONER_ENV=dev \
+      python3 evidence/live928.py
+    # Erwartung: cycle1/cycle2 recycle -> state "parked", rounds +1;
+    # /status-equivalent parked=1/claimed=0; docker ps|volume ls ohne Leak
+    # ausser den verwalteten Pool-Ressourcen.
+
+Zusaetzlich (Dienst statt Treiber — braucht Token + systemd):
+
+    PARKED_ENV=dev PARKED_PORT=8095 PARKED_POOL_SIZE=1 PARKED_TOKEN=<vault> \
+      PROVISIONER_IMAGE=rb-dedicated:fbe485640bfb PROVISIONER_ENV=dev \
+      python3 parked_service.py
+    curl -s -H 'Authorization: Bearer <vault>' 127.0.0.1:8095/status
+    curl -s -X POST -H 'Content-Type: application/json' \
+      -H 'Authorization: Bearer <vault>' -d '{}' 127.0.0.1:8095/claim
+    curl -s -X POST -H 'Content-Type: application/json' \
+      -H 'Authorization: Bearer <vault>' \
+      -d '{"instance_id":"parked-1","keep_warm":true}' 127.0.0.1:8095/recycle
+
+## Nachweis: kein Container-/Volume-Leak (Cleanup)
+
+Der reale `provisioner.stop` hat die Test-Instanz restfrei entfernt:
+
+    PROVISIONER_IMAGE=rb-dedicated:fbe485640bfb PROVISIONER_ENV=dev \
+      python3 provisioner.py stop --env dev --instance-id live928-1
+    {"instance": "live928-1", "removed": {"container": true, "network": true,
+     "volumes": true, "dirs": true}}
+    # verify: docker ps -a | grep live928 -> leer
+    #         docker volume ls | grep live928 -> leer
+    #         docker network ls | grep live928 -> leer
+    #         /srv/rift-dev-live928-1 -> fehlt
+
+=> Start+Parken+Claim erzeugen nur die verwalteten Pool-Ressourcen; `stop`
+   raeumt Container + Netz + zwei Volumes + Run-Pfade vollstaendig ab
+   (kein Leak). Der Dienst selbst stoppt PARKED-Instanzen NICHT beim
+   Herunterfahren (Auslaufschutz ist `reap`s Aufgabe, US2).
+
+===============================================================================
+NACHTRAG (Tester, 2026-09-24 ~16:20–16:35 GMT+2) — recycle-Root-Cause + 2-Zyklen
+===============================================================================
+
+## A) Hermetischer Dienst-E2E (PFLICHT) — PASS
+
+Neues Test-Artefakt `deploy/parked/evidence/hermetic928.py` (kein Produktcode):
+echter `ParkedController` + echter `ThreadingHTTPServer` auf 127.0.0.1:0, echte
+Requests per `urllib`, `FakeProvisioner`/`FakeBridge`/`FakeClock`.
+Ablauf: warm(N=2) -> /status parked=2 -> /claim FIFO -> /recycle -> PARKED ->
+zweiter /claim ok -> /reap stoppt Ueberfaellige. Ergebnis: **RESULT: PASS**
+(alle Checks OK, Zaehler-Invariante erfuellt, claims=2/recycles=2/reaps=1).
+
+Vorhandene Suite: `deploy/parked` `python3 -m unittest test_parked_pool
+test_parked_service` -> **52 Tests OK** (7.5s). Abdeckung: die HTTP-Tests
+decken jede Route einzeln ab (health/status/claim/recycle/reap/401/404/405/400),
+inkl. recycle->PARKED ueber HTTP. **Luecke (benannt):** kein einzelner Test
+faehrt die *verkettete* Sequenz warm->claim->recycle->claim->reap ueber HTTP;
+genau das schliesst `hermetic928.py` (Artefakt, kein Suite-Test).
+
+## B) Live-Repro recycle-Root-Cause (planet, REAL)
+
+Treiber `deploy/parked/evidence/live928_probe.py` (echter Provisioner + Bridge):
+
+    ### start dt=13.85s container=riftbreaker-dedicated-dev-live928probe
+        ports={"bridge": 46565}
+    ### pause_game (park)   = 200 {"event":"pause_game_result","ok":true,"paused":true,...}
+    ### get_state parked    = 200 {"event":"get_state_result","ok":false,"reason":"world_not_ready"}
+    ### resume_game (claim) = 200 {"event":"resume_game_result","ok":true,"paused":false,...}
+    ### t~2/5/10/20/30s get_state = 200 {"...","ok":false,"reason":"no_world",...}   (konstant)
+    ### end_game (no body)        = 400 {"ok":false,"reason":"invalid_request"}
+    ### end_game {result:null}    = 400 {"ok":false,"reason":"invalid_request"}
+    ### end_game {result:win}     = (-1, 'ERR timed out')   <- haengt (kein Welt-Tick)
+    ### end_game {result:bogus}   = 400 {"ok":false,"reason":"invalid_result"}
+    ### round_reset = 200 {"ok":true,"round_reset_epoch":0,"restart_map":"skipped"}
+    ### stop = {"removed":{"container":true,"network":true,"volumes":true,"dirs":true}}
+    ### leftover container present = False
+
+Bridge-Contract (belegt, `server/pipe-bridge/pipe_bridge.c`):
+- `handle_end_game` Z.1170; Pflichtfeld `result` (Z.1178 `json_get_string`),
+  fehlend/leer -> **400 `invalid_request`** (Z.1180); nur `win|lose` (Z.1184),
+  sonst **400 `invalid_result`**; sonst Pipe-Cmd `end_game` an DLL.
+- `get_state`/DLL liefert ohne Welt `ok:false, reason:"no_world"`
+  (`world_not_ready` direkt nach pause, danach `no_world`).
+
+**Root Cause (zweischichtig):**
+1. **Produkt-/Client-Bug:** `ParkedPool.recycle()` (parked_pool.py Z.317) ruft
+   `bridge.end_game(result)` mit `result=None` -> kein Body -> Bridge 400
+   `invalid_request`. Das ist eine **Vertragsverletzung unabhaengig vom
+   Weltzustand** — auch mit laufender Welt wuerde recycle hier mit 400 scheitern.
+2. **Umgebungs-Artefakt:** Auf planet laeuft nach `resume_game` **nie** eine Welt
+   (`get_state` bleibt 30s+ `no_world`); ein `end_game` MIT `result` kann daher
+   nicht abschliessen und **haengt** (Timeout), verstopft die Pipe.
+
+## C) Live-E2E 2 Zyklen MIT Fix-Shim — PASS, leakfrei
+
+Treiber `deploy/parked/evidence/live928_cycle.py`: patcht NUR im Harness
+`BridgeClient.end_game` (result=None -> HTTP uebersprungen = vorgeschlagener
+Produktfix), sonst echter Provisioner + Bridge + `ParkedPool`.
+
+**Konsistenz-Hinweis:** Der Harness-Shim (skip `end_game` bei `result=None`)
+entspricht 1:1 dem committeten Produktfix in `parked_pool.py` `recycle()`
+(`if result is not None: bridge.end_game(result)`); der Live-PASS in diesem
+Abschnitt belegt damit den Produktstand, nicht nur einen Test-Hack.
+
+    ### warm dt=14.22s state=parked bridge=http://127.0.0.1:37563
+    ### cycle1 claim  state=claimed handover=3.1243s
+    ### cycle1 recycle state=parked rounds=1
+    ### cycle2 claim  state=claimed handover=0.2734s
+    ### cycle2 recycle state=parked rounds=2
+    ### pool status=[{"instance":"live928cyc",...,"state":"parked","rounds":2,...}]
+    ### ps delta=["riftbreaker-dedicated-dev-live928cyc  rb-dedicated:fbe485640bfb"]
+    ### volume delta=["rb-dev-saves-live928cyc","rb-dev-wine-live928cyc"]
+    ### stop={"removed":{"container":true,"network":true,"volumes":true,"dirs":true}}
+    ### leftover container=False volumes=[]
+
+=> **2 Zyklen warm->claim->recycle->PARKED live erreicht** (rounds=2, wieder
+   PARKED, handover cycle2 0.27s). Deltas sind AUSSCHLIESSLICH die verwalteten
+   Pool-Ressourcen; `stop` raeumt Container+Netz+2 Volumes+Pfade restfrei ->
+   **kein Leak**. Ohne Shim scheitert cycle1 an `end_game(None)` (Abschnitt B).
+
+## D) Empfehlung (mit Beleg)
+
+**Codefix JA** — in `deploy/parked/parked_pool.py`, `recycle()` (Z.309–320),
+Soll: `end_game` NUR aufrufen, wenn `result` mitgegeben ist:
+
+    try:
+        if result is not None:
+            bridge.end_game(result)
+        bridge.round_reset()
+        if keep_warm:
+            bridge.pause_game()
+
+Begruendung: `end_game` verlangt ein Pflicht-`result` (Bridge Z.1178); ein
+`None`-Aufruf ist immer 400. Ist kein Ergebnis bekannt, ist `round_reset` +
+`pause_game` der gueltige, weltunabhaengige Recycle-Pfad (live belegt: C).
+Der zweite Aspekt (`end_game` mit result haengt ohne Welt) ist ein
+**Umgebungs-Blocker** (planet ohne reale Welt/Spieler, vgl. #919) und gehoert
+als separates Issue dokumentiert — NICHT als Produktfehler.
+
+Hinweis: der Dienst-/HTTP-Layer ist korrekt; kein Fix an
+`parked_service.py`/Controller noetig.
+
+===============================================================================
+NACHTRAG E (Tester, Runde 2, 2026-09-24 ~16:30 GMT+2) — recycle OHNE Shim, REAL
+===============================================================================
+
+Re-Test nach Produktfix `cbede49` (`recycle` ruft `end_game` nur bei `result`).
+Treiber `deploy/parked/evidence/live928_cycle_real.py`: **kein** Patch am
+Produktcode (`BridgeClient.end_game` unangetastet; der echte
+`ParkedPool.recycle()` laeuft). Echter Provisioner + echte Bridge, Env dev,
+Image `rb-dedicated:fbe485640bfb`, `instance_id=live928real`.
+
+Hermetisch (PFLICHT) davor:
+
+    $ cd deploy/parked && python3 -m unittest -v \
+        test_parked_pool.py test_measure_boot.py test_parked_service.py
+    Ran 66 tests in 7.548s
+    OK
+    $ python3 evidence/hermetic928.py
+    ### RESULT: PASS   (alle Checks OK; claims=2 recycles=2 reaps=1)
+
+Live-Rohdaten (Auszug, vollstaendig in /tmp/live928real.out):
+
+    ### SHIM=none (echter Produktcode, ParkedPool.recycle ungepatcht)
+    ### image=rb-dedicated:fbe485640bfb env=dev instance=live928real
+    ### docker ps before lines=77, volumes before lines=442
+    ### warm dt=14.60s state=parked bridge=http://127.0.0.1:46192
+    ### cycle1 claim state=claimed handover=3.1122s
+    ### cycle1 recycle state=parked rounds=1
+    ### cycle2 claim state=claimed handover=0.2309s
+    ### cycle2 recycle state=parked rounds=2
+    ### pool status=[{"instance": "live928real", "env": "dev",
+        "container": "riftbreaker-dedicated-dev-live928real",
+        "bridge_url": "http://127.0.0.1:46192", "state": "parked",
+        "rounds": 2, "parked_seconds": 2.35e-05}]
+    ### ps delta=["riftbreaker-dedicated-dev-live928real\trb-dedicated:fbe485640bfb"]
+    ### volume delta=["rb-dev-saves-live928real", "rb-dev-wine-live928real"]
+    ### stop={"instance": "live928real",
+        "removed": {"container": true, "network": true,
+                    "volumes": true, "dirs": true}}
+    ### leftover container=False volumes=[]
+
+Ergebnis:
+- **2 Zyklen warm->claim->recycle->PARKED OHNE Shim erreicht** (rounds=2, wieder
+  PARKED, handover cycle2 0.2309 s). **Kein HTTP-400** — der Produktcode ruft
+  `end_game` ohne `result` gar nicht mehr auf (Fix `cbede49` wirkt live).
+- Deltas sind AUSSCHLIESSLICH die verwalteten Pool-Ressourcen (1 Container +
+  2 Volumes); `stop` raeumt Container+Netz+2 Volumes+Pfade restfrei ->
+  **kein Leak** (leftover container=False, volumes=[]).
+
+=> recycle->PARKED ueber 2 Zyklen ist mit dem committeten Produktstand **REAL
+   (ohne Shim)** belegt; der PENDING-Status ist damit abschliessend aufgehoben.
+Offener Punkt (unveraendert, Umgebung): `end_game` MIT `result` haengt auf
+planet ohne reale Welt (vgl. #919) — separates Umgebungs-Issue, kein
+Produktfehler.

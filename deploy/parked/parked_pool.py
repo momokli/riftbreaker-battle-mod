@@ -308,13 +308,18 @@ class ParkedPool(object):
 
     def recycle(self, env: Optional[str] = None, instance_id: Optional[str] = None,
                 keep_warm: bool = True, result: Optional[str] = None) -> ParkedEntry:
-        """Nach Spielende aufraeumen: ``end_game`` + ``round_reset`` (+ ``pause_game``)
-        -> wieder ``PARKED``. Bei ``keep_warm=False`` stattdessen ``stop`` -> ``STOPPED``."""
+        """Nach Spielende aufraeumen: ``round_reset`` (+ ``pause_game``) -> wieder
+        ``PARKED``. ``end_game`` wird NUR aufgerufen, wenn ``result`` mitgegeben ist
+        (``win``/``lose``): die Bridge verlangt ein Pflicht-``result`` und lehnt
+        ``end_game(None)`` immer mit HTTP 400 ``invalid_request`` ab. Ohne Ergebnis ist
+        ``round_reset`` + ``pause_game`` der gueltige, weltunabhaengige Recycle-Pfad.
+        Bei ``keep_warm=False`` stattdessen ``stop`` -> ``STOPPED``."""
         entry = self._require(env, instance_id, ParkedState.CLAIMED, "recycle")
         entry.state = ParkedState.RECYCLING
         bridge = self._bridge(entry.bridge_url)
         try:
-            bridge.end_game(result)
+            if result is not None:
+                bridge.end_game(result)
             bridge.round_reset()
             if keep_warm:
                 bridge.pause_game()
