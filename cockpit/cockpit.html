@@ -613,6 +613,26 @@
                 outline: none;
             }
 
+            /* Chat-Formatier-Hilfe (#935): kompakte Symbol-/Template-Buttons */
+            .chat-tools .chat-tool {
+                height: 24px;
+                min-width: 24px;
+                padding: 0 5px;
+                font-family: var(--font-mono);
+                font-size: 12px;
+                line-height: 1;
+                background: var(--base);
+                color: var(--dim);
+                border-color: var(--line);
+            }
+            .chat-tools .chat-tool:hover {
+                background: var(--btn-hover);
+                color: var(--text);
+            }
+            .chat-tools .chat-tool:active {
+                background: var(--btn-active);
+            }
+
             /* Group D: Status Bar */
             footer.status-bar {
                 flex: 0 0 24px;
@@ -827,11 +847,27 @@
                                 <input id="chat_input" class="mono flow-grow" maxlength="200" placeholder="Nachricht an die Spieler ..." aria-label="Chat-Nachricht" />
                                 <button id="chat_send" class="btn-primary">send</button>
                             </div>
+                            <div id="chat_tools" class="flow-action-row chat-tools" role="group" aria-label="Formatier-Hilfe">
+                                <span class="prop-label">insert</span>
+                                <button class="chat-tool" data-insert="▶ " title="Pfeil-Prefix" aria-label="Pfeil einfuegen">▶</button>
+                                <button class="chat-tool" data-insert="★ " title="Highlight" aria-label="Stern einfuegen">★</button>
+                                <button class="chat-tool" data-insert="● " title="Punkt" aria-label="Punkt einfuegen">●</button>
+                                <button class="chat-tool" data-insert="⚠ " title="Warnung" aria-label="Warnung einfuegen">⚠</button>
+                                <button class="chat-tool" data-insert="► " title="Pointer" aria-label="Pointer einfuegen">►</button>
+                                <button class="chat-tool" data-insert="─ " title="Linie" aria-label="Linie einfuegen">─</button>
+                                <button class="chat-tool" data-insert="• " title="Bullet" aria-label="Bullet einfuegen">•</button>
+                                <button class="chat-tool" data-insert="→ " title="Pfeil rechts" aria-label="Pfeil rechts einfuegen">→</button>
+                                <button class="chat-tool" data-insert="✓ " title="Haken" aria-label="Haken einfuegen">✓</button>
+                                <button class="chat-tool" data-insert="[!] " title="Achtung-Prefix" aria-label="Achtung-Prefix einfuegen">[!]</button>
+                                <button class="chat-tool" data-insert="» " title="Zitat/Absender" aria-label="Zitat-Prefix einfuegen">»</button>
+                                <button class="chat-tool" data-wrap="=== " data-wrapend=" ===" title="Titel einrahmen" aria-label="Titel einrahmen">=…=</button>
+                            </div>
                             <div class="flow-note">
                                 Spieler-Chat aus dem Spiel erscheint hier; "send" schickt
-                                eine Server-Nachricht in den Spiel-Chat. Absender: system
-                                (clean) oder operator ([Operator]-Prefix). Enter sendet,
-                                leerer Text wird nicht gesendet (#935).
+                                eine Server-Nachricht in den Spiel-Chat. Chat ist Klartext
+                                (kein HTML/Markup) — Formatierung nur ueber Symbole/Prefix.
+                                Absender: system (clean) oder operator ([Operator]-Prefix).
+                                Enter sendet, leerer Text wird nicht gesendet (#935).
                             </div>
                         </div>
                     </fieldset>
@@ -1919,6 +1955,61 @@
                         chatSend();
                     }
                 });
+
+                // --- Chat-Formatier-Hilfe (#935): Symbole/Templates an Cursor-Position ---
+                function insertAtCursor(input, text) {
+                    if (!input || !text) {
+                        return;
+                    }
+                    var value = input.value || "";
+                    var start = input.selectionStart == null ? value.length : input.selectionStart;
+                    var end = input.selectionEnd == null ? value.length : input.selectionEnd;
+                    var next = value.slice(0, start) + text + value.slice(end);
+                    if (input.maxLength > 0 && next.length > input.maxLength) {
+                        next = next.slice(0, input.maxLength);
+                    }
+                    input.value = next;
+                    var caret = Math.min(start + text.length, next.length);
+                    input.focus();
+                    input.setSelectionRange(caret, caret);
+                }
+
+                function wrapAtCursor(input, prefix, suffix) {
+                    if (!input) {
+                        return;
+                    }
+                    var value = input.value || "";
+                    var start = input.selectionStart == null ? value.length : input.selectionStart;
+                    var end = input.selectionEnd == null ? value.length : input.selectionEnd;
+                    var selected = value.slice(start, end);
+                    var next = value.slice(0, start) + prefix + selected + suffix + value.slice(end);
+                    if (input.maxLength > 0 && next.length > input.maxLength) {
+                        next = next.slice(0, input.maxLength);
+                    }
+                    input.value = next;
+                    var caret = selected
+                        ? start + prefix.length + selected.length + suffix.length
+                        : start + prefix.length;
+                    caret = Math.min(caret, next.length);
+                    input.focus();
+                    input.setSelectionRange(caret, caret);
+                }
+
+                var chatTools = $("chat_tools");
+                if (chatTools) {
+                    chatTools.addEventListener("click", function (e) {
+                        var btn = e.target.closest ? e.target.closest("button.chat-tool") : null;
+                        if (!btn) {
+                            return;
+                        }
+                        var input = $("chat_input");
+                        if (btn.dataset.wrap) {
+                            wrapAtCursor(input, btn.dataset.wrap, btn.dataset.wrapend || "");
+                        } else {
+                            insertAtCursor(input, btn.dataset.insert || "");
+                        }
+                    });
+                }
 
                 function initEvents() {
                     if (typeof EventSource === "undefined") {
