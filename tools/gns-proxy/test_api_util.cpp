@@ -18,7 +18,7 @@ using rbapi::parseTargetSpec;
 using rbapi::parseUrlHostPort;
 using rbapi::retryDelayMs;
 using rbapi::runSoloClaim;
-using rbapi::shouldRetryClaim;
+using rbapi::SoloBudget;
 using rbapi::SoloOutcome;
 using rbapi::urlDecode;
 using rbroute::Endpoint;
@@ -163,18 +163,10 @@ static void testRetryDecision() {
   check(!isTransientClaimStatus(401, "unauthorized"), "401 endgueltig");
   check(!isTransientClaimStatus(200, ""), "200 kein Fehler");
 
-  // Budget: 4 Versuche, danach kein Retry mehr.
-  check(shouldRetryClaim(1, 4, -1, ""), "versuch 1 -> retry");
-  check(shouldRetryClaim(3, 4, 503, "bridge_unhealthy"), "versuch 3 -> retry");
-  check(!shouldRetryClaim(4, 4, 503, "bridge_unhealthy"), "erschoepft -> kein retry");
-  check(!shouldRetryClaim(1, 4, 409, "not_claimable"), "endgueltig -> kein retry");
-
   check(retryDelayMs(1) == 250, "delay 1");
   check(retryDelayMs(2) == 500, "delay 2");
   check(retryDelayMs(3) == 1000, "delay 3");
   check(retryDelayMs(9) == 1000, "delay cap");
-  // Gesamtbudget der Wartephasen < 5 s.
-  check(retryDelayMs(1) + retryDelayMs(2) + retryDelayMs(3) < 5000, "budget < 5s");
 }
 
 static void testUrlDecode() {
@@ -187,16 +179,32 @@ static void testUrlDecode() {
   checkEq(urlDecode("trailing%"), "trailing%", "einsames %");
 }
 
-// Fake-Parked-Dienst: liefert eine vorgegebene (status, body)-Folge und
-// protokolliert Aufrufe + Body. Ersetzt den echten WinSock-Outbound-POST.
+// --- /solo-Claim (Issue #929) -----------------------------------------------
+
+// Fake-Parked-Dienst: liefert eine vorgegebene (status, body)-Folge, simuliert
+// den Zeitverbrauch (Fake-Clock) und protokolliert Aufrufe, Body und das pro
+// Versuch uebergebene Timeout. Ersetzt den echten WinSock-Outbound-POST.
 struct FakeClaim {
   std::vector<HttpResp> responses;
   std::size_t idx = 0;
   int calls = 0;
   std::vector<std::string> payloads;
-  HttpResp operator()(const std::string &, const std::string &payload) {
+  std::vector<int> timeouts;
+  long long *clock = nullptr;   // Fake-Clock, die der Claim vorspult
+  long long consumeMs = -1;     // <0 = volles timeoutMs verbrauchen
+
+  HttpResp operator()(const std::string &, const std::string &payload,
+                      int timeoutMs) {
     ++calls;
     payloads.push_back(payload);
+    timeouts.push_back(timeoutMs);
+    if (clock != nullptr) {
+      long long used = consumeMs < 0 ? timeoutMs : consumeMs;
+      if (used > timeoutMs) {
+        used = timeoutMs;
+      }
+      *clock += used;
+    }
     if (idx < responses.size()) {
       return responses[idx++];
     }
@@ -205,20 +213,30 @@ struct FakeClaim {
 };
 
 static std::vector<int> g_sleeps;
-static void collectSleep(int ms) { g_sleeps.push_back(ms); }
 
+// Fuehrt runSoloClaim mit Fake-Clock aus: Claim und Sleep spulen dieselbe Uhr
+// vor, sodass die Wall-Clock exakt nachvollziehbar ist.
 static SoloOutcome runSolo(const std::string &env, FakeClaim &claim,
-                           int maxAttempts = 4) {
+                           long long &clock,
+                           const SoloBudget &budget = SoloBudget{}) {
   g_sleeps.clear();
-  return runSoloClaim(env, std::ref(claim), maxAttempts, collectSleep);
+  claim.clock = &clock;
+  const auto nowMs = [&clock]() -> long long { return clock; };
+  const auto sleepFn = [&clock](int ms) {
+    g_sleeps.push_back(ms);
+    clock += ms;
+  };
+  return runSoloClaim(env, std::ref(claim), budget, nowMs, sleepFn);
 }
 
 static void testSoloSuccess() {
   FakeClaim claim;
+  claim.consumeMs = 10;
   claim.responses.push_back(
       HttpResp{200, "{\"ok\":true,\"instance\":\"parked-1\","
                     "\"gns_endpoint\":\"127.0.0.1:32768\"}"});
-  SoloOutcome out = runSolo("", claim);
+  long long clock = 0;
+  SoloOutcome out = runSolo("", claim, clock);
   check(out.httpCode == 200, "solo ok -> 200");
   check(out.pinIdentity, "solo ok -> pin");
   checkEq(out.endpoint, "127.0.0.1:32768", "solo ziel");
@@ -226,13 +244,17 @@ static void testSoloSuccess() {
   check(claim.calls == 1, "solo ok -> 1 claim");
   check(g_sleeps.empty(), "solo ok -> kein sleep");
   checkEq(claim.payloads[0], "{}", "leerer env -> {} Body");
+  // Erster Versuch bekommt min(totalMs, attemptMs) = attemptMs.
+  check(claim.timeouts[0] == 1500, "erster Timeout = attemptMs");
 }
 
 static void testSoloEnvPayload() {
   FakeClaim claim;
+  claim.consumeMs = 10;
   claim.responses.push_back(
       HttpResp{200, "{\"gns_endpoint\":\"127.0.0.1:32100\"}"});
-  SoloOutcome out = runSolo("staging", claim);
+  long long clock = 0;
+  SoloOutcome out = runSolo("staging", claim, clock);
   check(out.pinIdentity, "env-Lauf pinnt");
   checkEq(claim.payloads[0], "{\"env\":\"staging\"}", "env im Body");
   checkEq(out.instance, "", "ohne instance-Feld leer");
@@ -240,49 +262,117 @@ static void testSoloEnvPayload() {
 
 static void testSoloRetryThenSuccess() {
   FakeClaim claim;
+  claim.consumeMs = 100;
   claim.responses.push_back(HttpResp{503, "{\"reason\":\"bridge_unhealthy\"}"});
   claim.responses.push_back(HttpResp{503, "{\"reason\":\"bridge_unhealthy\"}"});
   claim.responses.push_back(
       HttpResp{200, "{\"instance\":\"p\",\"gns_endpoint\":\"127.0.0.1:40000\"}"});
-  SoloOutcome out = runSolo("", claim);
+  long long clock = 0;
+  SoloOutcome out = runSolo("", claim, clock);
   check(out.pinIdentity, "retry->erfolg pinnt");
   checkEq(out.endpoint, "127.0.0.1:40000", "retry ziel");
   check(claim.calls == 3, "retry -> 3 claims");
   check(g_sleeps.size() == 2, "retry -> 2 sleeps");
   check(g_sleeps[0] == 250 && g_sleeps[1] == 500, "backoff 250/500");
+  check(clock < 4500, "retry-Erfolg unter Budget");
 }
 
 static void testSoloExhaustion() {
-  // 409 none_parked bleibt transient -> alle 4 Versuche, dann 503 retry:true.
+  // 409 none_parked bleibt transient; jeder Versuch verbraucht sein volles
+  // Timeout -> Budget erschoepft, Ergebnis 503 backend_starting.
   FakeClaim claim;
-  for (int i = 0; i < 4; ++i) {
+  claim.consumeMs = -1;
+  for (int i = 0; i < 6; ++i) {
     claim.responses.push_back(HttpResp{409, "{\"reason\":\"none_parked\"}"});
   }
-  SoloOutcome out = runSolo("", claim);
+  long long clock = 0;
+  SoloOutcome out = runSolo("", claim, clock);
   check(out.httpCode == 503, "erschoepft -> 503");
   check(!out.pinIdentity, "erschoepft -> kein pin");
   checkEq(out.reason, "backend_starting", "erschoepft reason");
   check(out.body.find("\"retry\":true") != std::string::npos,
         "erschoepft retry:true");
-  check(claim.calls == 4, "erschoepft -> 4 claims");
-  check(g_sleeps.size() == 3, "erschoepft -> 3 sleeps");
-  check(g_sleeps[2] == 1000, "letzter backoff 1000");
+  check(clock <= 4500, "erschoepft wall-clock <= totalMs");
 }
 
 static void testSoloConnectionErrorExhaustion() {
   // -1 (Connect-/Timeout-Fehler) ist transient -> ebenfalls 503 retry:true.
   FakeClaim claim;
-  SoloOutcome out = runSolo("", claim);  // keine Antworten -> immer -1
+  claim.consumeMs = -1;
+  long long clock = 0;
+  SoloOutcome out = runSolo("", claim, clock);  // keine Antworten -> immer -1
   check(out.httpCode == 503, "connect-fehler erschoepft -> 503");
   checkEq(out.reason, "backend_starting", "connect reason");
-  check(claim.calls == 4, "connect -> 4 claims");
+  check(clock <= 4500, "connect wall-clock <= totalMs");
+  check(claim.calls >= 2, "connect -> mehrere Versuche");
+}
+
+static void testSoloBudgetHardBound() {
+  // Jeder Versuch verbraucht sein volles Timeout: Gesamt-Wall-Clock ist HART
+  // <= totalMs, die uebergebenen Timeouts schrumpfen mit dem Rest-Budget.
+  FakeClaim claim;
+  claim.consumeMs = -1;
+  long long clock = 0;
+  SoloOutcome out = runSolo("", claim, clock);
+  check(clock <= 4500, "wall-clock hart <= totalMs");
+  check(out.httpCode == 503, "budget erschoepft -> 503");
+  checkEq(out.reason, "backend_starting", "budget reason");
+  bool shrinking = false;
+  int prev = 1 << 30;
+  for (int t : claim.timeouts) {
+    check(t <= 1500, "jeder Timeout <= attemptMs");
+    if (t < prev) {
+      shrinking = true;
+    }
+    prev = t;
+  }
+  check(shrinking, "Timeouts schrumpfen mit Rest-Budget");
+  check(claim.timeouts.back() < claim.timeouts.front(),
+        "letzter Timeout < erster");
+}
+
+static void testSoloBudgetMinAttemptCutoff() {
+  // Nur noch ein Versuch passt: totalMs=300 < attemptMs, danach bricht die
+  // Schleife ab (Rest-Budget < minAttemptMs).
+  FakeClaim claim;
+  claim.consumeMs = -1;
+  long long clock = 0;
+  SoloBudget budget;
+  budget.totalMs = 300;
+  budget.attemptMs = 1500;
+  budget.minAttemptMs = 250;
+  SoloOutcome out = runSolo("", claim, clock, budget);
+  check(clock <= 300, "mini-Budget wall-clock <= totalMs");
+  check(claim.calls == 1, "mini-Budget -> genau 1 Versuch");
+  check(claim.timeouts[0] == 300, "Timeout = Rest-Budget (300)");
+  check(out.httpCode == 503, "mini-Budget erschoepft -> 503");
+}
+
+static void testSoloBudgetSleepRespectsRemaining() {
+  // Nach dem 1. Versuch (1500 ms) bleibt 500 ms: Sleep 250 ms passt, danach
+  // ein letzter Versuch mit exakt dem Rest (250 ms) -> Summe genau 2000 ms.
+  FakeClaim claim;
+  claim.consumeMs = -1;
+  long long clock = 0;
+  SoloBudget budget;
+  budget.totalMs = 2000;
+  budget.attemptMs = 1500;
+  budget.minAttemptMs = 250;
+  SoloOutcome out = runSolo("", claim, clock, budget);
+  check(clock <= 2000, "sleep wall-clock <= totalMs");
+  check(claim.calls == 2, "sleep -> 2 Versuche");
+  check(claim.timeouts[0] == 1500 && claim.timeouts[1] == 250,
+        "Timeouts 1500/250");
+  check(out.httpCode == 503, "sleep erschoepft -> 503");
 }
 
 static void testSoloTerminalErrors() {
   // 409 not_claimable ist endgueltig -> genau 1 Versuch, 409.
   FakeClaim claim;
+  claim.consumeMs = 10;
   claim.responses.push_back(HttpResp{409, "{\"reason\":\"not_claimable\"}"});
-  SoloOutcome out = runSolo("", claim);
+  long long clock = 0;
+  SoloOutcome out = runSolo("", claim, clock);
   check(out.httpCode == 409, "not_claimable -> 409");
   checkEq(out.reason, "not_claimable", "not_claimable reason");
   check(claim.calls == 1, "not_claimable -> kein retry");
@@ -290,33 +380,30 @@ static void testSoloTerminalErrors() {
 
   // 200 ohne brauchbares Ziel -> 502 bad_gateway, kein Retry.
   FakeClaim claim2;
+  claim2.consumeMs = 10;
   claim2.responses.push_back(HttpResp{200, "{\"ok\":true}"});
-  SoloOutcome out2 = runSolo("", claim2);
+  long long clock2 = 0;
+  SoloOutcome out2 = runSolo("", claim2, clock2);
   check(out2.httpCode == 502, "200 ohne ziel -> 502");
   checkEq(out2.reason, "bad_gateway", "200 ohne ziel reason");
   check(claim2.calls == 1, "200 ohne ziel -> kein retry");
 
   // 200 mit ungueltigem Endpoint (Port 0) -> 502.
   FakeClaim claim3;
+  claim3.consumeMs = 10;
   claim3.responses.push_back(HttpResp{200, "{\"gns_endpoint\":\"127.0.0.1:0\"}"});
-  SoloOutcome out3 = runSolo("", claim3);
+  long long clock3 = 0;
+  SoloOutcome out3 = runSolo("", claim3, clock3);
   check(out3.httpCode == 502, "port 0 -> 502");
 
   // 401 (falscher/fehlender Token) ist keine Parked-Semantik -> 502.
   FakeClaim claim4;
+  claim4.consumeMs = 10;
   claim4.responses.push_back(HttpResp{401, "{\"reason\":\"unauthorized\"}"});
-  SoloOutcome out4 = runSolo("", claim4);
+  long long clock4 = 0;
+  SoloOutcome out4 = runSolo("", claim4, clock4);
   check(out4.httpCode == 502, "401 -> 502");
   check(claim4.calls == 1, "401 -> kein retry");
-}
-
-static void testSoloBudgetVariant() {
-  // maxAttempts=2: nach 2 transienten Fehlern Erschoepfung (1 Sleep).
-  FakeClaim claim;
-  SoloOutcome out = runSolo("", claim, 2);
-  check(claim.calls == 2, "maxAttempts=2 -> 2 claims");
-  check(g_sleeps.size() == 1, "maxAttempts=2 -> 1 sleep");
-  check(out.httpCode == 503, "maxAttempts=2 erschoepft -> 503");
 }
 
 int main() {
@@ -333,8 +420,10 @@ int main() {
   testSoloRetryThenSuccess();
   testSoloExhaustion();
   testSoloConnectionErrorExhaustion();
+  testSoloBudgetHardBound();
+  testSoloBudgetMinAttemptCutoff();
+  testSoloBudgetSleepRespectsRemaining();
   testSoloTerminalErrors();
-  testSoloBudgetVariant();
 
   if (g_failures == 0) {
     std::printf("test_api_util: %d Checks OK\n", g_checks);

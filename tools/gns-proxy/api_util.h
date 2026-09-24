@@ -7,6 +7,7 @@
 
 #include "route_rules.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdio>
 #include <functional>
@@ -273,18 +274,9 @@ inline bool isTransientClaimStatus(int httpStatus, const std::string &reason) {
   return false;
 }
 
-// Soll nach `attempt` Versuchen (1-basiert, bereits gemacht) ein weiterer
-// Versuch folgen? Nur bei transientem Fehler und solange das Budget reicht.
-inline bool shouldRetryClaim(int attempt, int maxAttempts, int httpStatus,
-                             const std::string &reason) {
-  if (attempt >= maxAttempts) {
-    return false;
-  }
-  return isTransientClaimStatus(httpStatus, reason);
-}
-
 // Wartezeit vor dem naechsten Versuch: 250 ms, 500 ms, 1000 ms … Cap 1000 ms.
-// Summe ueber 4 Versuche (3 Wartephasen) = 1750 ms < 5 s Budget.
+// runSoloClaim prueft die Wartezeit gegen das Rest-Budget — so bleibt die
+// Gesamtlaufzeit hart <= SoloBudget::totalMs (statt einer Versuchszahl).
 inline int retryDelayMs(int attempt) {
   int delay = 250;
   for (int i = 1; i < attempt && delay < 1000; ++i) {
@@ -326,11 +318,31 @@ inline std::string jsonEscape(const std::string &s) {
 // Parked-Semantik. In gns_probe.cpp liefert der Callback den WinSock-Outbound-
 // POST; im Host-Test ein Fake (Fake-Parked-Dienst). Retry-Erschoepfung und das
 // 409/503/502-Mapping sind damit hermetisch testbar (test_api_util.cpp).
+//
+// Das Latenz-Budget ist HART (Deadline-getrieben, nicht Versuchszahl): die
+// Schleife rechnet vor jedem Versuch `remaining = totalMs - elapsed` und bricht
+// ab, sobald weniger als `minAttemptMs` uebrig ist. Jeder Versuch bekommt
+// `min(remaining, attemptMs)` als Timeout — der Outbound-Client (gns_probe.cpp)
+// nutzt das als Summe fuer connect+recv, sodass ein Versuch nie laenger laeuft.
+// Damit ist die Gesamt-Wall-Clock garantiert <= totalMs (Default 4,5 s < 5 s).
 
 struct HttpResp {
   int status = -1;  // -1 = Verbindungs-/Timeout-Fehler (transient)
   std::string body;
 };
+
+// Hartes Latenz-Budget fuer den /solo-Claim (Wall-Clock).
+struct SoloBudget {
+  int totalMs = 4500;      // Obergrenze fuer die GESAMTE Claim-Schleife
+  int attemptMs = 1500;    // Obergrenze fuer einen einzelnen Versuch
+  int minAttemptMs = 250;  // kein Versuch mehr, wenn weniger Rest-Budget
+};
+
+// Claim-Callback: `path` + `payload` + pro Versuch `timeoutMs` (Rest-Budget,
+// bereits auf attemptMs gedeckelt). Muss innerhalb von timeoutMs zurueckkehren.
+using ClaimFn = std::function<HttpResp(const std::string &path,
+                                       const std::string &payload,
+                                       int timeoutMs)>;
 
 struct SoloOutcome {
   int httpCode = 502;
@@ -341,17 +353,20 @@ struct SoloOutcome {
   std::string reason;    // "backend_starting" bei Retry-Erschoepfung, sonst Grund
 };
 
-// Claim-Callback liefert (status, body) eines Parked-`POST /claim`; `sleepFn`
-// bekommt die Wartezeit in ms (im Host-Test eine Aufzeichnung, unter Wine
-// `Sleep`). Identitaet/env sind bereits geprueft — hier nur Claim + Mapping.
+// Claim-Callback liefert (status, body) eines Parked-`POST /claim`; `nowMs`
+// liefert eine monotone Millisekunden-Uhr (im Host-Test eine Fake-Clock, unter
+// Wine std::chrono::steady_clock); `sleepFn` bekommt die Wartezeit in ms (im
+// Host-Test eine Aufzeichnung, unter Wine `Sleep`). Identitaet/env sind bereits
+// geprueft — hier nur Claim + Mapping. Die Schleife ist deadline-getrieben und
+// garantiert eine Gesamt-Wall-Clock <= budget.totalMs.
 inline SoloOutcome runSoloClaim(
-    const std::string &env,
-    const std::function<HttpResp(const std::string &path,
-                                const std::string &payload)> &claim,
-    int maxAttempts, const std::function<void(int)> &sleepFn) {
+    const std::string &env, const ClaimFn &claim, const SoloBudget &budget,
+    const std::function<long long()> &nowMs,
+    const std::function<void(int)> &sleepFn) {
   const std::string claimBody =
       env.empty() ? std::string("{}")
                   : "{\"env\":\"" + jsonEscape(env) + "\"}";
+  const long long start = nowMs ? nowMs() : 0;
   int status = -1;
   std::string respBody;
   std::string reason;
@@ -359,9 +374,18 @@ inline SoloOutcome runSoloClaim(
   std::string instance;
   rbroute::Endpoint endpoint;
   bool haveEndpoint = false;
+  int attempt = 0;
 
-  for (int attempt = 1; attempt <= maxAttempts; ++attempt) {
-    const HttpResp r = claim("/claim", claimBody);
+  for (;;) {
+    const long long elapsed = (nowMs ? nowMs() : 0) - start;
+    const long long remaining = static_cast<long long>(budget.totalMs) - elapsed;
+    if (remaining < budget.minAttemptMs) {
+      break;  // zu wenig Rest-Budget fuer einen sinnvollen Versuch
+    }
+    ++attempt;
+    const int attemptTimeout = static_cast<int>(
+        std::min<long long>(remaining, budget.attemptMs));
+    const HttpResp r = claim("/claim", claimBody, attemptTimeout);
     status = r.status;
     respBody = r.body;
     reason.clear();
@@ -379,11 +403,21 @@ inline SoloOutcome runSoloClaim(
       reason = "no_endpoint";
       break;
     }
-    if (!shouldRetryClaim(attempt, maxAttempts, status, reason)) {
+    if (!isTransientClaimStatus(status, reason)) {
+      break;  // endgueltiger Fehler -> kein Retry
+    }
+    // Sleep gegen das Rest-Budget pruefen: nie laenger schlafen als uebrig.
+    const long long remainingBeforeSleep =
+        static_cast<long long>(budget.totalMs) - ((nowMs ? nowMs() : 0) - start);
+    if (remainingBeforeSleep <= 0) {
       break;
     }
-    if (sleepFn) {
-      sleepFn(retryDelayMs(attempt));
+    int delay = retryDelayMs(attempt);
+    if (delay > remainingBeforeSleep) {
+      delay = static_cast<int>(remainingBeforeSleep);
+    }
+    if (sleepFn && delay > 0) {
+      sleepFn(delay);
     }
   }
 
@@ -403,15 +437,13 @@ inline SoloOutcome runSoloClaim(
     out.body = "{\"ok\":false,\"reason\":\"backend_starting\",\"retry\":true}";
     return out;
   }
-  // Endgueltige Fehler auf die Parked-Semantik abbilden.
+  // Endgueltige Fehler auf die Parked-Semantik abbilden. 503 ist per
+  // isTransientClaimStatus immer transient und landet daher nie hier.
   int outStatus = 502;
   std::string outReason = "bad_gateway";
   if (status == 409) {
     outStatus = 409;
     outReason = reason.empty() ? std::string("not_claimable") : reason;
-  } else if (status == 503) {
-    outStatus = 503;
-    outReason = reason.empty() ? std::string("bridge_unhealthy") : reason;
   }
   out.httpCode = outStatus;
   out.reason = outReason;

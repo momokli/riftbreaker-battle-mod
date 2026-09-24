@@ -131,7 +131,12 @@ gns_probe.exe --port 6321 --map-file /etc/rbgns/routes --hold \
 | `--api-port` | HTTP-Port der UI/API (Default-Bind nur `127.0.0.1`)  |
 | `--api-host` | Bind-Adresse der UI/API (Default `127.0.0.1`)        |
 | `--target`   | `NAME=ip:port`, wiederholbar — die Buttons der UI    |
-| `--parked-url` | Ziel des Parked-Pool-Dienstes fuer `POST /solo` (Default `http://127.0.0.1:8095`) |
+| `--parked-url` | Ziel des Parked-Pool-Dienstes fuer `POST /solo` (Default: **nicht gesetzt**). **Nur IPv4-Literal** (`http://<IPv4>:port`) — der Outbound-Client nutzt `inet_pton`, also kein Hostname/DNS (`localhost` funktioniert nicht). |
+
+Der Parked-Pfad ist nur aktiv, wenn `--parked-url` **oder** die Umgebungsvariable
+`RBB_PARKED_URL` gesetzt ist (argv hat Vorrang); ohne beides antwortet
+`POST /solo` mit `503 parked_unconfigured`. `RBB_PARKED_URL` akzeptiert
+ebenso nur ein IPv4-Literal.
 
 `RBB_PARKED_TOKEN` (Env, **nicht** argv) ist der Bearer-Token fuer den
 Parked-Dienst; leer = kein Auth-Header.
@@ -192,10 +197,10 @@ Semantik wie `POST /route`, aber mit aufgeloestem Endpoint).
 | --- | --- |
 | Erfolg | `200 {ok:true,identitaet,target,instance}` |
 | `identitaet` fehlt | `400` |
-| Parked `409 none_parked` / `503 bridge_unhealthy` / Connect-Fehler (transient) | Retry (4 Versuche, 250 ms→1 s, Budget < 5 s); nach Erschoepfung `503 {ok:false,reason:"backend_starting",retry:true}` |
+| Parked `409 none_parked` / `503 bridge_unhealthy` / Connect-Fehler (transient) | Retry mit hartem Latenz-Budget: Deadline-getrieben, Gesamt-Wall-Clock ≤ 4,5 s (`SoloBudget{totalMs=4500, attemptMs=1500, minAttemptMs=250}`), Backoff 250 ms→1 s gegen das Rest-Budget geprueft; nach Erschoepfung `503 {ok:false,reason:"backend_starting",retry:true}` |
 | Parked `409 not_claimable` | `409` |
 | alles andere (401/500/…, oder 200 ohne `gns_endpoint`) | `502` |
-| Parked nicht konfiguriert | `503 {reason:"parked_unconfigured",retry:false}` |
+| Parked nicht konfiguriert (weder `--parked-url` noch `RBB_PARKED_URL`) | `503 {reason:"parked_unconfigured",retry:false}` |
 
 Der Retry laeuft **ausschliesslich im HTTP-Request-Thread** — der GNS-Hauptloop
 wird nie blockiert. Die Registry (`g_targets`) wird ebenfalls nur in der

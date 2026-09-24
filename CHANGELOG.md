@@ -1,3 +1,9 @@
+[Unreleased]
+Date: 24. 09. 2026
+
+  Features:
+    - GNS-Entry-Relay: Backends zur Laufzeit registrieren/abmelden (`POST`/`DELETE /backends`) und Spieler per `POST /solo` automatisch einer geparkten Solo-Instanz zuweisen (#929).
+
 Version: 1.0.2
 Date: 24. 09. 2026
 

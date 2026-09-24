@@ -52,6 +52,7 @@
 #include <cstring>
 #include <ctime>
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -258,8 +259,11 @@ std::vector<std::pair<std::string, rbroute::Endpoint>> g_targets;
 // Token kommt AUS DER UMWELT (`RBB_PARKED_TOKEN`), nie aus argv (Prozessliste).
 std::string g_parkedHost = "127.0.0.1";
 int g_parkedPort = 8095;
-// Default-Ziel ist der dev-Parked-Dienst; --parked-url ueberschreibt es.
-bool g_parkedConfigured = true;
+// Erst `--parked-url` ODER die Umgebungsvariable `RBB_PARKED_URL` schalten den
+// Parked-Pfad scharf; ohne beides antwortet `POST /solo` mit
+// `503 parked_unconfigured`. Beide akzeptieren nur ein IPv4-Literal
+// (Outbound-Client = inet_pton), nicht `localhost`/DNS-Namen.
+bool g_parkedConfigured = false;
 std::string g_parkedToken;
 // Operator-Pin pro Identitaet — ueberlebt Reconnects (der Client schliesst nach
 // ~20 s ohne Antwort selbst und verbindet neu). NUR vom Hauptloop beruehrt.
@@ -290,7 +294,6 @@ struct ApiCommand {
   std::string identity;  // bei Route-Befehlen
   std::string target;    // Backend-*Name* (RouteByName) bzw. Name (Add/Delete)
   rbroute::Endpoint endpoint;  // bei Add / RouteByEndpoint
-  bool hasEndpoint = false;
 };
 std::mutex g_apiMutex;
 std::vector<SessionInfo> g_sessionsSnapshot;
@@ -1337,16 +1340,35 @@ void handleSolo(SOCKET s, const std::string &requestBody) {
 
   // Claim + Retry/Backoff + Fehler-Mapping liegen als reine, host-testbare
   // Funktion in api_util.h (runSoloClaim). Der Callback ist der Outbound-POST
-  // (WinSock, im Request-Thread — der GNS-Hauptloop bleibt unberuehrt).
+  // (WinSock, im Request-Thread — der GNS-Hauptloop bleibt unberuehrt). Das
+  // Latenz-Budget ist hart: `timeoutMs` ist die Summe fuer connect+recv, die
+  // Uhr liefert std::chrono, die Gesamt-Wall-Clock bleibt <= totalMs (4,5 s).
+  const auto soloStart = std::chrono::steady_clock::now();
+  const std::function<long long()> nowMs = [soloStart]() -> long long {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now() - soloStart)
+        .count();
+  };
   const rbapi::SoloOutcome outcome = rbapi::runSoloClaim(
       env,
-      [](const std::string &path, const std::string &payload) -> rbapi::HttpResp {
+      [](const std::string &path, const std::string &payload,
+         int timeoutMs) -> rbapi::HttpResp {
+        // Ein Versuch <= timeoutMs: connect und recv teilen sich das Budget.
+        int connectMs = timeoutMs / 2;
+        if (connectMs < 1) {
+          connectMs = 1;
+        }
+        int recvMs = timeoutMs - connectMs;
+        if (recvMs < 1) {
+          recvMs = 1;
+        }
         const OutboundResult r = outboundHttpPost(g_parkedHost, g_parkedPort,
                                                   path, payload, g_parkedToken,
-                                                  2000, 2000);
+                                                  connectMs, recvMs);
         return rbapi::HttpResp{r.status, r.body};
       },
-      4, [](int ms) { Sleep(static_cast<DWORD>(ms)); });
+      rbapi::SoloBudget{}, nowMs,
+      [](int ms) { Sleep(static_cast<DWORD>(ms)); });
 
   if (outcome.pinIdentity) {
     {
@@ -1355,7 +1377,6 @@ void handleSolo(SOCKET s, const std::string &requestBody) {
       cmd.kind = ApiCommand::kRouteByEndpoint;
       cmd.identity = identity;
       rbroute::parseEndpoint(outcome.endpoint, cmd.endpoint);
-      cmd.hasEndpoint = true;
       g_apiCommands.push_back(cmd);
     }
     logLine("API: solo '%s' -> %s (instance=%s)", identity.c_str(),
@@ -1491,7 +1512,6 @@ void httpHandle(SOCKET s) {
           cmd.kind = ApiCommand::kBackendAdd;
           cmd.target = name;
           cmd.endpoint = endpoint;
-          cmd.hasEndpoint = true;
           g_apiCommands.push_back(cmd);
         }
         logLine("API: backend '%s' -> %s angefordert", name.c_str(),
@@ -1738,11 +1758,16 @@ int main(int argc, char **argv) {
     } else if (strcmp(argv[i], "--parked-url") == 0 && i + 1 < argc) {
       // Parked-Pool-Dienst fuer POST /solo (Issue #929). Token NUR per Env
       // (RBB_PARKED_TOKEN), damit er nicht in der Prozessliste steht.
+      // Nur IPv4-Literal (Outbound-Client = inet_pton), kein Hostname/DNS.
       const char *spec = argv[++i];
       std::string host;
       int port = 0;
-      if (!rbapi::parseUrlHostPort(spec, host, port)) {
-        fprintf(stderr, "--parked-url braucht http://host:port, bekam '%s'\n",
+      rbroute::Endpoint parsed;
+      if (!rbapi::parseUrlHostPort(spec, host, port) ||
+          !rbroute::parseEndpoint(host + ":" + std::to_string(port), parsed)) {
+        fprintf(stderr,
+                "--parked-url braucht http://<IPv4>:port (kein Hostname), "
+                "bekam '%s'\n",
                 spec);
         return 2;
       }
@@ -1752,12 +1777,38 @@ int main(int argc, char **argv) {
     }
   }
 
+  // `RBB_PARKED_URL` aus der Umgebung schaltet den Parked-Pfad ebenfalls scharf
+  // (argv hat Vorrang). Nur IPv4-Literal — sonst bleibt der Pfad unkonfiguriert
+  // und `POST /solo` liefert `503 parked_unconfigured`.
+  if (!g_parkedConfigured) {
+    const char *parkedUrl = getenv("RBB_PARKED_URL");
+    if (parkedUrl != nullptr && *parkedUrl != '\0') {
+      std::string host;
+      int port = 0;
+      rbroute::Endpoint parsed;
+      if (rbapi::parseUrlHostPort(parkedUrl, host, port) &&
+          rbroute::parseEndpoint(host + ":" + std::to_string(port), parsed)) {
+        g_parkedHost = host;
+        g_parkedPort = port;
+        g_parkedConfigured = true;
+      } else {
+        fprintf(stderr,
+                "RBB_PARKED_URL ungueltig (braucht http://<IPv4>:port): '%s'\n",
+                parkedUrl);
+      }
+    }
+  }
+
   const char *parkedToken = getenv("RBB_PARKED_TOKEN");
   if (parkedToken != nullptr) {
     g_parkedToken = parkedToken;
   }
-  logLine("parked fuer /solo: %s:%d (token=%s)", g_parkedHost.c_str(),
-          g_parkedPort, g_parkedToken.empty() ? "kein" : "gesetzt");
+  if (g_parkedConfigured) {
+    logLine("parked fuer /solo: %s:%d (token=%s)", g_parkedHost.c_str(),
+            g_parkedPort, g_parkedToken.empty() ? "kein" : "gesetzt");
+  } else {
+    logLine("parked fuer /solo: NICHT konfiguriert -> 503 parked_unconfigured");
+  }
 
   logLine("gns_probe (Spike #831, E1/E2) — port=%u", nPort);
   if (!resolveDll(dllPath)) {
