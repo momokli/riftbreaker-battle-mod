@@ -362,7 +362,8 @@ struct SoloOutcome {
 inline SoloOutcome runSoloClaim(
     const std::string &env, const ClaimFn &claim, const SoloBudget &budget,
     const std::function<long long()> &nowMs,
-    const std::function<void(int)> &sleepFn) {
+    const std::function<void(int)> &sleepFn,
+    const std::string &claimPath = "/claim") {
   const std::string claimBody =
       env.empty() ? std::string("{}")
                   : "{\"env\":\"" + jsonEscape(env) + "\"}";
@@ -385,7 +386,7 @@ inline SoloOutcome runSoloClaim(
     ++attempt;
     const int attemptTimeout = static_cast<int>(
         std::min<long long>(remaining, budget.attemptMs));
-    const HttpResp r = claim("/claim", claimBody, attemptTimeout);
+    const HttpResp r = claim(claimPath, claimBody, attemptTimeout);
     status = r.status;
     respBody = r.body;
     reason.clear();
