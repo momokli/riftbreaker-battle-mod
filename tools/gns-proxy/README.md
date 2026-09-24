@@ -131,6 +131,10 @@ gns_probe.exe --port 6321 --map-file /etc/rbgns/routes --hold \
 | `--api-port` | HTTP-Port der UI/API (Default-Bind nur `127.0.0.1`)  |
 | `--api-host` | Bind-Adresse der UI/API (Default `127.0.0.1`)        |
 | `--target`   | `NAME=ip:port`, wiederholbar — die Buttons der UI    |
+| `--parked-url` | Ziel des Parked-Pool-Dienstes fuer `POST /solo` (Default `http://127.0.0.1:8095`) |
+
+`RBB_PARKED_TOKEN` (Env, **nicht** argv) ist der Bearer-Token fuer den
+Parked-Dienst; leer = kein Auth-Header.
 
 Suffix-/Identitaets-Regeln aus der Routen-Datei haben **Vorrang**: wer
 `*-dev`/`*-staging` heisst oder eine exakte Identitaets-Regel trifft, wird
@@ -142,7 +146,6 @@ Endpunkte (der Relay selbst hat **keinen** Auth — er bindet daher nur lokal; d
 parallelen Sessions),
 `GET /targets` (JSON: die Buttons), `POST /route`
 `{"identitaet":"…","target":"NAME"}`.
-
 Im Deploy läuft die Rolle `website` die Lobby öffentlich aus:
 **https://proxy.rift.projectmellon.de** (Host-Caddy → `127.0.0.1:9200`, basic_auth
 `operator`). Lokal ohne Domain: `ssh -L 9200:127.0.0.1:9200 planet`.
@@ -158,7 +161,47 @@ selbst schliesst und neu verbindet; der Pin ueberlebt den Reconnect. Die
 einen mutex-geschuetzten Snapshot (`/sessions`) und schreibt Befehle in eine
 Queue, die die Hauptschleife abarbeitet (Muster `server/dll/rbbridge.c`).
 
-## Multi-Session (Issue #877)
+## Dynamische Backends + Solo-Claim (Issue #929)
+
+Zwei neue Endpunkte ergaenzen die statischen `--target`-Buttons:
+
+| Endpunkt | Body / Query | Wirkung |
+| --- | --- | --- |
+| `POST /backends` | `{"name":"…","endpoint":"ip:port"}` | Backend registrieren/aktualisieren (Name ist der Schluessel; doppelter Name aktualisiert). `200`; `400` bei fehlendem `name`/ungueltigem `endpoint`. |
+| `DELETE /backends?name=NAME` | — | Backend abmelden. `200`; `400` ohne `name`; `404` bei unbekanntem Namen. |
+| `GET /targets` | — | listet die **dynamische** Registry (ohne Relay-Neustart). |
+| `POST /solo` | `{"identitaet":"str:…","env"?}` | fragt den Parked-Pool nach einer geparkten Solo-Instanz, pinnt die Identitaet automatisch auf deren **GNS-UDP-Endpoint** und antwortet mit dem Ziel. Kein Operator-Klick. |
+
+```bash
+curl -s -X POST 127.0.0.1:9200/backends -d '{"name":"T","endpoint":"127.0.0.1:6324"}'
+curl -s 127.0.0.1:9200/targets                 # T erscheint — ohne Neustart
+curl -s -X DELETE '127.0.0.1:9200/backends?name=T'
+curl -s -X POST 127.0.0.1:9200/solo -d '{"identitaet":"str:<id>"}'
+# -> {"ok":true,"identitaet":"str:<id>","target":"127.0.0.1:32768","instance":"parked-1"}
+```
+
+**Ablauf `/solo`:** Der Relay ruft `POST /claim` am Parked-Dienst (Bearer aus
+`RBB_PARKED_TOKEN`) und liest daraus `gns_endpoint` (der **GNS-UDP**-Host:Port
+der Instanz — nicht die HTTP-Bridge). Das Ziel wird per Command-Queue in die
+Hauptschleife gegeben und als **Pin fuer die Identitaet** gesetzt (gleiche
+Semantik wie `POST /route`, aber mit aufgeloestem Endpoint).
+
+**Fehlercodes `/solo`** (Parked-Semantik wird abgebildet):
+
+| Fall | Antwort |
+| --- | --- |
+| Erfolg | `200 {ok:true,identitaet,target,instance}` |
+| `identitaet` fehlt | `400` |
+| Parked `409 none_parked` / `503 bridge_unhealthy` / Connect-Fehler (transient) | Retry (4 Versuche, 250 ms→1 s, Budget < 5 s); nach Erschoepfung `503 {ok:false,reason:"backend_starting",retry:true}` |
+| Parked `409 not_claimable` | `409` |
+| alles andere (401/500/…, oder 200 ohne `gns_endpoint`) | `502` |
+| Parked nicht konfiguriert | `503 {reason:"parked_unconfigured",retry:false}` |
+
+Der Retry laeuft **ausschliesslich im HTTP-Request-Thread** — der GNS-Hauptloop
+wird nie blockiert. Die Registry (`g_targets`) wird ebenfalls nur in der
+Hauptschleife mutiert; `GET /targets` liest einen mutex-geschuetzten Snapshot.
+Die dynamische Registry ist bewusst **fluechtig** (Parked ist Source of Truth).
+
 
 Der Relay bedient **N parallele Sessions**: jeder akzeptierte Client bekommt
 Client-Conn, Backend-Conn, Historie, Sende-Queues und Backpressure **eigen**.
@@ -211,7 +254,7 @@ Default-Ziel darf ein Re-Route **nicht** ueberschreiben.
 | Datei                    | Zweck                                                            |
 | ------------------------ | ---------------------------------------------------------------- |
 | `gns_probe.cpp`          | Relay + Routing + Message-Dump + Hold/Web-UI (`--dial` Diagnose) |
-| `api_util.h`             | reine API-Helfer (Target-Spec, JSON lesen/escapen)               |
+| `api_util.h`             | reine API-Helfer (Target-Spec, JSON, Query/URL, HTTP-Response, Retry) |
 | `test_api_util.cpp`      | Host-Test der API-Helfer (CI: `g++ -std=c++17`)                  |
 | `route_rules.h`          | Routing-Regeln (exakt / Suffix / Default), reine Logik           |
 | `test_route_rules.cpp`   | Host-Test der Regeln (CI: `g++ -std=c++17`)                      |
@@ -239,5 +282,6 @@ Sekunden auf (vorher sah es wie ein Timeout des Proxys aus).
 - [x] Deployment der Relay-Rolle + dev-Port-Umzug (#843)
 - [x] Hold + Operator-Web-UI (#857, PoC): Spieler halten, per Klick routen
 - [x] Multi-Session (#877): N parallele Sessions (eigene Queues/Backpressure)
+- [x] Dynamische Backend-Registry + `POST /solo` (Claim + Auto-Pin, Retry) (#929)
 - [ ] `m_nAppID` in eigenen GNS-Build statt Runtime-Patch
 - [ ] Rust-Backend/Launcher auf die JSON-API aufsetzen

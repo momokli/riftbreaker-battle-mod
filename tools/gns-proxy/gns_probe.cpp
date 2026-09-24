@@ -251,6 +251,16 @@ bool g_hold = false;
 int g_apiPort = 0;
 std::string g_apiHost = "127.0.0.1";
 std::vector<std::pair<std::string, rbroute::Endpoint>> g_targets;
+
+// --- Parked-Anbindung fuer POST /solo (Issue #929) ----------------------------
+// Der Relay ruft den Parked-Pool-Dienst (`POST /claim`) per WinSock-HTTP auf
+// und pinnt die Identitaet auf den von dort gelieferten GNS-UDP-Endpoint. Der
+// Token kommt AUS DER UMWELT (`RBB_PARKED_TOKEN`), nie aus argv (Prozessliste).
+std::string g_parkedHost = "127.0.0.1";
+int g_parkedPort = 8095;
+// Default-Ziel ist der dev-Parked-Dienst; --parked-url ueberschreibt es.
+bool g_parkedConfigured = true;
+std::string g_parkedToken;
 // Operator-Pin pro Identitaet — ueberlebt Reconnects (der Client schliesst nach
 // ~20 s ohne Antwort selbst und verbindet neu). NUR vom Hauptloop beruehrt.
 std::map<std::string, rbroute::Endpoint> g_pins;
@@ -269,11 +279,23 @@ struct SessionInfo {
   bool pinned = false;
 };
 struct ApiCommand {
-  std::string identity;
-  std::string target;
+  // Was die Hauptschleife tun soll (die Registry `g_targets` gehoert NUR ihr).
+  enum Kind {
+    kRouteByName,    // Identitaet auf einen registrierten Backend-*Namen* pinnen
+    kRouteByEndpoint,// Identitaet direkt auf einen Endpoint pinnen (/solo)
+    kBackendAdd,     // Backend registrieren/aktualisieren
+    kBackendDelete,  // Backend abmelden
+  };
+  Kind kind = kRouteByName;
+  std::string identity;  // bei Route-Befehlen
+  std::string target;    // Backend-*Name* (RouteByName) bzw. Name (Add/Delete)
+  rbroute::Endpoint endpoint;  // bei Add / RouteByEndpoint
+  bool hasEndpoint = false;
 };
 std::mutex g_apiMutex;
 std::vector<SessionInfo> g_sessionsSnapshot;
+// Kopie der Registry fuer den HTTP-Thread (nur unter g_apiMutex gelesen).
+std::vector<std::pair<std::string, rbroute::Endpoint>> g_targetsSnapshot;
 std::deque<ApiCommand> g_apiCommands;
 
 // Laufende Session-Buchfuehrung (NUR Hauptloop). Ein Eintrag pro Identitaet,
@@ -834,6 +856,60 @@ void drainFrom(Session &s, HSteamNetPollGroup group, bool fromClient) {
 // Bewusst ohne Auth und standardmaessig nur an 127.0.0.1 gebunden: wer die API
 // erreicht, darf routen. Zugriff von aussen per SSH-Tunnel.
 
+// Backend registrieren/aktualisieren (Name ist der Schluessel). NUR Hauptloop.
+void upsertTarget(const std::string &name, const rbroute::Endpoint &endpoint) {
+  for (std::size_t i = 0; i < g_targets.size(); ++i) {
+    if (g_targets[i].first == name) {
+      g_targets[i].second = endpoint;
+      return;
+    }
+  }
+  g_targets.emplace_back(name, endpoint);
+}
+
+// Backend abmelden. `g_pins` bleiben bewusst unangetastet (bestehende Pins
+// zeigen weiter auf den Endpoint, auch wenn der Name wegfällt). NUR Hauptloop.
+bool removeTarget(const std::string &name) {
+  for (std::vector<std::pair<std::string, rbroute::Endpoint>>::iterator it =
+           g_targets.begin();
+       it != g_targets.end(); ++it) {
+    if (it->first == name) {
+      g_targets.erase(it);
+      return true;
+    }
+  }
+  return false;
+}
+
+// Identitaet auf einen Endpoint pinnen und alle laufenden Sessions umziehen
+// (identische Semantik wie das fruehere /route, aber mit aufgeloestem Ziel).
+void pinIdentityTo(const std::string &identity, const rbroute::Endpoint &target,
+                   const char *why) {
+  g_pins[identity] = target;
+  logLine("API: pin '%s' -> %s", identity.c_str(), target.str().c_str());
+  for (std::map<HSteamNetConnection, std::unique_ptr<Session>>::iterator st =
+           g_clientSessions.begin();
+       st != g_clientSessions.end(); ++st) {
+    Session &s = *st->second;
+    if (s.identity != identity ||
+        s.clientConn == k_HSteamNetConnection_Invalid) {
+      continue;
+    }
+    routeTo(s, target, why);
+    SessionRecord &rec = sessionFor(identity);
+    rec.state = "routed";
+    rec.held = false;
+    rec.targetStr = target.str();
+  }
+}
+
+// Registry-Kopie fuer den HTTP-Thread (/targets liest nur diesen Snapshot).
+void refreshTargetsSnapshot() {
+  std::vector<std::pair<std::string, rbroute::Endpoint>> copy = g_targets;
+  std::lock_guard<std::mutex> lock(g_apiMutex);
+  g_targetsSnapshot.swap(copy);
+}
+
 void processApiCommands() {
   std::deque<ApiCommand> cmds;
   {
@@ -845,39 +921,44 @@ void processApiCommands() {
   }
   for (std::deque<ApiCommand>::const_iterator it = cmds.begin();
        it != cmds.end(); ++it) {
-    rbroute::Endpoint target;
-    bool found = false;
-    for (std::size_t i = 0; i < g_targets.size(); ++i) {
-      if (g_targets[i].first == it->target) {
-        target = g_targets[i].second;
-        found = true;
-        break;
+    switch (it->kind) {
+    case ApiCommand::kBackendAdd:
+      upsertTarget(it->target, it->endpoint);
+      logLine("API: backend '%s' -> %s (registriert)", it->target.c_str(),
+              it->endpoint.str().c_str());
+      break;
+    case ApiCommand::kBackendDelete:
+      if (removeTarget(it->target)) {
+        logLine("API: backend '%s' entfernt", it->target.c_str());
+      } else {
+        logLine("API: backend '%s' nicht vorhanden — ignoriert",
+                it->target.c_str());
       }
-    }
-    if (!found) {
-      logLine("API: unbekanntes Ziel '%s' — ignoriert", it->target.c_str());
-      continue;
-    }
-    // Pin pro Identitaet: greift auch beim naechsten Connect.
-    g_pins[it->identity] = target;
-    logLine("API: pin '%s' -> %s", it->identity.c_str(), target.str().c_str());
-    // Alle Sessions dieser Identitaet umziehen — bei einem kurzen
-    // Reconnect-Race koennen zwei gleichzeitig leben.
-    for (std::map<HSteamNetConnection, std::unique_ptr<Session>>::iterator st =
-             g_clientSessions.begin();
-         st != g_clientSessions.end(); ++st) {
-      Session &s = *st->second;
-      if (s.identity != it->identity ||
-          s.clientConn == k_HSteamNetConnection_Invalid) {
+      break;
+    case ApiCommand::kRouteByEndpoint:
+      // /solo: Ziel kommt aufgeloest vom Parked-Dienst (GNS-UDP-Endpoint).
+      pinIdentityTo(it->identity, it->endpoint, "solo (parked)");
+      break;
+    case ApiCommand::kRouteByName: {
+      rbroute::Endpoint target;
+      bool found = false;
+      for (std::size_t i = 0; i < g_targets.size(); ++i) {
+        if (g_targets[i].first == it->target) {
+          target = g_targets[i].second;
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        logLine("API: unbekanntes Ziel '%s' — ignoriert", it->target.c_str());
         continue;
       }
-      routeTo(s, target, "operator (web-ui)");
-      SessionRecord &rec = sessionFor(it->identity);
-      rec.state = "routed";
-      rec.held = false;
-      rec.targetStr = target.str();
+      pinIdentityTo(it->identity, target, "operator (web-ui)");
+      break;
+    }
     }
   }
+  refreshTargetsSnapshot();
 }
 
 std::string buildSessionsJson() {
@@ -911,15 +992,20 @@ std::string buildSessionsJson() {
 }
 
 std::string buildTargetsJson() {
+  std::vector<std::pair<std::string, rbroute::Endpoint>> snap;
+  {
+    std::lock_guard<std::mutex> lock(g_apiMutex);
+    snap = g_targetsSnapshot;
+  }
   std::string json = "[";
   bool first = true;
-  for (std::size_t i = 0; i < g_targets.size(); ++i) {
+  for (std::size_t i = 0; i < snap.size(); ++i) {
     if (!first) {
       json += ",";
     }
     first = false;
-    json += "{\"name\":\"" + rbapi::jsonEscape(g_targets[i].first) + "\"";
-    json += ",\"endpoint\":\"" + rbapi::jsonEscape(g_targets[i].second.str()) +
+    json += "{\"name\":\"" + rbapi::jsonEscape(snap[i].first) + "\"";
+    json += ",\"endpoint\":\"" + rbapi::jsonEscape(snap[i].second.str()) +
             "\"}";
   }
   json += "]";
@@ -1114,6 +1200,227 @@ void httpRespondJson(SOCKET s, int code, const char *status,
   httpRespond(s, code, status, "application/json; charset=utf-8", body);
 }
 
+// --- Outbound-HTTP Relay -> Parked (Issue #929) ------------------------------
+//
+// Blockierender WinSock-Client MIT connect-/recv-Timeout. Er laeuft im
+// HTTP-Request-Thread (jeder Request hat einen eigenen Thread) — der
+// GNS-Hauptloop wird dadurch NICHT blockiert. Status == -1 signalisiert einen
+// Verbindungs-/Timeout-Fehler (der /solo-Retry-Pfad behandelt das als transient).
+struct OutboundResult {
+  int status = -1;
+  std::string body;
+};
+
+OutboundResult outboundHttpPost(const std::string &host, int port,
+                                const std::string &path,
+                                const std::string &payload,
+                                const std::string &bearer,
+                                int connectTimeoutMs, int recvTimeoutMs) {
+  OutboundResult result;
+  SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (sock == INVALID_SOCKET) {
+    return result;
+  }
+  sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(static_cast<u_short>(port));
+  if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1) {
+    closesocket(sock);
+    return result;
+  }
+
+  // Nicht-blockierender connect + select-Timeout (haengt sonst bei blackhole).
+  u_long nonBlocking = 1;
+  ioctlsocket(sock, FIONBIO, &nonBlocking);
+  int rc = connect(sock, reinterpret_cast<sockaddr *>(&addr), sizeof(addr));
+  if (rc == SOCKET_ERROR) {
+    if (WSAGetLastError() != WSAEWOULDBLOCK) {
+      closesocket(sock);
+      return result;
+    }
+    fd_set wr;
+    FD_ZERO(&wr);
+    FD_SET(sock, &wr);
+    timeval tv;
+    tv.tv_sec = connectTimeoutMs / 1000;
+    tv.tv_usec = (connectTimeoutMs % 1000) * 1000;
+    rc = select(0, nullptr, &wr, nullptr, &tv);
+    if (rc <= 0) {
+      closesocket(sock);
+      return result;
+    }
+    int soErr = 0;
+    int soErrLen = sizeof(soErr);
+    if (getsockopt(sock, SOL_SOCKET, SO_ERROR,
+                   reinterpret_cast<char *>(&soErr), &soErrLen) != 0 ||
+        soErr != 0) {
+      closesocket(sock);
+      return result;
+    }
+  }
+  nonBlocking = 0;
+  ioctlsocket(sock, FIONBIO, &nonBlocking);
+  DWORD recvTimeout = static_cast<DWORD>(recvTimeoutMs);
+  setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
+             reinterpret_cast<const char *>(&recvTimeout),
+             sizeof(recvTimeout));
+  DWORD sendTimeout = static_cast<DWORD>(recvTimeoutMs);
+  setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO,
+             reinterpret_cast<const char *>(&sendTimeout),
+             sizeof(sendTimeout));
+
+  std::string req = "POST " + path + " HTTP/1.1\r\n";
+  req += "Host: " + host + ":" + std::to_string(port) + "\r\n";
+  req += "Content-Type: application/json\r\n";
+  req += "Content-Length: " + std::to_string(payload.size()) + "\r\n";
+  if (!bearer.empty()) {
+    req += "Authorization: Bearer " + bearer + "\r\n";
+  }
+  req += "Connection: close\r\n\r\n";
+  req += payload;
+
+  std::size_t off = 0;
+  while (off < req.size()) {
+    const int n = send(sock, req.data() + off,
+                       static_cast<int>(req.size() - off), 0);
+    if (n <= 0) {
+      closesocket(sock);
+      return result;
+    }
+    off += static_cast<std::size_t>(n);
+  }
+
+  std::string raw;
+  char buf[4096];
+  for (;;) {
+    const int n = recv(sock, buf, sizeof(buf), 0);
+    if (n <= 0) {
+      break;
+    }
+    raw.append(buf, static_cast<std::size_t>(n));
+    if (raw.size() > (1u << 20)) {
+      break;
+    }
+  }
+  closesocket(sock);
+
+  int code = 0;
+  std::string body;
+  if (!rbapi::parseHttpResponse(raw, code, body)) {
+    return result;  // Status bleibt -1 -> transienter Fehler
+  }
+  result.status = code;
+  result.body = body;
+  return result;
+}
+
+// POST /solo: Parked `POST /claim` aufrufen (Bearer), Ziel von dort holen und
+// die Identitaet per Command-Queue darauf pinnen. Retry/Backoff nur HIER im
+// Request-Thread (transiente Fehler: Backend faehrt noch hoch).
+void handleSolo(SOCKET s, const std::string &requestBody) {
+  std::string identity;
+  std::string env;
+  if (!rbapi::jsonStringField(requestBody, "identitaet", identity) ||
+      identity.empty()) {
+    httpRespondJson(s, 400, "Bad Request",
+                    "{\"ok\":false,\"reason\":\"bad_request\",\"detail\":\"identitaet fehlt\"}");
+    return;
+  }
+  rbapi::jsonStringField(requestBody, "env", env);
+
+  if (!g_parkedConfigured) {
+    httpRespondJson(s, 503, "Service Unavailable",
+                    "{\"ok\":false,\"reason\":\"parked_unconfigured\",\"retry\":false}");
+    return;
+  }
+
+  const std::string claimBody =
+      env.empty() ? std::string("{}")
+                  : "{\"env\":\"" + rbapi::jsonEscape(env) + "\"}";
+  const int kMaxAttempts = 4;
+  int status = -1;
+  std::string respBody;
+  std::string reason;
+  std::string endpointStr;
+  std::string instance;
+  rbroute::Endpoint endpoint;
+  bool haveEndpoint = false;
+
+  for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
+    const OutboundResult r =
+        outboundHttpPost(g_parkedHost, g_parkedPort, "/claim", claimBody,
+                         g_parkedToken, 2000, 2000);
+    status = r.status;
+    respBody = r.body;
+    reason.clear();
+    rbapi::jsonStringField(respBody, "reason", reason);
+    haveEndpoint = false;
+    if (status == 200) {
+      if (rbapi::jsonStringField(respBody, "gns_endpoint", endpointStr) &&
+          !endpointStr.empty() && rbroute::parseEndpoint(endpointStr, endpoint)) {
+        rbapi::jsonStringField(respBody, "instance", instance);
+        haveEndpoint = true;
+        break;
+      }
+      // 200 ohne brauchbares Ziel ist nicht retryfaehig (Fehlkonfiguration).
+      status = -2;
+      reason = "no_endpoint";
+      break;
+    }
+    if (!rbapi::shouldRetryClaim(attempt, kMaxAttempts, status, reason)) {
+      break;
+    }
+    logLine("solo: claim transient (status=%d reason='%s') — Retry %d/%d in %dms",
+            status, reason.c_str(), attempt + 1, kMaxAttempts,
+            rbapi::retryDelayMs(attempt));
+    Sleep(static_cast<DWORD>(rbapi::retryDelayMs(attempt)));
+  }
+
+  if (haveEndpoint) {
+    {
+      std::lock_guard<std::mutex> lock(g_apiMutex);
+      ApiCommand cmd;
+      cmd.kind = ApiCommand::kRouteByEndpoint;
+      cmd.identity = identity;
+      cmd.endpoint = endpoint;
+      cmd.hasEndpoint = true;
+      g_apiCommands.push_back(cmd);
+    }
+    logLine("API: solo '%s' -> %s (instance=%s)", identity.c_str(),
+            endpoint.str().c_str(), instance.c_str());
+    std::string out = "{\"ok\":true,\"identitaet\":\"" +
+                      rbapi::jsonEscape(identity) + "\",\"target\":\"" +
+                      rbapi::jsonEscape(endpoint.str()) +
+                      "\",\"instance\":\"" + rbapi::jsonEscape(instance) +
+                      "\"}";
+    httpRespondJson(s, 200, "OK", out);
+    return;
+  }
+
+  // Budget erschoepft und letzter Fehler war transient -> Backend startet noch.
+  if (rbapi::isTransientClaimStatus(status, reason)) {
+    logLine("solo: claim-Budget erschoepft (status=%d reason='%s') — 503 backend_starting",
+            status, reason.c_str());
+    httpRespondJson(s, 503, "Service Unavailable",
+                    "{\"ok\":false,\"reason\":\"backend_starting\",\"retry\":true}");
+    return;
+  }
+  // Endgueltige Fehler auf die Parked-Semantik abbilden.
+  int outStatus = 502;
+  std::string outReason = "bad_gateway";
+  if (status == 409) {
+    outStatus = 409;
+    outReason = reason.empty() ? std::string("not_claimable") : reason;
+  } else if (status == 503) {
+    outStatus = 503;
+    outReason = reason.empty() ? std::string("bridge_unhealthy") : reason;
+  }
+  httpRespondJson(s, outStatus, outStatus == 409 ? "Conflict" : "Error",
+                  "{\"ok\":false,\"reason\":\"" +
+                      rbapi::jsonEscape(outReason) + "\"}");
+}
+
 void httpHandle(SOCKET s) {
   DWORD timeout = 3000;
   setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&timeout),
@@ -1147,8 +1454,10 @@ void httpHandle(SOCKET s) {
   std::string path = (sp2 == std::string::npos)
                          ? req.substr(sp1 + 1)
                          : req.substr(sp1 + 1, sp2 - sp1 - 1);
+  std::string queryString;
   const std::size_t query = path.find('?');
   if (query != std::string::npos) {
+    queryString = path.substr(query + 1);
     path = path.substr(0, query);
   }
 
@@ -1193,6 +1502,7 @@ void httpHandle(SOCKET s) {
       {
         std::lock_guard<std::mutex> lock(g_apiMutex);
         ApiCommand cmd;
+        cmd.kind = ApiCommand::kRouteByName;
         cmd.identity = identity;
         cmd.target = target;
         g_apiCommands.push_back(cmd);
@@ -1201,6 +1511,69 @@ void httpHandle(SOCKET s) {
               target.c_str());
       httpRespondJson(s, 200, "OK", "{\"ok\":true}");
     }
+  } else if (method == "POST" && path == "/backends") {
+    // Dynamische Backend-Registry (Issue #929): {name, endpoint}.
+    std::string name;
+    std::string endpointStr;
+    if (!rbapi::jsonStringField(body, "name", name) || name.empty()) {
+      httpRespondJson(s, 400, "Bad Request",
+                      "{\"ok\":false,\"reason\":\"bad_request\",\"detail\":\"name fehlt\"}");
+    } else if (!rbapi::jsonStringField(body, "endpoint", endpointStr)) {
+      httpRespondJson(s, 400, "Bad Request",
+                      "{\"ok\":false,\"reason\":\"bad_request\",\"detail\":\"endpoint fehlt\"}");
+    } else {
+      rbroute::Endpoint endpoint;
+      if (!rbroute::parseEndpoint(endpointStr, endpoint)) {
+        httpRespondJson(s, 400, "Bad Request",
+                        "{\"ok\":false,\"reason\":\"bad_request\",\"detail\":\"endpoint ist kein ip:port\"}");
+      } else {
+        {
+          std::lock_guard<std::mutex> lock(g_apiMutex);
+          ApiCommand cmd;
+          cmd.kind = ApiCommand::kBackendAdd;
+          cmd.target = name;
+          cmd.endpoint = endpoint;
+          cmd.hasEndpoint = true;
+          g_apiCommands.push_back(cmd);
+        }
+        logLine("API: backend '%s' -> %s angefordert", name.c_str(),
+                endpoint.str().c_str());
+        httpRespondJson(s, 200, "OK", "{\"ok\":true}");
+      }
+    }
+  } else if (method == "DELETE" && path == "/backends") {
+    std::string name;
+    if (!rbapi::parseQueryParam(queryString, "name", name) || name.empty()) {
+      httpRespondJson(s, 400, "Bad Request",
+                      "{\"ok\":false,\"reason\":\"bad_request\",\"detail\":\"name fehlt\"}");
+    } else {
+      bool known = false;
+      {
+        std::lock_guard<std::mutex> lock(g_apiMutex);
+        for (std::size_t i = 0; i < g_targetsSnapshot.size(); ++i) {
+          if (g_targetsSnapshot[i].first == name) {
+            known = true;
+            break;
+          }
+        }
+      }
+      if (!known) {
+        httpRespondJson(s, 404, "Not Found",
+                        "{\"ok\":false,\"reason\":\"not_found\"}");
+      } else {
+        {
+          std::lock_guard<std::mutex> lock(g_apiMutex);
+          ApiCommand cmd;
+          cmd.kind = ApiCommand::kBackendDelete;
+          cmd.target = name;
+          g_apiCommands.push_back(cmd);
+        }
+        logLine("API: backend '%s' Abmeldung angefordert", name.c_str());
+        httpRespondJson(s, 200, "OK", "{\"ok\":true}");
+      }
+    }
+  } else if (method == "POST" && path == "/solo") {
+    handleSolo(s, body);
   } else {
     httpRespond(s, 404, "Not Found", "text/plain; charset=utf-8",
                 "not found\n");
@@ -1404,8 +1777,29 @@ int main(int argc, char **argv) {
         return 2;
       }
       g_targets.emplace_back(name, endpoint);
+    } else if (strcmp(argv[i], "--parked-url") == 0 && i + 1 < argc) {
+      // Parked-Pool-Dienst fuer POST /solo (Issue #929). Token NUR per Env
+      // (RBB_PARKED_TOKEN), damit er nicht in der Prozessliste steht.
+      const char *spec = argv[++i];
+      std::string host;
+      int port = 0;
+      if (!rbapi::parseUrlHostPort(spec, host, port)) {
+        fprintf(stderr, "--parked-url braucht http://host:port, bekam '%s'\n",
+                spec);
+        return 2;
+      }
+      g_parkedHost = host;
+      g_parkedPort = port;
+      g_parkedConfigured = true;
     }
   }
+
+  const char *parkedToken = getenv("RBB_PARKED_TOKEN");
+  if (parkedToken != nullptr) {
+    g_parkedToken = parkedToken;
+  }
+  logLine("parked fuer /solo: %s:%d (token=%s)", g_parkedHost.c_str(),
+          g_parkedPort, g_parkedToken.empty() ? "kein" : "gesetzt");
 
   logLine("gns_probe (Spike #831, E1/E2) — port=%u", nPort);
   if (!resolveDll(dllPath)) {
@@ -1556,6 +1950,8 @@ int main(int argc, char **argv) {
   // Steuer-API + Web-UI (Issue #857): eigener HTTP-Thread, Standardbind nur
   // 127.0.0.1 (kein Auth). Faellt der Bind aus, laeuft der Relay trotzdem.
   if (g_apiPort > 0) {
+    // Registry-Snapshot initial fuellen, BEVOR der HTTP-Thread /targets liest.
+    refreshTargetsSnapshot();
     std::thread(httpServerLoop).detach();
   }
   logLine("(E1: Status Connected erwarten | E2: Klartext-Nachrichten mit "
