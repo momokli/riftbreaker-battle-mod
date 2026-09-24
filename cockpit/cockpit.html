@@ -598,6 +598,7 @@
 
             #chat_as {
                 flex: 0 0 auto;
+                width: 96px;
                 height: 25px;
                 border-radius: 3px;
                 border: 1px solid var(--line);
@@ -840,10 +841,14 @@
                                 </div>
                             </div>
                             <div class="flow-action-row">
-                                <select id="chat_as" aria-label="Absender">
-                                    <option value="system">system</option>
-                                    <option value="operator" selected>operator</option>
-                                </select>
+                                <input id="chat_as" class="mono" list="chat_senders" maxlength="24" value="Operator" placeholder="Absender" title="Absender frei waehlen: 'system' = ohne Prefix, sonst wird [Absender] vorangestellt" aria-label="Absender (frei waehlbar)" />
+                                <datalist id="chat_senders">
+                                    <option value="system"></option>
+                                    <option value="Operator"></option>
+                                    <option value="Server"></option>
+                                    <option value="Admin"></option>
+                                    <option value="Referee"></option>
+                                </datalist>
                                 <input id="chat_input" class="mono flow-grow" maxlength="200" placeholder="Nachricht an die Spieler ..." aria-label="Chat-Nachricht" />
                                 <button id="chat_send" class="btn-primary">send</button>
                             </div>
@@ -866,7 +871,8 @@
                                 Spieler-Chat aus dem Spiel erscheint hier; "send" schickt
                                 eine Server-Nachricht in den Spiel-Chat. Chat ist Klartext
                                 (kein HTML/Markup) — Formatierung nur ueber Symbole/Prefix.
-                                Absender: system (clean) oder operator ([Operator]-Prefix).
+                                Absender frei waehlbar (Vorschlaege oder eigener Text):
+                                "system" = ohne Prefix, sonst wird [Absender] vorangestellt.
                                 Enter sendet, leerer Text wird nicht gesendet (#935).
                             </div>
                         </div>
@@ -1889,7 +1895,7 @@
 
                 // --- Chat (#935): Verlauf + Senden ---
                 var CHAT_MAX = 200;
-                function chatAppend(src, text) {
+                function chatAppend(src, text, sender) {
                     var log = $("chat_log");
                     if (!log || !text) {
                         return;
@@ -1902,7 +1908,7 @@
                     row.className = "chat-msg " + (src === "operator" ? "operator" : "player");
                     var who = document.createElement("span");
                     who.className = "chat-src";
-                    who.textContent = src === "operator" ? "operator" : "player";
+                    who.textContent = sender || (src === "operator" ? "operator" : "player");
                     var body = document.createElement("span");
                     body.className = "chat-text";
                     body.textContent = text;
@@ -1915,16 +1921,35 @@
                     log.scrollTop = log.scrollHeight;
                 }
 
+                // --- chat-sender (testable) ---
+                // Absender (#935): frei waehlbar. Leer oder "system" -> "" (clean);
+                // sonst der normalisierte Name. Klammern/Whitespace werden bereinigt,
+                // die Laenge auf 24 Zeichen begrenzt.
+                function chatSenderName(raw) {
+                    var name = String(raw == null ? "" : raw)
+                        .replace(/[\[\]]/g, " ")
+                        .replace(/\s+/g, " ")
+                        .trim();
+                    if (name.length > 24) {
+                        name = name.slice(0, 24).trim();
+                    }
+                    if (!name || name.toLowerCase() === "system") {
+                        return "";
+                    }
+                    return name;
+                }
+                // --- end chat-sender ---
+
                 async function chatSend() {
                     var input = $("chat_input");
                     var text = (input.value || "").trim();
                     if (!text) {
                         return;
                     }
-                    var as = $("chat_as") ? $("chat_as").value : "system";
+                    var sender = chatSenderName($("chat_as") ? $("chat_as").value : "");
                     var body = { text: text, type: "system" };
-                    if (as === "operator") {
-                        body.prefix = "[Operator] ";
+                    if (sender) {
+                        body.prefix = "[" + sender + "] ";
                     }
                     var btn = $("chat_send");
                     btn.disabled = true;
@@ -1936,7 +1961,7 @@
                             if (body.prefix && shown.indexOf(body.prefix) !== 0) {
                                 shown = body.prefix + shown;
                             }
-                            chatAppend("operator", shown);
+                            chatAppend("operator", shown, sender || "server");
                             $("out").textContent = "chat gesendet";
                         } else {
                             $("out").textContent = "chat fehlgeschlagen: " + ((r && r.reason) || "unbekannt");
