@@ -53,6 +53,67 @@ CLAIMED --end_game/round_reset--> RECYCLING --pause_game--> PARKED
 brechen **laut** mit `ParkedError` ab — nie ein halber Zustand. Scheitert
 `pause_game` nach dem Start, wird die Instanz zurückgerollt und gestoppt.
 
+## Parked VS (#910)
+
+Zusätzlich zum Solo-Warm-Pool (`ParkedPool`, #909) gibt es `ParkedVSPool`
+(`parked_vs.py`): **ein** geparkter Server für **zwei** Spieler. Er komponiert
+`ParkedPool` (kein Docker-/HTTP-Code dupliziert) und setzt ein **Ready-Gate**
+zwischen Beitritt und Handover. Die Welt läuft erst, wenn **beide** beigetreten
+**und** beide `ready` sind — bis dahin bleibt der `ParkedEntry` in `PARKED`
+(kein Weltfortschritt). Kein A/B-Split (das ist #875, out of scope).
+
+### VS-Zustandsmaschine
+
+| Zustand | Bedeutung |
+|---|---|
+| `WAITING_OPPONENT` | weniger als `required_players` (Default 2) beigetreten |
+| `WAITING_BOTH_READY` | alle beigetreten, aber nicht alle `ready` |
+| `CLAIMED` | Handover (`resume_game`) erfolgt |
+| `RECYCLING` | `end_game`/`round_reset` laufen |
+| `STOPPED` | Container gestoppt |
+
+```
+(warm_up) --> WAITING_OPPONENT
+WAITING_OPPONENT   --join(<2)-------------> WAITING_OPPONENT
+WAITING_OPPONENT   --join(2.)-------------> WAITING_BOTH_READY
+WAITING_BOTH_READY --ready(nicht alle)----> WAITING_BOTH_READY
+WAITING_BOTH_READY --ready(alle)--> [pool.claim()/resume_game] --> CLAIMED
+CLAIMED --recycle(keep_warm=True)--> RECYCLING --> WAITING_OPPONENT
+CLAIMED --recycle(keep_warm=False)---------------> STOPPED
+```
+
+**Gate-Invariante:** `pool.claim()` (= `resume_game`) wird **ausschließlich**
+ausgelöst, wenn `len(players) == required_players` **und**
+`len(ready) == required_players`. Das ist red-before-green getestet (ein
+absichtlich zu frühes Gate lässt den Test fehlschlagen).
+
+### API `ParkedVSPool`
+
+`ParkedVSPool(provisioner, pool=None, bridge_factory=None, clock=time.monotonic, sleep=time.sleep, required_players=2)`
+
+| Methode | Zweck | Rückgabe |
+|---|---|---|
+| `warm_up(env=None, instance_id=None)` | Instanz parken (delegiert an `ParkedPool.warm_up`); **idempotent** | `VSSession` |
+| `join(player, env=None, instance_id=None)` | Spieler beitritt; bis 2 beigetreten bleibt `WAITING_OPPONENT` | `VSSession` |
+| `ready(player, env=None, instance_id=None)` | Ready-Flag; Gate: bei beiden ready → `pool.claim()` → `CLAIMED`, Handover gemessen | `VSSession` |
+| `recycle(env=None, instance_id=None, keep_warm=True, result=None)` | Matchende: wieder `WAITING_OPPONENT` (warm) bzw. `STOPPED` (kalt) | `VSSession` |
+| `status()` | Snapshot aller VS-Sessions | `list[dict]` |
+
+**Fehlerverhalten (laut, `VSError`):** unbekannte/nie `warm_up`-te Instanz,
+doppeltes `join`/`ready` desselben Spielers, dritter Spieler
+(> `required_players`), `ready` vor `join`, `join`/`ready` nach `CLAIMED`,
+`recycle` vor `CLAIMED`. Scheitert das Gate-`claim` (Bridge nicht healthy),
+bleibt der Zustand `WAITING_BOTH_READY` und der Eintrag `PARKED`; das
+Ready-Flag des auslösenden Spielers wird zurückgerollt (kein halber Handover).
+
+### VS-DoD-Mapping (#910)
+
+| DoD (#910) | Umsetzung | Nachweis |
+|---|---|---|
+| Match-Start geparkt messbar schneller als Cold-Boot | `measure_boot.run_vs_measurement` (Cold-Boot vs. 2-Beitritt-Handover) → `saved_seconds` | [`MEASUREMENT.md`](MEASUREMENT.md) VS-Abschnitt + `test_measure_boot.MeasureVSTests` |
+| Zwei Spieler im selben Spiel, Pause bis `ready` beider Seiten | `join`×2 + Ready-Gate vor `pool.claim()` | `test_parked_vs.py` (`ReadyGateTests`, red-before-green) |
+| Nach Matchende Instanz wieder verfügbar/sauber gestoppt | `recycle(keep_warm=True/False)` | `test_parked_vs.py` (`RecycleTests`) |
+
 ## DoD-Mapping
 
 | DoD (#909) | Umsetzung | Nachweis |
@@ -126,13 +187,22 @@ Ansible (CI-Budget 240 s). Rohbelege:
 cd deploy/parked && TMPDIR=/dev/shm/parked-test python3 -m unittest -v
 ```
 
-25 Tests. Abgedeckt: warm_up happy + idempotent + Rollback bei
+52 Tests. Abgedeckt: warm_up happy + idempotent + Rollback bei
 `pause_game`-Fehler, **Welt-Tick-Invariante via `get_state`** (kein Fortschritt
 im PARKED, Fortschritt nach `claim`, red-before-green), claim misst Handover +
 verlangt `PARKED` + healthy, recycle warm/kalt, reap stoppt nur Überfällige und
 stoppt bei einem `stop`-Fehler die übrigen trotzdem (aggregierter
 `ParkedError`), status, Fehler → `ParkedError`, `measure_boot` liefert Differenz
 und räumt Cold+Parked auf (kein Container-Leak).
+
+**VS (#910)** zusätzlich: `ReadyGateTests` (erst beide beigetreten + beide
+`ready` lösen genau **ein** `resume_game` aus; kein `resume` nach Join 1/2 bzw.
+einer `ready`; **red-before-green**), `RecycleTests` (Slots geleert/kalt
+gestoppt, Match 2 sauber), `ErrorTests` (doppeltes join/ready, dritter Spieler,
+`ready` vor `join`, `join` nach `CLAIMED`, Gate-Fehler bleibt `PARKED`),
+`WorldProgressInvariantTests` (kein Welt-Tick bis beide ready, danach ja),
+`StatusTests`; `test_measure_boot.MeasureVSTests` (2-Beitritt-Handover,
+`saved_seconds`, Cleanup auch bei Gate-Fehler, CLI-`--vs`-Routing).
 
 > Lint (ruff) läuft separat in der CI, nicht Teil dieses Verzeichnis-Setups —
 der `ruff`-Aufruf wurde entfernt.
