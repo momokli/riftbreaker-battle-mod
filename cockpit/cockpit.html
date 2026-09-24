@@ -596,6 +596,23 @@
                 color: var(--dim);
             }
 
+            #chat_as {
+                flex: 0 0 auto;
+                height: 25px;
+                border-radius: 3px;
+                border: 1px solid var(--line);
+                background: var(--base);
+                color: var(--text);
+                font-family: var(--font-mono);
+                font-size: 12px;
+                padding: 0 4px;
+            }
+            #chat_as:focus {
+                border-color: var(--accent);
+                box-shadow: 0 0 0 1px var(--accent);
+                outline: none;
+            }
+
             /* Style-Guide (#935): sichtbare Referenz, volle Breite im Operator-Raster */
             .sg-panel {
                 grid-column: 1 / -1;
@@ -873,12 +890,17 @@
                                 </div>
                             </div>
                             <div class="flow-action-row">
+                                <select id="chat_as" aria-label="Absender">
+                                    <option value="system">system</option>
+                                    <option value="operator" selected>operator</option>
+                                </select>
                                 <input id="chat_input" class="mono flow-grow" maxlength="200" placeholder="Nachricht an die Spieler ..." aria-label="Chat-Nachricht" />
                                 <button id="chat_send" class="btn-primary">send</button>
                             </div>
                             <div class="flow-note">
                                 Spieler-Chat aus dem Spiel erscheint hier; "send" schickt
-                                eine Server-Nachricht in den Spiel-Chat. Enter sendet,
+                                eine Server-Nachricht in den Spiel-Chat. Absender: system
+                                (clean) oder operator ([Operator]-Prefix). Enter sendet,
                                 leerer Text wird nicht gesendet (#935).
                             </div>
                         </div>
@@ -2007,13 +2029,22 @@ monospace · tabular-nums · autoscroll</pre>
                     if (!text) {
                         return;
                     }
+                    var as = $("chat_as") ? $("chat_as").value : "system";
+                    var body = { text: text, type: "system" };
+                    if (as === "operator") {
+                        body.prefix = "[Operator] ";
+                    }
                     var btn = $("chat_send");
                     btn.disabled = true;
                     try {
-                        var r = await post("/send_chat", { text: text });
+                        var r = await post("/send_chat", body);
                         if (r && r.ok) {
                             input.value = "";
-                            chatAppend("operator", r.text || text);
+                            var shown = r.text || text;
+                            if (body.prefix && shown.indexOf(body.prefix) !== 0) {
+                                shown = body.prefix + shown;
+                            }
+                            chatAppend("operator", shown);
                             $("out").textContent = "chat gesendet";
                         } else {
                             $("out").textContent = "chat fehlgeschlagen: " + ((r && r.reason) || "unbekannt");
