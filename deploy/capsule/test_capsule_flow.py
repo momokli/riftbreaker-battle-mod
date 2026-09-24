@@ -37,7 +37,7 @@ class FakeClock(object):
 class FakeBridge(object):
     """Fake-Bridge: Welt-Pause/Resume + Operator-Override, protokolliert Aufrufe."""
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, log=None) -> None:
         self.url = url
         self.paused = True  # nach dem Parken angehalten
         self.calls = []
@@ -45,9 +45,12 @@ class FakeBridge(object):
         self.fail_on = set()
         self.pause_auto = None
         self.resume_seconds = 0.0
+        self.log = log  # gemeinsames Ereignis-Log (Ketten-Reihenfolge)
 
     def _guard(self, name: str) -> None:
         self.calls.append(name)
+        if self.log is not None:
+            self.log.append("bridge:" + name)
         if name in self.fail_on:
             raise RuntimeError("fake bridge %s exploded" % name)
 
@@ -72,14 +75,20 @@ class FakeBridge(object):
 class FakeCycle(object):
     """Fake-Attack-Cycle: ZSM PAUSED -> WARMUP -> RUNNING -> GAME_OVER."""
 
-    def __init__(self, env: str) -> None:
+    def __init__(self, env: str, log=None) -> None:
         self.env = env
         self.state = "paused"
         self.calls = []
         self.fail_start = False
+        self.log = log  # gemeinsames Ereignis-Log (Ketten-Reihenfolge)
+
+    def _log(self, name: str) -> None:
+        if self.log is not None:
+            self.log.append("cycle:" + name)
 
     def start(self):
         self.calls.append("start")
+        self._log("start")
         if self.fail_start:
             raise RuntimeError("fake cycle start exploded")
         if self.state == "paused":
@@ -88,6 +97,7 @@ class FakeCycle(object):
 
     def status(self):
         self.calls.append("status")
+        self._log("status")
         return {"ok": True, "state": self.state, "mode": "solo", "round": 0}
 
     # -- Testhilfen --------------------------------------------------------
@@ -143,18 +153,21 @@ class Harness(unittest.TestCase):
         self.parked = FakeParked()
         self.bridges = {}
         self.cycles = {}
+        # Gemeinsames Ereignis-Log: reiht Bridge- UND Cycle-Calls in echter
+        # Reihenfolge aneinander (Ketten-Nachweis, nicht nur Einzelfunktionen).
+        self.events = []
 
         def bridge_factory(url):
             bridge = self.bridges.get(url)
             if bridge is None:
-                bridge = FakeBridge(url)
+                bridge = FakeBridge(url, log=self.events)
                 self.bridges[url] = bridge
             return bridge
 
         def cycle_factory(env):
             cycle = self.cycles.get(env)
             if cycle is None:
-                cycle = FakeCycle(env)
+                cycle = FakeCycle(env, log=self.events)
                 self.cycles[env] = cycle
             return cycle
 
@@ -263,6 +276,17 @@ class ReadyTests(Harness):
         self.assertEqual(self.coord.status("test")["phase"], "claimed")
 
 
+    def test_ready_after_parked_is_wrong_phase_409(self):
+        # Nach einer beendeten Runde (parked) ist `ready` nicht mehr erlaubt.
+        self.opened()
+        self.coord.ready(env="test")
+        self.coord.finish(env="test")  # -> parked
+        with self.assertRaises(CapsuleError) as ctx:
+            self.coord.ready(env="test")
+        self.assertEqual(ctx.exception.status, 409)
+        self.assertEqual(ctx.exception.reason, "wrong_phase")
+
+
 class FinishTests(Harness):
     def test_finish_without_result_recycles_and_parks(self):
         self.opened()
@@ -353,31 +377,55 @@ class StatusTests(Harness):
 
 
 class FullChainTests(Harness):
-    """KERN-NACHWEIS: eine ganze Runde end-to-end, hermetisch (Fake-Stack)."""
+    """KERN-NACHWEIS: eine ganze Runde end-to-end, hermetisch (Fake-Stack).
+
+    Der Test spielt die Kette wirklich durch (open -> ready -> running ->
+    game_over -> finish -> parked -> auto) und prueft ueber das gemeinsame
+    Ereignis-Log die **Reihenfolge** der Bridge-/Cycle-Calls ueber ALLE
+    Schritte hinweg — nicht nur einzelne Funktionen isoliert.
+    """
 
     def test_one_full_round(self):
-        # open -> claimed (paused)
+        # 1) open -> claimed: Welt pausiert, claim OHNE resume, noch kein
+        #    Bridge-/Cycle-Call.
         cap = self.opened()
-        self.assertEqual(self.coord.status("test")["phase"], "claimed")
+        self.assertEqual(cap.phase, CapsulePhase.CLAIMED)
         self.assertTrue(self.bridge().paused)
         self.assertFalse(self.parked.claims[0]["resume"])
+        self.assertEqual(self.events, [])
 
-        # ready -> warmup -> running
+        # 2) ready -> resume_game DANN Cycle-Start (Reihenfolge!) -> warmup.
         self.coord.ready(env="test")
+        self.assertEqual(self.events, ["bridge:resume_game", "cycle:start"])
+        self.assertFalse(self.bridge().paused)
+        self.assertEqual(self.cycle().state, "warmup")
         self.assertEqual(self.coord.status("test")["phase"], "warmup")
+
+        # 3) Warmup-Ende + HQ -> running.
         self.cycle().to_running()
         self.assertEqual(self.coord.status("test")["phase"], "running")
 
-        # finish(win) -> parked + round erhoeht
+        # 4) HQ-Tod -> game_over sichtbar.
         self.cycle().to_game_over()
+        self.assertEqual(self.coord.status("test")["phase"], "game_over")
+
+        # 5) finish(win) -> end_game/reset/recycle ueber den Parked-Dienst ->
+        #    parked; genau EIN recycle mit result + keep_warm.
         cap = self.coord.finish(result="win", env="test")
         self.assertEqual(cap.phase, CapsulePhase.PARKED)
+        self.assertEqual(len(self.parked.recycles), 1)
         self.assertEqual(self.parked.recycles[0]["result"], "win")
+        self.assertTrue(self.parked.recycles[0]["keep_warm"])
         self.assertEqual(self.parked.rounds, 1)
+        self.assertEqual(self.cycle().calls.count("start"), 1)
+        # recycle laeuft ueber den Pool, nicht direkt am Cycle/Bridge.
+        self.assertNotIn("pause_game", self.bridge().calls)
 
-        # auto -> Operator-Override frei
+        # 6) auto -> Operator-Override frei (letzter Bridge-Call = pause_game).
         self.coord.auto(env="test")
+        self.assertEqual(self.bridge().auto_ops, ["auto"])
         self.assertEqual(self.bridge().pause_auto, -1)
+        self.assertEqual(self.events[-1], "bridge:pause_game")
 
     def test_neue_runde_nach_parked(self):
         self.opened()
