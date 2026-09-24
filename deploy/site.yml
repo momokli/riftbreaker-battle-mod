@@ -137,6 +137,13 @@
       tags: [tournament]
     - role: server-control
       tags: [server]
+    # Parked-Pool-Dienst (Issue #928): Warm-Pool-Halter pro Env. env-Param
+    # explizit an dieser Stelle, damit der Unit-Name (rbmods-parked-<env>)
+    # an DIESEM Play haengt (wie server_control_enabled/rift_env oben).
+    - role: parked-pool
+      tags: [server]
+      vars:
+        parked_pool_env: "{{ rift_env | default('dev') }}"
     - role: website
       tags: [website]
     - role: image-retention

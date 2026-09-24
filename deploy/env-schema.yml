@@ -64,6 +64,17 @@ per_env:
   server_control_port: [prod, staging]
   server_control_install_dir: [prod, staging]
   server_control_env_file: [prod, staging]
+  # --- Parked-Pool-Dienst (Issue #928) ------------------------------------
+  # Der Dienst ist env-parametrisiert (Unit rbmods-parked-<env>) und laeuft
+  # aktuell nur im dev-Play (site.yml). dev ist die Basis (host_vars) und setzt
+  # die isolierten Werte deshalb explizit; prod/staging deployen die Rolle
+  # derzeit NICHT (#498-Zwillinge sind ein eigenes Follow-up), daher hier nicht
+  # gelistet. Der isolierte Port weicht vom dev-server-control (8092) ab.
+  parked_pool_unit: [dev]
+  parked_pool_port: [dev]
+  parked_pool_pool_size: [dev]
+  parked_pool_install_dir: [dev]
+  parked_pool_env_file: [dev]
   # --- Tournament-Server ----------------------------------------------------
   tournament_install_dir: [prod, test, staging]
   tournament_unit: [prod, test, staging]

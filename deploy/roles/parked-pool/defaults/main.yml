@@ -1,0 +1,62 @@
+---
+# Defaults der Rolle parked-pool (Warmserver-Dienst pro Env, Issue #928).
+#
+# Der Dienst haelt N Dedicated-Instanzen "geparkt" (Container + Bridge laufen,
+# Welt angehalten) und bietet `claim()`/`recycle()`/`reap()` per HTTP an. Er ist
+# ein kleiner Python-Dienst (Standardbibliothek), der `ParkedPool` (#909) ueber
+# den Provisioner (#908) treibt. Bewusst KEINE eigene Docker-Logik.
+#
+# Haertung wie server-control (#424): Bind nur 127.0.0.1, Bearer-Token PFLICHT,
+# ohne Token startet der Dienst NICHT (fail-closed) — deshalb bricht auch die
+# Rolle ohne gesetztes `vault_parked_pool_token` ab (siehe tasks/main.yml).
+
+# Env-Namensraum. Das deployende Play setzt ihn explizit (dev/staging/prod);
+# so haengen Unit-/Install-/Env-Datei-Namen am jeweiligen Play.
+parked_pool_env: "{{ rift_env | default('dev') }}"
+
+# systemd-Unit + Installationsort + Entry-Point (env-parametrisiert).
+parked_pool_unit: "rbmods-parked-{{ parked_pool_env }}"
+parked_pool_install_dir: "/opt/rbmods/parked-pool-{{ parked_pool_env }}"
+parked_pool_bin: "{{ parked_pool_install_dir }}/parked_service.py"
+parked_pool_python: /usr/bin/python3
+
+# Harte systemd-Abhaengigkeit von docker.service (Default true, planet-
+# Verhalten). Unter WSL2 + Docker Desktop existiert keine docker.service-Unit
+# (siehe server-control #593) — dort per Var abschaltbar.
+parked_pool_require_docker_service: true
+
+# Netz: ausschliesslich localhost. Der Proxy-Claim (#929) proxyt dorthin.
+parked_pool_bind: 127.0.0.1
+# Default laut Plan #928 (server-control nutzt 8091 als Rollen-Default).
+# ACHTUNG: die Envs setzen den Port explizit isoliert (dev 8095, weil der
+# dev-server-control bereits 8092 belegt) — der Default ist nur der Fallback.
+parked_pool_port: 8092
+
+# Pool/Reap-Verhalten.
+parked_pool_pool_size: 1
+parked_pool_max_park_seconds: 900
+parked_pool_reap_interval: 30
+parked_pool_instance_prefix: parked
+parked_pool_log_level: INFO
+
+# Token-Quelle: NUR der Vault. Der Wert landet nie im Repo, nie im Log — die
+# Unit liest ihn aus einer 0600-Datei (EnvironmentFile), nicht aus `Environment=`.
+parked_pool_token: "{{ vault_parked_pool_token | default('') }}"
+
+parked_pool_env_file: "/etc/rbmods/parked-pool-{{ parked_pool_env }}.env"
+
+# -- Provisioner (#908) durchgereicht (PROVISIONER_*) ------------------------
+# Der Dienst startet/stoppt ueber den Provisioner; dieselben Werte wie das
+# laufende Deploy (Image-Tag = Deploy-SHA, gleiche Pfade/Quellen wie die
+# Compose-Instanz der Env).
+parked_pool_provisioner_env: "{{ parked_pool_env }}"
+parked_pool_provisioner_image: "{{ dedicated_server_image | default('') }}"
+parked_pool_provisioner_config_cfg: "/opt/rbmods/compose/rift-{{ parked_pool_env }}/riftbreaker/config/config.cfg"
+parked_pool_provisioner_rbtools_dir: "{{ rbtools_dir | default('/opt/rbmods/rbtools/' ~ parked_pool_env) }}"
+parked_pool_provisioner_game_source: "/srv/rift-{{ parked_pool_env }}/game"
+parked_pool_provisioner_base_dir: /srv
+
+# Quell-Skripte im Repo (aus dem Deploy-Checkout).
+parked_pool_service_src: "{{ playbook_dir }}/parked/parked_service.py"
+parked_pool_lib_src: "{{ playbook_dir }}/parked/parked_pool.py"
+parked_pool_provisioner_src: "{{ playbook_dir }}/provisioner/provisioner.py"
