@@ -5,10 +5,17 @@
 **Datum:** 2026-09-24 · **Umgebung:** Host `planet` (Linux 6.8.0-139, x64)
 
 Dieses Dokument ist das **committete Mess-/Spike-Artefakt** zu #909. Es belegt
-(a) die Messung Cold-Boot vs. Parked-Handover und (b) den **Live-Nachweis „kein
-Weltfortschritt im Parked-Zustand"** auf einer realen Dedicated-Instanz.
+(a) die Messung Cold-Boot vs. Parked-Handover mit **rohen Live-Belegen**
+([`evidence/`](evidence/)) und (b) den Stand des Nachweises „kein
+Weltfortschritt im Parked-Zustand" — hermetisch belegt, **live noch offen**
+(siehe §3 und §5).
 Die Scope-Trennung (Spike-Bericht ↔ Code-Deliverable) steht in
 [`README.md`](README.md#scope--spike-bericht-vs-code-deliverable).
+
+> **Status:** Dieser PR/-Branch schließt #909 **nicht** (`Closes #909` wurde
+> bewusst entfernt). Der DoD-Nachweis „kein Weltfortschritt" ist nur
+> hermetisch geführt; der Live-Nachweis auf einer wirklich laufenden Welt steht
+> aus (§5).
 
 ---
 
@@ -32,17 +39,23 @@ Live-Beweis (Abschnitt 3): Dev-Instanz `riftbreaker-dedicated-880`
 
 ## 2. Rohzahlen
 
-| Vorgang | gemessen | Messpunkt |
-|---|---|---|
-| **Cold-Boot** (Container-Start + Mod-Load + Bridge healthy) | **≈ 15,2 s** | `docker run` → `/health` ok |
-| davon bis `event=mod_load` / `ServerGameplayState` | ≈ 11 s | Log-Meilensteine |
-| **Parked-Handover** (`POST /resume_game`) | **≈ 0,13 s** | Bridge-Round-Trip |
-| Parken (`POST /pause_game`) | ≈ 0,5 s | Bridge-Round-Trip |
-| Warm-Volume-Restart eines bestehenden Servers (`-880`) | ≈ 2 s bis `/health` ok | stale Logs → Injection sofort |
+Die folgenden Zahlen sind mit **rohen Live-Belegen** unterlegt
+([`evidence/`](evidence/)). Die Messung wurde am 2026-09-24 erneut live gefahren;
+Spike-Wert und Re-Messung stehen nebeneinander.
 
-**Ersparnis:** ≈ 15 s pro Handover (nur Container + Content-ready; im echten
-Deploy zusätzlich die ~664 MB Content-Copy + Ansible, CI-Budget 240 s).
-Handover selbst ist sub-sekundig. **Prämisse bestätigt.**
+| Vorgang | Spike (2026-09-24 früh) | Re-Messung live (07:20Z) | Messpunkt | Rohbeleg |
+|---|---|---|---|---|
+| **Cold-Boot** (Container-Start + Mod-Load + Bridge healthy) | ≈ 15,2 s | **9,353 s** | `docker run` → `/health` ok | `909-coldboot-handover-*` |
+| **Parked-Handover** (`POST /resume_game`) | ≈ 0,13 s | **0,123 s** | Bridge-Round-Trip (idle) | `909-idle-roundtrips-*` |
+| Parken (`POST /pause_game`) | ≈ 0,5 s | **0,130 s** | Bridge-Round-Trip (idle) | `909-idle-roundtrips-*` |
+| Erste `pause_game` während des Boots (Hook-Install + MapGen) | — | 3,605 s | Bridge-Round-Trip | `909-coldboot-handover-*` |
+
+Die Re-Messung bestätigt die Kernaussage: **Handover (≈ 0,12 s) ist drei bis
+vier Größenordnungen schneller als der Cold-Boot (≈ 9–15 s)**. Der Cold-Boot ist
+host-cacheabhängig (9,4 s mit warmem Content/Wine-Prefix gegen 15,2 s im Spike) —
+beides ≫ Handover. Die Re-Messung lief in einem frischen Container mit denselben
+Mounts wie die Deploy-Compose (Content-Kopie, config.cfg, rbtools, image-
+vorbefülltes Wine-Volume), ephemer Port-Publish, danach restfrei entfernt.
 
 **Reproduktion (CLI):**
 
@@ -52,6 +65,15 @@ PROVISIONER_IMAGE=<image> PROVISIONER_ENV=test \
   python3 measure_boot.py --json --instance-id measure909
 # -> {"cold_boot_seconds":..,"parked_handover_seconds":..,"saved_seconds":..}
 ```
+
+> **Wichtig:** Gegen das **reale** Image ist `measure_boot.py --json` derzeit
+> **nicht** lauffähig: der Provisioner (#908) publiziert Container-Port 8080 und
+> mountet `/srv/game`,`/wine`,`/saves`, während die reale Bridge auf **9001**
+> lauscht und `/opt/riftbreaker`,`/data/config/config.cfg`,`/opt/rbtools` braucht
+> → Health-Timeout. Rohbeleg:
+> [`evidence/909-harness-live-attempt-2026-09-24.txt`](evidence/909-harness-live-attempt-2026-09-24.txt).
+> Die Zahlen oben stammen daher aus dem (im `evidence/`-Log dokumentierten)
+> Probe-Lauf mit den **realen** Deploy-Mounts. Siehe §4.
 
 Das Harness `measure_boot.run_measurement` räumt seine Ressourcen selbst auf
 (`try/finally`: Cold-Instanz wird gestoppt, geparkte Instanz recycelt mit
@@ -94,21 +116,30 @@ unverändert; nach `resume_game` ändert er sich wieder.
 `creatures_base_difficulty`, `end_game`, `players`, `hq_hp` sind über den
 gesamten Lauf konstant — im Auszug als `...` gekürzt.)
 
-**Ergebnis:**
+**Ergebnis (Park-Flag-Round-Trip, KEIN Welt-Nachweis):**
 
 - `pause_want` = **1** für das gesamte 45-s-Parked-Intervall konstant, nach
   `resume_game` wieder **0**. Der Park-Intent ist stabil und wird durch den
   Handover sauber umgeschaltet.
 - Übrige Fingerprint-Felder unverändert über das Intervall.
 
-### Ehrliche Einschränkung (was der Nachweis zeigt und was nicht)
+### Ehrliche Einschränkung (was der Nachweis zeigt und was NICHT)
 
-Die Dev-Instanz `-880` hatte zum Messzeitpunkt **keinen verbundenen Spieler**
-(`ok:false, reason:"no_account"`). Damit ist `game_paused` durchgehend `false`
-und die Welt-Sim-Felder sind `null` — **eine laufende Welt, die ohne Pause
-voranschreiten würde, war auf dieser Instanz nicht vorhanden**. Der Live-Lauf
-belegt daher belastbar den **Park-Flag-Round-Trip** (`pause_want` 0→1→0,
-stabil über 45 s), aber **nicht** das Anhalten einer aktiven Welt-Tick-Rate.
+Der Lauf belegt **nur den Park-Flag-Round-Trip** (`pause_want` 0→1→0, stabil
+über 45 s) — **nicht** das Anhalten einer aktiven Welt. Alle auf `planet`
+verfügbaren Instanzen liefern `get_state` mit `ok:false`:
+
+- Dev-Instanz `-880` (Bridge `9004`): `reason:"no_account"` — kein Spieler.
+- Frisch gebootete Probe (Bridge `19011`, gleiche Mounts wie die Deploy-Compose):
+  über > 2 min durchgehend `reason:"no_world"`; `game_paused` bleibt `false`,
+  alle Welt-Sim-Felder `null` (Rohbeleg:
+  [`evidence/909-idle-roundtrips-2026-09-24.txt`](evidence/909-idle-roundtrips-2026-09-24.txt)).
+
+Eine **wirklich laufende Welt** (mit Tick/Spieler), an der sich „vor/nach dem
+Park still" messen ließe, war auf `planet` nicht vorhanden. Der DoD-Nachweis
+„`get_state`/Save unverändert" für eine **reale, laufende** Welt steht daher
+**weiterhin aus** — er hängt an der offenen Pause-Semantik-Frage aus #880 und
+einem echten Spieler. Siehe §5.
 
 Der Nachweis „**kein Welt-Tick im PARKED-Zustand**" wird deshalb **hermetisch**
 geführt (siehe `test_parked_pool.py::WorldProgressInvariantTests`): eine
@@ -126,7 +157,36 @@ Fake-Bridge läuft der Tick von `0.0` auf `30.0` und
 `test_no_world_progress_while_parked` schlägt fehl (`AssertionError: 0.0 != 30.0`,
 Exit 1). Mit korrektem `pause_game` ist er grün.
 
-## 4. Beweis-Kommando (hermetisch)
+## 4. Harness-Live-Limit (Provisioner #908)
+
+`measure_boot.py --json` kann gegen das **reale** Image derzeit nicht live
+laufen: der Provisioner (#908) erzeugt den Container mit
+`-p 127.0.0.1:<host>:8080` und den Mounts `/srv/game`, `/wine`, `/saves`.
+Die reale Bridge lauscht aber IM Container auf **9001** und die Deploy-Compose
+mountet `/opt/riftbreaker`, `/data/config/config.cfg` (ro) und `/opt/rbtools`
+(ro). Folge: der Health-Poll trifft ins Leere → `ProvisionError: Health-Timeout`.
+Rohbeleg:
+[`evidence/909-harness-live-attempt-2026-09-24.txt`](evidence/909-harness-live-attempt-2026-09-24.txt).
+
+Deshalb wurden die Rohzahlen in §2 mit einem **eigenen Probe-Container** erzeugt,
+der die realen Deploy-Mounts nutzt (Skript im Rohbeleg-Header) — nicht mit dem
+Harness. Die Lücke ist als Issue erfasst und blockiert den vollen Live-Happy-Path
+von #909.
+
+## 5. DoD-Status (Scope / was dieser PR liefert)
+
+| DoD (#909) | Status in diesem PR |
+|---|---|
+| Handover messbar schneller als Cold-Boot | ✅ belegt (§2, Rohbelege) |
+| Auslaufschutz greift | ✅ hermetisch (`ParkedPool.reap` + Tests) |
+| **Kein Weltfortschritt im Parked-Zustand** | ⚠️ **hermetisch** belegt (§3, `WorldProgressInvariantTests`); **Live-Nachweis auf laufender Welt offen** (§3/§4) |
+
+Wegen DoD #3 ist `Closes #909` aus dem PR entfernt: **#909 bleibt offen**, bis
+#880 die Pause-Semantik und ein Live-Spieler den Welt-Nachweis erbringen. Dieser
+PR liefert das Code-Deliverable (Warm-Pool + Harness + hermetische Tests) und den
+Spike-/Mess-Bericht.
+
+## 6. Beweis-Kommando (hermetisch)
 
 ```sh
 cd deploy/parked && TMPDIR=/dev/shm/parked-test python3 -m unittest -v

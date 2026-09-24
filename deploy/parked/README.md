@@ -59,7 +59,7 @@ brechen **laut** mit `ParkedError` ab — nie ein halber Zustand. Scheitert
 |---|---|---|
 | Handover **messbar schneller** als Cold-Boot | `measure_boot.py` misst beide Pfade und liefert `saved_seconds` | Messung unten + `test_measure_boot` |
 | **Auslaufschutz** für zu lange geparkte Instanzen | `ParkedPool.reap(max_park_seconds)` stoppt überfällige | `test_reap_stops_only_overdue_parked_instances` |
-| **Kein Weltfortschritt** im Parked-Zustand | `pause_game` beim Parken, `resume_game` erst beim Claim; Invariante über `get_state` (Welt-Tick) | hermetisch: `WorldProgressInvariantTests` (`get_state`-Tick unverändert im PARKED, steigt nach `claim`, red-before-green) + live: [`MEASUREMENT.md` §3](MEASUREMENT.md) |
+| **Kein Weltfortschritt** im Parked-Zustand | `pause_game` beim Parken, `resume_game` erst beim Claim; Invariante über `get_state` (Welt-Tick) | **hermetisch**: `WorldProgressInvariantTests` (`get_state`-Tick unverändert im PARKED, steigt nach `claim`, red-before-green). **Live-Nachweis auf laufender Welt offen** (§3/§5 in [`MEASUREMENT.md`](MEASUREMENT.md)) — hängt an #880 + Live-Spieler |
 | Kein bestehender Code kaputt | neues Paket, wiederverwendeter Provisioner, nichts angefasst | nur `deploy/parked/` neu |
 
 ## Scope — Spike-Bericht vs. Code-Deliverable
@@ -69,30 +69,39 @@ kein PR** von Code-Deliverables. Für #909 gilt bewusst **EIN PR** (#917);
 die beiden Artefakt-Typen sind darin klar getrennt:
 
 - **Spike-/Mess-Bericht** (kein Code): [`MEASUREMENT.md`](MEASUREMENT.md) —
-  Methode, Rohzahlen (Cold-Boot ≈ 15,2 s / Handover ≈ 0,13 s / Parken ≈ 0,5 s),
-  Messumgebung, Datum und der Live-`get_state`-Nachweis „kein Weltfortschritt".
+  Methode, Rohzahlen (Spike 15,2 s / Re-Messung 9,35 s; Handover ≈ 0,12 s;
+  Parken ≈ 0,13 s), Messumgebung, Datum, **rohe Live-Belege** ([`evidence/`](evidence/))
+  und der ehrliche Stand des Live-`get_state`-Nachweises (hermetisch belegt, live offen).
 - **Code-Deliverable**: dieses Verzeichnis `deploy/parked/` — Warm-Pool
   (`parked_pool.py`), Mess-Harness (`measure_boot.py`) und hermetische Tests.
 
-Der Bericht in `MEASUREMENT.md` ist das committete, reproduzierbare Ergebnis des
-Spike-Teils; der Code ist das davon getragene Deliverable.
+Der Bericht in `MEASUREMENT.md` ist das committete Ergebnis des Spike-Teils,
+unterlegt mit den Roh-Logs in `evidence/`; der Code ist das davon getragene
+Deliverable.
 
 ## Gemessene Zahlen (live auf planet, 2026-09-24)
 
-Vollständiger, reproduzierbarer Mess-Bericht: [`MEASUREMENT.md`](MEASUREMENT.md).
-Realer Dedicated-Container, Bridge auf Host-Port 9011.
+Vollständiger Mess-Bericht **mit rohen Live-Belegen**:
+[`MEASUREMENT.md`](MEASUREMENT.md) und [`evidence/`](evidence/).
+Realer Dedicated-Container, ephemer publizierte Bridge.
 
-| Vorgang | gemessen |
-|---|---|
-| **Cold-Boot** (Container-Start + Mod-Load + Bridge healthy) | **≈ 15,2 s** |
-| **Parked-Handover** (`POST /resume_game`) | **≈ 0,13 s** |
-| Parken (`POST /pause_game`) | ≈ 0,5 s |
+| Vorgang | Spike | Re-Messung live |
+|---|---|---|
+| **Cold-Boot** (Container-Start + Mod-Load + Bridge healthy) | ≈ 15,2 s | **9,35 s** |
+| **Parked-Handover** (`POST /resume_game`) | ≈ 0,13 s | **0,12 s** |
+| Parken (`POST /pause_game`) | ≈ 0,5 s | **0,13 s** |
 
-**Ersparnis:** ≈ 15 s pro Handover (nur Container+Content; im echten Deploy
-zusätzlich die ~664 MB Content-Copy + Ansible, CI-Budget 240 s).
+**Ersparnis:** 9–15 s pro Handover (Cold-Boot, host-cacheabhängig) statt
+sub-sekundigem Handover; im echten Deploy zusätzlich die ~664 MB Content-Copy +
+Ansible (CI-Budget 240 s). Rohbelege:
+[`evidence/909-idle-roundtrips-2026-09-24.txt`](evidence/909-idle-roundtrips-2026-09-24.txt),
+[`evidence/909-coldboot-handover-2026-09-24.txt`](evidence/909-coldboot-handover-2026-09-24.txt).
 
-Der Live-Nachweis „kein Weltfortschritt im Parked-Zustand" (Blocker 1a) steht
-mit Rohbelegen in [`MEASUREMENT.md` §3](MEASUREMENT.md).
+> Der Live-Nachweis „kein Weltfortschritt" auf einer **laufenden** Welt steht
+> **aus** (auf `planet` keine Welt mit Spieler/Tick verfügbar; `get_state`
+> durchgehend `ok:false`). Er ist hermetisch belegt; siehe
+> [`MEASUREMENT.md` §3/§5](MEASUREMENT.md). **Dieser PR schließt #909 daher
+> nicht** (`Closes #909` entfernt).
 
 ## Config / Konventionen
 
@@ -104,6 +113,9 @@ mit Rohbelegen in [`MEASUREMENT.md` §3](MEASUREMENT.md).
 - `measure_boot.py` CLI braucht `PROVISIONER_*`-Config:
   `PROVISIONER_IMAGE=... python3 measure_boot.py --json` →
   `{"cold_boot_seconds":..,"parked_handover_seconds":..,"saved_seconds":..}`.
+  **Hinweis:** gegen das reale Image ist der Live-Lauf derzeit blockiert (Provisioner
+  #908: Container-Port `8080` statt `9001`, Mounts weichen von der Deploy-Compose ab) →
+  Health-Timeout, siehe [`MEASUREMENT.md` §4](MEASUREMENT.md).
 
 ## Test (hermetisch, ohne Docker/Netz/Spiel)
 
