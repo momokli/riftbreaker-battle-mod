@@ -59,13 +59,28 @@ brechen **laut** mit `ParkedError` ab — nie ein halber Zustand. Scheitert
 |---|---|---|
 | Handover **messbar schneller** als Cold-Boot | `measure_boot.py` misst beide Pfade und liefert `saved_seconds` | Messung unten + `test_measure_boot` |
 | **Auslaufschutz** für zu lange geparkte Instanzen | `ParkedPool.reap(max_park_seconds)` stoppt überfällige | `test_reap_stops_only_overdue_parked_instances` |
-| **Kein Weltfortschritt** im Parked-Zustand | `pause_game` beim Parken, `resume_game` erst beim Claim; Invariante im Modul-Docstring | `test_warm_up_*`, `test_claim_*` |
+| **Kein Weltfortschritt** im Parked-Zustand | `pause_game` beim Parken, `resume_game` erst beim Claim; Invariante über `get_state` (Welt-Tick) | hermetisch: `WorldProgressInvariantTests` (`get_state`-Tick unverändert im PARKED, steigt nach `claim`, red-before-green) + live: [`MEASUREMENT.md` §3](MEASUREMENT.md) |
 | Kein bestehender Code kaputt | neues Paket, wiederverwendeter Provisioner, nichts angefasst | nur `deploy/parked/` neu |
+
+## Scope — Spike-Bericht vs. Code-Deliverable
+
+Milestone #13 trennt methodisch **Spike (#880 + Mess-Teil #909) = Bericht,
+kein PR** von Code-Deliverables. Für #909 gilt bewusst **EIN PR** (#917);
+die beiden Artefakt-Typen sind darin klar getrennt:
+
+- **Spike-/Mess-Bericht** (kein Code): [`MEASUREMENT.md`](MEASUREMENT.md) —
+  Methode, Rohzahlen (Cold-Boot ≈ 15,2 s / Handover ≈ 0,13 s / Parken ≈ 0,5 s),
+  Messumgebung, Datum und der Live-`get_state`-Nachweis „kein Weltfortschritt".
+- **Code-Deliverable**: dieses Verzeichnis `deploy/parked/` — Warm-Pool
+  (`parked_pool.py`), Mess-Harness (`measure_boot.py`) und hermetische Tests.
+
+Der Bericht in `MEASUREMENT.md` ist das committete, reproduzierbare Ergebnis des
+Spike-Teils; der Code ist das davon getragene Deliverable.
 
 ## Gemessene Zahlen (live auf planet, 2026-09-24)
 
-Aus `progress-909-parked-solo.md`; realer Dedicated-Container, Bridge auf
-Host-Port 9011.
+Vollständiger, reproduzierbarer Mess-Bericht: [`MEASUREMENT.md`](MEASUREMENT.md).
+Realer Dedicated-Container, Bridge auf Host-Port 9011.
 
 | Vorgang | gemessen |
 |---|---|
@@ -75,6 +90,9 @@ Host-Port 9011.
 
 **Ersparnis:** ≈ 15 s pro Handover (nur Container+Content; im echten Deploy
 zusätzlich die ~664 MB Content-Copy + Ansible, CI-Budget 240 s).
+
+Der Live-Nachweis „kein Weltfortschritt im Parked-Zustand" (Blocker 1a) steht
+mit Rohbelegen in [`MEASUREMENT.md` §3](MEASUREMENT.md).
 
 ## Config / Konventionen
 
@@ -90,10 +108,16 @@ zusätzlich die ~664 MB Content-Copy + Ansible, CI-Budget 240 s).
 ## Test (hermetisch, ohne Docker/Netz/Spiel)
 
 ```sh
-cd deploy/parked && python3 -m unittest -v
-python3 -m ruff check deploy/parked
+cd deploy/parked && TMPDIR=/dev/shm/parked-test python3 -m unittest -v
 ```
 
-Abgedeckt: warm_up happy + idempotent + Rollback bei `pause_game`-Fehler, claim
-misst Handover + verlangt `PARKED` + healthy, recycle warm/kalt, reap stoppt nur
-Überfällige, status, Fehler → `ParkedError`, `measure_boot` liefert Differenz.
+25 Tests. Abgedeckt: warm_up happy + idempotent + Rollback bei
+`pause_game`-Fehler, **Welt-Tick-Invariante via `get_state`** (kein Fortschritt
+im PARKED, Fortschritt nach `claim`, red-before-green), claim misst Handover +
+verlangt `PARKED` + healthy, recycle warm/kalt, reap stoppt nur Überfällige und
+stoppt bei einem `stop`-Fehler die übrigen trotzdem (aggregierter
+`ParkedError`), status, Fehler → `ParkedError`, `measure_boot` liefert Differenz
+und räumt Cold+Parked auf (kein Container-Leak).
+
+> Lint (ruff) läuft separat in der CI, nicht Teil dieses Verzeichnis-Setups —
+der `ruff`-Aufruf wurde entfernt.
