@@ -19,7 +19,6 @@ import shutil
 import socket
 import tempfile
 import threading
-import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
