@@ -50,6 +50,7 @@ class FakeBridge(object):
         self.pause_noop = pause_noop
         self.calls = []
         self.fail_on = set()
+        self.end_game_calls = []
         self.paused = False
         self.world_tick = 0.0
         self._last_tick_at = clock()
@@ -81,6 +82,7 @@ class FakeBridge(object):
 
     def end_game(self, result=None):
         self._guard("end_game")
+        self.end_game_calls.append(result)
         return {"ok": True}
 
     def get_state(self):
@@ -226,9 +228,37 @@ class RecycleTests(PoolHarness):
         self.assertEqual(recycled.rounds, 1)
         self.assertEqual(recycled.parked_since, self.clock())
         calls = self.bridge_for(entry).calls
-        for expected in ("end_game", "round_reset", "pause_game"):
+        for expected in ("round_reset", "pause_game"):
             self.assertIn(expected, calls)
         self.assertEqual(self.provisioner.stops, [])  # warm geblieben
+
+    def test_recycle_without_result_skips_end_game(self):
+        # Red-before-green: die Bridge verlangt ein Pflicht-`result`
+        # (pipe_bridge.c handle_end_game); `end_game(None)` ist immer HTTP 400
+        # `invalid_request`. Ohne Ergebnis darf recycle `end_game` NICHT rufen —
+        # `round_reset` + `pause_game` ist der gueltige, weltunabhaengige Pfad.
+        entry = self.pool.warm_up(env="test", instance_id="r1")
+        self.pool.claim(env="test", instance_id="r1")
+        recycled = self.pool.recycle(env="test", instance_id="r1", keep_warm=True)
+        calls = self.bridge_for(entry).calls
+        self.assertNotIn("end_game", calls)
+        self.assertIn("round_reset", calls)
+        self.assertIn("pause_game", calls)
+        self.assertEqual(recycled.state, ParkedState.PARKED)
+        self.assertEqual(recycled.rounds, 1)
+        self.assertEqual(self.provisioner.stops, [])
+
+    def test_recycle_with_result_calls_end_game(self):
+        entry = self.pool.warm_up(env="test", instance_id="r1")
+        self.pool.claim(env="test", instance_id="r1")
+        recycled = self.pool.recycle(env="test", instance_id="r1", keep_warm=True,
+                                     result="win")
+        calls = self.bridge_for(entry).calls
+        self.assertIn("end_game", calls)
+        self.assertEqual(self.bridge_for(entry).end_game_calls, ["win"])
+        self.assertIn("round_reset", calls)
+        self.assertIn("pause_game", calls)
+        self.assertEqual(recycled.state, ParkedState.PARKED)
 
     def test_recycle_cold_stops_instance(self):
         self.pool.warm_up(env="test", instance_id="r1")

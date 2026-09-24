@@ -21,7 +21,10 @@ Endpunkte (JSON; Bearer-Token PFLICHT, wenn ``PARKED_TOKEN`` gesetzt):
   * ``GET  /health``   -> ``200 {"ok":true,"env":…}`` (Liveness des Dienstes)
   * ``GET  /status``   -> ``200 {counters, entries}``
   * ``POST /claim``    -> Instanz uebergeben (FIFO, aelteste ``PARKED``)
-  * ``POST /recycle``  -> nach Rundenende wieder ``PARKED`` (oder ``STOPPED``)
+  * ``POST /recycle``  -> nach Rundenende wieder ``PARKED`` (oder ``STOPPED``);
+                          optionales ``result`` (``win``/``lose``) wird an
+                          ``pool.recycle`` durchgereicht und loest dort
+                          ``end_game(result)`` aus (ohne ``result`` kein ``end_game``)
   * ``POST /reap``     -> manueller Auslaufschutz-Lauf
 
 Fehlerformat einheitlich ``{"ok":false,"reason":"<code>","detail":"…"}``;
