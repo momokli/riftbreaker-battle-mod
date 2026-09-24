@@ -12,10 +12,13 @@ Weltfortschritt im Parked-Zustand" — hermetisch belegt, **live noch offen**
 Die Scope-Trennung (Spike-Bericht ↔ Code-Deliverable) steht in
 [`README.md`](README.md#scope--spike-bericht-vs-code-deliverable).
 
-> **Status:** Dieser PR/-Branch schließt #909 **nicht** (`Closes #909` wurde
-> bewusst entfernt). Der DoD-Nachweis „kein Weltfortschritt" ist nur
-> hermetisch geführt; der Live-Nachweis auf einer wirklich laufenden Welt steht
-> aus (§5).
+> **Status (Teil-Abschluss):** Der DoD-Nachweis „kein Weltfortschritt" ist
+> **hermetisch** geführt (red-before-green, §3), **nicht** live: auf `planet`
+> gibt es keine laufende Welt (Spieler/Tick). Der Live-Nachweis ist als
+> Follow-up [#919](https://github.com/momokli/riftbreaker-battle-mod/issues/919)
+> erfasst; der **volle Live-Happy-Path** (`warm_up` gegen das reale Image) ist
+> durch [#918](https://github.com/momokli/riftbreaker-battle-mod/issues/918)
+> blockiert. Beide offenen Punkte stehen in §4/§5.
 
 ---
 
@@ -170,8 +173,9 @@ Rohbeleg:
 
 Deshalb wurden die Rohzahlen in §2 mit einem **eigenen Probe-Container** erzeugt,
 der die realen Deploy-Mounts nutzt (Skript im Rohbeleg-Header) — nicht mit dem
-Harness. Die Lücke ist als Issue erfasst und blockiert den vollen Live-Happy-Path
-von #909.
+Harness. Die Lücke ist als Issue
+[#918](https://github.com/momokli/riftbreaker-battle-mod/issues/918) erfasst und
+blockiert den vollen Live-Happy-Path von #909.
 
 ## 5. DoD-Status (Scope / was dieser PR liefert)
 
@@ -179,12 +183,21 @@ von #909.
 |---|---|
 | Handover messbar schneller als Cold-Boot | ✅ belegt (§2, Rohbelege) |
 | Auslaufschutz greift | ✅ hermetisch (`ParkedPool.reap` + Tests) |
-| **Kein Weltfortschritt im Parked-Zustand** | ⚠️ **hermetisch** belegt (§3, `WorldProgressInvariantTests`); **Live-Nachweis auf laufender Welt offen** (§3/§4) |
+| **Kein Weltfortschritt im Parked-Zustand** | ⚠️ **hermetisch** belegt (§3, `WorldProgressInvariantTests`); **Live-Nachweis auf laufender Welt offen** (§3/§4) → Follow-up [#919](https://github.com/momokli/riftbreaker-battle-mod/issues/919) |
 
-Wegen DoD #3 ist `Closes #909` aus dem PR entfernt: **#909 bleibt offen**, bis
-#880 die Pause-Semantik und ein Live-Spieler den Welt-Nachweis erbringen. Dieser
-PR liefert das Code-Deliverable (Warm-Pool + Harness + hermetische Tests) und den
-Spike-/Mess-Bericht.
+### Teil-Abschluss
+
+Dieser PR liefert das Code-Deliverable (Warm-Pool + Harness + hermetische Tests)
+und den Spike-/Mess-Bericht. Zwei Nachweise sind **umgebungs-/spielabhängig** und
+können in `planet`/CI nicht geführt werden; sie sind als Folgespuren erfasst,
+statt hier als erledigt behauptet zu werden:
+
+1. **Voller Live-Happy-Path** (`warm_up` gegen das reale Image inkl.
+   Content-Deploy) — blockiert durch **#918** (Provisioner bootet das reale Image
+   nicht; Port/Mounts weichen ab, siehe §4).
+2. **Live-Welt-Nachweis „kein Weltfortschritt"** — braucht eine laufende Welt +
+   Spieler; hängt an der Pause-Semantik aus #880 (offene Kernfrage: pausiert das
+   GAMEPLAY oder nur den DOM-Node?). Follow-up **#919**.
 
 ## 6. Beweis-Kommando (hermetisch)
 

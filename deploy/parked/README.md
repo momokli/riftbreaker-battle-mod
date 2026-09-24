@@ -59,7 +59,7 @@ brechen **laut** mit `ParkedError` ab — nie ein halber Zustand. Scheitert
 |---|---|---|
 | Handover **messbar schneller** als Cold-Boot | `measure_boot.py` misst beide Pfade und liefert `saved_seconds` | Messung unten + `test_measure_boot` |
 | **Auslaufschutz** für zu lange geparkte Instanzen | `ParkedPool.reap(max_park_seconds)` stoppt überfällige | `test_reap_stops_only_overdue_parked_instances` |
-| **Kein Weltfortschritt** im Parked-Zustand | `pause_game` beim Parken, `resume_game` erst beim Claim; Invariante über `get_state` (Welt-Tick) | **hermetisch**: `WorldProgressInvariantTests` (`get_state`-Tick unverändert im PARKED, steigt nach `claim`, red-before-green). **Live-Nachweis auf laufender Welt offen** (§3/§5 in [`MEASUREMENT.md`](MEASUREMENT.md)) — hängt an #880 + Live-Spieler |
+| **Kein Weltfortschritt** im Parked-Zustand | `pause_game` beim Parken, `resume_game` erst beim Claim; Invariante über `get_state` (Welt-Tick) | **hermetisch**: `WorldProgressInvariantTests` (`get_state`-Tick unverändert im PARKED, steigt nach `claim`, red-before-green). **Live-Nachweis auf laufender Welt offen** (§3/§5 in [`MEASUREMENT.md`](MEASUREMENT.md)) — hängt an #880 + Live-Spieler; Follow-up [#919](https://github.com/momokli/riftbreaker-battle-mod/issues/919) |
 | Kein bestehender Code kaputt | neues Paket, wiederverwendeter Provisioner, nichts angefasst | nur `deploy/parked/` neu |
 
 ## Scope — Spike-Bericht vs. Code-Deliverable
@@ -99,9 +99,11 @@ Ansible (CI-Budget 240 s). Rohbelege:
 
 > Der Live-Nachweis „kein Weltfortschritt" auf einer **laufenden** Welt steht
 > **aus** (auf `planet` keine Welt mit Spieler/Tick verfügbar; `get_state`
-> durchgehend `ok:false`). Er ist hermetisch belegt; siehe
-> [`MEASUREMENT.md` §3/§5](MEASUREMENT.md). **Dieser PR schließt #909 daher
-> nicht** (`Closes #909` entfernt).
+> durchgehend `ok:false`). Er ist hermetisch belegt und als Follow-up
+> [#919](https://github.com/momokli/riftbreaker-battle-mod/issues/919)
+> nachverfolgt; der volle Live-Happy-Path ist durch
+> [#918](https://github.com/momokli/riftbreaker-battle-mod/issues/918) blockiert.
+> Siehe [`MEASUREMENT.md` §3/§4/§5](MEASUREMENT.md).
 
 ## Config / Konventionen
 
@@ -114,7 +116,8 @@ Ansible (CI-Budget 240 s). Rohbelege:
   `PROVISIONER_IMAGE=... python3 measure_boot.py --json` →
   `{"cold_boot_seconds":..,"parked_handover_seconds":..,"saved_seconds":..}`.
   **Hinweis:** gegen das reale Image ist der Live-Lauf derzeit blockiert (Provisioner
-  #908: Container-Port `8080` statt `9001`, Mounts weichen von der Deploy-Compose ab) →
+  #908: Container-Port `8080` statt `9001`, Mounts weichen von der Deploy-Compose ab →
+  [#918](https://github.com/momokli/riftbreaker-battle-mod/issues/918)) →
   Health-Timeout, siehe [`MEASUREMENT.md` §4](MEASUREMENT.md).
 
 ## Test (hermetisch, ohne Docker/Netz/Spiel)
