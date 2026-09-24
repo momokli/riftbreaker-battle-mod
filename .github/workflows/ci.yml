@@ -130,16 +130,11 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         with:
           node-version: 20
-      # Warmer npm-Store (Issue #153): npm ci zieht aus dem Cache statt aus
-      # dem Netz. Key basiert auf dem package-lock.json.
-      - name: npm-Dependency-Cache (actions/cache)
-        if: needs.changes.outputs.test == 'true'
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: npm-store-${{ runner.os }}-${{ hashFiles('tests/rbbridge-hosttest/package-lock.json') }}
-          restore-keys: |
-            npm-store-${{ runner.os }}-
+      # Kein npm-Store-Cache mehr (Issue #306): die verbleibenden Node-Tests
+      # (rbbridge-/pipe-bridge-hosttest) haben keine externen Dependencies
+      # (package.json ohne deps, `node --test`), brauchen also kein `npm ci`
+      # und damit auch keinen Cache mehr — der Eintrag war zuletzt ohnehin ein
+      # No-op auf Basis des package-lock.json-Hash.
       - name: Unit-Test Deploy-Gate (Issue #118)
         if: needs.changes.outputs.test == 'true'
         working-directory: tools/deploy-gate
@@ -217,16 +212,19 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         working-directory: deploy/server-control
         run: python3 -m unittest test_server_control -v
+      # rbbridge-/pipe-bridge-hosttest sind dependency-frei (node:test) —
+      # kein `npm ci` mehr nötig (Issue #306, leaner CI). `npm test` startet
+      # `node --test` direkt.
       - name: rbbridge host-test (Issue #243)
         if: needs.changes.outputs.test == 'true'
         working-directory: tests/rbbridge-hosttest
-        run: npm ci && npm test
+        run: npm test
       # pipe_bridge /health-Logik (Issue #902): Statuscode+Body aus
       # health_logic.h host-kompiliert. "Pipe trennen" = pipe_ok=0 -> 503.
       - name: pipe-bridge host-test (Issue #902)
         if: needs.changes.outputs.test == 'true'
         working-directory: tests/pipe-bridge-hosttest
-        run: npm ci && npm test
+        run: npm test
       # Server-Control-Panel (#422): extrahiert den testbaren Marker-Block aus
       # cockpit.html und prueft das defensive Contract (immer "—", nie werfen,
       # nie location.reload). Keine Dependencies, daher kein npm ci noetig.
@@ -311,6 +309,18 @@ jobs:
             echo "Hinweis: /opt/ccache-rbbattle/bin fehlt — .github/runner/setup.sh noch nicht ausgeführt; Build ohne ccache."
           fi
           bash scripts/package.sh
+
+      # ccache-Effektivitaet sichtbar machen (Issue #306, .github/runner/README.md
+      # "Offen" Punkt 4): pro Build die Hit-Rate ausgeben, damit die Kennzahl
+      # messbar wird. Bricht nie ab (best-effort).
+      - name: ccache-Statistik (Issue #306)
+        if: needs.changes.outputs.build == 'true'
+        run: |
+          if command -v ccache >/dev/null 2>&1; then
+            ccache --show-stats || true
+          else
+            echo "ccache nicht im PATH — keine Statistik."
+          fi
       - name: Artefakte hochladen (dist/*.zip + Mod-Updater)
         if: needs.changes.outputs.build == 'true'
         uses: actions/upload-artifact@v4
