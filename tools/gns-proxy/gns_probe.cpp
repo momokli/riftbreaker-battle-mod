@@ -212,6 +212,14 @@ bool g_relayEnabled = false;
 rbroute::Endpoint g_defaultTarget;
 // --dial: nur Verbindungstest zu einem Backend (ohne Client), fuer Diagnose.
 rbroute::Endpoint g_dialTarget;
+// --client: minimaler echter GNS-Client (Issue #936 Live-Nachweis). Verbindet
+// ausgehend (gleicher Pfad wie --dial), haelt die Verbindung `--client-hold`
+// Sekunden und drainiert eingehende Nachrichten; optional eine Marker-Nachricht
+// (`--client-send`). Die Identitaet kommt automatisch aus dem Connect — damit
+// erzeugt der Modus headless echte parallele GNS-Sessions.
+rbroute::Endpoint g_clientTarget;
+int g_clientHoldSeconds = 60;
+std::string g_clientSend;
 
 // Routen: Key = Identitaetsstring (`str:…`), Suffix-Wildcard (`*-dev`) oder
 // Default (`*`) -> Backend.  Auswertung: exakt > laengster Suffix > Default.
@@ -787,6 +795,14 @@ void onConnectionStatusChanged(
       if (!backendSess->identity.empty()) {
         sessionFor(backendSess->identity).backendConnected = true;
       }
+      if (g_clientTarget.port != 0 && pIdentityToString != nullptr) {
+        // --client: Peer-Identitaet protokollieren (Abgleich mit /sessions auf
+        // dem Relay). Die EIGENE Identitaet steht nicht in SteamNetConnectionInfo
+        // — der Relay loggt sie serverseitig als `client-identitaet`.
+        char sid[256] = {0};
+        pIdentityToString(&info.m_identityRemote, sid, sizeof(sid));
+        logLine("CLIENT: verbunden — peer-identity='%s'", sid);
+      }
       queueHistoryDelta(*backendSess);
       break;
     }
@@ -1136,6 +1152,36 @@ void processApiCommands() {
           logLine("API: join '%s' -> unbekannte Instanz '%s' — ignoriert",
                   it->identity.c_str(), it->instance.c_str());
           break;
+        }
+        // Issue #936 TOCTOU: die Kapazitaet wurde im HTTP-Thread gegen den
+        // Snapshot (g_soloGroupsSnapshot) geprueft; bis zur Abarbeitung hier
+        // koennen weitere Joins denselben Instanznamen gefuellt haben. Wahrheit
+        // ist g_soloGroups in DIESEM Loop — daher mit derselben reinen Logik
+        // erneut klemmen. Ein idempotenter Rejoin (schon Mitglied) bleibt
+        // erlaubt und verbraucht keinen Platz.
+        {
+          std::vector<std::string> members;
+          std::map<std::string, std::vector<std::string>>::iterator mg =
+              g_soloGroups.find(it->instance);
+          if (mg != g_soloGroups.end()) {
+            members = mg->second;
+          }
+          bool alreadyMember = false;
+          for (std::size_t i = 0; i < members.size(); ++i) {
+            if (members[i] == it->identity) {
+              alreadyMember = true;
+              break;
+            }
+          }
+          if (rbapi::decideSoloAction(true, static_cast<int>(members.size()),
+                                      alreadyMember, g_maxPlayers) ==
+              rbapi::SoloJoinDecision::Full) {
+            logLine("API: join '%s' -> '%s' voll (%zu/%d) — TOCTOU-Clamp, "
+                    "kein Join",
+                    it->identity.c_str(), it->instance.c_str(), members.size(),
+                    g_maxPlayers);
+            break;
+          }
         }
         SoloClaim claim;
         claim.instance = it->instance;
@@ -2217,6 +2263,83 @@ bool resolveDll(const char *explicitPath) {
   return true;
 }
 
+// --- --client: minimaler echter GNS-Client (Issue #936 Live-Nachweis) ------
+// Nutzt denselben Connect-Pfad wie --dial, haelt die Verbindung aber und
+// drainiert, was der Gegenspieler (Relay/Backend) schickt. Die Identitaet kommt
+// automatisch aus dem Connect (kein App-Handshake) — zwei solcher Clients
+// erzeugen damit headless zwei echte, parallele GNS-Sessions derselben Instanz.
+int runClientMode() {
+  logLine("CLIENT: verbinde -> %s (hold=%ds%s)", g_clientTarget.str().c_str(),
+          g_clientHoldSeconds,
+          g_clientSend.empty() ? "" : ", send=ja");
+  Session clientSess;
+  clientSess.backendTarget = g_clientTarget;
+  startBackendConnect(clientSess);
+  for (int i = 0; i < 200 && !clientSess.backendConnected; ++i) {
+    pRunCallbacks(g_pInterface);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  if (!clientSess.backendConnected) {
+    logLine("CLIENT: Verbindung FEHLGESCHLAGEN (Timeout) -> %s",
+            g_clientTarget.str().c_str());
+    pKill();
+    return 1;
+  }
+  logLine("CLIENT: Connected -> %s (conn=%u)", g_clientTarget.str().c_str(),
+          clientSess.backendConn);
+  if (!g_clientSend.empty()) {
+    int64 out = 0;
+    const EResult r = pSendMessageToConnection(
+        g_pInterface, clientSess.backendConn, g_clientSend.data(),
+        static_cast<uint32>(g_clientSend.size()),
+        k_nSteamNetworkingSend_Reliable, &out);
+    logLine("CLIENT: Marker gesendet (%zu B, EResult=%d, out=%lld)",
+            g_clientSend.size(), static_cast<int>(r),
+            static_cast<long long>(out));
+  }
+  const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now() +
+      std::chrono::seconds(g_clientHoldSeconds);
+  size_t recvCount = 0;
+  size_t recvBytes = 0;
+  while (std::chrono::steady_clock::now() < deadline) {
+    pRunCallbacks(g_pInterface);
+    if (clientSess.backendPoll != k_HSteamNetPollGroup_Invalid) {
+      for (;;) {
+        SteamNetworkingMessage_t *pMsg = nullptr;
+        const int n = pReceiveMessagesOnPollGroup(
+            g_pInterface, clientSess.backendPoll, &pMsg, 1);
+        if (n <= 0 || pMsg == nullptr) {
+          break;
+        }
+        ++recvCount;
+        recvBytes += static_cast<size_t>(pMsg->m_cbSize);
+        logLine("CLIENT: MSG #%zu conn=%u size=%d flags=0x%x [S->C] %s",
+                recvCount, pMsg->m_conn, pMsg->m_cbSize, pMsg->m_nFlags,
+                asciiPreview(
+                    static_cast<const unsigned char *>(pMsg->m_pData),
+                    pMsg->m_cbSize <= 64 ? pMsg->m_cbSize : 48)
+                    .c_str());
+        pMsg->Release();
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  logLine("CLIENT: hold abgelaufen — %zu Nachricht(en), %zu B empfangen; "
+          "trenne sauber",
+          recvCount, recvBytes);
+  if (clientSess.backendConn != k_HSteamNetConnection_Invalid) {
+    pCloseConnection(g_pInterface, clientSess.backendConn, 0, nullptr, false);
+    clientSess.backendConn = k_HSteamNetConnection_Invalid;
+  }
+  for (int i = 0; i < 20; ++i) {
+    pRunCallbacks(g_pInterface);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  pKill();
+  return 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -2250,6 +2373,17 @@ int main(int argc, char **argv) {
         fprintf(stderr, "--dial braucht IPv4:port, bekam '%s'\n", spec);
         return 2;
       }
+    } else if (strcmp(argv[i], "--client") == 0 && i + 1 < argc) {
+      // Minimaler echter GNS-Client (Issue #936): verbindet, haelt, drainiert.
+      const char *spec = argv[++i];
+      if (!rbroute::parseEndpoint(spec, g_clientTarget)) {
+        fprintf(stderr, "--client braucht IPv4:port, bekam '%s'\n", spec);
+        return 2;
+      }
+    } else if (strcmp(argv[i], "--client-hold") == 0 && i + 1 < argc) {
+      g_clientHoldSeconds = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--client-send") == 0 && i + 1 < argc) {
+      g_clientSend = argv[++i];
     } else if (strcmp(argv[i], "--hold") == 0) {
       g_hold = true;
     } else if (strcmp(argv[i], "--api-port") == 0 && i + 1 < argc) {
@@ -2457,6 +2591,11 @@ int main(int argc, char **argv) {
                                       : "FEHLGESCHLAGEN (Timeout)");
     pKill();
     return dialSess.backendConnected ? 0 : 1;
+  }
+
+  if (g_clientTarget.port != 0) {
+    // Minimaler echter GNS-Client (Issue #936): kein Listen-Socket noetig.
+    return runClientMode();
   }
 
   SteamNetworkingIPAddr serverLocalAddr;
