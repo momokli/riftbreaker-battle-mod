@@ -140,6 +140,8 @@ shared:
   # Rollen-Default (dev-Port) hier als host-konstant gefuehrt.
   gns_relay_parked_url: "Ziel des Parked-Pool-Dienstes fuer /solo (Default dev 127.0.0.1:9201) — Relay-Singleton, kein Env-Twin."
   gns_relay_parked_token: "Bearer-Token fuer den Parked-Dienst aus dem Vault (vault_parked_pool_token) — Zugangsdatum, kein Env-Pfad/Port."
+  gns_relay_capsule_url: "Ziel des Kapsel-Flow-Dienstes fuer /solo (Vorrang) + /ready (Default dev 127.0.0.1:9211) — Relay-Singleton, kein Env-Twin."
+  gns_relay_capsule_token: "Bearer-Token fuer den Kapsel-Dienst aus dem Vault (vault_capsule_token) — Zugangsdatum, kein Env-Pfad/Port."
   # GNS-Lobby (Issue #857): Operator-Web-UI des Relay-Singletons.
   proxy_domain: "Lobby-Domain (proxy.rift.projectmellon.de) — env-UNABHAENGIG (Relay-Singleton), daher NICHT per-env ueberschrieben."
   proxy_upstream: "Upstream der Lobby-Route (127.0.0.1:9200) — die Relay-API auf dem Host."
