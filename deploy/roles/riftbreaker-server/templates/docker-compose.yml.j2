@@ -191,6 +191,11 @@ services:
     environment:
       RBB_ENV: "{{ rift_env }}"
       RBB_REF: "{{ rift_deploy_ref }}"
+    ports:
+      # Host-Publish fuer den Kapsel-Dienst (#931): der laeuft als systemd-Host-
+      # Dienst und ruft `POST /start` auf 127.0.0.1 (capsule_flow_cycle_url).
+      # Ohne diesen Publish ist der Control-Port nur im Compose-Netz erreichbar.
+      - "127.0.0.1:{{ riftbreaker_attack_cycle_port }}:{{ riftbreaker_attack_cycle_port }}"
     volumes:
       - "{{ riftbreaker_attack_cycle_script }}:/app/attack_cycle.py:ro"
     command:
