@@ -75,6 +75,9 @@ per_env:
   parked_pool_pool_size: [dev]
   parked_pool_install_dir: [dev]
   parked_pool_env_file: [dev]
+  # --- Kapsel-Flow-Dienst (Issue #931, dev) -------------------------------
+  capsule_flow_port: [dev]
+  capsule_flow_parked_port: [dev]
   # --- Tournament-Server ----------------------------------------------------
   tournament_install_dir: [prod, test, staging]
   tournament_unit: [prod, test, staging]
