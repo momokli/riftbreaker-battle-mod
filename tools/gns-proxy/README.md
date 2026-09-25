@@ -113,6 +113,17 @@ Routen-Datei (`<key>=<ip:port>`, `#` = Kommentar) siehe `routes.example`.
 Optional: `--appid N` (Default 780310), `--identity`, `--unencrypted 1`,
 `--allow-without-auth {0,1,2}`, `--port`, `--dll`.
 
+### Minimaler GNS-Client `--client` (#936)
+
+`gns_probe.exe --client <ip:port> [--client-hold <sec>] [--client-send <ascii>]`
+verbindet als echter GNS-Client auf dem `--dial`-Pfad (GNS-DLL + AppID-Patch),
+wartet auf `Connected`, haelt die Verbindung `--client-hold` Sekunden (Default 60),
+drainiert eingehende Nachrichten (Groesse/Anzahl, Log-Praefix `CLIENT:`) und sendet
+optional eine Marker-Nachricht (`--client-send`). Danach sauberes Trennen. Damit
+laesst sich headless eine echte GNS-Session erzeugen (die Identitaet kommt
+automatisch aus dem Connect) — zwei solche Clients sind der Live-Nachweis fuer
+#936 (Details: `evidence/936-live-2026-09-25.txt`).
+
 ## Hold + Operator-UI (Issue #857, PoC)
 
 Statt unentschiedene Joins automatisch auf den Default zu schicken, kann der
@@ -133,6 +144,7 @@ gns_probe.exe --port 6321 --map-file /etc/rbgns/routes --hold \
 | `--target`   | `NAME=ip:port`, wiederholbar — die Buttons der UI    |
 | `--parked-url` | Ziel des Parked-Pool-Dienstes fuer `POST /solo` (Default: **nicht gesetzt**). **Nur IPv4-Literal** (`http://<IPv4>:port`) — der Outbound-Client nutzt `inet_pton`, also kein Hostname/DNS (`localhost` funktioniert nicht). |
 | `--capsule-url` | Ziel des **Kapsel-Flow-Dienstes** fuer `POST /solo` (Issue #931, Default: **nicht gesetzt**). Ist er gesetzt (argv oder `RBB_CAPSULE_URL`), ruft `/solo` `POST /capsule/open` (Claim **ohne** resume → pausiertes Spiel) statt `POST /claim`; ebenfalls nur IPv4-Literal. |
+| `--max-players` | Aufnahme-Limit einer Solo-Instanz fuer den Beitritt weiterer Clients (Issue #936, Default `4` = Server-Default `riftbreaker_server_max_players: 4`). `<1` → Start verweigert (`exit 2`). Im Deploy steuert die Ansible-Variable `gns_relay_max_players` (Rolle `gns-relay`, Default `4`) diesen Wert. |
 
 Der Parked-Pfad ist nur aktiv, wenn `--parked-url` **oder** die Umgebungsvariable
 `RBB_PARKED_URL` gesetzt ist (argv hat Vorrang); ohne beides antwortet
@@ -210,6 +222,8 @@ aufgeloestem Endpoint). Der Claim-Pfad ist dabei konfigurierbar
 | `identitaet` fehlt | `400` |
 | Parked `409 none_parked` / `503 bridge_unhealthy` / Connect-Fehler (transient) | Retry mit hartem Latenz-Budget: Deadline-getrieben, Gesamt-Wall-Clock ≤ 4,5 s (`SoloBudget{totalMs=4500, attemptMs=1500, minAttemptMs=250}`), Backoff 250 ms→1 s gegen das Rest-Budget geprueft; nach Erschoepfung `503 {ok:false,reason:"backend_starting",retry:true}` |
 | Parked `409 not_claimable` | `409` |
+| `instance` unbekannt (`POST /solo {instance:X}` — kein Mitglied in der Instanz) | `409 {ok:false,reason:"unknown_instance"}` |
+| `instance` voll (`soloMemberCount` ≥ `--max-players`) | `409 {ok:false,reason:"instance_full"}` |
 | alles andere (401/500/…, oder 200 ohne `gns_endpoint`) | `502` |
 | Parked nicht konfiguriert (weder `--parked-url` noch `RBB_PARKED_URL`, und keine Kapsel) | `503 {reason:"parked_unconfigured",retry:false}` |
 
@@ -250,6 +264,9 @@ unveraendert:
 | `soloPhase` | `provisioned` / `underway` / `in_game_paused` / `running` |
 | `soloInstance` | Name der geclaimten Parked-Instanz |
 | `soloEndpoint` | GNS-UDP-Endpoint der Instanz (`ip:port`) |
+| `soloMembers` | Identitaeten der Mitglieder dieser Instanz (Liste) |
+| `soloMemberCount` | Anzahl Mitglieder in der Instanz |
+| `soloMaxPlayers` | Aufnahme-Limit der Instanz (`--max-players`) |
 
 Phasen (reine Logik in `api_util.h`, host-getestet):
 
@@ -279,6 +296,29 @@ im Normalpfad praktisch **nur transient** erreichbar (z. B. waehrend `recycling`
 die Ableitung degradiert sicher, ueberzeichnet aber die Erreichbarkeit. Ein echter
 In-Game-Pause-Nachweis braucht einen Live-Client (Playtest) oder eine neue
 Pause-Quelle.
+
+### Solo-Join — mehrere Clients auf einer Instanz (#936)
+
+Bisher ergab jeder `POST /solo` **einen neuen Claim**. #936 erlaubt es, einer
+**bestehenden** Solo-Instanz beizutreten (mehrere Clients im selben Solo-Spiel),
+ohne einen zweiten Claim anzulegen:
+
+| `/solo`-Body-Feld | Wirkung |
+| --- | --- |
+| `instance` (optional, JSON-String) | Name einer bereits laufenden Solo-Instanz. Ist er gesetzt, joint der Relay dieser Instanz (`joinOnly` — **kein** neuer Claim, Ziel = bestehender GNS-UDP-Endpoint eines Mitglieds) und pinnt die Identitaet darauf (je nach `self_send`). **Fehlt das Feld, bleibt das Verhalten unveraendert** (neuer Claim wie #929/#930). Rejoin derselben Identitaet ist idempotent (kein Fehler, keine Doppelzaehlung) und hat Vorrang vor der Kapazitaetspruefung. |
+
+- **Kapazitaet:** Die Aufnahme ist auf `--max-players` begrenzt (Default `4`). Ueber
+  dem Limit → `409 instance_full`; ein `instance`-Name, der keiner bekannten
+  Instanz entspricht → `409 unknown_instance` (siehe Fehlercode-Tabelle oben).
+- **Kurzer Abnahme-Aufruf:** `curl -s -X POST 127.0.0.1:9200/solo -d '{"identitaet":"str:<B>","instance":"parked-1"}'`
+  → `{"ok":true,…,"instance":"parked-1"}`; beide Identitaeten teilen denselben
+  `soloEndpoint` und dieselbe Mitgliederliste.
+
+**Lobby (UI):** Jede Session-Karte zeigt additiv die Zeile
+`Instanz · n/max · Mitglieder` (`n` = `soloMemberCount`, `max` = `soloMaxPlayers`)
+und einen **Join**-Button. Der Button joint der eigenen bzw. — per Auswahl — einer
+bekannten Instanz (`POST /solo {identitaet, instance}`); Fehler werden wie oben
+als Kurzhinweis (`Instanz unbekannt` / `Instanz voll`) angezeigt.
 
 
 Der Relay bedient **N parallele Sessions**: jeder akzeptierte Client bekommt
@@ -362,5 +402,7 @@ Sekunden auf (vorher sah es wie ein Timeout des Proxys aus).
 - [x] Multi-Session (#877): N parallele Sessions (eigene Queues/Backpressure)
 - [x] Dynamische Backend-Registry + `POST /solo` (Claim + Auto-Pin, Retry) (#929)
 - [x] Lobby-Solo-Button `[ solo | self-send on ]` + `/sessions`-Solo-Status (#930)
+- [x] Solo-Join mehrere Clients auf einer Instanz (#936) — Live: 2 echte GNS-Clients,
+      gleiche Instanz n/max, kein Kick (evidence/936-live-2026-09-25.txt)
 - [ ] `m_nAppID` in eigenen GNS-Build statt Runtime-Patch
 - [ ] Rust-Backend/Launcher auf die JSON-API aufsetzen

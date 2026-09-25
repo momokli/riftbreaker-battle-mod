@@ -85,6 +85,11 @@ gns_relay_extra_routes: []
 # /claim`) und pinnt die Identitaet auf deren GNS-UDP-Endpoint — ohne
 # Operator-Klick. Default = dev-Parked-Dienst (parked_pool_port, host_vars).
 gns_relay_parked_url: "http://127.0.0.1:9201"
+# --- Kapazitaet einer Solo-Instanz (Issue #936) ------------------------------
+# Obergrenze der Identitaeten, die der Relay auf DIESELBE Solo-Instanz aufnimmt
+# (`--max-players`, Join ueber Kapazitaet -> 409 instance_full). Default 4 =
+# Server-Default (`riftbreaker_server_max_players`).
+gns_relay_max_players: 4
 # Bearer-Token fuer den Parked-Dienst (dort `PARKED_TOKEN`, Vault
 # `vault_parked_pool_token`). Leer = kein Token (dev/lokal). Wird als
 # Compose-`environment` (RBB_PARKED_TOKEN) gereicht, NICHT per argv — sonst
