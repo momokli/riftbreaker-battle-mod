@@ -113,6 +113,17 @@ Routen-Datei (`<key>=<ip:port>`, `#` = Kommentar) siehe `routes.example`.
 Optional: `--appid N` (Default 780310), `--identity`, `--unencrypted 1`,
 `--allow-without-auth {0,1,2}`, `--port`, `--dll`.
 
+### Minimaler GNS-Client `--client` (#936)
+
+`gns_probe.exe --client <ip:port> [--client-hold <sec>] [--client-send <ascii>]`
+verbindet als echter GNS-Client auf dem `--dial`-Pfad (GNS-DLL + AppID-Patch),
+wartet auf `Connected`, haelt die Verbindung `--client-hold` Sekunden (Default 60),
+drainiert eingehende Nachrichten (Groesse/Anzahl, Log-Praefix `CLIENT:`) und sendet
+optional eine Marker-Nachricht (`--client-send`). Danach sauberes Trennen. Damit
+laesst sich headless eine echte GNS-Session erzeugen (die Identitaet kommt
+automatisch aus dem Connect) — zwei solche Clients sind der Live-Nachweis fuer
+#936 (Details: `evidence/936-live-2026-09-25.txt`).
+
 ## Hold + Operator-UI (Issue #857, PoC)
 
 Statt unentschiedene Joins automatisch auf den Default zu schicken, kann der
@@ -383,5 +394,7 @@ Sekunden auf (vorher sah es wie ein Timeout des Proxys aus).
 - [x] Multi-Session (#877): N parallele Sessions (eigene Queues/Backpressure)
 - [x] Dynamische Backend-Registry + `POST /solo` (Claim + Auto-Pin, Retry) (#929)
 - [x] Lobby-Solo-Button `[ solo | self-send on ]` + `/sessions`-Solo-Status (#930)
+- [x] Solo-Join mehrere Clients auf einer Instanz (#936) — Live: 2 echte GNS-Clients,
+      gleiche Instanz n/max, kein Kick (evidence/936-live-2026-09-25.txt)
 - [ ] `m_nAppID` in eigenen GNS-Build statt Runtime-Patch
 - [ ] Rust-Backend/Launcher auf die JSON-API aufsetzen
