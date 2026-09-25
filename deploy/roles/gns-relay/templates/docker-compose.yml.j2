@@ -40,6 +40,9 @@ services:
       # stuende er in der Container-Prozessliste.
       RBB_PARKED_URL: "{{ gns_relay_parked_url }}"
       RBB_PARKED_TOKEN: "{{ gns_relay_parked_token }}"
+      # Kapsel-Flow-Dienst: Vorrang fuer POST /solo + Traeger von POST /ready (#931).
+      RBB_CAPSULE_URL: "{{ gns_relay_capsule_url }}"
+      RBB_CAPSULE_TOKEN: "{{ gns_relay_capsule_token }}"
     volumes:
       # Eigenes Wine-Prefix (nicht mit dem dev-Server geteilt).
       - "{{ gns_relay_wine_volume }}:{{ gns_relay_wine_mount }}"
@@ -69,7 +72,8 @@ services:
         --dll {{ gns_relay_bin_mount }}/bin/GameNetworkingSockets.dll
         --api-host {{ gns_relay_api_host }}
         --api-port {{ gns_relay_api_port }}
-        --parked-url {{ gns_relay_parked_url }}{% if gns_relay_hold %}
+        --parked-url {{ gns_relay_parked_url }}
+        --capsule-url {{ gns_relay_capsule_url }}{% if gns_relay_hold %}
         --hold{% endif %}{% for t in gns_relay_targets %}
         --target {{ t }}{% endfor %}
 

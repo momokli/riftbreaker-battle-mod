@@ -1269,6 +1269,25 @@ async function solo(identity, btn, cardEl) {
   setTimeout(loadSessions, 300);
 }
 
+// Ready: Kapsel resume + Warmup-Start (POST /ready). Damit ist der Start im
+// Proxy erledigt; den Countdown in den Chat schickt der Announcer (1.0.7).
+async function ready(btn, cardEl) {
+  btn.disabled = true;
+  try {
+    const r = await fetch("/ready", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const j = await r.json().catch(() => null);
+    if (!r.ok) {
+      const reason = (j && j.reason) ? j.reason : ("http " + r.status);
+      const MSG = { capsule_unconfigured: "Kapsel-Dienst nicht konfiguriert",
+        capsule_unreachable: "Kapsel nicht erreichbar" };
+      hint(cardEl, MSG[reason] || reason);
+    } else {
+      hint(cardEl, "ready gesendet - Countdown folgt im Chat");
+    }
+  } catch (e) { hint(cardEl, "Netzwerkfehler"); }
+  setTimeout(loadSessions, 300);
+}
+
 function card(s) {
   const c = el("div", "card " + s.state);
   const top = el("div", "row");
@@ -1319,6 +1338,13 @@ function card(s) {
   soloRow.appendChild(sbtn);
   soloRow.appendChild(tog);
   c.appendChild(soloRow);
+
+  const readyRow = el("div", "solo");
+  const rbtn = el("button", null, "READY");
+  rbtn.title = "Kapsel: resume + Warmup-Start (POST /ready)";
+  rbtn.onclick = () => ready(rbtn, c);
+  readyRow.appendChild(rbtn);
+  c.appendChild(readyRow);
   return c;
 }
 
@@ -1660,6 +1686,34 @@ void handleSolo(SOCKET s, const std::string &requestBody) {
                   outcome.httpCode == 409 ? "Conflict" : "Error", outcome.body);
 }
 
+// POST /ready: an den Kapsel-Dienst proxien (`POST /capsule/ready` = resume +
+// Warmup-Start). Der Kapsel-Dienst kennt die aktive Instanz; hier ist kein
+// Eigenzustand/Pin noetig. Nur wenn eine Kapsel konfiguriert ist.
+void handleReady(SOCKET s, const std::string &requestBody) {
+  (void)requestBody;
+  if (!g_capsuleConfigured) {
+    httpRespondJson(s, 503, "Service Unavailable",
+                    "{\"ok\":false,\"reason\":\"capsule_unconfigured\",\"retry\":false}");
+    return;
+  }
+  const OutboundResult r = outboundHttpPost(g_capsuleHost, g_capsulePort,
+                                            "/capsule/ready", "{}",
+                                            g_capsuleToken, 1500, 2500);
+  if (r.status == 200) {
+    logLine("API: ready -> capsule (ok)");
+    httpRespondJson(s, 200, "OK", r.body.empty() ? "{\"ok\":true}" : r.body);
+    return;
+  }
+  if (r.status <= 0) {
+    httpRespondJson(s, 502, "Bad Gateway",
+                    "{\"ok\":false,\"reason\":\"capsule_unreachable\"}");
+    return;
+  }
+  logLine("API: ready -> capsule (status=%d)", r.status);
+  httpRespondJson(s, r.status, "Error",
+                  r.body.empty() ? "{\"ok\":false}" : r.body);
+}
+
 void httpHandle(SOCKET s) {
   DWORD timeout = 3000;
   setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&timeout),
@@ -1815,6 +1869,8 @@ void httpHandle(SOCKET s) {
     }
   } else if (method == "POST" && path == "/solo") {
     handleSolo(s, body);
+  } else if (method == "POST" && path == "/ready") {
+    handleReady(s, body);
   } else {
     httpRespond(s, 404, "Not Found", "text/plain; charset=utf-8",
                 "not found\n");
