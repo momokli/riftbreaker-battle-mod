@@ -75,6 +75,9 @@ per_env:
   parked_pool_pool_size: [dev]
   parked_pool_install_dir: [dev]
   parked_pool_env_file: [dev]
+  # --- Kapsel-Flow-Dienst (Issue #931, dev) -------------------------------
+  capsule_flow_port: [dev]
+  capsule_flow_parked_port: [dev]
   # --- Tournament-Server ----------------------------------------------------
   tournament_install_dir: [prod, test, staging]
   tournament_unit: [prod, test, staging]
@@ -135,7 +138,7 @@ shared:
   # Parked-Anbindung fuer POST /solo (Issue #929): Singleton-Relay spricht den
   # env-eigenen Parked-Dienst an; der Relay selbst ist kein Env-Twin, daher das
   # Rollen-Default (dev-Port) hier als host-konstant gefuehrt.
-  gns_relay_parked_url: "Ziel des Parked-Pool-Dienstes fuer /solo (Default dev 127.0.0.1:8095) — Relay-Singleton, kein Env-Twin."
+  gns_relay_parked_url: "Ziel des Parked-Pool-Dienstes fuer /solo (Default dev 127.0.0.1:9201) — Relay-Singleton, kein Env-Twin."
   gns_relay_parked_token: "Bearer-Token fuer den Parked-Dienst aus dem Vault (vault_parked_pool_token) — Zugangsdatum, kein Env-Pfad/Port."
   # GNS-Lobby (Issue #857): Operator-Web-UI des Relay-Singletons.
   proxy_domain: "Lobby-Domain (proxy.rift.projectmellon.de) — env-UNABHAENGIG (Relay-Singleton), daher NICHT per-env ueberschrieben."
