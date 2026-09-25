@@ -527,7 +527,7 @@ class Provisioner(object):
         return {
             "running": running,
             "health": self._health_label(spec, running),
-            "ports": {"bridge": spec.bridge_port, "docker": self.docker.port(spec.container)},
+            "ports": self._ports(spec),
             "container": spec.container,
         }
 
@@ -639,8 +639,25 @@ class Provisioner(object):
             return "unreachable"
         return "healthy" if self.health_probe(spec.health_url()) else "starting"
 
+    @staticmethod
+    def _gns_from_mapping(mapping: Dict[str, str]) -> Optional[str]:
+        """GNS-UDP-Host-Endpoint der Instanz aus dem ``6321/udp``-Mapping (#929).
+
+        Der Publizier-Aufruf ``-p 127.0.0.1::6321/udp`` vergibt einen
+        ephemeren Host-Port; ``docker port`` liefert z. B.
+        ``{"6321/udp": "127.0.0.1:32768"}``. Fehlt der Eintrag, ``None`` —
+        kein Crash (der Port ist additiv, nicht Pflicht).
+        """
+        value = mapping.get("6321/udp")
+        return value or None
+
     def _ports(self, spec: InstanceSpec) -> Dict[str, Any]:
-        return {"bridge": spec.bridge_port, "docker": self.docker.port(spec.container)}
+        mapping = self.docker.port(spec.container)
+        return {
+            "bridge": spec.bridge_port,
+            "gns": self._gns_from_mapping(mapping),
+            "docker": mapping,
+        }
 
     def _status_dict(self, spec: InstanceSpec, created: bool) -> Dict[str, Any]:
         info = self.docker.inspect_optional(spec.container)

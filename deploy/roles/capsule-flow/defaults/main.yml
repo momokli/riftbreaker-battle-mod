@@ -1,0 +1,50 @@
+---
+# Defaults der Rolle capsule-flow (Kapsel-Flow-Dienst pro Env, Issue #931).
+#
+# Der Dienst verkettet die vorhandenen Bausteine zu einer gespielten Runde:
+# Parked-Dienst (#928, claim ohne resume) -> Attack-Cycle (start) -> Bridge
+# (resume/pause+auto) -> Parked recycle. Er ist ein kleiner Python-Dienst
+# (Standardbibliothek) und spricht die Nachbarn ausschliesslich per HTTP an —
+# bewusst KEIN Docker-/Bridge-Code hier.
+#
+# Haertung wie parked-pool/server-control (#424): Bind nur 127.0.0.1, Bearer-
+# Token PFLICHT (fail-closed) — deshalb bricht die Rolle ohne gesetztes
+# `vault_capsule_token` ab (siehe tasks/main.yml).
+
+# Env-Namensraum. Das deployende Play setzt ihn explizit (dev/staging/prod);
+# so haengen Unit-/Install-/Env-Datei-Namen am jeweiligen Play.
+capsule_flow_env: "{{ rift_env | default('dev') }}"
+
+# systemd-Unit + Installationsort + Entry-Point (env-parametrisiert).
+capsule_flow_unit: "rbmods-capsule-{{ capsule_flow_env }}"
+capsule_flow_install_dir: "/opt/rbmods/capsule-flow-{{ capsule_flow_env }}"
+capsule_flow_bin: "{{ capsule_flow_install_dir }}/capsule_service.py"
+capsule_flow_python: /usr/bin/python3
+
+# Der Kapsel-Dienst startet selbst keinen Container (er spricht Parked/Bridge
+# per HTTP) — deshalb KEINE harte docker.service-Abhaengigkeit (Default false).
+capsule_flow_require_docker_service: false
+
+# Netz: ausschliesslich localhost (der Relay/Cockpit ruft dorthin).
+capsule_flow_bind: 127.0.0.1
+# Default laut Plan #931 (eigener Dienst; die Envs setzen den Port explizit).
+capsule_flow_port: 9211
+
+# Nachbarn (HTTP). Defaults = dev-Muster: Parked-Port 8095 (dev-server-control
+# belegt 8092), Attack-Cycle-Control 9102.
+capsule_flow_parked_port: 9201
+capsule_flow_parked_url: "http://127.0.0.1:{{ capsule_flow_parked_port }}"
+capsule_flow_cycle_url: "http://127.0.0.1:9102"
+capsule_flow_timeout: 5
+capsule_flow_log_level: INFO
+
+# Token-Quellen: NUR der Vault. Die Werte landen nie im Repo, nie im Log — die
+# Unit liest sie aus einer 0600-Datei (EnvironmentFile), nicht aus `Environment=`.
+capsule_flow_token: "{{ vault_capsule_token | default('') }}"
+capsule_flow_parked_token: "{{ vault_parked_pool_token | default('') }}"
+
+capsule_flow_env_file: "/etc/rbmods/capsule-{{ capsule_flow_env }}.env"
+
+# Quell-Skripte im Repo (aus dem Deploy-Checkout).
+capsule_flow_service_src: "{{ playbook_dir }}/capsule/capsule_service.py"
+capsule_flow_lib_src: "{{ playbook_dir }}/capsule/capsule_flow.py"

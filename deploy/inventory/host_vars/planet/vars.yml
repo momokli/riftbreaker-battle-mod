@@ -71,6 +71,10 @@ gns_relay_port: 6321
 gns_relay_deploy_dir: /opt/rbmods/compose/gns-relay
 gns_relay_bin_dir: /opt/rbmods/gns-relay/bin
 gns_relay_wine_volume: gns-relay-wine
+# POST /solo (Issue #929) spricht den env-Parked-Dienst an. Das Rollen-Default
+# zeigt auf den dev-Port 9201; staging/prod setzen dort den isolierten
+# parked_pool_port (ENV-ISOLATION-GATE) und muessen gns_relay_parked_url
+# entsprechend mitsetzen.
 
 # --- Tournament-Server (systemd, Rust/axum aus tournament/) ------------------
 tournament_install_dir: /opt/rbmods/tournament-server
@@ -91,12 +95,20 @@ server_control_port: 8092
 # angehalten) und bietet claim()/recycle()/reap() per HTTP an (Bearer aus dem
 # Vault: vault_parked_pool_token). dev deployt die Rolle ueber site.yml — die
 # isolierten Werte stehen deshalb hier explizit (ENV-ISOLATION-GATE).
-# Port 8095, weil der dev-server-control bereits 127.0.0.1:8092 belegt.
+# Port 9201: 127.0.0.1:8092 haelt der dev-server-control, und der Bereich
+# 8000-8500 ist host-weit von azuracast belegt (Docker-port-proxy). Deshalb eigener
+# Block ab 9200 (9200 = Relay-Lobby-API).
 parked_pool_unit: rbmods-parked-dev
-parked_pool_port: 8095
+parked_pool_port: 9201
 parked_pool_pool_size: 1
 parked_pool_install_dir: /opt/rbmods/parked-pool-dev
 parked_pool_env_file: /etc/rbmods/parked-pool-dev.env
+
+# --- Kapsel-Flow-Dienst (Issue #931, dev) ------------------------------------
+# Eigener Port + der dev-Parked-Port als Nachbar (der Dienst claimt dort ohne
+# resume -> pausiertes Spiel). Gleicher Port-Block wie parked-pool.
+capsule_flow_port: 9211
+capsule_flow_parked_port: 9201
 
 # --- Website (Landing + Cockpit, eigener rift-caddy) -------------------------
 # Architektur (Issue #322): Der Riftbreaker-Stack betreibt einen EIGENEN,

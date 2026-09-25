@@ -155,6 +155,7 @@ class ParkedEntry:
     env: str
     container: str
     bridge_url: str
+    gns_endpoint: Optional[str] = None
     state: ParkedState = ParkedState.WARMING
     parked_since: Optional[float] = None
     claimed_at: Optional[float] = None
@@ -169,6 +170,7 @@ class ParkedEntry:
             "env": self.env,
             "container": self.container,
             "bridge_url": self.bridge_url,
+            "gns_endpoint": self.gns_endpoint,
             "state": self.state.value,
             "rounds": self.rounds,
             "parked_seconds": parked_seconds,
@@ -221,6 +223,41 @@ class ParkedPool(object):
             return str(url)
         raise ParkedError("Provisioner-Ergebnis ohne Bridge-Port: %r" % (result,))
 
+    @staticmethod
+    def _gns_endpoint(result: Dict[str, Any]) -> Optional[str]:
+        """GNS-UDP-Host-Endpoint der Instanz aus ``ports["gns"]`` (#929).
+
+        Der Provisioner liefert das 6321/udp-Mapping als ``"127.0.0.1:32768"``
+        (oder ``None``). Tolerant fuer eine strukturierte Form
+        ``{"host":…,"port":…}``; fehlt das Feld, ``None`` (kein Crash).
+        """
+        ports = result.get("ports") or {}
+        gns = ports.get("gns")
+        if isinstance(gns, dict):
+            port = gns.get("port")
+            if not port:
+                return None
+            return "%s:%s" % (gns.get("host") or "127.0.0.1", port)
+        if gns:
+            return str(gns)
+        return None
+
+    def _refresh_gns_endpoint(self, entry: ParkedEntry) -> None:
+        """Endpoint zum Claim-Zeitpunkt FRISCH lesen (der Host-UDP-Port wechselt
+        bei einem Container-Neustart). Fehler/fehlende Provisioner-Methode sind
+        best-effort: der zuletzt bekannte Wert bleibt stehen."""
+        status_fn = getattr(self.provisioner, "status", None)
+        if not callable(status_fn):
+            return
+        try:
+            result = status_fn(instance_id=entry.instance_id, env=entry.env)
+        except Exception as exc:  # noqa: BLE001 - best-effort, kein harter Abbruch
+            LOG.warning("gns_endpoint refresh fuer %s: %s", entry.instance_id, exc)
+            return
+        # Erfolgreicher Status ist die frische Quelle: auch ein fehlendes
+        # 6321/udp-Mapping (None) ersetzt den warm_up-Wert.
+        entry.gns_endpoint = self._gns_endpoint(result)
+
     def _bridge(self, url: str) -> Any:
         return self.bridge_factory(url)
 
@@ -266,6 +303,7 @@ class ParkedPool(object):
 
         entry.container = result.get("container") or ""
         entry.bridge_url = self._bridge_url(result)
+        entry.gns_endpoint = self._gns_endpoint(result)
 
         try:
             self._bridge(entry.bridge_url).pause_game()
@@ -282,18 +320,32 @@ class ParkedPool(object):
         entry.parked_since = self.clock()
         return entry
 
-    def claim(self, env: Optional[str] = None, instance_id: Optional[str] = None) -> Dict[str, Any]:
-        """Geparkte Instanz an ein Spiel uebergeben (``resume_game``) und die
-        Handover-Dauer messen."""
+    def claim(self, env: Optional[str] = None, instance_id: Optional[str] = None,
+              resume: bool = True) -> Dict[str, Any]:
+        """Geparkte Instanz an ein Spiel uebergeben und die Handover-Dauer messen.
+
+        ``resume=True`` (Default, rueckwaerts-kompatibel): ``resume_game`` und
+        Zeitmessung des Handovers (Welt laeuft danach). ``resume=False``: die
+        Instanz wird uebergeben, die Welt bleibt aber PAUSIERT (``#931``
+        Kapsel-Flow: der Spieler sieht ein pausiertes Spiel; erst ``ready``
+        resumed). In beiden Faellen wird die Bridge-Health geprueft und der
+        Eintrag -> ``CLAIMED``; ``handover_seconds`` ist bei ``resume=False``
+        ~0 (kein Resume gemessen).
+        """
         entry = self._require(env, instance_id, ParkedState.PARKED, "claim")
+        # Der Host-UDP-Port kann seit dem warm_up gewechselt haben -> frisch lesen.
+        self._refresh_gns_endpoint(entry)
         bridge = self._bridge(entry.bridge_url)
         if not bridge.health_ok():
             raise ParkedError("claim: Bridge %s nicht healthy" % entry.bridge_url)
         start = self.clock()
-        try:
-            bridge.resume_game()
-        except Exception as exc:
-            raise ParkedError("claim: resume_game von %s fehlgeschlagen: %s" % (entry.instance_id, exc))
+        if resume:
+            try:
+                bridge.resume_game()
+            except Exception as exc:
+                raise ParkedError(
+                    "claim: resume_game von %s fehlgeschlagen: %s" % (entry.instance_id, exc)
+                )
         handover = self.clock() - start
         entry.state = ParkedState.CLAIMED
         entry.claimed_at = self.clock()
@@ -302,7 +354,9 @@ class ParkedPool(object):
             "instance": entry.instance_id,
             "env": entry.env,
             "bridge_url": entry.bridge_url,
+            "gns_endpoint": entry.gns_endpoint,
             "state": entry.state.value,
+            "resumed": bool(resume),
             "handover_seconds": handover,
         }
 
@@ -339,6 +393,7 @@ class ParkedPool(object):
             entry.state = ParkedState.STOPPED
             entry.parked_since = None
             entry.claimed_at = None
+            entry.gns_endpoint = None
         return entry
 
     def reap(self, max_park_seconds: float) -> List[ParkedEntry]:
@@ -365,6 +420,7 @@ class ParkedPool(object):
                 continue
             entry.state = ParkedState.STOPPED
             entry.parked_since = None
+            entry.gns_endpoint = None
             stopped.append(entry)
         if errors:
             raise ParkedError("; ".join(errors))

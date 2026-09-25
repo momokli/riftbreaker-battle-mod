@@ -1,0 +1,83 @@
+---
+# Rolle: capsule-flow — Kapsel-Flow-Dienst pro Env (Issue #931). Muster:
+# parked-pool/server-control (#424): systemd-Unit + Binary aus dem
+# Repo-Checkout.
+#
+# Der Dienst laeuft als root-freier lokaler HTTP-Dienst (er spricht Parked,
+# Attack-Cycle und Bridge nur per HTTP an — kein Docker-Socket-Zugriff). Er
+# bindet nur 127.0.0.1 und verlangt fuer JEDEN Request einen Bearer-Token
+# (fail-closed, wenn `capsule_flow_token` gesetzt ist — die Rolle setzt ihn aus
+# dem Vault).
+
+- name: "Vorbedingung: Bearer-Token gesetzt (kein offener Kapsel-Endpunkt)"
+  assert:
+    that:
+      - capsule_flow_token | length > 0
+    fail_msg: >-
+      Das Bearer-Token (capsule_flow_token) ist leer. Der Kapsel-Flow-Dienst hat
+      einen Bearer-Token PFLICHT (#931, Haertung wie #424) und wuerde ohne ihn
+      gar nicht starten. Token im Vault (host_vars/planet/vault.yml) setzen:
+      `ansible-vault edit deploy/inventory/host_vars/planet/vault.yml`.
+    success_msg: "Kapsel-Token vorhanden (Wert wird nie geloggt)."
+  when: not ansible_check_mode
+
+- name: Installationsverzeichnis anlegen
+  file:
+    path: "{{ capsule_flow_install_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Umgebungsverzeichnis anlegen
+  file:
+    path: "{{ capsule_flow_env_file | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Dienst-Skript installieren
+  copy:
+    src: "{{ capsule_flow_service_src }}"
+    dest: "{{ capsule_flow_bin }}"
+    mode: "0755"
+    owner: root
+    group: root
+  notify: restart capsule-flow
+
+- name: Kapsel-Flow-Bibliothek installieren (capsule_flow.py, #931)
+  copy:
+    src: "{{ capsule_flow_lib_src }}"
+    dest: "{{ capsule_flow_install_dir }}/capsule_flow.py"
+    mode: "0644"
+    owner: root
+    group: root
+  notify: restart capsule-flow
+
+- name: Umgebungsdatei rendern (Token, 0600 — nie world-readable)
+  template:
+    src: rbmods-capsule.env.j2
+    dest: "{{ capsule_flow_env_file }}"
+    mode: "0600"
+    owner: root
+    group: root
+  notify: restart capsule-flow
+
+- name: systemd-Unit rendern
+  template:
+    src: rbmods-capsule.service.j2
+    dest: "/etc/systemd/system/{{ capsule_flow_unit }}.service"
+    mode: "0644"
+  notify: restart capsule-flow
+
+- name: Unit aktivieren und starten
+  systemd:
+    name: "{{ capsule_flow_unit }}"
+    state: started
+    enabled: true
+    daemon_reload: true
+  register: capsule_flow_systemd
+  # Erster Deploy im PR-Gate (`--check`): der Check-Modus schreibt die Unit-Datei
+  # NICHT, deshalb kennt systemd den Service noch nicht („Could not find the
+  # requested service"). Nur genau diesen einen Fall tolerieren.
+  failed_when: >-
+    capsule_flow_systemd is failed and not
+    (ansible_check_mode | bool and
+     'Could not find the requested service' in (capsule_flow_systemd.msg | default('')))

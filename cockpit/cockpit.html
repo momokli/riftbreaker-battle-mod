@@ -1147,6 +1147,13 @@
                     <button id="gc_ready" class="btn-secondary">ready</button>
                     <span id="gc_state" aria-live="polite">state: —</span>
                 </div>
+                <!-- Kapsel-Flow (Issue #931): additiv. Phase-Readout + Operator-
+                     Override `auto` (Bridge /pause_game {"op":"auto"}). Faellt auf
+                     "—" zurueck, wenn kein Kapsel-Dienst konfiguriert ist. -->
+                <div class="flow-action-row">
+                    <button id="gc_auto" class="btn-secondary" title="Operator-Override freigeben (Engine steuert wieder)">auto</button>
+                    <span id="gc_capsule" aria-live="polite">capsule: —</span>
+                </div>
             </section>
 
             <!-- G. STATUS BAR -->
@@ -1174,6 +1181,27 @@
                         body: body === undefined ? "{}" : JSON.stringify(body),
                     });
                     return res.json();
+                }
+
+                // Kapsel-First (Issue #931): versucht den Kapsel-Endpunkt und faellt
+                // auf die bestehende Bridge-Route zurueck, wenn der Kapsel-Dienst
+                // nicht erreichbar/konfiguriert ist (rein additiv, kein Handler
+                // entfernt). `fallback` liefert die Bridge-Antwort.
+                async function capsuleFirst(path, body, fallback) {
+                    try {
+                        var res = await fetch(path, {
+                            method: "POST",
+                            headers: { "content-type": "application/json" },
+                            body: JSON.stringify(body || {}),
+                        });
+                        if (res.ok) {
+                            var r = await res.json();
+                            if (r && r.ok) return r;
+                        }
+                    } catch (e) {
+                        // Kapsel nicht erreichbar -> Fallback.
+                    }
+                    return fallback ? fallback() : null;
                 }
 
                 function fmt(v) {
@@ -1596,7 +1624,11 @@
                 };
                 async function endGame(result) {
                     try {
-                        var r = await post("end_game", { result: result });
+                        // Kapsel-First (#931): /capsule/finish recycelt + parkt;
+                        // Fallback = bisherige Bridge-Route end_game.
+                        var r = await capsuleFirst("/capsule/finish", { result: result }, function () {
+                            return post("end_game", { result: result });
+                        });
                         $("out").textContent = r && r.ok ? "" : JSON.stringify(r);
                         refreshAdvanced();
                     } catch (e) {
@@ -2555,7 +2587,42 @@
                     gameConfigEditor.start().then(function () { $("gc_msg").textContent = "start gesendet"; }).catch(function (err) { $("gc_msg").textContent = "ERR " + err.message; });
                 };
                 $("gc_ready").onclick = function () {
-                    gameConfigEditor.setReady(true).then(function () { $("gc_msg").textContent = "ready gesendet"; }).catch(function (err) { $("gc_msg").textContent = "ERR " + err.message; });
+                    // Kapsel-First (#931): /capsule/ready = resume + Cycle-Start;
+                    // Fallback = bisheriges setReady(true).
+                    capsuleFirst("/capsule/ready", {}, null).then(function (r) {
+                        if (r && r.ok) {
+                            $("gc_msg").textContent = "ready gesendet";
+                            capsulePoll();
+                            return null;
+                        }
+                        return gameConfigEditor.setReady(true).then(function () { $("gc_msg").textContent = "ready gesendet"; });
+                    }).catch(function (err) { $("gc_msg").textContent = "ERR " + err.message; });
+                };
+
+                // Kapsel-Flow (Issue #931): Phase-Readout + `auto`. Rein additiv:
+                // bestehende Handler bleiben unveraendert; fehlt der Kapsel-Dienst
+                // (404/Fehler), bleibt der Readout "—" (kein Bruch des Cockpits).
+                async function capsulePoll() {
+                    try {
+                        var res = await fetch("/capsule/status");
+                        if (!res.ok) {
+                            $("gc_capsule").textContent = "capsule: —";
+                            return;
+                        }
+                        var s = await res.json();
+                        var parts = [s.phase || "—"];
+                        if (s.instance) parts.push(s.instance);
+                        if (s.cycle && s.cycle.state) parts.push("cycle:" + s.cycle.state);
+                        $("gc_capsule").textContent = "capsule: " + parts.join(" · ");
+                    } catch (e) {
+                        $("gc_capsule").textContent = "capsule: —";
+                    }
+                }
+                $("gc_auto").onclick = function () {
+                    post("/capsule/auto", {}).then(function (r) {
+                        $("gc_msg").textContent = r && r.ok ? "auto gesendet" : JSON.stringify(r);
+                        capsulePoll();
+                    }).catch(function (err) { $("gc_msg").textContent = "ERR " + err.message; });
                 };
 
                 function gcRefresh() {
@@ -2583,7 +2650,7 @@
 
                 var gcTimer = tabTimer();
                 registerTabLifecycle("tab_game_config", {
-                    start: function () { gcTimer.every(gcRefresh, 5000); },
+                    start: function () { gcTimer.every(gcRefresh, 5000); gcTimer.every(capsulePoll, 3000); },
                     stop: function () { gcTimer.stop(); },
                 });
 

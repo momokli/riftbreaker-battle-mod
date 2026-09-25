@@ -680,6 +680,24 @@ class StopStatusTestCase(BaseFixture):
         self.assertEqual(status["health"], "healthy")
         self.assertIn("9001/tcp", status["ports"]["docker"])
 
+    def test_status_exposes_gns_udp_endpoint(self):
+        # Issue #929: der GNS-UDP-Host-Port (`6321/udp`-Mapping) wird first-class
+        # als `ports["gns"]` surface (Ziel fuer den Relay-/solo-Pin).
+        provisioner = self.provisioner()
+        provisioner.start("test", "solo", "0")
+        status = provisioner.status("0", "test")
+        self.assertEqual(status["ports"]["gns"], "127.0.0.1:32768")
+        self.assertIn("6321/udp", status["ports"]["docker"])
+
+    def test_gns_endpoint_none_without_udp_mapping(self):
+        # Fehlt das 6321/udp-Mapping, bleibt `gns` None — kein Crash.
+        self.assertIsNone(prov.Provisioner._gns_from_mapping({"9001/tcp": "127.0.0.1:30001"}))
+        self.assertIsNone(prov.Provisioner._gns_from_mapping({}))
+        self.assertEqual(
+            prov.Provisioner._gns_from_mapping({"6321/udp": "127.0.0.1:32768"}),
+            "127.0.0.1:32768",
+        )
+
     def test_status_starting_when_health_not_ok(self):
         provisioner = self.provisioner()
         provisioner.start("test", "solo", "0")

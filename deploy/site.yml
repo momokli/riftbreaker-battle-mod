@@ -144,6 +144,13 @@
       tags: [server]
       vars:
         parked_pool_env: "{{ rift_env | default('dev') }}"
+    # Kapsel-Flow-Dienst (Issue #931): verkettet Parked/Attack-Cycle/Bridge zu
+    # einer Runde. Bewusst NUR im dev-Play (site.yml) — der boot-test
+    # (test-deploy.yml) bootet nur den Game-Server und kennt Parked/Cycle nicht.
+    - role: capsule-flow
+      tags: [server]
+      vars:
+        capsule_flow_env: "{{ rift_env | default('dev') }}"
     - role: website
       tags: [website]
     - role: image-retention

@@ -144,7 +144,27 @@ class RecycleTests(VSHarness):
         entry = self.pool._entries[("test", "r1")]
         self.assertEqual(entry.state, ParkedState.PARKED)
         self.assertEqual(self.provisioner.stops, [])  # warm geblieben
-        for expected in ("end_game", "round_reset", "pause_game"):
+        # #928-Semantik: OHNE `result` ist `end_game` NICHT erlaubt (die Bridge
+        # verlangt ein Pflicht-`result` und lehnt `end_game(None)` mit HTTP 400
+        # ab) — der weltunabhaengige Pfad ist `round_reset` + `pause_game`.
+        for expected in ("round_reset", "pause_game"):
+            self.assertIn(expected, bridge.calls)
+        self.assertNotIn("end_game", bridge.calls)
+
+    def test_recycle_keep_warm_with_result_calls_end_game(self):
+        # Mit `result` (win/lose) ist `end_game(result)` der gueltige Pfad.
+        self.warm()
+        self.join_two()
+        self.vs.ready("p1", env="test", instance_id="r1")
+        self.vs.ready("p2", env="test", instance_id="r1")
+        bridge = self.bridge_for("r1")
+        session = self.vs.recycle(env="test", instance_id="r1", keep_warm=True,
+                                  result="win")
+        self.assertEqual(session.state, VSState.WAITING_OPPONENT)
+        self.assertEqual(session.rounds, 1)
+        self.assertIn("end_game", bridge.calls)
+        self.assertEqual(bridge.end_game_calls, ["win"])
+        for expected in ("round_reset", "pause_game"):
             self.assertIn(expected, bridge.calls)
 
     def test_recycle_cold_stops_instance(self):
