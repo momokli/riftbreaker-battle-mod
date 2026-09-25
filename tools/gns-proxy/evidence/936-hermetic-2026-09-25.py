@@ -150,7 +150,7 @@ def main() -> int:
         "Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), "
         "kompiliert mit g++ -std=c++17\n"
         "Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py\n"
-        "=" * 70 + "\n\n"
+        + "=" * 70 + "\n\n"
     )
     with open(OUT_TXT, "w", encoding="utf-8") as fh:
         fh.write(header)
