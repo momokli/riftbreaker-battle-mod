@@ -30,7 +30,7 @@ parked_pool_bind: 127.0.0.1
 # Default laut Plan #928 (server-control nutzt 8091 als Rollen-Default).
 # ACHTUNG: die Envs setzen den Port explizit isoliert (dev 8095, weil der
 # dev-server-control bereits 8092 belegt) — der Default ist nur der Fallback.
-parked_pool_port: 8092
+parked_pool_port: 9201
 
 # Pool/Reap-Verhalten.
 parked_pool_pool_size: 1
