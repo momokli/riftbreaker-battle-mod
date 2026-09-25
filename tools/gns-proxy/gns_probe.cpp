@@ -251,6 +251,10 @@ int g_appid = 780310;
 bool g_hold = false;
 int g_apiPort = 0;
 std::string g_apiHost = "127.0.0.1";
+// Obergrenze der Aufnahme in eine Solo-Instanz (Issue #936). Default 4 =
+// Server-Default (`riftbreaker_server_max_players`). Nur vom Hauptloop gelesen
+// (aus `g_maxPlayers` in die Session-Anzeige kopiert); per `--max-players`.
+int g_maxPlayers = 4;
 std::vector<std::pair<std::string, rbroute::Endpoint>> g_targets;
 
 // --- Parked-Anbindung fuer POST /solo (Issue #929) ----------------------------
@@ -288,8 +292,20 @@ struct SoloClaim {
   std::string instance;
   rbroute::Endpoint endpoint;
   long long claimedAtMs = 0;  // steady_clock-Millisekunden (nur Anzeige)
+  // Mitglieder der Instanz (Issue #936): mindestens die claimende Identitaet,
+  // danach per Join aufgenommene Identitaeten. Reihenfolge = Aufnahme;
+  // Duplikate werden beim Join vermieden. Nur Hauptloop.
+  std::vector<std::string> members;
 };
 std::map<std::string, SoloClaim> g_soloClaims;
+
+// Rueckindex Instanz -> Identitaeten (Issue #936): beantwortet "wer teilt
+// Instanz X" und die Kapazitaetszaehlung vor dem Pin. `g_soloClaims` bleibt
+// die Wahrheit pro Identitaet; dieser Index wird von Claims/Joins gespeist.
+// NUR vom Hauptloop beruehrt. Fuer den HTTP-Thread wird nach jeder Aenderung
+// eine Kopie unter `g_apiMutex` veroeffentlicht (g_soloGroupsSnapshot).
+std::map<std::string, std::vector<std::string>> g_soloGroups;
+std::map<std::string, std::vector<std::string>> g_soloGroupsSnapshot;
 
 // Vom HTTP-Thread gefuellter Pause-Cache: Parked-Instanz -> Spiel angehalten?
 // Quelle ist der Parked-`GET /status` (nur wenn `--parked-url` gesetzt).
@@ -314,6 +330,11 @@ struct SessionInfo {
   std::string soloInstance;
   std::string soloPhase;   // provisioned | underway | in_game_paused | running
   std::string soloEndpoint;
+  // Solo-Gruppe (Issue #936, additiv): die uebrigen Identitaeten derselben
+  // Instanz + Zaehler + Aufnahmegrenze. Leer, wenn kein Claim existiert.
+  std::vector<std::string> soloMembers;
+  size_t soloMemberCount = 0;
+  int soloMaxPlayers = 0;
 };
 struct ApiCommand {
   // Was die Hauptschleife tun soll (die Registry `g_targets` gehoert NUR ihr).
@@ -329,6 +350,10 @@ struct ApiCommand {
   rbroute::Endpoint endpoint;  // bei Add / RouteByEndpoint
   std::string instance;  // Parked-Instanzname (RouteByEndpoint, /solo)
   bool selfSend = true;  // /solo: Client automatisch auf die Instanz schicken?
+  // Issue #936: reiner Join (kein neuer Claim). Bei true wird die Identitaet
+  // nur als Mitglied aufgenommen und (bei selfSend) auf den BESTEHENDEN
+  // Endpoint der Instanz gepinnt. `instance` nennt die Ziel-Gruppe.
+  bool joinOnly = false;
 };
 std::mutex g_apiMutex;
 std::vector<SessionInfo> g_sessionsSnapshot;
@@ -689,6 +714,17 @@ void refreshSnapshot() {
       s.soloPhase = rbapi::soloPhaseName(rbapi::deriveSoloPhase(
           true, hasRec && s.connected,
           hasRec && rit->second.backendConnected, gamePaused));
+      // Issue #936 (additiv): Mitglieder der Instanz + Kapazitaet.
+      std::map<std::string, std::vector<std::string>>::const_iterator mit =
+          g_soloGroups.find(claim.instance);
+      if (mit != g_soloGroups.end()) {
+        s.soloMembers = mit->second;
+        s.soloMemberCount = mit->second.size();
+      } else {
+        s.soloMembers.push_back(identity);
+        s.soloMemberCount = 1;
+      }
+      s.soloMaxPlayers = g_maxPlayers;
     }
     snap.push_back(s);
   };
@@ -1008,6 +1044,39 @@ void refreshTargetsSnapshot() {
   g_targetsSnapshot.swap(copy);
 }
 
+// Issue #936: Mitglied in die Instanz-Gruppe aufnehmen (dedupliziert) und die
+// Mitgliederliste des Claims der Identitaet spiegeln. NUR Hauptloop.
+void soloGroupAddMember(const std::string &instance,
+                        const std::string &identity) {
+  if (instance.empty() || identity.empty()) {
+    return;
+  }
+  std::vector<std::string> &members = g_soloGroups[instance];
+  bool present = false;
+  for (std::size_t i = 0; i < members.size(); ++i) {
+    if (members[i] == identity) {
+      present = true;
+      break;
+    }
+  }
+  if (!present) {
+    members.push_back(identity);
+  }
+  std::map<std::string, SoloClaim>::iterator cit =
+      g_soloClaims.find(identity);
+  if (cit != g_soloClaims.end()) {
+    cit->second.members = members;
+  }
+}
+
+// Kopie der Gruppen (Instanz -> Identitaeten) fuer den HTTP-Thread. NUR
+// Hauptloop ruft das nach jeder Claim-/Join-Aenderung.
+void refreshSoloGroupsSnapshot() {
+  std::map<std::string, std::vector<std::string>> copy = g_soloGroups;
+  std::lock_guard<std::mutex> lock(g_apiMutex);
+  g_soloGroupsSnapshot.swap(copy);
+}
+
 void processApiCommands() {
   std::deque<ApiCommand> cmds;
   {
@@ -1037,13 +1106,60 @@ void processApiCommands() {
       // /solo: Ziel kommt aufgeloest vom Parked-Dienst (GNS-UDP-Endpoint).
       // Claim IMMER merken (ueberlebt Reconnects / listet ohne Client); nur
       // bei self_send=true zusaetzlich sofort pinnen (heutiges Verhalten).
+      const long long nowMsJoin =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now().time_since_epoch())
+              .count();
+      if (it->joinOnly) {
+        // Issue #936: Join OHNE neuen Claim. Ziel = bestehender Endpoint der
+        // Instanz (aus einem bereits aufgenommenen Mitglied).
+        rbroute::Endpoint target;
+        bool found = false;
+        std::map<std::string, std::vector<std::string>>::iterator git =
+            g_soloGroups.find(it->instance);
+        if (git != g_soloGroups.end()) {
+          for (std::size_t i = 0; i < git->second.size(); ++i) {
+            std::map<std::string, SoloClaim>::iterator cit =
+                g_soloClaims.find(git->second[i]);
+            if (cit != g_soloClaims.end()) {
+              target = cit->second.endpoint;
+              found = true;
+              break;
+            }
+          }
+        }
+        if (!found && it->endpoint.port != 0) {
+          target = it->endpoint;  // Fallback: Ziel bereits mitgegeben
+          found = true;
+        }
+        if (!found) {
+          logLine("API: join '%s' -> unbekannte Instanz '%s' — ignoriert",
+                  it->identity.c_str(), it->instance.c_str());
+          break;
+        }
+        SoloClaim claim;
+        claim.instance = it->instance;
+        claim.endpoint = target;
+        claim.claimedAtMs = nowMsJoin;
+        g_soloClaims[it->identity] = claim;
+        soloGroupAddMember(it->instance, it->identity);
+        if (it->selfSend) {
+          pinIdentityTo(it->identity, target, "solo (join)");
+          logLine("API: join '%s' -> %s (instance=%s)", it->identity.c_str(),
+                  target.str().c_str(), it->instance.c_str());
+        } else {
+          logLine("API: join '%s' -> %s (instance=%s, self_send=off)",
+                  it->identity.c_str(), target.str().c_str(),
+                  it->instance.c_str());
+        }
+        break;
+      }
       SoloClaim claim;
       claim.instance = it->instance;
       claim.endpoint = it->endpoint;
-      claim.claimedAtMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                              std::chrono::steady_clock::now().time_since_epoch())
-                              .count();
+      claim.claimedAtMs = nowMsJoin;
       g_soloClaims[it->identity] = claim;
+      soloGroupAddMember(it->instance, it->identity);
       if (it->selfSend) {
         pinIdentityTo(it->identity, it->endpoint, "solo (parked)");
       } else {
@@ -1072,6 +1188,7 @@ void processApiCommands() {
     }
   }
   refreshTargetsSnapshot();
+  refreshSoloGroupsSnapshot();
 }
 
 std::string buildSessionsJson() {
@@ -1103,6 +1220,17 @@ std::string buildSessionsJson() {
       json += ",\"soloPhase\":\"" + rbapi::jsonEscape(it->soloPhase) + "\"";
       json += ",\"soloInstance\":\"" + rbapi::jsonEscape(it->soloInstance) + "\"";
       json += ",\"soloEndpoint\":\"" + rbapi::jsonEscape(it->soloEndpoint) + "\"";
+      // Solo-Gruppe (Issue #936, additiv): Mitglieder derselben Instanz.
+      json += ",\"soloMembers\":[";
+      for (std::size_t i = 0; i < it->soloMembers.size(); ++i) {
+        if (i > 0) {
+          json += ",";
+        }
+        json += "\"" + rbapi::jsonEscape(it->soloMembers[i]) + "\"";
+      }
+      json += "]";
+      json += ",\"soloMemberCount\":" + std::to_string(it->soloMemberCount);
+      json += ",\"soloMaxPlayers\":" + std::to_string(it->soloMaxPlayers);
     }
     json += "}";
   }
@@ -1217,6 +1345,7 @@ const char kUiHtml[] = R"HTML(<!doctype html>
 </main>
 <script>
 let TARGETS = [];
+let KNOWN_INSTANCES = [];
 const SOLO_SELF = {}; // Identitaet -> self-send an/aus (Default: an)
 const ORDER = { held: 0, waiting: 1, connected: 2, closed: 3, routed: 4 };
 const LABEL = { held: "wartet", waiting: "getrennt", connected: "verbunden", closed: "getrennt", routed: "geroutet" };
@@ -1269,6 +1398,28 @@ async function solo(identity, btn, cardEl) {
   setTimeout(loadSessions, 300);
 }
 
+// Solo-Join (Issue #936): einer BESTEHENDEN Instanz beitreten, ohne neuen
+// Claim (POST /solo {identitaet, instance}).
+async function joinSolo(identity, instance, btn, cardEl) {
+  if (!instance) { hint(cardEl, "keine Solo-Instanz zum Beitreten"); return; }
+  btn.disabled = true;
+  const selfSend = SOLO_SELF[identity] !== false;
+  try {
+    const r = await fetch("/solo", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identitaet: identity, instance: instance, self_send: selfSend }) });
+    if (!r.ok) {
+      const j = await r.json().catch(() => null);
+      const reason = (j && j.reason) ? j.reason : ("http " + r.status);
+      const MSG = { unknown_instance: "Instanz unbekannt", instance_full: "Instanz voll",
+        parked_unconfigured: "Parked-Dienst nicht konfiguriert" };
+      hint(cardEl, MSG[reason] || reason);
+    } else {
+      hint(cardEl, "gejoint: " + instance);
+    }
+  } catch (e) { hint(cardEl, "Netzwerkfehler"); }
+  setTimeout(loadSessions, 300);
+}
+
 function card(s) {
   const c = el("div", "card " + s.state);
   const top = el("div", "row");
@@ -1283,6 +1434,16 @@ function card(s) {
     srow.appendChild(el("span", "badge solo-" + s.soloPhase, PHASE[s.soloPhase] || s.soloPhase));
     if (s.soloInstance) srow.appendChild(el("span", "sub", s.soloInstance));
     c.appendChild(srow);
+    // Instanz-Gruppe (Issue #936): Instanz · n/max · Mitglieder.
+    if (s.soloInstance) {
+      const grow = el("div", "meta");
+      const gi = el("span");
+      gi.append("Instanz ", el("b", null, s.soloInstance),
+        " · ", el("b", "tick", (s.soloMemberCount || 0) + "/" + (s.soloMaxPlayers || "-")),
+        " · ", el("b", null, (s.soloMembers || []).join(", ") || s.identity));
+      grow.appendChild(gi);
+      c.appendChild(grow);
+    }
   }
 
   const m1 = el("div", "meta");
@@ -1318,6 +1479,28 @@ function card(s) {
   tog.onclick = () => { SOLO_SELF[s.identity] = !selfSend; loadSessions(); };
   soloRow.appendChild(sbtn);
   soloRow.appendChild(tog);
+  // Join-Button (Issue #936): eigener Instanz (idempotent, re-pin) oder einer
+  // bekannten Instanz beitreten.
+  const jbtn = el("button", null, "join");
+  if (s.soloInstance) {
+    jbtn.title = s.soloInstance;
+    jbtn.onclick = () => joinSolo(s.identity, s.soloInstance, jbtn, c);
+  } else if (KNOWN_INSTANCES.length === 1) {
+    jbtn.title = KNOWN_INSTANCES[0];
+    jbtn.onclick = () => joinSolo(s.identity, KNOWN_INSTANCES[0], jbtn, c);
+  } else if (KNOWN_INSTANCES.length > 1) {
+    const sel = el("select");
+    for (const inst of KNOWN_INSTANCES) {
+      const o = el("option", null, inst);
+      o.value = inst;
+      sel.appendChild(o);
+    }
+    soloRow.appendChild(sel);
+    jbtn.onclick = () => joinSolo(s.identity, sel.value, jbtn, c);
+  } else {
+    jbtn.disabled = true;
+  }
+  soloRow.appendChild(jbtn);
   c.appendChild(soloRow);
   return c;
 }
@@ -1328,6 +1511,7 @@ async function loadSessions() {
   catch (e) { $("dot").classList.add("off"); return; }
   $("dot").classList.remove("off");
   rows.sort((x, y) => (ORDER[x.state] ?? 9) - (ORDER[y.state] ?? 9));
+  KNOWN_INSTANCES = Array.from(new Set(rows.map(r => r.soloInstance).filter(Boolean)));
 
   $("n-wait").textContent = rows.filter(r => r.state === "held" || r.state === "waiting").length;
   $("n-conn").textContent = rows.filter(r => r.connected).length;
@@ -1577,6 +1761,69 @@ void handleSolo(SOCKET s, const std::string &requestBody) {
   rbapi::jsonStringField(requestBody, "env", env);
   bool selfSend = true;
   rbapi::parseSoloSelfSend(requestBody, selfSend);
+
+  // Issue #936: optionaler Join einer BESTEHENDEN Solo-Instanz. Nennt der Body
+  // eine `instance`, entscheidet die reine Funktion `decideSoloAction`, ob die
+  // Identitaet ohne neuen Claim beitreten darf. Ein Join braucht keinen
+  // Parked-/Kapsel-Zugriff (die Instanz existiert bereits).
+  std::string instance;
+  if (rbapi::parseSoloInstance(requestBody, instance)) {
+    std::vector<std::string> members;
+    {
+      std::lock_guard<std::mutex> lock(g_apiMutex);
+      std::map<std::string, std::vector<std::string>>::const_iterator git =
+          g_soloGroupsSnapshot.find(instance);
+      if (git != g_soloGroupsSnapshot.end()) {
+        members = git->second;
+      }
+    }
+    bool alreadyMember = false;
+    for (std::size_t i = 0; i < members.size(); ++i) {
+      if (members[i] == identity) {
+        alreadyMember = true;
+        break;
+      }
+    }
+    const rbapi::SoloJoinDecision decision = rbapi::decideSoloAction(
+        true, static_cast<int>(members.size()), alreadyMember, g_maxPlayers);
+    if (decision == rbapi::SoloJoinDecision::UnknownInstance) {
+      logLine("API: solo-join '%s' -> unbekannte Instanz '%s' -> 409",
+              identity.c_str(), instance.c_str());
+      httpRespondJson(s, 409, "Conflict",
+                      "{\"ok\":false,\"reason\":\"unknown_instance\"}");
+      return;
+    }
+    if (decision == rbapi::SoloJoinDecision::Full) {
+      logLine("API: solo-join '%s' -> '%s' voll (%d/%d) -> 409",
+              identity.c_str(), instance.c_str(),
+              static_cast<int>(members.size()), g_maxPlayers);
+      httpRespondJson(s, 409, "Conflict",
+                      "{\"ok\":false,\"reason\":\"instance_full\"}");
+      return;
+    }
+    // JoinExisting oder (idempotent) AlreadyMember: kein neuer Claim.
+    {
+      std::lock_guard<std::mutex> lock(g_apiMutex);
+      ApiCommand cmd;
+      cmd.kind = ApiCommand::kRouteByEndpoint;
+      cmd.joinOnly = true;
+      cmd.identity = identity;
+      cmd.instance = instance;
+      cmd.selfSend = selfSend;
+      g_apiCommands.push_back(cmd);
+    }
+    logLine("API: solo-join '%s' -> instance=%s (%s, self_send=%s)",
+            identity.c_str(), instance.c_str(),
+            rbapi::soloJoinDecisionName(decision),
+            selfSend ? "on" : "off");
+    std::string out = "{\"ok\":true,\"identitaet\":\"" +
+                      rbapi::jsonEscape(identity) + "\",\"instance\":\"" +
+                      rbapi::jsonEscape(instance) + "\",\"join\":true,"
+                      "\"self_send\":" +
+                      (selfSend ? "true" : "false") + "}";
+    httpRespondJson(s, 200, "OK", out);
+    return;
+  }
 
   if (!g_capsuleConfigured && !g_parkedConfigured) {
     httpRespondJson(s, 503, "Service Unavailable",
@@ -2056,6 +2303,16 @@ int main(int argc, char **argv) {
       g_capsuleHost = host;
       g_capsulePort = port;
       g_capsuleConfigured = true;
+    } else if (strcmp(argv[i], "--max-players") == 0 && i + 1 < argc) {
+      // Aufnahmegrenze einer Solo-Instanz (Issue #936). Default 4 =
+      // Server-Default (`riftbreaker_server_max_players`).
+      const char *spec = argv[++i];
+      const int v = atoi(spec);
+      if (v < 1) {
+        fprintf(stderr, "--max-players braucht >= 1, bekam '%s'\n", spec);
+        return 2;
+      }
+      g_maxPlayers = v;
     }
   }
 

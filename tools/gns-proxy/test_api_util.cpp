@@ -15,6 +15,7 @@ using rbapi::parseHttpResponse;
 using rbapi::parseHttpStatusLine;
 using rbapi::deriveSoloPhase;
 using rbapi::parseQueryParam;
+using rbapi::parseSoloInstance;
 using rbapi::parseSoloSelfSend;
 using rbapi::parseTargetSpec;
 using rbapi::parseUrlHostPort;
@@ -244,6 +245,82 @@ static void testParseSoloSelfSend() {
   out = false;
   check(!parseSoloSelfSend("{\"self_send\":1}", out), "Zahl -> kein Bool");
   check(out, "Zahl -> Default true");
+}
+
+// Issue #936: optionales `instance`-Feld im /solo-Body (Join einer bestehenden
+// Solo-Instanz). Muster wie parseSoloSelfSend, aber ein nicht-leerer String.
+static void testParseSoloInstance() {
+  std::string out;
+  check(parseSoloInstance("{\"identitaet\":\"str:A\",\"instance\":\"parked-7\"}", out),
+        "instance gefunden");
+  checkEq(out, "parked-7", "instance Wert");
+  // Whitespace tolerant.
+  out.clear();
+  check(parseSoloInstance("{ \"instance\" : \"parked-9\" }", out),
+        "instance mit Whitespace");
+  checkEq(out, "parked-9", "instance Wert (WS)");
+  // Fehlendes Feld -> false, out leer.
+  out = "alt";
+  check(!parseSoloInstance("{\"identitaet\":\"str:A\"}", out),
+        "fehlendes instance -> false");
+  checkEq(out, "", "fehlendes instance -> out leer");
+  check(!parseSoloInstance("", out), "leerer Body -> false");
+  checkEq(out, "", "leerer Body -> out leer");
+  // Leerer String zaehlt nicht als Instanz -> false.
+  out = "alt";
+  check(!parseSoloInstance("{\"instance\":\"\"}", out),
+        "leeres instance -> false");
+  checkEq(out, "", "leeres instance -> out leer");
+  // Nicht-String -> false, out unberuehrt/leer.
+  out = "alt";
+  check(!parseSoloInstance("{\"instance\":42}", out), "Zahl -> false");
+  checkEq(out, "", "Zahl -> out leer");
+}
+
+// Issue #936: reine Aufnahme-Entscheidung fuer /solo. `instanceRequested` =
+// der Body nennt eine nicht-leere `instance`; `memberCount` = aktuelle
+// Mitgliederzahl der Gruppe (<=0 bedeutet: Instanz unbekannt).
+static void testDecideSoloAction() {
+  using rbapi::decideSoloAction;
+  using rbapi::SoloJoinDecision;
+  // Kein instance-Feld -> unveraendertes Verhalten (neuer Claim).
+  check(decideSoloAction(false, 0, false, 4) == SoloJoinDecision::NewClaim,
+        "ohne instance -> NewClaim");
+  check(decideSoloAction(false, 3, false, 4) == SoloJoinDecision::NewClaim,
+        "ohne instance (count ignoriert) -> NewClaim");
+  // Bekannte Instanz mit freier Kapazitaet -> Join.
+  check(decideSoloAction(true, 1, false, 4) == SoloJoinDecision::JoinExisting,
+        "bekannt, 1/4 -> JoinExisting");
+  check(decideSoloAction(true, 3, false, 4) == SoloJoinDecision::JoinExisting,
+        "bekannt, 3/4 -> JoinExisting");
+  // Grenze: memberCount == maxPlayers -> Full.
+  check(decideSoloAction(true, 4, false, 4) == SoloJoinDecision::Full,
+        "memberCount == maxPlayers -> Full");
+  check(decideSoloAction(true, 5, false, 4) == SoloJoinDecision::Full,
+        "memberCount > maxPlayers -> Full");
+  // Unbekannte Instanz: named, aber keine Gruppe (count 0) -> UnknownInstance.
+  check(decideSoloAction(true, 0, false, 4) == SoloJoinDecision::UnknownInstance,
+        "unbekannte Instanz -> UnknownInstance");
+  check(decideSoloAction(true, -1, false, 4) == SoloJoinDecision::UnknownInstance,
+        "negativer count -> UnknownInstance");
+  // Idempotenter Rejoin: bereits Mitglied, auch wenn die Instanz voll ist.
+  check(decideSoloAction(true, 4, true, 4) == SoloJoinDecision::AlreadyMember,
+        "bereits Mitglied (voll) -> AlreadyMember");
+  check(decideSoloAction(true, 2, true, 4) == SoloJoinDecision::AlreadyMember,
+        "bereits Mitglied -> AlreadyMember");
+  // Grenze maxPlayers=1: Join ist unmoeglich (1 Mitglied = voll).
+  check(decideSoloAction(true, 1, false, 1) == SoloJoinDecision::Full,
+        "maxPlayers=1, count 1 -> Full");
+  check(decideSoloAction(true, 0, false, 1) == SoloJoinDecision::UnknownInstance,
+        "maxPlayers=1, count 0 -> UnknownInstance");
+  // Degeneriertes maxPlayers (<1) wird auf 1 geklemmt.
+  check(decideSoloAction(true, 0, false, 0) == SoloJoinDecision::UnknownInstance,
+        "maxPlayers=0, count 0 -> UnknownInstance");
+  // Namen sind stabil und nicht leer.
+  checkEq(rbapi::soloJoinDecisionName(SoloJoinDecision::Full), "instance_full",
+          "name Full");
+  checkEq(rbapi::soloJoinDecisionName(SoloJoinDecision::UnknownInstance),
+          "unknown_instance", "name UnknownInstance");
 }
 
 // --- /solo-Claim (Issue #929) -----------------------------------------------
@@ -516,6 +593,8 @@ int main() {
   testDeriveSoloPhase();
   testSoloPhaseName();
   testParseSoloSelfSend();
+  testParseSoloInstance();
+  testDecideSoloAction();
   testSoloSuccess();
   testSoloEnvPayload();
   testSoloClaimPathConfigurable();

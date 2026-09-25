@@ -1,0 +1,378 @@
+Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=Issue #936 — hermetischer Beweis: mehrere Clients auf EINER Solo-Instanz
+Datum: 2026-09-25
+Repo: github.com/momokli/riftbreaker-battle-mod
+Quelle: rbapi::decideSoloAction (tools/gns-proxy/api_util.h), kompiliert mit g++ -std=c++17
+Skript: tools/gns-proxy/evidence/936-hermetic-2026-09-25.py
+=
+
+Szenario 1: Default-Kapazitaet 4 — zwei Clients auf EINE Instanz
+  /solo identitaet=str:A instance=parked-936 -> new_claim (Instanz angelegt, endpoint=127.0.0.1:32768)
+  Instanz parked-936: endpoint=127.0.0.1:32768 mitglieder=[str:A] (n=1)
+  /solo identitaet=str:B instance=parked-936 -> join_existing (kein neuer Claim, endpoint=127.0.0.1:32768)
+  Instanz parked-936: endpoint=127.0.0.1:32768 mitglieder=[str:A, str:B] (n=2)
+  /solo identitaet=str:A instance=parked-936 -> already_member (kein neuer Claim, endpoint=127.0.0.1:32768)
+  Instanz parked-936: endpoint=127.0.0.1:32768 mitglieder=[str:A, str:B] (n=2)
+  CHECK beide_auf_instanz: OK
+  CHECK ein_endpoint: OK
+  CHECK mitgliederliste_gleich: OK (beide Sichten = [str:A, str:B])
+
+Szenario 2: Kapazitaet 2 — dritter Join -> instance_full
+  /solo identitaet=str:A instance=parked-full -> new_claim (Instanz angelegt, endpoint=127.0.0.1:32768)
+  /solo identitaet=str:B instance=parked-full -> join_existing (kein neuer Claim, endpoint=127.0.0.1:32768)
+  /solo identitaet=str:C instance=parked-full -> instance_full
+  Instanz parked-full: endpoint=127.0.0.1:32768 mitglieder=[str:A, str:B] (n=2)
+  CHECK dritter_abgewiesen: OK (n=2, C fehlt=ja)
+
+Szenario 3: unbekannte Instanz -> unknown_instance
+  /solo identitaet=str:D instance=parked-unknown -> unknown_instance
+  CHECK unbekannt_kein_claim: OK
+
+======================================================================
+Fazit: Zwei Identitaeten landen auf derselben Instanz und dem
+selben Endpoint mit identischer Mitgliederliste; der Join ueber
+Kapazitaet -> instance_full, unbekannte Instanz -> unknown_instance.

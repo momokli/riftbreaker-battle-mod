@@ -70,7 +70,8 @@ services:
         --api-host {{ gns_relay_api_host }}
         --api-port {{ gns_relay_api_port }}
         --parked-url {{ gns_relay_parked_url }}{% if gns_relay_hold %}
-        --hold{% endif %}{% for t in gns_relay_targets %}
+        --hold{% endif %}
+        --max-players {{ gns_relay_max_players }}{% for t in gns_relay_targets %}
         --target {{ t }}{% endfor %}
 
 volumes:
