@@ -52,7 +52,9 @@
 #include <cstring>
 #include <ctime>
 #include <deque>
+#include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -87,6 +89,8 @@ typedef HSteamListenSocket (*fn_CreateListenSocketIP)(
 typedef bool (*fn_CloseListenSocket)(ISteamNetworkingSockets *,
                                      HSteamListenSocket);
 typedef HSteamNetPollGroup (*fn_CreatePollGroup)(ISteamNetworkingSockets *);
+typedef bool (*fn_DestroyPollGroup)(ISteamNetworkingSockets *,
+                                   HSteamNetPollGroup);
 typedef bool (*fn_SetConnectionPollGroup)(ISteamNetworkingSockets *,
                                           HSteamNetConnection,
                                           HSteamNetPollGroup);
@@ -124,6 +128,9 @@ fn_Kill pKill = nullptr;
 fn_CreateListenSocketIP pCreateListenSocketIP = nullptr;
 fn_CloseListenSocket pCloseListenSocket = nullptr;
 fn_CreatePollGroup pCreatePollGroup = nullptr;
+// Optional (nicht in der Pflichtliste): fehlt der Export, bleiben die
+// Poll-Gruppen bis zum Prozessende belegt (Issue #877).
+fn_DestroyPollGroup pDestroyPollGroup = nullptr;
 fn_SetConnectionPollGroup pSetConnectionPollGroup = nullptr;
 fn_AcceptConnection pAcceptConnection = nullptr;
 fn_CloseConnection pCloseConnection = nullptr;
@@ -137,12 +144,13 @@ fn_SetConnConfigInt32 pSetConnConfigInt32 = nullptr;
 fn_IPAddrToString pIPAddrToString = nullptr;
 
 ISteamNetworkingSockets *g_pInterface = nullptr;
-HSteamNetPollGroup g_hPollGroup = k_HSteamNetPollGroup_Invalid;
 int g_msgCount = 0;
 
-// --- Relay (E3/E4) -----------------------------------------------------------
-// Terminierendes Relay: der Client haengt an g_clientConn, ein neuer GNS-Client
-// am Backend an g_backendConn.  Nachrichten werden 1:1 weitergereicht.
+// --- Relay (E3/E4) — Multi-Session (Issue #877) ------------------------------
+// Terminierendes Relay: JEDER Client bekommt eine eigene Session (Client-Conn +
+// optionaler Backend-Conn).  Nachrichten werden 1:1 weitergereicht.  Frueher
+// lagen Verbindung/Queues/Historie in globalen Singletonen — ein zweiter Client
+// ueberschrieb sie und die Sitzung des ersten kollabierte (Blocker fuer 1v1).
 //
 // Routing (E4): der GNS-*Identitaetsstring* des Clients kommt mit dem Connect
 // (`str:<hex>`, stabil pro Installation) und ist damit sofort verfuegbar — damit
@@ -150,14 +158,55 @@ int g_msgCount = 0;
 // Spielname kommt erst nach der Handshake-Antwort; er wird daher aus dem
 // durchgereichten Strom gelernt und loest bei Abweichung ein **Re-Route**
 // (Replay des bis dahin Gesehenen auf das richtige Backend) aus.
-HSteamNetConnection g_clientConn = k_HSteamNetConnection_Invalid;
-HSteamNetConnection g_backendConn = k_HSteamNetConnection_Invalid;
-bool g_backendConnected = false;
+struct Session {
+  HSteamNetConnection clientConn = k_HSteamNetConnection_Invalid;
+  HSteamNetConnection backendConn = k_HSteamNetConnection_Invalid;
+  bool backendConnected = false;
+  // Aktuelles Ziel als Endpoint (fuer Vergleiche beim Re-Route).
+  rbroute::Endpoint backendTarget;
+  // GNS-Identitaet (`str:<hex>`, stabil pro Installation) und die zuletzt
+  // angewandte Namens-Regel (fuer die Re-Route-Erkennung).
+  std::string identity;
+  std::string lastRouteKey;
+  // Historie aller Client->Server-Nachrichten (fuer Replay beim Re-Route) plus
+  // Merker, wie viele davon schon an das *aktuelle* Backend gingen.
+  std::vector<std::pair<std::string, int>> history;
+  size_t historyBytes = 0;
+  size_t historyForwarded = 0;
+  // Sende-Queues + Backpressure pro Session: GNS liefert
+  // `k_EResultLimitExceeded`, wenn der Sende-Puffer des Ziels voll ist (typisch:
+  // 500-KB-Weltzustand vom lokalen Backend ueber eine langsame Client-Leitung).
+  // Dann wird gepuffert und von der Quelle nur so lange gelesen, wie die Queue
+  // der Gegenseite unter dem Soft-Limit liegt.
+  std::deque<std::pair<std::string, int>> toClientQ;
+  std::deque<std::pair<std::string, int>> toBackendQ;
+  size_t toClientBytes = 0;
+  size_t toBackendBytes = 0;
+  // Eine Poll-Gruppe je Session und Richtung: GNS kennt nur
+  // ReceiveMessagesOnPollGroup (kein *.OnConnection); globales Lesen wuerde die
+  // Backpressure einer Session an alle anderen koppeln.
+  HSteamNetPollGroup clientPoll = k_HSteamNetPollGroup_Invalid;
+  HSteamNetPollGroup backendPoll = k_HSteamNetPollGroup_Invalid;
+};
+
+// Registry: die Client-Map *besitzt* die Session, die Backend-Map zeigt nur
+// darauf.  Lookup beim Dispatching ueber `pMsg->m_conn` bzw. im Status-Callback.
+std::map<HSteamNetConnection, std::unique_ptr<Session>> g_clientSessions;
+std::map<HSteamNetConnection, Session *> g_backendSessions;
+
+Session *sessionForClient(HSteamNetConnection conn) {
+  std::map<HSteamNetConnection, std::unique_ptr<Session>>::iterator it =
+      g_clientSessions.find(conn);
+  return it == g_clientSessions.end() ? nullptr : it->second.get();
+}
+
+Session *sessionForBackend(HSteamNetConnection conn) {
+  std::map<HSteamNetConnection, Session *>::iterator it =
+      g_backendSessions.find(conn);
+  return it == g_backendSessions.end() ? nullptr : it->second;
+}
+
 bool g_relayEnabled = false;
-uint32 g_backendIP = 0;
-uint16 g_backendPort = 0;
-// Aktuelles Ziel als Endpoint (fuer Vergleiche beim Re-Route).
-rbroute::Endpoint g_backendTarget;
 // Konfigurierter Default (--forward bzw. Default-Regel `*`).  Wird NIE durch ein
 // Re-Route ueberschrieben — sonst wandert der Default zu einem anderen Backend.
 rbroute::Endpoint g_defaultTarget;
@@ -173,26 +222,10 @@ rbroute::Endpoint g_dialTarget;
 // staging landete (Default wurde ignoriert; live belegt, Issue #843).
 rbroute::Table g_routes;
 const char *g_mapFile = nullptr;
-std::string g_clientIdentity;
-std::string g_lastRouteKey;
-
-// Historie aller Client->Server-Nachrichten (fuer Replay beim Re-Route) plus
-// Merker, wie viele davon schon an das *aktuelle* Backend gingen.
-std::vector<std::pair<std::string, int>> g_history;
-size_t g_historyBytes = 0;
-size_t g_historyForwarded = 0;
+// Grenzen pro Session: Obergrenze der Replay-Historie und Soft-Limit der
+// Sende-Queue (Backpressure, siehe Session-Kommentar).
 const size_t kMaxHistoryBytes = 8u * 1024 * 1024;
-
-// Sende-Queues + Backpressure.  GNS liefert `k_EResultLimitExceeded`, wenn der
-// Sende-Puffer des Ziels voll ist (typisch: 500-KB-Weltzustand vom lokalen
-// Backend ueber eine langsame Client-Leitung).  Dann wird gepuffert und von der
-// Quelle nur so lange gelesen, wie die Queue der Gegenseite unter dem Limit ist.
-std::deque<std::pair<std::string, int>> g_toClientQ;
-std::deque<std::pair<std::string, int>> g_toBackendQ;
-size_t g_toClientBytes = 0;
-size_t g_toBackendBytes = 0;
 const size_t kQueueSoftLimit = 2u * 1024 * 1024;
-HSteamNetPollGroup g_backendPoll = k_HSteamNetPollGroup_Invalid;
 
 // --- Logging -----------------------------------------------------------------
 
@@ -219,9 +252,50 @@ bool g_hold = false;
 int g_apiPort = 0;
 std::string g_apiHost = "127.0.0.1";
 std::vector<std::pair<std::string, rbroute::Endpoint>> g_targets;
+
+// --- Parked-Anbindung fuer POST /solo (Issue #929) ----------------------------
+// Der Relay ruft den Parked-Pool-Dienst (`POST /claim`) per WinSock-HTTP auf
+// und pinnt die Identitaet auf den von dort gelieferten GNS-UDP-Endpoint. Der
+// Token kommt AUS DER UMWELT (`RBB_PARKED_TOKEN`), nie aus argv (Prozessliste).
+std::string g_parkedHost = "127.0.0.1";
+int g_parkedPort = 8095;
+// Erst `--parked-url` ODER die Umgebungsvariable `RBB_PARKED_URL` schalten den
+// Parked-Pfad scharf; ohne beides antwortet `POST /solo` mit
+// `503 parked_unconfigured`. Beide akzeptieren nur ein IPv4-Literal
+// (Outbound-Client = inet_pton), nicht `localhost`/DNS-Namen.
+bool g_parkedConfigured = false;
+std::string g_parkedToken;
+
+// --- Capsule-Anbindung fuer POST /solo (Issue #931) --------------------------
+// Ist der Kapsel-Dienst konfiguriert (`--capsule-url` ODER `RBB_CAPSULE_URL`),
+// ruft `POST /solo` `POST /capsule/open` auf (Claim OHNE resume: der Spieler
+// landet in einem PAUSIERTEN Spiel) und pinnt auf das gelieferte
+// `gns_endpoint`. `instance` wird durchgereicht. Ohne Kapsel bleibt der
+// bisherige Parked-Pfad (#929) unveraendert. Token aus `RBB_CAPSULE_TOKEN`.
+std::string g_capsuleHost = "127.0.0.1";
+int g_capsulePort = 8093;
+bool g_capsuleConfigured = false;
+std::string g_capsuleToken;
 // Operator-Pin pro Identitaet — ueberlebt Reconnects (der Client schliesst nach
 // ~20 s ohne Antwort selbst und verbindet neu). NUR vom Hauptloop beruehrt.
 std::map<std::string, rbroute::Endpoint> g_pins;
+
+// Solo-Claim pro Identitaet (Issue #930): gemerkt wird, WELCHE Parked-Instanz
+// geclaimt wurde — auch OHNE verbundenen Client (dann existiert kein
+// SessionRecord). NUR vom Hauptloop beruehrt; der HTTP-Thread reicht den Claim
+// ueber die Command-Queue ein.
+struct SoloClaim {
+  std::string instance;
+  rbroute::Endpoint endpoint;
+  long long claimedAtMs = 0;  // steady_clock-Millisekunden (nur Anzeige)
+};
+std::map<std::string, SoloClaim> g_soloClaims;
+
+// Vom HTTP-Thread gefuellter Pause-Cache: Parked-Instanz -> Spiel angehalten?
+// Quelle ist der Parked-`GET /status` (nur wenn `--parked-url` gesetzt).
+// Fehlt ein Eintrag, faellt die Phase sicher auf Underway/Running zurueck.
+// Unter g_apiMutex gelesen/geschrieben.
+std::map<std::string, bool> g_parkedPaused;
 
 // Anzeige-Snapshot (HTTP-Thread liest, Hauptloop schreibt) + Befehls-Queue.
 struct SessionInfo {
@@ -235,13 +309,31 @@ struct SessionInfo {
   long long heldSeconds = 0;
   bool connected = false;
   bool pinned = false;
+  // Solo-Status (Issue #930, additiv): nur gesetzt, wenn fuer die Identitaet
+  // ein Parked-Claim existiert (g_soloClaims).
+  std::string soloInstance;
+  std::string soloPhase;   // provisioned | underway | in_game_paused | running
+  std::string soloEndpoint;
 };
 struct ApiCommand {
-  std::string identity;
-  std::string target;
+  // Was die Hauptschleife tun soll (die Registry `g_targets` gehoert NUR ihr).
+  enum Kind {
+    kRouteByName,    // Identitaet auf einen registrierten Backend-*Namen* pinnen
+    kRouteByEndpoint,// Identitaet direkt auf einen Endpoint pinnen (/solo)
+    kBackendAdd,     // Backend registrieren/aktualisieren
+    kBackendDelete,  // Backend abmelden
+  };
+  Kind kind = kRouteByName;
+  std::string identity;  // bei Route-Befehlen
+  std::string target;    // Backend-*Name* (RouteByName) bzw. Name (Add/Delete)
+  rbroute::Endpoint endpoint;  // bei Add / RouteByEndpoint
+  std::string instance;  // Parked-Instanzname (RouteByEndpoint, /solo)
+  bool selfSend = true;  // /solo: Client automatisch auf die Instanz schicken?
 };
 std::mutex g_apiMutex;
 std::vector<SessionInfo> g_sessionsSnapshot;
+// Kopie der Registry fuer den HTTP-Thread (nur unter g_apiMutex gelesen).
+std::vector<std::pair<std::string, rbroute::Endpoint>> g_targetsSnapshot;
 std::deque<ApiCommand> g_apiCommands;
 
 // Laufende Session-Buchfuehrung (NUR Hauptloop). Ein Eintrag pro Identitaet,
@@ -257,6 +349,7 @@ struct SessionRecord {
   std::chrono::steady_clock::time_point heldSince;
   bool connected = false;
   bool held = false;
+  bool backendConnected = false;  // Issue #930: fuer die Phasen-Ableitung
 };
 std::map<std::string, SessionRecord> g_sessions;
 
@@ -409,85 +502,115 @@ bool flushQueue(std::deque<std::pair<std::string, int>> &q, size_t &bytes,
 
 // Alles, was der Client geschickt hat und dem *aktuellen* Backend noch nicht
 // vorliegt, in die Backend-Queue schieben (Backlog bzw. Replay nach Re-Route).
-void queueHistoryDelta() {
+void queueHistoryDelta(Session &s) {
   size_t n = 0;
-  while (g_historyForwarded < g_history.size()) {
-    const std::pair<std::string, int> &m = g_history[g_historyForwarded];
-    g_toBackendQ.push_back(m);
-    g_toBackendBytes += m.first.size();
-    ++g_historyForwarded;
+  while (s.historyForwarded < s.history.size()) {
+    const std::pair<std::string, int> &m = s.history[s.historyForwarded];
+    s.toBackendQ.push_back(m);
+    s.toBackendBytes += m.first.size();
+    ++s.historyForwarded;
     ++n;
   }
   if (n > 0) {
     logLine("replay/backlog: %zu Nachricht(en) -> backend-queue (%zu offen)",
-            n, g_toBackendQ.size());
+            n, s.toBackendQ.size());
   }
 }
 
-void startBackendConnect() {
+void startBackendConnect(Session &s) {
   if (pConnectByIPAddress == nullptr || pIPAddrSetIPv4 == nullptr) {
     logLine("relay: ConnectByIPAddress/SetIPv4-Export fehlt");
     return;
   }
   uint32 ip = 0;
-  if (!rbroute::ipToU32(g_backendTarget.ip, ip)) {
-    logLine("relay: ungueltige Backend-IP '%s'", g_backendTarget.ip.c_str());
+  if (!rbroute::ipToU32(s.backendTarget.ip, ip)) {
+    logLine("relay: ungueltige Backend-IP '%s'", s.backendTarget.ip.c_str());
     return;
   }
-  g_backendIP = ip;
-  g_backendPort = g_backendTarget.port;
+  if (s.backendPoll == k_HSteamNetPollGroup_Invalid) {
+    s.backendPoll = pCreatePollGroup(g_pInterface);
+  }
   SteamNetworkingIPAddr addr;
   memset(&addr, 0, sizeof(addr));
-  pIPAddrSetIPv4(&addr, g_backendIP, g_backendPort);
-  g_backendConn = pConnectByIPAddress(g_pInterface, &addr, 0, nullptr);
-  if (g_backendConn == k_HSteamNetConnection_Invalid) {
+  pIPAddrSetIPv4(&addr, ip, s.backendTarget.port);
+  s.backendConn = pConnectByIPAddress(g_pInterface, &addr, 0, nullptr);
+  if (s.backendConn == k_HSteamNetConnection_Invalid) {
     logLine("backend-connect auf %s FEHLGESCHLAGEN",
-            g_backendTarget.str().c_str());
+            s.backendTarget.str().c_str());
     return;
   }
-  pSetConnectionPollGroup(g_pInterface, g_backendConn, g_backendPoll);
+  g_backendSessions[s.backendConn] = &s;
+  pSetConnectionPollGroup(g_pInterface, s.backendConn, s.backendPoll);
   if (pSetConnConfigInt32 != nullptr) {
     // Default ist 512 KiB — ein einzelner Weltzustand ist ~500 KiB, mit
     // vorangehenden Nachrichten laeuft der Puffer sonst sofort voll.
-    pSetConnConfigInt32(pUtilsAccessor(), g_backendConn,
+    pSetConnConfigInt32(pUtilsAccessor(), s.backendConn,
                         k_ESteamNetworkingConfig_SendBufferSize, 8 * 1024 * 1024);
   }
-  logLine("backend-connect gestartet -> conn=%u (%s)", g_backendConn,
-          g_backendTarget.str().c_str());
+  logLine("backend-connect gestartet -> conn=%u (%s)", s.backendConn,
+          s.backendTarget.str().c_str());
 }
 
-void routeTo(const rbroute::Endpoint &target, const char *why) {
+// Vorwaerts-Deklaration: sessionFor() steht weiter unten, routeTo() braucht es
+// aber schon fuer die Backend-Status-Buchfuehrung (Issue #930).
+SessionRecord &sessionFor(const std::string &identity);
+
+void routeTo(Session &s, const rbroute::Endpoint &target, const char *why) {
   logLine("ROUTE (%s) -> %s", why, target.str().c_str());
-  if (g_backendConn != k_HSteamNetConnection_Invalid) {
-    pCloseConnection(g_pInterface, g_backendConn, 0, nullptr, false);
-    g_backendConn = k_HSteamNetConnection_Invalid;
-    g_backendConnected = false;
+  if (s.backendConn != k_HSteamNetConnection_Invalid) {
+    g_backendSessions.erase(s.backendConn);
+    pCloseConnection(g_pInterface, s.backendConn, 0, nullptr, false);
+    s.backendConn = k_HSteamNetConnection_Invalid;
+    s.backendConnected = false;
   }
-  g_backendTarget = target;
+  s.backendTarget = target;
+  if (!s.identity.empty()) {
+    SessionRecord &rec = sessionFor(s.identity);
+    rec.backendConnected = false;
+  }
   // Alles Gesehene erneut an das (neue) Backend schicken — aber erst, wenn es
   // verbunden ist (siehe Callback), sonst flutet ein Replay den Handshake.
-  g_toBackendQ.clear();
-  g_toBackendBytes = 0;
-  g_historyForwarded = 0;
-  startBackendConnect();
+  s.toBackendQ.clear();
+  s.toBackendBytes = 0;
+  s.historyForwarded = 0;
+  startBackendConnect(s);
 }
 
-// Pro Client aufraeumen — sonst wird die Historie des vorigen Matches beim
-// naechsten Join ans neue Backend geflutet.
-void resetClientState() {
-  g_history.clear();
-  g_historyBytes = 0;
-  g_historyForwarded = 0;
-  g_toClientQ.clear();
-  g_toClientBytes = 0;
-  g_toBackendQ.clear();
-  g_toBackendBytes = 0;
-  g_lastRouteKey.clear();
-  g_clientIdentity.clear();
-  g_backendConnected = false;
-  // Kein Backend gewaehlt, bis der Connect-Pfad entscheidet (Regel/Pin/Default)
-  // oder bewusst haelt (--hold).
-  g_backendTarget = rbroute::Endpoint{};
+// Neue Session fuer einen akzeptierten Client — frischer Zustand (Historie und
+// Queues leer), damit das vorige Match nicht in das neue Backend flutet.
+Session &createClientSession(HSteamNetConnection clientConn) {
+  std::unique_ptr<Session> owned(new Session());
+  owned->clientConn = clientConn;
+  owned->clientPoll = pCreatePollGroup(g_pInterface);
+  Session *s = owned.get();
+  g_clientSessions[clientConn] = std::move(owned);
+  return *s;
+}
+
+// Session eines beendeten Clients aufraeumen: Backend schliessen, Poll-Gruppen
+// freigeben (Export optional — s. pDestroyPollGroup) und die Session loeschen.
+void destroyClientSession(HSteamNetConnection clientConn) {
+  std::map<HSteamNetConnection, std::unique_ptr<Session>>::iterator it =
+      g_clientSessions.find(clientConn);
+  if (it == g_clientSessions.end()) {
+    return;
+  }
+  Session &s = *it->second;
+  if (s.backendConn != k_HSteamNetConnection_Invalid) {
+    g_backendSessions.erase(s.backendConn);
+    pCloseConnection(g_pInterface, s.backendConn, 0, nullptr, false);
+    s.backendConn = k_HSteamNetConnection_Invalid;
+    s.backendConnected = false;
+  }
+  if (pDestroyPollGroup != nullptr) {
+    if (s.clientPoll != k_HSteamNetPollGroup_Invalid) {
+      pDestroyPollGroup(g_pInterface, s.clientPoll);
+    }
+    if (s.backendPoll != k_HSteamNetPollGroup_Invalid) {
+      pDestroyPollGroup(g_pInterface, s.backendPoll);
+    }
+  }
+  g_clientSessions.erase(it);
 }
 
 // --- Session-Buchfuehrung (Issue #857) ---------------------------------------
@@ -509,31 +632,75 @@ SessionRecord &sessionFor(const std::string &identity) {
 void refreshSnapshot() {
   const std::chrono::steady_clock::time_point now =
       std::chrono::steady_clock::now();
+  // Pause-Cache des HTTP-Threads einmal kopieren (unter g_apiMutex).
+  std::map<std::string, bool> parkedPaused;
+  {
+    std::lock_guard<std::mutex> lock(g_apiMutex);
+    parkedPaused = g_parkedPaused;
+  }
   std::vector<SessionInfo> snap;
-  snap.reserve(g_sessions.size());
+  snap.reserve(g_sessions.size() + g_soloClaims.size());
+  // Vereinigung: Session-Buchfuehrung + geclaimte Identitaeten OHNE Session
+  // (Issue #930 — nach dem Solo-Claim existiert noch kein SessionRecord).
+  std::map<std::string, bool> seen;
+  const auto fill = [&](const std::string &identity) {
+    if (seen[identity]) {
+      return;
+    }
+    seen[identity] = true;
+    SessionInfo s;
+    s.identity = identity;
+    std::map<std::string, SessionRecord>::const_iterator rit =
+        g_sessions.find(identity);
+    const bool hasRec = rit != g_sessions.end();
+    if (hasRec) {
+      const SessionRecord &rec = rit->second;
+      s.ip = rec.ip;
+      s.name = rec.name;
+      s.state = rec.state;
+      s.target = rec.targetStr;
+      s.messages = rec.messages;
+      s.connected = rec.connected;
+      s.ageSeconds = std::chrono::duration_cast<std::chrono::seconds>(
+                         now - rec.firstSeen)
+                         .count();
+      s.heldSeconds =
+          rec.held
+              ? std::chrono::duration_cast<std::chrono::seconds>(now -
+                                                                 rec.heldSince)
+                    .count()
+              : 0;
+    } else {
+      s.state = "waiting";  // geclaimt, aber (noch) kein Client
+    }
+    s.pinned = g_pins.find(identity) != g_pins.end();
+    std::map<std::string, SoloClaim>::const_iterator cit =
+        g_soloClaims.find(identity);
+    if (cit != g_soloClaims.end()) {
+      const SoloClaim &claim = cit->second;
+      s.soloInstance = claim.instance;
+      s.soloEndpoint = claim.endpoint.str();
+      bool gamePaused = false;
+      std::map<std::string, bool>::const_iterator pit =
+          parkedPaused.find(claim.instance);
+      if (pit != parkedPaused.end()) {
+        gamePaused = pit->second;
+      }
+      s.soloPhase = rbapi::soloPhaseName(rbapi::deriveSoloPhase(
+          true, hasRec && s.connected,
+          hasRec && rit->second.backendConnected, gamePaused));
+    }
+    snap.push_back(s);
+  };
   for (std::map<std::string, SessionRecord>::const_iterator it =
            g_sessions.begin();
        it != g_sessions.end(); ++it) {
-    const SessionRecord &rec = it->second;
-    SessionInfo s;
-    s.identity = rec.identity;
-    s.ip = rec.ip;
-    s.name = rec.name;
-    s.state = rec.state;
-    s.target = rec.targetStr;
-    s.messages = rec.messages;
-    s.connected = rec.connected;
-    s.pinned = g_pins.find(rec.identity) != g_pins.end();
-    s.ageSeconds = std::chrono::duration_cast<std::chrono::seconds>(
-                       now - rec.firstSeen)
-                       .count();
-    s.heldSeconds =
-        rec.held
-            ? std::chrono::duration_cast<std::chrono::seconds>(now -
-                                                               rec.heldSince)
-                  .count()
-            : 0;
-    snap.push_back(s);
+    fill(it->first);
+  }
+  for (std::map<std::string, SoloClaim>::const_iterator it =
+           g_soloClaims.begin();
+       it != g_soloClaims.end(); ++it) {
+    fill(it->first);
   }
   std::lock_guard<std::mutex> lock(g_apiMutex);
   g_sessionsSnapshot.swap(snap);
@@ -553,8 +720,8 @@ void onConnectionStatusChanged(
           info.m_szConnectionDescription, info.m_eEndReason, info.m_szEndDebug);
 
   switch (info.m_eState) {
-  case k_ESteamNetworkingConnectionState_Connecting:
-    if (pInfo->m_hConn == g_backendConn) {
+  case k_ESteamNetworkingConnectionState_Connecting: {
+    if (sessionForBackend(pInfo->m_hConn) != nullptr) {
       logLine("backend: Connecting (ausgehend)");
       break;
     }
@@ -563,122 +730,141 @@ void onConnectionStatusChanged(
       pCloseConnection(g_pInterface, pInfo->m_hConn, 0, nullptr, false);
       break;
     }
-    g_clientConn = pInfo->m_hConn;
-    resetClientState();
-    if (!pSetConnectionPollGroup(g_pInterface, pInfo->m_hConn, g_hPollGroup)) {
+    Session &s = createClientSession(pInfo->m_hConn);
+    if (!pSetConnectionPollGroup(g_pInterface, pInfo->m_hConn, s.clientPoll)) {
       logLine("SetConnectionPollGroup FEHLGESCHLAGEN (weiter trotzdem)");
     }
     if (pSetConnConfigInt32 != nullptr) {
-      pSetConnConfigInt32(pUtilsAccessor(), g_clientConn,
+      pSetConnConfigInt32(pUtilsAccessor(), pInfo->m_hConn,
                           k_ESteamNetworkingConfig_SendBufferSize,
                           8 * 1024 * 1024);
     }
-    logLine("E1: Verbindung AKZEPTIERT (Handshake laeuft)");
+    logLine("E1: Verbindung AKZEPTIERT (Handshake laeuft) — %zu Session(s)",
+            g_clientSessions.size());
     break;
-  case k_ESteamNetworkingConnectionState_Connected:
-    if (pInfo->m_hConn == g_backendConn) {
+  }
+  case k_ESteamNetworkingConnectionState_Connected: {
+    Session *backendSess = sessionForBackend(pInfo->m_hConn);
+    if (backendSess != nullptr) {
       logLine("backend: Connected");
-      g_backendConnected = true;
-      queueHistoryDelta();
+      backendSess->backendConnected = true;
+      if (!backendSess->identity.empty()) {
+        sessionFor(backendSess->identity).backendConnected = true;
+      }
+      queueHistoryDelta(*backendSess);
       break;
     }
     logLine("E1 GRUEN: state=Connected — der Client akzeptiert einen fremden "
             "GNS-Server");
-    if (g_relayEnabled) {
-      // Identitaet kommt sofort mit dem Connect und ist stabil pro Installation
-      // -> damit koennen wir direkt routen, ohne auf den Spielnamen zu warten.
-      char ident[256] = {0};
-      if (pIdentityToString != nullptr) {
-        pIdentityToString(&info.m_identityRemote, ident, sizeof(ident));
-      }
-      char remote[64] = {0};
-      if (pIPAddrToString != nullptr) {
-        pIPAddrToString(&info.m_addrRemote, remote, sizeof(remote), true);
-      }
-      g_clientIdentity = ident;
-      g_lastRouteKey.clear();
-      logLine("client-identitaet: '%s' (%s)", g_clientIdentity.c_str(), remote);
+    Session *s = sessionForClient(pInfo->m_hConn);
+    if (s == nullptr || !g_relayEnabled) {
+      break;
+    }
+    // Identitaet kommt sofort mit dem Connect und ist stabil pro Installation
+    // -> damit koennen wir direkt routen, ohne auf den Spielnamen zu warten.
+    char ident[256] = {0};
+    if (pIdentityToString != nullptr) {
+      pIdentityToString(&info.m_identityRemote, ident, sizeof(ident));
+    }
+    char remote[64] = {0};
+    if (pIPAddrToString != nullptr) {
+      pIPAddrToString(&info.m_addrRemote, remote, sizeof(remote), true);
+    }
+    s->identity = ident;
+    s->lastRouteKey.clear();
+    logLine("client-identitaet: '%s' (%s) — %zu parallele Session(s)",
+            s->identity.c_str(), remote, g_clientSessions.size());
 
-      // Session-Buchfuehrung (fuer die Operator-UI, Issue #857).
-      SessionRecord &rec = sessionFor(g_clientIdentity);
-      rec.ip = remote;
-      rec.connected = true;
-      rec.held = false;
-      rec.state = "connected";
+    // Session-Buchfuehrung (fuer die Operator-UI, Issue #857).
+    SessionRecord &rec = sessionFor(s->identity);
+    rec.ip = remote;
+    rec.connected = true;
+    rec.held = false;
+    rec.state = "connected";
 
-      const std::map<std::string, rbroute::Endpoint>::iterator pin =
-          g_pins.find(g_clientIdentity);
-      const rbroute::Rule *rule = g_routes.matchSpecific(g_clientIdentity);
-      if (pin != g_pins.end()) {
-        // Operator hat diese Identitaet bereits festgelegt -> ueberlebt Reconnect.
-        rec.state = "routed";
-        rec.targetStr = pin->second.str();
-        routeTo(pin->second, "operator-pin");
-      } else if (rule != nullptr) {
-        rec.state = "routed";
-        rec.targetStr = rule->target.str();
-        routeTo(rule->target, "identitaet (explizite Regel)");
-      } else if (g_hold) {
-        // Halten: KEIN Backend-Aufbau. Der Client bleibt im Loading, seine
-        // Nachrichten laufen in die Historie; der Operator entscheidet spaeter.
-        rec.held = true;
-        rec.heldSince = std::chrono::steady_clock::now();
-        rec.state = "held";
-        g_backendTarget = rbroute::Endpoint{};
-        logLine("HOLD: halte '%s' (%s) — warte auf Operator (Ziel-Buttons: %zu)",
-                g_clientIdentity.c_str(), remote, g_targets.size());
-      } else {
-        rec.state = "routed";
-        rec.targetStr = g_defaultTarget.str();
-        routeTo(g_defaultTarget, "default (bis der Name ihn ggf. umroutet)");
-      }
+    const std::map<std::string, rbroute::Endpoint>::iterator pin =
+        g_pins.find(s->identity);
+    const rbroute::Rule *rule = g_routes.matchSpecific(s->identity);
+    if (pin != g_pins.end()) {
+      // Operator hat diese Identitaet bereits festgelegt -> ueberlebt Reconnect.
+      rec.state = "routed";
+      rec.targetStr = pin->second.str();
+      routeTo(*s, pin->second, "operator-pin");
+    } else if (rule != nullptr) {
+      rec.state = "routed";
+      rec.targetStr = rule->target.str();
+      routeTo(*s, rule->target, "identitaet (explizite Regel)");
+    } else if (g_hold) {
+      // Halten: KEIN Backend-Aufbau. Der Client bleibt im Loading, seine
+      // Nachrichten laufen in die Historie; der Operator entscheidet spaeter.
+      rec.held = true;
+      rec.heldSince = std::chrono::steady_clock::now();
+      rec.state = "held";
+      s->backendTarget = rbroute::Endpoint{};
+      logLine("HOLD: halte '%s' (%s) — warte auf Operator (Ziel-Buttons: %zu)",
+              s->identity.c_str(), remote, g_targets.size());
+    } else {
+      rec.state = "routed";
+      rec.targetStr = g_defaultTarget.str();
+      routeTo(*s, g_defaultTarget, "default (bis der Name ihn ggf. umroutet)");
     }
     break;
+  }
   case k_ESteamNetworkingConnectionState_ClosedByPeer:
-  case k_ESteamNetworkingConnectionState_ProblemDetectedLocally:
-    if (pInfo->m_hConn == g_backendConn) {
-      logLine("backend beendet (state=%d) — client schliessen",
+  case k_ESteamNetworkingConnectionState_ProblemDetectedLocally: {
+    Session *backendSess = sessionForBackend(pInfo->m_hConn);
+    if (backendSess != nullptr) {
+      logLine("backend beendet (state=%d) — Client bleibt, Session kann neu "
+              "routen",
               static_cast<int>(info.m_eState));
-      g_backendConn = k_HSteamNetConnection_Invalid;
-      g_backendConnected = false;
-    } else {
-      logLine("client beendet (state=%d) — aufraeumen",
-              static_cast<int>(info.m_eState));
-      // Halte-Dauer messen (Kernfrage des PoC: wie lange toleriert der Client
-      // das Warten?) und die Session fuer die UI als wartend/geschlossen zeigen.
-      if (!g_clientIdentity.empty()) {
-        SessionRecord &rec = sessionFor(g_clientIdentity);
-        rec.connected = false;
-        if (rec.held) {
-          const long long held =
-              std::chrono::duration_cast<std::chrono::seconds>(
-                  std::chrono::steady_clock::now() - rec.heldSince)
-                  .count();
-          logLine("HOLD: '%s' nach %llds getrennt (Client-Timeout) — wartet "
-                  "auf Reconnect (Pin ueberlebt)",
-                  g_clientIdentity.c_str(), held);
-          rec.state = "waiting";
-        } else {
-          rec.state = "closed";
-        }
+      g_backendSessions.erase(pInfo->m_hConn);
+      backendSess->backendConn = k_HSteamNetConnection_Invalid;
+      backendSess->backendConnected = false;
+      if (!backendSess->identity.empty()) {
+        sessionFor(backendSess->identity).backendConnected = false;
       }
-      g_clientConn = k_HSteamNetConnection_Invalid;
-      if (g_backendConn != k_HSteamNetConnection_Invalid) {
-        pCloseConnection(g_pInterface, g_backendConn, 0, nullptr, false);
-        g_backendConn = k_HSteamNetConnection_Invalid;
-        g_backendConnected = false;
+      pCloseConnection(g_pInterface, pInfo->m_hConn, 0, nullptr, false);
+      break;
+    }
+    Session *s = sessionForClient(pInfo->m_hConn);
+    if (s == nullptr) {
+      pCloseConnection(g_pInterface, pInfo->m_hConn, 0, nullptr, false);
+      break;
+    }
+    logLine("client beendet (state=%d) — Session aufraeumen",
+            static_cast<int>(info.m_eState));
+    // Halte-Dauer messen (Kernfrage des PoC: wie lange toleriert der Client
+    // das Warten?) und die Session fuer die UI als wartend/geschlossen zeigen.
+    if (!s->identity.empty()) {
+      SessionRecord &rec = sessionFor(s->identity);
+      rec.connected = false;
+      rec.backendConnected = false;
+      if (rec.held) {
+        const long long held =
+            std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - rec.heldSince)
+                .count();
+        logLine("HOLD: '%s' nach %llds getrennt (Client-Timeout) — wartet "
+                "auf Reconnect (Pin ueberlebt)",
+                s->identity.c_str(), held);
+        rec.state = "waiting";
+      } else {
+        rec.state = "closed";
       }
     }
+    destroyClientSession(pInfo->m_hConn);
     pCloseConnection(g_pInterface, pInfo->m_hConn, 0, nullptr, false);
     break;
+  }
   default:
     break;
   }
 }
 
 // Nachrichten einer Richtung einsammeln und in die Queue der Gegenseite legen.
-// `fromClient` = true: Client -> Backend, false: Backend -> Client.
-void drainFrom(HSteamNetPollGroup group, bool fromClient) {
+// Die Poll-Gruppe gehoert genau einer Session — `fromClient` = true: Client ->
+// Backend, false: Backend -> Client.
+void drainFrom(Session &s, HSteamNetPollGroup group, bool fromClient) {
   for (;;) {
     SteamNetworkingMessage_t *pMsg = nullptr;
     const int count =
@@ -707,16 +893,16 @@ void drainFrom(HSteamNetPollGroup group, bool fromClient) {
       continue;
     }
     if (fromClient) {
-      // Historie fuer Replay (Backlog UND spaeteres Re-Route) fuehren.
-      if (g_historyBytes + size <= kMaxHistoryBytes) {
-        g_history.emplace_back(payload, flags);
-        g_historyBytes += size;
+      // Historie fuer Replay (Backlog UND spaeteres Re-Route) der Session fuehren.
+      if (s.historyBytes + size <= kMaxHistoryBytes) {
+        s.history.emplace_back(payload, flags);
+        s.historyBytes += size;
       } else {
         logLine("  -> HISTORIE VOLL — nicht replay-faehig (%zu B)", size);
       }
       // Session-Buchfuehrung fuer die UI (Issue #857): Nachrichten zaehlen.
       std::map<std::string, SessionRecord>::iterator rec =
-          g_sessions.find(g_clientIdentity);
+          g_sessions.find(s.identity);
       if (rec != g_sessions.end()) {
         ++rec->second.messages;
       }
@@ -729,12 +915,12 @@ void drainFrom(HSteamNetPollGroup group, bool fromClient) {
           rec->second.name.empty()) {
         rec->second.name = learnedName;
       }
-      if (rule != nullptr && rule->key != g_lastRouteKey) {
-        g_lastRouteKey = rule->key;
-        if (!(rule->target == g_backendTarget)) {
+      if (rule != nullptr && rule->key != s.lastRouteKey) {
+        s.lastRouteKey = rule->key;
+        if (!(rule->target == s.backendTarget)) {
           logLine("NAME ROUTE: '%s' -> %s (re-route)", rule->key.c_str(),
                   rule->target.str().c_str());
-          routeTo(rule->target, "name");
+          routeTo(s, rule->target, "name");
         } else {
           logLine("NAME ROUTE: '%s' -> schon richtiges backend %s",
                   rule->key.c_str(), rule->target.str().c_str());
@@ -745,14 +931,14 @@ void drainFrom(HSteamNetPollGroup group, bool fromClient) {
           rec->second.targetStr = rule->target.str();
         }
       }
-      queueHistoryDelta();
+      queueHistoryDelta(s);
     } else {
-      g_toClientQ.emplace_back(payload, flags);
-      g_toClientBytes += size;
+      s.toClientQ.emplace_back(payload, flags);
+      s.toClientBytes += size;
     }
     // Quelle anhalten, wenn die Gegenseite schon genug Daten hat.
-    if (g_toClientBytes >= kQueueSoftLimit ||
-        g_toBackendBytes >= kQueueSoftLimit) {
+    if (s.toClientBytes >= kQueueSoftLimit ||
+        s.toBackendBytes >= kQueueSoftLimit) {
       break;
     }
   }
@@ -768,6 +954,60 @@ void drainFrom(HSteamNetPollGroup group, bool fromClient) {
 // Bewusst ohne Auth und standardmaessig nur an 127.0.0.1 gebunden: wer die API
 // erreicht, darf routen. Zugriff von aussen per SSH-Tunnel.
 
+// Backend registrieren/aktualisieren (Name ist der Schluessel). NUR Hauptloop.
+void upsertTarget(const std::string &name, const rbroute::Endpoint &endpoint) {
+  for (std::size_t i = 0; i < g_targets.size(); ++i) {
+    if (g_targets[i].first == name) {
+      g_targets[i].second = endpoint;
+      return;
+    }
+  }
+  g_targets.emplace_back(name, endpoint);
+}
+
+// Backend abmelden. `g_pins` bleiben bewusst unangetastet (bestehende Pins
+// zeigen weiter auf den Endpoint, auch wenn der Name wegfällt). NUR Hauptloop.
+bool removeTarget(const std::string &name) {
+  for (std::vector<std::pair<std::string, rbroute::Endpoint>>::iterator it =
+           g_targets.begin();
+       it != g_targets.end(); ++it) {
+    if (it->first == name) {
+      g_targets.erase(it);
+      return true;
+    }
+  }
+  return false;
+}
+
+// Identitaet auf einen Endpoint pinnen und alle laufenden Sessions umziehen
+// (identische Semantik wie das fruehere /route, aber mit aufgeloestem Ziel).
+void pinIdentityTo(const std::string &identity, const rbroute::Endpoint &target,
+                   const char *why) {
+  g_pins[identity] = target;
+  logLine("API: pin '%s' -> %s", identity.c_str(), target.str().c_str());
+  for (std::map<HSteamNetConnection, std::unique_ptr<Session>>::iterator st =
+           g_clientSessions.begin();
+       st != g_clientSessions.end(); ++st) {
+    Session &s = *st->second;
+    if (s.identity != identity ||
+        s.clientConn == k_HSteamNetConnection_Invalid) {
+      continue;
+    }
+    routeTo(s, target, why);
+    SessionRecord &rec = sessionFor(identity);
+    rec.state = "routed";
+    rec.held = false;
+    rec.targetStr = target.str();
+  }
+}
+
+// Registry-Kopie fuer den HTTP-Thread (/targets liest nur diesen Snapshot).
+void refreshTargetsSnapshot() {
+  std::vector<std::pair<std::string, rbroute::Endpoint>> copy = g_targets;
+  std::lock_guard<std::mutex> lock(g_apiMutex);
+  g_targetsSnapshot.swap(copy);
+}
+
 void processApiCommands() {
   std::deque<ApiCommand> cmds;
   {
@@ -779,31 +1019,59 @@ void processApiCommands() {
   }
   for (std::deque<ApiCommand>::const_iterator it = cmds.begin();
        it != cmds.end(); ++it) {
-    rbroute::Endpoint target;
-    bool found = false;
-    for (std::size_t i = 0; i < g_targets.size(); ++i) {
-      if (g_targets[i].first == it->target) {
-        target = g_targets[i].second;
-        found = true;
-        break;
+    switch (it->kind) {
+    case ApiCommand::kBackendAdd:
+      upsertTarget(it->target, it->endpoint);
+      logLine("API: backend '%s' -> %s (registriert)", it->target.c_str(),
+              it->endpoint.str().c_str());
+      break;
+    case ApiCommand::kBackendDelete:
+      if (removeTarget(it->target)) {
+        logLine("API: backend '%s' entfernt", it->target.c_str());
+      } else {
+        logLine("API: backend '%s' nicht vorhanden — ignoriert",
+                it->target.c_str());
       }
+      break;
+    case ApiCommand::kRouteByEndpoint: {
+      // /solo: Ziel kommt aufgeloest vom Parked-Dienst (GNS-UDP-Endpoint).
+      // Claim IMMER merken (ueberlebt Reconnects / listet ohne Client); nur
+      // bei self_send=true zusaetzlich sofort pinnen (heutiges Verhalten).
+      SoloClaim claim;
+      claim.instance = it->instance;
+      claim.endpoint = it->endpoint;
+      claim.claimedAtMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now().time_since_epoch())
+                              .count();
+      g_soloClaims[it->identity] = claim;
+      if (it->selfSend) {
+        pinIdentityTo(it->identity, it->endpoint, "solo (parked)");
+      } else {
+        logLine("API: solo '%s' -> %s (self_send=off, nur reserviert)",
+                it->identity.c_str(), it->endpoint.str().c_str());
+      }
+      break;
     }
-    if (!found) {
-      logLine("API: unbekanntes Ziel '%s' — ignoriert", it->target.c_str());
-      continue;
+    case ApiCommand::kRouteByName: {
+      rbroute::Endpoint target;
+      bool found = false;
+      for (std::size_t i = 0; i < g_targets.size(); ++i) {
+        if (g_targets[i].first == it->target) {
+          target = g_targets[i].second;
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        logLine("API: unbekanntes Ziel '%s' — ignoriert", it->target.c_str());
+        continue;
+      }
+      pinIdentityTo(it->identity, target, "operator (web-ui)");
+      break;
     }
-    // Pin pro Identitaet: greift auch beim naechsten Connect.
-    g_pins[it->identity] = target;
-    logLine("API: pin '%s' -> %s", it->identity.c_str(), target.str().c_str());
-    if (it->identity == g_clientIdentity &&
-        g_clientConn != k_HSteamNetConnection_Invalid) {
-      routeTo(target, "operator (web-ui)");
-      SessionRecord &rec = sessionFor(it->identity);
-      rec.state = "routed";
-      rec.held = false;
-      rec.targetStr = target.str();
     }
   }
+  refreshTargetsSnapshot();
 }
 
 std::string buildSessionsJson() {
@@ -830,6 +1098,12 @@ std::string buildSessionsJson() {
     json += ",\"messages\":" + std::to_string(it->messages);
     json += ",\"age_seconds\":" + std::to_string(it->ageSeconds);
     json += ",\"held_seconds\":" + std::to_string(it->heldSeconds);
+    // Solo-Status (Issue #930, additiv — nur wenn ein Claim existiert).
+    if (!it->soloPhase.empty()) {
+      json += ",\"soloPhase\":\"" + rbapi::jsonEscape(it->soloPhase) + "\"";
+      json += ",\"soloInstance\":\"" + rbapi::jsonEscape(it->soloInstance) + "\"";
+      json += ",\"soloEndpoint\":\"" + rbapi::jsonEscape(it->soloEndpoint) + "\"";
+    }
     json += "}";
   }
   json += "]";
@@ -837,15 +1111,20 @@ std::string buildSessionsJson() {
 }
 
 std::string buildTargetsJson() {
+  std::vector<std::pair<std::string, rbroute::Endpoint>> snap;
+  {
+    std::lock_guard<std::mutex> lock(g_apiMutex);
+    snap = g_targetsSnapshot;
+  }
   std::string json = "[";
   bool first = true;
-  for (std::size_t i = 0; i < g_targets.size(); ++i) {
+  for (std::size_t i = 0; i < snap.size(); ++i) {
     if (!first) {
       json += ",";
     }
     first = false;
-    json += "{\"name\":\"" + rbapi::jsonEscape(g_targets[i].first) + "\"";
-    json += ",\"endpoint\":\"" + rbapi::jsonEscape(g_targets[i].second.str()) +
+    json += "{\"name\":\"" + rbapi::jsonEscape(snap[i].first) + "\"";
+    json += ",\"endpoint\":\"" + rbapi::jsonEscape(snap[i].second.str()) +
             "\"}";
   }
   json += "]";
@@ -899,6 +1178,13 @@ const char kUiHtml[] = R"HTML(<!doctype html>
   .badge.held { background:rgba(242,193,78,.16); color:var(--held); }
   .badge.waiting { background:rgba(240,138,138,.16); color:var(--waiting); }
   .badge.routed { background:rgba(95,211,154,.16); color:var(--routed); }
+  .badge.solo-provisioned { background:rgba(78,161,255,.16); color:var(--accent); }
+  .badge.solo-underway { background:rgba(242,193,78,.16); color:var(--held); }
+  .badge.solo-in_game_paused { background:rgba(240,138,138,.16); color:var(--waiting); }
+  .badge.solo-running { background:rgba(95,211,154,.16); color:var(--routed); }
+  .solo { display:flex; gap:8px; margin-top:10px; }
+  .solo .toggle.on { border-color:var(--accent); background:#1b2735; }
+  .hint { margin-top:8px; font-size:12px; color:var(--waiting); }
   .meta { display:flex; flex-wrap:wrap; gap:6px 16px; margin-bottom:12px;
     color:var(--muted); font-size:12.5px; }
   .meta b { color:var(--fg); font-weight:600; }
@@ -931,8 +1217,11 @@ const char kUiHtml[] = R"HTML(<!doctype html>
 </main>
 <script>
 let TARGETS = [];
+const SOLO_SELF = {}; // Identitaet -> self-send an/aus (Default: an)
 const ORDER = { held: 0, waiting: 1, connected: 2, closed: 3, routed: 4 };
 const LABEL = { held: "wartet", waiting: "getrennt", connected: "verbunden", closed: "getrennt", routed: "geroutet" };
+const PHASE = { provisioned: "provisioniert", underway: "Spieler unterwegs",
+  in_game_paused: "im Spiel (paused)", running: "laeuft" };
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
   const e = document.createElement(tag);
@@ -954,6 +1243,32 @@ async function route(identity, target, btn) {
   setTimeout(loadSessions, 250);
 }
 
+function hint(cardEl, text) {
+  let h = cardEl.querySelector(".hint");
+  if (!h) { h = el("div", "hint"); cardEl.appendChild(h); }
+  h.textContent = text;
+}
+
+// Solo: claim + self-send in einem Schritt (POST /solo {identitaet, self_send}).
+async function solo(identity, btn, cardEl) {
+  btn.disabled = true;
+  const selfSend = SOLO_SELF[identity] !== false;
+  try {
+    const r = await fetch("/solo", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identitaet: identity, self_send: selfSend }) });
+    if (!r.ok) {
+      const j = await r.json().catch(() => null);
+      const reason = (j && j.reason) ? j.reason : ("http " + r.status);
+      const MSG = { none_parked: "keine geparkte Instanz frei",
+        backend_starting: "Backend startet noch - gleich erneut",
+        parked_unconfigured: "Parked-Dienst nicht konfiguriert",
+        not_claimable: "Instanz nicht claimbar" };
+      hint(cardEl, MSG[reason] || reason);
+    }
+  } catch (e) { hint(cardEl, "Netzwerkfehler"); }
+  setTimeout(loadSessions, 300);
+}
+
 function card(s) {
   const c = el("div", "card " + s.state);
   const top = el("div", "row");
@@ -962,6 +1277,13 @@ function card(s) {
   if (s.pinned) badge.textContent += " - pin";
   top.appendChild(badge);
   c.appendChild(top);
+
+  if (s.soloPhase) {
+    const srow = el("div", "row");
+    srow.appendChild(el("span", "badge solo-" + s.soloPhase, PHASE[s.soloPhase] || s.soloPhase));
+    if (s.soloInstance) srow.appendChild(el("span", "sub", s.soloInstance));
+    c.appendChild(srow);
+  }
 
   const m1 = el("div", "meta");
   const a = el("span"); a.append("ID ", el("b", null, s.identity)); m1.appendChild(a);
@@ -986,6 +1308,17 @@ function card(s) {
   }
   if (!TARGETS.length) act.appendChild(el("span", "sub", "keine --target gesetzt"));
   c.appendChild(act);
+
+  const selfSend = SOLO_SELF[s.identity] !== false;
+  const soloRow = el("div", "solo");
+  const sbtn = el("button", null, "solo");
+  sbtn.onclick = () => solo(s.identity, sbtn, c);
+  const tog = el("button", "toggle" + (selfSend ? " on" : ""),
+    selfSend ? "self-send on" : "self-send off");
+  tog.onclick = () => { SOLO_SELF[s.identity] = !selfSend; loadSessions(); };
+  soloRow.appendChild(sbtn);
+  soloRow.appendChild(tog);
+  c.appendChild(soloRow);
   return c;
 }
 
@@ -1040,6 +1373,293 @@ void httpRespondJson(SOCKET s, int code, const char *status,
   httpRespond(s, code, status, "application/json; charset=utf-8", body);
 }
 
+// --- Outbound-HTTP Relay -> Parked (Issue #929) ------------------------------
+//
+// Blockierender WinSock-Client MIT connect-/recv-Timeout. Er laeuft im
+// HTTP-Request-Thread (jeder Request hat einen eigenen Thread) — der
+// GNS-Hauptloop wird dadurch NICHT blockiert. Status == -1 signalisiert einen
+// Verbindungs-/Timeout-Fehler (der /solo-Retry-Pfad behandelt das als transient).
+struct OutboundResult {
+  int status = -1;
+  std::string body;
+};
+
+OutboundResult outboundHttpCall(const std::string &method,
+                                const std::string &host, int port,
+                                const std::string &path,
+                                const std::string &payload,
+                                const std::string &bearer,
+                                int connectTimeoutMs, int recvTimeoutMs) {
+  OutboundResult result;
+  SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (sock == INVALID_SOCKET) {
+    return result;
+  }
+  sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(static_cast<u_short>(port));
+  if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1) {
+    closesocket(sock);
+    return result;
+  }
+
+  // Nicht-blockierender connect + select-Timeout (haengt sonst bei blackhole).
+  u_long nonBlocking = 1;
+  ioctlsocket(sock, FIONBIO, &nonBlocking);
+  int rc = connect(sock, reinterpret_cast<sockaddr *>(&addr), sizeof(addr));
+  if (rc == SOCKET_ERROR) {
+    if (WSAGetLastError() != WSAEWOULDBLOCK) {
+      closesocket(sock);
+      return result;
+    }
+    fd_set wr;
+    FD_ZERO(&wr);
+    FD_SET(sock, &wr);
+    timeval tv;
+    tv.tv_sec = connectTimeoutMs / 1000;
+    tv.tv_usec = (connectTimeoutMs % 1000) * 1000;
+    rc = select(0, nullptr, &wr, nullptr, &tv);
+    if (rc <= 0) {
+      closesocket(sock);
+      return result;
+    }
+    int soErr = 0;
+    int soErrLen = sizeof(soErr);
+    if (getsockopt(sock, SOL_SOCKET, SO_ERROR,
+                   reinterpret_cast<char *>(&soErr), &soErrLen) != 0 ||
+        soErr != 0) {
+      closesocket(sock);
+      return result;
+    }
+  }
+  nonBlocking = 0;
+  ioctlsocket(sock, FIONBIO, &nonBlocking);
+  DWORD recvTimeout = static_cast<DWORD>(recvTimeoutMs);
+  setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
+             reinterpret_cast<const char *>(&recvTimeout),
+             sizeof(recvTimeout));
+  DWORD sendTimeout = static_cast<DWORD>(recvTimeoutMs);
+  setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO,
+             reinterpret_cast<const char *>(&sendTimeout),
+             sizeof(sendTimeout));
+
+  std::string req = method + " " + path + " HTTP/1.1\r\n";
+  req += "Host: " + host + ":" + std::to_string(port) + "\r\n";
+  req += "Content-Type: application/json\r\n";
+  req += "Content-Length: " + std::to_string(payload.size()) + "\r\n";
+  if (!bearer.empty()) {
+    req += "Authorization: Bearer " + bearer + "\r\n";
+  }
+  req += "Connection: close\r\n\r\n";
+  req += payload;
+
+  std::size_t off = 0;
+  while (off < req.size()) {
+    const int n = send(sock, req.data() + off,
+                       static_cast<int>(req.size() - off), 0);
+    if (n <= 0) {
+      closesocket(sock);
+      return result;
+    }
+    off += static_cast<std::size_t>(n);
+  }
+
+  std::string raw;
+  char buf[4096];
+  for (;;) {
+    const int n = recv(sock, buf, sizeof(buf), 0);
+    if (n <= 0) {
+      break;
+    }
+    raw.append(buf, static_cast<std::size_t>(n));
+    if (raw.size() > (1u << 20)) {
+      break;
+    }
+  }
+  closesocket(sock);
+
+  int code = 0;
+  std::string body;
+  if (!rbapi::parseHttpResponse(raw, code, body)) {
+    return result;  // Status bleibt -1 -> transienter Fehler
+  }
+  result.status = code;
+  result.body = body;
+  return result;
+}
+
+// POST-Variante fuer den /solo-Claim (duenne Huelle um outboundHttpCall).
+OutboundResult outboundHttpPost(const std::string &host, int port,
+                                const std::string &path,
+                                const std::string &payload,
+                                const std::string &bearer,
+                                int connectTimeoutMs, int recvTimeoutMs) {
+  return outboundHttpCall("POST", host, port, path, payload, bearer,
+                          connectTimeoutMs, recvTimeoutMs);
+}
+
+// Parked-`GET /status` abfragen und den Pause-Cache (Instanz -> angehalten?)
+// aktualisieren. Laeuft best-effort im HTTP-Request-Thread, gedrosselt per TTL,
+// und blockiert daher NIE den GNS-Hauptloop. Fehler = stiller No-Op (die Phase
+// faellt dann sicher auf Underway/Running zurueck).
+void refreshParkedGameState() {
+  if (!g_parkedConfigured) {
+    return;
+  }
+  {
+    static std::chrono::steady_clock::time_point lastPoll;
+    const std::chrono::steady_clock::time_point now =
+        std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lock(g_apiMutex);
+    if (lastPoll.time_since_epoch().count() != 0 &&
+        now - lastPoll < std::chrono::milliseconds(1500)) {
+      return;
+    }
+    lastPoll = now;
+  }
+  const OutboundResult r = outboundHttpCall("GET", g_parkedHost, g_parkedPort,
+                                            "/status", std::string(),
+                                            g_parkedToken, 400, 600);
+  if (r.status != 200) {
+    return;
+  }
+  // entries[] ist eine flache Liste von {instance,…,state,…}. Wir lesen je
+  // `"instance":"X"` den folgenden `"state":"Y"` (Reihenfolge aus to_dict).
+  std::map<std::string, bool> fresh;
+  const std::string instanceKey = "\"instance\":\"";
+  std::size_t pos = r.body.find("\"entries\"");
+  if (pos == std::string::npos) {
+    pos = 0;
+  }
+  while ((pos = r.body.find(instanceKey, pos)) != std::string::npos) {
+    std::size_t start = pos + instanceKey.size();
+    const std::size_t iend = r.body.find('"', start);
+    if (iend == std::string::npos) {
+      break;
+    }
+    const std::string instance = r.body.substr(start, iend - start);
+    const std::size_t stateKey = r.body.find("\"state\":\"", iend);
+    if (stateKey == std::string::npos ||
+        stateKey > r.body.find("\"instance\":\"", iend)) {
+      break;
+    }
+    start = stateKey + 9;
+    const std::size_t send = r.body.find('"', start);
+    if (send == std::string::npos) {
+      break;
+    }
+    const std::string state = r.body.substr(start, send - start);
+    // Nur die Parked-Phasen ohne Welt-Fortschritt gelten als angehalten.
+    const bool paused =
+        (state == "parked" || state == "recycling" || state == "warming");
+    fresh[instance] = paused;
+    pos = send;
+  }
+  if (!fresh.empty()) {
+    std::lock_guard<std::mutex> lock(g_apiMutex);
+    g_parkedPaused = fresh;
+  }
+}
+
+// POST /solo: Parked `POST /claim` aufrufen (Bearer), Ziel von dort holen und
+// die Identitaet per Command-Queue darauf pinnen. Retry/Backoff nur HIER im
+// Request-Thread (transiente Fehler: Backend faehrt noch hoch).
+void handleSolo(SOCKET s, const std::string &requestBody) {
+  std::string identity;
+  std::string env;
+  if (!rbapi::jsonStringField(requestBody, "identitaet", identity) ||
+      identity.empty()) {
+    httpRespondJson(s, 400, "Bad Request",
+                    "{\"ok\":false,\"reason\":\"bad_request\",\"detail\":\"identitaet fehlt\"}");
+    return;
+  }
+  rbapi::jsonStringField(requestBody, "env", env);
+  bool selfSend = true;
+  rbapi::parseSoloSelfSend(requestBody, selfSend);
+
+  if (!g_capsuleConfigured && !g_parkedConfigured) {
+    httpRespondJson(s, 503, "Service Unavailable",
+                    "{\"ok\":false,\"reason\":\"parked_unconfigured\",\"retry\":false}");
+    return;
+  }
+
+  // Ziel waehlen: konfigurierte Kapsel (#931) hat Vorrang und claimt ohne
+  // resume (`/capsule/open`); sonst der bisherige Parked-Pfad (#929, `/claim`).
+  const bool useCapsule = g_capsuleConfigured;
+  const std::string claimHost = useCapsule ? g_capsuleHost : g_parkedHost;
+  const int claimPort = useCapsule ? g_capsulePort : g_parkedPort;
+  const std::string claimToken = useCapsule ? g_capsuleToken : g_parkedToken;
+  const std::string claimPath = useCapsule ? "/capsule/open" : "/claim";
+
+  // Claim + Retry/Backoff + Fehler-Mapping liegen als reine, host-testbare
+  // Funktion in api_util.h (runSoloClaim). Der Callback ist der Outbound-POST
+  // (WinSock, im Request-Thread — der GNS-Hauptloop bleibt unberuehrt). Das
+  // Latenz-Budget ist hart: `timeoutMs` ist die Summe fuer connect+recv, die
+  // Uhr liefert std::chrono, die Gesamt-Wall-Clock bleibt <= totalMs (4,5 s).
+  const auto soloStart = std::chrono::steady_clock::now();
+  const std::function<long long()> nowMs = [soloStart]() -> long long {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now() - soloStart)
+        .count();
+  };
+  const rbapi::SoloOutcome outcome = rbapi::runSoloClaim(
+      env,
+      [claimHost, claimPort, claimToken](const std::string &path,
+                                         const std::string &payload,
+                                         int timeoutMs) -> rbapi::HttpResp {
+        // Ein Versuch <= timeoutMs: connect und recv teilen sich das Budget.
+        int connectMs = timeoutMs / 2;
+        if (connectMs < 1) {
+          connectMs = 1;
+        }
+        int recvMs = timeoutMs - connectMs;
+        if (recvMs < 1) {
+          recvMs = 1;
+        }
+        const OutboundResult r = outboundHttpPost(claimHost, claimPort,
+                                                  path, payload, claimToken,
+                                                  connectMs, recvMs);
+        return rbapi::HttpResp{r.status, r.body};
+      },
+      rbapi::SoloBudget{}, nowMs,
+      [](int ms) { Sleep(static_cast<DWORD>(ms)); },
+      claimPath);
+
+  if (outcome.pinIdentity) {
+    {
+      std::lock_guard<std::mutex> lock(g_apiMutex);
+      ApiCommand cmd;
+      cmd.kind = ApiCommand::kRouteByEndpoint;
+      cmd.identity = identity;
+      cmd.instance = outcome.instance;
+      cmd.selfSend = selfSend;
+      rbroute::parseEndpoint(outcome.endpoint, cmd.endpoint);
+      g_apiCommands.push_back(cmd);
+    }
+    logLine("API: solo '%s' -> %s (instance=%s, self_send=%s)", identity.c_str(),
+            outcome.endpoint.c_str(), outcome.instance.c_str(),
+            selfSend ? "on" : "off");
+    std::string out = "{\"ok\":true,\"identitaet\":\"" +
+                      rbapi::jsonEscape(identity) + "\",\"target\":\"" +
+                      rbapi::jsonEscape(outcome.endpoint) +
+                      "\",\"instance\":\"" +
+                      rbapi::jsonEscape(outcome.instance) + "\",\"self_send\":" +
+                      (selfSend ? "true" : "false") + "}";
+    httpRespondJson(s, 200, "OK", out);
+    return;
+  }
+
+  // Budget erschoepft und letzter Fehler war transient -> Backend startet noch.
+  if (outcome.reason == "backend_starting") {
+    logLine("solo: claim-Budget erschoepft — 503 backend_starting");
+    httpRespondJson(s, 503, "Service Unavailable", outcome.body);
+    return;
+  }
+  httpRespondJson(s, outcome.httpCode,
+                  outcome.httpCode == 409 ? "Conflict" : "Error", outcome.body);
+}
+
 void httpHandle(SOCKET s) {
   DWORD timeout = 3000;
   setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&timeout),
@@ -1073,8 +1693,10 @@ void httpHandle(SOCKET s) {
   std::string path = (sp2 == std::string::npos)
                          ? req.substr(sp1 + 1)
                          : req.substr(sp1 + 1, sp2 - sp1 - 1);
+  std::string queryString;
   const std::size_t query = path.find('?');
   if (query != std::string::npos) {
+    queryString = path.substr(query + 1);
     path = path.substr(0, query);
   }
 
@@ -1105,6 +1727,9 @@ void httpHandle(SOCKET s) {
   if (method == "GET" && path == "/") {
     httpRespond(s, 200, "OK", "text/html; charset=utf-8", kUiHtml);
   } else if (method == "GET" && path == "/sessions") {
+    // Best-effort Pause-Quelle aktualisieren (gedrosselt, blockiert nicht den
+    // Hauptloop); danach den Snapshot ausgeben (Issue #930).
+    refreshParkedGameState();
     httpRespondJson(s, 200, "OK", buildSessionsJson());
   } else if (method == "GET" && path == "/targets") {
     httpRespondJson(s, 200, "OK", buildTargetsJson());
@@ -1119,6 +1744,7 @@ void httpHandle(SOCKET s) {
       {
         std::lock_guard<std::mutex> lock(g_apiMutex);
         ApiCommand cmd;
+        cmd.kind = ApiCommand::kRouteByName;
         cmd.identity = identity;
         cmd.target = target;
         g_apiCommands.push_back(cmd);
@@ -1127,6 +1753,68 @@ void httpHandle(SOCKET s) {
               target.c_str());
       httpRespondJson(s, 200, "OK", "{\"ok\":true}");
     }
+  } else if (method == "POST" && path == "/backends") {
+    // Dynamische Backend-Registry (Issue #929): {name, endpoint}.
+    std::string name;
+    std::string endpointStr;
+    if (!rbapi::jsonStringField(body, "name", name) || name.empty()) {
+      httpRespondJson(s, 400, "Bad Request",
+                      "{\"ok\":false,\"reason\":\"bad_request\",\"detail\":\"name fehlt\"}");
+    } else if (!rbapi::jsonStringField(body, "endpoint", endpointStr)) {
+      httpRespondJson(s, 400, "Bad Request",
+                      "{\"ok\":false,\"reason\":\"bad_request\",\"detail\":\"endpoint fehlt\"}");
+    } else {
+      rbroute::Endpoint endpoint;
+      if (!rbroute::parseEndpoint(endpointStr, endpoint)) {
+        httpRespondJson(s, 400, "Bad Request",
+                        "{\"ok\":false,\"reason\":\"bad_request\",\"detail\":\"endpoint ist kein ip:port\"}");
+      } else {
+        {
+          std::lock_guard<std::mutex> lock(g_apiMutex);
+          ApiCommand cmd;
+          cmd.kind = ApiCommand::kBackendAdd;
+          cmd.target = name;
+          cmd.endpoint = endpoint;
+          g_apiCommands.push_back(cmd);
+        }
+        logLine("API: backend '%s' -> %s angefordert", name.c_str(),
+                endpoint.str().c_str());
+        httpRespondJson(s, 200, "OK", "{\"ok\":true}");
+      }
+    }
+  } else if (method == "DELETE" && path == "/backends") {
+    std::string name;
+    if (!rbapi::parseQueryParam(queryString, "name", name) || name.empty()) {
+      httpRespondJson(s, 400, "Bad Request",
+                      "{\"ok\":false,\"reason\":\"bad_request\",\"detail\":\"name fehlt\"}");
+    } else {
+      bool known = false;
+      {
+        std::lock_guard<std::mutex> lock(g_apiMutex);
+        for (std::size_t i = 0; i < g_targetsSnapshot.size(); ++i) {
+          if (g_targetsSnapshot[i].first == name) {
+            known = true;
+            break;
+          }
+        }
+      }
+      if (!known) {
+        httpRespondJson(s, 404, "Not Found",
+                        "{\"ok\":false,\"reason\":\"not_found\"}");
+      } else {
+        {
+          std::lock_guard<std::mutex> lock(g_apiMutex);
+          ApiCommand cmd;
+          cmd.kind = ApiCommand::kBackendDelete;
+          cmd.target = name;
+          g_apiCommands.push_back(cmd);
+        }
+        logLine("API: backend '%s' Abmeldung angefordert", name.c_str());
+        httpRespondJson(s, 200, "OK", "{\"ok\":true}");
+      }
+    }
+  } else if (method == "POST" && path == "/solo") {
+    handleSolo(s, body);
   } else {
     httpRespond(s, 404, "Not Found", "text/plain; charset=utf-8",
                 "not found\n");
@@ -1232,6 +1920,8 @@ bool resolveDll(const char *explicitPath) {
       lib, "SteamAPI_ISteamNetworkingSockets_CloseListenSocket"));
   pCreatePollGroup = reinterpret_cast<fn_CreatePollGroup>(
       GetProcAddress(lib, "SteamAPI_ISteamNetworkingSockets_CreatePollGroup"));
+  pDestroyPollGroup = reinterpret_cast<fn_DestroyPollGroup>(
+      GetProcAddress(lib, "SteamAPI_ISteamNetworkingSockets_DestroyPollGroup"));
   pSetConnectionPollGroup =
       reinterpret_cast<fn_SetConnectionPollGroup>(GetProcAddress(
           lib, "SteamAPI_ISteamNetworkingSockets_SetConnectionPollGroup"));
@@ -1328,7 +2018,108 @@ int main(int argc, char **argv) {
         return 2;
       }
       g_targets.emplace_back(name, endpoint);
+    } else if (strcmp(argv[i], "--parked-url") == 0 && i + 1 < argc) {
+      // Parked-Pool-Dienst fuer POST /solo (Issue #929). Token NUR per Env
+      // (RBB_PARKED_TOKEN), damit er nicht in der Prozessliste steht.
+      // Nur IPv4-Literal (Outbound-Client = inet_pton), kein Hostname/DNS.
+      const char *spec = argv[++i];
+      std::string host;
+      int port = 0;
+      rbroute::Endpoint parsed;
+      if (!rbapi::parseUrlHostPort(spec, host, port) ||
+          !rbroute::parseEndpoint(host + ":" + std::to_string(port), parsed)) {
+        fprintf(stderr,
+                "--parked-url braucht http://<IPv4>:port (kein Hostname), "
+                "bekam '%s'\n",
+                spec);
+        return 2;
+      }
+      g_parkedHost = host;
+      g_parkedPort = port;
+      g_parkedConfigured = true;
+    } else if (strcmp(argv[i], "--capsule-url") == 0 && i + 1 < argc) {
+      // Kapsel-Flow-Dienst fuer POST /solo (Issue #931). Token NUR per Env
+      // (RBB_CAPSULE_TOKEN), damit er nicht in der Prozessliste steht.
+      // Nur IPv4-Literal (Outbound-Client = inet_pton), kein Hostname/DNS.
+      const char *spec = argv[++i];
+      std::string host;
+      int port = 0;
+      rbroute::Endpoint parsed;
+      if (!rbapi::parseUrlHostPort(spec, host, port) ||
+          !rbroute::parseEndpoint(host + ":" + std::to_string(port), parsed)) {
+        fprintf(stderr,
+                "--capsule-url braucht http://<IPv4>:port (kein Hostname), "
+                "bekam '%s'\n",
+                spec);
+        return 2;
+      }
+      g_capsuleHost = host;
+      g_capsulePort = port;
+      g_capsuleConfigured = true;
     }
+  }
+
+  // `RBB_PARKED_URL` aus der Umgebung schaltet den Parked-Pfad ebenfalls scharf
+  // (argv hat Vorrang). Nur IPv4-Literal — sonst bleibt der Pfad unkonfiguriert
+  // und `POST /solo` liefert `503 parked_unconfigured`.
+  if (!g_parkedConfigured) {
+    const char *parkedUrl = getenv("RBB_PARKED_URL");
+    if (parkedUrl != nullptr && *parkedUrl != '\0') {
+      std::string host;
+      int port = 0;
+      rbroute::Endpoint parsed;
+      if (rbapi::parseUrlHostPort(parkedUrl, host, port) &&
+          rbroute::parseEndpoint(host + ":" + std::to_string(port), parsed)) {
+        g_parkedHost = host;
+        g_parkedPort = port;
+        g_parkedConfigured = true;
+      } else {
+        fprintf(stderr,
+                "RBB_PARKED_URL ungueltig (braucht http://<IPv4>:port): '%s'\n",
+                parkedUrl);
+      }
+    }
+  }
+
+  const char *parkedToken = getenv("RBB_PARKED_TOKEN");
+  if (parkedToken != nullptr) {
+    g_parkedToken = parkedToken;
+  }
+
+  // `RBB_CAPSULE_URL` schaltet den Kapsel-Pfad scharf (argv hat Vorrang);
+  // `POST /solo` ruft dann `POST /capsule/open` (Claim OHNE resume, #931).
+  if (!g_capsuleConfigured) {
+    const char *capsuleUrl = getenv("RBB_CAPSULE_URL");
+    if (capsuleUrl != nullptr && *capsuleUrl != '\0') {
+      std::string host;
+      int port = 0;
+      rbroute::Endpoint parsed;
+      if (rbapi::parseUrlHostPort(capsuleUrl, host, port) &&
+          rbroute::parseEndpoint(host + ":" + std::to_string(port), parsed)) {
+        g_capsuleHost = host;
+        g_capsulePort = port;
+        g_capsuleConfigured = true;
+      } else {
+        fprintf(stderr,
+                "RBB_CAPSULE_URL ungueltig (braucht http://<IPv4>:port): '%s'\n",
+                capsuleUrl);
+      }
+    }
+  }
+  const char *capsuleToken = getenv("RBB_CAPSULE_TOKEN");
+  if (capsuleToken != nullptr) {
+    g_capsuleToken = capsuleToken;
+  }
+
+  if (g_capsuleConfigured) {
+    logLine("capsule fuer /solo: %s:%d (token=%s)", g_capsuleHost.c_str(),
+            g_capsulePort, g_capsuleToken.empty() ? "kein" : "gesetzt");
+  }
+  if (g_parkedConfigured) {
+    logLine("parked fuer /solo: %s:%d (token=%s)", g_parkedHost.c_str(),
+            g_parkedPort, g_parkedToken.empty() ? "kein" : "gesetzt");
+  } else if (!g_capsuleConfigured) {
+    logLine("parked/capsule fuer /solo: NICHT konfiguriert -> 503 parked_unconfigured");
   }
 
   logLine("gns_probe (Spike #831, E1/E2) — port=%u", nPort);
@@ -1396,17 +2187,19 @@ int main(int argc, char **argv) {
     // Nur Verbindungstest (kein Listen-Socket) — sonst kollidiert der Test mit
     // dem laufenden Relay auf 6321.
     logLine("DIAL-TEST -> %s", g_dialTarget.str().c_str());
-    g_backendPoll = pCreatePollGroup(g_pInterface);
-    g_backendTarget = g_dialTarget;
-    startBackendConnect();
-    for (int i = 0; i < 200 && !g_backendConnected; ++i) {
+    // Eigene Wegwerf-Session ohne Client — nur Verbindungstest (Issue #831).
+    Session dialSess;
+    dialSess.backendTarget = g_dialTarget;
+    startBackendConnect(dialSess);
+    for (int i = 0; i < 200 && !dialSess.backendConnected; ++i) {
       pRunCallbacks(g_pInterface);
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     logLine("DIAL %s",
-            g_backendConnected ? "OK (Connected)" : "FEHLGESCHLAGEN (Timeout)");
+            dialSess.backendConnected ? "OK (Connected)"
+                                      : "FEHLGESCHLAGEN (Timeout)");
     pKill();
-    return g_backendConnected ? 0 : 1;
+    return dialSess.backendConnected ? 0 : 1;
   }
 
   SteamNetworkingIPAddr serverLocalAddr;
@@ -1433,15 +2226,17 @@ int main(int argc, char **argv) {
     logLine("CreateListenSocketIP auf Port %u FEHLGESCHLAGEN", nPort);
     return 1;
   }
-  g_hPollGroup = pCreatePollGroup(g_pInterface);
-  if (g_hPollGroup == k_HSteamNetPollGroup_Invalid) {
-    logLine("CreatePollGroup FEHLGESCHLAGEN");
+  // Die Poll-Gruppen entstehen pro Session (Issue #877) — je Richtung eine,
+  // sonst koppelt globales Lesen die Backpressure aller Sessions. Der Probe-
+  // Aufruf haelt das alte Fail-Fast: kann gar keine Poll-Gruppe erzeugt werden,
+  // wuerde sonst jede Session still nichts relayen.
+  const HSteamNetPollGroup probePoll = pCreatePollGroup(g_pInterface);
+  if (probePoll == k_HSteamNetPollGroup_Invalid) {
+    logLine("CreatePollGroup FEHLGESCHLAGEN (Export/Interface pruefen)");
     return 1;
   }
-  g_backendPoll = pCreatePollGroup(g_pInterface);
-  if (g_backendPoll == k_HSteamNetPollGroup_Invalid) {
-    logLine("CreatePollGroup (backend) FEHLGESCHLAGEN");
-    return 1;
+  if (pDestroyPollGroup != nullptr) {
+    pDestroyPollGroup(g_pInterface, probePoll);
   }
   logLine("lauscht als GNS-Server auf 0.0.0.0:%u — warte auf Handshake", nPort);
   loadRoutes();
@@ -1476,6 +2271,8 @@ int main(int argc, char **argv) {
   // Steuer-API + Web-UI (Issue #857): eigener HTTP-Thread, Standardbind nur
   // 127.0.0.1 (kein Auth). Faellt der Bind aus, laeuft der Relay trotzdem.
   if (g_apiPort > 0) {
+    // Registry-Snapshot initial fuellen, BEVOR der HTTP-Thread /targets liest.
+    refreshTargetsSnapshot();
     std::thread(httpServerLoop).detach();
   }
   logLine("(E1: Status Connected erwarten | E2: Klartext-Nachrichten mit "
@@ -1485,17 +2282,33 @@ int main(int argc, char **argv) {
   while (true) {
     pRunCallbacks(g_pInterface);
     if (!g_relayEnabled) {
-      drainFrom(g_hPollGroup, true);
+      for (std::map<HSteamNetConnection, std::unique_ptr<Session>>::iterator it =
+               g_clientSessions.begin();
+           it != g_clientSessions.end(); ++it) {
+        if (it->second->clientPoll == k_HSteamNetPollGroup_Invalid) {
+          continue;
+        }
+        drainFrom(*it->second, it->second->clientPoll, true);
+      }
     } else {
-      // Backpressure: nur lesen, solange die Queue der Gegenseite noch Luft hat.
-      if (g_toClientBytes < kQueueSoftLimit) {
-        drainFrom(g_backendPoll, false);
+      // Jede Session unabhaengig bedienen: Backpressure bleibt pro Session
+      // (nur lesen, solange die Queue der Gegenseite Luft hat), damit eine
+      // langsame Leitung die andere Session nicht ausbremst.
+      for (std::map<HSteamNetConnection, std::unique_ptr<Session>>::iterator it =
+               g_clientSessions.begin();
+           it != g_clientSessions.end(); ++it) {
+        Session &s = *it->second;
+        if (s.toClientBytes < kQueueSoftLimit &&
+            s.backendPoll != k_HSteamNetPollGroup_Invalid) {
+          drainFrom(s, s.backendPoll, false);
+        }
+        if (s.toBackendBytes < kQueueSoftLimit &&
+            s.clientPoll != k_HSteamNetPollGroup_Invalid) {
+          drainFrom(s, s.clientPoll, true);
+        }
+        flushQueue(s.toClientQ, s.toClientBytes, s.clientConn);
+        flushQueue(s.toBackendQ, s.toBackendBytes, s.backendConn);
       }
-      if (g_toBackendBytes < kQueueSoftLimit) {
-        drainFrom(g_hPollGroup, true);
-      }
-      flushQueue(g_toClientQ, g_toClientBytes, g_clientConn);
-      flushQueue(g_toBackendQ, g_toBackendBytes, g_backendConn);
     }
     if (g_apiPort > 0) {
       // Befehle des HTTP-Threads abarbeiten und den Anzeige-Snapshot, den

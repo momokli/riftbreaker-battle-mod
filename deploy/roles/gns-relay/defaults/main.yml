@@ -41,6 +41,11 @@ gns_relay_compose_project: gns-relay
 # Dasselbe Laufzeit-Image wie der Dedicated Server (bringt wine, Xvfb und
 # gosu/steamuser mit). Der Tag ist der Deploy-SHA (kein `latest`).
 gns_relay_image: "{{ dedicated_server_image }}"
+# Container-Log-Limit (Issue #301): json-file-Rotation, damit die
+# Container-Logs (/var/lib/docker/containers/*/*-json.log) nicht unbegrenzt
+# wachsen. Konfigurierbar per host_vars / `-e`.
+gns_relay_log_max_size: "10m"
+gns_relay_log_max_file: "3"
 
 # --- Netz / Routing ---------------------------------------------------------
 # Client-hardgewireter Einstiegsport. Der Relay terminiert GNS hier selbst.
@@ -74,6 +79,17 @@ gns_relay_targets:
 # die Routen-Datei schreibt — sonst wuerde Handarbeit beim naechsten Deploy
 # ueberschrieben. Beispiel: "str:AB12 = 127.0.0.1:6323".
 gns_relay_extra_routes: []
+
+# --- Parked-Anbindung fuer POST /solo (Issue #929) --------------------------
+# Der Relay fragt diesen Dienst nach einer geparkten Solo-Instanz (`POST
+# /claim`) und pinnt die Identitaet auf deren GNS-UDP-Endpoint — ohne
+# Operator-Klick. Default = dev-Parked-Dienst (parked_pool_port, host_vars).
+gns_relay_parked_url: "http://127.0.0.1:8095"
+# Bearer-Token fuer den Parked-Dienst (dort `PARKED_TOKEN`, Vault
+# `vault_parked_pool_token`). Leer = kein Token (dev/lokal). Wird als
+# Compose-`environment` (RBB_PARKED_TOKEN) gereicht, NICHT per argv — sonst
+# stuende der Token in der Container-Prozessliste.
+gns_relay_parked_token: "{{ vault_parked_pool_token | default('') }}"
 
 # --- Container-interne Pfade / Prozess --------------------------------------
 # Mount-Punkt der Game-DLLs (read-only). Der Probe laeuft aus

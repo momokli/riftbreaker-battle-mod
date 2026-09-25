@@ -131,6 +131,23 @@ gns_probe.exe --port 6321 --map-file /etc/rbgns/routes --hold \
 | `--api-port` | HTTP-Port der UI/API (Default-Bind nur `127.0.0.1`)  |
 | `--api-host` | Bind-Adresse der UI/API (Default `127.0.0.1`)        |
 | `--target`   | `NAME=ip:port`, wiederholbar — die Buttons der UI    |
+| `--parked-url` | Ziel des Parked-Pool-Dienstes fuer `POST /solo` (Default: **nicht gesetzt**). **Nur IPv4-Literal** (`http://<IPv4>:port`) — der Outbound-Client nutzt `inet_pton`, also kein Hostname/DNS (`localhost` funktioniert nicht). |
+| `--capsule-url` | Ziel des **Kapsel-Flow-Dienstes** fuer `POST /solo` (Issue #931, Default: **nicht gesetzt**). Ist er gesetzt (argv oder `RBB_CAPSULE_URL`), ruft `/solo` `POST /capsule/open` (Claim **ohne** resume → pausiertes Spiel) statt `POST /claim`; ebenfalls nur IPv4-Literal. |
+
+Der Parked-Pfad ist nur aktiv, wenn `--parked-url` **oder** die Umgebungsvariable
+`RBB_PARKED_URL` gesetzt ist (argv hat Vorrang); ohne beides antwortet
+`POST /solo` mit `503 parked_unconfigured`. `RBB_PARKED_URL` akzeptiert
+ebenso nur ein IPv4-Literal.
+
+**Kapsel-Vorrang (Issue #931):** Ist `--capsule-url` **oder** `RBB_CAPSULE_URL`
+gesetzt, hat der Kapsel-Dienst Vorrang: `POST /solo` ruft `POST /capsule/open`
+an ihm (Claim ohne resume, der Spieler landet in einem **pausierten** Spiel) und
+pinnt auf das gelieferte `gns_endpoint`. Ohne Kapsel bleibt der bisherige
+Parked-Pfad (#929) unveraendert. Nur wenn **weder** Kapsel **noch** Parked
+konfiguriert ist, antwortet `/solo` mit `503 parked_unconfigured`.
+
+`RBB_PARKED_TOKEN` bzw. `RBB_CAPSULE_TOKEN` (Env, **nicht** argv) sind die
+Bearer-Token fuer den jeweiligen Dienst; leer = kein Auth-Header.
 
 Suffix-/Identitaets-Regeln aus der Routen-Datei haben **Vorrang**: wer
 `*-dev`/`*-staging` heisst oder eine exakte Identitaets-Regel trifft, wird
@@ -138,10 +155,10 @@ automatisch geroutet; nur der Rest wartet.
 
 Endpunkte (der Relay selbst hat **keinen** Auth — er bindet daher nur lokal; die
 öffentliche Lobby-Domain setzt davor der Host-Caddy mit basic_auth):
-`GET /` (Single-File-UI), `GET /sessions` (JSON: wer wartet),
+`GET /` (Single-File-UI), `GET /sessions` (JSON: wer wartet — jetzt alle
+parallelen Sessions),
 `GET /targets` (JSON: die Buttons), `POST /route`
 `{"identitaet":"…","target":"NAME"}`.
-
 Im Deploy läuft die Rolle `website` die Lobby öffentlich aus:
 **https://proxy.rift.projectmellon.de** (Host-Caddy → `127.0.0.1:9200`, basic_auth
 `operator`). Lokal ohne Domain: `ssh -L 9200:127.0.0.1:9200 planet`.
@@ -157,9 +174,128 @@ selbst schliesst und neu verbindet; der Pin ueberlebt den Reconnect. Die
 einen mutex-geschuetzten Snapshot (`/sessions`) und schreibt Befehle in eine
 Queue, die die Hauptschleife abarbeitet (Muster `server/dll/rbbridge.c`).
 
-> **Grenze:** Der Relay terminiert und relayt die Sitzung fuer ihre ganze Dauer;
-> er bedient damit **einen Client zur Zeit**. Mehrere parallele Matches brauchen
-> mehrere Sitzungen im Relay (offenes Follow-up).
+## Dynamische Backends + Solo-Claim (Issue #929)
+
+Zwei neue Endpunkte ergaenzen die statischen `--target`-Buttons:
+
+| Endpunkt | Body / Query | Wirkung |
+| --- | --- | --- |
+| `POST /backends` | `{"name":"…","endpoint":"ip:port"}` | Backend registrieren/aktualisieren (Name ist der Schluessel; doppelter Name aktualisiert). `200`; `400` bei fehlendem `name`/ungueltigem `endpoint`. |
+| `DELETE /backends?name=NAME` | — | Backend abmelden. `200`; `400` ohne `name`; `404` bei unbekanntem Namen. |
+| `GET /targets` | — | listet die **dynamische** Registry (ohne Relay-Neustart). |
+| `POST /solo` | `{"identitaet":"str:…","env"?,"self_send"?}` | fragt den Parked-Pool nach einer geparkten Solo-Instanz, pinnt die Identitaet automatisch auf deren **GNS-UDP-Endpoint** und antwortet mit dem Ziel. Kein Operator-Klick. `self_send` (JSON-Bool, Default `true`) steuert, ob der Spieler sofort mitgeschickt wird. |
+
+```bash
+curl -s -X POST 127.0.0.1:9200/backends -d '{"name":"T","endpoint":"127.0.0.1:6324"}'
+curl -s 127.0.0.1:9200/targets                 # T erscheint — ohne Neustart
+curl -s -X DELETE '127.0.0.1:9200/backends?name=T'
+curl -s -X POST 127.0.0.1:9200/solo -d '{"identitaet":"str:<id>"}'
+# -> {"ok":true,"identitaet":"str:<id>","target":"127.0.0.1:32768","instance":"parked-1"}
+```
+
+**Ablauf `/solo`:** Der Relay ruft `POST /capsule/open` am Kapsel-Dienst (#931,
+Bearer aus `RBB_CAPSULE_TOKEN`) **oder** — wenn keine Kapsel konfiguriert ist —
+`POST /claim` am Parked-Dienst (Bearer aus `RBB_PARKED_TOKEN`) und liest daraus
+`gns_endpoint` (der **GNS-UDP**-Host:Port der Instanz — nicht die HTTP-Bridge).
+Das Ziel wird per Command-Queue in die Hauptschleife gegeben und als **Pin fuer
+die Identitaet** gesetzt (gleiche Semantik wie `POST /route`, aber mit
+aufgeloestem Endpoint). Der Claim-Pfad ist dabei konfigurierbar
+(in `runSoloClaim(..., claimPath)` parametrisiert).
+
+**Fehlercodes `/solo`** (Parked-Semantik wird abgebildet):
+
+| Fall | Antwort |
+| --- | --- |
+| Erfolg | `200 {ok:true,identitaet,target,instance}` |
+| `identitaet` fehlt | `400` |
+| Parked `409 none_parked` / `503 bridge_unhealthy` / Connect-Fehler (transient) | Retry mit hartem Latenz-Budget: Deadline-getrieben, Gesamt-Wall-Clock ≤ 4,5 s (`SoloBudget{totalMs=4500, attemptMs=1500, minAttemptMs=250}`), Backoff 250 ms→1 s gegen das Rest-Budget geprueft; nach Erschoepfung `503 {ok:false,reason:"backend_starting",retry:true}` |
+| Parked `409 not_claimable` | `409` |
+| alles andere (401/500/…, oder 200 ohne `gns_endpoint`) | `502` |
+| Parked nicht konfiguriert (weder `--parked-url` noch `RBB_PARKED_URL`, und keine Kapsel) | `503 {reason:"parked_unconfigured",retry:false}` |
+
+Der Retry laeuft **ausschliesslich im HTTP-Request-Thread** — der GNS-Hauptloop
+wird nie blockiert. Die Registry (`g_targets`) wird ebenfalls nur in der
+Hauptschleife mutiert; `GET /targets` liest einen mutex-geschuetzten Snapshot.
+Die dynamische Registry ist bewusst **fluechtig** (Parked ist Source of Truth).
+
+### Solo-Button `[ solo | self-send on ]` (#930)
+
+Jede Session-Karte in der Lobby bekommt einen **solo**-Button mit einem
+`self-send`-Toggle daneben. Der Klick ruft `POST /solo {identitaet, self_send}`
+und macht beides in einem Schritt: Instanz claimen **und** den Spieler
+hinschicken (ohne separaten Ziel-Klick).
+
+- **self-send on** (Default) — wie heute: Claim + sofortiger Pin. Der Client wird
+  umgezogen (schon verbunden) bzw. beim Reconnect automatisch geroutet.
+- **self-send off** — nur claimen/reservieren: der Relay merkt sich Instanz +
+  Endpoint (`g_soloClaims`), pinnt aber **nicht**. Ein spaeterer Ziel-Button
+  (`POST /route`) oder ein erneutes `solo` mit `self_send:true` routet dann.
+- Fehlende `self_send` im Body = **Default `true`** (heutiges Verhalten, keine
+  Breaking-Change; Pfad/Methode/Pflichtfelder von `/solo` unveraendert).
+
+Der Claim-Zustand wird pro Identitaet gehalten (nicht pro Session) und ueberlebt
+Reconnects. `/sessions` gibt ihn additiv aus — bestehende Felder bleiben
+unveraendert:
+
+| Feld | Bedeutung |
+| --- | --- |
+| `soloPhase` | `provisioned` / `underway` / `in_game_paused` / `running` |
+| `soloInstance` | Name der geclaimten Parked-Instanz |
+| `soloEndpoint` | GNS-UDP-Endpoint der Instanz (`ip:port`) |
+
+Phasen (reine Logik in `api_util.h`, host-getestet):
+
+| `soloPhase` | Anzeige | Bedingung |
+| --- | --- | --- |
+| `provisioned` | provisioniert | geclaimt, aber (noch) kein Client verbunden |
+| `underway` | Spieler unterwegs | Client verbunden, Backend-Connect laeuft |
+| `in_game_paused` | im Spiel (paused) | Client + Backend verbunden, Spiel angehalten |
+| `running` | laeuft | Client + Backend verbunden, Spiel laeuft |
+
+Auch **geclaimte Identitaeten ohne verbundenen Client** werden in `/sessions`
+gelistet (eigener Zweig, `state:"waiting"`) — vorher waren sie unsichtbar.
+
+**Pause-Quelle (bevorzugt ohne Deploy-Aenderung):** Ist `--parked-url` gesetzt,
+fragt der Relay beim `/sessions`-Poll gedrosselt (TTL 1,5 s, im HTTP-Thread)
+den Parked-`GET /status` ab und leitet `in_game_paused` aus dem Instanzzustand ab
+(nur Phasen ohne Welt-Fortschritt = angehalten). Fehlt die Quelle, faellt die
+Phase sicher auf `provisioned`/`underway`/`running` zurueck (kein Haenger, kein
+Crash). `self_send` ist eine reine UI-/Body-Auswahl und aendert die
+Parked-Semantik nicht.
+
+**Reichweite von `in_game_paused` (ehrlich):** Die Pause-Quelle leitet „angehalten"
+nur aus den Parked-Zustaenden `parked` / `recycling` / `warming` ab
+(`gns_probe.cpp`, `refreshParkedGameState`). Eine **geclaimte** Instanz steht aber
+auf `claimed` → `gamePaused=false` → Phase `running`. `in_game_paused` ist damit
+im Normalpfad praktisch **nur transient** erreichbar (z. B. waehrend `recycling`);
+die Ableitung degradiert sicher, ueberzeichnet aber die Erreichbarkeit. Ein echter
+In-Game-Pause-Nachweis braucht einen Live-Client (Playtest) oder eine neue
+Pause-Quelle.
+
+
+Der Relay bedient **N parallele Sessions**: jeder akzeptierte Client bekommt
+Client-Conn, Backend-Conn, Historie, Sende-Queues und Backpressure **eigen**.
+Vorher lagen diese in globalen Singletonen — ein zweiter Client ueberschrieb sie
+und die Sitzung des ersten kollabierte (Blocker fuer 1v1/VS, #875).
+
+```text
+Client A --GNS--> gns_relay --+--> prod A   (Session 1: eigene Queues/Backpressure)
+Client B --GNS--> gns_relay --+--> prod B   (Session 2: eigene Queues/Backpressure)
+```
+
+| Baustein                | je Session | Bemerkung                                                              |
+| ----------------------- | ---------- | ---------------------------------------------------------------------- |
+| Client-/Backend-Conn    | ja         | die Client-Verbindung besitzt die Session, der Backend zeigt nur drauf |
+| Historie (Replay)       | ja         | Re-Route/Backlog flutet nur die eigene Session                         |
+| Sende-Queues + Limits   | ja         | die Backpressure einer langsamen Leitung bremst nur sie                |
+| Poll-Gruppe je Richtung | ja         | es gibt kein `ReceiveMessagesOnConnection`                             |
+| Pin pro Identitaet      | nein       | `g_pins` bleibt global und ueberlebt Reconnects                        |
+
+Eine Poll-Gruppe **je Session und Richtung** ist noetig, weil GNS kein
+`ReceiveMessagesOnConnection` exportiert: globales Lesen wuerde die Backpressure
+aller Sessions an die langsamste koppeln. `POST /route` pinnt weiter pro
+Identitaet und zieht **alle** Sessions dieser Identitaet um; `GET /sessions`
+listet sie parallel auf.
 
 ## Backpressure (wichtig)
 
@@ -188,7 +324,7 @@ Default-Ziel darf ein Re-Route **nicht** ueberschreiben.
 | Datei                    | Zweck                                                            |
 | ------------------------ | ---------------------------------------------------------------- |
 | `gns_probe.cpp`          | Relay + Routing + Message-Dump + Hold/Web-UI (`--dial` Diagnose) |
-| `api_util.h`             | reine API-Helfer (Target-Spec, JSON lesen/escapen)               |
+| `api_util.h`             | reine API-Helfer (Target-Spec, JSON, Query/URL, HTTP-Response, Retry) |
 | `test_api_util.cpp`      | Host-Test der API-Helfer (CI: `g++ -std=c++17`)                  |
 | `route_rules.h`          | Routing-Regeln (exakt / Suffix / Default), reine Logik           |
 | `test_route_rules.cpp`   | Host-Test der Regeln (CI: `g++ -std=c++17`)                      |
@@ -215,6 +351,8 @@ Sekunden auf (vorher sah es wie ein Timeout des Proxys aus).
 - [x] 1.0: Suffix-Routing (`-dev`/`-staging`) als Regeln + Host-Test (#843)
 - [x] Deployment der Relay-Rolle + dev-Port-Umzug (#843)
 - [x] Hold + Operator-Web-UI (#857, PoC): Spieler halten, per Klick routen
+- [x] Multi-Session (#877): N parallele Sessions (eigene Queues/Backpressure)
+- [x] Dynamische Backend-Registry + `POST /solo` (Claim + Auto-Pin, Retry) (#929)
+- [x] Lobby-Solo-Button `[ solo | self-send on ]` + `/sessions`-Solo-Status (#930)
 - [ ] `m_nAppID` in eigenen GNS-Build statt Runtime-Patch
-- [ ] Mehrere Sitzungen im Relay (parallele Matches hinter einer IPv4)
 - [ ] Rust-Backend/Launcher auf die JSON-API aufsetzen

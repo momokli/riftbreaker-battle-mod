@@ -64,6 +64,17 @@ per_env:
   server_control_port: [prod, staging]
   server_control_install_dir: [prod, staging]
   server_control_env_file: [prod, staging]
+  # --- Parked-Pool-Dienst (Issue #928) ------------------------------------
+  # Der Dienst ist env-parametrisiert (Unit rbmods-parked-<env>) und laeuft
+  # aktuell nur im dev-Play (site.yml). dev ist die Basis (host_vars) und setzt
+  # die isolierten Werte deshalb explizit; prod/staging deployen die Rolle
+  # derzeit NICHT (#498-Zwillinge sind ein eigenes Follow-up), daher hier nicht
+  # gelistet. Der isolierte Port weicht vom dev-server-control (8092) ab.
+  parked_pool_unit: [dev]
+  parked_pool_port: [dev]
+  parked_pool_pool_size: [dev]
+  parked_pool_install_dir: [dev]
+  parked_pool_env_file: [dev]
   # --- Tournament-Server ----------------------------------------------------
   tournament_install_dir: [prod, test, staging]
   tournament_unit: [prod, test, staging]
@@ -121,6 +132,11 @@ shared:
   gns_relay_api_port: "HTTP-Port der Steuer-API/UI (9200) — Relay-Singleton, kein Env-Port."
   gns_relay_targets: "Buttons/Targets der UI (NAME=ip:port) — aus den drei Backend-Zielen abgeleitet, kein Env-Twin."
   gns_relay_extra_routes: "Zusaetzliche Routen-Zeilen fuer die gerenderte Routen-Datei (deploy-feste Pins)."
+  # Parked-Anbindung fuer POST /solo (Issue #929): Singleton-Relay spricht den
+  # env-eigenen Parked-Dienst an; der Relay selbst ist kein Env-Twin, daher das
+  # Rollen-Default (dev-Port) hier als host-konstant gefuehrt.
+  gns_relay_parked_url: "Ziel des Parked-Pool-Dienstes fuer /solo (Default dev 127.0.0.1:8095) — Relay-Singleton, kein Env-Twin."
+  gns_relay_parked_token: "Bearer-Token fuer den Parked-Dienst aus dem Vault (vault_parked_pool_token) — Zugangsdatum, kein Env-Pfad/Port."
   # GNS-Lobby (Issue #857): Operator-Web-UI des Relay-Singletons.
   proxy_domain: "Lobby-Domain (proxy.rift.projectmellon.de) — env-UNABHAENGIG (Relay-Singleton), daher NICHT per-env ueberschrieben."
   proxy_upstream: "Upstream der Lobby-Route (127.0.0.1:9200) — die Relay-API auf dem Host."

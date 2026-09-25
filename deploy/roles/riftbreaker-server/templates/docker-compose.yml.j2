@@ -7,6 +7,14 @@ services:
     image: "{{ riftbreaker_server_image }}"
     container_name: {{ riftbreaker_server_container }}
     restart: unless-stopped
+    # Container-Log begrenzen (Issue #301): json-file-Logs wachsen sonst
+    # unbegrenzt (/var/lib/docker/containers/*/*-json.log). Per-Service, weil
+    # das Log-Opting pro Container gilt. Werte konfigurierbar (Rollen-Defaults).
+    logging:
+      driver: json-file
+      options:
+        max-size: "{{ riftbreaker_log_max_size }}"
+        max-file: "{{ riftbreaker_log_max_file }}"
     init: true
     stdin_open: true
     # Container-Labels (Issue #483, US4): per `docker inspect` sichtbar, ohne
@@ -69,6 +77,11 @@ services:
     image: "{{ riftbreaker_sessions_image }}"
     container_name: {{ riftbreaker_sessions_container }}
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "{{ riftbreaker_log_max_size }}"
+        max-file: "{{ riftbreaker_log_max_file }}"
     depends_on:
       - {{ riftbreaker_server_container }}
     labels:
@@ -99,6 +112,11 @@ services:
     image: "{{ riftbreaker_send_tailer_image }}"
     container_name: {{ riftbreaker_send_tailer_container }}
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "{{ riftbreaker_log_max_size }}"
+        max-file: "{{ riftbreaker_log_max_file }}"
     depends_on:
       - {{ riftbreaker_server_container }}
     labels:
@@ -127,6 +145,11 @@ services:
     image: "{{ riftbreaker_match_loop_image }}"
     container_name: {{ riftbreaker_match_loop_container }}
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "{{ riftbreaker_log_max_size }}"
+        max-file: "{{ riftbreaker_log_max_file }}"
     depends_on:
       - {{ riftbreaker_server_container }}
     labels:
@@ -155,6 +178,11 @@ services:
     image: "{{ riftbreaker_attack_cycle_image }}"
     container_name: {{ riftbreaker_attack_cycle_container }}
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "{{ riftbreaker_log_max_size }}"
+        max-file: "{{ riftbreaker_log_max_file }}"
     depends_on:
       - {{ riftbreaker_server_container }}
     labels:

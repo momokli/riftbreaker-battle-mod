@@ -1,0 +1,76 @@
+# 930-live-2026-09-24 — Live-Smoke Solo-Button / self-send (#930)
+Datum: 2026-09-24 21:10-21:12 CEST · Host: planet · Env: dev (isoliert, keine Prod)
+Branch: feat/930-proxy-solo-self-send @ 47c4b10 (Base origin/main e2519fe)
+Relay: tools/gns-proxy/gns_probe.exe (MinGW, neu gebaut) md5=1998697148d9e3473f5e3975b200f89d
+  -> ephemerer Container gns-relay-t930 (rb-dedicated:e2519fe9bb3d, Wine+Xvfb),
+     --port 16321 --api-port 19200 --parked-url http://127.0.0.1:18095 --hold
+Parked: deploy/parked/parked_service.py — echter Service-Codepfad (build_server/
+  ParkedController/ParkedPool) mit Mock-Provisioner + Mock-Bridge (kein Docker/
+  kein echtes Spiel), PARKED_PORT=18095, pool_size=2
+Hinweis: Bestehender dev-Container `gns-relay` (Port 6321/9200) NICHT angefasst.
+
+## 0) Parked-Pool vor /solo (2 PARKED)
+counters: parked=2 claimed=0 total=2
+parked-1 parked 127.0.0.1:33001
+parked-2 parked 127.0.0.1:33002
+
+## 1) POST /solo self_send:true  -> 200, Pin gesetzt
+curl -X POST /solo -d '{"identitaet":"str:t930","self_send":true}'
+{"ok":true,"identitaet":"str:t930","target":"127.0.0.1:33000","instance":"parked-1","self_send":true} HTTP=200
+
+Relay-Log:
+[19:10:48] gns_probe: API: solo 'str:t930' -> 127.0.0.1:33000 (instance=parked-1, self_send=on)
+[19:10:48] gns_probe: API: pin 'str:t930' -> 127.0.0.1:33000
+
+## 2) GET /sessions — neue Felder soloPhase/soloInstance/soloEndpoint
+[
+    {
+        "identity": "str:t930", "ip": "", "name": "", "state": "waiting",
+        "target": "", "connected": false, "pinned": true, "messages": 0,
+        "age_seconds": 0, "held_seconds": 0,
+        "soloPhase": "provisioned", "soloInstance": "parked-1",
+        "soloEndpoint": "127.0.0.1:33000"
+    }
+]
+=> Geclaimte Identitaet OHNE verbundenen Client wird gelistet (state="waiting"),
+   soloPhase="provisioned", pinned=true (self_send:true).
+
+## 3) GET / — neue UI (Button/Toggle/Badges im HTML)
+wc -c index.html = 9317 ; 'solo'-Treffer = 18
+Button-Labels: "solo", "self-send on", "self-send off"
+Phasen-Labels: "provisioniert", "Spieler unterwegs", "im Spiel (paused)", "laeuft"
+Hermetisch (strings im exe): "self-send on/off", "soloPhase","soloInstance","soloEndpoint"
+
+## 4) POST /solo self_send:false (frische Identitaet) -> 200, KEIN Pin
+curl -X POST /solo -d '{"identitaet":"str:t930off","self_send":false}'
+{"ok":true,"identitaet":"str:t930off","target":"127.0.0.1:33001","instance":"parked-1","self_send":false} HTTP=200
+
+Relay-Log:
+[19:11:44] gns_probe: API: solo 'str:t930off' -> 127.0.0.1:33001 (instance=parked-1, self_send=off)
+[19:11:44] gns_probe: API: solo 'str:t930off' -> 127.0.0.1:33001 (self_send=off, nur reserviert)
+
+## 5) /sessions danach — self_send:false => pinned=false, Claim trotzdem gelistet
+[
+  { "identity": "str:t930",    ... "pinned": true,  "soloPhase": "provisioned",
+    "soloInstance": "parked-1", "soloEndpoint": "127.0.0.1:33000" },
+  { "identity": "str:t930off", ... "pinned": false, "soloPhase": "provisioned",
+    "soloInstance": "parked-1", "soloEndpoint": "127.0.0.1:33001" }
+]
+Parked-Status danach: parked=1 claimed=1 (Handover parked->claimed, claims=1)
+
+## Grenzen des headless Nachweises
+- Kein GNS-Client vorhanden: die Phasen in_game_paused/running (Client+Backend
+  verbunden) sind headless NICHT live erreichbar. Sie sind vollstaendig durch
+  Host-Tests abgedeckt (test_api_util.cpp: alle 5 Zweige von deriveSoloPhase +
+  soloPhaseName) und werden hier nur bis "provisioned" live bestaetigt.
+- Der Pause-Cache-Poll (GET /status -> g_parkedPaused) laeuft additiv im
+  HTTP-Thread; er beeinflusst nur die paused/running-Unterscheidung, nicht den
+  provisioned/underway-Pfad.
+- Mock-Provisioner/Bridge: echter parked_service-HTTP-Pfad, aber kein echter
+  Container-Start/echtes Spiel (bewusst hermetisch).
+
+## Host-/Build-Belege (separat, siehe Report)
+- test_api_util.cpp: 162 Checks OK (Exit 0)
+- test_route_rules.cpp: 44 Checks OK (Exit 0)
+- build.sh: Exit 0, gns_probe.exe warnungsfrei
+- deploy/parked: 98 Tests, 1 rot (pre-existing auf main, Issue #947) — von #930 nicht beruehrt

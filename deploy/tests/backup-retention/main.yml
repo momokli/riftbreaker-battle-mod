@@ -1,0 +1,28 @@
+---
+# Hermetischer Selbsttest der Backup-/Stray-Retention (Issue #312).
+#
+# Läuft LOKAL auf dem Control-Node/CI-Runner: keine Host-Facts, kein SSH,
+# keine Prod-Aktion. Stattdessen wird die ECHTE Task-Datei der Rolle
+# (`tasks/backup-retention.yml`) gegen ein Fixture-Verzeichnis aufgerufen —
+# geprüft wird also genau der Code, der auch im Deploy läuft (kein Nachbau).
+#
+# Aufruf über run.sh:
+#   ansible-playbook deploy/tests/backup-retention/main.yml \
+#     -e test_fixture_root=/tmp/xyz -e test_mods_root=/tmp/xyz/mods
+#
+# `test_fixture_root` ist das Fixture-Verzeichnis (enthält `backups/`);
+# `test_mods_root` ist ein zweites Fixture mit Sentinels (mods/-Guard #212
+# darf dort NICHTS anfassen).
+- name: "Backup/Stray-Retention Selbsttest (Issue #312)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    riftbreaker_backup_dir: "{{ test_fixture_root }}/backups"
+    riftbreaker_mods_dir: "{{ test_mods_root }}"
+    riftbreaker_backup_keep: 5
+
+  tasks:
+    - name: Retention-Task der Rolle ausführen (echter Deploy-Code)
+      include_tasks: "{{ playbook_dir }}/../../roles/riftbreaker-server/tasks/backup-retention.yml"

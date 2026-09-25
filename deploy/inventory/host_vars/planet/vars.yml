@@ -71,6 +71,10 @@ gns_relay_port: 6321
 gns_relay_deploy_dir: /opt/rbmods/compose/gns-relay
 gns_relay_bin_dir: /opt/rbmods/gns-relay/bin
 gns_relay_wine_volume: gns-relay-wine
+# POST /solo (Issue #929) spricht den env-Parked-Dienst an. Das Rollen-Default
+# zeigt auf den dev-Port 8095; staging/prod setzen dort den isolierten
+# parked_pool_port (ENV-ISOLATION-GATE) und muessen gns_relay_parked_url
+# entsprechend mitsetzen.
 
 # --- Tournament-Server (systemd, Rust/axum aus tournament/) ------------------
 tournament_install_dir: /opt/rbmods/tournament-server
@@ -85,6 +89,18 @@ tournament_bridge_b_url: "http://127.0.0.1:9001/exec"
 # rift-caddy.Caddyfile.j2). Der Bearer-Token liegt AUSSCHLIESSLICH im Vault
 # (vault_server_control_token); ohne ihn bricht die Rolle ab (fail-closed).
 server_control_port: 8092
+
+# --- Parked-Pool-Dienst (Warm-Pool, Issue #928) ------------------------------
+# Haelt N Dedicated-Instanzen "geparkt" (Container + Bridge laufen, Welt
+# angehalten) und bietet claim()/recycle()/reap() per HTTP an (Bearer aus dem
+# Vault: vault_parked_pool_token). dev deployt die Rolle ueber site.yml — die
+# isolierten Werte stehen deshalb hier explizit (ENV-ISOLATION-GATE).
+# Port 8095, weil der dev-server-control bereits 127.0.0.1:8092 belegt.
+parked_pool_unit: rbmods-parked-dev
+parked_pool_port: 8095
+parked_pool_pool_size: 1
+parked_pool_install_dir: /opt/rbmods/parked-pool-dev
+parked_pool_env_file: /etc/rbmods/parked-pool-dev.env
 
 # --- Website (Landing + Cockpit, eigener rift-caddy) -------------------------
 # Architektur (Issue #322): Der Riftbreaker-Stack betreibt einen EIGENEN,

@@ -1,0 +1,90 @@
+---
+# Rolle: parked-pool — Warmserver-Dienst pro Env (Issue #928). Muster:
+# server-control (#424): systemd-Unit + Binary aus dem Repo-Checkout.
+#
+# Der Dienst laeuft als root, weil er den Docker-Socket nutzt (Provisioner);
+# er bindet nur 127.0.0.1 und verlangt fuer JEDEN Request einen Bearer-Token
+# (wenn gesetzt — die Rolle setzt ihn aus dem Vault, fail-closed).
+
+- name: "Vorbedingung: Bearer-Token gesetzt (kein offener Claim-Endpunkt)"
+  assert:
+    that:
+      - parked_pool_token | length > 0
+    fail_msg: >-
+      Das Bearer-Token (parked_pool_token) ist leer. Der Parked-Pool-Dienst hat
+      einen Bearer-Token PFLICHT (#928, Haertung wie #424) und wuerde ohne ihn
+      gar nicht starten. Token im Vault (host_vars/planet/vault.yml) setzen:
+      `ansible-vault edit deploy/inventory/host_vars/planet/vault.yml`.
+    success_msg: "Parked-Pool-Token vorhanden (Wert wird nie geloggt)."
+  when: not ansible_check_mode
+
+- name: Installationsverzeichnis anlegen
+  file:
+    path: "{{ parked_pool_install_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Umgebungsverzeichnis anlegen
+  file:
+    path: "{{ parked_pool_env_file | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Dienst-Skript installieren
+  copy:
+    src: "{{ parked_pool_service_src }}"
+    dest: "{{ parked_pool_bin }}"
+    mode: "0755"
+    owner: root
+    group: root
+  notify: restart parked-pool
+
+- name: Warm-Pool-Bibliothek installieren (parked_pool.py, #909)
+  copy:
+    src: "{{ parked_pool_lib_src }}"
+    dest: "{{ parked_pool_install_dir }}/parked_pool.py"
+    mode: "0644"
+    owner: root
+    group: root
+  notify: restart parked-pool
+
+- name: Provisioner installieren (provisioner.py, #908 — Dienst-Import)
+  copy:
+    src: "{{ parked_pool_provisioner_src }}"
+    dest: "{{ parked_pool_install_dir }}/provisioner.py"
+    mode: "0644"
+    owner: root
+    group: root
+  notify: restart parked-pool
+
+- name: Umgebungsdatei rendern (Token, 0600 — nie world-readable)
+  template:
+    src: rbmods-parked.env.j2
+    dest: "{{ parked_pool_env_file }}"
+    mode: "0600"
+    owner: root
+    group: root
+  notify: restart parked-pool
+
+- name: systemd-Unit rendern
+  template:
+    src: rbmods-parked.service.j2
+    dest: "/etc/systemd/system/{{ parked_pool_unit }}.service"
+    mode: "0644"
+  notify: restart parked-pool
+
+- name: Unit aktivieren und starten
+  systemd:
+    name: "{{ parked_pool_unit }}"
+    state: started
+    enabled: true
+    daemon_reload: true
+  register: parked_pool_systemd
+  # Erster Deploy im PR-Gate (`--check --tags server`): der Check-Modus schreibt
+  # die Unit-Datei NICHT, deshalb kennt systemd den Service noch nicht
+  # („Could not find the requested service"). Nur genau diesen einen Fall
+  # tolerieren, alles andere bleibt ein harter Fehler.
+  failed_when: >-
+    parked_pool_systemd is failed and not
+    (ansible_check_mode | bool and
+     'Could not find the requested service' in (parked_pool_systemd.msg | default('')))
