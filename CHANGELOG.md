@@ -1,3 +1,9 @@
+Version: 1.0.5
+Date: 25. 09. 2026
+
+  Features:
+    - Solo-Spiel: mehrere Clients auf derselben Instanz — `POST /solo {instance}` joint einer bestehenden Solo-Instanz (kein neuer Claim), `--max-players` (Default 4) begrenzt die Aufnahme (`409 instance_full`/`unknown_instance`), `/sessions` zeigt `soloMembers`/`soloMemberCount`/`soloMaxPlayers`, Lobby-Karte mit Join-Button (#936).
+
 Version: 1.0.4
 Date: 25. 09. 2026
 
