@@ -1,3 +1,12 @@
+Version: 1.0.4
+Date: 25. 09. 2026
+
+  Bugfixes:
+    - Dev-Dienste laufen auf eigenem Port-Block 92xx — Port-Kollision mit den uebrigen Diensten behoben (#956).
+
+  Intern:
+    - Vault-Token fuer parked-pool + capsule-flow ergaenzt (#954).
+
 Version: 1.0.3
 Date: 25. 09. 2026
 
