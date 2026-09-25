@@ -4,6 +4,7 @@ Date: 24. 09. 2026
   Features:
     - GNS-Entry-Relay: Backends zur Laufzeit registrieren/abmelden (`POST`/`DELETE /backends`) und Spieler per `POST /solo` automatisch einer geparkten Solo-Instanz zuweisen (#929).
     - GNS-Entry-Relay-Lobby: Solo-Button `[ solo | self-send on ]` — claimt eine geparkte Instanz und schickt den Spieler in einem Schritt hin (`POST /solo` mit additivem `self_send`, Default true); `/sessions` zeigt additiv `soloPhase`/`soloInstance`/`soloEndpoint`, auch fuer geclaimte Identitaeten ohne verbundenen Client (#930).
+    - Solo-Spiel: mehrere Clients auf derselben Instanz — `POST /solo {instance}` joint einer bestehenden Solo-Instanz (kein neuer Claim), `--max-players` (Default 4) begrenzt die Aufnahme (`409 instance_full`/`unknown_instance`), `/sessions` zeigt `soloMembers`/`soloMemberCount`/`soloMaxPlayers`, Lobby-Karte mit Join-Button (#936).
 
 Version: 1.0.2
 Date: 24. 09. 2026
