@@ -218,6 +218,14 @@ wird nie blockiert. Die Registry (`g_targets`) wird ebenfalls nur in der
 Hauptschleife mutiert; `GET /targets` liest einen mutex-geschuetzten Snapshot.
 Die dynamische Registry ist bewusst **fluechtig** (Parked ist Source of Truth).
 
+### READY-Button `[ READY ]`
+
+Jede Session-Karte hat neben `solo` einen **`READY`**-Button. Er ruft `POST /ready`
+und proxyt an den Kapsel-Dienst (`POST /capsule/ready`) — **resume + Warmup-Start**.
+Nur wenn `--capsule-url`/`RBB_CAPSULE_URL` gesetzt ist; sonst `503
+{capsule_unconfigured}`. Damit liegt der ganze Start im Proxy: `solo` (claim,
+pausiert) → `READY` (resume). Den Countdown in den Chat schickt der Announcer (1.0.7).
+
 ### Solo-Button `[ solo | self-send on ]` (#930)
 
 Jede Session-Karte in der Lobby bekommt einen **solo**-Button mit einem

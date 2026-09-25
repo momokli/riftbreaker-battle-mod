@@ -91,6 +91,14 @@ gns_relay_parked_url: "http://127.0.0.1:9201"
 # stuende der Token in der Container-Prozessliste.
 gns_relay_parked_token: "{{ vault_parked_pool_token | default('') }}"
 
+# --- Kapsel-Anbindung (Issue #931) ------------------------------------------
+# Ist der Kapsel-Dienst gesetzt, hat er fuer `POST /solo` VORRANG (Claim OHNE
+# resume) und traegt `POST /ready` (resume + Warmup-Start). Default = dev-Kapsel
+# (capsule_flow_port, host_vars).
+gns_relay_capsule_url: "http://127.0.0.1:9211"
+# Bearer-Token (Vault `vault_capsule_token`), per Env gereicht (nie argv).
+gns_relay_capsule_token: "{{ vault_capsule_token | default('') }}"
+
 # --- Container-interne Pfade / Prozess --------------------------------------
 # Mount-Punkt der Game-DLLs (read-only). Der Probe laeuft aus
 # {{ gns_relay_bin_mount }}/bin und laedt dort die GameNetworkingSockets.dll.
