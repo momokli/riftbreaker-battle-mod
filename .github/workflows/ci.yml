@@ -268,6 +268,13 @@ jobs:
         if: needs.changes.outputs.test == 'true'
         working-directory: tests/cockpit-render
         run: npm test
+      # Chat-Absender (#935): Normalisierung des frei waehlbaren Absenders
+      # (leer/"system" -> ohne Prefix, sonst bereinigter Name, max 24 Zeichen).
+      # Extrahierter Marker-Block, kein Netzwerk/DOM. Keine Dependencies.
+      - name: Unit-Test Chat-Absender (#935)
+        if: needs.changes.outputs.test == 'true'
+        working-directory: tests/chat-sender
+        run: npm test
 
   build:
     name: Build + Package (rbbridge.dll/exe, dist/*.zip)

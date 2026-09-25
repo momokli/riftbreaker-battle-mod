@@ -396,6 +396,7 @@ static BOOL ht_ReadProcessMemory(HANDLE proc, const void *addr, LPVOID out,
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <time.h>     /* #934: time() fuer den Chat-Timestamp */
 #include <psapi.h>    /* Issue #252: EnumProcessModules/GetModuleBaseNameW ... */
 #include <tlhelp32.h> /* Issue #252: Toolhelp32 Module32FirstW/NextW           */
 
@@ -3027,6 +3028,36 @@ static const unsigned char RBBRIDGE_RESUMEGAME_SIG[] = {
     0x24, 0x48, 0x83, 0x06, 0x00, 0x00
 };
 
+/* #934: Server -> Spieler Chat. Die Engine broadcastet eine `NetPlayerChatAck`
+ * via `ServerGameplaySessions::QueueBroadcastPacket<NetPlayerChatAck>(ack&&,
+ * NetTransferType, NetConnection* exclude)` (RVA 0x17CFF70). Ack-Layout
+ * (per RegisterType/ctr disasm verifiziert):
+ *   +0x00 i64 timestamp; +0x08 u32 player (0xFFFFFFFF = Server/Operator);
+ *   +0x10 Exor::UtfString message (0x28 B); +0x38 u8 ChatMessageType (8 = MESSAGE)
+ * Gesamt 0x40. Die Enqueue-Seite ist thread-sicher, der Container-Walk NICHT ->
+ * Aufruf im GAME-Thread (Detour), nicht vom Pipe-Thread. */
+#define RBBRIDGE_SGS_SESSIONS_OFF          0x768u
+#define RBBRIDGE_CHAT_ACK_SIZE             0x40u
+#define RBBRIDGE_CHAT_OFF_TIMESTAMP        0x00u
+#define RBBRIDGE_CHAT_OFF_PLAYER           0x08u
+#define RBBRIDGE_CHAT_OFF_MESSAGE          0x10u
+#define RBBRIDGE_CHAT_OFF_TYPE             0x38u
+#define RBBRIDGE_CHAT_PLAYER_SERVER        0xFFFFFFFFu
+#define RBBRIDGE_CHAT_TYPE_MESSAGE         8u
+#define RBBRIDGE_CHAT_TRANSFER_UNRELIABLE  1
+static const unsigned char RBBRIDGE_BROADCASTCHAT_SIG[] = {
+    0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x10, 0x4C, 0x89, 0x48, 0x20, 0x44,
+    0x89, 0x40, 0x18, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
+    0x41, 0x57, 0x48, 0x8D, 0x6C, 0x24, 0xB0, 0x48, 0x81, 0xEC, 0x50, 0x01,
+    0x00, 0x00
+};
+
+/* Selfcheck (host-testbar): Laenge == 38 (der 18-Byte-Prefix ist NICHT unique). */
+static int broadcastchat_sig_selfcheck(void)
+{
+    return sizeof(RBBRIDGE_BROADCASTCHAT_SIG) == 38;
+}
+
 /* Loest eine Fn ueber ihre AOB auf — nur bei genau EINEM Treffer. */
 static const unsigned char *resolve_unique_fn(const unsigned char *base,
                                               size_t size,
@@ -5509,6 +5540,16 @@ static volatile LONG g_game_req = 0;        /* 0 keins, 1 Pause, 2 Resume */
 static volatile LONG g_game_req_done = 0;   /* 1 = vom Game-Thread ausgefuehrt */
 static volatile LONG g_game_last_flag = -1; /* Readback [this+0x534] */
 static volatile LONG g_game_want = -1;  /* Operator-Override: -1 auto, 0 run, 1 pause */
+/* #934: anstehende Server-Chat-Nachricht (im Game-Thread-Hook gesendet). */
+static volatile LONG g_chat_out_pending = 0;
+static volatile LONG g_chat_out_done = 0;
+static char g_chat_out_text[256];
+static volatile LONG g_chat_out_type = 8; /* ChatMessageType: 2=SYSTEM, 4=ANNOUNCEMENT, 8=MESSAGE */
+static const unsigned char *g_chat_broadcast_fn = NULL;
+typedef void (__fastcall *broadcastchat_fn_t)(void *sessions, void *ack,
+                                              int transfer, void *conn);
+typedef void (__fastcall *utfstring_ctor_fn_t)(void *self, const char *s);
+typedef void (__fastcall *utfstring_dtor_fn_t)(void *self);
 static const unsigned char *g_game_base = NULL;
 static const unsigned char *g_game_pausegame_fn = NULL;  /* GameplayState::PauseGame */
 static const unsigned char *g_game_resumegame_fn = NULL; /* GameplayState::ResumeGame */
@@ -5516,6 +5557,28 @@ static const unsigned char *g_game_resumegame_fn = NULL; /* GameplayState::Resum
 typedef void (__fastcall *game_pausegame_fn_t)(void *self, void *reason,
                                                unsigned char b, int world_type);
 typedef void (__fastcall *game_resumegame_fn_t)(void *self);
+
+/* #934: baut die NetPlayerChatAck und broadcastet sie (GAME-Thread). */
+static void send_chat_now(void *state)
+{
+    unsigned char ack[RBBRIDGE_CHAT_ACK_SIZE];
+    void *sessions;
+
+    if (!state || !g_game_base || !g_chat_broadcast_fn)
+        return;
+    sessions = (unsigned char *)state + RBBRIDGE_SGS_SESSIONS_OFF;
+    memset(ack, 0, sizeof(ack));
+    *(long long *)(ack + RBBRIDGE_CHAT_OFF_TIMESTAMP) = (long long)time(NULL);
+    *(unsigned int *)(ack + RBBRIDGE_CHAT_OFF_PLAYER) = RBBRIDGE_CHAT_PLAYER_SERVER;
+    ((utfstring_ctor_fn_t)(uintptr_t)(g_game_base + RBBRIDGE_RVA_UTFSTRING_CTOR))(
+        ack + RBBRIDGE_CHAT_OFF_MESSAGE, g_chat_out_text);
+    ack[RBBRIDGE_CHAT_OFF_TYPE] = (unsigned char)g_chat_out_type;
+    ((broadcastchat_fn_t)(uintptr_t)g_chat_broadcast_fn)(
+        sessions, ack, RBBRIDGE_CHAT_TRANSFER_UNRELIABLE, NULL);
+    ((utfstring_dtor_fn_t)(uintptr_t)(g_game_base + RBBRIDGE_RVA_UTFSTRING_DTOR))(
+        ack + RBBRIDGE_CHAT_OFF_MESSAGE);
+    dbg("send_chat: broadcasted (%u B text)", (unsigned)strlen(g_chat_out_text));
+}
 
 /* Laeuft auf dem GAME-Thread. Fuehrt einen anstehenden Pause/Resume-Request
  * hier aus (richtiger Thread) und ruft danach unveraendert das Original. */
@@ -5559,6 +5622,12 @@ static void __fastcall gameplay_updlogic_hook(
                          &state))
             InterlockedExchange(&g_game_last_flag, (LONG)state);
         InterlockedExchange(&g_game_req_done, 1);
+    }
+    /* #934: anstehende Server-Chat-Nachricht hier (GAME-Thread) senden. */
+    if (InterlockedCompareExchange(&g_chat_out_pending, 0, 0)) {
+        send_chat_now(self);
+        InterlockedExchange(&g_chat_out_pending, 0);
+        InterlockedExchange(&g_chat_out_done, 1);
     }
     ((gameplay_updlogic_fn_t)g_gameplay_updlogic_orig)(self, a, b, c, d);
 }
@@ -5638,6 +5707,60 @@ static int install_game_pause_hook(const unsigned char *base, size_t size)
     dbg("install_game_pause_hook: installiert an %p (Trampolin %p)",
         (const void *)target, (void *)trampoline);
     return 1;
+}
+
+/* send_chat (#934): Text an ALLE verbundenen Spieler (Vanilla-Chat). Der
+ * Broadcast laeuft im GAME-Thread-Hook (Race bei Spieler-Join/-Leave).
+ * Event: {"event":"send_chat_result","ok":true,"text":".."} bzw. ok:false
+ * mit reason no_module|hook_not_installable|no_broadcast_fn|invalid_text. */
+static RBBRIDGE_NOINLINE void dispatch_send_chat(HANDLE hPipe, const char *text,
+                                                  int type, const char *prefix)
+{
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    const char *via = NULL;
+    const unsigned char *execfn = NULL;
+    int i, done;
+
+    if (!text || !text[0]) {
+        send_line(hPipe, "{\"event\":\"send_chat_result\",\"ok\":false,"
+                         "\"reason\":\"invalid_text\"}");
+        return;
+    }
+    if (!resolve_module(&base, &size, &via, &execfn)) {
+        dbg("send_chat: Modul nicht aufloesbar");
+        send_line(hPipe, "{\"event\":\"send_chat_result\",\"ok\":false,"
+                         "\"reason\":\"no_module\"}");
+        return;
+    }
+    if (!install_game_pause_hook(base, size)) {
+        send_line(hPipe, "{\"event\":\"send_chat_result\",\"ok\":false,"
+                         "\"reason\":\"hook_not_installable\"}");
+        return;
+    }
+    if (!broadcastchat_sig_selfcheck() ||
+        (g_chat_broadcast_fn = resolve_unique_fn(base, size,
+            RBBRIDGE_BROADCASTCHAT_SIG, sizeof(RBBRIDGE_BROADCASTCHAT_SIG))) == NULL) {
+        send_line(hPipe, "{\"event\":\"send_chat_result\",\"ok\":false,"
+                         "\"reason\":\"no_broadcast_fn\"}");
+        return;
+    }
+    /* Text kopieren (NUL-terminiert; Rest nullt die fixe Puffergroesse). */
+    memset(g_chat_out_text, 0, sizeof(g_chat_out_text));
+    /* prefix (falls gesetzt) + text, NUL-terminiert, gekappt. */
+    snprintf(g_chat_out_text, sizeof(g_chat_out_text), "%s%s",
+             (prefix && prefix[0]) ? prefix : "", text);
+    InterlockedExchange(&g_chat_out_type, (LONG)type);
+    InterlockedExchange(&g_chat_out_done, 0);
+    InterlockedExchange(&g_chat_out_pending, 1);
+    for (i = 0; i < 300 && !g_chat_out_done; i++)
+        Sleep(10);
+    done = (int)g_chat_out_done;
+    dbg("send_chat: text='%s' done=%d", g_chat_out_text, done);
+    send_line(hPipe,
+              "{\"event\":\"send_chat_result\",\"ok\":true,\"text\":\"%s\","
+              "\"sent\":%s}",
+              text, done ? "true" : "pending");
 }
 
 static RBBRIDGE_NOINLINE void dispatch_pause_game(HANDLE hPipe, int pause,
@@ -6761,6 +6884,26 @@ static void handle_line(HANDLE hPipe, const char *line)
 
     /* pause_game / resume_game (Write #880): echter Welt-/Server-Freeze nativ
      * via ServerGameplayState::On{Pause,Resume}GameRequest (kein DOM/exec). */
+    if (strcmp(cmd, "send_chat") == 0) {
+        char text[256] = "";
+        char ty[16] = "system";
+        char prefix[64] = "";
+        int type = 2; /* Default SYSTEM: rendert ohne Spieler-Sender-Label */
+        json_get_string(line, "text", text, sizeof(text));
+        json_get_string(line, "type", ty, sizeof(ty));
+        json_get_string(line, "prefix", prefix, sizeof(prefix));
+        if (strcmp(ty, "message") == 0)
+            type = 8;
+        else if (strcmp(ty, "announcement") == 0)
+            type = 4;
+        else if (strcmp(ty, "system") == 0)
+            type = 2;
+        else
+            type = atoi(ty) ? atoi(ty) : 2;
+        dispatch_send_chat(hPipe, text, type, prefix);
+        return;
+    }
+
     if (strcmp(cmd, "pause_game") == 0 || strcmp(cmd, "resume_game") == 0) {
         char op[16] = "marshalled";
         int auto_release = 0;

@@ -1354,6 +1354,54 @@ static void handle_dom_suspend(SOCKET c, const char *cmd, const char *event)
 /* POST /pause_game + /resume_game (Write, Issue #880): echter Welt-/Server-
  * Freeze nativ via ServerGameplayState::On{Pause,Resume}GameRequest. Kein
  * Body. Liefert die pause_game_result-/resume_game_result-Zeile der Bridge. */
+/* POST /send_chat (#934): Server -> Spieler Chat. Body {"text":".."}.
+ * Liefert die send_chat_result-Zeile der Bridge. */
+static void handle_send_chat(SOCKET c, const char *body)
+{
+    char text[256] = "";
+    char ty[16] = "system";
+    char prefix[64] = "";
+    char esc_pfx[64 * 2];
+    char esc[256 * 2];
+    char line[READ_BUF];
+    char payload[LINE_MAX];
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+    int rc;
+
+    if (body) {
+        json_get_string(body, "text", text, sizeof(text));
+        json_get_string(body, "type", ty, sizeof(ty));
+        json_get_string(body, "prefix", prefix, sizeof(prefix));
+    }
+    if (!text[0]) {
+        blog("POST /send_chat ohne text -> invalid_request");
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_text\"}");
+        return;
+    }
+    json_escape(text, esc, sizeof(esc));
+    json_escape(prefix, esc_pfx, sizeof(esc_pfx));
+    snprintf(payload, sizeof(payload),
+             "{\"cmd\":\"send_chat\",\"text\":\"%s\",\"type\":\"%s\","
+             "\"prefix\":\"%s\"}\n",
+             esc, ty, esc_pfx);
+    rc = pipe_send_command("send_chat_result", payload, timeout_ms, line,
+                           sizeof(line));
+    if (rc == -1) {
+        blog("POST /send_chat: Pipe nicht erreichbar -> pipe_unavailable");
+        http_respond(c, 503, "Service Unavailable",
+                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+        return;
+    }
+    if (rc != 0) {
+        http_respond(c, 500, "Internal Server Error",
+                     "{\"ok\":false,\"reason\":\"timeout\"}");
+        return;
+    }
+    log_response("/send_chat", line);
+    http_respond(c, 200, "OK", line);
+}
+
 static void handle_game_pause(SOCKET c, const char *cmd, const char *event,
                              const char *body)
 {
@@ -2121,6 +2169,16 @@ static void handle_client(SOCKET c)
             handle_dom_suspend(c, "pause_dom", "pause_dom_result");
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/resume_dom") == 0) {
             handle_dom_suspend(c, "resume_dom", "resume_dom_result");
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/send_chat") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_send_chat(c, b);
+            free(b);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/pause_game") == 0) {
             char *b = malloc((size_t)body_len + 1);
             if (!b) {
