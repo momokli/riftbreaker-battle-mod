@@ -212,6 +212,14 @@ bool g_relayEnabled = false;
 rbroute::Endpoint g_defaultTarget;
 // --dial: nur Verbindungstest zu einem Backend (ohne Client), fuer Diagnose.
 rbroute::Endpoint g_dialTarget;
+// --client: minimaler echter GNS-Client (Issue #936 Live-Nachweis). Verbindet
+// ausgehend (gleicher Pfad wie --dial), haelt die Verbindung `--client-hold`
+// Sekunden und drainiert eingehende Nachrichten; optional eine Marker-Nachricht
+// (`--client-send`). Die Identitaet kommt automatisch aus dem Connect — damit
+// erzeugt der Modus headless echte parallele GNS-Sessions.
+rbroute::Endpoint g_clientTarget;
+int g_clientHoldSeconds = 60;
+std::string g_clientSend;
 
 // Routen: Key = Identitaetsstring (`str:…`), Suffix-Wildcard (`*-dev`) oder
 // Default (`*`) -> Backend.  Auswertung: exakt > laengster Suffix > Default.
@@ -251,6 +259,10 @@ int g_appid = 780310;
 bool g_hold = false;
 int g_apiPort = 0;
 std::string g_apiHost = "127.0.0.1";
+// Obergrenze der Aufnahme in eine Solo-Instanz (Issue #936). Default 4 =
+// Server-Default (`riftbreaker_server_max_players`). Nur vom Hauptloop gelesen
+// (aus `g_maxPlayers` in die Session-Anzeige kopiert); per `--max-players`.
+int g_maxPlayers = 4;
 std::vector<std::pair<std::string, rbroute::Endpoint>> g_targets;
 
 // --- Parked-Anbindung fuer POST /solo (Issue #929) ----------------------------
@@ -288,8 +300,20 @@ struct SoloClaim {
   std::string instance;
   rbroute::Endpoint endpoint;
   long long claimedAtMs = 0;  // steady_clock-Millisekunden (nur Anzeige)
+  // Mitglieder der Instanz (Issue #936): mindestens die claimende Identitaet,
+  // danach per Join aufgenommene Identitaeten. Reihenfolge = Aufnahme;
+  // Duplikate werden beim Join vermieden. Nur Hauptloop.
+  std::vector<std::string> members;
 };
 std::map<std::string, SoloClaim> g_soloClaims;
+
+// Rueckindex Instanz -> Identitaeten (Issue #936): beantwortet "wer teilt
+// Instanz X" und die Kapazitaetszaehlung vor dem Pin. `g_soloClaims` bleibt
+// die Wahrheit pro Identitaet; dieser Index wird von Claims/Joins gespeist.
+// NUR vom Hauptloop beruehrt. Fuer den HTTP-Thread wird nach jeder Aenderung
+// eine Kopie unter `g_apiMutex` veroeffentlicht (g_soloGroupsSnapshot).
+std::map<std::string, std::vector<std::string>> g_soloGroups;
+std::map<std::string, std::vector<std::string>> g_soloGroupsSnapshot;
 
 // Vom HTTP-Thread gefuellter Pause-Cache: Parked-Instanz -> Spiel angehalten?
 // Quelle ist der Parked-`GET /status` (nur wenn `--parked-url` gesetzt).
@@ -314,6 +338,11 @@ struct SessionInfo {
   std::string soloInstance;
   std::string soloPhase;   // provisioned | underway | in_game_paused | running
   std::string soloEndpoint;
+  // Solo-Gruppe (Issue #936, additiv): die uebrigen Identitaeten derselben
+  // Instanz + Zaehler + Aufnahmegrenze. Leer, wenn kein Claim existiert.
+  std::vector<std::string> soloMembers;
+  size_t soloMemberCount = 0;
+  int soloMaxPlayers = 0;
 };
 struct ApiCommand {
   // Was die Hauptschleife tun soll (die Registry `g_targets` gehoert NUR ihr).
@@ -329,6 +358,10 @@ struct ApiCommand {
   rbroute::Endpoint endpoint;  // bei Add / RouteByEndpoint
   std::string instance;  // Parked-Instanzname (RouteByEndpoint, /solo)
   bool selfSend = true;  // /solo: Client automatisch auf die Instanz schicken?
+  // Issue #936: reiner Join (kein neuer Claim). Bei true wird die Identitaet
+  // nur als Mitglied aufgenommen und (bei selfSend) auf den BESTEHENDEN
+  // Endpoint der Instanz gepinnt. `instance` nennt die Ziel-Gruppe.
+  bool joinOnly = false;
 };
 std::mutex g_apiMutex;
 std::vector<SessionInfo> g_sessionsSnapshot;
@@ -689,6 +722,17 @@ void refreshSnapshot() {
       s.soloPhase = rbapi::soloPhaseName(rbapi::deriveSoloPhase(
           true, hasRec && s.connected,
           hasRec && rit->second.backendConnected, gamePaused));
+      // Issue #936 (additiv): Mitglieder der Instanz + Kapazitaet.
+      std::map<std::string, std::vector<std::string>>::const_iterator mit =
+          g_soloGroups.find(claim.instance);
+      if (mit != g_soloGroups.end()) {
+        s.soloMembers = mit->second;
+        s.soloMemberCount = mit->second.size();
+      } else {
+        s.soloMembers.push_back(identity);
+        s.soloMemberCount = 1;
+      }
+      s.soloMaxPlayers = g_maxPlayers;
     }
     snap.push_back(s);
   };
@@ -750,6 +794,14 @@ void onConnectionStatusChanged(
       backendSess->backendConnected = true;
       if (!backendSess->identity.empty()) {
         sessionFor(backendSess->identity).backendConnected = true;
+      }
+      if (g_clientTarget.port != 0 && pIdentityToString != nullptr) {
+        // --client: Peer-Identitaet protokollieren (Abgleich mit /sessions auf
+        // dem Relay). Die EIGENE Identitaet steht nicht in SteamNetConnectionInfo
+        // — der Relay loggt sie serverseitig als `client-identitaet`.
+        char sid[256] = {0};
+        pIdentityToString(&info.m_identityRemote, sid, sizeof(sid));
+        logLine("CLIENT: verbunden — peer-identity='%s'", sid);
       }
       queueHistoryDelta(*backendSess);
       break;
@@ -1008,6 +1060,39 @@ void refreshTargetsSnapshot() {
   g_targetsSnapshot.swap(copy);
 }
 
+// Issue #936: Mitglied in die Instanz-Gruppe aufnehmen (dedupliziert) und die
+// Mitgliederliste des Claims der Identitaet spiegeln. NUR Hauptloop.
+void soloGroupAddMember(const std::string &instance,
+                        const std::string &identity) {
+  if (instance.empty() || identity.empty()) {
+    return;
+  }
+  std::vector<std::string> &members = g_soloGroups[instance];
+  bool present = false;
+  for (std::size_t i = 0; i < members.size(); ++i) {
+    if (members[i] == identity) {
+      present = true;
+      break;
+    }
+  }
+  if (!present) {
+    members.push_back(identity);
+  }
+  std::map<std::string, SoloClaim>::iterator cit =
+      g_soloClaims.find(identity);
+  if (cit != g_soloClaims.end()) {
+    cit->second.members = members;
+  }
+}
+
+// Kopie der Gruppen (Instanz -> Identitaeten) fuer den HTTP-Thread. NUR
+// Hauptloop ruft das nach jeder Claim-/Join-Aenderung.
+void refreshSoloGroupsSnapshot() {
+  std::map<std::string, std::vector<std::string>> copy = g_soloGroups;
+  std::lock_guard<std::mutex> lock(g_apiMutex);
+  g_soloGroupsSnapshot.swap(copy);
+}
+
 void processApiCommands() {
   std::deque<ApiCommand> cmds;
   {
@@ -1037,13 +1122,90 @@ void processApiCommands() {
       // /solo: Ziel kommt aufgeloest vom Parked-Dienst (GNS-UDP-Endpoint).
       // Claim IMMER merken (ueberlebt Reconnects / listet ohne Client); nur
       // bei self_send=true zusaetzlich sofort pinnen (heutiges Verhalten).
+      const long long nowMsJoin =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now().time_since_epoch())
+              .count();
+      if (it->joinOnly) {
+        // Issue #936: Join OHNE neuen Claim. Ziel = bestehender Endpoint der
+        // Instanz (aus einem bereits aufgenommenen Mitglied).
+        rbroute::Endpoint target;
+        bool found = false;
+        std::map<std::string, std::vector<std::string>>::iterator git =
+            g_soloGroups.find(it->instance);
+        if (git != g_soloGroups.end()) {
+          for (std::size_t i = 0; i < git->second.size(); ++i) {
+            std::map<std::string, SoloClaim>::iterator cit =
+                g_soloClaims.find(git->second[i]);
+            if (cit != g_soloClaims.end()) {
+              target = cit->second.endpoint;
+              found = true;
+              break;
+            }
+          }
+        }
+        if (!found && it->endpoint.port != 0) {
+          target = it->endpoint;  // Fallback: Ziel bereits mitgegeben
+          found = true;
+        }
+        if (!found) {
+          logLine("API: join '%s' -> unbekannte Instanz '%s' — ignoriert",
+                  it->identity.c_str(), it->instance.c_str());
+          break;
+        }
+        // Issue #936 TOCTOU: die Kapazitaet wurde im HTTP-Thread gegen den
+        // Snapshot (g_soloGroupsSnapshot) geprueft; bis zur Abarbeitung hier
+        // koennen weitere Joins denselben Instanznamen gefuellt haben. Wahrheit
+        // ist g_soloGroups in DIESEM Loop — daher mit derselben reinen Logik
+        // erneut klemmen. Ein idempotenter Rejoin (schon Mitglied) bleibt
+        // erlaubt und verbraucht keinen Platz.
+        {
+          std::vector<std::string> members;
+          std::map<std::string, std::vector<std::string>>::iterator mg =
+              g_soloGroups.find(it->instance);
+          if (mg != g_soloGroups.end()) {
+            members = mg->second;
+          }
+          bool alreadyMember = false;
+          for (std::size_t i = 0; i < members.size(); ++i) {
+            if (members[i] == it->identity) {
+              alreadyMember = true;
+              break;
+            }
+          }
+          if (rbapi::decideSoloAction(true, static_cast<int>(members.size()),
+                                      alreadyMember, g_maxPlayers) ==
+              rbapi::SoloJoinDecision::Full) {
+            logLine("API: join '%s' -> '%s' voll (%zu/%d) — TOCTOU-Clamp, "
+                    "kein Join",
+                    it->identity.c_str(), it->instance.c_str(), members.size(),
+                    g_maxPlayers);
+            break;
+          }
+        }
+        SoloClaim claim;
+        claim.instance = it->instance;
+        claim.endpoint = target;
+        claim.claimedAtMs = nowMsJoin;
+        g_soloClaims[it->identity] = claim;
+        soloGroupAddMember(it->instance, it->identity);
+        if (it->selfSend) {
+          pinIdentityTo(it->identity, target, "solo (join)");
+          logLine("API: join '%s' -> %s (instance=%s)", it->identity.c_str(),
+                  target.str().c_str(), it->instance.c_str());
+        } else {
+          logLine("API: join '%s' -> %s (instance=%s, self_send=off)",
+                  it->identity.c_str(), target.str().c_str(),
+                  it->instance.c_str());
+        }
+        break;
+      }
       SoloClaim claim;
       claim.instance = it->instance;
       claim.endpoint = it->endpoint;
-      claim.claimedAtMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                              std::chrono::steady_clock::now().time_since_epoch())
-                              .count();
+      claim.claimedAtMs = nowMsJoin;
       g_soloClaims[it->identity] = claim;
+      soloGroupAddMember(it->instance, it->identity);
       if (it->selfSend) {
         pinIdentityTo(it->identity, it->endpoint, "solo (parked)");
       } else {
@@ -1072,6 +1234,7 @@ void processApiCommands() {
     }
   }
   refreshTargetsSnapshot();
+  refreshSoloGroupsSnapshot();
 }
 
 std::string buildSessionsJson() {
@@ -1103,6 +1266,17 @@ std::string buildSessionsJson() {
       json += ",\"soloPhase\":\"" + rbapi::jsonEscape(it->soloPhase) + "\"";
       json += ",\"soloInstance\":\"" + rbapi::jsonEscape(it->soloInstance) + "\"";
       json += ",\"soloEndpoint\":\"" + rbapi::jsonEscape(it->soloEndpoint) + "\"";
+      // Solo-Gruppe (Issue #936, additiv): Mitglieder derselben Instanz.
+      json += ",\"soloMembers\":[";
+      for (std::size_t i = 0; i < it->soloMembers.size(); ++i) {
+        if (i > 0) {
+          json += ",";
+        }
+        json += "\"" + rbapi::jsonEscape(it->soloMembers[i]) + "\"";
+      }
+      json += "]";
+      json += ",\"soloMemberCount\":" + std::to_string(it->soloMemberCount);
+      json += ",\"soloMaxPlayers\":" + std::to_string(it->soloMaxPlayers);
     }
     json += "}";
   }
@@ -1217,6 +1391,7 @@ const char kUiHtml[] = R"HTML(<!doctype html>
 </main>
 <script>
 let TARGETS = [];
+let KNOWN_INSTANCES = [];
 const SOLO_SELF = {}; // Identitaet -> self-send an/aus (Default: an)
 const ORDER = { held: 0, waiting: 1, connected: 2, closed: 3, routed: 4 };
 const LABEL = { held: "wartet", waiting: "getrennt", connected: "verbunden", closed: "getrennt", routed: "geroutet" };
@@ -1269,6 +1444,28 @@ async function solo(identity, btn, cardEl) {
   setTimeout(loadSessions, 300);
 }
 
+// Solo-Join (Issue #936): einer BESTEHENDEN Instanz beitreten, ohne neuen
+// Claim (POST /solo {identitaet, instance}).
+async function joinSolo(identity, instance, btn, cardEl) {
+  if (!instance) { hint(cardEl, "keine Solo-Instanz zum Beitreten"); return; }
+  btn.disabled = true;
+  const selfSend = SOLO_SELF[identity] !== false;
+  try {
+    const r = await fetch("/solo", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identitaet: identity, instance: instance, self_send: selfSend }) });
+    if (!r.ok) {
+      const j = await r.json().catch(() => null);
+      const reason = (j && j.reason) ? j.reason : ("http " + r.status);
+      const MSG = { unknown_instance: "Instanz unbekannt", instance_full: "Instanz voll",
+        parked_unconfigured: "Parked-Dienst nicht konfiguriert" };
+      hint(cardEl, MSG[reason] || reason);
+    } else {
+      hint(cardEl, "gejoint: " + instance);
+    }
+  } catch (e) { hint(cardEl, "Netzwerkfehler"); }
+  setTimeout(loadSessions, 300);
+}
+
 // Ready: Kapsel resume + Warmup-Start (POST /ready). Damit ist der Start im
 // Proxy erledigt; den Countdown in den Chat schickt der Announcer (1.0.7).
 async function ready(btn, cardEl) {
@@ -1302,6 +1499,16 @@ function card(s) {
     srow.appendChild(el("span", "badge solo-" + s.soloPhase, PHASE[s.soloPhase] || s.soloPhase));
     if (s.soloInstance) srow.appendChild(el("span", "sub", s.soloInstance));
     c.appendChild(srow);
+    // Instanz-Gruppe (Issue #936): Instanz · n/max · Mitglieder.
+    if (s.soloInstance) {
+      const grow = el("div", "meta");
+      const gi = el("span");
+      gi.append("Instanz ", el("b", null, s.soloInstance),
+        " · ", el("b", "tick", (s.soloMemberCount || 0) + "/" + (s.soloMaxPlayers || "-")),
+        " · ", el("b", null, (s.soloMembers || []).join(", ") || s.identity));
+      grow.appendChild(gi);
+      c.appendChild(grow);
+    }
   }
 
   const m1 = el("div", "meta");
@@ -1337,6 +1544,28 @@ function card(s) {
   tog.onclick = () => { SOLO_SELF[s.identity] = !selfSend; loadSessions(); };
   soloRow.appendChild(sbtn);
   soloRow.appendChild(tog);
+  // Join-Button (Issue #936): eigener Instanz (idempotent, re-pin) oder einer
+  // bekannten Instanz beitreten.
+  const jbtn = el("button", null, "join");
+  if (s.soloInstance) {
+    jbtn.title = s.soloInstance;
+    jbtn.onclick = () => joinSolo(s.identity, s.soloInstance, jbtn, c);
+  } else if (KNOWN_INSTANCES.length === 1) {
+    jbtn.title = KNOWN_INSTANCES[0];
+    jbtn.onclick = () => joinSolo(s.identity, KNOWN_INSTANCES[0], jbtn, c);
+  } else if (KNOWN_INSTANCES.length > 1) {
+    const sel = el("select");
+    for (const inst of KNOWN_INSTANCES) {
+      const o = el("option", null, inst);
+      o.value = inst;
+      sel.appendChild(o);
+    }
+    soloRow.appendChild(sel);
+    jbtn.onclick = () => joinSolo(s.identity, sel.value, jbtn, c);
+  } else {
+    jbtn.disabled = true;
+  }
+  soloRow.appendChild(jbtn);
   c.appendChild(soloRow);
 
   const readyRow = el("div", "solo");
@@ -1354,6 +1583,7 @@ async function loadSessions() {
   catch (e) { $("dot").classList.add("off"); return; }
   $("dot").classList.remove("off");
   rows.sort((x, y) => (ORDER[x.state] ?? 9) - (ORDER[y.state] ?? 9));
+  KNOWN_INSTANCES = Array.from(new Set(rows.map(r => r.soloInstance).filter(Boolean)));
 
   $("n-wait").textContent = rows.filter(r => r.state === "held" || r.state === "waiting").length;
   $("n-conn").textContent = rows.filter(r => r.connected).length;
@@ -1603,6 +1833,69 @@ void handleSolo(SOCKET s, const std::string &requestBody) {
   rbapi::jsonStringField(requestBody, "env", env);
   bool selfSend = true;
   rbapi::parseSoloSelfSend(requestBody, selfSend);
+
+  // Issue #936: optionaler Join einer BESTEHENDEN Solo-Instanz. Nennt der Body
+  // eine `instance`, entscheidet die reine Funktion `decideSoloAction`, ob die
+  // Identitaet ohne neuen Claim beitreten darf. Ein Join braucht keinen
+  // Parked-/Kapsel-Zugriff (die Instanz existiert bereits).
+  std::string instance;
+  if (rbapi::parseSoloInstance(requestBody, instance)) {
+    std::vector<std::string> members;
+    {
+      std::lock_guard<std::mutex> lock(g_apiMutex);
+      std::map<std::string, std::vector<std::string>>::const_iterator git =
+          g_soloGroupsSnapshot.find(instance);
+      if (git != g_soloGroupsSnapshot.end()) {
+        members = git->second;
+      }
+    }
+    bool alreadyMember = false;
+    for (std::size_t i = 0; i < members.size(); ++i) {
+      if (members[i] == identity) {
+        alreadyMember = true;
+        break;
+      }
+    }
+    const rbapi::SoloJoinDecision decision = rbapi::decideSoloAction(
+        true, static_cast<int>(members.size()), alreadyMember, g_maxPlayers);
+    if (decision == rbapi::SoloJoinDecision::UnknownInstance) {
+      logLine("API: solo-join '%s' -> unbekannte Instanz '%s' -> 409",
+              identity.c_str(), instance.c_str());
+      httpRespondJson(s, 409, "Conflict",
+                      "{\"ok\":false,\"reason\":\"unknown_instance\"}");
+      return;
+    }
+    if (decision == rbapi::SoloJoinDecision::Full) {
+      logLine("API: solo-join '%s' -> '%s' voll (%d/%d) -> 409",
+              identity.c_str(), instance.c_str(),
+              static_cast<int>(members.size()), g_maxPlayers);
+      httpRespondJson(s, 409, "Conflict",
+                      "{\"ok\":false,\"reason\":\"instance_full\"}");
+      return;
+    }
+    // JoinExisting oder (idempotent) AlreadyMember: kein neuer Claim.
+    {
+      std::lock_guard<std::mutex> lock(g_apiMutex);
+      ApiCommand cmd;
+      cmd.kind = ApiCommand::kRouteByEndpoint;
+      cmd.joinOnly = true;
+      cmd.identity = identity;
+      cmd.instance = instance;
+      cmd.selfSend = selfSend;
+      g_apiCommands.push_back(cmd);
+    }
+    logLine("API: solo-join '%s' -> instance=%s (%s, self_send=%s)",
+            identity.c_str(), instance.c_str(),
+            rbapi::soloJoinDecisionName(decision),
+            selfSend ? "on" : "off");
+    std::string out = "{\"ok\":true,\"identitaet\":\"" +
+                      rbapi::jsonEscape(identity) + "\",\"instance\":\"" +
+                      rbapi::jsonEscape(instance) + "\",\"join\":true,"
+                      "\"self_send\":" +
+                      (selfSend ? "true" : "false") + "}";
+    httpRespondJson(s, 200, "OK", out);
+    return;
+  }
 
   if (!g_capsuleConfigured && !g_parkedConfigured) {
     httpRespondJson(s, 503, "Service Unavailable",
@@ -2026,6 +2319,83 @@ bool resolveDll(const char *explicitPath) {
   return true;
 }
 
+// --- --client: minimaler echter GNS-Client (Issue #936 Live-Nachweis) ------
+// Nutzt denselben Connect-Pfad wie --dial, haelt die Verbindung aber und
+// drainiert, was der Gegenspieler (Relay/Backend) schickt. Die Identitaet kommt
+// automatisch aus dem Connect (kein App-Handshake) — zwei solcher Clients
+// erzeugen damit headless zwei echte, parallele GNS-Sessions derselben Instanz.
+int runClientMode() {
+  logLine("CLIENT: verbinde -> %s (hold=%ds%s)", g_clientTarget.str().c_str(),
+          g_clientHoldSeconds,
+          g_clientSend.empty() ? "" : ", send=ja");
+  Session clientSess;
+  clientSess.backendTarget = g_clientTarget;
+  startBackendConnect(clientSess);
+  for (int i = 0; i < 200 && !clientSess.backendConnected; ++i) {
+    pRunCallbacks(g_pInterface);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  if (!clientSess.backendConnected) {
+    logLine("CLIENT: Verbindung FEHLGESCHLAGEN (Timeout) -> %s",
+            g_clientTarget.str().c_str());
+    pKill();
+    return 1;
+  }
+  logLine("CLIENT: Connected -> %s (conn=%u)", g_clientTarget.str().c_str(),
+          clientSess.backendConn);
+  if (!g_clientSend.empty()) {
+    int64 out = 0;
+    const EResult r = pSendMessageToConnection(
+        g_pInterface, clientSess.backendConn, g_clientSend.data(),
+        static_cast<uint32>(g_clientSend.size()),
+        k_nSteamNetworkingSend_Reliable, &out);
+    logLine("CLIENT: Marker gesendet (%zu B, EResult=%d, out=%lld)",
+            g_clientSend.size(), static_cast<int>(r),
+            static_cast<long long>(out));
+  }
+  const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now() +
+      std::chrono::seconds(g_clientHoldSeconds);
+  size_t recvCount = 0;
+  size_t recvBytes = 0;
+  while (std::chrono::steady_clock::now() < deadline) {
+    pRunCallbacks(g_pInterface);
+    if (clientSess.backendPoll != k_HSteamNetPollGroup_Invalid) {
+      for (;;) {
+        SteamNetworkingMessage_t *pMsg = nullptr;
+        const int n = pReceiveMessagesOnPollGroup(
+            g_pInterface, clientSess.backendPoll, &pMsg, 1);
+        if (n <= 0 || pMsg == nullptr) {
+          break;
+        }
+        ++recvCount;
+        recvBytes += static_cast<size_t>(pMsg->m_cbSize);
+        logLine("CLIENT: MSG #%zu conn=%u size=%d flags=0x%x [S->C] %s",
+                recvCount, pMsg->m_conn, pMsg->m_cbSize, pMsg->m_nFlags,
+                asciiPreview(
+                    static_cast<const unsigned char *>(pMsg->m_pData),
+                    pMsg->m_cbSize <= 64 ? pMsg->m_cbSize : 48)
+                    .c_str());
+        pMsg->Release();
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  logLine("CLIENT: hold abgelaufen — %zu Nachricht(en), %zu B empfangen; "
+          "trenne sauber",
+          recvCount, recvBytes);
+  if (clientSess.backendConn != k_HSteamNetConnection_Invalid) {
+    pCloseConnection(g_pInterface, clientSess.backendConn, 0, nullptr, false);
+    clientSess.backendConn = k_HSteamNetConnection_Invalid;
+  }
+  for (int i = 0; i < 20; ++i) {
+    pRunCallbacks(g_pInterface);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  pKill();
+  return 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -2059,6 +2429,17 @@ int main(int argc, char **argv) {
         fprintf(stderr, "--dial braucht IPv4:port, bekam '%s'\n", spec);
         return 2;
       }
+    } else if (strcmp(argv[i], "--client") == 0 && i + 1 < argc) {
+      // Minimaler echter GNS-Client (Issue #936): verbindet, haelt, drainiert.
+      const char *spec = argv[++i];
+      if (!rbroute::parseEndpoint(spec, g_clientTarget)) {
+        fprintf(stderr, "--client braucht IPv4:port, bekam '%s'\n", spec);
+        return 2;
+      }
+    } else if (strcmp(argv[i], "--client-hold") == 0 && i + 1 < argc) {
+      g_clientHoldSeconds = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--client-send") == 0 && i + 1 < argc) {
+      g_clientSend = argv[++i];
     } else if (strcmp(argv[i], "--hold") == 0) {
       g_hold = true;
     } else if (strcmp(argv[i], "--api-port") == 0 && i + 1 < argc) {
@@ -2112,6 +2493,16 @@ int main(int argc, char **argv) {
       g_capsuleHost = host;
       g_capsulePort = port;
       g_capsuleConfigured = true;
+    } else if (strcmp(argv[i], "--max-players") == 0 && i + 1 < argc) {
+      // Aufnahmegrenze einer Solo-Instanz (Issue #936). Default 4 =
+      // Server-Default (`riftbreaker_server_max_players`).
+      const char *spec = argv[++i];
+      const int v = atoi(spec);
+      if (v < 1) {
+        fprintf(stderr, "--max-players braucht >= 1, bekam '%s'\n", spec);
+        return 2;
+      }
+      g_maxPlayers = v;
     }
   }
 
@@ -2256,6 +2647,11 @@ int main(int argc, char **argv) {
                                       : "FEHLGESCHLAGEN (Timeout)");
     pKill();
     return dialSess.backendConnected ? 0 : 1;
+  }
+
+  if (g_clientTarget.port != 0) {
+    // Minimaler echter GNS-Client (Issue #936): kein Listen-Socket noetig.
+    return runClientMode();
   }
 
   SteamNetworkingIPAddr serverLocalAddr;
