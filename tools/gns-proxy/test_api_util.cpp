@@ -316,6 +316,19 @@ static void testDecideSoloAction() {
   // Degeneriertes maxPlayers (<1) wird auf 1 geklemmt.
   check(decideSoloAction(true, 0, false, 0) == SoloJoinDecision::UnknownInstance,
         "maxPlayers=0, count 0 -> UnknownInstance");
+  // Grenz-/Negativfaelle (Stage 5, #936): das Klemmen von maxPlayers<1 wirkt
+  // erst bei memberCount>0 (bei count 0 greift vorher UnknownInstance), sonst
+  // waere der Klemmpfad ungetestet.
+  check(decideSoloAction(true, 1, false, 0) == SoloJoinDecision::Full,
+        "maxPlayers=0 geklemmt auf 1, count 1 -> Full");
+  check(decideSoloAction(true, 1, false, -3) == SoloJoinDecision::Full,
+        "maxPlayers=-3 geklemmt auf 1, count 1 -> Full");
+  // Idempotenz hat Vorrang auch bei inkonsistentem Zustand (Mitglied, aber
+  // Gruppe unbekannt/leer): kein Fehler, kein Doppelzaehlen.
+  check(decideSoloAction(true, 0, true, 4) == SoloJoinDecision::AlreadyMember,
+        "Mitglied trotz count 0 -> AlreadyMember");
+  check(decideSoloAction(true, -1, true, 4) == SoloJoinDecision::AlreadyMember,
+        "Mitglied trotz negativem count -> AlreadyMember");
   // Namen sind stabil und nicht leer.
   checkEq(rbapi::soloJoinDecisionName(SoloJoinDecision::Full), "instance_full",
           "name Full");
