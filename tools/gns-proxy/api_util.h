@@ -383,6 +383,100 @@ inline bool parseSoloSelfSend(const std::string &body, bool &out) {
   return false;  // Nicht-Bool -> Default bleibt stehen
 }
 
+// `"instance": "..."` aus dem /solo-Body lesen (Issue #936, Muster wie
+// parseSoloSelfSend). Rueckgabe true NUR bei einem nicht-leeren JSON-String;
+// `out` wird vorher geleert. Fehlendes, leeres oder nicht-string-Feld -> false
+// (heutiges Verhalten: kein Join, neuer Claim).
+inline bool parseSoloInstance(const std::string &body, std::string &out) {
+  out.clear();
+  const std::string needle = "\"instance\"";
+  const std::size_t pos = body.find(needle);
+  if (pos == std::string::npos) {
+    return false;
+  }
+  std::size_t p = body.find(':', pos + needle.size());
+  if (p == std::string::npos) {
+    return false;
+  }
+  ++p;
+  while (p < body.size() && (body[p] == ' ' || body[p] == '\t' ||
+                             body[p] == '\n' || body[p] == '\r')) {
+    ++p;
+  }
+  if (p >= body.size() || body[p] != '"') {
+    return false;  // kein String (Zahl/null/Array/Objekt) -> Default
+  }
+  ++p;
+  std::string value;
+  while (p < body.size()) {
+    const char c = body[p];
+    if (c == '"') {
+      out = value;
+      return !out.empty();  // leerer String zaehlt nicht als Instanz
+    }
+    if (c == '\\' && p + 1 < body.size()) {
+      value += body[p + 1];  // einfache Escapes (Instanznamen sind schlicht)
+      p += 2;
+      continue;
+    }
+    value += c;
+    ++p;
+  }
+  return false;  // unterminierter String -> Default
+}
+
+// --- /solo-Aufnahme-Entscheidung (Issue #936) -------------------------------
+//
+// Reine, host-testbare Entscheidung, ob ein `/solo`-Request einen NEUEN Claim
+// ausloest oder einer bereits geclaimten Solo-Instanz beitritt. Der Relay haelt
+// die Gruppen-Wahrheit (`g_soloGroups`: instance -> Identitaeten); die
+// Kapazitaet deckelt er auf `--max-players` (Default 4 = Server-Default).
+enum class SoloJoinDecision {
+  NewClaim,        // kein instance genannt -> heutiges Verhalten
+  JoinExisting,    // bekannte Instanz, freie Kapazitaet -> Join ohne Claim
+  Full,            // bekannte Instanz, memberCount >= maxPlayers -> 409
+  UnknownInstance, // instance genannt, aber keine Gruppe -> 409
+  AlreadyMember,   // Identitaet ist schon Mitglied -> idempotent
+};
+
+// Stabile JSON-Strings fuer die Fehlerpfade (nur Full/UnknownInstance haben
+// einen Body mit `reason`; Join/NewClaim/AlreadyMember sind Erfolg).
+inline const char *soloJoinDecisionName(SoloJoinDecision d) {
+  switch (d) {
+  case SoloJoinDecision::Full: return "instance_full";
+  case SoloJoinDecision::UnknownInstance: return "unknown_instance";
+  case SoloJoinDecision::NewClaim: return "new_claim";
+  case SoloJoinDecision::JoinExisting: return "join_existing";
+  case SoloJoinDecision::AlreadyMember: return "already_member";
+  }
+  return "";
+}
+
+// `instanceRequested` = der /solo-Body nennt eine nicht-leere `instance`.
+// `memberCount` = aktuelle Mitgliederzahl der Gruppe; <= 0 bedeutet, dass zu
+// dieser Instanz keine Gruppe existiert (unbekannt). `alreadyMember` = die
+// Identitaet steht bereits in der Gruppe. Reihenfolge: Idempotenz zuerst (ein
+// Mitglied wird nie abgewiesen, verbraucht keinen Platz), danach Kapazitaet.
+inline SoloJoinDecision decideSoloAction(bool instanceRequested, int memberCount,
+                                        bool alreadyMember, int maxPlayers) {
+  if (!instanceRequested) {
+    return SoloJoinDecision::NewClaim;
+  }
+  if (alreadyMember) {
+    return SoloJoinDecision::AlreadyMember;
+  }
+  if (memberCount <= 0) {
+    return SoloJoinDecision::UnknownInstance;
+  }
+  if (maxPlayers < 1) {
+    maxPlayers = 1;  // degeneriertes Limit -> mindestens 1
+  }
+  if (memberCount >= maxPlayers) {
+    return SoloJoinDecision::Full;
+  }
+  return SoloJoinDecision::JoinExisting;
+}
+
 // --- /solo-Orchestrierung (Issue #929) --------------------------------------
 //
 // Reine (socket-freie) Abbildung des Relay-`/solo`-Pfads: Claim-Aufruf per

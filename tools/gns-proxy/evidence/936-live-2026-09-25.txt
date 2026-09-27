@@ -1,0 +1,117 @@
+# 936-live-2026-09-25 — Live-Smoke: ZWEI Clients auf EINER Solo-Instanz (#936)
+Datum: 2026-09-25 10:56-11:00 CEST · Host: planet · Env: dev (isoliert, keine Prod)
+Branch: feature/936-solo-multi-client @ b7df17b (Rework: --client-Modus, TOCTOU-Clamp)
+Relay-Binary: tools/gns-proxy/gns_probe.exe (MinGW, neu gebaut)
+  md5 = ca44dc66a132337b29caa7321b674a9c
+Image: rb-dedicated:3099926d67eb (Wine+Xvfb, gosu steamuser, eigener Wine-Prefix)
+Hinweis: Bestehender Container `gns-relay` (Port 6321/9200) NICHT angefasst.
+
+## 0) Aufbau
+Ephemerer Relay-Container gns-relay-t936r (--network host), eigene Wine-Prefix-Volume:
+  cmd: Xvfb :99 ...; gosu steamuser wine /opt/gns-relay/gns_probe.exe
+       --port 16321 --api-port 19200 --parked-url http://127.0.0.1:19201
+       --hold --max-players 4 --dll /opt/riftbreaker/bin/GameNetworkingSockets.dll
+  mounts: /tmp/936r/gns_probe.exe -> /opt/gns-relay/gns_probe.exe
+          /tmp/936r/wine-relay    -> /data/.wine
+          /srv/rift-dev/game      -> /opt/riftbreaker (ro)
+
+Parked-Dienst (Mock-Provisioner + Mock-Bridge, echter parked_service-Codepfad),
+Bind 127.0.0.1:19201, pool_size=2 (deploy/parked/parked_service.py):
+  counters: parked=2 claimed=0 total=2
+  parked-1 parked 127.0.0.1:33000
+  parked-2 parked 127.0.0.1:33001
+
+Zwei Clients (je eigener Container + eigene Wine-Prefix -> eigene Identitaet),
+Branch-Binary, echter GNS-Client-Modus:
+  gns-client-a-936: wine gns_probe.exe --client 127.0.0.1:16321 --client-hold 150
+  gns-client-b-936: wine gns_probe.exe --client 127.0.0.1:16321 --client-hold 150
+
+## 1) Beide Clients verbinden -> zwei echte Sessions, je eigene Identitaet
+Relay-Log:
+  [10:58:03] E1 GRUEN: state=Connected — der Client akzeptiert einen fremden GNS-Server
+  [10:58:03] client-identitaet: 'ip:127.0.0.1:58038' (127.0.0.1:58038) — 1 parallele Session(s)
+  [10:58:03] HOLD: halte 'ip:127.0.0.1:58038' — warte auf Operator
+  [10:58:05] client-identitaet: 'ip:127.0.0.1:36393' (127.0.0.1:36393) — 2 parallele Session(s)
+  [10:58:05] HOLD: halte 'ip:127.0.0.1:36393' — warte auf Operator
+
+Client-Log (A):
+  CLIENT: verbinde -> 127.0.0.1:16321 (hold=150s)
+  CLIENT: verbunden — peer-identity='ip:127.0.0.1:16321'
+  CLIENT: Connected -> 127.0.0.1:16321 (conn=143869450)
+Client-Log (B): analog (conn=1950734053)
+
+## 2) POST /solo A -> neuer Claim; POST /solo B {instance} -> Join derselben Instanz
+curl -X POST /solo -d '{"identitaet":"ip:127.0.0.1:58038","env":"dev"}'
+  {"ok":true,"identitaet":"ip:127.0.0.1:58038","target":"127.0.0.1:33000","instance":"parked-1","self_send":true}
+curl -X POST /solo -d '{"identitaet":"ip:127.0.0.1:36393","instance":"parked-1"}'
+  {"ok":true,"identitaet":"ip:127.0.0.1:36393","instance":"parked-1","join":true,"self_send":true}
+
+Relay-Log:
+  [10:58:25] API: solo 'ip:127.0.0.1:58038' -> 127.0.0.1:33000 (instance=parked-1, self_send=on)
+  [10:58:25] API: pin 'ip:127.0.0.1:58038' -> 127.0.0.1:33000
+  [10:58:25] ROUTE (solo (parked)) -> 127.0.0.1:33000
+  [10:58:27] API: solo-join 'ip:127.0.0.1:36393' -> instance=parked-1 (join_existing, self_send=on)
+  [10:58:27] API: pin 'ip:127.0.0.1:36393' -> 127.0.0.1:33000
+  [10:58:27] API: join 'ip:127.0.0.1:36393' -> 127.0.0.1:33000 (instance=parked-1)
+
+## 3) GET /sessions — beide in DERSELBEN Instanz, gleicher Endpoint, n=2/4
+T0 (direkt nach Claim+Join):
+  ip:127.0.0.1:36393 | state=routed | pinned=true | inst=parked-1
+    | ep=127.0.0.1:33000 | members=['ip:127.0.0.1:58038','ip:127.0.0.1:36393'] | n=2/4 | phase=underway
+  ip:127.0.0.1:58038 | state=routed | pinned=true | inst=parked-1
+    | ep=127.0.0.1:33000 | members=['ip:127.0.0.1:58038','ip:127.0.0.1:36393'] | n=2/4 | phase=underway
+
+## 4) Halte-Check ~25 s spaeter — KEIN Kick/Close der beiden Clients
+GET /sessions (T+25s), beide weiterhin connected=true, state=routed:
+  [{"identity":"ip:127.0.0.1:36393",...,"state":"routed","connected":true,"pinned":true,
+    "age_seconds":50,"soloPhase":"underway","soloInstance":"parked-1",
+    "soloEndpoint":"127.0.0.1:33000",
+    "soloMembers":["ip:127.0.0.1:58038","ip:127.0.0.1:36393"],"soloMemberCount":2,"soloMaxPlayers":4},
+   {"identity":"ip:127.0.0.1:58038",...,"state":"routed","connected":true,"pinned":true,
+    "age_seconds":52,"soloInstance":"parked-1","soloEndpoint":"127.0.0.1:33000",
+    "soloMembers":["ip:127.0.0.1:58038","ip:127.0.0.1:36393"],"soloMemberCount":2,"soloMaxPlayers":4}]
+
+Relay-Log im selben Fenster: NUR Backend-Connect-Timeouts (kein echtes GNS-Backend
+hinter dem Mock-Endpoint 127.0.0.1:33000 — erwartet), Client-Seite bleibt:
+  [10:58:35] backend: ... state=5 endReason=5003 'Timed out attempting to connect'
+  [10:58:35] backend beendet (state=5) — Client bleibt, Session kann neu routen
+Grep auf Client-Closes: KEINE Zeile fuer 58038/36393; die einzige
+`client beendet`-Zeile stammt vom kurzlebigen Marker-Client C (s. 5).
+
+## 5) Marker-Sendepfad (--client-send): dritter Client C, hold 8 s
+  CLIENT: Marker gesendet (9 B, EResult=1, out=1)
+  CLIENT: hold abgelaufen — 0 Nachricht(en), 0 B empfangen; trenne sauber
+Relay-Log:
+  MSG #1 conn=1813969201 size=9 flags=0x8 [C->S]
+      0000: 48 45 4c 4c 4f 2d 39 33 36                       HELLO-936
+=> Der --client-Modus sendet zuverlaessig; der Relay empfaengt die Nachricht.
+
+## 6) TOCTOU-Clamp live (parked-2, 4 gleichzeitige Joins bei 1/4)
+Die HTTP-Threads lesen den Snapshot (g_soloGroupsSnapshot, TTL 250 ms) und liessen
+alle 4 Joins zu (1/4 < 4):
+  str:K1 -> {"ok":true,...}   str:K2 -> {"ok":true,...}
+  str:K3 -> {"ok":true,...}   str:K4 -> {"ok":true,...}
+Der Hauptloop klemmt gegen die Wahrheit g_soloGroups erneut:
+  [10:59:55] API: join 'str:K3' -> 127.0.0.1:33001 (instance=parked-2)
+  [10:59:55] API: join 'str:K1' -> 127.0.0.1:33001 (instance=parked-2)
+  [10:59:55] API: join 'str:K4' -> 127.0.0.1:33001 (instance=parked-2)
+  [10:59:55] API: join 'str:K2' -> 'parked-2' voll (4/4) — TOCTOU-Clamp, kein Join
+Endzustand members=['str:C1','str:K3','str:K1','str:K4'] n=4/4 — NICHT 5. Ohne den
+Clamp waere die Mitgliederzahl ueber --max-players gewachsen.
+
+## Offener Restpunkt (ehrlich, NICHT erledigt)
+Es gibt KEINEN Game-Client auf planet (nur DedicatedServer.exe + GNS-DLL). Diese
+Evidenz beweist: zwei echte parallele GNS-Sessions auf EINER Solo-Instanz, gleicher
+soloEndpoint, n=2/4, kein Kick ueber die Haltezeit, plus Relay-Log. Sie beweist
+NICHT „beide Spieler sehen sich im Spiel und keiner fliegt raus" aus Spielersicht —
+das braucht echte Riftbreaker-Clients (menschlicher Player-Test), wie bei #877 als
+needs:player-test. Kein Game-Client, keine erfundenen Ergebnisse.
+
+## Grenzen des headless Nachweises
+- Der Mock-Backend (127.0.0.1:33000) hat keinen echten GNS-Listener; der
+  Backend-Connect des Relays laeuft daher in einen Timeout. Fuer den Beweis
+  „zwei Clients in EINER Instanz, kein Kick" ist das unerheblich (die
+  Client-Sessions bleiben bestehen), fuenf 'in_game_paused/running'-Phasen aber
+  nicht headless erreichbar (Phase blieb 'underway').
+- Identitaeten sind hier `ip:<host>:<port>` (Probe-Default ohne eigene
+  Generic-String-Identitaet); sie sind pro Client eindeutig, aber port-gebunden.
