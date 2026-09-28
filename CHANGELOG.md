@@ -1,3 +1,13 @@
+Version: 1.0.4
+Date: 28. 09. 2026
+
+  Features:
+    - Server→Spieler-Chat nativ: `POST /send_chat` bzw. Pipe-Cmd `send_chat` broadcastet eine Chat-Nachricht an alle Spieler (Vanilla-Chat), `type` 2/4/8 (system/announcement/message); Wire-Event `send_chat_result`. Text wird JSON-escaped (framing-sicher) (#934, PR #944).
+    - Cockpit-Chat-Panel: Verlauf der `player_chat`-Events (ueber den bestehenden `/events`-SSE-Kanal, kein zweiter EventSource) + Eingabezeile zum Senden via `POST /send_chat`; Absender-Umschalter (`system` = ohne Prefix, sonst `[Absender] `), Formatier-Toolbar, XSS-sicher (`textContent`) (#935, PR #945).
+
+  CI:
+    - boot-test: Attack-Cycle-Host-Port je Lauf eindeutig aufloesen — die feste Bindung `127.0.0.1:9102` kollidierte mit dem Dev-/Test-Stack und blockierte als Required-Check alle PR-Merges (#967, PR #972).
+
 Version: 1.0.3
 Date: 25. 09. 2026
 
@@ -6,9 +16,7 @@ Date: 25. 09. 2026
     - Parked-Pool-Dienst: Solo-Warmserver warm halten, claimen, recyceln, reap (#928).
     - GNS-Entry-Relay: Backends zur Laufzeit registrieren/abmelden (`POST`/`DELETE /backends`) und Spieler per `POST /solo` automatisch einer geparkten Solo-Instanz zuweisen (#929).
     - GNS-Entry-Relay-Lobby: Solo-Button `[ solo | self-send on ]` — claimt eine geparkte Instanz und schickt den Spieler in einem Schritt hin (`POST /solo` mit additivem `self_send`, Default true); `/sessions` zeigt additiv `soloPhase`/`soloInstance`/`soloEndpoint`, auch fuer geclaimte Identitaeten ohne verbundenen Client (#930).
-    - Server→Spieler-Chat nativ: `POST /send_chat` bzw. Pipe-Cmd `send_chat` broadcastet eine Chat-Nachricht an alle Spieler (Vanilla-Chat), `type` 2/4/8 (system/announcement/message); Wire-Event `send_chat_result`. Text wird JSON-escaped (framing-sicher) (#934, PR #944).
     - Solo-Spiel: mehrere Clients auf derselben Instanz — `POST /solo {instance}` joint einer bestehenden Solo-Instanz (kein neuer Claim), `--max-players` (Default 4) begrenzt die Aufnahme (`409 instance_full`/`unknown_instance`), `/sessions` zeigt `soloMembers`/`soloMemberCount`/`soloMaxPlayers`, Lobby-Karte mit Join-Button (#936).
-    - Cockpit-Chat-Panel: Verlauf der `player_chat`-Events (ueber den bestehenden `/events`-SSE-Kanal, kein zweiter EventSource) + Eingabezeile zum Senden via `POST /send_chat`; Absender-Umschalter (`system` = ohne Prefix, sonst `[Absender] `), Formatier-Toolbar, XSS-sicher (`textContent`) (#935).
 
   Bugfixes:
     - Provisioner Live-Pfad: Container-Port auf 9001 korrigiert + reale Deploy-Mounts -> Health-Timeout gegen das reale Image behoben (#918).
