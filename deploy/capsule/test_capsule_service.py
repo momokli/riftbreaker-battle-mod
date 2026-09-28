@@ -16,7 +16,7 @@ import unittest
 import urllib.error
 import urllib.request
 
-from capsule_flow import CapsuleCoordinator
+from capsule_flow import CapsuleCoordinator, build_coordinator
 from capsule_service import (
     CapsuleConfigError,
     CapsuleServiceConfig,
@@ -38,10 +38,10 @@ def make_coordinator():
             bridges[url] = bridge
         return bridge
 
-    def cycle_factory(env):
+    def cycle_factory(env, url=""):
         cycle = cycles.get(env)
         if cycle is None:
-            cycle = FakeCycle(env)
+            cycle = FakeCycle(env, url)
             cycles[env] = cycle
         return cycle
 
@@ -91,6 +91,18 @@ class ConfigTests(unittest.TestCase):
             CapsuleServiceConfig.from_env({"CAPSULE_TIMEOUT": "-1"})
         with self.assertRaises(CapsuleConfigError):
             CapsuleServiceConfig.from_env({"CAPSULE_TIMEOUT": "NaN"})
+
+    def test_build_coordinator_cycle_url_fallback(self):
+        # Issue #966: pro-Instanz-URL gewinnt; leer -> config.cycle_url als Fallback.
+        cfg = CapsuleServiceConfig(
+            env="dev", cycle_url="http://127.0.0.1:9102", timeout=5.0
+        )
+        coord = build_coordinator(cfg, clock=FakeClock())
+        self.assertEqual(coord.cycle_factory("dev", "").base_url, "http://127.0.0.1:9102")
+        self.assertEqual(
+            coord.cycle_factory("dev", "http://127.0.0.1:9331").base_url,
+            "http://127.0.0.1:9331",
+        )
 
 
 class HttpHarness(unittest.TestCase):

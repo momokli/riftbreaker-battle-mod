@@ -75,8 +75,9 @@ class FakeBridge(object):
 class FakeCycle(object):
     """Fake-Attack-Cycle: ZSM PAUSED -> WARMUP -> RUNNING -> GAME_OVER."""
 
-    def __init__(self, env: str, log=None) -> None:
+    def __init__(self, env: str, url: Optional[str] = None, log=None) -> None:
         self.env = env
+        self.url = url
         self.state = "paused"
         self.calls = []
         self.fail_start = False
@@ -113,10 +114,12 @@ class FakeParked(object):
 
     def __init__(self, instance: str = "parked-1",
                  bridge_url: str = "http://127.0.0.1:40001",
-                 gns: str = "127.0.0.1:41001") -> None:
+                 gns: str = "127.0.0.1:41001",
+                 cycle_url: str = "http://127.0.0.1:9102") -> None:
         self.instance = instance
         self.bridge_url = bridge_url
         self.gns = gns
+        self.cycle_url = cycle_url
         self.claims = []
         self.recycles = []
         self.rounds = 0
@@ -132,6 +135,7 @@ class FakeParked(object):
             "env": env,
             "bridge_url": self.bridge_url,
             "gns_endpoint": self.gns,
+            "cycle_url": self.cycle_url,
             "state": "claimed",
             "resumed": bool(resume),
             "handover_seconds": 0.0,
@@ -164,10 +168,10 @@ class Harness(unittest.TestCase):
                 self.bridges[url] = bridge
             return bridge
 
-        def cycle_factory(env):
+        def cycle_factory(env, url=""):
             cycle = self.cycles.get(env)
             if cycle is None:
-                cycle = FakeCycle(env, log=self.events)
+                cycle = FakeCycle(env, url, log=self.events)
                 self.cycles[env] = cycle
             return cycle
 
@@ -204,6 +208,20 @@ class OpenTests(Harness):
         self.assertEqual(cap.instance_id, "parked-1")
         self.assertEqual(cap.gns_endpoint, "127.0.0.1:41001")
         self.assertEqual(cap.identitaet, "str:AB12")
+
+    def test_open_uses_per_instance_cycle_url(self):
+        # Issue #966: der Cycle der INSTANZ wird verdrahtet, nicht der globale.
+        self.parked.cycle_url = "http://127.0.0.1:9321"
+        cap = self.opened()
+        self.assertEqual(cap.cycle_url, "http://127.0.0.1:9321")
+        self.assertEqual(self.cycle().url, "http://127.0.0.1:9321")
+
+    def test_open_empty_cycle_url_falls_back(self):
+        # Kein Cycle im Parked-Ergebnis -> Factory erhaelt "" (Fallback-Pfad).
+        self.parked.cycle_url = ""
+        cap = self.opened()
+        self.assertIsNone(cap.cycle_url)
+        self.assertEqual(self.cycle().url, "")
 
     def test_open_twice_is_rejected(self):
         self.opened()
