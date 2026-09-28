@@ -89,6 +89,7 @@ Antwort immer JSON; Fehlerformat `{"ok":false,"reason":…,"detail":…}`.
 | `POST` | `/claim` | `{"env"?,"instance_id"?,"resume"?}` | `200` / `400` / `409` / `503` | `pool.claim()`; ohne `instance_id` aelteste `PARKED` (FIFO). `resume` (#931) Default `true`; `resume=false` uebergibt die Instanz bei **pausierter** Welt, `resume` kein JSON-Boolean ⇒ `400`. Keine `PARKED` ⇒ `409 none_parked`; Bridge unhealthy ⇒ `503 bridge_unhealthy`. Antwort enthält `gns_endpoint` (#929) und `resumed`. |
 | `POST` | `/recycle` | `{"instance_id","keep_warm"?=true,"result"?}` | `200` / `400` / `409` | nach Rundenende wieder `PARKED`; `result` (`win`/`lose`) wird durchgereicht und löst `end_game(result)` aus (ohne `result` kein `end_game`); `keep_warm=false` ⇒ `stop()`; Nicht-`CLAIMED` ⇒ `409`; fehlendes `instance_id` oder `keep_warm` kein JSON-Boolean ⇒ `400`. |
 | `POST` | `/reap` | `{"max_park_seconds"?}` | `200 {stopped:[…]}` | manueller Auslaufschutz-Lauf. |
+| `POST` | `/reconcile` | `{}` | `200 {removed,evicted,kept,skipped_foreign}` / `503` | manueller Reconciliation-Lauf (#969): entfernt Orphans/Restart-Leaks der eigenen Env; Fehler im Lauf ⇒ `503 reconcile_failed`. |
 
 Unbekannte Route ⇒ `404 {"ok":false,"reason":"not_found"}`; falsche Methode
 auf bekannter Route ⇒ `405`.
@@ -97,7 +98,8 @@ auf bekannter Route ⇒ `405`.
 
 Aus `pool.status()`: `parked`, `claimed`, `warming`, `recycling`, `stopped`,
 `total`. Laufzeit-Lifetime: `claims`, `recycles`, `reaps`, `warm_failures`,
-`handover_last_seconds`, `handover_avg_seconds` (rollierendes Fenster).
+`orphans_removed` (#969), `handover_last_seconds`, `handover_avg_seconds`
+(rollierendes Fenster).
 **Invariante:** `parked+claimed+warming+recycling+stopped == total`.
 
 ### Env-Konfiguration (`PARKED_*`)
@@ -110,14 +112,18 @@ Aus `pool.status()`: `parked`, `claimed`, `warming`, `recycling`, `stopped`,
 | `PARKED_POOL_SIZE` | `1` | N warme Instanzen |
 | `PARKED_MAX_PARK_SECONDS` | `900` | Reap-Auslaufschwelle |
 | `PARKED_REAP_INTERVAL` | `30` | Sekunden zwischen Maintain-Laeufen |
+| `PARKED_RECONCILE_INTERVAL` | `300` | Sekunden zwischen Reconciliation-Laeufen |
+| `PARKED_RECONCILE_ON_START` | `true` | einmaliger Reconcile **vor** dem ersten `_fill()` beim Start |
 | `PARKED_INSTANCE_PREFIX` | `parked` | Praefix der `instance_id` |
 | `PARKED_TOKEN` | `` (leer) | Bearer-Token; nicht-leer ⇒ Pflicht |
 | `PARKED_LOG_LEVEL` | `INFO` | Logging |
 | `PROVISIONER_*` | — | an `provisioner.load_config()` durchgereicht (`PROVISIONER_IMAGE` Pflicht) |
 
-`PARKED_PORT`/`POOL_SIZE`/`MAX_PARK_SECONDS`/`REAP_INTERVAL` fail-closed
-validiert (Zahl > 0); Fehlkonfiguration ⇒ Start bricht ab (`ParkedConfigError`).
-Fehlendes `PROVISIONER_IMAGE` ⇒ ebenfalls laut (`build_provisioner`).
+`PARKED_PORT`/`POOL_SIZE`/`MAX_PARK_SECONDS`/`REAP_INTERVAL`/`RECONCILE_INTERVAL`
+fail-closed validiert (Zahl > 0), `RECONCILE_ON_START` als Boolean
+(`1/true/yes/on`, `0/false/no/off`); Fehlkonfiguration ⇒ Start bricht ab
+(`ParkedConfigError`). Fehlendes `PROVISIONER_IMAGE` ⇒ ebenfalls laut
+(`build_provisioner`).
 
 ### Dienst-DoD-Mapping (#928)
 
@@ -126,6 +132,55 @@ Fehlendes `PROVISIONER_IMAGE` ⇒ ebenfalls laut (`build_provisioner`).
 | Pool warm halten bis N | `ParkedController.maintain_once` (`_fill` bis `pool_size`) | `test_parked_service.ControllerFillTests` |
 | Claim als Anfrage-Schnittstelle | `POST /claim` (FIFO aelteste `PARKED`), `handover_seconds` | `HttpTests.test_claim_ok_with_handover` |
 | Recycle nach Rundenende → wieder `PARKED` | `POST /recycle` (`keep_warm`) | `HttpTests.test_recycle_returns_to_parked` |
+
+### Reconciliation / Orphan-Cleanup (#969)
+
+Beim (Neu-)Start kann ein Dienst-`Restart` **verwaiste Container** der eigenen Env
+hinterlassen (der Warm-Pool trackt sie nach einem Neustart nicht mehr).
+`ParkedPool.reconcile()` gleicht den echten Docker-Zustand gegen das Tracking ab.
+
+**Discovery.** `provisioner.list_instances(env=<own_env>)` liefert alle Container
+mit Label `rb.provisioner.env == own_env` als
+`{container, env, instance, status, running, started_at}`. Sidecars tragen dieselben
+Labels; sie werden bei der Auswertung je `(env, instance)` **gruppiert**.
+
+**Orphan-Regeln** (nur innerhalb der EIGENEN Env):
+
+1. `(env, instance)` ist **nicht** getrackt → Orphan (Restart-Leak) → `stop()`.
+2. Getrackt, aber `State.Status` ist **nicht** `running` (Created-Zombie / Exited /
+   Dead), obwohl der Eintrag `PARKED`/`CLAIMED`/`WARMING` behauptet → stale Eintrag
+   **evicten** + Container entfernen.
+3. Getrackter `STOPPED`-Eintrag, Container existiert noch → Orphan → entfernen.
+4. Getrackte `PARKED`/`CLAIMED`/`RECYCLING` mit **laufendem** Container → behalten.
+5. Getrackter Eintrag **ohne** Container (Crash) → evicten, **kein** `stop`.
+
+Entfernt wird per vollem `provisioner.stop(instance_id, env)` (Container + Sidecars +
+Netz + Volumes + Pfade). Die **Bridge wird nie beruehrt** (kein `pause_game`/
+`resume_game`). Fremde Envs (`!= own_env`) werden **nie** angefasst
+(`skipped_foreign`). Ueberfaellige getrackte `PARKED`-Instanzen bleiben Sache von
+`reap` (kennt `parked_since`).
+
+`reconcile()` ist **idempotent** (reines Mengendifferenzieren; zweiter Lauf findet
+nichts) und **fehlertolerant**: ein `stop`-Fehler bei einem Orphan bricht die
+Schleife nicht ab (aggregiert in `errors`, die uebrigen werden trotzdem entfernt).
+Rueckgabe `{removed, evicted, zombies, kept, skipped_foreign, errors}`.
+
+**Ablauf im Dienst:** `PARKED_RECONCILE_ON_START=true` ⇒ ein synchroner
+`reconcile()` **vor** dem Thread-Start (und vor dem ersten `_fill()`); danach
+periodisch alle `PARKED_RECONCILE_INTERVAL` Sekunden, jeweils **vor** `_fill()`
+und `_reap()`. Entfernte Orphans werden in `orphans_removed` gezaehlt und in
+`GET /status` (`counters`) sichtbar.
+
+| DoD (#969) | Umsetzung | Nachweis |
+|---|---|---|
+| Restart-Leak / Orphan entfernen | `ParkedPool.reconcile()` (Discovery − Tracking) | `test_parked_pool.ReconcileTests` |
+| Created-Zombie entfernen + evicten | Regel 2 (`evicted` + `stop`) | `test_parked_pool.ReconcileTests.test_created_zombie_is_evicted_and_removed` |
+| Idempotent | zweiter Lauf ohne Effekt | `ReconcileTests.test_second_run_is_noop` |
+| `stop`-Fehler isoliert | aggregierte `errors`, Rest entfernt | `ReconcileTests.test_stop_error_isolated_others_removed` |
+| Fremde Env nie anfassen | `skipped_foreign`, kein Cross-Env-`stop` | `ReconcileTests.test_foreign_env_never_touched` |
+| Bridge unberuehrt | kein `pause_game`/`resume_game` im Reconcile | `ReconcileTests.test_reconcile_never_touches_bridge` |
+| Start-Reconcile vor `_fill()` | `reconcile_on_start` in `start()` | `test_parked_service.ControllerReconcileTests.test_start_reconciles_before_fill` |
+| Periodisch + Observability | `reconcile_interval`, `orphans_removed`, `POST /reconcile` | `ControllerReconcileTests`, `HttpTests.test_reconcile_endpoint_removes_orphan` |
 | Periodischer Reap / Auslaufschutz | `reap_due()` + `_reap()`, `POST /reap` | `ControllerReapTests`, `HttpTests.test_reap_endpoint` |
 | Status/Health-Endpoint (PARKED/CLAIMED-Zaehler) | `GET /status`/`GET /health` + Invariante | `HttpTests.test_status_has_counters_and_entries` |
 | Bearer-Auth fail-closed | `401` + `WWW-Authenticate` wenn Token gesetzt; Rolle erzwingt Token | `AuthTests`, Rolle `parked-pool` |
@@ -282,7 +337,7 @@ Ansible (CI-Budget 240 s). Rohbelege:
 cd deploy/parked && TMPDIR=/dev/shm/parked-test python3 -m unittest -v
 ```
 
-52 Tests. Abgedeckt: warm_up happy + idempotent + Rollback bei
+52 Pool-Tests (Stand #969: Suite gesamt 133 Tests). Abgedeckt: warm_up happy + idempotent + Rollback bei
 `pause_game`-Fehler, **Welt-Tick-Invariante via `get_state`** (kein Fortschritt
 im PARKED, Fortschritt nach `claim`, red-before-green), claim misst Handover +
 verlangt `PARKED` + healthy, recycle warm/kalt, reap stoppt nur Überfällige und
@@ -296,7 +351,14 @@ fail-closed, fehlendes `PROVISIONER_IMAGE`), Controller-Auffüllen/Idempotenz/
 Backoff+`warm_failures`/Reap/Zähler-Invariante/FIFO-Claim, alle HTTP-Routen
 (`/health`, `/status`, `/claim` ok+`409`, `/recycle` → `PARKED`/`stopped`,
 `/reap`, `401`+`WWW-Authenticate`, `404`, `405`, Doppel-Claim `409`,
-Bridge-unhealthy `503`).
+Bridge-unhealthy `503`, `POST /reconcile` ok/`503`).
+
+**Reconciliation (#969)** zusätzlich: `test_parked_pool.ReconcileTests`
+(Restart-Leak/Orphan, Created-Zombie evict+stop, laufend getrackt bleibt,
+`STOPPED`-mit-Container, Phantom-Eintrag ohne `stop`, Fremd-Env unberührt,
+Idempotenz, `stop`-Fehler isoliert, Bridge unberührt, Zwei-Pool-Restart) und
+`test_parked_service.ControllerReconcileTests`/`HttpTests` (Start-Reconcile vor
+`_fill`, periodisch via `reconcile_interval`, `orphans_removed`, `POST /reconcile`).
 
 **VS (#910)** zusätzlich: `ReadyGateTests` (erst beide beigetreten + beide
 `ready` lösen genau **ein** `resume_game` aus; kein `resume` nach Join 1/2 bzw.

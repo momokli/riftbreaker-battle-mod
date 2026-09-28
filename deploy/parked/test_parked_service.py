@@ -88,6 +88,10 @@ class FakeProvisioner(object):
         self.starts = []
         self.stops = []
         self.fail_start = False
+        self.fail_stop = set()
+        # #969: Container-Inventar fuer die Discovery (env, instance) -> Status.
+        self._containers = {}
+        self.list_calls = []
         # GNS-UDP-Host-Endpoint, den `status` liefert (simuliert `docker port`
         # 6321/udp). Tests duerfen ihn aendern (Container-Neustart) oder auf None
         # setzen (Mapping weg).
@@ -97,6 +101,7 @@ class FakeProvisioner(object):
         if self.fail_start:
             raise RuntimeError("fake start %s exploded" % instance_id)
         self.starts.append((env or self.cfg.env, instance_id))
+        self._containers[(env or self.cfg.env, instance_id)] = "running"
         port = self._BASE_PORT + len(self.starts)
         return {
             "instance": instance_id,
@@ -128,7 +133,30 @@ class FakeProvisioner(object):
 
     def stop(self, instance_id=None, env=None):
         self.stops.append((env or self.cfg.env, instance_id))
+        if instance_id in self.fail_stop:
+            raise RuntimeError("fake stop %s exploded" % instance_id)
+        self._containers.pop((env or self.cfg.env, instance_id), None)
         return {"instance": instance_id, "removed": {}}
+
+    # -- Discovery (#969) -------------------------------------------------
+    def list_instances(self, env=None):
+        env = env or self.cfg.env
+        self.list_calls.append(env)
+        return [
+            {
+                "container": "riftbreaker-dedicated-%s-%s" % (row_env, instance),
+                "env": row_env,
+                "instance": instance,
+                "status": status,
+                "running": status == "running",
+            }
+            for (row_env, instance), status in sorted(self._containers.items())
+            if row_env == env
+        ]
+
+    def add_container(self, instance_id, status="running", env=None):
+        """Testhilfe: Container ohne ``start`` im Inventar anlegen (Leak)."""
+        self._containers[(env or self.cfg.env, instance_id)] = status
 
 
 def make_pool(clock, provisioner, bridges):
@@ -167,6 +195,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.pool_size, 1)
         self.assertEqual(cfg.max_park_seconds, 900.0)
         self.assertEqual(cfg.reap_interval, 30.0)
+        self.assertEqual(cfg.reconcile_interval, 300.0)
+        self.assertTrue(cfg.reconcile_on_start)
         self.assertEqual(cfg.instance_prefix, "parked")
         self.assertEqual(cfg.token, "")
 
@@ -179,6 +209,8 @@ class ConfigTests(unittest.TestCase):
                 "PARKED_POOL_SIZE": "3",
                 "PARKED_MAX_PARK_SECONDS": "120",
                 "PARKED_REAP_INTERVAL": "5",
+                "PARKED_RECONCILE_INTERVAL": "7",
+                "PARKED_RECONCILE_ON_START": "false",
                 "PARKED_INSTANCE_PREFIX": "warm",
                 "PARKED_TOKEN": "  s3cr3t  ",
                 "PARKED_LOG_LEVEL": "DEBUG",
@@ -190,6 +222,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.pool_size, 3)
         self.assertEqual(cfg.max_park_seconds, 120.0)
         self.assertEqual(cfg.reap_interval, 5.0)
+        self.assertEqual(cfg.reconcile_interval, 7.0)
+        self.assertFalse(cfg.reconcile_on_start)
         self.assertEqual(cfg.instance_prefix, "warm")
         self.assertEqual(cfg.token, "s3cr3t")
         self.assertEqual(cfg.log_level, "DEBUG")
@@ -211,6 +245,22 @@ class ConfigTests(unittest.TestCase):
     def test_invalid_reap_interval_raises(self):
         with self.assertRaises(ParkedConfigError):
             ParkedServiceConfig.from_env({"PARKED_REAP_INTERVAL": "NaN"})
+
+    def test_invalid_reconcile_interval_raises(self):
+        with self.assertRaises(ParkedConfigError):
+            ParkedServiceConfig.from_env({"PARKED_RECONCILE_INTERVAL": "0"})
+        with self.assertRaises(ParkedConfigError):
+            ParkedServiceConfig.from_env({"PARKED_RECONCILE_INTERVAL": "abc"})
+
+    def test_invalid_reconcile_on_start_raises(self):
+        with self.assertRaises(ParkedConfigError):
+            ParkedServiceConfig.from_env({"PARKED_RECONCILE_ON_START": "maybe"})
+
+    def test_reconcile_on_start_accepts_boolean_tokens(self):
+        self.assertTrue(ParkedServiceConfig.from_env({"PARKED_RECONCILE_ON_START": "1"}).reconcile_on_start)
+        self.assertTrue(ParkedServiceConfig.from_env({"PARKED_RECONCILE_ON_START": "yes"}).reconcile_on_start)
+        self.assertFalse(ParkedServiceConfig.from_env({"PARKED_RECONCILE_ON_START": "0"}).reconcile_on_start)
+        self.assertFalse(ParkedServiceConfig.from_env({"PARKED_RECONCILE_ON_START": "off"}).reconcile_on_start)
 
     def test_invalid_port_raises(self):
         with self.assertRaises(ParkedConfigError):
@@ -312,6 +362,93 @@ class ControllerReapTests(unittest.TestCase):
         self.assertIn(claimed["instance"], [r["instance"] for r in controller._rows()])
         # CLAIMED bleibt unberuehrt (kein stop der laufenden Instanz).
         self.assertEqual(self.provisioner.stops, [])
+
+
+class ControllerReconcileTests(unittest.TestCase):
+    """#969 US3: Reconcile beim Start + periodisch, ohne den Loop zu toeten."""
+
+    def setUp(self):
+        self.clock = FakeClock(1000.0)
+        self.provisioner = FakeProvisioner()
+        self.bridges = {}
+
+    def test_reconcile_removes_orphan_and_counts(self):
+        controller = make_controller(self.clock, self.provisioner, self.bridges)
+        self.provisioner.add_container("leak", "running")
+        result = controller.reconcile()
+        self.assertEqual(result["removed"], ["leak"])
+        self.assertEqual(controller.orphans_removed, 1)
+        self.assertEqual(controller.counters()["orphans_removed"], 1)
+
+    def test_maintain_reconciles_when_due_before_fill(self):
+        controller = make_controller(
+            self.clock, self.provisioner, self.bridges, pool_size=1, reconcile_interval=5.0
+        )
+        self.provisioner.add_container("leak", "running")
+        self.clock.advance(6.0)
+        controller.maintain_once()
+        self.assertNotIn(("test", "leak"), self.provisioner._containers)
+        self.assertEqual(controller.counters()["parked"], 1)
+        self.assertEqual(controller.orphans_removed, 1)
+
+    def test_reconcile_not_due_is_skipped(self):
+        controller = make_controller(
+            self.clock, self.provisioner, self.bridges, pool_size=0, reconcile_interval=5.0
+        )
+        self.provisioner.add_container("leak", "running")
+        controller.maintain_once()  # 0 < interval -> kein Reconcile
+        self.assertIn(("test", "leak"), self.provisioner._containers)
+        self.assertEqual(controller.orphans_removed, 0)
+
+    def test_reconcile_due_after_interval(self):
+        controller = make_controller(
+            self.clock, self.provisioner, self.bridges, reconcile_interval=10.0
+        )
+        self.assertFalse(controller.reconcile_due())
+        self.clock.advance(10.0)
+        self.assertTrue(controller.reconcile_due())
+
+    def test_start_reconciles_before_fill(self):
+        controller = make_controller(
+            self.clock, self.provisioner, self.bridges,
+            pool_size=1, reconcile_interval=9999.0, reconcile_on_start=True,
+        )
+        controller._loop = lambda: None  # Thread sofort beenden (kein Rennen)
+        self.provisioner.add_container("leak", "running")
+        controller.start()
+        try:
+            # Synchroner Reconcile VOR dem ersten _fill(): Leak weg.
+            self.assertEqual(controller.orphans_removed, 1)
+            self.assertNotIn(("test", "leak"), self.provisioner._containers)
+            controller.maintain_once()  # fuellt (Reconcile nicht faellig)
+            self.assertEqual(controller.counters()["parked"], 1)
+        finally:
+            controller.stop()
+
+    def test_start_reconcile_can_be_disabled(self):
+        controller = make_controller(
+            self.clock, self.provisioner, self.bridges,
+            pool_size=0, reconcile_on_start=False,
+        )
+        controller._loop = lambda: None
+        self.provisioner.add_container("leak", "running")
+        controller.start()
+        try:
+            self.assertEqual(controller.orphans_removed, 0)
+            self.assertIn(("test", "leak"), self.provisioner._containers)
+        finally:
+            controller.stop()
+
+    def test_reconcile_stop_error_does_not_block_fill(self):
+        controller = make_controller(
+            self.clock, self.provisioner, self.bridges, pool_size=1, reconcile_interval=5.0
+        )
+        self.provisioner.add_container("leak", "running")
+        self.provisioner.fail_stop.add("leak")
+        self.clock.advance(6.0)
+        controller.maintain_once()
+        self.assertEqual(controller.orphans_removed, 0)
+        self.assertEqual(controller.counters()["parked"], 1)  # Loop lebt, Pool gefuellt
 
 
 class ControllerClaimRecycleTests(unittest.TestCase):
@@ -548,6 +685,29 @@ class HttpTests(HttpHarness):
         status, body = self.post("/reap", {"max_park_seconds": 10})
         self.assertEqual(status, 200)
         self.assertEqual(len(body["stopped"]), 1)
+
+    def test_reconcile_endpoint_removes_orphan(self):
+        self.provisioner.add_container("leak", "running")
+        status, body = self.post("/reconcile", {})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+        self.assertIn("leak", body["removed"])
+        self.assertEqual(body["kept"], 0)
+        self.assertIn("skipped_foreign", body)
+        _s, counters = self.get("/status")
+        self.assertEqual(counters["counters"]["orphans_removed"], 1)
+
+    def test_reconcile_endpoint_503_on_error(self):
+        self.provisioner.add_container("leak", "running")
+        self.provisioner.fail_stop.add("leak")
+        status, body = self.post("/reconcile", {})
+        self.assertEqual(status, 503)
+        self.assertEqual(body["reason"], "reconcile_failed")
+
+    def test_reconcile_method_not_allowed(self):
+        status, body = self.get("/reconcile")
+        self.assertEqual(status, 405)
+        self.assertEqual(body["reason"], "method_not_allowed")
 
     def test_unknown_route_404(self):
         status, body = self.get("/nope")

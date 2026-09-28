@@ -111,6 +111,9 @@ class FakeProvisioner(object):
         self.fail_stop = set()
         # instance_id -> (bridge_port, gns_endpoint); status liest hieraus.
         self._ports = {}
+        # #969: Container-Inventar fuer die Discovery (env, instance) -> Status.
+        self._containers = {}
+        self.list_calls = []
 
     def _gns_for(self, instance_id):
         known = self._ports.get(instance_id)
@@ -120,6 +123,7 @@ class FakeProvisioner(object):
 
     def start(self, env=None, mode="solo", instance_id=None):
         self.starts.append((env or self.cfg.env, instance_id))
+        self._containers[(env or self.cfg.env, instance_id)] = "running"
         port = self._BASE_PORT + len(self.starts)
         # Issue #929: der GNS-UDP-Host-Port kommt aus dem 6321/udp-Mapping.
         gns = "127.0.0.1:%d" % (port + 1000)
@@ -162,7 +166,33 @@ class FakeProvisioner(object):
         self.stops.append((env or self.cfg.env, instance_id))
         if instance_id in self.fail_stop:
             raise RuntimeError("fake stop %s exploded" % instance_id)
+        self._containers.pop((env or self.cfg.env, instance_id), None)
         return {"instance": instance_id, "removed": {}}
+
+    # -- Discovery (#969) -------------------------------------------------
+    def list_instances(self, env=None):
+        """Env-gefilterte Container-Liste (Discovery-Fundament fuer reconcile)."""
+        env = env or self.cfg.env
+        self.list_calls.append(env)
+        return [
+            {
+                "container": "riftbreaker-dedicated-%s-%s" % (row_env, instance),
+                "env": row_env,
+                "instance": instance,
+                "status": status,
+                "running": status == "running",
+            }
+            for (row_env, instance), status in sorted(self._containers.items())
+            if row_env == env
+        ]
+
+    def set_status(self, instance_id, status, env=None):
+        """Testhilfe: Status eines Containers setzen (z. B. Created-Zombie)."""
+        self._containers[(env or self.cfg.env, instance_id)] = status
+
+    def add_container(self, instance_id, status="running", env=None):
+        """Testhilfe: Container ohne ``start`` im Inventar anlegen (Leak)."""
+        self._containers[(env or self.cfg.env, instance_id)] = status
 
 
 class PoolHarness(unittest.TestCase):
@@ -512,6 +542,121 @@ class StatusTests(PoolHarness):
 
     def test_status_empty_pool(self):
         self.assertEqual(self.pool.status(), [])
+
+
+class ReconcileTests(PoolHarness):
+    """#969 US2: ``ParkedPool.reconcile()`` raeumt Orphans/Restart-Leaks auf."""
+
+    def test_untracked_running_container_is_removed(self):
+        # Restart-Leak: Container existiert, Pool trackt ihn nicht.
+        self.provisioner.add_container("r1", "running")
+        result = self.pool.reconcile()
+        self.assertEqual(result["removed"], ["r1"])
+        self.assertEqual(result["evicted"], [])
+        self.assertEqual(result["zombies"], [])
+        self.assertIn(("test", "r1"), self.provisioner.stops)
+        self.assertNotIn(("test", "r1"), self.provisioner._containers)
+
+    def test_created_zombie_is_evicted_and_removed(self):
+        self.pool.warm_up(env="test", instance_id="r1")
+        self.provisioner.set_status("r1", "created")
+        result = self.pool.reconcile()
+        self.assertEqual(result["removed"], ["r1"])
+        self.assertEqual(result["evicted"], ["r1"])
+        self.assertEqual(result["zombies"], ["r1"])
+        self.assertNotIn(("test", "r1"), self.pool._entries)
+
+    def test_running_tracked_parked_is_kept(self):
+        self.pool.warm_up(env="test", instance_id="r1")
+        result = self.pool.reconcile()
+        self.assertEqual(result["kept"], 1)
+        self.assertEqual(result["removed"], [])
+        self.assertEqual(self.provisioner.stops, [])
+
+    def test_running_tracked_claimed_is_kept(self):
+        self.pool.warm_up(env="test", instance_id="r1")
+        self.pool.claim(env="test", instance_id="r1")
+        result = self.pool.reconcile()
+        self.assertEqual(result["kept"], 1)
+        self.assertEqual(result["removed"], [])
+
+    def test_stopped_tracked_with_container_is_removed(self):
+        entry = self.pool.warm_up(env="test", instance_id="r1")
+        entry.state = ParkedState.STOPPED
+        result = self.pool.reconcile()
+        self.assertEqual(result["removed"], ["r1"])
+        self.assertIn(("test", "r1"), self.provisioner.stops)
+
+    def test_phantom_entry_evicted_without_stop(self):
+        # Tracked, aber Container fehlt (Crash) -> evict, KEIN stop.
+        self.pool.warm_up(env="test", instance_id="r1")
+        self.provisioner._containers.clear()
+        result = self.pool.reconcile()
+        self.assertEqual(result["evicted"], ["r1"])
+        self.assertEqual(result["removed"], [])
+        self.assertEqual(self.provisioner.stops, [])
+
+    def test_foreign_env_never_touched(self):
+        self.provisioner.add_container("x", "running", env="other")
+        original = self.provisioner.list_instances
+
+        def loose(env=None):
+            return list(original(env)) + [
+                {
+                    "container": "riftbreaker-dedicated-other-x",
+                    "env": "other",
+                    "instance": "x",
+                    "status": "running",
+                    "running": True,
+                }
+            ]
+
+        self.provisioner.list_instances = loose
+        result = self.pool.reconcile()
+        self.assertEqual(result["skipped_foreign"], 1)
+        self.assertEqual(self.provisioner.stops, [])
+        self.assertIn(("other", "x"), self.provisioner._containers)
+
+    def test_second_run_is_noop(self):
+        self.provisioner.add_container("leak", "running")
+        first = self.pool.reconcile()
+        self.assertEqual(first["removed"], ["leak"])
+        second = self.pool.reconcile()
+        self.assertEqual(
+            second,
+            {"removed": [], "evicted": [], "zombies": [], "kept": 0,
+             "skipped_foreign": 0, "errors": []},
+        )
+
+    def test_stop_error_isolated_others_removed(self):
+        self.provisioner.add_container("a", "running")
+        self.provisioner.add_container("b", "running")
+        self.provisioner.fail_stop.add("a")
+        result = self.pool.reconcile()
+        self.assertIn("b", result["removed"])
+        self.assertNotIn("a", result["removed"])
+        self.assertTrue(result["errors"])
+        self.assertIn(("test", "b"), self.provisioner.stops)
+
+    def test_reconcile_never_touches_bridge(self):
+        entry = self.pool.warm_up(env="test", instance_id="r1")
+        bridge = self.bridge_for(entry)
+        bridge.calls.clear()
+        self.provisioner.add_container("leak", "running")
+        self.pool.reconcile()
+        self.assertEqual(bridge.calls, [])
+
+    def test_restart_leak_between_two_pools(self):
+        pool_a = ParkedPool(
+            self.provisioner, self.factory, clock=self.clock, sleep=lambda _s: None
+        )
+        pool_a.warm_up(env="test", instance_id="r1")
+        pool_b = ParkedPool(
+            self.provisioner, self.factory, clock=self.clock, sleep=lambda _s: None
+        )
+        result = pool_b.reconcile()
+        self.assertEqual(result["removed"], ["r1"])
+        self.assertNotIn(("test", "r1"), self.provisioner._containers)
 
 
 if __name__ == "__main__":

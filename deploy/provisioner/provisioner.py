@@ -685,6 +685,72 @@ class Provisioner(object):
             "container": spec.container,
         }
 
+    def list_instances(self, env: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Alle Container der EIGENEN ``env`` auflisten (#969).
+
+        Grundlage ist das ``rb.provisioner.env``-Label ueber
+        :meth:`DockerCli.ps_all`. Fuer jeden Namen wird ``docker inspect``
+        gelesen und daraus ``instance`` (Label ``rb.provisioner.instance``,
+        Fallback Namens-Suffix), ``status`` (``State.Status``), ``running``
+        und ``started_at`` abgeleitet. Ein Container ohne (oder mit fremdem)
+        ``rb.provisioner.env``-Label wird defensiv gefiltert, damit ein Dienst
+        pro Env nie fremde Container anfasst.
+
+        Ein fehlgeschlagenes ``inspect`` (Container zwischen ``ps`` und
+        ``inspect`` verschwunden) wird uebersprungen — kein Crash.
+        """
+        env = env or self.cfg.env
+        try:
+            names = self.docker.ps_all("rb.provisioner.env=%s" % env)
+        except DockerError as exc:
+            LOG.warning("list_instances: docker ps fehlgeschlagen: %s", exc)
+            return []
+        instances: List[Dict[str, Any]] = []
+        for name in names:
+            try:
+                info = self.docker.inspect_optional(name)
+            except DockerError as exc:
+                LOG.warning("list_instances: inspect %s fehlgeschlagen: %s", name, exc)
+                continue
+            if info is None:
+                continue
+            labels = (info.get("Config") or {}).get("Labels") or {}
+            row_env = labels.get("rb.provisioner.env") or env
+            if row_env != env:
+                # Fremde Env: nie auflisten (ein Dienst pro Env, kein Cross-Env).
+                continue
+            state = info.get("State") or {}
+            status = state.get("Status") or ""
+            instance = labels.get("rb.provisioner.instance") or self._instance_from_name(
+                name, env
+            )
+            if not instance:
+                continue
+            instances.append(
+                {
+                    "container": name,
+                    "env": row_env,
+                    "instance": instance,
+                    "status": status,
+                    "running": status == "running",
+                    "started_at": state.get("StartedAt"),
+                }
+            )
+        return instances
+
+    @staticmethod
+    def _instance_from_name(name: str, env: str) -> Optional[str]:
+        """Fallback: ``instance`` aus dem Dedicated-Container-Namen ableiten.
+
+        Neben dem Label ist der Dedi-Name deterministisch
+        (``riftbreaker-dedicated-<env>-<instance>``); Sidecar-Namen tragen kein
+        ableitbares Suffix und werden ohne Label uebersprungen.
+        """
+        prefix = "riftbreaker-dedicated-%s-" % env
+        if name.startswith(prefix) and len(name) > len(prefix):
+            return name[len(prefix):]
+        return None
+
     # -- intern ------------------------------------------------------------
     def _preflight(self, spec: InstanceSpec) -> None:
         if self._port_in_use(spec.bridge_port):

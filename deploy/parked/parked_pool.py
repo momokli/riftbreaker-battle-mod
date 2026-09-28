@@ -459,3 +459,175 @@ class ParkedPool(object):
         """Snapshot aller Pool-Eintraege (als einfache dicts)."""
         now = self.clock()
         return [entry.to_dict(now) for entry in self._entries.values()]
+
+    # -- Reconciliation (#969) --------------------------------------------
+    def _discover(self, env: str) -> List[Dict[str, Any]]:
+        """Container der EIGENEN ``env`` auflisten (Discovery-Fundament).
+
+        Bevorzugt :meth:`Provisioner.list_instances` (#969). Fehlt die Methode,
+        wird defensiv ueber ``provisioner.docker.ps_all`` + ``inspect_optional``
+        gelesen (gleiches Ergebnis, nur ohne Provisioner-Wrapper).
+        """
+        list_fn = getattr(self.provisioner, "list_instances", None)
+        if callable(list_fn):
+            return list(list_fn(env=env) or [])
+
+        docker = getattr(self.provisioner, "docker", None)
+        ps_all = getattr(docker, "ps_all", None)
+        if not callable(ps_all):
+            raise ParkedError("reconcile: Provisioner ohne list_instances/docker.ps_all")
+        rows: List[Dict[str, Any]] = []
+        for name in ps_all("rb.provisioner.env=%s" % env):
+            try:
+                info = docker.inspect_optional(name)
+            except Exception as exc:  # noqa: BLE001 - Discovery best-effort
+                LOG.warning("reconcile: inspect %s fehlgeschlagen: %s", name, exc)
+                continue
+            if info is None:
+                continue
+            labels = (info.get("Config") or {}).get("Labels") or {}
+            state = info.get("State") or {}
+            status = state.get("Status") or ""
+            rows.append(
+                {
+                    "container": name,
+                    "env": labels.get("rb.provisioner.env") or env,
+                    "instance": labels.get("rb.provisioner.instance"),
+                    "status": status,
+                    "running": status == "running",
+                    "started_at": state.get("StartedAt"),
+                }
+            )
+        return rows
+
+    def _evict(self, env: str, instance_id: str) -> None:
+        """Tracking-Eintrag rein in-memory entfernen (kein Docker-Aufruf)."""
+        self._entries.pop((env, instance_id), None)
+
+    def _remove_orphan(
+        self,
+        env: str,
+        instance_id: str,
+        group: Dict[str, Any],
+        status: str,
+        result: Dict[str, Any],
+    ) -> None:
+        """Einen Orphan per vollem ``provisioner.stop`` entfernen.
+
+        Die Bridge wird dabei NIE beruehrt (kein ``pause_game``/``resume_game``)
+        — ``stop`` loest Container/Sidecars/Netz/Volumes/Pfade auf. Ein
+        ``stop``-Fehler bricht die Schleife nicht ab: er wird aggregiert und
+        der naechste Orphan weiter entfernt (wie :meth:`reap`).
+        """
+        label = "orphan:%s (status=%s)" % (
+            group.get("container") or instance_id,
+            status or "unknown",
+        )
+        LOG.info("reconcile: %s", label)
+        try:
+            self.provisioner.stop(instance_id=instance_id, env=env)
+        except Exception as exc:  # noqa: BLE001 - ein Fehler stoppt die Schleife nicht
+            result["errors"].append(
+                "reconcile: stop von %s fehlgeschlagen: %s" % (instance_id, exc)
+            )
+            return
+        result["removed"].append(instance_id)
+        if not group.get("running"):
+            result["zombies"].append(instance_id)
+
+    def reconcile(self) -> Dict[str, Any]:
+        """Pool gegen den echten Docker-Zustand abgleichen (#969).
+
+        Reines Mengendifferenzieren (Discovery − Tracking) innerhalb der EIGENEN
+        ``env``; fremde Envs werden nie angefasst. Entfernt werden:
+
+          * nicht getrackte Container (Restart-Leak / Orphan),
+          * getrackte Eintraege, deren Container nicht laeuft (Created-Zombie /
+            Exited / Dead), samt Eviction des stale Eintrags,
+          * getrackte ``STOPPED``-Eintraege, deren Container noch existiert.
+
+        Getrackte ``PARKED``/``CLAIMED``/``RECYCLING`` mit laufendem Container
+        bleiben unberuehrt. Getrackte Eintraege ohne Container (Crash) werden
+        evicted — ohne ``stop``. Ueberfaellige ``PARKED``-Instanzen bleiben
+        Sache von :meth:`reap` (kennt ``parked_since``).
+
+        Idempotent: ein zweiter Lauf findet nichts mehr. Rueckgabe::
+
+            {"removed": [...], "evicted": [...], "zombies": [...],
+             "kept": int, "skipped_foreign": int, "errors": [str]}
+        """
+        env = self._default_env()
+        result: Dict[str, Any] = {
+            "removed": [],
+            "evicted": [],
+            "zombies": [],
+            "kept": 0,
+            "skipped_foreign": 0,
+            "errors": [],
+        }
+        try:
+            rows = self._discover(env)
+        except Exception as exc:  # noqa: BLE001 - Discovery best-effort
+            result["errors"].append("reconcile: discovery fehlgeschlagen: %s" % exc)
+            return result
+
+        # Container je (env, instance) gruppieren. Sidecars tragen dieselben
+        # rb.provisioner.*-Labels; ihre Status sind fuer den Instanzzustand
+        # gleichwertig (ein Stack laeuft oder nicht).
+        groups: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for row in rows:
+            row_env = row.get("env") or env
+            if row_env != env:
+                result["skipped_foreign"] += 1
+                continue
+            instance = row.get("instance")
+            if not instance:
+                continue
+            group = groups.setdefault(
+                (row_env, instance),
+                {"container": "", "statuses": [], "running": False},
+            )
+            if not group["container"]:
+                group["container"] = row.get("container") or ""
+            status = row.get("status") or ""
+            group["statuses"].append(status)
+            if row.get("running") or status == "running":
+                group["running"] = True
+
+        for (row_env, instance_id), group in groups.items():
+            status = group["statuses"][0] if group["statuses"] else ""
+            tracked = self._entries.get((row_env, instance_id))
+            if tracked is None or tracked.state == ParkedState.STOPPED:
+                # Orphan: nicht getrackt (Restart-Leak) bzw. getrackt STOPPED
+                # mit noch vorhandenem Container.
+                self._remove_orphan(row_env, instance_id, group, status, result)
+            elif not group["running"]:
+                # Created-Zombie/Exited/Dead, waehrend der Eintrag PARKED/
+                # CLAIMED/WARMING behauptet -> stale Eintrag evicten + weg.
+                self._evict(row_env, instance_id)
+                result["evicted"].append(instance_id)
+                self._remove_orphan(row_env, instance_id, group, status, result)
+            else:
+                result["kept"] += 1
+
+        # Reverse-Luecke: getrackter Eintrag ohne Container (z. B. Crash) ->
+        # evict, KEIN stop (nichts da). Nur die eigene env.
+        discovered = set(groups.keys())
+        for key in list(self._entries.keys()):
+            if key[0] != env or key in discovered:
+                continue
+            self._evict(key[0], key[1])
+            result["evicted"].append(key[1])
+
+        if result["errors"]:
+            LOG.warning("reconcile (%s): %s", env, "; ".join(result["errors"]))
+        else:
+            LOG.info(
+                "reconcile (%s): removed=%d evicted=%d kept=%d skipped_foreign=%d",
+                env,
+                len(result["removed"]),
+                len(result["evicted"]),
+                result["kept"],
+                result["skipped_foreign"],
+            )
+        return result

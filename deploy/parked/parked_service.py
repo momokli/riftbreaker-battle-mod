@@ -25,7 +25,9 @@ Endpunkte (JSON; Bearer-Token PFLICHT, wenn ``PARKED_TOKEN`` gesetzt):
                           optionales ``result`` (``win``/``lose``) wird an
                           ``pool.recycle`` durchgereicht und loest dort
                           ``end_game(result)`` aus (ohne ``result`` kein ``end_game``)
-  * ``POST /reap``     -> manueller Auslaufschutz-Lauf
+  * ``POST /reap``      -> manueller Auslaufschutz-Lauf
+  * ``POST /reconcile`` -> manueller Reconciliation-Lauf (Restart-Leaks /
+                          Orphans entfernen); ``503`` bei Fehlern im Lauf
 
 Fehlerformat einheitlich ``{"ok":false,"reason":"<code>","detail":"…"}``;
 ``401`` ohne/mit falschem Bearer, ``404`` unbekannte Route, ``409`` falscher
@@ -98,6 +100,23 @@ def _positive_number(env: Dict[str, str], var: str, default: Any, cast: Any) -> 
     return value
 
 
+_TRUE_TOKENS = ("1", "true", "yes", "on")
+_FALSE_TOKENS = ("0", "false", "no", "off")
+
+
+def _bool_value(env: Dict[str, str], var: str, default: bool) -> bool:
+    """Boolean-Env lesen: fehlend/leer -> Default; unbekannt -> Fehler (fail-closed)."""
+    raw = env.get(var)
+    if raw is None or str(raw).strip() == "":
+        return bool(default)
+    token = str(raw).strip().lower()
+    if token in _TRUE_TOKENS:
+        return True
+    if token in _FALSE_TOKENS:
+        return False
+    raise ParkedConfigError("%s muss ein Boolean sein (war %r)" % (var, raw))
+
+
 @dataclasses.dataclass
 class ParkedServiceConfig:
     """Dienst-Konfiguration aus ``PARKED_*``; ``PROVISIONER_*`` werden an
@@ -109,6 +128,8 @@ class ParkedServiceConfig:
     pool_size: int = 1
     max_park_seconds: float = 900.0
     reap_interval: float = 30.0
+    reconcile_interval: float = 300.0
+    reconcile_on_start: bool = True
     instance_prefix: str = "parked"
     token: str = ""
     log_level: str = "INFO"
@@ -125,6 +146,10 @@ class ParkedServiceConfig:
             pool_size=int(_positive_number(env, "PARKED_POOL_SIZE", 1, int)),
             max_park_seconds=float(_positive_number(env, "PARKED_MAX_PARK_SECONDS", 900.0, float)),
             reap_interval=float(_positive_number(env, "PARKED_REAP_INTERVAL", 30.0, float)),
+            reconcile_interval=float(
+                _positive_number(env, "PARKED_RECONCILE_INTERVAL", 300.0, float)
+            ),
+            reconcile_on_start=_bool_value(env, "PARKED_RECONCILE_ON_START", True),
             instance_prefix=prefix,
             token=(env.get("PARKED_TOKEN") or "").strip(),
             log_level=(env.get("PARKED_LOG_LEVEL") or "INFO").strip() or "INFO",
@@ -182,11 +207,15 @@ class ParkedController(object):
         clock: Any = time.monotonic,
         sleep: Any = time.sleep,
         backoff_cap: float = DEFAULT_BACKOFF_CAP,
+        reconcile_interval: float = 300.0,
+        reconcile_on_start: bool = True,
     ) -> None:
         self.pool = pool
         self.pool_size = int(pool_size)
         self.max_park_seconds = float(max_park_seconds)
         self.reap_interval = float(reap_interval)
+        self.reconcile_interval = float(reconcile_interval)
+        self.reconcile_on_start = bool(reconcile_on_start)
         self.env = env
         self.prefix = prefix
         self.clock = clock
@@ -200,12 +229,14 @@ class ParkedController(object):
         self._backoff = 1.0
         self._warm_retry_at = 0.0
         self._last_reap = clock()
+        self._last_reconcile = clock()
 
         # Lifetime-Zaehler (Laufzeit des Dienstes).
         self.claims = 0
         self.recycles = 0
         self.reaps = 0
         self.warm_failures = 0
+        self.orphans_removed = 0
         self._handovers: List[float] = []
 
     # -- intern ------------------------------------------------------------
@@ -250,6 +281,44 @@ class ParkedController(object):
     def reap_due(self) -> bool:
         return (self.clock() - self._last_reap) >= self.reap_interval
 
+    def reconcile_due(self) -> bool:
+        return (self.clock() - self._last_reconcile) >= self.reconcile_interval
+
+    def reconcile(self) -> Dict[str, Any]:
+        """Pool gegen den echten Docker-Zustand abgleichen (#969).
+
+        Best-effort: Fehler toeten den Maintain-Loop nicht; die Anzahl
+        entfernter Orphans wird im Zaehler ``orphans_removed`` kumuliert.
+        Die Bridge wird dabei nie beruehrt (kein ``pause_game``).
+        """
+        with self._lock:
+            self._last_reconcile = self.clock()
+            try:
+                result = self.pool.reconcile()
+            except ParkedError as exc:
+                LOG.warning("reconcile: %s", exc)
+                return {
+                    "removed": [],
+                    "evicted": [],
+                    "zombies": [],
+                    "kept": 0,
+                    "skipped_foreign": 0,
+                    "errors": [str(exc)],
+                }
+            removed = list(result.get("removed") or [])
+            self.orphans_removed += len(removed)
+            errors = list(result.get("errors") or [])
+            if errors:
+                LOG.warning("reconcile (%s): %s", self.env, "; ".join(errors))
+            elif removed or result.get("evicted"):
+                LOG.info(
+                    "reconcile (%s): %d orphans entfernt, %d evicted",
+                    self.env,
+                    len(removed),
+                    len(result.get("evicted") or []),
+                )
+            return result
+
     def _reap(self) -> List[Any]:
         if not self.reap_due():
             return []
@@ -263,8 +332,10 @@ class ParkedController(object):
             return []
 
     def maintain_once(self) -> None:
-        """Ein Wartungslauf: erst auffuellen, dann (falls faellig) reapen."""
+        """Ein Wartungslauf: erst reconcilen, dann auffuellen, dann reapen."""
         with self._lock:
+            if self.reconcile_due():
+                self.reconcile()
             self._fill()
             self._reap()
 
@@ -364,6 +435,7 @@ class ParkedController(object):
                 "recycles": self.recycles,
                 "reaps": self.reaps,
                 "warm_failures": self.warm_failures,
+                "orphans_removed": self.orphans_removed,
                 "handover_last_seconds": last,
                 "handover_avg_seconds": average,
             }
@@ -372,6 +444,13 @@ class ParkedController(object):
     def start(self) -> None:
         if self._thread is not None:
             return
+        if self.reconcile_on_start:
+            # Synchron VOR dem Thread-Start (und vor dem ersten _fill()):
+            # beseitigt Restart-Leaks, bevor neue Instanzen gefuellt werden.
+            try:
+                self.reconcile()
+            except Exception:  # noqa: BLE001 - Start darf nie scheitern
+                LOG.exception("Start-Reconcile fehlgeschlagen")
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="parked-maintain", daemon=True)
         self._thread.start()
@@ -513,7 +592,22 @@ class Handler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 result = self.controller.reap(payload.get("max_park_seconds"))
                 self._send_json(200, dict({"ok": True}, **result))
-            elif path in ("/health", "/status", "/claim", "/recycle", "/reap"):
+            elif method == "POST" and path == "/reconcile":
+                result = self.controller.reconcile()
+                errors = list(result.get("errors") or [])
+                if errors:
+                    raise ServiceError(503, "reconcile_failed", "; ".join(errors))
+                self._send_json(
+                    200,
+                    {
+                        "ok": True,
+                        "removed": result.get("removed") or [],
+                        "evicted": result.get("evicted") or [],
+                        "kept": result.get("kept", 0),
+                        "skipped_foreign": result.get("skipped_foreign", 0),
+                    },
+                )
+            elif path in ("/health", "/status", "/claim", "/recycle", "/reap", "/reconcile"):
                 self._send_json(405, {"ok": False, "reason": "method_not_allowed", "method": method})
             else:
                 self._send_json(404, {"ok": False, "reason": "not_found", "path": path})
@@ -576,6 +670,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         pool_size=config.pool_size,
         max_park_seconds=config.max_park_seconds,
         reap_interval=config.reap_interval,
+        reconcile_interval=config.reconcile_interval,
+        reconcile_on_start=config.reconcile_on_start,
         env=config.env,
         prefix=config.instance_prefix,
     )
