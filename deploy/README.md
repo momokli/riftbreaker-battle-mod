@@ -11,6 +11,25 @@ die forced command führt genau dieses Playbook aus.
 
 On-demand-Dedi-Provisioner (kalter Pfad): [`deploy/provisioner/`](provisioner/) — startet/stoppt je Spielwunsch eine run-scoped Instanz (Issue #908).
 
+## Parität: Parked/Provisioned = voller Stack
+
+Eine geparkte/geclaimte (oder ad-hoc provisionierte) Solo-Instanz ist ein **eigener, vollwertiger
+Game-Server** — kein reduzierter Sonderfall. Sie läuft mit **demselben vollen Stack** wie jede
+Env: `riftbreaker-dedicated` **plus** die Sidecars `send-tailer`, `attack-cycle`, `match-loop`,
+`session-recorder`.
+
+**Regel:** Was auf einem dev/prod-Dedicated läuft, läuft auch auf einer geparkten/provisionierten
+Instanz. Abweichungen sind nur als **explizites, dokumentiertes X** zulässig (mit Begründung) —
+niemals implizit „das braucht der Warmserver nicht".
+
+**Konsequenz fürs Bauen:** Neue Env-weite Services/Ports/Env-Vars gelten automatisch auch für den
+Provisioner-Pfad (`deploy/provisioner/provisioner.py`, `deploy/parked/`, `deploy/capsule/`).
+Alles, was pro Instanz variiert (Ports, URLs, Namen), wird **pro Instanz abgeleitet** — nicht
+global festgenagelt (Vorbild: `ParkedPool._bridge_url`). Feste Host-Ports sind zu vermeiden: sie
+kollidieren zwischen Envs/Tests (siehe #967).
+
+Siehe Milestone **1.0.11 (Server-Parity)** und #966.
+
 ## Voraussetzungen
 
 - `ansible` (core ≥ 2.19) auf dem Control-Node (dem Rechner, von dem du deployst; beim CD ist das planet selbst, als root — siehe CD-Abschnitt).
