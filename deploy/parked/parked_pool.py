@@ -37,10 +37,12 @@ import enum
 import itertools
 import json
 import logging
+import os
+import re
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 LOG = logging.getLogger("parked")
 
@@ -193,17 +195,23 @@ class ParkedPool(object):
     ``clock`` / ``sleep`` — injizierbar (Tests: Fake, echt: ``time``).
     """
 
+    # Marker-Dateien liegen unter ``state_dir``: ``claimed-<env>-<instance>``.
+    # Nur ``[A-Za-z0-9_.-]`` im Namen (Pfad-Traversal-Schutz fuer Discovery-Daten).
+    _MARKER_SAFE = re.compile(r"[^A-Za-z0-9_.-]")
+
     def __init__(
         self,
         provisioner: Any,
         bridge_factory: Optional[Callable[[str], Any]] = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        state_dir: Optional[str] = None,
     ) -> None:
         self.provisioner = provisioner
         self.bridge_factory = bridge_factory or (lambda url: BridgeClient(url))
         self.clock = clock
         self.sleep = sleep
+        self.state_dir = self._resolve_state_dir(state_dir)
         self._entries: Dict[Tuple[str, str], ParkedEntry] = {}
         self._ids = itertools.count(1)
 
@@ -211,6 +219,97 @@ class ParkedPool(object):
     def _default_env(self) -> str:
         cfg = getattr(self.provisioner, "cfg", None)
         return getattr(cfg, "env", None) or "test"
+
+    # -- persistente Claim-Markierung (#969 B1) ---------------------------
+    def _resolve_state_dir(self, state_dir: Optional[str]) -> str:
+        """State-Verzeichnis fuer die Claim-Marker bestimmen.
+
+        Reihenfolge: explizit uebergeben > ``PARKED_STATE_DIR`` >
+        ``<provisioner.cfg.base_dir>/parked-state/<env>`` (Default ``/srv``).
+        So ueberlebt die Claim-Info einen Dienst-Restart, ohne dass der Pool
+        ein komplettes JSON-State-File schreiben/laden muss.
+        """
+        if state_dir:
+            return str(state_dir)
+        env_dir = os.environ.get("PARKED_STATE_DIR")
+        if env_dir and env_dir.strip():
+            return env_dir.strip()
+        cfg = getattr(self.provisioner, "cfg", None)
+        base = getattr(cfg, "base_dir", None) or "/srv"
+        return os.path.join(str(base), "parked-state", self._default_env())
+
+    @classmethod
+    def _marker_name(cls, env: str, instance_id: str) -> str:
+        safe_env = cls._MARKER_SAFE.sub("_", str(env))[:64]
+        safe_instance = cls._MARKER_SAFE.sub("_", str(instance_id))[:64]
+        return "claimed-%s-%s" % (safe_env, safe_instance)
+
+    def _marker_path(self, env: str, instance_id: str) -> str:
+        return os.path.join(self.state_dir, self._marker_name(env, instance_id))
+
+    def _mark_claimed(self, env: str, instance_id: str) -> None:
+        """Claim-Marker atomar schreiben (temp + ``os.replace``).
+
+        Enthaelt ``{env, instance, claimed_at}`` als JSON; das macht
+        :meth:`claimed_instances` robust (kein Parsen des Dateinamens).
+        """
+        try:
+            os.makedirs(self.state_dir, exist_ok=True)
+            path = self._marker_path(env, instance_id)
+            payload = {
+                "env": env,
+                "instance": instance_id,
+                "claimed_at": self.clock(),
+            }
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+            os.replace(tmp, path)
+        except OSError as exc:  # pragma: no cover - nur Log, kein harter Abbruch
+            LOG.warning("claim-Marker fuer %s (env=%s) nicht schreibbar: %s", instance_id, env, exc)
+
+    def _clear_claimed(self, env: str, instance_id: str) -> None:
+        """Claim-Marker entfernen (idempotent; fehlt er, ist es kein Fehler)."""
+        try:
+            os.remove(self._marker_path(env, instance_id))
+        except FileNotFoundError:
+            return
+        except OSError as exc:  # pragma: no cover - nur Log
+            LOG.warning("claim-Marker fuer %s (env=%s) nicht entfernbar: %s", instance_id, env, exc)
+
+    def _is_claimed_marker(self, env: str, instance_id: str) -> bool:
+        """True, wenn ein persistenter Claim-Marker fuer ``(env, instance)`` existiert."""
+        try:
+            return os.path.exists(self._marker_path(env, instance_id))
+        except OSError:  # pragma: no cover - defensiv
+            return False
+
+    def claimed_instances(self, env: Optional[str] = None) -> Set[str]:
+        """Instance-IDs mit Claim-Marker der EIGENEN ``env`` (persistiert).
+
+        Grundlage fuer :meth:`ParkedController._next_id`: eine frische Instanz
+        darf keine ID wiederverwenden, die noch von einem (nach einem Restart
+        untracked) geclaimten Container belegt ist.
+        """
+        env = env or self._default_env()
+        result: Set[str] = set()
+        try:
+            names = os.listdir(self.state_dir)
+        except OSError:
+            return result
+        for name in names:
+            if not name.startswith("claimed-") or name.endswith(".tmp"):
+                continue
+            try:
+                with open(os.path.join(self.state_dir, name), encoding="utf-8") as handle:
+                    payload = json.load(handle)
+            except (OSError, ValueError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            if payload.get("env") == env and payload.get("instance"):
+                result.add(str(payload["instance"]))
+        return result
 
     def _next_id(self) -> str:
         return "parked-%d" % next(self._ids)
@@ -344,6 +443,9 @@ class ParkedPool(object):
 
         entry.state = ParkedState.PARKED
         entry.parked_since = self.clock()
+        # Der Pool besitzt diese Instanz jetzt: ein (ggf. verwaister) Claim-
+        # Marker einer frueheren Generation darf sie nicht mehr schuetzen.
+        self._clear_claimed(env, instance_id)
         return entry
 
     def claim(self, env: Optional[str] = None, instance_id: Optional[str] = None,
@@ -376,6 +478,9 @@ class ParkedPool(object):
         entry.state = ParkedState.CLAIMED
         entry.claimed_at = self.clock()
         entry.parked_since = None
+        # Persistente Claim-Markierung (#969 B1): ueberlebt einen Dienst-Restart,
+        # damit Reconcile den laufenden geclaimten Container NIE stoppt.
+        self._mark_claimed(entry.env, entry.instance_id)
         return {
             "instance": entry.instance_id,
             "env": entry.env,
@@ -422,6 +527,8 @@ class ParkedPool(object):
             entry.claimed_at = None
             entry.gns_endpoint = None
             entry.cycle_url = None
+        # Recycle beendet den Claim -> Marker entfernen (PARKED wie STOPPED).
+        self._clear_claimed(entry.env, entry.instance_id)
         return entry
 
     def reap(self, max_park_seconds: float) -> List[ParkedEntry]:
@@ -450,6 +557,7 @@ class ParkedPool(object):
             entry.parked_since = None
             entry.gns_endpoint = None
             entry.cycle_url = None
+            self._clear_claimed(entry.env, entry.instance_id)
             stopped.append(entry)
         if errors:
             raise ParkedError("; ".join(errors))
@@ -459,3 +567,200 @@ class ParkedPool(object):
         """Snapshot aller Pool-Eintraege (als einfache dicts)."""
         now = self.clock()
         return [entry.to_dict(now) for entry in self._entries.values()]
+
+    # -- Reconciliation (#969) --------------------------------------------
+    def _discover(self, env: str) -> List[Dict[str, Any]]:
+        """Container der EIGENEN ``env`` auflisten (Discovery-Fundament).
+
+        Bevorzugt :meth:`Provisioner.list_instances` (#969). Fehlt die Methode,
+        wird defensiv ueber ``provisioner.docker.ps_all`` + ``inspect_optional``
+        gelesen (gleiches Ergebnis, nur ohne Provisioner-Wrapper). Ein echter
+        Daemon-Fehler beim ``ps``/``inspect`` wird dabei NICHT geschluckt — er
+        steigt auf und wird von :meth:`reconcile` als Discovery-Ausfall gewertet.
+        """
+        list_fn = getattr(self.provisioner, "list_instances", None)
+        if callable(list_fn):
+            return list(list_fn(env=env) or [])
+
+        docker = getattr(self.provisioner, "docker", None)
+        ps_all = getattr(docker, "ps_all", None)
+        if not callable(ps_all):
+            raise ParkedError("reconcile: Provisioner ohne list_instances/docker.ps_all")
+        rows: List[Dict[str, Any]] = []
+        for name in ps_all("rb.provisioner.env=%s" % env):
+            # Ein ECHTER inspect-Fehler (Daemon kaputt) wird laut propagiert:
+            # ``reconcile`` faengt ihn als Discovery-Ausfall ab (#969 B2) und
+            # evictet NICHT. Nur ein wirklich fehlender Container -> None.
+            info = docker.inspect_optional(name)
+            if info is None:
+                continue
+            labels = (info.get("Config") or {}).get("Labels") or {}
+            state = info.get("State") or {}
+            status = state.get("Status") or ""
+            rows.append(
+                {
+                    "container": name,
+                    "env": labels.get("rb.provisioner.env") or env,
+                    "instance": labels.get("rb.provisioner.instance"),
+                    "status": status,
+                    "running": status == "running",
+                    "started_at": state.get("StartedAt"),
+                }
+            )
+        return rows
+
+    def _evict(self, env: str, instance_id: str) -> None:
+        """Tracking-Eintrag rein in-memory entfernen (kein Docker-Aufruf)."""
+        self._entries.pop((env, instance_id), None)
+
+    def _remove_orphan(
+        self,
+        env: str,
+        instance_id: str,
+        group: Dict[str, Any],
+        status: str,
+        result: Dict[str, Any],
+    ) -> None:
+        """Einen Orphan per vollem ``provisioner.stop`` entfernen.
+
+        Die Bridge wird dabei NIE beruehrt (kein ``pause_game``/``resume_game``)
+        — ``stop`` loest Container/Sidecars/Netz/Volumes/Pfade auf. Ein
+        ``stop``-Fehler bricht die Schleife nicht ab: er wird aggregiert und
+        der naechste Orphan weiter entfernt (wie :meth:`reap`).
+        """
+        label = "orphan:%s (status=%s)" % (
+            group.get("container") or instance_id,
+            status or "unknown",
+        )
+        LOG.info("reconcile: %s", label)
+        try:
+            self.provisioner.stop(instance_id=instance_id, env=env)
+        except Exception as exc:  # noqa: BLE001 - ein Fehler stoppt die Schleife nicht
+            result["errors"].append(
+                "reconcile: stop von %s fehlgeschlagen: %s" % (instance_id, exc)
+            )
+            return
+        result["removed"].append(instance_id)
+        if not group.get("running"):
+            result["zombies"].append(instance_id)
+        # Defensiv: ein entfernter Container soll auch keinen Claim-Marker
+        # zuruecklassen (Marker'd Container werden hier eigentlich nie erreicht).
+        self._clear_claimed(env, instance_id)
+
+    def reconcile(self) -> Dict[str, Any]:
+        """Pool gegen den echten Docker-Zustand abgleichen (#969).
+
+        Reines Mengendifferenzieren (Discovery − Tracking) innerhalb der EIGENEN
+        ``env``; fremde Envs werden nie angefasst. Entfernt werden:
+
+          * nicht getrackte Container (Restart-Leak / Orphan),
+          * getrackte Eintraege, deren Container nicht laeuft (Created-Zombie /
+            Exited / Dead), samt Eviction des stale Eintrags,
+          * getrackte ``STOPPED``-Eintraege, deren Container noch existiert.
+
+        Getrackte ``PARKED``/``CLAIMED``/``RECYCLING`` mit laufendem Container
+        bleiben unberuehrt. Getrackte Eintraege ohne Container (Crash) werden
+        evicted — ohne ``stop``. Ueberfaellige ``PARKED``-Instanzen bleiben
+        Sache von :meth:`reap` (kennt ``parked_since``).
+
+        Persistente Claim-Marker (#969 B1): jeder discoverte **und** getrackte
+        Eintrag mit Marker wird **nie** gestoppt/evictet — so ueberlebt ein
+        laufendes, geclaimtes Spiel einen Dienst-Restart. Faellt die Discovery
+        aus (#969 B2), bricht der Lauf **ohne** Eviction ab
+        (``discovery_failed=True``) — sonst wuerde die Reverse-Luecke alle
+        getrackten Eintraege vergessen und ``_fill`` einen Leak erzeugen.
+
+        Idempotent: ein zweiter Lauf findet nichts mehr. Rueckgabe::
+
+            {"removed": [...], "evicted": [...], "zombies": [...],
+             "kept": int, "skipped_foreign": int,
+             "discovery_failed": bool, "errors": [str]}
+        """
+        env = self._default_env()
+        result: Dict[str, Any] = {
+            "removed": [],
+            "evicted": [],
+            "zombies": [],
+            "kept": 0,
+            "skipped_foreign": 0,
+            "discovery_failed": False,
+            "errors": [],
+        }
+        try:
+            rows = self._discover(env)
+        except Exception as exc:  # noqa: BLE001 - Discovery best-effort
+            # Lauter Discovery-Ausfall (#969 B2): NICHT evicten, NICHT stop.
+            result["errors"].append("reconcile: discovery fehlgeschlagen: %s" % exc)
+            result["discovery_failed"] = True
+            LOG.warning("reconcile (%s): discovery fehlgeschlagen, kein Eingriff: %s", env, exc)
+            return result
+
+        # Container je (env, instance) gruppieren. Sidecars tragen dieselben
+        # rb.provisioner.*-Labels; ihre Status sind fuer den Instanzzustand
+        # gleichwertig (ein Stack laeuft oder nicht).
+        groups: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for row in rows:
+            row_env = row.get("env") or env
+            if row_env != env:
+                result["skipped_foreign"] += 1
+                continue
+            instance = row.get("instance")
+            if not instance:
+                continue
+            group = groups.setdefault(
+                (row_env, instance),
+                {"container": "", "statuses": [], "running": False},
+            )
+            if not group["container"]:
+                group["container"] = row.get("container") or ""
+            status = row.get("status") or ""
+            group["statuses"].append(status)
+            if row.get("running") or status == "running":
+                group["running"] = True
+
+        for (row_env, instance_id), group in groups.items():
+            status = group["statuses"][0] if group["statuses"] else ""
+            tracked = self._entries.get((row_env, instance_id))
+            if self._is_claimed_marker(row_env, instance_id):
+                # Persistenter Claim (#969 B1): der Container gehoert einem
+                # laufenden Spiel (ggf. aus einer VORHERIGEN Prozess-Generation)
+                # -> nie stoppen/evicten.
+                result["kept"] += 1
+                continue
+            if tracked is None or tracked.state == ParkedState.STOPPED:
+                # Orphan: nicht getrackt (Restart-Leak) bzw. getrackt STOPPED
+                # mit noch vorhandenem Container.
+                self._remove_orphan(row_env, instance_id, group, status, result)
+            elif not group["running"]:
+                # Created-Zombie/Exited/Dead, waehrend der Eintrag PARKED/
+                # CLAIMED/WARMING behauptet -> stale Eintrag evicten + weg.
+                self._evict(row_env, instance_id)
+                result["evicted"].append(instance_id)
+                self._remove_orphan(row_env, instance_id, group, status, result)
+            else:
+                result["kept"] += 1
+
+        # Reverse-Luecke: getrackter Eintrag ohne Container (z. B. Crash) ->
+        # evict, KEIN stop (nichts da). Nur die eigene env. Eintraege mit
+        # Claim-Marker bleiben (Claim-Container kann transient fehlen).
+        discovered = set(groups.keys())
+        for key in list(self._entries.keys()):
+            if key[0] != env or key in discovered:
+                continue
+            if self._is_claimed_marker(key[0], key[1]):
+                continue
+            self._evict(key[0], key[1])
+            result["evicted"].append(key[1])
+
+        if result["errors"]:
+            LOG.warning("reconcile (%s): %s", env, "; ".join(result["errors"]))
+        else:
+            LOG.info(
+                "reconcile (%s): removed=%d evicted=%d kept=%d skipped_foreign=%d",
+                env,
+                len(result["removed"]),
+                len(result["evicted"]),
+                result["kept"],
+                result["skipped_foreign"],
+            )
+        return result

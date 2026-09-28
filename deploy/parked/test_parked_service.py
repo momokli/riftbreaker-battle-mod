@@ -13,13 +13,16 @@ Kein Docker, kein Netz (ausser einem echten ``ThreadingHTTPServer`` auf
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import tempfile
 import threading
 import unittest
 import urllib.error
 import urllib.request
 from types import SimpleNamespace
 
-from parked_pool import ParkedPool, ParkedState
+from parked_pool import ParkedError, ParkedPool, ParkedState
 from parked_service import (
     ParkedConfigError,
     ParkedController,
@@ -88,6 +91,10 @@ class FakeProvisioner(object):
         self.starts = []
         self.stops = []
         self.fail_start = False
+        self.fail_stop = set()
+        # #969: Container-Inventar fuer die Discovery (env, instance) -> Status.
+        self._containers = {}
+        self.list_calls = []
         # GNS-UDP-Host-Endpoint, den `status` liefert (simuliert `docker port`
         # 6321/udp). Tests duerfen ihn aendern (Container-Neustart) oder auf None
         # setzen (Mapping weg).
@@ -97,6 +104,7 @@ class FakeProvisioner(object):
         if self.fail_start:
             raise RuntimeError("fake start %s exploded" % instance_id)
         self.starts.append((env or self.cfg.env, instance_id))
+        self._containers[(env or self.cfg.env, instance_id)] = "running"
         port = self._BASE_PORT + len(self.starts)
         return {
             "instance": instance_id,
@@ -128,10 +136,33 @@ class FakeProvisioner(object):
 
     def stop(self, instance_id=None, env=None):
         self.stops.append((env or self.cfg.env, instance_id))
+        if instance_id in self.fail_stop:
+            raise RuntimeError("fake stop %s exploded" % instance_id)
+        self._containers.pop((env or self.cfg.env, instance_id), None)
         return {"instance": instance_id, "removed": {}}
 
+    # -- Discovery (#969) -------------------------------------------------
+    def list_instances(self, env=None):
+        env = env or self.cfg.env
+        self.list_calls.append(env)
+        return [
+            {
+                "container": "riftbreaker-dedicated-%s-%s" % (row_env, instance),
+                "env": row_env,
+                "instance": instance,
+                "status": status,
+                "running": status == "running",
+            }
+            for (row_env, instance), status in sorted(self._containers.items())
+            if row_env == env
+        ]
 
-def make_pool(clock, provisioner, bridges):
+    def add_container(self, instance_id, status="running", env=None):
+        """Testhilfe: Container ohne ``start`` im Inventar anlegen (Leak)."""
+        self._containers[(env or self.cfg.env, instance_id)] = status
+
+
+def make_pool(clock, provisioner, bridges, state_dir=None):
     def factory(url):
         bridge = bridges.get(url)
         if bridge is None:
@@ -139,11 +170,13 @@ def make_pool(clock, provisioner, bridges):
             bridges[url] = bridge
         return bridge
 
-    return ParkedPool(provisioner, factory, clock=clock, sleep=lambda _s: None)
+    return ParkedPool(
+        provisioner, factory, clock=clock, sleep=lambda _s: None, state_dir=state_dir
+    )
 
 
-def make_controller(clock, provisioner, bridges, pool_size=1, **kwargs):
-    pool = make_pool(clock, provisioner, bridges)
+def make_controller(clock, provisioner, bridges, pool_size=1, state_dir=None, **kwargs):
+    pool = make_pool(clock, provisioner, bridges, state_dir=state_dir)
     controller = ParkedController(
         pool,
         pool_size=pool_size,
@@ -158,6 +191,24 @@ def make_controller(clock, provisioner, bridges, pool_size=1, **kwargs):
     return controller
 
 
+def use_temp_state_dir(case):
+    """Test-Hygiene: eigenen ``PARKED_STATE_DIR`` je Test.
+
+    Verhindert, dass Claim-Marker in den Produktions-Default (``/srv/...``)
+    geschrieben werden und zwischen Testlaeufen persistieren. Der Pool liest
+    den Env-Wert, wenn ihm kein explizites ``state_dir`` uebergeben wird.
+    """
+    path = tempfile.mkdtemp(prefix="parked-state-")
+    case.addCleanup(shutil.rmtree, path, True)
+    previous = os.environ.get("PARKED_STATE_DIR")
+    os.environ["PARKED_STATE_DIR"] = path
+    if previous is None:
+        case.addCleanup(os.environ.pop, "PARKED_STATE_DIR", None)
+    else:
+        case.addCleanup(os.environ.__setitem__, "PARKED_STATE_DIR", previous)
+    return path
+
+
 class ConfigTests(unittest.TestCase):
     def test_defaults(self):
         cfg = ParkedServiceConfig.from_env({})
@@ -167,6 +218,9 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.pool_size, 1)
         self.assertEqual(cfg.max_park_seconds, 900.0)
         self.assertEqual(cfg.reap_interval, 30.0)
+        self.assertEqual(cfg.reconcile_interval, 300.0)
+        self.assertTrue(cfg.reconcile_on_start)
+        self.assertEqual(cfg.state_dir, "/srv/parked-state/test")
         self.assertEqual(cfg.instance_prefix, "parked")
         self.assertEqual(cfg.token, "")
 
@@ -179,6 +233,9 @@ class ConfigTests(unittest.TestCase):
                 "PARKED_POOL_SIZE": "3",
                 "PARKED_MAX_PARK_SECONDS": "120",
                 "PARKED_REAP_INTERVAL": "5",
+                "PARKED_RECONCILE_INTERVAL": "7",
+                "PARKED_RECONCILE_ON_START": "false",
+                "PARKED_STATE_DIR": "/var/lib/rbmods/parked-state",
                 "PARKED_INSTANCE_PREFIX": "warm",
                 "PARKED_TOKEN": "  s3cr3t  ",
                 "PARKED_LOG_LEVEL": "DEBUG",
@@ -190,6 +247,9 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.pool_size, 3)
         self.assertEqual(cfg.max_park_seconds, 120.0)
         self.assertEqual(cfg.reap_interval, 5.0)
+        self.assertEqual(cfg.reconcile_interval, 7.0)
+        self.assertFalse(cfg.reconcile_on_start)
+        self.assertEqual(cfg.state_dir, "/var/lib/rbmods/parked-state")
         self.assertEqual(cfg.instance_prefix, "warm")
         self.assertEqual(cfg.token, "s3cr3t")
         self.assertEqual(cfg.log_level, "DEBUG")
@@ -212,6 +272,26 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ParkedConfigError):
             ParkedServiceConfig.from_env({"PARKED_REAP_INTERVAL": "NaN"})
 
+    def test_invalid_reconcile_interval_raises(self):
+        with self.assertRaises(ParkedConfigError):
+            ParkedServiceConfig.from_env({"PARKED_RECONCILE_INTERVAL": "0"})
+        with self.assertRaises(ParkedConfigError):
+            ParkedServiceConfig.from_env({"PARKED_RECONCILE_INTERVAL": "abc"})
+
+    def test_invalid_reconcile_on_start_raises(self):
+        with self.assertRaises(ParkedConfigError):
+            ParkedServiceConfig.from_env({"PARKED_RECONCILE_ON_START": "maybe"})
+
+    def test_reconcile_on_start_accepts_boolean_tokens(self):
+        self.assertTrue(ParkedServiceConfig.from_env({"PARKED_RECONCILE_ON_START": "1"}).reconcile_on_start)
+        self.assertTrue(ParkedServiceConfig.from_env({"PARKED_RECONCILE_ON_START": "yes"}).reconcile_on_start)
+        self.assertFalse(ParkedServiceConfig.from_env({"PARKED_RECONCILE_ON_START": "0"}).reconcile_on_start)
+        self.assertFalse(ParkedServiceConfig.from_env({"PARKED_RECONCILE_ON_START": "off"}).reconcile_on_start)
+
+    def test_state_dir_defaults_below_provisioner_base_dir(self):
+        cfg = ParkedServiceConfig.from_env({"PROVISIONER_BASE_DIR": "/data", "PARKED_ENV": "prod"})
+        self.assertEqual(cfg.state_dir, "/data/parked-state/prod")
+
     def test_invalid_port_raises(self):
         with self.assertRaises(ParkedConfigError):
             ParkedServiceConfig.from_env({"PARKED_PORT": "0"})
@@ -227,6 +307,7 @@ class ControllerFillTests(unittest.TestCase):
         self.clock = FakeClock(1000.0)
         self.provisioner = FakeProvisioner()
         self.bridges = {}
+        self.state_dir = use_temp_state_dir(self)
 
     def test_maintain_fills_pool_to_size(self):
         controller = make_controller(self.clock, self.provisioner, self.bridges, pool_size=2)
@@ -284,6 +365,7 @@ class ControllerReapTests(unittest.TestCase):
         self.clock = FakeClock(1000.0)
         self.provisioner = FakeProvisioner()
         self.bridges = {}
+        self.state_dir = use_temp_state_dir(self)
 
     def test_reap_due_stops_overdue_parked(self):
         controller = make_controller(
@@ -314,11 +396,222 @@ class ControllerReapTests(unittest.TestCase):
         self.assertEqual(self.provisioner.stops, [])
 
 
+class ControllerReconcileTests(unittest.TestCase):
+    """#969 US3: Reconcile beim Start + periodisch, ohne den Loop zu toeten."""
+
+    def setUp(self):
+        self.clock = FakeClock(1000.0)
+        self.provisioner = FakeProvisioner()
+        self.bridges = {}
+        self.state_dir = use_temp_state_dir(self)
+
+    def test_reconcile_removes_orphan_and_counts(self):
+        controller = make_controller(self.clock, self.provisioner, self.bridges)
+        self.provisioner.add_container("leak", "running")
+        result = controller.reconcile()
+        self.assertEqual(result["removed"], ["leak"])
+        self.assertEqual(controller.orphans_removed, 1)
+        self.assertEqual(controller.counters()["orphans_removed"], 1)
+
+    def test_maintain_reconciles_when_due_before_fill(self):
+        controller = make_controller(
+            self.clock, self.provisioner, self.bridges, pool_size=1, reconcile_interval=5.0
+        )
+        self.provisioner.add_container("leak", "running")
+        self.clock.advance(6.0)
+        controller.maintain_once()
+        self.assertNotIn(("test", "leak"), self.provisioner._containers)
+        self.assertEqual(controller.counters()["parked"], 1)
+        self.assertEqual(controller.orphans_removed, 1)
+
+    def test_reconcile_not_due_is_skipped(self):
+        controller = make_controller(
+            self.clock, self.provisioner, self.bridges, pool_size=0, reconcile_interval=5.0
+        )
+        self.provisioner.add_container("leak", "running")
+        controller.maintain_once()  # 0 < interval -> kein Reconcile
+        self.assertIn(("test", "leak"), self.provisioner._containers)
+        self.assertEqual(controller.orphans_removed, 0)
+
+    def test_reconcile_due_after_interval(self):
+        controller = make_controller(
+            self.clock, self.provisioner, self.bridges, reconcile_interval=10.0
+        )
+        self.assertFalse(controller.reconcile_due())
+        self.clock.advance(10.0)
+        self.assertTrue(controller.reconcile_due())
+
+    def test_start_reconciles_before_fill(self):
+        controller = make_controller(
+            self.clock, self.provisioner, self.bridges,
+            pool_size=1, reconcile_interval=9999.0, reconcile_on_start=True,
+        )
+        controller._loop = lambda: None  # Thread sofort beenden (kein Rennen)
+        self.provisioner.add_container("leak", "running")
+        controller.start()
+        try:
+            # Synchroner Reconcile VOR dem ersten _fill(): Leak weg.
+            self.assertEqual(controller.orphans_removed, 1)
+            self.assertNotIn(("test", "leak"), self.provisioner._containers)
+            controller.maintain_once()  # fuellt (Reconcile nicht faellig)
+            self.assertEqual(controller.counters()["parked"], 1)
+        finally:
+            controller.stop()
+
+    def test_start_reconcile_can_be_disabled(self):
+        controller = make_controller(
+            self.clock, self.provisioner, self.bridges,
+            pool_size=0, reconcile_on_start=False,
+        )
+        controller._loop = lambda: None
+        self.provisioner.add_container("leak", "running")
+        controller.start()
+        try:
+            self.assertEqual(controller.orphans_removed, 0)
+            self.assertIn(("test", "leak"), self.provisioner._containers)
+        finally:
+            controller.stop()
+
+    def test_reconcile_stop_error_does_not_block_fill(self):
+        controller = make_controller(
+            self.clock, self.provisioner, self.bridges, pool_size=1, reconcile_interval=5.0
+        )
+        self.provisioner.add_container("leak", "running")
+        self.provisioner.fail_stop.add("leak")
+        self.clock.advance(6.0)
+        controller.maintain_once()
+        self.assertEqual(controller.orphans_removed, 0)
+        self.assertEqual(controller.counters()["parked"], 1)  # Loop lebt, Pool gefuellt
+
+    def test_discovery_failure_does_not_evict_or_fill(self):
+        # #969 B2: Discovery-Ausfall -> getrackte Instanz bleibt, kein _fill-Leak.
+        controller = make_controller(
+            self.clock, self.provisioner, self.bridges, pool_size=1, reconcile_interval=0.1
+        )
+        controller.maintain_once()  # eine PARKED-Instanz, getrackt
+        self.assertEqual(controller.counters()["parked"], 1)
+        starts_before = list(self.provisioner.starts)
+
+        def boom(env=None):
+            raise RuntimeError("docker ps down")
+
+        self.provisioner.list_instances = boom
+        self.clock.advance(1.0)
+        controller.maintain_once()
+        # Keine Eviction: Instanz bleibt getrackt, Container bleibt.
+        self.assertEqual(controller.counters()["parked"], 1)
+        self.assertEqual(controller.orphans_removed, 0)
+        self.assertEqual(self.provisioner.stops, [])
+        # Kein _fill()-Trigger durch den falschen (leeren) Zustand.
+        self.assertEqual(self.provisioner.starts, starts_before)
+
+    def test_start_discovery_failure_does_not_fill(self):
+        # #969 Rework: der Start-Pfad umgeht die alte Skip-Logik. Ein
+        # fehlgeschlagener Start-Reconcile muss das _fill-Gate dauerhaft
+        # schliessen, nicht nur eine Iteration.
+        controller = make_controller(
+            self.clock, self.provisioner, self.bridges, pool_size=2,
+            reconcile_interval=300.0, reconcile_on_start=True,
+        )
+        controller._loop = lambda: None  # Thread sofort beenden (kein Rennen)
+        self.provisioner.add_container("ghost", "running")
+
+        def boom(env=None):
+            raise RuntimeError("docker ps down")
+
+        self.provisioner.list_instances = boom
+        controller.start()
+        try:
+            # Start-Reconcile scheiterte -> kein _fill, ghost unberuehrt.
+            self.assertEqual(self.provisioner.starts, [])
+            self.assertEqual(sorted(self.provisioner._containers), [("test", "ghost")])
+            self.assertFalse(controller._discovery_ok)
+            # Erste Iteration: reconcile nicht faellig (300 s) -> ohne das Gate
+            # wuerde _fill sofort parked-1/parked-2 erzeugen.
+            controller.maintain_once()
+            self.assertEqual(self.provisioner.starts, [])
+            self.assertEqual(sorted(self.provisioner._containers), [("test", "ghost")])
+            self.assertEqual(controller.orphans_removed, 0)
+            self.assertEqual(self.provisioner.stops, [])
+        finally:
+            controller.stop()
+
+    def test_periodic_discovery_failure_keeps_fill_suppressed(self):
+        # #969 Rework (b): reconcile_interval > reap_interval -> nur die eine
+        # faellige Iteration skippte frueheren. Das Gate haelt _fill auch in
+        # der NICHT faelligen Folge-Iteration an.
+        controller = make_controller(
+            self.clock, self.provisioner, self.bridges, pool_size=1,
+            reap_interval=5.0, reconcile_interval=10.0,
+        )
+        self.provisioner.add_container("ghost", "running")
+
+        def boom(env=None):
+            raise RuntimeError("docker ps down")
+
+        self.provisioner.list_instances = boom
+        self.clock.advance(11.0)   # iter1: Reconcile faellig (10 s)
+        controller.maintain_once()
+        self.assertEqual(self.provisioner.starts, [])
+        self.assertIn(("test", "ghost"), self.provisioner._containers)
+        self.clock.advance(5.0)    # iter2: Reconcile NICHT faellig
+        self.assertFalse(controller.reconcile_due())
+        controller.maintain_once()
+        self.assertEqual(self.provisioner.starts, [])
+        self.assertIn(("test", "ghost"), self.provisioner._containers)
+        self.assertEqual(self.provisioner.stops, [])
+
+    def test_fill_resumes_after_discovery_recovers(self):
+        # #969 Rework: erst ein ERFOLGREICHER Discovery-Lauf oeffnet das Gate
+        # wieder; danach fuellt der naechste faellige maintain_once() auf.
+        controller = make_controller(
+            self.clock, self.provisioner, self.bridges, pool_size=1,
+            reap_interval=5.0, reconcile_interval=10.0,
+        )
+
+        def boom(env=None):
+            raise RuntimeError("docker ps down")
+
+        self.provisioner.list_instances = boom
+        self.clock.advance(11.0)
+        controller.maintain_once()
+        self.assertEqual(self.provisioner.starts, [])
+        self.assertFalse(controller._discovery_ok)
+        self.assertIsNotNone(controller._discovery_error)
+
+        del self.provisioner.list_instances  # Discovery wieder gesund
+        self.clock.advance(11.0)
+        controller.maintain_once()
+        self.assertTrue(controller._discovery_ok)
+        self.assertIsNone(controller._discovery_error)
+        self.assertEqual(controller.counters()["parked"], 1)
+        self.assertEqual(len(self.provisioner.starts), 1)
+        self.assertTrue(controller.counters()["discovery_ok"])
+
+    def test_reconcile_parked_error_treated_as_not_ok(self):
+        # #969 Rework: ParkedError im Reconcile -> fail-safe (nicht auffuellen).
+        controller = make_controller(
+            self.clock, self.provisioner, self.bridges, pool_size=1,
+            reconcile_interval=5.0, reconcile_on_start=False,
+        )
+
+        def boom():
+            raise ParkedError("reconcile kaputt")
+
+        controller.pool.reconcile = boom
+        self.clock.advance(6.0)
+        controller.maintain_once()
+        self.assertFalse(controller._discovery_ok)
+        self.assertEqual(controller._discovery_error, "reconcile kaputt")
+        self.assertEqual(self.provisioner.starts, [])
+
+
 class ControllerClaimRecycleTests(unittest.TestCase):
     def setUp(self):
         self.clock = FakeClock(1000.0)
         self.provisioner = FakeProvisioner()
         self.bridges = {}
+        self.state_dir = use_temp_state_dir(self)
 
     def test_claim_fifo_oldest(self):
         controller = make_controller(self.clock, self.provisioner, self.bridges, pool_size=1)
@@ -366,6 +659,7 @@ class HttpHarness(unittest.TestCase):
         self.clock = FakeClock(1000.0)
         self.provisioner = FakeProvisioner()
         self.bridges = {}
+        self.state_dir = use_temp_state_dir(self)
         self.pool = make_pool(self.clock, self.provisioner, self.bridges)
         self.controller = ParkedController(
             self.pool, pool_size=1, max_park_seconds=900.0, reap_interval=9999.0,
@@ -548,6 +842,29 @@ class HttpTests(HttpHarness):
         status, body = self.post("/reap", {"max_park_seconds": 10})
         self.assertEqual(status, 200)
         self.assertEqual(len(body["stopped"]), 1)
+
+    def test_reconcile_endpoint_removes_orphan(self):
+        self.provisioner.add_container("leak", "running")
+        status, body = self.post("/reconcile", {})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+        self.assertIn("leak", body["removed"])
+        self.assertEqual(body["kept"], 0)
+        self.assertIn("skipped_foreign", body)
+        _s, counters = self.get("/status")
+        self.assertEqual(counters["counters"]["orphans_removed"], 1)
+
+    def test_reconcile_endpoint_503_on_error(self):
+        self.provisioner.add_container("leak", "running")
+        self.provisioner.fail_stop.add("leak")
+        status, body = self.post("/reconcile", {})
+        self.assertEqual(status, 503)
+        self.assertEqual(body["reason"], "reconcile_failed")
+
+    def test_reconcile_method_not_allowed(self):
+        status, body = self.get("/reconcile")
+        self.assertEqual(status, 405)
+        self.assertEqual(body["reason"], "method_not_allowed")
 
     def test_unknown_route_404(self):
         status, body = self.get("/nope")
