@@ -28,6 +28,43 @@ Alles, was pro Instanz variiert (Ports, URLs, Namen), wird **pro Instanz abgelei
 global festgenagelt (Vorbild: `ParkedPool._bridge_url`). Feste Host-Ports sind zu vermeiden: sie
 kollidieren zwischen Envs/Tests (siehe #967).
 
+### Konkrete Provisioner-Umsetzung (#966)
+
+Seit #966 startet der Provisioner-Pfad je Instanz den **vollen Stack**: den Dedi-Container
+(`riftbreaker-dedicated-<env>-<id>`) plus die vier Sidecars `send-tailer`, `attack-cycle`,
+`match-loop`, `session-recorder`. Die Ableitung liegt in `deploy/provisioner/provisioner.py`
+(Klasse `InstanceSpec`) und ist deterministisch aus `(env, instance_id)`:
+
+- **Suffix:** rein numerische `instance_id` (z. B. `github.run_id` `12345`) wird direkt genutzt;
+nicht-numerische (z. B. `local`) via `crc32`.
+- **Host-Ports** (jeweils `base + suffix % 20000`): `bridge_port_base` (Default `30000`) für die
+Bridge, **eigener** `attack_cycle_port_base` (Default `31000`) für den Attack-Cycle-Control.
+Getrennte Bases halten die Ports sicher auseinander (Lehre aus #967).
+- **Sidecar-Container-Namen:** `rb-<env>-<id>-send-tailer`, `-attack-cycle`, `-match-loop`,
+`-session-recorder` — konsistent mit `compose_project` (`rb-<env>-<id>`) und `container`.
+- **In-Netz-URLs** (Container-Name + Container-Port, kein Host-Publish): `send_tailer_queue_url`
+= `http://<attack-cycle>:<attack_cycle_container_port>/queue_send` (Container-Port Default `9102`,
+wie die Rolle); `match_loop_bridge_url`/`attack_cycle_bridge_url` = `http://<dedi>:<bridge_container_port>`.
+- **Nur** der Attack-Cycle-Control wird auf `127.0.0.1` gepublished (`attack_cycle_url`,
+Host-`attack_cycle_port`) — der Kapsel-Dienst ist ein Host-Dienst. Der Parked-Pool gibt diese URL
+als `cycle_url` durch (#966); die `CapsuleServiceConfig.cycle_url` ist nur noch Fallback für den
+Einzel-Prozess-Betrieb ohne Sidecars.
+
+### Boot-Test-Naming/Cleanup (Abgrenzung)
+
+Damit sich Provisioner- und Boot-Test-Ressourcen nicht gegenseitig erkennen oder wegräumen:
+
+- **Boot-Test** (`deploy/test-deploy.yml`, `deploy/test-vars.yml`): Namen `riftbreaker-*--test-<run>`
+(`riftbreaker-dedicated-`, `-sessions-`, `-send-tailer-`, `-match-loop-`, `-attack-cycle-`, `-egress-`),
+Compose-Projekt `rb-test-<run>`. Das Cleanup in `.github/workflows/boot-test.yml` erfasst Reste über
+das **Label** `RBB_ENV=test` (Filter `docker ps --filter label=RBB_ENV=test`).
+- **Provisioner:** Namen `rb-<env>-<id>-<svc>`; Labels `rb.provisioner.env` / `rb.provisioner.instance`
+(→ `ps_all(filter_label=...)`), `RBB_ENV=<env>` nur als **Env-Var** (`-e`), nicht als Label.
+- Folglich greift der Boot-Test-Label-Filter `RBB_ENV=test` **nicht** auf Provisioner-Container
+(kein Kollateral-Cleanup), und die Provisioner-Namen tauchen in keiner Boot-Test-Präfix-Enumeration
+auf. Provisioner-Reste räumt der Provisioner selbst (`stop()`/`_rollback()`/Reap, idempotent über die
+`rb.provisioner.*`-Labels).
+
 Siehe Milestone **1.0.11 (Server-Parity)** und #966.
 
 ## Voraussetzungen
