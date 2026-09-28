@@ -155,6 +155,7 @@ class ParkedEntry:
     env: str
     container: str
     bridge_url: str
+    cycle_url: Optional[str] = None
     gns_endpoint: Optional[str] = None
     state: ParkedState = ParkedState.WARMING
     parked_since: Optional[float] = None
@@ -170,6 +171,7 @@ class ParkedEntry:
             "env": self.env,
             "container": self.container,
             "bridge_url": self.bridge_url,
+            "cycle_url": self.cycle_url,
             "gns_endpoint": self.gns_endpoint,
             "state": self.state.value,
             "rounds": self.rounds,
@@ -223,6 +225,23 @@ class ParkedPool(object):
             return str(url)
         raise ParkedError("Provisioner-Ergebnis ohne Bridge-Port: %r" % (result,))
 
+    def _cycle_url(self, result: Dict[str, Any]) -> str:
+        """Attack-Cycle-Control-URL der Instanz (#966) — analog ``_bridge_url``.
+
+        Quelle: ``result["ports"]["attack_cycle"]`` (Host-Port, den der
+        Provisioner pro Instanz ableitet); Fallback die fertige URL
+        ``result["cycle_url"]``/``result["attack_cycle_url"]``. Fehlt beides,
+        ist das ein harter Fehler (gleiche Haerte wie ``_bridge_url``).
+        """
+        ports = result.get("ports") or {}
+        cycle_port = ports.get("attack_cycle")
+        if cycle_port:
+            return "http://127.0.0.1:%d" % int(cycle_port)
+        url = result.get("cycle_url") or result.get("attack_cycle_url")
+        if url:
+            return str(url)
+        raise ParkedError("Provisioner-Ergebnis ohne Attack-Cycle-Port: %r" % (result,))
+
     @staticmethod
     def _gns_endpoint(result: Dict[str, Any]) -> Optional[str]:
         """GNS-UDP-Host-Endpoint der Instanz aus ``ports["gns"]`` (#929).
@@ -257,6 +276,12 @@ class ParkedPool(object):
         # Erfolgreicher Status ist die frische Quelle: auch ein fehlendes
         # 6321/udp-Mapping (None) ersetzt den warm_up-Wert.
         entry.gns_endpoint = self._gns_endpoint(result)
+        # Cycle-URL ebenfalls frisch halten (best-effort, #966): fehlt sie im
+        # Status, bleibt der zuletzt bekannte Wert stehen.
+        try:
+            entry.cycle_url = self._cycle_url(result)
+        except ParkedError:
+            pass
 
     def _bridge(self, url: str) -> Any:
         return self.bridge_factory(url)
@@ -303,6 +328,7 @@ class ParkedPool(object):
 
         entry.container = result.get("container") or ""
         entry.bridge_url = self._bridge_url(result)
+        entry.cycle_url = self._cycle_url(result)
         entry.gns_endpoint = self._gns_endpoint(result)
 
         try:
@@ -354,6 +380,7 @@ class ParkedPool(object):
             "instance": entry.instance_id,
             "env": entry.env,
             "bridge_url": entry.bridge_url,
+            "cycle_url": entry.cycle_url,
             "gns_endpoint": entry.gns_endpoint,
             "state": entry.state.value,
             "resumed": bool(resume),
@@ -394,6 +421,7 @@ class ParkedPool(object):
             entry.parked_since = None
             entry.claimed_at = None
             entry.gns_endpoint = None
+            entry.cycle_url = None
         return entry
 
     def reap(self, max_park_seconds: float) -> List[ParkedEntry]:
@@ -421,6 +449,7 @@ class ParkedPool(object):
             entry.state = ParkedState.STOPPED
             entry.parked_since = None
             entry.gns_endpoint = None
+            entry.cycle_url = None
             stopped.append(entry)
         if errors:
             raise ParkedError("; ".join(errors))

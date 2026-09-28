@@ -403,6 +403,27 @@ class TestAttackCycle(unittest.TestCase):
         self.assertEqual(cycle.bought, [])
         self.assertEqual(cycle.orders, [])
 
+    def test_resolve_orders_error_logs_and_counts(self):
+        # Issue #966: ein werfender _spend wird laut geloggt UND gezaehlt;
+        # die Order bleibt verworfen (Verhalten unveraendert).
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        cycle = self._cycle(poster)
+
+        def boom(cost):
+            raise RuntimeError("bridge down")
+
+        cycle._spend = boom
+        cycle.buy(3)
+        with self.assertLogs("attack_cycle", level="WARNING") as cm:
+            cycle._resolve_orders()
+        self.assertEqual(cycle.resolve_errors, 1)
+        self.assertIn("wave3", cycle.last_resolve_error or "")
+        self.assertEqual(cycle.bought, [])
+        self.assertEqual(cycle.orders, [])
+        self.assertTrue(any("resolve error" in m for m in cm.output), cm.output)
+        self.assertEqual(cycle.status()["resolve_errors"], 1)
+        self.assertIn("wave3", cycle.status()["last_resolve_error"] or "")
+
     def test_level_caps_at_max(self):
         poster = FakePoster('{"ok":true,"hq_hp":100.0}')
         clock = FakeClock(0.0)

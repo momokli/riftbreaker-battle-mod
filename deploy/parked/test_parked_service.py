@@ -102,7 +102,12 @@ class FakeProvisioner(object):
             "instance": instance_id,
             "container": "riftbreaker-dedicated-%s-%s" % (env or self.cfg.env, instance_id),
             "running": True,
-            "ports": {"bridge": port, "gns": "127.0.0.1:%d" % (port + 1000)},
+            "ports": {
+                "bridge": port,
+                "gns": "127.0.0.1:%d" % (port + 1000),
+                # #966: pro Instanz abgeleiteter Attack-Cycle-Control-Host-Port.
+                "attack_cycle": port + 2000,
+            },
             "created": True,
         }
 
@@ -112,7 +117,12 @@ class FakeProvisioner(object):
         return {
             "running": True,
             "health": "healthy",
-            "ports": {"bridge": self._BASE_PORT + 1, "gns": self.gns},
+            "ports": {
+                "bridge": self._BASE_PORT + 1,
+                "gns": self.gns,
+                # #966: deterministisch wie der Provisioner (instance-abgeleitet).
+                "attack_cycle": self._BASE_PORT + 2001,
+            },
             "container": "riftbreaker-dedicated-%s-%s" % (env or self.cfg.env, instance_id),
         }
 

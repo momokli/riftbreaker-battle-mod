@@ -117,6 +117,7 @@ class Capsule:
     rounds: int = 0
     bridge: Any = None
     cycle: Any = None
+    cycle_url: Optional[str] = None
 
     def to_dict(self, now: Optional[float] = None) -> Dict[str, Any]:
         return {
@@ -125,6 +126,7 @@ class Capsule:
             "instance": self.instance_id,
             "bridge_url": self.bridge_url,
             "gns_endpoint": self.gns_endpoint,
+            "cycle_url": self.cycle_url,
             "identitaet": self.identitaet,
             "round": self.rounds,
             "claimed_seconds": None if now is None else now - self.claimed_at,
@@ -276,7 +278,9 @@ class CapsuleCoordinator(object):
     ``parked`` — Objekt mit ``claim(env, instance_id, resume)`` und
     ``recycle(env, instance_id, keep_warm, result)`` (Produktion:
     :class:`ParkedServiceClient`; Tests: Fake).
-    ``cycle_factory`` — ``callable(env) -> CycleClient``.
+    ``cycle_factory`` — ``callable(env, cycle_url) -> CycleClient``; die pro
+    Instanz uebergebene ``cycle_url`` aus dem Parked-Ergebnis gewinnt, ein
+    Leerstring faellt auf die Env-Konfiguration zurueck (#966).
     ``bridge_factory`` — ``callable(bridge_url) -> BridgeControl``.
     ``clock`` — injizierbar (Tests: Fake).
     """
@@ -284,7 +288,7 @@ class CapsuleCoordinator(object):
     def __init__(
         self,
         parked: Any,
-        cycle_factory: Callable[[str], Any],
+        cycle_factory: Callable[..., Any],
         bridge_factory: Callable[[str], Any],
         clock: Callable[[], float] = time.monotonic,
         env: Optional[str] = None,
@@ -378,6 +382,7 @@ class CapsuleCoordinator(object):
         if not instance:
             raise CapsuleError("claim_failed", "Parked-Antwort ohne instance", 502)
         bridge_url = result.get("bridge_url") or ""
+        cycle_url = result.get("cycle_url") or result.get("attack_cycle_url") or ""
         capsule = Capsule(
             env=env,
             instance_id=str(instance),
@@ -387,7 +392,8 @@ class CapsuleCoordinator(object):
             claimed_at=self.clock(),
             identitaet=identitaet,
             bridge=self.bridge_factory(str(bridge_url)) if bridge_url else None,
-            cycle=self.cycle_factory(env),
+            cycle=self.cycle_factory(env, str(cycle_url)),
+            cycle_url=str(cycle_url) or None,
         )
         self._capsules[env] = capsule
         self._transition(capsule, CapsulePhase.CLAIMED)
@@ -489,6 +495,7 @@ class CapsuleCoordinator(object):
                 "instance": None,
                 "bridge_url": None,
                 "gns_endpoint": None,
+                "cycle_url": None,
                 "round": 0,
                 "cycle": {"state": None},
                 "claimed_seconds": None,
@@ -526,7 +533,9 @@ def build_coordinator(capsule_config: Any, clock: Callable[[], float] = time.mon
     )
     return CapsuleCoordinator(
         parked,
-        cycle_factory=lambda env: CycleClient(capsule_config.cycle_url, timeout=capsule_config.timeout),
+        cycle_factory=lambda env, url="": CycleClient(
+            url or capsule_config.cycle_url, timeout=capsule_config.timeout
+        ),
         bridge_factory=lambda url: BridgeControl(url, timeout=capsule_config.timeout),
         clock=clock,
         env=capsule_config.env,

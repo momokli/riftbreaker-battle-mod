@@ -44,6 +44,14 @@ LOG = logging.getLogger("provisioner")
 INSTANCE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
 BYTES_PER_GB = 1024 ** 3
 
+# Sidecar-Skripte liegen im Deploy-Baum neben diesem Modul (deploy/<module>/).
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_DEPLOY_DIR = os.path.dirname(_HERE)
+
+
+def _deploy_script(*parts: str) -> str:
+    return os.path.join(_DEPLOY_DIR, *parts)
+
 
 class ConfigError(Exception):
     """Konfiguration unbrauchbar — fail-closed (CLI-Exit 2)."""
@@ -76,6 +84,23 @@ class Config:
     min_free_gb: float = 10.0
     bridge_port_base: int = 30000
     bridge_container_port: int = 9001
+    # Sidecar-Ports (#966): EIGENER Host-Port-Base, damit der Attack-Cycle-
+    # Control-Port nie mit ``bridge_port`` kollidiert (Issue #967: kein fester
+    # Host-Port). ``attack_cycle_container_port`` = Port IM Container (wie Rolle).
+    attack_cycle_port_base: int = 31000
+    attack_cycle_container_port: int = 9102
+    # Sidecar-Kommandos: 1:1 aus docker-compose.yml.j2 (Rollen-Defaults).
+    attack_cycle_interval: int = 420
+    attack_cycle_difficulty_interval: int = 200
+    match_loop_restart_delay: int = 10
+    sessions_image: str = "python:3.12-slim"
+    send_tailer_image: str = "python:3.12-slim"
+    match_loop_image: str = "python:3.12-slim"
+    attack_cycle_image: str = "python:3.12-slim"
+    sessions_script: str = _deploy_script("session-recorder", "session_recorder.py")
+    send_tailer_script: str = _deploy_script("send-tailer", "send_tailer.py")
+    match_loop_script: str = _deploy_script("match-loop", "match_loop.py")
+    attack_cycle_script: str = _deploy_script("attack-cycle", "attack_cycle.py")
     config_cfg: str = "/opt/rbmods/compose/rift-{env}/riftbreaker/config/config.cfg"
     rbtools_dir: str = "/opt/rbmods/rbtools/{env}"
     game_source: str = "/srv/rift-{env}/game"
@@ -95,6 +120,19 @@ _JSON_KEYS = {
     "min_free_gb": "min_free_gb",
     "bridge_port_base": "bridge_port_base",
     "bridge_container_port": "bridge_container_port",
+    "attack_cycle_port_base": "attack_cycle_port_base",
+    "attack_cycle_container_port": "attack_cycle_container_port",
+    "attack_cycle_interval": "attack_cycle_interval",
+    "attack_cycle_difficulty_interval": "attack_cycle_difficulty_interval",
+    "match_loop_restart_delay": "match_loop_restart_delay",
+    "sessions_image": "sessions_image",
+    "send_tailer_image": "send_tailer_image",
+    "match_loop_image": "match_loop_image",
+    "attack_cycle_image": "attack_cycle_image",
+    "sessions_script": "sessions_script",
+    "send_tailer_script": "send_tailer_script",
+    "match_loop_script": "match_loop_script",
+    "attack_cycle_script": "attack_cycle_script",
     "config_cfg": "config_cfg",
     "rbtools_dir": "rbtools_dir",
     "game_source": "game_source",
@@ -113,6 +151,19 @@ _ENV_KEYS = {
     "PROVISIONER_MIN_FREE_GB": "min_free_gb",
     "PROVISIONER_BRIDGE_PORT_BASE": "bridge_port_base",
     "PROVISIONER_BRIDGE_CONTAINER_PORT": "bridge_container_port",
+    "PROVISIONER_ATTACK_CYCLE_PORT_BASE": "attack_cycle_port_base",
+    "PROVISIONER_ATTACK_CYCLE_CONTAINER_PORT": "attack_cycle_container_port",
+    "PROVISIONER_ATTACK_CYCLE_INTERVAL": "attack_cycle_interval",
+    "PROVISIONER_ATTACK_CYCLE_DIFFICULTY_INTERVAL": "attack_cycle_difficulty_interval",
+    "PROVISIONER_MATCH_LOOP_RESTART_DELAY": "match_loop_restart_delay",
+    "PROVISIONER_SESSIONS_IMAGE": "sessions_image",
+    "PROVISIONER_SEND_TAILER_IMAGE": "send_tailer_image",
+    "PROVISIONER_MATCH_LOOP_IMAGE": "match_loop_image",
+    "PROVISIONER_ATTACK_CYCLE_IMAGE": "attack_cycle_image",
+    "PROVISIONER_SESSIONS_SCRIPT": "sessions_script",
+    "PROVISIONER_SEND_TAILER_SCRIPT": "send_tailer_script",
+    "PROVISIONER_MATCH_LOOP_SCRIPT": "match_loop_script",
+    "PROVISIONER_ATTACK_CYCLE_SCRIPT": "attack_cycle_script",
     "PROVISIONER_CONFIG_CFG": "config_cfg",
     "PROVISIONER_RBTOOLS_DIR": "rbtools_dir",
     "PROVISIONER_GAME_SOURCE": "game_source",
@@ -120,7 +171,16 @@ _ENV_KEYS = {
     "PROVISIONER_INSTANCE_ID": "instance_id",
 }
 
-_INT_FIELDS = ("timeout", "bridge_port_base", "bridge_container_port")
+_INT_FIELDS = (
+    "timeout",
+    "bridge_port_base",
+    "bridge_container_port",
+    "attack_cycle_port_base",
+    "attack_cycle_container_port",
+    "attack_cycle_interval",
+    "attack_cycle_difficulty_interval",
+    "match_loop_restart_delay",
+)
 _FLOAT_FIELDS = ("health_deadline", "health_interval", "min_free_gb")
 
 
@@ -187,6 +247,11 @@ def load_config(env: Optional[Dict[str, str]] = None, path: Optional[str] = None
             "bridge_container_port %r ist ungueltig (erlaubt: 1..65535)"
             % (cfg.bridge_container_port,)
         )
+    if not (1 <= cfg.attack_cycle_container_port <= 65535):
+        raise ConfigError(
+            "attack_cycle_container_port %r ist ungueltig (erlaubt: 1..65535)"
+            % (cfg.attack_cycle_container_port,)
+        )
     return cfg
 
 
@@ -225,6 +290,26 @@ class InstanceSpec(object):
         self.sessions_dir = os.path.join(run_root, "sessions")
         self.bridge_port_base = cfg.bridge_port_base
         self.bridge_port = cfg.bridge_port_base + (self._numeric_suffix() % 20000)
+        # Sidecar-Namen (#966): konsistent mit ``compose_project``/``container``.
+        self.send_tailer_container = "%s-send-tailer" % self.compose_project
+        self.attack_cycle_container = "%s-attack-cycle" % self.compose_project
+        self.match_loop_container = "%s-match-loop" % self.compose_project
+        self.session_recorder_container = "%s-session-recorder" % self.compose_project
+        # Eigener Host-Port-Base -> nie gleich ``bridge_port`` (Issue #967).
+        self.attack_cycle_port_base = cfg.attack_cycle_port_base
+        self.attack_cycle_port = cfg.attack_cycle_port_base + (self._numeric_suffix() % 20000)
+        self.attack_cycle_container_port = cfg.attack_cycle_container_port
+        self.attack_cycle_interval = cfg.attack_cycle_interval
+        self.attack_cycle_difficulty_interval = cfg.attack_cycle_difficulty_interval
+        self.match_loop_restart_delay = cfg.match_loop_restart_delay
+        self.sessions_image = cfg.sessions_image
+        self.send_tailer_image = cfg.send_tailer_image
+        self.match_loop_image = cfg.match_loop_image
+        self.attack_cycle_image = cfg.attack_cycle_image
+        self.sessions_script = cfg.sessions_script
+        self.send_tailer_script = cfg.send_tailer_script
+        self.match_loop_script = cfg.match_loop_script
+        self.attack_cycle_script = cfg.attack_cycle_script
         # Reale Image-Quellen (Platzhalter {env} wird durch das Env-Segment ersetzt).
         self.bridge_container_port = cfg.bridge_container_port
         self.config_cfg = cfg.config_cfg.replace("{env}", env)
@@ -247,6 +332,36 @@ class InstanceSpec(object):
     def health_url(self) -> str:
         return "http://127.0.0.1:%d/health" % self.bridge_port
 
+    def send_tailer_queue_url(self) -> str:
+        """Queue-URL des Attack-Cycle IM Netz (Compose-Template 1:1)."""
+        return "http://%s:%d/queue_send" % (
+            self.attack_cycle_container,
+            self.attack_cycle_container_port,
+        )
+
+    def match_loop_bridge_url(self) -> str:
+        """Bridge-URL IM Netz (Container-Name + Container-Port)."""
+        return "http://%s:%d" % (self.container, self.bridge_container_port)
+
+    def attack_cycle_bridge_url(self) -> str:
+        return self.match_loop_bridge_url()
+
+    def attack_cycle_url(self) -> str:
+        """Control-URL des Attack-Cycle auf dem HOST (127.0.0.1, #966)."""
+        return "http://127.0.0.1:%d" % self.attack_cycle_port
+
+    def session_recorder_sessions_dir(self) -> str:
+        return self.sessions_dir
+
+    def sidecar_containers(self) -> List[str]:
+        """Alle vier Sidecar-Container-Namen in fester Reihenfolge."""
+        return [
+            self.session_recorder_container,
+            self.send_tailer_container,
+            self.match_loop_container,
+            self.attack_cycle_container,
+        ]
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "env": self.env,
@@ -262,6 +377,17 @@ class InstanceSpec(object):
             "sessions_dir": self.sessions_dir,
             "bridge_port": self.bridge_port,
             "bridge_container_port": self.bridge_container_port,
+            "attack_cycle_port": self.attack_cycle_port,
+            "attack_cycle_container_port": self.attack_cycle_container_port,
+            "send_tailer_container": self.send_tailer_container,
+            "attack_cycle_container": self.attack_cycle_container,
+            "match_loop_container": self.match_loop_container,
+            "session_recorder_container": self.session_recorder_container,
+            "send_tailer_queue_url": self.send_tailer_queue_url(),
+            "attack_cycle_url": self.attack_cycle_url(),
+            "match_loop_bridge_url": self.match_loop_bridge_url(),
+            "attack_cycle_bridge_url": self.attack_cycle_bridge_url(),
+            "session_recorder_sessions_dir": self.session_recorder_sessions_dir(),
             "config_cfg": self.config_cfg,
             "rbtools_dir": self.rbtools_dir,
             "game_source": self.game_source,
@@ -464,7 +590,13 @@ class Provisioner(object):
 
         self._preflight(spec)
 
-        created: Dict[str, Any] = {"container": False, "network": False, "volumes": [], "dirs": []}
+        created: Dict[str, Any] = {
+            "container": False,
+            "sidecars": [],
+            "network": False,
+            "volumes": [],
+            "dirs": [],
+        }
         try:
             self._create_dirs(spec, created)
             self._create_network(spec, created)
@@ -475,6 +607,8 @@ class Provisioner(object):
                     "Health-Timeout: %s liefert kein ok innerhalb von %ss"
                     % (spec.health_url(), self.cfg.health_deadline)
                 )
+            # Sidecars erst nach der Dedi-Health: sie brauchen die Bridge.
+            self._create_sidecars(spec, created)
         except Exception:
             self._rollback(spec, created)
             raise
@@ -487,12 +621,26 @@ class Provisioner(object):
         instance_id = instance_id if instance_id is not None else self.cfg.instance_id
         spec = self.spec_factory(env, instance_id, self.cfg)
 
-        removed = {"container": False, "network": False, "volumes": False, "dirs": False}
+        removed = {
+            "container": False,
+            "sidecars": False,
+            "network": False,
+            "volumes": False,
+            "dirs": False,
+        }
 
-        # Reihenfolge wie Boot-Test-Cleanup: Container -> Netz -> Volumes -> Pfade.
+        # Reihenfolge wie Boot-Test-Cleanup: Container -> Sidecars -> Netz ->
+        # Volumes -> Pfade.
         if self.docker.inspect_optional(spec.container) is not None:
             removed["container"] = True
         self.docker.rm(spec.container)
+
+        sidecars_present = False
+        for name in spec.sidecar_containers():
+            if self.docker.inspect_optional(name) is not None:
+                sidecars_present = True
+            self.docker.rm(name)
+        removed["sidecars"] = sidecars_present
 
         if self.docker.network_exists(spec.network):
             removed["network"] = True
@@ -547,6 +695,13 @@ class Provisioner(object):
             )
         if not self.docker.image_exists(self.cfg.image):
             raise ProvisionError("Image fehlt: %s (docker image inspect -> rc!=0)" % self.cfg.image)
+        # Sidecar-Images fail-loud VOR dem ersten Container (#966).
+        for ref in (spec.sessions_image, spec.send_tailer_image,
+                    spec.match_loop_image, spec.attack_cycle_image):
+            if not self.docker.image_exists(ref):
+                raise ProvisionError(
+                    "Sidecar-Image fehlt: %s (docker image inspect -> rc!=0)" % ref
+                )
         missing = []
         if not os.path.isdir(spec.game_source):
             missing.append("game_source=%s" % spec.game_source)
@@ -554,6 +709,10 @@ class Provisioner(object):
             missing.append("config_cfg=%s" % spec.config_cfg)
         if not os.path.isdir(spec.rbtools_dir):
             missing.append("rbtools_dir=%s" % spec.rbtools_dir)
+        for script in (spec.sessions_script, spec.send_tailer_script,
+                       spec.match_loop_script, spec.attack_cycle_script):
+            if not os.path.isfile(script):
+                missing.append("sidecar_script=%s" % script)
         if missing:
             raise ProvisionError(
                 "Quellen fehlen (Mounts wuerden ins Leere zeigen): %s" % ", ".join(missing)
@@ -625,6 +784,92 @@ class Provisioner(object):
         self.docker.run_or_fail(args)
         created["container"] = True
 
+    def _create_sidecars(self, spec: InstanceSpec, created: Dict[str, Any]) -> None:
+        """Vier Sidecars pro Instanz starten (#966) — Soll-Env/Volumes/Commands
+        1:1 aus ``roles/riftbreaker-server/templates/docker-compose.yml.j2``.
+
+        Im selben Docker-Netz wie der Dedi-Container; nur der Attack-Cycle-
+        Control-Port wird auf 127.0.0.1 gepublished. Identische
+        ``rb.provisioner.*``-Labels zur einfachen Zuordnung.
+        """
+        labels = [
+            "--label", "rb.provisioner.env=%s" % spec.env,
+            "--label", "rb.provisioner.instance=%s" % spec.instance_id,
+        ]
+        env = ["-e", "RBB_ENV=%s" % spec.env]
+
+        # session-recorder: Wine-Volume ro + sessions-Dir (Bind, RW).
+        self.docker.run_or_fail([
+            "run", "-d",
+            "--name", spec.session_recorder_container,
+            "--network", spec.network,
+            "--restart", "unless-stopped",
+            *labels,
+            *env,
+            "-v", "%s:/data/.wine:ro" % spec.wine_volume,
+            "-v", "%s:/data/sessions" % spec.sessions_dir,
+            "-v", "%s:/app/session_recorder.py:ro" % spec.sessions_script,
+            spec.sessions_image,
+            "python3", "-u", "/app/session_recorder.py",
+            "--wine-prefix", "/data/.wine",
+            "--out-dir", "/data/sessions",
+        ])
+        created["sidecars"].append(spec.session_recorder_container)
+
+        # send-tailer: Wine-Volume ro + queue-url (in-network).
+        self.docker.run_or_fail([
+            "run", "-d",
+            "--name", spec.send_tailer_container,
+            "--network", spec.network,
+            "--restart", "unless-stopped",
+            *labels,
+            *env,
+            "-v", "%s:/data/.wine:ro" % spec.wine_volume,
+            "-v", "%s:/app/send_tailer.py:ro" % spec.send_tailer_script,
+            spec.send_tailer_image,
+            "python3", "-u", "/app/send_tailer.py",
+            "--wine-prefix", "/data/.wine",
+            "--queue-url", spec.send_tailer_queue_url(),
+        ])
+        created["sidecars"].append(spec.send_tailer_container)
+
+        # match-loop: bridge-url (in-network), kein Wine-Volume.
+        self.docker.run_or_fail([
+            "run", "-d",
+            "--name", spec.match_loop_container,
+            "--network", spec.network,
+            "--restart", "unless-stopped",
+            *labels,
+            *env,
+            "-v", "%s:/app/match_loop.py:ro" % spec.match_loop_script,
+            spec.match_loop_image,
+            "python3", "-u", "/app/match_loop.py",
+            "--bridge-url", spec.match_loop_bridge_url(),
+            "--restart-delay", str(spec.match_loop_restart_delay),
+        ])
+        created["sidecars"].append(spec.match_loop_container)
+
+        # attack-cycle: bridge-url + Skript ro; EINZIGER Host-Publish.
+        self.docker.run_or_fail([
+            "run", "-d",
+            "--name", spec.attack_cycle_container,
+            "--network", spec.network,
+            "--restart", "unless-stopped",
+            *labels,
+            *env,
+            "-p", "127.0.0.1:%d:%d" % (
+                spec.attack_cycle_port, spec.attack_cycle_container_port),
+            "-v", "%s:/app/attack_cycle.py:ro" % spec.attack_cycle_script,
+            spec.attack_cycle_image,
+            "python3", "-u", "/app/attack_cycle.py",
+            "--bridge-url", spec.attack_cycle_bridge_url(),
+            "--interval", str(spec.attack_cycle_interval),
+            "--difficulty-interval", str(spec.attack_cycle_difficulty_interval),
+            "--control-bind", "0.0.0.0",
+            "--control-port", str(spec.attack_cycle_container_port),
+        ])
+        created["sidecars"].append(spec.attack_cycle_container)
+
     def _wait_healthy(self, spec: InstanceSpec) -> bool:
         deadline = self.clock() + self.cfg.health_deadline
         while True:
@@ -656,6 +901,19 @@ class Provisioner(object):
         return {
             "bridge": spec.bridge_port,
             "gns": self._gns_from_mapping(mapping),
+            # Sidecar-Ports/URLs (#966): additiv, fehlend -> nie Crash.
+            "attack_cycle": getattr(spec, "attack_cycle_port", None),
+            "attack_cycle_container_port": getattr(spec, "attack_cycle_container_port", None),
+            "send_tailer_queue_url": (
+                spec.send_tailer_queue_url() if hasattr(spec, "send_tailer_queue_url") else None
+            ),
+            "attack_cycle_url": spec.attack_cycle_url() if hasattr(spec, "attack_cycle_url") else None,
+            "match_loop_bridge_url": (
+                spec.match_loop_bridge_url() if hasattr(spec, "match_loop_bridge_url") else None
+            ),
+            "attack_cycle_bridge_url": (
+                spec.attack_cycle_bridge_url() if hasattr(spec, "attack_cycle_bridge_url") else None
+            ),
             "docker": mapping,
         }
 
@@ -682,6 +940,11 @@ class Provisioner(object):
                 self.docker.rm(spec.container)
             except DockerError as exc:  # pragma: no cover - nur Log
                 LOG.warning("Rollback Container %s: %s", spec.container, exc)
+        for name in created.get("sidecars", []):
+            try:
+                self.docker.rm(name)
+            except DockerError as exc:  # pragma: no cover - nur Log
+                LOG.warning("Rollback Sidecar %s: %s", name, exc)
         for volume in created.get("volumes", []):
             try:
                 self.docker.volume_rm(volume)
