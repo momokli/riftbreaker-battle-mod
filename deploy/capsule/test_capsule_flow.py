@@ -11,6 +11,7 @@ Fakes mit gemeinsamem Zustand; die Uhr ist eine ``FakeClock``. Aufruf:
 from __future__ import annotations
 
 import unittest
+from typing import Optional
 
 from capsule_flow import (
     Capsule,
