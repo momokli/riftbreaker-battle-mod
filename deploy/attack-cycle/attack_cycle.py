@@ -72,6 +72,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import random
 import threading
@@ -106,6 +107,9 @@ DEFAULT_DIFFICULTY_INTERVAL_FIRST_S = 200.0  # erster Schritt (1→2)
 DEFAULT_DIFFICULTY_INTERVAL_SUBSEQUENT_S = 600.0  # Folge-Schritte (2→3 … 8→9)
 DEFAULT_BRIDGE_URL = "http://127.0.0.1:9001"
 DEFAULT_CONTROL_PORT = 9102
+
+# Observability (#966): lauter Resolver-Logger statt stillem Schlucken.
+LOG = logging.getLogger("attack_cycle")
 
 # --- Game-Flow (docs/GAME_FLOW.md, Issues #826/#827/#828) --------------------
 # Modus: SOLO (1 Welt, Persona emuliert den Gegner) vs VS (2 Welten, echter
@@ -611,6 +615,9 @@ class AttackCycle:
         self._round_reset_epoch = 0  # Edge-Erkennung Round-Reset-Wrapper (#854)
         self._start_epoch: Optional[int] = None  # Edge-Erkennung fuer start_epoch
         self._start_signaled = False  # Start-Signal gesehen (noch nicht angewandt)
+        # Observability (#966): monotoner Resolver-Fehler-Zaehler + letzter Fehler.
+        self.resolve_errors = 0
+        self.last_resolve_error: Optional[str] = None
 
     # --- Toggles ----------------------------------------------------------
     @property
@@ -767,15 +774,35 @@ class AttackCycle:
                 else:
                     print(f"[attack-cycle] wave{level} verworfen (status={status} ok={ok}): {body[:160]}", flush=True)
             except Exception as e:
-                print(f"[attack-cycle] wave{level} resolve error: {e}", flush=True)
+                # #966: nicht mehr still schlucken — laut loggen + zaehlen.
+                # Verhalten unveraendert: die Order bleibt verworfen.
+                with self._lock:
+                    self.resolve_errors += 1
+                    self.last_resolve_error = "wave%d: %s" % (level, e)
+                LOG.warning(
+                    "[attack-cycle] wave%d resolve error (resolve_errors=%d): %s",
+                    level,
+                    self.resolve_errors,
+                    e,
+                    exc_info=True,
+                )
 
     def _resolver_loop(self) -> None:
         """Hintergrund-Resolver: bezahlt kontinuierlich offene Orders."""
         while True:
             try:
                 self._resolve_orders()
-            except Exception:
-                pass
+            except Exception as e:
+                # #966: Loop-Fehler laut machen statt ``pass`` (sonst unsichtbar).
+                with self._lock:
+                    self.resolve_errors += 1
+                    self.last_resolve_error = "resolver_loop: %s" % (e,)
+                LOG.warning(
+                    "[attack-cycle] resolver loop error (resolve_errors=%d): %s",
+                    self.resolve_errors,
+                    e,
+                    exc_info=True,
+                )
             time.sleep(0.5)
 
     # --- Feuern -----------------------------------------------------------
@@ -1067,6 +1094,8 @@ class AttackCycle:
                 "history": list(self.history),
                 "last_fire": self.last_fire,
                 "last_event": self.last_event,
+                "resolve_errors": self.resolve_errors,
+                "last_resolve_error": self.last_resolve_error,
             }
 
     # --- Status an die Bridge pushen (WebUI) ----------------------------
