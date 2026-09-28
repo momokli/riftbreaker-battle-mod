@@ -780,6 +780,32 @@ static size_t chat_build_player_chat(const char *text, char *out, size_t n)
     return (size_t)len;
 }
 
+/* #934: Baut die `send_chat_result`-Erfolgszeile aus dem rohen Chat-Text.
+ * Escaping via json_escape_into() — analog zur Gegenrichtung #549
+ * (chat_build_player_chat): ohne das entsteht bei `"`/`\` invalides JSON
+ * und bei Steuerzeichen (LF) ein Pipe-Framing-Desync (Restzeile verfaelscht
+ * die Antwort des naechsten Kommandos). Rein (nur snprintf) -> host-testbar
+ * (tests/rbbridge-hosttest). Rueckgabe = Laenge der Zeile ohne NUL; 0 =
+ * Puffer zu klein (der Aufrufer darf dann KEINE Zeile senden). */
+static size_t send_chat_build_result(const char *text, int done, char *out,
+                                     size_t n)
+{
+    char esc[512];
+    int len;
+
+    if (!out || n == 0)
+        return 0;
+    out[0] = '\0';
+    json_escape_into(text ? text : "", esc, sizeof(esc));
+    len = snprintf(out, n,
+                   "{\"event\":\"send_chat_result\",\"ok\":true,"
+                   "\"text\":\"%s\",\"sent\":\"%s\"}",
+                   esc, done ? "true" : "pending");
+    if (len < 0 || (size_t)len >= n)
+        return 0;
+    return (size_t)len;
+}
+
 /* #392: liest den String-Wert `"session"` aus einer Request-Zeile (die
  * Bridge haengt ihn zentral an JEDEN Command an). Reine Funktion ->
  * host-testbar (tests/rbbridge-hosttest). Rueckgabe 1 = gefunden und nicht
@@ -5548,8 +5574,6 @@ static volatile LONG g_chat_out_type = 8; /* ChatMessageType: 2=SYSTEM, 4=ANNOUN
 static const unsigned char *g_chat_broadcast_fn = NULL;
 typedef void (__fastcall *broadcastchat_fn_t)(void *sessions, void *ack,
                                               int transfer, void *conn);
-typedef void (__fastcall *utfstring_ctor_fn_t)(void *self, const char *s);
-typedef void (__fastcall *utfstring_dtor_fn_t)(void *self);
 static const unsigned char *g_game_base = NULL;
 static const unsigned char *g_game_pausegame_fn = NULL;  /* GameplayState::PauseGame */
 static const unsigned char *g_game_resumegame_fn = NULL; /* GameplayState::ResumeGame */
@@ -5570,13 +5594,13 @@ static void send_chat_now(void *state)
     memset(ack, 0, sizeof(ack));
     *(long long *)(ack + RBBRIDGE_CHAT_OFF_TIMESTAMP) = (long long)time(NULL);
     *(unsigned int *)(ack + RBBRIDGE_CHAT_OFF_PLAYER) = RBBRIDGE_CHAT_PLAYER_SERVER;
-    ((utfstring_ctor_fn_t)(uintptr_t)(g_game_base + RBBRIDGE_RVA_UTFSTRING_CTOR))(
-        ack + RBBRIDGE_CHAT_OFF_MESSAGE, g_chat_out_text);
+    /* Kosmetik/Dedup: vorhandene UtfString-Helper statt lokaler Ctor/Dtor-Calls. */
+    build_utfstring(g_game_base, g_chat_out_text,
+                    ack + RBBRIDGE_CHAT_OFF_MESSAGE);
     ack[RBBRIDGE_CHAT_OFF_TYPE] = (unsigned char)g_chat_out_type;
     ((broadcastchat_fn_t)(uintptr_t)g_chat_broadcast_fn)(
         sessions, ack, RBBRIDGE_CHAT_TRANSFER_UNRELIABLE, NULL);
-    ((utfstring_dtor_fn_t)(uintptr_t)(g_game_base + RBBRIDGE_RVA_UTFSTRING_DTOR))(
-        ack + RBBRIDGE_CHAT_OFF_MESSAGE);
+    destroy_utfstring(g_game_base, ack + RBBRIDGE_CHAT_OFF_MESSAGE);
     dbg("send_chat: broadcasted (%u B text)", (unsigned)strlen(g_chat_out_text));
 }
 
@@ -5655,10 +5679,13 @@ static int install_game_pause_hook(const unsigned char *base, size_t size)
     g_game_resumegame_fn = resolve_unique_fn(base, size,
                                              RBBRIDGE_RESUMEGAME_SIG,
                                              sizeof(RBBRIDGE_RESUMEGAME_SIG));
-    if (!g_game_pausegame_fn || !g_game_resumegame_fn) {
-        dbg("install_game_pause_hook: PauseGame/ResumeGame-AOB fehlt/mehrdeutig");
-        return 0;
-    }
+    /* #934-Review: der UpdLogic-Detour ist auch fuer send_chat zustaendig und
+     * braucht die Pause-/Resume-Sigs NICHT. Fehlen sie, ist das kein
+     * Installationsfehler; pause_game/resume_game melden dann selbst
+     * `no_pause_fn` (siehe dispatch_pause_game). */
+    if (!g_game_pausegame_fn || !g_game_resumegame_fn)
+        dbg("install_game_pause_hook: PauseGame/ResumeGame-AOB fehlt/mehrdeutig "
+            "-> pause_game/resume_game nicht verfuegbar");
     g_game_base = base;
 
     trampoline = (unsigned char *)VirtualAlloc(
@@ -5711,8 +5738,10 @@ static int install_game_pause_hook(const unsigned char *base, size_t size)
 
 /* send_chat (#934): Text an ALLE verbundenen Spieler (Vanilla-Chat). Der
  * Broadcast laeuft im GAME-Thread-Hook (Race bei Spieler-Join/-Leave).
- * Event: {"event":"send_chat_result","ok":true,"text":".."} bzw. ok:false
- * mit reason no_module|hook_not_installable|no_broadcast_fn|invalid_text. */
+ * Braucht nur den UpdLogic-Detour (install_game_pause_hook), NICHT die
+ * Pause-/Resume-Sigs.
+ * Event: {"event":"send_chat_result","ok":true,"text":"..","sent":"true"|"pending"}
+ * bzw. ok:false mit reason no_module|hook_not_installable|no_broadcast_fn|invalid_text. */
 static RBBRIDGE_NOINLINE void dispatch_send_chat(HANDLE hPipe, const char *text,
                                                   int type, const char *prefix)
 {
@@ -5757,10 +5786,16 @@ static RBBRIDGE_NOINLINE void dispatch_send_chat(HANDLE hPipe, const char *text,
         Sleep(10);
     done = (int)g_chat_out_done;
     dbg("send_chat: text='%s' done=%d", g_chat_out_text, done);
-    send_line(hPipe,
-              "{\"event\":\"send_chat_result\",\"ok\":true,\"text\":\"%s\","
-              "\"sent\":%s}",
-              text, done ? "true" : "pending");
+    /* Review-Blocker: Text NIE roh einsetzen (Quote/Backslash -> invalides JSON,
+     * LF -> Pipe-Framing-Desync). Escaping im host-testbaren Builder (#549-Muster). */
+    {
+        char resp[768];
+        if (send_chat_build_result(text, done, resp, sizeof(resp)) > 0)
+            send_line(hPipe, "%s", resp);
+        else
+            send_line(hPipe, "{\"event\":\"send_chat_result\",\"ok\":false,"
+                             "\"reason\":\"encode_failed\"}");
+    }
 }
 
 static RBBRIDGE_NOINLINE void dispatch_pause_game(HANDLE hPipe, int pause,
@@ -5792,6 +5827,15 @@ static RBBRIDGE_NOINLINE void dispatch_pause_game(HANDLE hPipe, int pause,
         send_line(hPipe,
                   "{\"event\":\"%s\",\"ok\":false,"
                   "\"reason\":\"hook_not_installable\"}",
+                  ev);
+        return;
+    }
+    /* #934-Review: Pause/Resume-Sigs werden best-effort aufgeloest; fehlen sie,
+     * hier ehrlich melden statt still nichts zu tun. */
+    if (!g_game_pausegame_fn || !g_game_resumegame_fn) {
+        dbg("pause_game: PauseGame/ResumeGame nicht aufloesbar");
+        send_line(hPipe,
+                  "{\"event\":\"%s\",\"ok\":false,\"reason\":\"no_pause_fn\"}",
                   ev);
         return;
     }
