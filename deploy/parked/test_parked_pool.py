@@ -123,23 +123,30 @@ class FakeProvisioner(object):
         port = self._BASE_PORT + len(self.starts)
         # Issue #929: der GNS-UDP-Host-Port kommt aus dem 6321/udp-Mapping.
         gns = "127.0.0.1:%d" % (port + 1000)
-        self._ports[instance_id] = (port, gns)
+        # Issue #966: pro Instanz abgeleiteter Attack-Cycle-Control-Port.
+        cycle_port = port + 2000
+        self._ports[instance_id] = (port, gns, cycle_port)
         return {
             "instance": instance_id,
             "container": "riftbreaker-dedicated-%s-%s" % (env or self.cfg.env, instance_id),
             "running": True,
             "health": "healthy",
-            "ports": {"bridge": port, "gns": gns},
+            "ports": {"bridge": port, "gns": gns, "attack_cycle": cycle_port},
+            "cycle_url": "http://127.0.0.1:%d" % cycle_port,
             "created": True,
         }
 
     def status(self, instance_id=None, env=None):
         known = self._ports.get(instance_id)
-        port, gns = known if known else (self._BASE_PORT, None)
+        if known:
+            port, gns, cycle_port = known
+        else:
+            port, gns, cycle_port = self._BASE_PORT, None, self._BASE_PORT + 2000
         return {
             "running": True,
             "health": "healthy",
-            "ports": {"bridge": port, "gns": gns},
+            "ports": {"bridge": port, "gns": gns, "attack_cycle": cycle_port},
+            "cycle_url": "http://127.0.0.1:%d" % cycle_port,
             "container": "riftbreaker-dedicated-%s-%s" % (env or self.cfg.env, instance_id),
         }
 
@@ -148,7 +155,8 @@ class FakeProvisioner(object):
         (Container-Neustart) bzw. entfernen (endpoint=None)."""
         known = self._ports.get(instance_id)
         bridge = known[0] if known else self._BASE_PORT
-        self._ports[instance_id] = (bridge, endpoint)
+        cycle = known[2] if known else self._BASE_PORT + 2000
+        self._ports[instance_id] = (bridge, endpoint, cycle)
 
     def stop(self, instance_id=None, env=None):
         self.stops.append((env or self.cfg.env, instance_id))
@@ -206,6 +214,39 @@ class WarmUpTests(PoolHarness):
         entry = self.pool.warm_up(env="test", instance_id="r1")
         self.assertEqual(entry.gns_endpoint, "127.0.0.1:41001")
 
+    def test_warm_up_records_cycle_url(self):
+        # Issue #966: pro Instanz abgeleitete Attack-Cycle-Control-URL.
+        entry = self.pool.warm_up(env="test", instance_id="r1")
+        self.assertEqual(entry.cycle_url, "http://127.0.0.1:42001")
+        self.assertEqual(self.pool.status()[0]["cycle_url"], "http://127.0.0.1:42001")
+
+    def test_warm_up_missing_cycle_port_fails_loud(self):
+        # Gleiche Haerte wie _bridge_url: fehlt der Cycle-Port -> lauter Fehler.
+        original = self.provisioner.start
+
+        def start(env=None, mode="solo", instance_id=None):
+            result = original(env=env, mode=mode, instance_id=instance_id)
+            result["ports"].pop("attack_cycle", None)
+            result.pop("cycle_url", None)
+            return result
+
+        self.provisioner.start = start
+        with self.assertRaises(ParkedError):
+            self.pool.warm_up(env="test", instance_id="r1")
+
+    def test_cycle_url_from_fallback_field(self):
+        # Fallback: Provisioner liefert die fertige URL statt eines Ports.
+        self.assertEqual(
+            self.pool._cycle_url({"cycle_url": "http://127.0.0.1:9110"}),
+            "http://127.0.0.1:9110",
+        )
+        self.assertEqual(
+            self.pool._cycle_url({"ports": {}} | {"attack_cycle_url": "http://127.0.0.1:9111"}),
+            "http://127.0.0.1:9111",
+        )
+        with self.assertRaises(ParkedError):
+            self.pool._cycle_url({"ports": {}})
+
     def test_warm_up_pause_failure_rolls_back_loudly(self):
         # Bridge kennt die URL erst nach start; pause_game soll knallen.
         original_factory = self.pool.bridge_factory
@@ -255,6 +296,12 @@ class ClaimTests(PoolHarness):
         self.pool.warm_up(env="test", instance_id="r1")
         result = self.pool.claim(env="test", instance_id="r1")
         self.assertEqual(result["gns_endpoint"], "127.0.0.1:41001")
+
+    def test_claim_returns_cycle_url(self):
+        # Issue #966: die Claim-Antwort traegt die Cycle-URL der Instanz.
+        self.pool.warm_up(env="test", instance_id="r1")
+        result = self.pool.claim(env="test", instance_id="r1")
+        self.assertEqual(result["cycle_url"], "http://127.0.0.1:42001")
 
     def test_claim_reads_gns_endpoint_fresh(self):
         # Nach einem Container-Neustart wechselt der Host-UDP-Port -> claim liest
