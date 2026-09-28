@@ -42,6 +42,9 @@ LOG = logging.getLogger("provisioner")
 
 # instance_id: run-scoped Suffix analog rbbattle_run_suffix (github.run_id).
 INSTANCE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
+# #970: Suffix-Template fuer den server_name. Nur Zeichen, die weder die
+# Rewrite-Zeile ("-Quoting/CR/LF) noch das Erlaubte-Instanz-Alphabet sprengen.
+SERVER_NAME_SUFFIX_RE = re.compile(r"^[A-Za-z0-9_.\-{}]*$")
 BYTES_PER_GB = 1024 ** 3
 
 # Sidecar-Skripte liegen im Deploy-Baum neben diesem Modul (deploy/<module>/).
@@ -102,6 +105,9 @@ class Config:
     match_loop_script: str = _deploy_script("match-loop", "match_loop.py")
     attack_cycle_script: str = _deploy_script("attack-cycle", "attack_cycle.py")
     config_cfg: str = "/opt/rbmods/compose/rift-{env}/riftbreaker/config/config.cfg"
+    # Additiver Suffix am `server_name` der je Instanz abgeleiteten config.cfg
+    # (#970). Platzhalter `{env}`/`{instance_id}`; leerer Wert = bewusstes Opt-out.
+    server_name_suffix: str = "-{env}-{instance_id}"
     rbtools_dir: str = "/opt/rbmods/rbtools/{env}"
     game_source: str = "/srv/rift-{env}/game"
     image_build_dir: str = ""
@@ -135,6 +141,7 @@ _JSON_KEYS = {
     "match_loop_script": "match_loop_script",
     "attack_cycle_script": "attack_cycle_script",
     "config_cfg": "config_cfg",
+    "server_name_suffix": "server_name_suffix",
     "rbtools_dir": "rbtools_dir",
     "game_source": "game_source",
     "image_build_dir": "image_build_dir",
@@ -167,6 +174,7 @@ _ENV_KEYS = {
     "PROVISIONER_MATCH_LOOP_SCRIPT": "match_loop_script",
     "PROVISIONER_ATTACK_CYCLE_SCRIPT": "attack_cycle_script",
     "PROVISIONER_CONFIG_CFG": "config_cfg",
+    "PROVISIONER_SERVER_NAME_SUFFIX": "server_name_suffix",
     "PROVISIONER_RBTOOLS_DIR": "rbtools_dir",
     "PROVISIONER_GAME_SOURCE": "game_source",
     "PROVISIONER_IMAGE_BUILD_DIR": "image_build_dir",
@@ -230,8 +238,13 @@ def load_config(env: Optional[Dict[str, str]] = None, path: Optional[str] = None
 
     for var, field in _ENV_KEYS.items():
         raw = env.get(var)
-        if raw is not None and str(raw).strip() != "":
-            values[field] = _coerce(field, raw)
+        if raw is None:
+            continue
+        # Leerstring = bewusstes Opt-out beim server_name-Suffix (#970);
+        # fuer alle uebrigen Felder bleibt ein Leerwert "nicht gesetzt".
+        if str(raw).strip() == "" and var != "PROVISIONER_SERVER_NAME_SUFFIX":
+            continue
+        values[field] = _coerce(field, raw)
 
     cfg = Config(**values) if values else Config()
 
@@ -254,6 +267,11 @@ def load_config(env: Optional[Dict[str, str]] = None, path: Optional[str] = None
         raise ConfigError(
             "attack_cycle_container_port %r ist ungueltig (erlaubt: 1..65535)"
             % (cfg.attack_cycle_container_port,)
+        )
+    if not SERVER_NAME_SUFFIX_RE.match(cfg.server_name_suffix):
+        raise ConfigError(
+            "server_name_suffix %r ist ungueltig (erlaubt: %s)"
+            % (cfg.server_name_suffix, SERVER_NAME_SUFFIX_RE.pattern)
         )
     return cfg
 
@@ -291,6 +309,9 @@ class InstanceSpec(object):
         self.game_dir = os.path.join(run_root, "game")
         self.backups_dir = os.path.join(run_root, "backups")
         self.sessions_dir = os.path.join(run_root, "sessions")
+        # Instanz-eigene config.cfg (#970): Staging-Ziel im run_root.
+        self.config_dir = os.path.join(run_root, "config")
+        self.config_cfg_staged = os.path.join(self.config_dir, "config.cfg")
         self.bridge_port_base = cfg.bridge_port_base
         self.bridge_port = cfg.bridge_port_base + (self._numeric_suffix() % 20000)
         # Sidecar-Namen (#966): konsistent mit ``compose_project``/``container``.
@@ -316,6 +337,12 @@ class InstanceSpec(object):
         # Reale Image-Quellen (Platzhalter {env} wird durch das Env-Segment ersetzt).
         self.bridge_container_port = cfg.bridge_container_port
         self.config_cfg = cfg.config_cfg.replace("{env}", env)
+        # Additiver Namens-Suffix (#970): rein rechnend, nie Routing-relevant.
+        self.server_name_suffix = (
+            cfg.server_name_suffix
+            .replace("{env}", env)
+            .replace("{instance_id}", instance_id)
+        )
         self.rbtools_dir = cfg.rbtools_dir.replace("{env}", env)
         self.game_source = cfg.game_source.replace("{env}", env)
         # Deploy-Identitaet (#968): Mod-Log liest RBB_REF im Container.
@@ -336,6 +363,14 @@ class InstanceSpec(object):
 
     def health_url(self) -> str:
         return "http://127.0.0.1:%d/health" % self.bridge_port
+
+    def config_cfg_source(self) -> str:
+        """Pfad der geteilten Env-`config.cfg` (Quelle des Stagings, #970)."""
+        return self.config_cfg
+
+    def suffixed_server_name(self, base: str) -> str:
+        """Basisname aus der Quelle + instanz-eigener Suffix (#970)."""
+        return base + self.server_name_suffix
 
     def send_tailer_queue_url(self) -> str:
         """Queue-URL des Attack-Cycle IM Netz (Compose-Template 1:1)."""
@@ -394,6 +429,9 @@ class InstanceSpec(object):
             "attack_cycle_bridge_url": self.attack_cycle_bridge_url(),
             "session_recorder_sessions_dir": self.session_recorder_sessions_dir(),
             "config_cfg": self.config_cfg,
+            "config_dir": self.config_dir,
+            "config_cfg_staged": self.config_cfg_staged,
+            "server_name_suffix": self.server_name_suffix,
             "rbtools_dir": self.rbtools_dir,
             "game_source": self.game_source,
             "deploy_ref": self.deploy_ref,
@@ -602,9 +640,11 @@ class Provisioner(object):
             "network": False,
             "volumes": [],
             "dirs": [],
+            "config_staged": None,
         }
         try:
             self._create_dirs(spec, created)
+            self._stage_config(spec, created)
             self._create_network(spec, created)
             self._create_volumes(spec, created)
             self._create_container(spec, created, mode)
@@ -660,7 +700,7 @@ class Provisioner(object):
         removed["volumes"] = volumes_present
 
         dirs_present = False
-        for directory in (spec.game_dir, spec.backups_dir, spec.sessions_dir):
+        for directory in (spec.game_dir, spec.backups_dir, spec.sessions_dir, spec.config_dir):
             if os.path.isdir(directory):
                 dirs_present = True
                 shutil.rmtree(directory, ignore_errors=True)
@@ -686,6 +726,64 @@ class Provisioner(object):
         }
 
     # -- intern ------------------------------------------------------------
+    @staticmethod
+    def _read_server_name(path: str) -> str:
+        """Basisname aus der ERSTEN `set server_name "..."`-Zeile (#970).
+
+        Fehlt die Zeile, laut abbrechen — der Fehlertext nennt nur den Pfad,
+        nie den Dateiinhalt (Secret-Hygiene).
+        """
+        with open(path, "r", encoding="utf-8") as handle:
+            text = handle.read()
+        match = re.search(r'^set\s+server_name\s+"([^"]*)"', text, re.MULTILINE)
+        if match is None:
+            raise ProvisionError(
+                "config.cfg %s enthaelt keine server_name-Zeile "
+                '(erwartet: set server_name "...")' % path
+            )
+        return match.group(1)
+
+    @staticmethod
+    def _render_config(source_path: str, base_name: str, new_name: str) -> str:
+        """Kopie der Quelle mit GENAU EINER ersetzten `server_name`-Zeile (#970).
+
+        Alle uebrigen Zeilen bleiben byte-identisch (inkl. Kommentaren und
+        Passwortzeilen). Kein globales ``.replace()`` auf Teilstrings.
+        """
+        with open(source_path, "r", encoding="utf-8") as handle:
+            text = handle.read()
+        pattern = re.compile(r'^set\s+server_name\s+"[^"]*"', re.MULTILINE)
+        rendered, count = pattern.subn('set server_name "%s"' % new_name, text, count=1)
+        if count != 1:
+            raise ProvisionError(
+                "config.cfg %s enthaelt keine server_name-Zeile "
+                '(erwartet: set server_name "%s")' % (source_path, base_name)
+            )
+        return rendered
+
+    def _stage_config(self, spec: InstanceSpec, created: Dict[str, Any]) -> None:
+        """Instanz-eigene config.cfg in ``run_root`` ableiten und atomar ablegen.
+
+        Inhalt = Byte-Kopie der Env-Quelle, nur die ``server_name``-Zeile traegt
+        den Instanz-Suffix. Modus 0644; Quelle bleibt unberuehrt. Es wird NUR
+        der Pfad + die Byte-Groesse geloggt — niemals der Inhalt (AK3.3).
+        """
+        base = self._read_server_name(spec.config_cfg)
+        new_name = spec.suffixed_server_name(base)
+        text = self._render_config(spec.config_cfg, base, new_name)
+        os.makedirs(spec.config_dir, exist_ok=True)
+        tmp = spec.config_cfg_staged + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp, spec.config_cfg_staged)
+        os.chmod(spec.config_cfg_staged, 0o644)
+        created["config_staged"] = spec.config_cfg_staged
+        LOG.info(
+            "config.cfg gestaged: %s (%d bytes)",
+            spec.config_cfg_staged,
+            len(text.encode("utf-8")),
+        )
+
     def _preflight(self, spec: InstanceSpec) -> None:
         if self._port_in_use(spec.bridge_port):
             raise ProvisionError(
@@ -723,6 +821,9 @@ class Provisioner(object):
             raise ProvisionError(
                 "Quellen fehlen (Mounts wuerden ins Leere zeigen): %s" % ", ".join(missing)
             )
+        # Fail-loud VOR dem ersten Container: die Quelle braucht eine
+        # server_name-Zeile fuer die instanz-eigene Ableitung (#970).
+        self._read_server_name(spec.config_cfg)
 
     @staticmethod
     def _port_in_use(port: int, host: str = "127.0.0.1") -> bool:
@@ -749,7 +850,7 @@ class Provisioner(object):
         return shutil.disk_usage(probe).free
 
     def _create_dirs(self, spec: InstanceSpec, created: Dict[str, Any]) -> None:
-        for directory in (spec.game_dir, spec.backups_dir, spec.sessions_dir):
+        for directory in (spec.game_dir, spec.backups_dir, spec.sessions_dir, spec.config_dir):
             if not os.path.isdir(directory):
                 os.makedirs(directory, exist_ok=True)
                 created["dirs"].append(directory)
@@ -778,7 +879,7 @@ class Provisioner(object):
             "-v", "%s:/opt/riftbreaker" % spec.game_source,
             "-v", "%s:/data/.wine" % spec.wine_volume,
             "-v", "%s:/data/saves" % spec.saves_volume,
-            "-v", "%s:/data/config/config.cfg:ro" % spec.config_cfg,
+            "-v", "%s:/data/config/config.cfg:ro" % spec.config_cfg_staged,
             "-v", "%s:/opt/rbtools:ro" % spec.rbtools_dir,
             "-e", "RIFTBREAKER_MODE=%s" % mode,
             "-e", "RBB_BRIDGE_BIND=0.0.0.0",
@@ -966,6 +1067,11 @@ class Provisioner(object):
                 self.docker.volume_rm(volume)
             except DockerError as exc:  # pragma: no cover - nur Log
                 LOG.warning("Rollback Volume %s: %s", volume, exc)
+        if created.get("config_staged"):
+            try:
+                os.remove(created["config_staged"])
+            except OSError as exc:  # pragma: no cover - nur Log
+                LOG.warning("Rollback config.cfg %s: %s", created["config_staged"], exc)
         if created.get("network"):
             try:
                 self.docker.network_rm(spec.network)
