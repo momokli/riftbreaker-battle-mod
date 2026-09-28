@@ -157,9 +157,19 @@ Labels; sie werden bei der Auswertung je `(env, instance)` **gruppiert**.
 
 Entfernt wird per vollem `provisioner.stop(instance_id, env)` (Container + Sidecars +
 Netz + Volumes + Pfade). Die **Bridge wird nie beruehrt** (kein `pause_game`/
-`resume_game`). Fremde Envs (`!= own_env`) werden **nie** angefasst
-(`skipped_foreign`). Ueberfaellige getrackte `PARKED`-Instanzen bleiben Sache von
-`reap` (kennt `parked_since`).
+`resume_game`). Fremde Envs (`!= own_env`) werden **nie** angefasst. Der Zaehler
+`skipped_foreign` ist dabei reine Defense-in-Depth-Beobachtbarkeit: sowohl
+`list_instances` als auch der Fallback filtern fremde Container bereits
+serverseitig per Label `rb.provisioner.env=<env>`, im Produktionspfad ist er
+daher praktisch immer `0`. Ueberfaellige getrackte `PARKED`-Instanzen bleiben
+Sache von `reap` (kennt `parked_since`).
+
+Zur **Reverse-Luecke** (Regel 3 vs. Regel 5): ein getrackter `STOPPED`-Eintrag,
+dessen Container noch existiert, ist ein Orphan und wird entfernt (Regel 3).
+Existiert der Container dagegen **nicht** mehr (z. B. nach `recycle keep_warm=false`
+oder nach einem Container-Verlust), evictet Reconcile den Eintrag ohne `stop`
+(Regel 5) — der Eintrag verschwindet dann aus dem `stopped`-Tracking. Beides ist
+konsistent: Regel 3 raeumt echte Container, Regel 5 nur toten Tracking-State.
 
 #### Persistente Claim-Marker (B1 — kein Verlust eines laufenden Spiels)
 
