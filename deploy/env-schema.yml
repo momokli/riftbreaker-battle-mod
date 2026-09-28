@@ -54,6 +54,10 @@ per_env:
   riftbreaker_send_tailer_container: [prod, test, staging]
   riftbreaker_match_loop_container: [prod, test, staging]
   riftbreaker_attack_cycle_container: [prod, test, staging]
+  # Host-Publish des Attack-Cycle-Control (Kapsel /ready, #963): im boot-test je
+  # Lauf eindeutig (Issue #967) — sonst kollidiert der feste 9102-Publish mit dem
+  # Dev-Stack. Nur test setzt ihn explizit; dev/prod/staging nutzen den Rollen-Default.
+  riftbreaker_attack_cycle_port: [test]
 
   # --- Crash-Collector (Prod-Zwilling, Issue #481) -------------------------
   crash_collector_unit: [prod, staging]
