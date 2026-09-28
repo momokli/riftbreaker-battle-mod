@@ -64,6 +64,16 @@ class DockerError(Exception):
     """``docker``-Aufruf fehlgeschlagen."""
 
 
+def _error_is_missing(err: str) -> bool:
+    """True, wenn ``stderr`` ein FEHLEN der Ressource meldet (kein Daemon-Fehler).
+
+    Nur dann darf ``inspect_optional`` ``None`` liefern; alles andere ist ein
+    echter Fehler und wird laut propagiert (#969 B2).
+    """
+    lowered = err.lower()
+    return "no such object" in lowered or "no such container" in lowered
+
+
 class ProvisionError(Exception):
     """Provisionierung nicht moeglich (Preflight/Rollback) — laut abbrechen."""
 
@@ -492,25 +502,43 @@ class DockerCli(object):
         return payload[0]
 
     def inspect_optional(self, name: str) -> Optional[Dict[str, Any]]:
-        """Wie ``inspect``, aber fehlende Ressource -> ``None`` (kein Fehler)."""
-        rc, out, _err = self._run(["inspect", name])
+        """Wie ``inspect``, aber eine FEHLENDE Ressource -> ``None`` (kein Fehler).
+
+        Nur „nicht gefunden" (rc!=0, stderr „No such object"/„No such container")
+        gilt als ``None``; ein echter Daemon-Fehler wird laut als
+        :class:`DockerError` gemeldet (#969 B2). So kann der Aufrufer
+        „Container fehlt" nicht mit „Docker kaputt" verwechseln.
+        """
+        rc, out, err = self._run(["inspect", name])
         if rc != 0:
-            return None
+            if _error_is_missing(err):
+                return None
+            raise DockerError("docker inspect %s: %s" % (name, err.strip() or "exit %d" % rc))
         try:
             payload = json.loads(out)
-        except ValueError:
-            return None
+        except ValueError as exc:
+            raise DockerError("docker inspect %s: kein JSON: %s" % (name, exc))
         if not payload:
             return None
         return payload[0]
 
     def ps_all(self, filter_label: Optional[str] = None) -> List[str]:
+        """Container-Namen auflisten (optional per Label gefiltert).
+
+        Ein fehlgeschlagenes ``docker ps`` (Daemon-Hiccup/Restart) wird **laut**
+        als :class:`DockerError` gemeldet — NICHT als leere Liste (#969 B2).
+        Sonst kann ein Aufrufer „nichts laeuft" nicht von „Discovery kaputt"
+        unterscheiden (stille Massen-Eviction). Eine erfolgreiche, aber leere
+        Ausgabe bleibt eine leere Liste.
+        """
         args = ["ps", "-a", "--format", "{{.Names}}"]
         if filter_label:
             args += ["--filter", "label=%s" % filter_label]
-        rc, out, _err = self._run(args)
+        rc, out, err = self._run(args)
         if rc != 0:
-            return []
+            raise DockerError(
+                "docker ps: %s" % (err.strip() or "exit %d" % rc)
+            )
         return [line.strip() for line in out.splitlines() if line.strip()]
 
     def port(self, container: str) -> Dict[str, str]:
@@ -724,6 +752,68 @@ class Provisioner(object):
             "ports": self._ports(spec),
             "container": spec.container,
         }
+
+    def list_instances(self, env: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Alle Container der EIGENEN ``env`` auflisten (#969).
+
+        Grundlage ist das ``rb.provisioner.env``-Label ueber
+        :meth:`DockerCli.ps_all`. Fuer jeden Namen wird ``docker inspect``
+        gelesen und daraus ``instance`` (Label ``rb.provisioner.instance``,
+        Fallback Namens-Suffix), ``status`` (``State.Status``), ``running``
+        und ``started_at`` abgeleitet. Ein Container ohne (oder mit fremdem)
+        ``rb.provisioner.env``-Label wird defensiv gefiltert, damit ein Dienst
+        pro Env nie fremde Container anfasst.
+
+        Ein fehlgeschlagenes ``inspect`` (Container zwischen ``ps`` und
+        ``inspect`` verschwunden) wird uebersprungen — kein Crash. Ein
+        fehlgeschlagenes ``docker ps`` wird dagegen **laut** propagiert (#969 B2):
+        der Aufrufer (Reconcile) darf „nichts laeuft" nicht mit „Discovery
+        kaputt" verwechseln. Ebenso propagiert ein ECHTER Daemon-Fehler beim
+        ``inspect`` (nur echtes „nicht gefunden" liefert ``None``).
+        """
+        env = env or self.cfg.env
+        names = self.docker.ps_all("rb.provisioner.env=%s" % env)
+        instances: List[Dict[str, Any]] = []
+        for name in names:
+            info = self.docker.inspect_optional(name)
+            if info is None:
+                continue
+            labels = (info.get("Config") or {}).get("Labels") or {}
+            row_env = labels.get("rb.provisioner.env") or env
+            if row_env != env:
+                # Fremde Env: nie auflisten (ein Dienst pro Env, kein Cross-Env).
+                continue
+            state = info.get("State") or {}
+            status = state.get("Status") or ""
+            instance = labels.get("rb.provisioner.instance") or self._instance_from_name(
+                name, env
+            )
+            if not instance:
+                continue
+            instances.append(
+                {
+                    "container": name,
+                    "env": row_env,
+                    "instance": instance,
+                    "status": status,
+                    "running": status == "running",
+                    "started_at": state.get("StartedAt"),
+                }
+            )
+        return instances
+
+    @staticmethod
+    def _instance_from_name(name: str, env: str) -> Optional[str]:
+        """Fallback: ``instance`` aus dem Dedicated-Container-Namen ableiten.
+
+        Neben dem Label ist der Dedi-Name deterministisch
+        (``riftbreaker-dedicated-<env>-<instance>``); Sidecar-Namen tragen kein
+        ableitbares Suffix und werden ohne Label uebersprungen.
+        """
+        prefix = "riftbreaker-dedicated-%s-" % env
+        if name.startswith(prefix) and len(name) > len(prefix):
+            return name[len(prefix):]
+        return None
 
     # -- intern ------------------------------------------------------------
     @staticmethod

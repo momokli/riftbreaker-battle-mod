@@ -73,9 +73,12 @@ if cmd == "inspect":
     if name not in containers:
         sys.stderr.write("Error: No such object: %s\n" % name)
         sys.exit(1)
-    running = containers[name]["running"]
+    entry = containers[name]
+    running = entry["running"]
     print(json.dumps([{"Name": "/" + name,
-                       "State": {"Status": "running" if running else "exited"}}]))
+                       "Config": {"Labels": entry.get("labels", {})},
+                       "State": {"Status": "running" if running else "exited",
+                                 "StartedAt": "2026-01-01T00:00:00Z"}}]))
 elif cmd == "ps":
     for name in load("containers.json", {}):
         print(name)
@@ -141,7 +144,12 @@ elif cmd == "run":
             if len(parts) >= 3 and parts[1].isdigit():
                 bridge_port = int(parts[1])
     containers = load("containers.json", {})
-    containers[name] = {"running": True, "bridge_port": bridge_port}
+    labels = {}
+    for i, a in enumerate(args):
+        if a == "--label" and i + 1 < len(args) and "=" in args[i + 1]:
+            key, value = args[i + 1].split("=", 1)
+            labels[key] = value
+    containers[name] = {"running": True, "bridge_port": bridge_port, "labels": labels}
     save("containers.json", containers)
     print(name)
 elif cmd == "start":
@@ -340,6 +348,12 @@ class DockerCliTestCase(BaseFixture):
         self.assertIsNone(self.docker.inspect_optional("ghost"))
         with self.assertRaises(prov.DockerError):
             self.docker.inspect("ghost")
+
+    def test_inspect_optional_daemon_error_raises(self):
+        # #969 B2: nur „nicht gefunden" -> None; ein echter Daemon-Fehler laut.
+        self.docker._run = lambda args: (1, "", "Cannot connect to the Docker daemon")  # type: ignore[assignment]
+        with self.assertRaises(prov.DockerError):
+            self.docker.inspect_optional("whatever")
 
 
 class InstanceSpecTestCase(BaseFixture):
@@ -1096,6 +1110,112 @@ class InstanceConfigStagingTestCase(BaseFixture):
         self.assertFalse(os.path.isdir(spec.config_dir))
         self.assertFalse(os.path.exists(spec.config_cfg_staged))
         self.assertFalse(os.path.exists(spec.run_root))
+
+
+class ListInstancesTestCase(BaseFixture):
+    """#969 US1: ``list_instances`` liefert die Container der EIGENEN env."""
+
+    def _make_foreign(self):
+        self.docker.run_or_fail([
+            "run", "-d", "--name", "riftbreaker-dedicated-other-x",
+            "--label", "rb.provisioner.env=other",
+            "--label", "rb.provisioner.instance=x",
+            IMAGE,
+        ])
+
+    def test_lists_own_env_with_fields(self):
+        self.provisioner().start("test", "solo", "0")
+        rows = self.provisioner().list_instances("test")
+        by_container = {row["container"]: row for row in rows}
+        self.assertIn("riftbreaker-dedicated-test-0", by_container)
+        row = by_container["riftbreaker-dedicated-test-0"]
+        self.assertEqual(row["env"], "test")
+        self.assertEqual(row["instance"], "0")
+        self.assertEqual(row["status"], "running")
+        self.assertTrue(row["running"])
+        self.assertEqual(row["started_at"], "2026-01-01T00:00:00Z")
+
+    def test_foreign_env_excluded(self):
+        self.provisioner().start("test", "solo", "0")
+        self._make_foreign()
+        rows = self.provisioner().list_instances("test")
+        self.assertEqual({row["env"] for row in rows}, {"test"})
+        self.assertNotIn(
+            "riftbreaker-dedicated-other-x", {row["container"] for row in rows}
+        )
+
+    def test_env_defaults_to_cfg_env(self):
+        self.provisioner().start("test", "solo", "0")
+        rows = self.provisioner().list_instances()
+        self.assertTrue(any(row["instance"] == "0" for row in rows))
+
+    def test_ps_uses_env_label_filter(self):
+        self.provisioner().list_instances("test")
+        ps_calls = [c for c in self.docker_calls() if c and c[0] == "ps"]
+        self.assertEqual(ps_calls[-1], ["ps", "-a", "--format", "{{.Names}}",
+                                        "--filter", "label=rb.provisioner.env=test"])
+
+    def test_missing_inspect_is_skipped_without_crash(self):
+        self.provisioner().start("test", "solo", "0")
+        original = self.docker.ps_all
+
+        def ps_all(filter_label=None):
+            return list(original(filter_label)) + ["ghost-container"]
+
+        self.docker.ps_all = ps_all
+        rows = self.provisioner().list_instances("test")
+        self.assertNotIn("ghost-container", {row["container"] for row in rows})
+        self.assertTrue(any(row["container"] == "riftbreaker-dedicated-test-0" for row in rows))
+
+    def test_stopped_container_reports_exited(self):
+        spec_name = "riftbreaker-dedicated-test-9"
+        self.docker.run_or_fail([
+            "run", "-d", "--name", spec_name,
+            "--label", "rb.provisioner.env=test",
+            "--label", "rb.provisioner.instance=9",
+            IMAGE,
+        ])
+        self.docker.stop(spec_name)
+        rows = {row["container"]: row for row in self.provisioner().list_instances("test")}
+        self.assertEqual(rows[spec_name]["status"], "exited")
+        self.assertFalse(rows[spec_name]["running"])
+
+    def test_instance_falls_back_to_container_name(self):
+        # Label `rb.provisioner.instance` fehlt -> Suffix aus dem Dedi-Namen.
+        self.docker.run_or_fail([
+            "run", "-d", "--name", "riftbreaker-dedicated-test-7",
+            "--label", "rb.provisioner.env=test",
+            IMAGE,
+        ])
+        rows = {row["container"]: row for row in self.provisioner().list_instances("test")}
+        self.assertEqual(rows["riftbreaker-dedicated-test-7"]["instance"], "7")
+
+    def test_ps_failure_raises_docker_error(self):
+        # #969 B2: `docker ps`-Ausfall wird LAUT gemeldet, nicht als leere Liste.
+        self.docker._run = lambda args: (1, "", "Cannot connect to the Docker daemon")  # type: ignore[assignment]
+        with self.assertRaises(prov.DockerError):
+            self.docker.ps_all("rb.provisioner.env=test")
+
+    def test_list_instances_propagates_ps_failure(self):
+        # #969 B2: der Provisioner darf den Discovery-Ausfall nicht schlucken.
+        def boom(*_args, **_kwargs):
+            raise prov.DockerError("docker ps explo")
+
+        self.docker.ps_all = boom  # type: ignore[assignment]
+        with self.assertRaises(prov.DockerError):
+            self.provisioner().list_instances("test")
+
+    def test_list_instances_propagates_inspect_daemon_error(self):
+        # #969 B2: ein ECHTER inspect-Daemon-Fehler wird laut propagiert (nicht
+        # wie ein fehlender Container still uebersprungen).
+        self.provisioner().start("test", "solo", "0")
+
+        def boom(_name):
+            raise prov.DockerError("docker inspect explo")
+
+        self.docker.inspect_optional = boom  # type: ignore[assignment]
+        with self.assertRaises(prov.DockerError):
+            self.provisioner().list_instances("test")
 
 
 class CliTestCase(BaseFixture):

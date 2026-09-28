@@ -150,6 +150,18 @@ ist reiner Anzeigename; GNS-Relay/Ports pinnen `ip:port` (#929).
   volumes, dirs}}` — idempotent; fehlende Ressourcen sind **kein** Fehler.
 - `status(instance_id=None, env=None) -> {running, health, ports, container}`
   — fehlt der Container: `running=False`, `health="unreachable"`, kein Fehler.
+- `list_instances(env=None) -> [{container, env, instance, status, running,
+  started_at}]` (#969) — alle Container der EIGENEN `env` (Label
+  `rb.provisioner.env`; `env`-Default `cfg.env`). Grundlage ist
+  `DockerCli.ps_all("rb.provisioner.env=<env>")` + `inspect_optional` je Name;
+  `instance` stammt aus dem Label `rb.provisioner.instance` (Fallback:
+  Dedi-Namens-Suffix), `status` = `State.Status`. Fremde/fehlende Env-Labels
+  werden defensiv gefiltert; ein fehlgeschlagenes `inspect` (Container zwischen
+  `ps` und `inspect` weg) wird uebersprungen — kein Crash. Ein fehlgeschlagenes
+  `docker ps` wird dagegen **laut** als `DockerError` propagiert (#969 B2), damit
+  ein Aufrufer „nichts laeuft" nicht mit „Discovery kaputt" verwechselt
+  (`DockerCli.ps_all` wirft jetzt statt `[]`). Discovery-Fundament fuer
+  `ParkedPool.reconcile()` (#969).
 
   `ports` ist `{bridge, gns, docker}` (Issue #929): `bridge` = der Bridge-Host-Port,
   `gns` = der **GNS-UDP-Host:Port** der Instanz aus dem `6321/udp`-Mapping
@@ -183,7 +195,10 @@ Argumente gegen das reale Image-Layout (Host:Container `9001`, fünf Mounts inkl
 idempotent + Reste weg, Port belegt / Disk voll / Image fehlt / Quellen fehlen →
 `ProvisionError` ohne Container, Health-Timeout → Rollback, Fehler in der Mitte →
 Rollback der Vorstufen, status ohne/mit Container, `InstanceSpec`-Determinismus/
-Validierung/`{env}`-Substitution, Config fail-closed (inkl. `bridge_container_port`).
+Validierung/`{env}`-Substitution, Config fail-closed (inkl. `bridge_container_port`),
+`list_instances` (#969: eigene Env inkl. `instance`/`status`/`running`/`started_at`,
+Fremd-Env gefiltert, fehlendes `inspect` uebersprungen, Label-Fallback aus dem
+Dedi-Namen, `ps`-Label-Filter).
 
 ## Sicherheits-/Robustheitsregeln
 
