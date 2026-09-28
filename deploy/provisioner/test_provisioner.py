@@ -17,6 +17,7 @@ import json
 import os
 import shutil
 import socket
+import stat
 import tempfile
 import threading
 import unittest
@@ -249,7 +250,9 @@ class BaseFixture(unittest.TestCase):
         os.makedirs(self.rbtools_dir)
         self.config_cfg = os.path.join(self.sources, "config.cfg")
         with open(self.config_cfg, "w", encoding="utf-8") as handle:
-            handle.write("# test config\n")
+            # Analog config.cfg.j2: die Quelle braucht eine server_name-Zeile
+            # (Preflight/Staging pruefen sie, #970).
+            handle.write('set server_name "RBBattle"\nset server_password "secret"\n# test config\n')
 
         os.environ["FAKE_DOCKER_LOG"] = self.log_file
         os.environ["FAKE_DOCKER_STATE_DIR"] = self.state_dir
@@ -449,6 +452,42 @@ class InstanceSpecTestCase(BaseFixture):
         self.assertEqual(a.bridge_port, b.bridge_port)
         self.assertGreaterEqual(a.bridge_port, self.cfg.bridge_port_base)
 
+    # -- #970: instanz-eigene config.cfg ----------------------------------
+    def test_config_staged_paths_deterministic(self):
+        spec = self.spec("12345")
+        run_root = os.path.join(self.base_dir, "rift-test-12345")
+        self.assertEqual(spec.config_dir, os.path.join(run_root, "config"))
+        self.assertEqual(
+            spec.config_cfg_staged, os.path.join(run_root, "config", "config.cfg")
+        )
+        self.assertEqual(self.spec("12345").config_cfg_staged, spec.config_cfg_staged)
+
+    def test_server_name_suffix_default_and_override(self):
+        self.assertEqual(self.spec("0").server_name_suffix, "-test-0")
+        cfg = prov.Config(**{**vars(self.cfg), "server_name_suffix": "-x-{instance_id}"})
+        self.assertEqual(prov.InstanceSpec("test", "0", cfg).server_name_suffix, "-x-0")
+        self.assertEqual(prov.InstanceSpec("test", "0", cfg).suffixed_server_name("RBBattle"), "RBBattle-x-0")
+
+    def test_server_name_suffix_empty_opts_out(self):
+        cfg = prov.Config(**{**vars(self.cfg), "server_name_suffix": ""})
+        spec = prov.InstanceSpec("test", "0", cfg)
+        self.assertEqual(spec.server_name_suffix, "")
+        self.assertEqual(spec.suffixed_server_name("RBBattle"), "RBBattle")
+
+    def test_config_cfg_is_source_unchanged(self):
+        # Regression: `config_cfg` bleibt die geteilte Env-QUelle (additiv).
+        spec = self.spec("0")
+        self.assertEqual(spec.config_cfg, self.config_cfg)
+        self.assertEqual(spec.config_cfg_source(), self.config_cfg)
+
+    def test_to_dict_has_staged_fields(self):
+        spec = self.spec("0")
+        payload = spec.to_dict()
+        self.assertEqual(payload["config_dir"], spec.config_dir)
+        self.assertEqual(payload["config_cfg_staged"], spec.config_cfg_staged)
+        self.assertEqual(payload["server_name_suffix"], spec.server_name_suffix)
+        self.assertEqual(payload["config_cfg"], spec.config_cfg)
+
 
 class ConfigTestCase(BaseFixture):
     def test_requires_image(self):
@@ -581,6 +620,40 @@ class ConfigTestCase(BaseFixture):
         self.assertFalse(prov.http_health_ok(self.stub.url))
         self.assertFalse(prov.http_health_ok("http://127.0.0.1:%d/health" % free_port()))
 
+    # -- #970: server_name_suffix (Config) -------------------------------
+    def test_server_name_suffix_default_is_template(self):
+        cfg = prov.load_config({"PROVISIONER_IMAGE": IMAGE})
+        self.assertEqual(cfg.server_name_suffix, "-{env}-{instance_id}")
+
+    def test_server_name_suffix_env_override_trimmed(self):
+        cfg = prov.load_config({
+            "PROVISIONER_IMAGE": IMAGE,
+            "PROVISIONER_SERVER_NAME_SUFFIX": " -x-{instance_id} ",
+        })
+        self.assertEqual(cfg.server_name_suffix, "-x-{instance_id}")
+
+    def test_server_name_suffix_empty_env_opts_out(self):
+        cfg = prov.load_config({
+            "PROVISIONER_IMAGE": IMAGE,
+            "PROVISIONER_SERVER_NAME_SUFFIX": "",
+        })
+        self.assertEqual(cfg.server_name_suffix, "")
+
+    def test_server_name_suffix_json_key_accepted(self):
+        path = os.path.join(self.tmp, "cfg-suffix.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"image": IMAGE, "server_name_suffix": "-j-{instance_id}"}, handle)
+        cfg = prov.load_config({"PROVISIONER_CONFIG": path})
+        self.assertEqual(cfg.server_name_suffix, "-j-{instance_id}")
+
+    def test_server_name_suffix_rejects_quote_or_newline(self):
+        for bad in ('-"{instance_id}"', "a\nb", 'x"y', "a b", "semi;colon"):
+            with self.assertRaises(prov.ConfigError, msg=bad):
+                prov.load_config({
+                    "PROVISIONER_IMAGE": IMAGE,
+                    "PROVISIONER_SERVER_NAME_SUFFIX": bad,
+                })
+
 
 class StartTestCase(BaseFixture):
     def test_happy_path(self):
@@ -601,6 +674,8 @@ class StartTestCase(BaseFixture):
         # Run-scoped Verzeichnisse existieren.
         self.assertTrue(os.path.isdir(spec.game_dir))
         self.assertTrue(os.path.isdir(spec.sessions_dir))
+        # Instanz-eigene config.cfg wurde gestaged (#970).
+        self.assertTrue(os.path.isfile(spec.config_cfg_staged))
 
     def test_start_creates_four_sidecars_in_network(self):
         status = self.provisioner().start("test", "solo", "0")
@@ -709,7 +784,10 @@ class StartTestCase(BaseFixture):
         self.assertIn("%s:/opt/riftbreaker" % spec.game_source, run)
         self.assertIn("%s:/data/.wine" % spec.wine_volume, run)
         self.assertIn("%s:/data/saves" % spec.saves_volume, run)
-        self.assertIn("%s:/data/config/config.cfg:ro" % spec.config_cfg, run)
+        self.assertIn("%s:/data/config/config.cfg:ro" % spec.config_cfg_staged, run)
+        # Die geteilte Env-Quelle wird NICHT mehr direkt gemountet (#970).
+        self.assertNotIn("%s:/data/config/config.cfg:ro" % spec.config_cfg, run)
+        self.assertTrue(os.path.isfile(spec.config_cfg_staged))
         self.assertIn("%s:/opt/rbtools:ro" % spec.rbtools_dir, run)
         # Bridge-Bind/-Port im Container + Rig-Sync-Env (sonst Crash vor bind()).
         self.assertIn("RBB_BRIDGE_BIND=0.0.0.0", run)
@@ -936,6 +1014,102 @@ class StopStatusTestCase(BaseFixture):
         status = provisioner.status("0", "test")
         self.assertTrue(status["running"])
         self.assertEqual(status["health"], "starting")
+
+
+class _StagingFailProvisioner(prov.Provisioner):
+    """Test-Helfer: simulierter Schreibfehler genau im Staging-Schritt (#970)."""
+
+    def _render_config(self, source_path, base_name, new_name):
+        raise OSError("simulated staging failure")
+
+
+class InstanceConfigStagingTestCase(BaseFixture):
+    """#970: instanz-eigene config.cfg ableiten, mounten, restfrei stoppen."""
+
+    def test_staging_rewrites_only_server_name(self):
+        self.provisioner().start("test", "solo", "0")
+        spec = self.spec("0")
+        with open(spec.config_cfg, "r", encoding="utf-8") as handle:
+            source = handle.read().splitlines()
+        with open(spec.config_cfg_staged, "r", encoding="utf-8") as handle:
+            staged = handle.read().splitlines()
+        self.assertEqual(len(staged), len(source))
+        self.assertEqual(staged[0], 'set server_name "RBBattle-test-0"')
+        # Alle uebrigen Zeilen (inkl. Passwort) bleiben byte-identisch.
+        self.assertEqual(staged[1:], source[1:])
+
+    def test_staging_mode_is_0644(self):
+        self.provisioner().start("test", "solo", "0")
+        spec = self.spec("0")
+        mode = stat.S_IMODE(os.stat(spec.config_cfg_staged).st_mode)
+        self.assertEqual(mode, 0o644)
+
+    def test_two_instances_get_distinct_names(self):
+        provisioner = self.provisioner()
+        provisioner.start("test", "solo", "0")
+        provisioner.start("test", "solo", "1")
+        spec_a, spec_b = self.spec("0"), self.spec("1")
+        self.assertNotEqual(spec_a.config_cfg_staged, spec_b.config_cfg_staged)
+        self.assertTrue(os.path.isfile(spec_a.config_cfg_staged))
+        self.assertTrue(os.path.isfile(spec_b.config_cfg_staged))
+        name_a = provisioner._read_server_name(spec_a.config_cfg_staged)
+        name_b = provisioner._read_server_name(spec_b.config_cfg_staged)
+        self.assertEqual(name_a, "RBBattle-test-0")
+        self.assertEqual(name_b, "RBBattle-test-1")
+        self.assertNotEqual(name_a, name_b)
+
+    def test_source_without_server_name_fails_loud_before_container(self):
+        bad = os.path.join(self.sources, "config_no_name.cfg")
+        with open(bad, "w", encoding="utf-8") as handle:
+            handle.write('# keine server_name-Zeile\nset server_password "secret"\n')
+        with self.assertRaises(prov.ProvisionError):
+            self.provisioner(config_cfg=bad).start("test", "solo", "0")
+        self.assertEqual(self.run_calls(), [])
+
+    def test_missing_config_source_fails_loud(self):
+        with self.assertRaises(prov.ProvisionError):
+            self.provisioner(
+                config_cfg=os.path.join(self.tmp, "nope.cfg")
+            ).start("test", "solo", "0")
+        self.assertEqual(self.run_calls(), [])
+
+    def test_staging_write_failure_rolls_back(self):
+        cfg = prov.Config(**vars(self.cfg))
+        provisioner = _StagingFailProvisioner(cfg, docker=self.docker)
+        spec = self.spec("0")
+        with self.assertRaises(OSError):
+            provisioner.start("test", "solo", "0")
+        self.assertEqual(self.run_calls(), [])
+        self.assertFalse(os.path.exists(spec.config_cfg_staged))
+        self.assertFalse(os.path.isdir(spec.run_root))
+
+    def test_password_never_logged(self):
+        with self.assertLogs(prov.LOG, level="INFO") as cm:
+            status = self.provisioner().start("test", "solo", "0")
+        self.assertNotIn("secret", "\n".join(cm.output))
+        with open(self.log_file, "r", encoding="utf-8") as handle:
+            docker_log = handle.read()
+        self.assertNotIn("secret", docker_log)
+        self.assertNotIn("secret", json.dumps(status))
+
+    def test_staged_content_not_in_status(self):
+        status = self.provisioner().start("test", "solo", "0")
+        spec = self.spec("0")
+        blob = json.dumps(status) + json.dumps(spec.to_dict())
+        self.assertNotIn("secret", blob)
+        self.assertNotIn("set server_name", blob)
+
+    def test_stop_removes_staged_config_and_dir(self):
+        provisioner = self.provisioner()
+        provisioner.start("test", "solo", "0")
+        spec = self.spec("0")
+        self.assertTrue(os.path.isdir(spec.config_dir))
+        self.assertTrue(os.path.isfile(spec.config_cfg_staged))
+        result = provisioner.stop("0", "test")
+        self.assertTrue(result["removed"]["dirs"])
+        self.assertFalse(os.path.isdir(spec.config_dir))
+        self.assertFalse(os.path.exists(spec.config_cfg_staged))
+        self.assertFalse(os.path.exists(spec.run_root))
 
 
 class ListInstancesTestCase(BaseFixture):

@@ -25,7 +25,9 @@ niemals implizit „das braucht der Warmserver nicht".
 **Konsequenz fürs Bauen:** Neue Env-weite Services/Ports/Env-Vars gelten automatisch auch für den
 Provisioner-Pfad (`deploy/provisioner/provisioner.py`, `deploy/parked/`, `deploy/capsule/`).
 Alles, was pro Instanz variiert (Ports, URLs, Namen), wird **pro Instanz abgeleitet** — nicht
-global festgenagelt (Vorbild: `ParkedPool._bridge_url`). Feste Host-Ports sind zu vermeiden: sie
+global festgenagelt (Vorbild: `ParkedPool._bridge_url`). Seit #970 umfasst das auch den
+`server_name` der instanz-eigenen `config.cfg` (Suffix `<env>-<instance_id>`, Anzeigename —
+Routing bleibt unberührt, #929). Feste Host-Ports sind zu vermeiden: sie
 kollidieren zwischen Envs/Tests (siehe #967).
 
 ### Konkrete Provisioner-Umsetzung (#966)
