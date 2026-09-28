@@ -58,6 +58,7 @@ per_env:
   # Lauf eindeutig (Issue #967) — sonst kollidiert der feste 9102-Publish mit dem
   # Dev-Stack. Nur test setzt ihn explizit; dev/prod/staging nutzen den Rollen-Default.
   riftbreaker_attack_cycle_port: [test]
+  riftbreaker_attack_cycle_port: [prod, test, staging]
 
   # --- Crash-Collector (Prod-Zwilling, Issue #481) -------------------------
   crash_collector_unit: [prod, staging]
