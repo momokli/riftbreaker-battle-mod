@@ -1,0 +1,9 @@
+{
+  "name": "chat-sender",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Web-UI-Test fuer den freien Chat-Absender im Cockpit (Issue #935): Normalisierung/Leer-/system-Faelle. Keine Dependencies, kein Netzwerk.",
+  "scripts": {
+    "test": "node --test"
+  }
+}
