@@ -799,6 +799,49 @@ int main(void)
     }
 
     /* -------------------------------------------------------------- */
+    /* #934: send_chat_result-Response-Builder (Escaping)              */
+    /* -------------------------------------------------------------- */
+    /* sichert Blocker 1 dauerhaft ab: text darf NIE roh in die Zeile.
+     * Quote/Backslash -> invalides JSON, Steuerzeichen (LF/Tab) -> Pipe-
+     * Framing-Desync. Rein, ohne Spielprozess. */
+    {
+        char out[512];
+        size_t n;
+
+        n = send_chat_build_result("hello", 1, out, sizeof(out));
+        check(n > 0 && strcmp(out,
+              "{\"event\":\"send_chat_result\",\"ok\":true,"
+              "\"text\":\"hello\",\"sent\":\"true\"}") == 0,
+              "send_chat_build_result: einfacher Text -> send_chat_result-Zeile");
+
+        n = send_chat_build_result("hello", 0, out, sizeof(out));
+        check(n > 0 && strstr(out, "\"sent\":\"pending\"") != NULL,
+              "send_chat_build_result: done=0 -> sent=pending");
+
+        n = send_chat_build_result("a\"b\\c", 1, out, sizeof(out));
+        check(n > 0 && strstr(out, "\"text\":\"a\\\"b\\\\c\"") != NULL,
+              "send_chat_build_result: Quote/Backslash escaped");
+
+        /* LF (0x0a) muss als \u000a raus — sonst zerlegt es die Pipe-Zeile. */
+        n = send_chat_build_result("a\nb", 1, out, sizeof(out));
+        check(n > 0 && strstr(out, "\\u000a") != NULL &&
+                  strchr(out, '\n') == NULL,
+              "send_chat_build_result: LF -> \\u000a (kein Framing-Desync)");
+
+        /* Tab -> \u0009, kein Roh-Steuerzeichen. */
+        n = send_chat_build_result("a\tb", 1, out, sizeof(out));
+        check(n > 0 && strstr(out, "\\u0009") != NULL &&
+                  strchr(out, '\t') == NULL,
+              "send_chat_build_result: Tab -> \\u0009 (kein Roh-Steuerzeichen)");
+
+        /* Puffer zu klein -> 0 (kein abgeschnittenes/ungueltiges JSON). */
+        check(send_chat_build_result("hello", 1, out, 8) == 0,
+              "send_chat_build_result: Puffer zu klein -> 0");
+        check(send_chat_build_result(NULL, 1, out, sizeof(out)) > 0,
+              "send_chat_build_result: NULL -> leerer text (kein Crash)");
+    }
+
+    /* -------------------------------------------------------------- */
     /* #392: Request-Logzeile (session-Trace) - reine Helfer           */
     /* -------------------------------------------------------------- */
     /* prueft session_from_line (session-Wert aus der Request-Zeile) und
@@ -1118,6 +1161,12 @@ int main(void)
         /* #880: Selfcheck der UpdateGameplayLogic-Signatur (Game-Thread-Detour). */
         check(gameplay_updlogic_sig_selfcheck() == 1,
               "UpdLogic-Sig: Selfcheck gruen (36B-Prolog instruction-aligned)");
+    }
+
+    {
+        /* #934: Selfcheck der Broadcast-Chat-Signatur. */
+        check(broadcastchat_sig_selfcheck() == 1,
+              "BroadcastChat-Sig: Selfcheck gruen (38 B, unique im .text)");
     }
 
     /* resolve_set_suspended_fn: genau ein Treffer -> Adresse; zwei Treffer
