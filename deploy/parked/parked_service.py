@@ -130,6 +130,7 @@ class ParkedServiceConfig:
     reap_interval: float = 30.0
     reconcile_interval: float = 300.0
     reconcile_on_start: bool = True
+    state_dir: str = ""
     instance_prefix: str = "parked"
     token: str = ""
     log_level: str = "INFO"
@@ -139,6 +140,13 @@ class ParkedServiceConfig:
         env = os.environ if env is None else env
         name = (env.get("PARKED_ENV") or env.get("PROVISIONER_ENV") or "test").strip()
         prefix = (env.get("PARKED_INSTANCE_PREFIX") or "parked").strip() or "parked"
+        # Default des State-Dirs fuer die persistenten Claim-Marker (#969 B1):
+        # unter dem Provisioner-Datenverzeichnis (``PROVISIONER_BASE_DIR``),
+        # ueberschreibbar per ``PARKED_STATE_DIR``.
+        base_dir = (env.get("PROVISIONER_BASE_DIR") or "/srv").strip() or "/srv"
+        state_dir = (env.get("PARKED_STATE_DIR") or "").strip()
+        if not state_dir:
+            state_dir = os.path.join(base_dir, "parked-state", name or "test")
         return cls(
             env=name or "test",
             bind=(env.get("PARKED_BIND") or "127.0.0.1").strip() or "127.0.0.1",
@@ -150,6 +158,7 @@ class ParkedServiceConfig:
                 _positive_number(env, "PARKED_RECONCILE_INTERVAL", 300.0, float)
             ),
             reconcile_on_start=_bool_value(env, "PARKED_RECONCILE_ON_START", True),
+            state_dir=state_dir,
             instance_prefix=prefix,
             token=(env.get("PARKED_TOKEN") or "").strip(),
             log_level=(env.get("PARKED_LOG_LEVEL") or "INFO").strip() or "INFO",
@@ -253,9 +262,18 @@ class ParkedController(object):
         """Frische ``instance_id`` (``<prefix>-<n>``), die der Pool noch nicht kennt.
 
         So kann ein nach ``warm_up``-Fehler als ``STOPPED`` hinterlassener Slot
-        nicht die Wiederverwendung blockieren.
+        nicht die Wiederverwendung blockieren. Zusaetzlich werden **geclaimte**
+        IDs (persistenter Marker, #969 B1) uebersprungen: ein nach einem Restart
+        untracked laufendes Spiel darf nicht von einer frischen Instanz
+        uebernommen werden (Docker-Namenskollision).
         """
         present = set(self._states())
+        claimed_fn = getattr(self.pool, "claimed_instances", None)
+        if callable(claimed_fn):
+            try:
+                present |= set(claimed_fn(self.env))
+            except Exception:  # noqa: BLE001 - best-effort, kein harter Abbruch
+                LOG.warning("claimed_instances nicht lesbar", exc_info=True)
         while True:
             self._counter += 1
             candidate = "%s-%d" % (self.prefix, self._counter)
@@ -303,6 +321,7 @@ class ParkedController(object):
                     "zombies": [],
                     "kept": 0,
                     "skipped_foreign": 0,
+                    "discovery_failed": False,
                     "errors": [str(exc)],
                 }
             removed = list(result.get("removed") or [])
@@ -332,10 +351,17 @@ class ParkedController(object):
             return []
 
     def maintain_once(self) -> None:
-        """Ein Wartungslauf: erst reconcilen, dann auffuellen, dann reapen."""
+        """Ein Wartungslauf: erst reconcilen, dann auffuellen, dann reapen.
+
+        Schlug die Discovery fehl (#969 B2), wird **nicht** aufgefuellt: der
+        Zustand ist unbekannt, ein ``_fill()`` koennte den Leak verdoppeln.
+        """
         with self._lock:
             if self.reconcile_due():
-                self.reconcile()
+                result = self.reconcile()
+                if result.get("discovery_failed"):
+                    self._reap()
+                    return
             self._fill()
             self._reap()
 
@@ -664,7 +690,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         return 0
 
-    pool = ParkedPool(provisioner_obj)
+    pool = ParkedPool(provisioner_obj, state_dir=config.state_dir)
     controller = ParkedController(
         pool,
         pool_size=config.pool_size,

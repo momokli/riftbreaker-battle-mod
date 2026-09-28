@@ -1010,6 +1010,21 @@ class ListInstancesTestCase(BaseFixture):
         rows = {row["container"]: row for row in self.provisioner().list_instances("test")}
         self.assertEqual(rows["riftbreaker-dedicated-test-7"]["instance"], "7")
 
+    def test_ps_failure_raises_docker_error(self):
+        # #969 B2: `docker ps`-Ausfall wird LAUT gemeldet, nicht als leere Liste.
+        self.docker._run = lambda args: (1, "", "Cannot connect to the Docker daemon")  # type: ignore[assignment]
+        with self.assertRaises(prov.DockerError):
+            self.docker.ps_all("rb.provisioner.env=test")
+
+    def test_list_instances_propagates_ps_failure(self):
+        # #969 B2: der Provisioner darf den Discovery-Ausfall nicht schlucken.
+        def boom(*_args, **_kwargs):
+            raise prov.DockerError("docker ps explo")
+
+        self.docker.ps_all = boom  # type: ignore[assignment]
+        with self.assertRaises(prov.DockerError):
+            self.provisioner().list_instances("test")
+
 
 class CliTestCase(BaseFixture):
     def test_check_ok(self):

@@ -467,12 +467,22 @@ class DockerCli(object):
         return payload[0]
 
     def ps_all(self, filter_label: Optional[str] = None) -> List[str]:
+        """Container-Namen auflisten (optional per Label gefiltert).
+
+        Ein fehlgeschlagenes ``docker ps`` (Daemon-Hiccup/Restart) wird **laut**
+        als :class:`DockerError` gemeldet — NICHT als leere Liste (#969 B2).
+        Sonst kann ein Aufrufer „nichts laeuft" nicht von „Discovery kaputt"
+        unterscheiden (stille Massen-Eviction). Eine erfolgreiche, aber leere
+        Ausgabe bleibt eine leere Liste.
+        """
         args = ["ps", "-a", "--format", "{{.Names}}"]
         if filter_label:
             args += ["--filter", "label=%s" % filter_label]
-        rc, out, _err = self._run(args)
+        rc, out, err = self._run(args)
         if rc != 0:
-            return []
+            raise DockerError(
+                "docker ps: %s" % (err.strip() or "exit %d" % rc)
+            )
         return [line.strip() for line in out.splitlines() if line.strip()]
 
     def port(self, container: str) -> Dict[str, str]:
@@ -697,14 +707,13 @@ class Provisioner(object):
         pro Env nie fremde Container anfasst.
 
         Ein fehlgeschlagenes ``inspect`` (Container zwischen ``ps`` und
-        ``inspect`` verschwunden) wird uebersprungen — kein Crash.
+        ``inspect`` verschwunden) wird uebersprungen — kein Crash. Ein
+        fehlgeschlagenes ``docker ps`` wird dagegen **laut** propagiert (#969 B2):
+        der Aufrufer (Reconcile) darf „nichts laeuft" nicht mit „Discovery
+        kaputt" verwechseln.
         """
         env = env or self.cfg.env
-        try:
-            names = self.docker.ps_all("rb.provisioner.env=%s" % env)
-        except DockerError as exc:
-            LOG.warning("list_instances: docker ps fehlgeschlagen: %s", exc)
-            return []
+        names = self.docker.ps_all("rb.provisioner.env=%s" % env)
         instances: List[Dict[str, Any]] = []
         for name in names:
             try:

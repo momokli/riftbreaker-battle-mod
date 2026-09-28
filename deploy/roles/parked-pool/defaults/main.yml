@@ -39,6 +39,11 @@ parked_pool_reap_interval: 30
 parked_pool_instance_prefix: parked
 parked_pool_log_level: INFO
 
+# State-Verzeichnis fuer die persistenten Claim-Marker (#969 B1).
+# Ueberlebt einen Dienst-Restart: Reconcile stoppt so NIE ein laufendes,
+# geclaimtes Spiel. Default unter dem Provisioner-Datenverzeichnis.
+parked_pool_state_dir: "{{ parked_pool_provisioner_base_dir }}/parked-state/{{ parked_pool_env }}"
+
 # Token-Quelle: NUR der Vault. Der Wert landet nie im Repo, nie im Log — die
 # Unit liest ihn aus einer 0600-Datei (EnvironmentFile), nicht aus `Environment=`.
 parked_pool_token: "{{ vault_parked_pool_token | default('') }}"

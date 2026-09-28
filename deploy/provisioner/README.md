@@ -125,8 +125,11 @@ Preflight prüft fail-loud VOR dem Container, dass `game_source` (Dir),
   `instance` stammt aus dem Label `rb.provisioner.instance` (Fallback:
   Dedi-Namens-Suffix), `status` = `State.Status`. Fremde/fehlende Env-Labels
   werden defensiv gefiltert; ein fehlgeschlagenes `inspect` (Container zwischen
-  `ps` und `inspect` weg) wird uebersprungen — kein Crash. Discovery-Fundament
-  fuer `ParkedPool.reconcile()` (#969).
+  `ps` und `inspect` weg) wird uebersprungen — kein Crash. Ein fehlgeschlagenes
+  `docker ps` wird dagegen **laut** als `DockerError` propagiert (#969 B2), damit
+  ein Aufrufer „nichts laeuft" nicht mit „Discovery kaputt" verwechselt
+  (`DockerCli.ps_all` wirft jetzt statt `[]`). Discovery-Fundament fuer
+  `ParkedPool.reconcile()` (#969).
 
   `ports` ist `{bridge, gns, docker}` (Issue #929): `bridge` = der Bridge-Host-Port,
   `gns` = der **GNS-UDP-Host:Port** der Instanz aus dem `6321/udp`-Mapping

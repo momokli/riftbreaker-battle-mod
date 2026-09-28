@@ -10,6 +10,9 @@ Uhr ist eine ``FakeClock``. Aufruf:
 
 from __future__ import annotations
 
+import os
+import shutil
+import tempfile
 import unittest
 from types import SimpleNamespace
 
@@ -202,6 +205,9 @@ class PoolHarness(unittest.TestCase):
         self.clock = FakeClock(start=1000.0)
         self.provisioner = FakeProvisioner()
         self.bridges = {}
+        # Eigener State-Dir pro Test (hermetisch; Claim-Marker persistieren dort).
+        self.state_dir = tempfile.mkdtemp(prefix="parked-state-")
+        self.addCleanup(shutil.rmtree, self.state_dir, True)
 
         def factory(url):
             bridge = self.bridges.get(url)
@@ -211,7 +217,10 @@ class PoolHarness(unittest.TestCase):
             return bridge
 
         self.factory = factory
-        self.pool = ParkedPool(self.provisioner, factory, clock=self.clock, sleep=lambda _s: None)
+        self.pool = ParkedPool(
+            self.provisioner, factory, clock=self.clock, sleep=lambda _s: None,
+            state_dir=self.state_dir,
+        )
 
     def bridge_for(self, entry) -> FakeBridge:
         return self.bridges[entry.bridge_url]
@@ -625,7 +634,7 @@ class ReconcileTests(PoolHarness):
         self.assertEqual(
             second,
             {"removed": [], "evicted": [], "zombies": [], "kept": 0,
-             "skipped_foreign": 0, "errors": []},
+             "skipped_foreign": 0, "discovery_failed": False, "errors": []},
         )
 
     def test_stop_error_isolated_others_removed(self):
@@ -648,15 +657,84 @@ class ReconcileTests(PoolHarness):
 
     def test_restart_leak_between_two_pools(self):
         pool_a = ParkedPool(
-            self.provisioner, self.factory, clock=self.clock, sleep=lambda _s: None
+            self.provisioner, self.factory, clock=self.clock, sleep=lambda _s: None,
+            state_dir=self.state_dir,
         )
         pool_a.warm_up(env="test", instance_id="r1")
         pool_b = ParkedPool(
-            self.provisioner, self.factory, clock=self.clock, sleep=lambda _s: None
+            self.provisioner, self.factory, clock=self.clock, sleep=lambda _s: None,
+            state_dir=self.state_dir,
         )
         result = pool_b.reconcile()
         self.assertEqual(result["removed"], ["r1"])
         self.assertNotIn(("test", "r1"), self.provisioner._containers)
+
+    def test_discovery_failure_does_not_evict(self):
+        # #969 B2: `docker ps` faellt aus -> KEINE Reverse-Eviction, kein stop.
+        self.pool.warm_up(env="test", instance_id="r1")
+        self.provisioner.add_container("leak", "running")
+
+        def boom(env=None):
+            raise RuntimeError("docker ps down")
+
+        self.provisioner.list_instances = boom
+        result = self.pool.reconcile()
+        self.assertTrue(result["discovery_failed"])
+        self.assertEqual(result["evicted"], [])
+        self.assertEqual(result["removed"], [])
+        self.assertTrue(result["errors"])
+        self.assertEqual(self.provisioner.stops, [])
+        # Getrackte Instanz bleibt getrackt und ihr Container im Inventar.
+        self.assertIn(("test", "r1"), self.pool._entries)
+        self.assertIn(("test", "r1"), self.provisioner._containers)
+        self.assertIn(("test", "leak"), self.provisioner._containers)
+
+    def test_restart_during_claimed_keeps_container(self):
+        # #969 B1: Claim-Marker persistiert -> Restart-Reconcile stoppt NIE.
+        pool_a = ParkedPool(
+            self.provisioner, self.factory, clock=self.clock, sleep=lambda _s: None,
+            state_dir=self.state_dir,
+        )
+        pool_a.warm_up(env="test", instance_id="r1")
+        pool_a.claim(env="test", instance_id="r1")
+        self.assertTrue(pool_a._is_claimed_marker("test", "r1"))
+
+        # Restart: frischer Pool, gleicher State-Dir/Provisioner (leeres Tracking).
+        pool_b = ParkedPool(
+            self.provisioner, self.factory, clock=self.clock, sleep=lambda _s: None,
+            state_dir=self.state_dir,
+        )
+        self.assertEqual(pool_b._entries, {})
+        result = pool_b.reconcile()
+        self.assertEqual(result["removed"], [])
+        self.assertEqual(result["evicted"], [])
+        self.assertEqual(result["kept"], 1)
+        self.assertEqual(self.provisioner.stops, [])
+        self.assertIn(("test", "r1"), self.provisioner._containers)
+        # Marker bleibt bestehen (Claim laeuft weiter).
+        self.assertTrue(pool_b._is_claimed_marker("test", "r1"))
+
+    def test_claimed_marker_cleared_on_recycle(self):
+        entry = self.pool.warm_up(env="test", instance_id="r1")
+        self.pool.claim(env="test", instance_id="r1")
+        self.assertTrue(self.pool._is_claimed_marker("test", "r1"))
+        self.pool.recycle(env="test", instance_id="r1", keep_warm=True)
+        self.assertFalse(self.pool._is_claimed_marker("test", "r1"))
+        self.assertEqual(entry.state, ParkedState.PARKED)
+
+    def test_claimed_marker_cleared_on_cold_recycle(self):
+        self.pool.warm_up(env="test", instance_id="r1")
+        self.pool.claim(env="test", instance_id="r1")
+        self.pool.recycle(env="test", instance_id="r1", keep_warm=False)
+        self.assertFalse(self.pool._is_claimed_marker("test", "r1"))
+
+    def test_claimed_instances_lists_only_own_env_markers(self):
+        self.pool.warm_up(env="test", instance_id="r1")
+        self.pool.claim(env="test", instance_id="r1")
+        # Fremd-Env-Marker direkt schreiben (anderer Pool waere eine zweite env).
+        self.pool._mark_claimed("other", "z9")
+        self.assertEqual(self.pool.claimed_instances("test"), {"r1"})
+        self.assertIn("z9", self.pool.claimed_instances("other"))
 
 
 if __name__ == "__main__":

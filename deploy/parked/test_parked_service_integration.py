@@ -36,7 +36,13 @@ import urllib.request
 
 from parked_pool import ParkedPool
 from parked_service import ParkedController, ParkedServiceConfig, build_server
-from test_parked_service import FakeBridge, FakeClock, FakeProvisioner, make_pool
+from test_parked_service import (
+    FakeBridge,
+    FakeClock,
+    FakeProvisioner,
+    make_pool,
+    use_temp_state_dir,
+)
 
 
 class CountingBridgeFactory(object):
@@ -83,6 +89,7 @@ class RestartLeakE2ETests(unittest.TestCase):
     """#969: Restart-Leak wird beim Start reconciled, dann wieder aufgefuellt."""
 
     def test_restart_leak_is_reconciled_then_refilled_without_bridge(self):
+        use_temp_state_dir(self)
         clock = FakeClock(1000.0)
         provisioner = FakeProvisioner()
 
@@ -139,6 +146,7 @@ class RestartLeakE2ETests(unittest.TestCase):
     def test_start_reconcile_then_fill_via_maintain_loop(self):
         """Variant ohne gepatchten Loop: start() reconciled synchron, der Loop
         fuellt danach nach. Nutzt denselben FakeProvisioner als Restart-Welt."""
+        use_temp_state_dir(self)
         clock = FakeClock(500.0)
         provisioner = FakeProvisioner()
         # Ein Leak aus einer früheren Generation:
@@ -165,6 +173,7 @@ class RestartLeakE2ETests(unittest.TestCase):
 
     def test_foreign_env_survives_reconcile_integration(self):
         """Fremde ``env`` wird im Integrationslauf nie angefasst."""
+        use_temp_state_dir(self)
         clock = FakeClock(1000.0)
         provisioner = FakeProvisioner()
         factory = CountingBridgeFactory(clock)
@@ -188,10 +197,57 @@ class RestartLeakE2ETests(unittest.TestCase):
         result = controller.reconcile()
         self.assertEqual(result["skipped_foreign"], 1)
         self.assertIn(("other", "x"), provisioner._containers)  # unberuehrt
-        self.assertNotIn(("other", "x"), provisioner.stops)  # nie gestoppt
-        # eigene getrackte Instanz bleibt:
+        self.assertNotIn(("other", "x"), provisioner.stops)  # nie gestoppt        # eigene getrackte Instanz bleibt:
         self.assertEqual(controller.counters()["parked"], 1)
         self.assertEqual(result["removed"], [])
+
+    def test_restart_during_claimed_keeps_running_game(self):
+        """#969 B1: Restart waehrend CLAIMED darf das laufende Spiel NICHT killen.
+
+        Der persistente Claim-Marker aus Generation 1 ueberlebt den Restart;
+        Reconcile ueberspringt den geclaimten Container. ``_fill()`` weicht auf
+        eine FRISCHE ID aus (keine Docker-Namenskollision).
+        """
+        use_temp_state_dir(self)
+        clock = FakeClock(1000.0)
+        provisioner = FakeProvisioner()
+
+        # --- Generation 1: parken, dann an ein Spiel uebergeben (CLAIMED) ---
+        old = build_controller(clock, provisioner, CountingBridgeFactory(clock), pool_size=1)
+        old.maintain_once()
+        claimed = old.claim()
+        claimed_id = claimed["instance"]
+        self.assertEqual(claimed["state"], "claimed")
+        self.assertIn(("test", claimed_id), provisioner._containers)
+
+        # --- Restart: frischer Controller ueber demselben Provisioner/State-Dir ---
+        new_factory = CountingBridgeFactory(clock)
+        new = build_controller(
+            clock, provisioner, new_factory, pool_size=1,
+            reconcile_interval=9999.0, reconcile_on_start=True,
+        )
+        new._loop = lambda: None
+        new.start()
+        try:
+            # Reconcile hat den geclaimten Container NICHT gestoppt.
+            self.assertEqual(new.orphans_removed, 0)
+            self.assertNotIn(("test", claimed_id), provisioner.stops)
+            self.assertIn(("test", claimed_id), provisioner._containers)
+            self.assertEqual(new_factory.bridges, {})  # Reconcile ohne Bridge
+
+            # _fill() nimmt eine andere ID (claimed-Instanz bleibt besetzt).
+            new.maintain_once()
+            self.assertEqual(new.counters()["parked"], 1)
+            parked_ids = [
+                i for (env, i) in provisioner._containers
+                if env == "test" and i != claimed_id
+            ]
+            self.assertEqual(len(parked_ids), 1)
+            self.assertNotEqual(parked_ids[0], claimed_id)
+            # Laufendes Spiel lebt weiter.
+            self.assertIn(("test", claimed_id), provisioner._containers)
+        finally:
+            new.stop()
 
 
 class ReconcileHttpIntegrationTests(unittest.TestCase):
@@ -201,6 +257,7 @@ class ReconcileHttpIntegrationTests(unittest.TestCase):
         self.clock = FakeClock(1000.0)
         self.provisioner = FakeProvisioner()
         self.bridges = {}
+        use_temp_state_dir(self)
         self.pool = make_pool(self.clock, self.provisioner, self.bridges)
         self.controller = ParkedController(
             self.pool, pool_size=1, max_park_seconds=900.0, reap_interval=9999.0,

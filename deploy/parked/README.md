@@ -114,6 +114,7 @@ Aus `pool.status()`: `parked`, `claimed`, `warming`, `recycling`, `stopped`,
 | `PARKED_REAP_INTERVAL` | `30` | Sekunden zwischen Maintain-Laeufen |
 | `PARKED_RECONCILE_INTERVAL` | `300` | Sekunden zwischen Reconciliation-Laeufen |
 | `PARKED_RECONCILE_ON_START` | `true` | einmaliger Reconcile **vor** dem ersten `_fill()` beim Start |
+| `PARKED_STATE_DIR` | `<PROVISIONER_BASE_DIR>/parked-state/<env>` | Verzeichnis fuer persistente Claim-Marker (#969 B1); ueberlebt einen Dienst-Restart |
 | `PARKED_INSTANCE_PREFIX` | `parked` | Praefix der `instance_id` |
 | `PARKED_TOKEN` | `` (leer) | Bearer-Token; nicht-leer ⇒ Pflicht |
 | `PARKED_LOG_LEVEL` | `INFO` | Logging |
@@ -160,10 +161,39 @@ Netz + Volumes + Pfade). Die **Bridge wird nie beruehrt** (kein `pause_game`/
 (`skipped_foreign`). Ueberfaellige getrackte `PARKED`-Instanzen bleiben Sache von
 `reap` (kennt `parked_since`).
 
+#### Persistente Claim-Marker (B1 — kein Verlust eines laufenden Spiels)
+
+Nach einem Dienst-Restart ist der In-Memory-Tracking-State weg. Ohne weitere
+Absicherung wuerde Reconcile einen **laufenden, geclaimten** Container als
+nicht-getrackt einstufen und per `stop` (inkl. Volumes/Pfade) zerstoeren. Deshalb
+schreibt `claim()` einen **persistenten Marker** `claimed-<env>-<instance>` in
+`PARKED_STATE_DIR` (JSON mit `env`/`instance`/`claimed_at`; atomar via
+`temp`+`os.replace`; Name auf `[A-Za-z0-9_.-]` bereinigt).
+
+* `reconcile()` **ueberspringt** Marker-Instanzen (`kept`), egal ob discoveryt
+  oder getrackt — kein `stop`, kein `evict`, auch nicht ueber die Reverse-Luecke.
+  Ein geclaimtes Spiel ueberlebt so jeden Restart.
+* Marker werden bei `recycle()` (warm **und** kalt), `reap()` und jedem
+  erfolgreichen `warm_up()`/`stop` entfernt. Nur `claim()` setzt sie.
+* `_fill()` ueberspringt geclaimte IDs (`ParkedPool.claimed_instances`), damit
+  eine frische Instanz keinen laufenden Container namenskollidierend uebernimmt.
+* Container, die **vor** diesem Feature entstanden (kein Marker), bleiben
+  normale Orphans und werden entfernt — der Leak-Fix aus #969 bleibt wirksam.
+
+#### Discovery-Ausfall bricht ab (B2 — kein Re-Leak)
+
+`provisioner.list_instances()` meldet ein fehlgeschlagenes `docker ps` **laut**
+(`DockerError`, keine leere Liste). `reconcile()` faengt das ab, setzt
+`discovery_failed=True` und **bricht ohne Eviction ab**: die Reverse-Luecke wird
+**nicht** angewandt, getrackte Eintraege bleiben. `ParkedController.maintain_once`
+ueberspringt in diesem Fall `_fill()` (sonst wuerde ein falscher Leerzustand
+neue Container starten, waehrend die alten weiterlaufen = genau der Bug aus #969).
+
 `reconcile()` ist **idempotent** (reines Mengendifferenzieren; zweiter Lauf findet
 nichts) und **fehlertolerant**: ein `stop`-Fehler bei einem Orphan bricht die
 Schleife nicht ab (aggregiert in `errors`, die uebrigen werden trotzdem entfernt).
-Rueckgabe `{removed, evicted, zombies, kept, skipped_foreign, errors}`.
+Rueckgabe `{removed, evicted, zombies, kept, skipped_foreign, discovery_failed,
+	errors}`.
 
 **Ablauf im Dienst:** `PARKED_RECONCILE_ON_START=true` ⇒ ein synchroner
 `reconcile()` **vor** dem Thread-Start (und vor dem ersten `_fill()`); danach
@@ -179,6 +209,8 @@ und `_reap()`. Entfernte Orphans werden in `orphans_removed` gezaehlt und in
 | `stop`-Fehler isoliert | aggregierte `errors`, Rest entfernt | `ReconcileTests.test_stop_error_isolated_others_removed` |
 | Fremde Env nie anfassen | `skipped_foreign`, kein Cross-Env-`stop` | `ReconcileTests.test_foreign_env_never_touched` |
 | Bridge unberuehrt | kein `pause_game`/`resume_game` im Reconcile | `ReconcileTests.test_reconcile_never_touches_bridge` |
+| Laufendes geclaimtes Spiel ueberlebt Restart (B1) | persistenter Claim-Marker, Reconcile-Skip | `ReconcileTests.test_restart_during_claimed_keeps_container`, `test_parked_service_integration.RestartLeakE2ETests.test_restart_during_claimed_keeps_running_game` |
+| Discovery-Ausfall evictet nicht (B2) | `list_instances` laut + `discovery_failed`-Abort | `ReconcileTests.test_discovery_failure_does_not_evict`, `ControllerReconcileTests.test_discovery_failure_does_not_evict_or_fill`, `test_provisioner.ListInstancesTestCase.test_ps_failure_raises_docker_error` |
 | Start-Reconcile vor `_fill()` | `reconcile_on_start` in `start()` | `test_parked_service.ControllerReconcileTests.test_start_reconciles_before_fill` |
 | Periodisch + Observability | `reconcile_interval`, `orphans_removed`, `POST /reconcile` | `ControllerReconcileTests`, `HttpTests.test_reconcile_endpoint_removes_orphan` |
 | Periodischer Reap / Auslaufschutz | `reap_due()` + `_reap()`, `POST /reap` | `ControllerReapTests`, `HttpTests.test_reap_endpoint` |
@@ -356,9 +388,12 @@ Bridge-unhealthy `503`, `POST /reconcile` ok/`503`).
 **Reconciliation (#969)** zusätzlich: `test_parked_pool.ReconcileTests`
 (Restart-Leak/Orphan, Created-Zombie evict+stop, laufend getrackt bleibt,
 `STOPPED`-mit-Container, Phantom-Eintrag ohne `stop`, Fremd-Env unberührt,
-Idempotenz, `stop`-Fehler isoliert, Bridge unberührt, Zwei-Pool-Restart) und
-`test_parked_service.ControllerReconcileTests`/`HttpTests` (Start-Reconcile vor
-`_fill`, periodisch via `reconcile_interval`, `orphans_removed`, `POST /reconcile`).
+Idempotenz, `stop`-Fehler isoliert, Bridge unberührt, Zwei-Pool-Restart,
+**Claim-Marker ueberlebt Restart (B1)**, **Discovery-Ausfall ohne Eviction (B2)**)
+und `test_parked_service.ControllerReconcileTests`/`HttpTests` (Start-Reconcile vor
+`_fill`, periodisch via `reconcile_interval`, `orphans_removed`, `POST /reconcile`,
+Discovery-Ausfall fuellt nicht) sowie `test_parked_service_integration`
+(Restart-Leak-E2E, Claimed-Restart-E2E).
 
 **VS (#910)** zusätzlich: `ReadyGateTests` (erst beide beigetreten + beide
 `ready` lösen genau **ein** `resume_game` aus; kein `resume` nach Join 1/2 bzw.

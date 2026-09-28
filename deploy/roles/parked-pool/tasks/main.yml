@@ -30,6 +30,12 @@
     state: directory
     mode: "0755"
 
+- name: State-Verzeichnis fuer persistente Claim-Marker anlegen (#969)
+  file:
+    path: "{{ parked_pool_state_dir }}"
+    state: directory
+    mode: "0700"
+
 - name: Dienst-Skript installieren
   copy:
     src: "{{ parked_pool_service_src }}"
