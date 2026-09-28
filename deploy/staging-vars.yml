@@ -35,6 +35,8 @@ riftbreaker_saves_volume: rb-saves-staging
 # IO-Bridge isoliert von dev (9001) und prod (9002) — sonst Kollision auf
 # 127.0.0.1.
 riftbreaker_bridge_port: 9003
+# Attack-Cycle-Control-Host-Port je Env eindeutig (#967/#963) — siehe prod-vars.yml.
+riftbreaker_attack_cycle_port: 9104
 
 # Bridge-Binaries (rbtools) isoliert — Pfad-Schema `<env>` (Issue #483,
 # Ziel B: /opt/rbmods/rbtools/<env>).
