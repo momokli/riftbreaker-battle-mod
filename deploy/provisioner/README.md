@@ -60,8 +60,11 @@ Env überschreibt Dateiwerte.
 | `PROVISIONER_RBTOOLS_DIR` | `/opt/rbmods/rbtools/{env}` | Host-rbtools → `/opt/rbtools:ro` |
 | `PROVISIONER_GAME_SOURCE` | `/srv/rift-{env}/game` | Host-Spielstand → `/opt/riftbreaker` |
 | `PROVISIONER_IMAGE_BUILD_DIR` | — | Compose-Kontext (optional) |
+| `PROVISIONER_DEPLOY_REF` | `unknown` | Deploy-Identität → `RBB_REF` im Container (Compose-Parität `rift_deploy_ref`) |
 
-`{env}` wird in `config_cfg`/`rbtools_dir`/`game_source` durch das Env-Segment
+`deploy_ref` ist auch als JSON-Key `deploy_ref` in der `PROVISIONER_CONFIG`-Datei
+zulässig (Env `PROVISIONER_DEPLOY_REF` überschreibt die Datei, wie bei allen
+Feldern). `${env}` wird in `config_cfg`/`rbtools_dir`/`game_source` durch das Env-Segment
 ersetzt (z. B. `/srv/rift-dev/game`). `bridge_container_port` wird auf
 `1..65535` validiert, sonst `ConfigError`.
 
@@ -79,7 +82,21 @@ ersetzt (z. B. `/srv/rift-dev/game`). `bridge_container_port` wird auf
 | Saves | `<saves_volume>:/data/saves` |
 | Config | `<config_cfg>:/data/config/config.cfg:ro` |
 | rbtools | `<rbtools_dir>:/opt/rbtools:ro` |
-| Env | `RIFTBREAKER_MODE=<mode>`, `RBB_BRIDGE_BIND=0.0.0.0`, `RBB_BRIDGE_PORT=<bridge_container_port>`, `WINEESYNC=0`, `WINEFSYNC=0` |
+| Restart-Policy | `--restart unless-stopped` |
+| Log-Rotation | `json-file`, `--log-opt max-size=10m --log-opt max-file=3` |
+| Locale | `LC_ALL=C.UTF-8`, `LANG=C.UTF-8` |
+| Env | `RIFTBREAKER_MODE=<mode>`, `RBB_BRIDGE_BIND=0.0.0.0`, `RBB_BRIDGE_PORT=<bridge_container_port>`, `WINEESYNC=0`, `WINEFSYNC=0`, `RBB_ENV=<env>`, `RBB_REF=<deploy_ref>` |
+
+**Compose-Parität (Contract, #968):** `_create_container` verdrahtet dieselben
+Härtungswerte wie das Compose-Layout der [Rolle
+`riftbreaker-server`](../roles/riftbreaker-server/templates/docker-compose.yml.j2)
+— `restart: unless-stopped`, `logging` (`json-file`/`max-size`/`max-file`),
+`LC_ALL`/`LANG=C.UTF-8` sowie `RBB_ENV`/`RBB_REF`. So haben geparkte/provisionierte
+Instanzen denselben Standard wie der dedizierte Server. `RBB_ENV` folgt dem
+Env-Segment der Instanz; `RBB_REF` kommt aus `deploy_ref` (Default `unknown`,
+analog zum Rollen-Fallback `rift_deploy_ref`). `--restart`/`--log-opt` gelten
+nur beim Erzeugen — ein bereits laufender Container wird nur gestartet und
+NICHT nachträglich migriert.
 
 Preflight prüft fail-loud VOR dem Container, dass `game_source` (Dir),
 `config_cfg` (File) und `rbtools_dir` (Dir) existieren — sonst kein halber Start.

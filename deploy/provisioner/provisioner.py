@@ -106,6 +106,7 @@ class Config:
     game_source: str = "/srv/rift-{env}/game"
     image_build_dir: str = ""
     instance_id: str = "local"
+    deploy_ref: str = "unknown"
 
 
 # JSON-Datei-Keys -> Config-Feld. Env-Variablen ueberschreiben die Datei.
@@ -138,6 +139,7 @@ _JSON_KEYS = {
     "game_source": "game_source",
     "image_build_dir": "image_build_dir",
     "instance_id": "instance_id",
+    "deploy_ref": "deploy_ref",
 }
 
 _ENV_KEYS = {
@@ -169,6 +171,7 @@ _ENV_KEYS = {
     "PROVISIONER_GAME_SOURCE": "game_source",
     "PROVISIONER_IMAGE_BUILD_DIR": "image_build_dir",
     "PROVISIONER_INSTANCE_ID": "instance_id",
+    "PROVISIONER_DEPLOY_REF": "deploy_ref",
 }
 
 _INT_FIELDS = (
@@ -315,6 +318,8 @@ class InstanceSpec(object):
         self.config_cfg = cfg.config_cfg.replace("{env}", env)
         self.rbtools_dir = cfg.rbtools_dir.replace("{env}", env)
         self.game_source = cfg.game_source.replace("{env}", env)
+        # Deploy-Identitaet (#968): Mod-Log liest RBB_REF im Container.
+        self.deploy_ref = cfg.deploy_ref
 
     def _numeric_suffix(self) -> int:
         """Stabiler Zahlenwert fuer die Port-Ableitung.
@@ -391,6 +396,7 @@ class InstanceSpec(object):
             "config_cfg": self.config_cfg,
             "rbtools_dir": self.rbtools_dir,
             "game_source": self.game_source,
+            "deploy_ref": self.deploy_ref,
         }
 
 
@@ -779,6 +785,16 @@ class Provisioner(object):
             "-e", "RBB_BRIDGE_PORT=%d" % spec.bridge_container_port,
             "-e", "WINEESYNC=0",
             "-e", "WINEFSYNC=0",
+            # Parked-Instanz-Haertung (#968): Compose-Paritaet.
+            "--restart", "unless-stopped",
+            # Log-Rotation (sonst unbegrenztes json-file-Wachstum).
+            "--log-opt", "max-size=10m",
+            "--log-opt", "max-file=3",
+            "-e", "LC_ALL=C.UTF-8",
+            "-e", "LANG=C.UTF-8",
+            # Deploy-Identitaet (#483): Mod-Log liest RBB_ENV/RBB_REF.
+            "-e", "RBB_ENV=%s" % spec.env,
+            "-e", "RBB_REF=%s" % spec.deploy_ref,
             self.cfg.image,
         ]
         self.docker.run_or_fail(args)

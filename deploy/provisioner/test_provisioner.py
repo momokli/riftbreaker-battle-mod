@@ -702,6 +702,16 @@ class StartTestCase(BaseFixture):
         self.assertIn("RBB_BRIDGE_PORT=9001", run)
         self.assertIn("WINEESYNC=0", run)
         self.assertIn("WINEFSYNC=0", run)
+        # Parked-Instanz-Haertung (#968): Compose-Paritaet am `docker run`.
+        self.assertIn("--restart", run)
+        self.assertEqual(run[run.index("--restart") + 1], "unless-stopped")
+        self.assertIn("--log-opt", run)
+        self.assertIn("max-size=10m", run)
+        self.assertIn("max-file=3", run)
+        self.assertIn("LC_ALL=C.UTF-8", run)
+        self.assertIn("LANG=C.UTF-8", run)
+        self.assertIn("RBB_ENV=test", run)
+        self.assertIn("RBB_REF=unknown", run)
         # Image bleibt das letzte Argument.
         self.assertEqual(run[-1], IMAGE)
 
@@ -767,6 +777,71 @@ class StartTestCase(BaseFixture):
         self.assertFalse(status["created"])
         self.assertTrue(status["running"])
         self.assertEqual(len(self.run_calls()), 1)
+
+
+class HardeningTestCase(BaseFixture):
+    """#968: `docker run` spiegelt das Compose-Haertungs-Layout."""
+
+    def test_run_args_hardening_defaults(self):
+        self.provisioner().start("test", "solo", "0")
+        run = self.run_calls()[0]
+        self.assertEqual(run[run.index("--restart") + 1], "unless-stopped")
+        # Beide log-opts vorhanden (Reihenfolge egal).
+        opts = [run[i + 1] for i, arg in enumerate(run) if arg == "--log-opt"]
+        self.assertIn("max-size=10m", opts)
+        self.assertIn("max-file=3", opts)
+        self.assertIn("-e", run)
+        self.assertIn("LC_ALL=C.UTF-8", run)
+        self.assertIn("LANG=C.UTF-8", run)
+        self.assertIn("RBB_ENV=test", run)
+        self.assertIn("RBB_REF=unknown", run)
+        self.assertEqual(run[-1], IMAGE)
+
+    def test_rbb_ref_from_config(self):
+        self.provisioner(deploy_ref="v1.0.11-abc1234").start("test", "solo", "0")
+        run = self.run_calls()[0]
+        self.assertIn("RBB_REF=v1.0.11-abc1234", run)
+
+    def test_rbb_env_follows_env_segment(self):
+        self.provisioner(env="staging").start("staging", "solo", "0")
+        run = self.run_calls()[0]
+        self.assertIn("RBB_ENV=staging", run)
+        self.assertNotIn("RBB_ENV=test", run)
+
+
+class HardeningConfigTestCase(BaseFixture):
+    """#968: Config-Feld `deploy_ref` (Default/Env/JSON)."""
+
+    def test_deploy_ref_default_unknown(self):
+        cfg = prov.load_config({"PROVISIONER_IMAGE": IMAGE})
+        self.assertEqual(cfg.deploy_ref, "unknown")
+
+    def test_deploy_ref_env_override_trimmed(self):
+        cfg = prov.load_config({
+            "PROVISIONER_IMAGE": IMAGE,
+            "PROVISIONER_DEPLOY_REF": " sha-9 ",
+        })
+        self.assertEqual(cfg.deploy_ref, "sha-9")
+
+    def test_deploy_ref_json_and_env_precedence(self):
+        path = os.path.join(self.tmp, "cfg-ref.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"image": IMAGE, "deploy_ref": "fromfile"}, handle)
+        cfg = prov.load_config({"PROVISIONER_CONFIG": path})
+        self.assertEqual(cfg.deploy_ref, "fromfile")
+        cfg_env = prov.load_config({
+            "PROVISIONER_CONFIG": path,
+            "PROVISIONER_DEPLOY_REF": "fromenv",
+        })
+        self.assertEqual(cfg_env.deploy_ref, "fromenv")  # Env > Datei
+
+    def test_deploy_ref_json_key_accepted(self):
+        # Regression: `deploy_ref` ist ein bekannter Key (kein ConfigError).
+        path = os.path.join(self.tmp, "cfg-ref-known.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"image": IMAGE, "deploy_ref": "jsonref"}, handle)
+        cfg = prov.load_config({"PROVISIONER_CONFIG": path})
+        self.assertEqual(cfg.deploy_ref, "jsonref")
 
 
 class StopStatusTestCase(BaseFixture):
