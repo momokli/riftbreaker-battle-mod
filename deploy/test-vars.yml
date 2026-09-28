@@ -30,6 +30,13 @@ riftbreaker_compose_project: "rb-test-{{ rbbattle_run_suffix }}"
 riftbreaker_server_port_udp: ""
 riftbreaker_bridge_port: 9003
 
+# Attack-Cycle-Control-Port je Lauf eindeutig (Issue #967): der Host-Publish
+# `127.0.0.1:<port>:<port>` (Kapsel /ready, #963) kollidierte mit dem Dev-Stack
+# (9102) und liess `docker compose up` im boot-test scheitern ("port is already
+# allocated"). Oberhalb der Tournament-Range (10000-29999), unterhalb der
+# ephemeren Linux-Range (32768+).
+riftbreaker_attack_cycle_port: "{{ 30000 + ((rbbattle_run_suffix | int) % 2000) }}"
+
 # Host-Pfade je Lauf eindeutig (Issue #307). Pfad-Schema `<env>` (Issue #483,
 # Ziel B): /srv/rift-<env>-<run>/game|backups|sessions — derselbe Namensraum wie
 # dev/prod, je Lauf eindeutig (zwei parallele boot-tests koennen sich nicht

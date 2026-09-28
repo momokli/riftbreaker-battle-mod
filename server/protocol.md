@@ -27,6 +27,7 @@ Wahrheitsquelle, Events sind nur Benachrichtigungen.
 {"event":"exec_result","command":"rb_wave 3","ok":false,"reason":"not_implemented (RE: ConsoleService/Lua-State finden)"}
 {"event":"score_update","t":12345678,"score":0,"resources":{"iron":0,"carbon":0},"wave":0}
 {"event":"player_chat","text":"-send carbonium 10"}
+{"event":"send_chat_result","ok":true,"text":"gg wp","sent":"true"}
 {"event":"error","error":"unknown_cmd"}
 ```
 
@@ -35,6 +36,14 @@ Wahrheitsquelle, Events sind nur Benachrichtigungen.
   Pipe. Sie wird **vor** der `get_state_result`-Zeile von `get_state`
   emittiert; `pipe_bridge` sammelt die Texte und injiziert sie als
   `"chat":["...",...]`-Array in die `get_state`-Antwort (Cockpit-Poll).
+- `send_chat_result` (#934) ist die Antwort auf das `send_chat`-Kommando
+  (Server → Spieler): `ok:true` bei erfolgreichem Broadcast bzw. `ok:false`
+  mit `reason` (`invalid_text`, `no_module`, `hook_not_installable`,
+  `no_broadcast_fn`, `encode_failed`). Das Feld `text` ist die **rohe**,
+  gesendete Nachricht — JSON-escaped (`"`/`\`/Steuerzeichen, `\uXXXX`), damit
+  die Zeile auch bei `"`/`\`/LF gueltig und framing-sicher bleibt. `sent`
+  ist `"true"` wenn der GAME-Thread-Hook den Broadcast ausgefuehrt hat,
+  sonst `"pending"` (Timeout, Kommando bleibt eingereiht).
 
 ### Nachrichten des Clients an die DLL (im Harness implementiert)
 
@@ -42,7 +51,19 @@ Wahrheitsquelle, Events sind nur Benachrichtigungen.
 {"cmd":"ping"}
 {"cmd":"exec","command":"rb_wave 3"}
 {"cmd":"try_spend","amount":"10"}
+{"cmd":"send_chat","text":"gg wp","type":"system","prefix":""}
 ```
+
+- `send_chat` (#934) sendet eine Chat-Nachricht **vom Server an alle
+  verbundenen Spieler** (Vanilla-Chat-Broadcast). `text` = Nachricht;
+  optional `prefix` (wird dem Text vorangestellt). `type` waehlt die
+  ChatMessageType — `system` = 2 (rendert ohne Spieler-Sender-Label),
+  `announcement` = 4, `message` = 8; numerische Werte werden ebenfalls
+  akzeptiert (Default 2). Antwort: `send_chat_result` (siehe DLL→Client.
+  Der Broadcast laeuft im GAME-Thread-Hook (UPDLOGIC-Detour), damit der
+  Container-Walk nicht vom Pipe-Thread aus laeuft.
+  → HTTP: `POST /send_chat` mit Body `{"text":"..","type":"..","prefix":".."}`.
+  Ein fehlender/leerer `text` ergibt `400 invalid_text`.
 
 - `try_spend` ist der **transaktionale Carbonium-Abzug** (Issue #694): zieht
   `amount` (Display-Einheiten, String) NUR ab, wenn das Guthaben reicht.
@@ -133,6 +154,7 @@ werden ignoriert (vorwärtskompatibel). Alle Events sind benachrichtigend
 | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `pong`, `exec_result`, `score_update`, `error`                          | `rbbridge.c` (Pipe-Server)                                                                                                                        | ✅ implementiert                                                                                                                                                                                                                 |
 | `player_chat`                                                           | `rbbridge.c` (Pipe-Server): inline Hook auf `OnNetPlayerChatRequest` liest den UtfString (`utfstring_to_cstr`) und gibt ihn in `send_state()` aus | ✅ implementiert (Build 2.0.58485, Prolog-verifiziert); **Live-Nachweis offen** (Player-Test, #549)                                                                                                                              |
+| `send_chat_result`                                                      | `rbbridge.c` (Pipe-Server): `dispatch_send_chat` reiht die Nachricht ein; der GAME-Thread-Hook (`gameplay_updlogic_hook`) broadcastet per `NetPlayerChatAck` | ✅ implementiert (#934, PR #944); Antwortzeile escaped via `send_chat_build_result` |
 | `score_update`, `wave_received`, `round_*`, `match_end`                 | **TODO(RE):** Werte/Adressen per `scan/` finden bzw. Events aus Lua-Signalen (`[RBBATTLE] event=...` Log-Prefix im Mod, Experiment C) ableiten    | offen (Struktur in `send_state()` verdrahtet, Werte Default bis RE)                                                                                                                                                              |
 | `wave_sent`                                                             | Lua-Mod beim Kauf der Welle (meldet über `exec`-Kanal / künftigen Event-Pfad)                                                                     | offen (Mod folgt aus Spike)                                                                                                                                                                                                      |
 | `round_start`, `incoming_wave`, `round_end`, `match_end` (Server→Spiel) | Empfang in DLL → Zustellung an Spiel/Lua                                                                                                          | ✅ `dispatch_exec` implementiert: `ConsoleService::ExecuteCommand` per AOB-Signatur + RTTI/vftable aufgelöst (keine festen RVAs); Lua-seitig registriert der Mod `rb_wave <level>` bereits (Spike). Offen nur Live-Beweis (#252) |

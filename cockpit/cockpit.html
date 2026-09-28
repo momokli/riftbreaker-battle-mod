@@ -552,6 +552,88 @@
                 width: 100%;
             }
 
+            /* Chat (#935): Verlauf + Eingabe */
+            .chat-messages {
+                flex: 1 1 auto;
+                width: 100%;
+                height: 100%;
+                overflow-y: auto;
+                padding: 6px 8px;
+                display: flex;
+                flex-direction: column;
+                gap: 3px;
+                font-size: 12px;
+            }
+            .chat-empty {
+                color: var(--dim);
+                font-size: 11px;
+            }
+            .chat-msg {
+                display: flex;
+                gap: 6px;
+                min-width: 0;
+            }
+            .chat-msg .chat-src {
+                flex: 0 0 auto;
+                width: 62px;
+                font-family: var(--font-mono);
+                font-size: 10px;
+                letter-spacing: 0.05em;
+                text-transform: uppercase;
+                color: var(--dim);
+            }
+            .chat-msg .chat-text {
+                min-width: 0;
+                overflow-wrap: anywhere;
+            }
+            .chat-msg.player .chat-src {
+                color: var(--accent);
+            }
+            .chat-msg.operator .chat-src {
+                color: var(--good);
+            }
+            .chat-msg.operator .chat-text {
+                color: var(--dim);
+            }
+
+            #chat_as {
+                flex: 0 0 auto;
+                width: 96px;
+                height: 25px;
+                border-radius: 3px;
+                border: 1px solid var(--line);
+                background: var(--base);
+                color: var(--text);
+                font-family: var(--font-mono);
+                font-size: 12px;
+                padding: 0 4px;
+            }
+            #chat_as:focus {
+                border-color: var(--accent);
+                box-shadow: 0 0 0 1px var(--accent);
+                outline: none;
+            }
+
+            /* Chat-Formatier-Hilfe (#935): kompakte Symbol-/Template-Buttons */
+            .chat-tools .chat-tool {
+                height: 24px;
+                min-width: 24px;
+                padding: 0 5px;
+                font-family: var(--font-mono);
+                font-size: 12px;
+                line-height: 1;
+                background: var(--base);
+                color: var(--dim);
+                border-color: var(--line);
+            }
+            .chat-tools .chat-tool:hover {
+                background: var(--btn-hover);
+                color: var(--text);
+            }
+            .chat-tools .chat-tool:active {
+                background: var(--btn-active);
+            }
+
             /* Group D: Status Bar */
             footer.status-bar {
                 flex: 0 0 24px;
@@ -745,6 +827,53 @@
                                 <span class="prop-label">difficulty subsequent (s)</span>
                                 <input id="difficulty_interval_subsequent_input" class="mono" size="6" value="600" aria-label="Difficulty subsequent step in seconds" />
                                 <button id="difficulty_interval_subsequent_set" class="btn-primary">set</button>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <!-- B3. CHAT (#935): Spieler-Chat anzeigen + Server-Nachricht senden. -->
+                    <fieldset class="q-groupbox" id="panel-chat">
+                        <legend>Chat</legend>
+                        <div class="flow-container">
+                            <div class="log-scroll-area">
+                                <div id="chat_log" class="chat-messages" role="log" aria-live="polite" aria-label="Chat-Verlauf">
+                                    <span class="chat-empty">noch keine Nachrichten</span>
+                                </div>
+                            </div>
+                            <div class="flow-action-row">
+                                <input id="chat_as" class="mono" list="chat_senders" maxlength="24" value="Operator" placeholder="Absender" title="Absender frei waehlen: 'system' = ohne Prefix, sonst wird [Absender] vorangestellt" aria-label="Absender (frei waehlbar)" />
+                                <datalist id="chat_senders">
+                                    <option value="system"></option>
+                                    <option value="Operator"></option>
+                                    <option value="Server"></option>
+                                    <option value="Admin"></option>
+                                    <option value="Referee"></option>
+                                </datalist>
+                                <input id="chat_input" class="mono flow-grow" maxlength="200" placeholder="Nachricht an die Spieler ..." aria-label="Chat-Nachricht" />
+                                <button id="chat_send" class="btn-primary">send</button>
+                            </div>
+                            <div id="chat_tools" class="flow-action-row chat-tools" role="group" aria-label="Formatier-Hilfe">
+                                <span class="prop-label">insert</span>
+                                <button class="chat-tool" data-insert="▶ " title="Pfeil-Prefix" aria-label="Pfeil einfuegen">▶</button>
+                                <button class="chat-tool" data-insert="★ " title="Highlight" aria-label="Stern einfuegen">★</button>
+                                <button class="chat-tool" data-insert="● " title="Punkt" aria-label="Punkt einfuegen">●</button>
+                                <button class="chat-tool" data-insert="⚠ " title="Warnung" aria-label="Warnung einfuegen">⚠</button>
+                                <button class="chat-tool" data-insert="► " title="Pointer" aria-label="Pointer einfuegen">►</button>
+                                <button class="chat-tool" data-insert="─ " title="Linie" aria-label="Linie einfuegen">─</button>
+                                <button class="chat-tool" data-insert="• " title="Bullet" aria-label="Bullet einfuegen">•</button>
+                                <button class="chat-tool" data-insert="→ " title="Pfeil rechts" aria-label="Pfeil rechts einfuegen">→</button>
+                                <button class="chat-tool" data-insert="✓ " title="Haken" aria-label="Haken einfuegen">✓</button>
+                                <button class="chat-tool" data-insert="[!] " title="Achtung-Prefix" aria-label="Achtung-Prefix einfuegen">[!]</button>
+                                <button class="chat-tool" data-insert="» " title="Zitat/Absender" aria-label="Zitat-Prefix einfuegen">»</button>
+                                <button class="chat-tool" data-wrap="=== " data-wrapend=" ===" title="Titel einrahmen" aria-label="Titel einrahmen">=…=</button>
+                            </div>
+                            <div class="flow-note">
+                                Spieler-Chat aus dem Spiel erscheint hier; "send" schickt
+                                eine Server-Nachricht in den Spiel-Chat. Chat ist Klartext
+                                (kein HTML/Markup) — Formatierung nur ueber Symbole/Prefix.
+                                Absender frei waehlbar (Vorschlaege oder eigener Text):
+                                "system" = ohne Prefix, sonst wird [Absender] vorangestellt.
+                                Enter sendet, leerer Text wird nicht gesendet (#935).
                             </div>
                         </div>
                     </fieldset>
@@ -1796,6 +1925,149 @@
                 // Docker-Buttons + Status/Log-Polling werden lazy im Tab-Lifecycle
                 // unten verdrahtet (erst beim Oeffnen des Docker-Tabs).
 
+                // --- Chat (#935): Verlauf + Senden ---
+                var CHAT_MAX = 200;
+                function chatAppend(src, text, sender) {
+                    var log = $("chat_log");
+                    if (!log || !text) {
+                        return;
+                    }
+                    var empty = log.querySelector(".chat-empty");
+                    if (empty) {
+                        empty.remove();
+                    }
+                    var row = document.createElement("div");
+                    row.className = "chat-msg " + (src === "operator" ? "operator" : "player");
+                    var who = document.createElement("span");
+                    who.className = "chat-src";
+                    who.textContent = sender || (src === "operator" ? "operator" : "player");
+                    var body = document.createElement("span");
+                    body.className = "chat-text";
+                    body.textContent = text;
+                    row.appendChild(who);
+                    row.appendChild(body);
+                    log.appendChild(row);
+                    while (log.children.length > CHAT_MAX) {
+                        log.removeChild(log.firstChild);
+                    }
+                    log.scrollTop = log.scrollHeight;
+                }
+
+                // --- chat-sender (testable) ---
+                // Absender (#935): frei waehlbar. Leer oder "system" -> "" (clean);
+                // sonst der normalisierte Name. Klammern/Whitespace werden bereinigt,
+                // die Laenge auf 24 Zeichen begrenzt.
+                function chatSenderName(raw) {
+                    var name = String(raw == null ? "" : raw)
+                        .replace(/[\[\]]/g, " ")
+                        .replace(/\s+/g, " ")
+                        .trim();
+                    if (name.length > 24) {
+                        name = name.slice(0, 24).trim();
+                    }
+                    if (!name || name.toLowerCase() === "system") {
+                        return "";
+                    }
+                    return name;
+                }
+                // --- end chat-sender ---
+
+                async function chatSend() {
+                    var input = $("chat_input");
+                    var text = (input.value || "").trim();
+                    if (!text) {
+                        return;
+                    }
+                    var sender = chatSenderName($("chat_as") ? $("chat_as").value : "");
+                    var body = { text: text, type: "system" };
+                    if (sender) {
+                        body.prefix = "[" + sender + "] ";
+                    }
+                    var btn = $("chat_send");
+                    btn.disabled = true;
+                    try {
+                        var r = await post("/send_chat", body);
+                        if (r && r.ok) {
+                            input.value = "";
+                            var shown = r.text || text;
+                            if (body.prefix && shown.indexOf(body.prefix) !== 0) {
+                                shown = body.prefix + shown;
+                            }
+                            chatAppend("operator", shown, sender || "server");
+                            $("out").textContent = "chat gesendet";
+                        } else {
+                            $("out").textContent = "chat fehlgeschlagen: " + ((r && r.reason) || "unbekannt");
+                        }
+                    } catch (e) {
+                        $("out").textContent = "chat fehlgeschlagen: " + ((e && e.message) || "netzwerkfehler");
+                    } finally {
+                        btn.disabled = false;
+                    }
+                }
+
+                $("chat_send").onclick = chatSend;
+                $("chat_input").addEventListener("keydown", function (e) {
+                    if (e.key === "Enter") {
+                        e.preventDefault();
+                        chatSend();
+                    }
+                });
+
+                // --- Chat-Formatier-Hilfe (#935): Symbole/Templates an Cursor-Position ---
+                function insertAtCursor(input, text) {
+                    if (!input || !text) {
+                        return;
+                    }
+                    var value = input.value || "";
+                    var start = input.selectionStart == null ? value.length : input.selectionStart;
+                    var end = input.selectionEnd == null ? value.length : input.selectionEnd;
+                    var next = value.slice(0, start) + text + value.slice(end);
+                    if (input.maxLength > 0 && next.length > input.maxLength) {
+                        next = next.slice(0, input.maxLength);
+                    }
+                    input.value = next;
+                    var caret = Math.min(start + text.length, next.length);
+                    input.focus();
+                    input.setSelectionRange(caret, caret);
+                }
+
+                function wrapAtCursor(input, prefix, suffix) {
+                    if (!input) {
+                        return;
+                    }
+                    var value = input.value || "";
+                    var start = input.selectionStart == null ? value.length : input.selectionStart;
+                    var end = input.selectionEnd == null ? value.length : input.selectionEnd;
+                    var selected = value.slice(start, end);
+                    var next = value.slice(0, start) + prefix + selected + suffix + value.slice(end);
+                    if (input.maxLength > 0 && next.length > input.maxLength) {
+                        next = next.slice(0, input.maxLength);
+                    }
+                    input.value = next;
+                    var caret = selected
+                        ? start + prefix.length + selected.length + suffix.length
+                        : start + prefix.length;
+                    caret = Math.min(caret, next.length);
+                    input.focus();
+                    input.setSelectionRange(caret, caret);
+                }
+
+                var chatTools = $("chat_tools");
+                if (chatTools) {
+                    chatTools.addEventListener("click", function (e) {
+                        var btn = e.target.closest ? e.target.closest("button.chat-tool") : null;
+                        if (!btn) {
+                            return;
+                        }
+                        var input = $("chat_input");
+                        if (btn.dataset.wrap) {
+                            wrapAtCursor(input, btn.dataset.wrap, btn.dataset.wrapend || "");
+                        } else {
+                            insertAtCursor(input, btn.dataset.insert || "");
+                        }
+                    });
+                }
+
                 function initEvents() {
                     if (typeof EventSource === "undefined") {
                         return;
@@ -1820,6 +2092,7 @@
                             refresh();
                         } else if (d && d.event === "player_chat" && d.text) {
                             $("out").textContent = "chat: " + d.text;
+                            chatAppend("player", d.text);
                         }
                     };
                     es.onerror = function () {
