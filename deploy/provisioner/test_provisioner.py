@@ -129,9 +129,10 @@ elif cmd == "volume" and sub == "rm":
     else:
         sys.stderr.write("Error: No such volume\n"); sys.exit(1)
 elif cmd == "run":
-    if fail("run"):
+    name = args[args.index("--name") + 1] if "--name" in args else ""
+    if fail("run") or fail("run %s" % name):
         sys.stderr.write("Error: cannot start container\n"); sys.exit(1)
-    name = args[args.index("--name") + 1]
+    bridge_port = 0
     bridge_port = 0
     for i, a in enumerate(args):
         if a == "-p":
@@ -264,9 +265,14 @@ class BaseFixture(unittest.TestCase):
             health_interval=0.0,
             min_free_gb=0.0,
             bridge_port_base=bridge,
+            attack_cycle_port_base=bridge + 1000,
             game_source=self.game_source,
             config_cfg=self.config_cfg,
             rbtools_dir=self.rbtools_dir,
+            sessions_image=IMAGE,
+            send_tailer_image=IMAGE,
+            match_loop_image=IMAGE,
+            attack_cycle_image=IMAGE,
             instance_id="0",
         )
         self.docker = prov.DockerCli(self.docker_bin, 30)
@@ -345,6 +351,50 @@ class InstanceSpecTestCase(BaseFixture):
         self.assertEqual(spec.backups_dir, os.path.join(self.base_dir, "rift-test-12345", "backups"))
         self.assertEqual(spec.sessions_dir, os.path.join(self.base_dir, "rift-test-12345", "sessions"))
         self.assertEqual(spec.bridge_port, self.cfg.bridge_port_base + (12345 % 20000))
+
+    def test_sidecar_names_are_deterministic(self):
+        spec = self.spec("12345")
+        self.assertEqual(spec.send_tailer_container, "rb-test-12345-send-tailer")
+        self.assertEqual(spec.attack_cycle_container, "rb-test-12345-attack-cycle")
+        self.assertEqual(spec.match_loop_container, "rb-test-12345-match-loop")
+        self.assertEqual(spec.session_recorder_container, "rb-test-12345-session-recorder")
+        self.assertEqual(spec.sidecar_containers(), [
+            "rb-test-12345-session-recorder",
+            "rb-test-12345-send-tailer",
+            "rb-test-12345-match-loop",
+            "rb-test-12345-attack-cycle",
+        ])
+
+    def test_sidecar_urls_mirror_compose_network(self):
+        spec = self.spec("12345")
+        self.assertEqual(
+            spec.send_tailer_queue_url(),
+            "http://rb-test-12345-attack-cycle:%d/queue_send" % spec.attack_cycle_container_port,
+        )
+        self.assertEqual(
+            spec.match_loop_bridge_url(),
+            "http://riftbreaker-dedicated-test-12345:%d" % spec.bridge_container_port,
+        )
+        self.assertEqual(spec.attack_cycle_bridge_url(), spec.match_loop_bridge_url())
+        self.assertEqual(spec.attack_cycle_url(), "http://127.0.0.1:%d" % spec.attack_cycle_port)
+        self.assertEqual(spec.session_recorder_sessions_dir(), spec.sessions_dir)
+
+    def test_sidecar_port_never_collides_with_bridge_port(self):
+        # Eigener Port-Base (#967): fuer dieselbe instance_id immer distintos.
+        for instance_id in ("0", "1", "12345", "local", "parked-7"):
+            spec = self.spec(instance_id)
+            self.assertNotEqual(spec.attack_cycle_port, spec.bridge_port, instance_id)
+            self.assertGreaterEqual(spec.attack_cycle_port, self.cfg.attack_cycle_port_base)
+
+    def test_sidecar_fields_in_to_dict(self):
+        spec = self.spec("12345")
+        payload = spec.to_dict()
+        self.assertEqual(payload["attack_cycle_port"], spec.attack_cycle_port)
+        self.assertEqual(payload["attack_cycle_container"], spec.attack_cycle_container)
+        self.assertEqual(payload["send_tailer_queue_url"], spec.send_tailer_queue_url())
+        self.assertEqual(payload["attack_cycle_url"], spec.attack_cycle_url())
+        self.assertEqual(payload["match_loop_bridge_url"], spec.match_loop_bridge_url())
+        self.assertEqual(payload["session_recorder_sessions_dir"], spec.sessions_dir)
 
     def test_deterministic_repeat(self):
         self.assertEqual(self.spec("777").to_dict(), self.spec("777").to_dict())
@@ -480,6 +530,37 @@ class ConfigTestCase(BaseFixture):
                     "PROVISIONER_BRIDGE_CONTAINER_PORT": bad,
                 })
 
+    def test_invalid_attack_cycle_container_port_fails_closed(self):
+        for bad in ("0", "70000", "notaport", "-1"):
+            with self.assertRaises(prov.ConfigError, msg=bad):
+                prov.load_config({
+                    "PROVISIONER_IMAGE": IMAGE,
+                    "PROVISIONER_ATTACK_CYCLE_CONTAINER_PORT": bad,
+                })
+
+    def test_sidecar_defaults(self):
+        cfg = prov.load_config({"PROVISIONER_IMAGE": IMAGE})
+        self.assertEqual(cfg.attack_cycle_port_base, 31000)
+        self.assertEqual(cfg.attack_cycle_container_port, 9102)
+        self.assertEqual(cfg.attack_cycle_interval, 420)
+        self.assertEqual(cfg.attack_cycle_difficulty_interval, 200)
+        self.assertEqual(cfg.match_loop_restart_delay, 10)
+        self.assertEqual(cfg.sessions_image, "python:3.12-slim")
+        self.assertTrue(cfg.attack_cycle_script.endswith("attack-cycle/attack_cycle.py"))
+
+    def test_sidecar_env_overrides(self):
+        cfg = prov.load_config({
+            "PROVISIONER_IMAGE": IMAGE,
+            "PROVISIONER_ATTACK_CYCLE_PORT_BASE": "41000",
+            "PROVISIONER_ATTACK_CYCLE_INTERVAL": "100",
+            "PROVISIONER_SEND_TAILER_IMAGE": "tailer:1",
+            "PROVISIONER_MATCH_LOOP_SCRIPT": "/tmp/match_loop.py",
+        })
+        self.assertEqual(cfg.attack_cycle_port_base, 41000)
+        self.assertEqual(cfg.attack_cycle_interval, 100)
+        self.assertEqual(cfg.send_tailer_image, "tailer:1")
+        self.assertEqual(cfg.match_loop_script, "/tmp/match_loop.py")
+
     def test_http_health_ok_against_stub(self):
         self.assertTrue(prov.http_health_ok(self.stub.url))
         self.stub.server.ok = False
@@ -497,8 +578,8 @@ class StartTestCase(BaseFixture):
         self.assertEqual(status["container"], spec.container)
         self.assertEqual(status["instance"], "0")
         self.assertEqual(status["ports"]["bridge"], spec.bridge_port)
-        # Genau EIN Container wurde erzeugt.
-        self.assertEqual(len(self.run_calls()), 1)
+        # Genau EIN Dedi-Container + vier Sidecars wurden erzeugt (#966).
+        self.assertEqual(len(self.run_calls()), 5)
         run = self.run_calls()[0]
         self.assertIn("--name", run)
         self.assertEqual(run[run.index("--name") + 1], spec.container)
@@ -506,6 +587,43 @@ class StartTestCase(BaseFixture):
         # Run-scoped Verzeichnisse existieren.
         self.assertTrue(os.path.isdir(spec.game_dir))
         self.assertTrue(os.path.isdir(spec.sessions_dir))
+
+    def test_start_creates_four_sidecars_in_network(self):
+        status = self.provisioner().start("test", "solo", "0")
+        spec = self.spec("0")
+        runs = self.run_calls()
+        self.assertEqual(len(runs), 5)
+        by_name = {r[r.index("--name") + 1]: r for r in runs}
+        for name in spec.sidecar_containers():
+            self.assertIn(name, by_name)
+            run = by_name[name]
+            self.assertIn("--network", run)
+            self.assertEqual(run[run.index("--network") + 1], spec.network)
+            self.assertIn("rb.provisioner.env=test", run)
+            self.assertIn("rb.provisioner.instance=0", run)
+        # Nur der Attack-Cycle publiziert einen Host-Port (127.0.0.1).
+        cycle_run = by_name[spec.attack_cycle_container]
+        self.assertIn(
+            "127.0.0.1:%d:%d" % (spec.attack_cycle_port, spec.attack_cycle_container_port),
+            cycle_run,
+        )
+        self.assertIn("--control-port", cycle_run)
+        self.assertEqual(
+            cycle_run[cycle_run.index("--control-port") + 1],
+            str(spec.attack_cycle_container_port),
+        )
+        # send-tailer/match-loop/session-recorder ohne Host-Port.
+        for name in (spec.send_tailer_container, spec.match_loop_container,
+                     spec.session_recorder_container):
+            self.assertNotIn("-p", by_name[name])
+        # send-tailer zeigt auf den Cycle im Netz, match-loop auf die Bridge.
+        st = by_name[spec.send_tailer_container]
+        self.assertIn(spec.send_tailer_queue_url(), st)
+        ml = by_name[spec.match_loop_container]
+        self.assertIn(spec.match_loop_bridge_url(), ml)
+        # Sidecar-URLs sind auch im Status sichtbar (US3).
+        self.assertEqual(status["ports"]["attack_cycle"], spec.attack_cycle_port)
+        self.assertEqual(status["ports"]["attack_cycle_url"], spec.attack_cycle_url())
 
     def test_idempotent_second_start(self):
         provisioner = self.provisioner()
@@ -518,7 +636,7 @@ class StartTestCase(BaseFixture):
         self.assertEqual(second["health"], "healthy")
         # KEIN zweiter `docker run` — der zweite Start erzeugt keinen Container.
         self.assertEqual(len(self.run_calls()), runs_after_first)
-        self.assertEqual(len(self.run_calls()), 1)
+        self.assertEqual(len(self.run_calls()), 5)
 
     def test_port_in_use_fails_loud(self):
         blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -568,7 +686,7 @@ class StartTestCase(BaseFixture):
     def test_run_args_real_image_layout(self):
         self.provisioner().start("test", "solo", "0")
         spec = self.spec("0")
-        self.assertEqual(len(self.run_calls()), 1)
+        self.assertEqual(len(self.run_calls()), 5)
         run = self.run_calls()[0]
         # Host-Port = spec.bridge_port, Container-Port = 9001.
         self.assertIn("127.0.0.1:%d:9001" % spec.bridge_port, run)
@@ -592,10 +710,30 @@ class StartTestCase(BaseFixture):
             {"game_source": os.path.join(self.tmp, "nope-game")},
             {"config_cfg": os.path.join(self.tmp, "nope.cfg")},
             {"rbtools_dir": os.path.join(self.tmp, "nope-rbtools")},
+            {"attack_cycle_script": os.path.join(self.tmp, "nope-cycle.py")},
+            {"send_tailer_script": os.path.join(self.tmp, "nope-send.py")},
         ):
             with self.assertRaises(prov.ProvisionError, msg=override):
                 self.provisioner(**override).start("test", "solo", "0")
         self.assertEqual(self.run_calls(), [])
+
+    def test_missing_sidecar_image_fails_loud_before_container(self):
+        # Fail-loud VOR dem ersten Container (#966): kein halber Stack.
+        with self.assertRaises(prov.ProvisionError):
+            self.provisioner(sessions_image="missing:latest").start("test", "solo", "0")
+        self.assertEqual(self.run_calls(), [])
+
+    def test_sidecar_failure_rolls_back_container(self):
+        # Bricht ein Sidecar-Start ab, wird der ganze Stack zurueckgerollt.
+        spec = self.spec("0")
+        os.environ["FAKE_DOCKER_FAIL"] = "run %s" % spec.match_loop_container
+        with self.assertRaises(prov.DockerError):
+            self.provisioner().start("test", "solo", "0")
+        calls = self.docker_calls()
+        self.assertIn(["rm", "-f", spec.container], calls)
+        self.assertIn(["rm", "-f", spec.send_tailer_container], calls)
+        self.assertIsNone(self.docker.inspect_optional(spec.container))
+        self.assertFalse(os.path.isdir(spec.run_root))
 
     def test_start_forwards_mode_and_run_scope_labels(self):
         # Issue-Signatur ist start(env, mode): ``mode`` MUSS im Container ankommen
@@ -643,6 +781,8 @@ class StopStatusTestCase(BaseFixture):
         self.assertTrue(result["removed"]["dirs"])
         calls = self.docker_calls()
         self.assertIn(["rm", "-f", spec.container], calls)
+        for name in spec.sidecar_containers():
+            self.assertIn(["rm", "-f", name], calls)
         self.assertIn(["network", "rm", spec.network], calls)
         self.assertIn(["volume", "rm", spec.wine_volume], calls)
         self.assertIn(["volume", "rm", spec.saves_volume], calls)
@@ -655,14 +795,16 @@ class StopStatusTestCase(BaseFixture):
         second = provisioner.stop("0", "test")
         self.assertEqual(
             second["removed"],
-            {"container": False, "network": False, "volumes": False, "dirs": False},
+            {"container": False, "sidecars": False, "network": False,
+             "volumes": False, "dirs": False},
         )
 
     def test_stop_on_never_started_instance(self):
         result = self.provisioner().stop("999", "test")
         self.assertEqual(
             result["removed"],
-            {"container": False, "network": False, "volumes": False, "dirs": False},
+            {"container": False, "sidecars": False, "network": False,
+             "volumes": False, "dirs": False},
         )
 
     def test_status_without_container(self):
