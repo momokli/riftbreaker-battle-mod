@@ -346,6 +346,12 @@ class DockerCliTestCase(BaseFixture):
         with self.assertRaises(prov.DockerError):
             self.docker.inspect("ghost")
 
+    def test_inspect_optional_daemon_error_raises(self):
+        # #969 B2: nur „nicht gefunden" -> None; ein echter Daemon-Fehler laut.
+        self.docker._run = lambda args: (1, "", "Cannot connect to the Docker daemon")  # type: ignore[assignment]
+        with self.assertRaises(prov.DockerError):
+            self.docker.inspect_optional("whatever")
+
 
 class InstanceSpecTestCase(BaseFixture):
     def test_deterministic_names(self):
@@ -1022,6 +1028,18 @@ class ListInstancesTestCase(BaseFixture):
             raise prov.DockerError("docker ps explo")
 
         self.docker.ps_all = boom  # type: ignore[assignment]
+        with self.assertRaises(prov.DockerError):
+            self.provisioner().list_instances("test")
+
+    def test_list_instances_propagates_inspect_daemon_error(self):
+        # #969 B2: ein ECHTER inspect-Daemon-Fehler wird laut propagiert (nicht
+        # wie ein fehlender Container still uebersprungen).
+        self.provisioner().start("test", "solo", "0")
+
+        def boom(_name):
+            raise prov.DockerError("docker inspect explo")
+
+        self.docker.inspect_optional = boom  # type: ignore[assignment]
         with self.assertRaises(prov.DockerError):
             self.provisioner().list_instances("test")
 

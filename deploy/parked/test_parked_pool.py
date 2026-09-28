@@ -688,6 +688,29 @@ class ReconcileTests(PoolHarness):
         self.assertIn(("test", "r1"), self.provisioner._containers)
         self.assertIn(("test", "leak"), self.provisioner._containers)
 
+    def test_discover_fallback_propagates_inspect_error(self):
+        # #969 B2: der _discover-Fallback (Provisioner OHNE list_instances) darf
+        # einen echten inspect-Fehler nicht schlucken; ``reconcile`` wertet ihn
+        # als Discovery-Ausfall (keine Eviction, kein stop).
+        class _Docker(object):
+            def ps_all(self, filter_label=None):
+                return ["riftbreaker-dedicated-test-0"]
+
+            def inspect_optional(self, name):
+                raise ParkedError("docker inspect explo")
+
+        fake = SimpleNamespace(cfg=SimpleNamespace(env="test"), docker=_Docker())
+        pool = ParkedPool(
+            fake, self.factory, clock=self.clock, sleep=lambda _s: None,
+            state_dir=self.state_dir,
+        )
+        with self.assertRaises(ParkedError):
+            pool._discover("test")
+        result = pool.reconcile()
+        self.assertTrue(result["discovery_failed"])
+        self.assertEqual(result["removed"], [])
+        self.assertEqual(result["evicted"], [])
+
     def test_restart_during_claimed_keeps_container(self):
         # #969 B1: Claim-Marker persistiert -> Restart-Reconcile stoppt NIE.
         pool_a = ParkedPool(

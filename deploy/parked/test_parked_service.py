@@ -22,7 +22,7 @@ import urllib.error
 import urllib.request
 from types import SimpleNamespace
 
-from parked_pool import ParkedPool, ParkedState
+from parked_pool import ParkedError, ParkedPool, ParkedState
 from parked_service import (
     ParkedConfigError,
     ParkedController,
@@ -504,6 +504,106 @@ class ControllerReconcileTests(unittest.TestCase):
         self.assertEqual(self.provisioner.stops, [])
         # Kein _fill()-Trigger durch den falschen (leeren) Zustand.
         self.assertEqual(self.provisioner.starts, starts_before)
+
+    def test_start_discovery_failure_does_not_fill(self):
+        # #969 Rework: der Start-Pfad umgeht die alte Skip-Logik. Ein
+        # fehlgeschlagener Start-Reconcile muss das _fill-Gate dauerhaft
+        # schliessen, nicht nur eine Iteration.
+        controller = make_controller(
+            self.clock, self.provisioner, self.bridges, pool_size=2,
+            reconcile_interval=300.0, reconcile_on_start=True,
+        )
+        controller._loop = lambda: None  # Thread sofort beenden (kein Rennen)
+        self.provisioner.add_container("ghost", "running")
+
+        def boom(env=None):
+            raise RuntimeError("docker ps down")
+
+        self.provisioner.list_instances = boom
+        controller.start()
+        try:
+            # Start-Reconcile scheiterte -> kein _fill, ghost unberuehrt.
+            self.assertEqual(self.provisioner.starts, [])
+            self.assertEqual(sorted(self.provisioner._containers), [("test", "ghost")])
+            self.assertFalse(controller._discovery_ok)
+            # Erste Iteration: reconcile nicht faellig (300 s) -> ohne das Gate
+            # wuerde _fill sofort parked-1/parked-2 erzeugen.
+            controller.maintain_once()
+            self.assertEqual(self.provisioner.starts, [])
+            self.assertEqual(sorted(self.provisioner._containers), [("test", "ghost")])
+            self.assertEqual(controller.orphans_removed, 0)
+            self.assertEqual(self.provisioner.stops, [])
+        finally:
+            controller.stop()
+
+    def test_periodic_discovery_failure_keeps_fill_suppressed(self):
+        # #969 Rework (b): reconcile_interval > reap_interval -> nur die eine
+        # faellige Iteration skippte frueheren. Das Gate haelt _fill auch in
+        # der NICHT faelligen Folge-Iteration an.
+        controller = make_controller(
+            self.clock, self.provisioner, self.bridges, pool_size=1,
+            reap_interval=5.0, reconcile_interval=10.0,
+        )
+        self.provisioner.add_container("ghost", "running")
+
+        def boom(env=None):
+            raise RuntimeError("docker ps down")
+
+        self.provisioner.list_instances = boom
+        self.clock.advance(11.0)   # iter1: Reconcile faellig (10 s)
+        controller.maintain_once()
+        self.assertEqual(self.provisioner.starts, [])
+        self.assertIn(("test", "ghost"), self.provisioner._containers)
+        self.clock.advance(5.0)    # iter2: Reconcile NICHT faellig
+        self.assertFalse(controller.reconcile_due())
+        controller.maintain_once()
+        self.assertEqual(self.provisioner.starts, [])
+        self.assertIn(("test", "ghost"), self.provisioner._containers)
+        self.assertEqual(self.provisioner.stops, [])
+
+    def test_fill_resumes_after_discovery_recovers(self):
+        # #969 Rework: erst ein ERFOLGREICHER Discovery-Lauf oeffnet das Gate
+        # wieder; danach fuellt der naechste faellige maintain_once() auf.
+        controller = make_controller(
+            self.clock, self.provisioner, self.bridges, pool_size=1,
+            reap_interval=5.0, reconcile_interval=10.0,
+        )
+
+        def boom(env=None):
+            raise RuntimeError("docker ps down")
+
+        self.provisioner.list_instances = boom
+        self.clock.advance(11.0)
+        controller.maintain_once()
+        self.assertEqual(self.provisioner.starts, [])
+        self.assertFalse(controller._discovery_ok)
+        self.assertIsNotNone(controller._discovery_error)
+
+        del self.provisioner.list_instances  # Discovery wieder gesund
+        self.clock.advance(11.0)
+        controller.maintain_once()
+        self.assertTrue(controller._discovery_ok)
+        self.assertIsNone(controller._discovery_error)
+        self.assertEqual(controller.counters()["parked"], 1)
+        self.assertEqual(len(self.provisioner.starts), 1)
+        self.assertTrue(controller.counters()["discovery_ok"])
+
+    def test_reconcile_parked_error_treated_as_not_ok(self):
+        # #969 Rework: ParkedError im Reconcile -> fail-safe (nicht auffuellen).
+        controller = make_controller(
+            self.clock, self.provisioner, self.bridges, pool_size=1,
+            reconcile_interval=5.0, reconcile_on_start=False,
+        )
+
+        def boom():
+            raise ParkedError("reconcile kaputt")
+
+        controller.pool.reconcile = boom
+        self.clock.advance(6.0)
+        controller.maintain_once()
+        self.assertFalse(controller._discovery_ok)
+        self.assertEqual(controller._discovery_error, "reconcile kaputt")
+        self.assertEqual(self.provisioner.starts, [])
 
 
 class ControllerClaimRecycleTests(unittest.TestCase):

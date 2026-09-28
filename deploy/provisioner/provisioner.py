@@ -61,6 +61,16 @@ class DockerError(Exception):
     """``docker``-Aufruf fehlgeschlagen."""
 
 
+def _error_is_missing(err: str) -> bool:
+    """True, wenn ``stderr`` ein FEHLEN der Ressource meldet (kein Daemon-Fehler).
+
+    Nur dann darf ``inspect_optional`` ``None`` liefern; alles andere ist ein
+    echter Fehler und wird laut propagiert (#969 B2).
+    """
+    lowered = err.lower()
+    return "no such object" in lowered or "no such container" in lowered
+
+
 class ProvisionError(Exception):
     """Provisionierung nicht moeglich (Preflight/Rollback) — laut abbrechen."""
 
@@ -454,14 +464,22 @@ class DockerCli(object):
         return payload[0]
 
     def inspect_optional(self, name: str) -> Optional[Dict[str, Any]]:
-        """Wie ``inspect``, aber fehlende Ressource -> ``None`` (kein Fehler)."""
-        rc, out, _err = self._run(["inspect", name])
+        """Wie ``inspect``, aber eine FEHLENDE Ressource -> ``None`` (kein Fehler).
+
+        Nur „nicht gefunden" (rc!=0, stderr „No such object"/„No such container")
+        gilt als ``None``; ein echter Daemon-Fehler wird laut als
+        :class:`DockerError` gemeldet (#969 B2). So kann der Aufrufer
+        „Container fehlt" nicht mit „Docker kaputt" verwechseln.
+        """
+        rc, out, err = self._run(["inspect", name])
         if rc != 0:
-            return None
+            if _error_is_missing(err):
+                return None
+            raise DockerError("docker inspect %s: %s" % (name, err.strip() or "exit %d" % rc))
         try:
             payload = json.loads(out)
-        except ValueError:
-            return None
+        except ValueError as exc:
+            raise DockerError("docker inspect %s: kein JSON: %s" % (name, exc))
         if not payload:
             return None
         return payload[0]
@@ -710,17 +728,14 @@ class Provisioner(object):
         ``inspect`` verschwunden) wird uebersprungen — kein Crash. Ein
         fehlgeschlagenes ``docker ps`` wird dagegen **laut** propagiert (#969 B2):
         der Aufrufer (Reconcile) darf „nichts laeuft" nicht mit „Discovery
-        kaputt" verwechseln.
+        kaputt" verwechseln. Ebenso propagiert ein ECHTER Daemon-Fehler beim
+        ``inspect`` (nur echtes „nicht gefunden" liefert ``None``).
         """
         env = env or self.cfg.env
         names = self.docker.ps_all("rb.provisioner.env=%s" % env)
         instances: List[Dict[str, Any]] = []
         for name in names:
-            try:
-                info = self.docker.inspect_optional(name)
-            except DockerError as exc:
-                LOG.warning("list_instances: inspect %s fehlgeschlagen: %s", name, exc)
-                continue
+            info = self.docker.inspect_optional(name)
             if info is None:
                 continue
             labels = (info.get("Config") or {}).get("Labels") or {}

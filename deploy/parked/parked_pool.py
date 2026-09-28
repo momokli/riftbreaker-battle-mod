@@ -574,7 +574,9 @@ class ParkedPool(object):
 
         Bevorzugt :meth:`Provisioner.list_instances` (#969). Fehlt die Methode,
         wird defensiv ueber ``provisioner.docker.ps_all`` + ``inspect_optional``
-        gelesen (gleiches Ergebnis, nur ohne Provisioner-Wrapper).
+        gelesen (gleiches Ergebnis, nur ohne Provisioner-Wrapper). Ein echter
+        Daemon-Fehler beim ``ps``/``inspect`` wird dabei NICHT geschluckt — er
+        steigt auf und wird von :meth:`reconcile` als Discovery-Ausfall gewertet.
         """
         list_fn = getattr(self.provisioner, "list_instances", None)
         if callable(list_fn):
@@ -586,11 +588,10 @@ class ParkedPool(object):
             raise ParkedError("reconcile: Provisioner ohne list_instances/docker.ps_all")
         rows: List[Dict[str, Any]] = []
         for name in ps_all("rb.provisioner.env=%s" % env):
-            try:
-                info = docker.inspect_optional(name)
-            except Exception as exc:  # noqa: BLE001 - Discovery best-effort
-                LOG.warning("reconcile: inspect %s fehlgeschlagen: %s", name, exc)
-                continue
+            # Ein ECHTER inspect-Fehler (Daemon kaputt) wird laut propagiert:
+            # ``reconcile`` faengt ihn als Discovery-Ausfall ab (#969 B2) und
+            # evictet NICHT. Nur ein wirklich fehlender Container -> None.
+            info = docker.inspect_optional(name)
             if info is None:
                 continue
             labels = (info.get("Config") or {}).get("Labels") or {}

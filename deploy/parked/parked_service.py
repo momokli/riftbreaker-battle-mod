@@ -240,6 +240,13 @@ class ParkedController(object):
         self._last_reap = clock()
         self._last_reconcile = clock()
 
+        # Discovery-Health ueber den Lauf hinaus (#969 B2): solange die
+        # Discovery nicht ok ist, fuellt ``_fill`` NICHT auf (fail-safe gegen
+        # den Re-Leak). Nur ein ERFOLGREICHER ``reconcile`` oeffnet das Gate.
+        self._discovery_ok = True
+        self._discovery_error: Optional[str] = None
+        self._discovery_skip_logged = False
+
         # Lifetime-Zaehler (Laufzeit des Dienstes).
         self.claims = 0
         self.recycles = 0
@@ -281,7 +288,22 @@ class ParkedController(object):
                 return candidate
 
     def _fill(self) -> None:
-        """Fehlende ``PARKED``-Slots per ``warm_up`` bis ``pool_size`` fuellen."""
+        """Fehlende ``PARKED``-Slots per ``warm_up`` bis ``pool_size`` fuellen.
+
+        Solange die Discovery nicht ok ist (#969 B2), wird NICHT aufgefuellt:
+        der echte Docker-Zustand ist unbekannt, ein ``warm_up`` koennte einen
+        Re-Leak erzeugen. Das Gate wird ausschliesslich von einem ERFOLGREICHEN
+        :meth:`reconcile` wieder geoeffnet — nicht nur in der Fehler-Iteration.
+        """
+        if not self._discovery_ok:
+            if not self._discovery_skip_logged:
+                LOG.warning(
+                    "_fill ausgesetzt: discovery nicht ok (%s)",
+                    self._discovery_error or "unbekannt",
+                )
+                self._discovery_skip_logged = True
+            return
+        self._discovery_skip_logged = False
         if self.clock() < self._warm_retry_at:
             return
         while len(self._parked_rows()) < self.pool_size:
@@ -314,7 +336,11 @@ class ParkedController(object):
             try:
                 result = self.pool.reconcile()
             except ParkedError as exc:
+                # Defensiv: unbekannter Zustand -> als nicht-ok behandeln und
+                # NICHT auffuellen (fail-safe gegen den Re-Leak).
                 LOG.warning("reconcile: %s", exc)
+                self._discovery_ok = False
+                self._discovery_error = str(exc)
                 return {
                     "removed": [],
                     "evicted": [],
@@ -327,6 +353,10 @@ class ParkedController(object):
             removed = list(result.get("removed") or [])
             self.orphans_removed += len(removed)
             errors = list(result.get("errors") or [])
+            # Discovery-Health ueber den Lauf hinaus merken (#969 B2).
+            discovery_failed = bool(result.get("discovery_failed"))
+            self._discovery_ok = not discovery_failed
+            self._discovery_error = errors[0] if (discovery_failed and errors) else None
             if errors:
                 LOG.warning("reconcile (%s): %s", self.env, "; ".join(errors))
             elif removed or result.get("evicted"):
@@ -351,17 +381,16 @@ class ParkedController(object):
             return []
 
     def maintain_once(self) -> None:
-        """Ein Wartungslauf: erst reconcilen, dann auffuellen, dann reapen.
+        """Ein Wartungslauf: reconcilen (wenn faellig), auffuellen, reapen.
 
-        Schlug die Discovery fehl (#969 B2), wird **nicht** aufgefuellt: der
-        Zustand ist unbekannt, ein ``_fill()`` koennte den Leak verdoppeln.
+        Schlug die Discovery fehl (#969 B2), haelt :meth:`_fill` selbst an
+        (``_discovery_ok``) — unabhaengig davon, ob diese Iteration faellig war
+        —, bis ein erfolgreicher Reconcile das Gate wieder oeffnet. ``_reap``
+        laeuft weiterhin immer.
         """
         with self._lock:
             if self.reconcile_due():
-                result = self.reconcile()
-                if result.get("discovery_failed"):
-                    self._reap()
-                    return
+                self.reconcile()
             self._fill()
             self._reap()
 
@@ -462,6 +491,7 @@ class ParkedController(object):
                 "reaps": self.reaps,
                 "warm_failures": self.warm_failures,
                 "orphans_removed": self.orphans_removed,
+                "discovery_ok": self._discovery_ok,
                 "handover_last_seconds": last,
                 "handover_avg_seconds": average,
             }
@@ -472,10 +502,15 @@ class ParkedController(object):
             return
         if self.reconcile_on_start:
             # Synchron VOR dem Thread-Start (und vor dem ersten _fill()):
-            # beseitigt Restart-Leaks, bevor neue Instanzen gefuellt werden.
+            # beseitigt Restart-Leaks UND setzt das Discovery-Gate (#969 B2),
+            # bevor neue Instanzen gefuellt werden. Auch der Start-Pfad ist
+            # damit gedeckt: ein fehlgeschlagener Start-Reconcile laesst
+            # ``_fill`` bis zum naechsten erfolgreichen Lauf aussetzen.
             try:
                 self.reconcile()
             except Exception:  # noqa: BLE001 - Start darf nie scheitern
+                self._discovery_ok = False
+                self._discovery_error = "Start-Reconcile fehlgeschlagen"
                 LOG.exception("Start-Reconcile fehlgeschlagen")
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="parked-maintain", daemon=True)
