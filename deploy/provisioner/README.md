@@ -30,6 +30,7 @@ gegen `^[A-Za-z0-9_.-]{1,40}$` validiert.
 | Game-Dir | `<base_dir>/rift-<env>-<id>/game` | `/srv/rift-test-12345/game` |
 | Backup-Dir | `<base_dir>/rift-<env>-<id>/backups` | `/srv/rift-test-12345/backups` |
 | Sessions-Dir | `<base_dir>/rift-<env>-<id>/sessions` | `/srv/rift-test-12345/sessions` |
+| Staged config.cfg | `<base_dir>/rift-<env>-<id>/config/config.cfg` | `/srv/rift-test-12345/config/config.cfg` |
 | Bridge-Host-Port | `<base> + (n(instance_id) % 20000)` | `42345` |
 | Game-UDP-Port | ephemer, `127.0.0.1::6321/udp` | — |
 
@@ -56,7 +57,8 @@ Env überschreibt Dateiwerte.
 | `PROVISIONER_MIN_FREE_GB` | `10` | Disk-Schwelle (wie `riftbreaker_disk_min_free_gb`) |
 | `PROVISIONER_BRIDGE_PORT_BASE` | `30000` | Basis Port-Ableitung (Host-Publish) |
 | `PROVISIONER_BRIDGE_CONTAINER_PORT` | `9001` | Bridge-Port **im Container** (`RBB_BRIDGE_PORT`) |
-| `PROVISIONER_CONFIG_CFG` | `/opt/rbmods/compose/rift-{env}/riftbreaker/config/config.cfg` | Host-`config.cfg` → `/data/config/config.cfg:ro` |
+| `PROVISIONER_CONFIG_CFG` | `/opt/rbmods/compose/rift-{env}/riftbreaker/config/config.cfg` | **Quelle** für die je Instanz abgeleitete `config.cfg` (Diff: nur die `server_name`-Zeile) |
+| `PROVISIONER_SERVER_NAME_SUFFIX` | `-{env}-{instance_id}` | Additiver Suffix am `server_name` der je Instanz abgeleiteten `config.cfg` (s. „Instanz-eigene config.cfg“) |
 | `PROVISIONER_RBTOOLS_DIR` | `/opt/rbmods/rbtools/{env}` | Host-rbtools → `/opt/rbtools:ro` |
 | `PROVISIONER_GAME_SOURCE` | `/srv/rift-{env}/game` | Host-Spielstand → `/opt/riftbreaker` |
 | `PROVISIONER_IMAGE_BUILD_DIR` | — | Compose-Kontext (optional) |
@@ -66,7 +68,9 @@ Env überschreibt Dateiwerte.
 zulässig (Env `PROVISIONER_DEPLOY_REF` überschreibt die Datei, wie bei allen
 Feldern). `${env}` wird in `config_cfg`/`rbtools_dir`/`game_source` durch das Env-Segment
 ersetzt (z. B. `/srv/rift-dev/game`). `bridge_container_port` wird auf
-`1..65535` validiert, sonst `ConfigError`.
+`1..65535` validiert, sonst `ConfigError`. `server_name_suffix` darf nur
+`[A-Za-z0-9_.-{}]` enthalten (kein `"`/CR/LF) — sonst `ConfigError`,
+leerer Wert = bewusstes Opt-out (#970).
 
 ## Container-Layout (reales Image)
 
@@ -80,7 +84,7 @@ ersetzt (z. B. `/srv/rift-dev/game`). `bridge_container_port` wird auf
 | Game | `<game_source>:/opt/riftbreaker` |
 | Wine | `<wine_volume>:/data/.wine` |
 | Saves | `<saves_volume>:/data/saves` |
-| Config | `<config_cfg>:/data/config/config.cfg:ro` |
+| Config | `<run_root>/config/config.cfg` (je Instanz; `server_name` + `<suffix>`):`/data/config/config.cfg:ro` |
 | rbtools | `<rbtools_dir>:/opt/rbtools:ro` |
 | Restart-Policy | `--restart unless-stopped` |
 | Log-Rotation | `json-file`, `--log-opt max-size=10m --log-opt max-file=3` |
@@ -99,7 +103,35 @@ nur beim Erzeugen — ein bereits laufender Container wird nur gestartet und
 NICHT nachträglich migriert.
 
 Preflight prüft fail-loud VOR dem Container, dass `game_source` (Dir),
-`config_cfg` (File) und `rbtools_dir` (Dir) existieren — sonst kein halber Start.
+`config_cfg` (File, inkl. vorhandener `server_name`-Zeile) und `rbtools_dir`
+(Dir) existieren — sonst kein halber Start.
+
+## Instanz-eigene `config.cfg` (#970)
+
+Jede provisionierte/parked Instanz bekommt eine **eigene** `config.cfg` in
+`<run_root>/config/config.cfg` (Attribut `config_cfg_staged`), damit zwei
+Instanzen derselben Env nicht dieselbe Datei teilen:
+
+1. **Quelle** = `PROVISIONER_CONFIG_CFG` (geteilte Env-Datei, `spec.config_cfg`).
+2. **Staging** in `_stage_config` direkt nach `_create_dirs`, VOR dem ersten
+   Container: Basisname aus der ersten `set server_name "..."`-Zeile lesen,
+   `server_name` = `<Basisname>` + Suffix setzen, Rest **byte-identisch** kopieren.
+3. **Schreiben** atomar (`*.tmp` → `os.replace`), Modus **`0644`**; die Quelle
+   bleibt unberührt.
+4. **Mount**: `_create_container` mountet `config_cfg_staged` (nicht mehr die
+   geteilte Env-Datei) nach `/data/config/config.cfg:ro`.
+
+Suffix-Präzedenz: `server_name_suffix` (Env `PROVISIONER_SERVER_NAME_SUFFIX` /
+JSON-Key) → Default `-{env}-{instance_id}` (Beispiel: `RBBattle-dev-parked-1`).
+Ein **leerer** Wert ist das Opt-out (identischer Name); Env-Leerstring wird
+bewusst übernommen. Der Basisname wird aus der Quelle gelesen — kein Hardcode
+`RBBattle`.
+
+Fail-loud (#970): fehlt die Quelle oder deren `server_name`-Zeile, bricht
+`start` **vor dem ersten Container** ab (`ProvisionError`, `run`-Calls = 0).
+**Secret-Hygiene:** das Server-Passwort erscheint nie in Logs/`to_dict()`/Status
+— geloggt werden nur Pfad + Byte-Größe. **Routing bleibt unberührt:** `server_name`
+ist reiner Anzeigename; GNS-Relay/Ports pinnen `ip:port` (#929).
 
 ## API
 
