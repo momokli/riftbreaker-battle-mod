@@ -10,7 +10,6 @@ Uhr ist eine ``FakeClock``. Aufruf:
 
 from __future__ import annotations
 
-import os
 import shutil
 import tempfile
 import unittest
