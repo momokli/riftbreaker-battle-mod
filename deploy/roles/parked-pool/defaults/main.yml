@@ -55,6 +55,9 @@ parked_pool_provisioner_config_cfg: "/opt/rbmods/compose/rift-{{ parked_pool_env
 parked_pool_provisioner_rbtools_dir: "{{ rbtools_dir | default('/opt/rbmods/rbtools/' ~ parked_pool_env) }}"
 parked_pool_provisioner_game_source: "/srv/rift-{{ parked_pool_env }}/game"
 parked_pool_provisioner_base_dir: /srv
+# Deploy-Identitaet (#968): gleiche RBB_REF wie die Compose-Instanz der Env
+# (dev/test = Checkout-SHA, prod = Git-Tag via deploy-identity.yml).
+parked_pool_provisioner_deploy_ref: "{{ rift_deploy_ref | default('unknown') }}"
 
 # Quell-Skripte im Repo (aus dem Deploy-Checkout).
 parked_pool_service_src: "{{ playbook_dir }}/parked/parked_service.py"
