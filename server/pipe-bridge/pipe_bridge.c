@@ -11,8 +11,15 @@
  *   Kein Fremd-Dep, nur Win32 (Winsock) - laeuft unter Wine.
  *
  * Endpunkte (HTTP/1.1, Antwort immer application/json, Connection: close):
- *   GET  /health       -> 200 {"ok":true,"pipe":<bool>}
- *                         (<pipe> = Pipe-Verbindung moeglich, Probe-Connect)
+ *   GET  /health       -> Readiness aus der BESTEHENDEN persistenten
+ *                         Verbindung (g_pipe), KEIN Zweit-Connect (#902):
+ *                         200 {"ok":true,"pipe":true}; ist keine
+ *                         persistente Verbindung da 503 {"ok":false,
+ *                         "pipe":false,"reason":"pipe_unavailable"}.
+ *   GET  /health?deep=1 -> zusaetzlich DLL-Ping ueber dieselbe bestehende
+ *                         Verbindung (pipe_send_command, kein frischer
+ *                         Connect); schlaegt der fehl -> 503 {"ok":false,
+ *                         "pipe":true,"ping":false,"reason":"ping_failed"}
  *   GET  /             -> Web-UI (cockpit.html, nur C++-Direktfunktionen)
  *   POST /get_state    -> carbonium/max/resources/HQ (C++)
  *   POST /add_resource -> carbonium direkt aendern (C++)
@@ -57,6 +64,10 @@
 #include <stdarg.h>
 #include <string.h>
 
+/* Windows-freie Statuscode-/Body-Wahl fuer /health (Issue #902, host-testbar). */
+#include "health_logic.h"
+#include "ready_gate.h" /* #937: reines, host-testbares Ready-Gate */
+
 #define BRIDGE_NAME          "pipe_bridge"
 
 #define DEFAULT_PIPE_NAME    "\\\\.\\pipe\\rbbattle"
@@ -90,6 +101,30 @@ static void init_session_id(void)
     GetLocalTime(&st);
     snprintf(g_session_id, sizeof(g_session_id), "%04d%02d%02d-%02d%02d%02d",
              st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+}
+
+/* #392: haengt `,"session":"<id>"` vor das schliessende `}` eines
+ * Command-Payloads (`{...}\n`). Reine Funktion -> zentral in
+ * pipe_send_command nutzbar (keine Call-Site-Aenderung).
+ * Rueckgabe 1 = out gesetzt; 0 = kein JSON-Objekt / Puffer zu klein
+ * (der Aufrufer schreibt dann payload unveraendert). */
+static int attach_session_field(const char *payload, const char *session,
+                                char *out, size_t n)
+{
+    size_t len, brace;
+
+    if (!payload || !session || !out || n == 0)
+        return 0;
+    len = strlen(payload);
+    while (len > 0 && (payload[len - 1] == '\n' || payload[len - 1] == '\r'))
+        len--;                              /* Trailing-Newline ignorieren */
+    if (len < 2 || payload[0] != '{' || payload[len - 1] != '}')
+        return 0;
+    brace = len - 1;                        /* Index des schliessenden `}` */
+    if (snprintf(out, n, "%.*s,\"session\":\"%s\"}\n",
+                 (int)brace, payload, session) >= (int)n)
+        return 0;                           /* Puffer zu klein -> unveraendert */
+    return 1;
 }
 
 static void blog(const char *fmt, ...)
@@ -538,6 +573,13 @@ static CRITICAL_SECTION g_game_config_cs;
 static int g_ready = 0;
 static CRITICAL_SECTION g_ready_cs;
 
+/* #937: Ready-Gate (`/ready` im Chat -> alle distinct ready -> Start). Reine
+ * Logik in ready_gate.h; hier nur der mutex-geschuetzte Zustand. `players`
+ * kommt aus der get_state_result-Zeile, die conn_id aus dem player_chat-Event. */
+static ready_gate_t g_ready_gate;
+static CRITICAL_SECTION g_ready_gate_cs;
+static int g_ready_timeout_s = 180; /* ENV RBB_READY_TIMEOUT_S (US4) */
+
 /* Start-Signal (#828): POST /start inkrementiert diesen Zaehler; der attack_cycle
  * pollt ihn via GET /game_config (`start_epoch`) und startet bei einem neuen
  * Wert (Edge). So ist das Start-Signal LESBAR, nicht nur ein Ack. */
@@ -560,6 +602,174 @@ static void sse_broadcast(const char *line)
 }
 
 
+/* #937: monotone Zeitbasis (Sekunden) fuer Gate-Deadline/Timeout. */
+static double bridge_now_s(void)
+{
+    return (double)GetTickCount64() / 1000.0;
+}
+
+/* #937: erkennt (getrimmt, case-insensitiv) exakt "/ready". */
+static int is_ready_command(const char *text)
+{
+    const char *p = text;
+    size_t len;
+    static const char *kw = "/ready";
+    size_t i;
+
+    if (!p)
+        return 0;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+        p++;
+    len = strlen(p);
+    while (len > 0 && (p[len - 1] == ' ' || p[len - 1] == '\t' ||
+                       p[len - 1] == '\r' || p[len - 1] == '\n'))
+        len--;
+    if (len != 6)
+        return 0;
+    for (i = 0; i < 6; i++) {
+        unsigned char c = (unsigned char)p[i];
+        unsigned char k = (unsigned char)kw[i];
+        if (c >= 'A' && c <= 'Z')
+            c = (unsigned char)(c - 'A' + 'a');
+        if (c != k)
+            return 0;
+    }
+    return 1;
+}
+
+/* #937/US6: Server->Spieler-Status ueber den BESTEHENDEN #934-Pfad
+ * (`send_chat`-Kommando, kein neuer Hook). Escaping via json_escape (wie
+ * handle_send_chat). Bewusst FIRE-AND-FORGET: diese Funktion wird aus dem
+ * pipe_reader-Thread aufgerufen, der selbst die Antworten liest - ein
+ * wartender pipe_send_command() wuerde sich dort selbst blockieren. Die
+ * eingehende send_chat_result-Zeile matcht keinen Waiter und wird ignoriert.
+ *
+ * MUTEX (US6-Fix): hier darf NICHT g_cmd_cs genommen werden. pipe_send_command
+ * haelt g_cmd_cs ueber das gesamte WaitForSingleObject(g_resp_ev, timeout_ms);
+ * die erwartete Antwort kann aber nur DIESER reader-Thread liefern. Nähme der
+ * Reader g_cmd_cs, blockierte er sich selbst bis RBB_BRIDGE_TIMEOUT_MS
+ * (Default 20 s) - ein Bounded-Deadlock bei jedem /ready, das mit einem
+ * laufenden get_state-Poll kollidiert. Die Pipe-Writes serialisiert g_pipe_cs. */
+static void bridge_send_chat_status(int players, int count, int timeout)
+{
+    char text[256];
+    char esc[512];
+    char payload[LINE_MAX];
+
+    if (timeout)
+        snprintf(text, sizeof(text),
+                 "Ready-Timeout: %d/%d ready - Spiel bleibt pausiert "
+                 "(kein Kick).", count, players);
+    else if (players > 0 && count >= players)
+        snprintf(text, sizeof(text),
+                 "Alle %d Spieler ready - Start!", players);
+    else
+        snprintf(text, sizeof(text),
+                 "%d/%d ready - warte auf die restlichen Spieler.",
+                 count, players);
+
+    json_escape(text, esc, sizeof(esc));
+    snprintf(payload, sizeof(payload),
+             "{\"cmd\":\"send_chat\",\"text\":\"%s\",\"type\":\"system\","
+             "\"prefix\":\"\"}\n",
+             esc);
+
+    EnterCriticalSection(&g_pipe_cs);
+    if (g_pipe != INVALID_HANDLE_VALUE)
+        pipe_write_all(g_pipe, payload);
+    LeaveCriticalSection(&g_pipe_cs);
+}
+
+/* #937: verarbeitet eine Chat-Zeile fuer das Gate. Erkennt "/ready", traegt
+ * die conn_id (Fallback: Text-Distinct, wenn keine conn_id am Wire) idempotent
+ * ein und feuert bei `ready_count == players` GENAU EINMAL das Start-Signal
+ * (identisch zu handle_post_start: g_start_epoch++). */
+static void ready_gate_on_chat(const char *text, const char *conn_id)
+{
+    char id[RBB_READY_ID_LEN];
+    int added = 0, fire = 0, first = 0, count = 0, players = 0;
+    double now = bridge_now_s();
+
+    if (!is_ready_command(text))
+        return;
+
+    if (conn_id && conn_id[0])
+        snprintf(id, sizeof(id), "%s", conn_id);
+    else
+        snprintf(id, sizeof(id), "text:ready"); /* Fallback: alle ohne
+                                                 * conn_id kollidieren -> count 1
+                                                 * (Grenze: Live-Attribution #549) */
+
+    EnterCriticalSection(&g_ready_gate_cs);
+    if (!g_ready_gate.fired) {
+        first = (g_ready_gate.count == 0);
+        added = ready_gate_add(&g_ready_gate, id);
+        if (added) {
+            /* neuer /ready -> vorherigen Timeout-Latch zuruecksetzen (neue
+             * Runde/neuer Versuch), sonst meldet die Config dauerhaft true. */
+            g_ready_gate.timed_out = 0;
+            ready_gate_arm(&g_ready_gate, now, (double)g_ready_timeout_s);
+        }
+        players = g_ready_gate.players;
+        count = g_ready_gate.count;
+        if (added && ready_gate_should_fire(&g_ready_gate, players)) {
+            g_ready_gate.fired = 1;
+            g_ready_gate.timed_out = 0;
+            fire = 1;
+        }
+    }
+    LeaveCriticalSection(&g_ready_gate_cs);
+
+    if (fire) {
+        int epoch;
+        char ev[128];
+        EnterCriticalSection(&g_start_epoch_cs);
+        g_start_epoch += 1;
+        epoch = g_start_epoch;
+        LeaveCriticalSection(&g_start_epoch_cs);
+        blog("ready-gate: alle %d ready -> start (epoch %d)", count, epoch);
+        snprintf(ev, sizeof(ev),
+                 "{\"event\":\"ready_all\",\"players\":%d,"
+                 "\"ready_count\":%d,\"start_epoch\":%d}",
+                 players, count, epoch);
+        sse_broadcast(ev);
+        bridge_send_chat_status(players, count, 0); /* US6: alle ready */
+    } else if (added && first) {
+        char ev[96];
+        snprintf(ev, sizeof(ev),
+                 "{\"event\":\"ready_update\",\"players\":%d,"
+                 "\"ready_count\":%d}", players, count);
+        sse_broadcast(ev);
+        bridge_send_chat_status(players, count, 0); /* US6: erstes ready */
+    }
+}
+
+/* #937/US4: Timeout-Tick. Bei Ablauf wird die Ready-Menge geleert, ein
+ * Status-Event `ready_timeout` gebroadcastet und NICHTS gestartet (kein Kick
+ * -> attack_cycle bleibt/zurueck PAUSED). Wird aus dem pipe_reader-Loop
+ * aufgerufen, damit der Timeout auch ohne eingehende Zeilen greift. */
+static void ready_gate_tick(void)
+{
+    int expired = 0;
+    EnterCriticalSection(&g_ready_gate_cs);
+    if (ready_gate_expired(&g_ready_gate, bridge_now_s())) {
+        ready_gate_clear(&g_ready_gate);
+        g_ready_gate.timed_out = 1;
+        expired = 1;
+    }
+    LeaveCriticalSection(&g_ready_gate_cs);
+    if (expired) {
+        int players, count;
+        blog("ready-gate: Timeout -> PAUSED (kein Kick)");
+        sse_broadcast("{\"event\":\"ready_timeout\"}");
+        EnterCriticalSection(&g_ready_gate_cs);
+        players = g_ready_gate.players;
+        count = g_ready_gate.count; /* nach clear() == 0 */
+        LeaveCriticalSection(&g_ready_gate_cs);
+        bridge_send_chat_status(players, count, 1); /* US6: Timeout */
+    }
+}
+
 /* Route eine Pipe-Zeile: Events -> Server-Handling, Responses -> Waiter. */
 static void route_pipe_line(HANDLE h, const char *line)
 {
@@ -570,10 +780,25 @@ static void route_pipe_line(HANDLE h, const char *line)
 
     if (strcmp(ev, "player_chat") == 0) {
         char text[256] = "";
+        char cid[64] = "";
         json_get_string(line, "text", text, sizeof(text));
+        json_get_string(line, "conn_id", cid, sizeof(cid));
         blog("player_chat: %.120s", text);
         sse_broadcast(line);
+        /* #937: /ready erkennt das Gate; conn_id traegt die Attribution. */
+        ready_gate_on_chat(text, cid);
         return;
+    }
+
+    /* #937: Spielerzahl aus der get_state_result-Zeile mitlesen (Quelle fuer
+     * das Gate "alle ready"). Faellt danach durch zum Response-Waiter. */
+    if (strcmp(ev, "get_state_result") == 0) {
+        double p = 0.0;
+        if (json_get_number(line, "players", &p)) {
+            EnterCriticalSection(&g_ready_gate_cs);
+            g_ready_gate.players = (int)p;
+            LeaveCriticalSection(&g_ready_gate_cs);
+        }
     }
 
     /* Response-Zeile: an einen wartenden HTTP-Handler liefern. */
@@ -665,6 +890,8 @@ static DWORD WINAPI pipe_reader_main(LPVOID arg)
             } else {
                 Sleep(10);
             }
+            /* #937/US4: Timeout-Gate unabhaengig von eingehenden Zeilen. */
+            ready_gate_tick();
         }
     }
     return 0;
@@ -677,6 +904,14 @@ static int pipe_send_command(const char *event, const char *payload,
                              int timeout_ms, char *line_out, size_t line_out_sz)
 {
     int w;
+    char wire[LINE_MAX];
+    const char *out_payload = payload;
+
+    /* #392: Session-/Boot-ID zentral an JEDEN Command haengen (nicht pro
+     * Call-Site). Payloads sind immer ein JSON-Objekt; sonst bleibt
+     * out_payload == payload (defensiv, kein Crash). */
+    if (attach_session_field(payload, g_session_id, wire, sizeof(wire)))
+        out_payload = wire;
 
     /* Serialisierung: der HTTP-Server ist jetzt multi-threaded (PR B), aber
      * Pipe + pending-Response-Slot sind single. */
@@ -695,7 +930,7 @@ static int pipe_send_command(const char *event, const char *payload,
     LeaveCriticalSection(&g_resp_cs);
 
     EnterCriticalSection(&g_pipe_cs);
-    w = pipe_write_all(g_pipe, payload);
+    w = pipe_write_all(g_pipe, out_payload);
     LeaveCriticalSection(&g_pipe_cs);
     if (!w) {
         LeaveCriticalSection(&g_cmd_cs);
@@ -718,6 +953,21 @@ static int pipe_send_command(const char *event, const char *payload,
     LeaveCriticalSection(&g_resp_cs);
     LeaveCriticalSection(&g_cmd_cs);
     return 0;
+}
+
+/* Readiness der Pipe aus der BESTEHENDEN persistenten Verbindung (#902).
+ * Liest g_pipe unter g_pipe_cs und liefert 1, wenn ein gueltiges Handle da
+ * ist, sonst 0. Es wird bewusst KEIN neuer Connect geoeffnet: rbbridge.dll
+ * erzeugt die Pipe mit nMaxInstances=1, der pipe_reader-Thread haelt die
+ * einzige Instanz -> jeder zusaetzliche Connect traefe ERROR_PIPE_BUSY und
+ * meldete die Pipe faelschlich als tot. 0/1 zurueck. */
+static int pipe_ready(void)
+{
+    int ok;
+    EnterCriticalSection(&g_pipe_cs);
+    ok = (g_pipe != INVALID_HANDLE_VALUE);
+    LeaveCriticalSection(&g_pipe_cs);
+    return ok ? 1 : 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -815,19 +1065,34 @@ static const char *find_icase(const char *hay, const char *needle)
     return NULL;
 }
 
-static void handle_health(SOCKET c)
+/* GET /health[?deep=1]: Readiness aus der BESTEHENDEN persistenten
+ * Verbindung (#902), KEIN Zweit-Connect mehr. Ist eine Verbindung da,
+ * gilt die Pipe als bereit; der optionale Deep-Ping laeuft ueber dieselbe
+ * Verbindung (pipe_send_command). Statuscode/Body kommen aus health_logic.h
+ * - ehrlich statt "immer 200". Bei pipe_ok=1 bleibt der Default-Body
+ * bitgleich zu vorher. */
+static void handle_health(SOCKET c, int deep)
 {
-    char body[128];
-    int pipe_ok = 0;
-    /* Kurzes Fenster: /health ist ein Probe-Connect, der nie lange warten darf. */
-    HANDLE h = pipe_connect(500);
-    if (h != INVALID_HANDLE_VALUE) {
-        pipe_ok = 1;
-        CloseHandle(h);
-    }
-    snprintf(body, sizeof(body), "{\"ok\":true,\"pipe\":%s}",
-             pipe_ok ? "true" : "false");
-    http_respond(c, 200, "OK", body);
+    char body[192];
+    char line[READ_BUF];
+    int pipe_ok;
+    int ping_ok = 0;
+    int code;
+
+    /* Readiness aus der persistenten Verbindung: kein frischer Connect, sonst
+     * ERROR_PIPE_BUSY gegen die eine DLL-Pipe-Instanz (nMaxInstances=1). */
+    pipe_ok = pipe_ready();
+
+    /* Deep-Ping ueber die BESTEHENDE Verbindung (kein neuer Connect).
+     * pipe_send_command schreibt auf g_pipe und wartet auf die pong-Zeile. */
+    if (deep && pipe_ok)
+        ping_ok = (pipe_send_command("pong", "{\"cmd\":\"ping\"}\n",
+                                     2000, line, sizeof(line)) == 0);
+
+    code = deep ? bridge_health_status_deep(pipe_ok, ping_ok)
+                : bridge_health_status(pipe_ok);
+    bridge_health_body(pipe_ok, ping_ok, deep, body, sizeof(body));
+    http_respond(c, code, code == 200 ? "OK" : "Service Unavailable", body);
 }
 
 
@@ -1254,32 +1519,117 @@ static void handle_dom_suspend(SOCKET c, const char *cmd, const char *event)
     char line[READ_BUF];
     char payload[LINE_MAX];
     int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
-    HANDLE h = pipe_connect(2500);
-
-    if (h == INVALID_HANDLE_VALUE) {
-        blog("POST /%s: Pipe nicht erreichbar -> pipe_unavailable", cmd);
-        http_respond(c, 503, "Service Unavailable",
-                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
-        return;
-    }
 
     snprintf(payload, sizeof(payload), "{\"cmd\":\"%s\"}\n", cmd);
-    if (!pipe_write_all(h, payload)) {
-        CloseHandle(h);
-        http_respond(c, 500, "Internal Server Error",
-                     "{\"ok\":false,\"reason\":\"pipe_error\"}");
-        return;
-    }
 
+    /* Kanonischer Pfad (Issue #881): dieselbe PERSISTENTE Pipe + der
+     * geteilte Response-Slot wie alle anderen Handler. Eine eigene
+     * pipe_connect-Verbindung scheitert (dwShareMode 0 -> ERROR_PIPE_BUSY)
+     * und meldet faelschlich pipe_unavailable. */
     {
-        int rc = pipe_wait_line(h, event, NULL, timeout_ms, line, sizeof(line));
-        CloseHandle(h);
+        int rc = pipe_send_command(event, payload, timeout_ms, line, sizeof(line));
+        if (rc == -1) {
+            blog("POST /%s: Pipe nicht erreichbar -> pipe_unavailable", cmd);
+            http_respond(c, 503, "Service Unavailable",
+                         "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+            return;
+        }
         if (rc != 0) {
             http_respond(c, 500, "Internal Server Error",
                          "{\"ok\":false,\"reason\":\"timeout\"}");
             return;
         }
     }
+    log_response("/dom_suspend", line);
+    http_respond(c, 200, "OK", line);
+}
+
+/* POST /pause_game + /resume_game (Write, Issue #880): echter Welt-/Server-
+ * Freeze nativ via ServerGameplayState::On{Pause,Resume}GameRequest. Kein
+ * Body. Liefert die pause_game_result-/resume_game_result-Zeile der Bridge. */
+/* POST /send_chat (#934): Server -> Spieler Chat. Body {"text":".."}.
+ * Liefert die send_chat_result-Zeile der Bridge. */
+static void handle_send_chat(SOCKET c, const char *body)
+{
+    char text[256] = "";
+    char ty[16] = "system";
+    char prefix[64] = "";
+    char esc_pfx[64 * 2];
+    char esc[256 * 2];
+    char line[READ_BUF];
+    char payload[LINE_MAX];
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+    int rc;
+
+    if (body) {
+        json_get_string(body, "text", text, sizeof(text));
+        json_get_string(body, "type", ty, sizeof(ty));
+        json_get_string(body, "prefix", prefix, sizeof(prefix));
+    }
+    if (!text[0]) {
+        blog("POST /send_chat ohne text -> invalid_request");
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_text\"}");
+        return;
+    }
+    json_escape(text, esc, sizeof(esc));
+    json_escape(prefix, esc_pfx, sizeof(esc_pfx));
+    snprintf(payload, sizeof(payload),
+             "{\"cmd\":\"send_chat\",\"text\":\"%s\",\"type\":\"%s\","
+             "\"prefix\":\"%s\"}\n",
+             esc, ty, esc_pfx);
+    rc = pipe_send_command("send_chat_result", payload, timeout_ms, line,
+                           sizeof(line));
+    if (rc == -1) {
+        blog("POST /send_chat: Pipe nicht erreichbar -> pipe_unavailable");
+        http_respond(c, 503, "Service Unavailable",
+                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+        return;
+    }
+    if (rc != 0) {
+        http_respond(c, 500, "Internal Server Error",
+                     "{\"ok\":false,\"reason\":\"timeout\"}");
+        return;
+    }
+    log_response("/send_chat", line);
+    http_respond(c, 200, "OK", line);
+}
+
+static void handle_game_pause(SOCKET c, const char *cmd, const char *event,
+                             const char *body)
+{
+    char op[16] = "marshalled";
+    char esc_op[16 * 2];
+    char line[READ_BUF];
+    char payload[LINE_MAX];
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+    int rc;
+
+    if (body)
+        json_get_string(body, "op", op, sizeof(op));
+    if (op[0] && strcmp(op, "marshalled") != 0 && strcmp(op, "auto") != 0) {
+        blog("POST /%s: unbekanntes op '%s'", cmd, op);
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_op\"}");
+        return;
+    }
+    json_escape(op, esc_op, sizeof(esc_op));
+    snprintf(payload, sizeof(payload),
+             "{\"cmd\":\"%s\",\"op\":\"%s\"}\n", cmd, esc_op);
+
+    rc = pipe_send_command(event, payload, timeout_ms, line, sizeof(line));
+    if (rc == -1) {
+        blog("POST /%s: Pipe nicht erreichbar -> pipe_unavailable", cmd);
+        http_respond(c, 503, "Service Unavailable",
+                     "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+        return;
+    }
+    if (rc != 0) {
+        http_respond(c, 500, "Internal Server Error",
+                     "{\"ok\":false,\"reason\":\"timeout\"}");
+        return;
+    }
+    log_response(event, line);
     http_respond(c, 200, "OK", line);
 }
 
@@ -1502,6 +1852,11 @@ static void handle_post_attack_reset(SOCKET c, const char *body)
         EnterCriticalSection(&g_attack_reset_cs);
         g_attack_reset_epoch++;
         LeaveCriticalSection(&g_attack_reset_cs);
+        /* #937/US3: Runden-Reset -> fired/timed_out-Latch des Ready-Gates
+         * loeschen, damit die naechste Runde erneut per /ready startet. */
+        EnterCriticalSection(&g_ready_gate_cs);
+        ready_gate_reset(&g_ready_gate);
+        LeaveCriticalSection(&g_ready_gate_cs);
         blog("attack_reset -> epoch %d", g_attack_reset_epoch);
     }
 
@@ -1539,6 +1894,11 @@ static void handle_post_round_reset(SOCKET c, const char *body)
 
     if (trigger) {
         blog("round_reset -> epoch %d", epoch);
+        /* #937/US3: Runden-Reset -> fired/timed_out-Latch des Ready-Gates
+         * loeschen (POST /round_reset {"reset":1} = neue Runde). */
+        EnterCriticalSection(&g_ready_gate_cs);
+        ready_gate_reset(&g_ready_gate);
+        LeaveCriticalSection(&g_ready_gate_cs);
 
         json_get_number(body, "map", &map_flag);
         if (map_flag != 0.0) {
@@ -1663,9 +2023,11 @@ static void handle_post_natural_attack_rules(SOCKET c, const char *body)
 static void handle_get_game_config(SOCKET c)
 {
     char cfg[4096];
-    char resp[4352];
+    char resp[4608];
+    char rstat[512];
     int epoch;
     int ready;
+    int rd_timeout;
 
     EnterCriticalSection(&g_game_config_cs);
     if (g_game_config[0]) {
@@ -1682,20 +2044,30 @@ static void handle_get_game_config(SOCKET c)
     EnterCriticalSection(&g_ready_cs);
     ready = g_ready;
     LeaveCriticalSection(&g_ready_cs);
+    EnterCriticalSection(&g_ready_gate_cs);
+    ready_gate_status_json(&g_ready_gate, rstat, sizeof(rstat));
+    rd_timeout = g_ready_gate.timed_out;
+    LeaveCriticalSection(&g_ready_gate_cs);
 
-    /* `start_epoch` + `ready` in das flache Config-Objekt haengen (vor die
-     * schliessende Klammer) -> der attack_cycle hat beides aus EINEM Poll. */
+    /* `start_epoch` + `ready` + #937-Gate-Status in das flache Config-Objekt
+     * haengen (vor die schliessende Klammer) -> der attack_cycle hat alles aus
+     * EINEM Poll: players, ready_count, ready_players[], ready_deadline,
+     * ready_timeout. */
     {
         size_t len = strlen(cfg);
         if (len > 0 && cfg[len - 1] == '}') {
             cfg[len - 1] = '\0';
             snprintf(resp, sizeof(resp),
-                     "%s,\"start_epoch\":%d,\"ready\":%s}",
-                     cfg, epoch, ready ? "true" : "false");
+                     "%s,\"start_epoch\":%d,\"ready\":%s,%s,"
+                     "\"ready_timeout\":%s}",
+                     cfg, epoch, ready ? "true" : "false", rstat,
+                     rd_timeout ? "true" : "false");
         } else {
             snprintf(resp, sizeof(resp),
-                     "{\"start_epoch\":%d,\"ready\":%s}",
-                     epoch, ready ? "true" : "false");
+                     "{\"start_epoch\":%d,\"ready\":%s,%s,"
+                     "\"ready_timeout\":%s}",
+                     epoch, ready ? "true" : "false", rstat,
+                     rd_timeout ? "true" : "false");
         }
     }
     http_respond(c, 200, "OK", resp);
@@ -1818,8 +2190,10 @@ static void handle_client(SOCKET c)
 
         log_request(method, path, body, body_len);
 
-        if (strcmp(method, "GET") == 0 && strcmp(path, "/health") == 0) {
-            handle_health(c);
+        if (strcmp(method, "GET") == 0 &&
+            (strcmp(path, "/health") == 0 ||
+             strncmp(path, "/health?", 8) == 0)) {
+            handle_health(c, strstr(path, "deep=1") != NULL);
         } else if (strcmp(method, "GET") == 0 && strcmp(path, "/events") == 0) {
             handle_events(c);
         } else if (strcmp(method, "GET") == 0 && strcmp(path, "/attack_status") == 0) {
@@ -2010,6 +2384,36 @@ static void handle_client(SOCKET c)
             handle_dom_suspend(c, "pause_dom", "pause_dom_result");
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/resume_dom") == 0) {
             handle_dom_suspend(c, "resume_dom", "resume_dom_result");
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/send_chat") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_send_chat(c, b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/pause_game") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_game_pause(c, "pause_game", "pause_game_result", b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/resume_game") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_game_pause(c, "resume_game", "resume_game_result", b);
+            free(b);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/restart_map") == 0) {
             char *b = malloc((size_t)body_len + 1);
             if (!b) {
@@ -2080,6 +2484,9 @@ static int mode_server(void)
     InitializeCriticalSection(&g_natural_attack_rules_cs);
     InitializeCriticalSection(&g_game_config_cs);
     InitializeCriticalSection(&g_ready_cs);
+    InitializeCriticalSection(&g_ready_gate_cs);
+    ready_gate_init(&g_ready_gate);
+    g_ready_timeout_s = ready_timeout_cap(env_int("RBB_READY_TIMEOUT_S", 180), 180);
     InitializeCriticalSection(&g_start_epoch_cs);
     g_resp_ev = CreateEvent(NULL, FALSE, FALSE, NULL);
     CreateThread(NULL, 0, pipe_reader_main, NULL, 0, NULL);

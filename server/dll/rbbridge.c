@@ -366,6 +366,28 @@ static int safe_read_u32(const void *addr, uint32_t *out)
     return 1;
 }
 
+/* ReadProcessMemory-Shim (#436): liest nur INNERHALB der synthetischen
+ * Region direkt; ausserhalb -> FALSE. Spiegelt das reale Verhalten
+ * "unlesbar -> FALSE statt Page-Fault" und haelt resolve_dom_node host-testbar. */
+static BOOL ht_ReadProcessMemory(HANDLE proc, const void *addr, LPVOID out,
+                                 SIZE_T n, SIZE_T *nread)
+{
+    uintptr_t a = (uintptr_t)addr;
+    uintptr_t b = (uintptr_t)g_ht_region_base;
+    uintptr_t e = b + (uintptr_t)g_ht_region_size;
+    (void)proc;
+    if (!g_ht_region_base || a < b || a + n > e) {
+        if (nread)
+            *nread = 0;
+        return 0;
+    }
+    memcpy(out, addr, n);
+    if (nread)
+        *nread = n;
+    return 1;
+}
+#define ReadProcessMemory ht_ReadProcessMemory
+
 #else /* !RBBRIDGE_HOSTTEST: echter Windows-Build */
 
 #ifndef _WIN32_WINNT
@@ -374,6 +396,7 @@ static int safe_read_u32(const void *addr, uint32_t *out)
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <time.h>     /* #934: time() fuer den Chat-Timestamp */
 #include <psapi.h>    /* Issue #252: EnumProcessModules/GetModuleBaseNameW ... */
 #include <tlhelp32.h> /* Issue #252: Toolhelp32 Module32FirstW/NextW           */
 
@@ -733,14 +756,44 @@ static void json_escape_into(const char *in, char *out, size_t n)
     out[o] = '\0';
 }
 
-/* #549: Baut die `player_chat`-Protokollzeile aus dem rohen Chat-Text.
+/* #937/US1: stabile, kollisionsarme Verbindungs-ID aus dem (nur zur Laufzeit
+ * gueltigen) `NetConnection*`-Zeiger. Rein (kein Windows, kein Net) ->
+ * host-testbar (tests/rbbridge-hosttest).
+ *
+ * Warum ein Hash statt des Rohzeigers? Der Zeiger ist ASLR-abhaengig und darf
+ * NIE ins Wire-Protokoll (Info-Leak + pro Reconnect instabil). Die FNV-1a-64-
+ * Ableitung ist pro Verbindung stabil (gleicher Zeiger -> gleiche ID),
+ * kollisionsarm (64-Bit-Faltung, hier auf 48 Bit beschnitten) und liefert fuer
+ * p == 0 sauber 0 ("unbekannt" -> Feld wird weggelassen). */
+static unsigned long long conn_id_from_ptr(uintptr_t p)
+{
+    unsigned long long h = 1469598103934665603ULL; /* FNV-1a-64 offset basis */
+    int i;
+
+    if (p == 0)
+        return 0;
+    for (i = 0; i < 8; i++) {
+        h ^= (unsigned char)(p >> (8 * i));
+        h *= 1099511628211ULL; /* FNV-1a-64 prime */
+    }
+    h &= 0xFFFFFFFFFFFFULL; /* 48 Bit: kurz genug, kein Rohzeiger */
+    return h ? h : 1ULL;    /* nie 0 fuer p != 0 (0 == "unbekannt") */
+}
+
+/* #549/#937: Baut die `player_chat`-Protokollzeile aus dem rohen Chat-Text.
  * Escaping via json_escape_into(). Rein (nur snprintf) -> host-testbar
  * (tests/rbbridge-hosttest). Rueckgabe = Laenge der Zeile ohne
  * NUL-Terminator; 0 = leerer Text oder Puffer zu klein (der Aufrufer darf
  * dann NICHTS senden).
  *
+ * US1 (#937): bei conn_id != 0 werden die Zusatzfelder `conn_id` (hex) und
+ * `player` (Index, -1 = unbekannt) angehaengt. Bei conn_id == 0 bleibt die
+ * Zeile bitgleich zum Bestandsformat (Rueckwaertskompatibilitaet: alte
+ * Konsumenten ignorieren Zusatzfelder).
+ *
  * Die Zeile entspricht dem Wire-Event `player_chat` aus server/protocol.md. */
-static size_t chat_build_player_chat(const char *text, char *out, size_t n)
+static size_t chat_build_player_chat(const char *text, unsigned long long conn_id,
+                                     int player, char *out, size_t n)
 {
     char esc[512];
     int len;
@@ -751,9 +804,97 @@ static size_t chat_build_player_chat(const char *text, char *out, size_t n)
     if (!text || !text[0])
         return 0;
     json_escape_into(text, esc, sizeof(esc));
-    len = snprintf(out, n, "{\"event\":\"player_chat\",\"text\":\"%s\"}", esc);
+    if (conn_id != 0) {
+        len = snprintf(out, n,
+                       "{\"event\":\"player_chat\",\"text\":\"%s\","
+                       "\"conn_id\":\"%llx\",\"player\":%d}",
+                       esc, conn_id, player);
+    } else {
+        len = snprintf(out, n,
+                       "{\"event\":\"player_chat\",\"text\":\"%s\"}",
+                       esc);
+    }
     if (len < 0 || (size_t)len >= n)
         return 0;
+    return (size_t)len;
+}
+
+/* #934: Baut die `send_chat_result`-Erfolgszeile aus dem rohen Chat-Text.
+ * Escaping via json_escape_into() — analog zur Gegenrichtung #549
+ * (chat_build_player_chat): ohne das entsteht bei `"`/`\` invalides JSON
+ * und bei Steuerzeichen (LF) ein Pipe-Framing-Desync (Restzeile verfaelscht
+ * die Antwort des naechsten Kommandos). Rein (nur snprintf) -> host-testbar
+ * (tests/rbbridge-hosttest). Rueckgabe = Laenge der Zeile ohne NUL; 0 =
+ * Puffer zu klein (der Aufrufer darf dann KEINE Zeile senden). */
+static size_t send_chat_build_result(const char *text, int done, char *out,
+                                     size_t n)
+{
+    char esc[512];
+    int len;
+
+    if (!out || n == 0)
+        return 0;
+    out[0] = '\0';
+    json_escape_into(text ? text : "", esc, sizeof(esc));
+    len = snprintf(out, n,
+                   "{\"event\":\"send_chat_result\",\"ok\":true,"
+                   "\"text\":\"%s\",\"sent\":\"%s\"}",
+                   esc, done ? "true" : "pending");
+    if (len < 0 || (size_t)len >= n)
+        return 0;
+    return (size_t)len;
+}
+
+/* #392: liest den String-Wert `"session"` aus einer Request-Zeile (die
+ * Bridge haengt ihn zentral an JEDEN Command an). Reine Funktion ->
+ * host-testbar (tests/rbbridge-hosttest). Rueckgabe 1 = gefunden und nicht
+ * leer; sonst 0 (out = ""). Robust gegen fehlenden Key, Nicht-String-Werte,
+ * NULL und zu kleinen Puffer (kein Crash). */
+static int session_from_line(const char *line, char *out, size_t n)
+{
+    const char *p;
+    size_t k = 0;
+
+    if (!line || !out || n == 0)
+        return 0;
+    out[0] = '\0';
+    for (p = line; (p = strstr(p, "\"session\"")) != NULL; p += 9) {
+        const char *q = p + 9;
+        while (*q == ' ' || *q == '\t')
+            q++;
+        if (*q != ':')
+            continue;
+        q++;
+        while (*q == ' ' || *q == '\t')
+            q++;
+        if (*q != '"')
+            continue;
+        q++;
+        while (*q && *q != '"' && k + 1 < n)
+            out[k++] = *q++;
+        out[k] = '\0';
+        return (*q == '"' && k > 0) ? 1 : 0;
+    }
+    return 0;
+}
+
+/* #392: rendert die EINE Request-Logzeile `req cmd=<name> session=<id>`.
+ * Leere/NULL-Werte -> `-`. Reine Funktion -> host-testbar. Rueckgabe =
+ * Laenge der Zeile ohne NUL; 0 = Puffer zu klein (out = ""). */
+static size_t req_log_format(const char *cmd, const char *session,
+                             char *out, size_t n)
+{
+    int len;
+
+    if (!out || n == 0)
+        return 0;
+    len = snprintf(out, n, "req cmd=%s session=%s",
+                   (cmd && cmd[0]) ? cmd : "-",
+                   (session && session[0]) ? session : "-");
+    if (len < 0 || (size_t)len >= n) {
+        out[0] = '\0';
+        return 0;
+    }
     return (size_t)len;
 }
 
@@ -769,6 +910,9 @@ static size_t chat_build_player_chat(const char *text, char *out, size_t n)
 
 typedef struct {
     char buf[CHAT_QUEUE_CAP][CHAT_QUEUE_MSG];
+    /* #937/US2: Verbindungs-ID PARALLEL zum Text (FIFO-gekoppelt), damit der
+     * Wire-Emit die Identitaet mitgeben kann. 0 = unbekannt (Alt-Pfad). */
+    uintptr_t conn[CHAT_QUEUE_CAP];
     int head;
     int tail;
     int count;
@@ -781,8 +925,10 @@ static void chat_queue_init(chat_queue_t *q)
     memset(q, 0, sizeof(*q));
 }
 
-/* Fuegt eine Nachricht ein. Rueckgabe 1 = eingefuegt, 0 = text NULL/leer. */
-static int chat_queue_push(chat_queue_t *q, const char *text)
+/* Fuegt eine Nachricht MIT Verbindungs-ID ein (#937/US2). Rueckgabe 1 =
+ * eingefuegt, 0 = text NULL/leer. */
+static int chat_queue_push_conn(chat_queue_t *q, const char *text,
+                               uintptr_t conn)
 {
     if (!q || !text || !text[0])
         return 0;
@@ -793,21 +939,39 @@ static int chat_queue_push(chat_queue_t *q, const char *text)
     }
     snprintf(q->buf[q->tail], CHAT_QUEUE_MSG, "%s", text);
     q->buf[q->tail][CHAT_QUEUE_MSG - 1] = '\0';
+    q->conn[q->tail] = conn;
     q->tail = (q->tail + 1) % CHAT_QUEUE_CAP;
     q->count++;
     return 1;
 }
 
-/* Entnimmt die aelteste Nachricht. Rueckgabe 1 = entnommen (in out),
- * 0 = leer. */
-static int chat_queue_pop(chat_queue_t *q, char *out, size_t n)
+/* Alt-API ohne conn (conn 0 = unbekannt) -> Bestandsverhalten. */
+static int chat_queue_push(chat_queue_t *q, const char *text)
 {
+    return chat_queue_push_conn(q, text, (uintptr_t)0);
+}
+
+/* Entnimmt die aelteste Nachricht SAMT conn (optional, darf NULL sein).
+ * Rueckgabe 1 = entnommen (in out), 0 = leer. */
+static int chat_queue_pop_conn(chat_queue_t *q, char *out, size_t n,
+                              uintptr_t *conn_out)
+{
+    if (conn_out)
+        *conn_out = 0;
     if (!q || !out || n == 0 || q->count == 0)
         return 0;
     snprintf(out, n, "%s", q->buf[q->head]);
+    if (conn_out)
+        *conn_out = q->conn[q->head];
     q->head = (q->head + 1) % CHAT_QUEUE_CAP;
     q->count--;
     return 1;
+}
+
+/* Alt-API ohne conn. */
+static int chat_queue_pop(chat_queue_t *q, char *out, size_t n)
+{
+    return chat_queue_pop_conn(q, out, n, NULL);
 }
 
 #ifndef RBBRIDGE_HOSTTEST
@@ -822,7 +986,9 @@ static int g_file_log = 1;
 static volatile LONG g_stop = 0;   /* 1 = Thread soll sich beenden       */
 static HANDLE g_thread = NULL;     /* Handle des Pipe-Server-Threads     */
 static LONG g_thread_started = 0;  /* verhindert doppelte Attach-Threads */
+static LONG g_initialized = 0;     /* CS/Queue einmalig initen (#902/US3) */
 static CRITICAL_SECTION g_log_cs;  /* schuetzt das Datei-Log             */
+static CRITICAL_SECTION g_dbg_cs;  /* schuetzt den stderr-Write (#688)   */
 
 /* Chat-Detour (#549): OnNetPlayerChatRequest (RVA 0x1821B50) inline-
  * gehakt. Der Spieler tippt Chat (vanilla Client), die DLL liest den Text
@@ -860,14 +1026,31 @@ static void dbg(const char *fmt, ...)
     OutputDebugStringA(buf);
 
     /* Konsolen-/docker-Log (#392): gleicher Stream wie das Spiel (stderr ->
-     * docker), mit Zeitstempel fuer Korrelation mit bridge + exor_logs. */
+     * docker), mit Zeitstempel fuer Korrelation mit bridge + exor_logs.
+     *
+     * Bewusst direkter Handle-Write statt fprintf(stderr, ...): mingw
+     * leitet fprintf ueber den CRT-Slot __imp___acrt_iob_func in der
+     * writable .data-Section auf; ist dieser Slot korrumpiert, springt
+     * der Call in Nicht-Funktions-Code (Execute-Fault/DEP, #688). Der
+     * Handle-Write below hat diese Indirektion nicht. */
     {
+        char line[1152];
         SYSTEMTIME st;
         GetLocalTime(&st);
-        fprintf(stderr, "[%02d:%02d:%02d.%03d] [rbbridge] [tid=%lu] %s\n",
-                st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
-                (unsigned long)GetCurrentThreadId(), buf);
-        fflush(stderr);
+        int n = snprintf(line, sizeof(line),
+                         "[%02d:%02d:%02d.%03d] [rbbridge] [tid=%lu] %s\n",
+                         st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+                         (unsigned long)GetCurrentThreadId(), buf);
+        if (n > 0) {
+            HANDLE herr = GetStdHandle(STD_ERROR_HANDLE);
+            if (herr != NULL && herr != INVALID_HANDLE_VALUE) {
+                EnterCriticalSection(&g_dbg_cs);
+                DWORD written = 0;
+                WriteFile(herr, line, (DWORD)n, &written, NULL);
+                FlushFileBuffers(herr);
+                LeaveCriticalSection(&g_dbg_cs);
+            }
+        }
     }
 
     if (!g_file_log)
@@ -2758,6 +2941,12 @@ static const unsigned char *resolve_set_suspended_fn(const unsigned char *base,
 
 /* Findet den DOM-Node (dom_mananger): vftable-Scan + TypeHash-Filter.
  * Reine Leseoperation, kein Aufruf — graceful NULL. */
+/* Blockgroesse (Byte) fuer das crash-sichere ReadProcessMemory-Kopieren
+ * der Region in einen lokalen Stack-Puffer (klein gehalten, damit der
+ * Pipe-Thread-Stack nicht gesprengt wird). Von resolve_dom_node UND
+ * scan_qword_instance genutzt. */
+#define RBBRIDGE_SCAN_CHUNK (64u * 1024u)
+
 static void *resolve_dom_node(const unsigned char *base)
 {
     uint32_t want;
@@ -2772,8 +2961,6 @@ static void *resolve_dom_node(const unsigned char *base)
     for (;;) {
         MEMORY_BASIC_INFORMATION mi;
         uintptr_t next;
-        const uint64_t *q;
-        size_t nq, i;
         if (VirtualQuery((const void *)addr, &mi, sizeof(mi)) == 0)
             break;
         next = (uintptr_t)mi.BaseAddress + mi.RegionSize;
@@ -2782,29 +2969,285 @@ static void *resolve_dom_node(const unsigned char *base)
         addr = next;
         if (!is_readable_region(&mi))
             continue;
-        q = (const uint64_t *)mi.BaseAddress;
-        nq = mi.RegionSize / sizeof(uint64_t);
-        for (i = 0; i < nq; i++) {
-            unsigned char *inst;
-            uint32_t th = 0, ref32 = 0;
-            uint64_t L = 0;
-            if (q[i] != needle)
-                continue;
-            inst = (unsigned char *)&q[i];
-            if (!safe_read_u32(inst + RBBRIDGE_LUAGRAPHNODE_TYPEHASH_OFF, &th))
-                continue;
-            if (th != want)
-                continue; /* anderer LuaGraphNode (Pool/Mission) */
-            if (!safe_read_u64(inst + RBBRIDGE_LUAGRAPHNODE_L_OFF, &L) || !L)
-                continue;
-            if (!safe_read_u32(inst + RBBRIDGE_LUAGRAPHNODE_REF_OFF, &ref32))
-                continue;
-            if ((int32_t)ref32 < 0)
-                continue;
-            return inst;
+        /* Crash-sicher (#436): Region chunkweise per ReadProcessMemory in
+         * einen lokalen Puffer kopieren und DORT scannen — kein roher
+         * q[i]-Deref. Wird die Region zwischen VirtualQuery und dem Lesen
+         * freigegeben (Heap-Churn / Player-Join), liefert ReadProcessMemory
+         * FALSE statt eines Page-Faults (#655-Muster). Der frühere rohe
+         * q[i]-Deref crashte `get_state` (Crash-Bundles: FAULT in
+         * resolve_dom_node <- dispatch_get_state, ACCESS_VIOLATION). */
+        uint64_t buf[RBBRIDGE_SCAN_CHUNK / sizeof(uint64_t)];
+        size_t remaining = mi.RegionSize;
+        uintptr_t rbase = (uintptr_t)mi.BaseAddress;
+        while (remaining > 0) {
+            size_t chunk = remaining > sizeof(buf) ? sizeof(buf) : remaining;
+            SIZE_T nread = 0;
+            if (ReadProcessMemory(GetCurrentProcess(), (const void *)rbase,
+                                  buf, chunk, &nread) &&
+                nread >= sizeof(uint64_t)) {
+                size_t nq = nread / sizeof(uint64_t);
+                for (size_t i = 0; i < nq; i++) {
+                    unsigned char *inst;
+                    uint32_t th = 0, ref32 = 0;
+                    uint64_t L = 0;
+                    if (buf[i] != needle)
+                        continue;
+                    inst = (unsigned char *)(rbase + i * sizeof(uint64_t));
+                    if (!safe_read_u32(inst +
+                                       RBBRIDGE_LUAGRAPHNODE_TYPEHASH_OFF, &th))
+                        continue;
+                    if (th != want)
+                        continue; /* anderer LuaGraphNode (Pool/Mission) */
+                    if (!safe_read_u64(inst + RBBRIDGE_LUAGRAPHNODE_L_OFF, &L) ||
+                        !L)
+                        continue;
+                    if (!safe_read_u32(inst + RBBRIDGE_LUAGRAPHNODE_REF_OFF,
+                                       &ref32))
+                        continue;
+                    if ((int32_t)ref32 < 0)
+                        continue;
+                    return inst;
+                }
+            }
+            rbase += chunk;
+            remaining -= chunk;
         }
     }
     return NULL;
+}
+
+/* ------------------------------------------------------------------ */
+/* #880: pause_game / resume_game — nativer Dedi-Pause (GameplayState)  */
+/*                                                                    */
+/* Spike #880: echter Welt-/Server-Freeze (nicht DOM). Nativ (kein      */
+/* exec/Console). Einstieg sind die ARGLOSEN Server-Overrides           */
+/*   ServerGameplayState::OnPauseGameRequest  (RVA 0x1825F20, Build     */
+/*     2.0.58485):  mov byte ptr [rcx+0x534], 1 ; jmp rel32             */
+/*   ServerGameplayState::OnResumeGameRequest (RVA 0x1828590):          */
+/*     mov byte ptr [rcx+0x534], 0 ; jmp rel32                          */
+/* (rcx = this). Sie setzen das Pause-Request-Flag +0x534 und springen  */
+/* in den gemeinsamen Handler (RVA 0x1810130), der die eigentliche      */
+/* Arbeit macht. GameplayState::PauseGame (RVA 0x1A130F0) erwartet      */
+/* dagegen einen UtfString -> als nativer Einstieg ungeeignet; darum    */
+/* die arglosen Request-Overrides.                                      */
+/*                                                                    */
+/* Instanz: ServerGameplayState-Primary-vftable                         */
+/*   RVA 0x2F0C5A0 (PDB `??_7ServerGameplayState@Riftbreaker@@6B@`)     */
+/* -> vftable-Scan wie resolve_dom_node. Readback des Pause-Flags       */
+/* +0x534 (0/1).                                                       */
+/*                                                                    */
+/* Thread-Modell (#880, live belegt): ein direkter Aufruf der Engine-Fn vom
+ * PIPE-Thread crasht; der Schreib-/Aufruf-Punkt laeuft daher auf dem
+ * GAME-Thread (Detour, siehe dispatch_pause_game/install_game_pause_hook).  */
+/* ------------------------------------------------------------------ */
+
+#define RBBRIDGE_SGS_VFTABLE_RVA   0x2F0C5A0u /* ??_7ServerGameplayState@Riftbreaker@@6B@ */
+#define RBBRIDGE_SGS_PAUSEFLAG_OFF 0x534u     /* Ist-Zustand: 1 = pausiert */
+
+/* #880-Marshalling: GameplayState::UpdateGameplayLogic(float,float,u64) ist der
+ * GAME-Thread-Logik-Update (er konsumiert z.B. das restart_map-Pending-Flag in
+ * GameplayState::OnRestart) und damit der sichere Konsumpunkt fuer den Pause-/
+ * Resume-Request — ein direkter Aufruf der Server-Overrides vom PIPE-Thread
+ * crasht (live nachgewiesen). Prolog ist 36 Byte instruction-aligned:
+ *   mov rax,rsp; mov [rax+0x10],rbx; mov [rax+0x20],r9;
+ *   push rbp/rsi/rdi/r12/r13/r14/r15; lea rbp,[rax-0x108]; sub rsp,0x1D0
+ * -> Patch-Laenge 36. Die AOB (55 Byte) ist im .text genau EINMAL vorhanden;
+ * die ersten 36 Byte (die der Detour ueberschreibt) bindet der Selfcheck. */
+#define RBBRIDGE_RVA_GAMEPLAY_UPDLOGIC       0x1A1C100u
+#define RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN 36u
+static const unsigned char RBBRIDGE_GAMEPLAY_UPDLOGIC_SIG[] = {
+    0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x10, 0x4C, 0x89, 0x48, 0x20, 0x55,
+    0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D,
+    0xA8, 0xF8, 0xFE, 0xFF, 0xFF, 0x48, 0x81, 0xEC, 0xD0, 0x01, 0x00, 0x00,
+    0x0F, 0x29, 0x70, 0xB8, 0x0F, 0x29, 0x78, 0xA8, 0x44, 0x0F, 0x29, 0x40,
+    0x98, 0x44, 0x0F, 0x29, 0x48, 0x88, 0x0F
+};
+
+/* Selfcheck (host-testbar): Laenge == 55 und die ersten 36 Byte (die der
+ * Detour ueberschreibt) sind instruction-aligned der erwartete Prolog. */
+static int gameplay_updlogic_sig_selfcheck(void)
+{
+    static const unsigned char expect36[] = {
+        0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x10, 0x4C, 0x89, 0x48, 0x20,
+        0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+        0x48, 0x8D, 0xA8, 0xF8, 0xFE, 0xFF, 0xFF, 0x48, 0x81, 0xEC, 0xD0,
+        0x01, 0x00, 0x00
+    };
+    if (sizeof(RBBRIDGE_GAMEPLAY_UPDLOGIC_SIG) != 55)
+        return 0;
+    if (RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN != sizeof(expect36))
+        return 0;
+    if (memcmp(RBBRIDGE_GAMEPLAY_UPDLOGIC_SIG, expect36, sizeof(expect36)) != 0)
+        return 0;
+    return 1;
+}
+
+/* Loest GameplayState::UpdateGameplayLogic per AOB auf — nur bei EINEM Treffer. */
+static const unsigned char *resolve_gameplay_updlogic_fn(const unsigned char *base,
+                                                         size_t size)
+{
+    if (!gameplay_updlogic_sig_selfcheck())
+        return NULL;
+    if (sig_count_in_image(base, size, RBBRIDGE_GAMEPLAY_UPDLOGIC_SIG,
+                           sizeof(RBBRIDGE_GAMEPLAY_UPDLOGIC_SIG)) != 1)
+        return NULL;
+    return scan_bytes(base, size, RBBRIDGE_GAMEPLAY_UPDLOGIC_SIG,
+                      sizeof(RBBRIDGE_GAMEPLAY_UPDLOGIC_SIG));
+}
+
+/* #880: die ECHTEN Aufrufer-Pfade der Engine (per `git`-freier Disasm-Analyse
+ * von ServerGameplayState::UpdateWorldPauseState): PauseGame wird dort als
+ * `PauseGame(this, &reason, false, WorldType=3)` gerufen, ResumeGame als
+ * `ResumeGame(this)` (arglos). Beide Fn-Entries ueber ihre Prolog-AOB (unique)
+ * aufloesen. Der reason ist ein STATISCHES UtfString-Objekt in .data
+ * (RVA 0x47936E0) — wir benutzen genau dasselbe. */
+#define RBBRIDGE_RVA_PAUSE_REASON 0x47936E0u
+static const unsigned char RBBRIDGE_PAUSEGAME_SIG[] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x48, 0x89,
+    0x7C, 0x24, 0x20, 0x44, 0x88, 0x44, 0x24, 0x18, 0x55, 0x41, 0x54, 0x41,
+    0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC, 0x24, 0xF0, 0xFD, 0xFF,
+    0xFF, 0x48, 0x81, 0xEC, 0x10, 0x03, 0x00, 0x00, 0x45, 0x8B, 0xE1
+};
+static const unsigned char RBBRIDGE_RESUMEGAME_SIG[] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x48, 0x89,
+    0x7C, 0x24, 0x18, 0x55, 0x48, 0x8D, 0xAC, 0x24, 0x50, 0xFE, 0xFF, 0xFF,
+    0x48, 0x81, 0xEC, 0xB0, 0x02, 0x00, 0x00, 0x48, 0x8B, 0xF9, 0x48, 0x8D,
+    0x05, 0x7F, 0xCC, 0x50, 0x01, 0x48, 0x89, 0x44, 0x24, 0x40, 0xC7, 0x44,
+    0x24, 0x48, 0x83, 0x06, 0x00, 0x00
+};
+
+/* #934: Server -> Spieler Chat. Die Engine broadcastet eine `NetPlayerChatAck`
+ * via `ServerGameplaySessions::QueueBroadcastPacket<NetPlayerChatAck>(ack&&,
+ * NetTransferType, NetConnection* exclude)` (RVA 0x17CFF70). Ack-Layout
+ * (per RegisterType/ctr disasm verifiziert):
+ *   +0x00 i64 timestamp; +0x08 u32 player (0xFFFFFFFF = Server/Operator);
+ *   +0x10 Exor::UtfString message (0x28 B); +0x38 u8 ChatMessageType (8 = MESSAGE)
+ * Gesamt 0x40. Die Enqueue-Seite ist thread-sicher, der Container-Walk NICHT ->
+ * Aufruf im GAME-Thread (Detour), nicht vom Pipe-Thread. */
+#define RBBRIDGE_SGS_SESSIONS_OFF          0x768u
+#define RBBRIDGE_CHAT_ACK_SIZE             0x40u
+#define RBBRIDGE_CHAT_OFF_TIMESTAMP        0x00u
+#define RBBRIDGE_CHAT_OFF_PLAYER           0x08u
+#define RBBRIDGE_CHAT_OFF_MESSAGE          0x10u
+#define RBBRIDGE_CHAT_OFF_TYPE             0x38u
+#define RBBRIDGE_CHAT_PLAYER_SERVER        0xFFFFFFFFu
+#define RBBRIDGE_CHAT_TYPE_MESSAGE         8u
+#define RBBRIDGE_CHAT_TRANSFER_UNRELIABLE  1
+static const unsigned char RBBRIDGE_BROADCASTCHAT_SIG[] = {
+    0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x10, 0x4C, 0x89, 0x48, 0x20, 0x44,
+    0x89, 0x40, 0x18, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
+    0x41, 0x57, 0x48, 0x8D, 0x6C, 0x24, 0xB0, 0x48, 0x81, 0xEC, 0x50, 0x01,
+    0x00, 0x00
+};
+
+/* Selfcheck (host-testbar): Laenge == 38 (der 18-Byte-Prefix ist NICHT unique). */
+static int broadcastchat_sig_selfcheck(void)
+{
+    return sizeof(RBBRIDGE_BROADCASTCHAT_SIG) == 38;
+}
+
+/* Loest eine Fn ueber ihre AOB auf — nur bei genau EINEM Treffer. */
+static const unsigned char *resolve_unique_fn(const unsigned char *base,
+                                              size_t size,
+                                              const unsigned char *sig, size_t n)
+{
+    if (!base || !sig || !n)
+        return NULL;
+    if (sig_count_in_image(base, size, sig, n) != 1)
+        return NULL;
+    return scan_bytes(base, size, sig, n);
+}
+
+/* Byte lesen, nur aus committed+lesbarer Region (kein Crash). Eigener Helfer,
+ * weil safe_read_u8 erst weiter unten (natural_waves-Block) definiert ist und
+ * dieser Resolver-Block davor steht (host-testbar). */
+static int game_read_u8(const void *addr, unsigned char *out)
+{
+    MEMORY_BASIC_INFORMATION mi;
+    if (!addr || !out)
+        return 0;
+    if (!VirtualQuery(addr, &mi, sizeof(mi)))
+        return 0;
+    if (!is_readable_region(&mi))
+        return 0;
+    if ((uintptr_t)addr + 1 > (uintptr_t)mi.BaseAddress + mi.RegionSize)
+        return 0;
+    memcpy(out, addr, 1);
+    return 1;
+}
+
+/* Byte schreiben, nur in committed+schreibbarer Region (kein Crash). */
+static int game_write_u8(void *addr, unsigned char val)
+{
+    MEMORY_BASIC_INFORMATION mi;
+    if (!addr)
+        return 0;
+    if (!VirtualQuery(addr, &mi, sizeof(mi)))
+        return 0;
+    if (mi.State != MEM_COMMIT || (mi.Protect & PAGE_GUARD))
+        return 0;
+    switch (mi.Protect & 0xFF) {
+    case PAGE_READWRITE:
+    case PAGE_WRITECOPY:
+    case PAGE_EXECUTE_READWRITE:
+    case PAGE_EXECUTE_WRITECOPY:
+        break;
+    default:
+        return 0;
+    }
+    if ((uintptr_t)addr + 1 > (uintptr_t)mi.BaseAddress + mi.RegionSize)
+        return 0;
+    memcpy(addr, &val, 1);
+    return 1;
+}
+
+/* --- #880: Pause-Request-Bitfeld ----------------------------------------- */
+/* ServerGameplayState::UpdateWorldPauseState (Game-Thread) berechnet den
+ * Soll-Pause-Zustand u.a. aus dem Dword-Feld [this+0x35CC] (Bit 0x10); ruft
+ * dann selbst PauseGame/ResumeGame. Operationen setzen/loeschen dieses Bit. */
+#define RBBRIDGE_SGS_PAUSEBITS_OFF       0x35CCu
+#define RBBRIDGE_SGS_PAUSE_BIT           0x02u  /* "Pause gewuenscht" */
+#define RBBRIDGE_SGS_PAUSE_BIT0          0x01u
+#define RBBRIDGE_SGS_PAUSE_BIT10         0x10u
+#define RBBRIDGE_SGS_PAUSETIMER_OFF      0x35D0u /* Grace-Timer aktiv? */
+
+static int game_read_u32(const void *addr, uint32_t *out)
+{
+    MEMORY_BASIC_INFORMATION mi;
+    if (!addr || !out)
+        return 0;
+    if (!VirtualQuery(addr, &mi, sizeof(mi)))
+        return 0;
+    if (!is_readable_region(&mi))
+        return 0;
+    if ((uintptr_t)addr + 4 > (uintptr_t)mi.BaseAddress + mi.RegionSize)
+        return 0;
+    memcpy(out, addr, 4);
+    return 1;
+}
+
+static int game_write_u32(void *addr, uint32_t val)
+{
+    MEMORY_BASIC_INFORMATION mi;
+    if (!addr)
+        return 0;
+    if (!VirtualQuery(addr, &mi, sizeof(mi)))
+        return 0;
+    if (mi.State != MEM_COMMIT || (mi.Protect & PAGE_GUARD))
+        return 0;
+    switch (mi.Protect & 0xFF) {
+    case PAGE_READWRITE:
+    case PAGE_WRITECOPY:
+    case PAGE_EXECUTE_READWRITE:
+    case PAGE_EXECUTE_WRITECOPY:
+        break;
+    default:
+        return 0;
+    }
+    if ((uintptr_t)addr + 4 > (uintptr_t)mi.BaseAddress + mi.RegionSize)
+        return 0;
+    memcpy(addr, &val, 4);
+    return 1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -3623,10 +4066,8 @@ static int64_t read_resource_max(const unsigned char *base,
 /* Scannt den eigenen Adressraum (nur MEM_COMMIT + lesbar, kein PAGE_GUARD)
  * nach einem 8-Byte-alignierten QWORD == needle. Reine Leseoperation, kein
  * Aufruf; Rueckgabe = Fundstelle (erstes Vorkommen) oder NULL. */
-/* Blockgroesse (Byte) fuer das crash-sichere ReadProcessMemory-Kopieren
- * der Region in einen lokalen Stack-Puffer (klein gehalten, damit der
- * Pipe-Thread-Stack nicht gesprengt wird). */
-#define RBBRIDGE_SCAN_CHUNK (64u * 1024u)
+/* RBBRIDGE_SCAN_CHUNK ist oben (vor resolve_dom_node) definiert — beide
+ * Scanner (resolve_dom_node + scan_qword_instance) nutzen denselben Chunk. */
 
 static unsigned char *scan_qword_instance(uint64_t needle, const char *name)
 {
@@ -5157,6 +5598,331 @@ static RBBRIDGE_NOINLINE void dispatch_pause_dom(HANDLE hPipe, int pause)
               (unsigned long long)(uintptr_t)inst);
 }
 
+/* pause_game / resume_game (Write #880): echter Welt-/Server-Freeze nativ
+ * ueber die arglosen ServerGameplayState-Request-Overrides (kein DOM/exec/Lua).
+ *
+ * Drei Wege (`op`):
+ *   marshalled (Default) — Request wird hinterlegt und im GAME-Thread-Detour
+ *     (GameplayState::UpdateGameplayLogic) via PauseGame/ResumeGame ausgefuehrt
+ *     (thread-sicher, WIRKSAM).
+ *   flag    — nur [this+0x534] schreiben (thread-sicher, aber ohne Wirkung:
+ *     der Handler macht die Arbeit — live belegt).
+ *   call    — direkter Aufruf vom PIPE-Thread (crasht: falscher Thread) —
+ *     nur fuer den A/B-Nachweis.
+ *
+ * Events:
+ *   {"event":"pause_game_result","ok":true,"paused":true,"via":"marshalled",
+ *    "consumed":true,"flag":1}
+ *   {"event":"..._result","ok":false,"reason":
+ *    "no_module"|"signature_not_found"|"instance_not_found"|"hook_not_installable"}
+ */
+/* --- Pending-Zustand + OnUpdate-Detour (Game-Thread) ---------------------- */
+typedef void (__fastcall *gameplay_updlogic_fn_t)(
+    void *self, float a, float b, unsigned long long c,
+    unsigned long long d);
+
+static void *g_gameplay_updlogic_orig = NULL; /* Trampolin */
+static void *g_gameplay_updlogic_target = NULL;
+static int g_game_pause_hook_installed = 0;
+static volatile LONG g_game_req = 0;        /* 0 keins, 1 Pause, 2 Resume */
+static volatile LONG g_game_req_done = 0;   /* 1 = vom Game-Thread ausgefuehrt */
+static volatile LONG g_game_last_flag = -1; /* Readback [this+0x534] */
+static volatile LONG g_game_want = -1;  /* Operator-Override: -1 auto, 0 run, 1 pause */
+/* #934: anstehende Server-Chat-Nachricht (im Game-Thread-Hook gesendet). */
+static volatile LONG g_chat_out_pending = 0;
+static volatile LONG g_chat_out_done = 0;
+static char g_chat_out_text[256];
+static volatile LONG g_chat_out_type = 8; /* ChatMessageType: 2=SYSTEM, 4=ANNOUNCEMENT, 8=MESSAGE */
+static const unsigned char *g_chat_broadcast_fn = NULL;
+typedef void (__fastcall *broadcastchat_fn_t)(void *sessions, void *ack,
+                                              int transfer, void *conn);
+static const unsigned char *g_game_base = NULL;
+static const unsigned char *g_game_pausegame_fn = NULL;  /* GameplayState::PauseGame */
+static const unsigned char *g_game_resumegame_fn = NULL; /* GameplayState::ResumeGame */
+
+typedef void (__fastcall *game_pausegame_fn_t)(void *self, void *reason,
+                                               unsigned char b, int world_type);
+typedef void (__fastcall *game_resumegame_fn_t)(void *self);
+
+/* #934: baut die NetPlayerChatAck und broadcastet sie (GAME-Thread). */
+static void send_chat_now(void *state)
+{
+    unsigned char ack[RBBRIDGE_CHAT_ACK_SIZE];
+    void *sessions;
+
+    if (!state || !g_game_base || !g_chat_broadcast_fn)
+        return;
+    sessions = (unsigned char *)state + RBBRIDGE_SGS_SESSIONS_OFF;
+    memset(ack, 0, sizeof(ack));
+    *(long long *)(ack + RBBRIDGE_CHAT_OFF_TIMESTAMP) = (long long)time(NULL);
+    *(unsigned int *)(ack + RBBRIDGE_CHAT_OFF_PLAYER) = RBBRIDGE_CHAT_PLAYER_SERVER;
+    /* Kosmetik/Dedup: vorhandene UtfString-Helper statt lokaler Ctor/Dtor-Calls. */
+    build_utfstring(g_game_base, g_chat_out_text,
+                    ack + RBBRIDGE_CHAT_OFF_MESSAGE);
+    ack[RBBRIDGE_CHAT_OFF_TYPE] = (unsigned char)g_chat_out_type;
+    ((broadcastchat_fn_t)(uintptr_t)g_chat_broadcast_fn)(
+        sessions, ack, RBBRIDGE_CHAT_TRANSFER_UNRELIABLE, NULL);
+    destroy_utfstring(g_game_base, ack + RBBRIDGE_CHAT_OFF_MESSAGE);
+    dbg("send_chat: broadcasted (%u B text)", (unsigned)strlen(g_chat_out_text));
+}
+
+/* Laeuft auf dem GAME-Thread. Fuehrt einen anstehenden Pause/Resume-Request
+ * hier aus (richtiger Thread) und ruft danach unveraendert das Original. */
+static void __fastcall gameplay_updlogic_hook(
+    void *self, float a, float b, unsigned long long c,
+    unsigned long long d)
+{
+    LONG want = InterlockedCompareExchange(&g_game_want, 0, 0);
+    if (want >= 0) {
+        unsigned char state = 0xFF;
+        unsigned char zero = 0;
+        uint32_t bits = 0;
+        /* Quell-Flags passend setzen + Grace-Timer aus, damit
+         * UpdateWorldPauseState denselben Soll-Zustand ableitet. */
+        if (game_read_u32((unsigned char *)self + RBBRIDGE_SGS_PAUSEBITS_OFF,
+                          &bits)) {
+            uint32_t nv = (want == 1)
+                ? (bits | RBBRIDGE_SGS_PAUSE_BIT)
+                : (bits & ~(RBBRIDGE_SGS_PAUSE_BIT |
+                            RBBRIDGE_SGS_PAUSE_BIT0 |
+                            RBBRIDGE_SGS_PAUSE_BIT10));
+            if (nv != bits)
+                game_write_u32(
+                    (unsigned char *)self + RBBRIDGE_SGS_PAUSEBITS_OFF, nv);
+        }
+        game_write_u8((unsigned char *)self + RBBRIDGE_SGS_PAUSETIMER_OFF, zero);
+        /* Nur bei Abweichung den echten Engine-Call machen. */
+        if (game_read_u8((unsigned char *)self + RBBRIDGE_SGS_PAUSEFLAG_OFF,
+                         &state)) {
+            if (want == 1 && state == 0 && g_game_pausegame_fn && g_game_base) {
+                ((game_pausegame_fn_t)(uintptr_t)g_game_pausegame_fn)(
+                    self,
+                    (void *)(uintptr_t)(g_game_base +
+                                        RBBRIDGE_RVA_PAUSE_REASON),
+                    (unsigned char)0, 3);
+            } else if (want == 0 && state != 0 && g_game_resumegame_fn) {
+                ((game_resumegame_fn_t)(uintptr_t)g_game_resumegame_fn)(self);
+            }
+        }
+        if (game_read_u8((unsigned char *)self + RBBRIDGE_SGS_PAUSEFLAG_OFF,
+                         &state))
+            InterlockedExchange(&g_game_last_flag, (LONG)state);
+        InterlockedExchange(&g_game_req_done, 1);
+    }
+    /* #934: anstehende Server-Chat-Nachricht hier (GAME-Thread) senden. */
+    if (InterlockedCompareExchange(&g_chat_out_pending, 0, 0)) {
+        send_chat_now(self);
+        InterlockedExchange(&g_chat_out_pending, 0);
+        InterlockedExchange(&g_chat_out_done, 1);
+    }
+    ((gameplay_updlogic_fn_t)g_gameplay_updlogic_orig)(self, a, b, c, d);
+}
+
+/* Trampolin + Prolog-Patch (Muster install_spawn_hook). Idempotent. */
+static int install_game_pause_hook(const unsigned char *base, size_t size)
+{
+    const unsigned char *target;
+    unsigned char *trampoline;
+    unsigned char patch[RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN];
+    uintptr_t hook_addr, back_addr;
+    DWORD old_protect = 0;
+    size_t i;
+
+    if (g_game_pause_hook_installed)
+        return 1;
+
+    target = resolve_gameplay_updlogic_fn(base, size);
+    if (!target) {
+        dbg("install_game_pause_hook: UpdateGameplayLogic-AOB fehlt/mehrdeutig");
+        return 0;
+    }
+    g_game_pausegame_fn = resolve_unique_fn(base, size, RBBRIDGE_PAUSEGAME_SIG,
+                                            sizeof(RBBRIDGE_PAUSEGAME_SIG));
+    g_game_resumegame_fn = resolve_unique_fn(base, size,
+                                             RBBRIDGE_RESUMEGAME_SIG,
+                                             sizeof(RBBRIDGE_RESUMEGAME_SIG));
+    /* #934-Review: der UpdLogic-Detour ist auch fuer send_chat zustaendig und
+     * braucht die Pause-/Resume-Sigs NICHT. Fehlen sie, ist das kein
+     * Installationsfehler; pause_game/resume_game melden dann selbst
+     * `no_pause_fn` (siehe dispatch_pause_game). */
+    if (!g_game_pausegame_fn || !g_game_resumegame_fn)
+        dbg("install_game_pause_hook: PauseGame/ResumeGame-AOB fehlt/mehrdeutig "
+            "-> pause_game/resume_game nicht verfuegbar");
+    g_game_base = base;
+
+    trampoline = (unsigned char *)VirtualAlloc(
+        NULL, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!trampoline) {
+        dbg("install_game_pause_hook: VirtualAlloc fehlgeschlagen");
+        return 0;
+    }
+    memcpy(trampoline, target, RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN);
+    trampoline[RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN + 0] = 0xFF;
+    trampoline[RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN + 1] = 0x25;
+    trampoline[RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN + 2] = 0x00;
+    trampoline[RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN + 3] = 0x00;
+    trampoline[RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN + 4] = 0x00;
+    trampoline[RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN + 5] = 0x00;
+    back_addr = (uintptr_t)(target + RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN);
+    memcpy(trampoline + RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN + 6, &back_addr,
+           sizeof(back_addr));
+
+    patch[0] = 0xFF;
+    patch[1] = 0x25;
+    patch[2] = 0x00;
+    patch[3] = 0x00;
+    patch[4] = 0x00;
+    patch[5] = 0x00;
+    hook_addr = (uintptr_t)&gameplay_updlogic_hook;
+    memcpy(patch + 6, &hook_addr, sizeof(hook_addr));
+    for (i = 14; i < RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN; i++)
+        patch[i] = 0x90;
+
+    if (!VirtualProtect((void *)target, RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN,
+                        PAGE_EXECUTE_READWRITE, &old_protect)) {
+        dbg("install_game_pause_hook: VirtualProtect fehlgeschlagen");
+        VirtualFree(trampoline, 0, MEM_RELEASE);
+        return 0;
+    }
+    g_gameplay_updlogic_orig = trampoline; /* VOR dem Patch setzen */
+    memcpy((void *)target, patch, RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN);
+    VirtualProtect((void *)target, RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN,
+                   old_protect, &old_protect);
+    FlushInstructionCache(GetCurrentProcess(), target,
+                          RBBRIDGE_GAMEPLAY_UPDLOGIC_PATCH_LEN);
+
+    g_gameplay_updlogic_target = (void *)target;
+    g_game_pause_hook_installed = 1;
+    dbg("install_game_pause_hook: installiert an %p (Trampolin %p)",
+        (const void *)target, (void *)trampoline);
+    return 1;
+}
+
+/* send_chat (#934): Text an ALLE verbundenen Spieler (Vanilla-Chat). Der
+ * Broadcast laeuft im GAME-Thread-Hook (Race bei Spieler-Join/-Leave).
+ * Braucht nur den UpdLogic-Detour (install_game_pause_hook), NICHT die
+ * Pause-/Resume-Sigs.
+ * Event: {"event":"send_chat_result","ok":true,"text":"..","sent":"true"|"pending"}
+ * bzw. ok:false mit reason no_module|hook_not_installable|no_broadcast_fn|invalid_text. */
+static RBBRIDGE_NOINLINE void dispatch_send_chat(HANDLE hPipe, const char *text,
+                                                  int type, const char *prefix)
+{
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    const char *via = NULL;
+    const unsigned char *execfn = NULL;
+    int i, done;
+
+    if (!text || !text[0]) {
+        send_line(hPipe, "{\"event\":\"send_chat_result\",\"ok\":false,"
+                         "\"reason\":\"invalid_text\"}");
+        return;
+    }
+    if (!resolve_module(&base, &size, &via, &execfn)) {
+        dbg("send_chat: Modul nicht aufloesbar");
+        send_line(hPipe, "{\"event\":\"send_chat_result\",\"ok\":false,"
+                         "\"reason\":\"no_module\"}");
+        return;
+    }
+    if (!install_game_pause_hook(base, size)) {
+        send_line(hPipe, "{\"event\":\"send_chat_result\",\"ok\":false,"
+                         "\"reason\":\"hook_not_installable\"}");
+        return;
+    }
+    if (!broadcastchat_sig_selfcheck() ||
+        (g_chat_broadcast_fn = resolve_unique_fn(base, size,
+            RBBRIDGE_BROADCASTCHAT_SIG, sizeof(RBBRIDGE_BROADCASTCHAT_SIG))) == NULL) {
+        send_line(hPipe, "{\"event\":\"send_chat_result\",\"ok\":false,"
+                         "\"reason\":\"no_broadcast_fn\"}");
+        return;
+    }
+    /* Text kopieren (NUL-terminiert; Rest nullt die fixe Puffergroesse). */
+    memset(g_chat_out_text, 0, sizeof(g_chat_out_text));
+    /* prefix (falls gesetzt) + text, NUL-terminiert, gekappt. */
+    snprintf(g_chat_out_text, sizeof(g_chat_out_text), "%s%s",
+             (prefix && prefix[0]) ? prefix : "", text);
+    InterlockedExchange(&g_chat_out_type, (LONG)type);
+    InterlockedExchange(&g_chat_out_done, 0);
+    InterlockedExchange(&g_chat_out_pending, 1);
+    for (i = 0; i < 300 && !g_chat_out_done; i++)
+        Sleep(10);
+    done = (int)g_chat_out_done;
+    dbg("send_chat: text='%s' done=%d", g_chat_out_text, done);
+    /* Review-Blocker: Text NIE roh einsetzen (Quote/Backslash -> invalides JSON,
+     * LF -> Pipe-Framing-Desync). Escaping im host-testbaren Builder (#549-Muster). */
+    {
+        char resp[768];
+        if (send_chat_build_result(text, done, resp, sizeof(resp)) > 0)
+            send_line(hPipe, "%s", resp);
+        else
+            send_line(hPipe, "{\"event\":\"send_chat_result\",\"ok\":false,"
+                             "\"reason\":\"encode_failed\"}");
+    }
+}
+
+static RBBRIDGE_NOINLINE void dispatch_pause_game(HANDLE hPipe, int pause,
+                                                  int auto_release)
+{
+    const char *ev = pause ? "pause_game_result" : "resume_game_result";
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    const char *via = NULL;
+    const unsigned char *execfn = NULL;
+    unsigned char rb = 0xFF;
+    int i, done;
+
+    if (auto_release) {
+        /* auto: Operator-Override aufheben (Engine steuert wieder selbst). */
+        InterlockedExchange(&g_game_want, -1);
+        dbg("pause_game: auto -> Override geloescht");
+        send_line(hPipe, "{\"event\":\"%s\",\"ok\":true,\"via\":\"auto\"}", ev);
+        return;
+    }
+    if (!resolve_module(&base, &size, &via, &execfn)) {
+        dbg("pause_game: Modul nicht aufloesbar");
+        send_line(hPipe,
+                  "{\"event\":\"%s\",\"ok\":false,\"reason\":\"no_module\"}", ev);
+        return;
+    }
+    if (!install_game_pause_hook(base, size)) {
+        dbg("pause_game: Hook nicht installierbar");
+        send_line(hPipe,
+                  "{\"event\":\"%s\",\"ok\":false,"
+                  "\"reason\":\"hook_not_installable\"}",
+                  ev);
+        return;
+    }
+    /* #934-Review: Pause/Resume-Sigs werden best-effort aufgeloest; fehlen sie,
+     * hier ehrlich melden statt still nichts zu tun. */
+    if (!g_game_pausegame_fn || !g_game_resumegame_fn) {
+        dbg("pause_game: PauseGame/ResumeGame nicht aufloesbar");
+        send_line(hPipe,
+                  "{\"event\":\"%s\",\"ok\":false,\"reason\":\"no_pause_fn\"}",
+                  ev);
+        return;
+    }
+    /* Persistenten Operator-Soll-Zustand setzen; der GAME-Thread-Hook setzt
+     * ihn jede Frame durch. Kurz warten (~3 s), dann Ist-Zustand (+0x534). */
+    InterlockedExchange(&g_game_req_done, 0);
+    InterlockedExchange(&g_game_last_flag, -1);
+    InterlockedExchange(&g_game_want, pause ? 1 : 0);
+    for (i = 0; i < 300 && !g_game_req_done; i++)
+        Sleep(10);
+    done = (int)g_game_req_done;
+    rb = (unsigned char)(g_game_last_flag < 0 ? 0 : g_game_last_flag);
+    dbg("pause_game: %s want=%d consumed=%d state=%d",
+        pause ? "pause" : "resume", pause ? 1 : 0, done, (int)rb);
+    send_line(hPipe,
+              "{\"event\":\"%s\",\"ok\":true,\"paused\":%s,"
+              "\"readback\":\"%s\",\"flag\":%d,\"want\":%d,"
+              "\"via\":\"marshalled\",\"consumed\":%s}",
+              ev,
+              done ? (rb ? "true" : "false") : (pause ? "true" : "false"),
+              done ? "ok" : "pending", done ? (int)rb : -1, pause ? 1 : 0,
+              done ? "true" : "false");
+}
+
+
 /* Gibt den Rueckgabe-Vektor frei - exakt die Semantik von
  * `Exor::Vector<uint32,StlAllocatorProxy<uint32>>::~Vector`
  * (Disasm RVA 0x26F340):
@@ -5357,19 +6123,15 @@ static void dispatch_get_state(HANDLE hPipe)
     snprintf(hq_field, sizeof(hq_field),
              "\"hq_hp\":null,\"hq_hp_max\":null,\"hq_dead\":null");
 
-    /* DOM-Suspend-Flag (Read #520): nativ aus dem dom_mananger-Node
-     * (LuaGraphNode::+0xF1) — unabhaengig vom Spieler-Account. Nicht
-     * aufloesbar -> null (graceful). */
-    char dom_field[8];
-    {
-        void *dn = resolve_dom_node(base);
-        unsigned char sb = 0;
-        if (dn && safe_read_u8((unsigned char *)dn +
-                               RBBRIDGE_LUAGRAPHNODE_SUSPENDED_OFF, &sb))
-            snprintf(dom_field, sizeof(dom_field), "%s", sb ? "true" : "false");
-        else
-            snprintf(dom_field, sizeof(dom_field), "null");
-    }
+    /* #436: KEIN `dom_paused`/`game_paused` mehr in get_state. Beide kamen aus
+     * vollen Adressraum-Scans (resolve_dom_node / resolve_sgs_instance) und
+     * crashten genau diesen Pfad: get_state laeuft 1 Hz (match-loop + Cockpit),
+     * resolve_dom_node las die Regionen mit rohen q[i]-Derefs -> ACCESS_VIOLATION
+     * beim Heap-Churn (Crash-Bundles dev+staging: FAULT resolve_dom_node <-
+     * dispatch_get_state). Beide Felder liest ausserdem niemand (kein Cockpit,
+     * kein Skript). `pause_want` ist der Operator-Override (Global, kein Scan). */
+    char want_field[8];
+    snprintf(want_field, sizeof(want_field), "%d", (int)g_game_want);
 
     /* Spielerzahl (Read #512, nativ C++): GetConnectedPlayers(World*).
      * Default `null` (nicht aufloesbar / keine Welt) - nur bei Erfolg eine
@@ -5422,15 +6184,14 @@ static void dispatch_get_state(HANDLE hPipe)
     if (!ps) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
                          "\"reason\":\"no_playerservice\","
-                         "\"dom_paused\":%s,"
                          "\"mission_flow\":\"%s\","
                          "\"mission_flow_active\":%s,"
                          "\"mission_flow_payload\":%s,"
                          "\"creatures_base_difficulty\":%s,"
-                         "\"end_game\":%s,\"players\":%s,%s}",
-                  dom_field, flow_esc, flow_active ? "true" : "false",
+                         "\"end_game\":%s,\"players\":%s,%s,\"pause_want\":%s}",
+                  flow_esc, flow_active ? "true" : "false",
                   payload_field, diff_field, end_field, players_field,
-                  hq_field);
+                  hq_field, want_field);
         return;
     }
 
@@ -5439,15 +6200,14 @@ static void dispatch_get_state(HANDLE hPipe)
     if (!world) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
                          "\"reason\":\"no_world\","
-                         "\"dom_paused\":%s,"
                          "\"mission_flow\":\"%s\","
                          "\"mission_flow_active\":%s,"
                          "\"mission_flow_payload\":%s,"
                          "\"creatures_base_difficulty\":%s,"
-                         "\"end_game\":%s,\"players\":%s,%s}",
-                  dom_field, flow_esc, flow_active ? "true" : "false",
+                         "\"end_game\":%s,\"players\":%s,%s,\"pause_want\":%s}",
+                  flow_esc, flow_active ? "true" : "false",
                   payload_field, diff_field, end_field, players_field,
-                  hq_field);
+                  hq_field, want_field);
         return;
     }
 
@@ -5457,15 +6217,14 @@ static void dispatch_get_state(HANDLE hPipe)
     if (!account) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
                          "\"reason\":\"no_account\","
-                         "\"dom_paused\":%s,"
                          "\"mission_flow\":\"%s\","
                          "\"mission_flow_active\":%s,"
                          "\"mission_flow_payload\":%s,"
                          "\"creatures_base_difficulty\":%s,"
-                         "\"end_game\":%s,\"players\":%s,%s}",
-                  dom_field, flow_esc, flow_active ? "true" : "false",
+                         "\"end_game\":%s,\"players\":%s,%s,\"pause_want\":%s}",
+                  flow_esc, flow_active ? "true" : "false",
                   payload_field, diff_field, end_field, players_field,
-                  hq_field);
+                  hq_field, want_field);
         return;
     }
 
@@ -5549,15 +6308,14 @@ static void dispatch_get_state(HANDLE hPipe)
               "{\"event\":\"get_state_result\",\"ok\":true,"
               "\"carbonium\":%llu,\"carbonium_max\":%lld,"
               "\"ironium\":%llu,\"ironium_max\":%lld,\"resources\":%s,"
-              "\"dom_paused\":%s,"
               "\"mission_flow\":\"%s\",\"mission_flow_active\":%s,"
               "\"mission_flow_payload\":%s,"
               "\"creatures_base_difficulty\":%s,"
-              "\"end_game\":%s,\"players\":%s,%s}",
+              "\"end_game\":%s,\"players\":%s,%s,\"pause_want\":%s}",
               (unsigned long long)carbonium, (long long)carbonium_max,
               (unsigned long long)ironium, (long long)ironium_max,
-              resources, dom_field, flow_esc, flow_active ? "true" : "false",
-              payload_field, diff_field, end_field, players_field, hq_field);
+              resources, flow_esc, flow_active ? "true" : "false",
+              payload_field, diff_field, end_field, players_field, hq_field, want_field);
 }
 
 
@@ -6078,6 +6836,18 @@ static void handle_line(HANDLE hPipe, const char *line)
         return;
     }
 
+    /* #392: pro Request GENAU EINE Logzeile vor dem Dispatch (auch ping/
+     * get_state/probe), damit ein Crash ohne Dump dem Kommando + Session
+     * zuordenbar ist. */
+    {
+        char sess[64];
+        char loglin[192];
+        if (!session_from_line(line, sess, sizeof(sess)))
+            snprintf(sess, sizeof(sess), "-");
+        if (req_log_format(cmd, sess, loglin, sizeof(loglin)) > 0)
+            dbg("%s", loglin);
+    }
+
     if (strcmp(cmd, "ping") == 0) {
         /* TODO(spaeter): ggf. "t" mitgeben, damit der Client Latenz messen
          * kann - v0 bewusst minimal. */
@@ -6218,6 +6988,38 @@ static void handle_line(HANDLE hPipe, const char *line)
         return;
     }
 
+    /* pause_game / resume_game (Write #880): echter Welt-/Server-Freeze nativ
+     * via ServerGameplayState::On{Pause,Resume}GameRequest (kein DOM/exec). */
+    if (strcmp(cmd, "send_chat") == 0) {
+        char text[256] = "";
+        char ty[16] = "system";
+        char prefix[64] = "";
+        int type = 2; /* Default SYSTEM: rendert ohne Spieler-Sender-Label */
+        json_get_string(line, "text", text, sizeof(text));
+        json_get_string(line, "type", ty, sizeof(ty));
+        json_get_string(line, "prefix", prefix, sizeof(prefix));
+        if (strcmp(ty, "message") == 0)
+            type = 8;
+        else if (strcmp(ty, "announcement") == 0)
+            type = 4;
+        else if (strcmp(ty, "system") == 0)
+            type = 2;
+        else
+            type = atoi(ty) ? atoi(ty) : 2;
+        dispatch_send_chat(hPipe, text, type, prefix);
+        return;
+    }
+
+    if (strcmp(cmd, "pause_game") == 0 || strcmp(cmd, "resume_game") == 0) {
+        char op[16] = "marshalled";
+        int auto_release = 0;
+        json_get_string(line, "op", op, sizeof(op));
+        if (strcmp(op, "auto") == 0)
+            auto_release = 1;
+        dispatch_pause_game(hPipe, cmd[0] == 'p', auto_release);
+        return;
+    }
+
     if (strcmp(cmd, "restart_map") == 0) {
         char op[32] = "status";
         json_get_string(line, "op", op, sizeof(op));
@@ -6319,12 +7121,16 @@ static int serve_client(HANDLE hPipe)
             char cline[600];
             for (;;) {
                 int got = 0;
+                uintptr_t conn = 0;
                 EnterCriticalSection(&g_chat_cs);
-                got = chat_queue_pop(&g_chat_q, raw, sizeof(raw));
+                got = chat_queue_pop_conn(&g_chat_q, raw, sizeof(raw), &conn);
                 LeaveCriticalSection(&g_chat_cs);
                 if (!got)
                     break;
-                if (chat_build_player_chat(raw, cline, sizeof(cline)) > 0)
+                /* #937/US2: conn_id = stabile Hash-ID (kein Rohzeiger ins
+                 * Wire-Protokoll); player bleibt -1 (RE offen, US2b). */
+                if (chat_build_player_chat(raw, conn_id_from_ptr(conn), -1,
+                                           cline, sizeof(cline)) > 0)
                     send_line(hPipe, "%s", cline);
             }
         }
@@ -6440,15 +7246,22 @@ static const unsigned char CHAT_HOOK_ORIG[12] = {
 static void capture_chat_text(const void *req)
 {
     char buf[256];
+    uintptr_t conn;
 
     if (req == NULL)
         return;
     memset(buf, 0, sizeof(buf));
     if (!utfstring_to_cstr((const unsigned char *)req, buf, sizeof(buf)))
         return;
+    /* #937/US2: das zweite Detour-Argument (rdx = NetConnection*) wurde vom
+     * naked-Detour in g_chat_conn geparkt. Wir tragen es als Roh-Zeiger in die
+     * Queue; der Wire-Emit hasht ihn (conn_id_from_ptr) -> kein Rohzeiger ins
+     * Protokoll. Live-Beweis des tatsaechlichen Werts ist offen (siehe
+     * progress; #549-Voraussetzung). */
+    conn = g_chat_conn;
     dbg("player_chat: %s", buf);
     EnterCriticalSection(&g_chat_cs);
-    chat_queue_push(&g_chat_q, buf);
+    chat_queue_push_conn(&g_chat_q, buf, conn);
     LeaveCriticalSection(&g_chat_cs);
 }
 
@@ -6588,11 +7401,16 @@ int rbbridge_start(void)
         g_file_log = 0;
     }
 
-    InitializeCriticalSection(&g_log_cs);
+    /* Critical-Section-/Queue-Init EINMALIG (#902/US3): ein Re-Start nach
+     * totem Thread (rbbridge_ensure_server) darf die Critical Sections NICHT
+     * erneut initialisieren (Leck/UB). */
+    if (InterlockedCompareExchange(&g_initialized, 1, 0) == 0) {
+        InitializeCriticalSection(&g_log_cs);
+        InitializeCriticalSection(&g_dbg_cs);
+        InitializeCriticalSection(&g_chat_cs);
+        chat_queue_init(&g_chat_q);
+    }
     g_stop = 0;
-
-    InitializeCriticalSection(&g_chat_cs);
-    chat_queue_init(&g_chat_q);
 
     dbg("rbbridge_start: ref=%s", RBBRIDGE_REF);
 
@@ -6607,8 +7425,46 @@ int rbbridge_start(void)
     dbg("rbbridge_start: CreateThread fehlgeschlagen (GLE=%lu)",
         GetLastError());
     InterlockedExchange(&g_thread_started, 0);
-    DeleteCriticalSection(&g_log_cs);
+    /* CS bleiben initialisiert (einmalig, s.o.) -> hier kein Delete. */
     return -1;
+}
+
+/*
+ * Issue #902/US3: Selbstheilung auf DLL-Seite.
+ * Prueft, ob der Pipe-Server-Thread noch lebt, und setzt ihn nach einem
+ * abgebrochenen Thread OHNE Re-Inject neu auf. Der Host-Watchdog ruft das
+ * ueber `injector.exe --call ... rbbridge_ensure_server` auf.
+ * Rueckgabe: 0 = Thread laeuft (No-op) bzw. erfolgreich neu gestartet;
+ *            -1 = Neustart fehlgeschlagen.
+ *
+ * WICHTIG: Export UNBEDINGT via __declspec(dllexport) - die DLL wird mit
+ * `-shared` und OHNE .def gebaut, daher findet GetProcAddress den Entry nur
+ * mit dieser Markierung.
+ */
+__declspec(dllexport) int rbbridge_ensure_server(void)
+{
+    if (!g_thread_started)
+        return rbbridge_start(); /* noch nie gestartet -> Erststart */
+
+    /* Thread tot, wenn Handle NULL ist oder der Thread beendet wurde.
+     * WaitForSingleObject(h, 0) erkennt ein Thread-Ende nur, solange der
+     * Handle im laufenden Betrieb offen bleibt (hier der Fall). */
+    if (g_thread == NULL ||
+        WaitForSingleObject(g_thread, 0) == WAIT_OBJECT_0) {
+        DWORD exit_code = 0;
+        if (g_thread) {
+            GetExitCodeThread(g_thread, &exit_code);
+            CloseHandle(g_thread);
+        }
+        dbg("rbbridge_ensure_server: toter Pipe-Server-Thread "
+            "(exit=%lu) -> Neustart", (unsigned long)exit_code);
+        g_thread = NULL;
+        InterlockedExchange(&g_thread_started, 0);
+        return rbbridge_start();
+    }
+
+    dbg("rbbridge_ensure_server: Thread lebt -> No-op");
+    return 0; /* Thread laeuft weiter */
 }
 
 /*
@@ -6644,6 +7500,7 @@ void rbbridge_stop(void)
         g_thread = NULL;
     }
     DeleteCriticalSection(&g_log_cs);
+    DeleteCriticalSection(&g_dbg_cs);
     InterlockedExchange(&g_thread_started, 0);
 }
 

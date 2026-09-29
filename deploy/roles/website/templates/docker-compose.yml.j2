@@ -16,6 +16,13 @@ services:
     image: "{{ rift_caddy_image }}"
     container_name: {{ rift_caddy_container }}
     restart: unless-stopped
+    # Container-Log begrenzen (Issue #301): json-file-Logs wachsen sonst
+    # unbegrenzt. Werte konfigurierbar (Rollen-Defaults).
+    logging:
+      driver: json-file
+      options:
+        max-size: "{{ rift_caddy_log_max_size }}"
+        max-file: "{{ rift_caddy_log_max_file }}"
     network_mode: host
     volumes:
       - "{{ rift_caddy_deploy_dir }}/Caddyfile:/etc/caddy/Caddyfile:ro"

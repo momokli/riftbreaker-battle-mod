@@ -1,0 +1,26 @@
+# Verwaltet von deploy/ role "parked-pool" (Jinja). NICHT manuell editieren.
+#
+# Warmserver-Dienst pro Env (Issue #928). Bindet ausschliesslich
+# {{ parked_pool_bind }}:{{ parked_pool_port }}; Bearer-Token PFLICHT (Env-Datei).
+[Unit]
+Description=RIFT BATTLE Parked-Pool-Dienst ({{ parked_pool_env }})
+After=network-online.target{{ ' docker.service' if parked_pool_require_docker_service | default(true) | bool else '' }}
+Wants=network-online.target
+{% if parked_pool_require_docker_service | default(true) | bool %}
+Requires=docker.service
+{% endif %}
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory={{ parked_pool_install_dir }}
+# Token + PROVISIONER_* aus 0600-Datei (nicht aus Environment=).
+EnvironmentFile={{ parked_pool_env_file }}
+ExecStart={{ parked_pool_python }} {{ parked_pool_bin }}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

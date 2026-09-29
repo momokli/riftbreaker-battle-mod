@@ -14,8 +14,10 @@ ENV INSTALL_DIR=/opt/riftbreaker \
 # procps für pgrep (HEALTHCHECK), iproute2 für `ss` im Port-Watch
 # (scripts/entrypoint.sh watch_server_port). Ohne iproute2 ist der
 # In-Container-Port-Check still (das Basis-Image bringt `ss` nicht mit).
+# curl (Issue #902/US5): das Basis-Image bringt KEIN curl/wget -> für den
+# HEALTHCHECK (Pipe-Status) und den host-seitigen Watchdog nachinstallieren.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends procps iproute2 \
+    && apt-get install -y --no-install-recommends procps iproute2 curl \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -s /bin/bash "${STEAM_USER}" \
     && mkdir -p "${INSTALL_DIR}"
@@ -39,7 +41,12 @@ WORKDIR /home/${STEAM_USER}
 
 EXPOSE 6321/tcp 6321/udp
 
-HEALTHCHECK --interval=15s --timeout=5s --start-period=120s --retries=5 \
-    CMD pgrep -f DedicatedServer.exe >/dev/null || exit 1
+# Healthcheck spiegelt den Pipe-Status (Issue #902/US5): nicht nur "Prozess
+# laeuft", sondern auch die Ingress-Bridge (HTTP 9001 -> Named-Pipe). Seit US1
+# liefert /health bei toter Pipe HTTP 503 -> curl -f schlaegt fehl -> unhealthy.
+# start-period 300s (statt 120s): Injection + Spielbereitschaft + Bridge-Start
+# koennen >180s brauchen -> kein Flapping in der Startphase.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=300s --retries=5 \
+    CMD pgrep -f DedicatedServer.exe >/dev/null && curl -fsS --max-time 4 http://127.0.0.1:9001/health >/dev/null
 
 ENTRYPOINT ["/scripts/docker-entrypoint.sh"]

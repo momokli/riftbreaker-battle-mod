@@ -764,29 +764,43 @@ int main(void)
         char out[600];
         size_t n;
 
-        n = chat_build_player_chat("hello", out, sizeof(out));
+        /* #937/US1: Identitaetsfelder. conn_id == 0 -> kein Feld (Bestands-
+         * format bitgleich, RUECKWAERTSKOMPATIBILITAET). */
+        n = chat_build_player_chat("hello", 0, -1, out, sizeof(out));
         check(n > 0 && strcmp(out,
               "{\"event\":\"player_chat\",\"text\":\"hello\"}") == 0,
-              "chat_build_player_chat: einfacher Text -> player_chat-Zeile");
+              "chat_build_player_chat: ohne conn_id -> Bestandsformat");
 
-        n = chat_build_player_chat("a\"b\\c", out, sizeof(out));
+        n = chat_build_player_chat("a\"b\\c", 0, -1, out, sizeof(out));
         check(n > 0 && strcmp(out,
               "{\"event\":\"player_chat\",\"text\":\"a\\\"b\\\\c\"}") == 0,
               "chat_build_player_chat: Quote/Backslash escaped");
 
         /* Tab (0x09) ist ein Steuerzeichen < 0x20 -> \u0009, NICHT roh. */
-        n = chat_build_player_chat("a\tb", out, sizeof(out));
+        n = chat_build_player_chat("a\tb", 0, -1, out, sizeof(out));
         check(n > 0 && strstr(out, "\\u0009") != NULL &&
                   strchr(out, '\t') == NULL,
               "chat_build_player_chat: Tab -> \\u0009 (kein Roh-Steuerzeichen)");
 
+        /* #937/US1: conn_id != 0 -> Zusatzfelder conn_id (hex) + player. */
+        n = chat_build_player_chat("hey", 0x1a2b3cULL, 0, out, sizeof(out));
+        check(n > 0 &&
+                  strstr(out, "\"conn_id\":\"1a2b3c\"") != NULL &&
+                  strstr(out, "\"player\":0") != NULL &&
+                  strstr(out, "\"event\":\"player_chat\"") != NULL,
+              "chat_build_player_chat: conn_id+player als Zusatzfelder");
+
+        n = chat_build_player_chat("hey", 0x1a2b3cULL, -1, out, sizeof(out));
+        check(n > 0 && strstr(out, "\"player\":-1") != NULL,
+              "chat_build_player_chat: player=-1 (unbekannt) darstellbar");
+
         /* Leerer Text -> 0 (kein leeres Event senden). */
-        check(chat_build_player_chat("", out, sizeof(out)) == 0,
+        check(chat_build_player_chat("", 0, -1, out, sizeof(out)) == 0,
               "chat_build_player_chat: leerer Text -> 0 (nichts senden)");
-        check(chat_build_player_chat(NULL, out, sizeof(out)) == 0,
+        check(chat_build_player_chat(NULL, 0, -1, out, sizeof(out)) == 0,
               "chat_build_player_chat: NULL -> 0 (kein Crash)");
         /* Puffer zu klein -> 0 (kein abgeschnittenes JSON). */
-        check(chat_build_player_chat("hello", out, 8) == 0,
+        check(chat_build_player_chat("hello", 0, -1, out, 8) == 0,
               "chat_build_player_chat: Puffer zu klein -> 0");
 
         /* json_escape_into direkt: < 0x20 -> \uXXXX. */
@@ -796,6 +810,82 @@ int main(void)
             check(strcmp(esc, "x\\u0001y") == 0,
                   "json_escape_into: 0x01 -> \\u0001");
         }
+    }
+
+    /* -------------------------------------------------------------- */
+    /* #934: send_chat_result-Response-Builder (Escaping)              */
+    /* -------------------------------------------------------------- */
+    /* sichert Blocker 1 dauerhaft ab: text darf NIE roh in die Zeile.
+     * Quote/Backslash -> invalides JSON, Steuerzeichen (LF/Tab) -> Pipe-
+     * Framing-Desync. Rein, ohne Spielprozess. */
+    {
+        char out[512];
+        size_t n;
+
+        n = send_chat_build_result("hello", 1, out, sizeof(out));
+        check(n > 0 && strcmp(out,
+              "{\"event\":\"send_chat_result\",\"ok\":true,"
+              "\"text\":\"hello\",\"sent\":\"true\"}") == 0,
+              "send_chat_build_result: einfacher Text -> send_chat_result-Zeile");
+
+        n = send_chat_build_result("hello", 0, out, sizeof(out));
+        check(n > 0 && strstr(out, "\"sent\":\"pending\"") != NULL,
+              "send_chat_build_result: done=0 -> sent=pending");
+
+        n = send_chat_build_result("a\"b\\c", 1, out, sizeof(out));
+        check(n > 0 && strstr(out, "\"text\":\"a\\\"b\\\\c\"") != NULL,
+              "send_chat_build_result: Quote/Backslash escaped");
+
+        /* LF (0x0a) muss als \u000a raus — sonst zerlegt es die Pipe-Zeile. */
+        n = send_chat_build_result("a\nb", 1, out, sizeof(out));
+        check(n > 0 && strstr(out, "\\u000a") != NULL &&
+                  strchr(out, '\n') == NULL,
+              "send_chat_build_result: LF -> \\u000a (kein Framing-Desync)");
+
+        /* Tab -> \u0009, kein Roh-Steuerzeichen. */
+        n = send_chat_build_result("a\tb", 1, out, sizeof(out));
+        check(n > 0 && strstr(out, "\\u0009") != NULL &&
+                  strchr(out, '\t') == NULL,
+              "send_chat_build_result: Tab -> \\u0009 (kein Roh-Steuerzeichen)");
+
+        /* Puffer zu klein -> 0 (kein abgeschnittenes/ungueltiges JSON). */
+        check(send_chat_build_result("hello", 1, out, 8) == 0,
+              "send_chat_build_result: Puffer zu klein -> 0");
+        check(send_chat_build_result(NULL, 1, out, sizeof(out)) > 0,
+              "send_chat_build_result: NULL -> leerer text (kein Crash)");
+    }
+
+    /* -------------------------------------------------------------- */
+    /* #392: Request-Logzeile (session-Trace) - reine Helfer           */
+    /* -------------------------------------------------------------- */
+    /* prueft session_from_line (session-Wert aus der Request-Zeile) und
+     * req_log_format (die EINE Zeile `req cmd=<name> session=<id>`), inkl.
+     * der graceful-Faelle (fehlend/NULL/zu kleiner Puffer). */
+    {
+        char s[64];
+        char lg[192];
+
+        check(session_from_line("{\"cmd\":\"get_state\",\"session\":\"20260923-204900\"}",
+                                s, sizeof(s)) == 1 &&
+              strcmp(s, "20260923-204900") == 0,
+              "session_from_line: session-Wert geparst (#392)");
+        check(session_from_line("{\"cmd\":\"ping\"}", s, sizeof(s)) == 0,
+              "session_from_line: ohne session -> 0 (#392)");
+        check(session_from_line(NULL, s, sizeof(s)) == 0,
+              "session_from_line: NULL -> 0 (kein Crash) (#392)");
+        check(session_from_line("{\"session\":\"\"}", s, sizeof(s)) == 0,
+              "session_from_line: leerer Wert -> 0 (#392)");
+        check(req_log_format("get_state", "20260923-204900", lg, sizeof(lg)) > 0 &&
+              strcmp(lg, "req cmd=get_state session=20260923-204900") == 0,
+              "req_log_format: cmd+session formatiert (#392)");
+        check(req_log_format("rollout", NULL, lg, sizeof(lg)) > 0 &&
+              strcmp(lg, "req cmd=rollout session=-") == 0,
+              "req_log_format: fehlende session -> '-' (#392)");
+        check(req_log_format(NULL, NULL, lg, sizeof(lg)) > 0 &&
+              strcmp(lg, "req cmd=- session=-") == 0,
+              "req_log_format: cmd/session NULL -> '-' (#392)");
+        check(req_log_format("x", "y", lg, 8) == 0,
+              "req_log_format: Puffer zu klein -> 0 (#392)");
     }
 
     /* -------------------------------------------------------------- */
@@ -845,6 +935,58 @@ int main(void)
         chat_queue_init(&q);
         check(chat_queue_push(&q, NULL) == 0, "chat_queue: push NULL -> 0");
         check(chat_queue_push(&q, "") == 0, "chat_queue: push leer -> 0");
+    }
+
+    /* -------------------------------------------------------------- */
+    /* #937/US2: conn_id_from_ptr + conn-tragende Chat-Queue           */
+    /* -------------------------------------------------------------- */
+    {
+        unsigned long long a, b;
+
+        /* (0 -> 0 = "unbekannt"; NIE ein Hash fuer p == 0). */
+        check(conn_id_from_ptr((uintptr_t)0) == 0,
+              "conn_id_from_ptr: 0 -> 0 (unbekannt)");
+
+        /* Stabil: gleicher Zeiger -> gleiche ID (kein Zufall/ASLR-Drift). */
+        check(conn_id_from_ptr(0x00007ff6aabbccddULL) ==
+                  conn_id_from_ptr(0x00007ff6aabbccddULL),
+              "conn_id_from_ptr: stabil (identischer Zeiger -> identische ID)");
+
+        /* Nie 0 fuer p != 0 und nie der Rohzeiger (48-Bit-Beschnitt). */
+        a = conn_id_from_ptr(0x00007ff6aabbccddULL);
+        b = conn_id_from_ptr(0x00007ff6aabbccdeULL);
+        check(a != 0, "conn_id_from_ptr: p!=0 -> ID != 0");
+        check(a != 0x00007ff6aabbccddULL && a < (1ULL << 48),
+              "conn_id_from_ptr: kein Rohzeiger (>2^48-Hash beschnitten)");
+        check(a != b, "conn_id_from_ptr: kollisionsarm (Nachbarp. != ID)");
+
+        /* Queue traegt die conn_id PARALLEL zum Text (FIFO-gekoppelt). */
+        {
+            chat_queue_t cq;
+            char head[256];
+            uintptr_t cid = 0;
+
+            chat_queue_init(&cq);
+            check(chat_queue_push_conn(&cq, "one", 0x11u) == 1,
+                  "chat_queue_conn: push 'one' mit conn 0x11");
+            check(chat_queue_push_conn(&cq, "two", 0x22u) == 1,
+                  "chat_queue_conn: push 'two' mit conn 0x22");
+            check(chat_queue_pop_conn(&cq, head, sizeof(head), &cid) == 1 &&
+                      strcmp(head, "one") == 0 && cid == 0x11u,
+                  "chat_queue_conn: pop liefert Text+conn des AELTESTEN");
+            check(chat_queue_pop_conn(&cq, head, sizeof(head), &cid) == 1 &&
+                      strcmp(head, "two") == 0 && cid == 0x22u,
+                  "chat_queue_conn: FIFO-Kopplung Text<->conn bleibt");
+            check(chat_queue_pop_conn(&cq, head, sizeof(head), &cid) == 0,
+                  "chat_queue_conn: nach Drain leer (pop 0)");
+
+            /* Alt-API (ohne conn) traegt conn 0 -> Bestandsverhalten. */
+            chat_queue_push(&cq, "plain");
+            cid = 0xdead;
+            check(chat_queue_pop_conn(&cq, head, sizeof(head), &cid) == 1 &&
+                      strcmp(head, "plain") == 0 && cid == 0,
+                  "chat_queue_conn: push ohne conn -> conn 0");
+        }
     }
 
     /* -------------------------------------------------------------- */
@@ -1079,6 +1221,18 @@ int main(void)
         /* Signatur-Selfcheck: Laenge/Ret-Opcode/Flag-Offset konsistent. */
         check(set_suspended_sig_selfcheck() == 1,
               "SetSuspended-Sig: Selfcheck gruen (+0xF1, 0xC3, Hash)");
+    }
+
+    {
+        /* #880: Selfcheck der UpdateGameplayLogic-Signatur (Game-Thread-Detour). */
+        check(gameplay_updlogic_sig_selfcheck() == 1,
+              "UpdLogic-Sig: Selfcheck gruen (36B-Prolog instruction-aligned)");
+    }
+
+    {
+        /* #934: Selfcheck der Broadcast-Chat-Signatur. */
+        check(broadcastchat_sig_selfcheck() == 1,
+              "BroadcastChat-Sig: Selfcheck gruen (38 B, unique im .text)");
     }
 
     /* resolve_set_suspended_fn: genau ein Treffer -> Adresse; zwei Treffer
@@ -1379,6 +1533,32 @@ int main(void)
         check(hq_health_from_calls((void *)1, (void *)2, NULL, hq_stub_get,
                                    hq_stub_getmax, &hp, &hpmax, &dead) == 0,
               "hq core: find_fn NULL -> 0 (graceful) (#730)");
+    }
+
+    /* #436: resolve_dom_node scannt jetzt crash-sicher per ReadProcessMemory
+     * (HOSTTEST: Shim) statt mit rohen q[i]-Derefs — der rohe Deref crashte
+     * `get_state` (ACCESS_VIOLATION beim Heap-Churn). Positiv + graceful. */
+    {
+        const uint32_t DOM_INST_OFF = 0x1A00; /* frei (PAT_OFF=0x1800) */
+        unsigned char *dimg = build_image(0, 0, 0, 0, 0);
+        ht_set_module(dimg, IMG_SIZE);
+
+        check(resolve_dom_node(dimg) == NULL,
+              "resolve_dom_node: kein Node -> NULL (graceful, #436)");
+        check(resolve_dom_node(NULL) == NULL,
+              "resolve_dom_node: base NULL -> NULL (#436)");
+
+        /* Synthetischer dom_mananger-Knoten: QWORD == base+VFTABLE_RVA an
+         * DOM_INST_OFF, Felder (+0x20 L, +0x28 ref, +0x30 typehash) gesetzt. */
+        wr64(dimg + DOM_INST_OFF,
+             (uint64_t)(uintptr_t)(dimg + RBBRIDGE_LUAGRAPHNODE_VFTABLE_RVA));
+        wr32(dimg + DOM_INST_OFF + RBBRIDGE_LUAGRAPHNODE_TYPEHASH_OFF,
+             rbbridge_fnv1a32(RBBRIDGE_DOM_SCRIPT));
+        wr64(dimg + DOM_INST_OFF + RBBRIDGE_LUAGRAPHNODE_L_OFF, 0x1234u);
+        wr32(dimg + DOM_INST_OFF + RBBRIDGE_LUAGRAPHNODE_REF_OFF, 1u);
+        check(resolve_dom_node(dimg) == (void *)(dimg + DOM_INST_OFF),
+              "resolve_dom_node: Node gefunden (RPM-Pfad, #436)");
+        free(dimg);
     }
 
     free(img);

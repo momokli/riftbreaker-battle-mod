@@ -123,13 +123,15 @@ Was Platten füllt, sind die **Rolling-CD-Images**:
 
 Aufräumen (prüfen, was reclaimable ist, dann gezielt entfernen) — läuft auf
 planet **automatisch** über die Rolle `host-hygiene` (wöchentlicher
-systemd-Timer, Issue #308; Details: `deploy/README.md`). Manuell nur zum
-Nachsehen / für einen Einmal-Lauf:
+systemd-Timer `rbmods-host-hygiene.timer`, Issue #308; Details:
+`deploy/README.md`). Manuell nur zum **Nachsehen** (read-only):
 
 ```bash
 docker system df -v                 # was belegt wie viel, was ist shared/unique
-docker image prune                  # dangling only — KEIN -a (Rollback-Stand!)
 ```
+
+Der eigentliche Prune ist ein **Operator-Schritt bzw. die Automatik** — nicht
+bei jedem Nachsehen von Hand tippen.
 
 ⚠️ **Nicht** `docker image prune -a`: `-a` entfernt alle Images ohne laufenden
 Container und damit auch den getaggten Rollback-Stand `rb-dedicated:<alte-sha>`.
@@ -137,13 +139,44 @@ Die Automatik nutzt bewusst nur `docker image prune` (dangling).
 
 ### Host-Hygiene (unabhängig vom Stack)
 
-Auf `planet` lagen zum Messzeitpunkt **`syslog*` 5,4 GB + Journal 4 GB** ohne
-Limit. Gehört auf jedem Host begrenzt, sonst frisst es genau den Platz, den
-die Image-Leitplanke gerade freigeräumt hat:
+> **Korrektur (Issue #313):** Frühere Fassungen dieses Dokuments behaupteten,
+> `syslog*`/Journal seien auf `planet` *unbegrenzt*. Das war eine Fehldiagnose:
+> **logrotate ist aktiv** (`/etc/logrotate.d/`, Rotation der `syslog*`-Dateien)
+> und **journald hat ein Cap** — `SystemMaxUse=` in
+> `/etc/systemd/journald.conf`. Beide Größen sind damit begrenzt; die 5,4 GB
+> `syslog*` + 4 GB Journal aus der Messung sind der *eingestellte* Umfang, kein
+> ungebremstes Wachstum. Nachprüfen (read-only):
+>
+> ```bash
+du -sh /var/log/syslog* /var/log/journal    # Ist-Größe
+grep -E '^\s*SystemMaxUse' /etc/systemd/journald.conf
+journalctl --disk-usage
+```
 
-- `logrotate` für `/var/log/syslog*`
-- `SystemMaxUse=` in `/etc/systemd/journald.conf` (z. B. `1G`), danach
-  `systemctl restart systemd-journald`
+**Die Docker-`json-file`-Container-Logs sind jetzt im Stack begrenzt.**
+Frühere Fassungen (bis #301) hielten fest, dass der Compose-Stack *kein*
+per-Container Log-Opting setzt und die `*-json.log` je Container unbegrenzt
+wachsen. Das ist mit **Issue #301** geschlossen: jedes Compose-Template des
+Repos (`riftbreaker-server`, `gns-relay`, `website`/rift-caddy) setzt für
+**jeden** Service einen json-file-Treiber mit Rotation —
+`logging: {driver: json-file, options: {max-size: '10m', max-file: '3'}}`.
+Die Werte sind konfigurierbar über die Rollen-Defaults bzw. `-e`:
+`riftbreaker_log_max_size`/`riftbreaker_log_max_file`,
+`gns_relay_log_max_size`/`gns_relay_log_max_file`,
+`rift_caddy_log_max_size`/`rift_caddy_log_max_file`.
+
+Ein globales `log-opts` in `daemon.json` ist damit **optional** — es würde
+zusätzlich Container außerhalb dieses Stacks (oder ad-hoc `docker run`)
+begrenzen, ist aber kein Stack-Default. Nachprüfen (read-only):
+
+```bash
+du -sh /var/lib/docker/containers/*/*-json.log | sort -h | tail
+docker inspect --format '{{.Name}} {{.HostConfig.LogConfig.Type}} {{.HostConfig.LogConfig.Config}}' $(docker ps -q)
+```
+
+> Hinweis: `journald`-/`logrotate`-Beschreibungen unten sind read-only
+> Nachseh-Befehle. Eine *Änderung* an `SystemMaxUse` oder `logrotate` ist ein
+> Host-Eingriff außerhalb dieses Repos.
 
 ---
 

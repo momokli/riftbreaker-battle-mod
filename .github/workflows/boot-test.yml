@@ -272,16 +272,32 @@ jobs:
         run: |
           set -euo pipefail
           C="riftbreaker-dedicated-test-${RBBATTLE_RUN_ID}"
-          # Wine/Xvfb brauchen einen Moment — erst nach 30 s prüfen.
-          sleep 30
-          STATUS="$(ssh planet "docker inspect -f '{{.State.Status}}' '${C}'")"
-          RESTARTING="$(ssh planet "docker inspect -f '{{.State.Restarting}}' '${C}'")"
-          echo "Test-Container: status=$STATUS restarting=$RESTARTING"
-          [ "$STATUS" = "running" ] || { echo "::error::Test-Container bootet nicht (status=$STATUS)."; exit 1; }
-          [ "$RESTARTING" = "false" ] || { echo "::error::Test-Container ist in einer Crash-Loop."; exit 1; }
-          curl --silent --show-error --fail --max-time 10 \
-            "http://127.0.0.1:${TOURNAMENT_PORT}/health" | grep -q '"ok":true'
-          echo "Boot-Test OK: Container läuft stabil, tournament-server healthy auf ${TOURNAMENT_PORT}."
+          # Issue #893: statt fixem sleep 30 aktiv pollen, bis Container stabil
+          # UND tournament-/health ok ist. Der harte Deckel bleibt der Job-timeout
+          # (timeout-minutes: 25); die eigene Frist hier bricht den Fehlerfall
+          # frueh und mit den letzten Logzeilen diagnostizierbar ab.
+          DEADLINE=$((SECONDS + 120))
+          INTERVAL=3
+          STATUS="?"; RESTARTING="?"; HEALTH="neu"
+          while :; do
+            STATUS="$(ssh planet "docker inspect -f '{{.State.Status}}' '${C}'" 2>/dev/null || echo missing)"
+            RESTARTING="$(ssh planet "docker inspect -f '{{.State.Restarting}}' '${C}'" 2>/dev/null || echo unknown)"
+            if [ "$STATUS" = "running" ] && [ "$RESTARTING" = "false" ] \
+               && curl --silent --fail --max-time 10 \
+                    "http://127.0.0.1:${TOURNAMENT_PORT}/health" | grep -q '"ok":true'; then
+              echo "Boot-Test OK nach ${SECONDS}s: Container laeuft stabil, tournament-server healthy auf ${TOURNAMENT_PORT}."
+              exit 0
+            fi
+            if [ "$SECONDS" -ge "$DEADLINE" ]; then
+              echo "Test-Container: status=$STATUS restarting=$RESTARTING"
+              echo "::error::Boot verifizieren: Container/tournament nicht healthy innerhalb ${SECONDS}s (status=$STATUS, restarting=$RESTARTING)."
+              echo "--- letzte Logzeilen des Test-Containers ---"
+              ssh planet "docker logs --tail 40 '${C}' 2>&1 || true"
+              exit 1
+            fi
+            echo "Warte auf Boot... status=$STATUS restarting=$RESTARTING (${SECONDS}s/${DEADLINE}s)"
+            sleep "$INTERVAL"
+          done
 
       - name: Core-IO-Gate (C1 Boot — Issue #289)
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'

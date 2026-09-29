@@ -7,6 +7,14 @@ services:
     image: "{{ riftbreaker_server_image }}"
     container_name: {{ riftbreaker_server_container }}
     restart: unless-stopped
+    # Container-Log begrenzen (Issue #301): json-file-Logs wachsen sonst
+    # unbegrenzt (/var/lib/docker/containers/*/*-json.log). Per-Service, weil
+    # das Log-Opting pro Container gilt. Werte konfigurierbar (Rollen-Defaults).
+    logging:
+      driver: json-file
+      options:
+        max-size: "{{ riftbreaker_log_max_size }}"
+        max-file: "{{ riftbreaker_log_max_file }}"
     init: true
     stdin_open: true
     # Container-Labels (Issue #483, US4): per `docker inspect` sichtbar, ohne
@@ -32,6 +40,16 @@ services:
       # seit Issue #307), der Container-Port bleibt 9001.
       RBB_BRIDGE_BIND: "0.0.0.0"
       RBB_BRIDGE_PORT: "{{ riftbreaker_bridge_container_port }}"
+    # Healthcheck spiegelt den Pipe-Status (Issue #902/US5): Compose UEBERSCHREIBT
+    # den Dockerfile-Healthcheck -> konsistent halten. pgrep UND /health (200 nur
+    # bei lebender Pipe, US1). Port in-Container = {{ riftbreaker_bridge_container_port }}
+    # (immer 9001). start_period grosszuegig (300s) gegen Flapping in der Startphase.
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f DedicatedServer.exe >/dev/null && curl -fsS --max-time 4 http://127.0.0.1:{{ riftbreaker_bridge_container_port }}/health >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      start_period: 300s
+      retries: 5
     ports:
 {% if riftbreaker_server_port_udp | default('') %}
       - "{{ riftbreaker_server_port_udp }}:6321/udp"
@@ -59,6 +77,11 @@ services:
     image: "{{ riftbreaker_sessions_image }}"
     container_name: {{ riftbreaker_sessions_container }}
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "{{ riftbreaker_log_max_size }}"
+        max-file: "{{ riftbreaker_log_max_file }}"
     depends_on:
       - {{ riftbreaker_server_container }}
     labels:
@@ -89,6 +112,11 @@ services:
     image: "{{ riftbreaker_send_tailer_image }}"
     container_name: {{ riftbreaker_send_tailer_container }}
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "{{ riftbreaker_log_max_size }}"
+        max-file: "{{ riftbreaker_log_max_file }}"
     depends_on:
       - {{ riftbreaker_server_container }}
     labels:
@@ -117,6 +145,11 @@ services:
     image: "{{ riftbreaker_match_loop_image }}"
     container_name: {{ riftbreaker_match_loop_container }}
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "{{ riftbreaker_log_max_size }}"
+        max-file: "{{ riftbreaker_log_max_file }}"
     depends_on:
       - {{ riftbreaker_server_container }}
     labels:
@@ -145,6 +178,11 @@ services:
     image: "{{ riftbreaker_attack_cycle_image }}"
     container_name: {{ riftbreaker_attack_cycle_container }}
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "{{ riftbreaker_log_max_size }}"
+        max-file: "{{ riftbreaker_log_max_file }}"
     depends_on:
       - {{ riftbreaker_server_container }}
     labels:
@@ -153,6 +191,11 @@ services:
     environment:
       RBB_ENV: "{{ rift_env }}"
       RBB_REF: "{{ rift_deploy_ref }}"
+    ports:
+      # Host-Publish fuer den Kapsel-Dienst (#931): der laeuft als systemd-Host-
+      # Dienst und ruft `POST /start` auf 127.0.0.1 (capsule_flow_cycle_url).
+      # Ohne diesen Publish ist der Control-Port nur im Compose-Netz erreichbar.
+      - "127.0.0.1:{{ riftbreaker_attack_cycle_port }}:{{ riftbreaker_attack_cycle_port }}"
     volumes:
       - "{{ riftbreaker_attack_cycle_script }}:/app/attack_cycle.py:ro"
     command:
@@ -169,6 +212,40 @@ services:
       - 0.0.0.0
       - --control-port
       - "{{ riftbreaker_attack_cycle_port }}"
+
+  # Chat-Announcer (Issue #940): eigener Sidecar, liest den Attack-Cycle-State
+  # (GET /status) und schickt ereignis-/schwellenbasiert Status-Zeilen in den
+  # In-Game-Chat (POST /send_chat an die Bridge). Kein 1-Hz-Spam, kein Host-Port.
+  {{ riftbreaker_chat_announcer_container }}:
+    image: "{{ riftbreaker_chat_announcer_image }}"
+    container_name: {{ riftbreaker_chat_announcer_container }}
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "{{ riftbreaker_log_max_size }}"
+        max-file: "{{ riftbreaker_log_max_file }}"
+    depends_on:
+      - {{ riftbreaker_server_container }}
+      - {{ riftbreaker_attack_cycle_container }}
+    labels:
+      RBB_ENV: "{{ rift_env }}"
+      RBB_REF: "{{ rift_deploy_ref }}"
+    environment:
+      RBB_ENV: "{{ rift_env }}"
+      RBB_REF: "{{ rift_deploy_ref }}"
+    volumes:
+      - "{{ riftbreaker_chat_announcer_script }}:/app/announcer.py:ro"
+    command:
+      - python3
+      - -u
+      - /app/announcer.py
+      - --attack-cycle-url
+      - "{{ riftbreaker_chat_announcer_attack_cycle_url }}"
+      - --bridge-url
+      - "{{ riftbreaker_chat_announcer_bridge_url }}"
+      - --interval
+      - "{{ riftbreaker_chat_announcer_interval }}"
 
 volumes:
   {{ riftbreaker_wine_volume }}:

@@ -552,6 +552,88 @@
                 width: 100%;
             }
 
+            /* Chat (#935): Verlauf + Eingabe */
+            .chat-messages {
+                flex: 1 1 auto;
+                width: 100%;
+                height: 100%;
+                overflow-y: auto;
+                padding: 6px 8px;
+                display: flex;
+                flex-direction: column;
+                gap: 3px;
+                font-size: 12px;
+            }
+            .chat-empty {
+                color: var(--dim);
+                font-size: 11px;
+            }
+            .chat-msg {
+                display: flex;
+                gap: 6px;
+                min-width: 0;
+            }
+            .chat-msg .chat-src {
+                flex: 0 0 auto;
+                width: 62px;
+                font-family: var(--font-mono);
+                font-size: 10px;
+                letter-spacing: 0.05em;
+                text-transform: uppercase;
+                color: var(--dim);
+            }
+            .chat-msg .chat-text {
+                min-width: 0;
+                overflow-wrap: anywhere;
+            }
+            .chat-msg.player .chat-src {
+                color: var(--accent);
+            }
+            .chat-msg.operator .chat-src {
+                color: var(--good);
+            }
+            .chat-msg.operator .chat-text {
+                color: var(--dim);
+            }
+
+            #chat_as {
+                flex: 0 0 auto;
+                width: 96px;
+                height: 25px;
+                border-radius: 3px;
+                border: 1px solid var(--line);
+                background: var(--base);
+                color: var(--text);
+                font-family: var(--font-mono);
+                font-size: 12px;
+                padding: 0 4px;
+            }
+            #chat_as:focus {
+                border-color: var(--accent);
+                box-shadow: 0 0 0 1px var(--accent);
+                outline: none;
+            }
+
+            /* Chat-Formatier-Hilfe (#935): kompakte Symbol-/Template-Buttons */
+            .chat-tools .chat-tool {
+                height: 24px;
+                min-width: 24px;
+                padding: 0 5px;
+                font-family: var(--font-mono);
+                font-size: 12px;
+                line-height: 1;
+                background: var(--base);
+                color: var(--dim);
+                border-color: var(--line);
+            }
+            .chat-tools .chat-tool:hover {
+                background: var(--btn-hover);
+                color: var(--text);
+            }
+            .chat-tools .chat-tool:active {
+                background: var(--btn-active);
+            }
+
             /* Group D: Status Bar */
             footer.status-bar {
                 flex: 0 0 24px;
@@ -748,6 +830,53 @@
                             </div>
                         </div>
                     </fieldset>
+
+                    <!-- B3. CHAT (#935): Spieler-Chat anzeigen + Server-Nachricht senden. -->
+                    <fieldset class="q-groupbox" id="panel-chat">
+                        <legend>Chat</legend>
+                        <div class="flow-container">
+                            <div class="log-scroll-area">
+                                <div id="chat_log" class="chat-messages" role="log" aria-live="polite" aria-label="Chat-Verlauf">
+                                    <span class="chat-empty">noch keine Nachrichten</span>
+                                </div>
+                            </div>
+                            <div class="flow-action-row">
+                                <input id="chat_as" class="mono" list="chat_senders" maxlength="24" value="Operator" placeholder="Absender" title="Absender frei waehlen: 'system' = ohne Prefix, sonst wird [Absender] vorangestellt" aria-label="Absender (frei waehlbar)" />
+                                <datalist id="chat_senders">
+                                    <option value="system"></option>
+                                    <option value="Operator"></option>
+                                    <option value="Server"></option>
+                                    <option value="Admin"></option>
+                                    <option value="Referee"></option>
+                                </datalist>
+                                <input id="chat_input" class="mono flow-grow" maxlength="200" placeholder="Nachricht an die Spieler ..." aria-label="Chat-Nachricht" />
+                                <button id="chat_send" class="btn-primary">send</button>
+                            </div>
+                            <div id="chat_tools" class="flow-action-row chat-tools" role="group" aria-label="Formatier-Hilfe">
+                                <span class="prop-label">insert</span>
+                                <button class="chat-tool" data-insert="▶ " title="Pfeil-Prefix" aria-label="Pfeil einfuegen">▶</button>
+                                <button class="chat-tool" data-insert="★ " title="Highlight" aria-label="Stern einfuegen">★</button>
+                                <button class="chat-tool" data-insert="● " title="Punkt" aria-label="Punkt einfuegen">●</button>
+                                <button class="chat-tool" data-insert="⚠ " title="Warnung" aria-label="Warnung einfuegen">⚠</button>
+                                <button class="chat-tool" data-insert="► " title="Pointer" aria-label="Pointer einfuegen">►</button>
+                                <button class="chat-tool" data-insert="─ " title="Linie" aria-label="Linie einfuegen">─</button>
+                                <button class="chat-tool" data-insert="• " title="Bullet" aria-label="Bullet einfuegen">•</button>
+                                <button class="chat-tool" data-insert="→ " title="Pfeil rechts" aria-label="Pfeil rechts einfuegen">→</button>
+                                <button class="chat-tool" data-insert="✓ " title="Haken" aria-label="Haken einfuegen">✓</button>
+                                <button class="chat-tool" data-insert="[!] " title="Achtung-Prefix" aria-label="Achtung-Prefix einfuegen">[!]</button>
+                                <button class="chat-tool" data-insert="» " title="Zitat/Absender" aria-label="Zitat-Prefix einfuegen">»</button>
+                                <button class="chat-tool" data-wrap="=== " data-wrapend=" ===" title="Titel einrahmen" aria-label="Titel einrahmen">=…=</button>
+                            </div>
+                            <div class="flow-note">
+                                Spieler-Chat aus dem Spiel erscheint hier; "send" schickt
+                                eine Server-Nachricht in den Spiel-Chat. Chat ist Klartext
+                                (kein HTML/Markup) — Formatierung nur ueber Symbole/Prefix.
+                                Absender frei waehlbar (Vorschlaege oder eigener Text):
+                                "system" = ohne Prefix, sonst wird [Absender] vorangestellt.
+                                Enter sendet, leerer Text wird nicht gesendet (#935).
+                            </div>
+                        </div>
+                    </fieldset>
                 </main>
 
                 <!-- Advanced / Low-Level: native + Lua-Debug-Panels (#832) -->
@@ -767,8 +896,8 @@
                                     <span id="mission_flow_active" class="prop-val">—</span>
                                 </div>
                                 <div class="flow-prop">
-                                    <span class="prop-label">dom paused</span>
-                                    <span id="dom_paused" class="prop-val">—</span>
+                                    <span class="prop-label">pause want</span>
+                                    <span id="pause_want" class="prop-val" title="Operator-Override: -1 auto, 0 run, 1 pause (#880)">—</span>
                                 </div>
                                 <div class="flow-prop">
                                     <span class="prop-label">payload.spawn_point</span>
@@ -824,6 +953,12 @@
                             <div class="flow-action-row">
                                 <button id="dom_pause" title="LuaGraphNode::SetSuspended(true) am dom_mananger-Node — eigener C++-Write, kein Lua/Console" aria-label="Pause the DOM (freeze game loop node)">pause dom</button>
                                 <button id="dom_resume" title="LuaGraphNode::SetSuspended(false) am dom_mananger-Node" aria-label="Resume the DOM">resume dom</button>
+                            </div>
+
+                            <!-- Row 4b: Act (echter Welt-Pause, #880) -->
+                            <div class="flow-action-row">
+                                <button id="game_pause" title="nativer Welt-Pause (PauseGame, Game-Thread-Marshalling) — #880" aria-label="Pause the running world">pause game</button>
+                                <button id="game_resume" title="nativer Welt-Resume (ResumeGame) — #880" aria-label="Resume the world">resume game</button>
                             </div>
                         </div>
                     </fieldset>
@@ -1012,6 +1147,13 @@
                     <button id="gc_ready" class="btn-secondary">ready</button>
                     <span id="gc_state" aria-live="polite">state: —</span>
                 </div>
+                <!-- Kapsel-Flow (Issue #931): additiv. Phase-Readout + Operator-
+                     Override `auto` (Bridge /pause_game {"op":"auto"}). Faellt auf
+                     "—" zurueck, wenn kein Kapsel-Dienst konfiguriert ist. -->
+                <div class="flow-action-row">
+                    <button id="gc_auto" class="btn-secondary" title="Operator-Override freigeben (Engine steuert wieder)">auto</button>
+                    <span id="gc_capsule" aria-live="polite">capsule: —</span>
+                </div>
             </section>
 
             <!-- G. STATUS BAR -->
@@ -1039,6 +1181,27 @@
                         body: body === undefined ? "{}" : JSON.stringify(body),
                     });
                     return res.json();
+                }
+
+                // Kapsel-First (Issue #931): versucht den Kapsel-Endpunkt und faellt
+                // auf die bestehende Bridge-Route zurueck, wenn der Kapsel-Dienst
+                // nicht erreichbar/konfiguriert ist (rein additiv, kein Handler
+                // entfernt). `fallback` liefert die Bridge-Antwort.
+                async function capsuleFirst(path, body, fallback) {
+                    try {
+                        var res = await fetch(path, {
+                            method: "POST",
+                            headers: { "content-type": "application/json" },
+                            body: JSON.stringify(body || {}),
+                        });
+                        if (res.ok) {
+                            var r = await res.json();
+                            if (r && r.ok) return r;
+                        }
+                    } catch (e) {
+                        // Kapsel nicht erreichbar -> Fallback.
+                    }
+                    return fallback ? fallback() : null;
                 }
 
                 function fmt(v) {
@@ -1087,12 +1250,10 @@
                             s.mission_flow_active === undefined
                                 ? "—"
                                 : String(s.mission_flow_active);
-                        $("dom_paused").textContent =
-                            s.dom_paused === undefined || s.dom_paused === null
+                        $("pause_want").textContent =
+                            s.pause_want === undefined || s.pause_want === null
                                 ? "—"
-                                : s.dom_paused
-                                  ? "yes"
-                                  : "no";
+                                : String(s.pause_want);
                         var mfp = s.mission_flow_payload;
                         $("mission_flow_spawn").textContent = mfp &&
                             mfp.spawn_point !== undefined
@@ -1424,9 +1585,6 @@
                                     action + ": written, readback failed";
                                 return;
                             }
-                            $("dom_paused").textContent = r.paused
-                                ? "yes"
-                                : "no";
                             $("out").textContent = "";
                         } else {
                             $("out").textContent = JSON.stringify(r);
@@ -1443,9 +1601,34 @@
                     domSuspend("resume_dom");
                 };
 
+                async function gamePause(action, body) {
+                    try {
+                        var r = await post(action, body || {});
+                        if (r && r.ok) {
+                            $("pause_want").textContent =
+                                r.want === undefined ? "—" : String(r.want);
+                            $("out").textContent = "";
+                        } else {
+                            $("out").textContent = JSON.stringify(r);
+                        }
+                    } catch (e) {
+                        $("out").textContent = "ERR " + e.message;
+                    }
+                }
+
+                $("game_pause").onclick = function () {
+                    gamePause("pause_game");
+                };
+                $("game_resume").onclick = function () {
+                    gamePause("resume_game");
+                };
                 async function endGame(result) {
                     try {
-                        var r = await post("end_game", { result: result });
+                        // Kapsel-First (#931): /capsule/finish recycelt + parkt;
+                        // Fallback = bisherige Bridge-Route end_game.
+                        var r = await capsuleFirst("/capsule/finish", { result: result }, function () {
+                            return post("end_game", { result: result });
+                        });
                         $("out").textContent = r && r.ok ? "" : JSON.stringify(r);
                         refreshAdvanced();
                     } catch (e) {
@@ -1742,6 +1925,149 @@
                 // Docker-Buttons + Status/Log-Polling werden lazy im Tab-Lifecycle
                 // unten verdrahtet (erst beim Oeffnen des Docker-Tabs).
 
+                // --- Chat (#935): Verlauf + Senden ---
+                var CHAT_MAX = 200;
+                function chatAppend(src, text, sender) {
+                    var log = $("chat_log");
+                    if (!log || !text) {
+                        return;
+                    }
+                    var empty = log.querySelector(".chat-empty");
+                    if (empty) {
+                        empty.remove();
+                    }
+                    var row = document.createElement("div");
+                    row.className = "chat-msg " + (src === "operator" ? "operator" : "player");
+                    var who = document.createElement("span");
+                    who.className = "chat-src";
+                    who.textContent = sender || (src === "operator" ? "operator" : "player");
+                    var body = document.createElement("span");
+                    body.className = "chat-text";
+                    body.textContent = text;
+                    row.appendChild(who);
+                    row.appendChild(body);
+                    log.appendChild(row);
+                    while (log.children.length > CHAT_MAX) {
+                        log.removeChild(log.firstChild);
+                    }
+                    log.scrollTop = log.scrollHeight;
+                }
+
+                // --- chat-sender (testable) ---
+                // Absender (#935): frei waehlbar. Leer oder "system" -> "" (clean);
+                // sonst der normalisierte Name. Klammern/Whitespace werden bereinigt,
+                // die Laenge auf 24 Zeichen begrenzt.
+                function chatSenderName(raw) {
+                    var name = String(raw == null ? "" : raw)
+                        .replace(/[\[\]]/g, " ")
+                        .replace(/\s+/g, " ")
+                        .trim();
+                    if (name.length > 24) {
+                        name = name.slice(0, 24).trim();
+                    }
+                    if (!name || name.toLowerCase() === "system") {
+                        return "";
+                    }
+                    return name;
+                }
+                // --- end chat-sender ---
+
+                async function chatSend() {
+                    var input = $("chat_input");
+                    var text = (input.value || "").trim();
+                    if (!text) {
+                        return;
+                    }
+                    var sender = chatSenderName($("chat_as") ? $("chat_as").value : "");
+                    var body = { text: text, type: "system" };
+                    if (sender) {
+                        body.prefix = "[" + sender + "] ";
+                    }
+                    var btn = $("chat_send");
+                    btn.disabled = true;
+                    try {
+                        var r = await post("/send_chat", body);
+                        if (r && r.ok) {
+                            input.value = "";
+                            var shown = r.text || text;
+                            if (body.prefix && shown.indexOf(body.prefix) !== 0) {
+                                shown = body.prefix + shown;
+                            }
+                            chatAppend("operator", shown, sender || "server");
+                            $("out").textContent = "chat gesendet";
+                        } else {
+                            $("out").textContent = "chat fehlgeschlagen: " + ((r && r.reason) || "unbekannt");
+                        }
+                    } catch (e) {
+                        $("out").textContent = "chat fehlgeschlagen: " + ((e && e.message) || "netzwerkfehler");
+                    } finally {
+                        btn.disabled = false;
+                    }
+                }
+
+                $("chat_send").onclick = chatSend;
+                $("chat_input").addEventListener("keydown", function (e) {
+                    if (e.key === "Enter") {
+                        e.preventDefault();
+                        chatSend();
+                    }
+                });
+
+                // --- Chat-Formatier-Hilfe (#935): Symbole/Templates an Cursor-Position ---
+                function insertAtCursor(input, text) {
+                    if (!input || !text) {
+                        return;
+                    }
+                    var value = input.value || "";
+                    var start = input.selectionStart == null ? value.length : input.selectionStart;
+                    var end = input.selectionEnd == null ? value.length : input.selectionEnd;
+                    var next = value.slice(0, start) + text + value.slice(end);
+                    if (input.maxLength > 0 && next.length > input.maxLength) {
+                        next = next.slice(0, input.maxLength);
+                    }
+                    input.value = next;
+                    var caret = Math.min(start + text.length, next.length);
+                    input.focus();
+                    input.setSelectionRange(caret, caret);
+                }
+
+                function wrapAtCursor(input, prefix, suffix) {
+                    if (!input) {
+                        return;
+                    }
+                    var value = input.value || "";
+                    var start = input.selectionStart == null ? value.length : input.selectionStart;
+                    var end = input.selectionEnd == null ? value.length : input.selectionEnd;
+                    var selected = value.slice(start, end);
+                    var next = value.slice(0, start) + prefix + selected + suffix + value.slice(end);
+                    if (input.maxLength > 0 && next.length > input.maxLength) {
+                        next = next.slice(0, input.maxLength);
+                    }
+                    input.value = next;
+                    var caret = selected
+                        ? start + prefix.length + selected.length + suffix.length
+                        : start + prefix.length;
+                    caret = Math.min(caret, next.length);
+                    input.focus();
+                    input.setSelectionRange(caret, caret);
+                }
+
+                var chatTools = $("chat_tools");
+                if (chatTools) {
+                    chatTools.addEventListener("click", function (e) {
+                        var btn = e.target.closest ? e.target.closest("button.chat-tool") : null;
+                        if (!btn) {
+                            return;
+                        }
+                        var input = $("chat_input");
+                        if (btn.dataset.wrap) {
+                            wrapAtCursor(input, btn.dataset.wrap, btn.dataset.wrapend || "");
+                        } else {
+                            insertAtCursor(input, btn.dataset.insert || "");
+                        }
+                    });
+                }
+
                 function initEvents() {
                     if (typeof EventSource === "undefined") {
                         return;
@@ -1766,6 +2092,7 @@
                             refresh();
                         } else if (d && d.event === "player_chat" && d.text) {
                             $("out").textContent = "chat: " + d.text;
+                            chatAppend("player", d.text);
                         }
                     };
                     es.onerror = function () {
@@ -2260,7 +2587,42 @@
                     gameConfigEditor.start().then(function () { $("gc_msg").textContent = "start gesendet"; }).catch(function (err) { $("gc_msg").textContent = "ERR " + err.message; });
                 };
                 $("gc_ready").onclick = function () {
-                    gameConfigEditor.setReady(true).then(function () { $("gc_msg").textContent = "ready gesendet"; }).catch(function (err) { $("gc_msg").textContent = "ERR " + err.message; });
+                    // Kapsel-First (#931): /capsule/ready = resume + Cycle-Start;
+                    // Fallback = bisheriges setReady(true).
+                    capsuleFirst("/capsule/ready", {}, null).then(function (r) {
+                        if (r && r.ok) {
+                            $("gc_msg").textContent = "ready gesendet";
+                            capsulePoll();
+                            return null;
+                        }
+                        return gameConfigEditor.setReady(true).then(function () { $("gc_msg").textContent = "ready gesendet"; });
+                    }).catch(function (err) { $("gc_msg").textContent = "ERR " + err.message; });
+                };
+
+                // Kapsel-Flow (Issue #931): Phase-Readout + `auto`. Rein additiv:
+                // bestehende Handler bleiben unveraendert; fehlt der Kapsel-Dienst
+                // (404/Fehler), bleibt der Readout "—" (kein Bruch des Cockpits).
+                async function capsulePoll() {
+                    try {
+                        var res = await fetch("/capsule/status");
+                        if (!res.ok) {
+                            $("gc_capsule").textContent = "capsule: —";
+                            return;
+                        }
+                        var s = await res.json();
+                        var parts = [s.phase || "—"];
+                        if (s.instance) parts.push(s.instance);
+                        if (s.cycle && s.cycle.state) parts.push("cycle:" + s.cycle.state);
+                        $("gc_capsule").textContent = "capsule: " + parts.join(" · ");
+                    } catch (e) {
+                        $("gc_capsule").textContent = "capsule: —";
+                    }
+                }
+                $("gc_auto").onclick = function () {
+                    post("/capsule/auto", {}).then(function (r) {
+                        $("gc_msg").textContent = r && r.ok ? "auto gesendet" : JSON.stringify(r);
+                        capsulePoll();
+                    }).catch(function (err) { $("gc_msg").textContent = "ERR " + err.message; });
                 };
 
                 function gcRefresh() {
@@ -2288,7 +2650,7 @@
 
                 var gcTimer = tabTimer();
                 registerTabLifecycle("tab_game_config", {
-                    start: function () { gcTimer.every(gcRefresh, 5000); },
+                    start: function () { gcTimer.every(gcRefresh, 5000); gcTimer.every(capsulePoll, 3000); },
                     stop: function () { gcTimer.stop(); },
                 });
 

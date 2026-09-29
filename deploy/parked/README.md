@@ -1,0 +1,418 @@
+# deploy/parked — Warm-Pool „Parked Solo" (Issue #909)
+
+Für **einen Spielwunsch** einen Dedicated-Server **vorab hochfahren** und ihn
+*geparkt* bereithalten: Container + Mod-Load + Bridge laufen bereits, die Welt
+ist angehalten. Der Handover an ein echtes Spiel ist dann nur noch
+`POST /resume_game` statt eines kompletten Cold-Boots.
+
+Nur Standardbibliothek, kein venv/pip. Nutzt den Provisioner aus
+[`../provisioner`](../provisioner) (Issue #908) für Start/Stop — **keine**
+Duplikation der Docker-Logik.
+
+## Parked-Zustandsdefinition
+
+| Zustand | Bedeutung | Welt-Fortschritt |
+|---|---|---|
+| `WARMING` | Container startet, noch nicht geparkt | (Boot) |
+| `PARKED` | läuft, `pause_game` aktiv | **nein** |
+| `CLAIMED` | an ein Spiel übergeben (Welt läuft nur bei `resume=True`) | ja (`resume=True`) / nein (`resume=False`) |
+| `RECYCLING` | nach Spielende: `round_reset` (bzw. `end_game`, s. u.) laufen | nein |
+| `STOPPED` | Container gestoppt bzw. entfernt | — |
+
+**Invariante „kein Weltfortschritt":** Zwischen `pause_game()` (Übergang →
+`PARKED`) und `resume_game()` (Übergang → `CLAIMED`) darf keine Spielzeit
+vergehen, kein Wellen-Tick laufen und kein Rundenzähler steigen. Jeder
+Zustandswechsel ist explizit und messbar.
+
+Übergänge:
+
+```
+WARMING --pause_game--> PARKED --resume_game--> CLAIMED
+CLAIMED --round_reset (+end_game bei result)--> RECYCLING --pause_game--> PARKED
+{*, PARKED} --stop--> STOPPED
+```
+
+**`claim(resume=False)` (#931):** Die Instanz wird übergeben (`CLAIMED`), die
+Welt bleibt aber **pausiert** (kein `resume_game`) — der Kapsel-Flow zeigt dem
+Spieler zuerst ein pausiertes Spiel; erst `ready` resumed. `CLAIMED` heißt damit
+„an ein Spiel übergeben"; ob die Welt läuft, sagt `claim(resume)` bzw. das
+`resumed`-Feld der Antwort. Default ist `resume=True` (bisheriges Verhalten).
+
+## API
+
+`ParkedPool(provisioner, bridge_factory=None, clock=time.monotonic, sleep=time.sleep)`
+
+| Methode | Zweck | Rückgabe |
+|---|---|---|
+| `warm_up(env=None, instance_id=None)` | Provisioner `start()` → `pause_game()` → `PARKED`. **Idempotent**: schon `PARKED` → kein zweiter Start. | `ParkedEntry` |
+| `claim(env=None, instance_id=None, resume=True)` | Health prüfen → `CLAIMED`. `resume=True` (Default): `resume_game()` + Handover messen. `resume=False` (#931): **kein** `resume_game`, Welt bleibt pausiert, `handover_seconds` ≈ 0. Endpoint (`gns_endpoint`) wird vorher **frisch** über `provisioner.status()` gelesen (Port wechselt bei Container-Neustart). | `{instance, env, bridge_url, gns_endpoint, state, resumed, handover_seconds}` |
+| `recycle(env=None, instance_id=None, keep_warm=True, result=None)` | `round_reset()` + `pause_game()` → wieder `PARKED`. `end_game(result)` **nur** wenn `result` (`win`/`lose`) mitgegeben ist: die Bridge verlangt ein Pflicht-`result`, `end_game(None)` ist immer `400 invalid_request`. Ohne Ergebnis ist `round_reset` + `pause_game` der gültige, weltunabhängige Pfad. `keep_warm=False` → `stop()` → `STOPPED`. | `ParkedEntry` |
+| `reap(max_park_seconds)` | Auslaufschutz: zu lange geparkte Instanzen sauber stoppen. | `list[ParkedEntry]` |
+| `status()` | Snapshot aller Einträge. | `list[dict]` |
+
+`ParkedEntry` trägt seit #929 zusätzlich `gns_endpoint` — den **GNS-UDP**-Host:Port
+der Instanz (`"127.0.0.1:32768"`) aus `ports["gns"]` des Provisioners. Er wird
+beim `warm_up` gespeichert, beim `claim` frisch gelesen, und bei `stop`/`reap`
+(Container weg) wieder `None`. `to_dict()`/`GET /status` und die `claim()`-Antwort
+enthalten das Feld. `bridge_url` bleibt die **HTTP-Bridge** (Steuerung);
+`gns_endpoint` ist das Relay-/`/solo`-Ziel.
+
+`BridgeClient(base_url, timeout=5.0, opener=None)` — dünner stdlib-HTTP-Client:
+`health_ok()` (`GET /health`), `pause_game()`, `resume_game()`, `round_reset()`,
+`end_game(result)`, `get_state()` — jeweils `POST <base>/<path>`, Antwort JSON.
+Über `bridge_factory` injizierbar.
+
+**Fehlerverhalten:** unbekannte/falsche Zustände, Bridge-Fehler und Timeouts
+brechen **laut** mit `ParkedError` ab — nie ein halber Zustand. Scheitert
+`pause_game` nach dem Start, wird die Instanz zurückgerollt und gestoppt.
+
+## Dienst `parked_service.py` (#928)
+
+Der **fehlende Dienst** ueber `ParkedPool` (#909): haelt N Instanzen warm
+(Zielzustand `PARKED`), bietet `claim()` als Anfrage-Schnittstelle an (fuer den
+Proxy-Claim #929), recycelt nach Rundenende, reapt periodisch (Auslaufschutz)
+und liefert Status/Health. Ein Dienst **pro Env** (systemd `rbmods-parked-<env>`)
+ueber die Ansible-Rolle [`../roles/parked-pool`](../roles/parked-pool).
+`main()` (argparse, `--check`, `SIGTERM`/`SIGINT` ⇒ sauberes `httpd.shutdown()`
++ Loop-Stop) startet einen `ThreadingHTTPServer` (Bind `127.0.0.1`).
+
+### HTTP-API
+
+Bind `127.0.0.1:$PARKED_PORT` (Default 8092). `PARKED_TOKEN` gesetzt ⇒ **jeder**
+Request braucht `Authorization: Bearer …` (sonst `401` + `WWW-Authenticate`).
+Antwort immer JSON; Fehlerformat `{"ok":false,"reason":…,"detail":…}`.
+
+| Methode | Pfad | Body | Antwort | Semantik |
+|---|---|---|---|---|
+| `GET` | `/health` | — | `200 {"ok":true,"env":…}` | Liveness des Dienstes (nicht der Instanzen). |
+| `GET` | `/status` | — | `200 {counters, entries}` | Zaehler + `pool.status()`-Snapshot. |
+| `POST` | `/claim` | `{"env"?,"instance_id"?,"resume"?}` | `200` / `400` / `409` / `503` | `pool.claim()`; ohne `instance_id` aelteste `PARKED` (FIFO). `resume` (#931) Default `true`; `resume=false` uebergibt die Instanz bei **pausierter** Welt, `resume` kein JSON-Boolean ⇒ `400`. Keine `PARKED` ⇒ `409 none_parked`; Bridge unhealthy ⇒ `503 bridge_unhealthy`. Antwort enthält `gns_endpoint` (#929) und `resumed`. |
+| `POST` | `/recycle` | `{"instance_id","keep_warm"?=true,"result"?}` | `200` / `400` / `409` | nach Rundenende wieder `PARKED`; `result` (`win`/`lose`) wird durchgereicht und löst `end_game(result)` aus (ohne `result` kein `end_game`); `keep_warm=false` ⇒ `stop()`; Nicht-`CLAIMED` ⇒ `409`; fehlendes `instance_id` oder `keep_warm` kein JSON-Boolean ⇒ `400`. |
+| `POST` | `/reap` | `{"max_park_seconds"?}` | `200 {stopped:[…]}` | manueller Auslaufschutz-Lauf. |
+| `POST` | `/reconcile` | `{}` | `200 {removed,evicted,kept,skipped_foreign}` / `503` | manueller Reconciliation-Lauf (#969): entfernt Orphans/Restart-Leaks der eigenen Env; Fehler im Lauf ⇒ `503 reconcile_failed`. |
+
+Unbekannte Route ⇒ `404 {"ok":false,"reason":"not_found"}`; falsche Methode
+auf bekannter Route ⇒ `405`.
+
+### Zaehler (`counters` in `/status`)
+
+Aus `pool.status()`: `parked`, `claimed`, `warming`, `recycling`, `stopped`,
+`total`. Laufzeit-Lifetime: `claims`, `recycles`, `reaps`, `warm_failures`,
+`orphans_removed` (#969), `handover_last_seconds`, `handover_avg_seconds`
+(rollierendes Fenster).
+**Invariante:** `parked+claimed+warming+recycling+stopped == total`.
+
+### Env-Konfiguration (`PARKED_*`)
+
+| Var | Default | Bedeutung |
+|---|---|---|
+| `PARKED_ENV` | `PROVISIONER_ENV`/`test` | Env-Namensraum |
+| `PARKED_BIND` | `127.0.0.1` | Bind-Adresse |
+| `PARKED_PORT` | `8092` | Port (Proxy #929 proxyt dorthin) |
+| `PARKED_POOL_SIZE` | `1` | N warme Instanzen |
+| `PARKED_MAX_PARK_SECONDS` | `900` | Reap-Auslaufschwelle |
+| `PARKED_REAP_INTERVAL` | `30` | Sekunden zwischen Maintain-Laeufen |
+| `PARKED_RECONCILE_INTERVAL` | `300` | Sekunden zwischen Reconciliation-Laeufen |
+| `PARKED_RECONCILE_ON_START` | `true` | einmaliger Reconcile **vor** dem ersten `_fill()` beim Start |
+| `PARKED_STATE_DIR` | `<PROVISIONER_BASE_DIR>/parked-state/<env>` | Verzeichnis fuer persistente Claim-Marker (#969 B1); ueberlebt einen Dienst-Restart |
+| `PARKED_INSTANCE_PREFIX` | `parked` | Praefix der `instance_id` |
+| `PARKED_TOKEN` | `` (leer) | Bearer-Token; nicht-leer ⇒ Pflicht |
+| `PARKED_LOG_LEVEL` | `INFO` | Logging |
+| `PROVISIONER_*` | — | an `provisioner.load_config()` durchgereicht (`PROVISIONER_IMAGE` Pflicht) |
+
+`PARKED_PORT`/`POOL_SIZE`/`MAX_PARK_SECONDS`/`REAP_INTERVAL`/`RECONCILE_INTERVAL`
+fail-closed validiert (Zahl > 0), `RECONCILE_ON_START` als Boolean
+(`1/true/yes/on`, `0/false/no/off`); Fehlkonfiguration ⇒ Start bricht ab
+(`ParkedConfigError`). Fehlendes `PROVISIONER_IMAGE` ⇒ ebenfalls laut
+(`build_provisioner`).
+
+### Dienst-DoD-Mapping (#928)
+
+| DoD (#928) | Umsetzung | Nachweis |
+|---|---|---|
+| Pool warm halten bis N | `ParkedController.maintain_once` (`_fill` bis `pool_size`) | `test_parked_service.ControllerFillTests` |
+| Claim als Anfrage-Schnittstelle | `POST /claim` (FIFO aelteste `PARKED`), `handover_seconds` | `HttpTests.test_claim_ok_with_handover` |
+| Recycle nach Rundenende → wieder `PARKED` | `POST /recycle` (`keep_warm`) | `HttpTests.test_recycle_returns_to_parked` |
+
+### Reconciliation / Orphan-Cleanup (#969)
+
+Beim (Neu-)Start kann ein Dienst-`Restart` **verwaiste Container** der eigenen Env
+hinterlassen (der Warm-Pool trackt sie nach einem Neustart nicht mehr).
+`ParkedPool.reconcile()` gleicht den echten Docker-Zustand gegen das Tracking ab.
+
+**Discovery.** `provisioner.list_instances(env=<own_env>)` liefert alle Container
+mit Label `rb.provisioner.env == own_env` als
+`{container, env, instance, status, running, started_at}`. Sidecars tragen dieselben
+Labels; sie werden bei der Auswertung je `(env, instance)` **gruppiert**.
+
+**Orphan-Regeln** (nur innerhalb der EIGENEN Env):
+
+1. `(env, instance)` ist **nicht** getrackt → Orphan (Restart-Leak) → `stop()`.
+2. Getrackt, aber `State.Status` ist **nicht** `running` (Created-Zombie / Exited /
+   Dead), obwohl der Eintrag `PARKED`/`CLAIMED`/`WARMING` behauptet → stale Eintrag
+   **evicten** + Container entfernen.
+3. Getrackter `STOPPED`-Eintrag, Container existiert noch → Orphan → entfernen.
+4. Getrackte `PARKED`/`CLAIMED`/`RECYCLING` mit **laufendem** Container → behalten.
+5. Getrackter Eintrag **ohne** Container (Crash) → evicten, **kein** `stop`.
+
+Entfernt wird per vollem `provisioner.stop(instance_id, env)` (Container + Sidecars +
+Netz + Volumes + Pfade). Die **Bridge wird nie beruehrt** (kein `pause_game`/
+`resume_game`). Fremde Envs (`!= own_env`) werden **nie** angefasst. Der Zaehler
+`skipped_foreign` ist dabei reine Defense-in-Depth-Beobachtbarkeit: sowohl
+`list_instances` als auch der Fallback filtern fremde Container bereits
+serverseitig per Label `rb.provisioner.env=<env>`, im Produktionspfad ist er
+daher praktisch immer `0`. Ueberfaellige getrackte `PARKED`-Instanzen bleiben
+Sache von `reap` (kennt `parked_since`).
+
+Zur **Reverse-Luecke** (Regel 3 vs. Regel 5): ein getrackter `STOPPED`-Eintrag,
+dessen Container noch existiert, ist ein Orphan und wird entfernt (Regel 3).
+Existiert der Container dagegen **nicht** mehr (z. B. nach `recycle keep_warm=false`
+oder nach einem Container-Verlust), evictet Reconcile den Eintrag ohne `stop`
+(Regel 5) — der Eintrag verschwindet dann aus dem `stopped`-Tracking. Beides ist
+konsistent: Regel 3 raeumt echte Container, Regel 5 nur toten Tracking-State.
+
+#### Persistente Claim-Marker (B1 — kein Verlust eines laufenden Spiels)
+
+Nach einem Dienst-Restart ist der In-Memory-Tracking-State weg. Ohne weitere
+Absicherung wuerde Reconcile einen **laufenden, geclaimten** Container als
+nicht-getrackt einstufen und per `stop` (inkl. Volumes/Pfade) zerstoeren. Deshalb
+schreibt `claim()` einen **persistenten Marker** `claimed-<env>-<instance>` in
+`PARKED_STATE_DIR` (JSON mit `env`/`instance`/`claimed_at`; atomar via
+`temp`+`os.replace`; Name auf `[A-Za-z0-9_.-]` bereinigt).
+
+* `reconcile()` **ueberspringt** Marker-Instanzen (`kept`), egal ob discoveryt
+  oder getrackt — kein `stop`, kein `evict`, auch nicht ueber die Reverse-Luecke.
+  Ein geclaimtes Spiel ueberlebt so jeden Restart.
+* Marker werden bei `recycle()` (warm **und** kalt), `reap()` und jedem
+  erfolgreichen `warm_up()`/`stop` entfernt. Nur `claim()` setzt sie.
+* `_fill()` ueberspringt geclaimte IDs (`ParkedPool.claimed_instances`), damit
+  eine frische Instanz keinen laufenden Container namenskollidierend uebernimmt.
+* Container, die **vor** diesem Feature entstanden (kein Marker), bleiben
+  normale Orphans und werden entfernt — der Leak-Fix aus #969 bleibt wirksam.
+
+#### Discovery-Ausfall bricht ab (B2 — kein Re-Leak)
+
+`provisioner.list_instances()` meldet ein fehlgeschlagenes `docker ps` **laut**
+(`DockerError`, keine leere Liste). `reconcile()` faengt das ab, setzt
+`discovery_failed=True` und **bricht ohne Eviction ab**: die Reverse-Luecke wird
+**nicht** angewandt, getrackte Eintraege bleiben. `ParkedController.maintain_once`
+ueberspringt in diesem Fall `_fill()` (sonst wuerde ein falscher Leerzustand
+neue Container starten, waehrend die alten weiterlaufen = genau der Bug aus #969).
+
+`reconcile()` ist **idempotent** (reines Mengendifferenzieren; zweiter Lauf findet
+nichts) und **fehlertolerant**: ein `stop`-Fehler bei einem Orphan bricht die
+Schleife nicht ab (aggregiert in `errors`, die uebrigen werden trotzdem entfernt).
+Rueckgabe `{removed, evicted, zombies, kept, skipped_foreign, discovery_failed,
+	errors}`.
+
+**Ablauf im Dienst:** `PARKED_RECONCILE_ON_START=true` ⇒ ein synchroner
+`reconcile()` **vor** dem Thread-Start (und vor dem ersten `_fill()`); danach
+periodisch alle `PARKED_RECONCILE_INTERVAL` Sekunden, jeweils **vor** `_fill()`
+und `_reap()`. Entfernte Orphans werden in `orphans_removed` gezaehlt und in
+`GET /status` (`counters`) sichtbar.
+
+| DoD (#969) | Umsetzung | Nachweis |
+|---|---|---|
+| Restart-Leak / Orphan entfernen | `ParkedPool.reconcile()` (Discovery − Tracking) | `test_parked_pool.ReconcileTests` |
+| Created-Zombie entfernen + evicten | Regel 2 (`evicted` + `stop`) | `test_parked_pool.ReconcileTests.test_created_zombie_is_evicted_and_removed` |
+| Idempotent | zweiter Lauf ohne Effekt | `ReconcileTests.test_second_run_is_noop` |
+| `stop`-Fehler isoliert | aggregierte `errors`, Rest entfernt | `ReconcileTests.test_stop_error_isolated_others_removed` |
+| Fremde Env nie anfassen | `skipped_foreign`, kein Cross-Env-`stop` | `ReconcileTests.test_foreign_env_never_touched` |
+| Bridge unberuehrt | kein `pause_game`/`resume_game` im Reconcile | `ReconcileTests.test_reconcile_never_touches_bridge` |
+| Laufendes geclaimtes Spiel ueberlebt Restart (B1) | persistenter Claim-Marker, Reconcile-Skip | `ReconcileTests.test_restart_during_claimed_keeps_container`, `test_parked_service_integration.RestartLeakE2ETests.test_restart_during_claimed_keeps_running_game` |
+| Discovery-Ausfall evictet nicht (B2) | `list_instances` laut + `discovery_failed`-Abort | `ReconcileTests.test_discovery_failure_does_not_evict`, `ControllerReconcileTests.test_discovery_failure_does_not_evict_or_fill`, `test_provisioner.ListInstancesTestCase.test_ps_failure_raises_docker_error` |
+| Start-Reconcile vor `_fill()` | `reconcile_on_start` in `start()` | `test_parked_service.ControllerReconcileTests.test_start_reconciles_before_fill` |
+| Periodisch + Observability | `reconcile_interval`, `orphans_removed`, `POST /reconcile` | `ControllerReconcileTests`, `HttpTests.test_reconcile_endpoint_removes_orphan` |
+| Periodischer Reap / Auslaufschutz | `reap_due()` + `_reap()`, `POST /reap` | `ControllerReapTests`, `HttpTests.test_reap_endpoint` |
+| Status/Health-Endpoint (PARKED/CLAIMED-Zaehler) | `GET /status`/`GET /health` + Invariante | `HttpTests.test_status_has_counters_and_entries` |
+| Bearer-Auth fail-closed | `401` + `WWW-Authenticate` wenn Token gesetzt; Rolle erzwingt Token | `AuthTests`, Rolle `parked-pool` |
+| Kein Weltfortschritt im PARKED | `pause_game` beim Parken (Pool #909) | `test_parked_pool.WorldProgressInvariantTests` |
+
+### Live-Nachweis (#928)
+
+[`evidence/928-live-2026-09-24.txt`](evidence/928-live-2026-09-24.txt):
+**REAL** belegt — Dienst-Treiber gegen den echten Provisioner/Image: warm
+(cold boot + `pause_game`) ⇒ `PARKED`, `claim` (health + `resume_game`,
+`handover_seconds` gemessen), Bridge healthy, restfreies `stop` (kein Leak).
+**REAL belegt (mit Fix, ohne Shim)** — `recycle` → `PARKED` ueber 2 Zyklen
+(Nachtrag C mit Fix-Shim, **Nachtrag E OHNE Shim** am echten Produktcode in der
+Evidenz): `recycle` ruft `end_game` nur bei mitgegebenem `result`; ohne Ergebnis
+ist `round_reset` + `pause_game` der gueltige, weltunabhaengige Pfad (live:
+`live928_cycle_real.py` → warm→claim→recycle→PARKED x2, rounds=2, handover
+cycle2 0.23 s, kein HTTP-400, leakfrei). Der zuvor
+beobachtete `400 invalid_request` (`end_game(None)`) war eine
+Vertragsverletzung im Client (`parked_pool.py`), kein Dienst-Bug. Der
+verbleibende Aspekt (`end_game` MIT `result` haengt ohne Welt) ist ein
+Umgebungs-Blocker (planet ohne reale Welt, vgl. #919), kein Produktfehler.
+
+## Parked VS (#910)
+
+Zusätzlich zum Solo-Warm-Pool (`ParkedPool`, #909) gibt es `ParkedVSPool`
+(`parked_vs.py`): **ein** geparkter Server für **zwei** Spieler. Er komponiert
+`ParkedPool` (kein Docker-/HTTP-Code dupliziert) und setzt ein **Ready-Gate**
+zwischen Beitritt und Handover. Die Welt läuft erst, wenn **beide** beigetreten
+**und** beide `ready` sind — bis dahin bleibt der `ParkedEntry` in `PARKED`
+(kein Weltfortschritt). Kein A/B-Split (das ist #875, out of scope).
+
+### VS-Zustandsmaschine
+
+| Zustand | Bedeutung |
+|---|---|
+| `WAITING_OPPONENT` | weniger als `required_players` (Default 2) beigetreten |
+| `WAITING_BOTH_READY` | alle beigetreten, aber nicht alle `ready` |
+| `CLAIMED` | Handover (`resume_game`) erfolgt |
+| `RECYCLING` | `end_game`/`round_reset` laufen |
+| `STOPPED` | Container gestoppt |
+
+```
+(warm_up) --> WAITING_OPPONENT
+WAITING_OPPONENT   --join(<2)-------------> WAITING_OPPONENT
+WAITING_OPPONENT   --join(2.)-------------> WAITING_BOTH_READY
+WAITING_BOTH_READY --ready(nicht alle)----> WAITING_BOTH_READY
+WAITING_BOTH_READY --ready(alle)--> [pool.claim()/resume_game] --> CLAIMED
+CLAIMED --recycle(keep_warm=True)--> RECYCLING --> WAITING_OPPONENT
+CLAIMED --recycle(keep_warm=False)---------------> STOPPED
+```
+
+**Gate-Invariante:** `pool.claim()` (= `resume_game`) wird **ausschließlich**
+ausgelöst, wenn `len(players) == required_players` **und**
+`len(ready) == required_players`. Das ist red-before-green getestet (ein
+absichtlich zu frühes Gate lässt den Test fehlschlagen).
+
+### API `ParkedVSPool`
+
+`ParkedVSPool(provisioner, pool=None, bridge_factory=None, clock=time.monotonic, sleep=time.sleep, required_players=2)`
+
+| Methode | Zweck | Rückgabe |
+|---|---|---|
+| `warm_up(env=None, instance_id=None)` | Instanz parken (delegiert an `ParkedPool.warm_up`); **idempotent** | `VSSession` |
+| `join(player, env=None, instance_id=None)` | Spieler beitritt; bis 2 beigetreten bleibt `WAITING_OPPONENT` | `VSSession` |
+| `ready(player, env=None, instance_id=None)` | Ready-Flag; Gate: bei beiden ready → `pool.claim()` → `CLAIMED`, Handover gemessen | `VSSession` |
+| `recycle(env=None, instance_id=None, keep_warm=True, result=None)` | Matchende: wieder `WAITING_OPPONENT` (warm) bzw. `STOPPED` (kalt) | `VSSession` |
+| `status()` | Snapshot aller VS-Sessions | `list[dict]` |
+
+**Fehlerverhalten (laut, `VSError`):** unbekannte/nie `warm_up`-te Instanz,
+doppeltes `join`/`ready` desselben Spielers, dritter Spieler
+(> `required_players`), `ready` vor `join`, `join`/`ready` nach `CLAIMED`,
+`recycle` vor `CLAIMED`. Scheitert das Gate-`claim` (Bridge nicht healthy),
+bleibt der Zustand `WAITING_BOTH_READY` und der Eintrag `PARKED`; das
+Ready-Flag des auslösenden Spielers wird zurückgerollt (kein halber Handover).
+
+### VS-DoD-Mapping (#910)
+
+| DoD (#910) | Umsetzung | Nachweis |
+|---|---|---|
+| Match-Start geparkt messbar schneller als Cold-Boot | `measure_boot.run_vs_measurement` (Cold-Boot vs. 2-Beitritt-Handover) → `saved_seconds` | [`MEASUREMENT.md`](MEASUREMENT.md) VS-Abschnitt + `test_measure_boot.MeasureVSTests` |
+| Zwei Spieler im selben Spiel, Pause bis `ready` beider Seiten | `join`×2 + Ready-Gate vor `pool.claim()` | `test_parked_vs.py` (`ReadyGateTests`, red-before-green) |
+| Nach Matchende Instanz wieder verfügbar/sauber gestoppt | `recycle(keep_warm=True/False)` | `test_parked_vs.py` (`RecycleTests`) |
+
+## DoD-Mapping
+
+| DoD (#909) | Umsetzung | Nachweis |
+|---|---|---|
+| Handover **messbar schneller** als Cold-Boot | `measure_boot.py` misst beide Pfade und liefert `saved_seconds` | Messung unten + `test_measure_boot` |
+| **Auslaufschutz** für zu lange geparkte Instanzen | `ParkedPool.reap(max_park_seconds)` stoppt überfällige | `test_reap_stops_only_overdue_parked_instances` |
+| **Kein Weltfortschritt** im Parked-Zustand | `pause_game` beim Parken, `resume_game` erst beim Claim; Invariante über `get_state` (Welt-Tick) | **hermetisch**: `WorldProgressInvariantTests` (`get_state`-Tick unverändert im PARKED, steigt nach `claim`, red-before-green). **Live-Nachweis auf laufender Welt offen** (§3/§5 in [`MEASUREMENT.md`](MEASUREMENT.md)) — hängt an #880 + Live-Spieler; Follow-up [#919](https://github.com/momokli/riftbreaker-battle-mod/issues/919) |
+| Kein bestehender Code kaputt | neues Paket, wiederverwendeter Provisioner, nichts angefasst | nur `deploy/parked/` neu |
+
+## Scope — Spike-Bericht vs. Code-Deliverable
+
+Milestone #13 trennt methodisch **Spike (#880 + Mess-Teil #909) = Bericht,
+kein PR** von Code-Deliverables. Für #909 gilt bewusst **EIN PR** (#917);
+die beiden Artefakt-Typen sind darin klar getrennt:
+
+- **Spike-/Mess-Bericht** (kein Code): [`MEASUREMENT.md`](MEASUREMENT.md) —
+  Methode, Rohzahlen (Spike 15,2 s / Re-Messung 9,35 s; Handover ≈ 0,12 s;
+  Parken ≈ 0,13 s), Messumgebung, Datum, **rohe Live-Belege** ([`evidence/`](evidence/))
+  und der ehrliche Stand des Live-`get_state`-Nachweises (hermetisch belegt, live offen).
+- **Code-Deliverable**: dieses Verzeichnis `deploy/parked/` — Warm-Pool
+  (`parked_pool.py`), Mess-Harness (`measure_boot.py`) und hermetische Tests.
+
+Der Bericht in `MEASUREMENT.md` ist das committete Ergebnis des Spike-Teils,
+unterlegt mit den Roh-Logs in `evidence/`; der Code ist das davon getragene
+Deliverable.
+
+## Gemessene Zahlen (live auf planet, 2026-09-24)
+
+Vollständiger Mess-Bericht **mit rohen Live-Belegen**:
+[`MEASUREMENT.md`](MEASUREMENT.md) und [`evidence/`](evidence/).
+Realer Dedicated-Container, ephemer publizierte Bridge.
+
+| Vorgang | Spike | Re-Messung live |
+|---|---|---|
+| **Cold-Boot** (Container-Start + Mod-Load + Bridge healthy) | ≈ 15,2 s | **9,35 s** |
+| **Parked-Handover** (`POST /resume_game`) | ≈ 0,13 s | **0,12 s** |
+| Parken (`POST /pause_game`) | ≈ 0,5 s | **0,13 s** |
+
+**Ersparnis:** 9–15 s pro Handover (Cold-Boot, host-cacheabhängig) statt
+sub-sekundigem Handover; im echten Deploy zusätzlich die ~664 MB Content-Copy +
+Ansible (CI-Budget 240 s). Rohbelege:
+[`evidence/909-idle-roundtrips-2026-09-24.txt`](evidence/909-idle-roundtrips-2026-09-24.txt),
+[`evidence/909-coldboot-handover-2026-09-24.txt`](evidence/909-coldboot-handover-2026-09-24.txt).
+
+> Der Live-Nachweis „kein Weltfortschritt" auf einer **laufenden** Welt steht
+> **aus** (auf `planet` keine Welt mit Spieler/Tick verfügbar; `get_state`
+> durchgehend `ok:false`). Er ist hermetisch belegt und als Follow-up
+> [#919](https://github.com/momokli/riftbreaker-battle-mod/issues/919)
+> nachverfolgt; der volle Live-Happy-Path ist durch
+> [#918](https://github.com/momokli/riftbreaker-battle-mod/issues/918) blockiert.
+> Siehe [`MEASUREMENT.md` §3/§4/§5](MEASUREMENT.md).
+
+## Config / Konventionen
+
+- Instanz-`instance_id` folgt dem Provisioner-Schema (Regex
+  `^[A-Za-z0-9_.-]{1,40}$`); ohne Angabe vergibt der Pool `parked-<n>`.
+- `env` default aus `provisioner.cfg.env`.
+- Container-/Portnamen kommen ausschließlich aus `InstanceSpec` (#908), nie aus
+  Nutzereingabe.
+- `measure_boot.py` CLI braucht `PROVISIONER_*`-Config:
+  `PROVISIONER_IMAGE=... python3 measure_boot.py --json` →
+  `{"cold_boot_seconds":..,"parked_handover_seconds":..,"saved_seconds":..}`.
+  **Hinweis:** gegen das reale Image ist der Live-Lauf derzeit blockiert (Provisioner
+  #908: Container-Port `8080` statt `9001`, Mounts weichen von der Deploy-Compose ab →
+  [#918](https://github.com/momokli/riftbreaker-battle-mod/issues/918)) →
+  Health-Timeout, siehe [`MEASUREMENT.md` §4](MEASUREMENT.md).
+
+## Test (hermetisch, ohne Docker/Netz/Spiel)
+
+```sh
+cd deploy/parked && TMPDIR=/dev/shm/parked-test python3 -m unittest -v
+```
+
+52 Pool-Tests (Stand #969: Suite gesamt 133 Tests). Abgedeckt: warm_up happy + idempotent + Rollback bei
+`pause_game`-Fehler, **Welt-Tick-Invariante via `get_state`** (kein Fortschritt
+im PARKED, Fortschritt nach `claim`, red-before-green), claim misst Handover +
+verlangt `PARKED` + healthy, recycle warm/kalt, reap stoppt nur Überfällige und
+stoppt bei einem `stop`-Fehler die übrigen trotzdem (aggregierter
+`ParkedError`), status, Fehler → `ParkedError`, `measure_boot` liefert Differenz
+und räumt Cold+Parked auf (kein Container-Leak).
+
+**Dienst (#928)** zusätzlich (`test_parked_service.py`, hermetisch + echter
+`ThreadingHTTPServer` auf `127.0.0.1:0`): Config-Validierung (`PARKED_*`
+fail-closed, fehlendes `PROVISIONER_IMAGE`), Controller-Auffüllen/Idempotenz/
+Backoff+`warm_failures`/Reap/Zähler-Invariante/FIFO-Claim, alle HTTP-Routen
+(`/health`, `/status`, `/claim` ok+`409`, `/recycle` → `PARKED`/`stopped`,
+`/reap`, `401`+`WWW-Authenticate`, `404`, `405`, Doppel-Claim `409`,
+Bridge-unhealthy `503`, `POST /reconcile` ok/`503`).
+
+**Reconciliation (#969)** zusätzlich: `test_parked_pool.ReconcileTests`
+(Restart-Leak/Orphan, Created-Zombie evict+stop, laufend getrackt bleibt,
+`STOPPED`-mit-Container, Phantom-Eintrag ohne `stop`, Fremd-Env unberührt,
+Idempotenz, `stop`-Fehler isoliert, Bridge unberührt, Zwei-Pool-Restart,
+**Claim-Marker ueberlebt Restart (B1)**, **Discovery-Ausfall ohne Eviction (B2)**)
+und `test_parked_service.ControllerReconcileTests`/`HttpTests` (Start-Reconcile vor
+`_fill`, periodisch via `reconcile_interval`, `orphans_removed`, `POST /reconcile`,
+Discovery-Ausfall fuellt nicht) sowie `test_parked_service_integration`
+(Restart-Leak-E2E, Claimed-Restart-E2E).
+
+**VS (#910)** zusätzlich: `ReadyGateTests` (erst beide beigetreten + beide
+`ready` lösen genau **ein** `resume_game` aus; kein `resume` nach Join 1/2 bzw.
+einer `ready`; **red-before-green**), `RecycleTests` (Slots geleert/kalt
+gestoppt, Match 2 sauber), `ErrorTests` (doppeltes join/ready, dritter Spieler,
+`ready` vor `join`, `join` nach `CLAIMED`, Gate-Fehler bleibt `PARKED`),
+`WorldProgressInvariantTests` (kein Welt-Tick bis beide ready, danach ja),
+`StatusTests`; `test_measure_boot.MeasureVSTests` (2-Beitritt-Handover,
+`saved_seconds`, Cleanup auch bei Gate-Fehler, CLI-`--vs`-Routing).
+
+> Lint (ruff) läuft separat in der CI, nicht Teil dieses Verzeichnis-Setups —
+der `ruff`-Aufruf wurde entfernt.

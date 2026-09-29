@@ -43,6 +43,11 @@ rift_deploy_identity: "{{ rift_env }} · {{ rift_deploy_ref }}"
 # Eigener Rift-Caddy.
 rift_caddy_container: rift-caddy
 rift_caddy_image: caddy:2
+# Container-Log-Limit (Issue #301): json-file-Rotation, damit die
+# Container-Logs (/var/lib/docker/containers/*/*-json.log) nicht unbegrenzt
+# wachsen. Konfigurierbar per host_vars / `-e`.
+rift_caddy_log_max_size: "10m"
+rift_caddy_log_max_file: "3"
 rift_caddy_port: 8787
 rift_caddy_deploy_dir: "/opt/rbmods/compose/rift-{{ rift_env }}/caddy"
 rift_caddy_data_dir: "{{ rift_caddy_deploy_dir }}/data"

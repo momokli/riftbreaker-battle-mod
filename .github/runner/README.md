@@ -44,13 +44,15 @@ im geteilten `$HOME` racen. Hintergrund, Audit und Kapazitätswerte:
 
 ## Caches (warme Builds)
 
-- **npm-Store** (`actions/cache`, Pfad `~/.npm`): `tests/rbbridge-hosttest` hat
-  keine externen Deps mehr (nur `node:test`); der Cache-Eintrag bleibt als
-  No-op auf Basis des `package-lock.json`-Hash.
+- **npm-Store:** entfällt (Issue #306). Die verbleibenden Node-Tests
+  (`rbbridge-hosttest`, `pipe-bridge-hosttest`) sind dependency-frei
+  (`node --test`), laufen ohne `npm ci` und brauchen daher keinen Cache.
+  Der frühere `actions/cache`-Eintrag war zuletzt bereits ein No-op.
 - **ccache** (`actions/cache`, Pfad `~/.cache/ccache`): der MinGW-C++-Build
   (rbbridge.dll/injector.exe/rbbridge_standalone.exe) wird über den
   ccache-Wrapper (`/opt/ccache-rbbattle/bin`) kompiliert; Key basiert auf den
-  C-Quellen unter `server/**/*.c`.
+  C-Quellen unter `server/**/*.c`. Der `build`-Job gibt bei jedem Lauf
+  `ccache --show-stats` aus (Issue #306), damit die Hit-Rate messbar wird.
 
 ## Offen (bewusst nicht in diesem PR)
 
@@ -58,13 +60,15 @@ im geteilten `$HOME` racen. Hintergrund, Audit und Kapazitätswerte:
    Strategie: zweite Runner-Instanz mit demselben Label `planet` registrieren
    (systemd-Unit `actions-runner-rbbattle.service` duplizieren), oder ein
    zweites Label einführen und `runs-on` auf eine Matrix umstellen.
+   → eigenes Issue **#304**.
 2. **Health/Monitoring:** Runner-Heartbeat (z. B. `systemctl`-Status +
    `uptime`/Job-Queue) an das bestehende Monitoring hängen; Alarm bei offline
    Runner oder stuck Jobs.
 3. **tmpfs für `_work`:** Arbeitsverzeichnis des Runners auf tmpfs/fast Disk
-   legen, um Checkout/Cache-IO zu beschleunigen.
-4. **ccache-Hit-Rate messen:** Vorher/nachher-Zahlen (Buildzeit P50,
-   `ccache -s` Hit-Rate) stehen noch aus und sollen den PR ergänzen.
+   legen, um Checkout/Cache-IO zu beschleunigen. Host-Op (kein Code-PR).
+4. **ccache-Hit-Rate messen:** *messbar gemacht* (Issue #306): der `build`-Job
+   gibt jetzt pro Lauf `ccache --show-stats` aus. Die Vorher/nachher-Zahlen
+   (Buildzeit P50, Hit-Rate) sammeln sich über die nächsten Läufe.
 5. **sudoers-Hack entfernen:** `ci.yml` braucht kein sudo mehr; die Löschung von
    `/etc/sudoers.d/runner-apt` erfolgt manuell, sobald die alte Setup-Kette
-   verifiziert obsolet ist.
+   verifiziert obsolet ist. Host-Op (kein Code-PR).

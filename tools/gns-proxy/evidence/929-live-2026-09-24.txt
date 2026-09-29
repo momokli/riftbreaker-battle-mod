@@ -1,0 +1,113 @@
+# 929-live-2026-09-24 — Live-Nachweis GNS-Relay /solo + /backends (#929)
+Datum: 2026-09-24 20:14:16 CEST · Host: planet · Env: dev
+Relay: tools/gns-proxy @ 792380a (Branch feat/929-relay-dynamic-backends-solo), MinGW-Build, Wine im Container gns-relay
+Parked: deploy/parked/parked_service.py (echter ParkedController + echter Provisioner #918), PARKED_PORT=18095
+Image: rb-dedicated:d74a1eaab9b4
+
+## 1) Parked-Pool vor /solo (PARKED-Instanz mit gns_endpoint)
+{
+    "ok": true,
+    "env": "dev",
+    "counters": {
+        "parked": 1,
+        "claimed": 1,
+        "warming": 0,
+        "recycling": 0,
+        "stopped": 0,
+        "total": 2,
+        "claims": 1,
+        "recycles": 0,
+        "reaps": 2,
+        "warm_failures": 0,
+        "handover_last_seconds": 0.09753768506925553,
+        "handover_avg_seconds": 0.09753768506925553
+    },
+    "entries": [
+        {
+            "instance": "parked-1",
+            "env": "dev",
+            "container": "riftbreaker-dedicated-dev-parked-1",
+            "bridge_url": "http://127.0.0.1:37110",
+            "gns_endpoint": "127.0.0.1:33004",
+            "state": "claimed",
+            "rounds": 0,
+            "parked_seconds": null
+        },
+        {
+            "instance": "parked-2",
+            "env": "dev",
+            "container": "riftbreaker-dedicated-dev-parked-2",
+            "bridge_url": "http://127.0.0.1:34348",
+            "gns_endpoint": "127.0.0.1:33005",
+            "state": "parked",
+            "rounds": 0,
+            "parked_seconds": 41.61819409695454
+        }
+    ]
+}
+
+## 2) POST /solo (live, ohne Operator-Klick) — Zeitmessung
+{"ok":true,"identitaet":"str:live929","target":"127.0.0.1:33005","instance":"parked-2"} HTTP=200
+WALL_CLOCK=.149280500s
+
+## 3) Relay-Log: Pin wurde per Command-Queue gesetzt (kein Klick)
+[18:13:08] gns_probe: API: solo 'str:live929' -> 127.0.0.1:33004 (instance=parked-1)
+[18:13:36] gns_probe: API: backend 'DYN1' -> 127.0.0.1:6324 angefordert
+[18:13:36] gns_probe: API: backend 'DYN1' -> 127.0.0.1:6324 (registriert)
+[18:13:36] gns_probe: API: backend 'DYN1' Abmeldung angefordert
+[18:13:36] gns_probe: API: backend 'DYN1' entfernt
+[18:14:16] gns_probe: API: solo 'str:live929' -> 127.0.0.1:33005 (instance=parked-2)
+
+## 4) Parked-Pool nach /solo (Handover: parked->claimed)
+{
+    "ok": true,
+    "env": "dev",
+    "counters": {
+        "parked": 0,
+        "claimed": 2,
+        "warming": 0,
+        "recycling": 0,
+        "stopped": 0,
+        "total": 2,
+        "claims": 2,
+        "recycles": 0,
+        "reaps": 2,
+        "warm_failures": 0,
+        "handover_last_seconds": 0.10813950898591429,
+        "handover_avg_seconds": 0.10283859702758491
+    },
+    "entries": [
+        {
+            "instance": "parked-1",
+            "env": "dev",
+            "container": "riftbreaker-dedicated-dev-parked-1",
+            "bridge_url": "http://127.0.0.1:37110",
+            "gns_endpoint": "127.0.0.1:33004",
+            "state": "claimed",
+            "rounds": 0,
+            "parked_seconds": null
+        },
+        {
+            "instance": "parked-2",
+            "env": "dev",
+            "container": "riftbreaker-dedicated-dev-parked-2",
+            "bridge_url": "http://127.0.0.1:34348",
+            "gns_endpoint": "127.0.0.1:33005",
+            "state": "claimed",
+            "rounds": 0,
+            "parked_seconds": null
+        }
+    ]
+}
+
+## 5) /backends add -> GET /targets (ohne Relay-Neustart) -> delete -> 404
+-- POST /backends DYN1=127.0.0.1:6324
+{"ok":true} HTTP=200
+-- GET /targets
+[{"name":"DYN1","endpoint":"127.0.0.1:6324"}]
+-- DELETE /backends?name=DYN1
+{"ok":true} HTTP=200
+-- GET /targets
+[]
+-- DELETE unbekannt
+{"ok":false,"reason":"not_found"} HTTP=404

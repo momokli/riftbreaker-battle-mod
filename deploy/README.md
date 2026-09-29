@@ -9,6 +9,66 @@ läuft der CD (main→dev) per **SSH über einen dedizierten deploy-User** auf
 planet (Abschnitt [„CD: SSH-Deploy"](#cd-ssh-deploy-dedizierter-deploy-user));
 die forced command führt genau dieses Playbook aus.
 
+On-demand-Dedi-Provisioner (kalter Pfad): [`deploy/provisioner/`](provisioner/) — startet/stoppt je Spielwunsch eine run-scoped Instanz (Issue #908).
+
+## Parität: Parked/Provisioned = voller Stack
+
+Eine geparkte/geclaimte (oder ad-hoc provisionierte) Solo-Instanz ist ein **eigener, vollwertiger
+Game-Server** — kein reduzierter Sonderfall. Sie läuft mit **demselben vollen Stack** wie jede
+Env: `riftbreaker-dedicated` **plus** die Sidecars `send-tailer`, `attack-cycle`, `match-loop`,
+`session-recorder`.
+
+**Regel:** Was auf einem dev/prod-Dedicated läuft, läuft auch auf einer geparkten/provisionierten
+Instanz. Abweichungen sind nur als **explizites, dokumentiertes X** zulässig (mit Begründung) —
+niemals implizit „das braucht der Warmserver nicht".
+
+**Konsequenz fürs Bauen:** Neue Env-weite Services/Ports/Env-Vars gelten automatisch auch für den
+Provisioner-Pfad (`deploy/provisioner/provisioner.py`, `deploy/parked/`, `deploy/capsule/`).
+Alles, was pro Instanz variiert (Ports, URLs, Namen), wird **pro Instanz abgeleitet** — nicht
+global festgenagelt (Vorbild: `ParkedPool._bridge_url`). Seit #970 umfasst das auch den
+`server_name` der instanz-eigenen `config.cfg` (Suffix `<env>-<instance_id>`, Anzeigename —
+Routing bleibt unberührt, #929). Feste Host-Ports sind zu vermeiden: sie
+kollidieren zwischen Envs/Tests (siehe #967).
+
+### Konkrete Provisioner-Umsetzung (#966)
+
+Seit #966 startet der Provisioner-Pfad je Instanz den **vollen Stack**: den Dedi-Container
+(`riftbreaker-dedicated-<env>-<id>`) plus die vier Sidecars `send-tailer`, `attack-cycle`,
+`match-loop`, `session-recorder`. Die Ableitung liegt in `deploy/provisioner/provisioner.py`
+(Klasse `InstanceSpec`) und ist deterministisch aus `(env, instance_id)`:
+
+- **Suffix:** rein numerische `instance_id` (z. B. `github.run_id` `12345`) wird direkt genutzt;
+nicht-numerische (z. B. `local`) via `crc32`.
+- **Host-Ports** (jeweils `base + suffix % 20000`): `bridge_port_base` (Default `30000`) für die
+Bridge, **eigener** `attack_cycle_port_base` (Default `31000`) für den Attack-Cycle-Control.
+Getrennte Bases halten die Ports sicher auseinander (Lehre aus #967).
+- **Sidecar-Container-Namen:** `rb-<env>-<id>-send-tailer`, `-attack-cycle`, `-match-loop`,
+`-session-recorder` — konsistent mit `compose_project` (`rb-<env>-<id>`) und `container`.
+- **In-Netz-URLs** (Container-Name + Container-Port, kein Host-Publish): `send_tailer_queue_url`
+= `http://<attack-cycle>:<attack_cycle_container_port>/queue_send` (Container-Port Default `9102`,
+wie die Rolle); `match_loop_bridge_url`/`attack_cycle_bridge_url` = `http://<dedi>:<bridge_container_port>`.
+- **Nur** der Attack-Cycle-Control wird auf `127.0.0.1` gepublished (`attack_cycle_url`,
+Host-`attack_cycle_port`) — der Kapsel-Dienst ist ein Host-Dienst. Der Parked-Pool gibt diese URL
+als `cycle_url` durch (#966); die `CapsuleServiceConfig.cycle_url` ist nur noch Fallback für den
+Einzel-Prozess-Betrieb ohne Sidecars.
+
+### Boot-Test-Naming/Cleanup (Abgrenzung)
+
+Damit sich Provisioner- und Boot-Test-Ressourcen nicht gegenseitig erkennen oder wegräumen:
+
+- **Boot-Test** (`deploy/test-deploy.yml`, `deploy/test-vars.yml`): Namen `riftbreaker-*--test-<run>`
+(`riftbreaker-dedicated-`, `-sessions-`, `-send-tailer-`, `-match-loop-`, `-attack-cycle-`, `-egress-`),
+Compose-Projekt `rb-test-<run>`. Das Cleanup in `.github/workflows/boot-test.yml` erfasst Reste über
+das **Label** `RBB_ENV=test` (Filter `docker ps --filter label=RBB_ENV=test`).
+- **Provisioner:** Namen `rb-<env>-<id>-<svc>`; Labels `rb.provisioner.env` / `rb.provisioner.instance`
+(→ `ps_all(filter_label=...)`), `RBB_ENV=<env>` nur als **Env-Var** (`-e`), nicht als Label.
+- Folglich greift der Boot-Test-Label-Filter `RBB_ENV=test` **nicht** auf Provisioner-Container
+(kein Kollateral-Cleanup), und die Provisioner-Namen tauchen in keiner Boot-Test-Präfix-Enumeration
+auf. Provisioner-Reste räumt der Provisioner selbst (`stop()`/`_rollback()`/Reap, idempotent über die
+`rb.provisioner.*`-Labels).
+
+Siehe Milestone **1.0.11 (Server-Parity)** und #966.
+
 ## Voraussetzungen
 
 - `ansible` (core ≥ 2.19) auf dem Control-Node (dem Rechner, von dem du deployst; beim CD ist das planet selbst, als root — siehe CD-Abschnitt).
@@ -63,6 +123,10 @@ ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
 Reihenfolge der Rollen (site.yml): `mods-zip` → `dedicated-server-image` →
 `game-content` → `riftbreaker-server` → `tournament-server` →
 `website` → `image-retention` → `host-hygiene` → `crash-collector`.
+
+Die Backup-/Stray-Retention (`riftbreaker_backup_keep`, Issue #312) ist **kein
+eigener Rollenschritt**, sondern läuft am Ende der Rolle `riftbreaker-server`
+(`tasks/backup-retention.yml`) — kein Eintrag in der Reihenfolge oben.
 
 **Vor** den Rollen (in den `pre_tasks`) prüft ein Preflight den freien Platz auf
 `/` (Disk-Space-Gate, Issue #310): zu wenig Platz → Abbruch **vor** Image-Build
@@ -486,7 +550,7 @@ nur `deploy-check-local`**:
   lokal: `yamllint` über `deploy/`, Playbook-`--syntax-check` für `site.yml` +
   `deploy-prod.yml` (prod-Playbook, Issue #328), die hermetischen
   Rollen-Selbsttests (`deploy/tests/`: Disk-Gate #310,
-  `/server/*`-Route #463), Compose-Templates rendern (`check-render.yml`) und
+  `/server/*`-Route #463, Compose-Log-Limit #301), Compose-Templates rendern (`check-render.yml`) und
   jedes gerenderte Compose-File durch `docker compose config`. Kein
   Host-/SSH-Zugriff, keine Secrets. Läuft damit immer, auch wenn der
   planet-Runner gerade nicht erreichbar ist.
@@ -528,14 +592,17 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 | Rolle                    | Typ                | Was                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | ------------------------ | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `dedicated-server-image` | docker             | baut `rb-dedicated:<deploy-sha>` auf planet (geteiltes Laufzeit-Image)                                                                                                                                                                                                                                                                                                                                                       |
+| `image-retention`        | systemd            | systemd-Timer `rbmods-image-retention.timer` (täglich): entfernt alte Mod-Image-Tags (`deploy/image-retention/docker_image_tag_retention.sh`), behält das laufende Image + den Rollback-Stand (Issue #309)
+| `rbtools`                | build+stage        | baut die Windows-x64-Server-I/O-Tools (rbbridge.dll, injector.exe, pipe_bridge.exe) auf planet (MinGW-w64) und stagt sie nach `rbtools_dir` (read-only nach `/opt/rbtools` im Container; Issue #265)
+| `server-control`         | systemd            | Host-Agent (Plane B, Issue #424): stdlib-Python-Dienst wrappt `docker` (Status/Logs/Restart/Start/Stop + config.cfg); bind nur `127.0.0.1`, Caddy proxyt, Bearer-Token Pflicht
 | `game-content`           | steamcmd/sync      | Dedicated-Server-Content (App 4114030) nach `riftbreaker_game_dir` (idempotent, fail loud)                                                                                                                                                                                                                                                                                                                                   |
-| `riftbreaker-server`     | docker             | Dev-SP-Server 6324 (umgezogen von 6321, Issue #843; 1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation                                                                                                                                                                                                                                                      |
+| `riftbreaker-server`     | docker             | Dev-SP-Server 6324 (umgezogen von 6321, Issue #843; 1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation + Backup-/Stray-Retention (`riftbreaker_backup_keep`, #312)                                                                                                                                                                                                                                                      |
 | `satellite-relay`        | iptables + systemd | UDP-DNAT-Relay — **retired (Issue #846)**: `satellite_relay_state` (Default `present`) schaltet zwischen Aufbau und Teardown (`absent`) der früheren Relays `satellite` (prod, `:6321 → :6322`) und `sync` (staging, `:6321 → :6323`); Ziel-Port je Relay als Play-Var (`satellite_relay_target_port`), reboot-fest, kein `host_vars`                                                                                        |
 | `gns-relay`              | docker             | GNS-Entry-Relay auf planet (`network_mode: host`, UDP `:6321`): terminiert GameNetworkingSockets und routet per Suffix auf prod/staging/dev; hält seit #857 unentschiedene Joins und lässt sie per Web-UI (`--api-port`, lokal) auf ein Ziel routen; baut `gns_probe.exe` aus `tools/gns-proxy` (Issue #843/#857)                                                                                                            |
 | `tournament-server`      | systemd            | Rust/axum Referee + Web-UI. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt)                                                                                                                                                                                                                                 |
 | `website`                | eigener Caddy      | eigener `rift-caddy` (plain HTTP: Landing + `/mod.zip` + Cockpit `/contract/*` + `/tournament/*`) + Host-Caddy-Einträge (Issue #322) — Landing + Cockpit je Env, plus die env-unabhängige GNS-Lobby (`proxy.rift.projectmellon.de`, Issue #857); Host-Caddy-Reload deterministisch + fehlersichtbar, `rift-caddy` mit `admin off` (Issue #355); `/server/*` nur bei deploytem Agenten (`server_control_enabled`, Issue #463) |
 | `mods-zip`               | —                  | Paketierung + md5-Paritäts-Check (hart)                                                                                                                                                                                                                                                                                                                                                                                      |
-| `host-hygiene`           | systemd            | wöchentlicher Timer: entfernt **dangling** Docker-Images (`docker image prune`, **kein** `-a`; Issue #308)                                                                                                                                                                                                                                                                                                                   |
+| `host-hygiene`           | systemd            | wöchentlicher Timer: entfernt **dangling** Docker-Images (`docker image prune`, **kein** `-a`) + rbtools `test-*`-Retention (Issue #308/#606)                                                                                                                                                                                                                                                                                                                   |
 | `crash-collector`        | systemd            | Dauer-Dienst: sichert bei Crash-Markern das neueste `crash_info/<uuid>.{dmp,log,trace}` als Bundle nach `/opt/rbmods/crashes/` (+ Kontext/Meta, Retention; Issue #462)                                                                                                                                                                                                                                                       |
 
 ## Host-Caddy-Reload (Issue #355)
@@ -576,13 +643,15 @@ deploy/
 └── roles/
     ├── dedicated-server-image/    # baut rb-dedicated:<sha>
     ├── game-content/              # Steam-Content (App 4114030) deklarativ
-    ├── riftbreaker-server/        # docker 6324 (+ Restart-Handler; 6321 → gns-relay, #843)
+    ├── riftbreaker-server/        # docker 6324 (+ Restart-Handler; 6321 → gns-relay, #843; Backup-/Stray-Retention #312)
     ├── gns-relay/                 # GNS-Entry-Relay (UDP 6321, Suffix-Routing; #843)
     ├── satellite-relay/           # UDP-DNAT-Relay, state present|absent (retired, #846)
     ├── tournament-server/         # systemd
     ├── website/                   # eigener rift-caddy: Landing + Cockpit + GNS-Lobby (Issue #322/#857)
     ├── mods-zip/                  # Paketierung + md5-Parität
-    ├── host-hygiene/              # systemd-Timer (dangling Images, #308)
+    ├── image-retention/           # systemd-Timer (alte Mod-Image-Tags, #309)
+    ├── host-hygiene/              # systemd-Timer (dangling Images + rbtools test-*, #308/#606)
+    ├── server-control/            # systemd Host-Agent (docker-Wrapper; Plane B, #424)
     └── crash-collector/           # systemd-Dienst (Crash-Artefakte, #462)
 ```
 
@@ -665,6 +734,23 @@ journalctl -u rbmods-host-hygiene.timer -n 20         # letzter Timer-Lauf
 Der **Einmal-Lauf** über die bereits liegenden ~88,9 GB ist ein
 Operator-Schritt (nicht Teil des Deploys): auf planet `docker image prune`
 ausführen, danach `df -h /` zum Messen.
+
+### Container-Logs (Issue #301)
+
+Die Docker-`json-file`-Logs (`/var/lib/docker/containers/*/*-json.log`) sind
+kein Operator-Schritt mehr: **jedes** Compose-Template des Repos setzt für
+**jeden** Service `logging: {driver: json-file, options: {max-size, max-file}}`
+(Default 10m/3, konfigurierbar über `riftbreaker_log_max_*` /
+`gns_relay_log_max_*` / `rift_caddy_log_max_*`). Ein globales `log-opts` in
+`daemon.json` ist damit optional (deckt nur Container außerhalb dieses Stacks).
+Nachsehen (read-only):
+
+```bash
+du -sh /var/lib/docker/containers/*/*-json.log | sort -h | tail
+```
+
+Selbsttest: `bash deploy/tests/compose-logging/run.sh` (rendert die echten
+Templates, prüft per `docker compose config`; Negativ-Probe).
 
 ## Logs
 
