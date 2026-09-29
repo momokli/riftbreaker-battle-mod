@@ -295,8 +295,6 @@ class TestAnnouncerService(unittest.TestCase):
         self.assertTrue(calls[1].endswith("/attack_status"))
 
     def test_http_error_keeps_running(self):
-        sent = []
-
         def getter(url, timeout):
             return 0, "connection refused"
 
