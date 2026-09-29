@@ -51,6 +51,15 @@
     group: root
   notify: restart capsule-flow
 
+- name: Identitaets-Bibliothek installieren (identity.py, #931/#1011)
+  copy:
+    src: "{{ capsule_flow_identity_src }}"
+    dest: "{{ capsule_flow_install_dir }}/identity.py"
+    mode: "0644"
+    owner: root
+    group: root
+  notify: restart capsule-flow
+
 - name: Umgebungsdatei rendern (Token, 0600 — nie world-readable)
   template:
     src: rbmods-capsule.env.j2
