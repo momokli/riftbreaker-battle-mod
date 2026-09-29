@@ -232,6 +232,20 @@ bleiben gültig). Noch offen: zusätzliche Kinds (`attack_fire`,
 `creature_event`, `map_reset`). UI pollt `/state` (+ `/events?since=`); die
 Bridge-SSE bleibt raus (Single-Client).
 
+### 6.7 Casual-Queue (Pairing + kalte Provisionierung, #998)
+
+**Umgesetzt (#998):** Ein eigener Sidecar `deploy/queue/` paart Spieler (casual,
+**aktiv 1v1**, FIFO, kein MMR) und provisioniert bei einer Paarung **kalt**
+zwei frische Welten: Welt A (Team 0) und Welt B (Team 1). Beide Spieler werden
+im Referee via `POST /lobby {player, world}` registriert; der Relay-Endpunkt
+`POST /queue` proxyt an den Dienst und pinnt **beide** Identitaeten auf ihre
+**verschiedenen** GNS-Endpoints. Der Provisioner erhaelt einen expliziten
+`world`-Parameter (A/B) und seedet `RBB_VS_WORLD` + `RBB_REFEREE_URL` je Instanz
+(`parse_mode` unangetastet — eigene Achse). **Kein Warm-Pool**, kein
+Parked-VS-Reuse. Der Match-Record (`{participants,state,result?}`) uebersteht
+einen Dienst-Restart (`QUEUE_STATE_DIR`). Details: `deploy/queue/README.md`,
+`docs/LOBBY.md` §2.
+
 ## 7. Gap-Liste → abgeleitete Issues
 
 | #   | Lücke                                                          | Blockiert    |
@@ -253,6 +267,7 @@ Bridge-SSE bleibt raus (Single-Client).
 3. **G5** Cross-World-Sends + **G6** per-Welt-HQ → Winner.
 4. **G7** Start/Ready-Aggregat + Pause-Fan-out.
 5. **G8** Match-View-UI.
+6. **Queue** Casual-Pairing + kalte Doppel-Provisionierung ✅ umgesetzt (#998).
 
 ## 9. Risiken & offene Entscheidungen
 

@@ -144,6 +144,7 @@ gns_probe.exe --port 6321 --map-file /etc/rbgns/routes --hold \
 | `--target`   | `NAME=ip:port`, wiederholbar — die Buttons der UI    |
 | `--parked-url` | Ziel des Parked-Pool-Dienstes fuer `POST /solo` (Default: **nicht gesetzt**). **Nur IPv4-Literal** (`http://<IPv4>:port`) — der Outbound-Client nutzt `inet_pton`, also kein Hostname/DNS (`localhost` funktioniert nicht). |
 | `--capsule-url` | Ziel des **Kapsel-Flow-Dienstes** fuer `POST /solo` (Issue #931, Default: **nicht gesetzt**). Ist er gesetzt (argv oder `RBB_CAPSULE_URL`), ruft `/solo` `POST /capsule/open` (Claim **ohne** resume → pausiertes Spiel) statt `POST /claim`; ebenfalls nur IPv4-Literal. |
+| `--queue-url` | Ziel des **Queue-Dienstes** fuer `POST /queue` (Issue #998, Default: **nicht gesetzt**). Ist er gesetzt (argv oder `RBB_QUEUE_URL`), proxyt `/queue` an `POST /queue/join`; ebenfalls nur IPv4-Literal. Token aus `RBB_QUEUE_TOKEN`. |
 | `--max-players` | Aufnahme-Limit einer Solo-Instanz fuer den Beitritt weiterer Clients (Issue #936, Default `4` = Server-Default `riftbreaker_server_max_players: 4`). `<1` → Start verweigert (`exit 2`). Im Deploy steuert die Ansible-Variable `gns_relay_max_players` (Rolle `gns-relay`, Default `4`) diesen Wert. |
 
 Der Parked-Pfad ist nur aktiv, wenn `--parked-url` **oder** die Umgebungsvariable
@@ -231,6 +232,39 @@ Der Retry laeuft **ausschliesslich im HTTP-Request-Thread** — der GNS-Hauptloo
 wird nie blockiert. Die Registry (`g_targets`) wird ebenfalls nur in der
 Hauptschleife mutiert; `GET /targets` liest einen mutex-geschuetzten Snapshot.
 Die dynamische Registry ist bewusst **fluechtig** (Parked ist Source of Truth).
+
+### Queue (vs) — Casual-Pairing `[ Queue (vs) ]` (Issue #998)
+
+Ist `--queue-url`/`RBB_QUEUE_URL` gesetzt (Token `RBB_QUEUE_TOKEN`, Env), proxyt
+`POST /queue` an den Queue-Dienst (`POST /queue/join`). Der Dienst paart FIFO
+(aktiv 1v1), provisioniert **kalt** zwei frische Welten A/B und registriert beide
+Spieler im Referee. Der Relay pinnt bei einer Match-Antwort **ALLE** Teilnehmer
+(nicht nur den Aufrufer) ueber die Command-Queue auf ihre **verschiedenen**
+GNS-UDP-Endpoints.
+
+| Endpunkt | Body | Wirkung |
+| --- | --- | --- |
+| `POST /queue` | `{"identitaet":"str:…","mode":"vs"}` | `POST /queue/join` am Queue-Dienst; wartend -> `{ok:true,status:"queued",position}`; gepaart -> `{ok:true,status:"matched",match:{…,assignments:[{identitaet,world,instance,target}]}}` + Pin beider Teilnehmer. `mode` Default `vs`. |
+| `POST /queue/leave` | `{"identitaet":"str:…"}` | `POST /queue/leave`; entfernt den Queue-Zustand. |
+| `GET /queue/status` | — | `GET /queue/status` am Queue-Dienst (Queue + Matches). |
+
+```bash
+curl -s -X POST 127.0.0.1:9200/queue -d '{"identitaet":"str:<A>","mode":"vs"}'
+# -> {"ok":true,"status":"queued","position":1}
+curl -s -X POST 127.0.0.1:9200/queue -d '{"identitaet":"str:<B>","mode":"vs"}'
+# -> {"ok":true,"status":"matched","match":{"match_id":1,"assignments":[{"identitaet":"str:<A>","world":"A","target":"127.0.0.1:40001"},{…"B"…}]}}
+curl -s 127.0.0.1:9200/queue/status
+```
+
+Fehlercodes: ohne Queue konfiguriert `503 {reason:"queue_unconfigured",retry:false}`;
+Queue nicht erreichbar `502 {reason:"queue_unreachable"}`; fehlende `identitaet`
+`400`; sonst der Status/Body des Queue-Dienstes (z.B. `400 bad_mode`,
+`409 already_matched`).
+
+**Additive `/sessions`-Felder** (nur gesetzt, wenn ein Queue-Zustand existiert;
+bestehende Felder unveraendert): `queuePhase` (`queued|matched|provisioning|ready`),
+`queuePosition`, `matchId`, `vsWorld`. Die Karte zeigt den Queue-Status und einen
+**`[ Queue (vs) ]`**-Button (POST `/queue {identitaet, mode:"vs"}`).
 
 ### READY-Button `[ READY ]`
 

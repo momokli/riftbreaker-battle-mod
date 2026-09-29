@@ -312,8 +312,14 @@ class BaseFixture(unittest.TestCase):
         self.stub = HealthStub(ok=True)
         self.addCleanup(self.stub.close)
 
+        # #998-Verifier: ``InstanceSpec`` rechnet bridge_port = base + (crc%20000)
+        # und attack_cycle_port = base + 1000 + (crc%20000). Beide muessen
+        # <= 65535 bleiben -> base <= 65535 - 1000 - 19999 = 44536. free_port()
+        # liefert Ephemeral-Ports bis ~60999, daher die Basis hart begrenzen
+        # (weiterhin kollisionsfrei zum Health-Stub).
+        max_base = 65535 - 1000 - 19999
         bridge = free_port()
-        while bridge == self.stub.port:
+        while bridge > max_base or bridge < 1 or bridge == self.stub.port:
             bridge = free_port()
 
         self.cfg = prov.Config(
@@ -1553,6 +1559,114 @@ class ModeTestCase(BaseFixture):
         self.docker.inspect_optional = stripped
         status = provisioner.start("test", "solo_persona:aggro", "0")
         self.assertFalse(status["created"])
+
+
+class QueueWorldTestCase(BaseFixture):
+    """Issue #998 (US2): kalte VS-Welt-Seedung (A/B) im Provisioner."""
+
+    def _cycle_run(self, instance_id="0"):
+        name = self.spec(instance_id).attack_cycle_container
+        for call in self.run_calls():
+            if name in call:
+                return call
+        return None
+
+    def test_world_seeds_container_and_cycle_env(self):
+        self.provisioner(referee_url="http://127.0.0.1:9300").start(
+            "test", "solo_self", "0", "A")
+        run = self.run_calls()[0]
+        self.assertIn("RBB_VS_WORLD=A", run)
+        self.assertIn("RBB_REFEREE_URL=http://127.0.0.1:9300", run)
+        # parse_mode unangetastet: die Container-Modus-Achse bleibt solo_self.
+        self.assertIn("RIFTBREAKER_MODE=solo_self", run)
+        cycle = self._cycle_run()
+        self.assertIn("RBB_VS_WORLD=A", cycle)
+        self.assertIn("RBB_REFEREE_URL=http://127.0.0.1:9300", cycle)
+        # Kein self-send im VS.
+        self.assertEqual(cycle[cycle.index("--send-yourself") + 1], "off")
+
+    def test_world_b_is_distinct(self):
+        self.provisioner(referee_url="http://127.0.0.1:9300").start(
+            "test", "solo_self", "0", "B")
+        run = self.run_calls()[0]
+        self.assertIn("RBB_VS_WORLD=B", run)
+
+    def test_world_seeds_bridge_game_config(self):
+        self.stub.server.game_config = {"warmup_s": 120}
+        self.provisioner(referee_url="http://127.0.0.1:9300").start(
+            "test", "solo_self", "0", "A")
+        posted = {path: body for path, body in self.stub.server.posts}
+        gc = posted["/game_config"]
+        self.assertIs(gc["send_yourself"], False)
+        self.assertEqual(gc["vs_world"], "A")
+        self.assertEqual(gc["referee_url"], "http://127.0.0.1:9300")
+        self.assertEqual(gc["warmup_s"], 120)
+
+    def test_two_worlds_get_distinct_bridge_ports(self):
+        provisioner = self.provisioner(referee_url="http://127.0.0.1:9300")
+        provisioner.start("test", "solo_self", "queue-1-a", "A")
+        provisioner.start("test", "solo_self", "queue-1-b", "B")
+        a = self.spec("queue-1-a")
+        b = self.spec("queue-1-b")
+        self.assertNotEqual(a.bridge_port, b.bridge_port)
+        self.assertNotEqual(a.attack_cycle_port, b.attack_cycle_port)
+
+    def test_out_of_range_bridge_port_fails_loud(self):
+        # #998-Verifier: ein zu grosser base darf NICHT zu einem rohen
+        # OverflowError in _port_in_use/socket.connect fuehren, sondern muss
+        # beim Bau der InstanceSpec laut abbrechen.
+        cfg = prov.Config(**{**vars(self.cfg), "bridge_port_base": 65535})
+        with self.assertRaises(prov.ProvisionError):
+            prov.InstanceSpec("test", "1", cfg)
+
+    def test_out_of_range_attack_cycle_port_fails_loud(self):
+        # attack_cycle_port = base + (suffix%20000); base=65535 + suffix 1
+        # = 65536 -> ausserhalb 1..65535 (bridge_port bleibt aus der Fixture).
+        cfg = prov.Config(**{**vars(self.cfg), "attack_cycle_port_base": 65535})
+        with self.assertRaises(prov.ProvisionError):
+            prov.InstanceSpec("test", "1", cfg)
+
+    def test_valid_base_ports_stay_in_range(self):
+        spec = self.spec("queue-1-a")
+        self.assertTrue(1 <= spec.bridge_port <= 65535)
+        self.assertTrue(1 <= spec.attack_cycle_port <= 65535)
+
+    def test_invalid_world_fails_loud_before_docker(self):
+        for bad in ("a", "C", "", "AB", "world"):
+            with self.assertRaises(prov.ProvisionError, msg=bad):
+                self.provisioner().start("test", "solo_self", "0", bad)
+        self.assertEqual(self.run_calls(), [])
+
+    def test_no_world_keeps_solo_behaviour(self):
+        self.provisioner(referee_url="http://127.0.0.1:9300").start(
+            "test", "solo_self", "0")
+        run = self.run_calls()[0]
+        self.assertNotIn("RBB_VS_WORLD=A", run)
+        self.assertNotIn("RBB_REFEREE_URL", run)
+        cycle = self._cycle_run()
+        self.assertEqual(cycle[cycle.index("--send-yourself") + 1], "on")
+
+    def test_existing_container_world_mismatch_fails_loud(self):
+        provisioner = self.provisioner()
+        provisioner.start("test", "solo_self", "0", "A")
+        runs_before = len(self.run_calls())
+        with self.assertRaises(prov.ProvisionError):
+            provisioner.start("test", "solo_self", "0", "B")
+        self.assertEqual(len(self.run_calls()), runs_before)
+
+    def test_parse_world_rejects_bad_values(self):
+        self.assertEqual(prov.parse_world("A"), "A")
+        self.assertEqual(prov.parse_world("B"), "B")
+        for bad in ("", "a", "b", "C", None):
+            with self.assertRaises(prov.ProvisionError, msg=repr(bad)):
+                prov.parse_world(bad)
+
+    def test_referee_url_config_field(self):
+        cfg = prov.load_config(env={
+            "PROVISIONER_IMAGE": IMAGE,
+            "PROVISIONER_REFEREE_URL": "http://127.0.0.1:9300",
+        })
+        self.assertEqual(cfg.referee_url, "http://127.0.0.1:9300")
 
 
 if __name__ == "__main__":

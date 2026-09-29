@@ -20,6 +20,7 @@
 | GNS-Backends | `:6322` prod · `:6323` staging · `:6324` dev | nein | – | Relay |
 | Parked-Pool | `127.0.0.1:9201` | nein | **Bearer** (`PARKED_TOKEN`) | Relay (`/solo`) |
 | Capsule-Flow | `127.0.0.1:9211` | nein | **Bearer** (`CAPSULE_TOKEN`) | Relay (`/solo`,`/ready`) |
+| Queue-Dienst | `127.0.0.1:9221` | nein | **Bearer** (`QUEUE_TOKEN`) | Relay (`/queue`) |
 | Attack-Cycle-Control | `9102` dev · `9103` prod · `9104` staging | nein | keine | Capsule, Sidecar |
 | IO-Bridge | `9001` dev · `9002` prod · `9003` staging | nein | keine | Capsule, Cockpit, Sidecars |
 
@@ -48,6 +49,9 @@ Dispatcher `gns_probe.cpp:2226-2321`; UI `kUiHtml` `:1340-1347`.
 | POST | `/route` | – | Identität auf Endpoint pinnen | `{identitaet,target}` | `{ok}` | (Legacy/Diagnose) |
 | POST | `/solo` | – | **Claim/Provision · Join · Modus-Trigger** | s. u. | `{ok,identitaet,target|instance,mode?,self_send}` / `{ok:false,reason}` | Main-Screen-Kacheln (Spieler hinschicken), solo/join |
 | POST | `/ready` | – | Capsule resume + Warmup-Start | `{}` | `{ok}` o. Capsule-Body | **READY**-Button |
+| POST | `/queue` | – | **Queue-Join (vs)** — Proxy an Queue-Dienst | `{identitaet,mode?:"vs"}` | `{ok,status:"queued",position}` / `{ok,status:"matched",match:{…,assignments:[{identitaet,world,instance,target}]}}` / `{ok:false,reason}` | **`[ Queue (vs) ]`**-Button |
+| POST | `/queue/leave` | – | Queue-Join zurueckziehen | `{identitaet}` | `{ok,identitaet}` / `{ok:false,reason}` | (Leave) |
+| GET | `/queue/status` | – | Queue + Matches (Proxy) | – | Queue-Snapshot | Diagnose |
 | POST | `/backends` / DELETE `/backends?name=` | – | Backend registrieren/abmelden | `{name,endpoint}` | `{ok}` | Operator/Deploy (nicht Spieler) |
 
 ### `POST /solo` — drei Bedeutungen (`:1966-2131`)
@@ -63,6 +67,9 @@ Fehler-`reason`s: `none_parked, backend_starting, parked_unconfigured, not_claim
 ### `POST /ready` (`:2137-2226`)
 Proxyt an Capsule `POST /capsule/ready` (resume + Cycle `/start`). Ohne Capsule → `503 capsule_unconfigured`. Den Countdown-Text in den Chat schickt der **Announcer**, nicht der Relay.
 
+### `POST /queue` — Casual-Pairing (#998)
+Ist `--queue-url`/`RBB_QUEUE_URL` gesetzt (Token `RBB_QUEUE_TOKEN`), proxyt `POST /queue` an den Queue-Dienst (`POST /queue/join`). Der Dienst paart FIFO (aktiv 1v1), provisioniert **kalt** zwei frische Welten A/B und registriert beide Spieler im Referee. Bei einer Match-Antwort pinnt der Relay **alle** Teilnehmer auf ihre **verschiedenen** GNS-Endpoints. Fehler-`reason`s: `queue_unconfigured, queue_unreachable, bad_request, bad_mode, already_matched`. Ohne Queue → `503 queue_unconfigured`.
+
 ---
 
 ## 3 · Zustandsmodell (für Badges)
@@ -76,7 +83,9 @@ Proxyt an Capsule `POST /capsule/ready` (resume + Cycle `/start`). Ohne Capsule 
   "messages":N, "age_seconds":N, "held_seconds":N,
   "soloPhase":"provisioned|underway|in_game_paused|running",   // nur wenn geclaimt
   "soloInstance":"…", "soloEndpoint":"…",
-  "soloMembers":["…"], "soloMemberCount":N, "soloMaxPlayers":N }
+  "soloMembers":["…"], "soloMemberCount":N, "soloMaxPlayers":N,
+  "queuePhase":"queued|matched|provisioning|ready",   // nur wenn Queue-Zustand
+  "queuePosition":N, "matchId":N, "vsWorld":"A|B" }
 ```
 
 **`state`** (Verbindung/Routing): `held → wartet` · `waiting/closed → getrennt` · `connected → verbunden` · `routed → geroutet`.
@@ -92,6 +101,10 @@ Proxyt an Capsule `POST /capsule/ready` (resume + Cycle `/start`). Ohne Capsule 
 | *(kein Claim)* | – | *wartet* |
 
 > **Offen:** ein „fertig/Sieger"-Signal existiert serverseitig **noch nicht** (`STATUS.fertig` in der UI ist ohne Server-Signal). → #999.
+
+**`queuePhase`** (Issue #998, additiv — nur wenn ein Queue-Zustand existiert):
+`queued` (wartet) · `matched` (gepaart, auch `finished`/`failed`) · `provisioning`
+(kalte Welten fahren hoch) · `ready` (A/B provisioniert, Lobby registriert).
 
 ---
 
@@ -129,8 +142,8 @@ Spiel-start-relevant: `POST /start` · `POST /ready` · `POST /resume_game`/`/pa
 
 | Bedarf | Heute | Issue |
 |---|---|---|
-| Queue join/leave (`/queue/*`) | **fehlt** | #998 |
-| Queue-Status (`inQueue`, Position, `matchFound`) | **fehlt** in `/sessions` | #1000 |
+| Queue join/leave (`/queue/*`) | **done** (Relay-Proxy + Dienst) | #998 |
+| Queue-Status (`inQueue`, Position, `matchFound`) | **Basis** in `/sessions` (`queuePhase`/`queuePosition`/`matchId`/`vsWorld`); Veredelung offen | #1000 |
 | Match-Result / Sieger (`/matches`) | **fehlt** | #999 |
 | VS-Flow (gemeinsamer Start/Ready, Pause-Fan-out) | **fehlt** (Relay kennt nur Solo) | #995–#997 |
 

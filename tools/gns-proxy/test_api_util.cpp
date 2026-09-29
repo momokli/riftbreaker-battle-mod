@@ -723,6 +723,99 @@ static void testDecideReady() {
   }
 }
 
+static void testJsonIntField() {
+  long long v = 0;
+  check(rbapi::jsonIntField("{\"position\":3}", "position", v), "int field parsed");
+  check(v == 3, "int field value");
+  check(rbapi::jsonIntField("{\"match_id\":42,\"state\":\"ready\"}", "match_id", v),
+        "int field match_id");
+  check(v == 42, "int field match_id value");
+  check(!rbapi::jsonIntField("{\"position\":\"3\"}", "position", v),
+        "quoted number is not an int field");
+  check(!rbapi::jsonIntField("{\"other\":1}", "position", v), "missing int field");
+  check(rbapi::jsonIntField("{\"n\":-7}", "n", v), "negative int field");
+  check(v == -7, "negative int value");
+}
+
+static void testParseQueueJoinBody() {
+  // Issue #998 (US4): Body-Parser fuer POST /queue.
+  std::string id;
+  std::string mode;
+  check(rbapi::parseQueueJoinBody(
+            "{\"identitaet\":\"str:aa\",\"mode\":\"vs\"}", id, mode),
+        "queue join parsed");
+  checkEq(id, "str:aa", "queue join identitaet");
+  checkEq(mode, "vs", "queue join mode");
+
+  // Fehlender mode -> Default 'vs'.
+  check(rbapi::parseQueueJoinBody("{\"identitaet\":\"str:bb\"}", id, mode),
+        "queue join without mode");
+  checkEq(id, "str:bb", "queue join identitaet 2");
+  checkEq(mode, "vs", "queue join default mode");
+
+  // Fehlende/leere Identitaet -> false.
+  check(!rbapi::parseQueueJoinBody("{\"mode\":\"vs\"}", id, mode),
+        "queue join missing identitaet");
+  check(!rbapi::parseQueueJoinBody("{\"identitaet\":\"\"}", id, mode),
+        "queue join empty identitaet");
+  check(!rbapi::parseQueueJoinBody("{}", id, mode), "queue join empty body");
+}
+
+static void testParseQueueAssignments() {
+  // Issue #998 (US4): Pin-Plan aus der Match-Antwort — BEIDE Identitaeten mit
+  // ihren VERSCHIEDENEN Endpoints (reine Funktion, red-before-green).
+  const std::string body =
+      "{\"ok\":true,\"match\":{\"match_id\":1,\"assignments\":["
+      "{\"identitaet\":\"str:aa\",\"world\":\"A\",\"instance\":\"queue-1-a\","
+      "\"target\":\"127.0.0.1:40001\"},"
+      "{\"identitaet\":\"str:bb\",\"world\":\"B\",\"instance\":\"queue-1-b\","
+      "\"target\":\"127.0.0.1:40002\"}]}}";
+  std::vector<rbapi::QueueAssignment> plan;
+  check(rbapi::parseQueueAssignments(body, plan), "assignments parsed");
+  checkEq(std::to_string(plan.size()), "2", "assignments count");
+  if (plan.size() == 2) {
+    checkEq(plan[0].identitaet, "str:aa", "plan[0] identitaet");
+    checkEq(plan[0].world, "A", "plan[0] world");
+    checkEq(plan[0].endpoint, "127.0.0.1:40001", "plan[0] endpoint");
+    checkEq(plan[1].identitaet, "str:bb", "plan[1] identitaet");
+    checkEq(plan[1].world, "B", "plan[1] world");
+    checkEq(plan[1].endpoint, "127.0.0.1:40002", "plan[1] endpoint");
+    check(plan[0].endpoint != plan[1].endpoint, "distinct endpoints");
+  }
+
+  // Keine Paarung -> leerer Plan (kein Fehler).
+  std::vector<rbapi::QueueAssignment> empty;
+  check(!rbapi::parseQueueAssignments("{\"ok\":true,\"position\":1}", empty),
+        "pending body -> no assignments");
+  checkEq(std::to_string(empty.size()), "0", "pending plan empty");
+}
+
+static void testDeriveQueuePhase() {
+  using rbapi::QueuePhase;
+  check(rbapi::deriveQueuePhase(false, "") == QueuePhase::None,
+        "queue phase none");
+  check(rbapi::deriveQueuePhase(true, "") == QueuePhase::Queued,
+        "queue phase queued");
+  check(rbapi::deriveQueuePhase(false, "provisioning") == QueuePhase::Provisioning,
+        "queue phase provisioning");
+  check(rbapi::deriveQueuePhase(false, "ready") == QueuePhase::Ready,
+        "queue phase ready");
+  check(rbapi::deriveQueuePhase(false, "finished") == QueuePhase::Matched,
+        "queue phase matched (finished)");
+  check(rbapi::deriveQueuePhase(false, "failed") == QueuePhase::Matched,
+        "queue phase matched (failed)");
+  checkEq(std::string(rbapi::queuePhaseName(QueuePhase::None)), "",
+          "queue phase name none");
+  checkEq(std::string(rbapi::queuePhaseName(QueuePhase::Queued)), "queued",
+          "queue phase name queued");
+  checkEq(std::string(rbapi::queuePhaseName(QueuePhase::Matched)), "matched",
+          "queue phase name matched");
+  checkEq(std::string(rbapi::queuePhaseName(QueuePhase::Provisioning)),
+          "provisioning", "queue phase name provisioning");
+  checkEq(std::string(rbapi::queuePhaseName(QueuePhase::Ready)), "ready",
+          "queue phase name ready");
+}
+
 int main() {
   testParseTargetSpec();
   testJsonStringField();
@@ -750,6 +843,10 @@ int main() {
   testSoloBudgetMinAttemptCutoff();
   testSoloBudgetSleepRespectsRemaining();
   testSoloTerminalErrors();
+  testParseQueueJoinBody();
+  testJsonIntField();
+  testParseQueueAssignments();
+  testDeriveQueuePhase();
 
   if (g_failures == 0) {
     std::printf("test_api_util: %d Checks OK\n", g_checks);

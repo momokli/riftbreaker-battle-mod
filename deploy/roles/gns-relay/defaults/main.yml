@@ -111,6 +111,14 @@ gns_relay_capsule_url: "http://127.0.0.1:9211"
 # Bearer-Token (Vault `vault_capsule_token`), per Env gereicht (nie argv).
 gns_relay_capsule_token: "{{ vault_capsule_token | default('') }}"
 
+# --- Queue-Anbindung (Issue #998) -------------------------------------------
+# Ist der Queue-Dienst gesetzt, proxyt `POST /queue` an dessen `POST /queue/join`
+# und pinnt bei einer Paarung BEIDE Teilnehmer auf ihre Welten. Default = dev-
+# Queue (queue_port, host_vars).
+gns_relay_queue_url: "http://127.0.0.1:9221"
+# Bearer-Token (Vault `vault_queue_token`), per Env gereicht (nie argv).
+gns_relay_queue_token: "{{ vault_queue_token | default('') }}"
+
 # --- Container-interne Pfade / Prozess --------------------------------------
 # Mount-Punkt der Game-DLLs (read-only). Der Probe laeuft aus
 # {{ gns_relay_bin_mount }}/bin und laedt dort die GameNetworkingSockets.dll.

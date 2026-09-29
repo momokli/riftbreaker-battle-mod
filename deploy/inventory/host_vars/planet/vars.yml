@@ -110,6 +110,21 @@ parked_pool_env_file: /etc/rbmods/parked-pool-dev.env
 capsule_flow_port: 9211
 capsule_flow_parked_port: 9201
 
+# --- Queue-Dienst (Issue #998, dev) ------------------------------------------
+# Casual-Queue: paart Spieler (aktiv 1v1, FIFO) und provisioniert KALT zwei
+# frische VS-Welten (A/B) + Referee-Lobby. dev deployt die Rolle ueber site.yml
+# -> die isolierten Werte stehen deshalb hier explizit (ENV-ISOLATION-GATE,
+# Issue #483). Eigener Port 9221 (frei neben Parked 9201 / Kapsel 9211).
+# Nachbarn: Provisioner-Nachbar wie im Rollen-Default; der Referee IST der
+# tournament-server (dev-Port 8081, docs/VS_MATCH.md).
+queue_unit: rbmods-queue-dev
+queue_port: 9221
+queue_install_dir: /opt/rbmods/queue-dev
+queue_env_file: /etc/rbmods/queue-dev.env
+queue_state_dir: /var/lib/rbmods/queue-dev
+queue_provisioner_url: "http://127.0.0.1:8094"
+queue_referee_url: "http://127.0.0.1:8081"
+
 # --- Website (Landing + Cockpit, eigener rift-caddy) -------------------------
 # Architektur (Issue #322): Der Riftbreaker-Stack betreibt einen EIGENEN,
 # schlanken Caddy-Container (`rift-caddy`, plain HTTP, reines Durchreichen):

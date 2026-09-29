@@ -97,6 +97,10 @@ MODE_PERSONA_PREFIX = "solo_persona:"
 # Persona-Namen wie in personas.json (aggro, ruhig, matheo, ...).
 PERSONA_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,63}$")
 MODE_HINT = "erwartet 'solo_self' oder 'solo_persona:<name>'"
+# Issue #998 (US2): VS-Welten fuer die kalte Doppel-Provisionierung. EIGENE
+# Achse neben ``parse_mode`` (das unangetastet bleibt): ``world`` seedet
+# RBB_VS_WORLD + RBB_REFEREE_URL je Instanz und schaltet self-send ab.
+VS_WORLDS = ("A", "B")
 # Pfad IM Container fuer die gestagte Persona-Datei (Mount-Ziel).
 PERSONA_CONTAINER_PATH = "/data/personas.json"
 
@@ -118,11 +122,30 @@ def _container_env_mode(existing: Dict[str, Any]) -> Optional[str]:
     Liefert ``None``, wenn kein ``RIFTBREAKER_MODE`` gesetzt ist (z. B. legacy/
     extern erzeugter Container) — dann wird NICHT verglichen.
     """
+    return _container_env_value(existing, "RIFTBREAKER_MODE")
+
+
+def _container_env_value(existing: Dict[str, Any], name: str) -> Optional[str]:
+    """Einen ``Config.Env``-Eintrag (``NAME=wert``) lesen; fehlend -> ``None``."""
     env = (existing.get("Config") or {}).get("Env") or []
+    prefix = name + "="
     for item in env:
-        if isinstance(item, str) and item.startswith("RIFTBREAKER_MODE="):
+        if isinstance(item, str) and item.startswith(prefix):
             return item.split("=", 1)[1]
     return None
+
+
+def parse_world(world: str) -> str:
+    """VS-Welt strikt parsen (fail-loud, kein stiller Fallback).
+
+    Erlaubt nur ``"A"``/``"B"``; alles andere (leer, ``None``, ``a``,
+    ``world``) wirft :class:`ProvisionError` VOR jedem Docker-Call.
+    """
+    if world not in VS_WORLDS:
+        raise ProvisionError(
+            "unbekannte VS-Welt %r (erwartet 'A' oder 'B')" % (world,)
+        )
+    return world
 
 
 def parse_mode(mode: str) -> ModeSelection:
@@ -228,6 +251,10 @@ class Config:
     image_build_dir: str = ""
     instance_id: str = "local"
     deploy_ref: str = "unknown"
+    # Issue #998 (US2): Referee-Basis-URL fuer die VS-Welt-Seedung. Wird nur
+    # konsumiert, wenn ``start(..., world=...)`` gesetzt ist (Sidecar-Laufzeit-
+    # Env RBB_REFEREE_URL). Leer = kein VS-Seeding (solo bleibt bitgleich).
+    referee_url: str = ""
 
 
 # JSON-Datei-Keys -> Config-Feld. Env-Variablen ueberschreiben die Datei.
@@ -263,6 +290,7 @@ _JSON_KEYS = {
     "image_build_dir": "image_build_dir",
     "instance_id": "instance_id",
     "deploy_ref": "deploy_ref",
+    "referee_url": "referee_url",
 }
 
 _ENV_KEYS = {
@@ -297,6 +325,7 @@ _ENV_KEYS = {
     "PROVISIONER_IMAGE_BUILD_DIR": "image_build_dir",
     "PROVISIONER_INSTANCE_ID": "instance_id",
     "PROVISIONER_DEPLOY_REF": "deploy_ref",
+    "PROVISIONER_REFEREE_URL": "referee_url",
 }
 
 _INT_FIELDS = (
@@ -433,6 +462,10 @@ class InstanceSpec(object):
         self.personas_staged = os.path.join(self.config_dir, "personas.json")
         self.bridge_port_base = cfg.bridge_port_base
         self.bridge_port = cfg.bridge_port_base + (self._numeric_suffix() % 20000)
+        # #998-Verifier: ein zu grosser ``*_port_base`` kann den abgeleiteten
+        # Host-Port aus dem gueltigen TCP-Bereich schieben; das muss laut
+        # (``ProvisionError``) scheitern statt spaeter als roher
+        # ``OverflowError`` in ``_port_in_use``/``socket.connect``.
         # Sidecar-Namen (#966): konsistent mit ``compose_project``/``container``.
         self.send_tailer_container = "%s-send-tailer" % self.compose_project
         self.attack_cycle_container = "%s-attack-cycle" % self.compose_project
@@ -441,6 +474,15 @@ class InstanceSpec(object):
         # Eigener Host-Port-Base -> nie gleich ``bridge_port`` (Issue #967).
         self.attack_cycle_port_base = cfg.attack_cycle_port_base
         self.attack_cycle_port = cfg.attack_cycle_port_base + (self._numeric_suffix() % 20000)
+        for _label, _base, _port in (
+            ("bridge_port", self.bridge_port_base, self.bridge_port),
+            ("attack_cycle_port", self.attack_cycle_port_base, self.attack_cycle_port),
+        ):
+            if not 1 <= _port <= 65535:
+                raise ProvisionError(
+                    "%s %d liegt ausserhalb 1..65535 (base=%d, instance_id=%r)"
+                    % (_label, _port, _base, instance_id)
+                )
         self.attack_cycle_container_port = cfg.attack_cycle_container_port
         self.attack_cycle_interval = cfg.attack_cycle_interval
         self.attack_cycle_difficulty_interval = cfg.attack_cycle_difficulty_interval
@@ -752,9 +794,18 @@ class Provisioner(object):
         env: Optional[str] = None,
         mode: str = "solo_self",
         instance_id: Optional[str] = None,
+        world: Optional[str] = None,
     ) -> Dict[str, Any]:
         # Fail-loud VOR jeglicher Ressource: ungueltiger Modus -> kein Docker.
         selection = parse_mode(mode)
+        # Issue #998 (US2): VS-Welt ist eine SEPARATE Achse. ``parse_mode`` bleibt
+        # unangetastet; ``world`` seedet RBB_VS_WORLD + RBB_REFEREE_URL und
+        # schaltet self-send/persona fuer die Instanz ab.
+        if world is not None:
+            parse_world(world)
+            selection = dataclasses.replace(
+                selection, send_yourself=False, persona_on=False, persona=None
+            )
         env = env or self.cfg.env
         instance_id = instance_id if instance_id is not None else self.cfg.instance_id
         spec = self.spec_factory(env, instance_id, self.cfg)
@@ -770,6 +821,13 @@ class Provisioner(object):
                     "Instanz %s laeuft bereits im Modus '%s', angefordert war '%s' "
                     "(kein stilles Umschalten; erst stoppen, dann neu provisionieren)"
                     % (instance_id, existing_mode, selection.mode)
+                )
+            existing_world = _container_env_value(existing, "RBB_VS_WORLD")
+            if existing_world is not None and existing_world != (world or ""):
+                raise ProvisionError(
+                    "Instanz %s laeuft bereits in Welt '%s', angefordert war '%s' "
+                    "(kein stilles Umschalten; erst stoppen, dann neu provisionieren)"
+                    % (instance_id, existing_world, world or "")
                 )
             status = (existing.get("State") or {}).get("Status") or ""
             if status != "running":
@@ -803,7 +861,7 @@ class Provisioner(object):
                 self._stage_personas(spec, selection, created)
             self._create_network(spec, created)
             self._create_volumes(spec, created)
-            self._create_container(spec, created, selection)
+            self._create_container(spec, created, selection, world)
             if not self._wait_healthy(spec):
                 raise ProvisionError(
                     "Health-Timeout: %s liefert kein ok innerhalb von %ss"
@@ -811,9 +869,9 @@ class Provisioner(object):
                 )
             # Runtime-Wahrheit setzen (nach Health, VOR den Sidecars, damit der
             # erste Poll des Attack-Cycle schon korrekt ist) (#993).
-            self._seed_bridge(spec, selection)
+            self._seed_bridge(spec, selection, world)
             # Sidecars erst nach der Dedi-Health: sie brauchen die Bridge.
-            self._create_sidecars(spec, created, selection)
+            self._create_sidecars(spec, created, selection, world)
         except Exception:
             self._rollback(spec, created)
             raise
@@ -1051,13 +1109,17 @@ class Provisioner(object):
             return {}
         return parsed if isinstance(parsed, dict) else {}
 
-    def _seed_bridge(self, spec: InstanceSpec, selection: ModeSelection) -> None:
+    def _seed_bridge(self, spec: InstanceSpec, selection: ModeSelection,
+                     world: Optional[str] = None) -> None:
         """Bridge mit der modus-abgeleiteten Runtime-Konfiguration seeden.
 
         ``send_yourself``/``persona`` (#851) leben AUSSCHLIESSLICH in
         ``game_config`` — kein Entrypoint-Env wird konsumiert. Deshalb ist das
         Seeding die einzige wirksame Quelle fuer ``pipe_bridge.c`` und den
         Attack-Cycle. Fehler -> :class:`ProvisionError` (Rollback greift).
+
+        Issue #998 (US2): mit ``world`` wird zusaetzlich die VS-Welt +
+        Referee-URL geseedet (self-send/persona aus — kein Solo-Verhalten).
         """
         base = self.bridge_url(spec).rstrip("/")
         current = self._http_json("GET", base + "/game_config")
@@ -1065,6 +1127,9 @@ class Provisioner(object):
         merged["send_yourself"] = selection.send_yourself
         merged["persona"] = selection.persona_on
         merged["mode"] = selection.mode
+        if world is not None:
+            merged["vs_world"] = world
+            merged["referee_url"] = self.cfg.referee_url
         self._http_json("POST", base + "/game_config", merged)
         if selection.kind == "persona":
             doc = _load_personas_doc(self.cfg.personas_file)
@@ -1072,8 +1137,9 @@ class Provisioner(object):
             self._http_json("POST", base + "/persona_active", {"name": selection.persona})
         else:
             self._http_json("POST", base + "/persona_active", {"name": ""})
-        LOG.info("bridge geseedet: mode=%s send_yourself=%s persona=%s",
-                 selection.mode, selection.send_yourself, selection.persona or "-")
+        LOG.info("bridge geseedet: mode=%s send_yourself=%s persona=%s world=%s",
+                 selection.mode, selection.send_yourself, selection.persona or "-",
+                 world or "-")
 
     def _preflight(self, spec: InstanceSpec, selection: ModeSelection) -> None:
         if self._port_in_use(spec.bridge_port):
@@ -1131,6 +1197,10 @@ class Provisioner(object):
 
     @staticmethod
     def _port_in_use(port: int, host: str = "127.0.0.1") -> bool:
+        # #998-Verifier: out-of-range Ports laut melden statt einen rohen
+        # ``OverflowError`` aus ``connect()`` durchzureichen.
+        if not 1 <= int(port) <= 65535:
+            raise ProvisionError("Port %s liegt ausserhalb 1..65535" % (port,))
         probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         probe.settimeout(0.5)
         try:
@@ -1171,7 +1241,8 @@ class Provisioner(object):
                 created["volumes"].append(volume)
 
     def _create_container(
-        self, spec: InstanceSpec, created: Dict[str, Any], selection: ModeSelection
+        self, spec: InstanceSpec, created: Dict[str, Any], selection: ModeSelection,
+        world: Optional[str] = None,
     ) -> None:
         args = [
             "run",
@@ -1202,13 +1273,20 @@ class Provisioner(object):
             # Deploy-Identitaet (#483): Mod-Log liest RBB_ENV/RBB_REF.
             "-e", "RBB_ENV=%s" % spec.env,
             "-e", "RBB_REF=%s" % spec.deploy_ref,
-            self.cfg.image,
         ]
+        # Issue #998 (US2): VS-Welt + Referee-URL je Instanz (Sidecar-Laufzeit-Env).
+        if world is not None:
+            args += [
+                "-e", "RBB_VS_WORLD=%s" % world,
+                "-e", "RBB_REFEREE_URL=%s" % self.cfg.referee_url,
+            ]
+        args.append(self.cfg.image)
         self.docker.run_or_fail(args)
         created["container"] = True
 
     def _create_sidecars(
-        self, spec: InstanceSpec, created: Dict[str, Any], selection: ModeSelection
+        self, spec: InstanceSpec, created: Dict[str, Any], selection: ModeSelection,
+        world: Optional[str] = None,
     ) -> None:
         """Vier Sidecars pro Instanz starten (#966) — Soll-Env/Volumes/Commands
         1:1 aus ``roles/riftbreaker-server/templates/docker-compose.yml.j2``.
@@ -1222,6 +1300,13 @@ class Provisioner(object):
             "--label", "rb.provisioner.instance=%s" % spec.instance_id,
         ]
         env = ["-e", "RBB_ENV=%s" % spec.env]
+        # Issue #998 (US2): VS-Welt + Referee-URL auch den Sidecars (attack-cycle
+        # liest RBB_REFEREE_URL/RBB_VS_WORLD fuer den send_enemy-Egress).
+        if world is not None:
+            env += [
+                "-e", "RBB_VS_WORLD=%s" % world,
+                "-e", "RBB_REFEREE_URL=%s" % self.cfg.referee_url,
+            ]
 
         # session-recorder: Wine-Volume ro + sessions-Dir (Bind, RW).
         self.docker.run_or_fail([
@@ -1432,6 +1517,11 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--mode", default="solo_self")
     start.add_argument("--instance-id", dest="instance_id", default=None)
     start.add_argument(
+        "--world", default=None,
+        help="VS-Welt (A|B) fuer die kalte Doppel-Provisionierung (#998); "
+             "seedet RBB_VS_WORLD + RBB_REFEREE_URL, self-send aus",
+    )
+    start.add_argument(
         "--personas-file", dest="personas_file", default=None,
         help="Override der Persona-Quelle (Default: PROVISIONER_PERSONAS_FILE)",
     )
@@ -1482,7 +1572,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     provisioner = Provisioner(cfg)
     try:
         if args.command == "start":
-            result = provisioner.start(args.env, args.mode, args.instance_id)
+            # `world` nur uebergeben, wenn gesetzt (haelt die 3-Argument-
+            # Signatur fuer bestehende Aufrufer/Spies rueckwaerts-kompatibel).
+            if getattr(args, "world", None) is not None:
+                result = provisioner.start(args.env, args.mode, args.instance_id, args.world)
+            else:
+                result = provisioner.start(args.env, args.mode, args.instance_id)
         elif args.command == "stop":
             result = provisioner.stop(args.instance_id, args.env)
         else:

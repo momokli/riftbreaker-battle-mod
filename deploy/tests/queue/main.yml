@@ -1,0 +1,109 @@
+---
+# Hermetischer Render-Selbsttest der Rolle queue (Issue #998).
+#
+# Läuft LOKAL auf dem Control-Node/CI-Runner: keine Host-Facts, kein SSH,
+# kein Docker, kein Vault, keine Prod-Aktion. Gerendert werden die ECHTEN
+# Vorlagen der Rolle (kein Nachbau) mit Dummy-Werten; geprüft werden die
+# Invarianten von systemd-Unit und EnvironmentFile.
+#
+# Aufruf über run.sh (oder direkt):
+#   RB_QUEUE_RENDER_DIR=$(mktemp -d) ansible-playbook deploy/tests/queue/main.yml
+- name: "Queue Unit-/Env-Render (Issue #998)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    # Rollen-Defaults hier explizit (der Test laeuft ohne Rollen-Defaults).
+    queue_env: dev
+    queue_install_dir: /opt/rbmods/queue-dev
+    queue_bind: 127.0.0.1
+    queue_port: 9221
+    queue_python: /usr/bin/python3
+    queue_bin: "{{ queue_install_dir }}/queue_service.py"
+    queue_env_file: /etc/rbmods/queue-dev.env
+    queue_provisioner_url: "http://127.0.0.1:8094"
+    queue_provisioner_token: dummy-provisioner-token
+    queue_provisioner_timeout: 30
+    queue_referee_url: "http://127.0.0.1:8080"
+    queue_referee_token: dummy-referee-token
+    queue_timeout: 5
+    queue_log_level: INFO
+    queue_team_size: 1
+    queue_allow_teams: false
+    queue_state_dir: /var/lib/rbmods/queue-dev
+    queue_token: dummy-queue-token
+    queue_require_docker_service: "{{ test_require_docker_service | default(false) }}"
+    render_dir: >-
+      {{ lookup('env', 'RB_QUEUE_RENDER_DIR')
+         | default('/tmp/rb-queue-render', true) }}
+
+  tasks:
+    - name: Render-Verzeichnis sicherstellen
+      file:
+        path: "{{ render_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: systemd-Unit rendern (echte Rollen-Vorlage)
+      template:
+        src: "{{ playbook_dir }}/../../roles/queue/templates/rbmods-queue.service.j2"
+        dest: "{{ render_dir }}/rbmods-queue-dev.service"
+        mode: "0644"
+
+    - name: EnvironmentFile rendern (echte Rollen-Vorlage)
+      template:
+        src: "{{ playbook_dir }}/../../roles/queue/templates/rbmods-queue.env.j2"
+        dest: "{{ render_dir }}/rbmods-queue-dev.env"
+        mode: "0600"
+
+    - name: Gerenderte Unit + Env laden
+      set_fact:
+        unit: "{{ lookup('file', render_dir ~ '/rbmods-queue-dev.service') }}"
+        env_file: "{{ lookup('file', render_dir ~ '/rbmods-queue-dev.env') }}"
+
+    - name: Unit-Invarianten pruefen (ExecStart + EnvironmentFile + Restart)
+      assert:
+        that:
+          - ("ExecStart=" ~ queue_python ~ " " ~ queue_bin) in unit
+          - ("EnvironmentFile=" ~ queue_env_file) in unit
+          - ("WorkingDirectory=" ~ queue_install_dir) in unit
+          - "'Restart=on-failure' in unit"
+          - "'Type=simple' in unit"
+        fail_msg: >-
+          Gerenderte systemd-Unit verletzt eine Invariante (ExecStart,
+          EnvironmentFile, WorkingDirectory, Restart=on-failure oder
+          Type=simple).
+        success_msg: "Unit-Render ok (ExecStart + EnvironmentFile + Restart)."
+
+    - name: Env-Datei-Invarianten pruefen (Token + Nachbarn + Bind/Port)
+      assert:
+        that:
+          - ("QUEUE_TOKEN=dummy-queue-token") in env_file
+          - ("QUEUE_PROVISIONER_TOKEN=dummy-provisioner-token") in env_file
+          - ("QUEUE_REFEREE_TOKEN=dummy-referee-token") in env_file
+          - ("QUEUE_BIND=" ~ queue_bind) in env_file
+          - ("QUEUE_PORT=" ~ queue_port) in env_file
+          - ("QUEUE_PROVISIONER_URL=" ~ queue_provisioner_url) in env_file
+          - ("QUEUE_REFEREE_URL=" ~ queue_referee_url) in env_file
+          - ("QUEUE_STATE_DIR=" ~ queue_state_dir) in env_file
+        fail_msg: >-
+          Gerenderte EnvironmentFile verletzt eine Invariante (Token, Provisioner-
+          Token, Referee-Token, Bind/Port, Nachbar-URLs oder State-Dir).
+        success_msg: "Env-Render ok (Token + Nachbarn + Bind/Port)."
+
+    - name: "Docker-Requires folgt dem Flag, keine verwaiste Leerzeile"
+      assert:
+        that:
+          - ("Requires=docker.service" in unit) == (queue_require_docker_service | bool)
+          - ("After=network-online.target docker.service" in unit) == (queue_require_docker_service | bool)
+          - ("After=network-online.target" in unit)
+          - ("\n\nStartLimitIntervalSec" not in unit)
+        fail_msg: >-
+          queue_require_docker_service={{ queue_require_docker_service }}:
+          Requires=docker.service bzw. der docker.service-Teil von After= muss
+          exakt dem Flag folgen, und das Weglassen darf keine Leerzeile im
+          [Unit]-Block hinterlassen.
+        success_msg: >-
+          Docker-Requires korrekt (require_docker_service={{ queue_require_docker_service }}),
+          keine verwaiste Leerzeile.
