@@ -17,6 +17,9 @@
  *   - ready_gate_count(g) == Anzahl der DISTINCT ready-Spieler.
  *   - ready_gate_all_ready(g, players) == (players >= 1 && count >= players).
  *   - ready_gate_should_fire(g, players) == genau EINMAL pro Runde (fired-Latch).
+ *   - ready_gate_reset(g) loescht den Runden-Latch (fired/timed_out) samt Menge
+ *     und Deadline; wird beim Runden-Reset der Bridge (POST /attack_reset bzw.
+ *     /round_reset mit {"reset":1}) und implizit beim Prozessstart aufgerufen.
  *   - ready_gate_expired(g, now) == Grenzfall: now >= deadline gilt als
  *     abgelaufen; nur wenn ein Gate armed ist, noch jemand fehlt und der Start
  *     nicht schon gefeuert wurde.
@@ -111,14 +114,27 @@ static inline int ready_gate_should_fire(const ready_gate_t *g, int players)
     return ready_gate_all_ready(g, players);
 }
 
-/* Leert die Ready-Menge samt Deadline (fired/timed_out bleiben als Runden-
- * Latch stehen, bis die Runde zurueckgesetzt wird). */
+/* Leert die Ready-Menge samt Deadline. fired/timed_out bleiben als Runden-
+ * Latch stehen; fuer einen echten Runden-Reset ready_gate_reset() nutzen. */
 static inline void ready_gate_clear(ready_gate_t *g)
 {
     if (!g)
         return;
     g->count = 0;
     g->deadline = 0.0;
+}
+
+/* Runden-Reset: leert Menge + Deadline UND den Runden-Latch (fired/timed_out),
+ * damit das Gate in der naechsten Runde wieder genau einmal feuern kann.
+ * `players` bleibt erhalten (wird je Poll aus get_state_result aktualisiert). */
+static inline void ready_gate_reset(ready_gate_t *g)
+{
+    if (!g)
+        return;
+    g->count = 0;
+    g->deadline = 0.0;
+    g->fired = 0;
+    g->timed_out = 0;
 }
 
 /* #937/US4: Timeout-Grenzfall. Rueckgabe 1, wenn ein Gate armed ist

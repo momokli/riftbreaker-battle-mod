@@ -1848,6 +1848,11 @@ static void handle_post_attack_reset(SOCKET c, const char *body)
         EnterCriticalSection(&g_attack_reset_cs);
         g_attack_reset_epoch++;
         LeaveCriticalSection(&g_attack_reset_cs);
+        /* #937/US3: Runden-Reset -> fired/timed_out-Latch des Ready-Gates
+         * loeschen, damit die naechste Runde erneut per /ready startet. */
+        EnterCriticalSection(&g_ready_gate_cs);
+        ready_gate_reset(&g_ready_gate);
+        LeaveCriticalSection(&g_ready_gate_cs);
         blog("attack_reset -> epoch %d", g_attack_reset_epoch);
     }
 
@@ -1885,6 +1890,11 @@ static void handle_post_round_reset(SOCKET c, const char *body)
 
     if (trigger) {
         blog("round_reset -> epoch %d", epoch);
+        /* #937/US3: Runden-Reset -> fired/timed_out-Latch des Ready-Gates
+         * loeschen (POST /round_reset {"reset":1} = neue Runde). */
+        EnterCriticalSection(&g_ready_gate_cs);
+        ready_gate_reset(&g_ready_gate);
+        LeaveCriticalSection(&g_ready_gate_cs);
 
         json_get_number(body, "map", &map_flag);
         if (map_flag != 0.0) {
