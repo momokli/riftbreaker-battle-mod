@@ -159,3 +159,30 @@ Setup bereit fuer Stage 3 (Developer).
   - Regression gruen: test_route_rules 44, test_api_util 214,
     deploy/capsule 67 Tests OK.
   - Account (`account:<id>`) nur Parse+Test, keine Provisionierungslogik.
+
+## Verify (Stage 4, Verifier)
+
+**Verdict: PASS** — Diff `origin/main...origin/feat/992-player-identity` (9 Dateien, +650/−7).
+
+### Belege (selbst ausgefuehrt)
+- C++: `g++ -std=c++17 -Wall -Wextra -O1` + Run:
+  - `test_player_identity.cpp` → `35 Checks OK` (rc=0)
+  - `test_route_rules.cpp` → `44 Checks OK` (rc=0)
+  - `test_api_util.cpp` → `214 Checks OK` (rc=0)
+- Python: `python3 -m unittest discover -s deploy/capsule -p 'test_*.py'` → `Ran 67 tests ... OK` (rc=0)
+- Relay kompiliert: `x86_64-w64-mingw32-g++ -std=c++17 -Wall -Wextra -fsyntax-only -Iinclude gns_probe.cpp` → rc=0 (nur 23 vorbestehende `-Wcast-function-type`-Warnungen).
+- CI-Diff konsistent zum Muster (`if: needs.changes.outputs.test == 'true'`, gleiche Compiler-Flags, unittest-discover); changes-Gate um `deploy/capsule/` erweitert.
+
+### Soll-Abgleich
+- `PlayerIdentity`-Abstraktion (Kind steam|generic|account, raw, canonical, valid) ✔
+- canonical rueckwaertskompatibel: Steam/Account byte-gleich `raw`, Generic nur Hex-lowercase → Routen-/Pin-/Claim-Key (`str:…`/`steamid:…`) unveraendert ✔
+- `isAuthorized` passiv (`connected && valid`) ✔
+- Inline-Prefix-Check in `gns_probe.cpp` Z.965 ersetzt durch `rbident::isIdentityLike`; `account:` zusaetzlich ausgeschlossen ✔
+- Kein toter Arm (`identityKindName` deckt alle Kind-Werte; Parser erreicht alle Zweige) ✔
+- Unbekannte Formen → `valid=false` statt Crash; `canonicalize(None)`→None, unbekannt → raw durchgereicht ✔
+- Session-/Routen-Key = `canonical`; `rec.kind`/`kindName` in `/sessions`-JSON ✔
+
+### Anmerkungen (nicht blockierend)
+- Keine Secrets/Debug-Prints im Diff; keine Injection (Logs `%s`, Identitaet lokal formatiert).
+- Neu-Dateien ohne Trailing-Newline (Stil, kein Defekt).
+- `capsule_service.py` unveraendert: reicht `identitaet` an `coordinator.open` durch, das kanonisiert — Semantik ok.
