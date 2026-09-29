@@ -3,11 +3,13 @@
 #
 # Läuft LOKAL auf dem Control-Node/CI-Runner: kein Host, kein Vault, keine
 # Prod-Aktion. Bindet die ECHTE Task-Datei deploy/tasks/deploy-identity.yml ein
-# (kein Nachbau) und asserted den Identitaets-Vertrag für dev/prod/test:
+# (kein Nachbau) und asserted den Identitaets-Vertrag für dev/prod/prod-b/test:
 #
 #   rift_deploy_identity == "<env> · <ref>"
 #   dev/test             -> rift_deploy_ref == deploy_image_tag (Checkout-SHA)
-#   prod                 -> rift_deploy_ref == Git-Tag (kein +sha)
+#   prod/prod-b          -> rift_deploy_ref == Git-Tag (kein +sha)
+#
+# prod-b (Issue #995) ist eine prod-Welt -> gleiche Tag-Ref-Semantik wie prod-A.
 #
 # `test_checkout` zeigt auf ein Wegwerf-Repo (run.sh legt es mit Tag an), damit
 # `git describe --tags --always` deterministisch ist.
@@ -36,14 +38,14 @@
           - rift_deploy_identity == (rift_env ~ ' · ' ~ rift_deploy_ref)
           - rift_deploy_identity.startswith(rift_env ~ ' · ')
           - rift_deploy_ref | length > 0
-          # dev/test sind exakt der Checkout-SHA.
-          - (rift_env == 'prod') or (rift_deploy_ref == deploy_image_tag)
-          # prod traegt den exakten Git-Tag (KEIN +sha, einheitlich zu build_ref).
-          - (rift_env != 'prod') or (rift_deploy_ref == 'v9.9.9')
-          # Build-Ref (Issue #607): prod = exakter Tag (KEIN +sha), sonst voller
-          # Commit-SHA — exakt die RBB_BUILD_REF-Semantik.
-          - (rift_env != 'prod') or (rift_build_ref == 'v9.9.9')
-          - (rift_env == 'prod') or (rift_build_ref | length == 40)
+          # dev/test sind exakt der Checkout-SHA; prod/prod-b tragen den Tag.
+          - (rift_env in ['prod', 'prod-b']) or (rift_deploy_ref == deploy_image_tag)
+          # prod/prod-b tragen den exakten Git-Tag (KEIN +sha, einheitlich zu build_ref).
+          - (rift_env not in ['prod', 'prod-b']) or (rift_deploy_ref == 'v9.9.9')
+          # Build-Ref (Issue #607): prod/prod-b = exakter Tag (KEIN +sha), sonst
+          # voller Commit-SHA — exakt die RBB_BUILD_REF-Semantik.
+          - (rift_env not in ['prod', 'prod-b']) or (rift_build_ref == 'v9.9.9')
+          - (rift_env in ['prod', 'prod-b']) or (rift_build_ref | length == 40)
         fail_msg: >-
           Deploy-Identitaet verletzt den Vertrag (env={{ rift_env }},
           ref={{ rift_deploy_ref }}, identity={{ rift_deploy_identity }}).

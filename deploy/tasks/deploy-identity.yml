@@ -1,16 +1,16 @@
 ---
 # deploy/tasks/deploy-identity.yml — erzeugt die Deploy-Identitaet je Play
 # (Issue #483, US1). Wird per include_tasks in den pre_tasks von site.yml
-# (dev), deploy-prod.yml (prod), test-deploy.yml (test) und deploy-staging.yml
-# (staging) eingebunden.
+# (dev), deploy-prod.yml (prod-A + prod-B), test-deploy.yml (test) und
+# deploy-staging.yml (staging) eingebunden.
 #
-# `rift_env` MUSS dort als Play-Var stehen (dev|prod|test|staging): Play-Vars schlagen
-# Rollen-Defaults + host_vars, sonst erbt prod/test den dev-Wert (dieselbe
-# Praezedenz-Falle wie `server_control_enabled`, Issue #463).
+# `rift_env` MUSS dort als Play-Var stehen (dev|prod|prod-b|test|staging):
+# Play-Vars schlagen Rollen-Defaults + host_vars, sonst erbt prod/test den
+# dev-Wert (dieselbe Praezedenz-Falle wie `server_control_enabled`, Issue #463).
 #
 # Ergebnis:
 #   rift_deploy_ref       dev/test/staging = Checkout-SHA (deploy_image_tag);
-#                         prod     = Git-Tag (git describe --tags --always)
+#                         prod/prod-b = Git-Tag (git describe --tags --always)
 #   rift_deploy_identity  "<env> · <ref>"   (Surface-Vertrag, US4)
 #
 # Read-only (check_mode: false), damit der Render-/Check-Gate denselben Stand
@@ -24,9 +24,9 @@
   assert:
     that:
       - rift_env is defined
-      - rift_env in ['dev', 'prod', 'test', 'staging']
+      - rift_env in ['dev', 'prod', 'prod-b', 'test', 'staging']
     fail_msg: >-
-      rift_env fehlt oder ist ungueltig (erwartet dev|prod|test|staging). Es MUSS als
+      rift_env fehlt oder ist ungueltig (erwartet dev|prod|prod-b|test|staging). Es MUSS als
       Play-Var im jeweiligen Playbook stehen (Play-Vars schlagen
       Rollen-Defaults/host_vars) — sonst erbt prod/test den dev-Wert
       (Issue #483).
@@ -34,8 +34,9 @@
   tags: always
 
 # dev/test leiten den Ref direkt aus dem Checkout-SHA ab (deploy_image_tag,
-# bereits in den pre_tasks ermittelt). Nur prod braucht zusaetzlich den Git-Tag.
-- name: "Deploy-Ref — Git-Tag am Checkout ermitteln (nur prod)"
+# bereits in den pre_tasks ermittelt). prod-A/prod-B brauchen zusaetzlich den
+# Git-Tag (prod-b ist eine prod-Welt, gleiche Ref-Semantik wie prod-A).
+- name: "Deploy-Ref — Git-Tag am Checkout ermitteln (prod/prod-b)"
   command: git -c safe.directory=* -C {{ rift_deploy_checkout }} describe --tags --always
   delegate_to: localhost
   become: false
@@ -43,7 +44,7 @@
   changed_when: false
   failed_when: false
   register: rbbattle_deploy_describe
-  when: rift_env == 'prod'
+  when: rift_env in ['prod', 'prod-b']
   tags: always
 
 # Build-Ref (Issue #607): DERSELBE ref wie in die Binaries gebacken
@@ -59,7 +60,7 @@
   register: rbbattle_full_sha
   tags: always
 
-- name: "Build-Ref — Tag-Name (nur prod, exact-match, Issue #607)"
+- name: "Build-Ref — Tag-Name (prod/prod-b, exact-match, Issue #607)"
   command: git -c safe.directory=* -C {{ rift_deploy_checkout }} describe --tags --exact-match HEAD
   delegate_to: localhost
   become: false
@@ -67,7 +68,7 @@
   changed_when: false
   failed_when: false
   register: rbbattle_exact_tag
-  when: rift_env == 'prod'
+  when: rift_env in ['prod', 'prod-b']
   tags: always
 
 - name: "Build-Ref setzen (rift_build_ref, Issue #607)"
@@ -84,9 +85,9 @@
 - name: "Deploy-Ref zusammensetzen (rift_deploy_ref)"
   set_fact:
     rift_deploy_ref: >-
-      {{ _rbbattle_prod_ref if rift_env == 'prod' else deploy_image_tag }}
+      {{ _rbbattle_prod_ref if rift_env in ['prod', 'prod-b'] else deploy_image_tag }}
   vars:
-    # prod = exakter Git-Tag (KEIN +sha mehr — Tag zeigt ohnehin auf den
+    # prod/prod-b = exakter Git-Tag (KEIN +sha mehr — Tag zeigt ohnehin auf den
     # Commit). Leerer/fehlender describe-Output (kein Tag, kein Git) faellt auf
     # den Checkout-SHA zurueck — der Ref ist dann wenigstens nicht leer.
     rbbattle_prod_tag: "{{ (rbbattle_deploy_describe.stdout | default('')) | trim }}"
@@ -108,10 +109,10 @@
       - rift_deploy_ref | length > 0
       - rift_deploy_identity is defined
       - rift_deploy_identity == (rift_env ~ ' · ' ~ rift_deploy_ref)
-      - (rift_env == 'prod') or (rift_deploy_ref == deploy_image_tag)
+      - (rift_env in ['prod', 'prod-b']) or (rift_deploy_ref == deploy_image_tag)
     fail_msg: >-
       rift_deploy_ref/rift_deploy_identity fehlen oder verletzen den Vertrag
       (Issue #483, US1). dev/test muessen den Checkout-SHA (deploy_image_tag)
-      tragen, prod den Git-Tag; die Identitaet ist "<env> · <ref>".
+      tragen, prod/prod-b den Git-Tag; die Identitaet ist "<env> · <ref>".
     success_msg: "Deploy-Identitaet={{ rift_deploy_identity }}."
   tags: always

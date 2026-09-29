@@ -11,7 +11,7 @@
 | Komponente                       | Host              | Container/Unit                                                     | Port                 | Zweck                                                                                                                                                 |
 | -------------------------------- | ----------------- | ------------------------------------------------------------------ | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | riftbreaker-dedicated            | planet            | docker (wine)                                                      | 6324/udp             | Dev-SP-Server: 1v1 „vs sich selbst" (SP-Mode; rbbattle-Mod + rbbridge). Seit #843 von 6321 auf 6324 umgezogen — 6321 gehört dem Entry-Relay           |
-| gns-relay                        | planet            | docker (wine, `network_mode: host`)                                | 6321/udp             | GNS-Entry-Relay (Issue #843): terminiert GameNetworkingSockets, liest den Spielnamen und routet per Suffix auf prod :6322 / staging :6323 / dev :6324 |
+| gns-relay                        | planet            | docker (wine, `network_mode: host`)                                | 6321/udp             | GNS-Entry-Relay (Issue #843/#995): terminiert GameNetworkingSockets, liest den Spielnamen und routet per Suffix auf prod-A :6322 (`*-a`) / prod-B :6325 (`*-b`) / staging :6323 / dev :6324; Default `*` = prod-A |
 | tournament-server                | planet            | systemd (Rust/axum, `tournament/`)                                 | 8081                 | Turnier 1v1: Lobby/Ready/GO/Wave-Routing/Score (2 Welten)                                                                                             |
 | test-Instanzen                   | planet            | docker, on-demand                                                  | frei                 | Test-Server aller Art (Mod-Tests, Balance, Experimente)                                                                                               |
 | Operator-Cockpit + Tournament-UI | planet            | **eigener** Caddy (`rift-caddy`, plain HTTP) hinter `mellon-caddy` | 443 → 127.0.0.1:8787 | `/contract/*` → IO-Bridge (basic_auth) · `/tournament/*` → tournament-server                                                                          |
@@ -484,13 +484,14 @@ forced command (`deploy/deploy-ssh.sh`) validiert die SHA, macht
 (enges sudoers). Kein Token, kein Polling. Installation/Migration:
 `deploy/README.md` → „CD: SSH-Deploy".
 
-Topologie (Stand Issue #328, GNS-Entry-Relay #843, Konsolidierung #846): **drei**
-Instanzen auf planet. **DEV** läuft rolling auf `:6324` (dieser CD-Workflow,
+Topologie (Stand Issue #328, GNS-Entry-Relay #843, Konsolidierung #846, zweite prod-Welt #995): **vier** Game-Instanzen auf planet. **DEV** läuft rolling auf `:6324` (dieser CD-Workflow,
 `deploy/site.yml`); der client-hardgewirete Einstiegsport `:6321` gehört dem
 **GNS-Entry-Relay** (`gns-relay`, `deploy/site.yml`), das GNS terminiert und per
 Spielnamen-Suffix auf die Backends routet (`*-dev` → `:6324`, `*-staging` →
-`:6323`, sonst → `:6322`). **PROD** ist eine koexistierende zweite Instanz auf
-`:6322` und **STAGING** ein dritter Twin auf `:6323`. Beide werden seit Issue
+`:6323`, `*-a` → `:6322`, `*-b` → `:6325`, sonst → `:6322`). **PROD-A** ist eine koexistierende zweite Instanz auf
+`:6322`, **PROD-B** ein vierter Twin auf `:6325` (Issue #995) und **STAGING** ein
+weiterer Twin auf `:6323`. Prod-A und Prod-B werden in EINEM Lauf von
+`deploy/deploy-prod.yml` (zwei Plays, Vars per `vars_files`) deployt. Alle werden seit Issue
 #846 **nicht mehr** über eigene DNAT-Relays (`satellite`/`sync`) angesprochen —
 es gibt **genau einen** öffentlichen Einstieg (`planet:6321`), und die Umgebung
 wählt der Spielname (Suffix). Ein Direct-IP-Server (`disable_steam "1"`) deckt
@@ -670,9 +671,21 @@ Host-Pfad-Migration deckt Docker-Ressourcen **nicht** ab — Regressions-Nachwei
 Docroot je Env, s. #483/US3). `mods_zip_name: rbbattle.zip` + seine md5-Parität
 bleiben **unverändert** (zusätzlich entsteht `rbbattle-<env>-<ref>.zip`).
 
+**Zweite prod-Welt `prod-b` (Issue #995):** vierter Dedicated-Twin auf planet
+(:6325), eigene Container/Pfade/Volumes/Projekt (`deploy/prod-b-vars.yml`,
+Projekt `riftbreaker-dedicated-prod-b`), IO-Bridge `9004`, Server-Control
+`8095`, Attack-Cycle `9105`, eigener Crash-Collector. Deployt in **einem**
+Lauf mit Prod-A über die zwei Plays in `deploy/deploy-prod.yml` (Vars per
+`vars_files`; der Wrapper übergibt **kein** `-e @prod-vars.yml` mehr). Prod-B
+deployt **kein** mods-zip/tournament-server/website — eine Referee-Instanz kennt
+beide Welten (`tournament_bridge_a_url=:9002`, `tournament_bridge_b_url=:9004`).
+GNS-Suffix: `*-a` → A :6322, `*-b` → B :6325, Default `*` = A (abwärtskompatibel).
+
 `deploy/tasks/env-assert.yml` asserted zusätzlich, dass für `env != dev` jeder
-der obigen Pfade **vom dev-Basiswert abweicht** (Distinctness gegen explizite
-dev-Konstanten — Ansible kennt keine Variablen-Herkunft).
+der obigen Kern-Pfade **vom dev-Basiswert abweicht** (Distinctness gegen explizite
+dev-Konstanten — Ansible kennt keine Variablen-Herkunft); die Website-/Caddy-Keys
+werden nur für Envs geprüft, die die `website`-Rolle deployen (prod/staging) —
+prod-b deployt sie nicht.
 
 ### Migration & Rollback: `-<env>`-Schema (Ziel B, Issue #483)
 

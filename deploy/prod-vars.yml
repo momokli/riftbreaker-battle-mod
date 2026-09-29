@@ -68,13 +68,14 @@ riftbreaker_sessions_dir: "/srv/rift-{{ rift_env }}/sessions"
 riftbreaker_content_mode: sync
 
 # --- Tournament-Server (Referee + Web-UI, eigener Port/Unit/Install) ---------
-# Prod-Zwilling: isoliert von dev (8081) auf 8082; bridge A zeigt auf die eigene
-# prod-Bridge :9002 (kein Cross-Reference auf dev).
+# Prod-Zwilling: isoliert von dev (8081) auf 8082; EINE Referee-Instanz kennt
+# BEIDE Welten (Issue #995, docs/VS_MATCH.md §5.3): bridge_a = prod-A :9002,
+# bridge_b = prod-B :9004. Der B-Play deployt keinen eigenen Tournament-Server.
 tournament_install_dir: /opt/rbmods/tournament-server-prod
 tournament_unit: tournament-server-prod
 tournament_port: 8082
 tournament_bridge_a_url: "http://127.0.0.1:9002/exec"
-tournament_bridge_b_url: "http://127.0.0.1:9002/exec"
+tournament_bridge_b_url: "http://127.0.0.1:9004/exec"
 
 # --- Server-Control (Prod-Zwilling des Host-Agenten, Issue #498) ------------
 # Eigener Agent auf 8093 (dev bleibt 8092), eigene Unit/Install/Env-Datei —
