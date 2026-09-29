@@ -126,6 +126,22 @@ int main(void)
           "reset: nach neuer Runde feuert das Gate ERNEUT");
     ready_gate_reset(NULL); /* defensiv: NULL darf nicht crashen */
 
+    /* --- #937/US4 (Fix): Timeout-Obergrenze ------------------------- */
+    /* env_int klemmt nur n > 0; unplausibel hohe RBB_READY_TIMEOUT_S
+     * (z. B. 999999999) muessen auf eine sinnvolle Obergrenze begrenzt werden. */
+    check(ready_timeout_cap(180, 180) == 180, "cap: Default bleibt");
+    check(ready_timeout_cap(1, 180) == 1, "cap: 1 s bleibt");
+    check(ready_timeout_cap(0, 180) == 180, "cap: 0 -> Default");
+    check(ready_timeout_cap(-5, 180) == 180, "cap: negativ -> Default");
+    check(ready_timeout_cap(999999999, 180) == RBB_READY_TIMEOUT_MAX,
+          "cap: INT_MAX-nah -> Obergrenze");
+    check(ready_timeout_cap(RBB_READY_TIMEOUT_MAX + 1, 180) ==
+              RBB_READY_TIMEOUT_MAX,
+          "cap: knapp ueber Grenze -> Obergrenze");
+    check(ready_timeout_cap(RBB_READY_TIMEOUT_MAX, 180) ==
+              RBB_READY_TIMEOUT_MAX,
+          "cap: genau an der Grenze bleibt");
+
     /* --- Status-JSON ------------------------------------------------- */
     ready_gate_init(&g);
     g.players = 3;

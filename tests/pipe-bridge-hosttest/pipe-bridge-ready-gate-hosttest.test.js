@@ -173,6 +173,16 @@ test("pipe_bridge: Server->Spieler-Status nutzt #934 send_chat (#937/US6)", () =
     "muss die Pipe-Writes weiterhin unter g_pipe_cs serialisieren",
   );
 
+  // #937/US4 (Fix): RBB_READY_TIMEOUT_S oben begrenzen (env_int klemmt nur n>0).
+  assert.ok(
+    src.includes("ready_timeout_cap("),
+    "RBB_READY_TIMEOUT_S wird nicht ueber ready_timeout_cap() begrenzt (US4)",
+  );
+  assert.ok(
+    src.includes("RBB_READY_TIMEOUT_MAX"),
+    "RBB_READY_TIMEOUT_MAX (sane Obergrenze) fehlt (US4)",
+  );
+
   // Aufrufe an den Zeitpunkten: erstes ready UND alle ready UND timeout.
   assert.ok(
     src.includes("bridge_send_chat_status"),
