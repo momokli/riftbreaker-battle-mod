@@ -192,6 +192,7 @@ class Handler(BaseHTTPRequestHandler):
                     env=payload.get("env"),
                     instance_id=payload.get("instance_id"),
                     identitaet=payload.get("identitaet"),
+                    mode=payload.get("mode"),
                 )
                 self._send_json(200, dict({"ok": True}, **cap.to_dict()))
             elif method == "POST" and path == "/capsule/ready":

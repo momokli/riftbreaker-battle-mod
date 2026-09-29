@@ -132,6 +132,9 @@ class ParkedServiceConfig:
     reconcile_on_start: bool = True
     state_dir: str = ""
     instance_prefix: str = "parked"
+    # Issue #994: Modus, in dem der Hintergrund-Warm-Pool Instanzen startet
+    # (kein Request ⇒ kein Request-Modus). Default = heutiges Verhalten.
+    warm_mode: str = "solo_self"
     token: str = ""
     log_level: str = "INFO"
 
@@ -160,6 +163,7 @@ class ParkedServiceConfig:
             reconcile_on_start=_bool_value(env, "PARKED_RECONCILE_ON_START", True),
             state_dir=state_dir,
             instance_prefix=prefix,
+            warm_mode=(env.get("PARKED_MODE") or "solo_self").strip() or "solo_self",
             token=(env.get("PARKED_TOKEN") or "").strip(),
             log_level=(env.get("PARKED_LOG_LEVEL") or "INFO").strip() or "INFO",
         )
@@ -218,6 +222,7 @@ class ParkedController(object):
         backoff_cap: float = DEFAULT_BACKOFF_CAP,
         reconcile_interval: float = 300.0,
         reconcile_on_start: bool = True,
+        warm_mode: str = "solo_self",
     ) -> None:
         self.pool = pool
         self.pool_size = int(pool_size)
@@ -225,6 +230,8 @@ class ParkedController(object):
         self.reap_interval = float(reap_interval)
         self.reconcile_interval = float(reconcile_interval)
         self.reconcile_on_start = bool(reconcile_on_start)
+        # Issue #994: Modus, den der Hintergrund-Warm-Pool fixiert.
+        self.warm_mode = warm_mode or "solo_self"
         self.env = env
         self.prefix = prefix
         self.clock = clock
@@ -309,7 +316,7 @@ class ParkedController(object):
         while len(self._parked_rows()) < self.pool_size:
             instance_id = self._next_id()
             try:
-                self.pool.warm_up(env=self.env, instance_id=instance_id)
+                self.pool.warm_up(env=self.env, instance_id=instance_id, mode=self.warm_mode)
             except ParkedError as exc:
                 self.warm_failures += 1
                 LOG.warning("warm_up %s fehlgeschlagen: %s", instance_id, exc)
@@ -407,11 +414,15 @@ class ParkedController(object):
         return max(rows, key=key)["instance"]
 
     def claim(self, env: Optional[str] = None, instance_id: Optional[str] = None,
-              resume: bool = True) -> Dict[str, Any]:
+              resume: bool = True, mode: Optional[str] = None) -> Dict[str, Any]:
         """Instanz uebergeben. Ohne ``instance_id`` die aelteste ``PARKED`` (FIFO).
 
         ``resume=False`` reicht durch an :meth:`ParkedPool.claim`: die Welt
         bleibt nach der Uebergabe PAUSIERT (#931, Kapsel-Claim).
+
+        ``mode`` (Issue #994) ist der ANGEFORDERTE Modus; er muss zum warm
+        laufenden Container passen, sonst 409 ``mode_mismatch`` (kein stilles
+        Umschalten). ``None`` = kein Vergleich (heutiges Verhalten).
         """
         with self._lock:
             if instance_id is None:
@@ -419,9 +430,12 @@ class ParkedController(object):
                 if instance_id is None:
                     raise ServiceError(409, "none_parked", "keine PARKED-Instanz im Pool")
             try:
-                result = self.pool.claim(env=env, instance_id=instance_id, resume=bool(resume))
+                result = self.pool.claim(env=env, instance_id=instance_id, resume=bool(resume),
+                                         mode=mode)
             except ParkedError as exc:
                 detail = str(exc)
+                if "mode_mismatch" in detail:
+                    raise ServiceError(409, "mode_mismatch", detail)
                 if "healthy" in detail:
                     raise ServiceError(503, "bridge_unhealthy", detail)
                 raise ServiceError(409, "not_claimable", detail)
@@ -632,9 +646,17 @@ class Handler(BaseHTTPRequestHandler):
                 resume = payload.get("resume", True)
                 if not isinstance(resume, bool):
                     raise ServiceError(400, "bad_request", "resume muss ein JSON-Boolean sein")
+                mode = payload.get("mode")
+                if mode is not None:
+                    # Fail-loud VOR dem Claim: unbekannter Modus -> 400 bad_mode.
+                    module = _provisioner_module()
+                    try:
+                        module.parse_mode(mode)
+                    except module.ModeError as exc:
+                        raise ServiceError(400, "bad_mode", str(exc))
                 result = self.controller.claim(
                     env=payload.get("env"), instance_id=payload.get("instance_id"),
-                    resume=resume,
+                    resume=resume, mode=mode,
                 )
                 self._send_json(200, dict({"ok": True}, **result))
             elif method == "POST" and path == "/recycle":
@@ -735,6 +757,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         reconcile_on_start=config.reconcile_on_start,
         env=config.env,
         prefix=config.instance_prefix,
+        warm_mode=config.warm_mode,
     )
     httpd = build_server(config, controller)
     controller.start()

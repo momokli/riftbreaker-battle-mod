@@ -235,6 +235,35 @@ class WarmUpTests(PoolHarness):
         self.assertIn("pause_game", self.bridge_for(entry).calls)
         self.assertEqual(entry.rounds, 0)
 
+    def test_warm_up_passes_mode_to_provisioner_and_records_it(self):
+        # Issue #994: der Warm-Modus wird fixiert und an den Provisioner gegeben.
+        seen = []
+        original = self.provisioner.start
+
+        def start(env=None, mode="solo_self", instance_id=None):
+            seen.append(mode)
+            return original(env=env, mode=mode, instance_id=instance_id)
+
+        self.provisioner.start = start
+        entry = self.pool.warm_up(env="test", instance_id="r1", mode="solo_persona:aggro")
+        self.assertEqual(seen, ["solo_persona:aggro"])
+        self.assertEqual(entry.mode, "solo_persona:aggro")
+        self.assertEqual(self.pool.status()[0]["mode"], "solo_persona:aggro")
+
+    def test_warm_up_default_mode_is_solo_self(self):
+        # Backward-Compat: ohne mode-Argument startet der Provisioner solo_self.
+        seen = []
+        original = self.provisioner.start
+
+        def start(env=None, mode="solo_self", instance_id=None):
+            seen.append(mode)
+            return original(env=env, mode=mode, instance_id=instance_id)
+
+        self.provisioner.start = start
+        entry = self.pool.warm_up(env="test", instance_id="r1")
+        self.assertEqual(seen, ["solo_self"])
+        self.assertEqual(entry.mode, "solo_self")
+
     def test_warm_up_is_idempotent(self):
         first = self.pool.warm_up(env="test", instance_id="r1")
         second = self.pool.warm_up(env="test", instance_id="r1")
@@ -334,6 +363,26 @@ class ClaimTests(PoolHarness):
         self.pool.warm_up(env="test", instance_id="r1")
         result = self.pool.claim(env="test", instance_id="r1")
         self.assertEqual(result["gns_endpoint"], "127.0.0.1:41001")
+
+    def test_claim_mode_mismatch_fails_loud(self):
+        # Issue #994: abweichender angeforderter Modus -> lauter Fehler, kein
+        # stilles Umschalten; die Instanz bleibt PARKED.
+        self.pool.warm_up(env="test", instance_id="r1", mode="solo_self")
+        with self.assertRaises(ParkedError) as ctx:
+            self.pool.claim(env="test", instance_id="r1", mode="solo_persona:aggro")
+        self.assertIn("mode_mismatch", str(ctx.exception))
+        self.assertEqual(self.pool.status()[0]["state"], ParkedState.PARKED.value)
+
+    def test_claim_mode_match_succeeds(self):
+        self.pool.warm_up(env="test", instance_id="r1", mode="solo_persona:aggro")
+        result = self.pool.claim(env="test", instance_id="r1", mode="solo_persona:aggro")
+        self.assertEqual(result["state"], ParkedState.CLAIMED.value)
+
+    def test_claim_without_mode_is_backward_compatible(self):
+        # mode=None (Default) prueft nichts -> bisheriges Verhalten.
+        self.pool.warm_up(env="test", instance_id="r1", mode="solo_persona:aggro")
+        result = self.pool.claim(env="test", instance_id="r1")
+        self.assertEqual(result["state"], ParkedState.CLAIMED.value)
 
     def test_claim_returns_cycle_url(self):
         # Issue #966: die Claim-Antwort traegt die Cycle-URL der Instanz.
