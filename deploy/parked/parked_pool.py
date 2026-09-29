@@ -159,6 +159,9 @@ class ParkedEntry:
     bridge_url: str
     cycle_url: Optional[str] = None
     gns_endpoint: Optional[str] = None
+    # Issue #994: der beim Warm-Up fixierte Container-Modus
+    # (`solo_self` | `solo_persona:<name>`). Default = heutiges Verhalten.
+    mode: str = "solo_self"
     state: ParkedState = ParkedState.WARMING
     parked_since: Optional[float] = None
     claimed_at: Optional[float] = None
@@ -175,6 +178,7 @@ class ParkedEntry:
             "bridge_url": self.bridge_url,
             "cycle_url": self.cycle_url,
             "gns_endpoint": self.gns_endpoint,
+            "mode": self.mode,
             "state": self.state.value,
             "rounds": self.rounds,
             "parked_seconds": parked_seconds,
@@ -401,9 +405,15 @@ class ParkedPool(object):
         return entry
 
     # -- API ---------------------------------------------------------------
-    def warm_up(self, env: Optional[str] = None, instance_id: Optional[str] = None) -> ParkedEntry:
+    def warm_up(self, env: Optional[str] = None, instance_id: Optional[str] = None,
+                mode: str = "solo_self") -> ParkedEntry:
         """Instanz starten und parken. Idempotent: ist sie schon ``PARKED``,
-        passiert **kein** zweiter Start."""
+        passiert **kein** zweiter Start.
+
+        ``mode`` (Issue #994) ist der Modus, in dem der Container warm laeuft
+        (`solo_self` Default = heutiges Verhalten; `solo_persona:<name>`). Er
+        wird beim Provisionieren fixiert; ein Claim muss ihn treffen.
+        """
         env = env or self._default_env()
         instance_id = instance_id or self._next_id()
         key = (env, instance_id)
@@ -417,10 +427,10 @@ class ParkedPool(object):
             )
 
         entry = ParkedEntry(instance_id=instance_id, env=env, container="", bridge_url="",
-                            state=ParkedState.WARMING)
+                            mode=mode, state=ParkedState.WARMING)
         self._entries[key] = entry
         try:
-            result = self.provisioner.start(env=env, instance_id=instance_id)
+            result = self.provisioner.start(env=env, mode=mode, instance_id=instance_id)
         except Exception as exc:
             entry.state = ParkedState.STOPPED
             raise ParkedError("warm_up: start von %s fehlgeschlagen: %s" % (instance_id, exc))
@@ -449,8 +459,13 @@ class ParkedPool(object):
         return entry
 
     def claim(self, env: Optional[str] = None, instance_id: Optional[str] = None,
-              resume: bool = True) -> Dict[str, Any]:
+              resume: bool = True, mode: Optional[str] = None) -> Dict[str, Any]:
         """Geparkte Instanz an ein Spiel uebergeben und die Handover-Dauer messen.
+
+        ``mode`` (Issue #994) ist der ANGEFORDERTE Modus. Der Container-Modus
+        ist bereits beim Warm-Up fixiert; weicht der Request ab, wird NICHT
+        still umgeschaltet, sondern lauthupen (``mode_mismatch``). ``mode=None``
+        (Default) prueft nichts — heutiges Verhalten.
 
         ``resume=True`` (Default, rueckwaerts-kompatibel): ``resume_game`` und
         Zeitmessung des Handovers (Welt laeuft danach). ``resume=False``: die
@@ -461,6 +476,13 @@ class ParkedPool(object):
         ~0 (kein Resume gemessen).
         """
         entry = self._require(env, instance_id, ParkedState.PARKED, "claim")
+        # Issue #994: der angeforderte Modus muss zum warm laufenden Container
+        # passen (kein stilles Umschalten; spiegelt die Provisioner-Regel).
+        if mode is not None and mode != entry.mode:
+            raise ParkedError(
+                "mode_mismatch: Instanz %s laeuft in '%s', angefordert '%s'"
+                % (entry.instance_id, entry.mode, mode)
+            )
         # Der Host-UDP-Port kann seit dem warm_up gewechselt haben -> frisch lesen.
         self._refresh_gns_endpoint(entry)
         bridge = self._bridge(entry.bridge_url)

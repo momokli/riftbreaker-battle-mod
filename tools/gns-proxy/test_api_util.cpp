@@ -16,6 +16,7 @@ using rbapi::parseHttpStatusLine;
 using rbapi::deriveSoloPhase;
 using rbapi::parseQueryParam;
 using rbapi::parseSoloInstance;
+using rbapi::parseSoloMode;
 using rbapi::parseSoloSelfSend;
 using rbapi::parseTargetSpec;
 using rbapi::parseUrlHostPort;
@@ -280,6 +281,22 @@ static void testParseSoloInstance() {
 // Issue #936: reine Aufnahme-Entscheidung fuer /solo. `instanceRequested` =
 // der Body nennt eine nicht-leere `instance`; `memberCount` = aktuelle
 // Mitgliederzahl der Gruppe (<=0 bedeutet: Instanz unbekannt).
+static void testParseSoloMode() {
+  // Issue #994: modus lesen; fehlend/leer/nicht-String -> false (Default bleibt).
+  std::string out;
+  check(!parseSoloMode("{\"identitaet\":\"str:A\"}", out), "fehlendes mode -> false");
+  check(out.empty(), "fehlendes mode -> out leer");
+  check(parseSoloMode("{\"mode\":\"solo_persona:aggro\"}", out), "mode gefunden");
+  checkEq(out, "solo_persona:aggro", "mode exakter Wert");
+  check(parseSoloMode("{ \"mode\" :  \"solo_self\" }", out), "whitespace toleriert");
+  checkEq(out, "solo_self", "solo_self exakt");
+  check(!parseSoloMode("{\"mode\":\"\"}", out), "leerer String -> false");
+  check(out.empty(), "leerer String -> out leer");
+  check(!parseSoloMode("{\"mode\":42}", out), "Zahl -> false");
+  check(!parseSoloMode("{\"mode\":null}", out), "null -> false");
+  check(!parseSoloMode("", out), "leerer Body -> false");
+}
+
 static void testDecideSoloAction() {
   using rbapi::decideSoloAction;
   using rbapi::SoloJoinDecision;
@@ -380,7 +397,8 @@ static std::vector<int> g_sleeps;
 static SoloOutcome runSolo(const std::string &env, FakeClaim &claim,
                            long long &clock,
                            const SoloBudget &budget = SoloBudget{},
-                           const std::string &claimPath = "/claim") {
+                           const std::string &claimPath = "/claim",
+                           const std::string &mode = "") {
   g_sleeps.clear();
   claim.clock = &clock;
   const auto nowMs = [&clock]() -> long long { return clock; };
@@ -388,7 +406,7 @@ static SoloOutcome runSolo(const std::string &env, FakeClaim &claim,
     g_sleeps.push_back(ms);
     clock += ms;
   };
-  return runSoloClaim(env, std::ref(claim), budget, nowMs, sleepFn, claimPath);
+  return runSoloClaim(env, std::ref(claim), budget, nowMs, sleepFn, claimPath, mode);
 }
 
 static void testSoloSuccess() {
@@ -420,6 +438,46 @@ static void testSoloEnvPayload() {
   check(out.pinIdentity, "env-Lauf pinnt");
   checkEq(claim.payloads[0], "{\"env\":\"staging\"}", "env im Body");
   checkEq(out.instance, "", "ohne instance-Feld leer");
+}
+
+static void testSoloModePayload() {
+  // Issue #994: mode nur bei nicht-leerem Wert im Claim-Body. Default ("") ist
+  // byte-identisch zum bisherigen Verhalten.
+  FakeClaim claim;
+  claim.consumeMs = 10;
+  claim.responses.push_back(
+      HttpResp{200, "{\"instance\":\"p\",\"gns_endpoint\":\"127.0.0.1:40000\"}"});
+  long long clock = 0;
+  runSolo("", claim, clock, SoloBudget{}, "/claim", "solo_persona:aggro");
+  checkEq(claim.payloads[0], "{\"mode\":\"solo_persona:aggro\"}",
+          "mode-only Claim-Body");
+
+  FakeClaim both;
+  both.consumeMs = 10;
+  both.responses.push_back(
+      HttpResp{200, "{\"instance\":\"p\",\"gns_endpoint\":\"127.0.0.1:40000\"}"});
+  long long clock2 = 0;
+  runSolo("staging", both, clock2, SoloBudget{}, "/claim", "solo_self");
+  checkEq(both.payloads[0], "{\"env\":\"staging\",\"mode\":\"solo_self\"}",
+          "env+mode Claim-Body");
+
+  FakeClaim def;
+  def.consumeMs = 10;
+  def.responses.push_back(
+      HttpResp{200, "{\"instance\":\"p\",\"gns_endpoint\":\"127.0.0.1:40000\"}"});
+  long long clock3 = 0;
+  runSolo("", def, clock3, SoloBudget{}, "/claim", "");
+  checkEq(def.payloads[0], "{}", "Default mode -> byte-identisch {}");
+
+  // Rot-vor-gruen-Anker: Default-env bleibt ohne mode-Feld byte-identisch alt.
+  FakeClaim envOnly;
+  envOnly.consumeMs = 10;
+  envOnly.responses.push_back(
+      HttpResp{200, "{\"instance\":\"p\",\"gns_endpoint\":\"127.0.0.1:40000\"}"});
+  long long clock4 = 0;
+  runSolo("prod", envOnly, clock4, SoloBudget{}, "/claim", "");
+  checkEq(envOnly.payloads[0], "{\"env\":\"prod\"}",
+          "Default mode -> env-only Body byte-identisch");
 }
 
 // Issue #931: der Claim-Pfad ist konfigurierbar. Default bleibt Parked
@@ -678,10 +736,12 @@ int main() {
   testSoloPhaseName();
   testParseSoloSelfSend();
   testParseSoloInstance();
+  testParseSoloMode();
   testDecideSoloAction();
   testDecideReady();
   testSoloSuccess();
   testSoloEnvPayload();
+  testSoloModePayload();
   testSoloClaimPathConfigurable();
   testSoloRetryThenSuccess();
   testSoloExhaustion();

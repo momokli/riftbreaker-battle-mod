@@ -649,6 +649,36 @@ class ControllerClaimRecycleTests(unittest.TestCase):
         # kein zweites resume_game (Doppel-Claim lehnt VOR der Bridge ab)
         self.assertEqual(self.bridges[entry.bridge_url].calls.count("resume_game"), 1)
 
+    def test_claim_mode_mismatch_maps_to_409(self):
+        # Issue #994: Modus-Konflikt -> 409 mode_mismatch (kein stilles Umschalten).
+        controller = make_controller(self.clock, self.provisioner, self.bridges, pool_size=1)
+        controller.pool.warm_up(env="test", instance_id="r1", mode="solo_self")
+        with self.assertRaises(Exception) as ctx:
+            controller.claim(instance_id="r1", mode="solo_persona:aggro")
+        self.assertEqual(getattr(ctx.exception, "status", None), 409)
+        self.assertEqual(getattr(ctx.exception, "reason", None), "mode_mismatch")
+
+    def test_claim_passes_mode_through(self):
+        controller = make_controller(self.clock, self.provisioner, self.bridges, pool_size=1)
+        controller.pool.warm_up(env="test", instance_id="r1", mode="solo_persona:aggro")
+        result = controller.claim(instance_id="r1", mode="solo_persona:aggro")
+        self.assertEqual(result["state"], ParkedState.CLAIMED.value)
+
+    def test_fill_warms_with_configured_warm_mode(self):
+        # D3/#994: der Hintergrund-Warm-Pool fixiert den konfigurierten Modus.
+        controller = make_controller(self.clock, self.provisioner, self.bridges,
+                                     pool_size=1, warm_mode="solo_persona:aggro")
+        seen = []
+        original = self.provisioner.start
+
+        def start(env=None, mode="solo_self", instance_id=None):
+            seen.append(mode)
+            return original(env=env, mode=mode, instance_id=instance_id)
+
+        self.provisioner.start = start
+        controller.maintain_once()
+        self.assertEqual(seen, ["solo_persona:aggro"])
+
 
 class HttpHarness(unittest.TestCase):
     """Echter ``ThreadingHTTPServer`` auf ``127.0.0.1:0``, Requests per urllib."""
@@ -757,6 +787,26 @@ class HttpTests(HttpHarness):
         status, body = self.post("/claim", {"resume": 1})
         self.assertEqual(status, 400)
         self.assertEqual(body["reason"], "bad_request")
+
+    def test_claim_bad_mode_400(self):
+        # Issue #994: unbekannter Modus -> 400 bad_mode (fail-loud via parse_mode).
+        self.controller.maintain_once()
+        status, body = self.post("/claim", {"mode": "solo_bogus"})
+        self.assertEqual(status, 400)
+        self.assertEqual(body["reason"], "bad_mode")
+
+    def test_claim_mode_mismatch_409(self):
+        # Warm-Pool laeuft solo_self; Persona anfordern -> 409 mode_mismatch.
+        self.controller.maintain_once()
+        status, body = self.post("/claim", {"mode": "solo_persona:aggro"})
+        self.assertEqual(status, 409)
+        self.assertEqual(body["reason"], "mode_mismatch")
+
+    def test_claim_mode_matching_ok(self):
+        self.controller.maintain_once()
+        status, body = self.post("/claim", {"mode": "solo_self"})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
 
     def test_status_entry_carries_gns_endpoint(self):
         # Issue #929 (durchgaengig): provisioner ports.gns -> ParkedEntry -> /status.

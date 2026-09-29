@@ -120,6 +120,8 @@ class Capsule:
     bridge: Any = None
     cycle: Any = None
     cycle_url: Optional[str] = None
+    # Issue #994: angeforderter Modus der Runde (additiv; None = alt).
+    mode: Optional[str] = None
 
     def to_dict(self, now: Optional[float] = None) -> Dict[str, Any]:
         return {
@@ -130,6 +132,7 @@ class Capsule:
             "gns_endpoint": self.gns_endpoint,
             "cycle_url": self.cycle_url,
             "identitaet": self.identitaet,
+            "mode": self.mode,
             "round": self.rounds,
             "claimed_seconds": None if now is None else now - self.claimed_at,
         }
@@ -211,12 +214,14 @@ class ParkedServiceClient(object):
         return _http_json(self.base_url, "POST", path, payload, self.timeout, opener)
 
     def claim(self, env: Optional[str] = None, instance_id: Optional[str] = None,
-              resume: bool = True) -> Dict[str, Any]:
+              resume: bool = True, mode: Optional[str] = None) -> Dict[str, Any]:
         payload: Dict[str, Any] = {"resume": bool(resume)}
         if env is not None:
             payload["env"] = env
         if instance_id is not None:
             payload["instance_id"] = instance_id
+        if mode is not None:
+            payload["mode"] = mode
         return self._post("/claim", payload)
 
     def recycle(self, env: Optional[str] = None, instance_id: Optional[str] = None,
@@ -361,11 +366,13 @@ class CapsuleCoordinator(object):
 
     # -- API ---------------------------------------------------------------
     def open(self, env: Optional[str] = None, instance_id: Optional[str] = None,
-             identitaet: Optional[str] = None) -> Capsule:
+             identitaet: Optional[str] = None, mode: Optional[str] = None) -> Capsule:
         """Kapsel oeffnen: Parked ``claim`` OHNE resume -> ``claimed`` (Welt pausiert).
 
         Nur moeglich, wenn fuer die Env keine Kapsel laeuft (``idle``) bzw. die
-        letzte Runde ``parked`` ist; sonst ``409 already_open``.
+        letzte Runde ``parked`` ist; sonst ``409 already_open``. ``mode``
+        (Issue #994) wird an den Parked-Claim durchgereicht (Mismatch-Check
+        liegt dort); Default ``None`` = altes Verhalten.
         """
         env = env or self._default_env()
         existing = self._capsules.get(env)
@@ -376,7 +383,7 @@ class CapsuleCoordinator(object):
                 409,
             )
         try:
-            result = self.parked.claim(env=env, instance_id=instance_id, resume=False)
+            result = self.parked.claim(env=env, instance_id=instance_id, resume=False, mode=mode)
         except Exception as exc:  # noqa: BLE001 - Mapping in CapsuleError
             raise self._map_error(exc, "claim_failed", 503)
 
@@ -396,6 +403,7 @@ class CapsuleCoordinator(object):
             bridge=self.bridge_factory(str(bridge_url)) if bridge_url else None,
             cycle=self.cycle_factory(env, str(cycle_url)),
             cycle_url=str(cycle_url) or None,
+            mode=mode,
         )
         self._capsules[env] = capsule
         self._transition(capsule, CapsulePhase.CLAIMED)

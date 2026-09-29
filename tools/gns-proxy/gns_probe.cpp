@@ -1391,6 +1391,30 @@ const char kUiHtml[] = R"HTML(<!doctype html>
   .solo { display:flex; gap:8px; margin-top:10px; }
   .solo .toggle.on { border-color:var(--accent); background:#1b2735; }
   .hint { margin-top:8px; font-size:12px; color:var(--waiting); }
+  /* Main-Screen: Modi-Kacheln zuerst (Issue #994). */
+  .modes { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:16px; margin-bottom:18px; }
+  .mode-card { border:1px solid var(--line); border-radius:16px; padding:18px;
+    background:linear-gradient(180deg, var(--panel), #14171b);
+    box-shadow:0 8px 24px rgba(0,0,0,.25); }
+  .mode-card h2 { margin:0 0 6px; font-size:16px; font-weight:650; letter-spacing:.2px; }
+  .mode-card p { margin:0 0 14px; color:var(--muted); font-size:12.5px; }
+  .mode-card button { width:100%; flex:none; }
+  .playerbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:18px;
+    padding:14px 16px; border:1px solid var(--line); border-radius:14px; background:var(--panel); }
+  .playerbar label { color:var(--muted); font-size:13px; }
+  .playerbar select { padding:9px 11px; border-radius:10px; border:1px solid #2f3a49;
+    background:#1b2129; color:var(--fg); font:inherit; min-width:220px; }
+  .playerbar .badge { font-size:12px; }
+  /* Einheitlicher Status-Badge: wartet/provisioniert/laedt/laeuft/fertig. */
+  .badge.status-wartet { background:rgba(139,147,159,.16); color:var(--muted); }
+  .badge.status-provisioniert { background:rgba(78,161,255,.16); color:var(--accent); }
+  .badge.status-laedt { background:rgba(242,193,78,.16); color:var(--held); }
+  .badge.status-laeuft { background:rgba(95,211,154,.16); color:var(--routed); }
+  .badge.status-fertig { background:rgba(139,147,159,.16); color:var(--muted); }
+  details.diag { border:1px solid var(--line); border-radius:14px; padding:10px 14px;
+    background:var(--panel); }
+  details.diag > summary { cursor:pointer; color:var(--muted); font-size:13.5px; user-select:none; }
+  details.diag[open] > summary { margin-bottom:14px; }
   .meta { display:flex; flex-wrap:wrap; gap:6px 16px; margin-bottom:12px;
     color:var(--muted); font-size:12.5px; }
   .meta b { color:var(--fg); font-weight:600; }
@@ -1410,7 +1434,7 @@ const char kUiHtml[] = R"HTML(<!doctype html>
 <header>
   <span class="dot" id="dot"></span>
   <h1>Riftbreaker Proxy - Lobby</h1>
-  <span class="sub">Wartende Spieler einem Server zuweisen</span>
+  <span class="sub">Modus waehlen und Spieler hinschicken</span>
   <span class="grow"></span>
   <div class="stats">
     <span>wartend <b id="n-wait">0</b></span>
@@ -1419,7 +1443,28 @@ const char kUiHtml[] = R"HTML(<!doctype html>
   </div>
 </header>
 <main>
-  <div class="grid" id="grid"><div class="empty">lade...</div></div>
+  <section class="modes">
+    <div class="mode-card">
+      <h2>SOLO vs yourself</h2>
+      <p>Ein Spieler gegen sich selbst (solo_self).</p>
+      <button id="go-self">Spieler hinschicken</button>
+    </div>
+    <div class="mode-card">
+      <h2>SOLO vs persona:aggro</h2>
+      <p>Solo gegen die Persona aggro (solo_persona:aggro).</p>
+      <button id="go-persona">Spieler hinschicken</button>
+    </div>
+  </section>
+  <div class="playerbar">
+    <label for="player">Spieler</label>
+    <select id="player"><option value="">lade Sessions...</option></select>
+    <span id="player-status" class="badge status-wartet">wartet</span>
+    <span class="sub" id="player-hint"></span>
+  </div>
+  <details class="diag">
+    <summary>Sessions / Diagnose</summary>
+    <div class="grid" id="grid"><div class="empty">lade...</div></div>
+  </details>
 </main>
 <script>
 let TARGETS = [];
@@ -1429,6 +1474,18 @@ const ORDER = { held: 0, waiting: 1, connected: 2, closed: 3, routed: 4 };
 const LABEL = { held: "wartet", waiting: "getrennt", connected: "verbunden", closed: "getrennt", routed: "geroutet" };
 const PHASE = { provisioned: "provisioniert", underway: "Spieler unterwegs",
   in_game_paused: "im Spiel (paused)", running: "laeuft" };
+// Einheitlicher Status-Badge (Issue #994): wartet/provisioniert/laedt/laeuft/fertig.
+// `fertig` hat noch kein Server-Signal (offener Punkt) und ist hier nur definiert.
+const STATUS = { wartet: "wartet", provisioniert: "provisioniert", laedt: "laedt",
+  laeuft: "laeuft", fertig: "fertig" };
+function statusInfo(s) {
+  if (!s || !s.soloPhase) return { key: "wartet", label: STATUS.wartet };
+  if (s.soloPhase === "provisioned") return { key: "provisioniert", label: STATUS.provisioniert };
+  if (s.soloPhase === "underway") return { key: "laedt", label: STATUS.laedt };
+  if (s.soloPhase === "running") return { key: "laeuft", label: STATUS.laeuft };
+  if (s.soloPhase === "in_game_paused") return { key: "laeuft", label: STATUS.laeuft + " (pausiert)" };
+  return { key: "wartet", label: STATUS.wartet };
+}
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
   const e = document.createElement(tag);
@@ -1516,6 +1573,37 @@ async function ready(btn, cardEl) {
   } catch (e) { hint(cardEl, "Netzwerkfehler"); }
   setTimeout(loadSessions, 300);
 }
+
+// Main-Screen (Issue #994): Spieler + Modus waehlen und per POST /solo
+// {identitaet, mode, self_send} hinschicken. self_send nur bei solo_self.
+async function sendPlayer(mode, btn) {
+  const identity = $("player").value;
+  const hintEl = $("player-hint");
+  if (!identity) { hintEl.textContent = "kein Spieler gewaehlt"; return; }
+  btn.disabled = true;
+  hintEl.textContent = "";
+  const selfSend = mode === "solo_self";
+  try {
+    const r = await fetch("/solo", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identitaet: identity, mode: mode, self_send: selfSend }) });
+    if (!r.ok) {
+      const j = await r.json().catch(() => null);
+      const reason = (j && j.reason) ? j.reason : ("http " + r.status);
+      const MSG = { none_parked: "keine geparkte Instanz frei",
+        backend_starting: "Backend startet noch - gleich erneut",
+        parked_unconfigured: "Parked-Dienst nicht konfiguriert",
+        not_claimable: "Instanz nicht claimbar",
+        bad_mode: "unbekannter Modus",
+        mode_mismatch: "Instanz laeuft in einem anderen Modus" };
+      hintEl.textContent = MSG[reason] || reason;
+    } else {
+      hintEl.textContent = "gesendet: " + mode;
+    }
+  } catch (e) { hintEl.textContent = "Netzwerkfehler"; }
+  setTimeout(loadSessions, 300);
+}
+$("go-self").onclick = (e) => sendPlayer("solo_self", e.currentTarget);
+$("go-persona").onclick = (e) => sendPlayer("solo_persona:aggro", e.currentTarget);
 
 function card(s) {
   const c = el("div", "card " + s.state);
@@ -1620,6 +1708,28 @@ async function loadSessions() {
   $("n-wait").textContent = rows.filter(r => r.state === "held" || r.state === "waiting").length;
   $("n-conn").textContent = rows.filter(r => r.connected).length;
   $("n-routed").textContent = rows.filter(r => r.state === "routed").length;
+
+  const sel = $("player");
+  const prev = sel.value;
+  sel.innerHTML = "";
+  if (!rows.length) {
+    const o = el("option", null, "keine Sessions");
+    o.value = "";
+    sel.appendChild(o);
+  } else {
+    for (const s of rows) {
+      const o = el("option", null, (s.name || s.identity));
+      o.value = s.identity;
+      sel.appendChild(o);
+    }
+    if (rows.some(r => r.identity === prev)) sel.value = prev;
+  }
+  // Je gewaehltem Spieler genau EIN Status-Badge (aus /sessions.soloPhase).
+  const cur = rows.find(r => r.identity === sel.value) || null;
+  const info = statusInfo(cur);
+  const pb = $("player-status");
+  pb.className = "badge status-" + info.key;
+  pb.textContent = info.label;
 
   const g = $("grid");
   g.innerHTML = "";
@@ -1865,6 +1975,11 @@ void handleSolo(SOCKET s, const std::string &requestBody) {
   rbapi::jsonStringField(requestBody, "env", env);
   bool selfSend = true;
   rbapi::parseSoloSelfSend(requestBody, selfSend);
+  // Issue #994: angeforderten Modus lesen (leer = Default `solo_self`). Der
+  // Wert wird ungeprueft durchgereicht; die kanonische Validierung
+  // (`parse_mode`, fail-loud) macht der Parked-/Kapsel-Dienst (#993).
+  std::string mode;
+  rbapi::parseSoloMode(requestBody, mode);
 
   // Issue #936: optionaler Join einer BESTEHENDEN Solo-Instanz. Nennt der Body
   // eine `instance`, entscheidet die reine Funktion `decideSoloAction`, ob die
@@ -1922,9 +2037,11 @@ void handleSolo(SOCKET s, const std::string &requestBody) {
             selfSend ? "on" : "off");
     std::string out = "{\"ok\":true,\"identitaet\":\"" +
                       rbapi::jsonEscape(identity) + "\",\"instance\":\"" +
-                      rbapi::jsonEscape(instance) + "\",\"join\":true,"
-                      "\"self_send\":" +
-                      (selfSend ? "true" : "false") + "}";
+                      rbapi::jsonEscape(instance) + "\",\"join\":true";
+    if (!mode.empty()) {
+      out += ",\"mode\":\"" + rbapi::jsonEscape(mode) + "\"";  // additiv
+    }
+    out += ",\"self_send\":" + std::string(selfSend ? "true" : "false") + "}";
     httpRespondJson(s, 200, "OK", out);
     return;
   }
@@ -1975,7 +2092,7 @@ void handleSolo(SOCKET s, const std::string &requestBody) {
       },
       rbapi::SoloBudget{}, nowMs,
       [](int ms) { Sleep(static_cast<DWORD>(ms)); },
-      claimPath);
+      claimPath, mode);
 
   if (outcome.pinIdentity) {
     {
@@ -1995,8 +2112,11 @@ void handleSolo(SOCKET s, const std::string &requestBody) {
                       rbapi::jsonEscape(identity) + "\",\"target\":\"" +
                       rbapi::jsonEscape(outcome.endpoint) +
                       "\",\"instance\":\"" +
-                      rbapi::jsonEscape(outcome.instance) + "\",\"self_send\":" +
-                      (selfSend ? "true" : "false") + "}";
+                      rbapi::jsonEscape(outcome.instance) + "\"";
+    if (!mode.empty()) {
+      out += ",\"mode\":\"" + rbapi::jsonEscape(mode) + "\"";  // additiv
+    }
+    out += ",\"self_send\":" + std::string(selfSend ? "true" : "false") + "}";
     httpRespondJson(s, 200, "OK", out);
     return;
   }

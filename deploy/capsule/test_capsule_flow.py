@@ -127,8 +127,9 @@ class FakeParked(object):
         self.fail_claim = None
         self.fail_recycle = None
 
-    def claim(self, env=None, instance_id=None, resume=True):
-        self.claims.append({"env": env, "instance_id": instance_id, "resume": resume})
+    def claim(self, env=None, instance_id=None, resume=True, mode=None):
+        self.claims.append({"env": env, "instance_id": instance_id, "resume": resume,
+                            "mode": mode})
         if self.fail_claim is not None:
             raise self.fail_claim
         return {
@@ -209,6 +210,21 @@ class OpenTests(Harness):
         self.assertEqual(cap.instance_id, "parked-1")
         self.assertEqual(cap.gns_endpoint, "127.0.0.1:41001")
         self.assertEqual(cap.identitaet, "str:ab12")  # kanonisch (Issue #992)
+
+    def test_open_passes_mode_to_parked_and_exposes_it(self):
+        # Issue #994: mode wird an den Parked-Claim durchgereicht + additiv
+        # im Capsule-Dict ausgegeben.
+        cap = self.coord.open(env="test", identitaet="str:AB12", mode="solo_persona:aggro")
+        self.assertEqual(self.parked.claims[0]["mode"], "solo_persona:aggro")
+        self.assertEqual(cap.mode, "solo_persona:aggro")
+        self.assertEqual(cap.to_dict()["mode"], "solo_persona:aggro")
+
+    def test_open_default_mode_is_none(self):
+        # Default -> kein mode im Claim (altes Verhalten).
+        cap = self.opened()
+        self.assertIsNone(self.parked.claims[0]["mode"])
+        self.assertIsNone(cap.mode)
+        self.assertIsNone(cap.to_dict()["mode"])
 
     def test_open_uses_per_instance_cycle_url(self):
         # Issue #966: der Cycle der INSTANZ wird verdrahtet, nicht der globale.

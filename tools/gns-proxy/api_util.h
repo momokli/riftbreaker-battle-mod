@@ -425,6 +425,51 @@ inline bool parseSoloInstance(const std::string &body, std::string &out) {
   return false;  // unterminierter String -> Default
 }
 
+// `"mode": "solo_self"|"solo_persona:<name>"` aus dem /solo-Body lesen
+// (Issue #994). Muster wie parseSoloInstance, aber der Wert wird hier NICHT
+// inhaltlich geprueft — die kanonische Validierung macht der Provisioner
+// fail-loud via `parse_mode` (#993). Rueckgabe true NUR bei einem nicht-leeren
+// JSON-String; fehlendes/leeres/nicht-String-Feld -> false, `out` bleibt leer
+// (Default `solo_self` -> heutiges Verhalten, kein `mode` im Claim-Body).
+inline bool parseSoloMode(const std::string &body, std::string &out) {
+  out.clear();
+  const std::string needle = "\"mode\"";
+  const std::size_t pos = body.find(needle);
+  if (pos == std::string::npos) {
+    return false;
+  }
+  std::size_t p = body.find(':', pos + needle.size());
+  if (p == std::string::npos) {
+    return false;
+  }
+  ++p;
+  while (p < body.size() && (body[p] == ' ' || body[p] == '\t' ||
+                             body[p] == '\n' || body[p] == '\r')) {
+    ++p;
+  }
+  if (p >= body.size() || body[p] != '"') {
+    return false;  // kein String (Zahl/null/Array/Objekt) -> Default
+  }
+  ++p;
+  std::string value;
+  while (p < body.size()) {
+    const char c = body[p];
+    if (c == '"') {
+      out = value;
+      return !out.empty();  // leerer String zaehlt nicht als Modus
+    }
+    if (c == '\\' && p + 1 < body.size()) {
+      value += body[p + 1];  // einfache Escapes (Modi sind schlicht)
+      p += 2;
+      continue;
+    }
+    value += c;
+    ++p;
+  }
+  out.clear();
+  return false;  // unterminierter String -> Default
+}
+
 // --- /solo-Aufnahme-Entscheidung (Issue #936) -------------------------------
 //
 // Reine, host-testbare Entscheidung, ob ein `/solo`-Request einen NEUEN Claim
@@ -594,10 +639,30 @@ inline SoloOutcome runSoloClaim(
     const std::string &env, const ClaimFn &claim, const SoloBudget &budget,
     const std::function<long long()> &nowMs,
     const std::function<void(int)> &sleepFn,
-    const std::string &claimPath = "/claim") {
-  const std::string claimBody =
-      env.empty() ? std::string("{}")
-                  : "{\"env\":\"" + jsonEscape(env) + "\"}";
+    const std::string &claimPath = "/claim",
+    const std::string &mode = "") {
+  // Issue #994: `mode` ist der ANGEFORDERTE Modus. Er wird NUR bei nicht-leerem
+  // Wert in den Claim-Body gestellt — bei `mode == ""` bleibt der Body exakt
+  // wie zuvor (byte-identisch: `{}` / `{"env":...}`), also voll
+  // rueckwaerts-kompatibel fuer Parked `/claim` und Kapsel `/capsule/open`.
+  std::string claimBody;
+  if (env.empty() && mode.empty()) {
+    claimBody = "{}";
+  } else {
+    claimBody = "{";
+    bool first = true;
+    if (!env.empty()) {
+      claimBody += "\"env\":\"" + jsonEscape(env) + "\"";
+      first = false;
+    }
+    if (!mode.empty()) {
+      if (!first) {
+        claimBody += ",";
+      }
+      claimBody += "\"mode\":\"" + jsonEscape(mode) + "\"";
+    }
+    claimBody += "}";
+  }
   const long long start = nowMs ? nowMs() : 0;
   int status = -1;
   std::string respBody;
