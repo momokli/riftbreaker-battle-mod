@@ -92,7 +92,7 @@ jobs:
           fi
 
           if printf '%s\n' "$CHANGED" \
-             | grep -Eq '^(client-mod/|server/|cockpit/|tests/|tools/|scripts/|\.github/workflows/ci\.yml)'; then
+             | grep -Eq '^(client-mod/|server/|cockpit/|tests/|tools/|scripts/|deploy/capsule/|\.github/workflows/ci\.yml)'; then
             echo "test=true" >> "$GITHUB_OUTPUT"
           else
             echo "test=false" >> "$GITHUB_OUTPUT"
@@ -205,6 +205,20 @@ jobs:
         run: |
           g++ -std=c++17 -Wall -Wextra -O1 -o /tmp/test_api_util tools/gns-proxy/test_api_util.cpp
           /tmp/test_api_util
+      # Client-Identitaet abstrahiert (Issue #992): steamid:/str:/account:
+      # normalisiert. Reine Logik (player_identity.h) — host-compiliert,
+      # kein Wine/Windows/Spiel.
+      - name: Host-Test Player-Identitaet (Issue #992)
+        if: needs.changes.outputs.test == 'true'
+        run: |
+          g++ -std=c++17 -Wall -Wextra -O1 -o /tmp/test_player_identity tools/gns-proxy/test_player_identity.cpp
+          /tmp/test_player_identity
+      # Kapsel-Flow/-Dienst (Issue #931/#992): unittest, stdlib-only, kein Netz.
+      # Der Python-Spiegel der Identitaets-Normalisierung (identity.py) wird
+      # ueber dieselbe discover-Suite geprueft.
+      - name: Unit-Test Kapsel-Flow (Issue #931/#992)
+        if: needs.changes.outputs.test == 'true'
+        run: python3 -m unittest discover -s deploy/capsule -p 'test_*.py' -v
       # Server-Control-Host-Agent (Issue #459): Unit-/Integrationstests ohne
       # Docker, Netz oder Spiel (Fake-docker-Binary + echter Agent auf
       # Ephemeral-Port). Reiner Standardbibliothek-Code, daher kein npm ci.

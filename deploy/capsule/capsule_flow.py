@@ -50,6 +50,8 @@ import urllib.error
 import urllib.request
 from typing import Any, Callable, Dict, Optional
 
+from identity import canonicalize
+
 
 class CapsuleError(Exception):
     """Kapsel-Operation nicht moeglich — laut abbrechen (kein halber Zustand).
@@ -390,7 +392,7 @@ class CapsuleCoordinator(object):
             gns_endpoint=result.get("gns_endpoint"),
             phase=CapsulePhase.IDLE,
             claimed_at=self.clock(),
-            identitaet=identitaet,
+            identitaet=canonicalize(identitaet),
             bridge=self.bridge_factory(str(bridge_url)) if bridge_url else None,
             cycle=self.cycle_factory(env, str(cycle_url)),
             cycle_url=str(cycle_url) or None,

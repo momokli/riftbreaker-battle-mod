@@ -41,9 +41,23 @@
 // Reine Routing-Logik (exakt / Suffix-Wildcard / Default) — host-testbar in der
 // CI, siehe route_rules.h und test_route_rules.cpp.
 #include "route_rules.h"
+#include "player_identity.h"
 // Reine Helfer fuer die Steuer-API (Target-Spec, JSON) — host-testbar in der CI
 // (test_api_util.cpp).
 #include "api_util.h"
+
+// Anzeigename des Identitaets-Kinds (Issue #992) fuer Logs/API.
+static const char *identityKindName(rbident::Kind kind) {
+  switch (kind) {
+    case rbident::Kind::Steam:
+      return "steam";
+    case rbident::Kind::Account:
+      return "account";
+    case rbident::Kind::Generic:
+    default:
+      return "generic";
+  }
+}
 
 #include <chrono>
 #include <cstdarg>
@@ -167,6 +181,8 @@ struct Session {
   // GNS-Identitaet (`str:<hex>`, stabil pro Installation) und die zuletzt
   // angewandte Namens-Regel (fuer die Re-Route-Erkennung).
   std::string identity;
+  // Identitaets-Kind (Issue #992): Steam vs. anonymer Generic vs. Account.
+  rbident::Kind kind = rbident::Kind::Generic;
   std::string lastRouteKey;
   // Historie aller Client->Server-Nachrichten (fuer Replay beim Re-Route) plus
   // Merker, wie viele davon schon an das *aktuelle* Backend gingen.
@@ -324,6 +340,7 @@ std::map<std::string, bool> g_parkedPaused;
 // Anzeige-Snapshot (HTTP-Thread liest, Hauptloop schreibt) + Befehls-Queue.
 struct SessionInfo {
   std::string identity;
+  std::string kindName;  // "steam" | "generic" | "account" (Issue #992)
   std::string ip;
   std::string name;
   std::string state;  // connected | held | waiting | routed | closed
@@ -373,6 +390,7 @@ std::deque<ApiCommand> g_apiCommands;
 // damit ein Reconnect denselben Spieler weiterfuehrt.
 struct SessionRecord {
   std::string identity;
+  rbident::Kind kind = rbident::Kind::Generic;  // Issue #992
   std::string ip;
   std::string name;
   std::string targetStr;
@@ -688,6 +706,7 @@ void refreshSnapshot() {
     const bool hasRec = rit != g_sessions.end();
     if (hasRec) {
       const SessionRecord &rec = rit->second;
+      s.kindName = identityKindName(rec.kind);
       s.ip = rec.ip;
       s.name = rec.name;
       s.state = rec.state;
@@ -823,12 +842,25 @@ void onConnectionStatusChanged(
       pIPAddrToString(&info.m_addrRemote, remote, sizeof(remote), true);
     }
     s->identity = ident;
+    // Identitaet abstrahieren (Issue #992): Kind bestimmen, canonical als
+    // Routen-/Session-Key verwenden (fuer Steam/Generic byte-gleich zu raw,
+    // nur Hex lowercase) — Routen/Pins/Claims bleiben kompatibel.
+    rbident::PlayerIdentity pid;
+    if (rbident::parsePlayerIdentity(ident, pid)) {
+      s->kind = pid.kind;
+      s->identity = pid.canonical;
+    } else {
+      s->kind = rbident::Kind::Generic;
+      logLine("WARNUNG: ungueltige Client-Identitaet '%s' (%s)", ident, remote);
+    }
     s->lastRouteKey.clear();
-    logLine("client-identitaet: '%s' (%s) — %zu parallele Session(s)",
-            s->identity.c_str(), remote, g_clientSessions.size());
+    logLine("client-identitaet: '%s' (kind=%s, %s) — %zu parallele Session(s)",
+            s->identity.c_str(), identityKindName(s->kind), remote,
+            g_clientSessions.size());
 
     // Session-Buchfuehrung (fuer die Operator-UI, Issue #857).
     SessionRecord &rec = sessionFor(s->identity);
+    rec.kind = s->kind;
     rec.ip = remote;
     rec.connected = true;
     rec.held = false;
@@ -962,8 +994,7 @@ void drainFrom(Session &s, HSteamNetPollGroup group, bool fromClient) {
       std::string learnedName;
       const rbroute::Rule *rule = routeFromPayload(payload, &learnedName);
       if (rec != g_sessions.end() && !learnedName.empty() &&
-          learnedName.compare(0, 4, "str:") != 0 &&
-          learnedName.compare(0, 8, "steamid:") != 0 &&
+          !rbident::isIdentityLike(learnedName) &&
           rec->second.name.empty()) {
         rec->second.name = learnedName;
       }
@@ -1252,6 +1283,7 @@ std::string buildSessionsJson() {
     }
     first = false;
     json += "{\"identity\":\"" + rbapi::jsonEscape(it->identity) + "\"";
+    json += ",\"kind\":\"" + rbapi::jsonEscape(it->kindName) + "\"";
     json += ",\"ip\":\"" + rbapi::jsonEscape(it->ip) + "\"";
     json += ",\"name\":\"" + rbapi::jsonEscape(it->name) + "\"";
     json += ",\"state\":\"" + rbapi::jsonEscape(it->state) + "\"";
