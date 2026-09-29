@@ -72,9 +72,14 @@ class FakePoster:
         # Antwort auf POST /start — wie die Bridge: quittiert JEDEN Aufruf
         # mit start:true (pipe_bridge.c handle_post_start).
         self.start_resp = '{"ok":true,"start":true}'
+        # VS-Egress (US5/#996): Antwort fuer absolute Referee-URLs (`POST <url>/send`).
+        self.referee_status = 200
+        self.referee_resp = '{"queued_for":"B","round":1,"level":3}'
 
     def __call__(self, path, body):
         self.calls.append((path, body))
+        if path.startswith(("http://", "https://")):
+            return (self.referee_status, self.referee_resp)
         if path == "/get_state":
             return (self.state_status, self.state_resp)
         if path == "/try_spend":
@@ -714,13 +719,15 @@ class TestSendYourself(unittest.TestCase):
     gekaufte Welle geht. off = Carbonium abgezogen, nicht lokal feuern (sondern
     tracken, spaeter Server B)."""
 
-    def _cycle(self, poster, send_yourself=True, clock=None, toggles=None):
+    def _cycle(self, poster, send_yourself=True, clock=None, toggles=None, referee_url=None, vs_world="A"):
         return AttackCycle(
             "http://127.0.0.1:9001",
             interval_s=420.0,
             difficulty_interval_first_s=1e9,
             send_yourself=send_yourself,
             toggles=toggles,
+            referee_url=referee_url,
+            vs_world=vs_world,
             warmup_s=WARMUP_OFF,
             _poster=poster,
             _clock=clock or FakeClock(),
@@ -824,6 +831,93 @@ class TestSendYourself(unittest.TestCase):
         self.assertEqual(logics.count("logic/missions/survival/attack_level_3_id_1.logic"), 1)
         self.assertEqual([o["level"] for o in cycle.enemy_outgoing], [3])
         self.assertEqual(cycle.outgoing, [])  # lokal gefeuert -> kein outgoing
+
+    # --- US5 (#996): send_enemy als echter Producer (Referee-Egress) ---
+
+    def test_send_enemy_posts_to_referee_when_configured(self):
+        """Mit RBB_REFEREE_URL wird je gesendeter Welle ein POST /send an den
+        Referee geschickt (world/level/value); der Zaehler bleibt gefuehrt."""
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(
+            poster,
+            clock=clock,
+            toggles={"send_yourself": False, "send_enemy": True},
+            referee_url="http://referee:8080",
+            vs_world="a",
+        )
+        start_cycle(cycle)
+        cycle.buy(3)
+        cycle._resolve_orders()
+        clock.t = 420.0
+        cycle.step()
+
+        referee_calls = [c for c in poster.calls if c[0].startswith("http")]
+        self.assertEqual(len(referee_calls), 1)
+        path, body = referee_calls[0]
+        self.assertEqual(path, "http://referee:8080/send")
+        payload = json.loads(body.decode())
+        self.assertEqual(payload, {"world": "A", "level": 3, "value": 1400})
+        # Zaehler weiterhin gefuehrt (Monitoring/Abbruch).
+        self.assertEqual([o["level"] for o in cycle.enemy_outgoing], [3])
+
+    def test_send_enemy_counter_only_without_referee(self):
+        """Ohne RBB_REFEREE_URL: bitgleiches SOLO-Verhalten (nur Zaehler, kein
+        HTTP-Request an einen Referee)."""
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(
+            poster,
+            clock=clock,
+            toggles={"send_yourself": False, "send_enemy": True},
+        )
+        self.assertIsNone(cycle.referee_url)
+        start_cycle(cycle)
+        cycle.buy(3)
+        cycle._resolve_orders()
+        clock.t = 420.0
+        cycle.step()
+        self.assertEqual([o["level"] for o in cycle.enemy_outgoing], [3])
+        self.assertEqual([c for c in poster.calls if c[0].startswith("http")], [])
+
+    def test_send_enemy_http_error_is_non_fatal(self):
+        """Ein Referee-Fehler (HTTP 5xx) blockiert den Takt NICHT; der Schritt
+        bleibt ein 'attack' und der Zaehler wird weiter gefuehrt."""
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        poster.referee_status = 500
+        poster.referee_resp = '{"error":"boom"}'
+        clock = FakeClock(0.0)
+        cycle = self._cycle(
+            poster,
+            clock=clock,
+            toggles={"send_yourself": False, "send_enemy": True},
+            referee_url="http://referee:8080/",
+        )
+        start_cycle(cycle)
+        cycle.buy(3)
+        cycle._resolve_orders()
+        clock.t = 420.0
+        self.assertEqual(cycle.step(), "attack")
+        referee_calls = [c for c in poster.calls if c[0].startswith("http")]
+        self.assertEqual(len(referee_calls), 1)
+        self.assertEqual(referee_calls[0][0], "http://referee:8080/send")
+        self.assertEqual([o["level"] for o in cycle.enemy_outgoing], [3])
+
+    def test_send_enemy_empty_levels_make_no_request(self):
+        """Ohne gekaufte Wellen erzeugt der send_enemy-Pfad KEINEN Request."""
+        poster = FakePoster('{"ok":true,"hq_hp":100.0}')
+        clock = FakeClock(0.0)
+        cycle = self._cycle(
+            poster,
+            clock=clock,
+            toggles={"send_yourself": True, "send_enemy": True},
+            referee_url="http://referee:8080",
+        )
+        start_cycle(cycle)
+        clock.t = 420.0
+        cycle.step()  # natural, aber keine gekauften Level
+        self.assertEqual([c for c in poster.calls if c[0].startswith("http")], [])
+        self.assertEqual(cycle.enemy_outgoing, [])
 
 
 class TestGameFlowToggles(unittest.TestCase):
