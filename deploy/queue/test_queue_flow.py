@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
+import time
 import unittest
 
 from queue_core import (
@@ -268,6 +270,56 @@ class PersistenceTestCase(Harness):
         snap = coord.status()
         self.assertEqual(snap["queued"], 1)
         self.assertEqual(snap["queue"][0]["identitaet"], "str:aa")
+
+
+class ConcurrencyTestCase(Harness):
+    """#998-Verifier: der Dienst laeuft hinter ThreadingHTTPServer -> der
+    Koordinator muss Matchmaking (join/pair/leave/finish/status) serialisieren,
+    sonst paaren zwei gleichzeitige Joins doppelt / korrumpieren den Kern."""
+
+    def test_join_serialises_matchmaking(self):
+        coord = self.coordinator()
+        core = coord.core
+        original_pair = core.pair
+        guard = threading.Lock()
+        state = {"inside": 0, "overlap": False}
+
+        def tracked_pair():
+            with guard:
+                if state["inside"]:
+                    state["overlap"] = True
+                state["inside"] += 1
+            # Weites Fenster: ohne Lock schluepft der zweite Join hier durch.
+            time.sleep(0.05)
+            try:
+                return original_pair()
+            finally:
+                with guard:
+                    state["inside"] -= 1
+
+        core.pair = tracked_pair
+        barrier = threading.Barrier(2)
+        errors = []
+
+        def worker(name):
+            try:
+                barrier.wait(timeout=5)
+                coord.join(name)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(n,))
+                   for n in ("str:aa", "str:bb")]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        self.assertEqual(errors, [])
+        self.assertFalse(state["overlap"], "pair() lief ueberlappend (Lock fehlt)")
+        matches = core.matches_snapshot()
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(sorted(matches[0].participants()), ["str:aa", "str:bb"])
 
 
 if __name__ == "__main__":

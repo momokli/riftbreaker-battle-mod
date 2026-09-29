@@ -462,6 +462,10 @@ class InstanceSpec(object):
         self.personas_staged = os.path.join(self.config_dir, "personas.json")
         self.bridge_port_base = cfg.bridge_port_base
         self.bridge_port = cfg.bridge_port_base + (self._numeric_suffix() % 20000)
+        # #998-Verifier: ein zu grosser ``*_port_base`` kann den abgeleiteten
+        # Host-Port aus dem gueltigen TCP-Bereich schieben; das muss laut
+        # (``ProvisionError``) scheitern statt spaeter als roher
+        # ``OverflowError`` in ``_port_in_use``/``socket.connect``.
         # Sidecar-Namen (#966): konsistent mit ``compose_project``/``container``.
         self.send_tailer_container = "%s-send-tailer" % self.compose_project
         self.attack_cycle_container = "%s-attack-cycle" % self.compose_project
@@ -470,6 +474,15 @@ class InstanceSpec(object):
         # Eigener Host-Port-Base -> nie gleich ``bridge_port`` (Issue #967).
         self.attack_cycle_port_base = cfg.attack_cycle_port_base
         self.attack_cycle_port = cfg.attack_cycle_port_base + (self._numeric_suffix() % 20000)
+        for _label, _base, _port in (
+            ("bridge_port", self.bridge_port_base, self.bridge_port),
+            ("attack_cycle_port", self.attack_cycle_port_base, self.attack_cycle_port),
+        ):
+            if not 1 <= _port <= 65535:
+                raise ProvisionError(
+                    "%s %d liegt ausserhalb 1..65535 (base=%d, instance_id=%r)"
+                    % (_label, _port, _base, instance_id)
+                )
         self.attack_cycle_container_port = cfg.attack_cycle_container_port
         self.attack_cycle_interval = cfg.attack_cycle_interval
         self.attack_cycle_difficulty_interval = cfg.attack_cycle_difficulty_interval
@@ -1184,6 +1197,10 @@ class Provisioner(object):
 
     @staticmethod
     def _port_in_use(port: int, host: str = "127.0.0.1") -> bool:
+        # #998-Verifier: out-of-range Ports laut melden statt einen rohen
+        # ``OverflowError`` aus ``connect()`` durchzureichen.
+        if not 1 <= int(port) <= 65535:
+            raise ProvisionError("Port %s liegt ausserhalb 1..65535" % (port,))
         probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         probe.settimeout(0.5)
         try:

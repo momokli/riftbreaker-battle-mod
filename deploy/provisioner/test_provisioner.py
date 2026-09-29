@@ -312,8 +312,14 @@ class BaseFixture(unittest.TestCase):
         self.stub = HealthStub(ok=True)
         self.addCleanup(self.stub.close)
 
+        # #998-Verifier: ``InstanceSpec`` rechnet bridge_port = base + (crc%20000)
+        # und attack_cycle_port = base + 1000 + (crc%20000). Beide muessen
+        # <= 65535 bleiben -> base <= 65535 - 1000 - 19999 = 44536. free_port()
+        # liefert Ephemeral-Ports bis ~60999, daher die Basis hart begrenzen
+        # (weiterhin kollisionsfrei zum Health-Stub).
+        max_base = 65535 - 1000 - 19999
         bridge = free_port()
-        while bridge == self.stub.port:
+        while bridge > max_base or bridge < 1 or bridge == self.stub.port:
             bridge = free_port()
 
         self.cfg = prov.Config(
@@ -1604,6 +1610,26 @@ class QueueWorldTestCase(BaseFixture):
         b = self.spec("queue-1-b")
         self.assertNotEqual(a.bridge_port, b.bridge_port)
         self.assertNotEqual(a.attack_cycle_port, b.attack_cycle_port)
+
+    def test_out_of_range_bridge_port_fails_loud(self):
+        # #998-Verifier: ein zu grosser base darf NICHT zu einem rohen
+        # OverflowError in _port_in_use/socket.connect fuehren, sondern muss
+        # beim Bau der InstanceSpec laut abbrechen.
+        cfg = prov.Config(**{**vars(self.cfg), "bridge_port_base": 65535})
+        with self.assertRaises(prov.ProvisionError):
+            prov.InstanceSpec("test", "1", cfg)
+
+    def test_out_of_range_attack_cycle_port_fails_loud(self):
+        # attack_cycle_port = base + (suffix%20000); base=65535 + suffix 1
+        # = 65536 -> ausserhalb 1..65535 (bridge_port bleibt aus der Fixture).
+        cfg = prov.Config(**{**vars(self.cfg), "attack_cycle_port_base": 65535})
+        with self.assertRaises(prov.ProvisionError):
+            prov.InstanceSpec("test", "1", cfg)
+
+    def test_valid_base_ports_stay_in_range(self):
+        spec = self.spec("queue-1-a")
+        self.assertTrue(1 <= spec.bridge_port <= 65535)
+        self.assertTrue(1 <= spec.attack_cycle_port <= 65535)
 
     def test_invalid_world_fails_loud_before_docker(self):
         for bad in ("a", "C", "", "AB", "world"):

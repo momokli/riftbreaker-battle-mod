@@ -28,6 +28,7 @@ import dataclasses
 import json
 import os
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -181,6 +182,11 @@ class QueueCoordinator(object):
         self.state_dir = state_dir
         self.provision_mode = provision_mode
         self._cleaned: set = set()
+        # #998-Verifier: der Dienst laeuft hinter einem ``ThreadingHTTPServer``;
+        # zwei gleichzeitige Join/Pair/Leave/Finish/Status koennen sonst doppelt
+        # paaren oder den Kernzustand korrumpieren. Reentrant, weil einzelne
+        # Operationen intern bereits lesen + schreiben.
+        self._lock = threading.RLock()
         self._load_state()
 
     # -- Persistenz (US5) --------------------------------------------------
@@ -233,30 +239,32 @@ class QueueCoordinator(object):
         ``{"status":"matched","match":{…}}`` (nach erfolgreicher Provisionierung).
         """
         identity = canonicalize(identitaet) or identitaet
-        self.core.enqueue(identity, mode=mode, team_size=team_size)
-        self._persist()
-        match = self.core.pair()
-        if match is None:
+        with self._lock:
+            self.core.enqueue(identity, mode=mode, team_size=team_size)
+            self._persist()
+            match = self.core.pair()
+            if match is None:
+                return {
+                    "status": "queued",
+                    "identitaet": identity,
+                    "position": self.core.position(identity),
+                    "match": None,
+                }
+            self._provision(match)
             return {
-                "status": "queued",
+                "status": "matched",
                 "identitaet": identity,
-                "position": self.core.position(identity),
-                "match": None,
+                "position": None,
+                "match": match.to_dict(),
             }
-        self._provision(match)
-        return {
-            "status": "matched",
-            "identitaet": identity,
-            "position": None,
-            "match": match.to_dict(),
-        }
 
     def leave(self, identitaet: str) -> Dict[str, Any]:
         """Wartenden Spieler entfernen (bereits gepaart -> lauter Fehler)."""
         identity = canonicalize(identitaet) or identitaet
-        entry = self.core.leave(identity)
-        self._persist()
-        return {"identitaet": entry.identitaet}
+        with self._lock:
+            entry = self.core.leave(identity)
+            self._persist()
+            return {"identitaet": entry.identitaet}
 
     # -- Provisionierung (kalt, A/B) ---------------------------------------
     def _provision(self, match: Match) -> None:
@@ -312,18 +320,19 @@ class QueueCoordinator(object):
         wird nur gestoppt (Ergebnis bleibt ``null``). Ein zweiter Aufruf stoppt
         nicht erneut.
         """
-        match = self.core.get_match(match_id)
-        if match is None:
-            raise QueueError("unknown_match", "Match %s unbekannt" % match_id, 409)
-        if result is not None and result not in RESULTS:
-            raise QueueError("bad_result", "result muss einer von %s sein"
-                             % (", ".join(RESULTS),), 400)
-        self.core.finish(match_id, result)
-        if match.match_id not in self._cleaned:
-            self._cleanup(match)
-            self._cleaned.add(match.match_id)
-        self._persist()
-        return match.to_dict()
+        with self._lock:
+            match = self.core.get_match(match_id)
+            if match is None:
+                raise QueueError("unknown_match", "Match %s unbekannt" % match_id, 409)
+            if result is not None and result not in RESULTS:
+                raise QueueError("bad_result", "result muss einer von %s sein"
+                                 % (", ".join(RESULTS),), 400)
+            self.core.finish(match_id, result)
+            if match.match_id not in self._cleaned:
+                self._cleanup(match)
+                self._cleaned.add(match.match_id)
+            self._persist()
+            return match.to_dict()
 
     def _cleanup(self, match: Match) -> None:
         side = getattr(match, "_assignment_side", {}) or {}
@@ -341,7 +350,8 @@ class QueueCoordinator(object):
 
     # -- Snapshot ----------------------------------------------------------
     def status(self) -> Dict[str, Any]:
-        return self.core.status()
+        with self._lock:
+            return self.core.status()
 
 
 def build_coordinator(queue_config: Any, clock: Callable[[], float] = time.monotonic) -> QueueCoordinator:
