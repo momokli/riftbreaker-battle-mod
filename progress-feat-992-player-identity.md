@@ -186,3 +186,45 @@ Setup bereit fuer Stage 3 (Developer).
 - Keine Secrets/Debug-Prints im Diff; keine Injection (Logs `%s`, Identitaet lokal formatiert).
 - Neu-Dateien ohne Trailing-Newline (Stil, kein Defekt).
 - `capsule_service.py` unveraendert: reicht `identitaet` an `coordinator.open` durch, das kanonisiert — Semantik ok.
+
+## Test (Stage 5, Tester)
+
+**Verdict: PASS** — Abstraktion integriert, Issue-Abnahme erfuellt, Regression gruen.
+
+### Belege (selbst ausgefuehrt, Branch `feat/992-player-identity`)
+
+- **C++ (g++ -std=c++17 -Wall -Wextra -O1, host, kein Wine):**
+  - `test_player_identity` → `35 Checks OK` (rc=0)
+  - `test_route_rules` → `44 Checks OK` (rc=0)
+  - `test_api_util` → `214 Checks OK` (rc=0)
+- **Python (`python3 -m unittest discover -s deploy/capsule -p 'test_*.py'`):**
+  → `Ran 67 tests ... OK` (rc=0) — inkl. `test_identity`, `test_capsule_flow`, `test_capsule_service`.
+  Regression: Baseline war 56 Tests; +11 sind die neuen `test_identity`-Faelle.
+
+### E2E-Smoke — Host/Modul-Integration (kein Live-Relay/Spiel)
+
+**Ersatz begruendet:** Der laufende Relay (`gns_probe.exe`, Wine, API `127.0.0.1:9200`)
+ist der **installierte Build** unter `/opt/gns-relay`, NICHT der Branch-Code — ein Live-Smoke
+wuerde die #992-Abstraktion nicht treffen. Zwei echte Spiel-Clients (Steam + GOG) sind hier
+nicht startbar. Deshalb Modul-Integrationstest der Schnittstelle mit den vorhandenen Fakes
+(`test_capsule_flow.FakeParked/FakeBridge/FakeCycle`), Kette
+`rohe Identitaet -> canonicalize -> capsule_flow.open -> Session-/Routen-Key`.
+
+Ergebnis `SMOKE PASS` (14/14 Checks, rc=0):
+- `steamid:<id>` → `Kind.STEAM/valid`; `str:<hex>` → `Kind.GENERIC/valid`; Spielname → nicht identity-like.
+- canonical **unterscheidbar** (Steam ≠ GOG); Steam-canonical byte-gleich `raw` (rueckwaertskompatibel);
+  GOG-canonical = `str:` + lowercase-hex; canonical **idempotent** (2. Connect gleicher Client → gleich).
+- `is_authorized(True, id)` = True **ohne Login**; False wenn nicht verbunden.
+- `capsule_flow.open(identitaet=…)` speichert den canonical als Session-/Routen-Key; A/B unterscheidbar;
+  zweiter Connect desselben Clients → identischer Key.
+
+### Abnahme aus Issue
+
+- ✅ Zwei Clients (Steam + GOG/anonym) → stabile, unterscheidbare canonical, kein Login.
+- ✅ Zweiter Connect desselben Clients → gleiche canonical.
+
+### Regress
+
+- ✅ Keine bestehenden Tests rot; Suite 67/67 OK; Relay `-fsyntax-only` rc=0 (Verifier).
+
+Keine neuen Testdateien noetig (Module-Smoke ad hoc unter `/tmp` ausgefuehrt, nicht committet).
