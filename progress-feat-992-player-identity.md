@@ -131,9 +131,9 @@ Setup bereit fuer Stage 3 (Developer).
 - [x] 1 planner
 - [x] 2 setup
 - [x] 3 developer
-- [ ] 4 verifier
-- [ ] 5 tester
-- [ ] 6 developer (PR)
+- [x] 4 verifier
+- [x] 5 tester
+- [x] 6 developer (PR)
 - [ ] 7 reviewer
 
 ## Log
@@ -228,3 +228,12 @@ Ergebnis `SMOKE PASS` (14/14 Checks, rc=0):
 - ✅ Keine bestehenden Tests rot; Suite 67/67 OK; Relay `-fsyntax-only` rc=0 (Verifier).
 
 Keine neuen Testdateien noetig (Module-Smoke ad hoc unter `/tmp` ausgefuehrt, nicht committet).
+
+## PR (Stage 6, Developer)
+
+- Branch `feat/992-player-identity` gepusht (`Everything up-to-date`).
+- PR **#1001** erstellt: https://github.com/momokli/riftbreaker-battle-mod/pull/1001
+  - Base `main`, Head `feat/992-player-identity`, State OPEN.
+  - Titel: `feat(#992): Player-Identitaet abstrahieren (Client-Identitaet, account-ready)`.
+  - Body beginnt mit `Closes #992`; Was/Dateien/Tests/Milestone 1.0.13 dokumentiert.
+- Verifiziert via `clanker-gh pr view 1001`: Base=main, `Closes #992` im Body, offen.
