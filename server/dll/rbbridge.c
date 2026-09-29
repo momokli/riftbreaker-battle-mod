@@ -910,6 +910,9 @@ static size_t req_log_format(const char *cmd, const char *session,
 
 typedef struct {
     char buf[CHAT_QUEUE_CAP][CHAT_QUEUE_MSG];
+    /* #937/US2: Verbindungs-ID PARALLEL zum Text (FIFO-gekoppelt), damit der
+     * Wire-Emit die Identitaet mitgeben kann. 0 = unbekannt (Alt-Pfad). */
+    uintptr_t conn[CHAT_QUEUE_CAP];
     int head;
     int tail;
     int count;
@@ -922,8 +925,10 @@ static void chat_queue_init(chat_queue_t *q)
     memset(q, 0, sizeof(*q));
 }
 
-/* Fuegt eine Nachricht ein. Rueckgabe 1 = eingefuegt, 0 = text NULL/leer. */
-static int chat_queue_push(chat_queue_t *q, const char *text)
+/* Fuegt eine Nachricht MIT Verbindungs-ID ein (#937/US2). Rueckgabe 1 =
+ * eingefuegt, 0 = text NULL/leer. */
+static int chat_queue_push_conn(chat_queue_t *q, const char *text,
+                               uintptr_t conn)
 {
     if (!q || !text || !text[0])
         return 0;
@@ -934,21 +939,39 @@ static int chat_queue_push(chat_queue_t *q, const char *text)
     }
     snprintf(q->buf[q->tail], CHAT_QUEUE_MSG, "%s", text);
     q->buf[q->tail][CHAT_QUEUE_MSG - 1] = '\0';
+    q->conn[q->tail] = conn;
     q->tail = (q->tail + 1) % CHAT_QUEUE_CAP;
     q->count++;
     return 1;
 }
 
-/* Entnimmt die aelteste Nachricht. Rueckgabe 1 = entnommen (in out),
- * 0 = leer. */
-static int chat_queue_pop(chat_queue_t *q, char *out, size_t n)
+/* Alt-API ohne conn (conn 0 = unbekannt) -> Bestandsverhalten. */
+static int chat_queue_push(chat_queue_t *q, const char *text)
 {
+    return chat_queue_push_conn(q, text, (uintptr_t)0);
+}
+
+/* Entnimmt die aelteste Nachricht SAMT conn (optional, darf NULL sein).
+ * Rueckgabe 1 = entnommen (in out), 0 = leer. */
+static int chat_queue_pop_conn(chat_queue_t *q, char *out, size_t n,
+                              uintptr_t *conn_out)
+{
+    if (conn_out)
+        *conn_out = 0;
     if (!q || !out || n == 0 || q->count == 0)
         return 0;
     snprintf(out, n, "%s", q->buf[q->head]);
+    if (conn_out)
+        *conn_out = q->conn[q->head];
     q->head = (q->head + 1) % CHAT_QUEUE_CAP;
     q->count--;
     return 1;
+}
+
+/* Alt-API ohne conn. */
+static int chat_queue_pop(chat_queue_t *q, char *out, size_t n)
+{
+    return chat_queue_pop_conn(q, out, n, NULL);
 }
 
 #ifndef RBBRIDGE_HOSTTEST
@@ -7098,15 +7121,16 @@ static int serve_client(HANDLE hPipe)
             char cline[600];
             for (;;) {
                 int got = 0;
+                uintptr_t conn = 0;
                 EnterCriticalSection(&g_chat_cs);
-                got = chat_queue_pop(&g_chat_q, raw, sizeof(raw));
+                got = chat_queue_pop_conn(&g_chat_q, raw, sizeof(raw), &conn);
                 LeaveCriticalSection(&g_chat_cs);
                 if (!got)
                     break;
-                /* US1: Wire-Feld vorbereitet; die conn_id liefert US2 aus der
-                 * Queue (heute noch 0 == "unbekannt" -> Bestandsformat). */
-                if (chat_build_player_chat(raw, 0, -1, cline,
-                                           sizeof(cline)) > 0)
+                /* #937/US2: conn_id = stabile Hash-ID (kein Rohzeiger ins
+                 * Wire-Protokoll); player bleibt -1 (RE offen, US2b). */
+                if (chat_build_player_chat(raw, conn_id_from_ptr(conn), -1,
+                                           cline, sizeof(cline)) > 0)
                     send_line(hPipe, "%s", cline);
             }
         }
@@ -7222,15 +7246,22 @@ static const unsigned char CHAT_HOOK_ORIG[12] = {
 static void capture_chat_text(const void *req)
 {
     char buf[256];
+    uintptr_t conn;
 
     if (req == NULL)
         return;
     memset(buf, 0, sizeof(buf));
     if (!utfstring_to_cstr((const unsigned char *)req, buf, sizeof(buf)))
         return;
+    /* #937/US2: das zweite Detour-Argument (rdx = NetConnection*) wurde vom
+     * naked-Detour in g_chat_conn geparkt. Wir tragen es als Roh-Zeiger in die
+     * Queue; der Wire-Emit hasht ihn (conn_id_from_ptr) -> kein Rohzeiger ins
+     * Protokoll. Live-Beweis des tatsaechlichen Werts ist offen (siehe
+     * progress; #549-Voraussetzung). */
+    conn = g_chat_conn;
     dbg("player_chat: %s", buf);
     EnterCriticalSection(&g_chat_cs);
-    chat_queue_push(&g_chat_q, buf);
+    chat_queue_push_conn(&g_chat_q, buf, conn);
     LeaveCriticalSection(&g_chat_cs);
 }
 
