@@ -274,3 +274,20 @@ Keine neuen Testdateien noetig (Module-Smoke ad hoc unter `/tmp` ausgefuehrt, ni
   verdrahtet — bewusst, da Relay-Autorisierung heute implizit (connected ⇒ routen) ist.
 - Neue Dateien ohne Trailing-Newline (Stil). CHANGELOG wird im Repo per Release-Commit
   gepflegt → hier nicht nötig. Keine Frontend-Änderung → keine Screenshot-Pflicht.
+
+### Rework 29.09. (Retry 1/3) — Required-Check Lint rot
+- **Blocker:** Required-Check `Lint` (ruff 0.6.9, Rules E/F) rot: `deploy/capsule/test_identity.py:14`
+  `F401 [*] 'identity' imported but unused` (nur der reine Modul-Import; die Namen kommen
+  aus `from identity import …`). Eigene Regression des PR-Diffs, kein vorbestehender Check.
+- **Fix:** Commit `a48827d` `fix(#992): remove unused identity import (ruff F401)` — eine Zeile.
+  Lokal vorweggenommen: `ruff check .` rc=0 (all checks passed), `unittest discover` 67 OK.
+- **boot-test-Flake (nicht PR-Code):** Lauf `36579881332` scheiterte an einer transienten
+  Docker-Port-Kollision (`Bind for 127.0.0.1:31332 failed: port is already allocated`;
+  `BRIDGE_PORT = 30000 + run_id % 20000` → 31332 für diese run_id) beim `--force-recreate`.
+  Port war danach frei, keine Residuen; vorheriger Lauf `36579131596` (gleicher Code minus
+  Import) war gruen. Kein Bezug zum Diff (PR fasst keine Playbooks/vars/Rollen an).
+- **Re-Trigger:** `run rerun` und `workflow_dispatch` unter App-Token 403 → neuer Head `8b7ac85`
+  (Empty-Commit, kein Code-Change).
+- **CI-Ergebnis (Head `8b7ac85`):** alle Required-Checks gruen — Lint, boot-test,
+  deploy-check, deploy-check-local, Build+Package, Test (Unit+host), PR-Quality,
+  Conventional-Commit-Titel, Issue-Referenz. `mergeStateStatus: CLEAN`, `mergeable: MERGEABLE`.
