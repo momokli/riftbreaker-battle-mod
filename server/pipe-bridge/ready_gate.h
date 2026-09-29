@@ -34,6 +34,7 @@
 
 #define RBB_READY_MAX 16      /* max. gleichzeitig ready Spieler */
 #define RBB_READY_ID_LEN 48   /* Platz fuer conn_id-Hex bzw. Fallback-Text */
+#define RBB_READY_TIMEOUT_MAX 86400 /* #937/US4: sane Obergrenze (24 h) */
 
 typedef struct {
     char ids[RBB_READY_MAX][RBB_READY_ID_LEN];
@@ -161,6 +162,18 @@ static inline void ready_gate_arm(ready_gate_t *g, double now, double timeout_s)
         return;
     if (g->deadline <= 0.0 && g->count > 0 && timeout_s > 0.0)
         g->deadline = now + timeout_s;
+}
+
+/* #937/US4: begrenzt den konfigurierten Ready-Timeout auf [1, RBB_READY_TIMEOUT_MAX].
+ * env_int klemmt nur n > 0; unplausibel hohe Werte (z. B. 999999999) wuerden sonst
+ * ungebremst bis INT_MAX durchgereicht. n <= 0 -> Default. */
+static inline int ready_timeout_cap(int n, int def)
+{
+    if (n <= 0)
+        return def;
+    if (n > RBB_READY_TIMEOUT_MAX)
+        return RBB_READY_TIMEOUT_MAX;
+    return n;
 }
 
 /* JSON-Escaping fuer IDs (Fallback-IDs koennen beliebigen Text tragen). */

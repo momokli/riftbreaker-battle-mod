@@ -174,13 +174,18 @@ test("pipe_bridge: Server->Spieler-Status nutzt #934 send_chat (#937/US6)", () =
   );
 
   // #937/US4 (Fix): RBB_READY_TIMEOUT_S oben begrenzen (env_int klemmt nur n>0).
+  // Der Helfer steht in ready_gate.h; pipe_bridge.c muss ihn auch nutzen.
+  const headerPath = path.join(BRIDGE_DIR, "ready_gate.h");
+  assert.ok(fs.existsSync(headerPath), `Header fehlt: ${headerPath}`);
+  const header = fs.readFileSync(headerPath, "utf8");
   assert.ok(
     src.includes("ready_timeout_cap("),
     "RBB_READY_TIMEOUT_S wird nicht ueber ready_timeout_cap() begrenzt (US4)",
   );
   assert.ok(
-    src.includes("RBB_READY_TIMEOUT_MAX"),
-    "RBB_READY_TIMEOUT_MAX (sane Obergrenze) fehlt (US4)",
+    header.includes("RBB_READY_TIMEOUT_MAX") &&
+      header.includes("ready_timeout_cap"),
+    "ready_timeout_cap/RBB_READY_TIMEOUT_MAX (sane Obergrenze) fehlt in ready_gate.h (US4)",
   );
 
   // Aufrufe an den Zeitpunkten: erstes ready UND alle ready UND timeout.

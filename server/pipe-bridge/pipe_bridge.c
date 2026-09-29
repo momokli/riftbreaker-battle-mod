@@ -2486,7 +2486,7 @@ static int mode_server(void)
     InitializeCriticalSection(&g_ready_cs);
     InitializeCriticalSection(&g_ready_gate_cs);
     ready_gate_init(&g_ready_gate);
-    g_ready_timeout_s = env_int("RBB_READY_TIMEOUT_S", 180);
+    g_ready_timeout_s = ready_timeout_cap(env_int("RBB_READY_TIMEOUT_S", 180), 180);
     InitializeCriticalSection(&g_start_epoch_cs);
     g_resp_ev = CreateEvent(NULL, FALSE, FALSE, NULL);
     CreateThread(NULL, 0, pipe_reader_main, NULL, 0, NULL);
