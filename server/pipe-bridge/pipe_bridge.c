@@ -66,6 +66,7 @@
 
 /* Windows-freie Statuscode-/Body-Wahl fuer /health (Issue #902, host-testbar). */
 #include "health_logic.h"
+#include "ready_gate.h" /* #937: reines, host-testbares Ready-Gate */
 
 #define BRIDGE_NAME          "pipe_bridge"
 
@@ -572,6 +573,13 @@ static CRITICAL_SECTION g_game_config_cs;
 static int g_ready = 0;
 static CRITICAL_SECTION g_ready_cs;
 
+/* #937: Ready-Gate (`/ready` im Chat -> alle distinct ready -> Start). Reine
+ * Logik in ready_gate.h; hier nur der mutex-geschuetzte Zustand. `players`
+ * kommt aus der get_state_result-Zeile, die conn_id aus dem player_chat-Event. */
+static ready_gate_t g_ready_gate;
+static CRITICAL_SECTION g_ready_gate_cs;
+static int g_ready_timeout_s = 180; /* ENV RBB_READY_TIMEOUT_S (US4) */
+
 /* Start-Signal (#828): POST /start inkrementiert diesen Zaehler; der attack_cycle
  * pollt ihn via GET /game_config (`start_epoch`) und startet bei einem neuen
  * Wert (Edge). So ist das Start-Signal LESBAR, nicht nur ein Ack. */
@@ -594,6 +602,174 @@ static void sse_broadcast(const char *line)
 }
 
 
+/* #937: monotone Zeitbasis (Sekunden) fuer Gate-Deadline/Timeout. */
+static double bridge_now_s(void)
+{
+    return (double)GetTickCount64() / 1000.0;
+}
+
+/* #937: erkennt (getrimmt, case-insensitiv) exakt "/ready". */
+static int is_ready_command(const char *text)
+{
+    const char *p = text;
+    size_t len;
+    static const char *kw = "/ready";
+    size_t i;
+
+    if (!p)
+        return 0;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+        p++;
+    len = strlen(p);
+    while (len > 0 && (p[len - 1] == ' ' || p[len - 1] == '\t' ||
+                       p[len - 1] == '\r' || p[len - 1] == '\n'))
+        len--;
+    if (len != 6)
+        return 0;
+    for (i = 0; i < 6; i++) {
+        unsigned char c = (unsigned char)p[i];
+        unsigned char k = (unsigned char)kw[i];
+        if (c >= 'A' && c <= 'Z')
+            c = (unsigned char)(c - 'A' + 'a');
+        if (c != k)
+            return 0;
+    }
+    return 1;
+}
+
+/* #937/US6: Server->Spieler-Status ueber den BESTEHENDEN #934-Pfad
+ * (`send_chat`-Kommando, kein neuer Hook). Escaping via json_escape (wie
+ * handle_send_chat). Bewusst FIRE-AND-FORGET: diese Funktion wird aus dem
+ * pipe_reader-Thread aufgerufen, der selbst die Antworten liest - ein
+ * wartender pipe_send_command() wuerde sich dort selbst blockieren. Die
+ * eingehende send_chat_result-Zeile matcht keinen Waiter und wird ignoriert.
+ *
+ * MUTEX (US6-Fix): hier darf NICHT g_cmd_cs genommen werden. pipe_send_command
+ * haelt g_cmd_cs ueber das gesamte WaitForSingleObject(g_resp_ev, timeout_ms);
+ * die erwartete Antwort kann aber nur DIESER reader-Thread liefern. Nähme der
+ * Reader g_cmd_cs, blockierte er sich selbst bis RBB_BRIDGE_TIMEOUT_MS
+ * (Default 20 s) - ein Bounded-Deadlock bei jedem /ready, das mit einem
+ * laufenden get_state-Poll kollidiert. Die Pipe-Writes serialisiert g_pipe_cs. */
+static void bridge_send_chat_status(int players, int count, int timeout)
+{
+    char text[256];
+    char esc[512];
+    char payload[LINE_MAX];
+
+    if (timeout)
+        snprintf(text, sizeof(text),
+                 "Ready-Timeout: %d/%d ready - Spiel bleibt pausiert "
+                 "(kein Kick).", count, players);
+    else if (players > 0 && count >= players)
+        snprintf(text, sizeof(text),
+                 "Alle %d Spieler ready - Start!", players);
+    else
+        snprintf(text, sizeof(text),
+                 "%d/%d ready - warte auf die restlichen Spieler.",
+                 count, players);
+
+    json_escape(text, esc, sizeof(esc));
+    snprintf(payload, sizeof(payload),
+             "{\"cmd\":\"send_chat\",\"text\":\"%s\",\"type\":\"system\","
+             "\"prefix\":\"\"}\n",
+             esc);
+
+    EnterCriticalSection(&g_pipe_cs);
+    if (g_pipe != INVALID_HANDLE_VALUE)
+        pipe_write_all(g_pipe, payload);
+    LeaveCriticalSection(&g_pipe_cs);
+}
+
+/* #937: verarbeitet eine Chat-Zeile fuer das Gate. Erkennt "/ready", traegt
+ * die conn_id (Fallback: Text-Distinct, wenn keine conn_id am Wire) idempotent
+ * ein und feuert bei `ready_count == players` GENAU EINMAL das Start-Signal
+ * (identisch zu handle_post_start: g_start_epoch++). */
+static void ready_gate_on_chat(const char *text, const char *conn_id)
+{
+    char id[RBB_READY_ID_LEN];
+    int added = 0, fire = 0, first = 0, count = 0, players = 0;
+    double now = bridge_now_s();
+
+    if (!is_ready_command(text))
+        return;
+
+    if (conn_id && conn_id[0])
+        snprintf(id, sizeof(id), "%s", conn_id);
+    else
+        snprintf(id, sizeof(id), "text:ready"); /* Fallback: alle ohne
+                                                 * conn_id kollidieren -> count 1
+                                                 * (Grenze: Live-Attribution #549) */
+
+    EnterCriticalSection(&g_ready_gate_cs);
+    if (!g_ready_gate.fired) {
+        first = (g_ready_gate.count == 0);
+        added = ready_gate_add(&g_ready_gate, id);
+        if (added) {
+            /* neuer /ready -> vorherigen Timeout-Latch zuruecksetzen (neue
+             * Runde/neuer Versuch), sonst meldet die Config dauerhaft true. */
+            g_ready_gate.timed_out = 0;
+            ready_gate_arm(&g_ready_gate, now, (double)g_ready_timeout_s);
+        }
+        players = g_ready_gate.players;
+        count = g_ready_gate.count;
+        if (added && ready_gate_should_fire(&g_ready_gate, players)) {
+            g_ready_gate.fired = 1;
+            g_ready_gate.timed_out = 0;
+            fire = 1;
+        }
+    }
+    LeaveCriticalSection(&g_ready_gate_cs);
+
+    if (fire) {
+        int epoch;
+        char ev[128];
+        EnterCriticalSection(&g_start_epoch_cs);
+        g_start_epoch += 1;
+        epoch = g_start_epoch;
+        LeaveCriticalSection(&g_start_epoch_cs);
+        blog("ready-gate: alle %d ready -> start (epoch %d)", count, epoch);
+        snprintf(ev, sizeof(ev),
+                 "{\"event\":\"ready_all\",\"players\":%d,"
+                 "\"ready_count\":%d,\"start_epoch\":%d}",
+                 players, count, epoch);
+        sse_broadcast(ev);
+        bridge_send_chat_status(players, count, 0); /* US6: alle ready */
+    } else if (added && first) {
+        char ev[96];
+        snprintf(ev, sizeof(ev),
+                 "{\"event\":\"ready_update\",\"players\":%d,"
+                 "\"ready_count\":%d}", players, count);
+        sse_broadcast(ev);
+        bridge_send_chat_status(players, count, 0); /* US6: erstes ready */
+    }
+}
+
+/* #937/US4: Timeout-Tick. Bei Ablauf wird die Ready-Menge geleert, ein
+ * Status-Event `ready_timeout` gebroadcastet und NICHTS gestartet (kein Kick
+ * -> attack_cycle bleibt/zurueck PAUSED). Wird aus dem pipe_reader-Loop
+ * aufgerufen, damit der Timeout auch ohne eingehende Zeilen greift. */
+static void ready_gate_tick(void)
+{
+    int expired = 0;
+    EnterCriticalSection(&g_ready_gate_cs);
+    if (ready_gate_expired(&g_ready_gate, bridge_now_s())) {
+        ready_gate_clear(&g_ready_gate);
+        g_ready_gate.timed_out = 1;
+        expired = 1;
+    }
+    LeaveCriticalSection(&g_ready_gate_cs);
+    if (expired) {
+        int players, count;
+        blog("ready-gate: Timeout -> PAUSED (kein Kick)");
+        sse_broadcast("{\"event\":\"ready_timeout\"}");
+        EnterCriticalSection(&g_ready_gate_cs);
+        players = g_ready_gate.players;
+        count = g_ready_gate.count; /* nach clear() == 0 */
+        LeaveCriticalSection(&g_ready_gate_cs);
+        bridge_send_chat_status(players, count, 1); /* US6: Timeout */
+    }
+}
+
 /* Route eine Pipe-Zeile: Events -> Server-Handling, Responses -> Waiter. */
 static void route_pipe_line(HANDLE h, const char *line)
 {
@@ -604,10 +780,25 @@ static void route_pipe_line(HANDLE h, const char *line)
 
     if (strcmp(ev, "player_chat") == 0) {
         char text[256] = "";
+        char cid[64] = "";
         json_get_string(line, "text", text, sizeof(text));
+        json_get_string(line, "conn_id", cid, sizeof(cid));
         blog("player_chat: %.120s", text);
         sse_broadcast(line);
+        /* #937: /ready erkennt das Gate; conn_id traegt die Attribution. */
+        ready_gate_on_chat(text, cid);
         return;
+    }
+
+    /* #937: Spielerzahl aus der get_state_result-Zeile mitlesen (Quelle fuer
+     * das Gate "alle ready"). Faellt danach durch zum Response-Waiter. */
+    if (strcmp(ev, "get_state_result") == 0) {
+        double p = 0.0;
+        if (json_get_number(line, "players", &p)) {
+            EnterCriticalSection(&g_ready_gate_cs);
+            g_ready_gate.players = (int)p;
+            LeaveCriticalSection(&g_ready_gate_cs);
+        }
     }
 
     /* Response-Zeile: an einen wartenden HTTP-Handler liefern. */
@@ -699,6 +890,8 @@ static DWORD WINAPI pipe_reader_main(LPVOID arg)
             } else {
                 Sleep(10);
             }
+            /* #937/US4: Timeout-Gate unabhaengig von eingehenden Zeilen. */
+            ready_gate_tick();
         }
     }
     return 0;
@@ -1659,6 +1852,11 @@ static void handle_post_attack_reset(SOCKET c, const char *body)
         EnterCriticalSection(&g_attack_reset_cs);
         g_attack_reset_epoch++;
         LeaveCriticalSection(&g_attack_reset_cs);
+        /* #937/US3: Runden-Reset -> fired/timed_out-Latch des Ready-Gates
+         * loeschen, damit die naechste Runde erneut per /ready startet. */
+        EnterCriticalSection(&g_ready_gate_cs);
+        ready_gate_reset(&g_ready_gate);
+        LeaveCriticalSection(&g_ready_gate_cs);
         blog("attack_reset -> epoch %d", g_attack_reset_epoch);
     }
 
@@ -1696,6 +1894,11 @@ static void handle_post_round_reset(SOCKET c, const char *body)
 
     if (trigger) {
         blog("round_reset -> epoch %d", epoch);
+        /* #937/US3: Runden-Reset -> fired/timed_out-Latch des Ready-Gates
+         * loeschen (POST /round_reset {"reset":1} = neue Runde). */
+        EnterCriticalSection(&g_ready_gate_cs);
+        ready_gate_reset(&g_ready_gate);
+        LeaveCriticalSection(&g_ready_gate_cs);
 
         json_get_number(body, "map", &map_flag);
         if (map_flag != 0.0) {
@@ -1820,9 +2023,11 @@ static void handle_post_natural_attack_rules(SOCKET c, const char *body)
 static void handle_get_game_config(SOCKET c)
 {
     char cfg[4096];
-    char resp[4352];
+    char resp[4608];
+    char rstat[512];
     int epoch;
     int ready;
+    int rd_timeout;
 
     EnterCriticalSection(&g_game_config_cs);
     if (g_game_config[0]) {
@@ -1839,20 +2044,30 @@ static void handle_get_game_config(SOCKET c)
     EnterCriticalSection(&g_ready_cs);
     ready = g_ready;
     LeaveCriticalSection(&g_ready_cs);
+    EnterCriticalSection(&g_ready_gate_cs);
+    ready_gate_status_json(&g_ready_gate, rstat, sizeof(rstat));
+    rd_timeout = g_ready_gate.timed_out;
+    LeaveCriticalSection(&g_ready_gate_cs);
 
-    /* `start_epoch` + `ready` in das flache Config-Objekt haengen (vor die
-     * schliessende Klammer) -> der attack_cycle hat beides aus EINEM Poll. */
+    /* `start_epoch` + `ready` + #937-Gate-Status in das flache Config-Objekt
+     * haengen (vor die schliessende Klammer) -> der attack_cycle hat alles aus
+     * EINEM Poll: players, ready_count, ready_players[], ready_deadline,
+     * ready_timeout. */
     {
         size_t len = strlen(cfg);
         if (len > 0 && cfg[len - 1] == '}') {
             cfg[len - 1] = '\0';
             snprintf(resp, sizeof(resp),
-                     "%s,\"start_epoch\":%d,\"ready\":%s}",
-                     cfg, epoch, ready ? "true" : "false");
+                     "%s,\"start_epoch\":%d,\"ready\":%s,%s,"
+                     "\"ready_timeout\":%s}",
+                     cfg, epoch, ready ? "true" : "false", rstat,
+                     rd_timeout ? "true" : "false");
         } else {
             snprintf(resp, sizeof(resp),
-                     "{\"start_epoch\":%d,\"ready\":%s}",
-                     epoch, ready ? "true" : "false");
+                     "{\"start_epoch\":%d,\"ready\":%s,%s,"
+                     "\"ready_timeout\":%s}",
+                     epoch, ready ? "true" : "false", rstat,
+                     rd_timeout ? "true" : "false");
         }
     }
     http_respond(c, 200, "OK", resp);
@@ -2269,6 +2484,9 @@ static int mode_server(void)
     InitializeCriticalSection(&g_natural_attack_rules_cs);
     InitializeCriticalSection(&g_game_config_cs);
     InitializeCriticalSection(&g_ready_cs);
+    InitializeCriticalSection(&g_ready_gate_cs);
+    ready_gate_init(&g_ready_gate);
+    g_ready_timeout_s = ready_timeout_cap(env_int("RBB_READY_TIMEOUT_S", 180), 180);
     InitializeCriticalSection(&g_start_epoch_cs);
     g_resp_ev = CreateEvent(NULL, FALSE, FALSE, NULL);
     CreateThread(NULL, 0, pipe_reader_main, NULL, 0, NULL);

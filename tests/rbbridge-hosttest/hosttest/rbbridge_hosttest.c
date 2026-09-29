@@ -764,29 +764,43 @@ int main(void)
         char out[600];
         size_t n;
 
-        n = chat_build_player_chat("hello", out, sizeof(out));
+        /* #937/US1: Identitaetsfelder. conn_id == 0 -> kein Feld (Bestands-
+         * format bitgleich, RUECKWAERTSKOMPATIBILITAET). */
+        n = chat_build_player_chat("hello", 0, -1, out, sizeof(out));
         check(n > 0 && strcmp(out,
               "{\"event\":\"player_chat\",\"text\":\"hello\"}") == 0,
-              "chat_build_player_chat: einfacher Text -> player_chat-Zeile");
+              "chat_build_player_chat: ohne conn_id -> Bestandsformat");
 
-        n = chat_build_player_chat("a\"b\\c", out, sizeof(out));
+        n = chat_build_player_chat("a\"b\\c", 0, -1, out, sizeof(out));
         check(n > 0 && strcmp(out,
               "{\"event\":\"player_chat\",\"text\":\"a\\\"b\\\\c\"}") == 0,
               "chat_build_player_chat: Quote/Backslash escaped");
 
         /* Tab (0x09) ist ein Steuerzeichen < 0x20 -> \u0009, NICHT roh. */
-        n = chat_build_player_chat("a\tb", out, sizeof(out));
+        n = chat_build_player_chat("a\tb", 0, -1, out, sizeof(out));
         check(n > 0 && strstr(out, "\\u0009") != NULL &&
                   strchr(out, '\t') == NULL,
               "chat_build_player_chat: Tab -> \\u0009 (kein Roh-Steuerzeichen)");
 
+        /* #937/US1: conn_id != 0 -> Zusatzfelder conn_id (hex) + player. */
+        n = chat_build_player_chat("hey", 0x1a2b3cULL, 0, out, sizeof(out));
+        check(n > 0 &&
+                  strstr(out, "\"conn_id\":\"1a2b3c\"") != NULL &&
+                  strstr(out, "\"player\":0") != NULL &&
+                  strstr(out, "\"event\":\"player_chat\"") != NULL,
+              "chat_build_player_chat: conn_id+player als Zusatzfelder");
+
+        n = chat_build_player_chat("hey", 0x1a2b3cULL, -1, out, sizeof(out));
+        check(n > 0 && strstr(out, "\"player\":-1") != NULL,
+              "chat_build_player_chat: player=-1 (unbekannt) darstellbar");
+
         /* Leerer Text -> 0 (kein leeres Event senden). */
-        check(chat_build_player_chat("", out, sizeof(out)) == 0,
+        check(chat_build_player_chat("", 0, -1, out, sizeof(out)) == 0,
               "chat_build_player_chat: leerer Text -> 0 (nichts senden)");
-        check(chat_build_player_chat(NULL, out, sizeof(out)) == 0,
+        check(chat_build_player_chat(NULL, 0, -1, out, sizeof(out)) == 0,
               "chat_build_player_chat: NULL -> 0 (kein Crash)");
         /* Puffer zu klein -> 0 (kein abgeschnittenes JSON). */
-        check(chat_build_player_chat("hello", out, 8) == 0,
+        check(chat_build_player_chat("hello", 0, -1, out, 8) == 0,
               "chat_build_player_chat: Puffer zu klein -> 0");
 
         /* json_escape_into direkt: < 0x20 -> \uXXXX. */
@@ -921,6 +935,58 @@ int main(void)
         chat_queue_init(&q);
         check(chat_queue_push(&q, NULL) == 0, "chat_queue: push NULL -> 0");
         check(chat_queue_push(&q, "") == 0, "chat_queue: push leer -> 0");
+    }
+
+    /* -------------------------------------------------------------- */
+    /* #937/US2: conn_id_from_ptr + conn-tragende Chat-Queue           */
+    /* -------------------------------------------------------------- */
+    {
+        unsigned long long a, b;
+
+        /* (0 -> 0 = "unbekannt"; NIE ein Hash fuer p == 0). */
+        check(conn_id_from_ptr((uintptr_t)0) == 0,
+              "conn_id_from_ptr: 0 -> 0 (unbekannt)");
+
+        /* Stabil: gleicher Zeiger -> gleiche ID (kein Zufall/ASLR-Drift). */
+        check(conn_id_from_ptr(0x00007ff6aabbccddULL) ==
+                  conn_id_from_ptr(0x00007ff6aabbccddULL),
+              "conn_id_from_ptr: stabil (identischer Zeiger -> identische ID)");
+
+        /* Nie 0 fuer p != 0 und nie der Rohzeiger (48-Bit-Beschnitt). */
+        a = conn_id_from_ptr(0x00007ff6aabbccddULL);
+        b = conn_id_from_ptr(0x00007ff6aabbccdeULL);
+        check(a != 0, "conn_id_from_ptr: p!=0 -> ID != 0");
+        check(a != 0x00007ff6aabbccddULL && a < (1ULL << 48),
+              "conn_id_from_ptr: kein Rohzeiger (>2^48-Hash beschnitten)");
+        check(a != b, "conn_id_from_ptr: kollisionsarm (Nachbarp. != ID)");
+
+        /* Queue traegt die conn_id PARALLEL zum Text (FIFO-gekoppelt). */
+        {
+            chat_queue_t cq;
+            char head[256];
+            uintptr_t cid = 0;
+
+            chat_queue_init(&cq);
+            check(chat_queue_push_conn(&cq, "one", 0x11u) == 1,
+                  "chat_queue_conn: push 'one' mit conn 0x11");
+            check(chat_queue_push_conn(&cq, "two", 0x22u) == 1,
+                  "chat_queue_conn: push 'two' mit conn 0x22");
+            check(chat_queue_pop_conn(&cq, head, sizeof(head), &cid) == 1 &&
+                      strcmp(head, "one") == 0 && cid == 0x11u,
+                  "chat_queue_conn: pop liefert Text+conn des AELTESTEN");
+            check(chat_queue_pop_conn(&cq, head, sizeof(head), &cid) == 1 &&
+                      strcmp(head, "two") == 0 && cid == 0x22u,
+                  "chat_queue_conn: FIFO-Kopplung Text<->conn bleibt");
+            check(chat_queue_pop_conn(&cq, head, sizeof(head), &cid) == 0,
+                  "chat_queue_conn: nach Drain leer (pop 0)");
+
+            /* Alt-API (ohne conn) traegt conn 0 -> Bestandsverhalten. */
+            chat_queue_push(&cq, "plain");
+            cid = 0xdead;
+            check(chat_queue_pop_conn(&cq, head, sizeof(head), &cid) == 1 &&
+                      strcmp(head, "plain") == 0 && cid == 0,
+                  "chat_queue_conn: push ohne conn -> conn 0");
+        }
     }
 
     /* -------------------------------------------------------------- */

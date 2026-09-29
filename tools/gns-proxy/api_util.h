@@ -477,6 +477,71 @@ inline SoloJoinDecision decideSoloAction(bool instanceRequested, int memberCount
   return SoloJoinDecision::JoinExisting;
 }
 
+// --- Lobby-Ready-Gate (Issue #937, P2) --------------------------------------
+//
+// Reine, host-testbare Entscheidung im GNS-Proxy: erst wenn ALLE Mitglieder
+// der Lobby `POST /ready` getippt haben, wird `POST /capsule/ready` (resume +
+// Cycle-Start) ausgeloest. Idempotent JE MITGLIED: ein zweites /ready desselben
+// Mitglieds zaehlt nicht neu und loest keinen zweiten Kapsel-Ready aus.
+
+enum class ReadyDecision {
+  Wait,          // es fehlen noch Mitglieder -> nichts tun
+  AllReady,      // alle da UND noch nicht gefeuert -> Kapsel-Ready ausloesen
+  AlreadyReady,  // alle da, aber schon gefeuert -> idempotent, nichts tun
+};
+
+inline const char *readyDecisionName(ReadyDecision d) {
+  switch (d) {
+  case ReadyDecision::Wait: return "wait";
+  case ReadyDecision::AllReady: return "all_ready";
+  case ReadyDecision::AlreadyReady: return "already_ready";
+  }
+  return "";
+}
+
+struct ReadyResult {
+  ReadyDecision decision = ReadyDecision::Wait;
+  int ready = 0;                     // Mitglieder mit /ready
+  int total = 0;                     // Mitglieder in der Lobby
+  std::vector<std::string> missing;  // Mitglieder ohne ready (Reihenfolge)
+};
+
+// `readySet` = Identitaeten mit /ready (Duplikate unschaedlich), `members` =
+// Lobby-Mitglieder, `maxMembers` = Kapazitaetsdeckel (<=0 -> unbegrenzt),
+// `alreadyFired` = hat der Proxy der Kapsel schon ready gemeldet? Leere Lobby
+// oder mehr Mitglieder als Kapazitaet -> Wait (nie starten).
+inline ReadyResult decideReady(const std::vector<std::string> &readySet,
+                               const std::vector<std::string> &members,
+                               int maxMembers, bool alreadyFired) {
+  ReadyResult r;
+  r.total = static_cast<int>(members.size());
+  for (const auto &m : members) {
+    bool isReady = false;
+    for (const auto &id : readySet) {
+      if (id == m) {
+        isReady = true;
+        break;
+      }
+    }
+    if (isReady) {
+      r.ready++;
+    } else {
+      r.missing.push_back(m);
+    }
+  }
+  if (maxMembers > 0 && r.total > maxMembers) {
+    r.decision = ReadyDecision::Wait;  // mehr Mitglieder als Kapazitaet
+    return r;
+  }
+  if (members.empty() || !r.missing.empty()) {
+    r.decision = ReadyDecision::Wait;
+    return r;
+  }
+  r.decision = alreadyFired ? ReadyDecision::AlreadyReady
+                            : ReadyDecision::AllReady;
+  return r;
+}
+
 // --- /solo-Orchestrierung (Issue #929) --------------------------------------
 //
 // Reine (socket-freie) Abbildung des Relay-`/solo`-Pfads: Claim-Aufruf per

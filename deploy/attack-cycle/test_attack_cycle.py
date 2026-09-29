@@ -1630,5 +1630,68 @@ class TestCreatureAttackEvents(unittest.TestCase):
         self.assertIsNotNone(st["seconds_to_next_event"])
 
 
+class TestReadyGateStatus(unittest.TestCase):
+    """#937/US4: Ready-Gate-Statusfelder aus GET /game_config + Timeout-Pfad.
+
+    Der attack_cycle liest ``players``/``ready_count``/``ready_players`` und
+    ``ready_timeout`` defensiv mit. Bei ``ready_timeout: true`` faellt die
+    Zustandsmaschine nach PAUSED zurueck (reset) — KEIN Kick, kein Start.
+    """
+
+    def _cycle(self, getter_resp, getter_status=200, poster=None, **kwargs):
+        return AttackCycle(
+            "http://127.0.0.1:9001",
+            interval_s=420.0,
+            difficulty_interval_first_s=1e9,
+            _poster=poster or FakePoster('{"ok":true,"hq_hp":100.0}'),
+            _getter=FakeGetter(getter_resp, getter_status),
+            _clock=FakeClock(0.0),
+            **kwargs,
+        )
+
+    def test_ready_fields_synced_and_exposed(self):
+        body = json.dumps({
+            "players": 3,
+            "ready_count": 2,
+            "ready_players": ["0x1a", "0x2b"],
+            "ready_timeout": False,
+        })
+        cycle = self._cycle(body)
+        cycle.sync_game_config()
+        self.assertEqual(cycle.players, 3)
+        self.assertEqual(cycle.ready_count, 2)
+        self.assertEqual(cycle.ready_players, ["0x1a", "0x2b"])
+        self.assertFalse(cycle.ready_timeout)
+        st = cycle.status()
+        self.assertEqual(st["players"], 3)
+        self.assertEqual(st["ready_count"], 2)
+        self.assertEqual(st["ready_players"], ["0x1a", "0x2b"])
+        self.assertFalse(st["ready_timeout"])
+
+    def test_ready_timeout_resets_to_paused(self):
+        body = json.dumps({
+            "players": 2,
+            "ready_count": 0,
+            "ready_players": [],
+            "ready_timeout": True,
+        })
+        cycle = self._cycle(body)
+        cycle.signal_start()  # PAUSED -> WARMUP
+        self.assertEqual(cycle.state, STATE_WARMUP)
+        cycle.sync_game_config()
+        self.assertEqual(cycle.state, STATE_PAUSED)
+        self.assertFalse(cycle.ready)
+        self.assertTrue(cycle.ready_timeout)
+
+    def test_ready_timeout_read_back_false_after_round(self):
+        # false-Payload darf nicht resetten und den Zustand nicht kippen.
+        body = json.dumps({"ready_timeout": False})
+        cycle = self._cycle(body)
+        cycle.signal_start()
+        cycle.sync_game_config()
+        self.assertEqual(cycle.state, STATE_WARMUP)
+        self.assertFalse(cycle.ready_timeout)
+
+
 if __name__ == "__main__":
     unittest.main()

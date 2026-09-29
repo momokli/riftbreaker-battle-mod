@@ -27,13 +27,18 @@ Wahrheitsquelle, Events sind nur Benachrichtigungen.
 {"event":"exec_result","command":"rb_wave 3","ok":false,"reason":"not_implemented (RE: ConsoleService/Lua-State finden)"}
 {"event":"score_update","t":12345678,"score":0,"resources":{"iron":0,"carbon":0},"wave":0}
 {"event":"player_chat","text":"-send carbonium 10"}
+{"event":"player_chat","text":"/ready","conn_id":"1a2b3c","player":-1}
 {"event":"send_chat_result","ok":true,"text":"gg wp","sent":"true"}
 {"event":"error","error":"unknown_cmd"}
 ```
 
 - `player_chat` ist der Vanilla-Chat-Ingress (Detour #549): Der Spieler tippt
   Chat, die DLL liest den Text und legt ihn als `player_chat`-Zeile auf die
-  Pipe. Sie wird **vor** der `get_state_result`-Zeile von `get_state`
+  Pipe. Ab #937 tragen die Zeilen optional `conn_id` (stabile,
+  hash-abgeleitete Verbindungs-ID, nie der Rohzeiger) und `player`
+  (Spieler-Index, `-1` = unbekannt) — Zusatzfelder, die alte Konsumenten
+  ignorieren (`conn_id == 0` -> Feld entfaellt, Bestandsformat bitgleich).
+  `conn_id` traegt das `/ready`-Gate (distinct ready == `players`). Sie wird **vor** der `get_state_result`-Zeile von `get_state`
   emittiert; `pipe_bridge` sammelt die Texte und injiziert sie als
   `"chat":["...",...]`-Array in die `get_state`-Antwort (Cockpit-Poll).
 - `send_chat_result` (#934) ist die Antwort auf das `send_chat`-Kommando
@@ -130,6 +135,7 @@ werden ignoriert (vorwärtskompatibel). Alle Events sind benachrichtigend
 {"event":"round_end","t":990000,"round":2,"score":1560,"survived":true}
 {"event":"match_end","t":1200000,"winner":"player_a","reason":"base_destroyed","final_score":3120}
 {"event":"player_chat","t":1210450,"text":"gg wp"}
+{"event":"player_chat","t":1210451,"text":"/ready","conn_id":"1a2b3c","player":-1}
 ```
 
 ### server → game (Server steuert Spiel)
