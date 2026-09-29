@@ -116,3 +116,30 @@ test("pipe_bridge: /ready-Gate + Statusfelder verdrahtet (#937)", () => {
     "handle_get_game_config nutzt ready_gate_status_json nicht",
   );
 });
+
+test("pipe_bridge: Server->Spieler-Status nutzt #934 send_chat (#937/US6)", () => {
+  assert.ok(fs.existsSync(SRC), `Quelle fehlt: ${SRC}`);
+  const src = fs.readFileSync(SRC, "utf8");
+
+  // Kein NEUER Hook: der Status laeuft ueber das bestehende send_chat-Kommando.
+  const body = extractFunctionBody(src, "static void bridge_send_chat_status(int players, int count, int timeout)");
+  assert.ok(body, "bridge_send_chat_status nicht gefunden");
+  assert.ok(
+    body.includes('"cmd\\":\\"send_chat') || body.includes('send_chat'),
+    "stellt nicht das send_chat-Kommando (#934) auf die Pipe",
+  );
+  assert.ok(
+    !body.includes("pipe_send_command("),
+    "darf im reader-Thread NICHT auf send_chat_result warten (Selbst-Deadlock) — fire-and-forget",
+  );
+  assert.ok(
+    body.includes("json_escape("),
+    "escaped den Text nicht ueber den bestehenden Builder (json_escape)",
+  );
+
+  // Aufrufe an den Zeitpunkten: erstes ready UND alle ready UND timeout.
+  assert.ok(
+    src.includes("bridge_send_chat_status"),
+    "Status wird nirgends ausgeloest",
+  );
+});

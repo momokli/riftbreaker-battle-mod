@@ -637,6 +637,45 @@ static int is_ready_command(const char *text)
     return 1;
 }
 
+/* #937/US6: Server->Spieler-Status ueber den BESTEHENDEN #934-Pfad
+ * (`send_chat`-Kommando, kein neuer Hook). Escaping via json_escape (wie
+ * handle_send_chat). Bewusst FIRE-AND-FORGET: diese Funktion wird aus dem
+ * pipe_reader-Thread aufgerufen, der selbst die Antworten liest - ein
+ * wartender pipe_send_command() wuerde sich dort selbst blockieren. Die
+ * eingehende send_chat_result-Zeile matcht keinen Waiter und wird ignoriert. */
+static void bridge_send_chat_status(int players, int count, int timeout)
+{
+    char text[256];
+    char esc[512];
+    char payload[LINE_MAX];
+
+    if (timeout)
+        snprintf(text, sizeof(text),
+                 "Ready-Timeout: %d/%d ready - Spiel bleibt pausiert "
+                 "(kein Kick).", count, players);
+    else if (players > 0 && count >= players)
+        snprintf(text, sizeof(text),
+                 "Alle %d Spieler ready - Start!", players);
+    else
+        snprintf(text, sizeof(text),
+                 "%d/%d ready - warte auf die restlichen Spieler.",
+                 count, players);
+
+    json_escape(text, esc, sizeof(esc));
+    snprintf(payload, sizeof(payload),
+             "{\"cmd\":\"send_chat\",\"text\":\"%s\",\"type\":\"system\","
+             "\"prefix\":\"\"}\n",
+             esc);
+
+    EnterCriticalSection(&g_cmd_cs);
+    if (g_pipe != INVALID_HANDLE_VALUE) {
+        EnterCriticalSection(&g_pipe_cs);
+        pipe_write_all(g_pipe, payload);
+        LeaveCriticalSection(&g_pipe_cs);
+    }
+    LeaveCriticalSection(&g_cmd_cs);
+}
+
 /* #937: verarbeitet eine Chat-Zeile fuer das Gate. Erkennt "/ready", traegt
  * die conn_id (Fallback: Text-Distinct, wenn keine conn_id am Wire) idempotent
  * ein und feuert bei `ready_count == players` GENAU EINMAL das Start-Signal
@@ -689,13 +728,15 @@ static void ready_gate_on_chat(const char *text, const char *conn_id)
                  "{\"event\":\"ready_all\",\"players\":%d,"
                  "\"ready_count\":%d,\"start_epoch\":%d}",
                  players, count, epoch);
-        sse_broadcast(ev); /* Server->Spieler-Status: US6 (#934) */
+        sse_broadcast(ev);
+        bridge_send_chat_status(players, count, 0); /* US6: alle ready */
     } else if (added && first) {
         char ev[96];
         snprintf(ev, sizeof(ev),
                  "{\"event\":\"ready_update\",\"players\":%d,"
                  "\"ready_count\":%d}", players, count);
-        sse_broadcast(ev); /* Server->Spieler-Status: US6 (#934) */
+        sse_broadcast(ev);
+        bridge_send_chat_status(players, count, 0); /* US6: erstes ready */
     }
 }
 
@@ -714,8 +755,14 @@ static void ready_gate_tick(void)
     }
     LeaveCriticalSection(&g_ready_gate_cs);
     if (expired) {
+        int players, count;
         blog("ready-gate: Timeout -> PAUSED (kein Kick)");
         sse_broadcast("{\"event\":\"ready_timeout\"}");
+        EnterCriticalSection(&g_ready_gate_cs);
+        players = g_ready_gate.players;
+        count = g_ready_gate.count; /* nach clear() == 0 */
+        LeaveCriticalSection(&g_ready_gate_cs);
+        bridge_send_chat_status(players, count, 1); /* US6: Timeout */
     }
 }
 
