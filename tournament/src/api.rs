@@ -2380,6 +2380,104 @@ mod tests {
             .all(|c| !c.starts_with("POST /incoming_send ")));
     }
 
+    /// US2/US4 (#996): Cross-World-Send auch in der Gegenrichtung — ein Send
+    /// aus Welt B landet bei A's `wave_start` als genau EIN
+    /// `POST /incoming_send {level, from:"B"}` an die A-Bridge (der G5-Vertrag
+    /// ist richtungsunabhaengig; die Abnahme deckt nur A→B ab).
+    #[tokio::test]
+    async fn reverse_cross_world_send_b_to_a_pushes_ingress_to_a_bridge() {
+        let (addr_a, captures) = capture_endpoint().await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [Some(format!("http://{addr_a}/exec")), None];
+        let app = make_app(cfg).await;
+        register(&app, "A", "momo").await;
+        register(&app, "B", "matheo").await;
+        call(&app, "POST", "/go", Some(json!({}))).await;
+
+        // B sendet eine Welle (Level) an A.
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/send",
+            Some(json!({"world": "B", "level": 2, "value": 700})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+
+        // A meldet seinen Wellenstart -> Ingress-Push an A, from = B.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "A", "event": "wave_start", "built_value": 6400})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["effect"], "locked");
+        let ingress = v["ingress"].as_array().unwrap();
+        assert_eq!(ingress.len(), 1, "ingress: {v}");
+        assert_eq!(ingress[0]["level"], 2);
+        assert_eq!(ingress[0]["from"], "B");
+        assert_eq!(ingress[0]["ok"], true);
+        assert_eq!(
+            ingress[0]["endpoint"],
+            format!("http://{addr_a}/incoming_send")
+        );
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let all = captures.lock().await;
+        let caps: Vec<&String> = all
+            .iter()
+            .filter(|c| c.starts_with("POST /incoming_send "))
+            .collect();
+        assert_eq!(caps.len(), 1, "caps: {all:?}");
+        assert!(caps[0].contains("\"level\":2"), "req: {}", caps[0]);
+        assert!(caps[0].contains("\"from\":\"B\""), "req: {}", caps[0]);
+    }
+
+    /// US4 (#996): Mehrere offene Sends derselben Welt werden als EIN Ingress-
+    /// Push JE Batch zugestellt (nicht gebuendelt) — der G5-Vertrag ist
+    /// per-Batch; der Drain raeumt alle Batches.
+    #[tokio::test]
+    async fn multiple_pending_sends_push_one_ingress_per_batch() {
+        let (addr_b, captures) = capture_endpoint().await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [None, Some(format!("http://{addr_b}/exec"))];
+        let app = make_app(cfg).await;
+        register(&app, "A", "momo").await;
+        register(&app, "B", "matheo").await;
+        call(&app, "POST", "/go", Some(json!({}))).await;
+
+        for lvl in [1u32, 3] {
+            let (s, _) = call(
+                &app,
+                "POST",
+                "/send",
+                Some(json!({"world": "A", "level": lvl, "value": 300})),
+            )
+            .await;
+            assert_eq!(s, StatusCode::OK);
+        }
+
+        let (_, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "B", "event": "wave_start"})),
+        )
+        .await;
+        let ingress = v["ingress"].as_array().unwrap();
+        assert_eq!(ingress.len(), 2, "ingress: {v}");
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let all = captures.lock().await;
+        let pushes = all
+            .iter()
+            .filter(|c| c.starts_with("POST /incoming_send "))
+            .count();
+        assert_eq!(pushes, 2, "caps: {all:?}");
+    }
+
     // ---- US7: host-loser Abnahme-Test des Kern-Pfads (#996, G5 + G6) ----
 
     /// Abnahme (host-los, in-process):
