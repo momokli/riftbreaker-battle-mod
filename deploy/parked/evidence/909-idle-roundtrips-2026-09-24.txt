@@ -1,0 +1,5 @@
+# raw idle round-trip run 2026-09-24T07:26:09Z
+pause_game  dt=0.130  {"event":"pause_game_result","ok":true,"paused":false,"readback":"ok","flag":0,"want":1,"via":"marshalled","consumed":true}
+parked get_state: {"event":"get_state_result","ok":false,"reason":"no_world","dom_paused":true,"mission_flow":"","mission_flow_active":false,"mission_flow_payload":null,"creatures_base_difficulty":0.0000,"end_game":null,"players":null,"hq_hp":null,"hq_hp_max":null,"hq_dead":null,"game_paused":false,"pause_want":1}
+resume_game dt=0.123  {"event":"resume_game_result","ok":true,"paused":true,"readback":"ok","flag":1,"want":0,"via":"marshalled","consumed":true}
+after  get_state: {"event":"get_state_result","ok":false,"reason":"no_world","dom_paused":true,"mission_flow":"","mission_flow_active":false,"mission_flow_payload":null,"creatures_base_difficulty":0.0000,"end_game":null,"players":null,"hq_hp":null,"hq_hp_max":null,"hq_dead":null,"game_paused":false,"pause_want":0}

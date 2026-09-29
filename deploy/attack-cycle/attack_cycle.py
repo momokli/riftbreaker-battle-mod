@@ -72,6 +72,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import random
 import threading
@@ -106,6 +107,9 @@ DEFAULT_DIFFICULTY_INTERVAL_FIRST_S = 200.0  # erster Schritt (1→2)
 DEFAULT_DIFFICULTY_INTERVAL_SUBSEQUENT_S = 600.0  # Folge-Schritte (2→3 … 8→9)
 DEFAULT_BRIDGE_URL = "http://127.0.0.1:9001"
 DEFAULT_CONTROL_PORT = 9102
+
+# Observability (#966): lauter Resolver-Logger statt stillem Schlucken.
+LOG = logging.getLogger("attack_cycle")
 
 # --- Game-Flow (docs/GAME_FLOW.md, Issues #826/#827/#828) --------------------
 # Modus: SOLO (1 Welt, Persona emuliert den Gegner) vs VS (2 Welten, echter
@@ -571,6 +575,14 @@ class AttackCycle:
         # Default aus, weil die Bridge jeden /start-Aufruf quittiert.
         self.poll_start = bool(poll_start)
         self.ready = False
+        # #937: Ready-Gate-Sichtbarkeit (Bridge -> attack_cycle). Rein
+        # ANZEIGE/Reset-Ausloeser; der Start laeuft weiter nur ueber
+        # start_epoch. ``ready_timeout`` ist ein Edge-Signal (Gruen->Rot),
+        # damit ein Poll-Loop bei wiederholtem true nicht mehrfach resettet.
+        self.players = 0
+        self.ready_count = 0
+        self.ready_players: list = []
+        self.ready_timeout = False
         self.timeout = timeout
         # Wellen-Feuer-Regeln (Attack-Count/Boss/Extra/MP), konfigurierbar.
         # Ein explizites `difficulty_rules`-dict ueberschreibt das benannte
@@ -611,6 +623,9 @@ class AttackCycle:
         self._round_reset_epoch = 0  # Edge-Erkennung Round-Reset-Wrapper (#854)
         self._start_epoch: Optional[int] = None  # Edge-Erkennung fuer start_epoch
         self._start_signaled = False  # Start-Signal gesehen (noch nicht angewandt)
+        # Observability (#966): monotoner Resolver-Fehler-Zaehler + letzter Fehler.
+        self.resolve_errors = 0
+        self.last_resolve_error: Optional[str] = None
 
     # --- Toggles ----------------------------------------------------------
     @property
@@ -767,15 +782,35 @@ class AttackCycle:
                 else:
                     print(f"[attack-cycle] wave{level} verworfen (status={status} ok={ok}): {body[:160]}", flush=True)
             except Exception as e:
-                print(f"[attack-cycle] wave{level} resolve error: {e}", flush=True)
+                # #966: nicht mehr still schlucken — laut loggen + zaehlen.
+                # Verhalten unveraendert: die Order bleibt verworfen.
+                with self._lock:
+                    self.resolve_errors += 1
+                    self.last_resolve_error = "wave%d: %s" % (level, e)
+                LOG.warning(
+                    "[attack-cycle] wave%d resolve error (resolve_errors=%d): %s",
+                    level,
+                    self.resolve_errors,
+                    e,
+                    exc_info=True,
+                )
 
     def _resolver_loop(self) -> None:
         """Hintergrund-Resolver: bezahlt kontinuierlich offene Orders."""
         while True:
             try:
                 self._resolve_orders()
-            except Exception:
-                pass
+            except Exception as e:
+                # #966: Loop-Fehler laut machen statt ``pass`` (sonst unsichtbar).
+                with self._lock:
+                    self.resolve_errors += 1
+                    self.last_resolve_error = "resolver_loop: %s" % (e,)
+                LOG.warning(
+                    "[attack-cycle] resolver loop error (resolve_errors=%d): %s",
+                    self.resolve_errors,
+                    e,
+                    exc_info=True,
+                )
             time.sleep(0.5)
 
     # --- Feuern -----------------------------------------------------------
@@ -1029,6 +1064,10 @@ class AttackCycle:
                 "warmup_s": self.warmup_s,
                 "toggles": dict(self.toggles),
                 "ready": self.ready,
+                "players": self.players,
+                "ready_count": self.ready_count,
+                "ready_players": list(self.ready_players),
+                "ready_timeout": self.ready_timeout,
                 "level": self.level,
                 "seconds_to_next_attack": (
                     max(0.0, self.next_attack_at - now) if self.next_attack_at is not None else None
@@ -1067,6 +1106,8 @@ class AttackCycle:
                 "history": list(self.history),
                 "last_fire": self.last_fire,
                 "last_event": self.last_event,
+                "resolve_errors": self.resolve_errors,
+                "last_resolve_error": self.last_resolve_error,
             }
 
     # --- Status an die Bridge pushen (WebUI) ----------------------------
@@ -1218,6 +1259,7 @@ class AttackCycle:
             data = json.loads(body)
             if not isinstance(data, dict):
                 return
+            do_reset = False
             with self._lock:
                 mode = data.get("mode")
                 if mode in MODES:
@@ -1229,7 +1271,26 @@ class AttackCycle:
                 ready = data.get("ready")
                 if isinstance(ready, bool):
                     self.ready = ready
+                players = data.get("players")
+                if isinstance(players, int) and not isinstance(players, bool) and players >= 0:
+                    self.players = players
+                ready_count = data.get("ready_count")
+                if isinstance(ready_count, int) and not isinstance(ready_count, bool) and ready_count >= 0:
+                    self.ready_count = ready_count
+                ready_players = data.get("ready_players")
+                if isinstance(ready_players, list):
+                    self.ready_players = [str(x) for x in ready_players]
+                ready_timeout = data.get("ready_timeout")
+                if isinstance(ready_timeout, bool):
+                    # Edge-Erkennung: nur der Wechsel False -> True loest den
+                    # Reset aus (kein Kick, kein Start -> zurueck PAUSED).
+                    if ready_timeout and not self.ready_timeout:
+                        do_reset = True
+                    self.ready_timeout = ready_timeout
                 self._note_start_signal(data)
+            if do_reset:
+                print("[attack-cycle] ready_timeout -> PAUSED (kein Kick)", flush=True)
+                self.reset()
         except Exception:
             pass
 

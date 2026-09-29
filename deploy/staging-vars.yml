@@ -35,6 +35,8 @@ riftbreaker_saves_volume: rb-saves-staging
 # IO-Bridge isoliert von dev (9001) und prod (9002) — sonst Kollision auf
 # 127.0.0.1.
 riftbreaker_bridge_port: 9003
+# Attack-Cycle-Control-Host-Port je Env eindeutig (#967/#963) — siehe prod-vars.yml.
+riftbreaker_attack_cycle_port: 9104
 
 # Bridge-Binaries (rbtools) isoliert — Pfad-Schema `<env>` (Issue #483,
 # Ziel B: /opt/rbmods/rbtools/<env>).
@@ -49,6 +51,7 @@ riftbreaker_sessions_container: riftbreaker-sessions-staging
 riftbreaker_send_tailer_container: riftbreaker-send-tailer-staging
 riftbreaker_match_loop_container: riftbreaker-match-loop-staging
 riftbreaker_attack_cycle_container: riftbreaker-attack-cycle-staging
+riftbreaker_chat_announcer_container: riftbreaker-chat-announcer-staging
 riftbreaker_sessions_dir: "/srv/rift-{{ rift_env }}/sessions"
 
 # Content kommt per Sync aus dem kanonischen Cache (wie dev/prod).

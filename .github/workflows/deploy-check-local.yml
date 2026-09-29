@@ -10,6 +10,8 @@ name: Deploy Check (local)
 #   * Playbook-Syntax (site.yml + deploy-prod.yml, Issue #328/#329)
 #   * Deploy-Wiring + Provider-Unit-Tests (Issue #337)
 #   * Disk-Space-Gate-Selbsttest (Issue #310)
+#   * Backup/Stray-Retention-Selbsttest (Issue #312)
+#   * Compose-Log-Limit-Selbsttest (Issue #301)
 #   * Server-Control-Auth hinter dem Caddy (Issue #454)
 #   * Server-Control config-vars.json Render (Issue #704)
 #   * /server/*-Route-Selbsttest (dev rendert sie, prod nicht; Issue #463)
@@ -226,6 +228,26 @@ jobs:
       - name: "Disk-Space-Gate Selbsttest (Issue #310)"
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/disk-gate/run.sh
+
+      # Backup/Stray-Retention Selbsttest (Issue #312): hermetisch (tmpdir,
+      # localhost) — ruft die ECHTE Task-Datei der Rolle auf. Prueft: nur die N
+      # neuesten rbbattle-*.tar.gz + stray-*/ bleiben (deterministisch ueber den
+      # Namens-Zeitstempel), Idempotenz, --check entfernt nichts, keep=
+      # konfigurierbar, mods/ nie angefasst (Guard #212, inkl. fail-loud-
+      # Overlap) und der stat-Guard ist load-bearing (Negativ-Probe).
+      - name: "Backup/Stray-Retention Selbsttest (Issue #312)"
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
+        run: bash deploy/tests/backup-retention/run.sh
+
+      # Compose-Log-Limit Selbsttest (Issue #301): rendert die ECHTEN Compose-
+      # Templates der drei Rollen und prueft via `docker compose config
+      # --format json`, dass JEDER Service einen json-file-Log-Treiber mit
+      # max-size UND max-file traegt (konfigurierbar per -e) — schliesst die
+      # reale, unverwaltete Luecke der unbegrenzten Container-Logs. Negativ-
+      # Probe: ohne logging-Block wird der Test rot. Lokal, kein Host.
+      - name: "Compose-Log-Limit Selbsttest (Issue #301)"
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
+        run: bash deploy/tests/compose-logging/run.sh
 
       # Auth-Selbsttest der /server/*-Route (Issue #454): rendert das ECHTE
       # rift-caddy-Template, startet Caddy (host-net) + einen Mock-Agenten und

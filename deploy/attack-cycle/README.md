@@ -40,6 +40,16 @@ Ticks feuern nacheinander, jeweils mit dem zu diesem Zeitpunkt aktuellen Level.
 | `/queue_send` | POST    | Welle kaufen (`{"name":"waveN"}` oder `{"level":N}`)                                             |
 | `/status`     | GET     | `active`, `level`, `seconds_to_next_attack`, `seconds_to_next_difficulty`, `bought`, `orders`, … |
 
+### Ready-Gate-Sichtbarkeit (#937)
+
+`GET /game_config` (Poll via `sync_game_config`) liefert zusaetzlich `players`,
+`ready_count`, `ready_players[]`, `ready_deadline` und `ready_timeout`. Der
+Cycle spiegelt `players`/`ready_count`/`ready_players`/`ready_timeout` im
+`/status`. `ready_timeout: true` (Edge False→True) loest `reset()` aus →
+zurueck PAUSED, **kein Kick**. Der eigentliche Start laeuft unveraendert nur
+ueber `start_epoch` (die Bridge feuert es, sobald alle `players` distinct
+`/ready` getippt haben).
+
 ## Personas (Send-Profile)
 
 Eine Persona ist eine optionale Folge von **Attacken**; jede Attack ist eine

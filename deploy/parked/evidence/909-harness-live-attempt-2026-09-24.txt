@@ -1,0 +1,24 @@
+## harness live attempt (`measure_boot.py --json`) — FAILS against real image
+
+Command:
+  PROVISIONER_IMAGE=rb-dedicated:9f578c405d0d PROVISIONER_ENV=test PROVISIONER_HEALTH_DEADLINE=40 \
+    python3 measure_boot.py --json --instance-id measure909r
+
+stdout:
+
+stderr:
+Traceback (most recent call last):
+  File "/home/momo/repos/riftbreaker-battle-mod/deploy/parked/measure_boot.py", line 146, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/momo/repos/riftbreaker-battle-mod/deploy/parked/measure_boot.py", line 133, in main
+    result = run_measurement(provisioner, pool, env=args.env, cold_instance_id=cold_id,
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/momo/repos/riftbreaker-battle-mod/deploy/parked/measure_boot.py", line 96, in run_measurement
+    cold = measure_cold_boot(provisioner, clock, env=env, instance_id=cold_instance_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/momo/repos/riftbreaker-battle-mod/deploy/parked/measure_boot.py", line 48, in measure_cold_boot
+    provisioner.start(env=env, instance_id=instance_id)
+  File "/home/momo/repos/riftbreaker-battle-mod/deploy/parked/../provisioner/provisioner.py", line 448, in start
+    raise ProvisionError(
+rb_provisioner.ProvisionError: Health-Timeout: http://127.0.0.1:44564/health liefert kein ok innerhalb von 40.0s
