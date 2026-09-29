@@ -76,7 +76,8 @@ if cmd == "inspect":
     entry = containers[name]
     running = entry["running"]
     print(json.dumps([{"Name": "/" + name,
-                       "Config": {"Labels": entry.get("labels", {})},
+                       "Config": {"Labels": entry.get("labels", {}),
+                                  "Env": entry.get("env", [])},
                        "State": {"Status": "running" if running else "exited",
                                  "StartedAt": "2026-01-01T00:00:00Z"}}]))
 elif cmd == "ps":
@@ -149,7 +150,12 @@ elif cmd == "run":
         if a == "--label" and i + 1 < len(args) and "=" in args[i + 1]:
             key, value = args[i + 1].split("=", 1)
             labels[key] = value
-    containers[name] = {"running": True, "bridge_port": bridge_port, "labels": labels}
+    env = []
+    for i, a in enumerate(args):
+        if a == "-e" and i + 1 < len(args):
+            env.append(args[i + 1])
+    containers[name] = {"running": True, "bridge_port": bridge_port,
+                        "labels": labels, "env": env}
     save("containers.json", containers)
     print(name)
 elif cmd == "start":
@@ -1448,6 +1454,105 @@ class ModeTestCase(BaseFixture):
             self.provisioner().start("test", "solo_self", "0")
         self.assertIsNone(self.docker.inspect_optional(spec.container))
         self.assertFalse(os.path.isdir(spec.run_root))
+
+    # -- US6: CLI `--personas-file` (Regression: stiller No-Op) ----------
+    def test_cli_personas_file_override_reaches_provisioner(self):
+        # Regression #993: der CLI-Override muss VOR `Provisioner(cfg)` greifen,
+        # sonst ist `--personas-file` ein stiller No-Op. Die Persona `cliaggro`
+        # existiert NUR in der uebergebenen Datei -> rc==0 belegt, dass die
+        # Validierung wirklich die CLI-Datei nutzt (Default wuerde scheitern).
+        tmp = os.path.join(self.sources, "personas-cli.json")
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump({"personas": {"cliaggro": [[[0] * 10]]}}, handle)
+        captured = {}
+
+        class _Spy(object):
+            def __init__(self, cfg, *args, **kwargs):
+                captured["cfg"] = cfg
+                self.cfg = cfg
+
+            def start(self, env, mode, instance_id):
+                sel = prov.parse_mode(mode)
+                original(self.cfg)._validate_persona(sel)
+                return {"ok": True, "mode": sel.mode}
+
+        original = prov.Provisioner
+        prov.Provisioner = _Spy
+        try:
+            os.environ["PROVISIONER_IMAGE"] = IMAGE
+            rc = prov.main(
+                ["start", "--mode", "solo_persona:cliaggro", "--personas-file", tmp]
+            )
+        finally:
+            prov.Provisioner = original
+            os.environ.pop("PROVISIONER_IMAGE", None)
+        self.assertEqual(rc, 0)
+        self.assertEqual(captured["cfg"].personas_file, tmp)
+
+    def test_cli_without_personas_file_keeps_default(self):
+        # Ohne Flag bleibt der Default aus der Config unveraendert (RIFTBREAKER_*
+        # / JSON-Konfiguration), kein versehentlicher Override.
+        captured = {}
+        default_file = prov.load_config(env={"PROVISIONER_IMAGE": IMAGE}).personas_file
+
+        class _Spy(object):
+            def __init__(self, cfg, *args, **kwargs):
+                captured["cfg"] = cfg
+                self.cfg = cfg
+
+            def start(self, env, mode, instance_id):
+                return {"ok": True}
+
+        original = prov.Provisioner
+        prov.Provisioner = _Spy
+        try:
+            os.environ["PROVISIONER_IMAGE"] = IMAGE
+            rc = prov.main(["start", "--mode", "solo_self"])
+        finally:
+            prov.Provisioner = original
+            os.environ.pop("PROVISIONER_IMAGE", None)
+        self.assertEqual(rc, 0)
+        self.assertEqual(captured["cfg"].personas_file, default_file)
+
+    # -- Grenzfall: vorhandener Container mit anderem Modus --------------
+    def test_existing_container_mode_mismatch_fails_loud(self):
+        provisioner = self.provisioner()
+        provisioner.start("test", "solo_self", "0")
+        runs_before = len(self.run_calls())
+        posts_before = len(self.stub.server.posts)
+        with self.assertRaises(prov.ProvisionError):
+            provisioner.start("test", "solo_persona:aggro", "0")
+        # Kein stilles Umschalten: kein Re-Create, kein Re-Seed.
+        self.assertEqual(len(self.run_calls()), runs_before)
+        self.assertEqual(len(self.stub.server.posts), posts_before)
+
+    def test_existing_container_same_mode_is_idempotent(self):
+        provisioner = self.provisioner()
+        provisioner.start("test", "solo_self", "0")
+        runs_before = len(self.run_calls())
+        second = provisioner.start("test", "solo_self", "0")
+        self.assertFalse(second["created"])
+        self.assertEqual(len(self.run_calls()), runs_before)
+
+    def test_existing_container_without_mode_env_skips_check(self):
+        # Legacy/extern erzeugter Container ohne RIFTBREAKER_MODE: nichts zu
+        # vergleichen -> Idempotenz bleibt (kein Fehlalarm).
+        provisioner = self.provisioner()
+        provisioner.start("test", "solo_self", "0")
+        real = self.docker.inspect_optional
+
+        def stripped(name):
+            data = real(name)
+            if data is not None:
+                data = dict(data)
+                cfg = dict(data.get("Config") or {})
+                cfg.pop("Env", None)
+                data["Config"] = cfg
+            return data
+
+        self.docker.inspect_optional = stripped
+        status = provisioner.start("test", "solo_persona:aggro", "0")
+        self.assertFalse(status["created"])
 
 
 if __name__ == "__main__":

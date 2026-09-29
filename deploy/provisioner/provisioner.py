@@ -112,6 +112,19 @@ class ModeSelection:
     persona_on: bool
 
 
+def _container_env_mode(existing: Dict[str, Any]) -> Optional[str]:
+    """Modus eines vorhandenen Containers aus dessen ``Config.Env`` lesen (#993).
+
+    Liefert ``None``, wenn kein ``RIFTBREAKER_MODE`` gesetzt ist (z. B. legacy/
+    extern erzeugter Container) — dann wird NICHT verglichen.
+    """
+    env = (existing.get("Config") or {}).get("Env") or []
+    for item in env:
+        if isinstance(item, str) and item.startswith("RIFTBREAKER_MODE="):
+            return item.split("=", 1)[1]
+    return None
+
+
 def parse_mode(mode: str) -> ModeSelection:
     """Modus strikt parsen/validieren (fail-loud, kein stiller Fallback).
 
@@ -749,6 +762,15 @@ class Provisioner(object):
         existing = self.docker.inspect_optional(spec.container)
         if existing is not None:
             # Idempotenz: es gibt den Container schon -> KEIN zweiter.
+            # Kein stilles Umschalten: laeuft der Container in einem ANDEREN
+            # Modus (RIFTBREAKER_MODE), lauthupen statt den Request zu ignorieren.
+            existing_mode = _container_env_mode(existing)
+            if existing_mode is not None and existing_mode != selection.mode:
+                raise ProvisionError(
+                    "Instanz %s laeuft bereits im Modus '%s', angefordert war '%s' "
+                    "(kein stilles Umschalten; erst stoppen, dann neu provisionieren)"
+                    % (instance_id, existing_mode, selection.mode)
+                )
             status = (existing.get("State") or {}).get("Status") or ""
             if status != "running":
                 rc, _out, err = self.docker.start(spec.container)
@@ -1451,11 +1473,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         parser.print_help()
         return 2
 
+    # CLI-Override MUSS VOR dem Provisioner angewendet werden: `Provisioner.__init__`
+    # speichert eine Referenz auf cfg; ein spaeteres lokales Rebinden wuerde den
+    # bereits gebauten Provisioner NICHT erreichen (stiller No-Op, #993).
+    if args.command == "start" and getattr(args, "personas_file", None):
+        cfg = dataclasses.replace(cfg, personas_file=args.personas_file)
+
     provisioner = Provisioner(cfg)
     try:
         if args.command == "start":
-            if getattr(args, "personas_file", None):
-                cfg = dataclasses.replace(cfg, personas_file=args.personas_file)
             result = provisioner.start(args.env, args.mode, args.instance_id)
         elif args.command == "stop":
             result = provisioner.stop(args.instance_id, args.env)

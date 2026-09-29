@@ -179,6 +179,12 @@ Namen enthält. `solo_self` liest die Datei **nicht**.
   `{instance, container, running, health, ports, created}`.
   **Idempotent**: läuft der Container schon, wird **kein** zweiter erzeugt
   (`created=False`); ein gestoppter vorhandener Container wird nur gestartet.
+  **Kein stilles Umschalten:** weicht der angeforderte `mode` vom
+  `RIFTBREAKER_MODE`-Env des vorhandenen Containers ab (`docker inspect`), bricht
+  `start` fail-loud als `ProvisionError` ab — ein laufender `solo_self` wird also
+  nicht stillschweigend zu `solo_persona:<n>` (oder umgekehrt); erst `stop`, dann
+  neu provisionieren. Fehlt `RIFTBREAKER_MODE` ganz (legacy/extern erzeugter
+  Container), wird nicht verglichen und die Idempotenz bleibt erhalten.
   **Preflight fail-loud VOR dem Container**: Bridge-Port frei, genug freier
   Platz, Image vorhanden. **Rollback** aller begonnenen Ressourcen
   (Container → Volumes → Netz → Verzeichnisse) bei jedem Fehler.
