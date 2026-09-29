@@ -115,6 +115,28 @@ test("pipe_bridge: /ready-Gate + Statusfelder verdrahtet (#937)", () => {
     cfg.includes("ready_gate_status_json"),
     "handle_get_game_config nutzt ready_gate_status_json nicht",
   );
+
+  // #937/US3: "genau einmal PRO RUNDE" — der fired-Latch muss beim Runden-Reset
+  // geloescht werden (Bridge-seitiges Runden-Reset-Signal: POST /attack_reset
+  // bzw. /round_reset mit {"reset":1}).
+  const attackReset = extractFunctionBody(
+    src,
+    "static void handle_post_attack_reset(SOCKET c, const char *body)",
+  );
+  assert.ok(attackReset, "handle_post_attack_reset nicht gefunden");
+  assert.ok(
+    attackReset.includes("ready_gate_reset("),
+    "handle_post_attack_reset setzt den Gate-Runden-Latch nicht zurueck (US3)",
+  );
+  const roundReset = extractFunctionBody(
+    src,
+    "static void handle_post_round_reset(SOCKET c, const char *body)",
+  );
+  assert.ok(roundReset, "handle_post_round_reset nicht gefunden");
+  assert.ok(
+    roundReset.includes("ready_gate_reset("),
+    "handle_post_round_reset setzt den Gate-Runden-Latch nicht zurueck (US3)",
+  );
 });
 
 test("pipe_bridge: Server->Spieler-Status nutzt #934 send_chat (#937/US6)", () => {

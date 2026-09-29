@@ -96,6 +96,36 @@ int main(void)
           "expired: leere Menge -> 0 (nichts zu timeouten)");
     check(ready_gate_expired(NULL, 300.0) == 0, "expired: NULL -> 0");
 
+    /* --- #937/US3 (Fix): Runden-Latch zuruecksetzen ------------------ */
+    /* Ein „genau einmal pro Runde"-Latch muss beim Runden-Reset geloescht
+     * werden, sonst startet nach GAME_OVER->reset() ohne Bridge-Neustart keine
+     * zweite Runde per /ready. clear() laesst den Latch stehen, reset() nicht. */
+    ready_gate_init(&g);
+    g.players = 2;
+    ready_gate_add(&g, "aa11");
+    ready_gate_add(&g, "bb22");
+    ready_gate_arm(&g, 100.0, 180.0);
+    check(ready_gate_should_fire(&g, 2) == 1, "reset: alle da -> fire");
+    g.fired = 1;      /* Start gefeuert (Runde laeuft) */
+    g.timed_out = 1;  /* Timeout-Event gemeldet */
+    ready_gate_clear(&g);
+    check(g.fired == 1 && g.timed_out == 1,
+          "clear: fired/timed_out bleiben stehen (kein Runden-Reset)");
+    check(ready_gate_should_fire(&g, 2) == 0,
+          "clear: nach fire bleibt der Latch zu (genau einmal)");
+    ready_gate_reset(&g);
+    check(ready_gate_count(&g) == 0 && g.deadline == 0.0,
+          "reset: Menge + Deadline zurueck");
+    check(g.fired == 0 && g.timed_out == 0,
+          "reset: fired/timed_out geloescht -> neue Runde");
+    check(g.players == 2,
+          "reset: players bleibt (kommt je Poll aus get_state)");
+    ready_gate_add(&g, "cc33");
+    ready_gate_add(&g, "dd44");
+    check(ready_gate_should_fire(&g, 2) == 1,
+          "reset: nach neuer Runde feuert das Gate ERNEUT");
+    ready_gate_reset(NULL); /* defensiv: NULL darf nicht crashen */
+
     /* --- Status-JSON ------------------------------------------------- */
     ready_gate_init(&g);
     g.players = 3;
