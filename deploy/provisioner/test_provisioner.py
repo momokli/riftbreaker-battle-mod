@@ -192,31 +192,71 @@ def free_port():
 
 
 class _HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):  # noqa: N802
-        self.server.hits += 1
-        if self.server.ok and self.path == "/health":
-            body = b'{"ok": true}'
-            self.send_response(200)
-        else:
-            body = b'{"ok": false, "state": "starting"}'
-            self.send_response(503)
+    def _send(self, code, payload):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def do_GET(self):  # noqa: N802
+        self.server.hits += 1
+        if self.path == "/health":
+            if self.server.ok:
+                self._send(200, {"ok": True})
+            else:
+                self._send(503, {"ok": False, "state": "starting"})
+        elif self.path == "/game_config":
+            self._send(200, self.server.game_config)
+        elif self.path == "/personas":
+            self._send(200, self.server.personas or {})
+        else:
+            self._send(404, {"ok": False})
+
+    def do_POST(self):  # noqa: N802
+        self.server.hits += 1
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length).decode("utf-8") if length else ""
+        if self.server.fail_seed:
+            self._send(500, {"ok": False, "reason": "boom"})
+            return
+        try:
+            payload = json.loads(raw) if raw.strip() else {}
+        except ValueError:
+            payload = None
+        self.server.posts.append((self.path, payload))
+        if self.path == "/game_config":
+            self.server.game_config = payload if isinstance(payload, dict) else {}
+            self._send(200, {"ok": True})
+        elif self.path == "/personas":
+            self.server.personas = payload if isinstance(payload, dict) else {}
+            self._send(200, {"ok": True})
+        elif self.path == "/persona_active":
+            self.server.persona_active = payload if isinstance(payload, dict) else {}
+            self._send(200, {"ok": True})
+        else:
+            self._send(404, {"ok": False})
 
     def log_message(self, fmt, *args):  # noqa: A003
         pass
 
 
 class HealthStub(object):
-    """Lokaler HTTP-Health-Stub auf Ephemeral-Port (steuerbar ok/starting)."""
+    """Lokaler HTTP-Stub auf Ephemeral-Port (Health + Bridge-Seeding #993)."""
 
     def __init__(self, ok=True):
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), _HealthHandler)
         self.server.daemon_threads = True
         self.server.ok = ok
         self.server.hits = 0
+        # #993: Bridge-Seeding-Endpunkte (GET/POST /game_config, /personas,
+        # /persona_active) — steuerbar fuer Merge-/Fehler-Tests.
+        self.server.fail_seed = False
+        self.server.game_config = {"warmup_s": 120}
+        self.server.personas = {}
+        self.server.persona_active = {}
+        self.server.posts = []
         self.port = self.server.server_address[1]
         self.url = "http://127.0.0.1:%d/health" % self.port
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -253,6 +293,10 @@ class BaseFixture(unittest.TestCase):
             # Analog config.cfg.j2: die Quelle braucht eine server_name-Zeile
             # (Preflight/Staging pruefen sie, #970).
             handle.write('set server_name "RBBattle"\nset server_password "secret"\n# test config\n')
+        # Persona-Quelle (#993): hermetische Datei mit der Persona `aggro`.
+        self.personas_file = os.path.join(self.sources, "personas.json")
+        with open(self.personas_file, "w", encoding="utf-8") as handle:
+            json.dump({"personas": {"aggro": [[0, 0, 1, 0, 1, 0, 0, 0, 0]]}}, handle)
 
         os.environ["FAKE_DOCKER_LOG"] = self.log_file
         os.environ["FAKE_DOCKER_STATE_DIR"] = self.state_dir
@@ -279,6 +323,7 @@ class BaseFixture(unittest.TestCase):
             attack_cycle_port_base=bridge + 1000,
             game_source=self.game_source,
             config_cfg=self.config_cfg,
+            personas_file=self.personas_file,
             rbtools_dir=self.rbtools_dir,
             sessions_image=IMAGE,
             send_tailer_image=IMAGE,
@@ -305,7 +350,12 @@ class BaseFixture(unittest.TestCase):
 
     def provisioner(self, **overrides):
         cfg = prov.Config(**{**vars(self.cfg), **overrides})
-        return prov.Provisioner(cfg, docker=self.docker, health_probe=lambda url: prov.http_health_ok(self.stub.url))
+        return prov.Provisioner(
+            cfg,
+            docker=self.docker,
+            health_probe=lambda url: prov.http_health_ok(self.stub.url),
+            bridge_url=lambda spec: "http://127.0.0.1:%d" % self.stub.port,
+        )
 
     def spec(self, instance_id="0"):
         return prov.InstanceSpec(self.cfg.env, instance_id, self.cfg)
@@ -657,7 +707,7 @@ class ConfigTestCase(BaseFixture):
 
 class StartTestCase(BaseFixture):
     def test_happy_path(self):
-        status = self.provisioner().start("test", "solo", "0")
+        status = self.provisioner().start("test", "solo_self", "0")
         spec = self.spec("0")
         self.assertTrue(status["running"])
         self.assertEqual(status["health"], "healthy")
@@ -678,7 +728,7 @@ class StartTestCase(BaseFixture):
         self.assertTrue(os.path.isfile(spec.config_cfg_staged))
 
     def test_start_creates_four_sidecars_in_network(self):
-        status = self.provisioner().start("test", "solo", "0")
+        status = self.provisioner().start("test", "solo_self", "0")
         spec = self.spec("0")
         runs = self.run_calls()
         self.assertEqual(len(runs), 5)
@@ -716,10 +766,10 @@ class StartTestCase(BaseFixture):
 
     def test_idempotent_second_start(self):
         provisioner = self.provisioner()
-        first = provisioner.start("test", "solo", "0")
+        first = provisioner.start("test", "solo_self", "0")
         self.assertTrue(first["created"])
         runs_after_first = len(self.run_calls())
-        second = provisioner.start("test", "solo", "0")
+        second = provisioner.start("test", "solo_self", "0")
         self.assertFalse(second["created"])
         self.assertTrue(second["running"])
         self.assertEqual(second["health"], "healthy")
@@ -734,26 +784,26 @@ class StartTestCase(BaseFixture):
         blocker.listen(1)
         try:
             with self.assertRaises(prov.ProvisionError):
-                self.provisioner().start("test", "solo", "0")
+                self.provisioner().start("test", "solo_self", "0")
         finally:
             blocker.close()
         self.assertEqual(self.run_calls(), [])
 
     def test_disk_full_fails_loud(self):
         with self.assertRaises(prov.ProvisionError):
-            self.provisioner(min_free_gb=10 ** 9).start("test", "solo", "0")
+            self.provisioner(min_free_gb=10 ** 9).start("test", "solo_self", "0")
         self.assertEqual(self.run_calls(), [])
 
     def test_image_missing_fails_loud(self):
         with self.assertRaises(prov.ProvisionError):
-            self.provisioner(image="missing:latest").start("test", "solo", "0")
+            self.provisioner(image="missing:latest").start("test", "solo_self", "0")
         self.assertEqual(self.run_calls(), [])
 
     def test_health_timeout_rolls_back(self):
         self.stub.server.ok = False
         spec = self.spec("0")
         with self.assertRaises(prov.ProvisionError):
-            self.provisioner(health_deadline=0.0).start("test", "solo", "0")
+            self.provisioner(health_deadline=0.0).start("test", "solo_self", "0")
         calls = self.docker_calls()
         self.assertIn(["rm", "-f", spec.container], calls)
         self.assertIn(["volume", "rm", spec.wine_volume], calls)
@@ -766,14 +816,14 @@ class StartTestCase(BaseFixture):
         os.environ["FAKE_DOCKER_FAIL"] = "volume create"
         spec = self.spec("0")
         with self.assertRaises(prov.DockerError):
-            self.provisioner().start("test", "solo", "0")
+            self.provisioner().start("test", "solo_self", "0")
         calls = self.docker_calls()
         # Netz war schon erzeugt -> muss zurueckgerollt sein.
         self.assertIn(["network", "rm", spec.network], calls)
         self.assertEqual(self.run_calls(), [])
 
     def test_run_args_real_image_layout(self):
-        self.provisioner().start("test", "solo", "0")
+        self.provisioner().start("test", "solo_self", "0")
         spec = self.spec("0")
         self.assertEqual(len(self.run_calls()), 5)
         run = self.run_calls()[0]
@@ -816,13 +866,13 @@ class StartTestCase(BaseFixture):
             {"send_tailer_script": os.path.join(self.tmp, "nope-send.py")},
         ):
             with self.assertRaises(prov.ProvisionError, msg=override):
-                self.provisioner(**override).start("test", "solo", "0")
+                self.provisioner(**override).start("test", "solo_self", "0")
         self.assertEqual(self.run_calls(), [])
 
     def test_missing_sidecar_image_fails_loud_before_container(self):
         # Fail-loud VOR dem ersten Container (#966): kein halber Stack.
         with self.assertRaises(prov.ProvisionError):
-            self.provisioner(sessions_image="missing:latest").start("test", "solo", "0")
+            self.provisioner(sessions_image="missing:latest").start("test", "solo_self", "0")
         self.assertEqual(self.run_calls(), [])
 
     def test_sidecar_failure_rolls_back_container(self):
@@ -830,7 +880,7 @@ class StartTestCase(BaseFixture):
         spec = self.spec("0")
         os.environ["FAKE_DOCKER_FAIL"] = "run %s" % spec.match_loop_container
         with self.assertRaises(prov.DockerError):
-            self.provisioner().start("test", "solo", "0")
+            self.provisioner().start("test", "solo_self", "0")
         calls = self.docker_calls()
         self.assertIn(["rm", "-f", spec.container], calls)
         self.assertIn(["rm", "-f", spec.send_tailer_container], calls)
@@ -840,9 +890,9 @@ class StartTestCase(BaseFixture):
     def test_start_forwards_mode_and_run_scope_labels(self):
         # Issue-Signatur ist start(env, mode): ``mode`` MUSS im Container ankommen
         # (RIFTBREAKER_MODE) und die Instanz run-scoped gelabelt sein.
-        self.provisioner().start("test", "campaign", "0")
+        self.provisioner().start("test", "solo_self", "0")
         run = self.run_calls()[0]
-        self.assertEqual(run[run.index("-e") + 1], "RIFTBREAKER_MODE=campaign")
+        self.assertEqual(run[run.index("-e") + 1], "RIFTBREAKER_MODE=solo_self")
         self.assertIn("rb.provisioner.env=test", run)
         self.assertIn("rb.provisioner.instance=0", run)
 
@@ -855,7 +905,7 @@ class StartTestCase(BaseFixture):
         ])
         self.stub.server.ok = False
         with self.assertRaises(prov.ProvisionError):
-            self.provisioner(health_deadline=0.0).start("test", "solo", "0")
+            self.provisioner(health_deadline=0.0).start("test", "solo_self", "0")
         self.assertEqual(len(self.run_calls()), 1)
 
     def test_existing_stopped_container_is_restarted_not_recreated(self):
@@ -865,7 +915,7 @@ class StartTestCase(BaseFixture):
             "-p", "127.0.0.1:%d:9001" % spec.bridge_port, IMAGE,
         ])
         self.docker.stop(spec.container)
-        status = self.provisioner().start("test", "solo", "0")
+        status = self.provisioner().start("test", "solo_self", "0")
         self.assertFalse(status["created"])
         self.assertTrue(status["running"])
         self.assertEqual(len(self.run_calls()), 1)
@@ -875,7 +925,7 @@ class HardeningTestCase(BaseFixture):
     """#968: `docker run` spiegelt das Compose-Haertungs-Layout."""
 
     def test_run_args_hardening_defaults(self):
-        self.provisioner().start("test", "solo", "0")
+        self.provisioner().start("test", "solo_self", "0")
         run = self.run_calls()[0]
         self.assertEqual(run[run.index("--restart") + 1], "unless-stopped")
         # Beide log-opts vorhanden (Reihenfolge egal).
@@ -890,12 +940,12 @@ class HardeningTestCase(BaseFixture):
         self.assertEqual(run[-1], IMAGE)
 
     def test_rbb_ref_from_config(self):
-        self.provisioner(deploy_ref="v1.0.11-abc1234").start("test", "solo", "0")
+        self.provisioner(deploy_ref="v1.0.11-abc1234").start("test", "solo_self", "0")
         run = self.run_calls()[0]
         self.assertIn("RBB_REF=v1.0.11-abc1234", run)
 
     def test_rbb_env_follows_env_segment(self):
-        self.provisioner(env="staging").start("staging", "solo", "0")
+        self.provisioner(env="staging").start("staging", "solo_self", "0")
         run = self.run_calls()[0]
         self.assertIn("RBB_ENV=staging", run)
         self.assertNotIn("RBB_ENV=test", run)
@@ -939,7 +989,7 @@ class HardeningConfigTestCase(BaseFixture):
 class StopStatusTestCase(BaseFixture):
     def test_stop_removes_everything(self):
         provisioner = self.provisioner()
-        provisioner.start("test", "solo", "0")
+        provisioner.start("test", "solo_self", "0")
         spec = self.spec("0")
         result = provisioner.stop("0", "test")
         self.assertTrue(result["removed"]["container"])
@@ -957,7 +1007,7 @@ class StopStatusTestCase(BaseFixture):
 
     def test_stop_is_idempotent(self):
         provisioner = self.provisioner()
-        provisioner.start("test", "solo", "0")
+        provisioner.start("test", "solo_self", "0")
         provisioner.stop("0", "test")
         second = provisioner.stop("0", "test")
         self.assertEqual(
@@ -983,7 +1033,7 @@ class StopStatusTestCase(BaseFixture):
 
     def test_status_with_running_container(self):
         provisioner = self.provisioner()
-        provisioner.start("test", "solo", "0")
+        provisioner.start("test", "solo_self", "0")
         status = provisioner.status("0", "test")
         self.assertTrue(status["running"])
         self.assertEqual(status["health"], "healthy")
@@ -993,7 +1043,7 @@ class StopStatusTestCase(BaseFixture):
         # Issue #929: der GNS-UDP-Host-Port (`6321/udp`-Mapping) wird first-class
         # als `ports["gns"]` surface (Ziel fuer den Relay-/solo-Pin).
         provisioner = self.provisioner()
-        provisioner.start("test", "solo", "0")
+        provisioner.start("test", "solo_self", "0")
         status = provisioner.status("0", "test")
         self.assertEqual(status["ports"]["gns"], "127.0.0.1:32768")
         self.assertIn("6321/udp", status["ports"]["docker"])
@@ -1009,7 +1059,7 @@ class StopStatusTestCase(BaseFixture):
 
     def test_status_starting_when_health_not_ok(self):
         provisioner = self.provisioner()
-        provisioner.start("test", "solo", "0")
+        provisioner.start("test", "solo_self", "0")
         self.stub.server.ok = False
         status = provisioner.status("0", "test")
         self.assertTrue(status["running"])
@@ -1027,7 +1077,7 @@ class InstanceConfigStagingTestCase(BaseFixture):
     """#970: instanz-eigene config.cfg ableiten, mounten, restfrei stoppen."""
 
     def test_staging_rewrites_only_server_name(self):
-        self.provisioner().start("test", "solo", "0")
+        self.provisioner().start("test", "solo_self", "0")
         spec = self.spec("0")
         with open(spec.config_cfg, "r", encoding="utf-8") as handle:
             source = handle.read().splitlines()
@@ -1039,15 +1089,15 @@ class InstanceConfigStagingTestCase(BaseFixture):
         self.assertEqual(staged[1:], source[1:])
 
     def test_staging_mode_is_0644(self):
-        self.provisioner().start("test", "solo", "0")
+        self.provisioner().start("test", "solo_self", "0")
         spec = self.spec("0")
         mode = stat.S_IMODE(os.stat(spec.config_cfg_staged).st_mode)
         self.assertEqual(mode, 0o644)
 
     def test_two_instances_get_distinct_names(self):
         provisioner = self.provisioner()
-        provisioner.start("test", "solo", "0")
-        provisioner.start("test", "solo", "1")
+        provisioner.start("test", "solo_self", "0")
+        provisioner.start("test", "solo_self", "1")
         spec_a, spec_b = self.spec("0"), self.spec("1")
         self.assertNotEqual(spec_a.config_cfg_staged, spec_b.config_cfg_staged)
         self.assertTrue(os.path.isfile(spec_a.config_cfg_staged))
@@ -1063,14 +1113,14 @@ class InstanceConfigStagingTestCase(BaseFixture):
         with open(bad, "w", encoding="utf-8") as handle:
             handle.write('# keine server_name-Zeile\nset server_password "secret"\n')
         with self.assertRaises(prov.ProvisionError):
-            self.provisioner(config_cfg=bad).start("test", "solo", "0")
+            self.provisioner(config_cfg=bad).start("test", "solo_self", "0")
         self.assertEqual(self.run_calls(), [])
 
     def test_missing_config_source_fails_loud(self):
         with self.assertRaises(prov.ProvisionError):
             self.provisioner(
                 config_cfg=os.path.join(self.tmp, "nope.cfg")
-            ).start("test", "solo", "0")
+            ).start("test", "solo_self", "0")
         self.assertEqual(self.run_calls(), [])
 
     def test_staging_write_failure_rolls_back(self):
@@ -1078,14 +1128,14 @@ class InstanceConfigStagingTestCase(BaseFixture):
         provisioner = _StagingFailProvisioner(cfg, docker=self.docker)
         spec = self.spec("0")
         with self.assertRaises(OSError):
-            provisioner.start("test", "solo", "0")
+            provisioner.start("test", "solo_self", "0")
         self.assertEqual(self.run_calls(), [])
         self.assertFalse(os.path.exists(spec.config_cfg_staged))
         self.assertFalse(os.path.isdir(spec.run_root))
 
     def test_password_never_logged(self):
         with self.assertLogs(prov.LOG, level="INFO") as cm:
-            status = self.provisioner().start("test", "solo", "0")
+            status = self.provisioner().start("test", "solo_self", "0")
         self.assertNotIn("secret", "\n".join(cm.output))
         with open(self.log_file, "r", encoding="utf-8") as handle:
             docker_log = handle.read()
@@ -1093,7 +1143,7 @@ class InstanceConfigStagingTestCase(BaseFixture):
         self.assertNotIn("secret", json.dumps(status))
 
     def test_staged_content_not_in_status(self):
-        status = self.provisioner().start("test", "solo", "0")
+        status = self.provisioner().start("test", "solo_self", "0")
         spec = self.spec("0")
         blob = json.dumps(status) + json.dumps(spec.to_dict())
         self.assertNotIn("secret", blob)
@@ -1101,7 +1151,7 @@ class InstanceConfigStagingTestCase(BaseFixture):
 
     def test_stop_removes_staged_config_and_dir(self):
         provisioner = self.provisioner()
-        provisioner.start("test", "solo", "0")
+        provisioner.start("test", "solo_self", "0")
         spec = self.spec("0")
         self.assertTrue(os.path.isdir(spec.config_dir))
         self.assertTrue(os.path.isfile(spec.config_cfg_staged))
@@ -1124,7 +1174,7 @@ class ListInstancesTestCase(BaseFixture):
         ])
 
     def test_lists_own_env_with_fields(self):
-        self.provisioner().start("test", "solo", "0")
+        self.provisioner().start("test", "solo_self", "0")
         rows = self.provisioner().list_instances("test")
         by_container = {row["container"]: row for row in rows}
         self.assertIn("riftbreaker-dedicated-test-0", by_container)
@@ -1136,7 +1186,7 @@ class ListInstancesTestCase(BaseFixture):
         self.assertEqual(row["started_at"], "2026-01-01T00:00:00Z")
 
     def test_foreign_env_excluded(self):
-        self.provisioner().start("test", "solo", "0")
+        self.provisioner().start("test", "solo_self", "0")
         self._make_foreign()
         rows = self.provisioner().list_instances("test")
         self.assertEqual({row["env"] for row in rows}, {"test"})
@@ -1145,7 +1195,7 @@ class ListInstancesTestCase(BaseFixture):
         )
 
     def test_env_defaults_to_cfg_env(self):
-        self.provisioner().start("test", "solo", "0")
+        self.provisioner().start("test", "solo_self", "0")
         rows = self.provisioner().list_instances()
         self.assertTrue(any(row["instance"] == "0" for row in rows))
 
@@ -1156,7 +1206,7 @@ class ListInstancesTestCase(BaseFixture):
                                         "--filter", "label=rb.provisioner.env=test"])
 
     def test_missing_inspect_is_skipped_without_crash(self):
-        self.provisioner().start("test", "solo", "0")
+        self.provisioner().start("test", "solo_self", "0")
         original = self.docker.ps_all
 
         def ps_all(filter_label=None):
@@ -1208,7 +1258,7 @@ class ListInstancesTestCase(BaseFixture):
     def test_list_instances_propagates_inspect_daemon_error(self):
         # #969 B2: ein ECHTER inspect-Daemon-Fehler wird laut propagiert (nicht
         # wie ein fehlender Container still uebersprungen).
-        self.provisioner().start("test", "solo", "0")
+        self.provisioner().start("test", "solo_self", "0")
 
         def boom(_name):
             raise prov.DockerError("docker inspect explo")
@@ -1230,6 +1280,174 @@ class CliTestCase(BaseFixture):
         os.environ.pop("PROVISIONER_IMAGE", None)
         os.environ.pop("PROVISIONER_CONFIG", None)
         self.assertEqual(prov.main(["--check"]), 2)
+
+
+class ModeTestCase(BaseFixture):
+    """#993: Modus-Schema, fail-loud, Args, Staging/Rollback, Bridge-Seeding."""
+
+    # -- US1: Parser ------------------------------------------------------
+    def test_parse_solo_self(self):
+        sel = prov.parse_mode("solo_self")
+        self.assertEqual(sel.mode, "solo_self")
+        self.assertEqual(sel.kind, "self")
+        self.assertIsNone(sel.persona)
+        self.assertTrue(sel.send_yourself)
+        self.assertFalse(sel.persona_on)
+
+    def test_parse_solo_persona(self):
+        sel = prov.parse_mode("solo_persona:aggro")
+        self.assertEqual(sel.mode, "solo_persona:aggro")
+        self.assertEqual(sel.kind, "persona")
+        self.assertEqual(sel.persona, "aggro")
+        self.assertFalse(sel.send_yourself)
+        self.assertTrue(sel.persona_on)
+
+    def test_parse_invalid_fails_loud(self):
+        for bad in ("", "solo", "campaign", "solo_persona:", "solo_persona:a:b",
+                    "solo_persona:bad name", None, "SOLO_SELF", " solo_self",
+                    "solo_persona:" + "x" * 64):
+            with self.assertRaises(prov.ModeError, msg=repr(bad)):
+                prov.parse_mode(bad)
+
+    def test_mode_error_is_provision_error(self):
+        self.assertTrue(issubclass(prov.ModeError, prov.ProvisionError))
+
+    # -- US1: fail-loud start + CLI --------------------------------------
+    def test_start_invalid_mode_before_docker(self):
+        for bad in ("solo", "campaign", "nope", ""):
+            with self.assertRaises(prov.ProvisionError, msg=bad):
+                self.provisioner().start("test", bad, "0")
+        self.assertEqual(self.run_calls(), [])
+
+    def test_cli_invalid_mode_exit_one(self):
+        os.environ["PROVISIONER_IMAGE"] = IMAGE
+        try:
+            self.assertEqual(prov.main(["start", "--mode", "nope"]), 1)
+        finally:
+            os.environ.pop("PROVISIONER_IMAGE", None)
+
+    # -- US2: Persona-Validierung ----------------------------------------
+    def test_unknown_persona_fails_loud_before_container(self):
+        with self.assertRaises(prov.ProvisionError):
+            self.provisioner().start("test", "solo_persona:ghost", "0")
+        self.assertEqual(self.run_calls(), [])
+
+    def test_missing_personas_file_fails_loud(self):
+        with self.assertRaises(prov.ProvisionError):
+            self.provisioner(
+                personas_file=os.path.join(self.tmp, "nope.json")
+            ).start("test", "solo_persona:aggro", "0")
+        self.assertEqual(self.run_calls(), [])
+
+    def test_broken_personas_file_fails_loud(self):
+        bad = os.path.join(self.sources, "personas-bad.json")
+        with open(bad, "w", encoding="utf-8") as handle:
+            handle.write("{ not json")
+        with self.assertRaises(prov.ProvisionError):
+            self.provisioner(personas_file=bad).start("test", "solo_persona:aggro", "0")
+        self.assertEqual(self.run_calls(), [])
+
+    def test_wrong_shape_personas_file_fails_loud(self):
+        bad = os.path.join(self.sources, "personas-shape.json")
+        with open(bad, "w", encoding="utf-8") as handle:
+            json.dump({"nope": True}, handle)
+        with self.assertRaises(prov.ProvisionError):
+            self.provisioner(personas_file=bad).start("test", "solo_persona:aggro", "0")
+        self.assertEqual(self.run_calls(), [])
+
+    def test_solo_self_does_not_read_personas_file(self):
+        status = self.provisioner(
+            personas_file=os.path.join(self.tmp, "nope.json")
+        ).start("test", "solo_self", "0")
+        self.assertTrue(status["running"])
+        self.assertEqual(len(self.run_calls()), 5)
+
+    # -- US3: Container + Attack-Cycle-Sidecar ---------------------------
+    def _cycle_run(self):
+        name = self.spec("0").attack_cycle_container
+        for call in self.run_calls():
+            if name in call:
+                return call
+        return None
+
+    def test_solo_self_container_and_cycle_args(self):
+        self.provisioner().start("test", "solo_self", "0")
+        run = self.run_calls()[0]
+        self.assertIn("RIFTBREAKER_MODE=solo_self", run)
+        cycle = self._cycle_run()
+        self.assertIn("--send-yourself", cycle)
+        self.assertEqual(cycle[cycle.index("--send-yourself") + 1], "on")
+        self.assertNotIn("--persona", cycle)
+        self.assertNotIn("RBB_PERSONA_FILE=/data/personas.json", cycle)
+
+    def test_persona_container_and_cycle_args(self):
+        self.provisioner().start("test", "solo_persona:aggro", "0")
+        spec = self.spec("0")
+        run = self.run_calls()[0]
+        self.assertIn("RIFTBREAKER_MODE=solo_persona:aggro", run)
+        cycle = self._cycle_run()
+        self.assertEqual(cycle[cycle.index("--send-yourself") + 1], "off")
+        self.assertEqual(cycle[cycle.index("--persona") + 1], "aggro")
+        self.assertEqual(cycle[cycle.index("--persona-file") + 1], "/data/personas.json")
+        self.assertIn("RBB_PERSONA_FILE=/data/personas.json", cycle)
+        self.assertIn("%s:/data/personas.json:ro" % spec.personas_staged, cycle)
+
+    # -- US4: Staging + Rollback -----------------------------------------
+    def test_persona_file_staged_0644(self):
+        self.provisioner().start("test", "solo_persona:aggro", "0")
+        spec = self.spec("0")
+        self.assertTrue(os.path.isfile(spec.personas_staged))
+        self.assertEqual(stat.S_IMODE(os.stat(spec.personas_staged).st_mode), 0o644)
+        with open(spec.personas_staged, "r", encoding="utf-8") as handle:
+            doc = json.load(handle)
+        self.assertIn("aggro", doc["personas"])
+
+    def test_persona_mode_sidecar_failure_rolls_back_file(self):
+        spec = self.spec("0")
+        os.environ["FAKE_DOCKER_FAIL"] = "run %s" % spec.match_loop_container
+        with self.assertRaises(prov.DockerError):
+            self.provisioner().start("test", "solo_persona:aggro", "0")
+        self.assertFalse(os.path.exists(spec.personas_staged))
+        self.assertFalse(os.path.isdir(spec.run_root))
+
+    def test_stop_removes_staged_personas(self):
+        provisioner = self.provisioner()
+        provisioner.start("test", "solo_persona:aggro", "0")
+        spec = self.spec("0")
+        self.assertTrue(os.path.isfile(spec.personas_staged))
+        provisioner.stop("0", "test")
+        self.assertFalse(os.path.exists(spec.personas_staged))
+
+    # -- US5: Bridge-Seeding ---------------------------------------------
+    def test_solo_self_seeds_bridge(self):
+        self.stub.server.game_config = {"warmup_s": 120}
+        self.provisioner().start("test", "solo_self", "0")
+        posted = {path: body for path, body in self.stub.server.posts}
+        gc = posted["/game_config"]
+        self.assertIs(gc["send_yourself"], True)
+        self.assertIs(gc["persona"], False)
+        self.assertEqual(gc["mode"], "solo_self")
+        self.assertEqual(gc["warmup_s"], 120)  # Merge erhaelt Fremdfelder
+        self.assertEqual(self.stub.server.persona_active, {"name": ""})
+        self.assertNotIn("/personas", posted)
+
+    def test_persona_seeds_bridge(self):
+        self.provisioner().start("test", "solo_persona:aggro", "0")
+        posted = {path: body for path, body in self.stub.server.posts}
+        gc = posted["/game_config"]
+        self.assertIs(gc["send_yourself"], False)
+        self.assertIs(gc["persona"], True)
+        self.assertEqual(gc["mode"], "solo_persona:aggro")
+        self.assertIn("aggro", posted["/personas"]["personas"])
+        self.assertEqual(self.stub.server.persona_active, {"name": "aggro"})
+
+    def test_seed_failure_rolls_back(self):
+        self.stub.server.fail_seed = True
+        spec = self.spec("0")
+        with self.assertRaises(prov.ProvisionError):
+            self.provisioner().start("test", "solo_self", "0")
+        self.assertIsNone(self.docker.inspect_optional(spec.container))
+        self.assertFalse(os.path.isdir(spec.run_root))
 
 
 if __name__ == "__main__":
