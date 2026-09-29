@@ -594,6 +594,77 @@ static void testSoloTerminalErrors() {
   check(claim4.calls == 1, "401 -> kein retry");
 }
 
+static void testDecideReady() {
+  using rbapi::decideReady;
+  using rbapi::ReadyDecision;
+  using rbapi::readyDecisionName;
+
+  const std::vector<std::string> members = {"alice", "bob"};
+
+  // Leere Lobby -> niemals all_ready.
+  {
+    auto r = decideReady({}, {}, 4, false);
+    check(r.decision == ReadyDecision::Wait, "ready: leere Lobby -> wait");
+    check(r.total == 0 && r.ready == 0, "ready: leere Lobby -> 0/0");
+  }
+
+  // Niemand ready: alle fehlen.
+  {
+    auto r = decideReady({}, members, 4, false);
+    check(r.decision == ReadyDecision::Wait, "ready: niemand -> wait");
+    check(r.ready == 0 && r.total == 2, "ready: niemand -> 0/2");
+    check(r.missing.size() == 2, "ready: niemand -> beide fehlen");
+  }
+
+  // Ein Mitglied ready -> noch wait, das andere fehlt.
+  {
+    auto r = decideReady({"alice"}, members, 4, false);
+    check(r.decision == ReadyDecision::Wait, "ready: 1/2 -> wait");
+    check(r.ready == 1 && r.total == 2, "ready: 1/2 Zaehler");
+    check(r.missing.size() == 1 && r.missing[0] == "bob",
+          "ready: fehlendes Mitglied == bob");
+  }
+
+  // Alle ready, noch nicht gefeuert -> all_ready.
+  {
+    auto r = decideReady({"alice", "bob"}, members, 4, false);
+    check(r.decision == ReadyDecision::AllReady, "ready: 2/2 -> all_ready");
+    check(r.missing.empty(), "ready: 2/2 -> nichts fehlt");
+    check(std::string(readyDecisionName(r.decision)) == "all_ready",
+          "ready: Name all_ready");
+  }
+
+  // Idempotenz je Mitglied: doppelte ready-Eintraege aendern nichts.
+  {
+    auto r = decideReady({"alice", "alice", "bob"}, members, 4, false);
+    check(r.decision == ReadyDecision::AllReady,
+          "ready: Duplikate -> weiter all_ready (idempotent)");
+  }
+
+  // Schon gefeuert -> already_ready (kein zweiter Kapsel-Ready).
+  {
+    auto r = decideReady({"alice", "bob"}, members, 4, true);
+    check(r.decision == ReadyDecision::AlreadyReady,
+          "ready: bereits gefeuert -> already_ready");
+    check(std::string(readyDecisionName(r.decision)) == "already_ready",
+          "ready: Name already_ready");
+  }
+
+  // Mehr Mitglieder als Kapazitaet -> nicht starten.
+  {
+    auto r = decideReady({"alice", "bob"}, members, 1, false);
+    check(r.decision == ReadyDecision::Wait,
+          "ready: total > max -> wait");
+  }
+
+  // readySet mit Fremd-Identitaeten zaehlt nicht.
+  {
+    auto r = decideReady({"alice", "carol"}, members, 4, false);
+    check(r.decision == ReadyDecision::Wait && r.ready == 1,
+          "ready: Fremd-ready zaehlt nicht");
+  }
+}
+
 int main() {
   testParseTargetSpec();
   testJsonStringField();
@@ -608,6 +679,7 @@ int main() {
   testParseSoloSelfSend();
   testParseSoloInstance();
   testDecideSoloAction();
+  testDecideReady();
   testSoloSuccess();
   testSoloEnvPayload();
   testSoloClaimPathConfigurable();
