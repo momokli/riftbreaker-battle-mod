@@ -642,7 +642,14 @@ static int is_ready_command(const char *text)
  * handle_send_chat). Bewusst FIRE-AND-FORGET: diese Funktion wird aus dem
  * pipe_reader-Thread aufgerufen, der selbst die Antworten liest - ein
  * wartender pipe_send_command() wuerde sich dort selbst blockieren. Die
- * eingehende send_chat_result-Zeile matcht keinen Waiter und wird ignoriert. */
+ * eingehende send_chat_result-Zeile matcht keinen Waiter und wird ignoriert.
+ *
+ * MUTEX (US6-Fix): hier darf NICHT g_cmd_cs genommen werden. pipe_send_command
+ * haelt g_cmd_cs ueber das gesamte WaitForSingleObject(g_resp_ev, timeout_ms);
+ * die erwartete Antwort kann aber nur DIESER reader-Thread liefern. Nähme der
+ * Reader g_cmd_cs, blockierte er sich selbst bis RBB_BRIDGE_TIMEOUT_MS
+ * (Default 20 s) - ein Bounded-Deadlock bei jedem /ready, das mit einem
+ * laufenden get_state-Poll kollidiert. Die Pipe-Writes serialisiert g_pipe_cs. */
 static void bridge_send_chat_status(int players, int count, int timeout)
 {
     char text[256];
@@ -667,13 +674,10 @@ static void bridge_send_chat_status(int players, int count, int timeout)
              "\"prefix\":\"\"}\n",
              esc);
 
-    EnterCriticalSection(&g_cmd_cs);
-    if (g_pipe != INVALID_HANDLE_VALUE) {
-        EnterCriticalSection(&g_pipe_cs);
+    EnterCriticalSection(&g_pipe_cs);
+    if (g_pipe != INVALID_HANDLE_VALUE)
         pipe_write_all(g_pipe, payload);
-        LeaveCriticalSection(&g_pipe_cs);
-    }
-    LeaveCriticalSection(&g_cmd_cs);
+    LeaveCriticalSection(&g_pipe_cs);
 }
 
 /* #937: verarbeitet eine Chat-Zeile fuer das Gate. Erkennt "/ready", traegt
