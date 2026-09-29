@@ -48,3 +48,4 @@ capsule_flow_env_file: "/etc/rbmods/capsule-{{ capsule_flow_env }}.env"
 # Quell-Skripte im Repo (aus dem Deploy-Checkout).
 capsule_flow_service_src: "{{ playbook_dir }}/capsule/capsule_service.py"
 capsule_flow_lib_src: "{{ playbook_dir }}/capsule/capsule_flow.py"
+capsule_flow_identity_src: "{{ playbook_dir }}/capsule/identity.py"
