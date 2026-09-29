@@ -20,7 +20,9 @@
 
 use crate::broadcast;
 use crate::referee::{Command, GameEvent, GameEventKind, Referee, RefereeConfig};
-use crate::state::{MatchState, Phase, ReadyEffect, SendBatch, StateError, World};
+use crate::state::{
+    MatchState, PauseEffect, Phase, ReadyEffect, ResumeEffect, SendBatch, StateError, World,
+};
 use axum::extract::{Query, State as AxumState};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -155,6 +157,14 @@ struct GoReq {
     retry: bool,
 }
 
+/// `POST /pause` + `POST /resume` (Match-weiter DOM-Freeze-Fan-out, #997).
+#[derive(Debug, Deserialize, Default)]
+struct PauseReq {
+    /// Laufendes Match, bereits pausiert/frei: Fan-out trotzdem erneut senden.
+    #[serde(default)]
+    retry: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct SendReq {
     world: String,
@@ -242,6 +252,8 @@ pub fn router(app: AppState) -> Router {
         .route("/lobby", post(lobby))
         .route("/ready", post(ready))
         .route("/go", post(go))
+        .route("/pause", post(pause))
+        .route("/resume", post(resume))
         .route("/send", post(send))
         .route("/report", post(report))
         .route("/referee/event", post(referee_event))
@@ -345,6 +357,64 @@ async fn go(AxumState(app): AxumState<AppState>, Json(req): Json<GoReq>) -> ApiR
         "started": started,
         "phase": view.phase,
         "round": view.round,
+        "broadcast": broadcast,
+    })))
+}
+
+/// POST /pause — Match-weiter Pause-Fan-out (DOM-Freeze, #997).
+///
+/// Guard: nur `Phase::Running` (sonst 409). Der State setzt `paused=true`;
+/// danach fächert [`broadcast_dom`] `POST /pause_dom` an **beide** Bridges
+/// (`cfg.bridge_for(w)`, analog `broadcast_go`). Partial-Fehler einer Welt
+/// liefern HTTP **200** mit `broadcast.<W>.ok:false` — kein 5xx.
+///
+/// `already:true` bei bereits pausiertem Match (kein zweiter Fan-out); mit
+/// `{"retry":true}` wird trotzdem erneut gefächert.
+async fn pause(
+    AxumState(app): AxumState<AppState>,
+    Json(req): Json<PauseReq>,
+) -> ApiResult<Json<Value>> {
+    let already = {
+        let mut guard = app.state.write().await;
+        guard.pause().map_err(ApiError::from)? == PauseEffect::AlreadyPaused
+    };
+    let broadcast = if !already || req.retry {
+        broadcast_dom(&app, "pause_dom").await
+    } else {
+        stored_pause_broadcast(&app).await
+    };
+    let view = app.state.read().await.view();
+    Ok(Json(json!({
+        "paused": view.paused,
+        "phase": view.phase,
+        "already": already,
+        "broadcast": broadcast,
+    })))
+}
+
+/// POST /resume — Match-weiter Resume-Fan-out (DOM-Freeze aufheben, #997).
+///
+/// Guard: nur `Phase::Running` (sonst 409). `already:true`, wenn das Match gar
+/// nicht pausiert war (kein Doppel-Feed); mit `{"retry":true}` wird trotzdem
+/// erneut `POST /resume_dom` an beide Bridges gefächert.
+async fn resume(
+    AxumState(app): AxumState<AppState>,
+    Json(req): Json<PauseReq>,
+) -> ApiResult<Json<Value>> {
+    let already = {
+        let mut guard = app.state.write().await;
+        guard.resume().map_err(ApiError::from)? == ResumeEffect::AlreadyRunning
+    };
+    let broadcast = if !already || req.retry {
+        broadcast_dom(&app, "resume_dom").await
+    } else {
+        stored_pause_broadcast(&app).await
+    };
+    let view = app.state.read().await.view();
+    Ok(Json(json!({
+        "paused": view.paused,
+        "phase": view.phase,
+        "already": already,
         "broadcast": broadcast,
     })))
 }
@@ -589,6 +659,14 @@ async fn push_referee_commands(app: &AppState, world: World, commands: &[Command
 fn ingress_url(bridge: &str) -> String {
     let base = bridge.strip_suffix("/exec").unwrap_or(bridge);
     format!("{}/incoming_send", base.trim_end_matches('/'))
+}
+
+/// Leitet die Pause-/Resume-Route eines konfigurierten Bridge-Endpoints ab
+/// (#997). Derselbe HTTP-Adapter-Host wie [`ingress_url`]: ein abschließendes
+/// `/exec` wird entfernt und die Aktion (`pause_dom`/`resume_dom`) angehängt.
+fn dom_action_url(bridge: &str, action: &str) -> String {
+    let base = bridge.strip_suffix("/exec").unwrap_or(bridge);
+    format!("{}/{action}", base.trim_end_matches('/'))
 }
 
 /// Pusht die beim Wellenstart einer Welt gedrainten (level-basierten) Sends als
@@ -904,6 +982,68 @@ fn spawn_go_broadcast(app: &AppState, round: u32) {
     tokio::spawn(async move {
         let _ = broadcast_go(&app, round).await;
     });
+}
+
+/// Fan-out eines DOM-Aktions-Kommandos (`pause_dom`/`resume_dom`) an **beide**
+/// Bridges (#997) — analog [`broadcast_go`], aber ohne Payload (Body `{}`; die
+/// Bridge-Route nimmt keinen Body). Je Welt wird der Zustell-Status in
+/// `teams.<W>.pause_broadcast` festgehalten (für /state + UI).
+///
+/// Partial-Fehler einer Welt (Endpoint down / kein Endpoint) sind **kein**
+/// Fehler des Handlers: die andere Welt wird trotzdem gepusht, das Ergebnis
+/// steht je Welt im `broadcast`-Block (`ok:false` bzw. `ok:null` + `note`).
+async fn broadcast_dom(app: &AppState, action: &str) -> Value {
+    let timeout = app.cfg.go_timeout;
+    let payload = json!({});
+
+    let mut results = serde_json::Map::new();
+    for w in World::ALL {
+        match app.cfg.bridge_for(w) {
+            Some(url) => {
+                let endpoint = dom_action_url(url, action);
+                let res = broadcast::post_json(&endpoint, &payload, timeout).await;
+                app.state.write().await.record_pause_broadcast(
+                    w,
+                    res.ok(),
+                    res.error.clone(),
+                    Some(endpoint.clone()),
+                );
+                results.insert(
+                    w.as_str().to_string(),
+                    json!({
+                        "ok": res.ok(),
+                        "status": res.status,
+                        "error": res.error,
+                        "endpoint": endpoint,
+                    }),
+                );
+            }
+            None => {
+                results.insert(
+                    w.as_str().to_string(),
+                    json!({"ok": null, "note": "kein Endpoint konfiguriert (RBBRIDGE_<W>_URL) — kein Pause-Push"}),
+                );
+            }
+        }
+    }
+    Value::Object(results)
+}
+
+/// Gespiegelter `pause_broadcast`-Status je Welt aus `/state` (für den Fall
+/// „bereits pausiert, kein Retry" — kein erneuter Push, aber die UI sieht den
+/// letzten Zustell-Stand).
+async fn stored_pause_broadcast(app: &AppState) -> Value {
+    let view = app.state.read().await.view();
+    let mut results = serde_json::Map::new();
+    for w in World::ALL {
+        if let Some(t) = view.teams.get(w.as_str()) {
+            results.insert(
+                w.as_str().to_string(),
+                serde_json::to_value(&t.pause_broadcast).unwrap_or(Value::Null),
+            );
+        }
+    }
+    Value::Object(results)
 }
 
 // ---- Tests (HTTP-Level gegen echte Router + Mock-Endpoints) ----
@@ -2575,5 +2715,221 @@ mod tests {
         .await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(v["ingress"][0]["ok"], Value::Null);
+    }
+
+    // ---- #997: Pause/Resume-Fan-out (HTTP) ----
+
+    /// `POST /pause` fächert `POST /pause_dom` an **beide** Bridges; `POST /resume`
+    /// fächert `POST /resume_dom` — je Welt der eigene Endpoint (Muster `broadcast_go`).
+    #[tokio::test]
+    async fn pause_fans_out_to_both_bridges() {
+        let (addr_a, cap_a) = capture_endpoint().await;
+        let (addr_b, cap_b) = capture_endpoint().await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [
+            Some(format!("http://{addr_a}/exec")),
+            Some(format!("http://{addr_b}/exec")),
+        ];
+        let app = make_app(cfg).await;
+        ready_state(&app).await;
+        let (s, v) = call(&app, "POST", "/go", Some(json!({}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["broadcast"]["A"]["ok"], true);
+
+        // Pause → beide Bridges sehen POST /pause_dom.
+        let (s, v) = call(&app, "POST", "/pause", Some(json!({}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["paused"], true);
+        assert_eq!(v["already"], false);
+        assert_eq!(v["phase"], "running");
+        assert_eq!(v["broadcast"]["A"]["ok"], true);
+        assert_eq!(v["broadcast"]["B"]["ok"], true);
+        assert_eq!(
+            v["broadcast"]["A"]["endpoint"],
+            format!("http://{addr_a}/pause_dom")
+        );
+        assert_eq!(
+            v["broadcast"]["B"]["endpoint"],
+            format!("http://{addr_b}/pause_dom")
+        );
+
+        // Resume → beide Bridges sehen POST /resume_dom.
+        let (s, v) = call(&app, "POST", "/resume", Some(json!({}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["paused"], false);
+        assert_eq!(v["already"], false);
+        assert_eq!(v["broadcast"]["A"]["ok"], true);
+        assert_eq!(
+            v["broadcast"]["A"]["endpoint"],
+            format!("http://{addr_a}/resume_dom")
+        );
+        assert_eq!(
+            v["broadcast"]["B"]["endpoint"],
+            format!("http://{addr_b}/resume_dom")
+        );
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let a = cap_a.lock().await;
+        assert!(
+            a.iter().any(|r| r.starts_with("POST /pause_dom ")),
+            "A pause_dom: {a:?}"
+        );
+        assert!(
+            a.iter().any(|r| r.starts_with("POST /resume_dom ")),
+            "A resume_dom: {a:?}"
+        );
+        let b = cap_b.lock().await;
+        assert!(
+            b.iter().any(|r| r.starts_with("POST /pause_dom ")),
+            "B pause_dom: {b:?}"
+        );
+        assert!(
+            b.iter().any(|r| r.starts_with("POST /resume_dom ")),
+            "B resume_dom: {b:?}"
+        );
+    }
+
+    /// Pause/Resume nur in `Phase::Running` — sonst 409 `conflict`.
+    #[tokio::test]
+    async fn pause_blocked_outside_running() {
+        let app = make_app(test_cfg()).await;
+
+        // Lobby
+        let (s, v) = call(&app, "POST", "/pause", Some(json!({}))).await;
+        assert_eq!(s, StatusCode::CONFLICT);
+        assert_eq!(err_type(&v), "conflict");
+        let (s, _) = call(&app, "POST", "/resume", Some(json!({}))).await;
+        assert_eq!(s, StatusCode::CONFLICT);
+
+        // Ready
+        ready_state(&app).await;
+        let (s, _) = call(&app, "POST", "/pause", Some(json!({}))).await;
+        assert_eq!(s, StatusCode::CONFLICT);
+
+        // Finished
+        call(&app, "POST", "/go", Some(json!({}))).await;
+        call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "A", "event": "hq_hp", "hp": 0})),
+        )
+        .await;
+        let (s, v) = call(&app, "POST", "/pause", Some(json!({}))).await;
+        assert_eq!(s, StatusCode::CONFLICT);
+        assert_eq!(err_type(&v), "conflict");
+    }
+
+    /// Doppel-`pause` ist idempotent (`already:true`, kein zweiter Push);
+    /// `{"retry":true}` fächert erneut.
+    #[tokio::test]
+    async fn pause_retry_rebroadcasts() {
+        let (addr, cap) = capture_endpoint().await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [Some(format!("http://{addr}/exec")), None];
+        let app = make_app(cfg).await;
+        ready_state(&app).await;
+        call(&app, "POST", "/go", Some(json!({}))).await;
+
+        // 1. Pause → Push.
+        let (_, v) = call(&app, "POST", "/pause", Some(json!({}))).await;
+        assert_eq!(v["already"], false);
+        assert_eq!(v["broadcast"]["A"]["ok"], true);
+
+        // 2. Pause ohne retry → already, kein neuer Push.
+        let (_, v) = call(&app, "POST", "/pause", Some(json!({}))).await;
+        assert_eq!(v["already"], true);
+        assert_eq!(v["paused"], true);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let count1 = cap
+            .lock()
+            .await
+            .iter()
+            .filter(|r| r.starts_with("POST /pause_dom "))
+            .count();
+        assert_eq!(count1, 1, "kein zweiter Push ohne retry");
+
+        // 3. Pause mit retry → erneuter Push.
+        let (_, v) = call(&app, "POST", "/pause", Some(json!({"retry": true}))).await;
+        assert_eq!(v["already"], true);
+        assert_eq!(v["broadcast"]["A"]["ok"], true);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let count2 = cap
+            .lock()
+            .await
+            .iter()
+            .filter(|r| r.starts_with("POST /pause_dom "))
+            .count();
+        assert_eq!(count2, 2, "retry fächert erneut");
+    }
+
+    /// `/state` liefert `paused` top-level + `teams.<W>.pause_broadcast`; ohne
+    /// Bridge bleibt der Referee funktionsfähig (`ok:null` + `note`).
+    #[tokio::test]
+    async fn state_reports_paused() {
+        let app = make_app(test_cfg()).await; // bridge = [None, None]
+        ready_state(&app).await;
+        call(&app, "POST", "/go", Some(json!({}))).await;
+
+        let (_, st) = call(&app, "GET", "/state", None).await;
+        assert_eq!(st["paused"], false);
+        assert_eq!(st["teams"]["A"]["pause_broadcast"]["at"], Value::Null);
+
+        let (s, v) = call(&app, "POST", "/pause", Some(json!({}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["paused"], true);
+        assert_eq!(v["broadcast"]["A"]["ok"], Value::Null);
+        assert!(v["broadcast"]["A"]["note"].is_string());
+
+        let (_, st) = call(&app, "GET", "/state", None).await;
+        assert_eq!(st["paused"], true);
+        assert_eq!(st["phase"], "running"); // Pause ändert die Phase nicht
+        assert!(st["feed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "pause"));
+
+        let (s, v) = call(&app, "POST", "/resume", Some(json!({}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["paused"], false);
+        let (_, st) = call(&app, "GET", "/state", None).await;
+        assert_eq!(st["paused"], false);
+        assert!(st["feed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "resume"));
+    }
+
+    /// Partial-Fehler einer Welt ist HTTP 200 mit `ok:false` je Welt; die
+    /// andere Welt wird trotzdem gepusht (kein 5xx, kein Panic).
+    #[tokio::test]
+    async fn pause_partial_failure_is_ok_200() {
+        let (addr_b, cap_b) = capture_endpoint().await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [
+            // Port 1 ist praktisch immer zu → Transportfehler für A.
+            Some("http://127.0.0.1:1/exec".to_string()),
+            Some(format!("http://{addr_b}/exec")),
+        ];
+        let app = make_app(cfg).await;
+        ready_state(&app).await;
+        call(&app, "POST", "/go", Some(json!({}))).await;
+
+        let (s, v) = call(&app, "POST", "/pause", Some(json!({}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["paused"], true);
+        assert_eq!(v["broadcast"]["A"]["ok"], false);
+        assert!(v["broadcast"]["A"]["error"].is_string());
+        assert_eq!(v["broadcast"]["B"]["ok"], true);
+
+        // Die erreichbare Welt B hat den Push trotzdem gesehen.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(cap_b
+            .lock()
+            .await
+            .iter()
+            .any(|r| r.starts_with("POST /pause_dom ")));
     }
 }

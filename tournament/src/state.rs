@@ -208,6 +208,9 @@ pub struct TeamState {
     /// Sends, die in die nächste Welle dieser Welt laufen (noch nicht gedraint).
     pub pending: Vec<SendBatch>,
     pub broadcast: BroadcastStatus,
+    /// Zustell-Status des letzten Pause-/Resume-Fan-outs an diese Welt
+    /// (Spiegel von [`TeamState::broadcast`], #997).
+    pub pause_broadcast: BroadcastStatus,
 }
 
 /// Der komplette Match-Zustand (Referee-Sicht).
@@ -224,6 +227,9 @@ pub struct MatchState {
     pub winner: Option<World>,
     pub started_at: Option<u64>,
     pub hq_hp_start: f64,
+    /// Match-weiter Pausen-Zustand (DOM-Freeze-Fan-out, #997). Additiv; die
+    /// `phase` bleibt `running` — Pause ist kein Phasen-Übergang.
+    pub paused: bool,
     pub teams: [TeamState; 2],
     pub reveal: Option<Reveal>,
     /// Letzte Ereignisse (Terminal-Feed für die Web-UI).
@@ -246,6 +252,7 @@ impl MatchState {
             winner: None,
             started_at: None,
             hq_hp_start,
+            paused: false,
             teams: [TeamState::fresh(hq_hp_start), TeamState::fresh(hq_hp_start)],
             reveal: None,
             feed: VecDeque::new(),
@@ -449,11 +456,13 @@ impl MatchState {
         self.round = 1;
         self.winner = None;
         self.reveal = None;
+        self.paused = false;
         self.started_at = Some(now_ms());
         for w in World::ALL {
             let team = self.team_mut(w);
             team.pending.clear();
             team.broadcast = BroadcastStatus::default();
+            team.pause_broadcast = BroadcastStatus::default();
         }
         self.log("go", "Runde 1 beginnt");
         Ok(StartEffect { started: true })
@@ -488,6 +497,7 @@ impl MatchState {
         self.rounds_done = 0;
         self.winner = None;
         self.reveal = None;
+        self.paused = false;
         self.started_at = None;
         self.teams = [TeamState::fresh(hq), TeamState::fresh(hq)];
         self.teams[Self::slot(World::A)].player = Some(player.to_string());
@@ -837,6 +847,7 @@ impl MatchState {
         self.rounds_done = 0;
         self.winner = None;
         self.reveal = None;
+        self.paused = false;
         self.started_at = None;
         self.rematches = rematch_no;
         for w in World::ALL {
@@ -848,12 +859,67 @@ impl MatchState {
             team.wave = 0;
             team.pending.clear();
             team.broadcast = BroadcastStatus::default();
+            team.pause_broadcast = BroadcastStatus::default();
         }
         self.log(
             "rematch",
             format!("Rematch #{rematch_no} — zurück in die Lobby"),
         );
         Ok(())
+    }
+
+    /// POST /pause — Match-weiter DOM-Freeze (Pause-Fan-out, #997).
+    ///
+    /// Nur in `Phase::Running` erlaubt (sonst `conflict`). Setzt `paused=true`
+    /// und schreibt ein globales Feed-Event `kind="pause"`. Der Doppelaufruf
+    /// ist idempotent: bereits pausiert → [`PauseEffect::AlreadyPaused`] (kein
+    /// zweites Feed-Event; der HTTP-Layer entscheidet, ob er trotzdem erneut
+    /// fächert — `retry`).
+    pub fn pause(&mut self) -> Result<PauseEffect, StateError> {
+        if self.phase != Phase::Running {
+            return Err(StateError::new(
+                "conflict",
+                format!(
+                    "Pause nur während des Matches (Phase: {})",
+                    self.phase.as_str()
+                ),
+            ));
+        }
+        if self.paused {
+            return Ok(PauseEffect::AlreadyPaused);
+        }
+        self.paused = true;
+        self.log(
+            "pause",
+            "Match pausiert — DOM-Freeze an beide Welten gefächert",
+        );
+        Ok(PauseEffect::Applied)
+    }
+
+    /// POST /resume — Match-weiter DOM-Resume (Pause-Fan-out, #997).
+    ///
+    /// Nur in `Phase::Running` erlaubt (sonst `conflict`). Läuft das Match
+    /// bereits (nicht pausiert) → [`ResumeEffect::AlreadyRunning`] (kein
+    /// Doppel-Feed). Sonst `paused=false` + globales Feed-Event `kind="resume"`.
+    pub fn resume(&mut self) -> Result<ResumeEffect, StateError> {
+        if self.phase != Phase::Running {
+            return Err(StateError::new(
+                "conflict",
+                format!(
+                    "Resume nur während des Matches (Phase: {})",
+                    self.phase.as_str()
+                ),
+            ));
+        }
+        if !self.paused {
+            return Ok(ResumeEffect::AlreadyRunning);
+        }
+        self.paused = false;
+        self.log(
+            "resume",
+            "Match fortgesetzt — Resume an beide Welten gefächert",
+        );
+        Ok(ResumeEffect::Applied)
     }
 
     /// Broadcast-Ergebnis je Welt festhalten (für /state + UI).
@@ -865,6 +931,23 @@ impl MatchState {
         endpoint: Option<String>,
     ) {
         self.team_mut(world).broadcast = BroadcastStatus {
+            at: Some(now_ms()),
+            ok,
+            error,
+            endpoint,
+        };
+    }
+
+    /// Zustell-Ergebnis des Pause-/Resume-Fan-outs je Welt festhalten
+    /// (Spiegel von [`MatchState::record_broadcast`], #997).
+    pub fn record_pause_broadcast(
+        &mut self,
+        world: World,
+        ok: bool,
+        error: Option<String>,
+        endpoint: Option<String>,
+    ) {
+        self.team_mut(world).pause_broadcast = BroadcastStatus {
             at: Some(now_ms()),
             ok,
             error,
@@ -919,6 +1002,7 @@ impl MatchState {
                     wave: t.wave,
                     pending_sends: t.pending.clone(),
                     go_broadcast: t.broadcast.clone(),
+                    pause_broadcast: t.pause_broadcast.clone(),
                 },
             );
         }
@@ -946,6 +1030,7 @@ impl MatchState {
             winner: self.winner.map(|w| w.as_str().to_string()),
             started_at: self.started_at,
             hq_hp_start: self.hq_hp_start,
+            paused: self.paused,
             teams,
             reveal,
             feed,
@@ -964,6 +1049,7 @@ impl TeamState {
             wave: 0,
             pending: Vec::new(),
             broadcast: BroadcastStatus::default(),
+            pause_broadcast: BroadcastStatus::default(),
         }
     }
 }
@@ -981,6 +1067,8 @@ pub struct StateView {
     pub winner: Option<String>,
     pub started_at: Option<u64>,
     pub hq_hp_start: f64,
+    /// Match-weiter Pausen-Zustand (#997) — additiv, `phase` bleibt unberührt.
+    pub paused: bool,
     pub teams: BTreeMap<String, TeamView>,
     pub reveal: Option<RevealView>,
     pub feed: Vec<LogEntry>,
@@ -996,6 +1084,8 @@ pub struct TeamView {
     pub wave: u32,
     pub pending_sends: Vec<SendBatch>,
     pub go_broadcast: BroadcastStatus,
+    /// Zustell-Status des letzten Pause-/Resume-Fan-outs (#997).
+    pub pause_broadcast: BroadcastStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1057,6 +1147,24 @@ pub enum ReadyEffect {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StartEffect {
     pub started: bool,
+}
+
+/// Ergebnis eines `pause()`-Aufrufs (#997).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PauseEffect {
+    /// Match war nicht pausiert — jetzt pausiert (Fan-out senden).
+    Applied,
+    /// Match war bereits pausiert — idempotent, kein zweites Feed-Event.
+    AlreadyPaused,
+}
+
+/// Ergebnis eines `resume()`-Aufrufs (#997).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResumeEffect {
+    /// Match war pausiert — jetzt fortgesetzt (Fan-out senden).
+    Applied,
+    /// Match lief bereits (nicht pausiert) — idempotent, kein Doppel-Feed.
+    AlreadyRunning,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2004,5 +2112,143 @@ mod tests {
         assert!(b.level.is_none());
         let json = serde_json::to_value(&b).unwrap();
         assert!(json.get("level").is_none(), "level darf fehlen: {json}");
+    }
+
+    // ---- #997: Pause/Resume (Match-weiter DOM-Freeze-Fan-out) ----
+
+    #[test]
+    fn pause_and_resume_toggle_paused_in_running() {
+        let mut s = fresh();
+        start(&mut s);
+        assert!(!s.paused);
+
+        assert_eq!(s.pause().unwrap(), PauseEffect::Applied);
+        assert!(s.paused);
+        assert_eq!(s.phase, Phase::Running); // Pause ist kein Phasen-Übergang
+        assert!(s.feed.iter().any(|e| e.kind == "pause"));
+        // Pause ist global getaggt (world fehlt).
+        let p = s.feed.iter().find(|e| e.kind == "pause").unwrap();
+        assert!(p.world.is_none());
+
+        // Doppel-Pause → idempotent, kein zweites Feed-Event.
+        let before = s.feed.len();
+        assert_eq!(s.pause().unwrap(), PauseEffect::AlreadyPaused);
+        assert!(s.paused);
+        assert_eq!(s.feed.len(), before);
+
+        assert_eq!(s.resume().unwrap(), ResumeEffect::Applied);
+        assert!(!s.paused);
+        assert!(s.feed.iter().any(|e| e.kind == "resume"));
+
+        // Resume ohne Pause → idempotent, kein Doppel-Feed.
+        let before = s.feed.len();
+        assert_eq!(s.resume().unwrap(), ResumeEffect::AlreadyRunning);
+        assert!(!s.paused);
+        assert_eq!(s.feed.len(), before);
+    }
+
+    #[test]
+    fn pause_and_resume_blocked_outside_running() {
+        // Lobby
+        let mut s = fresh();
+        register_all(&mut s);
+        assert_eq!(s.pause().unwrap_err().code, "conflict");
+        assert_eq!(s.resume().unwrap_err().code, "conflict");
+
+        // Ready
+        s.ready(World::A).unwrap();
+        s.ready(World::B).unwrap();
+        s.arm_go().unwrap();
+        assert_eq!(s.phase, Phase::Ready);
+        assert_eq!(s.pause().unwrap_err().code, "conflict");
+        assert_eq!(s.resume().unwrap_err().code, "conflict");
+
+        // Finished
+        let mut s2 = fresh();
+        start(&mut s2);
+        s2.report_hq(World::A, 0.0).unwrap();
+        assert_eq!(s2.phase, Phase::Finished);
+        assert_eq!(s2.pause().unwrap_err().code, "conflict");
+        assert_eq!(s2.resume().unwrap_err().code, "conflict");
+    }
+
+    #[test]
+    fn paused_reset_on_start_match_rematch_and_start_sp() {
+        // start_match (Rematch-Zyklus)
+        let mut s = fresh();
+        start(&mut s);
+        s.pause().unwrap();
+        assert!(s.paused);
+        s.report_hq(World::A, 0.0).unwrap();
+        s.rematch().unwrap();
+        assert!(!s.paused);
+        s.start_match().unwrap();
+        assert!(!s.paused);
+
+        // rematch aus pausiertem Finished-Zustand setzt zurück (bereits oben),
+        // zusätzlich: pause → resume vor Rematch bleibt sauber.
+        let mut s2 = fresh();
+        start(&mut s2);
+        s2.pause().unwrap();
+        s2.resume().unwrap();
+        assert!(!s2.paused);
+
+        // start_sp
+        let mut s3 = fresh();
+        start(&mut s3);
+        s3.pause().unwrap();
+        // start_sp ist nur außerhalb Running erlaubt → erst beenden.
+        s3.report_hq(World::A, 0.0).unwrap();
+        s3.start_sp("momo").unwrap();
+        assert!(!s3.paused);
+        assert_eq!(s3.phase, Phase::Running);
+    }
+
+    #[test]
+    fn view_reports_paused_and_pause_broadcast() {
+        let mut s = fresh();
+        start(&mut s);
+        assert!(!s.view().paused);
+        assert!(s.view().teams["A"].pause_broadcast.at.is_none());
+
+        s.pause().unwrap();
+        s.record_pause_broadcast(
+            World::A,
+            true,
+            None,
+            Some("http://10.0.0.5:9002/pause_dom".to_string()),
+        );
+        s.record_pause_broadcast(World::B, false, Some("down".to_string()), None);
+        let v = s.view();
+        assert!(v.paused);
+        assert_eq!(v.teams["A"].pause_broadcast.ok, true);
+        assert_eq!(
+            v.teams["A"].pause_broadcast.endpoint.as_deref(),
+            Some("http://10.0.0.5:9002/pause_dom")
+        );
+        assert!(v.teams["A"].pause_broadcast.at.is_some());
+        assert_eq!(v.teams["B"].pause_broadcast.ok, false);
+        assert_eq!(v.teams["B"].pause_broadcast.error.as_deref(), Some("down"));
+
+        s.resume().unwrap();
+        assert!(!s.view().paused);
+    }
+
+    #[test]
+    fn rematch_clears_pause_broadcast() {
+        let mut s = fresh();
+        start(&mut s);
+        s.record_pause_broadcast(
+            World::A,
+            true,
+            None,
+            Some("http://x/pause_dom".to_string()),
+        );
+        s.report_hq(World::A, 0.0).unwrap();
+        s.rematch().unwrap();
+        assert_eq!(
+            s.team(World::A).pause_broadcast,
+            BroadcastStatus::default()
+        );
     }
 }
