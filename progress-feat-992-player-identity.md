@@ -237,3 +237,40 @@ Keine neuen Testdateien noetig (Module-Smoke ad hoc unter `/tmp` ausgefuehrt, ni
   - Titel: `feat(#992): Player-Identitaet abstrahieren (Client-Identitaet, account-ready)`.
   - Body beginnt mit `Closes #992`; Was/Dateien/Tests/Milestone 1.0.13 dokumentiert.
 - Verifiziert via `clanker-gh pr view 1001`: Base=main, `Closes #992` im Body, offen.
+
+## Review (Stage 7, Final Reviewer) — PR #1001
+
+**Verdict: APPROVE** (Code-Merits; Merge entscheidet Triage/Mensch).
+
+### Kriterien
+- **Closing-Keyword:** PR-Body erste Zeile = `Closes #992` ✔ (bestätigt via `pr view --json body`).
+- **Issue-Soll erfüllt:**
+  - `PlayerIdentity`-Abstraktion `kind`(steam|generic|account)/`raw`/`canonical`/`valid`
+    + `parsePlayerIdentity`/`isIdentityLike`/`isAuthorized` ✔
+  - `authorized` passiv (`connected && valid`) ✔
+  - Session = Verbindung (Session/SessionRecord; kein persistenter Account) ✔
+  - `canonical` rückwärtskompatibel: Steam/Account byte-gleich `raw`, Generic nur
+    Hex-lowercase → Routen-/Pin-/Claim-Key (`str:…`/`steamid:…`) unverändert ✔
+  - Account-Andockpunkt nur reserviert (`account:` parse+test), keine Provisionierung ✔
+  - Inline-Prefix-Check in `gns_probe.cpp` durch `rbident::isIdentityLike` ersetzt;
+    `kind` an Session/SessionRecord/SessionInfo + `/sessions`-JSON durchgereicht ✔
+- **Kein toter Arm / kein Scope-Creep:** `identityKindName` deckt alle Kind-Werte;
+  Diff bleibt im Plan-Scope (C++-Logik + Python-Spiegel + CI). `capsule_service.py`
+  bewusst unverändert (canonicalize greift in `capsule_flow.open`).
+- **Tests vorhanden & grün (selbst ausgeführt, Host, kein Wine):**
+  - `test_player_identity` 35 ✔, `test_route_rules` 44 ✔, `test_api_util` 214 ✔ (g++ -std=c++17 -Wall -Wextra -O1)
+  - `python3 -m unittest discover -s deploy/capsule` → 67 OK ✔
+- **Import-Wiring ok:** `from identity import canonicalize` folgt dem bestehenden
+  Flat-Sibling-Muster (`capsule_service` → `capsule_flow`), `deploy/capsule` liegt zur Laufzeit auf `sys.path`.
+
+### CI-Status (PR #1001)
+- PASS: Conventional-Commit-Titel, Issue-Referenz, Relevante Pfade (Boot-Test/CI/Deploy-Check).
+- PENDING (noch laufend, kein Fail): Lint, boot-test, deploy-check-local,
+  Build+Package (rbbridge/dist), Test (Unit + rbbridge host-test); Rust-Tournament = skipping.
+- `mergeStateStatus: BEHIND` (Branch hinter main) → vor Merge „Update branch" nötig.
+
+### Nicht blockierende Anmerkungen
+- `isAuthorized` ist als API-Prädikat definiert+getestet, aber (noch) nicht im Relay
+  verdrahtet — bewusst, da Relay-Autorisierung heute implizit (connected ⇒ routen) ist.
+- Neue Dateien ohne Trailing-Newline (Stil). CHANGELOG wird im Repo per Release-Commit
+  gepflegt → hier nicht nötig. Keine Frontend-Änderung → keine Screenshot-Pflicht.
