@@ -155,14 +155,15 @@ jobs:
         run: |
           set -euo pipefail
           RUN_ID="${{ github.run_id }}"
-          # Tournament-Port (10000–29999) und Bridge-Host-Port (30000–49999) je
-          # Lauf eindeutig aus run_id (monoton steigend -> benachbarte Läufe
-          # haben verschiedene Ports). Muss mit der Formel in test-vars.yml
-          # (tournament_port) übereinstimmen. Unter 32768 kollisionsfrei; der
-          # Bridge-Bereich oberhalb 32768 liegt in der ephemeren Linux-Range, ist
-          # aber deterministisch aus run_id und kurzlebig -> vernachlässigbar.
-          T_PORT=$(( 10000 + (RUN_ID % 20000) ))
-          B_PORT=$(( 30000 + (RUN_ID % 20000) ))
+          # Test-Ports je Lauf eindeutig aus run_id (monoton steigend -> benachbarte
+          # Läufe haben verschiedene Ports). Drei DISJUNKTE 2000er-Blöcke, alle
+          # unterhalb der ephemeren Linux-Range (32768+):
+          #   tournament 10000-11999, bridge 12000-13999, attack-cycle 14000-15999.
+          # tournament_port muss mit der Formel in test-vars.yml übereinstimmen;
+          # attack_cycle_port steht dort (14000 + run_suffix % 2000). Disjunkte
+          # Blöcke verhindern Host-Port-Kollisionen im selben Lauf (#988).
+          T_PORT=$(( 10000 + (RUN_ID % 2000) ))
+          B_PORT=$(( 12000 + (RUN_ID % 2000) ))
           echo "RBBATTLE_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
           echo "TOURNAMENT_PORT=$T_PORT" >> "$GITHUB_ENV"
           echo "BRIDGE_PORT=$B_PORT" >> "$GITHUB_ENV"

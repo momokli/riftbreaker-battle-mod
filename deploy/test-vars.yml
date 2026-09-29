@@ -33,9 +33,10 @@ riftbreaker_bridge_port: 9003
 # Attack-Cycle-Control-Port je Lauf eindeutig (Issue #967): der Host-Publish
 # `127.0.0.1:<port>:<port>` (Kapsel /ready, #963) kollidierte mit dem Dev-Stack
 # (9102) und liess `docker compose up` im boot-test scheitern ("port is already
-# allocated"). Oberhalb der Tournament-Range (10000-29999), unterhalb der
-# ephemeren Linux-Range (32768+).
-riftbreaker_attack_cycle_port: "{{ 30000 + ((rbbattle_run_suffix | int) % 2000) }}"
+# allocated"). Eigener 2000er-Block 14000-15999, DISJUNKT zu tournament
+# (10000-11999) und bridge (12000-13999, boot-test.yml) und unterhalb der
+# ephemeren Linux-Range (32768+) -> keine Host-Port-Kollision im selben Lauf (#988).
+riftbreaker_attack_cycle_port: "{{ 14000 + ((rbbattle_run_suffix | int) % 2000) }}"
 
 # Host-Pfade je Lauf eindeutig (Issue #307). Pfad-Schema `<env>` (Issue #483,
 # Ziel B): /srv/rift-<env>-<run>/game|backups|sessions — derselbe Namensraum wie
@@ -75,11 +76,11 @@ riftbreaker_content_cache_dir: /srv/riftbreaker/data/server
 # --- Tournament-Server (systemd) --------------------------------------------
 tournament_unit: "tournament-server-test-{{ rbbattle_run_suffix }}"
 # Je Lauf eindeutiger Port (kein fester 8091 mehr). Deterministic aus dem
-# Suffix: Bereich 10000–29999 liegt unterhalb der ephemeren Linux-Range
-# (32768+) und oberhalb Prod (6321/8081/9001–9003). CI überschreibt den Wert
-# zusätzlich mit `-e tournament_port` (gleiche Formel, siehe boot-test.yml),
-# damit curl- und Deploy-Port garantiert identisch sind.
-tournament_port: "{{ 10000 + ((rbbattle_run_suffix | int) % 20000) }}"
+# Suffix: disjunkter 2000er-Block 10000-11999, unterhalb der ephemeren
+# Linux-Range (32768+) und oberhalb Prod (6321/8081/9001-9003). CI überschreibt
+# den Wert zusätzlich mit `-e tournament_port` (gleiche Formel, siehe
+# boot-test.yml), damit curl- und Deploy-Port garantiert identisch sind.
+tournament_port: "{{ 10000 + ((rbbattle_run_suffix | int) % 2000) }}"
 # Der Tournament-Server erreicht die Bridge über A_URL (Core-IO-Gate C4,
 # Issue #289). CI überschreibt mit dem je Lauf eindeutigen Bridge-Port;
 # 9003 ist der Fallback für manuelle Einzelläufe.

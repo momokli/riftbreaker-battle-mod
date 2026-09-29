@@ -146,6 +146,10 @@ jobs:
           # Rolle riftbreaker-server muss im --check gegen ein NOCH nicht
           # migriertes <env>-Pfadschema gruen bleiben (kein reales Anlegen).
           bash deploy/tests/check-mode-paths/run.sh
+          # Disjunkte Test-Port-Bloecke (Issue #988): tournament/bridge/
+          # attack-cycle duerfen sich im selben boot-test-Lauf nicht als
+          # Host-Ports ueberlappen (sonst "port is already allocated").
+          bash deploy/tests/port-ranges/run.sh
 
       # SOC-Attestation (Issue #504): hermetischer Test der Deploy-Identitaets-
       # Attestation (konsistent -> PASS, abweichend -> FAIL, fehlende/inerte
