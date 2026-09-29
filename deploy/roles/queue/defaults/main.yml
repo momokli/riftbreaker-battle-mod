@@ -30,10 +30,12 @@ queue_bind: 127.0.0.1
 # Eigener Port (frei neben Parked 9201 / Kapsel 9211).
 queue_port: 9221
 
-# Nachbarn (HTTP). Provisioner-Port (Default 8094), Referee (tournament, 8080).
+# Nachbarn (HTTP). Provisioner-Port (Default 8094), Referee = tournament-server
+# (dev-Port 8081, docs/VS_MATCH.md) — Default spiegelt den dev-Wert wie die
+# Nachbar-Defaults im gns-relay (capsule/queue).
 queue_provisioner_url: "http://127.0.0.1:8094"
 queue_provisioner_timeout: 30
-queue_referee_url: "http://127.0.0.1:8080"
+queue_referee_url: "http://127.0.0.1:8081"
 queue_timeout: 5
 queue_log_level: INFO
 

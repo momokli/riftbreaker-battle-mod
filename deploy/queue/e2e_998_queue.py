@@ -206,7 +206,7 @@ class QueueE2E(unittest.TestCase):
         # (4) Referee erhaelt genau ein /lobby A UND ein /lobby B.
         lobbies = st.ref_server.lobbies
         self.assertEqual(len(lobbies), 2, lobbies)
-        lobby_by_world = {l["world"]: l["player"] for l in lobbies}
+        lobby_by_world = {lobby["world"]: lobby["player"] for lobby in lobbies}
         self.assertEqual(lobby_by_world, {"A": "str:aa", "B": "str:bb"}, lobbies)
 
         # (5) beide Identitaeten auf VERSCHIEDENE GNS-Endpoints gepinnt.

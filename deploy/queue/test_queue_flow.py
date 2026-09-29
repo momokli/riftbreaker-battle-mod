@@ -144,7 +144,7 @@ class JoinProvisionTestCase(Harness):
         coord.join("str:aa")
         coord.join("str:bb")
         self.assertEqual(len(self.referee.lobbies), 2)
-        by_world = {l["world"]: l["player"] for l in self.referee.lobbies}
+        by_world = {lobby["world"]: lobby["player"] for lobby in self.referee.lobbies}
         self.assertEqual(by_world["A"], "str:aa")
         self.assertEqual(by_world["B"], "str:bb")
 
@@ -255,7 +255,9 @@ class PersistenceTestCase(Harness):
         record = revived.core.get_match(1).to_dict()
         self.assertEqual(record["state"], STATE_FINISHED)
         self.assertEqual(record["result"], "draw")
-        self.assertEqual(revived.core.match_for("str:aa").match_id, 1)
+        # Nach finish ist die Identitaet wieder frei (kein aktives Match).
+        self.assertIsNone(revived.core.match_for("str:aa"))
+        self.assertEqual(revived.core.get_match(1).state, STATE_FINISHED)
 
     def test_pending_queue_survives_restart(self):
         state_dir = os.path.join(self.tmp, "state")

@@ -81,7 +81,7 @@ class QueueServiceConfig:
     provisioner_url: str = "http://127.0.0.1:8094"
     provisioner_token: str = ""
     provisioner_timeout: float = 30.0
-    referee_url: str = "http://127.0.0.1:8080"
+    referee_url: str = "http://127.0.0.1:8081"
     referee_token: str = ""
     timeout: float = 5.0
     state_dir: str = ""
@@ -101,7 +101,7 @@ class QueueServiceConfig:
             provisioner_url=(env.get("QUEUE_PROVISIONER_URL") or "http://127.0.0.1:8094").strip(),
             provisioner_token=(env.get("QUEUE_PROVISIONER_TOKEN") or "").strip(),
             provisioner_timeout=float(_positive_number(env, "QUEUE_PROVISIONER_TIMEOUT", 30.0, float)),
-            referee_url=(env.get("QUEUE_REFEREE_URL") or "http://127.0.0.1:8080").strip(),
+            referee_url=(env.get("QUEUE_REFEREE_URL") or "http://127.0.0.1:8081").strip(),
             referee_token=(env.get("QUEUE_REFEREE_TOKEN") or "").strip(),
             timeout=float(_positive_number(env, "QUEUE_TIMEOUT", 5.0, float)),
             state_dir=(env.get("QUEUE_STATE_DIR") or "").strip(),

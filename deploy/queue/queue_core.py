@@ -351,10 +351,23 @@ class QueueCore(object):
             match.state = STATE_READY
         return match
 
+    def _release_identities(self, match: Match) -> None:
+        """Teilnehmer aus der Aktiv-Zuordnung loesen (Match abgeschlossen/gescheitert).
+
+        Die Zuordnung in ``_identity_match`` ist nur fuer ein **laufendes**
+        Match bindend. Nach ``finished``/``failed`` wird sie geloest, damit sich
+        eine Identitaet wieder einreihen kann (#998) — auch nach einem
+        Dienst-Restart (``load_state`` baut nur aktive Matches wieder auf).
+        """
+        for identitaet in match.participants():
+            if self._identity_match.get(identitaet) == match.match_id:
+                del self._identity_match[identitaet]
+
     def mark_failed(self, match_id: int, detail: str = "") -> Match:
         match = self._require_match(match_id)
         match.state = STATE_FAILED
         match.detail = detail or match.detail
+        self._release_identities(match)
         return match
 
     def finish(self, match_id: int, result: Optional[str] = None) -> Match:
@@ -374,6 +387,8 @@ class QueueCore(object):
         match.state = STATE_FINISHED
         if result is not None:
             match.result = result
+        # Match abgeschlossen -> Teilnehmer wieder einreihbar (#998).
+        self._release_identities(match)
         return match
 
     # -- Snapshots ---------------------------------------------------------
@@ -475,8 +490,12 @@ class QueueCore(object):
             if raw.get("side"):
                 setattr(match, "_assignment_side", dict(raw["side"]))
             self._matches[match.match_id] = match
-            for player in match.participants():
-                self._identity_match[player] = match.match_id
+            # Nur laufende Matches binden die Identitaet; abgeschlossene/
+            # gescheiterte Matches bleiben als Record, blockieren aber keine
+            # erneute Einreihung (#998).
+            if match.state not in (STATE_FINISHED, STATE_FAILED):
+                for player in match.participants():
+                    self._identity_match[player] = match.match_id
         self._next_match_id = int(state.get("next_match_id", len(self._matches) + 1))
         self._seq = int(state.get("seq", len(self._queue)))
 

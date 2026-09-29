@@ -21,7 +21,6 @@ from queue_core import (
     WORLD_A,
     WORLD_B,
     STATE_PROVISIONING,
-    STATE_READY,
     STATE_FAILED,
     STATE_FINISHED,
 )
@@ -235,7 +234,52 @@ class QueueCoreTestCase(unittest.TestCase):
         failed = self.core.mark_failed(match.match_id, detail="provisioner down")
         self.assertEqual(failed.state, STATE_FAILED)
         self.assertEqual(failed.detail, "provisioner down")
-        self.assertEqual(self.core.match_for("str:aa").match_id, 1)
+        # Match abgebrochen -> Identitaet geloest, Record bleibt erhalten.
+        self.assertIsNone(self.core.match_for("str:aa"))
+        self.assertEqual(self.core.get_match(1).state, STATE_FAILED)
+
+    # -- Re-Queue nach Match-Ende (#998) -----------------------------------
+    def test_re_queue_after_finish(self):
+        self.core.enqueue("str:aa")
+        self.core.enqueue("str:bb")
+        first = self.core.pair()
+        self.core.finish(first.match_id, result="winnerA")
+        # Nach finish wieder einreihbar -> neues Match.
+        self.core.enqueue("str:aa")
+        self.core.enqueue("str:bb")
+        second = self.core.pair()
+        self.assertIsNotNone(second)
+        self.assertEqual(second.match_id, 2)
+        self.assertEqual(sorted(second.participants()), ["str:aa", "str:bb"])
+
+    def test_re_queue_after_failed(self):
+        self.core.enqueue("str:aa")
+        self.core.enqueue("str:bb")
+        first = self.core.pair()
+        self.core.mark_failed(first.match_id, detail="provisioner down")
+        # Ein gescheitertes Match blockiert die erneute Einreihung nicht.
+        entry = self.core.enqueue("str:aa")
+        self.assertEqual(entry.identitaet, "str:aa")
+
+    def test_re_queue_after_restart_once_match_finished(self):
+        self.core.enqueue("str:aa")
+        self.core.enqueue("str:bb")
+        first = self.core.pair()
+        self.core.finish(first.match_id, result="draw")
+        revived = QueueCore(clock=FakeClock())
+        revived.load_state(self.core.to_state())
+        # Nach Restart darf ein abgeschlossenes Match die Einreihung nicht sperren.
+        revived.enqueue("str:aa")
+        revived.enqueue("str:bb")
+        self.assertIsNotNone(revived.pair())
+
+    def test_active_match_still_blocks_re_queue(self):
+        self.core.enqueue("str:aa")
+        self.core.enqueue("str:bb")
+        self.core.pair()  # state=provisioning -> aktiv
+        with self.assertRaises(QueueError) as ctx:
+            self.core.enqueue("str:aa")
+        self.assertEqual(ctx.exception.reason, "already_matched")
 
     # -- Snapshot / Lookup -------------------------------------------------
     def test_match_for_and_get_match(self):
@@ -270,7 +314,9 @@ class QueueCoreTestCase(unittest.TestCase):
         by_id = {p["identitaet"]: p for p in record["participants"]}
         self.assertEqual(by_id["str:aa"]["instance"], "queue-1-a")
         self.assertEqual(by_id["str:bb"]["endpoint"], "127.0.0.1:40002")
-        self.assertEqual(revived.match_for("str:aa").match_id, 1)
+        # Nach finish ist die Identitaet wieder frei -> kein aktives Match.
+        self.assertIsNone(revived.match_for("str:aa"))
+        self.assertEqual(revived.get_match(1).state, STATE_FINISHED)
 
     def test_state_roundtrip_keeps_pending_queue(self):
         self.core.enqueue("str:aa")

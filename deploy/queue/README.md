@@ -97,7 +97,7 @@ falschem Bearer -> `401 unauthorized`.
 | `QUEUE_BIND` / `QUEUE_PORT` | `127.0.0.1` / `9221` | Bind (nur localhost) |
 | `QUEUE_TOKEN` | (leer) | Bearer-Token (Vault); leer = offen (nur Tests/dev) |
 | `QUEUE_PROVISIONER_URL` / `_TOKEN` / `_TIMEOUT` | `http://127.0.0.1:8094` / — / `30` | Provisioner (kalte Welten) |
-| `QUEUE_REFEREE_URL` / `_TOKEN` | `http://127.0.0.1:8080` / — | Referee-Lobby |
+| `QUEUE_REFEREE_URL` / `_TOKEN` | `http://127.0.0.1:8081` / — | Referee-Lobby (tournament-server) |
 | `QUEUE_TIMEOUT` | `5` | HTTP-Timeout (s) |
 | `QUEUE_STATE_DIR` | (leer) | Match-Record (JSON, uebersteht Restart) |
 | `QUEUE_TEAM_SIZE` / `QUEUE_ALLOW_TEAMS` | `1` / `false` | Match-Modell (aktiv 1v1) |

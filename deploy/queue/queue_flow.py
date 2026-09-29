@@ -24,7 +24,6 @@ Nur Standardbibliothek (stdlib), kein venv/pip. Alle Clients sind injizierbar
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import os
 import tempfile
@@ -39,9 +38,6 @@ from queue_core import (
     Match,
     QueueCore,
     QueueError,
-    STATE_FAILED,
-    STATE_FINISHED,
-    STATE_READY,
     RESULTS,
 )
 
@@ -281,7 +277,6 @@ class QueueCoordinator(object):
                     self.core.set_assignment(match, player, instance=iid, endpoint=endpoint)
             # Referee-Lobby: je Spieler genau ein /lobby mit seiner Welt.
             for assignment in match.assignments():
-                side = getattr(match, "_assignment_side", {}).get(assignment.identitaet, {})
                 self.referee.lobby(assignment.identitaet, assignment.world)
             self.core.mark_ready(match)
             self._persist()
