@@ -3,9 +3,11 @@ Date: —
 
   Features:
     - Referee als VS-Gehirn (Cross-World-Sends + per-Welt-HQ-Sieg, #996): Welt-getaggte Feed-Events (`LogEntry.world`, US1), wellen-basierter Send mit `level` (`POST /send {world,level,value}`, `SendBatch.level`, US2), C-Bridge-Ingress `POST /incoming_send` (Ziel-Event `incoming_wave`, US3), Ingress-Push an die Ziel-Bridge beim `wave_start` inkl. `ingress`-Block (US4/G5), Attack-Cycle-`send_enemy` als echter Referee-Egress via `RBB_REFEREE_URL`/`RBB_VS_WORLD` (US5), per-Welt-HQ-Reporter im `match-loop` → Referee (`hq_hp`/`hq_dead`, US6/G6). Ohne `RBB_REFEREE_URL` bleibt das SOLO-Verhalten bitgleich.
+    - Pause-Fan-out im Referee (#997): `POST /pause` / `POST /resume` fächert `POST <bridge>/pause_dom` bzw. `/resume_dom` an **beide** Welten (`cfg.bridge_for(w)`, analog GO-Broadcast); neuer match-weiter Zustand `MatchState.paused` + `teams.<W>.pause_broadcast` additiv in `GET /state`; Idempotenz (`already`) + `{"retry":true}`, 409 außerhalb Phase `running`, Partial-Fehler je Welt = HTTP 200 mit `ok:false` (kein 5xx). Kein C-/Bridge-/DLL-/Cockpit-/Attack-Cycle-Eingriff.
 
   Docs:
     - VS-Konzept §6.3/§6.4 + Gap-Liste G5/G6 auf „umgesetzt" gezogen; `docs/TOURNAMENT_API.md` um die `level`-Sendform + den `wave_start`-`ingress`-Block ergänzt; `server/protocol.md` um den Ingress-Endpoint `/incoming_send`; `deploy/env-schema.yml` um `RBB_REFEREE_URL`/`RBB_VS_WORLD`/`RBB_INCOMING_DELAY_S` (#996).
+    - `docs/TOURNAMENT_API.md` um `POST /pause`/`POST /resume` (Request/Response/Bridge-Payload) + `/state.paused`/`teams.<W>.pause_broadcast`; `docs/VS_MATCH.md` §6.5/§7 (Ready/Start „umgesetzt", Pause-Fan-out „umgesetzt (#997)", G7 ✅ mit Fußnote „Sidecar-Mitpause offen #553"); `docs/MATCH_VIEW.md` Referee-Route `POST /pause`/`/resume` (#997).
 
 Version: 1.0.13
 Date: 29. 09. 2026
