@@ -68,9 +68,13 @@ class FakePoster:
     def __init__(self, state_resp='{"ok":true}'):
         self.calls = []
         self.state_resp = state_resp
+        # Antwort auf absolute Referee-URLs (`POST <url>/report`, US6/#996).
+        self.report_resp = '{"ok":true,"match_over":false}'
 
     def __call__(self, path, body):
         self.calls.append((path, body))
+        if path.startswith(("http://", "https://")):
+            return (200, self.report_resp)
         if path == "/get_state":
             return (200, self.state_resp)
         return (200, '{"ok":true}')
@@ -146,6 +150,101 @@ class TestMatchLoop(unittest.TestCase):
         poster = FakePoster('{"event":"get_state_result","ok":false}')
         loop = self._loop(poster)
         self.assertIsNone(loop.step())
+        self.assertFalse(loop.seen_alive)
+
+
+class TestVsHqReporter(unittest.TestCase):
+    """US6 (#996): per-Welt-HQ-Reporter an den Referee (G6) — mit Referee
+    meldet der Loop HQ-HP/-Tod; ohne Referee bleibt das SOLO-Verhalten."""
+
+    def _loop(self, poster, referee_url=None, world="A", delay=10.0, clock=None):
+        return MatchLoop(
+            "http://127.0.0.1:9001",
+            restart_delay=delay,
+            referee_url=referee_url,
+            vs_world=world,
+            _poster=poster,
+            _clock=clock or FakeClock(),
+        )
+
+    @staticmethod
+    def _referee_calls(poster):
+        return [c for c in poster.calls if c[0].startswith("http")]
+
+    def test_solo_behavior_unchanged_without_referee(self):
+        poster = FakePoster(_state(hp=100.0, hp_max=1000.0, dead=False))
+        clock = FakeClock(0.0)
+        loop = self._loop(poster, clock=clock)
+        self.assertIsNone(loop.referee_url)
+        self.assertEqual(loop.step(), "alive")
+        poster.state_resp = _state(hp=0.0, hp_max=1000.0, dead=True)
+        self.assertEqual(loop.step(), "defeat")
+        # SOLO unveraendert: end_game + (nach Delay) restart_map.
+        self.assertIn(("/end_game", json.dumps({"result": "lose"}).encode("utf-8")), poster.calls)
+        self.assertEqual(self._referee_calls(poster), [])
+        clock.t = 11.0
+        self.assertEqual(loop.step(), "restart")
+        self.assertIn(("/restart_map", json.dumps({"op": "reset"}).encode("utf-8")), poster.calls)
+
+    def test_reports_hq_to_referee_when_configured(self):
+        poster = FakePoster(_state(hp=100.0, hp_max=1000.0, dead=False))
+        loop = self._loop(poster, referee_url="http://referee:8080")
+        self.assertEqual(loop.step(), "alive")
+        calls = self._referee_calls(poster)
+        self.assertEqual(len(calls), 1)
+        path, body = calls[0]
+        self.assertEqual(path, "http://referee:8080/report")
+        self.assertEqual(
+            json.loads(body.decode()),
+            {"world": "A", "event": "hq_hp", "hp": 100.0},
+        )
+        # Unveraenderter Wert -> kein zweiter Report (kein Spam).
+        self.assertIsNone(loop.step())
+        self.assertEqual(len(self._referee_calls(poster)), 1)
+        # Wertanderung -> Report.
+        poster.state_resp = _state(hp=70.0, hp_max=1000.0, dead=False)
+        loop.step()
+        payloads = [json.loads(b.decode()) for (p, b) in self._referee_calls(poster)]
+        self.assertEqual(payloads[-1], {"world": "A", "event": "hq_hp", "hp": 70.0})
+        # Ohne Referee: kein solcher Aufruf (Kontrolle).
+        self.assertNotIn("/end_game", [c[0] for c in poster.calls])
+
+    def test_hq_death_reports_hq_dead_once(self):
+        poster = FakePoster(_state(hp=100.0, hp_max=1000.0, dead=False))
+        loop = self._loop(poster, referee_url="http://referee:8080", world="b")
+        loop.step()  # alive -> hq_hp 100
+        poster.state_resp = _state(hp=0.0, hp_max=1000.0, dead=True)
+        self.assertEqual(loop.step(), "defeat")
+        events = [json.loads(b.decode())["event"] for (_, b) in self._referee_calls(poster)]
+        self.assertEqual(events.count("hq_dead"), 1)
+        self.assertIn("hq_hp", events)
+        # world aus #996 ist gross geschrieben.
+        worlds = {json.loads(b.decode())["world"] for (_, b) in self._referee_calls(poster)}
+        self.assertEqual(worlds, {"B"})
+        # Referee ist Autoritaet: KEIN lokales end_game/restart_map.
+        paths = [c[0] for c in poster.calls]
+        self.assertNotIn("/end_game", paths)
+        self.assertNotIn("/restart_map", paths)
+        # Zweiter step: kein zweites hq_dead (edge-getriggert).
+        self.assertIsNone(loop.step())
+        events = [json.loads(b.decode())["event"] for (_, b) in self._referee_calls(poster)]
+        self.assertEqual(events.count("hq_dead"), 1)
+
+    def test_match_over_response_does_not_local_end_game(self):
+        poster = FakePoster(_state(hp=100.0, hp_max=1000.0, dead=False))
+        poster.report_resp = '{"ok":true,"match_over":true,"winner":"A"}'
+        loop = self._loop(poster, referee_url="http://referee:8080")
+        loop.step()  # alive
+        poster.state_resp = _state(hp=0.0, hp_max=1000.0, dead=True)
+        self.assertEqual(loop.step(), "defeat")
+        self.assertNotIn("/end_game", [c[0] for c in poster.calls])
+        self.assertNotIn("/restart_map", [c[0] for c in poster.calls])
+
+    def test_poll_error_sends_nothing(self):
+        poster = FakePoster('{"event":"get_state_result","ok":false}')
+        loop = self._loop(poster, referee_url="http://referee:8080")
+        self.assertIsNone(loop.step())
+        self.assertEqual(self._referee_calls(poster), [])
         self.assertFalse(loop.seen_alive)
 
 

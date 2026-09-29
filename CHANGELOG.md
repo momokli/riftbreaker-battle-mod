@@ -1,3 +1,12 @@
+Version: [Unreleased]
+Date: —
+
+  Features:
+    - Referee als VS-Gehirn (Cross-World-Sends + per-Welt-HQ-Sieg, #996): Welt-getaggte Feed-Events (`LogEntry.world`, US1), wellen-basierter Send mit `level` (`POST /send {world,level,value}`, `SendBatch.level`, US2), C-Bridge-Ingress `POST /incoming_send` (Ziel-Event `incoming_wave`, US3), Ingress-Push an die Ziel-Bridge beim `wave_start` inkl. `ingress`-Block (US4/G5), Attack-Cycle-`send_enemy` als echter Referee-Egress via `RBB_REFEREE_URL`/`RBB_VS_WORLD` (US5), per-Welt-HQ-Reporter im `match-loop` → Referee (`hq_hp`/`hq_dead`, US6/G6). Ohne `RBB_REFEREE_URL` bleibt das SOLO-Verhalten bitgleich.
+
+  Docs:
+    - VS-Konzept §6.3/§6.4 + Gap-Liste G5/G6 auf „umgesetzt" gezogen; `docs/TOURNAMENT_API.md` um die `level`-Sendform + den `wave_start`-`ingress`-Block ergänzt; `server/protocol.md` um den Ingress-Endpoint `/incoming_send`; `deploy/env-schema.yml` um `RBB_REFEREE_URL`/`RBB_VS_WORLD`/`RBB_INCOMING_DELAY_S` (#996).
+
 Version: 1.0.13
 Date: 29. 09. 2026
 

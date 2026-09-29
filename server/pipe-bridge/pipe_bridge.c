@@ -26,6 +26,8 @@
  *   POST /activate_mission_flow -> Mission-Flow starten (C++, optionaler
  *                                 Database*-Payload via spawn_point, #386)
  *   POST /deactivate_mission_flow -> Mission-Flow/Welle beenden (C++, #389)
+ *   POST /incoming_send -> gegnerischen Wellen-Send in dieser Welt spawnen
+ *                         (Ingress G5; Ziel-Event incoming_wave, #996)
  *   POST /end_game     -> Match nativ beenden, result=win|lose (C++, #519)
  *   POST /try_spend    -> transaktionaler Carbonium-Abzug (C++, #694);
  *                         ok:false/insufficient kommt als 200 mit Rohzeile
@@ -67,6 +69,7 @@
 /* Windows-freie Statuscode-/Body-Wahl fuer /health (Issue #902, host-testbar). */
 #include "health_logic.h"
 #include "ready_gate.h" /* #937: reines, host-testbares Ready-Gate */
+#include "incoming_send.h" /* #996 (US3): host-testbarer Ingress-Parse/Build */
 
 #define BRIDGE_NAME          "pipe_bridge"
 
@@ -1312,6 +1315,57 @@ static void handle_activate_mission_flow(SOCKET c, const char *body)
     http_respond(c, 200, "OK", line);
 }
 
+/* POST /incoming_send: Ingress eines gegnerischen Wellen-Sends (Issue #996,
+ * US3/G5). Der Referee pusht hier einen Batch, der in DIESER Welt als Welle
+ * spawnen soll. Body: {"level":<int>=1>,"from":"<welt>","delay_s":<float?>}.
+ * Uebersetzt in das Ziel-Event `incoming_wave {level,from,delay_s}` auf der
+ * Pipe (Exec-/Wave-Kanal, analog activate_mission_flow) und liefert dessen
+ * exec_result-artige Antwortzeile (Rohzeile) an den Aufrufer zurueck.
+ * Fehlendes/ungueltiges level -> 400 invalid_request; keine Pipe -> 503
+ * pipe_unavailable. Der exakte DLL/Lua-Wire-Beweis braucht ein Live-Spiel
+ * (#252) und ist bewusst nicht Teil des Host-Tests. */
+static void handle_incoming_send(SOCKET c, const char *body)
+{
+    incoming_send_t req;
+    char payload[LINE_MAX];
+    char line[READ_BUF];
+    int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+
+    if (!incoming_send_parse(body, &req)) {
+        blog("POST /incoming_send ohne/ungueltiges level -> invalid_request");
+        http_respond(c, 400, "Bad Request",
+                     "{\"ok\":false,\"reason\":\"invalid_request\"}");
+        return;
+    }
+    if (incoming_send_pipe_line(&req, payload, sizeof(payload)) < 0) {
+        blog("POST /incoming_send: payload zu gross");
+        http_respond(c, 500, "Internal Server Error",
+                     "{\"ok\":false,\"reason\":\"payload_too_large\"}");
+        return;
+    }
+    blog("POST /incoming_send level=%d from=%s delay_s=%.3g", req.level,
+         req.from, req.delay_s);
+
+    {
+        int rc = pipe_send_command("incoming_wave_result", payload,
+                                   timeout_ms, line, sizeof(line));
+        if (rc == -1) {
+            blog("POST /incoming_send: Pipe nicht erreichbar -> "
+                 "pipe_unavailable");
+            http_respond(c, 503, "Service Unavailable",
+                         "{\"ok\":false,\"reason\":\"pipe_unavailable\"}");
+            return;
+        }
+        if (rc != 0) {
+            http_respond(c, 500, "Internal Server Error",
+                         "{\"ok\":false,\"reason\":\"timeout\"}");
+            return;
+        }
+    }
+    log_response("/incoming_send", line);
+    http_respond(c, 200, "OK", line);
+}
+
 /* POST /deactivate_mission_flow: fuehrt
  * {"cmd":"deactivate_mission_flow","flow":"..."} auf der Pipe aus (WRITE,
  * Issue #389) und liefert die deactivate_mission_flow_result-Zeile.
@@ -2339,6 +2393,16 @@ static void handle_client(SOCKET c)
             memcpy(b, body, (size_t)body_len);
             b[body_len] = '\0';
             handle_activate_mission_flow(c, b);
+            free(b);
+        } else if (strcmp(method, "POST") == 0 && strcmp(path, "/incoming_send") == 0) {
+            char *b = malloc((size_t)body_len + 1);
+            if (!b) {
+                free(req);
+                return;
+            }
+            memcpy(b, body, (size_t)body_len);
+            b[body_len] = '\0';
+            handle_incoming_send(c, b);
             free(b);
         } else if (strcmp(method, "POST") == 0 && strcmp(path, "/deactivate_mission_flow") == 0) {
             char *b = malloc((size_t)body_len + 1);

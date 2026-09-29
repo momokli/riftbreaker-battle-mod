@@ -154,6 +154,30 @@ werden ignoriert (vorwärtskompatibel). Alle Events sind benachrichtigend
 {"event":"match_end","t":1200000,"winner":"player_a","reason":"base_destroyed"}
 ```
 
+### Pipe-Ingress `/incoming_send` (Server → Bridge → Spiel, #996)
+
+Der Tournament-Referee („VS-Gehirn") pusht einen gegnerischen Wellen-Send an die
+Bridge der **Zielwelt**; die Bridge löst daraus den Wave-Spawn in dieser Welt aus
+(Spiegel zum Semantik-Event `incoming_wave` oben):
+
+```json
+{"level": 3, "from": "A", "delay_s": 5}
+```
+
+- `level` (int ≥ 1, **Pflicht**) — Difficulty-Level der Welle. Fehlt/ungültig
+  → `400 {"ok":false,"reason":"invalid_request"}`.
+- `from` (str, optional) — sendende Welt (z. B. `"A"`); Default `""`.
+- `delay_s` (float, optional) — Spawn-Verzögerung in Sekunden; Default `5`.
+
+Die Bridge übersetzt den Batch in das Ziel-Event `incoming_wave {level,from,delay_s}`
+(s. o.) und setzt es über denselben Pipe-/Exec-Kanal wie
+`activate_mission_flow`/`rb_wave` ab:
+`{"cmd":"incoming_wave","level":3,"from":"A","delay_s":5}`. Ist keine Pipe
+verbunden → `503 {"ok":false,"reason":"pipe_unavailable"}` (analog
+`/activate_mission_flow`); die Antwort ist eine `exec_result`-artige Rohzeile der
+DLL. Der exakte DLL-/Lua-Wire-Beweis (`dispatch_exec`) braucht ein Live-Spiel
+(#252) und ist hier bewusst offen.
+
 ## Wer erzeugt was im Spiel (Verdrahtung, teils RE)
 
 | Event                                                                   | Erzeuger im Spiel                                                                                                                                 | Stand im Harness                                                                                                                                                                                                                 |

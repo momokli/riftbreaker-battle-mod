@@ -140,9 +140,15 @@ pub struct SendBatch {
     /// Welt, von der gesendet wurde.
     pub from: World,
     /// Einheiten-Komposition (frei definiert; `unit` = Kreaturen-Id des Mods).
+    /// Leer für wellen-basierte Sends (US2, nur `level`).
     pub units: Vec<UnitSpec>,
     /// Gesendeter Wert in Send-Währung (z. B. Carbonium-Äquivalent).
     pub value: u64,
+    /// Difficulty-Level des Wellen-Sends (US2, issue #996). Der Attack-Cycle
+    /// kennt keine Unit-Komposition, nur ein Level; `None` für unit-basierte
+    /// Sends (SP/direkt). Additiv/optional — fehlt für Alt-Sends.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<u32>,
     /// Runde, in der der Send beim Referee einging (Zuordnung beim Drain).
     pub round: u32,
     /// Server-Zeitstempel (ms seit Unix-Epoch).
@@ -182,6 +188,11 @@ pub struct LogEntry {
     pub t: u64,
     pub kind: &'static str,
     pub msg: String,
+    /// Welt, der das Event zuzuordnen ist (`Some(A|B)`), oder `None` für
+    /// globale Einträge (`go`, `reveal`, `match_end`, `rematch`, `sp`).
+    /// Additiv/optional: globale Einträge lassen das Feld weg (`world` fehlt).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub world: Option<World>,
 }
 
 /// Zustand einer einzelnen Welt (Team).
@@ -258,7 +269,14 @@ impl MatchState {
         &mut self.teams[Self::slot(w)]
     }
 
+    /// Globaler Feed-Eintrag (keine Welt-Zuordnung).
     fn log(&mut self, kind: &'static str, msg: impl Into<String>) {
+        self.log_world(kind, None, msg);
+    }
+
+    /// Welt-getaggter Feed-Eintrag (US1): `world = Some(..)` für Ereignisse
+    /// einer Welt, `None` für globale (siehe [`LogEntry::world`]).
+    fn log_world(&mut self, kind: &'static str, world: Option<World>, msg: impl Into<String>) {
         if self.feed.len() >= self.feed_cap {
             self.feed.pop_front();
         }
@@ -269,6 +287,7 @@ impl MatchState {
             t: now_ms(),
             kind,
             msg: msg.into(),
+            world,
         });
     }
 
@@ -337,8 +356,9 @@ impl MatchState {
         }
         team.player = Some(player.to_string());
         let match_complete = World::ALL.iter().all(|w| self.player(*w).is_some());
-        self.log(
+        self.log_world(
             "register",
+            Some(world),
             format!(
                 "Spieler '{player}' registriert für Welt {world} ({})",
                 if created { "Anlage" } else { "Update" }
@@ -374,7 +394,7 @@ impl MatchState {
             return Ok(ReadyEffect::AlreadyReady);
         }
         self.team_mut(world).ready = true;
-        self.log("ready", format!("Welt {world} ist bereit"));
+        self.log_world("ready", Some(world), format!("Welt {world} ist bereit"));
         Ok(if self.both_ready() {
             ReadyEffect::BothReady
         } else {
@@ -539,12 +559,14 @@ impl MatchState {
             from,
             units: clean,
             value,
+            level: None,
             round: self.round,
             ts: now_ms(),
         };
         self.team_mut(to).pending.push(batch.clone());
-        self.log(
+        self.log_world(
             "send",
+            Some(from),
             format!(
                 "Send {from} → {to}: {total_units} Einheiten, Wert {value} (Runde {})",
                 self.round
@@ -557,12 +579,14 @@ impl MatchState {
                 from: World::B,
                 units: batch.units.clone(),
                 value,
+                level: None,
                 round: batch.round,
                 ts: batch.ts,
             };
             self.team_mut(World::A).pending.push(mirror);
-            self.log(
+            self.log_world(
                 "send",
+                Some(World::B),
                 format!(
                     "MIRROR (Spiegel) → P1: {total_units} Einheiten, Wert {value} (Runde {})",
                     self.round
@@ -572,7 +596,65 @@ impl MatchState {
         Ok(batch)
     }
 
-    /// POST /report — Wellenstart einer Welt: Queue-Drain + Reveal, Rundenwechsel.
+    /// POST /send mit `level` — wellen-basierter Cross-World-Send (US2, #996).
+    ///
+    /// Der Attack-Cycle kennt keine Unit-Komposition, nur ein
+    /// Difficulty-Level; deshalb trägt dieser Send ein `level` (statt `units`).
+    /// Er landet in der `pending`-Queue der **Gegner**-Welt und wird bei deren
+    /// nächstem `wave_start` gedraint (Reveal + Ingress-Push, US4).
+    ///
+    /// Validierung: `level >= 1`, nur in `Phase::Running`, sendende Welt muss
+    /// registriert sein (`invalid`/`conflict`/`not_found` wie bei `route_send`).
+    /// Der SP-Mirror bleibt unberührt: ein Level-Send spiegelt **nicht** doppelt
+    /// (SP braucht keinen Level-Send).
+    pub fn route_wave_send(
+        &mut self,
+        from: World,
+        level: u32,
+        value: u64,
+    ) -> Result<SendBatch, StateError> {
+        if self.phase != Phase::Running {
+            return Err(StateError::new(
+                "conflict",
+                format!(
+                    "Sends nur während des Matches (Phase: {})",
+                    self.phase.as_str()
+                ),
+            ));
+        }
+        if self.player(from).is_none() {
+            return Err(StateError::new(
+                "not_found",
+                format!("Welt {from} ist nicht registriert"),
+            ));
+        }
+        if level < 1 {
+            return Err(StateError::new(
+                "invalid",
+                format!("level muss ≥ 1 sein (war {level})"),
+            ));
+        }
+        let to = from.opponent();
+        let batch = SendBatch {
+            from,
+            units: Vec::new(),
+            value,
+            level: Some(level),
+            round: self.round,
+            ts: now_ms(),
+        };
+        self.team_mut(to).pending.push(batch.clone());
+        self.log_world(
+            "send",
+            Some(from),
+            format!(
+                "Send {from} → {to}: Level {level}, Wert {value} (Runde {})",
+                self.round
+            ),
+        );
+        Ok(batch)
+    }
+
     pub fn wave_start(
         &mut self,
         world: World,
@@ -639,8 +721,9 @@ impl MatchState {
                 reveal.built.insert(*w, bv);
             }
             reveal.incoming.insert(*w, drained);
-            self.log(
+            self.log_world(
                 "wave",
+                Some(*w),
                 format!("Welt {w}: Wellenstart Runde {round} — {drained_count} Send(s) aufgedeckt"),
             );
         }
@@ -692,13 +775,14 @@ impl MatchState {
         if self.mode == Mode::Sp && world == World::A {
             self.team_mut(World::B).hq_hp = hp;
         }
-        self.log("hq", format!("Welt {world}: HQ-HP {before:.0} → {hp:.0}"));
+        self.log_world("hq", Some(world), format!("Welt {world}: HQ-HP {before:.0} → {hp:.0}"));
         if hp <= 0.0 {
             let winner = world.opponent();
             self.winner = Some(winner);
             self.phase = Phase::Finished;
-            self.log(
+            self.log_world(
                 "finish",
+                Some(world),
                 format!("HQ von Welt {world} zerstört — Sieger: Welt {winner}"),
             );
             // Match-Ende-Hinweis (Log + Telegram + UI): nächster Spieler kann joinen.
@@ -733,7 +817,7 @@ impl MatchState {
             team.wave = wave;
         }
         if changed {
-            self.log("score", format!("Welt {world}: Score {score}, Wave {wave}"));
+            self.log_world("score", Some(world), format!("Welt {world}: Score {score}, Wave {wave}"));
         }
         Ok(ScoreEffect { changed })
     }
@@ -816,7 +900,7 @@ impl MatchState {
                 error.unwrap_or("unbekannt")
             )
         };
-        self.log("wave", msg);
+        self.log_world("wave", Some(world), msg);
     }
 
     /// Öffentliche Sicht auf den Zustand (wird als `/state` serialisiert).
@@ -1740,5 +1824,185 @@ mod tests {
         assert_eq!(s.team(World::A).score, 0);
         assert_eq!(s.team(World::A).wave, 0);
         assert!(s.team(World::A).resources.is_empty());
+    }
+
+    // ---- US1: Welt-getaggte Feed-Events (Issue #996) ----
+
+    /// Welt-spezifische Log-Aufrufe tragen `world`; globale bleiben `None`.
+    #[test]
+    fn log_entries_are_world_tagged() {
+        let mut s = fresh();
+        // register (A) → world A.
+        s.lobby_register(World::A, "momo").unwrap();
+        let reg = s.feed.iter().find(|e| e.kind == "register").unwrap();
+        assert_eq!(reg.world, Some(World::A));
+
+        // ready (B) → world B.
+        s.lobby_register(World::B, "matheo").unwrap();
+        s.ready(World::B).unwrap();
+        let rdy = s
+            .feed
+            .iter()
+            .rev()
+            .find(|e| e.kind == "ready" && e.msg.contains("B"))
+            .unwrap();
+        assert_eq!(rdy.world, Some(World::B));
+
+        // go (global) → None.
+        s.start_match().unwrap();
+        let go = s.feed.iter().find(|e| e.kind == "go").unwrap();
+        assert_eq!(go.world, None);
+
+        // send (A→B) ist der Sendewelt A zugeordnet.
+        s.route_send(
+            World::A,
+            vec![UnitSpec {
+                unit: "creeper".into(),
+                count: 1,
+            }],
+            100,
+        )
+        .unwrap();
+        let send = s.feed.iter().rev().find(|e| e.kind == "send").unwrap();
+        assert_eq!(send.world, Some(World::A));
+
+        // wave (B) → world B.
+        s.wave_start(World::B, None).unwrap();
+        let wave_b = s
+            .feed
+            .iter()
+            .rev()
+            .find(|e| e.kind == "wave" && e.msg.contains("Welt B"))
+            .unwrap();
+        assert_eq!(wave_b.world, Some(World::B));
+
+        // hq (A) / finish (A) tragen die betroffene Welt; match_end global.
+        s.report_hq(World::A, 0.0).unwrap();
+        let hq = s.feed.iter().rev().find(|e| e.kind == "hq").unwrap();
+        assert_eq!(hq.world, Some(World::A));
+        let fin = s.feed.iter().rev().find(|e| e.kind == "finish").unwrap();
+        assert_eq!(fin.world, Some(World::A));
+        let end = s.feed.iter().rev().find(|e| e.kind == "match_end").unwrap();
+        assert_eq!(end.world, None);
+
+        // score (B) ist world-getaggt (nach Rematch irrelevant; separat prüfen).
+        let mut s2 = fresh();
+        start(&mut s2);
+        s2.score_update(World::B, 5, res(1, 1), 1).unwrap();
+        let sc = s2.feed.iter().rev().find(|e| e.kind == "score").unwrap();
+        assert_eq!(sc.world, Some(World::B));
+    }
+
+    /// Das additive `world`-Feld bricht den Feed-Cursor nicht (seq bleibt
+    /// monoton, `feed_since`/`last_seq` unverändert).
+    #[test]
+    fn feed_seq_unchanged_with_world_field() {
+        let mut s = fresh();
+        register_all(&mut s);
+        s.start_match().unwrap();
+        let seqs: Vec<u64> = s.feed.iter().map(|e| e.seq).collect();
+        assert!(seqs.windows(2).all(|w| w[0] < w[1]));
+        let last = s.last_seq();
+        assert_eq!(*seqs.last().unwrap(), last);
+        assert!(s.feed_since(last).is_empty());
+        assert_eq!(s.feed_since(seqs[0]).len(), seqs.len() - 1);
+    }
+
+    /// Global-Einträge lassen das `world`-Feld aus (kein Bestandsbruch).
+    #[test]
+    fn log_entry_world_is_omitted_for_global_entries() {
+        let mut s = fresh();
+        register_all(&mut s);
+        s.start_match().unwrap();
+        let v = s.view();
+        let go = v.feed.iter().find(|e| e.kind == "go").unwrap();
+        assert!(go.world.is_none());
+        let json = serde_json::to_value(go).unwrap();
+        assert!(json.get("world").is_none(), "world darf global fehlen: {json}");
+        // Welt-Eintrag trägt das Feld explizit.
+        let reg = v
+            .feed
+            .iter()
+            .find(|e| e.kind == "register" && e.msg.contains("Welt A"))
+            .unwrap();
+        let json = serde_json::to_value(reg).unwrap();
+        assert_eq!(json["world"], "A");
+    }
+
+    // ---- US2: wellen-basierter Send mit Level (Issue #996) ----
+
+    #[test]
+    fn send_batch_carries_level_and_routes_to_opponent() {
+        let mut s = fresh();
+        start(&mut s);
+        let b = s.route_wave_send(World::A, 3, 1400).unwrap();
+        assert_eq!(b.from, World::A);
+        assert_eq!(b.level, Some(3));
+        assert_eq!(b.value, 1400);
+        assert!(b.units.is_empty());
+        assert_eq!(b.round, 1);
+        // Batch landet bei der Gegner-Welt B.
+        assert_eq!(pending(&s, World::B).len(), 1);
+        assert_eq!(pending(&s, World::B)[0].level, Some(3));
+        assert!(pending(&s, World::A).is_empty());
+        // Feed-Eintrag ist world-getaggt und nennt das Level (US1).
+        let send = s.feed.iter().rev().find(|e| e.kind == "send").unwrap();
+        assert_eq!(send.world, Some(World::A));
+        assert!(send.msg.contains("Level 3"), "msg: {}", send.msg);
+
+        // level < 1 → invalid; vor dem Start → conflict.
+        assert_eq!(
+            s.route_wave_send(World::A, 0, 1).unwrap_err().code,
+            "invalid"
+        );
+        let mut s2 = fresh();
+        register_all(&mut s2);
+        assert_eq!(
+            s2.route_wave_send(World::A, 3, 1).unwrap_err().code,
+            "conflict"
+        );
+
+        // Level-Send trägt das Drain-Level ins Reveal der Zielwelt.
+        let mut s3 = fresh();
+        start(&mut s3);
+        s3.route_wave_send(World::A, 5, 4000).unwrap();
+        s3.wave_start(World::B, None).unwrap();
+        let inc = &s3.reveal.as_ref().unwrap().incoming[&World::B];
+        assert_eq!(inc.len(), 1);
+        assert_eq!(inc[0].level, Some(5));
+        assert_eq!(inc[0].from, World::A);
+    }
+
+    /// SP-Mirror unverändert: ein Level-Send wird NICHT zurückgespiegelt.
+    #[test]
+    fn wave_send_sp_does_not_mirror() {
+        let mut s = fresh();
+        s.start_sp("momo").unwrap();
+        s.route_wave_send(World::A, 2, 700).unwrap();
+        assert_eq!(pending(&s, World::B).len(), 1);
+        assert!(
+            pending(&s, World::A).is_empty(),
+            "SP darf einen Level-Send nicht doppelt spiegeln"
+        );
+    }
+
+    /// Unit-basierte Sends tragen kein `level`-Feld (additiv, kein Bestandsbruch).
+    #[test]
+    fn unit_send_omits_level_field() {
+        let mut s = fresh();
+        start(&mut s);
+        let b = s
+            .route_send(
+                World::A,
+                vec![UnitSpec {
+                    unit: "creeper".into(),
+                    count: 2,
+                }],
+                400,
+            )
+            .unwrap();
+        assert!(b.level.is_none());
+        let json = serde_json::to_value(&b).unwrap();
+        assert!(json.get("level").is_none(), "level darf fehlen: {json}");
     }
 }

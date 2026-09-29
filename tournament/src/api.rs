@@ -20,7 +20,7 @@
 
 use crate::broadcast;
 use crate::referee::{Command, GameEvent, GameEventKind, Referee, RefereeConfig};
-use crate::state::{MatchState, Phase, ReadyEffect, StateError, World};
+use crate::state::{MatchState, Phase, ReadyEffect, SendBatch, StateError, World};
 use axum::extract::{Query, State as AxumState};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -48,6 +48,9 @@ pub struct Config {
     pub go_commands: Vec<String>,
     /// Timeout je Broadcast-Endpoint.
     pub go_timeout: Duration,
+    /// Verzögerung (`delay_s`) für Ingress-Pushes an die Ziel-Bridge beim
+    /// Wellenstart (US4, #996); Default aus `TOURNAMENT_INCOMING_DELAY_S`.
+    pub incoming_delay_s: f64,
     /// Start-HP jedes HQ.
     pub hq_hp_start: f64,
     /// Referee: Wellen-Deckel (0 = unbegrenzt) und Restart-Command (Issue #268).
@@ -155,9 +158,15 @@ struct GoReq {
 #[derive(Debug, Deserialize)]
 struct SendReq {
     world: String,
+    /// Unit-basierter Send (SP/direkt). Leer/missing für wellen-basierte Sends.
+    #[serde(default)]
     units: Vec<UnitReq>,
     #[serde(default)]
     value: u64,
+    /// Wellen-basierter Cross-World-Send (US2, #996): Difficulty-Level ≥ 1.
+    /// Gesetzt → Level-Send (`route_wave_send`); sonst unit-basiert.
+    #[serde(default)]
+    level: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -341,22 +350,36 @@ async fn go(AxumState(app): AxumState<AppState>, Json(req): Json<GoReq>) -> ApiR
 }
 
 /// POST /send — Wave-Routing: Send von Welt X landet in der Queue der Gegner-Welt.
+///
+/// Zwei Formen (additiv, #996):
+///   * unit-basiert (`{"world":"A","units":[…],"value":…}`) — SP/direkt;
+///   * wellen-basiert (`{"world":"A","level":3,"value":…}`) — Cross-World
+///     aus dem Attack-Cycle (US2/US5). Der Level-Send landet ebenfalls in der
+///     Queue der Gegner-Welt und wird bei deren nächstem `wave_start` in den
+///     Reveal übernommen und als Ingress gepusht (US4).
 async fn send(
     AxumState(app): AxumState<AppState>,
     Json(req): Json<SendReq>,
 ) -> ApiResult<Json<Value>> {
     let world = parse_world(&req.world)?;
-    let units: Vec<crate::state::UnitSpec> = req
-        .units
-        .into_iter()
-        .map(|u| crate::state::UnitSpec {
-            unit: u.unit,
-            count: u.count,
-        })
-        .collect();
-    let batch = app
-        .with_state(|s| s.route_send(world, units, req.value))
-        .await?;
+    let batch = match req.level {
+        Some(level) => {
+            app.with_state(|s| s.route_wave_send(world, level, req.value))
+                .await?
+        }
+        None => {
+            let units: Vec<crate::state::UnitSpec> = req
+                .units
+                .into_iter()
+                .map(|u| crate::state::UnitSpec {
+                    unit: u.unit,
+                    count: u.count,
+                })
+                .collect();
+            app.with_state(|s| s.route_send(world, units, req.value))
+                .await?
+        }
+    };
     let to = world.opponent();
     let view = app.state.read().await.view();
     let pending_len = view
@@ -367,6 +390,7 @@ async fn send(
     Ok(Json(json!({
         "queued_for": to.as_str(),
         "round": batch.round,
+        "level": batch.level,
         "batch": batch,
         "pending_sends": pending_len,
     })))
@@ -386,6 +410,23 @@ async fn report(
             let effect = app
                 .with_state(|s| s.wave_start(world, req.built_value))
                 .await?;
+            // Ingress-Push (US4): nur beim echten Lock dieser Welt — ein
+            // Duplikat/Retry (Reveal bereits gesetzt) pusht NICHT erneut.
+            let ingress = match effect {
+                crate::state::WaveEffect::Locked => {
+                    let batches: Vec<SendBatch> = {
+                        let guard = app.state.read().await;
+                        guard
+                            .reveal
+                            .as_ref()
+                            .and_then(|r| r.incoming.get(&world))
+                            .cloned()
+                            .unwrap_or_default()
+                    };
+                    push_incoming_sends(&app, world, &batches).await
+                }
+                crate::state::WaveEffect::Duplicate => Vec::new(),
+            };
             let view = app.state.read().await.view();
             Ok(Json(json!({
                 "world": world.as_str(),
@@ -397,6 +438,7 @@ async fn report(
                 "round": view.round,
                 "rounds_done": view.rounds_done,
                 "phase": view.phase,
+                "ingress": ingress,
             })))
         }
         "hq_hp" => {
@@ -537,6 +579,68 @@ async fn push_referee_commands(app: &AppState, world: World, commands: &[Command
         }
     }
     PushOutcome { results, delivered }
+}
+
+/// Leitet die Ingress-URL (`POST /incoming_send`) eines konfigurierten
+/// Bridge-Endpoints ab (US4, #996). Der Bridge-Endpoint ist auf einen
+/// HTTP-Adapter-Pfad gesetzt (typisch `/exec`, s. `RBBRIDGE_*_URL`); die
+/// Ingress-Route liegt auf demselben Host: ein abschließendes `/exec` wird
+/// entfernt und `/incoming_send` angehängt.
+fn ingress_url(bridge: &str) -> String {
+    let base = bridge.strip_suffix("/exec").unwrap_or(bridge);
+    format!("{}/incoming_send", base.trim_end_matches('/'))
+}
+
+/// Pusht die beim Wellenstart einer Welt gedrainten (level-basierten) Sends als
+/// Ingress an die Bridge der Zielwelt (US4, #996 — der G5-Vertrag).
+///
+/// Je Batch mit `level` genau EIN `POST <bridge_for(world)>/incoming_send` mit
+/// Body `{level, from, delay_s}`. Batchs **ohne** `level` (Alt-unit-Sends)
+/// werden defensiv übersprungen (nur im Reveal geführt). Ohne konfigurierten
+/// Endpoint wird je Batch `ok: null` vermerkt — kein Panic, kein `unwrap`
+/// (Muster `push_referee_commands`). Da der Drain den Batch aus `pending`
+/// entfernt und `Duplicate` nicht erneut pusht, wird jeder Batch genau EINMAL
+/// zugestellt.
+///
+/// Die Delay-Zeit stammt aus `cfg.incoming_delay_s` (`delay_s` im
+/// `incoming_wave`-Event).
+///
+/// Rückgabe: ein `ingress`-Block (je gepushtem Batch
+/// `{level, from, ok, http_status, error, endpoint}` bzw. `ok:null` + `note`).
+async fn push_incoming_sends(app: &AppState, world: World, batches: &[SendBatch]) -> Vec<Value> {
+    let mut results = Vec::new();
+    for batch in batches {
+        let Some(level) = batch.level else {
+            continue; // Alt-unit-Send: kein Ingress, nur Reveal.
+        };
+        let from = batch.from.as_str();
+        match app.cfg.bridge_for(world) {
+            Some(url) => {
+                let endpoint = ingress_url(url);
+                let payload = json!({
+                    "level": level,
+                    "from": from,
+                    "delay_s": app.cfg.incoming_delay_s,
+                });
+                let res = broadcast::post_json(&endpoint, &payload, app.cfg.go_timeout).await;
+                results.push(json!({
+                    "level": level,
+                    "from": from,
+                    "ok": res.ok(),
+                    "http_status": res.status,
+                    "error": res.error,
+                    "endpoint": endpoint,
+                }));
+            }
+            None => results.push(json!({
+                "level": level,
+                "from": from,
+                "ok": Value::Null,
+                "note": "kein Endpoint konfiguriert (RBBRIDGE_<W>_URL) — kein Ingress-Push",
+            })),
+        }
+    }
+    results
 }
 
 /// POST /referee/event — Spiel-Event an den Referee (Issue #268).
@@ -822,6 +926,7 @@ mod tests {
             bridge: [None, None],
             go_commands: vec!["debug_dom_resume".to_string()],
             go_timeout: Duration::from_millis(800),
+            incoming_delay_s: 5.0,
             hq_hp_start: 100.0,
             referee_max_wave: 0,
             // Explizite Test-Konfiguration (kein `Default`): hier bewusst
@@ -2013,5 +2118,462 @@ mod tests {
         assert_eq!(v["commands"][0]["command"], "rb_wave 1");
         let (_, v) = call(&app, "GET", "/referee/poll?world=B", None).await;
         assert_eq!(v["commands"].as_array().unwrap().len(), 0);
+    }
+
+    /// US2 (#996): wellen-basierter Send mit `level` landet in der Queue der
+    /// Gegner-Welt und wird world-getaggt im Feed geführt.
+    #[tokio::test]
+    async fn send_with_level_queues_for_opponent() {
+        let app = make_app(test_cfg()).await;
+        register(&app, "A", "momo").await;
+        register(&app, "B", "matheo").await;
+        call(&app, "POST", "/go", Some(json!({}))).await;
+
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/send",
+            Some(json!({"world": "A", "level": 3, "value": 1400})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["queued_for"], "B");
+        assert_eq!(v["level"], 3);
+        assert_eq!(v["batch"]["level"], 3);
+        assert_eq!(v["batch"]["from"], "A");
+        assert_eq!(v["pending_sends"], 1);
+
+        let (_, st) = call(&app, "GET", "/state", None).await;
+        let pend = st["teams"]["B"]["pending_sends"].as_array().unwrap();
+        assert_eq!(pend.len(), 1);
+        assert_eq!(pend[0]["level"], 3);
+        assert_eq!(pend[0]["value"], 1400);
+
+        // level 0 → 400 invalid.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/send",
+            Some(json!({"world": "A", "level": 0})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        assert_eq!(err_type(&v), "invalid");
+
+        // Unit-Send bleibt unverändert möglich (Legacy).
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/send",
+            Some(json!({"world": "B", "units": [{"unit": "x", "count": 1}], "value": 10})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["queued_for"], "A");
+        assert_eq!(v["level"], Value::Null);
+
+        // Feed-Eintrag ist world-getaggt.
+        let (_, ev) = call(&app, "GET", "/events", None).await;
+        let send = ev["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["kind"] == "send")
+            .unwrap();
+        assert_eq!(send["world"], "A");
+    }
+
+    // ---- US4: Ingress-Transport beim Wellenstart der Zielwelt (#996, G5) ----
+
+    /// Ein Level-Send A→B wird bei B's `wave_start` GENAU EINMAL als
+    /// `POST /incoming_send {level,from,delay_s}` an die B-Bridge gepusht.
+    #[tokio::test]
+    async fn wave_start_pushes_incoming_send_to_target_bridge() {
+        let (addr, captures) = capture_endpoint().await;
+        let mut cfg = test_cfg();
+        // Bridge-Endpoint wie im Betrieb (HTTP-Adapter-Pfad `/exec`).
+        cfg.bridge = [None, Some(format!("http://{addr}/exec"))];
+        let app = make_app(cfg).await;
+        register(&app, "A", "momo").await;
+        register(&app, "B", "matheo").await;
+        call(&app, "POST", "/go", Some(json!({}))).await;
+
+        // A sendet eine Welle (Level) an B.
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/send",
+            Some(json!({"world": "A", "level": 3, "value": 1400})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+
+        // B meldet seinen Wellenstart → Drain + Ingress-Push an B.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "B", "event": "wave_start", "built_value": 6400})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["effect"], "locked");
+        let ingress = v["ingress"].as_array().unwrap();
+        assert_eq!(ingress.len(), 1, "ingress: {v}");
+        assert_eq!(ingress[0]["level"], 3);
+        assert_eq!(ingress[0]["from"], "A");
+        assert_eq!(ingress[0]["ok"], true);
+        assert_eq!(ingress[0]["http_status"], 200);
+        assert_eq!(
+            ingress[0]["endpoint"],
+            format!("http://{addr}/incoming_send")
+        );
+
+        // Die B-Bridge hat genau EINEN /incoming_send-POST gesehen
+        // (der GO-Broadcast /exec zählt hier nicht).
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        {
+            let all = captures.lock().await;
+            let caps: Vec<&String> = all
+                .iter()
+                .filter(|c| c.starts_with("POST /incoming_send "))
+                .collect();
+            assert_eq!(caps.len(), 1, "caps: {all:?}");
+            assert!(
+                caps[0].starts_with("POST /incoming_send HTTP/1.1"),
+                "req: {}",
+                caps[0]
+            );
+            assert!(caps[0].contains("\"level\":3"), "req: {}", caps[0]);
+            assert!(caps[0].contains("\"from\":\"A\""), "req: {}", caps[0]);
+            // delay_s-Default aus der Config (5.0).
+            assert!(caps[0].contains("\"delay_s\":5.0"), "req: {}", caps[0]);
+        }
+    }
+
+    /// Ohne konfigurierte Ziel-Bridge bleibt der Referee funktionsfähig
+    /// (`ingress.ok == null`), kein Panic; der Reveal trägt den Send weiter.
+    #[tokio::test]
+    async fn wave_start_without_bridge_still_returns_state() {
+        let app = make_app(test_cfg()).await; // bridge = [None, None]
+        register(&app, "A", "momo").await;
+        register(&app, "B", "matheo").await;
+        call(&app, "POST", "/go", Some(json!({}))).await;
+        call(
+            &app,
+            "POST",
+            "/send",
+            Some(json!({"world": "A", "level": 2, "value": 700})),
+        )
+        .await;
+
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "B", "event": "wave_start"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let ingress = v["ingress"].as_array().unwrap();
+        assert_eq!(ingress.len(), 1, "ingress: {v}");
+        assert_eq!(ingress[0]["level"], 2);
+        assert_eq!(ingress[0]["ok"], Value::Null);
+        assert!(ingress[0]["note"].is_string());
+
+        // Reveal trägt den Batch weiterhin.
+        let (_, st) = call(&app, "GET", "/state", None).await;
+        let inc = st["reveal"]["incoming"]["B"].as_array().unwrap();
+        assert_eq!(inc.len(), 1);
+        assert_eq!(inc[0]["level"], 2);
+    }
+
+    /// Duplikat/Retry des `wave_start` pusht den Ingress NICHT erneut.
+    #[tokio::test]
+    async fn duplicate_wave_start_does_not_repush_ingress() {
+        let (addr, captures) = capture_endpoint().await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [None, Some(format!("http://{addr}/exec"))];
+        let app = make_app(cfg).await;
+        register(&app, "A", "momo").await;
+        register(&app, "B", "matheo").await;
+        call(&app, "POST", "/go", Some(json!({}))).await;
+        call(
+            &app,
+            "POST",
+            "/send",
+            Some(json!({"world": "A", "level": 3, "value": 1400})),
+        )
+        .await;
+
+        let (_, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "B", "event": "wave_start"})),
+        )
+        .await;
+        assert_eq!(v["ingress"].as_array().unwrap().len(), 1);
+
+        // Retry von B (Duplikat) → keine neuen Ingress-Pushes.
+        let (_, v2) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "B", "event": "wave_start"})),
+        )
+        .await;
+        assert_eq!(v2["effect"], "duplicate");
+        assert_eq!(v2["ingress"].as_array().unwrap().len(), 0);
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        {
+            let all = captures.lock().await;
+            let ingress_pushes = all
+                .iter()
+                .filter(|c| c.starts_with("POST /incoming_send "))
+                .count();
+            assert_eq!(
+                ingress_pushes, 1,
+                "genau ein Ingress-Push trotz Retry: {all:?}"
+            );
+        }
+    }
+
+    /// Ein unit-basierter (level-loser) Send wird NICHT als Ingress gepusht
+    /// (defensiv übersprungen), bleibt aber im Reveal.
+    #[tokio::test]
+    async fn unit_send_is_not_pushed_as_ingress() {
+        let (addr, captures) = capture_endpoint().await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [None, Some(format!("http://{addr}/exec"))];
+        let app = make_app(cfg).await;
+        register(&app, "A", "momo").await;
+        register(&app, "B", "matheo").await;
+        call(&app, "POST", "/go", Some(json!({}))).await;
+        call(
+            &app,
+            "POST",
+            "/send",
+            Some(json!({"world": "A", "units": [{"unit": "x", "count": 1}], "value": 10})),
+        )
+        .await;
+
+        let (_, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "B", "event": "wave_start"})),
+        )
+        .await;
+        assert_eq!(v["ingress"].as_array().unwrap().len(), 0);
+        let (_, st) = call(&app, "GET", "/state", None).await;
+        assert_eq!(
+            st["reveal"]["incoming"]["B"].as_array().unwrap().len(),
+            1
+        );
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert!(captures
+            .lock()
+            .await
+            .iter()
+            .all(|c| !c.starts_with("POST /incoming_send ")));
+    }
+
+    /// US2/US4 (#996): Cross-World-Send auch in der Gegenrichtung — ein Send
+    /// aus Welt B landet bei A's `wave_start` als genau EIN
+    /// `POST /incoming_send {level, from:"B"}` an die A-Bridge (der G5-Vertrag
+    /// ist richtungsunabhaengig; die Abnahme deckt nur A→B ab).
+    #[tokio::test]
+    async fn reverse_cross_world_send_b_to_a_pushes_ingress_to_a_bridge() {
+        let (addr_a, captures) = capture_endpoint().await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [Some(format!("http://{addr_a}/exec")), None];
+        let app = make_app(cfg).await;
+        register(&app, "A", "momo").await;
+        register(&app, "B", "matheo").await;
+        call(&app, "POST", "/go", Some(json!({}))).await;
+
+        // B sendet eine Welle (Level) an A.
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/send",
+            Some(json!({"world": "B", "level": 2, "value": 700})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+
+        // A meldet seinen Wellenstart -> Ingress-Push an A, from = B.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "A", "event": "wave_start", "built_value": 6400})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["effect"], "locked");
+        let ingress = v["ingress"].as_array().unwrap();
+        assert_eq!(ingress.len(), 1, "ingress: {v}");
+        assert_eq!(ingress[0]["level"], 2);
+        assert_eq!(ingress[0]["from"], "B");
+        assert_eq!(ingress[0]["ok"], true);
+        assert_eq!(
+            ingress[0]["endpoint"],
+            format!("http://{addr_a}/incoming_send")
+        );
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let all = captures.lock().await;
+        let caps: Vec<&String> = all
+            .iter()
+            .filter(|c| c.starts_with("POST /incoming_send "))
+            .collect();
+        assert_eq!(caps.len(), 1, "caps: {all:?}");
+        assert!(caps[0].contains("\"level\":2"), "req: {}", caps[0]);
+        assert!(caps[0].contains("\"from\":\"B\""), "req: {}", caps[0]);
+    }
+
+    /// US4 (#996): Mehrere offene Sends derselben Welt werden als EIN Ingress-
+    /// Push JE Batch zugestellt (nicht gebuendelt) — der G5-Vertrag ist
+    /// per-Batch; der Drain raeumt alle Batches.
+    #[tokio::test]
+    async fn multiple_pending_sends_push_one_ingress_per_batch() {
+        let (addr_b, captures) = capture_endpoint().await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [None, Some(format!("http://{addr_b}/exec"))];
+        let app = make_app(cfg).await;
+        register(&app, "A", "momo").await;
+        register(&app, "B", "matheo").await;
+        call(&app, "POST", "/go", Some(json!({}))).await;
+
+        for lvl in [1u32, 3] {
+            let (s, _) = call(
+                &app,
+                "POST",
+                "/send",
+                Some(json!({"world": "A", "level": lvl, "value": 300})),
+            )
+            .await;
+            assert_eq!(s, StatusCode::OK);
+        }
+
+        let (_, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "B", "event": "wave_start"})),
+        )
+        .await;
+        let ingress = v["ingress"].as_array().unwrap();
+        assert_eq!(ingress.len(), 2, "ingress: {v}");
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let all = captures.lock().await;
+        let pushes = all
+            .iter()
+            .filter(|c| c.starts_with("POST /incoming_send "))
+            .count();
+        assert_eq!(pushes, 2, "caps: {all:?}");
+    }
+
+    // ---- US7: host-loser Abnahme-Test des Kern-Pfads (#996, G5 + G6) ----
+
+    /// Abnahme (host-los, in-process):
+    ///   Satz 1 — ein Send aus A kommt in B an: bei B's `wave_start` geht
+    ///            genau EIN `POST /incoming_send {level:3, from:"A"}` an B.
+    ///   Satz 2 — HQ-Tod von B beendet das Match mit Sieger A (`finished`).
+    #[tokio::test]
+    async fn acceptance_cross_world_send_and_hq_win() {
+        let (addr_b, captures) = capture_endpoint().await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [None, Some(format!("http://{addr_b}/exec"))];
+        let app = make_app(cfg).await;
+
+        // Seed: A/B registriert, GO, Runde 1.
+        register(&app, "A", "momo").await;
+        register(&app, "B", "matheo").await;
+        let (s, v) = call(&app, "POST", "/go", Some(json!({}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["round"], 1);
+
+        // Satz 1: Send A→B (Level 3) → bei B's wave_start genau ein Ingress-Push.
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/send",
+            Some(json!({"world": "A", "level": 3, "value": 1400})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "B", "event": "wave_start", "built_value": 6400})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["effect"], "locked");
+        assert_eq!(v["ingress"].as_array().unwrap().len(), 1);
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        {
+            let all = captures.lock().await;
+            let incoming: Vec<&String> = all
+                .iter()
+                .filter(|c| c.starts_with("POST /incoming_send "))
+                .collect();
+            assert_eq!(incoming.len(), 1, "genau ein incoming_send: {all:?}");
+            assert!(incoming[0].contains("\"level\":3"), "req: {}", incoming[0]);
+            assert!(
+                incoming[0].contains("\"from\":\"A\""),
+                "req: {}",
+                incoming[0]
+            );
+        }
+
+        // Satz 2: HQ-Tod von B → Sieger A, Phase finished.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "B", "event": "hq_hp", "hp": 0})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["match_over"], true);
+        assert_eq!(v["winner"], "A");
+        assert_eq!(v["phase"], "finished");
+        let (_, st) = call(&app, "GET", "/state", None).await;
+        assert_eq!(st["phase"], "finished");
+        assert_eq!(st["winner"], "A");
+
+        // Gesamt: A→B-Send bleibt im Reveal von B sichtbar (level-getaggt).
+        assert_eq!(st["reveal"]["incoming"]["B"][0]["level"], 3);
+        assert_eq!(st["reveal"]["incoming"]["B"][0]["from"], "A");
+
+        // Gegenprobe: ohne bridge_for(B) bleibt der Referee funktionsfähig.
+        let app2 = make_app(test_cfg()).await;
+        register(&app2, "A", "momo").await;
+        register(&app2, "B", "matheo").await;
+        call(&app2, "POST", "/go", Some(json!({}))).await;
+        call(
+            &app2,
+            "POST",
+            "/send",
+            Some(json!({"world": "A", "level": 3, "value": 1400})),
+        )
+        .await;
+        let (s, v) = call(
+            &app2,
+            "POST",
+            "/report",
+            Some(json!({"world": "B", "event": "wave_start"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["ingress"][0]["ok"], Value::Null);
     }
 }

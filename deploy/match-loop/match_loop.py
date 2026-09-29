@@ -28,6 +28,14 @@ import urllib.error
 import urllib.request
 from typing import Callable, Dict, Optional
 
+# VS-HQ-Reporter (Issue #996, US6): Ist ``RBB_REFEREE_URL`` gesetzt, meldet der
+# Loop bei HQ-Wertänderung ``POST /report {world, event:"hq_hp", hp}`` und beim
+# bestaetigten HQ-Tod zusaetzlich ``event:"hq_dead"`` an den Referee — der ist
+# dann die Autoritaet ueber das Match-Ende (kein lokales ``end_game``).
+# ``RBB_VS_WORLD`` nennt die eigene Welt (Default "A"). Ohne Referee-URL bleibt
+# das SOLO-Verhalten (Latch + end_game + restart_map) bitgleich.
+DEFAULT_VS_WORLD = "A"
+
 # Normalisierte get_state-Sicht: ok + die drei HQ-Felder (hq_hp/hq_hp_max als
 # float|None, hq_dead als bool|None). None = "nicht auflösbar" (null im JSON).
 HqView = Dict[str, object]
@@ -84,6 +92,8 @@ class MatchLoop:
         base_url: str,
         restart_delay: float = 10.0,
         timeout: float = 5.0,
+        referee_url: Optional[str] = None,
+        vs_world: str = DEFAULT_VS_WORLD,
         _poster: Optional[Callable[[str, bytes], tuple]] = None,
         _clock: Callable[[], float] = time.monotonic,
     ):
@@ -93,13 +103,61 @@ class MatchLoop:
         self._poster = _poster or self._http_post
         self._clock = _clock
 
+        # VS-HQ-Reporter (US6, #996). Ohne referee_url = SOLO (unveraendert).
+        self.referee_url = (referee_url or "").rstrip("/") or None
+        self.vs_world = str(vs_world or DEFAULT_VS_WORLD).strip().upper() or DEFAULT_VS_WORLD
+
         self.seen_alive = False
         self.defeat_at: Optional[float] = None  # gesetzt bei Defeat, bis Restart
+        self.last_reported_hp: Optional[float] = None  # letzter an Referee gemeldeter Wert
+
+    # --- VS-HQ-Reporter (Cross-World, US6/#996) ---------------------------
+    def _report(self, payload: Dict[str, object]) -> Optional[Dict[str, object]]:
+        """POSTet ein Report-Event an den Referee (nicht-fatal, log-only).
+
+        Rueckgabe: geparste JSON-Antwort oder None (kein/fremder Body).
+        """
+        if not self.referee_url:
+            return None
+        try:
+            status, body = self._poster(
+                self.referee_url + "/report", json.dumps(payload).encode("utf-8")
+            )
+        except Exception as e:  # nie den Loop blockieren
+            print(f"[match-loop] report {payload.get('event')} fehlgeschlagen: {e}", flush=True)
+            return None
+        parsed: Optional[Dict[str, object]] = None
+        try:
+            obj = json.loads(body)
+            if isinstance(obj, dict):
+                parsed = obj
+        except (ValueError, TypeError):
+            parsed = None
+        print(
+            f"[match-loop] report {payload.get('event')} -> HTTP {status} "
+            f"{str(body)[:120]}",
+            flush=True,
+        )
+        return parsed
+
+    def _report_hq(self, hp: float) -> Optional[Dict[str, object]]:
+        """meldet den aktuellen HQ-HP an den Referee (event `hq_hp`)."""
+        if not self.referee_url:
+            return None
+        return self._report({"world": self.vs_world, "event": "hq_hp", "hp": hp})
+
+    def _report_hq_dead(self) -> Optional[Dict[str, object]]:
+        """meldet den bestaetigten HQ-Tod an den Referee (event `hq_dead`)."""
+        if not self.referee_url:
+            return None
+        return self._report({"world": self.vs_world, "event": "hq_dead"})
 
     # --- HTTP (urllib) ----------------------------------------------------
     def _http_post(self, path: str, body: bytes) -> tuple:
+        # `path` kann base_url-relativ oder eine volle URL sein (Referee, US6).
+        url = path if path.startswith(("http://", "https://")) else self.base_url + path
         req = urllib.request.Request(
-            self.base_url + path,
+            url,
             data=body,
             method="POST",
             headers={"Content-Type": "application/json"},
@@ -129,8 +187,9 @@ class MatchLoop:
     # --- ein Poll-Schritt -------------------------------------------------
     def step(self) -> Optional[str]:
         """Ein Iterationsschritt. Liefert eine Aktion ("defeat"/"restart") oder None."""
-        # Phase 2: Defeat erkannt, auf Restart-Delay warten.
-        if self.defeat_at is not None:
+        # Phase 2 (SOLO): Defeat erkannt, auf Restart-Delay warten. Im
+        # Referee-Modus gibt es diesen Pfad nicht (der Referee ist Autoritaet).
+        if self.referee_url is None and self.defeat_at is not None:
             if self._clock() - self.defeat_at >= self.restart_delay:
                 self._restart_map()
                 self.defeat_at = None
@@ -140,9 +199,18 @@ class MatchLoop:
 
         view = self._get_state()
         if not view.get("ok"):
-            return None  # Welt noch nicht bereit -> nichts tun
+            return None  # Welt noch nicht bereit -> nichts tun (Latch unberuehrt)
 
         if is_alive(view):
+            # Referee-Modus: HQ-Wert bei Aenderung melden (kein Spam).
+            hp = view.get("hq_hp")
+            if (
+                self.referee_url
+                and isinstance(hp, (int, float))
+                and hp != self.last_reported_hp
+            ):
+                self._report_hq(float(hp))
+                self.last_reported_hp = float(hp)
             if not self.seen_alive:
                 self.seen_alive = True
                 return "alive"
@@ -150,6 +218,23 @@ class MatchLoop:
 
         # HP null/0: nur ein Defeat, wenn das HQ in dieser Runde schon lebte.
         if self.seen_alive and is_defeat(view):
+            if self.referee_url:
+                # Der Referee entscheidet das Match-Ende (Sieger). Wir melden
+                # den finalen HP (falls ermittelbar) + den bestaetigten Tod und
+                # beenden NICHT selbst per end_game/restart_map.
+                hp = view.get("hq_hp")
+                if isinstance(hp, (int, float)) and float(hp) != self.last_reported_hp:
+                    self._report_hq(float(hp))
+                    self.last_reported_hp = float(hp)
+                resp = self._report_hq_dead()
+                if resp and resp.get("match_over"):
+                    print(
+                        f"[match-loop] match_over (winner={resp.get('winner')}) — "
+                        "Referee ist Autoritaet, kein lokaler end_game",
+                        flush=True,
+                    )
+                self.seen_alive = False
+                return "defeat"
             self._end_game()
             self.defeat_at = self._clock()
             self.seen_alive = False
@@ -164,11 +249,21 @@ def run(
     restart_delay: float = 10.0,
     once: bool = False,
     timeout: float = 5.0,
+    referee_url: Optional[str] = None,
+    vs_world: str = DEFAULT_VS_WORLD,
     _sleep: Callable[[float], None] = time.sleep,
     _poster: Optional[Callable[[str, bytes], tuple]] = None,
     _clock: Callable[[], float] = time.monotonic,
 ):
-    loop = MatchLoop(base_url, restart_delay=restart_delay, timeout=timeout, _poster=_poster, _clock=_clock)
+    loop = MatchLoop(
+        base_url,
+        restart_delay=restart_delay,
+        timeout=timeout,
+        referee_url=referee_url,
+        vs_world=vs_world,
+        _poster=_poster,
+        _clock=_clock,
+    )
     while True:
         loop.step()
         if once:
@@ -186,6 +281,20 @@ def build_parser():
     )
     p.add_argument("--poll-interval", type=float, default=1.0)
     p.add_argument("--restart-delay", type=float, default=10.0, help="Sekunden zwischen LOST und Restart")
+    p.add_argument(
+        "--referee-url",
+        default=os.environ.get("RBB_REFEREE_URL") or None,
+        help=(
+            "Referee-Basis-URL fuer den HQ-Reporter (VS, US6/#996). Gesetzt → "
+            "POST <url>/report {world,event:hq_hp|hq_dead}; sonst SOLO (end_game/restart_map) "
+            "(Default RBB_REFEREE_URL)"
+        ),
+    )
+    p.add_argument(
+        "--vs-world",
+        default=os.environ.get("RBB_VS_WORLD") or DEFAULT_VS_WORLD,
+        help="Eigene Welt im VS (Default RBB_VS_WORLD oder A)",
+    )
     p.add_argument("--once", action="store_true", help="Einen Poll ausführen, dann beenden")
     p.add_argument("--timeout", type=float, default=5.0, help="HTTP-Timeout je Request")
     return p
@@ -199,6 +308,8 @@ def main(argv=None):
         restart_delay=args.restart_delay,
         once=args.once,
         timeout=args.timeout,
+        referee_url=args.referee_url,
+        vs_world=args.vs_world,
     )
     return 0
 

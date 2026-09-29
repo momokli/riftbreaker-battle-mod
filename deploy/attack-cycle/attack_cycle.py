@@ -120,6 +120,12 @@ MODE_VS = "vs"
 MODES = (MODE_SOLO, MODE_VS)
 DEFAULT_MODE = MODE_SOLO
 
+# VS-Egress (Issue #996, US5): Ist ``RBB_REFEREE_URL`` gesetzt, schickt der
+# ``send_enemy``-Pfad je gesendeter Welle einen echten ``POST /send`` an den
+# Referee (statt nur ``enemy_outgoing`` zu zaehlen). ``RBB_VS_WORLD`` nennt die
+# eigene Welt (Default "A"). Ohne Referee-URL bleibt das SOLO-Verhalten bitgleich.
+DEFAULT_VS_WORLD = "A"
+
 # Zustandsmaschine PAUSED -> WARMUP -> RUNNING -> GAME_OVER.
 STATE_PAUSED = "paused"
 STATE_WARMUP = "warmup"
@@ -525,6 +531,8 @@ class AttackCycle:
         persona_name: str = "",
         send_yourself: bool = True,
         mode: str = DEFAULT_MODE,
+        referee_url: Optional[str] = None,
+        vs_world: str = DEFAULT_VS_WORLD,
         warmup_s: float = DEFAULT_WARMUP_S,
         toggles: Optional[Dict[str, bool]] = None,
         poll_start: bool = False,
@@ -570,6 +578,10 @@ class AttackCycle:
         base_toggles["send_yourself"] = bool(send_yourself)
         self.toggles = _normalize_toggles(toggles, base_toggles)
         self.mode = mode if mode in MODES else DEFAULT_MODE
+        # VS-Egress (US5, #996): Referee-Ziel + eigene Welt. Ohne URL bleibt der
+        # send_enemy-Pfad ein reiner Zaehler (SOLO).
+        self.referee_url = (referee_url or "").rstrip("/") or None
+        self.vs_world = str(vs_world or DEFAULT_VS_WORLD).strip().upper() or DEFAULT_VS_WORLD
         self.warmup_s = float(warmup_s) if warmup_s >= 0 else DEFAULT_WARMUP_S
         # Start-Signal defensiv (s. sync_start): Poll auf POST /start ist per
         # Default aus, weil die Bridge jeden /start-Aufruf quittiert.
@@ -693,8 +705,11 @@ class AttackCycle:
 
     # --- HTTP (urllib) ----------------------------------------------------
     def _http_post(self, path: str, body: bytes) -> tuple:
+        # `path` kann ein absoluter Pfad (base_url-relative) oder eine volle URL
+        # sein (z. B. der Referee-Egress, US5).
+        url = path if path.startswith(("http://", "https://")) else self.base_url + path
         req = urllib.request.Request(
-            self.base_url + path,
+            url,
             data=body,
             method="POST",
             headers={"Content-Type": "application/json"},
@@ -719,6 +734,29 @@ class AttackCycle:
 
     def _post_json(self, path: str, payload: Dict[str, Any]) -> tuple:
         return self._poster(path, json.dumps(payload).encode("utf-8"))
+
+    # --- VS-Egress (Cross-World-Send an den Referee, US5/#996) ------------
+    def _post_referee_send(self, level: int, value: int) -> None:
+        """Sendet EINE Welle als Cross-World-Send an den Referee.
+
+        ``POST {RBB_REFEREE_URL}/send {world, level, value}`` (Body = ``SendReq``
+        US2). Ist keine Referee-URL konfiguriert, passiert nichts (SOLO).
+        HTTP-Fehler blockieren den Takt NICHT — sie werden nur geloggt
+        (Muster ``buy``/``_fire``).
+        """
+        if not self.referee_url:
+            return
+        payload = {"world": self.vs_world, "level": int(level), "value": int(value)}
+        try:
+            status, body = self._poster(
+                self.referee_url + "/send", json.dumps(payload).encode("utf-8")
+            )
+            if not 200 <= status < 300:
+                LOG.warning(
+                    "referee send level=%s -> HTTP %s %s", level, status, str(body)[:120]
+                )
+        except Exception as e:  # nie den Takt blockieren
+            LOG.warning("referee send level=%s fehlgeschlagen: %s", level, e)
 
     # --- get_state / HQ-Erkennung ----------------------------------------
     def _hq_status(self) -> Optional[bool]:
@@ -1013,15 +1051,25 @@ class AttackCycle:
             )
         if enemy_on and sent_levels:
             # send_enemy: ZUSAETZLICH an den Gegner. Im SOLO gibt es keinen
-            # zweiten Server -> nur zaehlen (enemy_outgoing); im VS wird daraus
-            # der echte Versand an Welt B (#361).
+            # zweiten Server -> nur zaehlen (enemy_outgoing); mit konfiguriertem
+            # Referee (VS, US5/#996) wird zusaetzlich ein echter Cross-World-Send
+            # an den Referee gepostet (der Zaehler bleibt fuer Monitoring/Abbruch).
             with self._lock:
                 self.enemy_outgoing.extend({"level": lvl} for lvl in sent_levels)
-            print(
-                f"[attack-cycle] send_enemy=on -> {sent_levels} an den Gegner "
-                f"(mode={self.mode}, kein zweiter Server -> nur Zaehler)",
-                flush=True,
-            )
+            if self.referee_url:
+                for lvl in sent_levels:
+                    self._post_referee_send(lvl, WAVE_COST.get(lvl, 0))
+                print(
+                    f"[attack-cycle] send_enemy=on -> {sent_levels} an Referee "
+                    f"{self.referee_url}/send (world={self.vs_world})",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"[attack-cycle] send_enemy=on -> {sent_levels} an den Gegner "
+                    f"(mode={self.mode}, kein zweiter Server -> nur Zaehler)",
+                    flush=True,
+                )
         with self._lock:
             self.last_fire = {
                 "natural_level": natural_level,
@@ -1086,6 +1134,8 @@ class AttackCycle:
                 "persona": self.persona_name or None,
                 "attack_index": self.attack_index,
                 "send_yourself": self.send_yourself,
+                "referee_url": self.referee_url,
+                "vs_world": self.vs_world,
                 "outgoing": list(self.outgoing),
                 "enemy_outgoing": list(self.enemy_outgoing),
                 "interval_s": self.interval_s,
@@ -1633,6 +1683,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Game-Flow-Modus solo|vs (Default RBB_MODE oder solo); vs = 2 Welten",
     )
     p.add_argument(
+        "--referee-url",
+        default=os.environ.get("RBB_REFEREE_URL") or None,
+        help=(
+            "Referee-Basis-URL fuer den Cross-World-Send (VS, US5/#996). Gesetzt "
+            "→ send_enemy postet je Welle POST <url>/send; sonst nur Zaehler (Default RBB_REFEREE_URL)"
+        ),
+    )
+    p.add_argument(
+        "--vs-world",
+        default=os.environ.get("RBB_VS_WORLD") or DEFAULT_VS_WORLD,
+        choices=["A", "B", "a", "b"],
+        help="Eigene Welt im VS (Default RBB_VS_WORLD oder A)",
+    )
+    p.add_argument(
         "--warmup",
         type=float,
         default=None,
@@ -1701,6 +1765,8 @@ def main(argv: Optional[list] = None) -> int:
         persona_name=persona_name,
         send_yourself=(args.send_yourself == "on"),
         mode=args.mode,
+        referee_url=args.referee_url,
+        vs_world=args.vs_world,
         warmup_s=warmup_s,
         toggles={
             "natural": _env_bool("RBB_NATURAL", True),

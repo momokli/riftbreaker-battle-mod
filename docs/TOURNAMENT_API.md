@@ -24,6 +24,7 @@ Rust/axum in `tournament/` (Issue #29), Web-UI in `tournament/web/`
 | `RBBRIDGE_B_URL`                 | —                  | HTTP-Endpoint der Welt-B-Bridge (GO-Push)                                                         |
 | `TOURNAMENT_GO_COMMANDS`         | `debug_dom_resume` | Komma-separierte Unpause-/Start-Kommandos je Welt beim GO (je EIN gequotetes Argument, Issue #18) |
 | `TOURNAMENT_GO_TIMEOUT_MS`       | `3000`             | Timeout je Broadcast-Endpoint                                                                     |
+| `TOURNAMENT_INCOMING_DELAY_S`    | `5`                | `delay_s` des Ingress-Pushes (`incoming_wave`) an die Ziel-Bridge beim Wellenstart (US4, #996)     |
 | `TOURNAMENT_HQ_HP`               | `100`              | Start-HP jedes HQ                                                                                 |
 | `TOURNAMENT_REFEREE_MAX_WAVE`    | `0`                | Wellen-Deckel des Referees (`0` = unbegrenzt, Issue #268)                                         |
 | `TOURNAMENT_REFEREE_RESTART_CMD` | `rb_reset`         | In-game Command des Referees bei HQ-Tod (Issues #268/#281; Mod-Kommando `rb_reset`)               |
@@ -166,6 +167,19 @@ Nur in Phase `running` (sonst 409). Der Send wird in die Queue der
 **Gegner-Welt** gelegt und bei deren nächstem Wellenstart in den Reveal
 übernommen. Antwort: `{"queued_for": "B", "round": 1, "batch": {…}, "pending_sends": 1}`.
 
+**Wellen-basierter Cross-World-Send (US2/US5, #996).** Der Attack-Cycle kennt
+keine Unit-Komposition, nur ein Difficulty-Level; deshalb gibt es eine zweite,
+additive Form mit `level` statt `units`:
+
+```json
+{ "world": "A", "level": 3, "value": 1400 }
+```
+
+`level` (≥ 1) wird beim Referee zum Wellen-Send gestempelt (`SendBatch.level`) und
+in die `pending`-Queue der Gegner-Welt gelegt — identisch zum Unit-Send, nur ohne
+Einheiten. Antwort zusätzlich mit `"level": 3`. Unit-Sends ohne `level` bleiben
+unverändert (`level: null`). Ohne `level` **und** ohne `units` → 400 `invalid`.
+
 ### POST /report — Welt-Events (send_state-Egress, Issue #13 konzeptionell)
 
 ```json
@@ -177,7 +191,16 @@ Nur in Phase `running` (sonst 409). Der Send wird in die Queue der
 
 - `wave_start`: Wellenstart der Welt (Lock). `built_value` optional
   (Built-Value zum Reveal). Idempotent je Runde: Antwort
-  `{"effect": "locked"|"duplicate", "round": …, "rounds_done": …, "phase": …}`.
+  `{"effect": "locked"|"duplicate", "round": …, "rounds_done": …, "phase": …, "ingress": [… ]}`.
+  Beim echten Lock (`effect:locked`) pusht der Referee die gedrainten
+  **level-basierten** Sends aus `reveal.incoming.<W>` als Ingress an die
+  Bridge der Zielwelt (`POST <RBBRIDGE_<W>_URL>/incoming_send`,
+  Body `{level, from, delay_s}`; `delay_s` aus `TOURNAMENT_INCOMING_DELAY_S`).
+  Der `ingress`-Block nennt je Batch
+  `{level, from, ok, http_status, error, endpoint}`; ohne konfigurierten
+  Endpoint `{level, from, ok:null, note}` (kein Panic). Ein Retry
+  (`effect:duplicate`) pusht **nicht** erneut. Unit-Sends ohne `level` werden
+  nicht als Ingress gepusht (nur im Reveal geführt).
 - `hq_hp`: aktueller HQ-HP (absolut, 0 = HQ-Tod → Match-Ende). Antwort
   `{"match_over": bool, "winner": …, "hq_hp": …}`.
 - `score_update`: periodischer State-Snapshot (send_state-Egress, Issue #13) —
@@ -400,7 +423,9 @@ Jeder Eintrag trägt ein monotones `seq`-Feld (Cursor ohne Event-Verlust).
 eingehende Send-Komposition je Welt — was bei diesem Wellenstart gespawnt
 ist). `teams.<W>.pending_sends` = Sends, die in die **nächste** Welle dieser
 Welt laufen. `feed` = letzte Ereignisse (neueste zuerst, max. 30) für das
-Terminal-Feed der UI.
+Terminal-Feed der UI. Seit #996 (US1) trägt jeder Feed-Eintrag ein optionales
+`"world": "A"|"B"` (fehlt bei globalen Einträgen wie `go`/`match_end`);
+level-basierte Sends erscheinen mit `"level"` im `batch`/`pending_sends`.
 
 ### GET /health
 

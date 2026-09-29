@@ -171,12 +171,37 @@ Referee → Referee legt es in B's `pending`-Queue → **Ingress in Welt B** (ne
 Route an B's Bridge, z. B. `POST /incoming_send`) → B feuert via
 `activate_mission_flow`. Der Referee-`reveal` (built/incoming) zeigt es der UI.
 
+**Umgesetzt (#996, G5).** Der Pfad läuft jetzt end-to-end:
+
+- Der Attack-Cycle sendet mit gesetztem `RBB_REFEREE_URL` je gekaufter Welle
+  `POST <referee>/send {world:<RBB_VS_WORLD>, level:<n>, value:<cost>}`
+  (`SendBatch.level`, kein Unit-Umbau).
+- Der Referee (`route_wave_send`) legt den Batch in B's `pending`; der Drain bei
+  B's `wave_start` erzeugt den Reveal (`reveal.incoming.B`).
+- Derselbe `wave_start`-Handler pusht den Batch als
+  `POST <bridge_for(B)>/incoming_send {level,from,delay_s}` an die B-Bridge; die
+  Bridge setzt daraus `incoming_wave {level,from,delay_s}` über den Pipe-Kanal
+  ab (Dispatch/`exec_result` host-seitig belegt, Live-Beweis offen, #252).
+- Idempotent: der Drain entfernt den Batch; ein `wave_start`-Retry (`Duplicate`)
+  pusht nicht erneut.
+
+→ Details: `docs/TOURNAMENT_API.md` (POST `/send`, `wave_start`-`ingress`),
+`server/protocol.md` (`/incoming_send`).
+
 ### 6.4 Sieger / Match-Ende
 
 Heute: `report hq_hp` (extern) entscheidet `winner`; nativer HQ-Read existiert nur
 single-world im `match-loop`. Ziel: **per-Welt-HQ-Reporter** (je Welt
 `get_state.hq_hp` → `POST /report {world, hq_hp}`) → Referee setzt bei `hp<=0`
 `winner = opponent`.
+
+**Umgesetzt (#996, G6).** Der Match-Loop ist mit `RBB_REFEREE_URL` der
+per-Welt-Reporter: er meldet bei HQ-Wertänderung
+`POST <referee>/report {world:<RBB_VS_WORLD>, event:hq_hp, hp:<n>}` und beim
+bestätigten HQ-Tod zusätzlich `event:hq_dead`. Der Referee setzt bei `hp ≤ 0`
+`winner = opponent` und `phase = finished`; der Sidecar beendet **nicht** selbst
+per `end_game` (Referee ist Autorität). Ohne `RBB_REFEREE_URL` bleibt das
+SOLO-Verhalten (Latch + `end_game` + `restart_map`) bitgleich.
 
 ### 6.5 Gemeinsamer Start/Ready + Pause
 
@@ -187,9 +212,14 @@ single-world im `match-loop`. Ziel: **per-Welt-HQ-Reporter** (je Welt
 
 ### 6.6 Events pro Welt
 
-Referee-`LogEntry` hat **kein `world`-Feld`** → ergänzen + fehlende Kinds
-(`attack_fire`, `creature_event`, `map_reset`). UI pollt `/state` (+
-`/events?since=`). Die Bridge-SSE bleibt raus (Single-Client).
+**Umgesetzt (#996, US1):** Der Referee-`LogEntry` trägt jetzt ein optionales
+`world`-Feld (`"A"|"B"`, fehlt bei globalen Einträgen wie `go`/`match_end`);
+die welt-spezifischen Feed-Events (`register`, `ready`, `send`, `wave`, `hq`,
+`score`, `finish`) sind getaggt. `GET /events?since=` und der `/state.feed`
+exponieren es additiv (Bestands-Konsumenten, die nur `kind`/`msg` lesen,
+bleiben gültig). Noch offen: zusätzliche Kinds (`attack_fire`,
+`creature_event`, `map_reset`). UI pollt `/state` (+ `/events?since=`); die
+Bridge-SSE bleibt raus (Single-Client).
 
 ## 7. Gap-Liste → abgeleitete Issues
 
@@ -199,8 +229,8 @@ Referee-`LogEntry` hat **kein `world`-Feld`** → ergänzen + fehlende Kinds
 | G2  | Relay-API **Name/Identität→Ziel** (Lobby) oder Suffix `*-a/-b` | Routing      |
 | G3  | **prod-B Infra** (Vars/Ports/Container/Deploy/env-schema)      | Setups       |
 | G4  | Referee: `bridge_b`→9004, **Aggregat-Ready/Go**, World-Tagging | Start/Sieger |
-| G5  | **Cross-World-Send-Pfad** (A-Egress → Referee → B-Ingress)     | Gameplay     |
-| G6  | **per-Welt-HQ-Reporter** → Referee (Sieger)                    | Match-Ende   |
+| G5  | **Cross-World-Send-Pfad** (A-Egress → Referee → B-Ingress)     | ✅ umgesetzt (#996) |
+| G6  | **per-Welt-HQ-Reporter** → Referee (Sieger)                    | ✅ umgesetzt (#996) |
 | G7  | **Pause-Fan-out** (beide) + Sidecar mitpausieren               | Betrieb      |
 | G8  | **Match-View-UI** (konsumiert G1–G7)                           | UX           |
 

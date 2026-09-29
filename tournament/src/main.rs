@@ -11,6 +11,7 @@
 //! | `RBBRIDGE_B_URL` | — | HTTP-Endpoint Welt B |
 //! | `TOURNAMENT_GO_COMMANDS` | `debug_dom_resume` | Komma-separierte Unpause-/Start-Kommandos je Welt beim GO (Issue #22; je EIN gequotetes Argument, Issue #18) |
 //! | `TOURNAMENT_GO_TIMEOUT_MS` | `3000` | Timeout je Broadcast-Endpoint |
+//! | `TOURNAMENT_INCOMING_DELAY_S` | `5` | `delay_s` des Ingress-Pushes (`incoming_wave`) beim Wellenstart (US4, #996) |
 //! | `TOURNAMENT_HQ_HP` | `100` | Start-HP jedes HQ |
 //! | `TOURNAMENT_REFEREE_MAX_WAVE` | `0` | Wellen-Deckel des Referees (`0` = unbegrenzt, Issue #268) |
 //! | `TOURNAMENT_REFEREE_RESTART_CMD` | `rb_reset` | In-game Command des Referees bei HQ-Tod (Issue #268/#281; Mod-Kommando) |
@@ -113,6 +114,11 @@ fn config_from_env() -> Result<Config, String> {
     }
 
     let go_commands = parse_go_commands(&env_str("TOURNAMENT_GO_COMMANDS", "debug_dom_resume"));
+    // US4 (#996): Verzögerung fuer den Ingress-Push an die Ziel-Bridge beim
+    // Wellenstart (`delay_s` im `incoming_wave`-Event, protocol.md Default 5 s).
+    let incoming_delay_s: f64 = env_str("TOURNAMENT_INCOMING_DELAY_S", "5")
+        .parse()
+        .map_err(|_| "TOURNAMENT_INCOMING_DELAY_S muss eine Zahl sein".to_string())?;
 
     // Deploy-Identitaet (Issue #483, US4): dieselbe <env> · <ref> wie Landing,
     // Server-Control und die Container-Labels. Default "unknown" (kein Panic).
@@ -126,6 +132,7 @@ fn config_from_env() -> Result<Config, String> {
         bridge: [bridge_a, bridge_b],
         go_commands,
         go_timeout: Duration::from_millis(go_timeout_ms),
+        incoming_delay_s,
         hq_hp_start,
         referee_max_wave,
         referee_restart_cmd,
