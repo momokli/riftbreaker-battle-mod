@@ -26,6 +26,11 @@ const HARNESS = path.join(
   "hosttest",
   "pipe_bridge_ready_gate_hosttest.c",
 );
+const FLOW_HARNESS = path.join(
+  __dirname,
+  "hosttest",
+  "pipe_bridge_ready_gate_flow_hosttest.c",
+);
 
 function findHostCC() {
   for (const cc of ["cc", "gcc"]) {
@@ -64,6 +69,53 @@ test("pipe-bridge host-test: Ready-Gate-Logik (ready_gate.h, #937)", (t) => {
     assert.ok(m, `Harness-Ausgabe ohne Ergebniszeile:\n${out}`);
     assert.strictEqual(Number(m[2]), 0, `Harness-FAILs:\n${out}`);
     assert.ok(Number(m[1]) >= 15, `zu wenige Checks ausgeführt: ${m[1]}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #937 (Integration, host-seitig): Kern-Flow des Ready-Gates. Faehrt die
+// Bridge-Aufrufsequenz (ready_gate_on_chat/ready_gate_tick/round-reset) ueber
+// einen Mini-Treiber ueber die reine Logik nach: mehrere /ready mit
+// unterschiedlichen conn_ids -> GENAU EIN Start (start_epoch++) bei
+// ready_count==players; gleicher conn_id zweimal -> count bleibt 1;
+// players=0 -> kein Start; Timeout exakt an der Deadline -> ready_timeout,
+// kein Start; Runden-Reset -> Gate feuert erneut.
+test("pipe-bridge host-test: Ready-Gate Kern-Flow (Integration, #937)", (t) => {
+  const cc = findHostCC();
+  if (!cc) {
+    t.skip(
+      "kein Host-C-Compiler (cc/gcc) im PATH — Flow-Harness nicht " +
+        "kompilierbar; Test bleibt ungeprüft (nicht grün)",
+    );
+    return;
+  }
+  assert.ok(fs.existsSync(FLOW_HARNESS), `Harness fehlt: ${FLOW_HARNESS}`);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rb937-flow-"));
+  try {
+    const bin = path.join(dir, "pipe_bridge_ready_gate_flow_hosttest");
+    execFileSync(
+      cc,
+      [
+        "-O1",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-I",
+        BRIDGE_DIR,
+        "-o",
+        bin,
+        FLOW_HARNESS,
+      ],
+      { stdio: "pipe" },
+    );
+
+    const out = execFileSync(bin, [], { encoding: "utf8" });
+    const m = out.match(/HOSTTEST_PASS=(\d+) HOSTTEST_FAIL=(\d+)/);
+    assert.ok(m, `Harness-Ausgabe ohne Ergebniszeile:\n${out}`);
+    assert.strictEqual(Number(m[2]), 0, `Harness-FAILs:\n${out}`);
+    assert.ok(Number(m[1]) >= 30, `zu wenige Checks ausgeführt: ${m[1]}`);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
