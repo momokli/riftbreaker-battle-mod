@@ -77,6 +77,25 @@ int main(void)
     check(ready_gate_count(&g) == 0 && g.deadline == 0.0,
           "clear: Menge + Deadline zurueck");
 
+    /* --- #937/US4: Timeout-Grenzfall (deadline) ---------------------- */
+    ready_gate_init(&g);
+    check(ready_gate_expired(&g, 9999.0) == 0,
+          "expired: kein Gate armed -> 0");
+    ready_gate_add(&g, "aa11");
+    ready_gate_arm(&g, 100.0, 180.0);
+    check(ready_gate_expired(&g, 279.999) == 0, "expired: vor Deadline -> 0");
+    check(ready_gate_expired(&g, 280.0) == 1,
+          "expired: GENAU an Deadline -> 1 (Grenzfall >=)");
+    check(ready_gate_expired(&g, 280.001) == 1, "expired: nach Deadline -> 1");
+    g.fired = 1;
+    check(ready_gate_expired(&g, 300.0) == 0,
+          "expired: nach gefeuertem Start -> 0 (kein Timeout)");
+    g.fired = 0;
+    ready_gate_clear(&g);
+    check(ready_gate_expired(&g, 300.0) == 0,
+          "expired: leere Menge -> 0 (nichts zu timeouten)");
+    check(ready_gate_expired(NULL, 300.0) == 0, "expired: NULL -> 0");
+
     /* --- Status-JSON ------------------------------------------------- */
     ready_gate_init(&g);
     g.players = 3;

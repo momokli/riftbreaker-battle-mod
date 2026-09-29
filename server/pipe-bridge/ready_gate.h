@@ -121,6 +121,23 @@ static inline void ready_gate_clear(ready_gate_t *g)
     g->deadline = 0.0;
 }
 
+/* #937/US4: Timeout-Grenzfall. Rueckgabe 1, wenn ein Gate armed ist
+ * (deadline > 0), noch jemand fehlt (count > 0), der Start nicht schon gefeuert
+ * wurde und now >= deadline. now == deadline gilt bewusst als abgelaufen
+ * (>=), damit der Grenzfall deterministisch/testbar ist. */
+static inline int ready_gate_expired(const ready_gate_t *g, double now)
+{
+    if (!g)
+        return 0;
+    if (g->deadline <= 0.0)
+        return 0;
+    if (g->count <= 0)
+        return 0;
+    if (g->fired)
+        return 0;
+    return now >= g->deadline;
+}
+
 /* Armt das Gate beim ersten ready (deadline = now + timeout_s), falls noetig. */
 static inline void ready_gate_arm(ready_gate_t *g, double now, double timeout_s)
 {

@@ -575,6 +575,14 @@ class AttackCycle:
         # Default aus, weil die Bridge jeden /start-Aufruf quittiert.
         self.poll_start = bool(poll_start)
         self.ready = False
+        # #937: Ready-Gate-Sichtbarkeit (Bridge -> attack_cycle). Rein
+        # ANZEIGE/Reset-Ausloeser; der Start laeuft weiter nur ueber
+        # start_epoch. ``ready_timeout`` ist ein Edge-Signal (Gruen->Rot),
+        # damit ein Poll-Loop bei wiederholtem true nicht mehrfach resettet.
+        self.players = 0
+        self.ready_count = 0
+        self.ready_players: list = []
+        self.ready_timeout = False
         self.timeout = timeout
         # Wellen-Feuer-Regeln (Attack-Count/Boss/Extra/MP), konfigurierbar.
         # Ein explizites `difficulty_rules`-dict ueberschreibt das benannte
@@ -1056,6 +1064,10 @@ class AttackCycle:
                 "warmup_s": self.warmup_s,
                 "toggles": dict(self.toggles),
                 "ready": self.ready,
+                "players": self.players,
+                "ready_count": self.ready_count,
+                "ready_players": list(self.ready_players),
+                "ready_timeout": self.ready_timeout,
                 "level": self.level,
                 "seconds_to_next_attack": (
                     max(0.0, self.next_attack_at - now) if self.next_attack_at is not None else None
@@ -1247,6 +1259,7 @@ class AttackCycle:
             data = json.loads(body)
             if not isinstance(data, dict):
                 return
+            do_reset = False
             with self._lock:
                 mode = data.get("mode")
                 if mode in MODES:
@@ -1258,7 +1271,26 @@ class AttackCycle:
                 ready = data.get("ready")
                 if isinstance(ready, bool):
                     self.ready = ready
+                players = data.get("players")
+                if isinstance(players, int) and not isinstance(players, bool) and players >= 0:
+                    self.players = players
+                ready_count = data.get("ready_count")
+                if isinstance(ready_count, int) and not isinstance(ready_count, bool) and ready_count >= 0:
+                    self.ready_count = ready_count
+                ready_players = data.get("ready_players")
+                if isinstance(ready_players, list):
+                    self.ready_players = [str(x) for x in ready_players]
+                ready_timeout = data.get("ready_timeout")
+                if isinstance(ready_timeout, bool):
+                    # Edge-Erkennung: nur der Wechsel False -> True loest den
+                    # Reset aus (kein Kick, kein Start -> zurueck PAUSED).
+                    if ready_timeout and not self.ready_timeout:
+                        do_reset = True
+                    self.ready_timeout = ready_timeout
                 self._note_start_signal(data)
+            if do_reset:
+                print("[attack-cycle] ready_timeout -> PAUSED (kein Kick)", flush=True)
+                self.reset()
         except Exception:
             pass
 

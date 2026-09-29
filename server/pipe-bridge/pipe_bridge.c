@@ -661,12 +661,17 @@ static void ready_gate_on_chat(const char *text, const char *conn_id)
     if (!g_ready_gate.fired) {
         first = (g_ready_gate.count == 0);
         added = ready_gate_add(&g_ready_gate, id);
-        if (added)
+        if (added) {
+            /* neuer /ready -> vorherigen Timeout-Latch zuruecksetzen (neue
+             * Runde/neuer Versuch), sonst meldet die Config dauerhaft true. */
+            g_ready_gate.timed_out = 0;
             ready_gate_arm(&g_ready_gate, now, (double)g_ready_timeout_s);
+        }
         players = g_ready_gate.players;
         count = g_ready_gate.count;
         if (added && ready_gate_should_fire(&g_ready_gate, players)) {
             g_ready_gate.fired = 1;
+            g_ready_gate.timed_out = 0;
             fire = 1;
         }
     }
@@ -691,6 +696,26 @@ static void ready_gate_on_chat(const char *text, const char *conn_id)
                  "{\"event\":\"ready_update\",\"players\":%d,"
                  "\"ready_count\":%d}", players, count);
         sse_broadcast(ev); /* Server->Spieler-Status: US6 (#934) */
+    }
+}
+
+/* #937/US4: Timeout-Tick. Bei Ablauf wird die Ready-Menge geleert, ein
+ * Status-Event `ready_timeout` gebroadcastet und NICHTS gestartet (kein Kick
+ * -> attack_cycle bleibt/zurueck PAUSED). Wird aus dem pipe_reader-Loop
+ * aufgerufen, damit der Timeout auch ohne eingehende Zeilen greift. */
+static void ready_gate_tick(void)
+{
+    int expired = 0;
+    EnterCriticalSection(&g_ready_gate_cs);
+    if (ready_gate_expired(&g_ready_gate, bridge_now_s())) {
+        ready_gate_clear(&g_ready_gate);
+        g_ready_gate.timed_out = 1;
+        expired = 1;
+    }
+    LeaveCriticalSection(&g_ready_gate_cs);
+    if (expired) {
+        blog("ready-gate: Timeout -> PAUSED (kein Kick)");
+        sse_broadcast("{\"event\":\"ready_timeout\"}");
     }
 }
 
@@ -814,6 +839,8 @@ static DWORD WINAPI pipe_reader_main(LPVOID arg)
             } else {
                 Sleep(10);
             }
+            /* #937/US4: Timeout-Gate unabhaengig von eingehenden Zeilen. */
+            ready_gate_tick();
         }
     }
     return 0;
