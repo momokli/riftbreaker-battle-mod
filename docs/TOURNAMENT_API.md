@@ -29,6 +29,7 @@ Rust/axum in `tournament/` (Issue #29), Web-UI in `tournament/web/`
 | `TOURNAMENT_REFEREE_MAX_WAVE`    | `0`                | Wellen-Deckel des Referees (`0` = unbegrenzt, Issue #268)                                         |
 | `TOURNAMENT_REFEREE_RESTART_CMD` | `rb_reset`         | In-game Command des Referees bei HQ-Tod (Issues #268/#281; Mod-Kommando `rb_reset`)               |
 | `TOURNAMENT_WEB_DIR`             | `<crate>/web`      | Verzeichnis der statischen Web-UI                                                                 |
+| `TOURNAMENT_DB_PATH`             | `./data/rbbattle.db` | SQLite-Datei für persistierte Match-Records (#999; WAL-Modus, Verzeichnis wird angelegt)        |
 | `RUST_LOG`                       | `info`             | Log-Level                                                                                         |
 
 `RBBRIDGE_*_URL` zeigen auf den HTTP-Adapter der jeweiligen Dedi-Bridge
@@ -44,6 +45,11 @@ LOBBY/READY ── POST /go (oder AUTO_GO beim 2. Ready) ──► RUNNING (Rund
 RUNNING ── Runden-Loop ── HQ einer Welt ≤ 0 (event=hq_hp) ──► FINISHED (winner)
 FINISHED ── POST /rematch ──► LOBBY (Spieler bleiben, Rematch-Zähler +1)
 ```
+
+Beim Übergang nach `FINISHED` erzeugt der Referee **genau einen** persistenten
+Match-Record (SQLite, `TOURNAMENT_DB_PATH`) und schreibt ihn idempotent —
+Schreibfehler werden nur geloggt, die HTTP-Antwort bleibt unverändert (#999,
+[Match-Records](#get-matchesid--persistierter-match-record-999)).
 
 > **`POST /report event=hq_dead` beendet kein Match** und wechselt den
 > MatchState **nicht** nach `FINISHED`: Das Event fasst ausschließlich den
@@ -480,6 +486,42 @@ Seit #997 liefert `/state` zusätzlich `paused` (match-weit, top-level) und
 ### GET /health
 
 `{"ok": true, "phase": "lobby"}`
+
+### GET /matches/{id} — persistierter Match-Record (#999)
+
+```
+GET /matches/{id}?rematch=<n>
+```
+
+Additiver **Read-Beleg**: liefert genau den Record, den das Match-Ende
+(`event=hq_hp` mit `hp ≤ 0`) persistiert hat. `{id}` ist die `match_id`
+(aktuell `rift-1`), `rematch` wählt die Match-Instanz (Default `0`; jedes
+`POST /rematch` erhöht den Zähler). Unbekannt → **404**
+`{"error": "kein Match-Record …", "type": "not_found"}`.
+
+```json
+{
+  "match_id": "rift-1",
+  "rematch": 0,
+  "mode": "duel",
+  "rounds_done": 3,
+  "winner_player": "matheo",
+  "finished_at": "2026-09-29T21:11:00Z",
+  "participants": [
+    {"player_id": "momo",   "display_name": "momo",   "identity_source": "name", "opponent_id": "B", "result": "loss"},
+    {"player_id": "matheo", "display_name": "matheo", "identity_source": "name", "opponent_id": "A", "result": "win"}
+  ]
+}
+```
+
+Der Record ist bewusst **ELO-frei** (Elo/MMR gehören zu #131): er bildet nur
+Teilnehmer, Modus, Rundenzahl, Sieger und Zeitstempel (RFC3339 UTC) ab — die
+Grundlage für ein späteres Ranking. `identity_source` ist heute `name`
+(freier Textname, `POST /lobby`); die Client-Identität (#992,
+`str:`/`steamid:`/`account:`) dockt additiv an. Persistenz: SQLite-Tabelle
+`match_record`, Key (`match_id`, `rematch`, `player_id`), `journal_mode=WAL`
+(Datei `TOURNAMENT_DB_PATH`); ein zweiter `/report` derselben Match-Instanz
+legt kein Duplikat an.
 
 ## Bridge-Anbindung (v1, dokumentiertes Protokoll)
 

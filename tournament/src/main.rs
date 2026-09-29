@@ -18,6 +18,7 @@
 //! | `TOURNAMENT_WEB_DIR` | `<crate>/web` | Verzeichnis der statischen Web-UI |
 //! | `TOURNAMENT_ENV` | `unknown` | Umgebung der Deploy-Identitaet (`dev`\|`prod`\|`test`, Issue #483) |
 //! | `TOURNAMENT_REF` | `unknown` | Ref der Deploy-Identitaet (SHA/Tag, Issue #483) |
+//! | `TOURNAMENT_DB_PATH` | `./data/rbbattle.db` | SQLite-Datei der Match-Records (#999) |
 //! | `RUST_LOG` | `info` | Log-Level (tracing) |
 //!
 //! Siehe `docs/TOURNAMENT_API.md` für das komplette Protokoll.
@@ -25,12 +26,15 @@
 mod api;
 mod broadcast;
 mod elo;
+mod records;
 mod referee;
 mod state;
 
 use api::{AppState, Config};
+use records::RecordStore;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::Duration;
 
 fn env_bool(name: &str, default: bool) -> Result<bool, String> {
@@ -125,6 +129,13 @@ fn config_from_env() -> Result<Config, String> {
     let env = env_str("TOURNAMENT_ENV", "unknown");
     let deploy_ref = env_str("TOURNAMENT_REF", "unknown");
 
+    // Persistenz der Match-Records (#999): SQLite-Datei. Default liegt unter
+    // dem Arbeitsverzeichnis; das Verzeichnis wird beim Open angelegt.
+    let db_path = match std::env::var("TOURNAMENT_DB_PATH") {
+        Ok(p) if !p.trim().is_empty() => PathBuf::from(p),
+        _ => PathBuf::from("./data/rbbattle.db"),
+    };
+
     Ok(Config {
         host,
         port,
@@ -139,6 +150,7 @@ fn config_from_env() -> Result<Config, String> {
         web_dir,
         env,
         deploy_ref,
+        db_path,
     })
 }
 
@@ -174,7 +186,16 @@ async fn main() -> ExitCode {
 
     let bind_host = cfg.host.clone();
     let bind_port = cfg.port;
-    let app_state = AppState::new(cfg);
+    // Store VOR dem Router initialisieren (#999) — Fehler = Konfigurationsfehler.
+    let store = match RecordStore::open(&cfg.db_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Datenbank-Fehler ({}): {e}", cfg.db_path.display());
+            return ExitCode::from(2);
+        }
+    };
+    tracing::info!("Match-Records: SQLite unter {}", cfg.db_path.display());
+    let app_state = AppState::new(cfg, Arc::new(store));
     let app = api::router(app_state);
 
     let listener = match tokio::net::TcpListener::bind((bind_host.as_str(), bind_port)).await {

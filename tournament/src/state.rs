@@ -25,6 +25,7 @@
 //! Der Modul ist bewusst I/O-frei: Alle Mutationen laufen deterministisch
 //! unter einem `RwLock<MatchState>` im HTTP-Layer.
 
+use crate::records::{MatchRecord, Participant};
 use serde::Serialize;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
@@ -771,7 +772,7 @@ impl MatchState {
                 format!("Welt {world} ist nicht registriert"),
             ));
         }
-        if !hp.is_finite() || hp < 0.0 || hp > 1_000_000.0 {
+        if !hp.is_finite() || !(0.0..=1_000_000.0).contains(&hp) {
             return Err(StateError::new(
                 "invalid",
                 format!("ungültiger HQ-HP-Wert: {hp}"),
@@ -785,7 +786,11 @@ impl MatchState {
         if self.mode == Mode::Sp && world == World::A {
             self.team_mut(World::B).hq_hp = hp;
         }
-        self.log_world("hq", Some(world), format!("Welt {world}: HQ-HP {before:.0} → {hp:.0}"));
+        self.log_world(
+            "hq",
+            Some(world),
+            format!("Welt {world}: HQ-HP {before:.0} → {hp:.0}"),
+        );
         if hp <= 0.0 {
             let winner = world.opponent();
             self.winner = Some(winner);
@@ -827,7 +832,11 @@ impl MatchState {
             team.wave = wave;
         }
         if changed {
-            self.log_world("score", Some(world), format!("Welt {world}: Score {score}, Wave {wave}"));
+            self.log_world(
+                "score",
+                Some(world),
+                format!("Welt {world}: Score {score}, Wave {wave}"),
+            );
         }
         Ok(ScoreEffect { changed })
     }
@@ -984,6 +993,40 @@ impl MatchState {
             )
         };
         self.log_world("wave", Some(world), msg);
+    }
+
+    /// Baut den persistenten Match-Record aus dem Endzustand (Issue #999).
+    ///
+    /// Pure: nur `Phase::Finished` liefert `Some`; Teilnehmer kommen aus
+    /// `teams`, Sieger aus `winner`, der Rematch-Zähler ist Teil des Keys.
+    /// Kein I/O — das Schreiben übernimmt der HTTP-Layer ([`crate::records`]).
+    pub fn to_record(&self, finished_at: u64) -> Option<MatchRecord> {
+        if self.phase != Phase::Finished {
+            return None;
+        }
+        let winner = self.winner?;
+        let mut participants = Vec::new();
+        for w in World::ALL {
+            let Some(name) = self.player(w) else { continue };
+            participants.push(Participant {
+                player_id: name.to_string(),
+                display_name: name.to_string(),
+                // Identität #992 ist heute der freie Textname.
+                identity_source: "name".to_string(),
+                opponent_id: w.opponent().as_str().to_string(),
+                result: if w == winner { "win" } else { "loss" }.to_string(),
+            });
+        }
+        let winner_player = self.player(winner).unwrap_or_default().to_string();
+        Some(MatchRecord {
+            match_id: self.match_id.clone(),
+            rematch: self.rematches,
+            mode: self.mode.as_str().to_string(),
+            rounds_done: self.rounds_done,
+            winner_player,
+            finished_at: crate::records::rfc3339_utc(finished_at),
+            participants,
+        })
     }
 
     /// Öffentliche Sicht auf den Zustand (wird als `/state` serialisiert).
@@ -2026,7 +2069,10 @@ mod tests {
         let go = v.feed.iter().find(|e| e.kind == "go").unwrap();
         assert!(go.world.is_none());
         let json = serde_json::to_value(go).unwrap();
-        assert!(json.get("world").is_none(), "world darf global fehlen: {json}");
+        assert!(
+            json.get("world").is_none(),
+            "world darf global fehlen: {json}"
+        );
         // Welt-Eintrag trägt das Feld explizit.
         let reg = v
             .feed
@@ -2221,13 +2267,13 @@ mod tests {
         s.record_pause_broadcast(World::B, false, Some("down".to_string()), None);
         let v = s.view();
         assert!(v.paused);
-        assert_eq!(v.teams["A"].pause_broadcast.ok, true);
+        assert!(v.teams["A"].pause_broadcast.ok);
         assert_eq!(
             v.teams["A"].pause_broadcast.endpoint.as_deref(),
             Some("http://10.0.0.5:9002/pause_dom")
         );
         assert!(v.teams["A"].pause_broadcast.at.is_some());
-        assert_eq!(v.teams["B"].pause_broadcast.ok, false);
+        assert!(!v.teams["B"].pause_broadcast.ok);
         assert_eq!(v.teams["B"].pause_broadcast.error.as_deref(), Some("down"));
 
         s.resume().unwrap();
@@ -2238,17 +2284,53 @@ mod tests {
     fn rematch_clears_pause_broadcast() {
         let mut s = fresh();
         start(&mut s);
-        s.record_pause_broadcast(
-            World::A,
-            true,
-            None,
-            Some("http://x/pause_dom".to_string()),
-        );
+        s.record_pause_broadcast(World::A, true, None, Some("http://x/pause_dom".to_string()));
         s.report_hq(World::A, 0.0).unwrap();
         s.rematch().unwrap();
-        assert_eq!(
-            s.team(World::A).pause_broadcast,
-            BroadcastStatus::default()
-        );
+        assert_eq!(s.team(World::A).pause_broadcast, BroadcastStatus::default());
+    }
+
+    // ---- #999: pure Record-Ableitung (state.rs bleibt I/O-frei) ----
+
+    #[test]
+    fn to_record_only_when_finished() {
+        let mut s = fresh();
+        assert!(s.to_record(0).is_none()); // Lobby
+
+        start(&mut s);
+        assert!(s.to_record(0).is_none()); // Running
+
+        s.report_hq(World::A, 0.0).unwrap(); // Sieger B (matheo)
+        let r = s.to_record(1_700_000_000_000).unwrap();
+        assert_eq!(r.match_id, "rift-1");
+        assert_eq!(r.rematch, 0);
+        assert_eq!(r.mode, "duel");
+        assert_eq!(r.winner_player, "matheo");
+        assert_eq!(r.finished_at, "2023-11-14T22:13:20Z");
+        assert_eq!(r.participants.len(), 2);
+
+        let momo = r
+            .participants
+            .iter()
+            .find(|p| p.display_name == "momo")
+            .unwrap();
+        assert_eq!(momo.result, "loss");
+        assert_eq!(momo.opponent_id, "B");
+        let matheo = r
+            .participants
+            .iter()
+            .find(|p| p.display_name == "matheo")
+            .unwrap();
+        assert_eq!(matheo.result, "win");
+        assert_eq!(matheo.opponent_id, "A");
+
+        // Rematch → neuer Key, kein Record mehr (Phase Lobby).
+        s.rematch().unwrap();
+        assert!(s.to_record(0).is_none());
+        s.start_match().unwrap();
+        s.report_hq(World::A, 0.0).unwrap();
+        let r2 = s.to_record(0).unwrap();
+        assert_eq!(r2.rematch, 1);
+        assert_eq!(r2.winner_player, "matheo");
     }
 }

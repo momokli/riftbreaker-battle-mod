@@ -19,11 +19,12 @@
 //! (vorwärtskompatibel, wie im Protokoll des Servers üblich).
 
 use crate::broadcast;
+use crate::records::RecordStore;
 use crate::referee::{Command, GameEvent, GameEventKind, Referee, RefereeConfig};
 use crate::state::{
     MatchState, PauseEffect, Phase, ReadyEffect, ResumeEffect, SendBatch, StateError, World,
 };
-use axum::extract::{Query, State as AxumState};
+use axum::extract::{Path, Query, State as AxumState};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -64,6 +65,9 @@ pub struct Config {
     /// (Checkout-SHA bzw. Tag), sichtbar in `GET /health`.
     pub env: String,
     pub deploy_ref: String,
+    /// Pfad der SQLite-Datenbank fuer Match-Records (#999); Default
+    /// `./data/rbbattle.db` (`TOURNAMENT_DB_PATH`).
+    pub db_path: PathBuf,
 }
 
 impl Config {
@@ -85,11 +89,13 @@ pub struct AppState {
     pub state: Arc<RwLock<MatchState>>,
     /// Server-seitiger Referee (autoritative Event-/State-Quelle, Issue #268).
     pub referee: Arc<RwLock<Referee>>,
+    /// Persistenter Match-Record-Store (#999).
+    pub store: Arc<RecordStore>,
     pub cfg: Arc<Config>,
 }
 
 impl AppState {
-    pub fn new(cfg: Config) -> Self {
+    pub fn new(cfg: Config, store: Arc<RecordStore>) -> Self {
         let referee = Referee::new(RefereeConfig {
             max_wave: cfg.referee_max_wave,
             restart_cmd: cfg.referee_restart_cmd.clone(),
@@ -97,6 +103,7 @@ impl AppState {
         AppState {
             state: Arc::new(RwLock::new(MatchState::new(cfg.hq_hp_start))),
             referee: Arc::new(RwLock::new(referee)),
+            store,
             cfg: Arc::new(cfg),
         }
     }
@@ -262,6 +269,7 @@ pub fn router(app: AppState) -> Router {
         .route("/sp", post(sp))
         .route("/wave", post(wave))
         .route("/state", get(state_get))
+        .route("/matches/{id}", get(match_get))
         .route("/events", get(events))
         .route("/health", get(health))
         .fallback_service(tower_http::services::ServeDir::new(web))
@@ -515,7 +523,28 @@ async fn report(
             let hp = req
                 .hp
                 .ok_or_else(|| StateError::new("invalid", "event 'hq_hp' benötigt Feld 'hp'"))?;
-            let effect = app.with_state(|s| s.report_hq(world, hp)).await?;
+            let (effect, record) = app
+                .with_state(|s| {
+                    let effect = s.report_hq(world, hp)?;
+                    // #999: Match-Ende → pure Record-Ableitung (idempotent).
+                    let record = if effect.match_over {
+                        s.to_record(crate::records::now_ms())
+                    } else {
+                        None
+                    };
+                    Ok((effect, record))
+                })
+                .await?;
+            // Fehler beim Persistieren NUR loggen — die HTTP-Antwort bleibt gleich.
+            if let Some(rec) = &record {
+                if let Err(e) = app.store.record(rec) {
+                    tracing::error!(
+                        "Match-Record {}/{} konnte nicht geschrieben werden: {e}",
+                        rec.match_id,
+                        rec.rematch
+                    );
+                }
+            }
             let view = app.state.read().await.view();
             let hq_hp = view.teams.get(world.as_str()).map(|t| t.hq_hp);
             Ok(Json(json!({
@@ -836,7 +865,7 @@ async fn wave(
         Some(s) => parse_world(s)?,
     };
     let n = req.n.unwrap_or(DEFAULT_WAVE_N);
-    if n == 0 || n > MAX_WAVE_N {
+    if !(1..=MAX_WAVE_N).contains(&n) {
         return Err(StateError::new(
             "invalid",
             format!("n muss zwischen 1 und {MAX_WAVE_N} liegen (war {n})"),
@@ -902,6 +931,37 @@ async fn events(
 async fn state_get(AxumState(app): AxumState<AppState>) -> ApiResult<Json<Value>> {
     let view = app.state.read().await.view();
     Ok(Json(serde_json::to_value(view).unwrap_or(Value::Null)))
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RematchQuery {
+    /// Match-Instanz (Rematch-Zähler); Default 0 = das erste Match.
+    #[serde(default)]
+    rematch: Option<u32>,
+}
+
+/// GET /matches/{id} — persistierter Match-Record (#999, US3, additativ).
+///
+/// `?rematch=<n>` wählt die Match-Instanz (Default 0). Unbekannt → 404
+/// `not_found`.
+async fn match_get(
+    AxumState(app): AxumState<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<RematchQuery>,
+) -> ApiResult<Json<Value>> {
+    let rematch = q.rematch.unwrap_or(0);
+    match app.store.get(&id, rematch) {
+        Ok(Some(rec)) => Ok(Json(serde_json::to_value(rec).unwrap_or(Value::Null))),
+        Ok(None) => Err(StateError::new(
+            "not_found",
+            format!("kein Match-Record für match_id '{id}' (rematch {rematch})"),
+        )
+        .into()),
+        Err(e) => {
+            tracing::error!("Match-Record {id}/{rematch} lesen fehlgeschlagen: {e}");
+            Err(StateError::new("not_found", "Match-Record nicht lesbar").into())
+        }
+    }
 }
 
 /// GET /health
@@ -1077,11 +1137,22 @@ mod tests {
             // /health-Vertrag deterministisch pruefbar ist.
             env: "test".to_string(),
             deploy_ref: "deadbeef".to_string(),
+            db_path: temp_db_path(),
         }
     }
 
+    /// Eindeutiger Temp-DB-Pfad je Test (isoliert, keine Kollisionen).
+    fn temp_db_path() -> PathBuf {
+        let n = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("rbbattle-api-test-{n}.db"))
+    }
+
     async fn make_app(cfg: Config) -> Router {
-        router(AppState::new(cfg))
+        let store = RecordStore::open(&cfg.db_path).expect("test record store");
+        router(AppState::new(cfg, Arc::new(store)))
     }
 
     async fn call(
@@ -2508,10 +2579,7 @@ mod tests {
         .await;
         assert_eq!(v["ingress"].as_array().unwrap().len(), 0);
         let (_, st) = call(&app, "GET", "/state", None).await;
-        assert_eq!(
-            st["reveal"]["incoming"]["B"].as_array().unwrap().len(),
-            1
-        );
+        assert_eq!(st["reveal"]["incoming"]["B"].as_array().unwrap().len(), 1);
         tokio::time::sleep(Duration::from_millis(80)).await;
         assert!(captures
             .lock()
@@ -3021,5 +3089,114 @@ mod tests {
             assert_eq!(pauses, 1, "{name}: genau ein pause_dom — {reqs:?}");
             assert_eq!(resumes, 1, "{name}: genau ein resume_dom — {reqs:?}");
         }
+    }
+
+    // ---- #999: Match-Records (Capture + Read-Endpoint) ----
+
+    /// US2/US3: ein abgeschlossenes Match erzeugt genau EINEN Record mit
+    /// Teilnehmern + Sieger; der zweite Report dupliziert nicht; ein Rematch
+    /// erzeugt einen neuen Record; `GET /matches/{id}` liefert ihn additiv.
+    #[tokio::test]
+    async fn match_end_creates_record_and_read_endpoint() {
+        let app = make_app(test_cfg()).await;
+        register(&app, "A", "momo").await;
+        register(&app, "B", "matheo").await;
+        call(&app, "POST", "/go", Some(json!({}))).await;
+
+        // Vor Match-Ende existiert noch kein Record.
+        let (s, _) = call(&app, "GET", "/matches/rift-1", None).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+
+        // HQ-Tod von A → Sieger B.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "A", "event": "hq_hp", "hp": 0})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["match_over"], true);
+
+        let (s, rec) = call(&app, "GET", "/matches/rift-1", None).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(rec["match_id"], "rift-1");
+        assert_eq!(rec["rematch"], 0);
+        assert_eq!(rec["mode"], "duel");
+        assert_eq!(rec["winner_player"], "matheo");
+        assert!(rec["finished_at"].as_str().unwrap().ends_with('Z'));
+        let parts = rec["participants"].as_array().unwrap();
+        assert_eq!(parts.len(), 2, "rec: {rec}");
+        let momo = parts.iter().find(|p| p["display_name"] == "momo").unwrap();
+        assert_eq!(momo["result"], "loss");
+        assert_eq!(momo["opponent_id"], "B");
+        let matheo = parts
+            .iter()
+            .find(|p| p["display_name"] == "matheo")
+            .unwrap();
+        assert_eq!(matheo["result"], "win");
+
+        // Zweiter Report derselben Match-Instanz → kein Duplikat (Record
+        // bleibt bei 2 Teilnehmern; nach `finished` lehnt der State ab).
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "A", "event": "hq_hp", "hp": 0})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::CONFLICT);
+        let (_, rec2) = call(&app, "GET", "/matches/rift-1", None).await;
+        assert_eq!(rec2["participants"].as_array().unwrap().len(), 2);
+
+        // Rematch → neuer Record (Key rematch=1), Sieger diesmal A (momo).
+        let (s, _) = call(&app, "POST", "/rematch", None).await;
+        assert_eq!(s, StatusCode::OK);
+        call(&app, "POST", "/go", Some(json!({}))).await;
+        call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "B", "event": "hq_hp", "hp": 0})),
+        )
+        .await;
+        let (s, rec3) = call(&app, "GET", "/matches/rift-1?rematch=1", None).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(rec3["rematch"], 1);
+        assert_eq!(rec3["winner_player"], "momo");
+
+        // Der Record der ersten Instanz bleibt unverändert.
+        let (_, rec0) = call(&app, "GET", "/matches/rift-1?rematch=0", None).await;
+        assert_eq!(rec0["winner_player"], "matheo");
+
+        // Unbekannte match_id → 404.
+        let (s, _) = call(&app, "GET", "/matches/nope", None).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+    }
+
+    /// Persistenz überlebt einen Store-Neustart (eigene DB-Datei).
+    #[tokio::test]
+    async fn match_record_persists_across_store_reopen() {
+        let cfg = test_cfg();
+        let db = cfg.db_path.clone();
+        {
+            let app = make_app(cfg).await;
+            register(&app, "A", "momo").await;
+            register(&app, "B", "matheo").await;
+            call(&app, "POST", "/go", Some(json!({}))).await;
+            call(
+                &app,
+                "POST",
+                "/report",
+                Some(json!({"world": "A", "event": "hq_hp", "hp": 0})),
+            )
+            .await;
+        }
+        // Frischer Store auf derselben Datei → Record ist noch da.
+        let store = RecordStore::open(&db).unwrap();
+        let rec = store.get("rift-1", 0).unwrap().unwrap();
+        assert_eq!(rec.winner_player, "matheo");
+        assert_eq!(rec.participants.len(), 2);
+        let _ = std::fs::remove_file(&db);
     }
 }
