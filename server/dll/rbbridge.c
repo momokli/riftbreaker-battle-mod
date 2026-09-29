@@ -756,14 +756,44 @@ static void json_escape_into(const char *in, char *out, size_t n)
     out[o] = '\0';
 }
 
-/* #549: Baut die `player_chat`-Protokollzeile aus dem rohen Chat-Text.
+/* #937/US1: stabile, kollisionsarme Verbindungs-ID aus dem (nur zur Laufzeit
+ * gueltigen) `NetConnection*`-Zeiger. Rein (kein Windows, kein Net) ->
+ * host-testbar (tests/rbbridge-hosttest).
+ *
+ * Warum ein Hash statt des Rohzeigers? Der Zeiger ist ASLR-abhaengig und darf
+ * NIE ins Wire-Protokoll (Info-Leak + pro Reconnect instabil). Die FNV-1a-64-
+ * Ableitung ist pro Verbindung stabil (gleicher Zeiger -> gleiche ID),
+ * kollisionsarm (64-Bit-Faltung, hier auf 48 Bit beschnitten) und liefert fuer
+ * p == 0 sauber 0 ("unbekannt" -> Feld wird weggelassen). */
+static unsigned long long conn_id_from_ptr(uintptr_t p)
+{
+    unsigned long long h = 1469598103934665603ULL; /* FNV-1a-64 offset basis */
+    int i;
+
+    if (p == 0)
+        return 0;
+    for (i = 0; i < 8; i++) {
+        h ^= (unsigned char)(p >> (8 * i));
+        h *= 1099511628211ULL; /* FNV-1a-64 prime */
+    }
+    h &= 0xFFFFFFFFFFFFULL; /* 48 Bit: kurz genug, kein Rohzeiger */
+    return h ? h : 1ULL;    /* nie 0 fuer p != 0 (0 == "unbekannt") */
+}
+
+/* #549/#937: Baut die `player_chat`-Protokollzeile aus dem rohen Chat-Text.
  * Escaping via json_escape_into(). Rein (nur snprintf) -> host-testbar
  * (tests/rbbridge-hosttest). Rueckgabe = Laenge der Zeile ohne
  * NUL-Terminator; 0 = leerer Text oder Puffer zu klein (der Aufrufer darf
  * dann NICHTS senden).
  *
+ * US1 (#937): bei conn_id != 0 werden die Zusatzfelder `conn_id` (hex) und
+ * `player` (Index, -1 = unbekannt) angehaengt. Bei conn_id == 0 bleibt die
+ * Zeile bitgleich zum Bestandsformat (Rueckwaertskompatibilitaet: alte
+ * Konsumenten ignorieren Zusatzfelder).
+ *
  * Die Zeile entspricht dem Wire-Event `player_chat` aus server/protocol.md. */
-static size_t chat_build_player_chat(const char *text, char *out, size_t n)
+static size_t chat_build_player_chat(const char *text, unsigned long long conn_id,
+                                     int player, char *out, size_t n)
 {
     char esc[512];
     int len;
@@ -774,7 +804,16 @@ static size_t chat_build_player_chat(const char *text, char *out, size_t n)
     if (!text || !text[0])
         return 0;
     json_escape_into(text, esc, sizeof(esc));
-    len = snprintf(out, n, "{\"event\":\"player_chat\",\"text\":\"%s\"}", esc);
+    if (conn_id != 0) {
+        len = snprintf(out, n,
+                       "{\"event\":\"player_chat\",\"text\":\"%s\","
+                       "\"conn_id\":\"%llx\",\"player\":%d}",
+                       esc, conn_id, player);
+    } else {
+        len = snprintf(out, n,
+                       "{\"event\":\"player_chat\",\"text\":\"%s\"}",
+                       esc);
+    }
     if (len < 0 || (size_t)len >= n)
         return 0;
     return (size_t)len;
@@ -7064,7 +7103,10 @@ static int serve_client(HANDLE hPipe)
                 LeaveCriticalSection(&g_chat_cs);
                 if (!got)
                     break;
-                if (chat_build_player_chat(raw, cline, sizeof(cline)) > 0)
+                /* US1: Wire-Feld vorbereitet; die conn_id liefert US2 aus der
+                 * Queue (heute noch 0 == "unbekannt" -> Bestandsformat). */
+                if (chat_build_player_chat(raw, 0, -1, cline,
+                                           sizeof(cline)) > 0)
                     send_line(hPipe, "%s", cline);
             }
         }

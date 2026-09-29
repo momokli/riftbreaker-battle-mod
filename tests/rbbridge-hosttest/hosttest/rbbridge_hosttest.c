@@ -764,29 +764,43 @@ int main(void)
         char out[600];
         size_t n;
 
-        n = chat_build_player_chat("hello", out, sizeof(out));
+        /* #937/US1: Identitaetsfelder. conn_id == 0 -> kein Feld (Bestands-
+         * format bitgleich, RUECKWAERTSKOMPATIBILITAET). */
+        n = chat_build_player_chat("hello", 0, -1, out, sizeof(out));
         check(n > 0 && strcmp(out,
               "{\"event\":\"player_chat\",\"text\":\"hello\"}") == 0,
-              "chat_build_player_chat: einfacher Text -> player_chat-Zeile");
+              "chat_build_player_chat: ohne conn_id -> Bestandsformat");
 
-        n = chat_build_player_chat("a\"b\\c", out, sizeof(out));
+        n = chat_build_player_chat("a\"b\\c", 0, -1, out, sizeof(out));
         check(n > 0 && strcmp(out,
               "{\"event\":\"player_chat\",\"text\":\"a\\\"b\\\\c\"}") == 0,
               "chat_build_player_chat: Quote/Backslash escaped");
 
         /* Tab (0x09) ist ein Steuerzeichen < 0x20 -> \u0009, NICHT roh. */
-        n = chat_build_player_chat("a\tb", out, sizeof(out));
+        n = chat_build_player_chat("a\tb", 0, -1, out, sizeof(out));
         check(n > 0 && strstr(out, "\\u0009") != NULL &&
                   strchr(out, '\t') == NULL,
               "chat_build_player_chat: Tab -> \\u0009 (kein Roh-Steuerzeichen)");
 
+        /* #937/US1: conn_id != 0 -> Zusatzfelder conn_id (hex) + player. */
+        n = chat_build_player_chat("hey", 0x1a2b3cULL, 0, out, sizeof(out));
+        check(n > 0 &&
+                  strstr(out, "\"conn_id\":\"1a2b3c\"") != NULL &&
+                  strstr(out, "\"player\":0") != NULL &&
+                  strstr(out, "\"event\":\"player_chat\"") != NULL,
+              "chat_build_player_chat: conn_id+player als Zusatzfelder");
+
+        n = chat_build_player_chat("hey", 0x1a2b3cULL, -1, out, sizeof(out));
+        check(n > 0 && strstr(out, "\"player\":-1") != NULL,
+              "chat_build_player_chat: player=-1 (unbekannt) darstellbar");
+
         /* Leerer Text -> 0 (kein leeres Event senden). */
-        check(chat_build_player_chat("", out, sizeof(out)) == 0,
+        check(chat_build_player_chat("", 0, -1, out, sizeof(out)) == 0,
               "chat_build_player_chat: leerer Text -> 0 (nichts senden)");
-        check(chat_build_player_chat(NULL, out, sizeof(out)) == 0,
+        check(chat_build_player_chat(NULL, 0, -1, out, sizeof(out)) == 0,
               "chat_build_player_chat: NULL -> 0 (kein Crash)");
         /* Puffer zu klein -> 0 (kein abgeschnittenes JSON). */
-        check(chat_build_player_chat("hello", out, 8) == 0,
+        check(chat_build_player_chat("hello", 0, -1, out, 8) == 0,
               "chat_build_player_chat: Puffer zu klein -> 0");
 
         /* json_escape_into direkt: < 0x20 -> \uXXXX. */
