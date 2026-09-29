@@ -330,7 +330,7 @@ class QueueCoordinator(object):
             return match.to_dict()
 
     def _cleanup(self, match: Match) -> None:
-        side = getattr(match, "_assignment_side", {}) or {}
+        side = match.side
         errors = []
         for assignment in match.assignments():
             iid = side.get(assignment.identitaet, {}).get("instance")

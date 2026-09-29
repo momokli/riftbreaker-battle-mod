@@ -125,6 +125,9 @@ class Match:
     state: str = STATE_PROVISIONING
     result: Optional[str] = None
     detail: Optional[str] = None
+    # Nach Provisionierung nachgetragene Instanz/Endpoint je Teilnehmer
+    # (additiv, kein MMR): ``{identitaet: {"instance": ..., "endpoint": ...}}``.
+    side: Dict[str, Any] = dataclasses.field(default_factory=dict)
 
     # -- Sichten -----------------------------------------------------------
     def assignments(self) -> List[Assignment]:
@@ -160,8 +163,8 @@ class Match:
                 {
                     "identitaet": a.identitaet,
                     "world": a.world,
-                    "instance": a.instance,
-                    "endpoint": a.endpoint,
+                    "instance": (self.side.get(a.identitaet) or {}).get("instance"),
+                    "endpoint": (self.side.get(a.identitaet) or {}).get("endpoint"),
                 }
                 for a in self.assignments()
             ],
@@ -331,8 +334,8 @@ class QueueCore(object):
                        endpoint: Optional[str] = None) -> None:
         """Instanz/Endpoint eines Teilnehmers am Match-Record nachtragen.
 
-        ``Assignment`` ist eine Sicht auf ``teams``; die Werte werden daher in
-        einem seitlichen Dict gehalten, das ``Match.to_dict`` mitliest.
+        ``Assignment`` ist eine Sicht auf ``teams``; die Werte liegen additiv im
+        Dataclass-Feld ``Match.side`` und werden von ``Match.to_dict`` mitgelesen.
         """
         if identitaet not in match.participants():
             raise QueueError(
@@ -340,11 +343,7 @@ class QueueCore(object):
                 "%s ist kein Teilnehmer von Match %d" % (identitaet, match.match_id),
                 409,
             )
-        side = getattr(match, "_assignment_side", None)
-        if side is None:
-            side = {}
-            setattr(match, "_assignment_side", side)
-        side[identitaet] = {"instance": instance, "endpoint": endpoint}
+        match.side[identitaet] = {"instance": instance, "endpoint": endpoint}
 
     def mark_ready(self, match: Match) -> Match:
         if match.state == STATE_PROVISIONING:
@@ -443,7 +442,7 @@ class QueueCore(object):
                     "result": m.result,
                     "detail": m.detail,
                     "teams": [t.to_dict() for t in m.teams],
-                    "side": getattr(m, "_assignment_side", {}) or {},
+                    "side": dict(m.side),
                 }
                 for m in self.matches_snapshot()
             ],
@@ -486,9 +485,8 @@ class QueueCore(object):
                 state=raw.get("state", STATE_PROVISIONING),
                 result=raw.get("result"),
                 detail=raw.get("detail"),
+                side=dict(raw.get("side") or {}),
             )
-            if raw.get("side"):
-                setattr(match, "_assignment_side", dict(raw["side"]))
             self._matches[match.match_id] = match
             # Nur laufende Matches binden die Identitaet; abgeschlossene/
             # gescheiterte Matches bleiben als Record, blockieren aber keine
@@ -498,39 +496,3 @@ class QueueCore(object):
                     self._identity_match[player] = match.match_id
         self._next_match_id = int(state.get("next_match_id", len(self._matches) + 1))
         self._seq = int(state.get("seq", len(self._queue)))
-
-
-def _assignment_participants(match: Match) -> List[Dict[str, Any]]:
-    """Teilnehmer mit seitlichen Instanz/Endpoint-Werten (siehe ``set_assignment``)."""
-    side = getattr(match, "_assignment_side", {}) or {}
-    out = []
-    for a in match.assignments():
-        extra = side.get(a.identitaet, {})
-        out.append(
-            {
-                "identitaet": a.identitaet,
-                "world": a.world,
-                "instance": extra.get("instance"),
-                "endpoint": extra.get("endpoint"),
-            }
-        )
-    return out
-
-
-# ``Match.to_dict`` soll die seitlichen Zuordnungen mitlesen; wir patchen die
-# Methode einmal zentral (haelt das Dataclass schlank und testbar).
-def _match_to_dict(self: Match) -> Dict[str, Any]:
-    return {
-        "match_id": self.match_id,
-        "mode": self.mode,
-        "team_size": self.team_size,
-        "created_at": self.created_at,
-        "state": self.state,
-        "result": self.result,
-        "detail": self.detail,
-        "teams": [t.to_dict() for t in self.teams],
-        "participants": _assignment_participants(self),
-    }
-
-
-Match.to_dict = _match_to_dict  # type: ignore[assignment]

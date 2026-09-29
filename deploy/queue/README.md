@@ -41,6 +41,12 @@ Provisioner wird mit dem expliziten `world`-Parameter aufgerufen (`A`/`B`); das
 seedet `RBB_VS_WORLD` + `RBB_REFEREE_URL` je Instanz und schaltet self-send aus
 — `parse_mode` bleibt unangetastet (eigene Achse, Issue #998).
 
+**Erwartete Provisioner-Antwort** (`start`): ein JSON-Objekt; der GNS-UDP-Endpoint
+wird defensiv gelesen — bevorzugt `{"ports": {"gns": "<ip>:<port>"}}`, sonst
+`gns_endpoint` bzw. `endpoint` (jeweils String). Fehlt ein brauchbares Feld,
+bleibt der `endpoint` im Match-Record `null` (kein harter Fehler, Welt laeuft
+trotzdem). Rollback/`stop` nutzt nur die `instance_id`.
+
 **Rollback:** scheitert die zweite Provisionierung oder die Referee-Lobby,
 werden die bereits gestarteten Instanzen **kalt gestoppt** und das Match als
 `failed` markiert — kein halber Zustand (lauter Fehler).
