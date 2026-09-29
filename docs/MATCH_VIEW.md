@@ -77,7 +77,7 @@ und Statusleiste bleiben fix. Stil = wie das Cockpit (flaches Qt, 1px-Linien,
 | Runde | z. B. „Round 2" | — |
 | Winner | `—` / `A` / `B` | — |
 | **Start** | gemeinsamer Start beider Seiten | atomarer Broadcast (siehe §10) |
-| **Pause / Resume** | beide Seiten gleichzeitig einfrieren | `POST /pause_dom` + `/resume_dom` an **beide** Bridges (#871) |
+| **Pause / Resume** | beide Seiten gleichzeitig einfrieren | `POST /pause_dom` + `/resume_dom` an **beide** Bridges (#871); der Referee stellt dafuer die match-weite Route `POST /pause` / `POST /resume` bereit (#997) |
 | **New Round** | Reset + Map-Restart + Start (Wrapper) | siehe #854 |
 | **Config** | öffnet das Config-Panel (§7) | Navigation |
 
@@ -166,7 +166,11 @@ sequenceDiagram
 **Pause (vorhanden seit #871):** `POST /pause_dom` / `POST /resume_dom` frieren den
 **DOM-Direktor** ein (`LuaGraphNode::SetSuspended` am `dom_mananger`-Node, reiner
 C++-Flag-Write, kein Lua/Console). In VS fächert der Koordinator auf **beide**
-Bridges auf; der Zustand je Seite ist `get_state.dom_paused`. Wichtig: das ist ein
+Bridges auf; der Zustand je Seite ist `get_state.dom_paused`. Seit #997 bietet
+der Referee dafür die match-weite Route `POST /pause` / `POST /resume`, die den
+`pause_dom`-/`resume_dom`-Push an **beide** Bridges (`cfg.bridge_for(w)`) fächert
+und den Zustand unter `/state.paused` + `teams.<W>.pause_broadcast` spiegelt.
+Wichtig: das ist ein
 **Direktor-Freeze** (Wellen-/Skript-Timer), **kein** vollständiger Sim-Freeze
 (Spieler/Bauten/Kreaturen laufen weiter, die HUD-Uhr friert nicht mit ein); der
 **attack-cycle-Sidecar hat eigene Timer** und müsste mitpausiert werden (offen).

@@ -205,10 +205,21 @@ SOLO-Verhalten (Latch + `end_game` + `restart_map`) bitgleich.
 
 ### 6.5 Gemeinsamer Start/Ready + Pause
 
-- `ready` je Team aggregieren → bei „beide bereit" **Broadcast** (`start_epoch`)
-  an **beide** Bridges → beide `PAUSED→WARMUP` (Warmup-Uhr je Server lokal, Drift ok).
-- **Pause:** Fan-out `POST /pause_dom` / `/resume_dom` (#871) an **beide**
-  Bridges; **offen:** den attack-cycle je Welt mitpausieren (eigene Timer).
+- **Ready-Gate (umgesetzt, #937/#996):** `ready` je Team aggregieren
+  (`TeamState.ready`/`both_ready()`) → bei „beide bereit" armiert der Referee
+  GO (`arm_go()`); mit `AUTO_GO` startet das Match beim zweiten `ready`
+  (`start_match()`), sonst wartet die Phase `ready` auf `POST /go`.
+- **Symmetrischer Start (umgesetzt, #996):** `broadcast_go()` postet denselben
+  `go_payload` (`cmd:"go"`, `commands`) an **beide** Bridges
+  (`cfg.bridge_for(w)`) — beide `PAUSED→WARMUP` (Warmup-Uhr je Server lokal,
+  Drift ok). Harness-Tests: `go_broadcasts_to_both_bridge_endpoints`,
+  `auto_go_starts_on_second_ready_and_broadcasts`.
+- **Pause (umgesetzt, #997):** `POST /pause` / `POST /resume` (match-level)
+  fächern `POST <bridge-base>/pause_dom` bzw. `/resume_dom` (#871) an **beide**
+  Bridges (`cfg.bridge_for(w)`, analog `broadcast_go`); Idempotenz + `retry`,
+  409 außerhalb `running`. Zustand je Welt in `teams.<W>.pause_broadcast`,
+  match-weit in `/state.paused`. **Offen:** den attack-cycle je Welt mitpausieren
+  (eigene Timer) — #553.
 
 ### 6.6 Events pro Welt
 
@@ -231,7 +242,7 @@ Bridge-SSE bleibt raus (Single-Client).
 | G4  | Referee: `bridge_b`→9004, **Aggregat-Ready/Go**, World-Tagging | Start/Sieger |
 | G5  | **Cross-World-Send-Pfad** (A-Egress → Referee → B-Ingress)     | ✅ umgesetzt (#996) |
 | G6  | **per-Welt-HQ-Reporter** → Referee (Sieger)                    | ✅ umgesetzt (#996) |
-| G7  | **Pause-Fan-out** (beide) + Sidecar mitpausieren               | Betrieb      |
+| G7  | **Pause-Fan-out** (beide) ✅ umgesetzt (#997); Sidecar mitpausieren **offen** (#553) | Betrieb      |
 | G8  | **Match-View-UI** (konsumiert G1–G7)                           | UX           |
 
 ## 8. Phasenplan

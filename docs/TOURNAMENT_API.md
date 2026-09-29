@@ -150,6 +150,52 @@ Antwort:
 }
 ```
 
+### POST /pause — Pause-Fan-out an beide Welten (#997)
+
+```json
+{}              // beide Welten pausieren (DOM-Freeze)
+{"retry": true} // laufendes Match, bereits pausiert: Broadcast erneut senden
+```
+
+Guard: nur in Phase `running` (sonst **409** `conflict`). Der Referee fächert
+`POST <bridge-base>/pause_dom` an **beide** Bridges (`RBBRIDGE_A_URL` /
+`RBBRIDGE_B_URL`, analog `POST /go`); der Bridge-Endpoint-Pfad wird wie beim
+Ingress abgeleitet (ein abschließendes `/exec` wird entfernt, `/pause_dom`
+angehängt). Die Bridge-Route nimmt **keinen** Body (Body ist `{}`).
+
+`paused` ist der neue match-weite Zustand; die **Phase bleibt `running`**
+(Pause ist kein Phasen-Übergang). `already:true`, wenn das Match bereits
+pausiert war — dann **kein** erneuter Fan-out, außer `{"retry":true}`.
+Antwort (HTTP 200; Partial-Fehler einer Welt stehen je Welt als `ok:false`,
+**kein** 5xx):
+
+```json
+{
+  "paused": true,
+  "phase": "running",
+  "already": false,
+  "broadcast": {
+    "A": { "ok": true, "status": 200, "error": null, "endpoint": "http://…:9002/pause_dom" },
+    "B": { "ok": null, "note": "kein Endpoint konfiguriert (RBBRIDGE_B_URL) — kein Pause-Push" }
+  }
+}
+```
+
+Der Zustell-Status je Welt landet in `teams.<W>.pause_broadcast` von
+`GET /state` (sichtbar für die UI).
+
+### POST /resume — Resume-Fan-out an beide Welten (#997)
+
+```json
+{}              // beide Welten fortsetzen (DOM-Freeze aufheben)
+{"retry": true} // laufendes Match, bereits frei: Broadcast erneut senden
+```
+
+Guard: nur in Phase `running` (sonst **409** `conflict`). Fächert
+`POST <bridge-base>/resume_dom` an **beide** Bridges. `already:true`, wenn das
+Match gar nicht pausiert war (kein Doppel-Feed); mit `{"retry":true}` wird
+trotzdem erneut gefächert. Antwort wie `POST /pause` mit `"paused": false`.
+
 ### POST /send — Wave-Routing
 
 ```json
@@ -401,12 +447,14 @@ Jeder Eintrag trägt ein monotones `seq`-Feld (Cursor ohne Event-Verlust).
   "round": 2, "rounds_done": 1, "rematches": 0,
   "winner": null | "A" | "B",
   "started_at": 1788971651325, "hq_hp_start": 100.0,
+  "paused": false,
   "teams": {
     "A": {
       "player": "momo", "ready": true, "hq_hp": 100.0,
       "score": 1240, "resources": {"iron": 320, "carbon": 80}, "wave": 4,
       "pending_sends": [ {"from": "B", "units": […], "value": 900, "round": 2, "ts": …} ],
-      "go_broadcast": {"at": …, "ok": true, "error": null, "endpoint": "http://…"}
+      "go_broadcast": {"at": …, "ok": true, "error": null, "endpoint": "http://…"},
+      "pause_broadcast": {"at": …, "ok": true, "error": null, "endpoint": "http://…:9002/pause_dom"}
     },
     "B": { … }
   },
@@ -426,6 +474,8 @@ Welt laufen. `feed` = letzte Ereignisse (neueste zuerst, max. 30) für das
 Terminal-Feed der UI. Seit #996 (US1) trägt jeder Feed-Eintrag ein optionales
 `"world": "A"|"B"` (fehlt bei globalen Einträgen wie `go`/`match_end`);
 level-basierte Sends erscheinen mit `"level"` im `batch`/`pending_sends`.
+Seit #997 liefert `/state` zusätzlich `paused` (match-weit, top-level) und
+`teams.<W>.pause_broadcast` (Zustell-Status des letzten Pause-/Resume-Fan-outs).
 
 ### GET /health
 
