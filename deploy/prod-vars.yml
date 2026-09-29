@@ -61,6 +61,7 @@ riftbreaker_sessions_container: riftbreaker-sessions-prod
 riftbreaker_send_tailer_container: riftbreaker-send-tailer-prod
 riftbreaker_match_loop_container: riftbreaker-match-loop-prod
 riftbreaker_attack_cycle_container: riftbreaker-attack-cycle-prod
+riftbreaker_chat_announcer_container: riftbreaker-chat-announcer-prod
 riftbreaker_sessions_dir: "/srv/rift-{{ rift_env }}/sessions"
 
 # Content kommt per Sync aus dem kanonischen Cache (wie dev).
