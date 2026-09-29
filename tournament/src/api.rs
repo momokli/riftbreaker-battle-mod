@@ -20,7 +20,7 @@
 
 use crate::broadcast;
 use crate::referee::{Command, GameEvent, GameEventKind, Referee, RefereeConfig};
-use crate::state::{MatchState, Phase, ReadyEffect, StateError, World};
+use crate::state::{MatchState, Phase, ReadyEffect, SendBatch, StateError, World};
 use axum::extract::{Query, State as AxumState};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -48,6 +48,9 @@ pub struct Config {
     pub go_commands: Vec<String>,
     /// Timeout je Broadcast-Endpoint.
     pub go_timeout: Duration,
+    /// Verzögerung (`delay_s`) für Ingress-Pushes an die Ziel-Bridge beim
+    /// Wellenstart (US4, #996); Default aus `TOURNAMENT_INCOMING_DELAY_S`.
+    pub incoming_delay_s: f64,
     /// Start-HP jedes HQ.
     pub hq_hp_start: f64,
     /// Referee: Wellen-Deckel (0 = unbegrenzt) und Restart-Command (Issue #268).
@@ -407,6 +410,23 @@ async fn report(
             let effect = app
                 .with_state(|s| s.wave_start(world, req.built_value))
                 .await?;
+            // Ingress-Push (US4): nur beim echten Lock dieser Welt — ein
+            // Duplikat/Retry (Reveal bereits gesetzt) pusht NICHT erneut.
+            let ingress = match effect {
+                crate::state::WaveEffect::Locked => {
+                    let batches: Vec<SendBatch> = {
+                        let guard = app.state.read().await;
+                        guard
+                            .reveal
+                            .as_ref()
+                            .and_then(|r| r.incoming.get(&world))
+                            .cloned()
+                            .unwrap_or_default()
+                    };
+                    push_incoming_sends(&app, world, &batches).await
+                }
+                crate::state::WaveEffect::Duplicate => Vec::new(),
+            };
             let view = app.state.read().await.view();
             Ok(Json(json!({
                 "world": world.as_str(),
@@ -418,6 +438,7 @@ async fn report(
                 "round": view.round,
                 "rounds_done": view.rounds_done,
                 "phase": view.phase,
+                "ingress": ingress,
             })))
         }
         "hq_hp" => {
@@ -558,6 +579,68 @@ async fn push_referee_commands(app: &AppState, world: World, commands: &[Command
         }
     }
     PushOutcome { results, delivered }
+}
+
+/// Leitet die Ingress-URL (`POST /incoming_send`) eines konfigurierten
+/// Bridge-Endpoints ab (US4, #996). Der Bridge-Endpoint ist auf einen
+/// HTTP-Adapter-Pfad gesetzt (typisch `/exec`, s. `RBBRIDGE_*_URL`); die
+/// Ingress-Route liegt auf demselben Host: ein abschließendes `/exec` wird
+/// entfernt und `/incoming_send` angehängt.
+fn ingress_url(bridge: &str) -> String {
+    let base = bridge.strip_suffix("/exec").unwrap_or(bridge);
+    format!("{}/incoming_send", base.trim_end_matches('/'))
+}
+
+/// Pusht die beim Wellenstart einer Welt gedrainten (level-basierten) Sends als
+/// Ingress an die Bridge der Zielwelt (US4, #996 — der G5-Vertrag).
+///
+/// Je Batch mit `level` genau EIN `POST <bridge_for(world)>/incoming_send` mit
+/// Body `{level, from, delay_s}`. Batchs **ohne** `level` (Alt-unit-Sends)
+/// werden defensiv übersprungen (nur im Reveal geführt). Ohne konfigurierten
+/// Endpoint wird je Batch `ok: null` vermerkt — kein Panic, kein `unwrap`
+/// (Muster `push_referee_commands`). Da der Drain den Batch aus `pending`
+/// entfernt und `Duplicate` nicht erneut pusht, wird jeder Batch genau EINMAL
+/// zugestellt.
+///
+/// Die Delay-Zeit stammt aus `cfg.incoming_delay_s` (`delay_s` im
+/// `incoming_wave`-Event).
+///
+/// Rückgabe: ein `ingress`-Block (je gepushtem Batch
+/// `{level, from, ok, http_status, error, endpoint}` bzw. `ok:null` + `note`).
+async fn push_incoming_sends(app: &AppState, world: World, batches: &[SendBatch]) -> Vec<Value> {
+    let mut results = Vec::new();
+    for batch in batches {
+        let Some(level) = batch.level else {
+            continue; // Alt-unit-Send: kein Ingress, nur Reveal.
+        };
+        let from = batch.from.as_str();
+        match app.cfg.bridge_for(world) {
+            Some(url) => {
+                let endpoint = ingress_url(url);
+                let payload = json!({
+                    "level": level,
+                    "from": from,
+                    "delay_s": app.cfg.incoming_delay_s,
+                });
+                let res = broadcast::post_json(&endpoint, &payload, app.cfg.go_timeout).await;
+                results.push(json!({
+                    "level": level,
+                    "from": from,
+                    "ok": res.ok(),
+                    "http_status": res.status,
+                    "error": res.error,
+                    "endpoint": endpoint,
+                }));
+            }
+            None => results.push(json!({
+                "level": level,
+                "from": from,
+                "ok": Value::Null,
+                "note": "kein Endpoint konfiguriert (RBBRIDGE_<W>_URL) — kein Ingress-Push",
+            })),
+        }
+    }
+    results
 }
 
 /// POST /referee/event — Spiel-Event an den Referee (Issue #268).
@@ -843,6 +926,7 @@ mod tests {
             bridge: [None, None],
             go_commands: vec!["debug_dom_resume".to_string()],
             go_timeout: Duration::from_millis(800),
+            incoming_delay_s: 5.0,
             hq_hp_start: 100.0,
             referee_max_wave: 0,
             // Explizite Test-Konfiguration (kein `Default`): hier bewusst
@@ -2097,5 +2181,202 @@ mod tests {
             .find(|e| e["kind"] == "send")
             .unwrap();
         assert_eq!(send["world"], "A");
+    }
+
+    // ---- US4: Ingress-Transport beim Wellenstart der Zielwelt (#996, G5) ----
+
+    /// Ein Level-Send A→B wird bei B's `wave_start` GENAU EINMAL als
+    /// `POST /incoming_send {level,from,delay_s}` an die B-Bridge gepusht.
+    #[tokio::test]
+    async fn wave_start_pushes_incoming_send_to_target_bridge() {
+        let (addr, captures) = capture_endpoint().await;
+        let mut cfg = test_cfg();
+        // Bridge-Endpoint wie im Betrieb (HTTP-Adapter-Pfad `/exec`).
+        cfg.bridge = [None, Some(format!("http://{addr}/exec"))];
+        let app = make_app(cfg).await;
+        register(&app, "A", "momo").await;
+        register(&app, "B", "matheo").await;
+        call(&app, "POST", "/go", Some(json!({}))).await;
+
+        // A sendet eine Welle (Level) an B.
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/send",
+            Some(json!({"world": "A", "level": 3, "value": 1400})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+
+        // B meldet seinen Wellenstart → Drain + Ingress-Push an B.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "B", "event": "wave_start", "built_value": 6400})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["effect"], "locked");
+        let ingress = v["ingress"].as_array().unwrap();
+        assert_eq!(ingress.len(), 1, "ingress: {v}");
+        assert_eq!(ingress[0]["level"], 3);
+        assert_eq!(ingress[0]["from"], "A");
+        assert_eq!(ingress[0]["ok"], true);
+        assert_eq!(ingress[0]["http_status"], 200);
+        assert_eq!(
+            ingress[0]["endpoint"],
+            format!("http://{addr}/incoming_send")
+        );
+
+        // Die B-Bridge hat genau EINEN /incoming_send-POST gesehen
+        // (der GO-Broadcast /exec zählt hier nicht).
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        {
+            let all = captures.lock().await;
+            let caps: Vec<&String> = all
+                .iter()
+                .filter(|c| c.starts_with("POST /incoming_send "))
+                .collect();
+            assert_eq!(caps.len(), 1, "caps: {all:?}");
+            assert!(
+                caps[0].starts_with("POST /incoming_send HTTP/1.1"),
+                "req: {}",
+                caps[0]
+            );
+            assert!(caps[0].contains("\"level\":3"), "req: {}", caps[0]);
+            assert!(caps[0].contains("\"from\":\"A\""), "req: {}", caps[0]);
+            // delay_s-Default aus der Config (5.0).
+            assert!(caps[0].contains("\"delay_s\":5.0"), "req: {}", caps[0]);
+        }
+    }
+
+    /// Ohne konfigurierte Ziel-Bridge bleibt der Referee funktionsfähig
+    /// (`ingress.ok == null`), kein Panic; der Reveal trägt den Send weiter.
+    #[tokio::test]
+    async fn wave_start_without_bridge_still_returns_state() {
+        let app = make_app(test_cfg()).await; // bridge = [None, None]
+        register(&app, "A", "momo").await;
+        register(&app, "B", "matheo").await;
+        call(&app, "POST", "/go", Some(json!({}))).await;
+        call(
+            &app,
+            "POST",
+            "/send",
+            Some(json!({"world": "A", "level": 2, "value": 700})),
+        )
+        .await;
+
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "B", "event": "wave_start"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let ingress = v["ingress"].as_array().unwrap();
+        assert_eq!(ingress.len(), 1, "ingress: {v}");
+        assert_eq!(ingress[0]["level"], 2);
+        assert_eq!(ingress[0]["ok"], Value::Null);
+        assert!(ingress[0]["note"].is_string());
+
+        // Reveal trägt den Batch weiterhin.
+        let (_, st) = call(&app, "GET", "/state", None).await;
+        let inc = st["reveal"]["incoming"]["B"].as_array().unwrap();
+        assert_eq!(inc.len(), 1);
+        assert_eq!(inc[0]["level"], 2);
+    }
+
+    /// Duplikat/Retry des `wave_start` pusht den Ingress NICHT erneut.
+    #[tokio::test]
+    async fn duplicate_wave_start_does_not_repush_ingress() {
+        let (addr, captures) = capture_endpoint().await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [None, Some(format!("http://{addr}/exec"))];
+        let app = make_app(cfg).await;
+        register(&app, "A", "momo").await;
+        register(&app, "B", "matheo").await;
+        call(&app, "POST", "/go", Some(json!({}))).await;
+        call(
+            &app,
+            "POST",
+            "/send",
+            Some(json!({"world": "A", "level": 3, "value": 1400})),
+        )
+        .await;
+
+        let (_, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "B", "event": "wave_start"})),
+        )
+        .await;
+        assert_eq!(v["ingress"].as_array().unwrap().len(), 1);
+
+        // Retry von B (Duplikat) → keine neuen Ingress-Pushes.
+        let (_, v2) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "B", "event": "wave_start"})),
+        )
+        .await;
+        assert_eq!(v2["effect"], "duplicate");
+        assert_eq!(v2["ingress"].as_array().unwrap().len(), 0);
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        {
+            let all = captures.lock().await;
+            let ingress_pushes = all
+                .iter()
+                .filter(|c| c.starts_with("POST /incoming_send "))
+                .count();
+            assert_eq!(
+                ingress_pushes, 1,
+                "genau ein Ingress-Push trotz Retry: {all:?}"
+            );
+        }
+    }
+
+    /// Ein unit-basierter (level-loser) Send wird NICHT als Ingress gepusht
+    /// (defensiv übersprungen), bleibt aber im Reveal.
+    #[tokio::test]
+    async fn unit_send_is_not_pushed_as_ingress() {
+        let (addr, captures) = capture_endpoint().await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [None, Some(format!("http://{addr}/exec"))];
+        let app = make_app(cfg).await;
+        register(&app, "A", "momo").await;
+        register(&app, "B", "matheo").await;
+        call(&app, "POST", "/go", Some(json!({}))).await;
+        call(
+            &app,
+            "POST",
+            "/send",
+            Some(json!({"world": "A", "units": [{"unit": "x", "count": 1}], "value": 10})),
+        )
+        .await;
+
+        let (_, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "B", "event": "wave_start"})),
+        )
+        .await;
+        assert_eq!(v["ingress"].as_array().unwrap().len(), 0);
+        let (_, st) = call(&app, "GET", "/state", None).await;
+        assert_eq!(
+            st["reveal"]["incoming"]["B"].as_array().unwrap().len(),
+            1
+        );
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert!(captures
+            .lock()
+            .await
+            .iter()
+            .all(|c| !c.starts_with("POST /incoming_send ")));
     }
 }
