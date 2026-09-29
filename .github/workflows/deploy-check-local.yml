@@ -142,6 +142,9 @@ jobs:
           # die A/B-Zuordnung (*-a -> prod-A :6322, *-b -> prod-B :6325),
           # dev/staging-Ziele, Default und Reihenfolge.
           bash deploy/tests/gns-routing/run.sh
+          # Queue-Rolle (Issue #998): rendert Unit + EnvironmentFile und prueft
+          # die Invarianten (Bearer-Token, Bind/Port, Nachbar-URLs, State-Dir).
+          bash deploy/tests/queue/run.sh
           # Check-Mode-Schutz der Schreibkette (Issue #483, Befund PR #496): die
           # Rolle riftbreaker-server muss im --check gegen ein NOCH nicht
           # migriertes <env>-Pfadschema gruen bleiben (kein reales Anlegen).

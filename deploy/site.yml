@@ -151,6 +151,13 @@
       tags: [server]
       vars:
         capsule_flow_env: "{{ rift_env | default('dev') }}"
+    # Queue-Dienst (Issue #998): paart Spieler (casual 1v1) und provisioniert
+    # KALT zwei frische VS-Welten (A/B) + Referee-Lobby. Bewusst NUR im dev-Play
+    # (site.yml) — der boot-test kennt Provisioner/Referee nicht.
+    - role: queue
+      tags: [server]
+      vars:
+        queue_env: "{{ rift_env | default('dev') }}"
     - role: website
       tags: [website]
     - role: image-retention
