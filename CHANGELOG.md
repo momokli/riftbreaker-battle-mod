@@ -1,3 +1,15 @@
+Version: 1.0.13
+Date: 29. 09. 2026
+
+  Features:
+    - Player-Identitaet abstrahiert (`rbident`: kind + canonical, account-ready): der Inline-`str:`/`steamid:`-Prefix-Check ist durch `isIdentityLike` ersetzt, das Identitaets-`kind` durch Session/SessionRecord/SessionInfo + `/sessions`-JSON gefaedelt; Python-Spiegel `deploy/capsule/identity.py` + Tests (#992, PR #1001).
+    - Provisioner-Modus-Parameter `solo_self | solo_persona:<name>` im Schema (#993, PR #1002).
+    - Lobby Main-Screen: Modi-Kacheln, mode-Plumbing, Provision-Trigger und Status-Badge (#994, PR #1003).
+
+  Docs:
+    - Match-View-Konzept: UI + Struktur/Architektur (1v1/Solo) (#873, PR #874).
+    - VS-Welt-A/B-Konzept: Routing + Infra + Game (#875, PR #876).
+
 Version: 1.0.12
 Date: 29. 09. 2026
 
