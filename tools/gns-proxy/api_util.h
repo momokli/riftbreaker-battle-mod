@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace rbapi {
 
@@ -106,6 +107,44 @@ inline bool jsonStringField(const std::string &body, const std::string &key,
     }
   }
   return false;
+}
+
+// Minimaler JSON-Zahl-Leser (Issue #998): liest `"key": <int>` als long long.
+// Rueckgabe true nur bei einer echten (optional negativen) Ganzzahl.
+inline bool jsonIntField(const std::string &body, const std::string &key,
+                         long long &out) {
+  const std::string needle = "\"" + key + "\"";
+  std::size_t pos = body.find(needle);
+  if (pos == std::string::npos) {
+    return false;
+  }
+  pos = body.find(':', pos + needle.size());
+  if (pos == std::string::npos) {
+    return false;
+  }
+  ++pos;
+  while (pos < body.size() && (body[pos] == ' ' || body[pos] == '\t' ||
+                               body[pos] == '\n' || body[pos] == '\r')) {
+    ++pos;
+  }
+  if (pos >= body.size()) {
+    return false;
+  }
+  bool negative = false;
+  if (body[pos] == '-') {
+    negative = true;
+    ++pos;
+  }
+  if (pos >= body.size() || body[pos] < '0' || body[pos] > '9') {
+    return false;
+  }
+  long long value = 0;
+  while (pos < body.size() && body[pos] >= '0' && body[pos] <= '9') {
+    value = value * 10 + (body[pos] - '0');
+    ++pos;
+  }
+  out = negative ? -value : value;
+  return true;
 }
 
 // --- Dynamische Backends + Outbound-HTTP (Issue #929) -----------------------
@@ -746,6 +785,132 @@ inline SoloOutcome runSoloClaim(
   out.reason = outReason;
   out.body = "{\"ok\":false,\"reason\":\"" + jsonEscape(outReason) + "\"}";
   return out;
+}
+
+// --- Queue-Anbindung (Issue #998, US4) --------------------------------------
+//
+// Reine, host-testbare Helfer fuer den Relay-Endpunkt `POST /queue`:
+// Body-Parsing, der Pin-Plan aus der Match-Antwort (BEIDE Spieler auf ihre
+// jeweiligen Endpoints) und die additive Queue-Phase fuer `/sessions`.
+// Bewusst OHNE Socket/Win32 — laeuft als Host-Test in der CI.
+
+struct QueueAssignment {
+  std::string identitaet;
+  std::string world;
+  std::string instance;
+  std::string endpoint;
+};
+
+// `"identitaet"` (Pflicht, nicht leer) + optionales `"mode"` (Default `vs`) aus
+// dem `/queue`-Body lesen. Rueckgabe false, wenn die Identitaet fehlt/leer ist.
+inline bool parseQueueJoinBody(const std::string &body, std::string &identitaet,
+                               std::string &mode) {
+  mode = "vs";
+  if (!jsonStringField(body, "identitaet", identitaet) || identitaet.empty()) {
+    identitaet.clear();
+    return false;
+  }
+  std::string m;
+  if (jsonStringField(body, "mode", m) && !m.empty()) {
+    mode = m;
+  }
+  return true;
+}
+
+// Substring zwischen `[...]` hinter `"key"` (leer, wenn kein Array). Bewusst
+// naiv (kein verschachteltes Array in unseren Payloads) — reine PoC-Hilfe.
+inline std::string jsonArraySlice(const std::string &body, const std::string &key) {
+  const std::string needle = "\"" + key + "\"";
+  const std::size_t pos = body.find(needle);
+  if (pos == std::string::npos) {
+    return "";
+  }
+  const std::size_t open = body.find('[', pos + needle.size());
+  if (open == std::string::npos) {
+    return "";
+  }
+  const std::size_t close = body.find(']', open + 1);
+  if (close == std::string::npos) {
+    return "";
+  }
+  return body.substr(open + 1, close - open - 1);
+}
+
+// Pin-Plan aus einer Match-Antwort bilden: die `assignments`-Liste (Fallback
+// `participants`) in :class:`QueueAssignment`-Tupel aufloesen. Rueckgabe true,
+// wenn mindestens eine Zuordnung gefunden wurde; `out` wird vorher geleert.
+inline bool parseQueueAssignments(const std::string &body,
+                                  std::vector<QueueAssignment> &out) {
+  out.clear();
+  std::string slice = jsonArraySlice(body, "assignments");
+  if (slice.empty()) {
+    slice = jsonArraySlice(body, "participants");
+  }
+  if (slice.empty()) {
+    return false;
+  }
+  std::size_t pos = 0;
+  while (pos < slice.size()) {
+    const std::size_t open = slice.find('{', pos);
+    if (open == std::string::npos) {
+      break;
+    }
+    const std::size_t close = slice.find('}', open + 1);
+    if (close == std::string::npos) {
+      break;
+    }
+    const std::string obj = slice.substr(open, close - open + 1);
+    QueueAssignment a;
+    jsonStringField(obj, "identitaet", a.identitaet);
+    jsonStringField(obj, "world", a.world);
+    jsonStringField(obj, "instance", a.instance);
+    if (!jsonStringField(obj, "endpoint", a.endpoint)) {
+      jsonStringField(obj, "target", a.endpoint);  // Queue-Service-Sicht
+    }
+    if (!a.identitaet.empty()) {
+      out.push_back(a);
+    }
+    pos = close + 1;
+  }
+  return !out.empty();
+}
+
+// Sichtbare Queue-Phase einer Session (additiv zu SoloPhase).
+enum class QueuePhase {
+  None,          // kein Queue-Zustand
+  Queued,        // wartet in der Queue
+  Matched,       // gepaart (auch finished/failed)
+  Provisioning,  // kalte Welten werden hochgefahren
+  Ready,         // Match bereit (A/B provisioniert, Lobby registriert)
+};
+
+// `inQueue` = Identitaet wartet; `matchState` = Zustand ihres Matches (leer =
+// keins). Reihenfolge: ein Match dominiert die Warteschlange.
+inline QueuePhase deriveQueuePhase(bool inQueue, const std::string &matchState) {
+  if (matchState == "ready") {
+    return QueuePhase::Ready;
+  }
+  if (matchState == "provisioning") {
+    return QueuePhase::Provisioning;
+  }
+  if (!matchState.empty()) {
+    return QueuePhase::Matched;
+  }
+  if (inQueue) {
+    return QueuePhase::Queued;
+  }
+  return QueuePhase::None;
+}
+
+inline const char *queuePhaseName(QueuePhase phase) {
+  switch (phase) {
+  case QueuePhase::Queued: return "queued";
+  case QueuePhase::Matched: return "matched";
+  case QueuePhase::Provisioning: return "provisioning";
+  case QueuePhase::Ready: return "ready";
+  case QueuePhase::None: break;
+  }
+  return "";
 }
 
 } // namespace rbapi

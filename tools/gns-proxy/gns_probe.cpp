@@ -304,6 +304,28 @@ std::string g_capsuleHost = "127.0.0.1";
 int g_capsulePort = 8093;
 bool g_capsuleConfigured = false;
 std::string g_capsuleToken;
+
+// --- Queue-Anbindung (Issue #998, US4) ---------------------------------------
+// Ist der Queue-Dienst konfiguriert (`--queue-url` ODER `RBB_QUEUE_URL`), ruft
+// `POST /queue` dessen `POST /queue/join` auf und pinnt BEIDE Teilnehmer einer
+// Paarung auf ihre jeweiligen GNS-Endpoints. `POST /queue/leave` und
+// `GET /queue/status` werden durchgereicht. Ohne Queue antwortet `POST /queue`
+// mit `503 queue_unconfigured`. Token aus `RBB_QUEUE_TOKEN`.
+std::string g_queueHost = "127.0.0.1";
+int g_queuePort = 9221;
+bool g_queueConfigured = false;
+std::string g_queueToken;
+
+// Queue-Anzeige je Identitaet (Issue #998, additiv): vom HTTP-Thread unter
+// g_apiMutex geschrieben, vom Hauptloop in die /sessions-Sicht kopiert. Leer,
+// wenn fuer die Identitaet kein Queue-Zustand existiert.
+struct QueueSession {
+  std::string phase;    // queued | matched | provisioning | ready
+  int position = 0;     // Warteposition (nur bei phase=queued)
+  long long matchId = 0; // Match-Nummer (0 = keins)
+  std::string vsWorld;  // A | B (nur bei matched)
+};
+std::map<std::string, QueueSession> g_queueState;
 // Operator-Pin pro Identitaet — ueberlebt Reconnects (der Client schliesst nach
 // ~20 s ohne Antwort selbst und verbindet neu). NUR vom Hauptloop beruehrt.
 std::map<std::string, rbroute::Endpoint> g_pins;
@@ -360,6 +382,12 @@ struct SessionInfo {
   std::vector<std::string> soloMembers;
   size_t soloMemberCount = 0;
   int soloMaxPlayers = 0;
+  // Queue-Status (Issue #998, additiv): nur gesetzt, wenn fuer die Identitaet
+  // ein Queue-Zustand existiert (g_queueState).
+  std::string queuePhase;   // queued | matched | provisioning | ready
+  int queuePosition = 0;
+  long long matchId = 0;
+  std::string vsWorld;      // A | B
 };
 struct ApiCommand {
   // Was die Hauptschleife tun soll (die Registry `g_targets` gehoert NUR ihr).
@@ -685,9 +713,11 @@ void refreshSnapshot() {
       std::chrono::steady_clock::now();
   // Pause-Cache des HTTP-Threads einmal kopieren (unter g_apiMutex).
   std::map<std::string, bool> parkedPaused;
+  std::map<std::string, QueueSession> queueState;
   {
     std::lock_guard<std::mutex> lock(g_apiMutex);
     parkedPaused = g_parkedPaused;
+    queueState = g_queueState;
   }
   std::vector<SessionInfo> snap;
   snap.reserve(g_sessions.size() + g_soloClaims.size());
@@ -753,6 +783,15 @@ void refreshSnapshot() {
       }
       s.soloMaxPlayers = g_maxPlayers;
     }
+    // Queue-Status (Issue #998, additiv — nur wenn ein Zustand existiert).
+    std::map<std::string, QueueSession>::const_iterator qit =
+        queueState.find(identity);
+    if (qit != queueState.end()) {
+      s.queuePhase = qit->second.phase;
+      s.queuePosition = qit->second.position;
+      s.matchId = qit->second.matchId;
+      s.vsWorld = qit->second.vsWorld;
+    }
     snap.push_back(s);
   };
   for (std::map<std::string, SessionRecord>::const_iterator it =
@@ -763,6 +802,13 @@ void refreshSnapshot() {
   for (std::map<std::string, SoloClaim>::const_iterator it =
            g_soloClaims.begin();
        it != g_soloClaims.end(); ++it) {
+    fill(it->first);
+  }
+  // Queue-only-Identitaeten (Issue #998): ein wartender Spieler hat evtl. noch
+  // keine Session — trotzdem sichtbar (additiv).
+  for (std::map<std::string, QueueSession>::const_iterator it =
+           queueState.begin();
+       it != queueState.end(); ++it) {
     fill(it->first);
   }
   std::lock_guard<std::mutex> lock(g_apiMutex);
@@ -1310,6 +1356,13 @@ std::string buildSessionsJson() {
       json += ",\"soloMemberCount\":" + std::to_string(it->soloMemberCount);
       json += ",\"soloMaxPlayers\":" + std::to_string(it->soloMaxPlayers);
     }
+    // Queue-Status (Issue #998, additiv — nur wenn ein Zustand existiert).
+    if (!it->queuePhase.empty()) {
+      json += ",\"queuePhase\":\"" + rbapi::jsonEscape(it->queuePhase) + "\"";
+      json += ",\"queuePosition\":" + std::to_string(it->queuePosition);
+      json += ",\"matchId\":" + std::to_string(it->matchId);
+      json += ",\"vsWorld\":\"" + rbapi::jsonEscape(it->vsWorld) + "\"";
+    }
     json += "}";
   }
   json += "]";
@@ -1478,6 +1531,9 @@ const PHASE = { provisioned: "provisioniert", underway: "Spieler unterwegs",
 // `fertig` hat noch kein Server-Signal (offener Punkt) und ist hier nur definiert.
 const STATUS = { wartet: "wartet", provisioniert: "provisioniert", laedt: "laedt",
   laeuft: "laeuft", fertig: "fertig" };
+// Queue-Status (Issue #998): additive Felder aus /sessions.
+const QUEUE = { queued: "in Queue", matched: "gepaart", provisioning: "provisioniert",
+  ready: "bereit" };
 function statusInfo(s) {
   if (!s || !s.soloPhase) return { key: "wartet", label: STATUS.wartet };
   if (s.soloPhase === "provisioned") return { key: "provisioniert", label: STATUS.provisioniert };
@@ -1602,6 +1658,32 @@ async function sendPlayer(mode, btn) {
   } catch (e) { hintEl.textContent = "Netzwerkfehler"; }
   setTimeout(loadSessions, 300);
 }
+// Queue (vs): POST /queue {identitaet, mode} — der Relay proxyt /queue/join und
+// pinnt bei einer Paarung BEIDE Spieler auf ihre Welten (Issue #998).
+async function queueJoin(btn, cardEl) {
+  const identity = $("player").value;
+  const hintEl = $("player-hint");
+  if (!identity) { hintEl.textContent = "kein Spieler gewaehlt"; return; }
+  btn.disabled = true;
+  hintEl.textContent = "";
+  try {
+    const r = await fetch("/queue", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identitaet: identity, mode: "vs" }) });
+    const j = await r.json().catch(() => null);
+    if (!r.ok) {
+      const reason = (j && j.reason) ? j.reason : ("http " + r.status);
+      const MSG = { queue_unconfigured: "Queue-Dienst nicht konfiguriert",
+        queue_unreachable: "Queue nicht erreichbar", bad_request: "Identitaet fehlt",
+        already_matched: "bereits in einem Match" };
+      hintEl.textContent = MSG[reason] || reason;
+    } else if (j && j.status === "matched") {
+      hintEl.textContent = "gepaart - Match " + ((j.match && j.match.match_id) || "?");
+    } else {
+      hintEl.textContent = "in Queue (Position " + ((j && j.position) || "?") + ")";
+    }
+  } catch (e) { hintEl.textContent = "Netzwerkfehler"; }
+  setTimeout(loadSessions, 300);
+}
 $("go-self").onclick = (e) => sendPlayer("solo_self", e.currentTarget);
 $("go-persona").onclick = (e) => sendPlayer("solo_persona:aggro", e.currentTarget);
 
@@ -1694,6 +1776,25 @@ function card(s) {
   rbtn.onclick = () => ready(rbtn, c);
   readyRow.appendChild(rbtn);
   c.appendChild(readyRow);
+
+  // Queue (vs) (Issue #998): Join in die Casual-Queue; der Relay pinnt bei
+  // einer Paarung beide Spieler auf ihre Welten.
+  const qRow = el("div", "solo");
+  if (s.queuePhase) {
+    const qbadge = el("span", "badge queue-" + s.queuePhase,
+      QUEUE[s.queuePhase] || s.queuePhase);
+    qRow.appendChild(qbadge);
+    if (s.queuePhase === "queued" && s.queuePosition) {
+      qRow.appendChild(el("span", "sub", "Position " + s.queuePosition));
+    }
+    if (s.matchId) qRow.appendChild(el("span", "sub", "Match " + s.matchId));
+    if (s.vsWorld) qRow.appendChild(el("span", "sub", "Welt " + s.vsWorld));
+  }
+  const qbtn = el("button", null, "Queue (vs)");
+  qbtn.title = "In die Casual-Queue einreihen (POST /queue)";
+  qbtn.onclick = () => queueJoin(qbtn, c);
+  qRow.appendChild(qbtn);
+  c.appendChild(qRow);
   return c;
 }
 
@@ -2159,6 +2260,133 @@ void handleReady(SOCKET s, const std::string &requestBody) {
                   r.body.empty() ? "{\"ok\":false}" : r.body);
 }
 
+// POST /queue: an den Queue-Dienst proxien (`POST /queue/join`). Bei einer
+// Match-Antwort pinnt der Relay ALLE Teilnehmer (nicht nur den Aufrufer) ueber
+// die Command-Queue auf ihre jeweiligen Endpoints (Issue #998, US4).
+void handleQueue(SOCKET s, const std::string &requestBody) {
+  if (!g_queueConfigured) {
+    httpRespondJson(s, 503, "Service Unavailable",
+                    "{\"ok\":false,\"reason\":\"queue_unconfigured\",\"retry\":false}");
+    return;
+  }
+  std::string identity;
+  std::string mode;
+  if (!rbapi::parseQueueJoinBody(requestBody, identity, mode)) {
+    httpRespondJson(s, 400, "Bad Request",
+                    "{\"ok\":false,\"reason\":\"bad_request\",\"detail\":\"identitaet fehlt\"}");
+    return;
+  }
+  const std::string payload = "{\"identitaet\":\"" + rbapi::jsonEscape(identity) +
+                              "\",\"mode\":\"" + rbapi::jsonEscape(mode) + "\"}";
+  const OutboundResult r = outboundHttpPost(g_queueHost, g_queuePort, "/queue/join",
+                                            payload, g_queueToken, 2000, 8000);
+  if (r.status <= 0) {
+    httpRespondJson(s, 502, "Bad Gateway",
+                    "{\"ok\":false,\"reason\":\"queue_unreachable\"}");
+    return;
+  }
+  if (r.status != 200) {
+    httpRespondJson(s, r.status, "Error",
+                    r.body.empty() ? "{\"ok\":false}" : r.body);
+    return;
+  }
+  // Pin-Plan aus der Match-Antwort (BEIDE Teilnehmer, verschiedene Endpoints).
+  std::vector<rbapi::QueueAssignment> plan;
+  const bool matched = rbapi::parseQueueAssignments(r.body, plan);
+  std::string matchState;
+  rbapi::jsonStringField(r.body, "state", matchState);
+  long long matchId = 0;
+  rbapi::jsonIntField(r.body, "match_id", matchId);
+  if (matched) {
+    for (std::size_t i = 0; i < plan.size(); ++i) {
+      rbroute::Endpoint endpoint;
+      if (plan[i].endpoint.empty() ||
+          !rbroute::parseEndpoint(plan[i].endpoint, endpoint)) {
+        continue;
+      }
+      {
+        std::lock_guard<std::mutex> lock(g_apiMutex);
+        ApiCommand cmd;
+        cmd.kind = ApiCommand::kRouteByEndpoint;
+        cmd.identity = plan[i].identitaet;
+        cmd.instance = plan[i].instance;
+        cmd.endpoint = endpoint;
+        cmd.selfSend = true;
+        g_apiCommands.push_back(cmd);
+        QueueSession qs;
+        qs.phase = rbapi::queuePhaseName(rbapi::deriveQueuePhase(false, matchState));
+        qs.matchId = matchId;
+        qs.vsWorld = plan[i].world;
+        g_queueState[plan[i].identitaet] = qs;
+      }
+      logLine("API: queue '%s' -> %s (match=%lld world=%s)",
+              plan[i].identitaet.c_str(), plan[i].endpoint.c_str(), matchId,
+              plan[i].world.c_str());
+    }
+  } else {
+    long long position = 0;
+    rbapi::jsonIntField(r.body, "position", position);
+    {
+      std::lock_guard<std::mutex> lock(g_apiMutex);
+      QueueSession qs;
+      qs.phase = rbapi::queuePhaseName(rbapi::deriveQueuePhase(true, ""));
+      qs.position = static_cast<int>(position);
+      g_queueState[identity] = qs;
+    }
+    logLine("API: queue '%s' -> position=%lld", identity.c_str(), position);
+  }
+  httpRespondJson(s, 200, "OK", r.body.empty() ? "{\"ok\":true}" : r.body);
+}
+
+// POST /queue/leave: an den Queue-Dienst proxien (`POST /queue/leave`).
+void handleQueueLeave(SOCKET s, const std::string &requestBody) {
+  if (!g_queueConfigured) {
+    httpRespondJson(s, 503, "Service Unavailable",
+                    "{\"ok\":false,\"reason\":\"queue_unconfigured\",\"retry\":false}");
+    return;
+  }
+  std::string identity;
+  if (!rbapi::jsonStringField(requestBody, "identitaet", identity) ||
+      identity.empty()) {
+    httpRespondJson(s, 400, "Bad Request",
+                    "{\"ok\":false,\"reason\":\"bad_request\",\"detail\":\"identitaet fehlt\"}");
+    return;
+  }
+  const std::string payload = "{\"identitaet\":\"" + rbapi::jsonEscape(identity) + "\"}";
+  const OutboundResult r = outboundHttpPost(g_queueHost, g_queuePort, "/queue/leave",
+                                            payload, g_queueToken, 2000, 5000);
+  if (r.status <= 0) {
+    httpRespondJson(s, 502, "Bad Gateway",
+                    "{\"ok\":false,\"reason\":\"queue_unreachable\"}");
+    return;
+  }
+  if (r.status == 200) {
+    std::lock_guard<std::mutex> lock(g_apiMutex);
+    g_queueState.erase(identity);
+  }
+  httpRespondJson(s, r.status, r.status == 200 ? "OK" : "Error",
+                  r.body.empty() ? "{\"ok\":true}" : r.body);
+}
+
+// GET /queue/status: an den Queue-Dienst proxien (`GET /queue/status`).
+void handleQueueStatus(SOCKET s) {
+  if (!g_queueConfigured) {
+    httpRespondJson(s, 503, "Service Unavailable",
+                    "{\"ok\":false,\"reason\":\"queue_unconfigured\",\"retry\":false}");
+    return;
+  }
+  const OutboundResult r = outboundHttpCall("GET", g_queueHost, g_queuePort,
+                                            "/queue/status", "", g_queueToken,
+                                            2000, 5000);
+  if (r.status <= 0) {
+    httpRespondJson(s, 502, "Bad Gateway",
+                    "{\"ok\":false,\"reason\":\"queue_unreachable\"}");
+    return;
+  }
+  httpRespondJson(s, r.status, r.status == 200 ? "OK" : "Error",
+                  r.body.empty() ? "{\"ok\":true}" : r.body);
+}
+
 void httpHandle(SOCKET s) {
   DWORD timeout = 3000;
   setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&timeout),
@@ -2316,6 +2544,12 @@ void httpHandle(SOCKET s) {
     handleSolo(s, body);
   } else if (method == "POST" && path == "/ready") {
     handleReady(s, body);
+  } else if (method == "POST" && path == "/queue") {
+    handleQueue(s, body);
+  } else if (method == "POST" && path == "/queue/leave") {
+    handleQueueLeave(s, body);
+  } else if (method == "GET" && path == "/queue/status") {
+    handleQueueStatus(s);
   } else {
     httpRespond(s, 404, "Not Found", "text/plain; charset=utf-8",
                 "not found\n");
@@ -2645,6 +2879,25 @@ int main(int argc, char **argv) {
       g_capsuleHost = host;
       g_capsulePort = port;
       g_capsuleConfigured = true;
+    } else if (strcmp(argv[i], "--queue-url") == 0 && i + 1 < argc) {
+      // Queue-Dienst fuer POST /queue (Issue #998). Token NUR per Env
+      // (RBB_QUEUE_TOKEN), damit er nicht in der Prozessliste steht.
+      // Nur IPv4-Literal (Outbound-Client = inet_pton), kein Hostname/DNS.
+      const char *spec = argv[++i];
+      std::string host;
+      int port = 0;
+      rbroute::Endpoint parsed;
+      if (!rbapi::parseUrlHostPort(spec, host, port) ||
+          !rbroute::parseEndpoint(host + ":" + std::to_string(port), parsed)) {
+        fprintf(stderr,
+                "--queue-url braucht http://<IPv4>:port (kein Hostname), "
+                "bekam '%s'\n",
+                spec);
+        return 2;
+      }
+      g_queueHost = host;
+      g_queuePort = port;
+      g_queueConfigured = true;
     } else if (strcmp(argv[i], "--max-players") == 0 && i + 1 < argc) {
       // Aufnahmegrenze einer Solo-Instanz (Issue #936). Default 4 =
       // Server-Default (`riftbreaker_server_max_players`).
@@ -2708,6 +2961,35 @@ int main(int argc, char **argv) {
   const char *capsuleToken = getenv("RBB_CAPSULE_TOKEN");
   if (capsuleToken != nullptr) {
     g_capsuleToken = capsuleToken;
+  }
+
+  // `RBB_QUEUE_URL` schaltet den Queue-Pfad scharf (argv hat Vorrang);
+  // `POST /queue` proxyt dann `POST /queue/join` (Issue #998).
+  if (!g_queueConfigured) {
+    const char *queueUrl = getenv("RBB_QUEUE_URL");
+    if (queueUrl != nullptr && *queueUrl != '\0') {
+      std::string host;
+      int port = 0;
+      rbroute::Endpoint parsed;
+      if (rbapi::parseUrlHostPort(queueUrl, host, port) &&
+          rbroute::parseEndpoint(host + ":" + std::to_string(port), parsed)) {
+        g_queueHost = host;
+        g_queuePort = port;
+        g_queueConfigured = true;
+      } else {
+        fprintf(stderr,
+                "RBB_QUEUE_URL ungueltig (braucht http://<IPv4>:port): '%s'\n",
+                queueUrl);
+      }
+    }
+  }
+  const char *queueToken = getenv("RBB_QUEUE_TOKEN");
+  if (queueToken != nullptr) {
+    g_queueToken = queueToken;
+  }
+  if (g_queueConfigured) {
+    logLine("queue fuer /queue: %s:%d (token=%s)", g_queueHost.c_str(),
+            g_queuePort, g_queueToken.empty() ? "kein" : "gesetzt");
   }
 
   if (g_capsuleConfigured) {
