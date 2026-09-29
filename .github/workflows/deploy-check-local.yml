@@ -138,6 +138,10 @@ jobs:
           bash deploy/tests/deploy-checkout/run.sh
           bash deploy/tests/env-path-migration/run.sh
           bash deploy/tests/compose-project/run.sh
+          # GNS-Entry-Relay-Routen (Issue #995): rendert routes.j2 und prueft
+          # die A/B-Zuordnung (*-a -> prod-A :6322, *-b -> prod-B :6325),
+          # dev/staging-Ziele, Default und Reihenfolge.
+          bash deploy/tests/gns-routing/run.sh
           # Check-Mode-Schutz der Schreibkette (Issue #483, Befund PR #496): die
           # Rolle riftbreaker-server muss im --check gegen ein NOCH nicht
           # migriertes <env>-Pfadschema gruen bleiben (kein reales Anlegen).
