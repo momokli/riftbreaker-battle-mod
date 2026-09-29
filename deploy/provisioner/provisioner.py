@@ -78,6 +78,95 @@ class ProvisionError(Exception):
     """Provisionierung nicht moeglich (Preflight/Rollback) — laut abbrechen."""
 
 
+class ModeError(ProvisionError):
+    """Unbekannter/ungueltiger ``mode`` — fail-loud VOR jedem Docker-Call."""
+
+
+# ---------------------------------------------------------------------------
+# Issue #993 — Modus-Schema (bindend)
+#
+#   mode ::= "solo_self"              # Default: Spieler gegen sich selbst
+#          | "solo_persona:" <name>   # Solo gegen Persona <name>
+#
+# Kein stiller Fallback: alles andere -> :class:`ModeError` vor dem ersten
+# Docker-Call. Der Attack-Cycle-`--mode solo|vs` ist eine ANDERE Achse.
+# ---------------------------------------------------------------------------
+
+MODE_SOLO_SELF = "solo_self"
+MODE_PERSONA_PREFIX = "solo_persona:"
+# Persona-Namen wie in personas.json (aggro, ruhig, matheo, ...).
+PERSONA_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,63}$")
+MODE_HINT = "erwartet 'solo_self' oder 'solo_persona:<name>'"
+# Pfad IM Container fuer die gestagte Persona-Datei (Mount-Ziel).
+PERSONA_CONTAINER_PATH = "/data/personas.json"
+
+
+@dataclasses.dataclass(frozen=True)
+class ModeSelection:
+    """Geparster Modus + daraus abgeleitete Instanz-Konfiguration (#993)."""
+
+    mode: str          # kanonisch, z. B. "solo_self" / "solo_persona:aggro"
+    kind: str          # "self" | "persona"
+    persona: Optional[str]
+    send_yourself: bool
+    persona_on: bool
+
+
+def parse_mode(mode: str) -> ModeSelection:
+    """Modus strikt parsen/validieren (fail-loud, kein stiller Fallback).
+
+    ``solo_self`` -> self-send. ``solo_persona:<name>`` -> Persona-Setup statt
+    self-send. Alles andere (leer, ``solo``, ``campaign``, unbekannter Prefix,
+    ungueltiger Name, ``None``) wirft :class:`ModeError`.
+    """
+    if not isinstance(mode, str):
+        raise ModeError("unbekannter Modus %r (%s)" % (mode, MODE_HINT))
+    if mode == MODE_SOLO_SELF:
+        return ModeSelection(
+            mode=MODE_SOLO_SELF,
+            kind="self",
+            persona=None,
+            send_yourself=True,
+            persona_on=False,
+        )
+    if mode.startswith(MODE_PERSONA_PREFIX):
+        name = mode[len(MODE_PERSONA_PREFIX):]
+        if not PERSONA_NAME_RE.match(name):
+            raise ModeError(
+                "unbekannter Modus '%s' (Persona-Name ungueltig, erlaubt: %s)"
+                % (mode, PERSONA_NAME_RE.pattern)
+            )
+        return ModeSelection(
+            mode=MODE_PERSONA_PREFIX + name,
+            kind="persona",
+            persona=name,
+            send_yourself=False,
+            persona_on=True,
+        )
+    raise ModeError("unbekannter Modus '%s' (%s)" % (mode, MODE_HINT))
+
+
+def _load_personas_doc(path: str) -> Dict[str, Any]:
+    """Persona-Datei lesen und Format pruefen (Format ``{"personas": {...}}``).
+
+    Bewusst KEIN Import aus ``deploy/attack-cycle`` (keine Modulkopplung) — der
+    Vertrag ist das JSON-Format, nicht der Code. Jeder Fehler (fehlend, kaputt,
+    falsche Struktur) ist fail-loud als :class:`ProvisionError`.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            doc = json.load(handle)
+    except OSError as exc:
+        raise ProvisionError("Persona-Datei %s nicht lesbar: %s" % (path, exc))
+    except ValueError as exc:
+        raise ProvisionError("Persona-Datei %s ist kein gueltiges JSON: %s" % (path, exc))
+    if not isinstance(doc, dict) or not isinstance(doc.get("personas"), dict):
+        raise ProvisionError(
+            "Persona-Datei %s hat ungueltiges Format (erwartet {'personas': {...}})" % path
+        )
+    return doc
+
+
 # ---------------------------------------------------------------------------
 # US3 — Config (JSON + Env, analog SERVER_CONTROL_*)
 # ---------------------------------------------------------------------------
@@ -114,6 +203,9 @@ class Config:
     send_tailer_script: str = _deploy_script("send-tailer", "send_tailer.py")
     match_loop_script: str = _deploy_script("match-loop", "match_loop.py")
     attack_cycle_script: str = _deploy_script("attack-cycle", "attack_cycle.py")
+    # Persona-Quelle fuer ``mode=solo_persona:<name>`` (#993). Default zeigt auf
+    # die mitgelieferte Beispiel-Datei (via Env/JSON uebersteuerbar).
+    personas_file: str = _deploy_script("attack-cycle", "personas.example.json")
     config_cfg: str = "/opt/rbmods/compose/rift-{env}/riftbreaker/config/config.cfg"
     # Additiver Suffix am `server_name` der je Instanz abgeleiteten config.cfg
     # (#970). Platzhalter `{env}`/`{instance_id}`; leerer Wert = bewusstes Opt-out.
@@ -150,6 +242,7 @@ _JSON_KEYS = {
     "send_tailer_script": "send_tailer_script",
     "match_loop_script": "match_loop_script",
     "attack_cycle_script": "attack_cycle_script",
+    "personas_file": "personas_file",
     "config_cfg": "config_cfg",
     "server_name_suffix": "server_name_suffix",
     "rbtools_dir": "rbtools_dir",
@@ -183,6 +276,7 @@ _ENV_KEYS = {
     "PROVISIONER_SEND_TAILER_SCRIPT": "send_tailer_script",
     "PROVISIONER_MATCH_LOOP_SCRIPT": "match_loop_script",
     "PROVISIONER_ATTACK_CYCLE_SCRIPT": "attack_cycle_script",
+    "PROVISIONER_PERSONAS_FILE": "personas_file",
     "PROVISIONER_CONFIG_CFG": "config_cfg",
     "PROVISIONER_SERVER_NAME_SUFFIX": "server_name_suffix",
     "PROVISIONER_RBTOOLS_DIR": "rbtools_dir",
@@ -322,6 +416,8 @@ class InstanceSpec(object):
         # Instanz-eigene config.cfg (#970): Staging-Ziel im run_root.
         self.config_dir = os.path.join(run_root, "config")
         self.config_cfg_staged = os.path.join(self.config_dir, "config.cfg")
+        # Gestagte Persona-Datei (#993): Quelle fuer Bridge-Seeding + Mount.
+        self.personas_staged = os.path.join(self.config_dir, "personas.json")
         self.bridge_port_base = cfg.bridge_port_base
         self.bridge_port = cfg.bridge_port_base + (self._numeric_suffix() % 20000)
         # Sidecar-Namen (#966): konsistent mit ``compose_project``/``container``.
@@ -441,6 +537,7 @@ class InstanceSpec(object):
             "config_cfg": self.config_cfg,
             "config_dir": self.config_dir,
             "config_cfg_staged": self.config_cfg_staged,
+            "personas_staged": self.personas_staged,
             "server_name_suffix": self.server_name_suffix,
             "rbtools_dir": self.rbtools_dir,
             "game_source": self.game_source,
@@ -624,6 +721,7 @@ class Provisioner(object):
         health_probe: Optional[Callable[[str], bool]] = None,
         clock: Optional[Callable[[], float]] = None,
         sleep: Optional[Callable[[float], None]] = None,
+        bridge_url: Optional[Callable[[InstanceSpec], str]] = None,
     ) -> None:
         self.cfg = cfg
         self.docker = docker or DockerCli(cfg.docker, cfg.timeout)
@@ -631,14 +729,19 @@ class Provisioner(object):
         self.health_probe = health_probe or http_health_ok
         self.clock = clock or time.monotonic
         self.sleep = sleep or time.sleep
+        # Basis-URL der Bridge (Runtime-Seeding, #993). Injizierbar, damit Tests
+        # gegen einen lokalen Stub statt eines echten Ports sprechen koennen.
+        self.bridge_url = bridge_url or (lambda spec: "http://127.0.0.1:%d" % spec.bridge_port)
 
     # -- oeffentlich -------------------------------------------------------
     def start(
         self,
         env: Optional[str] = None,
-        mode: str = "solo",
+        mode: str = "solo_self",
         instance_id: Optional[str] = None,
     ) -> Dict[str, Any]:
+        # Fail-loud VOR jeglicher Ressource: ungueltiger Modus -> kein Docker.
+        selection = parse_mode(mode)
         env = env or self.cfg.env
         instance_id = instance_id if instance_id is not None else self.cfg.instance_id
         spec = self.spec_factory(env, instance_id, self.cfg)
@@ -660,7 +763,7 @@ class Provisioner(object):
                 )
             return self._status_dict(spec, created=False)
 
-        self._preflight(spec)
+        self._preflight(spec, selection)
 
         created: Dict[str, Any] = {
             "container": False,
@@ -669,20 +772,26 @@ class Provisioner(object):
             "volumes": [],
             "dirs": [],
             "config_staged": None,
+            "personas_staged": None,
         }
         try:
             self._create_dirs(spec, created)
             self._stage_config(spec, created)
+            if selection.kind == "persona":
+                self._stage_personas(spec, selection, created)
             self._create_network(spec, created)
             self._create_volumes(spec, created)
-            self._create_container(spec, created, mode)
+            self._create_container(spec, created, selection)
             if not self._wait_healthy(spec):
                 raise ProvisionError(
                     "Health-Timeout: %s liefert kein ok innerhalb von %ss"
                     % (spec.health_url(), self.cfg.health_deadline)
                 )
+            # Runtime-Wahrheit setzen (nach Health, VOR den Sidecars, damit der
+            # erste Poll des Attack-Cycle schon korrekt ist) (#993).
+            self._seed_bridge(spec, selection)
             # Sidecars erst nach der Dedi-Health: sie brauchen die Bridge.
-            self._create_sidecars(spec, created)
+            self._create_sidecars(spec, created, selection)
         except Exception:
             self._rollback(spec, created)
             raise
@@ -874,7 +983,77 @@ class Provisioner(object):
             len(text.encode("utf-8")),
         )
 
-    def _preflight(self, spec: InstanceSpec) -> None:
+    def _stage_personas(
+        self, spec: InstanceSpec, selection: ModeSelection, created: Dict[str, Any]
+    ) -> None:
+        """Persona-Datei instanz-eigen ablegen + atomar publizieren (#993).
+
+        Quelle = ``cfg.personas_file`` (Format ``{"personas": {...}}``). Inhalt
+        wird als kompaktes JSON in ``<run_root>/config/personas.json`` (0644)
+        geschrieben; dient dem Bridge-Seeding UND dem ro-Sidecar-Mount.
+        """
+        doc = self._validate_persona(selection)
+        os.makedirs(spec.config_dir, exist_ok=True)
+        tmp = spec.personas_staged + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(doc, handle, ensure_ascii=False)
+        os.replace(tmp, spec.personas_staged)
+        os.chmod(spec.personas_staged, 0o644)
+        created["personas_staged"] = spec.personas_staged
+        LOG.info("personas gestaged: %s", spec.personas_staged)
+
+    # -- Bridge-Seeding (#993, Runtime-Wahrheit) ---------------------------
+    def _http_json(
+        self, method: str, url: str, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Kleiner stdlib-HTTP-Helfer: JSON senden/lesen, Fehler -> ProvisionError."""
+        data = None
+        headers: Dict[str, str] = {}
+        if payload is not None:
+            data = json.dumps(payload).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(url, data=data, method=method, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=self.cfg.timeout) as response:
+                status = response.status
+                body = response.read().decode("utf-8", "replace")
+        except (urllib.error.URLError, OSError) as exc:
+            raise ProvisionError("Bridge-Aufruf %s %s fehlgeschlagen: %s" % (method, url, exc))
+        if status < 200 or status >= 300:
+            raise ProvisionError("Bridge-Aufruf %s %s -> HTTP %d" % (method, url, status))
+        if not body.strip():
+            return {}
+        try:
+            parsed = json.loads(body)
+        except ValueError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def _seed_bridge(self, spec: InstanceSpec, selection: ModeSelection) -> None:
+        """Bridge mit der modus-abgeleiteten Runtime-Konfiguration seeden.
+
+        ``send_yourself``/``persona`` (#851) leben AUSSCHLIESSLICH in
+        ``game_config`` — kein Entrypoint-Env wird konsumiert. Deshalb ist das
+        Seeding die einzige wirksame Quelle fuer ``pipe_bridge.c`` und den
+        Attack-Cycle. Fehler -> :class:`ProvisionError` (Rollback greift).
+        """
+        base = self.bridge_url(spec).rstrip("/")
+        current = self._http_json("GET", base + "/game_config")
+        merged = dict(current)
+        merged["send_yourself"] = selection.send_yourself
+        merged["persona"] = selection.persona_on
+        merged["mode"] = selection.mode
+        self._http_json("POST", base + "/game_config", merged)
+        if selection.kind == "persona":
+            doc = _load_personas_doc(self.cfg.personas_file)
+            self._http_json("POST", base + "/personas", doc)
+            self._http_json("POST", base + "/persona_active", {"name": selection.persona})
+        else:
+            self._http_json("POST", base + "/persona_active", {"name": ""})
+        LOG.info("bridge geseedet: mode=%s send_yourself=%s persona=%s",
+                 selection.mode, selection.send_yourself, selection.persona or "-")
+
+    def _preflight(self, spec: InstanceSpec, selection: ModeSelection) -> None:
         if self._port_in_use(spec.bridge_port):
             raise ProvisionError(
                 "Bridge-Port %d ist belegt (127.0.0.1) — Instanz %s nicht startbar"
@@ -914,6 +1093,19 @@ class Provisioner(object):
         # Fail-loud VOR dem ersten Container: die Quelle braucht eine
         # server_name-Zeile fuer die instanz-eigene Ableitung (#970).
         self._read_server_name(spec.config_cfg)
+        # Persona-Modus: Persona-Quelle muss existieren UND den Namen enthalten,
+        # sonst kein Container (#993). ``solo_self`` liest die Datei NICHT.
+        if selection.kind == "persona":
+            self._validate_persona(selection)
+
+    def _validate_persona(self, selection: ModeSelection) -> Dict[str, Any]:
+        """Persona-Datei laden und pruefen, dass ``selection.persona`` enthalten ist."""
+        doc = _load_personas_doc(self.cfg.personas_file)
+        if selection.persona not in doc["personas"]:
+            raise ProvisionError(
+                "unbekannte Persona '%s' in %s" % (selection.persona, self.cfg.personas_file)
+            )
+        return doc
 
     @staticmethod
     def _port_in_use(port: int, host: str = "127.0.0.1") -> bool:
@@ -956,7 +1148,9 @@ class Provisioner(object):
                 self.docker.run_or_fail(["volume", "create", volume])
                 created["volumes"].append(volume)
 
-    def _create_container(self, spec: InstanceSpec, created: Dict[str, Any], mode: str) -> None:
+    def _create_container(
+        self, spec: InstanceSpec, created: Dict[str, Any], selection: ModeSelection
+    ) -> None:
         args = [
             "run",
             "-d",
@@ -971,7 +1165,7 @@ class Provisioner(object):
             "-v", "%s:/data/saves" % spec.saves_volume,
             "-v", "%s:/data/config/config.cfg:ro" % spec.config_cfg_staged,
             "-v", "%s:/opt/rbtools:ro" % spec.rbtools_dir,
-            "-e", "RIFTBREAKER_MODE=%s" % mode,
+            "-e", "RIFTBREAKER_MODE=%s" % selection.mode,
             "-e", "RBB_BRIDGE_BIND=0.0.0.0",
             "-e", "RBB_BRIDGE_PORT=%d" % spec.bridge_container_port,
             "-e", "WINEESYNC=0",
@@ -991,7 +1185,9 @@ class Provisioner(object):
         self.docker.run_or_fail(args)
         created["container"] = True
 
-    def _create_sidecars(self, spec: InstanceSpec, created: Dict[str, Any]) -> None:
+    def _create_sidecars(
+        self, spec: InstanceSpec, created: Dict[str, Any], selection: ModeSelection
+    ) -> None:
         """Vier Sidecars pro Instanz starten (#966) — Soll-Env/Volumes/Commands
         1:1 aus ``roles/riftbreaker-server/templates/docker-compose.yml.j2``.
 
@@ -1057,7 +1253,8 @@ class Provisioner(object):
         created["sidecars"].append(spec.match_loop_container)
 
         # attack-cycle: bridge-url + Skript ro; EINZIGER Host-Publish.
-        self.docker.run_or_fail([
+        # Modus-abgeleitete Start-Fallback-Args (#993).
+        cycle_args = [
             "run", "-d",
             "--name", spec.attack_cycle_container,
             "--network", spec.network,
@@ -1067,6 +1264,13 @@ class Provisioner(object):
             "-p", "127.0.0.1:%d:%d" % (
                 spec.attack_cycle_port, spec.attack_cycle_container_port),
             "-v", "%s:/app/attack_cycle.py:ro" % spec.attack_cycle_script,
+        ]
+        if selection.kind == "persona":
+            cycle_args += [
+                "-e", "RBB_PERSONA_FILE=%s" % PERSONA_CONTAINER_PATH,
+                "-v", "%s:%s:ro" % (spec.personas_staged, PERSONA_CONTAINER_PATH),
+            ]
+        cycle_args += [
             spec.attack_cycle_image,
             "python3", "-u", "/app/attack_cycle.py",
             "--bridge-url", spec.attack_cycle_bridge_url(),
@@ -1074,7 +1278,14 @@ class Provisioner(object):
             "--difficulty-interval", str(spec.attack_cycle_difficulty_interval),
             "--control-bind", "0.0.0.0",
             "--control-port", str(spec.attack_cycle_container_port),
-        ])
+            "--send-yourself", "on" if selection.send_yourself else "off",
+        ]
+        if selection.kind == "persona":
+            cycle_args += [
+                "--persona", selection.persona,
+                "--persona-file", PERSONA_CONTAINER_PATH,
+            ]
+        self.docker.run_or_fail(cycle_args)
         created["sidecars"].append(spec.attack_cycle_container)
 
     def _wait_healthy(self, spec: InstanceSpec) -> bool:
@@ -1162,6 +1373,11 @@ class Provisioner(object):
                 os.remove(created["config_staged"])
             except OSError as exc:  # pragma: no cover - nur Log
                 LOG.warning("Rollback config.cfg %s: %s", created["config_staged"], exc)
+        if created.get("personas_staged"):
+            try:
+                os.remove(created["personas_staged"])
+            except OSError as exc:  # pragma: no cover - nur Log
+                LOG.warning("Rollback personas.json %s: %s", created["personas_staged"], exc)
         if created.get("network"):
             try:
                 self.docker.network_rm(spec.network)
@@ -1191,8 +1407,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     start = sub.add_parser("start", help="eine Instanz starten (idempotent)")
     start.add_argument("--env", default=None)
-    start.add_argument("--mode", default="solo")
+    start.add_argument("--mode", default="solo_self")
     start.add_argument("--instance-id", dest="instance_id", default=None)
+    start.add_argument(
+        "--personas-file", dest="personas_file", default=None,
+        help="Override der Persona-Quelle (Default: PROVISIONER_PERSONAS_FILE)",
+    )
 
     stop = sub.add_parser("stop", help="eine Instanz restfrei stoppen (idempotent)")
     stop.add_argument("--env", default=None)
@@ -1234,6 +1454,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     provisioner = Provisioner(cfg)
     try:
         if args.command == "start":
+            if getattr(args, "personas_file", None):
+                cfg = dataclasses.replace(cfg, personas_file=args.personas_file)
             result = provisioner.start(args.env, args.mode, args.instance_id)
         elif args.command == "stop":
             result = provisioner.stop(args.instance_id, args.env)
