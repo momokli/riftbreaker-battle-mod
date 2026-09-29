@@ -155,6 +155,23 @@ riftbreaker_attack_cycle_port: 9102
 riftbreaker_attack_cycle_script: "{{ riftbreaker_deploy_dir }}/attack_cycle.py"
 riftbreaker_attack_cycle_script_src: "{{ playbook_dir }}/attack-cycle/attack_cycle.py"
 
+# --- Chat-Announcer (Issue #940) ---------------------------------------------
+# Env-agnostischer Sidecar (analog attack-cycle): liest den Attack-Cycle-State
+# (GET /status) und schickt ereignis-/schwellenbasiert Status-Zeilen in den
+# In-Game-Chat (POST /send_chat an die Bridge). Kein 1-Hz-Spam; kein Host-Port.
+# container_name ist global -> prod/staging/test muessen ihn ueberschreiben.
+riftbreaker_chat_announcer_container: riftbreaker-chat-announcer
+riftbreaker_chat_announcer_image: "python:3.12-slim"
+# Attack-Cycle-Basis-URL im Compose-Netz (der Announcer haengt /status an).
+riftbreaker_chat_announcer_attack_cycle_url: "http://{{ riftbreaker_attack_cycle_container }}:{{ riftbreaker_attack_cycle_port }}"
+# Bridge-Basis-URL im Compose-Netz (der Announcer haengt /send_chat an).
+riftbreaker_chat_announcer_bridge_url: "http://{{ riftbreaker_server_container }}:{{ riftbreaker_bridge_container_port }}"
+# Poll-Intervall in Sekunden (nur Lesen; gesendet wird beim Schwellen-Crossing).
+riftbreaker_chat_announcer_interval: 1.0
+# Script auf dem Host (bind-mount ro in den Sidecar).
+riftbreaker_chat_announcer_script: "{{ riftbreaker_deploy_dir }}/announcer.py"
+riftbreaker_chat_announcer_script_src: "{{ playbook_dir }}/chat-announcer/announcer.py"
+
 # --- Sessions ---------------------------------------------------------------
 
 # --- Disk-Space-Gate (Issue #310) --------------------------------------------

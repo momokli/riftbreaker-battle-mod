@@ -213,6 +213,40 @@ services:
       - --control-port
       - "{{ riftbreaker_attack_cycle_port }}"
 
+  # Chat-Announcer (Issue #940): eigener Sidecar, liest den Attack-Cycle-State
+  # (GET /status) und schickt ereignis-/schwellenbasiert Status-Zeilen in den
+  # In-Game-Chat (POST /send_chat an die Bridge). Kein 1-Hz-Spam, kein Host-Port.
+  {{ riftbreaker_chat_announcer_container }}:
+    image: "{{ riftbreaker_chat_announcer_image }}"
+    container_name: {{ riftbreaker_chat_announcer_container }}
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "{{ riftbreaker_log_max_size }}"
+        max-file: "{{ riftbreaker_log_max_file }}"
+    depends_on:
+      - {{ riftbreaker_server_container }}
+      - {{ riftbreaker_attack_cycle_container }}
+    labels:
+      RBB_ENV: "{{ rift_env }}"
+      RBB_REF: "{{ rift_deploy_ref }}"
+    environment:
+      RBB_ENV: "{{ rift_env }}"
+      RBB_REF: "{{ rift_deploy_ref }}"
+    volumes:
+      - "{{ riftbreaker_chat_announcer_script }}:/app/announcer.py:ro"
+    command:
+      - python3
+      - -u
+      - /app/announcer.py
+      - --attack-cycle-url
+      - "{{ riftbreaker_chat_announcer_attack_cycle_url }}"
+      - --bridge-url
+      - "{{ riftbreaker_chat_announcer_bridge_url }}"
+      - --interval
+      - "{{ riftbreaker_chat_announcer_interval }}"
+
 volumes:
   {{ riftbreaker_wine_volume }}:
   {{ riftbreaker_saves_volume }}:
