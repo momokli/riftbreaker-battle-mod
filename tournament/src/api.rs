@@ -2932,4 +2932,94 @@ mod tests {
             .iter()
             .any(|r| r.starts_with("POST /pause_dom ")));
     }
+
+    /// #997 End-to-End: der komplette Match-Flow gegen den echten Router mit
+    /// zwei Mock-Bridge-Endpoints — lobby(A,B) → ready → go → `POST /pause` →
+    /// `POST /resume`. Prüft, dass **beide** Mocks *genau einmal* `POST
+    /// /pause_dom` bzw. `POST /resume_dom` sehen und dass `/state` `paused`
+    /// true/false spiegelt (Pause ändert die Phase nicht).
+    #[tokio::test]
+    async fn pause_resume_full_flow_end_to_end() {
+        let (addr_a, cap_a) = capture_endpoint().await;
+        let (addr_b, cap_b) = capture_endpoint().await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [
+            Some(format!("http://{addr_a}/exec")),
+            Some(format!("http://{addr_b}/exec")),
+        ];
+        let app = make_app(cfg).await;
+
+        // lobby(A,B) → ready → go (der echte, bestehende VS-Flow).
+        assert_eq!(register(&app, "A", "momo").await.0, StatusCode::OK);
+        assert_eq!(register(&app, "B", "matheo").await.0, StatusCode::OK);
+        let (_, v) = call(&app, "POST", "/ready", Some(json!({"world": "A"}))).await;
+        assert_eq!(v["phase"], "lobby"); // erst ein Ready
+        let (_, v) = call(&app, "POST", "/ready", Some(json!({"world": "B"}))).await;
+        assert_eq!(v["phase"], "ready");
+        let (s, v) = call(&app, "POST", "/go", Some(json!({}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["phase"], "running");
+
+        // vor Pause: /state meldet nicht pausiert.
+        let (_, st) = call(&app, "GET", "/state", None).await;
+        assert_eq!(st["paused"], false);
+
+        // POST /pause → beide Welten gepusht, `paused` true, Phase bleibt running.
+        let (s, v) = call(&app, "POST", "/pause", Some(json!({}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["paused"], true);
+        assert_eq!(v["already"], false);
+        assert_eq!(v["phase"], "running");
+        assert_eq!(v["broadcast"]["A"]["ok"], true);
+        assert_eq!(v["broadcast"]["B"]["ok"], true);
+        assert_eq!(
+            v["broadcast"]["A"]["endpoint"],
+            format!("http://{addr_a}/pause_dom")
+        );
+        assert_eq!(
+            v["broadcast"]["B"]["endpoint"],
+            format!("http://{addr_b}/pause_dom")
+        );
+
+        // /state spiegelt paused=true + pause_broadcast je Welt.
+        let (_, st) = call(&app, "GET", "/state", None).await;
+        assert_eq!(st["paused"], true);
+        assert_eq!(st["phase"], "running");
+        assert_eq!(st["teams"]["A"]["pause_broadcast"]["ok"], true);
+        assert_eq!(st["teams"]["B"]["pause_broadcast"]["ok"], true);
+
+        // POST /resume → beide Welten gepusht, `paused` false.
+        let (s, v) = call(&app, "POST", "/resume", Some(json!({}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["paused"], false);
+        assert_eq!(v["already"], false);
+        assert_eq!(v["broadcast"]["A"]["ok"], true);
+        assert_eq!(
+            v["broadcast"]["A"]["endpoint"],
+            format!("http://{addr_a}/resume_dom")
+        );
+        assert_eq!(
+            v["broadcast"]["B"]["endpoint"],
+            format!("http://{addr_b}/resume_dom")
+        );
+        let (_, st) = call(&app, "GET", "/state", None).await;
+        assert_eq!(st["paused"], false);
+        assert_eq!(st["phase"], "running");
+
+        // Beide Mocks haben GENAU EIN POST /pause_dom und EIN POST /resume_dom.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        for (name, cap) in [("A", &cap_a), ("B", &cap_b)] {
+            let reqs = cap.lock().await;
+            let pauses = reqs
+                .iter()
+                .filter(|r| r.starts_with("POST /pause_dom "))
+                .count();
+            let resumes = reqs
+                .iter()
+                .filter(|r| r.starts_with("POST /resume_dom "))
+                .count();
+            assert_eq!(pauses, 1, "{name}: genau ein pause_dom — {reqs:?}");
+            assert_eq!(resumes, 1, "{name}: genau ein resume_dom — {reqs:?}");
+        }
+    }
 }
