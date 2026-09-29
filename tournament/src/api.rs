@@ -155,9 +155,15 @@ struct GoReq {
 #[derive(Debug, Deserialize)]
 struct SendReq {
     world: String,
+    /// Unit-basierter Send (SP/direkt). Leer/missing für wellen-basierte Sends.
+    #[serde(default)]
     units: Vec<UnitReq>,
     #[serde(default)]
     value: u64,
+    /// Wellen-basierter Cross-World-Send (US2, #996): Difficulty-Level ≥ 1.
+    /// Gesetzt → Level-Send (`route_wave_send`); sonst unit-basiert.
+    #[serde(default)]
+    level: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -341,22 +347,36 @@ async fn go(AxumState(app): AxumState<AppState>, Json(req): Json<GoReq>) -> ApiR
 }
 
 /// POST /send — Wave-Routing: Send von Welt X landet in der Queue der Gegner-Welt.
+///
+/// Zwei Formen (additiv, #996):
+///   * unit-basiert (`{"world":"A","units":[…],"value":…}`) — SP/direkt;
+///   * wellen-basiert (`{"world":"A","level":3,"value":…}`) — Cross-World
+///     aus dem Attack-Cycle (US2/US5). Der Level-Send landet ebenfalls in der
+///     Queue der Gegner-Welt und wird bei deren nächstem `wave_start` in den
+///     Reveal übernommen und als Ingress gepusht (US4).
 async fn send(
     AxumState(app): AxumState<AppState>,
     Json(req): Json<SendReq>,
 ) -> ApiResult<Json<Value>> {
     let world = parse_world(&req.world)?;
-    let units: Vec<crate::state::UnitSpec> = req
-        .units
-        .into_iter()
-        .map(|u| crate::state::UnitSpec {
-            unit: u.unit,
-            count: u.count,
-        })
-        .collect();
-    let batch = app
-        .with_state(|s| s.route_send(world, units, req.value))
-        .await?;
+    let batch = match req.level {
+        Some(level) => {
+            app.with_state(|s| s.route_wave_send(world, level, req.value))
+                .await?
+        }
+        None => {
+            let units: Vec<crate::state::UnitSpec> = req
+                .units
+                .into_iter()
+                .map(|u| crate::state::UnitSpec {
+                    unit: u.unit,
+                    count: u.count,
+                })
+                .collect();
+            app.with_state(|s| s.route_send(world, units, req.value))
+                .await?
+        }
+    };
     let to = world.opponent();
     let view = app.state.read().await.view();
     let pending_len = view
@@ -367,6 +387,7 @@ async fn send(
     Ok(Json(json!({
         "queued_for": to.as_str(),
         "round": batch.round,
+        "level": batch.level,
         "batch": batch,
         "pending_sends": pending_len,
     })))
@@ -2013,5 +2034,68 @@ mod tests {
         assert_eq!(v["commands"][0]["command"], "rb_wave 1");
         let (_, v) = call(&app, "GET", "/referee/poll?world=B", None).await;
         assert_eq!(v["commands"].as_array().unwrap().len(), 0);
+    }
+
+    /// US2 (#996): wellen-basierter Send mit `level` landet in der Queue der
+    /// Gegner-Welt und wird world-getaggt im Feed geführt.
+    #[tokio::test]
+    async fn send_with_level_queues_for_opponent() {
+        let app = make_app(test_cfg()).await;
+        register(&app, "A", "momo").await;
+        register(&app, "B", "matheo").await;
+        call(&app, "POST", "/go", Some(json!({}))).await;
+
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/send",
+            Some(json!({"world": "A", "level": 3, "value": 1400})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["queued_for"], "B");
+        assert_eq!(v["level"], 3);
+        assert_eq!(v["batch"]["level"], 3);
+        assert_eq!(v["batch"]["from"], "A");
+        assert_eq!(v["pending_sends"], 1);
+
+        let (_, st) = call(&app, "GET", "/state", None).await;
+        let pend = st["teams"]["B"]["pending_sends"].as_array().unwrap();
+        assert_eq!(pend.len(), 1);
+        assert_eq!(pend[0]["level"], 3);
+        assert_eq!(pend[0]["value"], 1400);
+
+        // level 0 → 400 invalid.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/send",
+            Some(json!({"world": "A", "level": 0})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        assert_eq!(err_type(&v), "invalid");
+
+        // Unit-Send bleibt unverändert möglich (Legacy).
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/send",
+            Some(json!({"world": "B", "units": [{"unit": "x", "count": 1}], "value": 10})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["queued_for"], "A");
+        assert_eq!(v["level"], Value::Null);
+
+        // Feed-Eintrag ist world-getaggt.
+        let (_, ev) = call(&app, "GET", "/events", None).await;
+        let send = ev["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["kind"] == "send")
+            .unwrap();
+        assert_eq!(send["world"], "A");
     }
 }

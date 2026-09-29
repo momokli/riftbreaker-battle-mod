@@ -140,9 +140,15 @@ pub struct SendBatch {
     /// Welt, von der gesendet wurde.
     pub from: World,
     /// Einheiten-Komposition (frei definiert; `unit` = Kreaturen-Id des Mods).
+    /// Leer für wellen-basierte Sends (US2, nur `level`).
     pub units: Vec<UnitSpec>,
     /// Gesendeter Wert in Send-Währung (z. B. Carbonium-Äquivalent).
     pub value: u64,
+    /// Difficulty-Level des Wellen-Sends (US2, issue #996). Der Attack-Cycle
+    /// kennt keine Unit-Komposition, nur ein Level; `None` für unit-basierte
+    /// Sends (SP/direkt). Additiv/optional — fehlt für Alt-Sends.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<u32>,
     /// Runde, in der der Send beim Referee einging (Zuordnung beim Drain).
     pub round: u32,
     /// Server-Zeitstempel (ms seit Unix-Epoch).
@@ -553,6 +559,7 @@ impl MatchState {
             from,
             units: clean,
             value,
+            level: None,
             round: self.round,
             ts: now_ms(),
         };
@@ -572,6 +579,7 @@ impl MatchState {
                 from: World::B,
                 units: batch.units.clone(),
                 value,
+                level: None,
                 round: batch.round,
                 ts: batch.ts,
             };
@@ -588,7 +596,65 @@ impl MatchState {
         Ok(batch)
     }
 
-    /// POST /report — Wellenstart einer Welt: Queue-Drain + Reveal, Rundenwechsel.
+    /// POST /send mit `level` — wellen-basierter Cross-World-Send (US2, #996).
+    ///
+    /// Der Attack-Cycle kennt keine Unit-Komposition, nur ein
+    /// Difficulty-Level; deshalb trägt dieser Send ein `level` (statt `units`).
+    /// Er landet in der `pending`-Queue der **Gegner**-Welt und wird bei deren
+    /// nächstem `wave_start` gedraint (Reveal + Ingress-Push, US4).
+    ///
+    /// Validierung: `level >= 1`, nur in `Phase::Running`, sendende Welt muss
+    /// registriert sein (`invalid`/`conflict`/`not_found` wie bei `route_send`).
+    /// Der SP-Mirror bleibt unberührt: ein Level-Send spiegelt **nicht** doppelt
+    /// (SP braucht keinen Level-Send).
+    pub fn route_wave_send(
+        &mut self,
+        from: World,
+        level: u32,
+        value: u64,
+    ) -> Result<SendBatch, StateError> {
+        if self.phase != Phase::Running {
+            return Err(StateError::new(
+                "conflict",
+                format!(
+                    "Sends nur während des Matches (Phase: {})",
+                    self.phase.as_str()
+                ),
+            ));
+        }
+        if self.player(from).is_none() {
+            return Err(StateError::new(
+                "not_found",
+                format!("Welt {from} ist nicht registriert"),
+            ));
+        }
+        if level < 1 {
+            return Err(StateError::new(
+                "invalid",
+                format!("level muss ≥ 1 sein (war {level})"),
+            ));
+        }
+        let to = from.opponent();
+        let batch = SendBatch {
+            from,
+            units: Vec::new(),
+            value,
+            level: Some(level),
+            round: self.round,
+            ts: now_ms(),
+        };
+        self.team_mut(to).pending.push(batch.clone());
+        self.log_world(
+            "send",
+            Some(from),
+            format!(
+                "Send {from} → {to}: Level {level}, Wert {value} (Runde {})",
+                self.round
+            ),
+        );
+        Ok(batch)
+    }
+
     pub fn wave_start(
         &mut self,
         world: World,
@@ -1861,5 +1927,82 @@ mod tests {
             .unwrap();
         let json = serde_json::to_value(reg).unwrap();
         assert_eq!(json["world"], "A");
+    }
+
+    // ---- US2: wellen-basierter Send mit Level (Issue #996) ----
+
+    #[test]
+    fn send_batch_carries_level_and_routes_to_opponent() {
+        let mut s = fresh();
+        start(&mut s);
+        let b = s.route_wave_send(World::A, 3, 1400).unwrap();
+        assert_eq!(b.from, World::A);
+        assert_eq!(b.level, Some(3));
+        assert_eq!(b.value, 1400);
+        assert!(b.units.is_empty());
+        assert_eq!(b.round, 1);
+        // Batch landet bei der Gegner-Welt B.
+        assert_eq!(pending(&s, World::B).len(), 1);
+        assert_eq!(pending(&s, World::B)[0].level, Some(3));
+        assert!(pending(&s, World::A).is_empty());
+        // Feed-Eintrag ist world-getaggt und nennt das Level (US1).
+        let send = s.feed.iter().rev().find(|e| e.kind == "send").unwrap();
+        assert_eq!(send.world, Some(World::A));
+        assert!(send.msg.contains("Level 3"), "msg: {}", send.msg);
+
+        // level < 1 → invalid; vor dem Start → conflict.
+        assert_eq!(
+            s.route_wave_send(World::A, 0, 1).unwrap_err().code,
+            "invalid"
+        );
+        let mut s2 = fresh();
+        register_all(&mut s2);
+        assert_eq!(
+            s2.route_wave_send(World::A, 3, 1).unwrap_err().code,
+            "conflict"
+        );
+
+        // Level-Send trägt das Drain-Level ins Reveal der Zielwelt.
+        let mut s3 = fresh();
+        start(&mut s3);
+        s3.route_wave_send(World::A, 5, 4000).unwrap();
+        s3.wave_start(World::B, None).unwrap();
+        let inc = &s3.reveal.as_ref().unwrap().incoming[&World::B];
+        assert_eq!(inc.len(), 1);
+        assert_eq!(inc[0].level, Some(5));
+        assert_eq!(inc[0].from, World::A);
+    }
+
+    /// SP-Mirror unverändert: ein Level-Send wird NICHT zurückgespiegelt.
+    #[test]
+    fn wave_send_sp_does_not_mirror() {
+        let mut s = fresh();
+        s.start_sp("momo").unwrap();
+        s.route_wave_send(World::A, 2, 700).unwrap();
+        assert_eq!(pending(&s, World::B).len(), 1);
+        assert!(
+            pending(&s, World::A).is_empty(),
+            "SP darf einen Level-Send nicht doppelt spiegeln"
+        );
+    }
+
+    /// Unit-basierte Sends tragen kein `level`-Feld (additiv, kein Bestandsbruch).
+    #[test]
+    fn unit_send_omits_level_field() {
+        let mut s = fresh();
+        start(&mut s);
+        let b = s
+            .route_send(
+                World::A,
+                vec![UnitSpec {
+                    unit: "creeper".into(),
+                    count: 2,
+                }],
+                400,
+            )
+            .unwrap();
+        assert!(b.level.is_none());
+        let json = serde_json::to_value(&b).unwrap();
+        assert!(json.get("level").is_none(), "level darf fehlen: {json}");
     }
 }
