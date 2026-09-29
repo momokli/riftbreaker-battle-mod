@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import unittest
 
-import identity
 from identity import Kind, canonicalize, is_authorized, is_identity_like, parse_identity
 
 
