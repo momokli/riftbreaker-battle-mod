@@ -53,7 +53,10 @@
 # Split (Issue #995, prod-b): KERN-Keys gelten fuer jede Nicht-dev-Env; die
 # WEBSITE-/CADDY-Keys nur fuer Envs, die die Website/Caddy-Rolle wirklich
 # deployen (prod/staging). prod-B deployt sie nicht -> un-definiert -> ohne
-# Split waere der B-Play rot (undefined Lookup).
+# Split waere der B-Play rot (undefined Lookup). `mods_zip_dest` gehoert in
+# die KERN-Gruppe (Rework Blocker 2): prod-B konsumiert zwar das kanonische
+# A-Artefakt, muss aber EXPLIZIT vom dev-Basiswert abweichen — sonst erbte es
+# still den dev-Docroot.
 - name: "ENV-ISOLATION-GATE — Kern-Pfade vom dev-Basiswert abweichend (Issue #483, US3)"
   assert:
     that:
@@ -76,6 +79,7 @@
     - riftbreaker_compose_project
     - rbtools_dir
     - rbtools_staging_dir
+    - mods_zip_dest
   when: rift_env != 'dev'
   vars:
     # dev-Basiswerte (host_vars/planet). Bewusst als explizite Liste: Ansible
@@ -90,6 +94,7 @@
       riftbreaker_compose_project: riftbreaker-dedicated
       rbtools_dir: /opt/rbmods/rbtools/dev
       rbtools_staging_dir: /opt/rbmods/rbtools/dev/.staging
+      mods_zip_dest: /srv/rbmods-site/mods/rbbattle.zip
   tags: always
 
 # Website-/Caddy-Pfade (Issue #483, US3) — NUR Envs, die die website/rift-caddy
@@ -109,13 +114,11 @@
   loop:
     - website_docroot
     - website_mods_dir
-    - mods_zip_dest
     - rift_caddy_deploy_dir
   when: rift_env in ['prod', 'staging']
   vars:
     rift_env_dev_base:
       website_docroot: /srv/rbmods-site
       website_mods_dir: /srv/rbmods-site/mods
-      mods_zip_dest: /srv/rbmods-site/mods/rbbattle.zip
       rift_caddy_deploy_dir: /opt/rbmods/compose/rift-dev/caddy
   tags: always

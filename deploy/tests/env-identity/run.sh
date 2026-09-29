@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Hermetischer Selbsttest der Deploy-Identitaet (Issue #483, US1).
 #
-# Prüft die ECHTE Task-Datei deploy/tasks/deploy-identity.yml für alle drei
-# Envs (dev/prod/test): die Identitaet ist "<env> · <ref>", dev/test tragen den
-# Checkout-SHA, prod traegt zusaetzlich den Git-Tag.
+# Prüft die ECHTE Task-Datei deploy/tasks/deploy-identity.yml für alle vier
+# Envs (dev/test/prod/prod-b): die Identitaet ist "<env> · <ref>", dev/test
+# tragen den Checkout-SHA, prod/prod-b tragen zusaetzlich den Git-Tag.
 #
 # Kein Host, kein SSH, kein Vault, keine Prod-Aktion. Läuft in
 # deploy-check-local.
@@ -21,9 +21,9 @@ git -C "$checkout" -c user.email=test@example.invalid -c user.name=Test \
   commit -q --allow-empty -m "init"
 git -C "$checkout" tag v9.9.9
 
-for env in dev test prod; do
+for env in dev test prod prod-b; do
   echo "== Env: $env =="
   ansible-playbook "$play" -e "test_env=$env" -e "test_checkout=$checkout"
 done
 
-echo "OK: Deploy-Identitaet fuer dev/prod/test korrekt (<env> · <ref>)."
+echo "OK: Deploy-Identitaet fuer dev/test/prod/prod-b korrekt (<env> · <ref>)."

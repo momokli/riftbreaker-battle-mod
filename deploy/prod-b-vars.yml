@@ -15,8 +15,10 @@
 # BEWUSST NICHT enthalten (B deployt diese Komponenten nicht — eine
 # Referee-Instanz, keine zweite Landing/Caddy laut docs/VS_MATCH.md §5.1):
 #   tournament_*, landing_domain, cockpit_domain, rift_caddy_*,
-#   website_docroot, website_mods_dir, mods_zip_dest.
+#   website_docroot, website_mods_dir.
 # Entsprechend bleiben diese Keys im env-schema.yml NICHT um prod-b erweitert.
+# AUSNAHME: `mods_zip_dest` IST explizit gesetzt (siehe unten) — B hat keinen
+# eigenen Mod-Ort, konsumiert aber das kanonische Tag-Artefakt des A-Plays.
 
 # Eigene Container-/Port-Namen (dev 6324 / prod-A 6322 / staging 6323 bleiben
 # unberührt).
@@ -62,6 +64,17 @@ riftbreaker_match_loop_container: riftbreaker-match-loop-prod-b
 riftbreaker_attack_cycle_container: riftbreaker-attack-cycle-prod-b
 riftbreaker_chat_announcer_container: riftbreaker-chat-announcer-prod-b
 riftbreaker_sessions_dir: "/srv/rift-{{ rift_env }}/sessions"
+
+# Kanonisches Mod-Artefakt (Issue #995 Rework, Blocker 2): prod-B baut KEINEN
+# eigenen mods-zip (keine zweite Mod-Publikation), sondern konsumiert den Zip,
+# den der Prod-A-Play im SELBEN deploy-prod.yml-Lauf (A laeuft vor B) aus dem
+# Tag-Checkout nach dem prod-A-Docroot baut. Deshalb EXPLIZIT auf den
+# A-kanonischen Pfad gesetzt — ohne diesen Override erbte der B-Play still den
+# dev-`mods_zip_dest` (/srv/rbmods-site/mods/rbbattle.zip, host_vars) und
+# rollte den dev-Mod-Stand statt des deployten Tags aus (Cross-Env-Kopplung).
+# Der Wert ist bewusst NICHT distinct von prod-A (geteiltes Artefakt), aber
+# distinct vom dev-Basiswert -> env-assert.yml KERN-Gruppe bleibt gruen.
+mods_zip_dest: "/srv/rbmods-site-prod/mods/{{ mods_zip_name }}"
 
 # Content kommt per Sync aus dem kanonischen Cache (wie dev/prod-A/staging).
 riftbreaker_content_mode: sync

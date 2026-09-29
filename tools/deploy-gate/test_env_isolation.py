@@ -290,6 +290,16 @@ class ProdBDistinctnessTest(unittest.TestCase):
         for key in self.KEYS:
             self.assertIn(key, maps["prod-b"], key)
 
+    def test_real_prod_b_mods_zip_dest_does_not_inherit_dev(self):
+        # Issue #995 Rework, Blocker 2: prod-b muss `mods_zip_dest` EXPLIZIT
+        # setzen und auf das kanonische Prod-A-Artefakt zeigen — NICHT den
+        # dev-Docroot (/srv/rbmods-site) still erben.
+        maps = self._real_maps()
+        self.assertIn("mods_zip_dest", maps["prod-b"])
+        dest = maps["prod-b"]["mods_zip_dest"]
+        self.assertIn("/srv/rbmods-site-prod/", dest)
+        self.assertNotIn("/srv/rbmods-site/", dest)
+
     def test_detector_flags_a_ported_collision(self):
         # Negativ-Probe: prod-b erhaelt den prod-A-Bridge-Port -> MUSS erkannt
         # werden (beweist, dass der Test wirkungsvoll ist).

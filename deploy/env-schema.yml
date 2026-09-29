@@ -111,9 +111,12 @@ per_env:
   # --- Website-Pfade explizit je Env (Issue #483, US3) ---------------------
   website_docroot: [prod, test, staging]
   website_mods_dir: [prod, test, staging]
-  # mods_zip_dest wird nur von prod explizit gesetzt; test leitet es (ueber das
+  # mods_zip_dest: prod/staging setzen es explizit; test leitet es (ueber das
   # isolierte website_mods_dir) aus host_vars ab und bleibt dadurch distinct.
-  mods_zip_dest: [prod, staging]
+  # prod-b (Issue #995 Rework): MUSS es explizit setzen — sonst erbte der
+  # B-Play still den dev-Docroot (Cross-Env-Kopplung, Review-Blocker 2). B
+  # konsumiert das kanonische Tag-Artefakt des Prod-A-Plays.
+  mods_zip_dest: [prod, staging, prod-b]
   # --- Boot-Test (nur test) -------------------------------------------------
   dedicated_server_context_dir: [test]
 
