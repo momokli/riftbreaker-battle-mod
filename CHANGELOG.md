@@ -1,3 +1,18 @@
+Version: 1.0.11
+Date: 28. 09. 2026
+
+  Features:
+    - Parked-/Provisioned-Instanz-Haertung: `RBB_ENV`/`RBB_REF` im Container, Log-Rotation-Limits, restart-Policy und `Locale=C.UTF-8` (#968, PR #978).
+    - Parked-Instanz-Identitaet: eigene `config.cfg`/Spielname (Server-Name-Suffix) + `sessions`-Mount (#970, PR #980).
+
+  Bugfixes:
+    - Self-Send auf Parked-/Provisioner-Instanz: Chat-Nachricht postet, Carbonium wird jetzt korrekt abgezogen (#966, PR #977).
+    - Parked-Pool: Orphan-Leak durch In-Memory-State behoben — Reconciliation beim Start gegen persistierten Pool-State (#969, PR #979).
+    - Attack-Cycle-Host-Port je Env eindeutig (prod 9103, staging 9104) — Prod-Deploy-Kollision behoben (#976, PR #975).
+
+  Docs:
+    - Parity-Regel dokumentiert: Parked/Provisioned = voller Stack (dedicated + send-tailer + attack-cycle + match-loop + session-recorder) (#974, PR #971).
+
 Version: 1.0.4
 Date: 28. 09. 2026
 
