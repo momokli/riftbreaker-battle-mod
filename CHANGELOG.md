@@ -1,3 +1,9 @@
+Version: 1.0.6
+Date: 29. 09. 2026
+
+  Features:
+    - /ready im Chat: Das Spiel startet erst, wenn ALLE verbundenen Spieler `/ready` getippt haben (PAUSED/WARMUP -> RUNNING); der Status zeigt die fehlenden Spieler, Timeout (Default 180 s) faellt ohne Kick nach PAUSED zurueck (#937, PR #984).
+
 Version: 1.0.5
 Date: 29. 09. 2026
 
