@@ -251,6 +251,35 @@ class QueueCoreTestCase(unittest.TestCase):
         a = Assignment(identitaet="str:aa", world=WORLD_A)
         self.assertEqual(a.to_dict()["world"], WORLD_A)
 
+    # -- Persistenz (US5) --------------------------------------------------
+    def test_state_roundtrip_survives_restart(self):
+        self.core.enqueue("str:aa")
+        self.core.enqueue("str:bb")
+        match = self.core.pair()
+        self.core.set_assignment(match, "str:aa", instance="queue-1-a", endpoint="127.0.0.1:40001")
+        self.core.set_assignment(match, "str:bb", instance="queue-1-b", endpoint="127.0.0.1:40002")
+        self.core.mark_ready(match)
+        self.core.finish(match.match_id, result="winnerA")
+        state = self.core.to_state()
+
+        revived = QueueCore(clock=FakeClock())
+        revived.load_state(state)
+        record = revived.get_match(1).to_dict()
+        self.assertEqual(record["state"], STATE_FINISHED)
+        self.assertEqual(record["result"], "winnerA")
+        by_id = {p["identitaet"]: p for p in record["participants"]}
+        self.assertEqual(by_id["str:aa"]["instance"], "queue-1-a")
+        self.assertEqual(by_id["str:bb"]["endpoint"], "127.0.0.1:40002")
+        self.assertEqual(revived.match_for("str:aa").match_id, 1)
+
+    def test_state_roundtrip_keeps_pending_queue(self):
+        self.core.enqueue("str:aa")
+        state = self.core.to_state()
+        revived = QueueCore(clock=FakeClock())
+        revived.load_state(state)
+        self.assertEqual([e.identitaet for e in revived.queue_snapshot()], ["str:aa"])
+        self.assertEqual(revived.position("str:aa"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

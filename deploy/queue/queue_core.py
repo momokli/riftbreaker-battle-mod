@@ -399,6 +399,87 @@ class QueueCore(object):
             "allow_teams": self.allow_teams,
         }
 
+    # -- Persistenz (US5) --------------------------------------------------
+    def to_state(self) -> Dict[str, Any]:
+        """Serialisierbarer Snapshot (Queue + Matches + Zaehler) fuer die Datei."""
+        return {
+            "team_size": self.team_size,
+            "teams_per_match": self.teams_per_match,
+            "allow_teams": self.allow_teams,
+            "next_match_id": self._next_match_id,
+            "seq": self._seq,
+            "queue": [
+                {
+                    "identitaet": e.identitaet,
+                    "mode": e.mode,
+                    "team_size": e.team_size,
+                    "seq": e.seq,
+                    "enqueued_at": e.enqueued_at,
+                }
+                for e in self._queue
+            ],
+            "matches": [
+                {
+                    "match_id": m.match_id,
+                    "mode": m.mode,
+                    "team_size": m.team_size,
+                    "created_at": m.created_at,
+                    "state": m.state,
+                    "result": m.result,
+                    "detail": m.detail,
+                    "teams": [t.to_dict() for t in m.teams],
+                    "side": getattr(m, "_assignment_side", {}) or {},
+                }
+                for m in self.matches_snapshot()
+            ],
+        }
+
+    def load_state(self, state: Dict[str, Any]) -> None:
+        """Zustand aus :meth:`to_state` wiederherstellen (ersetzt alles)."""
+        if not isinstance(state, dict):
+            return
+        self._queue = []
+        self._by_identity = {}
+        self._matches = {}
+        self._identity_match = {}
+        for raw in state.get("queue", []) or []:
+            entry = QueueEntry(
+                identitaet=raw["identitaet"],
+                mode=raw.get("mode", "vs"),
+                team_size=int(raw.get("team_size", self.team_size)),
+                seq=int(raw.get("seq", 0)),
+                enqueued_at=float(raw.get("enqueued_at", 0.0)),
+            )
+            self._queue.append(entry)
+            self._by_identity[entry.identitaet] = entry
+        for raw in state.get("matches", []) or []:
+            teams = [
+                Team(
+                    index=int(t["index"]),
+                    world=t["world"],
+                    team_size=int(t.get("team_size", self.team_size)),
+                    players=list(t.get("players", [])),
+                )
+                for t in raw.get("teams", [])
+            ]
+            match = Match(
+                match_id=int(raw["match_id"]),
+                mode=raw.get("mode", "vs"),
+                team_size=int(raw.get("team_size", self.team_size)),
+                created_at=float(raw.get("created_at", 0.0)),
+                teams=teams,
+                state=raw.get("state", STATE_PROVISIONING),
+                result=raw.get("result"),
+                detail=raw.get("detail"),
+            )
+            if raw.get("side"):
+                setattr(match, "_assignment_side", dict(raw["side"]))
+            self._matches[match.match_id] = match
+            for player in match.participants():
+                self._identity_match[player] = match.match_id
+        self._next_match_id = int(state.get("next_match_id", len(self._matches) + 1))
+        self._seq = int(state.get("seq", len(self._queue)))
+
 
 def _assignment_participants(match: Match) -> List[Dict[str, Any]]:
     """Teilnehmer mit seitlichen Instanz/Endpoint-Werten (siehe ``set_assignment``)."""
