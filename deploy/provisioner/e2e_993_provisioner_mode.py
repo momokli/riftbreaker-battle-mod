@@ -24,10 +24,8 @@ Aufruf (Exit 0 = alle ACs belegt):
 
 import json
 import os
-import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
