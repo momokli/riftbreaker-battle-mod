@@ -2379,4 +2379,103 @@ mod tests {
             .iter()
             .all(|c| !c.starts_with("POST /incoming_send ")));
     }
+
+    // ---- US7: host-loser Abnahme-Test des Kern-Pfads (#996, G5 + G6) ----
+
+    /// Abnahme (host-los, in-process):
+    ///   Satz 1 — ein Send aus A kommt in B an: bei B's `wave_start` geht
+    ///            genau EIN `POST /incoming_send {level:3, from:"A"}` an B.
+    ///   Satz 2 — HQ-Tod von B beendet das Match mit Sieger A (`finished`).
+    #[tokio::test]
+    async fn acceptance_cross_world_send_and_hq_win() {
+        let (addr_b, captures) = capture_endpoint().await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [None, Some(format!("http://{addr_b}/exec"))];
+        let app = make_app(cfg).await;
+
+        // Seed: A/B registriert, GO, Runde 1.
+        register(&app, "A", "momo").await;
+        register(&app, "B", "matheo").await;
+        let (s, v) = call(&app, "POST", "/go", Some(json!({}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["round"], 1);
+
+        // Satz 1: Send A→B (Level 3) → bei B's wave_start genau ein Ingress-Push.
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/send",
+            Some(json!({"world": "A", "level": 3, "value": 1400})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "B", "event": "wave_start", "built_value": 6400})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["effect"], "locked");
+        assert_eq!(v["ingress"].as_array().unwrap().len(), 1);
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        {
+            let all = captures.lock().await;
+            let incoming: Vec<&String> = all
+                .iter()
+                .filter(|c| c.starts_with("POST /incoming_send "))
+                .collect();
+            assert_eq!(incoming.len(), 1, "genau ein incoming_send: {all:?}");
+            assert!(incoming[0].contains("\"level\":3"), "req: {}", incoming[0]);
+            assert!(
+                incoming[0].contains("\"from\":\"A\""),
+                "req: {}",
+                incoming[0]
+            );
+        }
+
+        // Satz 2: HQ-Tod von B → Sieger A, Phase finished.
+        let (s, v) = call(
+            &app,
+            "POST",
+            "/report",
+            Some(json!({"world": "B", "event": "hq_hp", "hp": 0})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["match_over"], true);
+        assert_eq!(v["winner"], "A");
+        assert_eq!(v["phase"], "finished");
+        let (_, st) = call(&app, "GET", "/state", None).await;
+        assert_eq!(st["phase"], "finished");
+        assert_eq!(st["winner"], "A");
+
+        // Gesamt: A→B-Send bleibt im Reveal von B sichtbar (level-getaggt).
+        assert_eq!(st["reveal"]["incoming"]["B"][0]["level"], 3);
+        assert_eq!(st["reveal"]["incoming"]["B"][0]["from"], "A");
+
+        // Gegenprobe: ohne bridge_for(B) bleibt der Referee funktionsfähig.
+        let app2 = make_app(test_cfg()).await;
+        register(&app2, "A", "momo").await;
+        register(&app2, "B", "matheo").await;
+        call(&app2, "POST", "/go", Some(json!({}))).await;
+        call(
+            &app2,
+            "POST",
+            "/send",
+            Some(json!({"world": "A", "level": 3, "value": 1400})),
+        )
+        .await;
+        let (s, v) = call(
+            &app2,
+            "POST",
+            "/report",
+            Some(json!({"world": "B", "event": "wave_start"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["ingress"][0]["ok"], Value::Null);
+    }
 }

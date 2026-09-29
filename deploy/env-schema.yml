@@ -174,3 +174,11 @@ shared:
   riftbreaker_server_campaign: "Bis #476 gemeinsam (Game-Settings koppeln heute dev/prod) — Kopplung ist bewusst/dokumentiert, kein stilles Erben."
   riftbreaker_server_mission: "Bis #476 gemeinsam (Game-Settings koppeln heute dev/prod) — wie campaign."
   riftbreaker_server_difficulty: "Bis #476 gemeinsam (Game-Settings koppeln heute dev/prod) — wie campaign."
+  # --- VS-Sidecar-Egress (Issue #996) --------------------------------------
+  # Laufzeit-Envs der Sidecars + des Referees; sie liegen NICHT im
+  # host_vars-Override-Mechanismus (nicht in dev/prod/test-vars). Env-eigene
+  # Werte setzt die Rolle/Compose-Schicht je Instanz, daher hier als host-
+  # konstant klassifiziert (kein dev-Vererbungs-Risiko im Sinne von #483).
+  RBB_REFEREE_URL: "Referee-Basis-URL fuer den VS-Egress (attack-cycle send_enemy, match-loop hq_hp) — Sidecar-Laufzeit-Env, je Instanz gesetzt."
+  RBB_VS_WORLD: "Eigene Welt im VS (A|B) fuer Sidecars — Sidecar-Laufzeit-Env, je Instanz gesetzt."
+  RBB_INCOMING_DELAY_S: "delay_s fuer den Ingress-Push/ingress-Empfang im VS — Sidecar-Laufzeit-Env."
