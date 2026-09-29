@@ -208,7 +208,7 @@ class OpenTests(Harness):
         self.assertTrue(self.bridge().paused)
         self.assertEqual(cap.instance_id, "parked-1")
         self.assertEqual(cap.gns_endpoint, "127.0.0.1:41001")
-        self.assertEqual(cap.identitaet, "str:AB12")
+        self.assertEqual(cap.identitaet, "str:ab12")  # kanonisch (Issue #992)
 
     def test_open_uses_per_instance_cycle_url(self):
         # Issue #966: der Cycle der INSTANZ wird verdrahtet, nicht der globale.

@@ -128,9 +128,9 @@ Alle Baselines GRUEN vor Feature-Beginn:
 Setup bereit fuer Stage 3 (Developer).
 
 ## Stages
-- [ ] 1 planner
-- [ ] 2 setup
-- [ ] 3 developer
+- [x] 1 planner
+- [x] 2 setup
+- [x] 3 developer
 - [ ] 4 verifier
 - [ ] 5 tester
 - [ ] 6 developer (PR)
@@ -138,3 +138,24 @@ Setup bereit fuer Stage 3 (Developer).
 
 ## Log
 - 2026-09-29: Dispatch gueltig, Pipeline gestartet.
+- 2026-09-29 (Stage 3, Developer):
+  - Stories 1–6 implementiert. Red→green belegt: `test_player_identity.cpp`
+    zuerst rot (Header fehlt, rc=1), nach `player_identity.h` gruen
+    (35 Checks OK, rc=0).
+  - NEU `tools/gns-proxy/player_identity.h` (rbident::Kind/PlayerIdentity/
+    parsePlayerIdentity/isIdentityLike/isAuthorized; canonical Steam/Account
+    byte-gleich raw, Generic Hex-lowercase).
+  - NEU `tools/gns-proxy/test_player_identity.cpp` (35 Checks).
+  - `tools/gns-proxy/gns_probe.cpp`: Inline-Prefix-Check -> `rbident::isIdentityLike`;
+    Connect parst `PlayerIdentity` (kind an Session/SessionRecord/SessionInfo,
+    `kind` im /sessions-JSON); Session-/Routen-Key = canonical. `-fsyntax-only`
+    mit x86_64-w64-mingw32-g++ rc=0.
+  - `.github/workflows/ci.yml`: Host-Test #992 + deploy/capsule-unittest-Suite
+    registriert; changes-Gate um `deploy/capsule/` erweitert.
+  - NEU `deploy/capsule/identity.py` + `test_identity.py` (identische
+    Testfall-Tabelle, 11 Tests). `capsule_flow.open` reicht `identitaet`
+    kanonisch durch; `test_capsule_flow`-Assertion auf `str:ab12` angepasst
+    (Kanonisierung).
+  - Regression gruen: test_route_rules 44, test_api_util 214,
+    deploy/capsule 67 Tests OK.
+  - Account (`account:<id>`) nur Parse+Test, keine Provisionierungslogik.
