@@ -3,6 +3,12 @@ Unreleased
   Features:
     - Chat-Announcer-Sidecar (#940): liest den Attack-Cycle-State (`GET /status`) und schickt ereignis-/schwellenbasiert Status-Zeilen in den In-Game-Chat (Bridge `POST /send_chat`) — Warmup-Schwellen (`3:00`…`0:10`) + `GO`, `next attack in 60s/30s/10s`, `incoming [W1]x3 [W4]x1` beim Feuern, Rundenende-Ergebnis; genau einmal pro Schwelle/Epoche, kein 1-Hz-Spam. Format an einer Stelle gekapselt (`style=short` Default).
 
+Version: 1.0.6
+Date: 29. 09. 2026
+
+  Features:
+    - /ready im Chat: Das Spiel startet erst, wenn ALLE verbundenen Spieler `/ready` getippt haben (PAUSED/WARMUP -> RUNNING); der Status zeigt die fehlenden Spieler, Timeout (Default 180 s) faellt ohne Kick nach PAUSED zurueck (#937, PR #984).
+
 Version: 1.0.5
 Date: 29. 09. 2026
 
