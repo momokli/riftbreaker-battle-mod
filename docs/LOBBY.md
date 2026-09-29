@@ -51,7 +51,7 @@ Dispatcher `gns_probe.cpp:2226-2321`; UI `kUiHtml` `:1340-1347`.
 | POST | `/ready` | – | Capsule resume + Warmup-Start | `{}` | `{ok}` o. Capsule-Body | **READY**-Button |
 | POST | `/queue` | – | **Queue-Join (vs)** — Proxy an Queue-Dienst | `{identitaet,mode?:"vs"}` | `{ok,status:"queued",position}` / `{ok,status:"matched",match:{…,assignments:[{identitaet,world,instance,target}]}}` / `{ok:false,reason}` | **`[ Queue (vs) ]`**-Button |
 | POST | `/queue/leave` | – | Queue-Join zurueckziehen | `{identitaet}` | `{ok,identitaet}` / `{ok:false,reason}` | (Leave) |
-| GET | `/queue/status` | – | Queue + Matches (Proxy) | – | Queue-Snapshot | Diagnose |
+| GET | `/queue/status` | – | Queue + Matches (Proxy) | – | Queue-Snapshot | **Queue-Zähler + Phase** (alle 1500 ms, Fallback `/sessions`) |
 | POST | `/backends` / DELETE `/backends?name=` | – | Backend registrieren/abmelden | `{name,endpoint}` | `{ok}` | Operator/Deploy (nicht Spieler) |
 
 ### `POST /solo` — drei Bedeutungen (`:1966-2131`)
@@ -106,6 +106,12 @@ Ist `--queue-url`/`RBB_QUEUE_URL` gesetzt (Token `RBB_QUEUE_TOKEN`), proxyt `POS
 `queued` (wartet) · `matched` (gepaart, auch `finished`/`failed`) · `provisioning`
 (kalte Welten fahren hoch) · `ready` (A/B provisioniert, Lobby registriert).
 
+> **UI-Progression (Issue #1000)** leitet die Phase im UI-Takt bevorzugt **live**
+> aus `GET /queue/status` ab (Match-Zuordnung → Phase aus `match.state`; sonst
+> Queue-Treffer → `queued`), weil der Relay-`queuePhase` nach dem Join nicht
+> nachgeführt wird. Label-Kette: `In Queue … (X warten)` → `Match gefunden` →
+> `provisioniert` → `läuft`; Abbruch (`POST /queue/leave`) nur in Phase `queued`.
+
 ---
 
 ## 4 · Interne Backends
@@ -143,7 +149,7 @@ Spiel-start-relevant: `POST /start` · `POST /ready` · `POST /resume_game`/`/pa
 | Bedarf | Heute | Issue |
 |---|---|---|
 | Queue join/leave (`/queue/*`) | **done** (Relay-Proxy + Dienst) | #998 |
-| Queue-Status (`inQueue`, Position, `matchFound`) | **Basis** in `/sessions` (`queuePhase`/`queuePosition`/`matchId`/`vsWorld`); Veredelung offen | #1000 |
+| Queue-Status (`inQueue`, Position, `matchFound`) | **done** (#1000): Labelkette + Zähler aus `/queue/status`, Leave-Button in `/sessions` (`queuePhase`/`queuePosition`/`matchId`/`vsWorld`) | #1000 |
 | Match-Result / Sieger (`/matches`) | **fehlt** | #999 |
 | VS-Flow (gemeinsamer Start/Ready, Pause-Fan-out) | **fehlt** (Relay kennt nur Solo) | #995–#997 |
 
