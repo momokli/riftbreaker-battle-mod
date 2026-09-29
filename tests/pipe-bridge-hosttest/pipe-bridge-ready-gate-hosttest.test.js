@@ -159,6 +159,20 @@ test("pipe_bridge: Server->Spieler-Status nutzt #934 send_chat (#937/US6)", () =
     "escaped den Text nicht ueber den bestehenden Builder (json_escape)",
   );
 
+  // #937/US6 (Fix): NICHT g_cmd_cs nehmen! pipe_send_command haelt g_cmd_cs
+  // ueber das gesamte WaitForSingleObject(g_resp_ev, timeout_ms); die Antwort
+  // kann nur DIESER reader-Thread liefern -> nähme er g_cmd_cs, entstuende ein
+  // Bounded-Deadlock bis RBB_BRIDGE_TIMEOUT_MS (Default 20 s). Nur g_pipe_cs
+  // (Write-Serialisierung) ist erlaubt.
+  assert.ok(
+    !body.includes("EnterCriticalSection(&g_cmd_cs)"),
+    "darf g_cmd_cs nicht nehmen (reader-Thread -> Bounded-Deadlock, US6)",
+  );
+  assert.ok(
+    body.includes("EnterCriticalSection(&g_pipe_cs)"),
+    "muss die Pipe-Writes weiterhin unter g_pipe_cs serialisieren",
+  );
+
   // Aufrufe an den Zeitpunkten: erstes ready UND alle ready UND timeout.
   assert.ok(
     src.includes("bridge_send_chat_status"),
