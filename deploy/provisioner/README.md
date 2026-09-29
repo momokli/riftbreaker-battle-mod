@@ -61,6 +61,7 @@ Env überschreibt Dateiwerte.
 | `PROVISIONER_SERVER_NAME_SUFFIX` | `-{env}-{instance_id}` | Additiver Suffix am `server_name` der je Instanz abgeleiteten `config.cfg` (s. „Instanz-eigene config.cfg“) |
 | `PROVISIONER_RBTOOLS_DIR` | `/opt/rbmods/rbtools/{env}` | Host-rbtools → `/opt/rbtools:ro` |
 | `PROVISIONER_GAME_SOURCE` | `/srv/rift-{env}/game` | Host-Spielstand → `/opt/riftbreaker` |
+| `PROVISIONER_PERSONAS_FILE` | `deploy/attack-cycle/personas.example.json` | **Quelle** der Persona-Defs für `mode=solo_persona:<name>` (#993); auch JSON-Key `personas_file` |
 | `PROVISIONER_IMAGE_BUILD_DIR` | — | Compose-Kontext (optional) |
 | `PROVISIONER_DEPLOY_REF` | `unknown` | Deploy-Identität → `RBB_REF` im Container (Compose-Parität `rift_deploy_ref`) |
 
@@ -89,7 +90,7 @@ leerer Wert = bewusstes Opt-out (#970).
 | Restart-Policy | `--restart unless-stopped` |
 | Log-Rotation | `json-file`, `--log-opt max-size=10m --log-opt max-file=3` |
 | Locale | `LC_ALL=C.UTF-8`, `LANG=C.UTF-8` |
-| Env | `RIFTBREAKER_MODE=<mode>`, `RBB_BRIDGE_BIND=0.0.0.0`, `RBB_BRIDGE_PORT=<bridge_container_port>`, `WINEESYNC=0`, `WINEFSYNC=0`, `RBB_ENV=<env>`, `RBB_REF=<deploy_ref>` |
+| Env | `RIFTBREAKER_MODE=<kanonischer mode>`, `RBB_BRIDGE_BIND=0.0.0.0`, `RBB_BRIDGE_PORT=<bridge_container_port>`, `WINEESYNC=0`, `WINEFSYNC=0`, `RBB_ENV=<env>`, `RBB_REF=<deploy_ref>` |
 
 **Compose-Parität (Contract, #968):** `_create_container` verdrahtet dieselben
 Härtungswerte wie das Compose-Layout der [Rolle
@@ -133,11 +134,48 @@ Fail-loud (#970): fehlt die Quelle oder deren `server_name`-Zeile, bricht
 — geloggt werden nur Pfad + Byte-Größe. **Routing bleibt unberührt:** `server_name`
 ist reiner Anzeigename; GNS-Relay/Ports pinnen `ip:port` (#929).
 
+## Modus (`mode`, #993)
+
+Der Claim/Provision gibt einen **Modus** mit, aus dem der Provisioner die
+Self-Send-/Persona-Konfiguration der Instanz ableitet:
+
+```
+mode ::= "solo_self"              # Default — Spieler gegen sich selbst (self-send)
+       | "solo_persona:" <name>   # Solo gegen Persona <name>
+```
+
+`name` ist nicht leer und matcht `^[A-Za-z0-9_.-]{1,63}$`. **Kein stiller
+Fallback:** alles andere (leer, `solo`, `campaign`, `solo_persona:`,
+`solo_persona:a:b`, ungültiger Name) → `ModeError` (Subklasse von
+`ProvisionError`) **vor dem ersten Docker-Call**; CLI-Exit `1` mit
+`{"ok": false, "error": ...}`.
+
+| mode | `RIFTBREAKER_MODE` (Container) | `game_config` (Bridge) | Persona-Runtime | Attack-Cycle CLI |
+|---|---|---|---|---|
+| `solo_self` | `solo_self` | `{"send_yourself": true, "persona": false}` | `POST /persona_active {"name":""}` | `--send-yourself on`, kein `--persona` |
+| `solo_persona:<n>` | `solo_persona:<n>` | `{"send_yourself": false, "persona": true}` | `POST /personas <doc>` + `POST /persona_active {"name":"<n>"}` | `--send-yourself off --persona <n> --persona-file /data/personas.json` |
+
+**Bridge-Seeding ist die Runtime-Wahrheit:** `send_yourself`/`persona` (#851)
+leben ausschließlich in `game_config` (kein Entrypoint-Env wird konsumiert).
+Nach der Health und **vor** den Sidecars liest `_seed_bridge` `GET /game_config`,
+merged `send_yourself`/`persona`/`mode` (übrige Keys wie `warmup_s` bleiben
+erhalten) und `POST`et das Ergebnis; im Persona-Modus zusätzlich `POST /personas`
++ `POST /persona_active`. Ein Fehler → `ProvisionError` + Rollback (kein halb
+konfigurierter Stack). Der Attack-Cycle-`--mode solo|vs` ist eine **andere**
+Achse und bleibt unberührt.
+
+**Persona-Datei:** im Persona-Modus wird `PROVISIONER_PERSONAS_FILE`
+(Format `{"personas": {"<name>": [[9 counts] x n]}}`) nach
+`<run_root>/config/personas.json` gestaged (atomar, `0644`) und als
+`/data/personas.json:ro` in den Attack-Cycle gemountet. Preflight prüft
+fail-loud **vor dem Container**, dass die Datei existiert, parsebar ist und den
+Namen enthält. `solo_self` liest die Datei **nicht**.
+
 ## API
 
-`Provisioner(cfg, docker=None, spec_factory=InstanceSpec, health_probe=None, clock=None, sleep=None)`
+`Provisioner(cfg, docker=None, spec_factory=InstanceSpec, health_probe=None, clock=None, sleep=None, bridge_url=None)`
 
-- `start(env=None, mode="solo", instance_id=None) -> dict`
+- `start(env=None, mode="solo_self", instance_id=None) -> dict`
   `{instance, container, running, health, ports, created}`.
   **Idempotent**: läuft der Container schon, wird **kein** zweiter erzeugt
   (`created=False`); ein gestoppter vorhandener Container wird nur gestartet.
@@ -173,7 +211,8 @@ CLI:
 
 ```sh
 PROVISIONER_IMAGE=... python3 provisioner.py --check
-PROVISIONER_IMAGE=... python3 provisioner.py start  --env test --instance-id "$RUN_ID"
+PROVISIONER_IMAGE=... python3 provisioner.py start  --env test --instance-id "$RUN_ID" --mode solo_self
+PROVISIONER_IMAGE=... python3 provisioner.py start  --env test --instance-id "$RUN_ID" --mode solo_persona:aggro --personas-file /path/personas.json
 PROVISIONER_IMAGE=... python3 provisioner.py status --env test --instance-id "$RUN_ID"
 PROVISIONER_IMAGE=... python3 provisioner.py stop   --env test --instance-id "$RUN_ID"
 ```
