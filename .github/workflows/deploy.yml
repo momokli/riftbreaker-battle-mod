@@ -63,7 +63,7 @@ jobs:
           ssh -o BatchMode=yes rbd "${GITHUB_SHA} ${GITHUB_REF}"
 
   deploy-prod:
-    name: Deploy Prod (planet :6322)
+    name: Deploy Prod A+B (planet :6322/:6325)
     runs-on: [self-hosted, planet]
     timeout-minutes: 60
     if: startsWith(github.ref, 'refs/tags/v')
@@ -74,7 +74,9 @@ jobs:
       name: prod
       url: https://cockpit.rift.projectmellon.de/
     steps:
-      # Prod fährt deploy/deploy-prod.yml (+ -e @deploy/prod-vars.yml). Der
+      # Prod fährt deploy/deploy-prod.yml (zwei Plays: Prod-A + Prod-B; jede
+      # laedt ihre Vars per `vars_files`, KEIN globales `-e @prod-vars.yml`
+      # mehr — Issue #995). Der
       # Remote-forced-command unterscheidet dev/staging/prod anhand von <ref>
       # (branch `main` -> dev, branch `staging` -> staging, tag `v*` -> prod) —
       # gleiche SSH-Mechanik wie dev.

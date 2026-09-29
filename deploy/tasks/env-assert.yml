@@ -49,7 +49,12 @@
 # Pfad vom dev-Wert abweichen, sonst schreiben zwei Envs in denselben Ort
 # (Live-Befund #1: prod mountete den dev-Docroot). dev ist die Basis und wird
 # nicht geprueft.
-- name: "ENV-ISOLATION-GATE — per-env-Pfade vom dev-Basiswert abweichend (Issue #483, US3)"
+#
+# Split (Issue #995, prod-b): KERN-Keys gelten fuer jede Nicht-dev-Env; die
+# WEBSITE-/CADDY-Keys nur fuer Envs, die die Website/Caddy-Rolle wirklich
+# deployen (prod/staging). prod-B deployt sie nicht -> un-definiert -> ohne
+# Split waere der B-Play rot (undefined Lookup).
+- name: "ENV-ISOLATION-GATE — Kern-Pfade vom dev-Basiswert abweichend (Issue #483, US3)"
   assert:
     that:
       # lookup('vars', item) statt des internen `vars`-Dict (ansible-core
@@ -64,9 +69,6 @@
       denselben Ort (Cross-Env-Schreibpfad).
     success_msg: "{{ item }} isoliert ({{ lookup('vars', item) }} != dev-Basiswert)."
   loop:
-    - website_docroot
-    - website_mods_dir
-    - mods_zip_dest
     - riftbreaker_game_dir
     - riftbreaker_backup_dir
     - riftbreaker_deploy_dir
@@ -74,7 +76,6 @@
     - riftbreaker_compose_project
     - rbtools_dir
     - rbtools_staging_dir
-    - rift_caddy_deploy_dir
   when: rift_env != 'dev'
   vars:
     # dev-Basiswerte (host_vars/planet). Bewusst als explizite Liste: Ansible
@@ -82,9 +83,6 @@
     # Stand Ziel-B-Schema (Issue #483): /srv/rift-dev/*, /opt/rbmods/compose/
     # rift-dev/*, /opt/rbmods/rbtools/dev.
     rift_env_dev_base:
-      website_docroot: /srv/rbmods-site
-      website_mods_dir: /srv/rbmods-site/mods
-      mods_zip_dest: /srv/rbmods-site/mods/rbbattle.zip
       riftbreaker_game_dir: /srv/rift-dev/game
       riftbreaker_backup_dir: /srv/rift-dev/backups
       riftbreaker_deploy_dir: /opt/rbmods/compose/rift-dev/riftbreaker
@@ -92,5 +90,32 @@
       riftbreaker_compose_project: riftbreaker-dedicated
       rbtools_dir: /opt/rbmods/rbtools/dev
       rbtools_staging_dir: /opt/rbmods/rbtools/dev/.staging
+  tags: always
+
+# Website-/Caddy-Pfade (Issue #483, US3) — NUR Envs, die die website/rift-caddy
+# -Rolle deployen (prod/staging). prod-b und test deployen sie nicht.
+- name: "ENV-ISOLATION-GATE — Website-/Caddy-Pfade vom dev-Basiswert abweichend (Issue #483, US3)"
+  assert:
+    that:
+      - lookup('vars', item) is defined
+      - (lookup('vars', item) | string) | length > 0
+      - (lookup('vars', item) | string) != (rift_env_dev_base[item] | string)
+    fail_msg: >-
+      ENV-ISOLATION-GATE (env={{ rift_env }}): '{{ item }}' erbt den
+      dev-Basiswert ('{{ rift_env_dev_base[item] }}'). Der Pfad muss je Env
+      explizit isoliert sein (Issue #483, US3) — sonst schreiben zwei Envs in
+      denselben Ort (Cross-Env-Schreibpfad).
+    success_msg: "{{ item }} isoliert ({{ lookup('vars', item) }} != dev-Basiswert)."
+  loop:
+    - website_docroot
+    - website_mods_dir
+    - mods_zip_dest
+    - rift_caddy_deploy_dir
+  when: rift_env in ['prod', 'staging']
+  vars:
+    rift_env_dev_base:
+      website_docroot: /srv/rbmods-site
+      website_mods_dir: /srv/rbmods-site/mods
+      mods_zip_dest: /srv/rbmods-site/mods/rbbattle.zip
       rift_caddy_deploy_dir: /opt/rbmods/compose/rift-dev/caddy
   tags: always

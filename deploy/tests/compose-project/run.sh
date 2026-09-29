@@ -65,6 +65,9 @@ check_env dev "$work/dev" riftbreaker-dedicated rb-wine rb-saves
 echo "== Positiv prod: historischer Projektname trifft riftbreaker-dedicated-prod_* =="
 check_env prod "$work/prod" riftbreaker-dedicated-prod rb-wine-prod rb-saves-prod -e "@$repo/deploy/prod-vars.yml"
 
+echo "== Positiv prod-b: eigener Projektname trifft riftbreaker-dedicated-prod-b_* (Issue #995) =="
+check_env prod-b "$work/prod-b" riftbreaker-dedicated-prod-b rb-wine-prod-b rb-saves-prod-b -e "@$repo/deploy/prod-b-vars.yml"
+
 echo "== Negativ-Probe: verworfenes Projekt 'rift-dev' verfehlt die bestehenden Volumes =="
 names_rejected="$(compose_names rift-dev "$work/dev/riftbreaker-server.yml")"
 if grep -qF "name: riftbreaker-dedicated_rb-wine" <<<"$names_rejected"; then

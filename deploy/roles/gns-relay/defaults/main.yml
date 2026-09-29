@@ -50,11 +50,16 @@ gns_relay_log_max_file: "3"
 # --- Netz / Routing ---------------------------------------------------------
 # Client-hardgewireter Einstiegsport. Der Relay terminiert GNS hier selbst.
 gns_relay_port: 6321
-# Suffix-Routing (Issue #843): exakter Treffer > laengster Suffix > Default.
+# Suffix-Routing (Issue #843/#995): exakter Treffer > laengster Suffix > Default.
 # Der Spielname mit Suffix waehlt die Umgebung (`momo-staging` -> staging,
-# `momo-dev` -> dev), alles andere landet auf dem Default (prod).
+# `momo-dev` -> dev, `momo-a` -> prod-A, `momo-b` -> prod-B), alles andere
+# landet auf dem Default (prod-A :6322, abwaertskompatibel, Entscheidung D1).
 gns_relay_target_dev: "127.0.0.1:6324"
 gns_relay_target_staging: "127.0.0.1:6323"
+# Zweite prod-Welt (Issue #995): A = bestehender prod-Server :6322,
+# B = neuer prod-b-Server :6325 (docs/VS_MATCH.md §3).
+gns_relay_target_a: "127.0.0.1:6322"
+gns_relay_target_b: "127.0.0.1:6325"
 gns_relay_target_default: "127.0.0.1:6322"
 
 # --- Operator-UI + Hold (Issue #857) ----------------------------------------
@@ -72,6 +77,8 @@ gns_relay_api_host: "127.0.0.1"
 gns_relay_api_port: 9200
 # Die Buttons der UI: `NAME=ip:port` (wird als `--target` uebergeben).
 gns_relay_targets:
+  - "PROD_A={{ gns_relay_target_a }}"
+  - "PROD_B={{ gns_relay_target_b }}"
   - "PROD={{ gns_relay_target_default }}"
   - "STAGING={{ gns_relay_target_staging }}"
   - "DEV={{ gns_relay_target_dev }}"

@@ -1,27 +1,38 @@
 ---
-# Prod-Instanz auf planet (:6322) + Abbau des Satellite-Relays
-# (Issue #328/#846). Öffentlicher Einstieg ist seit Issue #843/#846
-# ausschließlich der GNS-Entry-Relay auf planet:6321 (Suffix-Routing:
-# `*` -> :6322 prod); das alte UDP-DNAT-Relay (satellite:6321 -> :6322) wird
-# deshalb abgebaut (Play 2, `satellite_relay_state: absent`).
+# Prod-Instanzen auf planet: A (:6322) UND B (:6325) + Abbau des
+# Satellite-Relays (Issue #328/#846/#995). Öffentlicher Einstieg ist seit
+# Issue #843/#846 ausschließlich der GNS-Entry-Relay auf planet:6321
+# (Suffix-Routing: `*-a` -> :6322, `*-b` -> :6325, Default `*` -> :6322 = A);
+# das alte UDP-DNAT-Relay (satellite:6321 -> :6322) wird deshalb abgebaut
+# (Play 3, `satellite_relay_state: absent`).
 #
-# Aufruf (analog deploy/test-deploy.yml, Vault nötig für Server-Passwort):
+# Aufruf (Vault nötig für Server-Passwort):
 #   ansible-playbook -i deploy/inventory deploy/deploy-prod.yml \
-#     -e @deploy/prod-vars.yml --vault-password-file <vault.pass>
+#     --vault-password-file <vault.pass>
 #
-# Twin-Topologie + Tag→prod: prod ist jetzt ein vollwertiger Zwilling von dev
-# (site.yml) — inkl. `website`-Rolle (Landing www.rift.projectmellon.de +
-# Cockpit cockpit.rift.projectmellon.de, eigener rift-caddy-prod :8788,
-# Bridge :9002). Der CD-Workflow (.github/workflows/deploy.yml) fährt dieses
-# Playbook bei Tag-Push (v* -> prod). Der Image-Tag wird weiterhin aus dem
-# Checkout-SHA (Tag-Commit) abgeleitet.
+# Issue #995: ZWEI Plays (Prod-A + Prod-B), jede laedt ihre Vars per
+# `vars_files` (NICHT per globalem `-e @...` — Extra-Vars haben Vorrang und
+# wuerden den jeweils anderen Play ueberschreiben). Der CD-Wrapper
+# (deploy/deploy-wrapper.sh) uebergibt daher kein `-e` mehr.
+#
+# Twin-Topologie: Prod-A ist vollwertiger Zwilling von dev (site.yml) — inkl.
+# `website`-Rolle (Landing + Cockpit, eigener rift-caddy-prod :8788, Bridge
+# :9002) und `tournament-server` (eine Referee-Instanz fuer BEIDE Welten).
+# Prod-B deployt nur den Dedicated-Stack (Game/Content/rbtools/Server-Control/
+# Crash-Collector) — KEIN mods-zip, KEIN tournament-server, KEIN website
+# (eine Referee-Instanz, keine zweite Landing/Caddy, docs/VS_MATCH.md §5.1).
+#
+# Der Image-Tag wird weiterhin aus dem Checkout-SHA (Tag-Commit) abgeleitet.
 
-- name: RIFT BATTLE — Prod-Instanz (planet :6322)
+- name: RIFT BATTLE — Prod-A (planet :6322)
   hosts: planet
   become: true
 
+  vars_files:
+    - prod-vars.yml
+
   vars:
-    # Prod ist voller Twin von dev (Issue #498): eigener server-control-Agent
+    # Prod-A ist voller Twin von dev (Issue #498): eigener server-control-Agent
     # (Unit server-control-prod, Port 8093, eigenes Token) => die /server/*-
     # Route im prod-Cockpit wird gerendert und zeigt auf 127.0.0.1:8093 — NIE
     # auf den dev-Agenten (8092). Der prod-Bearer kommt aus dem Vault
@@ -34,7 +45,7 @@
     rift_env: prod
 
   pre_tasks:
-    - name: Deploy-SHA für den Image-Tag ermitteln
+    - name: Deploy-SHA für den Image-Tag ermitteln (Prod-A)
       command: git -c safe.directory=* -C {{ playbook_dir }}/.. rev-parse --short=12 HEAD
       delegate_to: localhost
       become: false
@@ -43,20 +54,20 @@
       register: rbbattle_prod_sha
       tags: always
 
-    - name: Image-Tag (Deploy-SHA) als Fact setzen
+    - name: Image-Tag (Deploy-SHA) als Fact setzen (Prod-A)
       set_fact:
         deploy_image_tag: "{{ rbbattle_prod_sha.stdout | trim }}"
       tags: always
 
-    # Deploy-Identitaet (Issue #483, US1): prod-Ref = Git-Tag (kein +sha).
-    - name: "Deploy-Identitaet erzeugen (Issue #483)"
+    # Deploy-Identitaet (Issue #483, US1): prod-A-Ref = Git-Tag (kein +sha).
+    - name: "Deploy-Identitaet erzeugen (Prod-A, Issue #483)"
       include_tasks: "{{ playbook_dir }}/tasks/deploy-identity.yml"
       vars:
         rift_deploy_checkout: "{{ playbook_dir }}/.."
       tags: always
 
     # Fail-loud-Contract (Issue #483, US2).
-    - name: "ENV-ISOLATION-GATE (Issue #483)"
+    - name: "ENV-ISOLATION-GATE (Prod-A, Issue #483)"
       include_tasks: "{{ playbook_dir }}/tasks/env-assert.yml"
       vars:
         rift_env_isolation_root: "{{ playbook_dir }}/.."
@@ -93,6 +104,75 @@
     # Prod-Zwilling des Crash-Collectors (Issue #481): eigene Unit + eigenes
     # Bundle-Dir (crash_collector_* in prod-vars.yml) — Crashes auf prod sind
     # damit sichtbar statt nur "keine Marker im dev-Log".
+    - role: crash-collector
+      tags: [crash]
+
+- name: RIFT BATTLE — Prod-B (planet :6325)
+  hosts: planet
+  become: true
+
+  vars_files:
+    - prod-b-vars.yml
+
+  vars:
+    # Prod-B ist ein Teil-Zwilling von Prod-A (Issue #995): eigener
+    # server-control-Agent (Unit server-control-prod-b, Port 8095, eigenes
+    # Token). Der Bearer kommt aus dem Vault
+    # (vault_server_control_prod_b_token) — fail-closed ohne Token.
+    server_control_enabled: true
+    server_control_token: "{{ vault_server_control_prod_b_token | default('') }}"
+    # Deploy-Identitaet (Issue #483, US1): DIESES Play ist prod-b.
+    rift_env: prod-b
+
+  pre_tasks:
+    - name: Deploy-SHA für den Image-Tag ermitteln (Prod-B)
+      command: git -c safe.directory=* -C {{ playbook_dir }}/.. rev-parse --short=12 HEAD
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      changed_when: false
+      register: rbbattle_prod_b_sha
+      tags: always
+
+    - name: Image-Tag (Deploy-SHA) als Fact setzen (Prod-B)
+      set_fact:
+        deploy_image_tag: "{{ rbbattle_prod_b_sha.stdout | trim }}"
+      tags: always
+
+    # Deploy-Identitaet (Issue #483, US1): prod-b-Ref = Git-Tag (kein +sha).
+    - name: "Deploy-Identitaet erzeugen (Prod-B, Issue #483)"
+      include_tasks: "{{ playbook_dir }}/tasks/deploy-identity.yml"
+      vars:
+        rift_deploy_checkout: "{{ playbook_dir }}/.."
+      tags: always
+
+    # Fail-loud-Contract (Issue #483, US2): der Schema-Audit kennt prod-b
+    # (tools/deploy-gate/check_env_isolation.py) und die Distinctness wird je
+    # Komponente geprueft (Website-Keys nur prod/staging -> B deployt sie nicht).
+    - name: "ENV-ISOLATION-GATE (Prod-B, Issue #483)"
+      include_tasks: "{{ playbook_dir }}/tasks/env-assert.yml"
+      vars:
+        rift_env_isolation_root: "{{ playbook_dir }}/.."
+      tags: always
+
+    # Env-Pfad-Migration (Issue #483, Ziel B): prod-b ist eine NEUE Env ohne
+    # Alt-Pfade -> Map-Eintrag leer (no-op), aber der Vertrag "ein Schema fuer
+    # alle Plays" bleibt intakt.
+    - name: "Env-Pfad-Migration (#483)"
+      include_tasks: "{{ playbook_dir }}/tasks/env-path-migration.yml"
+      tags: always
+
+  roles:
+    # KEIN mods-zip (keine zweite Mod-Publikation), KEIN tournament-server
+    # (eine Referee-Instanz) und KEINE website (keine zweite Landing/Caddy).
+    - role: dedicated-server-image
+    - role: game-content
+    - role: rbtools
+    - role: riftbreaker-server
+    - role: server-control
+      tags: [server]
+    # Eigener Crash-Collector (Issue #995, Entscheidung D2, Twin-Symmetrie zu
+    # prod-A/#481): crash_collector_* in prod-b-vars.yml.
     - role: crash-collector
       tags: [crash]
 

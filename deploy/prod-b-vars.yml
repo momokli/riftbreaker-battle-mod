@@ -1,0 +1,87 @@
+---
+# Prod-B-Instanz-Overrides (Issue #995) — DRITTER/w GAME-Dedicated auf planet
+# (zweite prod-Welt neben prod-A). Öffentlicher Einstieg ist ausschließlich der
+# GNS-Entry-Relay auf planet:6321 (Suffix-Routing, `*-b` -> :6325; Default `*`
+# bleibt A :6322).
+#
+# Analog deploy/prod-vars.yml (prod-A) und deploy/staging-vars.yml. Wird vom
+# zweiten Play in deploy/deploy-prod.yml per `vars_files` geladen (NICHT per
+# `-e` — das gäbe Extra-Vars-Precedence und würde auch den A-Play global
+# überschreiben).
+#
+# prod-B läuft KOEXISTIEREND mit dev (:6324), prod-A (:6322) und staging
+# (:6323): eigene Container-/Port-/Pfad-/Volume-/Projekt-Namen, kein Clash.
+#
+# BEWUSST NICHT enthalten (B deployt diese Komponenten nicht — eine
+# Referee-Instanz, keine zweite Landing/Caddy laut docs/VS_MATCH.md §5.1):
+#   tournament_*, landing_domain, cockpit_domain, rift_caddy_*,
+#   website_docroot, website_mods_dir, mods_zip_dest.
+# Entsprechend bleiben diese Keys im env-schema.yml NICHT um prod-b erweitert.
+
+# Eigene Container-/Port-Namen (dev 6324 / prod-A 6322 / staging 6323 bleiben
+# unberührt).
+riftbreaker_server_container: riftbreaker-dedicated-prod-b
+riftbreaker_server_port_udp: 6325
+# Compose-Projekt EXPLIZIT (Entscheidung D6, docs/VS_MATCH.md §5.1): eigene,
+# neue Instanz -> keine Volume-Altlast/keine Migration nötig; der historische
+# `-prod`-Projektname bleibt dem A-Play vorbehalten.
+riftbreaker_compose_project: "riftbreaker-dedicated-prod-b"
+
+# Eigener Game-Stand + Mod. Pfad-Schema `<env>` (Issue #483, Ziel B):
+# /srv/rift-<env>/game|backups -> /srv/rift-prod-b/*.
+riftbreaker_game_dir: "/srv/rift-{{ rift_env }}/game"
+riftbreaker_mod_dir: "{{ riftbreaker_game_dir }}/mods/rbbattle"
+riftbreaker_backup_dir: "/srv/rift-{{ rift_env }}/backups"
+# /opt/rbmods/compose/rift-<env>/riftbreaker -> /opt/rbmods/compose/rift-prod-b.
+riftbreaker_deploy_dir: "/opt/rbmods/compose/rift-{{ rift_env }}/riftbreaker"
+riftbreaker_config_dir: "{{ riftbreaker_deploy_dir }}/config"
+
+# Eigene persistente Volumes (Wine-Prefix + Saves).
+riftbreaker_wine_volume: rb-wine-prod-b
+riftbreaker_saves_volume: rb-saves-prod-b
+
+# IO-Bridge isoliert von dev (9001), prod-A (9002), staging (9003) —
+# sonst Kollision auf 127.0.0.1.
+riftbreaker_bridge_port: 9004
+# Attack-Cycle-Control-Host-Port je Env eindeutig (#967/#963): dev 9102 /
+# prod-A 9103 / staging 9104 -> prod-B 9105 (nächstfrei); sonst scheitert
+# `docker compose up` (port already allocated).
+riftbreaker_attack_cycle_port: 9105
+
+# Bridge-Binaries (rbtools) isoliert — Pfad-Schema `<env>` (Issue #483,
+# Ziel B: /opt/rbmods/rbtools/<env>) -> /opt/rbmods/rbtools/prod-b.
+rbtools_dir: "/opt/rbmods/rbtools/{{ rift_env }}"
+rbtools_staging_dir: "/opt/rbmods/rbtools/{{ rift_env }}/.staging"
+
+# Sidecars (Session-Recorder + Referee-Egress) isoliert — die festen
+# container_name-Werte würden sonst mit dev/prod-A/staging kollidieren.
+# Eigener Sessions-Dir, damit die JSONL getrennt bleiben.
+riftbreaker_sessions_container: riftbreaker-sessions-prod-b
+riftbreaker_send_tailer_container: riftbreaker-send-tailer-prod-b
+riftbreaker_match_loop_container: riftbreaker-match-loop-prod-b
+riftbreaker_attack_cycle_container: riftbreaker-attack-cycle-prod-b
+riftbreaker_chat_announcer_container: riftbreaker-chat-announcer-prod-b
+riftbreaker_sessions_dir: "/srv/rift-{{ rift_env }}/sessions"
+
+# Content kommt per Sync aus dem kanonischen Cache (wie dev/prod-A/staging).
+riftbreaker_content_mode: sync
+
+# --- Server-Control (eigener Host-Agent, Zwilling von prod-A) ---------------
+# Eigener Agent auf 8095 (dev 8092 / prod-A 8093 / staging 8094), eigene
+# Unit/Install/Env-Datei — steuert den prod-B-Container
+# (riftbreaker_server_container = riftbreaker-dedicated-prod-b). Das Token
+# kommt aus dem Vault (vault_server_control_prod_b_token, gesetzt in
+# deploy/deploy-prod.yml). Ops-Schritt (D5): Token muss im Vault existieren;
+# die Rolle ist fail-closed -> ohne Token bricht der B-Deploy ab (gewollt).
+server_control_unit: server-control-prod-b
+server_control_port: 8095
+server_control_install_dir: /opt/rbmods/server-control-prod-b
+server_control_env_file: /etc/rbmods/server-control-prod-b.env
+
+# --- Crash-Collector (Zwilling von prod-A, Entscheidung D2) -----------------
+# Twin-Symmetrie zu prod-A (Issue #481): eigene Unit + eigenes Bundle-Dir,
+# damit Crashes der zweiten prod-Welt sichtbar/getrennt gesammelt werden.
+# Der Container ist explizit der prod-B-Container.
+crash_collector_unit: rbmods-crash-collector-prod-b
+crash_collector_dir: /opt/rbmods/crashes-prod-b
+crash_collector_container: riftbreaker-dedicated-prod-b

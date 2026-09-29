@@ -35,10 +35,11 @@ import sys
 
 MARKER = "ENV-ISOLATION-GATE"
 
-VALID_ENVS = ("dev", "prod", "test", "staging")
+VALID_ENVS = ("dev", "prod", "prod-b", "test", "staging")
 ENV_FILES = {
     "dev": os.path.join("deploy", "inventory", "host_vars", "planet", "vars.yml"),
     "prod": os.path.join("deploy", "prod-vars.yml"),
+    "prod-b": os.path.join("deploy", "prod-b-vars.yml"),
     "test": os.path.join("deploy", "test-vars.yml"),
     "staging": os.path.join("deploy", "staging-vars.yml"),
 }
@@ -159,7 +160,7 @@ def check(repo_root, env=None):
                 )
 
     if env is not None and env not in VALID_ENVS:
-        problems.append("ungueltige --env '%s' (erwartet dev|prod|test|staging)." % env)
+        problems.append("ungueltige --env '%s' (erwartet dev|prod|prod-b|test|staging)." % env)
     return problems
 
 
@@ -168,7 +169,7 @@ def main(argv=None):
     parser.add_argument("--repo-root", default=default_repo_root(),
                         help="Repo-Root (Default: zwei Ebenen ueber diesem Skript).")
     parser.add_argument("--env", default=None,
-                        help="Env-Kontext (dev|prod|test|staging) — nur fuer die Meldung.")
+                        help="Env-Kontext (dev|prod|prod-b|test|staging) — nur fuer die Meldung.")
     args = parser.parse_args(argv)
 
     problems = check(args.repo_root, env=args.env)

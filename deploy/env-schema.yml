@@ -27,8 +27,12 @@
 
 per_env:
   # --- Dedicated-Server -----------------------------------------------------
-  riftbreaker_server_container: [prod, test, staging]
-  riftbreaker_server_port_udp: [prod, test, staging]
+  # prod-b (Issue #995): zweite prod-Welt, eigener Dedicated-Server. Die
+  # B-Komponenten unten tragen prod-b in ihren per_env-Listen; Website/Caddy/
+  # Tournament bleiben BEWUSST ausgenommen (der B-Play deployt sie NICHT —
+  # eine Referee-Instanz, keine zweite Landing/Caddy, docs/VS_MATCH.md §5.1).
+  riftbreaker_server_container: [prod, test, staging, prod-b]
+  riftbreaker_server_port_udp: [prod, test, staging, prod-b]
   # Compose-Projekt JE Env explizit (Issue #483, Ziel B): im neuen
   # `<env>`-Schema ist der Compose-Verzeichnis-Basename ueberall "riftbreaker"
   # -> ohne expliziten Projektnamen kollidierten dev und prod. Variante (a),
@@ -36,39 +40,41 @@ per_env:
   # (dev `riftbreaker-dedicated`, prod `riftbreaker-dedicated-prod`), damit die
   # projekt-praefixten Docker-Volumes der laufenden Instanzen weiter getroffen
   # werden; test bleibt lauf-isoliert (`rb-test-<suffix>`).
-  riftbreaker_compose_project: [dev, prod, test, staging]
-  riftbreaker_game_dir: [prod, test, staging]
-  riftbreaker_mod_dir: [prod, test, staging]
-  riftbreaker_backup_dir: [prod, test, staging]
-  riftbreaker_deploy_dir: [prod, test, staging]
-  riftbreaker_config_dir: [prod, staging]
-  riftbreaker_wine_volume: [prod, test, staging]
-  riftbreaker_saves_volume: [prod, test, staging]
-  riftbreaker_bridge_port: [prod, test, staging]
+  riftbreaker_compose_project: [dev, prod, test, staging, prod-b]
+  riftbreaker_game_dir: [prod, test, staging, prod-b]
+  riftbreaker_mod_dir: [prod, test, staging, prod-b]
+  riftbreaker_backup_dir: [prod, test, staging, prod-b]
+  riftbreaker_deploy_dir: [prod, test, staging, prod-b]
+  riftbreaker_config_dir: [prod, staging, prod-b]
+  riftbreaker_wine_volume: [prod, test, staging, prod-b]
+  riftbreaker_saves_volume: [prod, test, staging, prod-b]
+  riftbreaker_bridge_port: [prod, test, staging, prod-b]
   # --- Server-I/O-Tools (rbtools) -----------------------------------------
-  rbtools_dir: [prod, test, staging]
-  rbtools_staging_dir: [prod, test, staging]
+  rbtools_dir: [prod, test, staging, prod-b]
+  rbtools_staging_dir: [prod, test, staging, prod-b]
   # --- Sidecars (Session-Recorder + Send-Tailer + Match-Loop + Referee-Egress) -
-  riftbreaker_sessions_container: [prod, test, staging]
-  riftbreaker_sessions_dir: [prod, test, staging]
-  riftbreaker_send_tailer_container: [prod, test, staging]
-  riftbreaker_match_loop_container: [prod, test, staging]
-  riftbreaker_attack_cycle_container: [prod, test, staging]
-  riftbreaker_chat_announcer_container: [prod, test, staging]
+  riftbreaker_sessions_container: [prod, test, staging, prod-b]
+  riftbreaker_sessions_dir: [prod, test, staging, prod-b]
+  riftbreaker_send_tailer_container: [prod, test, staging, prod-b]
+  riftbreaker_match_loop_container: [prod, test, staging, prod-b]
+  riftbreaker_attack_cycle_container: [prod, test, staging, prod-b]
+  riftbreaker_chat_announcer_container: [prod, test, staging, prod-b]
   # Host-Publish des Attack-Cycle-Control (Kapsel /ready, #963): im boot-test je
   # Lauf eindeutig (Issue #967) — sonst kollidiert der feste 9102-Publish mit dem
   # Dev-Stack. Je Env eindeutig: dev 9102 (Default), prod 9103, staging 9104, test per-Run.
-  riftbreaker_attack_cycle_port: [prod, test, staging]
+  riftbreaker_attack_cycle_port: [prod, test, staging, prod-b]
 
   # --- Crash-Collector (Prod-Zwilling, Issue #481) -------------------------
-  crash_collector_unit: [prod, staging]
-  crash_collector_dir: [prod, staging]
-  crash_collector_container: [prod, staging]
+  # prod-b (Issue #995, Entscheidung D2): eigener Crash-Collector (Twin-
+  # Symmetrie) -> Unit/Dir/Container explizit je Env.
+  crash_collector_unit: [prod, staging, prod-b]
+  crash_collector_dir: [prod, staging, prod-b]
+  crash_collector_container: [prod, staging, prod-b]
   # --- Server-Control (Prod-Zwilling, Issue #498) --------------------------
-  server_control_unit: [prod, staging]
-  server_control_port: [prod, staging]
-  server_control_install_dir: [prod, staging]
-  server_control_env_file: [prod, staging]
+  server_control_unit: [prod, staging, prod-b]
+  server_control_port: [prod, staging, prod-b]
+  server_control_install_dir: [prod, staging, prod-b]
+  server_control_env_file: [prod, staging, prod-b]
   # --- Parked-Pool-Dienst (Issue #928) ------------------------------------
   # Der Dienst ist env-parametrisiert (Unit rbmods-parked-<env>) und laeuft
   # aktuell nur im dev-Play (site.yml). dev ist die Basis (host_vars) und setzt
@@ -84,12 +90,17 @@ per_env:
   capsule_flow_port: [dev]
   capsule_flow_parked_port: [dev]
   # --- Tournament-Server ----------------------------------------------------
+  # prod-b (Issue #995): BEWUSST NICHT um prod-b erweitert — der B-Play deployt
+  # KEINEN tournament-server (eine Referee-Instanz kennt beide Welten: A :9002,
+  # B :9004, docs/VS_MATCH.md §5.3); keine stille Zweit-Instanz.
   tournament_install_dir: [prod, test, staging]
   tournament_unit: [prod, test, staging]
   tournament_port: [prod, test, staging]
   tournament_bridge_a_url: [prod, test, staging]
   tournament_bridge_b_url: [prod, test, staging]
   # --- Website (prod + staging betreiben je eine eigene Landing/Cockpit) -----
+  # prod-b (Issue #995): BEWUSST NICHT um prod-b erweitert — der B-Play deployt
+  # KEINE website/rift-caddy (keine zweite Landing/Cockpit laut §5.1).
   landing_domain: [prod, staging]
   cockpit_domain: [prod, staging]
   rift_caddy_container: [prod, staging]

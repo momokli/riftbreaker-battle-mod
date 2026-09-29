@@ -79,12 +79,17 @@ if [ -n "$sha" ]; then
 fi
 chown -R deploy:deploy "$repo"
 
-# Dispatch anhand des ref: Tag v* -> prod, Branch staging -> staging, sonst dev.
+# Dispatch anhand des ref: Tag v* -> prod (A+B), Branch staging -> staging,
+# sonst dev.
+#
+# Issue #995: deploy/deploy-prod.yml faehrt ZWEI Plays (Prod-A + Prod-B), jede
+# laedt ihre Vars per `vars_files` (prod-vars.yml / prod-b-vars.yml). Ein
+# globales `-e @deploy/prod-vars.yml` haette Extra-Vars-Precedence und wuerde
+# damit auch den B-Play ueberschreiben -> deshalb hier KEIN `-e` mehr.
 case "$ref" in
   refs/tags/v*)
     exec "$ansible_bin" \
       -i deploy/inventory deploy/deploy-prod.yml \
-      -e @deploy/prod-vars.yml \
       --vault-password-file "$vault_file"
     ;;
   refs/heads/staging)

@@ -50,7 +50,7 @@ riftbreaker_content_mode: sync
 
 
 class FixtureRepo:
-    def __init__(self, schema=SCHEMA, host=HOST_VARS, prod=PROD_VARS, test=TEST_VARS, staging=""):
+    def __init__(self, schema=SCHEMA, host=HOST_VARS, prod=PROD_VARS, test=TEST_VARS, staging="", prod_b=""):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = self.tmp.name
         base = os.path.join(self.root, "deploy")
@@ -58,6 +58,7 @@ class FixtureRepo:
         self._write(os.path.join(base, "env-schema.yml"), schema)
         self._write(os.path.join(base, "inventory", "host_vars", "planet", "vars.yml"), host)
         self._write(os.path.join(base, "prod-vars.yml"), prod)
+        self._write(os.path.join(base, "prod-b-vars.yml"), prod_b)
         self._write(os.path.join(base, "test-vars.yml"), test)
         self._write(os.path.join(base, "staging-vars.yml"), staging)
 
@@ -166,7 +167,7 @@ class RealRepoTest(unittest.TestCase):
             self.assertIn("prod", per_env[var], var)
             self.assertIn("test", per_env[var], var)
         self.assertEqual(per_env.get("riftbreaker_compose_project"),
-                         ["dev", "prod", "test", "staging"])
+                         ["dev", "prod", "test", "staging", "prod-b"])
 
     def test_real_dev_basis_uses_env_schema(self):
         # dev ist kein Sonderfall mehr: die Pfade leiten sich aus `rift_env` ab.
