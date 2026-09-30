@@ -212,6 +212,17 @@ code="$(curl -s -o /dev/null -w '%{http_code}' -u "$OPERATOR_USER:definitiv-fals
 [[ "$code" == "401" ]] || fail "erwartet 401 mit falschem Passwort, bekam $code"
 ok "falsche Credentials → 401"
 
+echo "== 3b) GET auf einen SCHREIBPFAD → Basic-Challenge (Pfad-Matcher, kein Bypass)"
+# Der @write-Matcher matcht nur den PFAD (kein `method POST`); ein GET auf
+# /tournament/wave landet daher ebenfalls hinter der Basic-Auth. Das ist
+# konservativ (kein unauthentifizierter Zugriff auf einen Schreibpfad) und
+# harmlos: die Rust-Route ist POST-only (ein durchgelassener GET endete 405).
+hdr="$(curl -s -D - -o /dev/null -w '%{http_code}' "http://127.0.0.1:$CADDY_PORT/tournament/wave" || true)"
+code="${hdr: -3}"
+[[ "$code" == "401" ]] || fail "GET auf Schreibpfad gab $code statt 401 (Pfad-Matcher umgangen?)"
+grep -qi '^www-authenticate: *basic' <<<"$hdr" || fail "GET auf Schreibpfad: 401 nicht vom Caddy"
+ok "GET auf Schreibpfad → 401 Basic-Challenge (konservativ, kein Bypass)"
+
 echo "== 4) GET /tournament/state ohne Auth → 200 (Lesepfad frei)"
 body="$(curl -s -w '\n%{http_code}' "http://127.0.0.1:$CADDY_PORT/tournament/state" || true)"
 code="$(tail -n1 <<<"$body")"
