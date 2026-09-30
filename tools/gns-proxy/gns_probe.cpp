@@ -1441,6 +1441,13 @@ const char kUiHtml[] = R"HTML(<!doctype html>
   .badge.solo-underway { background:rgba(242,193,78,.16); color:var(--held); }
   .badge.solo-in_game_paused { background:rgba(240,138,138,.16); color:var(--waiting); }
   .badge.solo-running { background:rgba(95,211,154,.16); color:var(--routed); }
+  /* Queue-Badges (Issue #1000): queued/matched/provisioning/ready. */
+  .badge.queue-queued { background:rgba(242,193,78,.16); color:var(--held); }
+  .badge.queue-matched { background:rgba(78,161,255,.16); color:var(--accent); }
+  .badge.queue-provisioning { background:rgba(78,161,255,.16); color:var(--accent); }
+  .badge.queue-ready { background:rgba(95,211,154,.16); color:var(--routed); }
+  .badge.queue-failed { background:rgba(240,138,138,.16); color:var(--waiting); }
+  .badge.queue-finished { background:rgba(139,147,159,.16); color:var(--muted); }
   .solo { display:flex; gap:8px; margin-top:10px; }
   .solo .toggle.on { border-color:var(--accent); background:#1b2735; }
   .hint { margin-top:8px; font-size:12px; color:var(--waiting); }
@@ -1531,9 +1538,40 @@ const PHASE = { provisioned: "provisioniert", underway: "Spieler unterwegs",
 // `fertig` hat noch kein Server-Signal (offener Punkt) und ist hier nur definiert.
 const STATUS = { wartet: "wartet", provisioniert: "provisioniert", laedt: "laedt",
   laeuft: "laeuft", fertig: "fertig" };
-// Queue-Status (Issue #998): additive Felder aus /sessions.
-const QUEUE = { queued: "in Queue", matched: "gepaart", provisioning: "provisioniert",
-  ready: "bereit" };
+// Queue-Status (Issue #998/#1000): additive Felder aus /sessions; Phase wird
+// bevorzugt live aus GET /queue/status abgeleitet (D3), /sessions nur Fallback.
+const QUEUE = { queued: "In Queue", matched: "Match gefunden",
+  provisioning: "provisioniert", ready: "läuft", failed: "fehlgeschlagen",
+  finished: "beendet" };
+// Letzter GET /queue/status-Snapshot des 1500-ms-Takts (kein eigener Timer, US1).
+let QUEUE_SNAP = null;
+
+// Phase je Identitaet aus /queue/status (D3): zuerst Match-Zuordnung, dann
+// Queue-Treffer, sonst Fallback /sessions.queuePhase.
+function queuePhaseOf(s, snap) {
+  if (!s) return null;
+  if (snap) {
+    const m = (snap.matches || []).find((mm) =>
+      (mm.participants || []).some((p) => p.identitaet === s.identity));
+    if (m) return { phase: m.state || "provisioning", match: m };
+    if ((snap.queue || []).some((q) => q.identitaet === s.identity)) {
+      return { phase: "queued" };
+    }
+  }
+  return s.queuePhase ? { phase: s.queuePhase } : null;
+}
+
+// US2: Labelkette + Zaehler "(X warten)" (X aus /queue/status.queued).
+function queueStatusInfo(s, snap) {
+  const found = queuePhaseOf(s, snap);
+  if (!found) return null;
+  const phase = found.phase;
+  if (phase === "queued") {
+    const n = (snap && Number.isFinite(snap.queued)) ? snap.queued : null;
+    return { key: "queued", label: "In Queue … (" + (n == null ? "?" : n) + " warten)" };
+  }
+  return { key: phase, label: QUEUE[phase] || phase };
+}
 function statusInfo(s) {
   if (!s || !s.soloPhase) return { key: "wartet", label: STATUS.wartet };
   if (s.soloPhase === "provisioned") return { key: "provisioniert", label: STATUS.provisioniert };
@@ -1660,12 +1698,10 @@ async function sendPlayer(mode, btn) {
 }
 // Queue (vs): POST /queue {identitaet, mode} — der Relay proxyt /queue/join und
 // pinnt bei einer Paarung BEIDE Spieler auf ihre Welten (Issue #998).
-async function queueJoin(btn, cardEl) {
-  const identity = $("player").value;
-  const hintEl = $("player-hint");
-  if (!identity) { hintEl.textContent = "kein Spieler gewaehlt"; return; }
+// US4 (#1000): Identitaet kommt von der Card, nicht vom globalen Selektor.
+async function queueJoin(identity, btn, cardEl) {
+  if (!identity) { hint(cardEl, "keine Identitaet"); return; }
   btn.disabled = true;
-  hintEl.textContent = "";
   try {
     const r = await fetch("/queue", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ identitaet: identity, mode: "vs" }) });
@@ -1675,13 +1711,36 @@ async function queueJoin(btn, cardEl) {
       const MSG = { queue_unconfigured: "Queue-Dienst nicht konfiguriert",
         queue_unreachable: "Queue nicht erreichbar", bad_request: "Identitaet fehlt",
         already_matched: "bereits in einem Match" };
-      hintEl.textContent = MSG[reason] || reason;
+      hint(cardEl, MSG[reason] || reason);
     } else if (j && j.status === "matched") {
-      hintEl.textContent = "gepaart - Match " + ((j.match && j.match.match_id) || "?");
+      hint(cardEl, "Match gefunden - " + ((j.match && j.match.match_id) || "?"));
     } else {
-      hintEl.textContent = "in Queue (Position " + ((j && j.position) || "?") + ")";
+      hint(cardEl, "In Queue (Position " + ((j && j.position) || "?") + ")");
     }
-  } catch (e) { hintEl.textContent = "Netzwerkfehler"; }
+  } catch (e) { hint(cardEl, "Netzwerkfehler"); }
+  setTimeout(loadSessions, 300);
+}
+
+// US3 (#1000): "Queue verlassen" -> POST /queue/leave {identitaet}. Nur in der
+// Wartephase sinnvoll; Badge/Button lokal entfernen + Re-Poll.
+async function queueLeave(identity, btn, cardEl) {
+  if (!identity) { hint(cardEl, "keine Identitaet"); return; }
+  btn.disabled = true;
+  try {
+    const r = await fetch("/queue/leave", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identitaet: identity }) });
+    const j = await r.json().catch(() => null);
+    if (!r.ok) {
+      const reason = (j && j.reason) ? j.reason : ("http " + r.status);
+      const MSG = { not_queued: "nicht in der Queue", queue_unreachable: "Queue nicht erreichbar",
+        queue_unconfigured: "Queue-Dienst nicht konfiguriert", bad_request: "Identitaet fehlt" };
+      hint(cardEl, MSG[reason] || reason);
+    } else {
+      cardEl.querySelectorAll('.badge[class*="queue-"]').forEach((n) => n.remove());
+      btn.remove();
+      hint(cardEl, "Queue verlassen");
+    }
+  } catch (e) { hint(cardEl, "Netzwerkfehler"); }
   setTimeout(loadSessions, 300);
 }
 $("go-self").onclick = (e) => sendPlayer("solo_self", e.currentTarget);
@@ -1777,32 +1836,48 @@ function card(s) {
   readyRow.appendChild(rbtn);
   c.appendChild(readyRow);
 
-  // Queue (vs) (Issue #998): Join in die Casual-Queue; der Relay pinnt bei
-  // einer Paarung beide Spieler auf ihre Welten.
+  // Queue (vs) (Issue #998/#1000): Live-Phase aus /queue/status; Join/Leave.
   const qRow = el("div", "solo");
-  if (s.queuePhase) {
-    const qbadge = el("span", "badge queue-" + s.queuePhase,
-      QUEUE[s.queuePhase] || s.queuePhase);
+  const qinfo = queueStatusInfo(s, QUEUE_SNAP);
+  if (qinfo) {
+    const qbadge = el("span", "badge queue-" + qinfo.key, qinfo.label);
     qRow.appendChild(qbadge);
-    if (s.queuePhase === "queued" && s.queuePosition) {
+    const found = queuePhaseOf(s, QUEUE_SNAP);
+    const m = found && found.match;
+    if (qinfo.key === "queued" && s.queuePosition) {
       qRow.appendChild(el("span", "sub", "Position " + s.queuePosition));
     }
-    if (s.matchId) qRow.appendChild(el("span", "sub", "Match " + s.matchId));
+    const mid = (m && m.match_id) || s.matchId;
+    if (mid) qRow.appendChild(el("span", "sub", "Match " + mid));
     if (s.vsWorld) qRow.appendChild(el("span", "sub", "Welt " + s.vsWorld));
+    // D5: Abbruch nur in der Wartephase (der Dienst kennt Leave nur fuer Wartende).
+    if (qinfo.key === "queued") {
+      const lbtn = el("button", null, "Queue verlassen");
+      lbtn.title = "Aus der Queue austreten (POST /queue/leave)";
+      lbtn.onclick = () => queueLeave(s.identity, lbtn, c);
+      qRow.appendChild(lbtn);
+    }
   }
   const qbtn = el("button", null, "Queue (vs)");
   qbtn.title = "In die Casual-Queue einreihen (POST /queue)";
-  qbtn.onclick = () => queueJoin(qbtn, c);
+  if (!s.identity) qbtn.disabled = true;
+  qbtn.onclick = () => queueJoin(s.identity, qbtn, c);
   qRow.appendChild(qbtn);
   c.appendChild(qRow);
   return c;
 }
 
+// US1 (#1000): /queue/status im bestehenden 1500-ms-Takt mitfetchen (kein
+// neuer Timer). Faellt der Dienst aus (503 queue_unconfigured/Netz), bleibt
+// QUEUE_SNAP null und die Kette nutzt /sessions.queuePhase als Fallback.
 async function loadSessions() {
+  const queueP = fetch("/queue/status")
+    .then((r) => (r.ok ? r.json() : null)).catch(() => null);
   let rows;
   try { rows = await (await fetch("/sessions")).json(); }
   catch (e) { $("dot").classList.add("off"); return; }
   $("dot").classList.remove("off");
+  QUEUE_SNAP = await queueP;
   rows.sort((x, y) => (ORDER[x.state] ?? 9) - (ORDER[y.state] ?? 9));
   KNOWN_INSTANCES = Array.from(new Set(rows.map(r => r.soloInstance).filter(Boolean)));
 
