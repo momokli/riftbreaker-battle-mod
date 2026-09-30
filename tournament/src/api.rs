@@ -24,7 +24,9 @@ use crate::referee::{Command, GameEvent, GameEventKind, Referee, RefereeConfig};
 use crate::state::{
     MatchState, PauseEffect, Phase, ReadyEffect, ResumeEffect, SendBatch, StateError, World,
 };
-use axum::extract::{Path, Query, State as AxumState};
+use axum::extract::{Path, Query, Request, State as AxumState};
+use axum::http::{header, HeaderValue, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -68,6 +70,10 @@ pub struct Config {
     /// Pfad der SQLite-Datenbank fuer Match-Records (#999); Default
     /// `./data/rbbattle.db` (`TOURNAMENT_DB_PATH`).
     pub db_path: PathBuf,
+    /// Bearer-Token fuer MUTIERENDE Routen (Issue #298). Quelle ist der Vault
+    /// (`vault_tournament_token` → `TOURNAMENT_TOKEN`), read-once aus Env im
+    /// `main`. Leer = **fail-closed**: mutierende Routen antworten 401.
+    pub token: String,
 }
 
 impl Config {
@@ -253,9 +259,31 @@ struct RefereePollQuery {
 
 // ---- Router ----
 
+/// Mutierende Routen (Issue #298): verlangen `Authorization: Bearer <TOKEN>`.
+///
+/// Die Liste ist der Vertrag mit Caddy (`rift-caddy.Caddyfile.j2`, `@write`) —
+/// beide Stellen muessen dieselben Pfade fuehren (siehe `docs/TOURNAMENT_API.md`).
+#[allow(dead_code)]
+pub const WRITE_ROUTES: &[&str] = &[
+    "/lobby",
+    "/ready",
+    "/go",
+    "/pause",
+    "/resume",
+    "/send",
+    "/report",
+    "/rematch",
+    "/sp",
+    "/wave",
+    "/referee/event",
+];
+
 pub fn router(app: AppState) -> Router {
     let web = app.cfg.web_dir.clone();
-    Router::new()
+    // Mutierende Routen in EINEM Sub-Router mit Bearer-Layer; Leserouten +
+    // ServeDir-Web-UI bleiben frei. `route_layer` greift nur auf gematchte
+    // Routen dieses Sub-Routers (nicht auf den Fallback des Public-Routers).
+    let protected = Router::new()
         .route("/lobby", post(lobby))
         .route("/ready", post(ready))
         .route("/go", post(go))
@@ -263,17 +291,55 @@ pub fn router(app: AppState) -> Router {
         .route("/resume", post(resume))
         .route("/send", post(send))
         .route("/report", post(report))
-        .route("/referee/event", post(referee_event))
-        .route("/referee/poll", get(referee_poll))
         .route("/rematch", post(rematch))
         .route("/sp", post(sp))
         .route("/wave", post(wave))
+        .route("/referee/event", post(referee_event))
+        .route_layer(middleware::from_fn_with_state(
+            app.clone(),
+            require_bearer,
+        ));
+
+    let public = Router::new()
+        .route("/referee/poll", get(referee_poll))
         .route("/state", get(state_get))
         .route("/matches/{id}", get(match_get))
         .route("/events", get(events))
         .route("/health", get(health))
-        .fallback_service(tower_http::services::ServeDir::new(web))
-        .with_state(app)
+        .fallback_service(tower_http::services::ServeDir::new(web));
+
+    protected.merge(public).with_state(app)
+}
+
+/// Bearer-Middleware fuer mutierende Routen (Issue #298).
+///
+/// Fail-closed: ist `config.token` leer, wird JEDER mutierende Request mit 401
+/// abgewiesen (nie „offen"). Sonst muss `Authorization: Bearer <token>` exakt
+/// passen. Die Antwort traegt `WWW-Authenticate: Bearer`.
+async fn require_bearer(
+    AxumState(app): AxumState<AppState>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let token = app.cfg.token.as_str();
+    let expected = format!("Bearer {token}");
+    let provided = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    let authorized = !token.is_empty() && provided == Some(expected.as_str());
+    if !authorized {
+        let mut resp = Json(json!({
+            "error": "unauthorized",
+            "type": "unauthorized",
+        }))
+        .into_response();
+        *resp.status_mut() = StatusCode::UNAUTHORIZED;
+        resp.headers_mut()
+            .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+        return resp;
+    }
+    next.run(req).await
 }
 
 // ---- Handler ----
@@ -1118,6 +1184,10 @@ mod tests {
     use std::net::SocketAddr;
     use tower::ServiceExt;
 
+    /// Fester Test-Bearer (Issue #298): `call()` setzt ihn automatisch, damit
+    /// die Bestandstests unveraendert bleiben; die Auth-Tests senden roh.
+    const TEST_TOKEN: &str = "test-secret-token";
+
     fn test_cfg() -> Config {
         Config {
             host: "127.0.0.1".into(),
@@ -1138,6 +1208,7 @@ mod tests {
             env: "test".to_string(),
             deploy_ref: "deadbeef".to_string(),
             db_path: temp_db_path(),
+            token: TEST_TOKEN.to_string(),
         }
     }
 
@@ -1155,13 +1226,29 @@ mod tests {
         router(AppState::new(cfg, Arc::new(store)))
     }
 
+    /// Authentifizierter Aufruf (Bestandshelfer): setzt den Test-Bearer, damit
+    /// mutierende Routen den Layer passieren (Issue #298).
     async fn call(
         app: &Router,
         method: &str,
         uri: &str,
         body: Option<Value>,
     ) -> (StatusCode, Value) {
-        let builder = Request::builder().method(method).uri(uri);
+        request(app, method, uri, body, Some(TEST_TOKEN)).await
+    }
+
+    /// Roher Aufruf mit waehlbarem Bearer (`None` = kein Authorization-Header).
+    async fn request(
+        app: &Router,
+        method: &str,
+        uri: &str,
+        body: Option<Value>,
+        auth: Option<&str>,
+    ) -> (StatusCode, Value) {
+        let mut builder = Request::builder().method(method).uri(uri);
+        if let Some(token) = auth {
+            builder = builder.header("authorization", format!("Bearer {token}"));
+        }
         let req = match body {
             Some(b) => builder
                 .header("content-type", "application/json")
@@ -3198,5 +3285,91 @@ mod tests {
         assert_eq!(rec.winner_player, "matheo");
         assert_eq!(rec.participants.len(), 2);
         let _ = std::fs::remove_file(&db);
+    }
+
+    // ---- US1 (#298): Bearer-Layer fuer mutierende Routen ----
+
+    /// Jede mutierende Route weist ohne Bearer mit 401 ab.
+    #[tokio::test]
+    async fn every_write_route_rejects_without_bearer() {
+        let app = make_app(test_cfg()).await;
+        for route in WRITE_ROUTES {
+            let (s, _) = request(&app, "POST", route, None, None).await;
+            assert_eq!(s, StatusCode::UNAUTHORIZED, "{route} ohne Bearer");
+        }
+    }
+
+    /// 401 traegt die Bearer-Challenge (`WWW-Authenticate: Bearer`).
+    #[tokio::test]
+    async fn missing_bearer_401_carries_www_authenticate() {
+        let app = make_app(test_cfg()).await;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/wave")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(json!({"n": 3}).to_string()))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::WWW_AUTHENTICATE)
+                .and_then(|v| v.to_str().ok()),
+            Some("Bearer")
+        );
+    }
+
+    /// Falscher Bearer → 401; korrekter Bearer → bisheriges Verhalten (nie 401).
+    #[tokio::test]
+    async fn wrong_bearer_rejected_correct_bearer_passes() {
+        let app = make_app(test_cfg()).await;
+        let (s, v) = request(&app, "POST", "/wave", Some(json!({"n": 3})), Some("falsch")).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        assert_eq!(err_type(&v), "unauthorized");
+        // Ohne Bridge antwortet /wave mit 409 — entscheidend: NICHT 401.
+        let (s, _) = request(&app, "POST", "/wave", Some(json!({"n": 3})), Some(TEST_TOKEN)).await;
+        assert_ne!(s, StatusCode::UNAUTHORIZED);
+        // Mutierende Route mit 200-Semantik: /rematch.
+        let (s, _) = request(&app, "POST", "/rematch", None, Some(TEST_TOKEN)).await;
+        assert_eq!(s, StatusCode::OK);
+    }
+
+    /// Lesende Routen + Web-UI bleiben ohne Bearer frei.
+    #[tokio::test]
+    async fn read_routes_and_web_ui_are_open() {
+        let app = make_app(test_cfg()).await;
+        for uri in [
+            "/state",
+            "/health",
+            "/events",
+            "/referee/poll?world=A",
+            "/matches/rift-1",
+        ] {
+            let (s, _) = request(&app, "GET", uri, None, None).await;
+            assert_ne!(s, StatusCode::UNAUTHORIZED, "{uri} muss frei sein");
+        }
+        let (s, _) = request(&app, "GET", "/state", None, None).await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, _) = request(&app, "GET", "/health", None, None).await;
+        assert_eq!(s, StatusCode::OK);
+        // ServeDir-Web-UI (index.html) — freier Fallback.
+        let (s, _) = request(&app, "GET", "/", None, None).await;
+        assert_eq!(s, StatusCode::OK, "Web-UI / muss frei sein");
+    }
+
+    /// Leerer Token = fail-closed: mutierend 401 (auch mit beliebigem Bearer),
+    /// Lesen bleibt frei.
+    #[tokio::test]
+    async fn empty_token_is_fail_closed() {
+        let mut cfg = test_cfg();
+        cfg.token = String::new();
+        let app = make_app(cfg).await;
+        let (s, v) = request(&app, "POST", "/rematch", None, Some("irgendwas")).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        assert_eq!(err_type(&v), "unauthorized");
+        let (s, _) = request(&app, "POST", "/referee/event", Some(json!({"world":"A","type":"ready"})), None).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        let (s, _) = request(&app, "GET", "/health", None, None).await;
+        assert_eq!(s, StatusCode::OK);
     }
 }

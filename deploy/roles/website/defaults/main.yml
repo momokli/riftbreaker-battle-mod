@@ -75,6 +75,13 @@ contract_basic_auth_hash: "$2a$14$TSQCK7adF/aDuDzaRGY8wum3034v2huWYk9g9JPRCggLDu
 # `header_up` im Caddyfile (der Agent lehnt ein leeres `Bearer ` ab).
 server_control_token: "{{ vault_server_control_token | default('') }}"
 
+# Tournament-Bearer (Issue #298, Token-Quelle #298): Der rift-caddy proxyt die
+# SCHREIBENDEN /tournament/*-Pfade und muss den Bearer der Tournament-API selbst
+# setzen — ein Browser kann ihn nicht senden. Quelle ist ausschliesslich der
+# Vault (`vault_tournament_token`, dieselbe Quelle wie Rust + Queue); leer =
+# KEIN `header_up` im Caddyfile (kein literales `Bearer `).
+tournament_token: "{{ vault_tournament_token | default('') }}"
+
 # Geteilter Host-Caddy.
 website_host_caddy_container: mellon-caddy
 website_host_caddyfile_path: /home/momo/Caddyfile

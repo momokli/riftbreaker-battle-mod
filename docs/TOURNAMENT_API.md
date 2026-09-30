@@ -5,8 +5,9 @@ Riftbreaker-Dedi-Welten (A und B). Er verwaltet Lobby, Ready-Check, den
 synchronen GO-Start, das Wave-Routing (Sends A→B/B→A), den Reveal bei
 Wellenstart und den Match-Zustand bis zum HQ-Tod. Implementierung:
 Rust/axum in `tournament/` (Issue #29), Web-UI in `tournament/web/`
-(Issue #30). v1 bewusst ohne Auth/Persistenz — In-Memory, ein Match
-(Rematch über denselben Match-State), Deployment macht der Operator.
+(Issue #30). In-Memory, ein Match (Rematch über denselben Match-State),
+Deployment macht der Operator. Seit **#298** sind die **mutierenden** Routen
+per Bearer-Token geschützt (siehe „Auth-Modell“), die **lesenden** bleiben offen.
 
 - **Server**: `cargo run` (bzw. `cargo build --release`), siehe
   [tournament/README.md](../tournament/README.md)
@@ -17,7 +18,7 @@ Rust/axum in `tournament/` (Issue #29), Web-UI in `tournament/web/`
 
 | Env                              | Default            | Bedeutung                                                                                         |
 | -------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------- |
-| `TOURNAMENT_HOST`                | `0.0.0.0`          | Bind-Adresse                                                                                      |
+| `TOURNAMENT_HOST`                | `127.0.0.1`        | Bind-Adresse (Loopback; #298)                                                                     |
 | `TOURNAMENT_PORT`                | `8080`             | HTTP-Port (API + Web-UI)                                                                          |
 | `TOURNAMENT_AUTO_GO`             | `true`             | GO automatisch, sobald beide Welten ready                                                         |
 | `RBBRIDGE_A_URL`                 | —                  | HTTP-Endpoint der Welt-A-Bridge (GO-Push)                                                         |
@@ -30,11 +31,42 @@ Rust/axum in `tournament/` (Issue #29), Web-UI in `tournament/web/`
 | `TOURNAMENT_REFEREE_RESTART_CMD` | `rb_reset`         | In-game Command des Referees bei HQ-Tod (Issues #268/#281; Mod-Kommando `rb_reset`)               |
 | `TOURNAMENT_WEB_DIR`             | `<crate>/web`      | Verzeichnis der statischen Web-UI                                                                 |
 | `TOURNAMENT_DB_PATH`             | `./data/rbbattle.db` | SQLite-Datei für persistierte Match-Records (#999; WAL-Modus, Verzeichnis wird angelegt)        |
+| `TOURNAMENT_TOKEN`               | — (leer)           | Bearer für die mutierenden Routen (#298); leer = **fail-closed** (mutierend 401)                  |
 | `RUST_LOG`                       | `info`             | Log-Level                                                                                         |
 
 `RBBRIDGE_*_URL` zeigen auf den HTTP-Adapter der jeweiligen Dedi-Bridge
 (z. B. `http://10.0.0.5:9001/exec`). Fehlen sie, entfällt der Push und die
 Bridges erkennen den Start ausschließlich über Polling von `GET /state`.
+
+## Auth-Modell (Issue #298)
+
+Die API trennt **lesende** von **mutierenden** Routen:
+
+| Klasse         | Routen                                                                                          | Schutz |
+| -------------- | ----------------------------------------------------------------------------------------------- | ------ |
+| **mutierend**  | `POST /lobby /ready /go /pause /resume /send /report /rematch /sp /wave /referee/event`           | `Authorization: Bearer <TOURNAMENT_TOKEN>` — sonst **401** (+ `WWW-Authenticate: Bearer`) |
+| **lesend**     | `GET /state /matches/{id} /events /referee/poll /health` + statische Web-UI (`ServeDir`)          | frei (Polling/Landing unverändert) |
+
+- **Fail-closed:** ist `TOURNAMENT_TOKEN` leer/unset, weist die Middleware
+  **jeden** mutierenden Request mit 401 ab — die API ist nie „offen“.
+- **Token-Quelle:** ausschließlich der Vault (`vault_tournament_token`),
+  read-once aus `TOURNAMENT_TOKEN`. Landet nie im Repo/Log; die Unit liest ihn
+  aus einer 0600-`EnvironmentFile`.
+- **Single-Source:** derselbe Vault-Key speist Rust, den rift-caddy
+  (`header_up Authorization "Bearer …"` auf den Schreibpfaden) und den
+  Queue-Dienst (`QUEUE_REFEREE_TOKEN`). Kein zweiter Secret-Kanal.
+- **Bind:** `TOURNAMENT_HOST` ist Default `127.0.0.1`; der rift-caddy
+  (`network_mode: host`) proxyt dorthin. Ein Expose nach außen ist bewusst
+  nicht Teil dieses Schutzes (**Firewall out-of-scope**, eigener PR).
+
+Ein Aufruf ohne/mit falschem Bearer:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8081/wave   # 401
+curl -s -o /dev/null -w '%{http_code}\n' -H 'Authorization: Bearer <token>' \
+  -X POST http://127.0.0.1:8081/wave                                          # 200/409 (je nach Bridge)
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8081/health          # 200 (frei)
+```
 
 ## Match-Lebenszyklus
 
@@ -555,7 +587,8 @@ Kein Echtzeit-Zwang: Polling-Pull-Modell (wie im Server-Protokoll).
 
 ## Bekannte v1-Grenzen
 
-- Ein Match global, In-Memory (kein Persistenz/Auth) — Multi-Match folgt.
+- Ein Match global, In-Memory (kein Persistenz) — Multi-Match folgt. Auth:
+siehe „Auth-Modell“ (mutierend per Bearer, lesend frei, #298).
 - Sends, die nach dem Wellenstart einer Welt eintreffen, laufen in deren
   nächste Welle (Rundenzuteilung beim Referee).
 - Sehr späte `wave_start`-Retries nach abgeschlossenem Reveal werden als
