@@ -21,10 +21,10 @@
 # EINZIGE QUELLE der satellite_relay_*-Werte (Issue #328, Review #329): bewusst
 # KEINE host_vars/satellite/, sonst würde host_vars die Defaults still
 # überschreiben (Precedence). Die Rolle lief ursprünglich nur gegen den Host
-# `satellite`; später diente sie ZUSÄTZLICH dem Host `sync` als zweites UDP-
-# Relay (sync:6321 -> planet:6323) — dort wird `satellite_relay_target_port`
-# auf Play-Ebene (deploy/deploy-staging.yml) auf 6323 gesetzt, während
-# `satellite_relay_target_host` (65.21.27.234) und `satellite_relay_interface`
+# `satellite`. Früher diente sie zusätzlich dem Host `sync` als zweites UDP-
+# Relay (sync:6321 -> planet:6323); mit dem prod-only-Umbau (#1034) entfällt
+# dieser Pfad — der Teardown setzt `satellite_relay_target_port` bei Bedarf auf
+# 6323. `satellite_relay_target_host` (65.21.27.234) und `satellite_relay_interface`
 # (eth0) die Rollen-Defaults bleiben. Der Default `satellite_relay_target_port:
 # 6322` bleibt der satellite/prod-Wert. Beide Relays werden seit Issue #846
 # abgebaut; die Werte bleiben für den Teardown-Pfad erhalten und müssen zu den

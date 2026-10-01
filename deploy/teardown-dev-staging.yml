@@ -1,0 +1,141 @@
+---
+# ============================================================================
+# deploy/teardown-dev-staging.yml — EINMALIGER Host-Teardown der entfallenen
+# dev-/staging-Welten auf planet (Issue #1034, AC1).
+#
+# Zweck: Nach dem prod-only-Umbau (#1034) laufen auf planet keine dev-/
+# staging-Instanzen mehr. Dieses Playbook stoppt/entfernt ihre Host-Ressourcen
+# (Container, Volumes, systemd-Units, Pfade) idempotent und check-mode-fest.
+#
+# BEWUSST NICHT im CD verdrahtet (deploy.yml triggert nur Tags v* -> deploy-prod.yml)
+# und NICHT Teil der regulaeren Deploys: der Teardown wird EINMALIG/manuell
+# gefahren, wenn die dev-/staging-Dienste nicht mehr gebraucht werden. Runbook:
+# deploy/README.md → „Teardown dev/staging (#1034)".
+#
+# Aufruf (read-only-Probe zuerst!):
+#   ansible-playbook -i deploy/inventory deploy/teardown-dev-staging.yml --check --diff
+#   ansible-playbook -i deploy/inventory deploy/teardown-dev-staging.yml
+#
+# Der Teardown fasst AUSSCHLIESSLICH dev-/staging-Ressourcen an — der prod-A/
+# prod-B-Stack und der GNS-Entry-Relay bleiben unberuehrt.
+#
+# Check-Mode: alle mutierenden Tasks sind `command`/`shell` (in --check
+# uebersprungen) bzw. `file state=absent` (check-mode-sicher, meldet "would
+# change") — der --check-Lauf bricht nie ab und loescht nichts.
+
+- name: RIFT BATTLE — Teardown dev/staging (Issue #1034)
+  hosts: planet
+  become: true
+  gather_facts: false
+
+  vars:
+    # Container der entfallenen Welten (dev + staging) inkl. ihrer Sidecars und
+    # Caddys. Prod-A/Prod-B/gns-relay stehen hier BEWUSST NICHT.
+    teardown_containers:
+      - riftbreaker-dedicated
+      - riftbreaker-dedicated-staging
+      - riftbreaker-sessions
+      - riftbreaker-sessions-staging
+      - riftbreaker-send-tailer
+      - riftbreaker-send-tailer-staging
+      - riftbreaker-match-loop
+      - riftbreaker-match-loop-staging
+      - riftbreaker-attack-cycle
+      - riftbreaker-attack-cycle-staging
+      - riftbreaker-chat-announcer
+      - riftbreaker-chat-announcer-staging
+      - rift-caddy
+      - rift-caddy-staging
+    # Persistente Volumes der entfallenen Welten.
+    teardown_volumes:
+      - rb-wine
+      - rb-saves
+      - rb-wine-staging
+      - rb-saves-staging
+    # systemd-Units (mit und ohne .service-Suffix).
+    teardown_units:
+      - server-control
+      - server-control.service
+      - server-control-staging
+      - server-control-staging.service
+      - tournament-server
+      - tournament-server.service
+      - tournament-server-staging
+      - tournament-server-staging.service
+      - rbmods-crash-collector
+      - rbmods-crash-collector.service
+      - rbmods-crash-collector-staging
+      - rbmods-crash-collector-staging.service
+      - rbmods-parked-dev
+      - rbmods-capsule-dev
+      - rbmods-queue-dev
+    # Host-Pfade der entfallenen Welten (Daten, Compose, Tools, Env-Dateien).
+    teardown_paths:
+      - /srv/rift-dev
+      - /srv/rift-staging
+      - /opt/rbmods/compose/rift-dev
+      - /opt/rbmods/compose/rift-staging
+      - /opt/rbmods/rbtools/dev
+      - /opt/rbmods/rbtools/staging
+      - /opt/rbmods/tournament-server-staging
+      - /opt/rbmods/server-control-staging
+      - /opt/rbmods/crashes-staging
+      - /opt/rbmods/parked-pool-dev
+      - /opt/rbmods/capsule-flow-dev
+      - /opt/rbmods/queue-dev
+      - /etc/rbmods/parked-pool-dev.env
+      - /etc/rbmods/capsule-dev.env
+      - /etc/rbmods/queue-dev.env
+      - /var/lib/rbmods/queue-dev
+
+  tasks:
+    # --- Container -----------------------------------------------------------
+    # `docker rm -f` ist idempotent (nicht vorhanden -> Fehler wird toleriert).
+    - name: "Teardown — dev-/staging-Container entfernen"
+      command: "docker rm -f {{ item }}"
+      loop: "{{ teardown_containers }}"
+      register: teardown_rm_containers
+      changed_when: "'No such container' not in (teardown_rm_containers.stderr | default(''))"
+      failed_when: false
+
+    # --- Volumes -------------------------------------------------------------
+    - name: "Teardown — dev-/staging-Volumes entfernen"
+      command: "docker volume rm {{ item }}"
+      loop: "{{ teardown_volumes }}"
+      register: teardown_rm_volumes
+      changed_when: "'No such volume' not in (teardown_rm_volumes.stderr | default(''))"
+      failed_when: false
+
+    # --- systemd-Units -------------------------------------------------------
+    - name: "Teardown — dev-/staging-Units stoppen + deaktivieren"
+      shell: >-
+        systemctl stop {{ item }} 2>/dev/null || true;
+        systemctl disable {{ item }} 2>/dev/null || true;
+        true
+      loop: "{{ teardown_units }}"
+      changed_when: false
+
+    - name: "Teardown — Unit-Dateien entfernen"
+      file:
+        path: "/etc/systemd/system/{{ item }}"
+        state: absent
+      loop: "{{ teardown_units }}"
+
+    - name: "Teardown — systemd daemon-reload"
+      command: systemctl daemon-reload
+      changed_when: false
+
+    # --- Host-Pfade ----------------------------------------------------------
+    - name: "Teardown — dev-/staging-Pfade entfernen"
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ teardown_paths }}"
+
+    - name: "Teardown — Zusammenfassung (Issue #1034)"
+      debug:
+        msg: >-
+          Teardown dev/staging abgeschlossen: {{ teardown_containers | length }}
+          Container, {{ teardown_volumes | length }} Volumes,
+          {{ teardown_units | length }} Units, {{ teardown_paths | length }}
+          Pfade abgeraeumt (idempotent). Prod-A/Prod-B/gns-relay unberuehrt.

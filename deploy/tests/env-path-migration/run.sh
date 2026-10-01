@@ -7,13 +7,12 @@
 #   * erneuter Lauf               -> no-op (idempotent, changed=0)
 #   * Alt UND Neu vorhanden       -> kein mv (mehrdeutig, nur Warnung)
 #
-# Zusaetzlich (Befund 1, Verifier-Retry): WIRING-Nachweis — die regulaeren
-# Plays deploy/site.yml + deploy/deploy-prod.yml MUESSEN die Migration in den
-# `pre_tasks` VOR den Rollen einbinden (automatischer CD → sonst deployt der
-# naechste Lauf die neuen Pfade ohne migrierten Stand). Das prueft
-# `ansible-playbook --list-tasks` (echter Play-Parse, kein Host-Kontakt).
-# Die Negativ-Probe entfernt den include aus einer Fixture-Kopie und MUSS das
-# Fehlen dann erkennen.
+# Zusaetzlich (Befund 1, Verifier-Retry): WIRING-Nachweis — das regulaere
+# Play deploy/deploy-prod.yml MUSS die Migration in den `pre_tasks` VOR den
+# Rollen einbinden (automatischer CD → sonst deployt der naechste Lauf die
+# neuen Pfade ohne migrierten Stand). Das prueft `ansible-playbook --list-tasks`
+# (echter Play-Parse, kein Host-Kontakt). Die Negativ-Probe entfernt den
+# include aus einer Fixture-Kopie und MUSS das Fehlen dann erkennen.
 #
 # Läuft in deploy-check-local.
 set -euo pipefail
@@ -88,18 +87,15 @@ check_wiring() {  # <playbook> <inventory> [extra] -> 0 wenn Migration in pre_ta
 }
 
 echo "== Wiring: Migration liegt in pre_tasks VOR den Rollen =="
-check_wiring "$repo/deploy/site.yml" "$repo/deploy/inventory" \
-  || fail "deploy/site.yml bindet die Env-Pfad-Migration NICHT in den pre_tasks vor den Rollen ein (Befund 1)."
-echo "   site.yml: OK"
-check_wiring "$repo/deploy/deploy-prod.yml" "$repo/deploy/inventory" -e "@$repo/deploy/prod-vars.yml" \
+check_wiring "$repo/deploy/deploy-prod.yml" "$repo/deploy/inventory" \
   || fail "deploy/deploy-prod.yml bindet die Env-Pfad-Migration NICHT in den pre_tasks vor den Rollen ein (Befund 1)."
 echo "   deploy-prod.yml: OK"
 
 echo "== Negativ-Probe: ohne include erkennt check_wiring das Fehlen =="
 fixture="$(mktemp -d)"
 cp -r "$repo/deploy" "$fixture/deploy"
-# include-Block (name + include_tasks, 2 Zeilen) aus der site.yml-Kopie entfernen.
-python3 - "$fixture/deploy/site.yml" <<'PY'
+# include-Block (name + include_tasks, 2 Zeilen) aus der deploy-prod.yml-Kopie entfernen.
+python3 - "$fixture/deploy/deploy-prod.yml" <<'PY'
 import sys
 p = sys.argv[1]
 lines = open(p, encoding="utf-8").read().splitlines(keepends=True)
@@ -114,10 +110,10 @@ for ln in lines:
     out.append(ln)
 open(p, "w", encoding="utf-8").writelines(out)
 PY
-if check_wiring "$fixture/deploy/site.yml" "$fixture/deploy/inventory"; then
+if check_wiring "$fixture/deploy/deploy-prod.yml" "$fixture/deploy/inventory"; then
   fail "Negativ-Probe: check_wiring meldet OK, obwohl der Migration-include fehlt (Wiring-Test wirkungslos)."
 fi
 rm -rf "$fixture"
 echo "   Negativ-Probe erkannt."
 
-echo "OK: Migration in pre_tasks von site.yml/deploy-prod.yml verdrahtet (Befund 1)."
+echo "OK: Migration in pre_tasks von deploy-prod.yml verdrahtet (Befund 1)."

@@ -18,7 +18,8 @@ Geprueft wird gegen deploy/env-schema.yml:
 
 `dev` hat keine eigene Override-Datei; dev IST die Basis
 (inventory/host_vars/planet/vars.yml). Die Distinctness der per-env-Pfade
-gegen den dev-Basiswert asserted zusaetzlich deploy/tasks/env-assert.yml.
+gesagt der Schema-Audit gegen die Basis; deploy/tasks/env-assert.yml asserted
+Komponenten explizit gegen die historischen dev-Basiswerte (Referenzkonstanten).
 
 Exit-Codes:
   0 = alle Invarianten erfuellt
@@ -35,13 +36,12 @@ import sys
 
 MARKER = "ENV-ISOLATION-GATE"
 
-VALID_ENVS = ("dev", "prod", "prod-b", "test", "staging")
+VALID_ENVS = ("dev", "prod", "prod-b", "test")
 ENV_FILES = {
     "dev": os.path.join("deploy", "inventory", "host_vars", "planet", "vars.yml"),
     "prod": os.path.join("deploy", "prod-vars.yml"),
     "prod-b": os.path.join("deploy", "prod-b-vars.yml"),
     "test": os.path.join("deploy", "test-vars.yml"),
-    "staging": os.path.join("deploy", "staging-vars.yml"),
 }
 SCHEMA_REL = os.path.join("deploy", "env-schema.yml")
 
@@ -160,7 +160,7 @@ def check(repo_root, env=None):
                 )
 
     if env is not None and env not in VALID_ENVS:
-        problems.append("ungueltige --env '%s' (erwartet dev|prod|prod-b|test|staging)." % env)
+        problems.append("ungueltige --env '%s' (erwartet dev|prod|prod-b|test)." % env)
     return problems
 
 
@@ -169,7 +169,7 @@ def main(argv=None):
     parser.add_argument("--repo-root", default=default_repo_root(),
                         help="Repo-Root (Default: zwei Ebenen ueber diesem Skript).")
     parser.add_argument("--env", default=None,
-                        help="Env-Kontext (dev|prod|prod-b|test|staging) — nur fuer die Meldung.")
+                        help="Env-Kontext (dev|prod|prod-b|test) — nur fuer die Meldung.")
     args = parser.parse_args(argv)
 
     problems = check(args.repo_root, env=args.env)

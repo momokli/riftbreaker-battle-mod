@@ -1,15 +1,15 @@
 ---
 # deploy/tasks/deploy-identity.yml — erzeugt die Deploy-Identitaet je Play
-# (Issue #483, US1). Wird per include_tasks in den pre_tasks von site.yml
-# (dev), deploy-prod.yml (prod-A + prod-B), test-deploy.yml (test) und
-# deploy-staging.yml (staging) eingebunden.
+# (Issue #483, US1). Wird per include_tasks in den pre_tasks von
+# deploy-prod.yml (prod-A, prod-B, Play 0 host-services) und test-deploy.yml
+# (test) eingebunden.
 #
-# `rift_env` MUSS dort als Play-Var stehen (dev|prod|prod-b|test|staging):
+# `rift_env` MUSS dort als Play-Var stehen (prod|prod-b|test):
 # Play-Vars schlagen Rollen-Defaults + host_vars, sonst erbt prod/test den
 # dev-Wert (dieselbe Praezedenz-Falle wie `server_control_enabled`, Issue #463).
 #
 # Ergebnis:
-#   rift_deploy_ref       dev/test/staging = Checkout-SHA (deploy_image_tag);
+#   rift_deploy_ref       test = Checkout-SHA (deploy_image_tag);
 #                         prod/prod-b = Git-Tag (git describe --tags --always)
 #   rift_deploy_identity  "<env> · <ref>"   (Surface-Vertrag, US4)
 #
@@ -24,18 +24,18 @@
   assert:
     that:
       - rift_env is defined
-      - rift_env in ['dev', 'prod', 'prod-b', 'test', 'staging']
+      - rift_env in ['prod', 'prod-b', 'test']
     fail_msg: >-
-      rift_env fehlt oder ist ungueltig (erwartet dev|prod|prod-b|test|staging). Es MUSS als
+      rift_env fehlt oder ist ungueltig (erwartet prod|prod-b|test). Es MUSS als
       Play-Var im jeweiligen Playbook stehen (Play-Vars schlagen
       Rollen-Defaults/host_vars) — sonst erbt prod/test den dev-Wert
       (Issue #483).
     success_msg: "rift_env={{ rift_env }} (Play-Var)."
   tags: always
 
-# dev/test leiten den Ref direkt aus dem Checkout-SHA ab (deploy_image_tag,
-# bereits in den pre_tasks ermittelt). prod-A/prod-B brauchen zusaetzlich den
-# Git-Tag (prod-b ist eine prod-Welt, gleiche Ref-Semantik wie prod-A).
+# test leitet den Ref direkt aus dem Checkout-SHA ab (deploy_image_tag, bereits
+# in den pre_tasks ermittelt). prod-A/prod-B brauchen zusaetzlich den Git-Tag
+# (prod-b ist eine prod-Welt, gleiche Ref-Semantik wie prod-A).
 - name: "Deploy-Ref — Git-Tag am Checkout ermitteln (prod/prod-b)"
   command: git -c safe.directory=* -C {{ rift_deploy_checkout }} describe --tags --always
   delegate_to: localhost
@@ -112,7 +112,7 @@
       - (rift_env in ['prod', 'prod-b']) or (rift_deploy_ref == deploy_image_tag)
     fail_msg: >-
       rift_deploy_ref/rift_deploy_identity fehlen oder verletzen den Vertrag
-      (Issue #483, US1). dev/test muessen den Checkout-SHA (deploy_image_tag)
+      (Issue #483, US1). test muss den Checkout-SHA (deploy_image_tag)
       tragen, prod/prod-b den Git-Tag; die Identitaet ist "<env> · <ref>".
     success_msg: "Deploy-Identitaet={{ rift_deploy_identity }}."
   tags: always

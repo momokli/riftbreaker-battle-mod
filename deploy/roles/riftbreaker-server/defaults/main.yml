@@ -111,8 +111,8 @@ riftbreaker_sessions_script_src: "{{ playbook_dir }}/session-recorder/session_re
 # Env-agnostischer Sidecar (analog session-recorder): tailt exor_logs.txt und
 # POSTet Mod-Chat-Send-Orders (-send waveN) an den Attack-Cycle (/queue_send).
 # Kein Netz nach aussen, nur zum Attack-Cycle im selben Compose-Netz.
-# container_name ist global -> prod/staging/test muessen ihn ueberschreiben
-# (prod-vars/staging-vars/test-vars.yml), sonst Kollision (analog sessions).
+# container_name ist global -> prod/test muessen ihn ueberschreiben
+# (prod-vars/prod-b-vars/test-vars.yml), sonst Kollision (analog sessions).
 riftbreaker_send_tailer_container: riftbreaker-send-tailer
 riftbreaker_send_tailer_image: "python:3.12-slim"
 # Attack-Cycle-/queue_send-Endpoint im Compose-Netz (Attack-Cycle-Container + Port).
@@ -125,7 +125,7 @@ riftbreaker_send_tailer_script_src: "{{ playbook_dir }}/send-tailer/send_tailer.
 # Env-agnostischer Sidecar (analog send-tailer): pollt POST /get_state und
 # schliesst den Solo-Round-Loop (HQ zerstoert -> end_game(lose) -> 10 s ->
 # restart_map). Kein Wine-Volume noetig, nur HTTP zur Bridge im Compose-Netz.
-# container_name ist global -> prod/staging/test muessen ihn ueberschreiben.
+# container_name ist global -> prod/test muessen ihn ueberschreiben.
 riftbreaker_match_loop_container: riftbreaker-match-loop
 riftbreaker_match_loop_image: "python:3.12-slim"
 # Bridge-Basis-URL im Compose-Netz (ohne Pfad; der Loop haengt /get_state etc. an).
@@ -139,7 +139,7 @@ riftbreaker_match_loop_script_src: "{{ playbook_dir }}/match-loop/match_loop.py"
 # fuehrt den 7-min-Angriffszyklus (natuerliche Welle 1..9 + gestapelte Kaeufe).
 # Spricht rein ueber HTTP zur Bridge (get_state/try_spend/activate_mission_flow);
 # der send-tailer POSTet Kaeufe an seinen /queue_send-Endpunkt (Port unten).
-# container_name ist global -> prod/staging/test muessen ihn ueberschreiben.
+# container_name ist global -> prod/test muessen ihn ueberschreiben.
 riftbreaker_attack_cycle_container: riftbreaker-attack-cycle
 riftbreaker_attack_cycle_image: "python:3.12-slim"
 # Bridge-Basis-URL im Compose-Netz (ohne Pfad; der Cycle haengt Pfade selbst an).
@@ -159,7 +159,7 @@ riftbreaker_attack_cycle_script_src: "{{ playbook_dir }}/attack-cycle/attack_cyc
 # Env-agnostischer Sidecar (analog attack-cycle): liest den Attack-Cycle-State
 # (GET /status) und schickt ereignis-/schwellenbasiert Status-Zeilen in den
 # In-Game-Chat (POST /send_chat an die Bridge). Kein 1-Hz-Spam; kein Host-Port.
-# container_name ist global -> prod/staging/test muessen ihn ueberschreiben.
+# container_name ist global -> prod/test muessen ihn ueberschreiben.
 riftbreaker_chat_announcer_container: riftbreaker-chat-announcer
 riftbreaker_chat_announcer_image: "python:3.12-slim"
 # Attack-Cycle-Basis-URL im Compose-Netz (der Announcer haengt /status an).
@@ -177,7 +177,7 @@ riftbreaker_chat_announcer_script_src: "{{ playbook_dir }}/chat-announcer/announ
 # --- Disk-Space-Gate (Issue #310) --------------------------------------------
 # Mindest-freier Platz auf {{ riftbreaker_disk_mount }} VOR Image-Build und
 # Mod-Backup-Tarball. Der Preflight (tasks/disk-preflight.yml) wird aus den
-# pre_tasks von site.yml/test-deploy.yml aufgerufen — also VOR den Rollen, damit
+# pre_tasks von deploy-prod.yml/test-deploy.yml aufgerufen — also VOR den Rollen, damit
 # der Abbruch vor dedicated-server-image greift. Schwelle konfigurierbar.
 riftbreaker_disk_mount: "/"
 riftbreaker_disk_min_free_gb: 10

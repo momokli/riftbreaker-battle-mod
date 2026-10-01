@@ -3,20 +3,23 @@
 # /usr/local/bin/rbbattle-deploy — Anleitung in deploy/README.md → „CD: SSH-Deploy").
 #
 # Issue #483 (Ziel A / Live-Befund #2): je Env ein EIGENER Checkout
-# (`/opt/rbbattle-deploy/repo-<env>`) mit eigenem Ref/SHA-Marker. dev (main) und
-# prod (v*) können so PARALLEL laufen, ohne sich Ref/SHA im gemeinsamen repo
-# gegenseitig zu überschreiben.
+# (`/opt/rbbattle-deploy/repo-<env>`) mit eigenem Ref/SHA-Marker.
 #
-# Der forced command (deploy/deploy-ssh.sh) hat vorher geschrieben:
-#   .deploy-<env>.sha / .deploy-<env>.ref  (pro Env)
-#   .deploy-env                            (welche Env)
+# PROD-ONLY (Issue #1034): es gibt nur noch die prod-Welt. Der forced command
+# (deploy/deploy-ssh.sh) akzeptiert nur `refs/tags/v*` -> env=prod; hier wird
+# entsprechend immer deploy/deploy-prod.yml gefahren. dev (main)/staging sind
+# entfallen — ein unbekannter/ungueltiger ref bricht fail loud ab.
 #
-# Rollout/Rückwärts-Kompatibilität: fehlt .deploy-env (Bestand vor dem Umbau),
-# wird die Env aus den LEGACY-Markern .deploy-sha/-ref abgeleitet und der
-# bestehende Checkout `repo/` weiterbenutzt (Einmal-Migration der Marker/
+# Der forced command hat vorher geschrieben:
+#   .deploy-prod.sha / .deploy-prod.ref  (env-spezifisch)
+#   .deploy-env                          (welche Env = prod)
+#
+# Rollout/Rueckwaerts-Kompatibilitaet: fehlt .deploy-env (Bestand vor dem
+# Umbau), wird die Env aus den LEGACY-Markern .deploy-sha/-ref abgeleitet und
+# der bestehende Checkout `repo/` weiterbenutzt (Einmal-Migration der Marker/
 # Checkouts, siehe deploy/README.md). Danach arbeitet jeder Lauf env-lokal.
 #
-# Das Playbook läuft mit `become: true`; root gibt es ausschließlich über das
+# Das Playbook laeuft mit `become: true`; root gibt es ausschliesslich über das
 # enge sudoers-Snippet (NOPASSWD nur für diesen Wrapper, ohne Argumente).
 #
 # Testbare Übersteuerungen (Default = Produktion):
@@ -38,19 +41,18 @@ export ANSIBLE_CONFIG="${RBBATTLE_DEPLOY_ANSIBLE_CONFIG:-/etc/rbbattle-deploy/an
 env="$(cat "$deploy_root/.deploy-env" 2>/dev/null || true)"
 legacy=0
 if [ -z "$env" ]; then
-  # Fallback (Bestand vor dem Umbau): Env aus den Legacy-Markern ableiten und
-  # den bestehenden Checkout `repo/` benutzen.
+  # Fallback (Bestand vor dem Umbau, Issue #1034): nur prod ist noch gueltig.
   legacy=1
   legacy_ref="$(cat "$deploy_root/.deploy-ref" 2>/dev/null || true)"
   case "$legacy_ref" in
     refs/tags/v*) env=prod ;;
-    *) env=dev ;;
+    *) echo "rbbattle-deploy: ungültiger Legacy-ref '${legacy_ref}' (nur refs/tags/v*, Issue #1034)" >&2; exit 1 ;;
   esac
 fi
 
 case "$env" in
-  dev|prod|staging) ;;
-  *) echo "rbbattle-deploy: ungültige env '${env}'" >&2; exit 1 ;;
+  prod) ;;
+  *) echo "rbbattle-deploy: ungültige env '${env}' (nur prod, Issue #1034)" >&2; exit 1 ;;
 esac
 
 if [ "$legacy" -eq 1 ]; then
@@ -63,11 +65,10 @@ else
   ref="$(cat "$deploy_root/.deploy-$env.ref" 2>/dev/null || true)"
 fi
 
-# Eigener Checkout je Env: beim ersten prod-Lauf nach dem Umbau frisch klonen
-# (der dev-Checkout bleibt unangetastet). Vorher: git clone (als root) +
-# Ownership normalisieren. Agent-/RE-Arbeit legt auf planet teils root-owned
-# Dateien ab — liefe der Checkout als deploy, schlüge er mit
-# "unable to unlink … Permission denied" fehl.
+# Eigener Checkout je Env: beim ersten prod-Lauf nach dem Umbau frisch klonen.
+# Vorher: git clone (als root) + Ownership normalisieren. Agent-/RE-Arbeit legt
+# auf planet teils root-owned Dateien ab — liefe der Checkout als deploy, schlüge
+# er mit "unable to unlink … Permission denied" fehl.
 if [ ! -d "$repo/.git" ]; then
   git clone --quiet "$repo_url" "$repo"
 fi
@@ -79,28 +80,21 @@ if [ -n "$sha" ]; then
 fi
 chown -R deploy:deploy "$repo"
 
-# Dispatch anhand des ref: Tag v* -> prod (A+B), Branch staging -> staging,
-# sonst dev.
+# Dispatch: seit #1034 gibt es nur noch EINEN Deploy-Pfad (Tag v* -> prod A+B).
 #
-# Issue #995: deploy/deploy-prod.yml faehrt ZWEI Plays (Prod-A + Prod-B), jede
-# laedt ihre Vars per `vars_files` (prod-vars.yml / prod-b-vars.yml). Ein
-# globales `-e @deploy/prod-vars.yml` haette Extra-Vars-Precedence und wuerde
-# damit auch den B-Play ueberschreiben -> deshalb hier KEIN `-e` mehr.
+# Issue #995: deploy/deploy-prod.yml faehrt mehrere Plays (Play 0 host-services
+# + Prod-A + Prod-B), jede laedt ihre Vars per `vars_files` (prod-vars.yml /
+# prod-b-vars.yml). Ein globales `-e @deploy/prod-vars.yml` haette Extra-Vars-
+# Precedence und wuerde damit auch den B-Play ueberschreiben -> deshalb hier
+# KEIN `-e` mehr.
 case "$ref" in
   refs/tags/v*)
     exec "$ansible_bin" \
       -i deploy/inventory deploy/deploy-prod.yml \
       --vault-password-file "$vault_file"
     ;;
-  refs/heads/staging)
-    exec "$ansible_bin" \
-      -i deploy/inventory deploy/deploy-staging.yml \
-      -e @deploy/staging-vars.yml \
-      --vault-password-file "$vault_file"
-    ;;
   *)
-    exec "$ansible_bin" \
-      -i deploy/inventory deploy/site.yml \
-      --vault-password-file "$vault_file"
+    echo "rbbattle-deploy: ungültiger ref '${ref}' (nur refs/tags/v*, Issue #1034)" >&2
+    exit 1
     ;;
 esac

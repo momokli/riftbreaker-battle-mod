@@ -23,6 +23,8 @@
     - ../../roles/riftbreaker-server/defaults/main.yml
     - ../../roles/website/defaults/main.yml
     - ../../roles/gns-relay/defaults/main.yml
+    # prod-vars: der Render emuliert das prod-Play (Issue #1034).
+    - ../../prod-vars.yml
 
   vars:
     deploy_image_tag: check
@@ -32,6 +34,12 @@
     render_dir: "{{ lookup('env', 'RBBATTLE_RENDER_DIR') | default('/tmp/rbbattle-compose-logging', true) }}"
 
   tasks:
+    # Prod-Kontext (Issue #1034): rift_env=prod, damit die per-Env-Templates
+    # (riftbreaker_deploy_dir etc.) rendern koennen.
+    - name: "Prod-Kontext: rift_env setzen (Issue #1034)"
+      set_fact:
+        rift_env: prod
+
     - name: Render-Verzeichnis sicherstellen
       file:
         path: "{{ render_dir }}"

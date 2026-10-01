@@ -7,7 +7,7 @@ name: Deploy Check (local)
 #
 # Prüft:
 #   * yamllint über deploy/
-#   * Playbook-Syntax (site.yml + deploy-prod.yml, Issue #328/#329)
+#   * Playbook-Syntax (deploy-prod.yml + test-deploy.yml, Issue #328/#329/#1034)
 #   * Deploy-Wiring + Provider-Unit-Tests (Issue #337)
 #   * Disk-Space-Gate-Selbsttest (Issue #310)
 #   * Backup/Stray-Retention-Selbsttest (Issue #312)
@@ -206,21 +206,18 @@ jobs:
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: yamllint -c .yamllint deploy/
 
-      # Playbook-Syntax aller Inventar-Playbooks (Issue #328/#329/#483): deckt
-      # das prod-Playbook deploy-prod.yml (+ prod-vars.yml) UND den Boot-Test
-      # test-deploy.yml (+ test-vars.yml) ab. --syntax-check parst nur, verbindet
-      # NICHT und entschlüsselt das Vault nicht.
-      - name: Playbook-Syntax (site.yml + deploy-prod.yml + test-deploy.yml + deploy-staging.yml)
+      # Playbook-Syntax der Inventar-Playbooks (Issue #328/#329/#483/#1034):
+      # deckt das prod-Playbook deploy-prod.yml (prod-only, vars_files) UND den
+      # Boot-Test test-deploy.yml (+ test-vars.yml) ab. --syntax-check parst nur,
+      # verbindet NICHT und entschlüsselt das Vault nicht. site.yml/deploy-staging.yml
+      # sind mit #1034 entfallen.
+      - name: Playbook-Syntax (deploy-prod.yml + test-deploy.yml)
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
-          ansible-playbook -i deploy/inventory deploy/site.yml --syntax-check
-          ansible-playbook -i deploy/inventory deploy/deploy-prod.yml \
-            -e @deploy/prod-vars.yml --syntax-check
+          ansible-playbook -i deploy/inventory deploy/deploy-prod.yml --syntax-check
           ansible-playbook -i deploy/inventory deploy/test-deploy.yml \
             -e @deploy/test-vars.yml --syntax-check
-          ansible-playbook -i deploy/inventory deploy/deploy-staging.yml \
-            -e @deploy/staging-vars.yml --syntax-check
 
       # Playbook-Syntax des lokalen Solo-Dev-Setups (Issue #566): eigenes
       # Inventory (deploy/local-inventory.yml), außerhalb des
@@ -317,7 +314,7 @@ jobs:
 
       # Operator-Credential-Trennung (Issue #535): rendert das ECHTE
       # Cockpit-Caddyfile-Template und beweist: dev bleibt byte-identisch beim
-      # Legacy-Hash; ein Play-Var-Override (prod/staging) ersetzt ihn in ALLEN
+      # Legacy-Hash; ein Play-Var-Override (prod) ersetzt ihn in ALLEN
       # Operator-Bloecken ohne Legacy-Rest; die GNS-Lobby (proxy_basic_auth_hash)
       # ist von den per-Env Cockpit-Credentials ENTKOPPELT (eigener
       # vault_proxy_basic_auth_hash, sonst Legacy-Fallback — nie der Cockpit-Hash).

@@ -2,68 +2,35 @@
 # ============================================================================
 # planet — nicht-geheime Variablen (host_vars/planet/vars.yml)
 # Geheimnisse (Server-Passwort) NUR in vault.yml (ansible-vault verschlüsselt).
+#
+# PROD-ONLY (Issue #1034): Die frühere dev-Welt (site.yml) ist entfallen. Damit
+# enthält diese Datei KEINE dev-Welt-Pfade/Ports/Container/Domains mehr — sie
+# hält nur noch die host-weiten SINGLETON-Werte (gns-relay, image-retention,
+# host-hygiene) sowie env-unabhängige Basen. Die per-Env-Werte (prod/prod-b/
+# test) stehen in den jeweiligen Override-Dateien (prod-vars.yml,
+# prod-b-vars.yml, test-vars.yml); der env-schema-Audit (env-assert.yml) erzwingt,
+# dass jede env-spezifische Komponente dort EXPLIZIT gesetzt ist.
 # ============================================================================
 
-# --- Dedicated Game-Server (Dev-SP, 6321, 1v1 "vs sich selbst") -------------
-# Pfad-Schema `<env>` (Issue #483, Ziel B): dev wird vom unsuffigierten
-# Sonderfall auf DENSELBEN Namensraum wie prod/test gebracht — ein Schema, aus
-# `rift_env` abgeleitet (keine drei handgepflegten Saetze).
-#   /srv/rift-<env>/game | backups | sessions
-riftbreaker_game_dir: "/srv/rift-{{ rift_env }}/game"
-riftbreaker_mod_dir: "{{ riftbreaker_game_dir }}/mods/rbbattle"
-# Mod-Backups liegen AUSSERHALB von mods/ — der Dedicated Server lädt sonst
-# jeden Backup-Ordner mit *.manifest als zweite Mod (Befund 2026-09-10,
-# Issue #212; Guard + Verifikation in der Rolle).
-riftbreaker_backup_dir: "/srv/rift-{{ rift_env }}/backups"
-# Bridge-Binaries (rbtools) isoliert von prod (Root cause #409). Pfad-Schema
-# `<env>` (Issue #483, Ziel B): /opt/rbmods/rbtools/<env> (dev lag vorher unter
-# rbtools-drift, prod unter rbtools-rift).
-rbtools_dir: "/opt/rbmods/rbtools/{{ rift_env }}"
-rbtools_staging_dir: "/opt/rbmods/rbtools/{{ rift_env }}/.staging"
-# Laufzeit-Image (Rolle dedicated-server-image, Issue #241, Community-Rezept).
-# Tag = Deploy-SHA aus site.yml (pre_tasks) — KEIN `latest`; das Image existiert
-# garantiert, bevor der Container startet.
+# --- Laufzeit-Image (Rolle dedicated-server-image, Issue #241) ---------------
+# Tag = Deploy-SHA aus den pre_tasks des deployenden Plays — KEIN `latest`; das
+# Image existiert garantiert, bevor ein Container startet.
 dedicated_server_image_name: rb-dedicated
 dedicated_server_image: "{{ dedicated_server_image_name }}:{{ deploy_image_tag }}"
 riftbreaker_server_image: "{{ dedicated_server_image }}"
-riftbreaker_server_container: riftbreaker-dedicated
-# Dev-SP-Server jetzt auf 6324 (Issue #843): der client-hardgewirete Einstiegsport
-# 6321 gehoert dem GNS-Entry-Relay (Rolle gns-relay), das dev/staging/prod unter
-# DER Adresse terminiert und anhand des Spielnamens routet. Container-seitig
-# bindet der Server weiter 6321 (Compose: "6324:6321/udp"); nur der HOST-Port
-# wandert. prod (:6322)/staging (:6323) bleiben unveraendert.
-riftbreaker_server_port_udp: 6324
-# Compose-Projekt EXPLIZIT je Env (Issue #483, Ziel B): der Verzeichnis-Basename
-# ist im neuen Schema ueberall "riftbreaker" (/opt/rbmods/compose/rift-<env>/
-# riftbreaker) — die projekt-abgeleitete Kollision wird so vermieden und dev/
-# prod laufen als getrennte Compose-Projekte (kein Netz-/Container-Clash).
-#
-# Variante (a), Befund 2: HISTORISCHER Projektname BEIBEHALTEN. Compose
-# praefixt unbenannte Top-Level-Volumes mit dem Projektnamen
-# (<projekt>_<volume>) — live auf planet heisst das dev-Volume
-# `riftbreaker-dedicated_rb-wine` (+ `..._rb-saves`). Der Projektname ist
-# unabhaengig vom Compose-Verzeichnis; eine Umbenennung auf `rift-dev` wuerde
-# NEUE leere Volumes erzeugen und Wine-Prefix/Saves der laufenden Instanz
-# verwaisen lassen (die Host-Pfad-Migration deckt Docker-Ressourcen nicht ab).
-# Deshalb bleibt der Wert der historische Default (Basename des ALTEN
-# Deploy-Verzeichnisses /opt/rbmods/compose/riftbreaker-dedicated).
-riftbreaker_compose_project: "riftbreaker-dedicated"
-# Compose-/Config-/Sessions-Pfade im `<env>`-Schema.
-riftbreaker_deploy_dir: "/opt/rbmods/compose/rift-{{ rift_env }}/riftbreaker"
-riftbreaker_config_dir: "{{ riftbreaker_deploy_dir }}/config"
-riftbreaker_sessions_dir: "/srv/rift-{{ rift_env }}/sessions"
+
 # Welt/Config gemäß Community-Rezept (config.cfg.j2). Werte = funktionierender
-# Stand (verifiziert 2026-09-11).
+# Stand (verifiziert 2026-09-11). Env-übergreifend identisch (shared).
 riftbreaker_server_campaign: mp_survival/mp_survival
 riftbreaker_server_mission: survival/jungle
 riftbreaker_server_difficulty: coop_normal
 
 # --- GNS-Entry-Relay (Issue #843) --------------------------------------------
 # Terminiert GameNetworkingSockets auf dem client-hardgewireten UDP-Port 6321
-# und routet (Spielname-Suffix) auf prod :6322 / staging :6323 / dev :6324.
-# `network_mode: host` -> der Relay besitzt 6321 direkt auf dem Host. Der Relay
-# ist ein SINGLETON auf planet (genau ein 6321-Einstieg), daher sind seine
-# Werte host-konstant (env-schema: shared). Er laeuft auf demselben
+# und routet (Spielname-Suffix) auf prod-A :6322 / prod-B :6325. Als
+# EINZIGER öffentlicher Einstieg ist der Relay ein SINGLETON auf planet; seit
+# #1034 fährt ihn das prod-Play (deploy-prod.yml, Play 0) mit. `network_mode:
+# host` -> der Relay besitzt 6321 direkt auf dem Host. Er läuft auf demselben
 # Laufzeit-Image wie der Dedicated Server.
 gns_relay_container: gns-relay
 gns_relay_image: "{{ dedicated_server_image }}"
@@ -71,114 +38,69 @@ gns_relay_port: 6321
 gns_relay_deploy_dir: /opt/rbmods/compose/gns-relay
 gns_relay_bin_dir: /opt/rbmods/gns-relay/bin
 gns_relay_wine_volume: gns-relay-wine
-# POST /solo (Issue #929) spricht den env-Parked-Dienst an. Das Rollen-Default
-# zeigt auf den dev-Port 9201; staging/prod setzen dort den isolierten
-# parked_pool_port (ENV-ISOLATION-GATE) und muessen gns_relay_parked_url
-# entsprechend mitsetzen.
-
-# --- Tournament-Server (systemd, Rust/axum aus tournament/) ------------------
-tournament_install_dir: /opt/rbmods/tournament-server
-tournament_unit: tournament-server
-tournament_port: 8081
-tournament_bridge_a_url: "http://127.0.0.1:9001/exec"
-tournament_bridge_b_url: "http://127.0.0.1:9001/exec"
-
-# --- Server-Control (Plane B, systemd Host-Agent, Issue #424) ----------------
-# Wrappt `docker` auf dem Host: Status/Logs/Restart/Start/Stop + config.cfg.
-# Bindet NUR 127.0.0.1 — der rift-caddy proxyt /server/* dorthin (siehe
-# rift-caddy.Caddyfile.j2). Der Bearer-Token liegt AUSSCHLIESSLICH im Vault
-# (vault_server_control_token); ohne ihn bricht die Rolle ab (fail-closed).
-server_control_port: 8092
 
 # --- Parked-Pool-Dienst (Warm-Pool, Issue #928) ------------------------------
-# Haelt N Dedicated-Instanzen "geparkt" (Container + Bridge laufen, Welt
-# angehalten) und bietet claim()/recycle()/reap() per HTTP an (Bearer aus dem
-# Vault: vault_parked_pool_token). dev deployt die Rolle ueber site.yml — die
-# isolierten Werte stehen deshalb hier explizit (ENV-ISOLATION-GATE).
-# Port 9201: 127.0.0.1:8092 haelt der dev-server-control, und der Bereich
-# 8000-8500 ist host-weit von azuracast belegt (Docker-port-proxy). Deshalb eigener
-# Block ab 9200 (9200 = Relay-Lobby-API).
-parked_pool_unit: rbmods-parked-dev
+# Host-weiter SINGLETON (ein Relay auf dem Host): seit #1034 von Play 0
+# (deploy-prod.yml) deployt. Unit-/Pfad-Namen sind deshalb env-FREI (neutral),
+# nicht mehr an den dev-Zwilling gebunden. Haelt N Dedicated-Instanzen
+# "geparkt" und bietet claim()/recycle()/reap() per HTTP an (Bearer aus dem
+# Vault: vault_parked_pool_token). Port 9201: 127.0.0.1:8092 hält der
+# prod-server-control, und der Bereich 8000-8500 ist host-weit von azuracast
+# belegt (Docker-port-proxy); daher eigener Block ab 9200 (9200 = Relay-Lobby).
+parked_pool_unit: rbmods-parked
 parked_pool_port: 9201
 parked_pool_pool_size: 1
-parked_pool_install_dir: /opt/rbmods/parked-pool-dev
-parked_pool_env_file: /etc/rbmods/parked-pool-dev.env
+parked_pool_install_dir: /opt/rbmods/parked-pool
+parked_pool_env_file: /etc/rbmods/parked-pool.env
 
-# --- Kapsel-Flow-Dienst (Issue #931, dev) ------------------------------------
-# Eigener Port + der dev-Parked-Port als Nachbar (der Dienst claimt dort ohne
-# resume -> pausiertes Spiel). Gleicher Port-Block wie parked-pool.
+# --- Kapsel-Flow-Dienst (Issue #931) -----------------------------------------
+# Host-weiter SINGLETON (env-freie Namen). Eigener Port + der Parked-Port als
+# Nachbar (der Dienst claimt dort ohne resume -> pausiertes Spiel). Gleicher
+# Port-Block wie parked-pool.
 capsule_flow_port: 9211
 capsule_flow_parked_port: 9201
+# Unit-/Pfad-/Env-Datei-Overrides: env-FREI (host-weiter Singleton, analog
+# parked/queue). Ohne diese Overrides haengt der Rollen-Default am rift_env=prod
+# und deployte -prod-Namen (rbmods-capsule-prod, /opt/rbmods/capsule-flow-prod,
+# /etc/rbmods/capsule-prod.env).
+capsule_flow_unit: rbmods-capsule
+capsule_flow_install_dir: /opt/rbmods/capsule-flow
+capsule_flow_env_file: /etc/rbmods/capsule.env
 
-# --- Queue-Dienst (Issue #998, dev) ------------------------------------------
-# Casual-Queue: paart Spieler (aktiv 1v1, FIFO) und provisioniert KALT zwei
-# frische VS-Welten (A/B) + Referee-Lobby. dev deployt die Rolle ueber site.yml
-# -> die isolierten Werte stehen deshalb hier explizit (ENV-ISOLATION-GATE,
-# Issue #483). Eigener Port 9221 (frei neben Parked 9201 / Kapsel 9211).
-# Nachbarn: Provisioner-Nachbar wie im Rollen-Default; der Referee IST der
-# tournament-server (dev-Port 8081, docs/VS_MATCH.md).
-queue_unit: rbmods-queue-dev
+# --- Queue-Dienst (Issue #998) -----------------------------------------------
+# Host-weiter SINGLETON (env-freie Namen). Casual-Queue: paart Spieler
+# (aktiv 1v1, FIFO) und provisioniert KALT zwei frische VS-Welten (A/B) +
+# Referee-Lobby. Eigener Port 9221 (frei neben Parked 9201 / Kapsel 9211).
+# Referee IST der prod-tournament-server (prod-Port 8082, docs/VS_MATCH.md).
+queue_unit: rbmods-queue
 queue_port: 9221
-queue_install_dir: /opt/rbmods/queue-dev
-queue_env_file: /etc/rbmods/queue-dev.env
-queue_state_dir: /var/lib/rbmods/queue-dev
+queue_install_dir: /opt/rbmods/queue
+queue_env_file: /etc/rbmods/queue.env
+queue_state_dir: /var/lib/rbmods/queue
 queue_provisioner_url: "http://127.0.0.1:8094"
-queue_referee_url: "http://127.0.0.1:8081"
+queue_referee_url: "http://127.0.0.1:8082"
 
-# --- Website (Landing + Cockpit, eigener rift-caddy) -------------------------
-# Architektur (Issue #322): Der Riftbreaker-Stack betreibt einen EIGENEN,
-# schlanken Caddy-Container (`rift-caddy`, plain HTTP, reines Durchreichen):
-#   * landing_domain (www.drift.projectmellon.de) → file_server (Landing + /mod.zip)
-#   * cockpit_domain (cockpit.drift.projectmellon.de) →
-#       * /contract/*  → reverse_proxy an die IO-Bridge (Operator-Cockpit) und
-#       * /tournament/* → reverse_proxy an den tournament-server.
+# --- Website: geteilter Host-Caddy (Issue #322) ------------------------------
 # Der GETEILTE Deploy-Host-Caddy (`mellon-caddy`, hostet viele fremde Domains)
-# bekommt GENAU ZWEI Einträge (je Domain einen, per-Domain-Marker) →
-# reverse_proxy 127.0.0.1:{{ rift_caddy_port }} — kein Caddyfile.d-Snippet-Mount
-# mehr, kein Eingriff in fremde Sites.
-landing_domain: www.drift.projectmellon.de
-cockpit_domain: cockpit.drift.projectmellon.de
-website_docroot: /srv/rbmods-site
-website_mods_dir: "{{ website_docroot }}/mods"
-
-# Eigener Rift-Caddy (Container, network_mode host, plain HTTP). Lauscht
-# ausschliesslich auf 127.0.0.1:{{ rift_caddy_port }} (der Host-Caddy proxyt
-# dorthin); TLS terminiert weiterhin der Host-Caddy. Wichtig (Issue #355): der
-# Caddyfile-Template setzt `admin off`, damit der Container NICHT den Default-
-# Admin-Port 127.0.0.1:2019 belegt (dort lauscht die Admin-API des geteilten
-# Host-Caddys — sonst kollidiert `caddy reload` und landet beim falschen Prozess).
-rift_caddy_container: rift-caddy
-rift_caddy_image: caddy:2
-rift_caddy_port: 8787
-rift_caddy_deploy_dir: "/opt/rbmods/compose/rift-{{ rift_env }}/caddy"
-rift_caddy_data_dir: "{{ rift_caddy_deploy_dir }}/data"
-rift_caddy_config_dir: "{{ rift_caddy_deploy_dir }}/config"
-# Docroot IM Container (read-only Bind-Mount von website_docroot).
-rift_caddy_site_root: /srv/site
-
-# Geteilter Host-Caddy: genau ZWEI Einträge (je Domain einen, idempotent, kein
-# Snippet-Import). Die alte, manuell gepflegte Rift-Block-/Import-Zeile und
-# verwaiste operator.*-Einträge werden von der Rolle entfernt (siehe
-# deploy/roles/website/tasks/main.yml).
+# bekommt je Domain GENAU einen Eintrag (per-Domain-Marker) → reverse_proxy
+# 127.0.0.1:<rift_caddy_port> — kein Caddyfile.d-Snippet-Mount, kein Eingriff in
+# fremde Sites. Host-Konstante (ein Caddy pro Host), env-unabhängig.
 website_host_caddy_container: mellon-caddy
 website_host_caddyfile_path: /home/momo/Caddyfile
 website_host_caddyfile_owner: momo
 website_host_caddyfile_group: momo
 
+# Eigener Rift-Caddy: Image + container-interner Docroot sind env-unabhängig
+# (shared); die per-Env-Werte (Container-/Port-/Pfad-/Domain-Namen) stehen in
+# den Override-Dateien (prod-vars.yml).
+rift_caddy_image: caddy:2
+rift_caddy_site_root: /srv/site
+
 # --- Mods-Zip (Paketierung + md5-Parität) ------------------------------------
+# Der Dateiname ist historisch fix (md5-Parität/Download-Link); die Env-Trennung
+# läuft über das je Env abweichende mods_zip_dest (Override-Dateien).
 mods_zip_name: rbbattle.zip
-mods_zip_dest: "{{ website_mods_dir }}/{{ mods_zip_name }}"
 
-# --- Image-Tag-Retention (systemd, deploy/image-retention/docker_image_tag_retention.sh) ----
-# Issue #309: alter rb-dedicated/rb-headless-client-Tags aufräumen, aber das
-# laufende Image + N Rollback-Tags behalten. Wirksame Werte stehen in den
-# Rollen-Defaults (deploy/roles/image-retention/defaults/main.yml):
-#   image_retention_repos         "rb-dedicated rb-headless-client"
-#   image_retention_rollback_tags 2
-#   image_retention_on_calendar   daily
-# Der aktuelle Deploy-Tag (dedicated_server_image = rb-dedicated:<deploy-sha>)
-# wird dem Service als RB_PROTECTED_TAGS uebergeben und nie entfernt.
-
-# Game-Content ist auf planet bereits provisioniert (664 MB in /srv/rbgame).
-# SteamCMD-Modus haengt am "apt install lib32gcc-s1" -> sync als No-Op.
+# --- Game-Content ------------------------------------------------------------
+# Kanonischer Content-Cache auf planet → Sync-Modus in jeder Env (shared).
 riftbreaker_content_mode: sync

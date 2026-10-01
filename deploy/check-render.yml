@@ -22,6 +22,9 @@
     - roles/server-control/defaults/main.yml
     # gns-relay: liefert die Relay-Targets fuer den Compose-Render (Issue #843).
     - roles/gns-relay/defaults/main.yml
+    # prod-vars: der Render emuliert das PROD-Play (Issue #1034) — die
+    # per-Env-Werte (Website/Caddy/Server-Control) kommen von hier.
+    - prod-vars.yml
 
   vars:
     # Dummy-Werte nur fürs Rendern (kein Secret).
@@ -50,27 +53,27 @@
     render_dir: "{{ lookup('env', 'RBBATTLE_RENDER_DIR') | default('/tmp/rbbattle-compose-render', true) }}"
 
   tasks:
-    # Issue #463: check-render emuliert das dev-Play (site.yml) — dev deployt den
-    # server-control-Agenten, also darf die /server/*-Route im Cockpit gerendert
-    # werden. Als set_fact, weil die hier als vars_files geladenen
-    # Rollen-Defaults (website/defaults: server_control_enabled: false) die
-    # Praezedenz von Play-Vars ueberschreiben; set_fact gewinnt dagegen.
-    - name: "Dev-Kontext: server-control-Route aktivieren (Issue #463)"
+    # Issue #463: check-render emuliert das prod-Play (deploy-prod.yml) — prod
+    # deployt den server-control-Agenten, also darf die /server/*-Route im
+    # Cockpit gerendert werden. Als set_fact, weil die hier als vars_files
+    # geladenen Rollen-Defaults (website/defaults: server_control_enabled:
+    # false) die Praezedenz von Play-Vars ueberschreiben; set_fact gewinnt.
+    - name: "Prod-Kontext: server-control-Route aktivieren (Issue #463)"
       set_fact:
         server_control_enabled: true
 
-    # Deploy-Identitaet im dev-Kontext (Issue #483, US4): set_fact, weil die hier
-    # als vars_files geladenen Rollen-Defaults (website/defaults:
+    # Deploy-Identitaet im prod-Kontext (Issue #483, US4 / #1034): set_fact, weil
+    # die hier als vars_files geladenen Rollen-Defaults (website/defaults:
     # rift_env/rift_deploy_ref) die Praezedenz von Play-Vars ueberschreiben.
-    - name: "Dev-Kontext: Deploy-Identitaet setzen (Issue #483)"
+    - name: "Prod-Kontext: Deploy-Identitaet setzen (Issue #483)"
       set_fact:
-        rift_env: dev
+        rift_env: prod
         rift_deploy_ref: "{{ deploy_image_tag }}"
 
     # Eigener Task: Werte eines einzelnen set_fact werden gegen den VORHERIGEN
     # Variablenstand gerendert — rift_deploy_identity wuerde sonst die
     # Rollen-Defaults ("unknown · unknown") sehen.
-    - name: "Dev-Kontext: rift_deploy_identity ableiten (Issue #483)"
+    - name: "Prod-Kontext: rift_deploy_identity ableiten (Issue #483)"
       set_fact:
         rift_deploy_identity: "{{ rift_env }} · {{ rift_deploy_ref }}"
 
@@ -112,8 +115,8 @@
         gns_compose: "{{ lookup('file', render_dir ~ '/gns-relay.yml') }}"
       assert:
         that:
-          - "('*-dev     = ' ~ gns_relay_target_dev) in gns_routes"
-          - "('*-staging = ' ~ gns_relay_target_staging) in gns_routes"
+          - "('*-a       = ' ~ gns_relay_target_a) in gns_routes"
+          - "('*-b       = ' ~ gns_relay_target_b) in gns_routes"
           - "('*         = ' ~ gns_relay_target_default) in gns_routes"
           - "'network_mode: host' in gns_compose"
           - "(gns_relay_port | string) in gns_compose"
@@ -124,15 +127,15 @@
           - "('--api-host ' ~ gns_relay_api_host) in gns_compose"
           - "('--target ' ~ gns_relay_targets[0]) in gns_compose"
         fail_msg: >-
-          gns-relay.Render ist falsch (Issue #843/#857): die Routen-Datei muss
-          die drei Suffix-Regeln (dev/staging/default) tragen und das Compose
-          `network_mode: host`, den Einstiegsport sowie Hold + API-Flags
-          (--hold/--api-host/--api-port/--target).
-        success_msg: "gns-relay: Suffix-Routen + host-Netzwerk + Port + Hold/API korrekt (Issue #843/#857)."
+          gns-relay.Render ist falsch (Issue #843/#857/#1034): die Routen-Datei
+          muss die A/B-Suffix-Regeln + den Default tragen (dev/staging sind
+          entfallen) und das Compose `network_mode: host`, den Einstiegsport
+          sowie Hold + API-Flags (--hold/--api-host/--api-port/--target).
+        success_msg: "gns-relay: A/B-Routen + host-Netzwerk + Port + Hold/API korrekt (Issue #843/#1034)."
 
     # Deploy-Identitaet sichtbar (Issue #483, US4): die Landing-HTML wird aus
     # dem echten Rollen-Template gerendert; meta rb-env/rb-ref + Badge muessen
-    # den dev-Kontext tragen. Rein lokal (hermetischer Render-Test).
+    # den prod-Kontext tragen. Rein lokal (hermetischer Render-Test).
     - name: Landing-HTML rendern (Issue 483)
       template:
         src: roles/website/templates/index.html.j2
@@ -144,10 +147,10 @@
         landing: "{{ lookup('file', render_dir ~ '/index.html') }}"
       assert:
         that:
-          - '''<meta name="rb-env" content="dev">'' in landing'
+          - '''<meta name="rb-env" content="prod">'' in landing'
           - '(''<meta name="rb-ref" content="'' ~ rift_deploy_ref ~ ''">'') in landing'
           - "'rb-identity' in landing"
-          - "('dev · ' ~ rift_deploy_ref) in landing"
+          - "('prod · ' ~ rift_deploy_ref) in landing"
         fail_msg: >-
           Die gerenderte Landing-HTML traegt die Deploy-Identitaet nicht
           (meta rb-env/rb-ref + Badge, Issue #483).
@@ -302,16 +305,16 @@
           Basic-Auth, Bearer wird von Caddy injiziert (kein Token im Browser),
           leeres Token = kein header_up; /tournament/*-Lesepfade + Web-UI frei.
 
-    # Regression-Guard Issue #463: im dev-Render (server_control_enabled=true)
+    # Regression-Guard Issue #463: im prod-Render (server_control_enabled=true)
     # MUSS die /server/*-Route da sein — sonst sieht check-render etwas anderes
-    # als das echte dev-Play. (Die prod-Abwesenheit + die Port-Zuordnung deckt
-    # deploy/tests/server-control-route/run.sh hermetisch ab.)
-    - name: rift-caddy — /server/*-Route im dev-Render vorhanden (Issue 463)
+    # als das echte prod-Play. (Die Abwesenheit bei false + die Port-Zuordnung
+    # deckt deploy/tests/server-control-route/run.sh hermetisch ab.)
+    - name: rift-caddy — /server/*-Route im prod-Render vorhanden (Issue 463)
       assert:
         that:
           - "'handle /server/*' in (lookup('file', render_dir ~ '/rift-caddy.Caddyfile'))"
         fail_msg: >-
-          Der dev-Render des Cockpit-Caddyfiles enthaelt keine /server/*-Route.
-          dev deployt den server-control-Agenten (site.yml) — die Route muss
-          gerendert sein (Issue #463).
-        success_msg: "/server/*-Route im dev-Render vorhanden."
+          Der prod-Render des Cockpit-Caddyfiles enthaelt keine /server/*-Route.
+          prod deployt den server-control-Agenten (deploy-prod.yml) — die Route
+          muss gerendert sein (Issue #463).
+        success_msg: "/server/*-Route im prod-Render vorhanden."

@@ -20,7 +20,7 @@ cockpit_domain: cockpit.rift.projectmellon.de
 
 # GNS-Lobby (Issue #857): die Operator-Web-UI des GNS-Entry-Relays auf planet.
 # Der Relay ist ein SINGLETON (ein Prozess besitzt den client-hardgewireten
-# Einstiegsport 6321) — daher EINE feste Domain, identisch in dev/prod/staging,
+# Einstiegsport 6321) — daher EINE feste Domain, identisch in allen Envs,
 # mit identischem Host-Caddy-Block (idempotent, kein Env-Twin). Der Block zeigt
 # DIREKT auf die Relay-API ({{ proxy_upstream }}, 127.0.0.1), NICHT ueber einen
 # per-Env rift-caddy: die Lobby gehoert dem Relay, nicht einem Environment.
@@ -65,20 +65,18 @@ rift_caddy_site_root: /srv/site
 # den server-control-Agenten wirklich deployt (Issue #463). Default false =
 # fail-safe: ohne Agent zeigt die Route sonst auf 127.0.0.1:<server_control_port>
 # und traefe dort einen FREMDEN Agenten (auf planet den dev-Agenten).
-# Gesetzt wird das Flag im jeweiligen PLAY (site.yml true, deploy-prod.yml
-# true, Issue #498) — Play-Vars schlagen diese Defaults, waehrend die host_vars
-# fuer dev UND prod gelten und deshalb hier nicht taugen.
+# Gesetzt wird das Flag im jeweiligen PLAY (deploy-prod.yml true, Issue #498)
+# — Play-Vars schlagen diese Defaults; die host_vars taugen hierfuer nicht.
 server_control_enabled: false
 
 # /contract (Bridge-Kontrollpanel): basic_auth-Schutz (operator).
 #
-# Issue #535: Der Operator-Hash ist je Env getrennt. Die Plays deploy-prod.yml
-# (vault_contract_basic_auth_hash_prod) und deploy-staging.yml
-# (vault_contract_basic_auth_hash_staging) setzen `contract_basic_auth_hash`
+# Issue #535: Der Operator-Hash ist je Env getrennt. Das Play deploy-prod.yml
+# (vault_contract_basic_auth_hash_prod) setzt `contract_basic_auth_hash`
 # per Play-Var OHNE Fallback (fehlt die Vault-Var -> undefiniert -> Render
-# bricht laut ab, fail-closed). dev/test/local setzen keinen Play-Var und
+# bricht laut ab, fail-closed). test/local setzen keinen Play-Var und
 # bekommen daher byte-identisch den Legacy-Hash (bcrypt "zukka") — dieselben
-# Render-Pfade wie zuvor bleiben gruen.
+# Render-Pfade wie zuvor bleiben gruen. (#1034: dev-/staging-Plays entfallen.)
 #
 # Der Legacy-Hash ist NUR noch benannte Konstante (Vergleichsbasis fuer den
 # Distinctness-Assert in tasks/main.yml) und Fallback — kein zweites Literal

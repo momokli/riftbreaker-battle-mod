@@ -19,11 +19,11 @@ Ergaenzt (Issue #238) um PlayerCountTest: den Log-Provider player_count.py
 Laeuft ueber den bestehenden CI-Step (ci.yml, Job test) - keine ci.yml-Aenderung.
 
 Ergaenzt (Issue #337) um WireContractTest: prueft den AKTUELLEN, gate-losen
-deploy.yml-Vertrag ueber check_deploy_wiring.check_wiring() (push auf main,
-workflow_dispatch, SSH-Deploy-Step, permissions contents: read, concurrency
-cd-dev). Die #238-Park-Verdrahtung wurde mit e8f7783 bewusst entfernt; die
-Frage "Gate wieder einfuehren?" (#238/#327) ist offen - der Check verbietet
-das Gate nicht.
+prod-only deploy.yml-Vertrag (Issue #1034: push-Tags `v*`, workflow_dispatch,
+SSH-Deploy-Step, permissions contents: read, concurrency cd-prod) ueber
+check_deploy_wiring.check_wiring(). Die #238-Park-Verdrahtung wurde mit e8f7783
+bewusst entfernt; die Frage "Gate wieder einfuehren?" (#238/#327) ist offen -
+der Check verbietet das Gate nicht.
 
 Nur Standardbibliothek (unittest, os, sys, subprocess, tempfile).
 
@@ -282,19 +282,20 @@ class NegativeSemanticsTest(unittest.TestCase):
 
 # --- WireContractTest (Issue #337): gate-loser deploy.yml-Vertrag -------------
 
-# Minimaler Workflow, der den gate-losen Vertrag erfuellt (alle 5 Invarianten).
+# Minimaler Workflow, der den gate-losen, prod-only Vertrag erfuellt (alle 5
+# Invarianten; Issue #1034: Tail-Trigger statt main, cd-prod).
 GOOD_WORKFLOW = (
     "on:\n"
     "  push:\n"
-    "    branches: [main]\n"
+    "    tags: [\"v*\"]\n"
     "  workflow_dispatch:\n"
     "permissions:\n"
     "  contents: read\n"
     "concurrency:\n"
-    "  group: cd-dev\n"
+    "  group: cd-prod\n"
     "  cancel-in-progress: false\n"
     "jobs:\n"
-    "  deploy-dev:\n"
+    "  deploy-prod:\n"
     "    steps:\n"
     "      - run: ssh -o BatchMode=yes rbd x\n"
 )
@@ -312,9 +313,9 @@ class WireContractTest(unittest.TestCase):
     def test_minimal_gate_less_workflow_passes(self):
         self.assertEqual(self._wiring(GOOD_WORKFLOW), [])
 
-    def test_push_without_main_is_reported(self):
-        problems = self._wiring(GOOD_WORKFLOW.replace("[main]", "[dev]"))
-        self.assertTrue(any("main" in problem for problem in problems))
+    def test_push_without_tags_is_reported(self):
+        problems = self._wiring(GOOD_WORKFLOW.replace('[\"v*\"]', '[\"dev\"]'))
+        self.assertTrue(any("v*" in problem for problem in problems))
 
     def test_missing_ssh_step_is_reported(self):
         problems = self._wiring(GOOD_WORKFLOW.replace(SSH_STEP, ""))
@@ -329,7 +330,7 @@ class WireContractTest(unittest.TestCase):
         self.assertTrue(any("permissions" in problem for problem in problems))
 
     def test_concurrency_group_change_is_reported(self):
-        problems = self._wiring(GOOD_WORKFLOW.replace("group: cd-dev", "group: cd-other"))
+        problems = self._wiring(GOOD_WORKFLOW.replace("group: cd-prod", "group: cd-other"))
         self.assertTrue(any("concurrency" in problem for problem in problems))
 
     def _wiring(self, workflow_text):

@@ -168,19 +168,21 @@ class RealRepoTest(unittest.TestCase):
             self.assertIn("prod", per_env[var], var)
             self.assertIn("test", per_env[var], var)
         self.assertEqual(per_env.get("riftbreaker_compose_project"),
-                         ["dev", "prod", "test", "staging", "prod-b"])
+                         ["prod", "test", "prod-b"])
 
-    def test_real_dev_basis_uses_env_schema(self):
-        # dev ist kein Sonderfall mehr: die Pfade leiten sich aus `rift_env` ab.
-        path = os.path.join(REPO_ROOT, "deploy", "inventory", "host_vars", "planet", "vars.yml")
-        with open(path, "r", encoding="utf-8") as handle:
-            text = handle.read()
-        for needle in ("/srv/rift-{{ rift_env }}/game",
-                       "/srv/rift-{{ rift_env }}/backups",
-                       "/srv/rift-{{ rift_env }}/sessions",
-                       "/opt/rbmods/compose/rift-{{ rift_env }}/riftbreaker",
-                       "/opt/rbmods/rbtools/{{ rift_env }}"):
-            self.assertIn(needle, text, needle)
+    def test_real_prod_basis_uses_env_schema(self):
+        # PROD-ONLY (Issue #1034): dev ist kein Laufzeit-Env mehr; die Pfade
+        # leiten sich in den prod-Override-Dateien aus `rift_env` ab.
+        for rel in ("deploy/prod-vars.yml", "deploy/prod-b-vars.yml"):
+            path = os.path.join(REPO_ROOT, rel)
+            with open(path, "r", encoding="utf-8") as handle:
+                text = handle.read()
+            for needle in ("/srv/rift-{{ rift_env }}/game",
+                           "/srv/rift-{{ rift_env }}/backups",
+                           "/srv/rift-{{ rift_env }}/sessions",
+                           "/opt/rbmods/compose/rift-{{ rift_env }}/riftbreaker",
+                           "/opt/rbmods/rbtools/{{ rift_env }}"):
+                self.assertIn(needle, text, (rel, needle))
 
 
 class DevPathsTest(unittest.TestCase):
@@ -211,7 +213,7 @@ class DevPathsTest(unittest.TestCase):
 class ProdBDistinctnessTest(unittest.TestCase):
     """Issue #995: prod-b (zweite prod-Welt) muss sich in ALLEN
     kollisionsgefaehrdeten per_env-Werten (Ports/Volumes/Compose-Projekt/
-    Containern/Pfaden/Server-Control) von dev/prod/staging unterscheiden —
+    Containern/Pfaden/Server-Control) von prod/prod-b/test unterscheiden —
     sonst belegen zwei Envs denselben Host-Port/Container/Pfad.
 
     Der bestehende env-isolation-Test (deploy/tests/env-isolation) prueft nur
@@ -223,7 +225,6 @@ class ProdBDistinctnessTest(unittest.TestCase):
     ENV_FILES = {
         "dev": os.path.join("deploy", "inventory", "host_vars", "planet", "vars.yml"),
         "prod": os.path.join("deploy", "prod-vars.yml"),
-        "staging": os.path.join("deploy", "staging-vars.yml"),
         "prod-b": os.path.join("deploy", "prod-b-vars.yml"),
     }
     # Kollisionsgefaehrdete per_env-Keys: Ports, Volumes, Compose-Projekt,
@@ -272,7 +273,7 @@ class ProdBDistinctnessTest(unittest.TestCase):
             if key not in maps["prod-b"]:
                 continue
             pv = cls._render(maps["prod-b"][key], "prod-b")
-            for env in ("dev", "prod", "staging"):
+            for env in ("dev", "prod"):
                 if key in maps[env]:
                     ov = cls._render(maps[env][key], env)
                     if ov == pv:
@@ -314,10 +315,10 @@ class ProdBDistinctnessTest(unittest.TestCase):
     def test_detector_flags_a_volume_collision(self):
         maps = self._real_maps()
         maps["prod-b"] = dict(maps["prod-b"])
-        maps["prod-b"]["riftbreaker_wine_volume"] = maps["staging"]["riftbreaker_wine_volume"]
+        maps["prod-b"]["riftbreaker_wine_volume"] = maps["prod"]["riftbreaker_wine_volume"]
         problems = self._problems(maps)
         self.assertTrue(
-            any("riftbreaker_wine_volume" in p and "staging" in p for p in problems), problems
+            any("riftbreaker_wine_volume" in p and "prod" in p for p in problems), problems
         )
 
 

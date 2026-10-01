@@ -33,6 +33,11 @@
     - "{{ playbook_dir }}/../../roles/website/defaults/main.yml"
     - "{{ playbook_dir }}/../../roles/server-control/defaults/main.yml"
     - "{{ playbook_dir }}/../../inventory/host_vars/planet/vars.yml"
+    # #1034: die frueheren dev-/staging-Plays entfallen, host_vars haelt nur
+    # noch host-weite Singleton-Werte. Die per-Env Render-Werte (Ports/Domains)
+    # liefert deploy/prod-vars.yml — derselbe prod-Render-Pfad wie
+    # check-render.yml. Kein Vault-Zugriff (nur Kommentar-Verweis).
+    - "{{ playbook_dir }}/../../prod-vars.yml"
 
   vars:
     render_dir: "{{ lookup('env', 'RB_OPCRED_RENDER_DIR') | default('/tmp/rb-opcred-render', true) }}"

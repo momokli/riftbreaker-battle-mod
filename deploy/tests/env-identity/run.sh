@@ -21,9 +21,9 @@ git -C "$checkout" -c user.email=test@example.invalid -c user.name=Test \
   commit -q --allow-empty -m "init"
 git -C "$checkout" tag v9.9.9
 
-for env in dev test prod prod-b; do
+for env in test prod prod-b; do
   echo "== Env: $env =="
   ansible-playbook "$play" -e "test_env=$env" -e "test_checkout=$checkout"
 done
 
-echo "OK: Deploy-Identitaet fuer dev/test/prod/prod-b korrekt (<env> · <ref>)."
+echo "OK: Deploy-Identitaet fuer test/prod/prod-b korrekt (<env> · <ref>)."

@@ -49,6 +49,9 @@ riftbreaker_mod_dir: "{{ riftbreaker_game_dir }}/mods/rbbattle"
 riftbreaker_backup_dir: "/srv/rift-{{ rift_env }}-{{ rbbattle_run_suffix }}/backups"
 riftbreaker_deploy_dir: "/opt/rbmods/compose/rift-{{ rift_env }}-{{ rbbattle_run_suffix }}/riftbreaker"
 website_mods_dir: "/opt/rbbattle-deploy/test/mods-{{ rbbattle_run_suffix }}"
+# Kanonischer Zip-Zielpfad (Issue #1034): explizit, da host_vars ihn nicht mehr
+# als dev-Fallback fuehrt — env-schema: mods_zip_dest ist per_env [prod,test,prod-b].
+mods_zip_dest: "{{ website_mods_dir }}/{{ mods_zip_name }}"
 # Docroot je Lauf eindeutig (Issue #483, US3): sonst erbt der Boot-Test den
 # dev-Docroot /srv/rbmods-site (analog zur bestehenden website_mods_dir-
 # Isolation). Additiv, kein Rename der dev-Pfade.

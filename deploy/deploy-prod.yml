@@ -6,6 +6,12 @@
 # das alte UDP-DNAT-Relay (satellite:6321 -> :6322) wird deshalb abgebaut
 # (Play 3, `satellite_relay_state: absent`).
 #
+# PROD-ONLY (Issue #1034): Dieses Playbook ist das EINZIGE reguläre Playbook.
+# `deploy/site.yml` (dev) und `deploy/deploy-staging.yml` (staging) sind
+# entfallen — der CD deployt nur noch bei Tag-Push `v*`. Der GNS-Entry-Relay
+# (der EINZIGE öffentliche Einstieg) und die host-weiten Singleton-Dienste
+# laufen seither in Play 0 mit, statt allein im früheren dev-Play.
+#
 # Aufruf (Vault nötig für Server-Passwort):
 #   ansible-playbook -i deploy/inventory deploy/deploy-prod.yml \
 #     --vault-password-file <vault.pass>
@@ -15,7 +21,7 @@
 # wuerden den jeweils anderen Play ueberschreiben). Der CD-Wrapper
 # (deploy/deploy-wrapper.sh) uebergibt daher kein `-e` mehr.
 #
-# Twin-Topologie: Prod-A ist vollwertiger Zwilling von dev (site.yml) — inkl.
+# Twin-Topologie: Prod-A ist vollwertiger Zwilling der frueheren dev-Welt — inkl.
 # `website`-Rolle (Landing + Cockpit, eigener rift-caddy-prod :8788, Bridge
 # :9002) und `tournament-server` (eine Referee-Instanz fuer BEIDE Welten).
 # Prod-B deployt nur den Dedicated-Stack (Game/Content/rbtools/Server-Control/
@@ -23,6 +29,93 @@
 # (eine Referee-Instanz, keine zweite Landing/Caddy, docs/VS_MATCH.md §5.1).
 #
 # Der Image-Tag wird weiterhin aus dem Checkout-SHA (Tag-Commit) abgeleitet.
+
+# Play 0: host-weite Singleton-Dienste (Issue #1034). Frueher deployte allein
+# das dev-Play (site.yml) den GNS-Entry-Relay + die Host-Singletons. Mit dem
+# Prod-Only-Umbau laufen sie hier mit dem Tag-Deploy mit — sonst driftete der
+# EINZIGE öffentliche Einstieg (Relay:6321) nach dem dev-Abbau.
+#
+# `dedicated-server-image` steht bewusst ZUERST: der Relay laeuft auf demselben
+# Laufzeit-Image `rb-dedicated:<deploy-sha>` (wie der Dedicated Server), das
+# Play 0 vor `gns-relay` garantiert bauen muss — Play 0 laeuft VOR Prod-A.
+# Der Image-Build ist idempotent (Tag = Checkout-SHA): Prod-A findet das Image
+# danach vor und baut nicht erneut.
+- name: RIFT BATTLE — planet host services (GNS-Entry-Relay + Host-Singletons)
+  hosts: planet
+  become: true
+
+  vars_files:
+    - prod-vars.yml
+
+  vars:
+    # Deploy-Identitaet (Issue #483, US1): die host-weiten Dienste laufen im
+    # prod-Kontext (der einzige verbliebene Env). Play-Var, damit die Rollen
+    # (gns-relay/parked/capsule/queue) nicht den Rollen-Default erben.
+    rift_env: prod
+
+  pre_tasks:
+    - name: Deploy-SHA für den Image-Tag ermitteln (host services)
+      command: git -c safe.directory=* -C {{ playbook_dir }}/.. rev-parse --short=12 HEAD
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      changed_when: false
+      register: rbbattle_host_sha
+      tags: always
+
+    - name: Image-Tag (Deploy-SHA) als Fact setzen (host services)
+      set_fact:
+        deploy_image_tag: "{{ rbbattle_host_sha.stdout | trim }}"
+      tags: always
+
+    # Deploy-Identitaet (Issue #483, US1): prod-Ref = Git-Tag (kein +sha).
+    - name: "Deploy-Identitaet erzeugen (host services, Issue #483)"
+      include_tasks: "{{ playbook_dir }}/tasks/deploy-identity.yml"
+      vars:
+        rift_deploy_checkout: "{{ playbook_dir }}/.."
+      tags: always
+
+    # Fail-loud-Contract (Issue #483, US2).
+    - name: "ENV-ISOLATION-GATE (host services, Issue #483)"
+      include_tasks: "{{ playbook_dir }}/tasks/env-assert.yml"
+      vars:
+        rift_env_isolation_root: "{{ playbook_dir }}/.."
+      tags: always
+
+    # Env-Pfad-Migration (Issue #483, Ziel B): idempotenter `mv` + Symlink-
+    # Uebergang Alt->Neu VOR den Rollen (Prod-Pfade; idempotent -> no-op nach
+    # dem ersten Lauf).
+    - name: "Env-Pfad-Migration (#483)"
+      include_tasks: "{{ playbook_dir }}/tasks/env-path-migration.yml"
+      tags: always
+
+    # Disk-Space-Gate (#310): MUSS VOR dem Image-Build laufen (Play 0 baut das
+    # Laufzeit-Image fuer den Relay). Read-only (Fact ansible_mounts) ->
+    # `--check`-fest.
+    - name: "Disk-Gate — freien Platz VOR Image-Build prüfen (#310)"
+      include_role:
+        name: riftbreaker-server
+        tasks_from: disk-preflight
+      tags: always
+
+  roles:
+    - role: dedicated-server-image
+    # GNS-Entry-Relay (Issue #843): EINZIGER oeffentlicher Einstieg (UDP 6321).
+    # Ohne das dev-Play (site.yml) liefe der Relay sonst nicht mehr mit.
+    - role: gns-relay
+      tags: [server]
+    - role: image-retention
+    - role: host-hygiene
+      tags: [hygiene]
+    # Parked-/Kapsel-/Queue-Dienste (Issues #928/#931/#998): host-weite
+    # Singletons (ein Relay auf dem Host) — Units/Pfade sind env-frei
+    # (host_vars); sie liefen zuvor nur im dev-Play (site.yml).
+    - role: parked-pool
+      tags: [server]
+    - role: capsule-flow
+      tags: [server]
+    - role: queue
+      tags: [server]
 
 - name: RIFT BATTLE — Prod-A (planet :6322)
   hosts: planet
@@ -32,11 +125,11 @@
     - prod-vars.yml
 
   vars:
-    # Prod-A ist voller Twin von dev (Issue #498): eigener server-control-Agent
-    # (Unit server-control-prod, Port 8093, eigenes Token) => die /server/*-
-    # Route im prod-Cockpit wird gerendert und zeigt auf 127.0.0.1:8093 — NIE
-    # auf den dev-Agenten (8092). Der prod-Bearer kommt aus dem Vault
-    # (vault_server_control_prod_token) und wird von beiden Rollen
+    # Prod-A ist voller Twin der frueheren dev-Welt (Issue #498): eigener
+    # server-control-Agent (Unit server-control-prod, Port 8093, eigenes Token)
+    # => die /server/*-Route im prod-Cockpit wird gerendert und zeigt auf
+    # 127.0.0.1:8093 — NIE auf einen dev-Agenten. Der prod-Bearer kommt aus dem
+    # Vault (vault_server_control_prod_token) und wird von beiden Rollen
     # (server-control + website) gemeinsam gelesen.
     server_control_enabled: true
     server_control_token: "{{ vault_server_control_prod_token | default('') }}"
@@ -47,7 +140,7 @@
     # den dev-Hash zwingen (Muster rift_env/server_control_enabled).
     contract_basic_auth_hash: "{{ vault_contract_basic_auth_hash_prod }}"
     # Deploy-Identitaet (Issue #483, US1): DIESES Play ist prod. Play-Var, damit
-    # prod nicht den dev-Wert erbt; der Ref traegt den Git-Tag.
+    # prod nicht einen abweichenden Wert erbt; der Ref traegt den Git-Tag.
     rift_env: prod
 
   pre_tasks:
@@ -89,9 +182,9 @@
       tags: always
 
     # Legacy-rbtools-Symlink-Cleanup (#606): entfernt die vier Alt-Pfad-Symlinks
-    # rbtools-drift/-staging-drift (dev) und rbtools-rift/-staging-rift (prod),
-    # die die #483-Migration als Rollback-Alias hinterlassen hat. Kein aktiver
-    # Pfad referenziert sie mehr. Idempotent (nur Symlink, nie ein Verzeichnis).
+    # (u. a. rbtools-rift/-staging-rift), die die #483-Migration als
+    # Rollback-Alias hinterlassen hat. Idempotent (nur Symlink, nie ein
+    # Verzeichnis).
     - name: "Legacy-rbtools-Symlink-Cleanup (#606)"
       include_tasks: "{{ playbook_dir }}/tasks/legacy-rbtools-symlink-cleanup.yml"
       tags: always
@@ -154,7 +247,7 @@
 
     # Fail-loud-Contract (Issue #483, US2): der Schema-Audit kennt prod-b
     # (tools/deploy-gate/check_env_isolation.py) und die Distinctness wird je
-    # Komponente geprueft (Website-Keys nur prod/staging -> B deployt sie nicht).
+    # Komponente geprueft (Website-Keys nur prod -> B deployt sie nicht).
     - name: "ENV-ISOLATION-GATE (Prod-B, Issue #483)"
       include_tasks: "{{ playbook_dir }}/tasks/env-assert.yml"
       vars:

@@ -149,10 +149,11 @@ Der echte Staging-Lauf (`/solo` → join → pausiert → `ready` → WARMUP/RUN
 ## Deploy
 
 Rolle `deploy/roles/capsule-flow/` (Muster `parked-pool`): Unit
-`rbmods-capsule-<env>.service`, Env-Datei `/etc/rbmods/capsule-<env>.env` (0600,
-Token aus Vault), Bind `127.0.0.1:$CAPSULE_PORT`. Sie wird nur vom dev-Play
-(`deploy/site.yml`) aufgenommen — der Boot-Test (`test-deploy.yml`) bootet nur
-den Game-Server und kennt Parked/Cycle nicht.
+`rbmods-capsule.service`, Env-Datei `/etc/rbmods/capsule.env` (0600,
+Token aus Vault), Bind `127.0.0.1:$CAPSULE_PORT`. Seit #1034 ist
+`deploy/deploy-prod.yml` das EINZIGE Playbook; capsule-flow laeuft als
+host-weiter Singleton in dessen Play 0 — der Boot-Test (`test-deploy.yml`)
+bootet nur den Game-Server und kennt Parked/Cycle nicht.
 
 Der Relay (`tools/gns-proxy`) kann `POST /solo` auf den Kapsel-Dienst zeigen
 lassen: ist `--capsule-url`/`RBB_CAPSULE_URL` gesetzt, ruft `/solo`

@@ -7,22 +7,23 @@
 # Vorlage der Rolle website (kein Nachbau). Geprüft wird die Invariante aus
 # dem DoD:
 #
-#   dev  (server_control_enabled=true, wie site.yml)  -> handle /server/* MUSS
-#        gerendert sein und auf server_control_port (host_vars: 8092) zeigen.
 #   prod (server_control_enabled=true, wie deploy-prod.yml + prod-vars.yml)
 #        -> handle /server/* MUSS gerendert sein und auf server_control_port
-#        (prod-vars: 8093) zeigen — NIE auf den dev-Port 8092.
+#        (prod-vars: 8093) zeigen — NIE auf den frueheren dev-Port 8092.
 #   fail-safe (server_control_enabled=false) -> handle /server/* darf NICHT
 #        gerendert sein; das Cockpit-Root und /tournament/* bleiben erhalten.
+#
+# PROD-ONLY (Issue #1034): dev/staging sind entfallen; der Test deckt nur noch
+# den prod-Fall + den fail-safe-Fall ab.
 #
 # vars_files sind bewusst so geordnet, dass die host_vars die Rollen-Defaults
 # ÜBERSCHREIBEN (host_vars zuletzt) — das entspricht der echten Ansible-
 # Präzedenz (Rollen-Defaults < host_vars) und ist der Grund, weshalb das Flag
-# als Play-Var in site.yml/deploy-prod.yml steht, nicht in den host_vars.
+# als Play-Var in deploy-prod.yml steht, nicht in den host_vars.
 #
-# Zusätzlich wird die Ursache festgenagelt: dev UND prod deployen je einen
-# eigenen Agenten (deploy-prod.yml MIT Role server-control, Issue #498) —
-# jede Route zeigt nur auf den eigenen Port (8092 bzw. 8093).
+# Zusätzlich wird die Ursache festgenagelt: der prod-Play deployt einen eigenen
+# Agenten (deploy-prod.yml MIT Role server-control, Issue #498) — die Route
+# zeigt auf den prod-Port (8093).
 #
 # Aufruf über run.sh (oder direkt):
 #   RB_ROUTE_RENDER_DIR=$(mktemp -d) ansible-playbook deploy/tests/server-control-route/main.yml \
@@ -39,11 +40,14 @@
     - "{{ playbook_dir }}/../../roles/website/defaults/main.yml"
     - "{{ playbook_dir }}/../../roles/server-control/defaults/main.yml"
     - "{{ playbook_dir }}/../../inventory/host_vars/planet/vars.yml"
+    # PROD-ONLY (Issue #1034): der Test rendert den prod-Kontext; die
+    # per-Env-Werte (u. a. tournament_port) kommen aus prod-vars.yml.
+    - "{{ playbook_dir }}/../../prod-vars.yml"
 
   vars:
     render_dir: "{{ lookup('env', 'RB_ROUTE_RENDER_DIR') | default('/tmp/rb-server-control-route-render', true) }}"
     # expect_route + server_control_enabled kommen als extra vars aus run.sh
-    # (spiegeln die Play-Vars aus site.yml bzw. deploy-prod.yml).
+    # (spiegeln die Play-Vars aus deploy-prod.yml).
     expect_route: true
     server_control_enabled: false
 
@@ -65,7 +69,7 @@
         caddyfile: "{{ lookup('file', render_dir ~ '/Caddyfile') }}"
 
     # Issue #535: der gerenderte Operator-Block traegt exakt den Hash der Env
-    # (Play-Var in prod/staging, sonst Legacy-Fallback dev). Bei einem Override
+    # (Play-Var in prod, sonst Legacy-Fallback). Bei einem Override
     # (Hash != Legacy) darf der geteilte Legacy-Hash NIRGENDS mehr im Caddyfile
     # stehen — sonst bliebe das geteilte Operator-Passwort ueber Cockpit-Root,
     # /server/* und /tournament/*-Schreibpfade weiter aktiv.
@@ -78,7 +82,7 @@
         fail_msg: >-
           Das gerenderte Caddyfile traegt nicht den Operator-Hash der Env
           (Issue #535): erwartet `operator <hash>`. Bei einem von dev/legacy
-          abweichenden Hash (prod/staging-Play-Var) darf der geteilte
+          abweichenden Hash (prod-Play-Var) darf der geteilte
           Legacy-Hash NIRGENDS mehr vorkommen — sonst bleibt das geteilte
           Operator-Passwort aktiv.
         success_msg: "Operator-Hash je Env im Caddyfile, kein Legacy-Rest bei Override (Issue #535)."
@@ -100,8 +104,8 @@
       assert:
         that:
           - (("127.0.0.1:" ~ (server_control_port | string)) in caddyfile) == (expect_route | bool)
-          # dev haelt 8092; jede andere Env (prod 8093) darf die Route NIE auf
-          # den dev-Port zeigen (sonst Restart aus dem prod-Cockpit auf dev).
+          # prod haelt 8093; die Route darf NIE auf den frueheren dev-Port
+          # 8092 zeigen (Cross-Env-Schutz, Issue #498/#1034).
           - ((server_control_port | int) == 8092) or ("127.0.0.1:8092" not in caddyfile)
         fail_msg: >-
           Die /server/*-Route zeigt nicht auf den eigenen Agent-Port
@@ -120,17 +124,15 @@
           /tournament/* — das Gating darf nur die /server/*-Route betreffen.
         success_msg: "Cockpit-Root und /tournament/* unveraendert vorhanden."
 
-    # Ursache festnageln: die Route haengt an der Rolle. dev UND prod deployen
-    # je einen eigenen Agenten und schalten das Flag im Play an (Issue #498).
-    - name: "Ursache: dev + prod je eigener Agent + Route (Issue #498)"
+    # Ursache festnageln: die Route haengt an der Rolle. Der prod-Play deployt
+    # einen eigenen Agenten und schaltet das Flag im Play an (Issue #498/#1034).
+    - name: "Ursache: prod eigener Agent + Route (Issue #498)"
       assert:
         that:
-          - "'- role: server-control' in (lookup('file', playbook_dir ~ '/../../site.yml'))"
-          - "'server_control_enabled: true' in (lookup('file', playbook_dir ~ '/../../site.yml'))"
           - "'- role: server-control' in (lookup('file', playbook_dir ~ '/../../deploy-prod.yml'))"
           - "'server_control_enabled: true' in (lookup('file', playbook_dir ~ '/../../deploy-prod.yml'))"
         fail_msg: >-
-          Die Rollen-/Flag-Verdrahtung passt nicht zur Route: dev UND prod
-          muessen je einen server-control-Agenten deployen und
+          Die Rollen-/Flag-Verdrahtung passt nicht zur Route: der prod-Play
+          muss einen server-control-Agenten deployen und
           server_control_enabled=true setzen (Issue #498).
-        success_msg: "dev + prod je mit Agent/Route — Ursache und Fix passen zusammen."
+        success_msg: "prod mit Agent/Route — Ursache und Fix passen zusammen."

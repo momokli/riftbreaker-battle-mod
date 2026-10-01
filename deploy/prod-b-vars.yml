@@ -4,13 +4,13 @@
 # GNS-Entry-Relay auf planet:6321 (Suffix-Routing, `*-b` -> :6325; Default `*`
 # bleibt A :6322).
 #
-# Analog deploy/prod-vars.yml (prod-A) und deploy/staging-vars.yml. Wird vom
+# Analog deploy/prod-vars.yml (prod-A). Wird vom
 # zweiten Play in deploy/deploy-prod.yml per `vars_files` geladen (NICHT per
 # `-e` — das gäbe Extra-Vars-Precedence und würde auch den A-Play global
 # überschreiben).
 #
-# prod-B läuft KOEXISTIEREND mit dev (:6324), prod-A (:6322) und staging
-# (:6323): eigene Container-/Port-/Pfad-/Volume-/Projekt-Namen, kein Clash.
+# prod-B läuft KOEXISTIEREND mit prod-A (:6322): eigene Container-/Port-/
+# Pfad-/Volume-/Projekt-Namen, kein Clash.
 #
 # BEWUSST NICHT enthalten (B deployt diese Komponenten nicht — eine
 # Referee-Instanz, keine zweite Landing/Caddy laut docs/VS_MATCH.md §5.1):
@@ -56,7 +56,7 @@ rbtools_dir: "/opt/rbmods/rbtools/{{ rift_env }}"
 rbtools_staging_dir: "/opt/rbmods/rbtools/{{ rift_env }}/.staging"
 
 # Sidecars (Session-Recorder + Referee-Egress) isoliert — die festen
-# container_name-Werte würden sonst mit dev/prod-A/staging kollidieren.
+# container_name-Werte würden sonst mit prod-A kollidieren.
 # Eigener Sessions-Dir, damit die JSONL getrennt bleiben.
 riftbreaker_sessions_container: riftbreaker-sessions-prod-b
 riftbreaker_send_tailer_container: riftbreaker-send-tailer-prod-b
@@ -76,7 +76,7 @@ riftbreaker_sessions_dir: "/srv/rift-{{ rift_env }}/sessions"
 # distinct vom dev-Basiswert -> env-assert.yml KERN-Gruppe bleibt gruen.
 mods_zip_dest: "/srv/rbmods-site-prod/mods/{{ mods_zip_name }}"
 
-# Content kommt per Sync aus dem kanonischen Cache (wie dev/prod-A/staging).
+# Content kommt per Sync aus dem kanonischen Cache (wie prod-A).
 riftbreaker_content_mode: sync
 
 # --- Server-Control (eigener Host-Agent, Zwilling von prod-A) ---------------

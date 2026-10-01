@@ -37,7 +37,7 @@ log(){ printf 'rbmods-host-hygiene: %s\n' "$*"; }
 # ein Docker-Problem die rbtools-Hygiene nicht mitblockiert.
 #
 # Leitplanken:
-#   * NUR `test-*`-Verzeichnisse (nie dev/prod/staging), Top-Level unter
+#   * NUR `test-*`-Verzeichnisse (nie prod-A/prod-B), Top-Level unter
 #     $RBTOOLS_DIR.
 #   * Kein `rm -rf` ohne bounded, pattern-geprueften Pfad: jeder Kandidat
 #     stammt aus dem Glob `$RBTOOLS_DIR/test-*/` und wird nochmals per case

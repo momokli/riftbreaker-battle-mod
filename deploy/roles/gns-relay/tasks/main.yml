@@ -3,7 +3,7 @@
 #
 # Terminiert GameNetworkingSockets auf dem client-hardgewireten UDP-Port
 # {{ gns_relay_port }}, liest den Spielnamen und routet (Suffix) auf ein
-# Backend (prod/staging/dev). Laeuft als Container mit `network_mode: host` auf
+# Backend (prod-A/prod-B). Laeuft als Container mit `network_mode: host` auf
 # dem geteilten Laufzeit-Image rb-dedicated:<deploy-sha>.
 #
 # Ablauf: gns_probe.exe aus dem Repo-Checkout bauen (MinGW-w64/zig, wie die
