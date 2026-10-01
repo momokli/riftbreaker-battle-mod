@@ -5,6 +5,9 @@ Date: —
     - Ready→GO aus der Lobby: Queue postet je Welt `/ready` an den Referee; Relay-`POST /ready` ist kontextabhängig (Solo→Capsule, VS→Referee), zweiter Ready löst AUTO_GO/Broadcast an beide Bridges aus (#1025, PR #1052).
     - Referee-Bruecke im GNS-Relay: Lobby liest den Match-Zustand (`GET /referee/state`, Phase/Spieler/Welt/Sieger) und meldet Welten ready (`POST /referee/ready`); neue Lobby-UI (Phase-/Sieger-Badge + `READY (Referee)`-Button), fail-safe `503 referee_unconfigured` ohne Config (#1024, PR #1050).
 
+  Bugfixes:
+    - Provisioner: wiederholter `start()` re-assertiert die vier Sidecars (laufende unangetastet, gestoppte per `docker start`, fehlende aus der Container-Env `RIFTBREAKER_MODE`/`RBB_VS_WORLD` rekonstruiert, fail-loud) — kein stiller Halb-Stack nach Sidecar-Crash/-Remove; kein zweiter Container (#1026).
+
   Refactor:
     - Deployment-Cleanup: prod-only CD. `deploy/deploy-prod.yml` ist das einzige Playbook (Play 0 host-services + Prod-A + Prod-B + Relay-Teardown); dev (site.yml) und staging (deploy-staging.yml/staging-vars.yml) entfallen. CD nur noch bei Tag-Push `v*`; `deploy-ssh.sh`/`deploy-wrapper.sh` lehnen jeden anderen ref fail loud ab (#1034).
     - Host-Singleton-Dienste (gns-relay, image-retention, host-hygiene, parked-pool, capsule-flow, queue) laufen jetzt im prod-Play mit; parked/capsule/queue mit env-freien Unit-/Pfadnamen. GNS-Relay routet nur noch A/B/Default (#1034).
@@ -12,6 +15,7 @@ Date: —
 
   Docs:
     - `docs/STAGING.md` als retired/Archiv gekennzeichnet; `deploy/README.md` auf prod-only-Topologie/Trigger/Rollen/CD/Teardown aktualisiert (#1034).
+    - `docs/VS_MATCH.md` §6.5/§6.7 + `deploy/provisioner/README.md`: kalte Provisionierung startet Container + vier Sidecars, Welt bootet PAUSED/joinbar, „Resume" = Ready-Handover (kein Pre-GO-`resume_game`) + Idempotenz-Garantie (#1026).
 
   Security:
     - Tournament-API fail-closed abgesichert (Loopback-Bind + Caddy basic_auth + Rust-Bearer 401); Secret `vault_tournament_token` als Single-Source fuer Rust, Caddy und Queue (#298, PR #1023).

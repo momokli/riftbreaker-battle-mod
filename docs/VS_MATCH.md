@@ -230,6 +230,9 @@ SOLO-Verhalten (Latch + `end_game` + `restart_map`) bitgleich.
   409 außerhalb `running`. Zustand je Welt in `teams.<W>.pause_broadcast`,
   match-weit in `/state.paused`. **Offen:** den attack-cycle je Welt mitpausieren
   (eigene Timer) — #553.
+- **Kalte A/B-Provisionierung:** kalte Welten starten Container **+ vier
+  Sidecars**, booten **PAUSED**/joinbar und werden erst über den Ready-Handover
+  (§6.5) resumiert — **kein** Pre-GO-`resume_game`. Details + Idempotenz: §6.7.
 
 ### 6.6 Events pro Welt
 
@@ -259,6 +262,21 @@ Dienst je **distinct** Welt genau **ein** `POST /ready {world}` an den Referee
 (Reihenfolge erzwungen: erst `/lobby`, dann `/ready` — sonst `404 not_found`).
 Der zweite Ready loest `AUTO_GO` aus und broadcastet das GO an **beide** Bridges
 (§6.5). Details: `deploy/queue/README.md`, `docs/LOBBY.md` §2.
+
+**Kalt up + pausiert-joinbar (Ist-Zustand, #1026):** Die kalte
+Provisionierung startet je Welt den Dedi-Container **und vier Sidecars**
+(session-recorder, send-tailer, match-loop, attack-cycle, s. §6.2). Die Welt
+bootet **PAUSED** (Ready-Gate `#937`, Cycle-Zustand `paused`) und ist in diesem
+Zustand **joinbar** — der Spieler joint die **pausierte** Welt. Der **„Resume"
+IST der Ready-Handover** (§6.5): `POST /ready {world}` je Welt → beim zweiten
+Ready armt GO (`AUTO_GO`) → `broadcast_go()` an **beide** Bridges. Ein
+**Pre-GO-`resume_game` gibt es nicht** — die Queue provisioniert kalt und
+registriert nur `/lobby`; resumiert wird ausschliesslich ueber den Ready-Handover.
+**Idempotenz:** ein wiederholter `start()` erzeugt **keinen zweiten** Container
+und re-assertiert die vier Sidecars (laufende unangetastet, gestoppte per
+`docker start`, fehlende aus der Container-Env rekonstruiert) — der
+Operator-Retry nach Sidecar-Crash/-Remove stellt den **ganzen** Stack statt nur
+den Container wieder her.
 
 **Abgrenzung `parked_vs` vs. Queue+Referee (Entscheidung Pfad a):**
 `deploy/parked/parked_vs.py` bleibt der **Warm-Pool-/Pre-Warm-Pfad** fuer

@@ -1,0 +1,128 @@
+# Host-reproduzierbarer Nachweis Issue #1026 — kalte A/B-Welten up + pausiert-joinbar
+# Branch: feature/1026-cold-ab-worlds  ·  HEAD: 4e3e55b  ·  Host: planet  ·  Datum: 2026-10-01
+# Stage 5 (Tester) — echte Exit-Codes, volle Logs in /tmp/t-prov.log, /tmp/t-queue.log, /tmp/t-e2e.log
+#
+# Zweck: belegt die Kern-DoD-Kette OHNE Spiel/planet:
+#   cold start world=A/B erzeugt Container + 4 Sidecars
+#   wiederholter start() -> created=false, kein zweiter Container, Sidecars re-assertiert
+#   /lobby x2 -> /ready je Welt (Ready-Handover, #1025) ueber den echten Dienst-HTTP-Pfad
+
+=== Lauf 1: Provisioner-Unit-Tests (Sidecars, World-Seed, Idempotenz) ===
+$ cd deploy/provisioner && python3 -m unittest -v
+EXIT: 0
+Log-Tail: Ran 137 tests in ... — OK
+FAIL/ERROR: keine (0 x FAIL, 0 x ERROR)
+
+Relevante Assert-Namen (DoD 1 "up" + DoD 2 "idempotent"):
+  test_provisioner.StartTestCase.test_start_creates_four_sidecars_in_network
+      -> cold start(): Dedicated-Container + VIER Sidecars (session-recorder,
+         send-tailer, match-loop, attack-cycle) im Netz; World-Env (RBB_VS_WORLD/
+         RBB_REFEREE_URL) auf Container UND Sidecars.
+  test_provisioner.StartTestCase.test_idempotent_second_start
+      -> wiederholter start(): created=false, KEIN zweiter `docker run` (docker-run-Zaehler
+         steigt nicht), kein Sidecar-Duplikat.
+  test_provisioner.StartTestCase.test_existing_stopped_container_is_restarted_not_recreated
+      -> bestehender gestoppter Container wird per `docker start` reaktiviert, nicht neu gebaut.
+  test_provisioner.EnsureSidecarsTestCase (8 Tests, US1 + Drift-Fix):
+    - test_running_sidecars_untouched_on_repeat           (laufende unangetastet)
+    - test_stopped_sidecar_is_restarted_not_recreated     (gestoppt -> docker start, kein Neubau)
+    - test_missing_sidecar_is_recreated_from_container_env (fehlend -> genau 1 neuer docker run)
+    - test_missing_sidecar_reconstruction_fails_loud      (Rekonstruktion scheitert -> ProvisionError)
+    - test_legacy_container_missing_sidecars_skipped       (Legacy ohne RIFTBREAKER_MODE -> Skip)
+    - test_legacy_container_stopped_sidecar_is_still_started
+    - test_missing_vs_cycle_is_recreated_with_world_transform (world=A -> --send-yourself off,
+      kein --persona, RBB_VS_WORLD/RBB_REFEREE_URL gesetzt; behebt Verifier-Drift)
+    - test_missing_non_vs_cycle_keeps_self_send           (Gegenprobe: ohne Welt -> on)
+
+=== Lauf 2: Queue-Unit-Tests (Regressionsschutz) ===
+$ cd deploy/queue && python3 -m unittest -v
+EXIT: 0
+Log-Tail: Ran 77 tests in ... — OK
+FAIL/ERROR: keine
+
+=== Lauf 3: Queue-E2E #998 ueber echten Dienst-HTTP-Pfad (Ready-Handover) ===
+$ cd deploy/queue && TMPDIR=/dev/shm python3 e2e_998_queue.py
+EXIT: 0
+Log-Tail: test_acceptance_two_players_pair_into_one_match (__main__.QueueE2E) ... ok
+          Ran 1 test in ... — OK
+
+Rohprotokoll (Auszug):
+  STUB provisioner POST /start {"env":"e2e","mode":"solo_self","instance_id":"queue-1-a","world":"A"} -> gns=127.0.0.1:40000
+  STUB provisioner POST /start {"env":"e2e","mode":"solo_self","instance_id":"queue-1-b","world":"B"} -> gns=127.0.0.1:40001
+  STUB referee POST /lobby {"player":"str:aa","world":"A"}
+  STUB referee POST /lobby {"player":"str:bb","world":"B"}
+  STUB referee POST /ready {"world":"A"}
+  STUB referee POST /ready {"world":"B"}
+  STUB provisioner POST /stop {"env":"e2e","instance_id":"queue-1-a"}
+  STUB provisioner POST /stop {"env":"e2e","instance_id":"queue-1-b"}
+
+Assert-Kette (e2e_998_queue.py, QueueE2E.test_acceptance_two_players_pair_into_one_match):
+  assertEqual(match["match_id"], 1)                                   # ein Match
+  assertEqual(by_world, {"A":"str:aa","B":"str:bb"})                  # A<->Welt A, B<->Welt B
+  assertEqual(len(st.prov_server.starts), 2)                          # genau zwei kalte Starts
+  assertEqual(worlds, ["A","B"])                                      # Welt A + Welt B
+  assertEqual(instances, ["queue-1-a","queue-1-b"])
+  assertEqual(len(lobbies), 2)                                        # /lobby x2
+  assertEqual(lobby_by_world, {"A":"str:aa","B":"str:bb"})
+  assertEqual(len(readies), 2)                                        # /ready x2
+  assertEqual(sorted(r["world"] for r in readies), ["A","B"])         # je DISTINCT Welt genau ein /ready
+  assertEqual(len({r["world"] for r in readies}), 2)                  # keine Doppel-Welt
+  assertEqual(calls, ["lobby","lobby","ready","ready"])               # Reihenfolge: erst Lobby, dann Ready
+  assertEqual(len(set(endpoints.values())), 2)                        # zwei distinct Endpoints
+  assertEqual(len(st.prov_server.stops), 2)                           # Cleanup: beide gestoppt
+
+Hinweis: Nach dem zweiten /ready armt der Referee AUTO_GO -> broadcast_go() an beide Bridges
+(#1025-Handover). Der E2E-Stub bildet den Dienst-HTTP-Pfad ab; der reale AUTO_GO/Bridge-Pfad
+ist der Live-Lauf (US4, s. unten). Die zusaetzliche Rohdatei des E2E liegt unter
+deploy/queue/evidence/998-e2e-queue.txt (vom Harness selbst geschrieben).
+
+=== DoD -> Test-Mapping (plan-1026.md §4) ===
+DoD 1 — kalte A/B-Instanz up + pausiert/ready, live nachweisbar:
+  up        -> test_start_creates_four_sidecars_in_network (Container + 4 Sidecars, World-Env)
+  pausiert  -> Bridge bootet PAUSED / Cycle PAUSED (Startzustand, by design #1025/#937);
+               host-reproduzierbar ueber Code-/Doku-Beleg, LIVE-Assert nur in US4
+  ready     -> e2e_998_queue.py: /lobby x2 -> /ready je Welt -> AUTO_GO-Handover
+  live      -> US4 (NICHT gefahren, Vorbedingung fehlt — s. unten)
+DoD 2 — idempotent (mehrfacher Aufruf harmlos):
+  -> test_idempotent_second_start, test_existing_stopped_container_is_restarted_not_recreated
+     + EnsureSidecarsTestCase (laufend unberuehrt / gestoppt reaktiviert / fehlend rekonstruiert)
+     + Drift-Fix test_missing_vs_cycle_is_recreated_with_world_transform (world=A -> --send-yourself off)
+DoD 3 — in docs/VS_MATCH.md dokumentiert:
+  -> US2 (Commit c021501): §6.7 "Kalt up + pausiert-joinbar (Ist-Zustand, #1026)" + Querverweis §6.5;
+     Idempotenz-Absatz in deploy/provisioner/README.md.
+
+=== US4 — Live-Nachweis auf planet: NICHT GEFAHREN ===
+Grund: Vorbedingung "Provisioner erreichbar (127.0.0.1:8094)" ist NICHT erfuellt.
+Read-only geprueft (2026-10-01, host=planet):
+  - 127.0.0.1:8094 -> HTTP 000 (kein Listener auf :8094; kein provisioner-Prozess, keine
+    systemd-Unit; `ss -ltn` zeigt :8094 nicht).
+  - Referee 127.0.0.1:8082 -> HTTP 200, /state = {"match_id":"rift-1","mode":"duel",
+    "phase":"lobby","paused":false,...}; Dienst läuft als systemd-Unit
+    tournament-server-prod.service. TOURNAMENT_AUTO_GO aus 0600-EnvironmentFile
+    /etc/rbmods/tournament-server-prod.env — nicht unprivilegiert lesbar (kein Secret gelesen).
+  - Images vorhanden: rb-dedicated (mehrere Tags) + python:3.12-slim; Prod-Container laufen
+    bereits (riftbreaker-dedicated-prod-b + Sidecars, azuracast, plex, wireguard, ...).
+  - Ressourcen: / 85% (136G frei), /srv 35% (582G frei), RAM 62Gi total / 2.7Gi frei
+    (25Gi available). Host ist belegt -> zusaetzliche kalte Welten wuerden den Prod-Betrieb stoeren.
+=> Ein Live-Lauf wuerde einen zusaetzlichen Provisioner-Dienst + 2 kalte Welten auf einem
+   belegten Prod-Host erzwingen. Laut Auftrag NICHT erzwingen. Kein Eingriff erfolgt;
+   keine Container/Instanzen angefasst oder veraendert (Host unveraendert).
+
+Exaktes Operator-Runbook (plan-1026.md §2/US4) fuer den Live-Lauf:
+  1. Provisioner prod auf 127.0.0.1:8094 starten (deploy/provisioner/provisioner.py, env=prod);
+     Referee 8082 mit TOURNAMENT_AUTO_GO=true bestaetigen; Images vorhanden; Ports/freie Ressourcen pruefen.
+  2. POST 127.0.0.1:8094/start {"env":"prod","mode":"solo_self","instance_id":"1026-live-a","world":"A"}
+     POST 127.0.0.1:8094/start {"env":"prod","mode":"solo_self","instance_id":"1026-live-b","world":"B"}
+     -> je Antwort created=true, ports.gns != null, health=healthy.
+  3. docker ps --filter label=rb.provisioner.instance=1026-live-a|b
+     -> je Instanz Dedicated-Container + VIER Sidecars (env=prod).
+  4. Pausiert-joinbar: Bridge POST /get_state bzw. Cycle GET /status = paused (PAUSED-Startzustand).
+  5. Ready-Handover: POST 127.0.0.1:8082/lobby {"player":"<A>","world":"A"} + {"player":"<B>","world":"B"};
+     POST 127.0.0.1:8082/ready {"world":"A"}; POST /ready {"world":"B"}
+     -> zweiter Ready armt AUTO_GO -> broadcast_go(); beide Bridges PAUSED->WARMUP; /state phase=running.
+  6. Idempotenz: zweiter POST /start je ID -> created=false, keine neuen Container, Sidecars running.
+  7. Cleanup ZWINGEND: POST 127.0.0.1:8094/stop {"env":"prod","instance_id":"1026-live-a"} + "...-b"
+     -> danach `docker ps` sauber (keine 1026-Container/Sidecars).
+  8. Rohprotokoll (curl + docker ps) nach deploy/queue/evidence/1026-live-cold-ab.txt.
+
+Status: US4 offen (Restpunkt). US3 host-reproduzierbar = GRUEN (3 Laeufe, EXIT 0).
