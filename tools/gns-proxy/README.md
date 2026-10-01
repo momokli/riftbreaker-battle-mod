@@ -410,6 +410,8 @@ Default-Ziel darf ein Re-Route **nicht** ueberschreiben.
 | `test_api_util.cpp`      | Host-Test der API-Helfer (CI: `g++ -std=c++17`)                  |
 | `route_rules.h`          | Routing-Regeln (exakt / Suffix / Default), reine Logik           |
 | `test_route_rules.cpp`   | Host-Test der Regeln (CI: `g++ -std=c++17`)                      |
+| `referee_bridge.h`       | reine Bruecken-Logik zum Referee (Config-Parse, Ready-Body, /state, Fehler-Mapping) |
+| `test_referee_bridge.cpp`| Host-Test der Referee-Bruecke (CI: `g++ -std=c++17`)            |
 | `inspect_gns.py`         | findet `m_nAppID` (vtable-Slot-Scan) in der GNS-DLL              |
 | `pcap_flow.py`           | UDP-Payloads eines Flows in Reihenfolge aus einem pcap           |
 | `replay_first_packet.py` | Replay der ersten GNS-Nachricht (nur Schritt 1 sinnvoll)         |
