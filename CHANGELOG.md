@@ -2,6 +2,7 @@ Version: [Unreleased]
 Date: —
 
   Features:
+    - Ready→GO aus der Lobby: Queue postet je Welt `/ready` an den Referee; Relay-`POST /ready` ist kontextabhängig (Solo→Capsule, VS→Referee), zweiter Ready löst AUTO_GO/Broadcast an beide Bridges aus (#1025, PR #1052).
     - Referee-Bruecke im GNS-Relay: Lobby liest den Match-Zustand (`GET /referee/state`, Phase/Spieler/Welt/Sieger) und meldet Welten ready (`POST /referee/ready`); neue Lobby-UI (Phase-/Sieger-Badge + `READY (Referee)`-Button), fail-safe `503 referee_unconfigured` ohne Config (#1024, PR #1050).
 
   Refactor:
