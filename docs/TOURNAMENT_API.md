@@ -23,7 +23,6 @@ per Bearer-Token geschützt (siehe „Auth-Modell“), die **lesenden** bleiben 
 | `TOURNAMENT_AUTO_GO`             | `true`             | GO automatisch, sobald beide Welten ready                                                         |
 | `RBBRIDGE_A_URL`                 | —                  | HTTP-Endpoint der Welt-A-Bridge (GO-Push)                                                         |
 | `RBBRIDGE_B_URL`                 | —                  | HTTP-Endpoint der Welt-B-Bridge (GO-Push)                                                         |
-| `TOURNAMENT_GO_COMMANDS`         | `debug_dom_resume` | Komma-separierte Unpause-/Start-Kommandos je Welt beim GO (je EIN gequotetes Argument, Issue #18) |
 | `TOURNAMENT_GO_TIMEOUT_MS`       | `3000`             | Timeout je Broadcast-Endpoint                                                                     |
 | `TOURNAMENT_INCOMING_DELAY_S`    | `5`                | `delay_s` des Ingress-Pushes (`incoming_wave`) an die Ziel-Bridge beim Wellenstart (US4, #996)     |
 | `TOURNAMENT_HQ_HP`               | `100`              | Start-HP jedes HQ                                                                                 |
@@ -156,24 +155,25 @@ broadcastet GO an beide `RBBRIDGE_*_URL`-Endpoints (async). Bei
 {"retry": true} // laufendes Match: Broadcast erneut senden (z. B. nach Endpoint-Fehler)
 ```
 
-Broadcast-Payload an jede Bridge (`POST` auf `RBBRIDGE_*_URL`):
+Broadcast an jede Bridge: je Welt werden **beide** verifizierten Routen als
+leerer POST (Body `{}`) gefächert — Basis ist `RBBRIDGE_*_URL` ohne
+abschließendes `/exec`:
 
-```json
-{ "cmd": "go", "match_id": "rift-1", "round": 1, "commands": ["debug_dom_resume"] }
-```
+1. `POST <bridge-base>/resume_game` — native Server-Pause der kalt gebooteten
+   Welt aufheben (Issue #880; live gemessen ≈0,12 s,
+   `deploy/parked/MEASUREMENT.md`).
+2. `POST <bridge-base>/start` — Wellen-Zyklus armieren (`start_epoch`); der
+   attack-cycle vollzieht `PAUSED→WARMUP→RUNNING` (`attack_cycle.py`).
 
-`commands` ist die **geordnete** Liste der Unpause-/Start-Kommandos, die die
-Bridge je Welt ausführen muss (Sync-Start, Issue #22): `exec_cmd_client
-"<cmd>"` als EIN gequotetes Argument (Issue #18). Default ist
-`debug_dom_resume` (DOM-Ebene, verifiziert — SYNC_START.md); die native
-Server-Pause (`resume_game`, unverifiziert) wird per `TOURNAMENT_GO_COMMANDS`
-ergänzt, ihr Fallback ist das automatische `ResumeGame` beim Client-Join
-(`server_pause_game_when_empty`).
+Die Reihenfolge ist die Ausführungsreihenfolge (erst Sim entfrieren, dann Zyklus
+armieren); beide Bridge-Routen nehmen **keinen** Body. Der frühere
+`commands`-Payload (`TOURNAMENT_GO_COMMANDS`, Default `debug_dom_resume`) ist mit
+#1027 entfernt — es gibt **kein** Env mehr.
 
-Die Bridge führt daraus ihr GO aus (Unpause der pausierten Welt) — über
-`exec_cmd_client`/den rbbridge-exec-Dispatch; der Server behandelt den Push
-als **nicht-kritisch**: Zustell-Status landet in `teams.<W>.go_broadcast`
-von `GET /state`, der zuverlässige Kanal ist das Polling der Bridges.
+Der Server behandelt den Push als **nicht-kritisch**: der Zustell-Status landet
+je Welt aggregiert (`ok` = alle Routen ok, `routes[]`) in
+`teams.<W>.go_broadcast` von `GET /state`, der zuverlässige Kanal ist das
+Polling der Bridges.
 Antwort:
 
 ```json
@@ -182,7 +182,14 @@ Antwort:
   "phase": "running",
   "round": 1,
   "broadcast": {
-    "A": { "ok": true, "status": 200, "error": null, "endpoint": "http://…" },
+    "A": {
+      "ok": true,
+      "endpoint": "http://127.0.0.1:9001",
+      "routes": [
+        { "route": "resume_game", "ok": true, "status": 200, "error": null, "endpoint": "http://127.0.0.1:9001/resume_game" },
+        { "route": "start", "ok": true, "status": 200, "error": null, "endpoint": "http://127.0.0.1:9001/start" }
+      ]
+    },
     "B": { "ok": null, "note": "kein Endpoint konfiguriert — Bridges pollten /state" }
   }
 }
@@ -563,7 +570,7 @@ exec-Kanal aus (`exec_cmd_client`/rbbridge-exec-Dispatch):
 
 | Beobachtung in `/state` | Bridge-Kommando                                    | Wirkung                                                                                                      |
 | ----------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `phase` wird `running`  | `debug_dom_resume` (bzw. `TOURNAMENT_GO_COMMANDS`) | Unpause/Start des Runden-Loops (Fallback, falls der GO-Push nicht ankam; Idempotenz vorausgesetzt)           |
+| `phase` wird `running`  | `POST /start` (Wellen-Zyklus) · `POST /resume_game` (Server-Pause aufheben) | GO-Push des Servers an beide Welten (#1027); Fallback: Bridge erkennt `running`/`start_epoch` beim Polling von `GET /state` (Idempotenz vorausgesetzt) |
 | `round` steigt          | `round_start <n>`                                  | Neue Build-Phase, HUD-Updates                                                                                |
 | `reveal.round` neu      | `reveal`                                           | HUD-Aufdeckung: Built-Values + eingehende Komposition                                                        |
 | `phase` wird `finished` | `match_over`                                       | Sieg-/Verlierer-Screen                                                                                       |

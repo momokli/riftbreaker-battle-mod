@@ -219,11 +219,24 @@ SOLO-Verhalten (Latch + `end_game` + `restart_map`) bitgleich.
   (`TeamState.ready`/`both_ready()`) → bei „beide bereit" armiert der Referee
   GO (`arm_go()`); mit `AUTO_GO` startet das Match beim zweiten `ready`
   (`start_match()`), sonst wartet die Phase `ready` auf `POST /go`.
-- **Symmetrischer Start (umgesetzt, #996):** `broadcast_go()` postet denselben
-  `go_payload` (`cmd:"go"`, `commands`) an **beide** Bridges
-  (`cfg.bridge_for(w)`) — beide `PAUSED→WARMUP` (Warmup-Uhr je Server lokal,
-  Drift ok). Harness-Tests: `go_broadcasts_to_both_bridge_endpoints`,
-  `auto_go_starts_on_second_ready_and_broadcasts`.
+- **Symmetrischer Start (umgesetzt, #996/#1027):** `broadcast_go()` fächert je
+  Welt **beide** verifizierten Bridge-Routen als leeren POST (Body `{}`) an die
+  Basis von `cfg.bridge_for(w)` (ein abschließendes `/exec` wird entfernt, s.
+  `bridge_action_url`):
+  1. `POST <bridge-base>/resume_game` — native Server-Pause der kalt gebooteten
+     Welt aufheben (`pipe_bridge.c`/Issue #880; live gemessen ≈0,12 s,
+     `deploy/parked/MEASUREMENT.md` §2),
+  2. `POST <bridge-base>/start` — Wellen-Zyklus armieren (`start_epoch`); der
+     attack-cycle vollzieht `PAUSED→WARMUP→RUNNING` (`attack_cycle.py`).
+
+  Reihenfolge = Ausführungsreihenfolge (erst Sim entfrieren, dann Zyklus
+  armieren); beide `PAUSED→WARMUP` (Warmup-Uhr je Server lokal, Drift ok). Der
+  alte `/exec`-Command-Pfad (`go_payload`/`TOURNAMENT_GO_COMMANDS`, Default
+  `debug_dom_resume`) ist mit #1027 entfernt — **kein** Env, kein toter Kanal.
+  Zustell-Status je Welt aggregiert (`ok` = alle Routen ok, `routes[]`) in
+  `teams.<W>.go_broadcast`. Harness-Tests:
+  `go_broadcasts_to_both_bridge_endpoints`,
+  `second_ready_broadcasts_go_to_both_bridges`.
 - **Pause (umgesetzt, #997):** `POST /pause` / `POST /resume` (match-level)
   fächern `POST <bridge-base>/pause_dom` bzw. `/resume_dom` (#871) an **beide**
   Bridges (`cfg.bridge_for(w)`, analog `broadcast_go`); Idempotenz + `retry`,
@@ -315,7 +328,8 @@ Warm-Pool-Reuse, kein `resume_game` im Queue-Pfad.
 - **Sizing:** planet muss eine weitere Dauer-Instanz tragen (messen/aufstocken).
 - **Name vs. Identität:** Suffix-Routing erzwingt Namensdisziplin; Lobby-Mapping
   ist sauberer, braucht aber die Relay-API (+ evtl. Persistenz der Pins).
-- **Legacy:** Der Referee-`/go`-Command ist nicht mehr ausführbar; `TOURNAMENT_API.md`
-  driftet → im Zuge von G4 geradeziehen.
+- **Legacy:** Der Referee-`/go`-Command läuft seit **#1027** über die
+  verifizierten Bridge-Routen (`POST <bridge-base>/resume_game`, `/start`)
+  statt des toten `/exec`-Kanals; `TOURNAMENT_API.md` ist angeglichen.
 - **Scope:** echtes 1v1 ist laut `PLAYTEST_1.0.md` **Post-1.0** — dieses Konzept
   ist die Vorarbeit dafür.

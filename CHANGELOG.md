@@ -2,6 +2,7 @@ Version: [Unreleased]
 Date: —
 
   Features:
+    - GO-Executor der VS-Welten: `broadcast_go` fächert je Welt die verifizierten Bridge-Routen `POST <bridge-base>/resume_game` → `POST <bridge-base>/start` (leerer Body) statt des toten `/exec`-Command-Pfads; `TOURNAMENT_GO_COMMANDS`/`debug_dom_resume` entfernt (#1027).
     - Ready→GO aus der Lobby: Queue postet je Welt `/ready` an den Referee; Relay-`POST /ready` ist kontextabhängig (Solo→Capsule, VS→Referee), zweiter Ready löst AUTO_GO/Broadcast an beide Bridges aus (#1025, PR #1052).
     - Referee-Bruecke im GNS-Relay: Lobby liest den Match-Zustand (`GET /referee/state`, Phase/Spieler/Welt/Sieger) und meldet Welten ready (`POST /referee/ready`); neue Lobby-UI (Phase-/Sieger-Badge + `READY (Referee)`-Button), fail-safe `503 referee_unconfigured` ohne Config (#1024, PR #1050).
 
@@ -14,6 +15,7 @@ Date: —
     - Neues manuelles, idempotentes Teardown-Playbook `deploy/teardown-dev-staging.yml` (NICHT im CD verdrahtet) (#1034).
 
   Docs:
+    - `docs/VS_MATCH.md` §6.5/§9 + `docs/TOURNAMENT_API.md`: GO-Fan-out auf die verifizierten Bridge-Routen `resume_game`+`start` dokumentiert, `/exec`-Legacy-Env (`TOURNAMENT_GO_COMMANDS`) gestrichen (#1027).
     - `docs/STAGING.md` als retired/Archiv gekennzeichnet; `deploy/README.md` auf prod-only-Topologie/Trigger/Rollen/CD/Teardown aktualisiert (#1034).
     - `docs/VS_MATCH.md` §6.5/§6.7 + `deploy/provisioner/README.md`: kalte Provisionierung startet Container + vier Sidecars, Welt bootet PAUSED/joinbar, „Resume" = Ready-Handover (kein Pre-GO-`resume_game`) + Idempotenz-Garantie (#1026).
 
