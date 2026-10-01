@@ -7,7 +7,7 @@
 #
 # Aufruf: NICHT aus der Rolle selbst (die läuft erst NACH
 # dedicated-server-image), sondern als Preflight aus den Playbooks, die vor den
-# Rollen laufen (deploy/site.yml, deploy/test-deploy.yml):
+# Rollen laufen (deploy/deploy-prod.yml, deploy/test-deploy.yml):
 #   include_role: {name: riftbreaker-server, tasks_from: disk-preflight}
 #
 # Read-only → läuft im --check unverändert und ändert nichts. Schwelle

@@ -30,7 +30,7 @@ crash_collector_helper_src: "{{ playbook_dir }}/crash-collector/minidump_meta.py
 crash_collector_dir: /opt/rbmods/crashes
 
 # Environment-Name fuer den Bundle-Pfad (Issue #605): <env>/<ref>/<ts>-<uuid>.
-# Kommt aus der Deploy-Identitaet (rift_env, Play-Var in site.yml/deploy-prod.yml/
+# Kommt aus der Deploy-Identitaet (rift_env, Play-Var in deploy-prod.yml/
 # test-deploy.yml) und landet als RB_CRASH_ENV in der systemd-Unit.
 crash_collector_env: "{{ rift_env }}"
 

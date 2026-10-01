@@ -1,7 +1,7 @@
 ---
 # RIFT BATTLE — lokales Solo-Dev-Setup (Issue #566).
 #
-# Reproduziert, was dev/prod auf planet tun (deploy/site.yml), aber auf DEINEM
+# Reproduziert, was der prod-Stack auf planet tut (deploy/deploy-prod.yml), aber auf DEINEM
 # Rechner: Dedicated-Server-Image bauen, Game-Content ziehen, die
 # Server-I/O-Tools (rbbridge.dll/pipe_bridge.exe) cross-compilen und den Server
 # + die Bridge hochfahren. `cockpit.html` liefert die Bridge selbst unter
@@ -27,7 +27,7 @@
   become: true
 
   pre_tasks:
-    # Image-Tag = Checkout-SHA, wie bei site.yml/test-deploy.yml — kein
+    # Image-Tag = Checkout-SHA, wie bei deploy-prod.yml/test-deploy.yml — kein
     # `latest`, damit ein Rebuild nie ein stilles altes Image weiterlaufen
     # lässt. `-c safe.directory=*`: falls unter sudo/anderem Owner ausgeführt.
     - name: Image-Tag ermitteln (Checkout-SHA)
@@ -53,7 +53,7 @@
         rift_deploy_ref: "{{ deploy_image_tag }}"
       tags: always
 
-    # Derselbe Preflight wie site.yml/test-deploy.yml — VOR dem Image-Build.
+    # Derselbe Preflight wie deploy-prod.yml/test-deploy.yml — VOR dem Image-Build.
     # Prüft den Mountpoint "/" (Default riftbreaker_disk_mount); liegt
     # riftbreaker_local_root auf einem eigenen Mount, mit
     # `-e riftbreaker_disk_mount=/dein/mount` überschreiben (muss EXAKT einem

@@ -1,6 +1,6 @@
 # RIFT BATTLE — lokales Solo-Dev-Setup (Issue #566)
 
-Reproduziert, was `deploy/site.yml` auf planet für dev tut — auf deinem
+Reproduziert, was der Dedicated-Server-Stack auf planet tut — auf deinem
 eigenen Linux-Rechner, ohne planet-Zugriff. Gedacht für die IO-/Wave-/
 Difficulty-Spikes (#508/#513): Server hochfahren, `POST /get_state` /
 `activate_mission_flow` gegen die Bridge fahren.
@@ -206,7 +206,7 @@ sudo rm -rf /opt/rbmods/dedicated-server /opt/steamcmd
 
 ## Warum ein eigener Einstiegspunkt statt eines vierten Envs
 
-`deploy/site.yml`/`deploy-prod.yml`/`test-deploy.yml` teilen sich ein striktes
+`deploy/deploy-prod.yml`/`test-deploy.yml` teilen sich ein striktes
 Env-Isolations-Schema (`deploy/env-schema.yml`, Issue #483) — das löst
 Namensraum-Kollisionen auf **einem geteilten Mehr-Umgebungs-Host** (dev+prod+
 test laufen alle auf planet). Auf deinem eigenen Rechner gibt es nur EINE

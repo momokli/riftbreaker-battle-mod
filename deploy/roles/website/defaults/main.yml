@@ -65,9 +65,8 @@ rift_caddy_site_root: /srv/site
 # den server-control-Agenten wirklich deployt (Issue #463). Default false =
 # fail-safe: ohne Agent zeigt die Route sonst auf 127.0.0.1:<server_control_port>
 # und traefe dort einen FREMDEN Agenten (auf planet den dev-Agenten).
-# Gesetzt wird das Flag im jeweiligen PLAY (site.yml true, deploy-prod.yml
-# true, Issue #498) — Play-Vars schlagen diese Defaults, waehrend die host_vars
-# fuer dev UND prod gelten und deshalb hier nicht taugen.
+# Gesetzt wird das Flag im jeweiligen PLAY (deploy-prod.yml true, Issue #498)
+# — Play-Vars schlagen diese Defaults; die host_vars taugen hierfuer nicht.
 server_control_enabled: false
 
 # /contract (Bridge-Kontrollpanel): basic_auth-Schutz (operator).

@@ -47,7 +47,7 @@
   vars:
     render_dir: "{{ lookup('env', 'RB_ROUTE_RENDER_DIR') | default('/tmp/rb-server-control-route-render', true) }}"
     # expect_route + server_control_enabled kommen als extra vars aus run.sh
-    # (spiegeln die Play-Vars aus site.yml bzw. deploy-prod.yml).
+    # (spiegeln die Play-Vars aus deploy-prod.yml).
     expect_route: true
     server_control_enabled: false
 
