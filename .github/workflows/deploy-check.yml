@@ -101,13 +101,27 @@ jobs:
           # Server-Control (Issue #424): Bearer-Token PFLICHT. Dummy-Wert — der
           # --check entschluesselt nie das echte Vault.
           vault_server_control_token: check-dummy-token
+          # PROD-ONLY (Issue #1034): die Prod-A/-B-Plays lesen eigene Tokens.
+          # Dummy-Werte — der --check entschluesselt nie das echte Vault.
+          vault_server_control_prod_token: check-dummy-prod-token
+          vault_server_control_prod_b_token: check-dummy-prod-b-token
           # Operator-Credential je Env (Issue #535): die website-Rolle liest den
           # Cockpit-basic_auth-Hash aus dem Vault (ohne -> Legacy-Fallback dev).
           # Dummy-Wert — der --check entschluesselt nie das echte Vault.
           vault_contract_basic_auth_hash: "$2a$14$checkdummyoperatorhash0000000000000000000000000000000"
+          # PROD-ONLY (Issue #1034): deploy-prod.yml setzt den Operator-Hash im
+          # Prod-A-Play aus `vault_contract_basic_auth_hash_prod` (kein Fallback,
+          # fail-closed). Dummy-Wert — der --check entschluesselt nie das Vault.
+          vault_contract_basic_auth_hash_prod: "$2a$14$checkdummyoperatorhashprod0000000000000000000000000000"
           # GNS-Lobby (Issue #535): eigener host-konstanter Vault-Wert,
           # entkoppelt vom Cockpit-Hash. Dummy-Wert, kein Secret.
           vault_proxy_basic_auth_hash: "$2a$14$checkdummylobbyhash000000000000000000000000000000000"
+          # Singleton-Dienste (Issue #929/#931/#998): fail-closed Bearer aus dem
+          # Vault. Dummy-Werte — der --check entschluesselt nie das echte Vault.
+          vault_tournament_token: check-dummy-tournament-token
+          vault_parked_pool_token: check-dummy-parked
+          vault_capsule_token: check-dummy-capsule
+          vault_queue_token: check-dummy-queue
           EOF
           # --tags server,website: der Container-Stack + Website. Content-/
           # Tournament-Rollen brauchen Build-Artefakte (dist/, Rust-Binary) und
