@@ -1,20 +1,25 @@
-Version: [Unreleased]
-Date: —
+Version: 1.0.16
+Date: 01. 10. 2026
 
   Features:
     - Ready→GO aus der Lobby: Queue postet je Welt `/ready` an den Referee; Relay-`POST /ready` ist kontextabhängig (Solo→Capsule, VS→Referee), zweiter Ready löst AUTO_GO/Broadcast an beide Bridges aus (#1025, PR #1052).
     - Referee-Bruecke im GNS-Relay: Lobby liest den Match-Zustand (`GET /referee/state`, Phase/Spieler/Welt/Sieger) und meldet Welten ready (`POST /referee/ready`); neue Lobby-UI (Phase-/Sieger-Badge + `READY (Referee)`-Button), fail-safe `503 referee_unconfigured` ohne Config (#1024, PR #1050).
 
   Refactor:
-    - Deployment-Cleanup: prod-only CD. `deploy/deploy-prod.yml` ist das einzige Playbook (Play 0 host-services + Prod-A + Prod-B + Relay-Teardown); dev (site.yml) und staging (deploy-staging.yml/staging-vars.yml) entfallen. CD nur noch bei Tag-Push `v*`; `deploy-ssh.sh`/`deploy-wrapper.sh` lehnen jeden anderen ref fail loud ab (#1034).
-    - Host-Singleton-Dienste (gns-relay, image-retention, host-hygiene, parked-pool, capsule-flow, queue) laufen jetzt im prod-Play mit; parked/capsule/queue mit env-freien Unit-/Pfadnamen. GNS-Relay routet nur noch A/B/Default (#1034).
-    - Neues manuelles, idempotentes Teardown-Playbook `deploy/teardown-dev-staging.yml` (NICHT im CD verdrahtet) (#1034).
-
-  Docs:
-    - `docs/STAGING.md` als retired/Archiv gekennzeichnet; `deploy/README.md` auf prod-only-Topologie/Trigger/Rollen/CD/Teardown aktualisiert (#1034).
+    - Deployment-Cleanup: prod-only CD. `deploy/deploy-prod.yml` ist das einzige Playbook (Play 0 host-services + Prod-A + Prod-B + Relay-Teardown); dev (site.yml) und staging (deploy-staging.yml/staging-vars.yml) entfallen. CD nur noch bei Tag-Push `v*`; `deploy-ssh.sh`/`deploy-wrapper.sh` lehnen jeden anderen ref fail loud ab (#1034, PR #1044).
+    - Host-Singleton-Dienste (gns-relay, image-retention, host-hygiene, parked-pool, capsule-flow, queue) laufen jetzt im prod-Play mit; parked/capsule/queue mit env-freien Unit-/Pfadnamen. GNS-Relay routet nur noch A/B/Default — ein GNS-Eingang (#1034, PR #1044).
+    - Neues manuelles, idempotentes Teardown-Playbook `deploy/teardown-dev-staging.yml` (NICHT im CD verdrahtet) (#1034, PR #1044).
 
   Security:
-    - Tournament-API fail-closed abgesichert (Loopback-Bind + Caddy basic_auth + Rust-Bearer 401); Secret `vault_tournament_token` als Single-Source fuer Rust, Caddy und Queue (#298, PR #1023).
+    - Tournament-API fail-closed abgesichert (Loopback-Bind `TOURNAMENT_HOST=127.0.0.1` + Caddy basic_auth + Rust-Bearer 401 auf allen mutierenden Routen); Secret `vault_tournament_token` als Single-Source fuer Rust, Caddy und Queue (#298, PR #1023).
+    - Geteilte Operator-Credentials je Env entkoppelt: per-Env `vault_contract_basic_auth_hash_prod` + GNS-Lobby-Hash getrennt, Distinctness-Assert gegen den Legacy-Hash (#535, PR #1043, PR #1046).
+
+  Deploy:
+    - Mods-Upload-API (8322) als Host-Singleton im `env-schema.yml` dokumentiert (#534, PR #1045).
+    - Legacy-Symlink (`legacy-rbtools-symlink-cleanup`) aufgeraeumt, oeffentliche Game-Ports dokumentiert + asserted (#536, PR #1047).
+
+  Docs:
+    - `docs/STAGING.md` als retired/Archiv gekennzeichnet; `deploy/README.md` auf prod-only-Topologie/Trigger/Rollen/CD/Teardown aktualisiert (#1034, PR #1044).
 
 Version: 1.0.15
 Date: 29. 09. 2026
