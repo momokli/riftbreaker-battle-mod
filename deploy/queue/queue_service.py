@@ -70,6 +70,23 @@ def _flag(env: Dict[str, str], var: str, default: bool = False) -> bool:
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _non_negative_number(env: Dict[str, str], var: str, default: Any, cast: Any) -> Any:
+    """Env-Wert lesen: fehlend/leer -> Default; ungueltig/<0 -> Fehler (fail-closed).
+
+    ``0`` ist erlaubt (bedeutet je nach Feld „aus"); negative Werte nicht.
+    """
+    raw = env.get(var)
+    if raw is None or str(raw).strip() == "":
+        return cast(default)
+    try:
+        value = cast(str(raw).strip())
+    except (TypeError, ValueError):
+        raise QueueConfigError("%s muss eine Zahl sein (war %r)" % (var, raw))
+    if value < 0:
+        raise QueueConfigError("%s muss >= 0 sein (war %r)" % (var, raw))
+    return value
+
+
 @dataclasses.dataclass
 class QueueServiceConfig:
     """Dienst-Konfiguration aus ``QUEUE_*``."""
@@ -87,6 +104,8 @@ class QueueServiceConfig:
     state_dir: str = ""
     team_size: int = 1
     allow_teams: bool = False
+    # Auto-Finish-Reconciler (#1028): Intervall in Sekunden; 0 = aus.
+    reconcile_interval_s: float = 5.0
     log_level: str = "INFO"
 
     @classmethod
@@ -107,6 +126,8 @@ class QueueServiceConfig:
             state_dir=(env.get("QUEUE_STATE_DIR") or "").strip(),
             team_size=int(_positive_number(env, "QUEUE_TEAM_SIZE", 1, int)),
             allow_teams=_flag(env, "QUEUE_ALLOW_TEAMS", False),
+            reconcile_interval_s=float(
+                _non_negative_number(env, "QUEUE_RECONCILE_INTERVAL_S", 5.0, float)),
             log_level=(env.get("QUEUE_LOG_LEVEL") or "INFO").strip() or "INFO",
         )
 
@@ -284,6 +305,22 @@ def build_server(config: QueueServiceConfig, coordinator: QueueCoordinator) -> T
     return httpd
 
 
+def _reconciler_loop(coordinator: QueueCoordinator, interval: float,
+                     stop_event: threading.Event) -> None:
+    """Daemon-Takt: regelmaessig ``coordinator.reconcile()`` (#1028).
+
+    Fehler sind nicht-fatal (Log + naechster Tick). ``stop_event`` beendet die
+    Schleife sauber (kein blockierender Schlaf).
+    """
+    while not stop_event.wait(interval):
+        try:
+            outcome = coordinator.reconcile()
+            if outcome.get("finished"):
+                LOG.info("reconcile: %s", outcome)
+        except Exception:  # noqa: BLE001 - Dienst darf nie am Tick sterben
+            LOG.exception("reconcile fehlgeschlagen")
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="rbbattle queue service")
     parser.add_argument("--check", action="store_true", help="nur Konfiguration pruefen und beenden")
@@ -301,17 +338,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.check:
         LOG.info(
-            "Konfiguration OK (bind=%s port=%s env=%s provisioner=%s referee=%s state_dir=%s)",
+            "Konfiguration OK (bind=%s port=%s env=%s provisioner=%s referee=%s "
+            "state_dir=%s reconcile_interval_s=%s)",
             config.bind, config.port, config.env, config.provisioner_url,
-            config.referee_url, config.state_dir or "-",
+            config.referee_url, config.state_dir or "-", config.reconcile_interval_s,
         )
         return 0
 
     coordinator = build_coordinator(config)
     httpd = build_server(config, coordinator)
 
+    # Auto-Finish-Reconciler (#1028): Daemon-Thread liest den Referee-Zustand
+    # und finisht abgeschlossene Matches idempotent. 0 = aus.
+    stop_event = threading.Event()
+    if config.reconcile_interval_s > 0:
+        threading.Thread(
+            target=_reconciler_loop,
+            args=(coordinator, config.reconcile_interval_s, stop_event),
+            daemon=True,
+        ).start()
+        LOG.info("Reconciler aktiv (alle %.1fs)", config.reconcile_interval_s)
+
     def _shutdown(signum: int, _frame: Any) -> None:
         LOG.info("Signal %s empfangen — fahre herunter", signum)
+        stop_event.set()
         threading.Thread(target=httpd.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGTERM, _shutdown)
@@ -323,6 +373,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        stop_event.set()
         httpd.server_close()
     return 0
 

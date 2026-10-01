@@ -25,6 +25,7 @@ Nur Standardbibliothek (stdlib), kein venv/pip. Alle Clients sind injizierbar
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -35,11 +36,16 @@ from typing import Any, Callable, Dict, List, Optional
 
 from identity import canonicalize
 from queue_core import (
+    STATE_PROVISIONING,
+    STATE_READY,
     Match,
     QueueCore,
     QueueError,
     RESULTS,
+    derive_result,
 )
+
+LOG = logging.getLogger("queue-flow")
 
 
 def instance_id_for(match_id: int, world: str) -> str:
@@ -142,10 +148,19 @@ class RefereeClient(object):
         self.timeout = timeout
         self._opener = opener
 
-    def lobby(self, player: str, world: str) -> Dict[str, Any]:
+    def lobby(self, player: str, world: str,
+              match_id: Optional[int] = None) -> Dict[str, Any]:
+        """Spieler im Referee registrieren (``POST /lobby {player, world}``, Bearer).
+
+        ``match_id`` (Issue #1028) wird additiv mitgeschickt, damit der Referee
+        sie in ``GET /state`` als ``teams.<W>.match_id`` zurueckgibt und die
+        Queue ihr Ergebnis eindeutig zuordnen kann.
+        """
+        payload: Dict[str, Any] = {"player": player, "world": world}
+        if match_id is not None:
+            payload["match_id"] = int(match_id)
         return _http_json(self.base_url, "POST", "/lobby",
-                          {"player": player, "world": world}, self.timeout,
-                          self.token, self._opener)
+                          payload, self.timeout, self.token, self._opener)
 
     def ready(self, world: str) -> Dict[str, Any]:
         """Welt beim Referee bereit melden (``POST /ready {world}``, Bearer).
@@ -157,6 +172,19 @@ class RefereeClient(object):
         return _http_json(self.base_url, "POST", "/ready",
                           {"world": world}, self.timeout,
                           self.token, self._opener)
+
+    def state(self) -> Optional[Dict[str, Any]]:
+        """Autoritativen Referee-Zustand lesen (``GET /state``, auth-frei, #1028).
+
+        Lesen ist unkritisch: Fehler/Timeout liefern ``None`` statt zu werfen,
+        damit ein Reconciler-Tick bei einem Referee-Ausfall keinen Zustand
+        verliert und keinen Abbruch ausloest.
+        """
+        try:
+            return _http_json(self.base_url, "GET", "/state", None,
+                              self.timeout, "", self._opener)
+        except QueueError:
+            return None
 
 
 class QueueCoordinator(object):
@@ -286,9 +314,11 @@ class QueueCoordinator(object):
                 started.append(iid)
                 for player in team.players:
                     self.core.set_assignment(match, player, instance=iid, endpoint=endpoint)
-            # Referee-Lobby: je Spieler genau ein /lobby mit seiner Welt.
+            # Referee-Lobby: je Spieler genau ein /lobby mit seiner Welt
+            # (+ Queue-match_id, #1028: wird in /state echoisiert).
             for assignment in match.assignments():
-                self.referee.lobby(assignment.identitaet, assignment.world)
+                self.referee.lobby(assignment.identitaet, assignment.world,
+                                   match.match_id)
             # Ready-Egress (Issue #1025): NACH beiden /lobby-Aufrufen (sonst
             # Referee-404 not_found), dann je DISTINCT Welt genau EIN `ready`.
             # Der zweite Ready loest beim Referee (AUTO_GO) den gemeinsamen
@@ -335,7 +365,10 @@ class QueueCoordinator(object):
 
         ``result`` optional aus ``winnerA``/``winnerB``/``draw``. Ohne ``result``
         wird nur gestoppt (Ergebnis bleibt ``null``). Ein zweiter Aufruf stoppt
-        nicht erneut.
+        nicht erneut. Das Ergebnis wird VOR dem Cleanup persistiert: scheitert
+        ``provisioner.stop`` (eine Instanz), bleibt ``result`` gesetzt, der
+        Match wird NICHT als „cleaned" markiert und der naechste Aufruf
+        wiederholt nur den Stop (Fail-safe, #1028 US3).
         """
         with self._lock:
             match = self.core.get_match(match_id)
@@ -345,25 +378,141 @@ class QueueCoordinator(object):
                 raise QueueError("bad_result", "result muss einer von %s sein"
                                  % (", ".join(RESULTS),), 400)
             self.core.finish(match_id, result)
+            # Ergebnis (und ggf. state=finished) sichern, BEVOR gestoppt wird.
+            self._persist()
             if match.match_id not in self._cleaned:
                 self._cleanup(match)
                 self._cleaned.add(match.match_id)
-            self._persist()
+                self._persist()
             return match.to_dict()
 
     def _cleanup(self, match: Match) -> None:
+        """Beide kalt gestarteten Instanzen stoppen (fail-fast).
+
+        Scheitert ein Stop, sofort ``cleanup_failed`` werfen: der Match wird
+        nicht als „cleaned" markiert und der naechste Aufruf wiederholt den
+        Stop. ``provisioner.stop`` muss idempotent sein.
+        """
         side = match.side
-        errors = []
         for assignment in match.assignments():
             iid = side.get(assignment.identitaet, {}).get("instance")
             if not iid:
                 continue
             try:
                 self.provisioner.stop(iid, self.env)
-            except Exception as exc:  # noqa: BLE001
-                errors.append("%s: %s" % (iid, exc))
-        if errors:
-            raise QueueError("cleanup_failed", "; ".join(errors), 503)
+            except Exception as exc:  # noqa: BLE001 - Fail-safe: Retry beim naechsten Tick
+                raise QueueError("cleanup_failed", "%s: %s" % (iid, exc), 503)
+
+    # -- Reconciliation (Pull, #1028 US2/US3) ------------------------------
+    @staticmethod
+    def _referee_match_ids(state: Dict[str, Any]) -> set:
+        """Explizite Queue-``match_id``s aus ``teams.{A,B}.match_id`` (#1028)."""
+        ids = set()
+        teams = state.get("teams")
+        if isinstance(teams, dict):
+            for world in ("A", "B"):
+                team = teams.get(world)
+                if isinstance(team, dict):
+                    mid = team.get("match_id")
+                    if isinstance(mid, int):
+                        ids.add(mid)
+        return ids
+
+    @staticmethod
+    def _referee_player_pair(state: Dict[str, Any]) -> Optional[set]:
+        """Spielernamen beider Welten (Fallback-Zuordnung, wenn ``match_id`` fehlt)."""
+        teams = state.get("teams")
+        if not isinstance(teams, dict):
+            return None
+        names = []
+        for world in ("A", "B"):
+            team = teams.get(world)
+            player = team.get("player") if isinstance(team, dict) else None
+            names.append(player if isinstance(player, str) and player else None)
+        if len(names) == 2 and all(names):
+            return set(names)
+        return None
+
+    def reconcile(self) -> Dict[str, Any]:
+        """Aktive Matches gegen den autoritativen Referee-Zustand abgleichen (#1028).
+
+        Liest (auth-frei) ``GET /state``; bei ``phase=finished`` wird das
+        Ergebnis abgeleitet und ``finish`` (idempotent) ausgeloest. Ist der
+        Referee nicht erreichbar, passiert nichts (nur Log, kein
+        Zustandsverlust). Scheitert das Cleanup, bleibt das Ergebnis gesetzt und
+        der naechste Tick wiederholt nur den Stop (US3). Match ohne bekannte
+        Zuordnung wird uebersprungen + geloggt (kein Tick-Abbruch).
+        """
+        with self._lock:
+            matches = self.core.matches_snapshot()
+            pending_finish = [
+                m for m in matches if m.state in (STATE_PROVISIONING, STATE_READY)
+            ]
+            # Abgeschlossen, aber noch nicht „cleaned": nur der Stop wird
+            # wiederholt (Ergebnis bleibt gesetzt, US3). Braucht keinen Referee.
+            pending_cleanup = [
+                m for m in matches
+                if m.state not in (STATE_PROVISIONING, STATE_READY)
+                and m.match_id not in self._cleaned
+            ]
+            if not pending_finish and not pending_cleanup:
+                return {"reconciled": 0, "finished": []}
+            finished: List[int] = []
+            for match in pending_cleanup:
+                try:
+                    self.finish(match.match_id)  # Ergebnis bleibt; nur Stop retry
+                except QueueError as exc:
+                    LOG.warning(
+                        "reconcile: Cleanup-Retry(%s) fehlgeschlagen (%s) — "
+                        "naechster Tick", match.match_id, exc,
+                    )
+                    continue
+                finished.append(match.match_id)
+            if not pending_finish:
+                return {"reconciled": len(pending_cleanup), "finished": finished}
+            try:
+                state = self.referee.state()
+            except Exception as exc:  # noqa: BLE001 - nicht-fatal
+                LOG.warning("reconcile: Referee-Zustand nicht lesbar (%s)", exc)
+                return {"reconciled": len(pending_finish), "finished": finished,
+                        "error": "referee_unavailable"}
+            if not isinstance(state, dict):
+                LOG.warning("reconcile: Referee-Zustand unbrauchbar — Tick uebersprungen")
+                return {"reconciled": len(pending_finish), "finished": finished,
+                        "error": "referee_unavailable"}
+            phase = state.get("phase")
+            winner = state.get("winner")
+            match_ids = self._referee_match_ids(state)
+            player_pair = self._referee_player_pair(state)
+            for match in pending_finish:
+                match_id = match.match_id
+                mapped = match_id in match_ids
+                if not mapped and player_pair is not None and \
+                        set(match.participants()) == player_pair:
+                    mapped = True
+                    LOG.info(
+                        "reconcile: Match %s ueber Spielernamen zugeordnet "
+                        "(kein match_id-Echo)", match_id,
+                    )
+                if not mapped:
+                    LOG.warning(
+                        "reconcile: Match %s keiner Referee-Welt zugeordnet "
+                        "— uebersprungen", match_id,
+                    )
+                    continue
+                result = derive_result(phase, winner)
+                if result is None:
+                    continue  # noch nicht finished
+                try:
+                    self.finish(match_id, result=result)
+                except QueueError as exc:
+                    LOG.warning(
+                        "reconcile: finish(%s) fehlgeschlagen (%s) — Retry im "
+                        "naechsten Tick", match_id, exc,
+                    )
+                    continue
+                finished.append(match_id)
+            return {"reconciled": len(pending_finish), "finished": finished}
 
     # -- Snapshot ----------------------------------------------------------
     def status(self) -> Dict[str, Any]:

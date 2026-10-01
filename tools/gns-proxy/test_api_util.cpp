@@ -816,6 +816,50 @@ static void testDeriveQueuePhase() {
           "queue phase name ready");
 }
 
+static void testParseQueueFinishBody() {
+  // Issue #1028 (US4): Body-Parser/-Validator fuer POST /queue/finish.
+  long long id = 0;
+  bool hasResult = false;
+  std::string result;
+  std::string out;
+
+  // match_id + result.
+  check(rbapi::parseQueueFinishBody(
+            "{\"match_id\":7,\"result\":\"winnerA\"}", id, hasResult, result, out),
+        "finish parsed with result");
+  checkEq(std::to_string(id), "7", "finish match_id");
+  check(hasResult, "finish hasResult");
+  checkEq(result, "winnerA", "finish result");
+  checkEq(out, "{\"match_id\":7,\"result\":\"winnerA\"}", "finish outbound body");
+
+  // match_id ohne result -> kanonischer Body ohne result.
+  check(rbapi::parseQueueFinishBody("{\"match_id\":42}", id, hasResult, result, out),
+        "finish parsed without result");
+  checkEq(std::to_string(id), "42", "finish match_id 42");
+  check(!hasResult, "finish without result hasResult=false");
+  checkEq(out, "{\"match_id\":42}", "finish outbound body without result");
+
+  // Alle drei gueltigen Ergebnisse.
+  check(rbapi::parseQueueFinishBody("{\"match_id\":1,\"result\":\"winnerB\"}",
+                                    id, hasResult, result, out) &&
+        result == "winnerB", "finish winnerB valid");
+  check(rbapi::parseQueueFinishBody("{\"match_id\":1,\"result\":\"draw\"}",
+                                    id, hasResult, result, out) &&
+        result == "draw", "finish draw valid");
+
+  // Ungueltige Bodies -> false (kein Outbound).
+  check(!rbapi::parseQueueFinishBody("{}", id, hasResult, result, out),
+        "finish missing match_id");
+  check(!rbapi::parseQueueFinishBody("{\"match_id\":\"7\"}", id, hasResult, result, out),
+        "finish non-numeric match_id");
+  check(!rbapi::parseQueueFinishBody("{\"match_id\":7,\"result\":\"nope\"}",
+                                     id, hasResult, result, out),
+        "finish unknown result");
+  check(!rbapi::parseQueueFinishBody("{\"match_id\":7,\"result\":\"\"}",
+                                     id, hasResult, result, out),
+        "finish empty result");
+}
+
 int main() {
   testParseTargetSpec();
   testJsonStringField();
@@ -847,6 +891,7 @@ int main() {
   testJsonIntField();
   testParseQueueAssignments();
   testDeriveQueuePhase();
+  testParseQueueFinishBody();
 
   if (g_failures == 0) {
     std::printf("test_api_util: %d Checks OK\n", g_checks);

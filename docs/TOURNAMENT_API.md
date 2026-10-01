@@ -114,11 +114,15 @@ Alle Antworten sind JSON. Fehler:
 ### POST /lobby — Spieler registrieren
 
 ```json
-{ "player": "momo", "world": "A" }
+{ "player": "momo", "world": "A", "match_id": 7 }
 ```
 
 Idempotent; Namenswechsel setzt den Ready-Status der Welt zurück. Nur in
-Phase `lobby` (sonst 409). Antwort:
+Phase `lobby` (sonst 409). `match_id` ist **optional und additiv** (Issue #1028):
+fehlt sie, wird nichts gesetzt; ein falscher Typ (z. B. String) wird mit **422**
+abgewiesen. Der Queue-Dienst schickt hier seine Match-`match_id` mit, der
+Referee gibt sie in `GET /state` als `teams.{A,B}.match_id` zurück (Grundlage des
+Auto-Finish; die Queue zieht das Ergebnis selbst). Antwort:
 
 ```json
 {
@@ -410,7 +414,8 @@ SP-Mode-Semantik (Mirror-Konzept):
 - **HQ-HP gespiegelt:** `hq_hp` von A setzt auch die MIRROR-HP (es gibt nur
   EIN reales HQ).
 - **Match-Ende:** Bei HQ ≤ 0 → Phase `finished` + Feed-Event `match_end` mit
-  dem Hinweis „nächster Spieler kann joinen“.
+  dem Hinweis „nächster Spieler kann joinen“. Der Queue-Dienst liest diesen
+  Zustand (Auto-Finish, #1028) und traegt Ergebnis + kaltes Cleanup selbst nach.
 
 ### POST /wave — Operator-Wellen-Spawn (Issue #266)
 
@@ -496,6 +501,7 @@ Jeder Eintrag trägt ein monotones `seq`-Feld (Cursor ohne Event-Verlust).
   "teams": {
     "A": {
       "player": "momo", "ready": true, "hq_hp": 100.0,
+      "match_id": 7,
       "score": 1240, "resources": {"iron": 320, "carbon": 80}, "wave": 4,
       "pending_sends": [ {"from": "B", "units": […], "value": 900, "round": 2, "ts": …} ],
       "go_broadcast": {"at": …, "ok": true, "error": null, "endpoint": "http://…"},

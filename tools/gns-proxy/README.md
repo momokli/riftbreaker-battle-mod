@@ -253,6 +253,7 @@ GNS-UDP-Endpoints.
 | --- | --- | --- |
 | `POST /queue` | `{"identitaet":"str:…","mode":"vs"}` | `POST /queue/join` am Queue-Dienst; wartend -> `{ok:true,status:"queued",position}`; gepaart -> `{ok:true,status:"matched",match:{…,assignments:[{identitaet,world,instance,target}]}}` + Pin beider Teilnehmer. `mode` Default `vs`. |
 | `POST /queue/leave` | `{"identitaet":"str:…"}` | `POST /queue/leave`; entfernt den Queue-Zustand. |
+| `POST /queue/finish` | `{"match_id":1,"result?":"winnerA"}` | `POST /queue/finish` am Queue-Dienst (Issue #1028); traegt das Ergebnis nach + kaltes Cleanup. `result` optional (`winnerA`/`winnerB`/`draw`). |
 | `GET /queue/status` | — | `GET /queue/status` am Queue-Dienst (Queue + Matches). |
 
 ```bash
@@ -261,12 +262,14 @@ curl -s -X POST 127.0.0.1:9200/queue -d '{"identitaet":"str:<A>","mode":"vs"}'
 curl -s -X POST 127.0.0.1:9200/queue -d '{"identitaet":"str:<B>","mode":"vs"}'
 # -> {"ok":true,"status":"matched","match":{"match_id":1,"assignments":[{"identitaet":"str:<A>","world":"A","target":"127.0.0.1:40001"},{…"B"…}]}}
 curl -s 127.0.0.1:9200/queue/status
+curl -s -X POST 127.0.0.1:9200/queue/finish -d '{"match_id":1,"result":"winnerA"}'
 ```
 
 Fehlercodes: ohne Queue konfiguriert `503 {reason:"queue_unconfigured",retry:false}`;
 Queue nicht erreichbar `502 {reason:"queue_unreachable"}`; fehlende `identitaet`
-`400`; sonst der Status/Body des Queue-Dienstes (z.B. `400 bad_mode`,
-`409 already_matched`).
+`400`; bei `POST /queue/finish` fehlendes/nicht-numerisches `match_id` oder
+unbekanntes `result` `400 bad_request` (kein Outbound-Versuch); sonst der
+Status/Body des Queue-Dienstes (z.B. `400 bad_mode`, `409 already_matched`).
 
 **Additive `/sessions`-Felder** (nur gesetzt, wenn ein Queue-Zustand existiert;
 bestehende Felder unveraendert): `queuePhase` (`queued|matched|provisioning|ready`),

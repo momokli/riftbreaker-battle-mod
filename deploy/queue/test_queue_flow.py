@@ -48,6 +48,7 @@ class FakeProvisioner(object):
         self.stops = []
         self.fail_on_world = None
         self.fail_on_instance = None
+        self.fail_stop_once = False  # #1028: erster Stop scheitert (Fail-safe-Test)
         self._port = 40000
 
     def start(self, env, mode, instance_id, world=None):
@@ -66,6 +67,10 @@ class FakeProvisioner(object):
         }
 
     def stop(self, instance_id, env=None):
+        if self.fail_stop_once:
+            self.fail_stop_once = False
+            # Fail-fast: der Aufruf wird NICHT als Stop protokolliert.
+            raise RuntimeError("fake stop scheitert einmalig fuer %s" % instance_id)
         self.stops.append({"instance_id": instance_id, "env": env})
         return {"instance": instance_id, "removed": True}
 
@@ -77,12 +82,17 @@ class FakeReferee(object):
         self.calls = []  # gemeinsames Reihenfolge-Log: (kind, world)
         self.fail = False
         self.ready_fail = False  # nur der Ready-Egress scheitert
+        # #1028: autoritativer /state-Snapshot (GET /state, auth-frei).
+        self.state_payload = None
+        self.state_error = False
+        self.state_calls = 0
 
-    def lobby(self, player, world):
+    def lobby(self, player, world, match_id=None):
         self.calls.append(("lobby", world))
         if self.fail:
             raise RuntimeError("fake referee explodiert")
-        self.lobbies.append({"player": player, "world": world})
+        self.lobbies.append({"player": player, "world": world,
+                             "match_id": match_id})
         return {"ok": True}
 
     def ready(self, world):
@@ -91,6 +101,12 @@ class FakeReferee(object):
             raise RuntimeError("fake referee ready explodiert")
         self.readies.append({"world": world})
         return {"ok": True}
+
+    def state(self):
+        self.state_calls += 1
+        if self.state_error:
+            raise RuntimeError("fake referee state explodiert")
+        return self.state_payload
 
 
 class Harness(unittest.TestCase):
@@ -289,6 +305,139 @@ class FinishTestCase(Harness):
         with self.assertRaises(QueueError) as ctx:
             coord.leave("str:aa")
         self.assertEqual(ctx.exception.reason, "already_matched")
+
+
+class ReconcileTestCase(Harness):
+    """Issue #1028: Auto-Finish aus dem autoritativen Referee-Zustand (Pull)."""
+
+    def _matched(self):
+        coord = self.coordinator()
+        coord.join("str:aa")
+        out = coord.join("str:bb")
+        return coord, out["match"]["match_id"]
+
+    def _finished_state(self, mid, winner="A"):
+        return {
+            "phase": "finished",
+            "winner": winner,
+            "teams": {
+                "A": {"player": "str:aa", "match_id": mid},
+                "B": {"player": "str:bb", "match_id": mid},
+            },
+        }
+
+    def test_lobby_carries_queue_match_id(self):
+        # #1028: die Queue schickt ihre match_id in /lobby, damit der Referee
+        # sie in /state echoisiert (Grundlage der Zuordnung).
+        coord, mid = self._matched()
+        self.assertEqual([lobby["match_id"] for lobby in self.referee.lobbies], [mid, mid])
+
+    def test_reconcile_finishes_on_referee_finished(self):
+        coord, mid = self._matched()
+        self.referee.state_payload = self._finished_state(mid)
+        out = coord.reconcile()
+        self.assertEqual(out["finished"], [mid])
+        record = coord.core.get_match(mid).to_dict()
+        self.assertEqual(record["state"], STATE_FINISHED)
+        self.assertEqual(record["result"], "winnerA")
+        stopped = sorted(s["instance_id"] for s in self.provisioner.stops)
+        self.assertEqual(stopped, sorted([instance_id_for(mid, "A"), instance_id_for(mid, "B")]))
+
+    def test_reconcile_winner_b_maps_to_winnerb(self):
+        coord, mid = self._matched()
+        self.referee.state_payload = self._finished_state(mid, winner="B")
+        coord.reconcile()
+        self.assertEqual(coord.core.get_match(mid).result, "winnerB")
+
+    def test_reconcile_without_winner_is_draw(self):
+        coord, mid = self._matched()
+        self.referee.state_payload = self._finished_state(mid, winner=None)
+        coord.reconcile()
+        self.assertEqual(coord.core.get_match(mid).result, "draw")
+
+    def test_reconcile_not_finished_is_noop(self):
+        coord, mid = self._matched()
+        self.referee.state_payload = self._finished_state(mid)
+        self.referee.state_payload["phase"] = "running"
+        out = coord.reconcile()
+        self.assertEqual(out["finished"], [])
+        self.assertIsNone(coord.core.get_match(mid).result)
+        self.assertEqual(self.provisioner.stops, [])
+
+    def test_second_reconcile_is_noop(self):
+        coord, mid = self._matched()
+        self.referee.state_payload = self._finished_state(mid)
+        coord.reconcile()
+        stops_after = len(self.provisioner.stops)
+        out = coord.reconcile()
+        self.assertEqual(out["finished"], [])  # nicht mehr aktiv
+        self.assertEqual(len(self.provisioner.stops), stops_after)  # kein Doppel-Stop
+        # Der inaktive Match wird gar nicht erst gegen /state geprueft.
+        self.assertEqual(self.referee.state_calls, 1)
+
+    def test_reconcile_cleanup_retry_keeps_result(self):
+        """US3: scheitert der Stop, bleibt das Ergebnis; naechster Tick retry."""
+        coord, mid = self._matched()
+        self.referee.state_payload = self._finished_state(mid)
+        self.provisioner.fail_stop_once = True
+        out = coord.reconcile()
+        self.assertEqual(out["finished"], [])  # Cleanup scheiterte -> kein Abschluss
+        record = coord.core.get_match(mid).to_dict()
+        self.assertEqual(record["state"], STATE_FINISHED)
+        self.assertEqual(record["result"], "winnerA")  # Ergebnis bleibt erhalten
+        self.assertEqual(self.provisioner.stops, [])  # fail-fast: nichts protokolliert
+        # Naechster Tick -> beide Stops, Ergebnis unveraendert.
+        out2 = coord.reconcile()
+        self.assertEqual(out2["finished"], [mid])
+        self.assertEqual(len(self.provisioner.stops), 2)
+        self.assertEqual(coord.core.get_match(mid).result, "winnerA")
+        # Dritter Tick -> No-op.
+        coord.reconcile()
+        self.assertEqual(len(self.provisioner.stops), 2)
+
+    def test_reconcile_never_overwrites_result(self):
+        coord, mid = self._matched()
+        coord.finish(mid, result="winnerA")
+        stops_after = len(self.provisioner.stops)
+        # Referee meldet spaeter B als Sieger -> darf nichts mehr aendern.
+        self.referee.state_payload = self._finished_state(mid, winner="B")
+        coord.reconcile()
+        self.assertEqual(coord.core.get_match(mid).result, "winnerA")
+        self.assertEqual(len(self.provisioner.stops), stops_after)
+
+    def test_reconcile_referee_unavailable_is_noop(self):
+        coord, mid = self._matched()
+        self.referee.state_error = True
+        out = coord.reconcile()
+        self.assertEqual(out["finished"], [])
+        self.assertEqual(out["error"], "referee_unavailable")
+        self.assertIsNone(coord.core.get_match(mid).result)
+        self.assertEqual(self.provisioner.stops, [])
+        self.assertEqual(coord.core.get_match(mid).state, STATE_READY)  # Zustand erhalten
+
+    def test_reconcile_skips_unmapped_match(self):
+        coord, mid = self._matched()
+        state = self._finished_state(mid)
+        state["teams"]["A"]["match_id"] = 999
+        state["teams"]["B"]["match_id"] = 999
+        state["teams"]["A"]["player"] = "str:xx"
+        state["teams"]["B"]["player"] = "str:yy"
+        self.referee.state_payload = state
+        out = coord.reconcile()
+        self.assertEqual(out["finished"], [])
+        self.assertIsNone(coord.core.get_match(mid).result)
+        self.assertEqual(self.provisioner.stops, [])
+
+    def test_reconcile_fallback_matches_by_player_names(self):
+        coord, mid = self._matched()
+        state = self._finished_state(mid)
+        # Kein match_id-Echo -> Zuordnung defensiv ueber die Spielernamen.
+        state["teams"]["A"].pop("match_id")
+        state["teams"]["B"].pop("match_id")
+        self.referee.state_payload = state
+        out = coord.reconcile()
+        self.assertEqual(out["finished"], [mid])
+        self.assertEqual(coord.core.get_match(mid).result, "winnerA")
 
 
 class PersistenceTestCase(Harness):

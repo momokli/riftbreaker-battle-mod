@@ -103,6 +103,15 @@ class _RefereeStub(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_GET(self):  # noqa: N802
+        if self.path == "/state":
+            # Issue #1028: auth-freier Referee-Zustand fuer den Queue-Reconciler.
+            payload = getattr(self.server, "state_payload", None) or {}
+            _record("STUB referee GET /state -> %s" % json.dumps(payload))
+            self._json(200, payload)
+        else:
+            self._json(404, {"ok": False})
+
     def do_POST(self):  # noqa: N802
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length).decode("utf-8") if length else ""
@@ -144,6 +153,7 @@ class Stack(object):
         self.ref_server.lobbies = []
         self.ref_server.readies = []
         self.ref_server.calls = []
+        self.ref_server.state_payload = None  # #1028: GET /state-Snapshot
         self.ref_port = _serve(self.ref_server)
         case.addCleanup(self.ref_server.shutdown)
         case.addCleanup(self.ref_server.server_close)
@@ -242,6 +252,41 @@ class QueueE2E(unittest.TestCase):
         self.assertEqual(done["match"]["state"], "finished", done)
         self.assertEqual(done["match"]["result"], "winnerA", done)
         # Kaltes Cleanup: beide Instanzen gestoppt.
+        self.assertEqual(len(st.prov_server.stops), 2, st.prov_server.stops)
+
+    def test_acceptance_reconcile_auto_finishes_after_referee_finished(self):
+        """Issue #1028: der Reconciler liest /state und finisht automatisch."""
+        st = Stack(self, self.state_dir)
+
+        status_a, a = st.post("/queue/join", {"identitaet": "str:aa", "mode": "vs"})
+        self.assertEqual(status_a, 200, a)
+        status_b, b = st.post("/queue/join", {"identitaet": "str:bb", "mode": "vs"})
+        self.assertEqual(status_b, 200, b)
+        mid = b["match"]["match_id"]
+
+        # Referee meldet das authentische Match-Ende (Sieger A) inkl. match_id-Echo.
+        st.ref_server.state_payload = {
+            "phase": "finished",
+            "winner": "A",
+            "teams": {
+                "A": {"player": "str:aa", "match_id": mid},
+                "B": {"player": "str:bb", "match_id": mid},
+            },
+        }
+        outcome = st.coordinator.reconcile()
+        _record("RECONCILE -> %s" % json.dumps(outcome))
+        self.assertEqual(outcome["finished"], [mid], outcome)
+
+        # DoD: result im Match-Record gesetzt + BEIDE Instanzen gestoppt.
+        _s, snap = st.get("/queue/status")
+        record = snap["matches"][0]
+        self.assertEqual(record["state"], "finished", record)
+        self.assertEqual(record["result"], "winnerA", record)
+        self.assertEqual(sorted(p["instance_id"] for p in st.prov_server.stops),
+                         ["queue-1-a", "queue-1-b"], st.prov_server.stops)
+
+        # Idempotent: ein weiterer Tick stoppt nicht erneut.
+        st.coordinator.reconcile()
         self.assertEqual(len(st.prov_server.stops), 2, st.prov_server.stops)
 
 
