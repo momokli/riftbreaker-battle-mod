@@ -120,9 +120,10 @@ gns_relay_queue_token: "{{ vault_queue_token | default('') }}"
 # antworten beide Routen `503 referee_unconfigured`. Default spiegelt
 # `queue_referee_url` (planet host_vars setzt 8082).
 gns_relay_referee_url: "http://127.0.0.1:8082"
-# Bearer-Token fuer den mutierenden Referee-Pfad (Vault `vault_referee_token`),
-# per Env gereicht (nie argv). `GET /state` ist auth-frei, `POST /ready` nicht.
-gns_relay_referee_token: "{{ vault_referee_token | default('') }}"
+# Bearer-Token fuer den mutierenden Referee-Pfad (Single-Source Vault
+# `vault_tournament_token`), per Env gereicht (nie argv). `GET /state` ist
+# auth-frei, `POST /ready` nicht.
+gns_relay_referee_token: "{{ vault_tournament_token | default('') }}"
 
 # --- Container-interne Pfade / Prozess --------------------------------------
 # Mount-Punkt der Game-DLLs (read-only). Der Probe laeuft aus
