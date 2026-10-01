@@ -40,6 +40,12 @@
     # (server-control + website) gemeinsam gelesen.
     server_control_enabled: true
     server_control_token: "{{ vault_server_control_prod_token | default('') }}"
+    # Operator-Credential je Env (Issue #535): eigener Cockpit-basic_auth-Hash
+    # aus dem Vault — KEIN Fallback, damit ein fehlender Wert den Render laut
+    # abbricht (fail-closed) statt still den dev/legacy-Hash zu erben. Play-Var
+    # (nicht host_vars): host_vars gelten fuer dev UND prod und wuerden prod auf
+    # den dev-Hash zwingen (Muster rift_env/server_control_enabled).
+    contract_basic_auth_hash: "{{ vault_contract_basic_auth_hash_prod }}"
     # Deploy-Identitaet (Issue #483, US1): DIESES Play ist prod. Play-Var, damit
     # prod nicht den dev-Wert erbt; der Ref traegt den Git-Tag.
     rift_env: prod

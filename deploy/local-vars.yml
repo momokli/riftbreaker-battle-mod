@@ -110,6 +110,16 @@ crash_collector_symbolize: true
 # docker.service not found" scheitern, obwohl Docker laengst lief.
 crash_collector_require_docker_service: false
 
+# --- Operator-Credential je Env (Issue #535) -------------------------------
+# Lokal gibt es keinen Vault und keinen per-Env-Twin -> direkte Werte statt
+# vault_contract_basic_auth_hash/_proxy_basic_auth_hash. Der local-deploy faehrt
+# die website-Rolle heute NICHT (kein direkter Effekt); gesetzt, damit der
+# fail-closed-Assert der Rolle (rift_env=local ist ausgenommen) nie ohne Wert
+# trifft und ein kuenftiges Einbinden der Rolle nicht still den Legacy-Hash
+# zieht.
+contract_basic_auth_hash: localdev-operator
+proxy_basic_auth_hash: localdev-operator
+
 # --- Server-Control / Plane B (Review #566, Blocker 2) ----------------------
 # Kein Vault lokal -- Token direkt (wie riftbreaker_server_password), nicht
 # ueber vault_server_control_token. Ohne Token bricht die Rolle fail-closed ab

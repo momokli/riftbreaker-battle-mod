@@ -24,6 +24,23 @@
 # Rift-Block- und Import-Zeile sowie verwaiste operator.*-Einträge werden
 # entfernt, damit Caddyfile und Rolle übereinstimmen (kein Parallel-Block).
 
+# Issue #535: Operator-Credential je Env. prod/staging setzen den Hash per
+# Play-Var aus dem Vault; ein fehlender Wert ist undefiniert (Render bricht
+# laut ab, fail-closed). Dieser Assert schaerft zusaetzlich: auch ein
+# versehentlich auf den geteilten Legacy-Hash gesetzter Vault-Wert wird rot.
+# Gate ueber rift_env (Play-Var, Muster server_control_enabled) -> dev/test/
+# local bleiben unberuehrt.
+- name: "Operator-Credential je Env (Issue #535)"
+  assert:
+    that:
+      - "rift_env not in ['prod', 'staging'] or (contract_basic_auth_hash | length > 0)"
+      - "rift_env not in ['prod', 'staging'] or contract_basic_auth_hash != contract_basic_auth_hash_legacy_shared"
+    fail_msg: >-
+      prod/staging erben den geteilten Legacy-Operator-Hash (Issue #535).
+      vault_contract_basic_auth_hash_<env> setzen (bcrypt, != dev/legacy) —
+      sonst geteiltes Operator-Passwort.
+    success_msg: "Operator-Credential je Env getrennt (Issue #535)."
+
 - name: Docroot sicherstellen
   file:
     path: "{{ website_docroot }}"
