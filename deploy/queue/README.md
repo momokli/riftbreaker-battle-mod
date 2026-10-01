@@ -123,7 +123,9 @@ bash deploy/tests/queue/run.sh                            # Ansible-Rollen-Rende
 **KERN-NACHWEIS:** `e2e_998_queue.py` belegt die Issue-Abnahme ueber den echten
 Dienst-HTTP-Pfad: zwei Spieler -> **ein** Match, A<->Welt A / B<->Welt B, zwei
 verschiedene GNS-Endpoints, zwei Referee-`/lobby`-Registrierungen, ein
-Match-Record mit beiden Teilnehmern.
+Match-Record mit beiden Teilnehmern — und die #1025-Ready-Kette: je **distinct**
+Welt genau **ein** `POST /ready`, alle **nach** beiden `/lobby` (Reihenfolge im
+Stub-Assert).
 
 ## Deploy
 

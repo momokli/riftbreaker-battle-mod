@@ -13,6 +13,7 @@
 // Hier liegt nur das, was ohne Socket entscheidbar ist:
 //   * Config-Parse (URL -> IPv4:port, nur Literal — kein DNS),
 //   * Body-Bau fuer `POST /ready`,
+//   * kontextabhaengige Ready-Route (Solo -> Capsule, VS -> Referee, #1025),
 //   * robustes Lesen der `/state`-Antwort (fehlende Felder = leer, kein Crash),
 //   * das Fehler-Mapping auf die Lobby-Semantik (503/502/ok/durchreichen).
 //
@@ -100,6 +101,42 @@ inline std::string buildReadyBody(const std::string &world,
   }
   body += "}";
   return body;
+}
+
+// --- Ready-Routing (Issue #1025) -------------------------------------------
+//
+// Kontextabhaengige Verzweigung des Relay-`POST /ready`:
+//   Solo (kein VS-Kontext / leere Welt) -> Capsule `POST /capsule/ready`,
+//   VS   (Welt "A"|"B" aufgeloest)      -> Referee `POST /ready {world}`,
+//   Welt gesetzt, aber ungueltig         -> 400 bad_request.
+// Die Entscheidung ist bewusst rein (keine Sockets/Win32) und damit host-testbar.
+enum class ReadyRoute {
+  Capsule,   // Solo-Pfad, bit-identisch zum bisherigen Verhalten
+  Referee,   // VS-Pfad zum GO-Kern des Referees
+  BadWorld,  // Welt gesetzt, aber nicht "A"/"B"
+};
+
+inline const char *readyRouteName(ReadyRoute r) {
+  switch (r) {
+  case ReadyRoute::Capsule: return "capsule";
+  case ReadyRoute::Referee: return "referee";
+  case ReadyRoute::BadWorld: return "bad_world";
+  }
+  return "";
+}
+
+// `hasWorld` = Request/Queue-Kontext beansprucht eine VS-Welt. Ohne Welt
+// (Solo) bleibt es bit-identisch beim Capsule-Zweig; eine leere Welt zaehlt
+// ebenfalls als Solo (Default bleibt Capsule). Nur ein nicht-leerer,
+// unbekannter Wert ist ein Fehler.
+inline ReadyRoute resolveReadyRoute(bool hasWorld, const std::string &world) {
+  if (!hasWorld || world.empty()) {
+    return ReadyRoute::Capsule;
+  }
+  if (world == "A" || world == "B") {
+    return ReadyRoute::Referee;
+  }
+  return ReadyRoute::BadWorld;
 }
 
 // --- /state-Antwort lesen ---------------------------------------------------

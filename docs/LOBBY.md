@@ -49,7 +49,7 @@ Dispatcher `gns_probe.cpp:2226-2321`; UI `kUiHtml` `:1340-1347`.
 | GET | `/targets` | – | Routing-Ziele | – | `[{name,endpoint}]` | Route-Buttons je Karte |
 | POST | `/route` | – | Identität auf Endpoint pinnen | `{identitaet,target}` | `{ok}` | (Legacy/Diagnose) |
 | POST | `/solo` | – | **Claim/Provision · Join · Modus-Trigger** | s. u. | `{ok,identitaet,target|instance,mode?,self_send}` / `{ok:false,reason}` | Main-Screen-Kacheln (Spieler hinschicken), solo/join |
-| POST | `/ready` | – | Capsule resume + Warmup-Start | `{}` | `{ok}` o. Capsule-Body | **READY**-Button |
+| POST | `/ready` | – | **Kontextabh. Ready (#1025):** Solo → Capsule resume; VS (Welt) → Referee `POST /ready {world}` | `{}` o. `{world?:"A"\|"B",identitaet?}` | `{ok}` / Capsule-Body / Referee-Body (`{world,phase,teams}`) / `{ok:false,reason}` | **READY**-Button |
 | POST | `/queue` | – | **Queue-Join (vs)** — Proxy an Queue-Dienst | `{identitaet,mode?:"vs"}` | `{ok,status:"queued",position}` / `{ok,status:"matched",match:{…,assignments:[{identitaet,world,instance,target}]}}` / `{ok:false,reason}` | **`[ Queue (vs) ]`**-Button |
 | POST | `/queue/leave` | – | Queue-Join zurueckziehen | `{identitaet}` | `{ok,identitaet}` / `{ok:false,reason}` | (Leave) |
 | GET | `/queue/status` | – | Queue + Matches (Proxy) | – | Queue-Snapshot | **Queue-Zähler + Phase** (alle 1500 ms, Fallback `/sessions`) |
@@ -67,8 +67,13 @@ Fehler-`reason`s: `none_parked, backend_starting, parked_unconfigured, not_claim
 
 **Kein eigenes `/join`** — Join läuft über `POST /solo {instance}`.
 
-### `POST /ready` (`:2137-2226`)
-Proxyt an Capsule `POST /capsule/ready` (resume + Cycle `/start`). Ohne Capsule → `503 capsule_unconfigured`. Den Countdown-Text in den Chat schickt der **Announcer**, nicht der Relay.
+### `POST /ready` — kontextabhaengig (#1025)
+Der Relay verzweigt anhand des Kontexts (`rbref::resolveReadyRoute`, host-getestet in `test_referee_bridge.cpp`):
+
+- **Solo** (kein `world` und kein `vsWorld` der Session) → **bit-identisch** zum bisherigen Verhalten: Proxy an Capsule `POST /capsule/ready` (resume + Cycle `/start`); ohne Capsule → `503 capsule_unconfigured`. **Kein** Referee-Call.
+- **VS** (explizites `world:"A"|"B"` im Body **oder** aufgeloestes `vsWorld` aus dem Queue-Kontext `g_queueState[identitaet]`) → Referee `POST /ready {world}` (Bearer `RBB_REFEREE_TOKEN`), dieselbe Route wie `POST /referee/ready`. Antwort/Fehler wie dort (`503 referee_unconfigured`, `502 referee_unreachable`, Backend-Status durchgereicht).
+
+Die UI (`ready()`) haengt `{world: s.vsWorld}` an, wenn die Session eine VS-Welt hat, sonst `{}` (Solo unveraendert). Den Countdown-Text in den Chat schickt der **Announcer**, nicht der Relay.
 
 ### `GET /referee/state` + `POST /referee/ready` — Referee-Bruecke (#1024)
 Ist `--referee-url`/`RBB_REFEREE_URL` gesetzt (nur IPv4-Literal; Token aus `RBB_REFEREE_TOKEN`, **nicht** argv), proxyt der Relay Web-UI-Aktionen an den internen Referee (`tournament/src/api.rs`): `GET /referee/state` reicht `GET /state` durch (auth-frei) — die UI zeigt Phase (`Lobby|Ready|Running|Finished`), Sieger und „beide ready" additiv als eigene Zeile (überschreibt `soloPhase`/`queuePhase` nicht); `POST /referee/ready` reicht `{world}` an `POST /ready` (Bearer) durch. Ohne Config → `503 referee_unconfigured` (kein Outbound-Versuch, keine offene Route); nicht erreichbar → `502 referee_unreachable`; fehlendes/fremdes `world` → `400 bad_request`; Referee-Fehler (z. B. `401` ohne Token) werden unverändert durchgereicht. Fehler-`reason`s: `referee_unconfigured, referee_unreachable, bad_request`.
@@ -76,6 +81,8 @@ Ist `--referee-url`/`RBB_REFEREE_URL` gesetzt (nur IPv4-Literal; Token aus `RBB_
 
 ### `POST /queue` — Casual-Pairing (#998)
 Ist `--queue-url`/`RBB_QUEUE_URL` gesetzt (Token `RBB_QUEUE_TOKEN`), proxyt `POST /queue` an den Queue-Dienst (`POST /queue/join`). Der Dienst paart FIFO (aktiv 1v1), provisioniert **kalt** zwei frische Welten A/B und registriert beide Spieler im Referee. Bei einer Match-Antwort pinnt der Relay **alle** Teilnehmer auf ihre **verschiedenen** GNS-Endpoints. Fehler-`reason`s: `queue_unconfigured, queue_unreachable, bad_request, bad_mode, already_matched`. Ohne Queue → `503 queue_unconfigured`.
+
+**Ready-Egress (#1025):** Nach der Provisionierung **beider** kalter Welten und **beiden** `/lobby`-Registrierungen postet `deploy/queue/` je **distinct** Welt genau **ein** `POST /ready {world}` an den Referee (erst beide `/lobby`, dann Ready — sonst `404 not_found`). Der **zweite** Ready loest mit `TOURNAMENT_AUTO_GO=true` den **gemeinsamen GO-Broadcast an beide Bridges** aus (siehe `docs/VS_MATCH.md` §6.5). Bei nur einem `join` (= `queued`) gibt es **kein** Ready; scheitert ein Ready, greift der bestehende Rollback (beide Instanzen `stop`, Match `failed`).
 
 ---
 

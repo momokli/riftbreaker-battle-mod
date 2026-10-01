@@ -201,6 +201,38 @@ static void testMapError() {
         "500 -> backend_status");
 }
 
+// ---------------------------------------------------------------------------
+// Story 5 (#1025): kontextabhaengige Ready-Route (pure Entscheidung)
+// ---------------------------------------------------------------------------
+
+static void testResolveReadyRoute() {
+  // Solo: keine Welt / leere Welt -> Capsule (bit-identisch zu vorher).
+  check(rbref::resolveReadyRoute(false, "") == rbref::ReadyRoute::Capsule,
+        "keine Welt -> Capsule");
+  check(rbref::resolveReadyRoute(false, "A") == rbref::ReadyRoute::Capsule,
+        "hasWorld=false -> Capsule (auch mit Wert)");
+  check(rbref::resolveReadyRoute(true, "") == rbref::ReadyRoute::Capsule,
+        "leere Welt -> Capsule");
+
+  // VS: aufgeloeste Welt A/B -> Referee.
+  check(rbref::resolveReadyRoute(true, "A") == rbref::ReadyRoute::Referee,
+        "Welt A -> Referee");
+  check(rbref::resolveReadyRoute(true, "B") == rbref::ReadyRoute::Referee,
+        "Welt B -> Referee");
+
+  // Ungueltige, nicht-leere Welt -> BadWorld (400).
+  check(rbref::resolveReadyRoute(true, "Z") == rbref::ReadyRoute::BadWorld,
+        "unbekannte Welt -> BadWorld");
+  check(rbref::resolveReadyRoute(true, "a") == rbref::ReadyRoute::BadWorld,
+        "klein geschrieben -> BadWorld (case-sensitiv)");
+  checkEq(rbref::readyRouteName(rbref::ReadyRoute::Capsule), "capsule",
+          "route name capsule");
+  checkEq(rbref::readyRouteName(rbref::ReadyRoute::Referee), "referee",
+          "route name referee");
+  checkEq(rbref::readyRouteName(rbref::ReadyRoute::BadWorld), "bad_world",
+          "route name bad_world");
+}
+
 int main() {
   testParseConfigValid();
   testParseConfigInvalid();
@@ -209,6 +241,7 @@ int main() {
   testParseStateBothReady();
   testParseStateMissing();
   testMapError();
+  testResolveReadyRoute();
 
   std::printf("%d/%d ok\n", g_checks - g_failures, g_checks);
   if (g_failures != 0) {
