@@ -73,12 +73,23 @@ class FakeProvisioner(object):
 class FakeReferee(object):
     def __init__(self) -> None:
         self.lobbies = []
+        self.readies = []
+        self.calls = []  # gemeinsames Reihenfolge-Log: (kind, world)
         self.fail = False
+        self.ready_fail = False  # nur der Ready-Egress scheitert
 
     def lobby(self, player, world):
+        self.calls.append(("lobby", world))
         if self.fail:
             raise RuntimeError("fake referee explodiert")
         self.lobbies.append({"player": player, "world": world})
+        return {"ok": True}
+
+    def ready(self, world):
+        self.calls.append(("ready", world))
+        if self.fail or self.ready_fail:
+            raise RuntimeError("fake referee ready explodiert")
+        self.readies.append({"world": world})
         return {"ok": True}
 
 
@@ -163,6 +174,43 @@ class JoinProvisionTestCase(Harness):
         coord.join("str:AA")
         out = coord.join("str:BB")
         self.assertEqual(out["match"]["participants"][0]["identitaet"], "str:aa")
+
+
+class ReadyEgressTestCase(Harness):
+    """Issue #1025: Ready-Egress je Welt nach Provisionierung + Lobby."""
+
+    def test_match_sends_one_ready_per_world_after_lobbies(self):
+        coord = self.coordinator()
+        coord.join("str:aa")
+        coord.join("str:bb")
+        # Genau ZWEI Ready, je Welt A/B einmal.
+        self.assertEqual(len(self.referee.readies), 2)
+        self.assertEqual(sorted(r["world"] for r in self.referee.readies), ["A", "B"])
+        # Reihenfolge: erst beide /lobby, dann beide /ready (distinct Welt).
+        self.assertEqual([c[0] for c in self.referee.calls],
+                         ["lobby", "lobby", "ready", "ready"])
+        self.assertEqual([c[1] for c in self.referee.calls], ["A", "B", "A", "B"])
+
+    def test_first_join_sends_no_ready(self):
+        coord = self.coordinator()
+        out = coord.join("str:aa")
+        self.assertEqual(out["status"], "queued")
+        self.assertEqual(self.referee.readies, [])
+        self.assertEqual(self.referee.calls, [])
+
+    def test_ready_failure_rolls_back(self):
+        coord = self.coordinator()
+        coord.join("str:aa")
+        # Lobbys gelingen, erst der Ready-Egress scheitert.
+        self.referee.ready_fail = True
+        with self.assertRaises(QueueError) as ctx:
+            coord.join("str:bb")
+        self.assertEqual(ctx.exception.reason, "provision_failed")
+        self.assertEqual(len(self.referee.lobbies), 2)
+        stopped = sorted(s["instance_id"] for s in self.provisioner.stops)
+        self.assertEqual(stopped,
+                         sorted([instance_id_for(1, "A"), instance_id_for(1, "B")]))
+        self.assertEqual(coord.core.get_match(1).state, STATE_FAILED)
 
 
 class RollbackTestCase(Harness):
