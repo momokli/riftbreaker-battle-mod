@@ -52,6 +52,7 @@ Dispatcher `gns_probe.cpp:2226-2321`; UI `kUiHtml` `:1340-1347`.
 | POST | `/ready` | – | **Kontextabh. Ready (#1025):** Solo → Capsule resume; VS (Welt) → Referee `POST /ready {world}` | `{}` o. `{world?:"A"\|"B",identitaet?}` | `{ok}` / Capsule-Body / Referee-Body (`{world,phase,teams}`) / `{ok:false,reason}` | **READY**-Button |
 | POST | `/queue` | – | **Queue-Join (vs)** — Proxy an Queue-Dienst | `{identitaet,mode?:"vs"}` | `{ok,status:"queued",position}` / `{ok,status:"matched",match:{…,assignments:[{identitaet,world,instance,target}]}}` / `{ok:false,reason}` | **`[ Queue (vs) ]`**-Button |
 | POST | `/queue/leave` | – | Queue-Join zurueckziehen | `{identitaet}` | `{ok,identitaet}` / `{ok:false,reason}` | (Leave) |
+| POST | `/queue/finish` | – | **Match-Ergebnis + kaltes Cleanup** (Proxy, #1028) | `{match_id,result?:`winnerA\|winnerB\|draw`}` | Queue-Body (`{ok,match}`) / `{ok:false,reason}` | Operator/E2E |
 | GET | `/queue/status` | – | Queue + Matches (Proxy) | – | Queue-Snapshot | **Queue-Zähler + Phase** (alle 1500 ms, Fallback `/sessions`) |
 | GET | `/referee/state` | – | **Referee-Phase/Spieler/Sieger** (Proxy, #1024) | – | State-View (`phase,winner,teams.{A,B}.{player,ready}`) / `{ok:false,reason}` | Referee-Badge/Zeile (alle 1500 ms) |
 | POST | `/referee/ready` | – | Welt beim Referee ready melden | `{world:"A"\|"B",identitaet?}` | Referee-Body (`{world,phase,teams}`) / `{ok:false,reason}` | **`READY (Referee)`**-Button |
@@ -117,6 +118,8 @@ Ist `--queue-url`/`RBB_QUEUE_URL` gesetzt (Token `RBB_QUEUE_TOKEN`), proxyt `POS
 > **Offen:** ein „fertig/Sieger"-Signal existiert serverseitig **noch nicht** (`STATUS.fertig` in der UI ist ohne Server-Signal). → #999.
 
 **`queuePhase`** (Issue #998, additiv — nur wenn ein Queue-Zustand existiert):
+**Auto-Finish (#1028):** Nach der Provisionierung schickt die Queue ihre `match_id` in `POST /lobby` mit; der Referee gibt sie in `GET /state` als `teams.{A,B}.match_id` zurueck. Ein Reconciler-Takt im Queue-Dienst (`QUEUE_RECONCILE_INTERVAL_S`, Default 5 s) liest den Referee-Zustand (auth-frei) und ruft bei `phase=finished` selbst `POST /queue/finish` (Ergebnis aus `winner`, idempotent, Fail-safe). Der Relay exponiert zusaetzlich `POST /queue/finish` fuer den Operator-/E2E-Pfad.
+
 `queued` (wartet) · `matched` (gepaart, auch `finished`/`failed`) · `provisioning`
 (kalte Welten fahren hoch) · `ready` (A/B provisioniert, Lobby registriert).
 
@@ -174,6 +177,7 @@ Spiel-start-relevant: `POST /start` · `POST /ready` · `POST /resume_game`/`/pa
 | Bedarf | Heute | Issue |
 |---|---|---|
 | Queue join/leave (`/queue/*`) | **done** (Relay-Proxy + Dienst) | #998 |
+| Queue Auto-Finish (Referee-Ende -> `finish`/Cleanup) | **done** (#1028): Reconciler im Queue-Dienst + Relay `POST /queue/finish` | #1028 |
 | Queue-Status (`inQueue`, Position, `matchFound`) | **done** (#1000): Labelkette + Zähler aus `/queue/status`, Leave-Button in `/sessions` (`queuePhase`/`queuePosition`/`matchId`/`vsWorld`) | #1000 |
 | Match-Result / Sieger (`/matches`) | **teilweise** (#1024): Referee-Phase/Sieger via Relay `GET /referee/state` (`tournament /state`); Match-Record weiter offen | #1024, #999 |
 | VS-Flow (gemeinsamer Start/Ready, Pause-Fan-out) | **fehlt** (Relay kennt nur Solo) | #995–#997 |

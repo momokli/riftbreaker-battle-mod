@@ -153,6 +153,10 @@ const MAX_WAVE_N: u32 = 100;
 struct LobbyReq {
     player: String,
     world: String,
+    /// Optionale Queue-`match_id` (Issue #1028). Fehlt sie, wird nichts gesetzt;
+    /// ein falscher Typ wird von axum als `422` abgewiesen.
+    #[serde(default)]
+    match_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -340,7 +344,10 @@ async fn lobby(
 ) -> ApiResult<Json<Value>> {
     let world = parse_world(&req.world)?;
     let effect = app
-        .with_state(|s| s.lobby_register(world, &req.player))
+        .with_state(|s| match req.match_id {
+            Some(id) => s.lobby_register_with_match_id(world, &req.player, Some(id)),
+            None => s.lobby_register(world, &req.player),
+        })
         .await?;
     let view = app.state.read().await.view();
     let player = view
@@ -1300,6 +1307,51 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(v["phase"], "ready"); // AUTO_GO aus → wartet auf /go
         assert_eq!(v["match_started"], false);
+    }
+
+    /// US1 (#1028): `POST /lobby {match_id}` wird je Welt gespeichert und als
+    /// `teams.<W>.match_id` in `GET /state` ausgegeben; fehlend → `null`.
+    #[tokio::test]
+    async fn lobby_match_id_roundtrip_and_optional() {
+        let app = make_app(test_cfg()).await;
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/lobby",
+            Some(json!({"player": "momo", "world": "A", "match_id": 7})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        // B ohne match_id -> null.
+        let (s, _) = register(&app, "B", "matheo").await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, v) = call(&app, "GET", "/state", None).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["teams"]["A"]["match_id"], 7);
+        assert_eq!(v["teams"]["B"]["match_id"], Value::Null);
+        // Zweites /lobby ohne match_id laesst den Wert unveraendert (additiv).
+        let (s, _) = register(&app, "A", "momo2").await;
+        assert_eq!(s, StatusCode::OK);
+        let (_, v) = call(&app, "GET", "/state", None).await;
+        assert_eq!(v["teams"]["A"]["match_id"], 7);
+        // Namenswechsel setzt nur ready zurueck, nicht die match_id.
+        assert_eq!(v["teams"]["A"]["ready"], false);
+    }
+
+    /// US1 (#1028): ungueltiger `match_id`-Typ -> 422, kein halber Zustand.
+    #[tokio::test]
+    async fn lobby_rejects_invalid_match_id_type() {
+        let app = make_app(test_cfg()).await;
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/lobby",
+            Some(json!({"player": "momo", "world": "A", "match_id": "keine-zahl"})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+        let (_, v) = call(&app, "GET", "/state", None).await;
+        assert_eq!(v["teams"]["A"]["player"], Value::Null);
     }
 
     #[tokio::test]

@@ -913,6 +913,36 @@ inline const char *queuePhaseName(QueuePhase phase) {
   return "";
 }
 
+// `{match_id, result?}`-Body fuer `POST /queue/finish` parsen/validieren
+// (Issue #1028). Rueckgabe true nur bei numerischem `match_id` UND
+// fehlendem ODER gueltigem `result` (winnerA|winnerB|draw). `out` ist der
+// kanonische Outbound-Body fuer den Queue-Dienst; bei false bleibt kein Body
+// (kein Outbound-Versuch). Bewusst OHNE Socket/Win32 — host-testbar.
+inline bool parseQueueFinishBody(const std::string &body, long long &matchId,
+                                 bool &hasResult, std::string &result,
+                                 std::string &out) {
+  if (!jsonIntField(body, "match_id", matchId)) {
+    return false;
+  }
+  hasResult = false;
+  result.clear();
+  std::string r;
+  if (jsonStringField(body, "result", r)) {
+    if (r == "winnerA" || r == "winnerB" || r == "draw") {
+      hasResult = true;
+      result = r;
+    } else {
+      return false; // unbekanntes result -> ungueltig
+    }
+  }
+  out = "{\"match_id\":" + std::to_string(matchId);
+  if (hasResult) {
+    out += ",\"result\":\"" + jsonEscape(result) + "\"";
+  }
+  out += "}";
+  return true;
+}
+
 } // namespace rbapi
 
 #endif // RBBATTLE_API_UTIL_H

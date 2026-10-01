@@ -39,6 +39,24 @@ STATE_FINISHED = "finished"
 RESULTS = ("winnerA", "winnerB", "draw")
 
 
+def derive_result(phase: Optional[str], winner: Optional[str]) -> Optional[str]:
+    """Queue-Ergebnis aus der autoritativen Referee-Sicht ableiten (#1028).
+
+    Nur ``phase == "finished"`` ist ein abschliessendes Ergebnis:
+    ``winner == "A"`` -> ``winnerA``, ``winner == "B"`` -> ``winnerB``,
+    sonst (kein/Unentschieden) -> ``draw``. Andere Phasen -> ``None``
+    (noch nicht finishbar; der Reconciler laesst den Match unangetastet).
+    """
+    if phase != STATE_FINISHED:
+        return None
+    normalized = (winner or "").strip().upper()
+    if normalized == WORLD_A:
+        return "winnerA"
+    if normalized == WORLD_B:
+        return "winnerB"
+    return "draw"
+
+
 class QueueError(Exception):
     """Queue-Operation nicht moeglich — laut abbrechen (kein halber Zustand).
 

@@ -45,6 +45,18 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.timeout, 5.0)
         self.assertEqual(cfg.team_size, 1)
         self.assertFalse(cfg.allow_teams)
+        self.assertEqual(cfg.reconcile_interval_s, 5.0)  # #1028 Default
+
+    def test_reconcile_interval_env(self):
+        # #1028: Intervall steuerbar; 0 = aus (erlaubt), negativ = Fehler.
+        cfg = QueueServiceConfig.from_env({"QUEUE_RECONCILE_INTERVAL_S": "0"})
+        self.assertEqual(cfg.reconcile_interval_s, 0.0)
+        cfg = QueueServiceConfig.from_env({"QUEUE_RECONCILE_INTERVAL_S": "2.5"})
+        self.assertEqual(cfg.reconcile_interval_s, 2.5)
+        with self.assertRaises(QueueConfigError):
+            QueueServiceConfig.from_env({"QUEUE_RECONCILE_INTERVAL_S": "-1"})
+        with self.assertRaises(QueueConfigError):
+            QueueServiceConfig.from_env({"QUEUE_RECONCILE_INTERVAL_S": "abc"})
 
     def test_env_values(self):
         cfg = QueueServiceConfig.from_env({
@@ -56,6 +68,7 @@ class ConfigTests(unittest.TestCase):
             "QUEUE_STATE_DIR": "/tmp/q",
             "QUEUE_TIMEOUT": "2.5",
             "QUEUE_ALLOW_TEAMS": "on",
+            "QUEUE_RECONCILE_INTERVAL_S": "1.5",
         })
         self.assertEqual(cfg.env, "prod")
         self.assertEqual(cfg.port, 9222)
@@ -63,6 +76,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.state_dir, "/tmp/q")
         self.assertEqual(cfg.timeout, 2.5)
         self.assertTrue(cfg.allow_teams)
+        self.assertEqual(cfg.reconcile_interval_s, 1.5)
 
     def test_invalid_port_raises(self):
         with self.assertRaises(QueueConfigError):

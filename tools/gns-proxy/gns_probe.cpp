@@ -2592,6 +2592,38 @@ void handleQueueLeave(SOCKET s, const std::string &requestBody) {
                   r.body.empty() ? "{\"ok\":true}" : r.body);
 }
 
+// POST /queue/finish: an den Queue-Dienst proxien (`POST /queue/finish`).
+// Body `{match_id, result?}`; Operator-/E2E-Pfad (Issue #1028). Ohne Queue
+// 503, nicht erreichbar 502, ungueltiger Body 400 (kein Outbound), sonst
+// Queue-Status/-Body treu durchgereicht.
+void handleQueueFinish(SOCKET s, const std::string &requestBody) {
+  if (!g_queueConfigured) {
+    httpRespondJson(s, 503, "Service Unavailable",
+                    "{\"ok\":false,\"reason\":\"queue_unconfigured\",\"retry\":false}");
+    return;
+  }
+  long long matchId = 0;
+  bool hasResult = false;
+  std::string result;
+  std::string payload;
+  if (!rbapi::parseQueueFinishBody(requestBody, matchId, hasResult, result, payload)) {
+    httpRespondJson(s, 400, "Bad Request",
+                    "{\"ok\":false,\"reason\":\"bad_request\",\"detail\":"
+                    "\"match_id (Zahl) und optionales result "
+                    "(winnerA|winnerB|draw) erwartet\"}");
+    return;
+  }
+  const OutboundResult r = outboundHttpPost(g_queueHost, g_queuePort, "/queue/finish",
+                                            payload, g_queueToken, 2000, 8000);
+  if (r.status <= 0) {
+    httpRespondJson(s, 502, "Bad Gateway",
+                    "{\"ok\":false,\"reason\":\"queue_unreachable\"}");
+    return;
+  }
+  httpRespondJson(s, r.status, r.status == 200 ? "OK" : "Error",
+                  r.body.empty() ? "{\"ok\":true}" : r.body);
+}
+
 // GET /queue/status: an den Queue-Dienst proxien (`GET /queue/status`).
 void handleQueueStatus(SOCKET s) {
   if (!g_queueConfigured) {
@@ -2811,6 +2843,8 @@ void httpHandle(SOCKET s) {
     handleQueue(s, body);
   } else if (method == "POST" && path == "/queue/leave") {
     handleQueueLeave(s, body);
+  } else if (method == "POST" && path == "/queue/finish") {
+    handleQueueFinish(s, body);
   } else if (method == "GET" && path == "/queue/status") {
     handleQueueStatus(s);
   } else if (method == "GET" && path == "/referee/state") {

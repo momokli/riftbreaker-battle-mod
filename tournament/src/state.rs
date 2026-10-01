@@ -212,6 +212,11 @@ pub struct TeamState {
     /// Zustell-Status des letzten Pause-/Resume-Fan-outs an diese Welt
     /// (Spiegel von [`TeamState::broadcast`], #997).
     pub pause_broadcast: BroadcastStatus,
+    /// Queue-`match_id` dieser Welt (Issue #1028): optional, additiv. Wird per
+    /// `POST /lobby` gesetzt (falls mitgeschickt) und in `GET /state` als
+    /// `teams.<W>.match_id` ausgegeben (`null`, wenn ungesetzt). Der Referee
+    /// nutzt sie nur als Echo — die Queue zieht das Ergebnis selbst.
+    pub queue_match_id: Option<i64>,
 }
 
 /// Der komplette Match-Zustand (Referee-Sicht).
@@ -336,6 +341,19 @@ impl MatchState {
         world: World,
         player: &str,
     ) -> Result<RegisterEffect, StateError> {
+        self.lobby_register_with_match_id(world, player, None)
+    }
+
+    /// Wie [`MatchState::lobby_register`], zusaetzlich mit optionaler Queue-
+    /// `match_id` (Issue #1028). `match_id` ist rein additiv: fehlt sie (`None`),
+    /// bleibt ein bereits gesetzter Wert unveraendert; ein Namenswechsel setzt
+    /// weiterhin nur `ready` zurueck.
+    pub fn lobby_register_with_match_id(
+        &mut self,
+        world: World,
+        player: &str,
+        match_id: Option<i64>,
+    ) -> Result<RegisterEffect, StateError> {
         let player = player.trim();
         if player.is_empty() {
             return Err(StateError::new(
@@ -363,6 +381,9 @@ impl MatchState {
             }
         }
         team.player = Some(player.to_string());
+        if match_id.is_some() {
+            team.queue_match_id = match_id;
+        }
         let match_complete = World::ALL.iter().all(|w| self.player(*w).is_some());
         self.log_world(
             "register",
@@ -1046,6 +1067,7 @@ impl MatchState {
                     pending_sends: t.pending.clone(),
                     go_broadcast: t.broadcast.clone(),
                     pause_broadcast: t.pause_broadcast.clone(),
+                    match_id: t.queue_match_id,
                 },
             );
         }
@@ -1093,6 +1115,7 @@ impl TeamState {
             pending: Vec::new(),
             broadcast: BroadcastStatus::default(),
             pause_broadcast: BroadcastStatus::default(),
+            queue_match_id: None,
         }
     }
 }
@@ -1129,6 +1152,8 @@ pub struct TeamView {
     pub go_broadcast: BroadcastStatus,
     /// Zustell-Status des letzten Pause-/Resume-Fan-outs (#997).
     pub pause_broadcast: BroadcastStatus,
+    /// Queue-`match_id` dieser Welt (Issue #1028, additiv) — `null` wenn ungesetzt.
+    pub match_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

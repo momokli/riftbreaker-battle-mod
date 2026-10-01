@@ -12,9 +12,10 @@ Referee ausschliesslich per HTTP an — bewusst kein Docker-/Spiel-Code hier.
 join(a) -> queued (position=1)
 join(b) -> matched m1: A<->Welt A, B<->Welt B
          -> zwei KALT-Provisionierungen (verschiedene Instanzen/Endpoints)
-         -> Referee POST /lobby {player, world} je Spieler
+         -> Referee POST /lobby {player, world, match_id} je Spieler
          -> Match-Record {participants:[{identitaet,world,instance,endpoint}], …}
 finish(m1, result?) -> Ergebnis nachtragen + KALTES Cleanup (beide Instanzen stoppen)
+reconcile() -> liest Referee GET /state; phase=finished -> finish(match_id, abgeleitetes result)
 ```
 
 ## Phasen / Modelle
@@ -24,6 +25,16 @@ finish(m1, result?) -> Ergebnis nachtragen + KALTES Cleanup (beide Instanzen sto
 `provisioning -> ready -> finished` (Fehler -> `failed`). `finish` ist
 **idempotent**: der zweite Aufruf stoppt nicht erneut und aendert das Ergebnis
 nicht.
+
+**Auto-Finish (Pull, #1028):** Ein Reconciler-Takt (`QUEUE_RECONCILE_INTERVAL_S`,
+Default `5`s, `0` = aus) liest den autoritativen Referee-Zustand ueber
+`GET /state` (auth-frei) und ruft bei `phase=finished` `finish(match_id, result)`
+selbst auf. Die Zuordnung laeuft ueber das `match_id`-Echo, das die Queue bei
+`POST /lobby` mitschickt und der Referee als `teams.<W>.match_id` ausgibt
+(defensiver Fallback: gleiche Spielernamen). Ergebnis: `winner=A -> winnerA`,
+`winner=B -> winnerB`, sonst `draw`. Ist der Referee nicht erreichbar, passiert
+nichts (nur Log, kein Zustandsverlust); scheitert das Cleanup, bleibt das
+Ergebnis gesetzt und der naechste Takt wiederholt nur den Stop (US3).
 
 | Begriff | Bedeutung |
 |---|---|
@@ -107,10 +118,13 @@ falschem Bearer -> `401 unauthorized`.
 | `QUEUE_TIMEOUT` | `5` | HTTP-Timeout (s) |
 | `QUEUE_STATE_DIR` | (leer) | Match-Record (JSON, uebersteht Restart) |
 | `QUEUE_TEAM_SIZE` / `QUEUE_ALLOW_TEAMS` | `1` / `false` | Match-Modell (aktiv 1v1) |
+| `QUEUE_RECONCILE_INTERVAL_S` | `5` | Auto-Finish-Reconciler-Takt (s); `0` = aus |
 | `QUEUE_LOG_LEVEL` | `INFO` | Log-Level |
 
 Zahlen (`PORT`/`TIMEOUT`/`PROVISIONER_TIMEOUT`) sind **fail-closed** validiert:
 fehlend -> Default, ungueltig/<=0 -> Start-Abbruch (`--check` -> rc 2).
+`QUEUE_RECONCILE_INTERVAL_S` erlaubt zusaetzlich `0` (Reconciler aus), negative
+Werte -> Start-Abbruch.
 
 ## Tests
 
@@ -119,6 +133,11 @@ cd deploy/queue && python3 -m unittest -v                 # Core + Flow + Servic
 cd deploy/queue && TMPDIR=/dev/shm python3 e2e_998_queue.py   # E2E-Abnahme (§0) + Evidence
 bash deploy/tests/queue/run.sh                            # Ansible-Rollen-Render + --check (CI)
 ```
+
+**Kaltes Cleanup (#1028):** `finish` sichert das Ergebnis, **bevor** gestoppt
+wird. Scheitert ein `provisioner.stop` (Fail-fast), wird der Match **nicht** als
+„cleaned" markiert: der naechste Reconciler-Takt wiederholt nur den Stop, das
+Ergebnis bleibt erhalten und wird nie ueberschrieben.
 
 **KERN-NACHWEIS:** `e2e_998_queue.py` belegt die Issue-Abnahme ueber den echten
 Dienst-HTTP-Pfad: zwei Spieler -> **ein** Match, A<->Welt A / B<->Welt B, zwei
