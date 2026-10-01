@@ -19,6 +19,11 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 play="$here/main.yml"
 prod_vars="$here/../../prod-vars.yml"
+# Issue #535: prod-A setzt contract_basic_auth_hash als Play-Var aus dem Vault
+# (deploy-prod.yml). Der Test emuliert das mit einem vom dev/legacy-Hash
+# abweichenden Wert: der gerenderte Operator-Block MUSS diesen tragen und der
+# geteilte Legacy-Hash darf NIRGENDS mehr vorkommen (Distinctness).
+PROD_OPERATOR_HASH='$2a$14$prodoperatorhash000000000000000000000000000000000000'
 
 echo "== Fall A: dev (server_control_enabled=true) -> /server/* MUSS gerendert sein =="
 RB_ROUTE_RENDER_DIR="$(mktemp -d)" ansible-playbook "$play" \
@@ -26,7 +31,8 @@ RB_ROUTE_RENDER_DIR="$(mktemp -d)" ansible-playbook "$play" \
 
 echo "== Fall B: prod (server_control_enabled=true) -> /server/* auf 8093, nie 8092 =="
 RB_ROUTE_RENDER_DIR="$(mktemp -d)" ansible-playbook "$play" \
-  -e expect_route=true -e server_control_enabled=true -e @"$prod_vars"
+  -e expect_route=true -e server_control_enabled=true -e @"$prod_vars" \
+  -e contract_basic_auth_hash="$PROD_OPERATOR_HASH"
 
 echo "== Fall C: fail-safe (server_control_enabled=false) -> /server/* fehlt =="
 RB_ROUTE_RENDER_DIR="$(mktemp -d)" ansible-playbook "$play" \

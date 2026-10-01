@@ -315,6 +315,17 @@ jobs:
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/server-control-route/run.sh
 
+      # Operator-Credential-Trennung (Issue #535): rendert das ECHTE
+      # Cockpit-Caddyfile-Template und beweist: dev bleibt byte-identisch beim
+      # Legacy-Hash; ein Play-Var-Override (prod/staging) ersetzt ihn in ALLEN
+      # Operator-Bloecken ohne Legacy-Rest; die GNS-Lobby (proxy_basic_auth_hash)
+      # ist von den per-Env Cockpit-Credentials ENTKOPPELT (eigener
+      # vault_proxy_basic_auth_hash, sonst Legacy-Fallback — nie der Cockpit-Hash).
+      # Lokal, kein Host, kein Vault.
+      - name: "Operator-Credential-Trennung (Issue #535)"
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
+        run: bash deploy/tests/operator-credentials/run.sh
+
       # Auth-Selbsttest der /tournament/*-Route (Issue #298): rendert das ECHTE
       # rift-caddy-Template, startet Caddy (host-net) + einen Mock-Referee und
       # prueft per curl: schreibende Pfade (POST /tournament/wave) ohne
