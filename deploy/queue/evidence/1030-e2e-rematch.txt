@@ -1,0 +1,45 @@
+# E2E-Beweis Issue #1030 — Lobby-Rematch (gleiche Paarung, frische A/B-Welten)
+# Rohprotokoll des Harness-Laufs (queue_service HTTP + Stubs)
+
+=== E2E #1030 run (state_dir=/dev/shm/e2e1030-state-cywwi9ti) ===
+HTTP POST http://127.0.0.1:41815/queue/join -> 200 {"ok": true, "status": "queued", "identitaet": "str:aa", "position": 1}
+STUB provisioner POST /start {"env": "e2e", "mode": "solo_self", "instance_id": "queue-1-a", "world": "A"} -> gns=127.0.0.1:40001
+STUB provisioner POST /start {"env": "e2e", "mode": "solo_self", "instance_id": "queue-1-b", "world": "B"} -> gns=127.0.0.1:40002
+STUB referee POST /lobby {"player": "str:aa", "world": "A", "match_id": 1}
+STUB referee POST /lobby {"player": "str:bb", "world": "B", "match_id": 1}
+STUB referee POST /ready {"world": "A"}
+STUB referee POST /ready {"world": "B"}
+HTTP POST http://127.0.0.1:41815/queue/join -> 200 {"ok": true, "status": "matched", "identitaet": "str:bb", "match": {"match_id": 1, "mode": "vs", "state": "ready", "result": null, "rematch_of": null, "participants": [{"identitaet": "str:aa", "world": "A", "instance": "queue-1-a", "endpoint": "127.0.0.1:40001"}, {"identitaet": "str:bb", "world": "B", "instance": "queue-1-b", "endpoint": "127.0.0.1:40002"}], "assignments": [{"identitaet": "str:aa", "world": "A", "instance": "queue-1-a", "target": "127.0.0.1:40001"}, {"identitaet": "str:bb", "world": "B", "instance": "queue-1-b", "target": "127.0.0.1:40002"}]}}
+HTTP POST http://127.0.0.1:41815/queue/rematch -> 409 {"ok": false, "reason": "match_not_finished", "detail": "Match 1 ist nicht finished (war ready)"}
+STUB provisioner POST /stop {"env": "e2e", "instance_id": "queue-1-a"}
+STUB provisioner POST /stop {"env": "e2e", "instance_id": "queue-1-b"}
+HTTP POST http://127.0.0.1:41815/queue/finish -> 200 {"ok": true, "match": {"match_id": 1, "mode": "vs", "state": "finished", "result": "draw", "rematch_of": null, "participants": [{"identitaet": "str:aa", "world": "A", "instance": "queue-1-a", "endpoint": "127.0.0.1:40001"}, {"identitaet": "str:bb", "world": "B", "instance": "queue-1-b", "endpoint": "127.0.0.1:40002"}], "assignments": [{"identitaet": "str:aa", "world": "A", "instance": "queue-1-a", "target": "127.0.0.1:40001"}, {"identitaet": "str:bb", "world": "B", "instance": "queue-1-b", "target": "127.0.0.1:40002"}]}}
+STUB referee POST /rematch -> phase=lobby rematches=1
+STUB provisioner POST /start {"env": "e2e", "mode": "solo_self", "instance_id": "queue-2-a", "world": "A"} -> gns=127.0.0.1:40003
+STUB provisioner POST /start {"env": "e2e", "mode": "solo_self", "instance_id": "queue-2-b", "world": "B"} -> gns=127.0.0.1:40004
+STUB referee POST /lobby {"player": "str:aa", "world": "A", "match_id": 2}
+STUB referee POST /lobby {"player": "str:bb", "world": "B", "match_id": 2}
+STUB referee POST /ready {"world": "A"}
+STUB referee POST /ready {"world": "B"}
+HTTP POST http://127.0.0.1:41815/queue/rematch -> 200 {"ok": true, "rematch_of": 1, "idempotent": false, "match": {"match_id": 2, "mode": "vs", "state": "ready", "result": null, "rematch_of": 1, "participants": [{"identitaet": "str:aa", "world": "A", "instance": "queue-2-a", "endpoint": "127.0.0.1:40003"}, {"identitaet": "str:bb", "world": "B", "instance": "queue-2-b", "endpoint": "127.0.0.1:40004"}], "assignments": [{"identitaet": "str:aa", "world": "A", "instance": "queue-2-a", "target": "127.0.0.1:40003"}, {"identitaet": "str:bb", "world": "B", "instance": "queue-2-b", "target": "127.0.0.1:40004"}]}}
+=== E2E #1030 run (state_dir=/dev/shm/e2e1030-state-kchwy3jh) ===
+HTTP POST http://127.0.0.1:40779/queue/join -> 200 {"ok": true, "status": "queued", "identitaet": "str:aa", "position": 1}
+STUB provisioner POST /start {"env": "e2e", "mode": "solo_self", "instance_id": "queue-1-a", "world": "A"} -> gns=127.0.0.1:40001
+STUB provisioner POST /start {"env": "e2e", "mode": "solo_self", "instance_id": "queue-1-b", "world": "B"} -> gns=127.0.0.1:40002
+STUB referee POST /lobby {"player": "str:aa", "world": "A", "match_id": 1}
+STUB referee POST /lobby {"player": "str:bb", "world": "B", "match_id": 1}
+STUB referee POST /ready {"world": "A"}
+STUB referee POST /ready {"world": "B"}
+HTTP POST http://127.0.0.1:40779/queue/join -> 200 {"ok": true, "status": "matched", "identitaet": "str:bb", "match": {"match_id": 1, "mode": "vs", "state": "ready", "result": null, "rematch_of": null, "participants": [{"identitaet": "str:aa", "world": "A", "instance": "queue-1-a", "endpoint": "127.0.0.1:40001"}, {"identitaet": "str:bb", "world": "B", "instance": "queue-1-b", "endpoint": "127.0.0.1:40002"}], "assignments": [{"identitaet": "str:aa", "world": "A", "instance": "queue-1-a", "target": "127.0.0.1:40001"}, {"identitaet": "str:bb", "world": "B", "instance": "queue-1-b", "target": "127.0.0.1:40002"}]}}
+STUB provisioner POST /stop {"env": "e2e", "instance_id": "queue-1-a"}
+STUB provisioner POST /stop {"env": "e2e", "instance_id": "queue-1-b"}
+HTTP POST http://127.0.0.1:40779/queue/finish -> 200 {"ok": true, "match": {"match_id": 1, "mode": "vs", "state": "finished", "result": "winnerA", "rematch_of": null, "participants": [{"identitaet": "str:aa", "world": "A", "instance": "queue-1-a", "endpoint": "127.0.0.1:40001"}, {"identitaet": "str:bb", "world": "B", "instance": "queue-1-b", "endpoint": "127.0.0.1:40002"}], "assignments": [{"identitaet": "str:aa", "world": "A", "instance": "queue-1-a", "target": "127.0.0.1:40001"}, {"identitaet": "str:bb", "world": "B", "instance": "queue-1-b", "target": "127.0.0.1:40002"}]}}
+STUB referee POST /rematch -> phase=lobby rematches=1
+STUB provisioner POST /start {"env": "e2e", "mode": "solo_self", "instance_id": "queue-2-a", "world": "A"} -> gns=127.0.0.1:40003
+STUB provisioner POST /start {"env": "e2e", "mode": "solo_self", "instance_id": "queue-2-b", "world": "B"} -> gns=127.0.0.1:40004
+STUB referee POST /lobby {"player": "str:aa", "world": "A", "match_id": 2}
+STUB referee POST /lobby {"player": "str:bb", "world": "B", "match_id": 2}
+STUB referee POST /ready {"world": "A"}
+STUB referee POST /ready {"world": "B"}
+HTTP POST http://127.0.0.1:40779/queue/rematch -> 200 {"ok": true, "rematch_of": 1, "idempotent": false, "match": {"match_id": 2, "mode": "vs", "state": "ready", "result": null, "rematch_of": 1, "participants": [{"identitaet": "str:aa", "world": "A", "instance": "queue-2-a", "endpoint": "127.0.0.1:40003"}, {"identitaet": "str:bb", "world": "B", "instance": "queue-2-b", "endpoint": "127.0.0.1:40004"}], "assignments": [{"identitaet": "str:aa", "world": "A", "instance": "queue-2-a", "target": "127.0.0.1:40003"}, {"identitaet": "str:bb", "world": "B", "instance": "queue-2-b", "target": "127.0.0.1:40004"}]}}
+HTTP POST http://127.0.0.1:40779/queue/rematch -> 200 {"ok": true, "rematch_of": 1, "idempotent": true, "match": {"match_id": 2, "mode": "vs", "state": "ready", "result": null, "rematch_of": 1, "participants": [{"identitaet": "str:aa", "world": "A", "instance": "queue-2-a", "endpoint": "127.0.0.1:40003"}, {"identitaet": "str:bb", "world": "B", "instance": "queue-2-b", "endpoint": "127.0.0.1:40004"}], "assignments": [{"identitaet": "str:aa", "world": "A", "instance": "queue-2-a", "target": "127.0.0.1:40003"}, {"identitaet": "str:bb", "world": "B", "instance": "queue-2-b", "target": "127.0.0.1:40004"}]}}

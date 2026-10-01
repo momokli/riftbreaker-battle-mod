@@ -75,6 +75,8 @@ LOBBY ── beide Welten ready (AUTO_GO=off) ──► READY (GO steht aus)
 LOBBY/READY ── POST /go (oder AUTO_GO beim 2. Ready) ──► RUNNING (Runde 1)
 RUNNING ── Runden-Loop ── HQ einer Welt ≤ 0 (event=hq_hp) ──► FINISHED (winner)
 FINISHED ── POST /rematch ──► LOBBY (Spieler bleiben, Rematch-Zähler +1)
+         └ (Lobby-Rematch #1030: die QUEUE ruft /rematch intern, dann
+            POST /lobby mit NEUER match_id + frische Kalt-Welten)
 ```
 
 Beim Übergang nach `FINISHED` erzeugt der Referee **genau einen** persistenten
@@ -102,7 +104,16 @@ Schreibfehler werden nur geloggt, die HTTP-Antwort bleibt unverändert (#999,
 3. **HQ-Schaden:** Die Welt meldet ihren HQ-HP (absolut, `event=hq_hp`).
    Bei ≤ 0 → Phase `finished`, `winner` = Gegner-Welt.
 4. **Rematch:** Nach Match-Ende setzt `POST /rematch` in die Lobby zurück
-   (Spieler bleiben registriert, ready/HP/Queues werden zurückgesetzt).
+   (Spieler bleiben registriert, ready/HP/Queues werden zurückgesetzt; das
+   Queue-`match_id`-Echo wird geleert).
+
+> **Lobby-Rematch (#1030):** Der spielerseitige Rematch läuft **nicht** direkt
+> gegen `POST /rematch`, sondern über die Queue (`POST /queue/rematch` im
+> Relay/Queue-Dienst). Die Queue stoppt zuerst die alten Kalt-Welten, ruft
+> **intern** `POST /rematch` (Reset) und provisioniert danach zwei **frische**
+> Welten derselben Paarung; die neue `match_id` kommt per `POST /lobby`.
+> `POST /referee/rematch` am Relay ist der **reine Reset** (Operator-Pfad,
+> keine neuen Welten). Details: [docs/LOBBY.md](LOBBY.md) §2, [docs/VS_MATCH.md](VS_MATCH.md) §6.7.
 
 ## Endpoints
 

@@ -1467,7 +1467,7 @@ const char kUiHtml[] = R"HTML(<!doctype html>
   .badge.ref-Ready { background:rgba(242,193,78,.16); color:var(--held); }
   .badge.ref-Running { background:rgba(95,211,154,.16); color:var(--routed); }
   .badge.ref-Finished { background:rgba(78,161,255,.16); color:var(--accent); }
-  .solo { display:flex; gap:8px; margin-top:10px; }
+  .solo { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
   .solo .toggle.on { border-color:var(--accent); background:#1b2735; }
   .hint { margin-top:8px; font-size:12px; color:var(--waiting); }
   /* Main-Screen: Modi-Kacheln zuerst (Issue #994). */
@@ -1793,6 +1793,34 @@ async function refereeReady(identity, world, btn, cardEl) {
   } catch (e) { hint(cardEl, "Netzwerkfehler"); }
   setTimeout(loadSessions, 300);
 }
+// Rematch (Issue #1030): dieselbe Paarung neu starten (POST /queue/rematch).
+// Nur im Finished-Zustand sinnvoll; der Dienst stoppt die alten Welten und
+// provisioniert zwei frische (sein eigener Anti-Zombie-Pfad).
+async function queueRematch(matchId, btn, cardEl) {
+  if (!matchId) { hint(cardEl, "keine Match-ID"); return; }
+  btn.disabled = true;
+  try {
+    const r = await fetch("/queue/rematch", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ match_id: matchId }) });
+    const j = await r.json().catch(() => null);
+    if (!r.ok) {
+      const reason = (j && j.reason) ? j.reason : ("http " + r.status);
+      const MSG = { queue_unconfigured: "Queue-Dienst nicht konfiguriert",
+        queue_unreachable: "Queue nicht erreichbar", bad_request: "Match-ID fehlt",
+        unauthorized: "Queue-Token fehlt/ungueltig", unknown_match: "Match unbekannt",
+        no_match: "kein Match fuer diesen Spieler",
+        match_not_finished: "Match noch nicht beendet",
+        referee_rematch_failed: "Referee lehnt Rematch ab (laeuft noch)",
+        cleanup_failed: "alte Welten liessen sich nicht stoppen",
+        provision_failed: "neue Welten fehlgeschlagen" };
+      hint(cardEl, MSG[reason] || reason);
+    } else {
+      const nm = j && j.match && j.match.match_id;
+      hint(cardEl, "Rematch gestartet - Match " + (nm || "?"));
+    }
+  } catch (e) { hint(cardEl, "Netzwerkfehler"); }
+  setTimeout(loadSessions, 300);
+}
 $("go-self").onclick = (e) => sendPlayer("solo_self", e.currentTarget);
 $("go-persona").onclick = (e) => sendPlayer("solo_persona:aggro", e.currentTarget);
 
@@ -1946,6 +1974,15 @@ function card(s) {
   rbtnRef.onclick = () => refereeReady(s.identity, rsel.value, rbtnRef, c);
   refRow.appendChild(rsel);
   refRow.appendChild(rbtnRef);
+  // Rematch (Issue #1030): nur im Finished-Zustand UND mit bekannter Match-ID.
+  const refFound = queuePhaseOf(s, QUEUE_SNAP);
+  const refMid = (refFound && refFound.match && refFound.match.match_id) || s.matchId;
+  if (REF_SNAP && REF_SNAP.phase === "finished" && refMid) {
+    const rmb = el("button", null, "Rematch");
+    rmb.title = "Rematch derselben Paarung (POST /queue/rematch)";
+    rmb.onclick = () => queueRematch(refMid, rmb, c);
+    refRow.appendChild(rmb);
+  }
   c.appendChild(refRow);
   return c;
 }
@@ -2624,6 +2661,75 @@ void handleQueueFinish(SOCKET s, const std::string &requestBody) {
                   r.body.empty() ? "{\"ok\":true}" : r.body);
 }
 
+// POST /queue/rematch: an den Queue-Dienst proxien (`POST /queue/rematch`,
+// Issue #1030). Body `{match_id}` ODER `{identitaet}`; bei Erfolg pinnt der
+// Relay ALLE Teilnehmer des NEUEN Matches auf ihre GNS-Endpoints (wie
+// `POST /queue`, Issue #998). Queue-Fehler werden treu durchgereicht.
+void handleQueueRematch(SOCKET s, const std::string &requestBody) {
+  if (!g_queueConfigured) {
+    httpRespondJson(s, 503, "Service Unavailable",
+                    "{\"ok\":false,\"reason\":\"queue_unconfigured\",\"retry\":false}");
+    return;
+  }
+  long long matchId = 0;
+  std::string identitaet;
+  std::string payload;
+  if (!rbapi::parseQueueRematchBody(requestBody, matchId, identitaet, payload)) {
+    httpRespondJson(s, 400, "Bad Request",
+                    "{\"ok\":false,\"reason\":\"bad_request\",\"detail\":"
+                    "\"genau match_id (Zahl) ODER identitaet (String) erwartet\"}");
+    return;
+  }
+  const OutboundResult r = outboundHttpPost(g_queueHost, g_queuePort,
+                                            "/queue/rematch", payload,
+                                            g_queueToken, 2000, 8000);
+  if (r.status <= 0) {
+    httpRespondJson(s, 502, "Bad Gateway",
+                    "{\"ok\":false,\"reason\":\"queue_unreachable\"}");
+    return;
+  }
+  if (r.status != 200) {
+    httpRespondJson(s, r.status, "Error",
+                    r.body.empty() ? "{\"ok\":false}" : r.body);
+    return;
+  }
+  // Pin-Plan aus der Match-Antwort (BEIDE Teilnehmer, NEUE Endpoints).
+  std::vector<rbapi::QueueAssignment> plan;
+  const bool matched = rbapi::parseQueueAssignments(r.body, plan);
+  std::string matchState;
+  rbapi::jsonStringField(r.body, "state", matchState);
+  long long newMatchId = 0;
+  rbapi::jsonIntField(r.body, "match_id", newMatchId);
+  if (matched) {
+    for (std::size_t i = 0; i < plan.size(); ++i) {
+      rbroute::Endpoint endpoint;
+      if (plan[i].endpoint.empty() ||
+          !rbroute::parseEndpoint(plan[i].endpoint, endpoint)) {
+        continue;
+      }
+      {
+        std::lock_guard<std::mutex> lock(g_apiMutex);
+        ApiCommand cmd;
+        cmd.kind = ApiCommand::kRouteByEndpoint;
+        cmd.identity = plan[i].identitaet;
+        cmd.instance = plan[i].instance;
+        cmd.endpoint = endpoint;
+        cmd.selfSend = true;
+        g_apiCommands.push_back(cmd);
+        QueueSession qs;
+        qs.phase = rbapi::queuePhaseName(rbapi::deriveQueuePhase(false, matchState));
+        qs.matchId = newMatchId;
+        qs.vsWorld = plan[i].world;
+        g_queueState[plan[i].identitaet] = qs;
+      }
+      logLine("API: rematch '%s' -> %s (match=%lld world=%s)",
+              plan[i].identitaet.c_str(), plan[i].endpoint.c_str(), newMatchId,
+              plan[i].world.c_str());
+    }
+  }
+  httpRespondJson(s, 200, "OK", r.body.empty() ? "{\"ok\":true}" : r.body);
+}
+
 // GET /queue/status: an den Queue-Dienst proxien (`GET /queue/status`).
 void handleQueueStatus(SOCKET s) {
   if (!g_queueConfigured) {
@@ -2680,6 +2786,28 @@ void handleRefereeReady(SOCKET s, const std::string &requestBody) {
   std::string identitaet;
   rbapi::jsonStringField(requestBody, "identitaet", identitaet);
   refereeReadyOutbound(s, world, identitaet);
+}
+
+// POST /referee/rematch: Reset des Referees durchreichen (`POST /rematch`,
+// Bearer, Issue #1030). NUR Reset in die Lobby — KEINE neuen Welten (das ist
+// der Queue-Rematch, `POST /queue/rematch`). Operator-/Diagnose-Pfad.
+void handleRefereeRematch(SOCKET s) {
+  if (!g_refereeConfigured) {
+    httpRespondJson(s, 503, "Service Unavailable",
+                    "{\"ok\":false,\"reason\":\"referee_unconfigured\",\"retry\":false}");
+    return;
+  }
+  const OutboundResult r = outboundHttpPost(g_refereeHost, g_refereePort,
+                                            "/rematch", "{}", g_refereeToken,
+                                            2000, 5000);
+  const rbref::RefStatus st = rbref::mapRefereeError(true, r.status);
+  if (st == rbref::RefStatus::Unreachable) {
+    httpRespondJson(s, 502, "Bad Gateway",
+                    "{\"ok\":false,\"reason\":\"referee_unreachable\"}");
+    return;
+  }
+  httpRespondJson(s, r.status, r.status == 200 ? "OK" : "Error",
+                  r.body.empty() ? "{\"ok\":true}" : r.body);
 }
 
 void httpHandle(SOCKET s) {
@@ -2845,12 +2973,16 @@ void httpHandle(SOCKET s) {
     handleQueueLeave(s, body);
   } else if (method == "POST" && path == "/queue/finish") {
     handleQueueFinish(s, body);
+  } else if (method == "POST" && path == "/queue/rematch") {
+    handleQueueRematch(s, body);
   } else if (method == "GET" && path == "/queue/status") {
     handleQueueStatus(s);
   } else if (method == "GET" && path == "/referee/state") {
     handleRefereeState(s);
   } else if (method == "POST" && path == "/referee/ready") {
     handleRefereeReady(s, body);
+  } else if (method == "POST" && path == "/referee/rematch") {
+    handleRefereeRematch(s);
   } else {
     httpRespond(s, 404, "Not Found", "text/plain; charset=utf-8",
                 "not found\n");

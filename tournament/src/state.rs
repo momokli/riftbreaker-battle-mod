@@ -890,6 +890,11 @@ impl MatchState {
             team.pending.clear();
             team.broadcast = BroadcastStatus::default();
             team.pause_broadcast = BroadcastStatus::default();
+            // Issue #1030: das Queue-`match_id`-Echo des ALTEN Matches leeren.
+            // Sonst echoisiert `GET /state` zwischen Reset und neuem `/lobby`
+            // die alte `match_id` (Fehlzuordnung des Queue-Reconcilers). Die
+            // neue `match_id` setzt der naechste `POST /lobby` (Queue).
+            team.queue_match_id = None;
         }
         self.log(
             "rematch",
@@ -1723,6 +1728,57 @@ mod tests {
         let mut s = fresh();
         start(&mut s);
         assert_eq!(s.rematch().unwrap_err().code, "conflict");
+    }
+
+    /// Issue #1030: Referee-Vertrag fuer den Lobby-Rematch — Reset (nicht
+    /// `running`) leert das alte Queue-`match_id`-Echo; das anschliessende
+    /// `/lobby` mit neuer `match_id` setzt sie in `GET /state` (teams.<W>.
+    /// match_id). Ressourcen/Score/Winner sind zurueckgesetzt.
+    #[test]
+    fn rematch_clears_queue_match_id_then_new_lobby_sets_it() {
+        let mut s = fresh();
+        s.lobby_register_with_match_id(World::A, "momo", Some(7))
+            .unwrap();
+        s.lobby_register_with_match_id(World::B, "matheo", Some(7))
+            .unwrap();
+        s.ready(World::A).unwrap();
+        s.ready(World::B).unwrap();
+        s.arm_go().unwrap();
+        s.start_match().unwrap();
+        s.report_hq(World::A, 0.0).unwrap();
+        assert_eq!(s.phase, Phase::Finished);
+
+        s.rematch().unwrap();
+        assert_eq!(s.phase, Phase::Lobby);
+        // Kein altes match_id-Echo mehr (Anti-Zombie-Zuordnungsrest).
+        assert_eq!(s.view().teams["A"].match_id, None);
+        assert_eq!(s.view().teams["B"].match_id, None);
+
+        // Neue Lobby mit neuer Queue-match_id -> /state zeigt die neue id.
+        s.lobby_register_with_match_id(World::A, "momo", Some(8))
+            .unwrap();
+        s.lobby_register_with_match_id(World::B, "matheo", Some(8))
+            .unwrap();
+        assert_eq!(s.view().teams["A"].match_id, Some(8));
+        assert_eq!(s.view().teams["B"].match_id, Some(8));
+        assert_eq!(s.rematches, 1);
+        assert_eq!(s.view().phase, "lobby");
+    }
+
+    /// Issue #1030 (US4): ein zweites `/rematch` in der Lobby ist idempotent
+    /// und zaehlt den Rematch-Zaehler hoch, ohne Spieler zu verlieren.
+    #[test]
+    fn rematch_from_lobby_refreshes_players_and_counter() {
+        let mut s = fresh();
+        start(&mut s);
+        s.report_hq(World::A, 0.0).unwrap();
+        s.rematch().unwrap();
+        assert_eq!(s.rematches, 1);
+        assert_eq!(s.player(World::A), Some("momo"));
+        assert_eq!(s.player(World::B), Some("matheo"));
+        s.rematch().unwrap();
+        assert_eq!(s.rematches, 2);
+        assert_eq!(s.phase, Phase::Lobby);
     }
 
     #[test]

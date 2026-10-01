@@ -16,6 +16,8 @@ join(b) -> matched m1: A<->Welt A, B<->Welt B
          -> Match-Record {participants:[{identitaet,world,instance,endpoint}], …}
 finish(m1, result?) -> Ergebnis nachtragen + KALTES Cleanup (beide Instanzen stoppen)
 reconcile() -> liest Referee GET /state; phase=finished -> finish(match_id, abgeleitetes result)
+rematch(m1) -> Alt-Stop -> Referee POST /rematch (Reset) -> zwei FRISCHE Welten
+               derselben Paarung (neue match_id m2, rematch_of=m1); idempotent
 ```
 
 ## Phasen / Modelle
@@ -40,9 +42,10 @@ Ergebnis gesetzt und der naechste Takt wiederholt nur den Stop (US3).
 |---|---|
 | `QueueEntry` | wartender Spieler (FIFO-Slot, `seq`) |
 | `Team` | Team-Index + Welt (`A`/`B`) + Spieler |
-| `Match` | `match_id` (monoton), `state`, `result?`, `teams`, `participants` |
+| `Match` | `match_id` (monoton), `state`, `result?`, `rematch_of?`, `teams`, `participants` |
 | Welt-Zuordnung | Team 0 -> `A`, Team 1 -> `B` |
 | Ergebnis | `winnerA` / `winnerB` / `draw` (kein MMR) |
+| `rematch_of` | `match_id` des Quell-Matches eines Rematches (`null` bei regulaerem Match) |
 
 ## Kalte Provisionierung (US2)
 
@@ -80,6 +83,7 @@ Bind `127.0.0.1:$QUEUE_PORT` (Default **9221**). Bearer-Token PFLICHT, wenn
 | `POST` | `/queue/join` | `{"identitaet","mode":"vs"}` | wartend -> `{status:"queued",position}`; gepaart -> `{status:"matched",match:{…,assignments:[{identitaet,world,instance,target}]}}` |
 | `POST` | `/queue/leave` | `{"identitaet"}` | wartenden Spieler entfernen (bereits gepaart -> `409`) |
 | `POST` | `/queue/finish` | `{"match_id","result"?}` | Ergebnis + kaltes Cleanup (idempotent) |
+| `POST` | `/queue/rematch` | `{"match_id"}` **oder** `{"identitaet"}` | Rematch derselben Paarung: Alt-Stop -> Referee-Reset -> zwei frische Kalt-Welten (`rematch_of`, `idempotent`) |
 
 ```bash
 curl -s 127.0.0.1:9221/health
@@ -87,6 +91,8 @@ curl -s -X POST 127.0.0.1:9221/queue/join -d '{"identitaet":"str:<A>","mode":"vs
 curl -s -X POST 127.0.0.1:9221/queue/join -d '{"identitaet":"str:<B>","mode":"vs"}'   # -> matched A/B
 curl -s 127.0.0.1:9221/queue/status
 curl -s -X POST 127.0.0.1:9221/queue/finish -d '{"match_id":1,"result":"winnerA"}'
+curl -s -X POST 127.0.0.1:9221/queue/rematch -d '{"match_id":1}'        # -> rematch_of=1, neues Match 2
+curl -s -X POST 127.0.0.1:9221/queue/rematch -d '{"identitaet":"str:<A>"}'  # Komfort-Pfad
 ```
 
 **Fehler-Mapping:** `mode != "vs"` -> `400 bad_mode`; fehlende `identitaet` ->
@@ -94,6 +100,52 @@ curl -s -X POST 127.0.0.1:9221/queue/finish -d '{"match_id":1,"result":"winnerA"
 `400 unsupported_team_size`; unbekannter Match / bereits gepaart -> `409`;
 Provisioner/Referee nicht erreichbar -> `503 provision_failed`; ohne/mit
 falschem Bearer -> `401 unauthorized`.
+
+### Lobby-Rematch (`POST /queue/rematch`, Issue #1030)
+
+Startet nach einem **beendeten** Match ein neues Match derselben Paarung
+(gleiche zwei Spieler, gleiche A/B-Weltzuordnung) mit **zwei frischen
+(kalten)** Welten. Reihenfolge (Anti-Zombie, Plan §4):
+
+1. Quelle aufloesen (`match_id` **oder** letztes Match der `identitaet`);
+   `state == finished`, sonst `409 match_not_finished`.
+2. Idempotenz: liegt `_rematch_of[alte_id]` vor -> sofortiges Ergebnis,
+   `idempotent:true`, **kein** Start.
+3. `finish(alte_id)` — garantiertes, idempotentes Kalt-Stop beider Alt-Welten
+   **vor** jedem Neustart. Fehler -> `503 cleanup_failed`, **kein** neuer Match.
+4. Neuen Record anlegen (`rematch_of=alte_id`, neue monotone `match_id`).
+5. Referee `POST /rematch` (Reset -> Lobby). `409` -> Record `failed`, **keine**
+   Instanz gestartet -> `409 referee_rematch_failed`.
+6. Zwei **frische** Kalt-Welten (`queue-<neu>-a/b`) + Referee `POST /lobby`
+   (neue `match_id`) + `POST /ready`. Fehler -> Rollback (Stop) + `failed`,
+   `503 provision_failed`.
+7. `_rematch_of[alte_id] = neue_id` **erst nach** Erfolg setzen + persistieren.
+
+Antwort `200`: `{ok:true, rematch_of:<alt>, idempotent:<bool>, match:{…}}`.
+Body ohne/mit ungueltigem `match_id`/`identitaet` -> `400 bad_request`; beide
+oder keine Angabe -> `400`; unbekannte `match_id` -> `409 unknown_match`;
+Spieler ohne Match -> `409 no_match`. `_rematch_of` wird in
+`queue-state.json` persistiert (Idempotenz ueberlebt einen Dienst-Restart).
+
+**Referee-Seite:** `POST /rematch` ist ein reiner Reset in die Lobby; er leert
+zusätzlich das Queue-`match_id`-Echo (`teams.<W>.match_id = null`), damit der
+Reconciler zwischen Reset und neuem `/lobby` keine Alt-Welten zuordnet.
+
+### #183-Lifecycle-Defaults (bewusst konservativ)
+
+Issue #183 (Match-Lifecycle) ist **offen**; dieser PR legt konservative,
+benannte Defaults fest (revidierbar):
+
+| #183-Frage | Default #1030 |
+|---|---|
+| Spar-Pool reset? | **Ja** — Referee-Reset leert `resources`/HP; Queue startet frische kalte Welten (kein Warm-Reuse). |
+| Seed/Settings identisch? | **Identisch** — gleiche Paarung, gleiche A/B-Zuordnung, gleicher `env`/`provision_mode`; kein Reseed. |
+| Disconnect mitten im Match | **Out of scope** — Rematch nur bei `phase=finished`. |
+| Ready/GO-Timeout | **Unveraendert** (#1025). |
+| Server-Crash mitten im Match | **Out of scope**. |
+| Wann gewertet/abgebrochen | Kein MMR; neuer Record (`rematch_of`), `result` bleibt am Alt-Record. |
+| Rematch waehrend `running` | **Refused** (`409 referee_rematch_failed`), kein neuer Start. |
+| Cleanup-Semantik | Alt-Welten **immer** vor neuen gestoppt; Cleanup-Fehler blockiert Neustart. |
 
 ## Aufbau
 
@@ -105,6 +157,7 @@ falschem Bearer -> `401 unauthorized`.
 | `identity.py` | Identitaets-Spiegel (Kopie `deploy/capsule/identity.py`; kein Cross-Import). |
 | `test_queue_core.py` / `test_queue_flow.py` / `test_queue_service.py` | hermetische Tests (stdlib, `127.0.0.1:0`). |
 | `e2e_998_queue.py` | Tester-Stage-Harness: echter Dienst-HTTP-Pfad gegen Stub-Provisioner/-Referee; Rohbeleg nach `evidence/`. |
+| `e2e_1030_rematch.py` | Tester-Stage-Harness fuer den Lobby-Rematch (#1030); Rohbeleg nach `evidence/`. |
 
 ## Konfiguration (`QUEUE_*`)
 
