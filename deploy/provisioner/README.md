@@ -226,6 +226,23 @@ PROVISIONER_IMAGE=... python3 provisioner.py stop   --env test --instance-id "$R
 Exit-Codes: `0` ok · `1` `ProvisionError`/`DockerError` · `2` `ConfigError`
 (fail-closed).
 
+## Idempotenz (#1026)
+
+Wiederholter `start()` ist harmlos (DoD 2): existiert der Dedi-Container schon,
+wird **kein zweiter** erzeugt (`created=False`); ein gestoppter vorhandener
+Container wird nur gestartet. Seit **#1026** re-assertiert der Existing-Pfad
+zusätzlich die **vier Sidecars** (`_ensure_sidecars`): **laufende** bleiben
+unangetastet (kein zweites `docker run`, kein Duplikat), **gestoppte** werden per
+`docker start <name>` reaktiviert, **fehlende** aus den Env-Werten des
+bestehenden Containers (`RIFTBREAKER_MODE` → `parse_mode`, `RBB_VS_WORLD` →
+`world`) über denselben Args-Builder nachgezogen. Schlägt die Rekonstruktion fehl
+→ `ProvisionError` (fail-loud, kein stiller Halb-Stack). Legacy-Container ohne
+`RIFTBREAKER_MODE` behalten die Skip-Logik (kein harter Bruch; ein vorhandener
+gestoppter Sidecar wird trotzdem gestartet). Die Sidecar-`docker run`-Argumente
+stammen aus EINER Quelle (`_sidecar_run_args`) für Erzeugung UND Re-Assert — kein
+Drift zwischen Erststart und Wiederherstellung. Die `docker run`-Zahl eines
+repeated `start()` steigt damit nicht.
+
 ## Test (hermetisch, ohne Docker/Netz/Spiel)
 
 Fake-`docker`-Binary + lokaler HTTP-Health-Stub:
