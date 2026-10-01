@@ -72,15 +72,14 @@ Siehe Milestone **1.0.11 (Server-Parity)** und #966.
 ## Voraussetzungen
 
 - `ansible` (core ≥ 2.19) auf dem Control-Node (dem Rechner, von dem du deployst; beim CD ist das planet selbst, als root — siehe CD-Abschnitt).
-- SSH mesh-first: Aliase `planet` (dev-/prod-/staging-Dedi) **sowie** die
-  beiden früheren Relay-Hosts `satellite` und `sync` in `~/.ssh/config`
-  (Tailscale), jeweils `root`-Login. Wie `planet` sind `satellite`/`sync`
-  Mesh-Aliase — SSH **niemals** über die Public-IP (`65.21.181.48` bzw.
-  `65.21.253.64`). Die DNAT-Relays auf `satellite`/`sync` sind seit Issue #846
-  **abgebaut**; die Hosts bleiben im Inventory, weil die Playbook-Plays (2) den
-  Teardown idempotent nachfahren. Ohne den Alias läuft
-  `deploy/deploy-prod.yml` (`hosts: satellite`) bzw.
-  `deploy/deploy-staging.yml` (`hosts: sync`) ins Leere.
+- SSH mesh-first: Aliase `planet` (prod-A-/prod-B-Dedi) **sowie** der
+  frühere Relay-Host `satellite` in `~/.ssh/config` (Tailscale), jeweils
+  `root`-Login. Wie `planet` ist `satellite` ein Mesh-Alias — SSH **niemals**
+  über die Public-IP (`65.21.181.48`). Das DNAT-Relay auf `satellite` ist seit
+  Issue #846 **abgebaut**; der Host bleibt im Inventory, weil der Play den
+  Teardown idempotent nachfährt. Der frühere Staging-Relay-Host `sync` ist mit
+  dem prod-only-Umbau (Issue #1034) entfallen. Ohne den Alias läuft
+  `deploy/deploy-prod.yml` (`hosts: satellite`) ins Leere.
 - Auf planet: Docker + `docker compose`, `systemd`,
   Caddy als geteilter Container `mellon-caddy` (Host-Gateway) — der Rift-Stack
   betreibt zusätzlich einen eigenen, schlanken `rift-caddy` (Image `caddy:2`,
@@ -104,7 +103,7 @@ ansible-vault edit   deploy/inventory/host_vars/planet/vault.yml
 Beim Lauf das Vault-Passwort angeben:
 
 ```bash
-ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
+ansible-playbook -i deploy/inventory deploy/deploy-prod.yml --ask-vault-pass
 ```
 
 Alternativ `vault_password_file = .vault_pass` in `ansible.cfg` setzen und die
@@ -117,11 +116,15 @@ nie im Repo, nie in Logs.
 ## Deploy
 
 ```bash
-ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
+ansible-playbook -i deploy/inventory deploy/deploy-prod.yml --ask-vault-pass
 ```
 
-Reihenfolge der Rollen (site.yml): `mods-zip` → `dedicated-server-image` →
-`game-content` → `riftbreaker-server` → `tournament-server` →
+PROD-ONLY (Issue #1034): `deploy-prod.yml` ist das EINZIGE reguläre Playbook.
+Play 0 („planet host services") fährt die host-weiten Singleton-Rollen
+(`gns-relay`, `image-retention`, `host-hygiene`, `parked-pool`, `capsule-flow`,
+`queue`); danach folgen Prod-A, Prod-B und der Satellite-Relay-Teardown.
+Reihenfolge (Prod-A): `mods-zip` → `dedicated-server-image` →
+`game-content` → `rbtools` → `riftbreaker-server` → `tournament-server` →
 `website` → `image-retention` → `host-hygiene` → `crash-collector`.
 
 Die Backup-/Stray-Retention (`riftbreaker_backup_keep`, Issue #312) ist **kein
@@ -141,7 +144,7 @@ reicht ein Lauf — es gibt keine manuellen „einmalig auf planet"-Schritte.
 ```bash
 # 1) Vault-Passwort bereitstellen (siehe „Vault"; root-only auf dem Zielhost).
 # 2) Ein Kommando:
-ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
+ansible-playbook -i deploy/inventory deploy/deploy-prod.yml --ask-vault-pass
 ```
 
 Was das Playbook selbst besitzt:
@@ -215,10 +218,10 @@ ansible-playbook -i deploy/inventory deploy/deploy-prod.yml \
   `host_vars/satellite/` oder `host_vars/sync/`, damit keine Precedence-Falle
   entsteht.
 
-Der Relay ergänzte den dev-Stack; `deploy/site.yml` (CD) bleibt unverändert der
-dev-Rollout. Staging nutzte dasselbe Muster: `deploy/deploy-staging.yml` Play 2
-fuhr die Rolle auf `sync` und baut sie dort (mit `satellite_relay_target_port:
-6323` für den Regel-Match) jetzt ab.
+Der Relay ist seit Issue #1034 der EINZIGE öffentliche Einstieg und wird vom
+prod-Play (`deploy/deploy-prod.yml`, Play 0) mitdeployt — dev/staging sind
+entfallen; der Satellite-Relay-Host `satellite` wird im selben Play weiterhin
+idempotent abgebaut.
 
 ### DNS (manuell, host-seitig bei Cloudflare)
 
@@ -227,14 +230,13 @@ die öffentlichen A-Records auf planet statt auf die Relay-Hosts:
 
 | Record                     | Ziel (A)       |
 | -------------------------- | -------------- |
-| `drift.projectmellon.de`   | `65.21.27.234` |
 | `rift.projectmellon.de`    | `65.21.27.234` |
-| `staging.projectmellon.de` | `65.21.27.234` |
+| `proxy.rift.projectmellon.de` | `65.21.27.234` |
 
-Der GNS-Entry-Relay unterscheidet dev/prod/staging über den **Spielnamen-**
-Suffix, nicht über die Adresse. Der DNS-Schritt ist **nicht repo-owned** und
-muss manuell gepflegt werden (Host-Einstieg/Cockpit-Domains); er ist Teil von
-Issue #846.
+Der GNS-Entry-Relay unterscheidet die prod-Welten A/B über den **Spielnamen-**
+Suffix (`*-a`/`*-b`, Default = A), nicht über die Adresse. Der DNS-Schritt ist
+**nicht repo-owned** und muss manuell gepflegt werden (Host-Einstieg/Cockpit-
+Domains); er ist Teil von Issue #846.
 
 ### Vault
 
@@ -286,44 +288,36 @@ prod-B `vault_server_control_prod_b_token`, staging
 
 ## Continuous Deploy (CD)
 
-Nach jedem Merge auf `main` rollt der Workflow
+Ein Tag-Push `v*` rollt der Workflow
 [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) den aktuellen
-Mod-Stand automatisch auf den Solo-**DEV**-Server aus (planet).
+Mod-Stand automatisch auf die **PROD**-Welten aus (planet). Der frühere
+Merge-auf-main-Deploy (dev) und der `staging`-Branch-Deploy sind mit dem
+Deployment-Cleanup (Issue #1034) entfallen.
 
-Topologie (Issue #328 + staging + GNS-Entry-Relay #843, Konsolidierung #846):
-**drei** koexistierende Instanzen auf planet. Der client-hardgewirete
-Einstiegsport `:6321` gehört auf planet dem **GNS-Entry-Relay** (Rolle
-`gns-relay`), das GNS terminiert und per Spielnamen-Suffix auf die Backends
-routet. Es gibt **einen einzigen öffentlichen Einstieg** (`65.21.27.234:6321`);
-die früheren DNAT-Relays auf `satellite`/`sync` sind abgebaut.
+Topologie (Issue #328 + GNS-Entry-Relay #843, Konsolidierung #846, prod-only
+#1034): **zwei** koexistierende prod-Instanzen (A/B) auf planet. Der
+client-hardgewirete Einstiegsport `:6321` gehört auf planet dem
+**GNS-Entry-Relay** (Rolle `gns-relay`), das GNS terminiert und per
+Spielnamen-Suffix auf die Backends routet. Es gibt **einen einzigen
+öffentlichen Einstieg** (`65.21.27.234:6321`); die früheren DNAT-Relays auf
+`satellite`/`sync` sind abgebaut.
 
 | Env     | Trigger        | Host   | Game-Port | Öffentlicher Einstieg (planet `:6321`)           |
 | ------- | -------------- | ------ | --------- | ------------------------------------------------ |
-| DEV     | push `main`    | planet | `:6324`   | GNS-Entry-Relay, Spielname `*-dev` → `:6324`     |
 | PROD-A  | push Tag `v*`  | planet | `:6322`   | GNS-Entry-Relay, `*-a` / Default (kein Suffix) → `:6322` |
 | PROD-B  | push Tag `v*`  | planet | `:6325`   | GNS-Entry-Relay, Spielname `*-b` → `:6325` (Issue #995) |
-| STAGING | push `staging` | planet | `:6323`   | GNS-Entry-Relay, Spielname `*-staging` → `:6323` |
 
-- **DEV** (planet, `:6324`): rolling, von diesem CD-Workflow deployt
-  (`deploy/site.yml`, Werte aus `inventory/host_vars/planet/`). Der frühere
-  Dev-Port `:6321` ist an den GNS-Entry-Relay gegangen (Issue #843).
-- **PROD-A** (planet, `:6322`): koexistierende zweite Instanz
-  (`riftbreaker-dedicated-prod`), erreichbar über den GNS-Entry-Relay
-  (`rift.projectmellon.de` → `65.21.27.234:6321`, `*-a` / Default-Route →
-  `:6322`). Das frühere `satellite:6321 → :6322`-DNAT-Relay ist **retired**
-  (Issue #846). Deploy mit
+- **PROD-A** (planet, `:6322`): erste prod-Welt (`riftbreaker-dedicated-prod`),
+  erreichbar über den GNS-Entry-Relay (`rift.projectmellon.de` →
+  `65.21.27.234:6321`, `*-a` / Default-Route → `:6322`). Das frühere
+  `satellite:6321 → :6322`-DNAT-Relay ist **retired** (Issue #846). Deploy mit
   [`deploy-prod.yml`](deploy-prod.yml) + [`prod-vars.yml`](prod-vars.yml).
-- **PROD-B** (planet, `:6325`): vierte Twin-Instanz (Issue #995,
+- **PROD-B** (planet, `:6325`): zweite prod-Welt (Issue #995,
   `riftbreaker-dedicated-prod-b`), erreichbar über denselben GNS-Entry-Relay
   (Spielname `*-b` → `:6325`); eigene Container/Pfade/Volumes/Projekt + eigener
   Server-Control/Crash-Collector. Deployt im **selben** `deploy-prod.yml`-Lauf
   wie Prod-A ([`prod-b-vars.yml`](prod-b-vars.yml)); **ohne** mods-zip /
   tournament-server / website (eine Referee-Instanz kennt beide Welten).
-- **STAGING** (planet, `:6323`): dritter Twin (wie prod), erreichbar über den
-  GNS-Entry-Relay (`staging.projectmellon.de` → `65.21.27.234:6321`,
-  Spielname `*-staging` → `:6323`). Das frühere `sync:6321 → :6323`-DNAT-Relay
-  ist **retired** (Issue #846). Deploy bei Push auf `staging` per
-  `deploy/deploy-staging.yml` + `deploy/staging-vars.yml`.
 
 Der Client ist effektiv auf Port `6321` hardgewired — es gibt deshalb **genau
 einen** öffentlichen Zugang (planet `:6321`), und die Umgebung wird über den
@@ -337,16 +331,13 @@ GNS-Gegenspieler des Clients, liest den Spielnamen und **routet** anhand eines
 Suffix auf ein Backend — Regeln in `roles/gns-relay/templates/routes.j2`:
 
 ```text
-*-dev     = 127.0.0.1:6324     # Suffix-Wildcard
-*-staging = 127.0.0.1:6323     # Suffix-Wildcard
 *-a       = 127.0.0.1:6322     # Suffix-Wildcard (prod-A, #995)
 *-b       = 127.0.0.1:6325     # Suffix-Wildcard (prod-B, #995)
 *         = 127.0.0.1:6322     # Default (prod-A, abwaertskompatibel)
 ```
 
 Auswertung: **exakt** > **längster Suffix** > **Default**. Damit wählt der
-Spielname die Umgebung (`momo-staging` → staging, `momo-dev` → dev, `momo-a` →
-prod-A, `momo-b` → prod-B, sonst prod-A)
+Spielname die prod-Welt (`momo-a` → prod-A, `momo-b` → prod-B, sonst prod-A)
 — ohne Drop/Kick/Reconnect. Die `gns_probe.exe` wird zur Deploy-Zeit aus
 `tools/gns-proxy/` gebaut (MinGW-w64/zig, wie die Rolle `rbtools`) und auf
 demselben Laufzeit-Image `rb-dedicated:<sha>` betrieben; sie braucht die
@@ -362,25 +353,38 @@ basic_auth `operator`), ihr `--api-port` selbst bindet nur `127.0.0.1`. Lokal oh
 Domain: `ssh -L 9200:127.0.0.1:9200 planet`. Suffix-/Identitäts-Regeln haben
 weiter Vorrang.
 
-Weil der Relay `6321` übernimmt, ist der **dev-Server von `6321` auf `6324`
-umgezogen** (`riftbreaker_server_port_udp`); prod (`:6322`) und staging (`:6323`)
-bleiben unverändert, haben aber seit Issue #846 **keinen** eigenen Relay mehr —
-ihr öffentlicher Einstieg ist derselbe planet-GNS-Entry-Relay auf `:6321`
-(Suffix-Routing).
+Weil der Relay `6321` übernimmt, laufen die prod-Welten auf ihren eigenen
+Host-Ports (`:6322`/`:6325`); ihr öffentlicher Einstieg ist ausschließlich der
+planet-GNS-Entry-Relay auf `:6321` (Suffix-Routing). dev/staging sind mit dem
+prod-only-Umbau (Issue #1034) entfallen.
 
-Der **Tag→prod- und Branch→staging-Kanal ist verdrahtet**: ein Tag-Push `v*`
-rollt `deploy/deploy-prod.yml` (Prod-A + Prod-B) auf prod aus, ein
-Push auf `staging` rollt `deploy/deploy-staging.yml` (+ `-e @deploy/staging-vars.yml`)
-aus. Der forced command reicht den `<ref>` per Marker-Datei an den root-Wrapper,
-der `main` → `site.yml` (dev), `refs/tags/v*` → `deploy-prod.yml` (prod A+B) und
-`refs/heads/staging` → `deploy-staging.yml` (staging) dispatched (siehe
+Der **Tag→prod-Kanal ist verdrahtet**: ein Tag-Push `v*` rollt
+`deploy/deploy-prod.yml` (Play 0 host-services + Prod-A + Prod-B) auf prod aus.
+Der forced command reicht den `<ref>` per Marker-Datei an den root-Wrapper, der
+`refs/tags/v*` → `deploy-prod.yml` dispatched; jeder andere ref ist ein Fehler
+(fail loud, Issue #1034; siehe
 [„CD: SSH-Deploy"](#cd-ssh-deploy-dedizierter-deploy-user)).
 
 ```text
-push auf main          → deploy-dev     (site.yml,           dev       :6324 via GNS-Entry-Relay planet:6321)
-push auf Tag v*        → deploy-prod    (deploy-prod.yml,    prod-A    :6322 + prod-B :6325 via GNS-Entry-Relay planet:6321)
-push auf staging       → deploy-staging (deploy-staging.yml, staging   :6323 via GNS-Entry-Relay planet:6321)
+push auf Tag v*        → deploy-prod    (deploy-prod.yml,    prod-A :6322 + prod-B :6325 via GNS-Entry-Relay planet:6321)
 ```
+
+### Teardown dev/staging (#1034)
+
+Die entfallenen dev-/staging-Ressourcen auf planet (Container, Volumes,
+systemd-Units, Pfade) räumt das **nicht im CD verdrahtete**, idempotente
+Playbook [`deploy/teardown-dev-staging.yml`](teardown-dev-staging.yml) ab. Es
+wird **einmalig/manuell** gefahren, wenn die alten Dienste nicht mehr gebraucht
+werden:
+
+```bash
+# Erst read-only prüfen, dann ausführen:
+ansible-playbook -i deploy/inventory deploy/teardown-dev-staging.yml --check --diff
+ansible-playbook -i deploy/inventory deploy/teardown-dev-staging.yml
+```
+
+Der Teardown fasst ausschließlich dev-/staging-Ressourcen an — der
+prod-A/prod-B-Stack und der GNS-Entry-Relay bleiben unberührt.
 
 ## CD: SSH-Deploy (dedizierter deploy-User)
 
@@ -389,25 +393,22 @@ deploy-User** (ersetzt den früheren HTTP-Hook aus #91 — kein Token, kein
 Polling, Ergebnis-Streaming direkt im Job-Log):
 
 ```text
-push auf main / push auf Tag v*
+push auf Tag v*
   → GitHub-Actions-Job auf dem self-hosted Runner (planet)
   → ssh rbd "<sha> <ref>"                     [Runner-Key, User deploy]
   → forced command /opt/rbbattle-deploy/deploy-ssh.sh (läuft als deploy):
-       SHA validieren → env aus <ref> ableiten (main→dev, Tag v*→prod)
-       → env-spezifische Marker .deploy-<env>.sha/-ref + .deploy-env schreiben
+       SHA validieren → ref prüfen (nur refs/tags/v* → prod; sonst fail loud)
+       → Marker .deploy-prod.sha/-ref + .deploy-env=prod schreiben
        → sudo -n /usr/local/bin/rbbattle-deploy (als root):
-            cd /opt/rbbattle-deploy/repo-<env> (eigener Checkout je Env)
+            cd /opt/rbbattle-deploy/repo-prod (eigener Checkout)
             git fetch + Hard-Checkout (als root) → chown -R deploy:deploy
-            refs/heads/main → site.yml        (dev)
-            refs/tags/v*    → deploy-prod.yml (prod)
+            refs/tags/v*    → deploy-prod.yml (prod A+B, #1034)
   → exit code = Deploy-Ergebnis (kein Polling, kein Secret)
 ```
 
-**Getrennte Checkouts (Issue #483):** dev und prod haben je einen EIGENEN
-Checkout (`repo-dev/`, `repo-prod/`) und eigene Ref/SHA-Marker
-(`.deploy-dev.*` / `.deploy-prod.*`). Ein dev-Lauf (`main`) und ein prod-Lauf
-(`Tag v*`) können so **parallel** laufen, ohne sich Ref/SHA zu überschreiben.
-Der Umstieg ist rückwärts-kompatibel: die alten, env-losen Marker
+**Checkout + Marker (Issue #483/#1034):** der prod-Lauf nutzt den EIGENEN
+Checkout `repo-prod/` mit den Markern `.deploy-prod.sha`/`-ref` (+
+`.deploy-env=prod`). Rückwärts-kompatibel: die alten, env-losen Marker
 (`.deploy-sha`/`.deploy-ref`) liest der Wrapper nur noch als **Fallback**,
 wenn `.deploy-env` fehlt — dann benutzt er weiter den bestehenden Checkout
 `repo/`. Nach der Einmal-Migration (s. Checkliste) ist jeder Lauf env-lokal.
@@ -425,11 +426,9 @@ Voraussetzungen: root-Shell auf planet; das Repo ist öffentlich (anonymes
 `git fetch` genügt). `deploy/deploy-ssh.sh` ist die Quelle für Schritt 2.
 
 ```bash
-# 1) Service-User + Verzeichnisse + getrennte Checkouts (je Env einer, Issue #483):
+# 1) Service-User + Verzeichnisse + prod-Checkout (Issue #1034):
 sudo useradd --system --home /opt/rbbattle-deploy --shell /usr/sbin/nologin deploy
 sudo install -d -o deploy -g deploy -m 0750 /opt/rbbattle-deploy
-sudo -u deploy git clone https://github.com/momokli/riftbreaker-battle-mod.git \
-  /opt/rbbattle-deploy/repo-dev
 sudo -u deploy git clone https://github.com/momokli/riftbreaker-battle-mod.git \
   /opt/rbbattle-deploy/repo-prod
 
@@ -455,7 +454,7 @@ SSHALIAS
 
 # 5) Smoke-Test (führt den ECHTEN Deploy aus; exit 0 = grün):
 sudo -u runner ssh -o BatchMode=yes rbd \
-  "$(git -C /opt/rbbattle-deploy/repo-dev rev-parse origin/main) refs/heads/main"
+  "$(git -C /opt/rbbattle-deploy/repo-prod rev-parse origin/main) refs/tags/v0.0.0"
 ```
 
 ### Root-Weg (Standard): Ansible `become` über eng begrenztes sudoers
@@ -475,7 +474,7 @@ sudo /opt/rb-ansible/bin/pip install --disable-pip-version-check "ansible-core==
 #    deploy/deploy-wrapper.sh). Er arbeitet je Env in
 #    /opt/rbbattle-deploy/repo-<env> und dispatched anhand der Env-Marker
 #    .deploy-<env>.* (.deploy-env = aktuelle Env), die der forced command
-#    vorher geschrieben hat — main -> site.yml, Tag v* -> deploy-prod.yml:
+#    vorher geschrieben hat — seit #1034 nur noch Tag v* -> deploy-prod.yml:
 sudo install -m 0755 deploy/deploy-wrapper.sh /usr/local/bin/rbbattle-deploy
 sudo chown root:root /usr/local/bin/rbbattle-deploy
 sudo chmod 0755 /usr/local/bin/rbbattle-deploy
@@ -606,8 +605,9 @@ nur `deploy-check-local`**:
 
 - [`deploy-check-local.yml`](../.github/workflows/deploy-check-local.yml)
   (**Required Check**, GitHub-Hosted-Runner, `ubuntu-latest`) prüft rein
-  lokal: `yamllint` über `deploy/`, Playbook-`--syntax-check` für `site.yml` +
-  `deploy-prod.yml` (prod-Playbook, Issue #328), die hermetischen
+  lokal: `yamllint` über `deploy/`, Playbook-`--syntax-check` für
+  `deploy-prod.yml` (prod-Playbook, Issue #328) + `test-deploy.yml`, die
+  hermetischen
   Rollen-Selbsttests (`deploy/tests/`: Disk-Gate #310,
   `/server/*`-Route #463, Compose-Log-Limit #301), Compose-Templates rendern (`check-render.yml`) und
   jedes gerenderte Compose-File durch `docker compose config`. Kein
@@ -655,9 +655,9 @@ root-äquivalenten Zugriff; der SSH-Weg ist nur der Zugang für den read-only
 | `rbtools`                | build+stage        | baut die Windows-x64-Server-I/O-Tools (rbbridge.dll, injector.exe, pipe_bridge.exe) auf planet (MinGW-w64) und stagt sie nach `rbtools_dir` (read-only nach `/opt/rbtools` im Container; Issue #265)
 | `server-control`         | systemd            | Host-Agent (Plane B, Issue #424): stdlib-Python-Dienst wrappt `docker` (Status/Logs/Restart/Start/Stop + config.cfg); bind nur `127.0.0.1`, Caddy proxyt, Bearer-Token Pflicht
 | `game-content`           | steamcmd/sync      | Dedicated-Server-Content (App 4114030) nach `riftbreaker_game_dir` (idempotent, fail loud)                                                                                                                                                                                                                                                                                                                                   |
-| `riftbreaker-server`     | docker             | Dev-SP-Server 6324 (umgezogen von 6321, Issue #843; 1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation + Backup-/Stray-Retention (`riftbreaker_backup_keep`, #312)                                                                                                                                                                                                                                                      |
+| `riftbreaker-server`     | docker             | Dedicated-Server (prod-A `:6322` / prod-B `:6325`; 1v1 vs sich selbst), Mod-Install + Restart-Handler + Guard (keine Fremd-Mods in `mods/`) + Post-Deploy-Verifikation + Backup-/Stray-Retention (`riftbreaker_backup_keep`, #312)                                                                                                                                                                                                                                                      |
 | `satellite-relay`        | iptables + systemd | UDP-DNAT-Relay — **retired (Issue #846)**: `satellite_relay_state` (Default `present`) schaltet zwischen Aufbau und Teardown (`absent`) der früheren Relays `satellite` (prod, `:6321 → :6322`) und `sync` (staging, `:6321 → :6323`); Ziel-Port je Relay als Play-Var (`satellite_relay_target_port`), reboot-fest, kein `host_vars`                                                                                        |
-| `gns-relay`              | docker             | GNS-Entry-Relay auf planet (`network_mode: host`, UDP `:6321`): terminiert GameNetworkingSockets und routet per Suffix auf prod-A `:6322` (`*-a`) / prod-B `:6325` (`*-b`) / staging `:6323` / dev `:6324`; hält seit #857 unentschiedene Joins und lässt sie per Web-UI (`--api-port`, lokal) auf ein Ziel routen; baut `gns_probe.exe` aus `tools/gns-proxy` (Issue #843/#857/#995)                                                                                                            |
+| `gns-relay`              | docker             | GNS-Entry-Relay auf planet (`network_mode: host`, UDP `:6321`): terminiert GameNetworkingSockets und routet per Suffix auf prod-A `:6322` (`*-a`) / prod-B `:6325` (`*-b`) / Default `:6322`; hält seit #857 unentschiedene Joins und lässt sie per Web-UI (`--api-port`, lokal) auf ein Ziel routen; baut `gns_probe.exe` aus `tools/gns-proxy` (Issue #843/#857/#995/#1034)                                                                                                            |
 | `tournament-server`      | systemd            | Rust/axum Referee + Web-UI. Binary aus `tournament/` — wird beim Deploy auf planet gebaut (Rust-Toolchain via rustup unter `/opt/rbbattle-deploy/`, idempotent von der Rolle bereitgestellt)                                                                                                                                                                                                                                 |
 | `website`                | eigener Caddy      | eigener `rift-caddy` (plain HTTP: Landing + `/mod.zip` + Cockpit `/contract/*` + `/tournament/*`) + Host-Caddy-Einträge (Issue #322) — Landing + Cockpit je Env, plus die env-unabhängige GNS-Lobby (`proxy.rift.projectmellon.de`, Issue #857); Host-Caddy-Reload deterministisch + fehlersichtbar, `rift-caddy` mit `admin off` (Issue #355); `/server/*` nur bei deploytem Agenten (`server_control_enabled`, Issue #463) |
 | `mods-zip`               | —                  | Paketierung + md5-Paritäts-Check (hart)                                                                                                                                                                                                                                                                                                                                                                                      |
@@ -686,25 +686,23 @@ geteilten Host-Caddy (`mellon-caddy`) per `docker exec … caddy validate` +
 
 ```text
 deploy/
-├── site.yml                       # Haupt-Playbook dev (pre_tasks + Rollenreihenfolge)
-├── deploy-prod.yml                # Prod-A (planet :6322) + Prod-B (:6325) + Relay-Teardown (satellite, #846/#995)
-├── prod-vars.yml                  # Overrides Prod-A (dev-kokexistierend)
+├── deploy-prod.yml                # EINZIGES Playbook: Play 0 host-services + Prod-A (:6322) + Prod-B (:6325) + Relay-Teardown (satellite, #846/#995/#1034)
+├── prod-vars.yml                  # Overrides Prod-A
 ├── prod-b-vars.yml                # Overrides Prod-B (zweite prod-Welt, #995)
-├── deploy-staging.yml             # Staging-Instanz (planet :6323) + Relay-Teardown (sync, #846)
-├── staging-vars.yml               # Overrides der staging-Instanz (dev-/prod-kokexistierend)
 ├── test-deploy.yml / test-vars.yml # Boot-Test-Instanz (CI)
-├── check-render.yml               # deploy-check-local: rendert Compose-Templates lokal
+├── check-render.yml               # deploy-check-local: rendert Compose-Templates lokal (prod-Kontext)
+├── teardown-dev-staging.yml       # manueller, idempotenter Host-Teardown dev/staging (#1034; NICHT im CD)
 ├── deploy-ssh.sh                  # CD: forced command für den deploy-User (SSH)
 ├── inventory/
-│   ├── hosts.yml                  # Hosts "planet" (dev/prod/staging) + "satellite"/"sync" (Relay-Teardown, mesh-first)
+│   ├── hosts.yml                  # Hosts "planet" + "satellite" (Relay-Teardown, mesh-first)
 │   └── host_vars/planet/
-│       ├── vars.yml               # nicht-geheime Konfiguration
+│       ├── vars.yml               # nicht-geheime Host-Singleton-Konfiguration (prod-only)
 │       └── vault.yml              # Geheimnis (ansible-vault verschlüsselt)
 └── roles/
     ├── dedicated-server-image/    # baut rb-dedicated:<sha>
     ├── game-content/              # Steam-Content (App 4114030) deklarativ
-    ├── riftbreaker-server/        # docker 6324 (+ Restart-Handler; 6321 → gns-relay, #843; Backup-/Stray-Retention #312)
-    ├── gns-relay/                 # GNS-Entry-Relay (UDP 6321, Suffix-Routing; #843)
+    ├── riftbreaker-server/        # docker prod-A :6322 / prod-B :6325 (+ Restart-Handler; 6321 → gns-relay, #843; Backup-/Stray-Retention #312)
+    ├── gns-relay/                 # GNS-Entry-Relay (UDP 6321, A/B-Suffix-Routing; #843/#1034)
     ├── satellite-relay/           # UDP-DNAT-Relay, state present|absent (retired, #846)
     ├── tournament-server/         # systemd
     ├── website/                   # eigener rift-caddy: Landing + Cockpit + GNS-Lobby (Issue #322/#857)
@@ -865,11 +863,11 @@ Jeder Deploy traegt genau eine Identitaet `<env> · <ref>`:
 | Assert     | `deploy/tasks/env-assert.yml`                                                                          | Audit + Distinctness der per-env-Pfade; non-zero rc bricht den Deploy ab                    |
 | Tests      | `deploy/tests/env-identity/`, `deploy/tests/env-isolation/`, `tools/deploy-gate/test_env_isolation.py` | hermetisch (kein Host, kein Vault)                                                          |
 
-`rift_env` ist bewusst eine **Play-Var** in `site.yml` (dev), `deploy-prod.yml`
-(prod A+B) und `test-deploy.yml` (test): Play-Vars schlagen Rollen-Defaults und
-`host_vars` — sonst erbt prod/test still den dev-Wert (dieselbe Praezedenz wie
-`server_control_enabled`, #463). `dev` hat keine Override-Datei: dev **ist** die
-Basis (`inventory/host_vars/planet/vars.yml`).
+`rift_env` ist bewusst eine **Play-Var** in `deploy-prod.yml` (Play 0 = prod,
+Prod-A = prod, Prod-B = prod-b) und `test-deploy.yml` (test): Play-Vars schlagen
+Rollen-Defaults und `host_vars` (dieselbe Praezedenz wie `server_control_enabled`,
+#463). Seit Issue #1034 gibt es keine dev-Welt mehr; `host_vars/planet/vars.yml`
+hält nur noch host-weite Singleton-Werte.
 
 **Assert-Semantik (fail-loud):**
 

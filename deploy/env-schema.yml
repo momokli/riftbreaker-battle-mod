@@ -1,11 +1,12 @@
 ---
-# env-schema.yml — Env-Isolations-Schema (Issue #483, US2).
+# env-schema.yml — Env-Isolations-Schema (Issue #483, US2; prod-only #1034).
 #
 # Vertrag: JEDE Variable in den Env-Override-Dateien
-# (deploy/prod-vars.yml, deploy/test-vars.yml) ist entweder
+# (deploy/prod-vars.yml, deploy/prod-b-vars.yml, deploy/test-vars.yml) ist
+# entweder
 #   * `per_env`  -> Umgebungs-spezifisch (Pfad/Name/Port/Domain) und MUSS in
 #                   JEDER gelisteten Env-Datei **explizit** stehen. Fehlt sie,
-#                   erbt die Env still den dev-Wert (host_vars) — genau die
+#                   erbt die Env still den Basis-Wert (host_vars) — genau die
 #                   Bug-Klasse aus #483. Das Gate bricht dann ab.
 #   * `shared`   -> bewusst env-uebergreifend identisch, MIT Begruendung
 #                   (Allowlist). Ein Eintrag ohne Begruendung ist ein Fehler.
@@ -19,11 +20,11 @@
 # PyYAML); der Aufruf steht in deploy/tasks/env-assert.yml (Marker
 # ENV-ISOLATION-GATE) und laeuft in den pre_tasks VOR den Rollen.
 #
-# `dev` hat KEINE eigene Override-Datei: dev IST die Basis
-# (inventory/host_vars/planet/vars.yml). Seit der Ziel-B-Migration (#483) nutzt
-# dev DENSELBEN `<env>`-Namensraum (/srv/rift-dev/... statt der frueheren
-# unsuffigierten Sonderpfade /srv/rbgame etc.) — ein Schema, aus `rift_env`
-# abgeleitet. Die Distinctness gegen die dev-Basis asserted env-assert.yml.
+# PROD-ONLY (Issue #1034): die frueheren Envs `dev` (site.yml) und `staging`
+# (deploy-staging.yml) sind entfallen. `dev` hat deshalb KEINE per_env-Zeilen
+# mehr; die host_vars/planet-Datei haelt nur noch host-weite Singleton-Werte.
+# Der Distinctness-Assert in env-assert.yml vergleicht weiterhin gegen die
+# historischen dev-Basiswerte (Referenzkonstanten).
 
 per_env:
   # --- Dedicated-Server -----------------------------------------------------
@@ -31,116 +32,91 @@ per_env:
   # B-Komponenten unten tragen prod-b in ihren per_env-Listen; Website/Caddy/
   # Tournament bleiben BEWUSST ausgenommen (der B-Play deployt sie NICHT —
   # eine Referee-Instanz, keine zweite Landing/Caddy, docs/VS_MATCH.md §5.1).
-  riftbreaker_server_container: [prod, test, staging, prod-b]
-  riftbreaker_server_port_udp: [prod, test, staging, prod-b]
-  # Compose-Projekt JE Env explizit (Issue #483, Ziel B): im neuen
-  # `<env>`-Schema ist der Compose-Verzeichnis-Basename ueberall "riftbreaker"
-  # -> ohne expliziten Projektnamen kollidierten dev und prod. Variante (a),
-  # Befund 2: der Wert bleibt der HISTORISCHE Projektname
-  # (dev `riftbreaker-dedicated`, prod `riftbreaker-dedicated-prod`), damit die
-  # projekt-praefixten Docker-Volumes der laufenden Instanzen weiter getroffen
-  # werden; test bleibt lauf-isoliert (`rb-test-<suffix>`).
-  riftbreaker_compose_project: [dev, prod, test, staging, prod-b]
-  riftbreaker_game_dir: [prod, test, staging, prod-b]
-  riftbreaker_mod_dir: [prod, test, staging, prod-b]
-  riftbreaker_backup_dir: [prod, test, staging, prod-b]
-  riftbreaker_deploy_dir: [prod, test, staging, prod-b]
-  riftbreaker_config_dir: [prod, staging, prod-b]
-  riftbreaker_wine_volume: [prod, test, staging, prod-b]
-  riftbreaker_saves_volume: [prod, test, staging, prod-b]
-  riftbreaker_bridge_port: [prod, test, staging, prod-b]
+  riftbreaker_server_container: [prod, test, prod-b]
+  riftbreaker_server_port_udp: [prod, test, prod-b]
+  # Compose-Projekt JE Env explizit (Issue #483, Ziel B): der
+  # Compose-Verzeichnis-Basename ist ueberall "riftbreaker" -> ohne expliziten
+  # Projektnamen kollidierten die Welten. Der Wert bleibt der HISTORISCHE
+  # Projektname (prod-A `riftbreaker-dedicated-prod`, prod-B `...-prod-b`),
+  # damit die projekt-praefixten Docker-Volumes der laufenden Instanzen weiter
+  # getroffen werden; test bleibt lauf-isoliert (`rb-test-<suffix>`).
+  riftbreaker_compose_project: [prod, test, prod-b]
+  riftbreaker_game_dir: [prod, test, prod-b]
+  riftbreaker_mod_dir: [prod, test, prod-b]
+  riftbreaker_backup_dir: [prod, test, prod-b]
+  riftbreaker_deploy_dir: [prod, test, prod-b]
+  riftbreaker_config_dir: [prod, prod-b]
+  riftbreaker_wine_volume: [prod, test, prod-b]
+  riftbreaker_saves_volume: [prod, test, prod-b]
+  riftbreaker_bridge_port: [prod, test, prod-b]
   # --- Server-I/O-Tools (rbtools) -----------------------------------------
-  rbtools_dir: [prod, test, staging, prod-b]
-  rbtools_staging_dir: [prod, test, staging, prod-b]
+  rbtools_dir: [prod, test, prod-b]
+  rbtools_staging_dir: [prod, test, prod-b]
   # --- Sidecars (Session-Recorder + Send-Tailer + Match-Loop + Referee-Egress) -
-  riftbreaker_sessions_container: [prod, test, staging, prod-b]
-  riftbreaker_sessions_dir: [prod, test, staging, prod-b]
-  riftbreaker_send_tailer_container: [prod, test, staging, prod-b]
-  riftbreaker_match_loop_container: [prod, test, staging, prod-b]
-  riftbreaker_attack_cycle_container: [prod, test, staging, prod-b]
-  riftbreaker_chat_announcer_container: [prod, test, staging, prod-b]
+  riftbreaker_sessions_container: [prod, test, prod-b]
+  riftbreaker_sessions_dir: [prod, test, prod-b]
+  riftbreaker_send_tailer_container: [prod, test, prod-b]
+  riftbreaker_match_loop_container: [prod, test, prod-b]
+  riftbreaker_attack_cycle_container: [prod, test, prod-b]
+  riftbreaker_chat_announcer_container: [prod, test, prod-b]
   # Host-Publish des Attack-Cycle-Control (Kapsel /ready, #963): im boot-test je
-  # Lauf eindeutig (Issue #967) — sonst kollidiert der feste 9102-Publish mit dem
-  # Dev-Stack. Je Env eindeutig: dev 9102 (Default), prod 9103, staging 9104, test per-Run.
-  riftbreaker_attack_cycle_port: [prod, test, staging, prod-b]
+  # Lauf eindeutig (Issue #967). Je Env eindeutig: prod-A 9103, prod-B 9105,
+  # test per-Run.
+  riftbreaker_attack_cycle_port: [prod, test, prod-b]
 
   # --- Crash-Collector (Prod-Zwilling, Issue #481) -------------------------
   # prod-b (Issue #995, Entscheidung D2): eigener Crash-Collector (Twin-
   # Symmetrie) -> Unit/Dir/Container explizit je Env.
-  crash_collector_unit: [prod, staging, prod-b]
-  crash_collector_dir: [prod, staging, prod-b]
-  crash_collector_container: [prod, staging, prod-b]
+  crash_collector_unit: [prod, prod-b]
+  crash_collector_dir: [prod, prod-b]
+  crash_collector_container: [prod, prod-b]
   # --- Server-Control (Prod-Zwilling, Issue #498) --------------------------
-  server_control_unit: [prod, staging, prod-b]
-  server_control_port: [prod, staging, prod-b]
-  server_control_install_dir: [prod, staging, prod-b]
-  server_control_env_file: [prod, staging, prod-b]
-  # --- Parked-Pool-Dienst (Issue #928) ------------------------------------
-  # Der Dienst ist env-parametrisiert (Unit rbmods-parked-<env>) und laeuft
-  # aktuell nur im dev-Play (site.yml). dev ist die Basis (host_vars) und setzt
-  # die isolierten Werte deshalb explizit; prod/staging deployen die Rolle
-  # derzeit NICHT (#498-Zwillinge sind ein eigenes Follow-up), daher hier nicht
-  # gelistet. Der isolierte Port weicht vom dev-server-control (8092) ab.
-  parked_pool_unit: [dev]
-  parked_pool_port: [dev]
-  parked_pool_pool_size: [dev]
-  parked_pool_install_dir: [dev]
-  parked_pool_env_file: [dev]
-  # --- Kapsel-Flow-Dienst (Issue #931, dev) -------------------------------
-  capsule_flow_port: [dev]
-  capsule_flow_parked_port: [dev]
-  # --- Queue-Dienst (Issue #998, dev) -------------------------------------
-  # Env-parametrisiert (Unit rbmods-queue-<env>), aktuell nur im dev-Play
-  # (site.yml). Der isolierte Port weicht von Parked (9201) / Kapsel (9211) ab.
-  queue_unit: [dev]
-  queue_port: [dev]
-  queue_install_dir: [dev]
-  queue_env_file: [dev]
-  queue_state_dir: [dev]
-  queue_provisioner_url: [dev]
-  queue_referee_url: [dev]
+  server_control_unit: [prod, prod-b]
+  server_control_port: [prod, prod-b]
+  server_control_install_dir: [prod, prod-b]
+  server_control_env_file: [prod, prod-b]
+
   # --- Tournament-Server ----------------------------------------------------
   # prod-b (Issue #995): BEWUSST NICHT um prod-b erweitert — der B-Play deployt
-  # KEINEN tournament-server (eine Referee-Instanz kennt beide Welten: A :9002,
-  # B :9004, docs/VS_MATCH.md §5.3); keine stille Zweit-Instanz.
-  tournament_install_dir: [prod, test, staging]
-  tournament_unit: [prod, test, staging]
-  tournament_port: [prod, test, staging]
-  tournament_bridge_a_url: [prod, test, staging]
-  tournament_bridge_b_url: [prod, test, staging]
-  # --- Website (prod + staging betreiben je eine eigene Landing/Cockpit) -----
+  # KEINEN tournament-server (eine Referee-Instanz kennt beide Welten: A :6322,
+  # B :6325, docs/VS_MATCH.md §5.3); keine stille Zweit-Instanz.
+  tournament_install_dir: [prod, test]
+  tournament_unit: [prod, test]
+  tournament_port: [prod, test]
+  tournament_bridge_a_url: [prod, test]
+  tournament_bridge_b_url: [prod, test]
+  # --- Website (nur prod betreibt eine Landing/Cockpit) ---------------------
   # prod-b (Issue #995): BEWUSST NICHT um prod-b erweitert — der B-Play deployt
   # KEINE website/rift-caddy (keine zweite Landing/Cockpit laut §5.1).
-  landing_domain: [prod, staging]
-  cockpit_domain: [prod, staging]
-  rift_caddy_container: [prod, staging]
-  rift_caddy_port: [prod, staging]
-  rift_caddy_deploy_dir: [prod, staging]
-  rift_caddy_data_dir: [prod, staging]
-  rift_caddy_config_dir: [prod, staging]
+  landing_domain: [prod]
+  cockpit_domain: [prod]
+  rift_caddy_container: [prod]
+  rift_caddy_port: [prod]
+  rift_caddy_deploy_dir: [prod]
+  rift_caddy_data_dir: [prod]
+  rift_caddy_config_dir: [prod]
   # --- Website-Pfade explizit je Env (Issue #483, US3) ---------------------
-  website_docroot: [prod, test, staging]
-  website_mods_dir: [prod, test, staging]
-  # mods_zip_dest: prod/staging setzen es explizit; test leitet es (ueber das
-  # isolierte website_mods_dir) aus host_vars ab und bleibt dadurch distinct.
-  # prod-b (Issue #995 Rework): MUSS es explizit setzen — sonst erbte der
-  # B-Play still den dev-Docroot (Cross-Env-Kopplung, Review-Blocker 2). B
-  # konsumiert das kanonische Tag-Artefakt des Prod-A-Plays.
-  mods_zip_dest: [prod, staging, prod-b]
+  website_docroot: [prod, test]
+  website_mods_dir: [prod, test]
+  # mods_zip_dest (Issue #995 Rework): prod/prod-b/test setzen es explizit.
+  # prod-B konsumiert das kanonische Tag-Artefakt des Prod-A-Plays, MUSS aber
+  # EXPLIZIT vom dev-Basiswert abweichen — sonst erbte es still den dev-Docroot
+  # (Cross-Env-Kopplung). test leitet es aus dem lauf-isolierten website_mods_dir.
+  mods_zip_dest: [prod, test, prod-b]
   # --- Boot-Test (nur test) -------------------------------------------------
   dedicated_server_context_dir: [test]
 
 shared:
   riftbreaker_content_mode: "Content wird in allen Envs per Sync aus dem kanonischen Cache geholt — gleicher Modus, kein Env-Zustand (#483)."
-  riftbreaker_content_cache_dir: "Kanonischer Steam-Content-Cache auf planet (Host-Stand, /srv/riftbreaker/data/server) — EINE Quelle fuer alle Envs."
+  riftbreaker_content_cache_dir: "Kanonischer Steam-Content-Cache auf planet (Host-Stand) — EINE Quelle fuer alle Envs."
   riftbreaker_disk_min_free_gb: "Disk-Gate-Schwelle ist ein Host-Ressourcen-Parameter, kein Env-Pfad/-Name/Stand (gleiche Schwelle ueberall)."
   cargo_home: "Rust-Toolchain-Pfad des CI-Runners — Laufzeit-/Runner-Infrastruktur, kein Env-State."
   rustup_home: "Rust-Toolchain-Pfad des CI-Runners — Laufzeit-/Runner-Infrastruktur, kein Env-State."
   rbbattle_run_suffix: "Nur die Test-Instanz traegt einen Lauf-Suffix (github.run_id) — Lauf-Parameter, kein Env-Pfad/Port/Domain."
-  # --- Dev-Basis-Keys (host_vars/planet), env-uebergreifend identisch -------
-  # Diese Keys stehen NUR in host_vars, nicht in prod-/test-vars. Sie sind
-  # bewusst klassifiziert (nicht "still geerbt"): das Gate fordert fuer JEDEN
-  # host_vars-Top-Level-Key eine Klasse. Begruendung je Key unten.
+  # --- Host-Singleton-/Basis-Keys (host_vars/planet), env-uebergreifend ----
+  # Diese Keys stehen nur in host_vars. Sie sind bewusst klassifiziert (nicht
+  # "still geerbt"): das Gate fordert fuer JEDEN host_vars-Top-Level-Key eine
+  # Klasse. Begruendung je Key unten.
   dedicated_server_image_name: "Image-Basisname (rb-dedicated) ist ueber alle Envs gleich; der Tag kommt aus deploy_image_tag (Deploy-SHA), nicht aus der Env."
   dedicated_server_image: "Rendert den env-unabhaengigen Tag (image_name:deploy_image_tag); Env-Trennung laeuft ueber Container-Name/Pfade, nicht den Image-Namen."
   riftbreaker_server_image: "Alias auf dedicated_server_image — gleiche Begruendung (Tag = Deploy-SHA, kein Env-Praefix)."
@@ -148,12 +124,10 @@ shared:
   # --- GNS-Entry-Relay (Issue #843) -----------------------------------------
   # Der Relay ist ein SINGLETON auf planet: genau EIN Prozess besitzt den
   # client-hardgewireten UDP-Einstiegsport 6321. Er routet anhand des
-  # Spielnamens auf die drei (per_env isolierten) Backends — er selbst ist KEIN
-  # Env-Praefix-Twin, daher host-konstant (shared) und nicht per_env (per_env
-  # wuerde prod/test/staging zwingen, Werte zu setzen, obwohl die Rolle dort
-  # gar nicht deployt wird).
+  # Spielnamens auf die (per_env isolierten) prod-Welten — er selbst ist KEIN
+  # Env-Twin, daher host-konstant (shared).
   gns_relay_container: "Container-Name des Relays (gns-relay) — ein Singleton auf planet, kein Env-Twin."
-  gns_relay_image: "Alias auf dedicated_server_image — Tag = Deploy-SHA (kein Env-Praefix), wie riftbreaker_server_image."
+  gns_relay_image: "Alias auf dedicated_server_image — Tag = Deploy-SHA (kein Env-Praefix)."
   gns_relay_port: "Client-hardgewireter Einstiegsport 6321 — Host-Konstante (der Client waehlt ihn), kein Env-Port."
   gns_relay_deploy_dir: "Compose-/Config-Verzeichnis des Relays (/opt/rbmods/compose/gns-relay) — Singleton, kein per-Env-Pfad."
   gns_relay_bin_dir: "Ablage der gebauten gns_probe.exe (/opt/rbmods/gns-relay/bin) — Singleton, kein per-Env-Pfad."
@@ -162,16 +136,15 @@ shared:
   gns_relay_hold: "Spieler halten statt auto-routen (PoC-Web-UI) — Singleton-Verhalten des Relays, kein Env-Twin."
   gns_relay_api_host: "Bind-Adresse der Steuer-API (127.0.0.1) — kein Auth, daher host-lokal."
   gns_relay_api_port: "HTTP-Port der Steuer-API/UI (9200) — Relay-Singleton, kein Env-Port."
-  gns_relay_targets: "Buttons/Targets der UI (NAME=ip:port) — aus den drei Backend-Zielen abgeleitet, kein Env-Twin."
+  gns_relay_targets: "Buttons/Targets der UI (NAME=ip:port) — aus den A/B-Backend-Zielen abgeleitet, kein Env-Twin."
   gns_relay_extra_routes: "Zusaetzliche Routen-Zeilen fuer die gerenderte Routen-Datei (deploy-feste Pins)."
   # Parked-Anbindung fuer POST /solo (Issue #929): Singleton-Relay spricht den
-  # env-eigenen Parked-Dienst an; der Relay selbst ist kein Env-Twin, daher das
-  # Rollen-Default (dev-Port) hier als host-konstant gefuehrt.
-  gns_relay_parked_url: "Ziel des Parked-Pool-Dienstes fuer /solo (Default dev 127.0.0.1:9201) — Relay-Singleton, kein Env-Twin."
+  # host-weiten Parked-Dienst an; der Relay selbst ist kein Env-Twin.
+  gns_relay_parked_url: "Ziel des Parked-Pool-Dienstes fuer /solo (127.0.0.1:9201) — Relay-Singleton, kein Env-Twin."
   gns_relay_parked_token: "Bearer-Token fuer den Parked-Dienst aus dem Vault (vault_parked_pool_token) — Zugangsdatum, kein Env-Pfad/Port."
-  gns_relay_capsule_url: "Ziel des Kapsel-Flow-Dienstes fuer /solo (Vorrang) + /ready (Default dev 127.0.0.1:9211) — Relay-Singleton, kein Env-Twin."
+  gns_relay_capsule_url: "Ziel des Kapsel-Flow-Dienstes fuer /solo (Vorrang) + /ready (127.0.0.1:9211) — Relay-Singleton, kein Env-Twin."
   gns_relay_capsule_token: "Bearer-Token fuer den Kapsel-Dienst aus dem Vault (vault_capsule_token) — Zugangsdatum, kein Env-Pfad/Port."
-  gns_relay_queue_url: "Ziel des Queue-Dienstes fuer POST /queue (Default dev 127.0.0.1:9221) — Relay-Singleton, kein Env-Twin."
+  gns_relay_queue_url: "Ziel des Queue-Dienstes fuer POST /queue (127.0.0.1:9221) — Relay-Singleton, kein Env-Twin."
   gns_relay_queue_token: "Bearer-Token fuer den Queue-Dienst aus dem Vault (vault_queue_token) — Zugangsdatum, kein Env-Pfad/Port."
   # GNS-Lobby (Issue #857): Operator-Web-UI des Relay-Singletons.
   proxy_domain: "Lobby-Domain (proxy.rift.projectmellon.de) — env-UNABHAENGIG (Relay-Singleton), daher NICHT per-env ueberschrieben."
@@ -182,30 +155,45 @@ shared:
   # keinem Env-Play ueberschrieben wird (sonst Host-Caddyfile-Flap).
   proxy_basic_auth_hash: "basic_auth-Hash der Lobby (operator) aus dem eigenen host-konstanten Vault-Wert (vault_proxy_basic_auth_hash), entkoppelt von den per-Env Cockpit-Credentials; die Relay-API selbst hat keinen Auth."
   # Issue #535 (Nur-Doku): contract_basic_auth_hash ist eine Rollen-Default/
-  # Play-Var (kein Top-Level-Key einer Var-Quelle) — prod-A/staging setzen ihn
-  # per Play-Var aus dem Vault, dev/test/local erben den Legacy-Fallback.
-  # Deshalb NICHT in `per_env` (check_env_isolation prueft nur Var-Quell-Keys).
+  # Play-Var (kein Top-Level-Key einer Var-Quelle) — prod-A setzt ihn per
+  # Play-Var aus dem Vault, test/local erben den Legacy-Fallback (Issue #1034:
+  # die frueheren dev-/staging-Plays entfallen). Deshalb NICHT in `per_env`
+  # (check_env_isolation prueft nur Var-Quell-Keys).
   contract_basic_auth_hash_legacy_shared: "Geteilter Legacy-Operator-Hash (bcrypt \"zukka\") als benannte Fallback-Konstante + Vergleichsbasis des per-Env Distinctness-Asserts (Issue #535)."
+  # --- Parked-/Kapsel-/Queue-Dienste (Host-Singletons, #1034) ---------------
+  # Sie werden von Play 0 (deploy-prod.yml) als host-weite Singletons
+  # deployt (ein Relay/Queue auf dem Host) und tragen env-FREIE Unit-/Pfad-Namen.
+  parked_pool_unit: "Unit-Name (rbmods-parked) — host-weiter Singleton, kein Env-Twin."
+  parked_pool_port: "HTTP-Port des Parked-Dienstes (9201) — Singleton, kein Env-Port."
+  parked_pool_pool_size: "Warm-Pool-Groesse — Singleton-Verhalten, kein Env-Zustand."
+  parked_pool_install_dir: "Installationsort (/opt/rbmods/parked-pool) — Singleton, kein per-Env-Pfad."
+  parked_pool_env_file: "EnvironmentFile (/etc/rbmods/parked-pool.env) — Singleton, kein per-Env-Pfad."
+  parked_pool_state_dir: "State-Verzeichnis des Parked-Dienstes — Singleton, kein per-Env-Pfad."
+  capsule_flow_port: "HTTP-Port des Kapsel-Dienstes (9211) — Singleton, kein Env-Port."
+  capsule_flow_parked_port: "Parked-Nachbarport des Kapsel-Dienstes (9201) — Singleton, kein Env-Port."
+  queue_unit: "Unit-Name (rbmods-queue) — host-weiter Singleton, kein Env-Twin."
+  queue_port: "HTTP-Port des Queue-Dienstes (9221) — Singleton, kein Env-Port."
+  queue_install_dir: "Installationsort (/opt/rbmods/queue) — Singleton, kein per-Env-Pfad."
+  queue_env_file: "EnvironmentFile (/etc/rbmods/queue.env) — Singleton, kein per-Env-Pfad."
+  queue_state_dir: "State-Verzeichnis des Queue-Dienstes (/var/lib/rbmods/queue) — Singleton."
+  queue_provisioner_url: "Ziel des Provisioners fuer die Queue — Singleton-Nachbar, kein Env-Twin."
+  queue_referee_url: "Ziel des Referees (prod-tournament-server 8082) — Singleton-Nachbar."
   # --- Tournament-API-Auth (Issue #298) -------------------------------------
-  # Rollen-Defaults (keine Override-Datei): der Loopback-Bind und der Vault-
-  # Token gelten env-uebergreifend. Bewusst klassifiziert, damit die Haertung
-  # nicht als stiller dev-Vererbungsfall missverstanden wird.
   tournament_host: "Bind-Adresse des tournament-server (Default 127.0.0.1, Issue #298) — Zugriffsdatum, kein Env-Pfad/Port; Loopback gilt fuer jede Env, der rift-caddy (host-net) proxyt dorthin."
-  tournament_token: "Bearer-Token der Tournament-API aus dem Vault (vault_tournament_token) — Zugangsdatum, kein Env-Pfad/Port; EINE Quelle fuer Rust + Caddy + Queue."
+  tournament_token: "Bearer-Token der Tournament-API aus dem Vault (vault_tournament_token) — Zugangsdatum; EINE Quelle fuer Rust + Caddy + Queue."
   website_host_caddy_container: "Geteilter Host-Caddy (mellon-caddy) hostet fremde Domains — EINER pro Host, kein Env-Praefix moeglich (#322)."
   website_host_caddyfile_path: "Pfad zum geteilten Host-Caddyfile (/home/momo/Caddyfile) — Host-Konstante, kein Env-Zustand."
   website_host_caddyfile_owner: "Owner des geteilten Host-Caddyfiles (momo) — Host-Konstante, kein Env-Zustand."
   website_host_caddyfile_group: "Gruppe des geteilten Host-Caddyfiles (momo) — Host-Konstante, kein Env-Zustand."
   mods_zip_name: "Zip-Dateiname rbbattle.zip ist historisch fix (md5-Paritaet/Download-Link); Env-Trennung erfolgt ueber das abweichende mods_zip_dest."
   rift_caddy_site_root: "Docroot IM Caddy-Container (/srv/site) — container-interner Pfad, unabhaengig vom Host-Mount je Env."
-  riftbreaker_server_campaign: "Bis #476 gemeinsam (Game-Settings koppeln heute dev/prod) — Kopplung ist bewusst/dokumentiert, kein stilles Erben."
-  riftbreaker_server_mission: "Bis #476 gemeinsam (Game-Settings koppeln heute dev/prod) — wie campaign."
-  riftbreaker_server_difficulty: "Bis #476 gemeinsam (Game-Settings koppeln heute dev/prod) — wie campaign."
+  riftbreaker_server_campaign: "Game-Settings koppeln die Welten — Kopplung ist bewusst/dokumentiert, kein stilles Erben."
+  riftbreaker_server_mission: "Wie campaign (Game-Settings)."
+  riftbreaker_server_difficulty: "Wie campaign (Game-Settings)."
   # --- VS-Sidecar-Egress (Issue #996) --------------------------------------
   # Laufzeit-Envs der Sidecars + des Referees; sie liegen NICHT im
-  # host_vars-Override-Mechanismus (nicht in dev/prod/test-vars). Env-eigene
-  # Werte setzt die Rolle/Compose-Schicht je Instanz, daher hier als host-
-  # konstant klassifiziert (kein dev-Vererbungs-Risiko im Sinne von #483).
+  # host_vars-Override-Mechanismus (nicht in prod/prod-b/test-vars). Env-eigene
+  # Werte setzt die Rolle/Compose-Schicht je Instanz, daher host-konstant.
   RBB_REFEREE_URL: "Referee-Basis-URL fuer den VS-Egress (attack-cycle send_enemy, match-loop hq_hp) — Sidecar-Laufzeit-Env, je Instanz gesetzt."
   RBB_VS_WORLD: "Eigene Welt im VS (A|B) fuer Sidecars — Sidecar-Laufzeit-Env, je Instanz gesetzt."
   RBB_QUEUE_URL: "Queue-Dienst-Basis-URL fuer den Relay-Endpunkt POST /queue (Issue #998) — Relay-Laufzeit-Env (RBB_QUEUE_URL)."

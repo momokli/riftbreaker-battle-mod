@@ -3,13 +3,11 @@
 # (Issue #463).
 #
 # Prüft die ECHTE Vorlage deploy/roles/website/templates/rift-caddy.Caddyfile.j2
-# in den drei Zuständen (dev/prod/fail-safe, Issue #498):
-#   Fall A dev  (server_control_enabled=true, wie site.yml)   -> /server/* MUSS
-#                da sein und auf 127.0.0.1:8092 zeigen.
-#   Fall B prod (server_control_enabled=true, wie deploy-prod.yml + prod-vars)
+# in den zwei Zuständen (prod/fail-safe, Issue #463/#1034):
+#   Fall A prod (server_control_enabled=true, wie deploy-prod.yml + prod-vars)
 #                -> /server/* MUSS da sein und auf 127.0.0.1:8093 zeigen,
-#                   NIE auf 8092.
-#   Fall C fail-safe (server_control_enabled=false)           -> /server/* darf
+#                   NIE auf 8092 (dev ist entfallen).
+#   Fall B fail-safe (server_control_enabled=false)           -> /server/* darf
 #                NICHT da sein, Cockpit-Root + /tournament/* bleiben.
 #
 # Kein Host, kein SSH, kein Docker, kein Vault, keine Prod-Aktion.
@@ -25,17 +23,13 @@ prod_vars="$here/../../prod-vars.yml"
 # geteilte Legacy-Hash darf NIRGENDS mehr vorkommen (Distinctness).
 PROD_OPERATOR_HASH='$2a$14$prodoperatorhash000000000000000000000000000000000000'
 
-echo "== Fall A: dev (server_control_enabled=true) -> /server/* MUSS gerendert sein =="
-RB_ROUTE_RENDER_DIR="$(mktemp -d)" ansible-playbook "$play" \
-  -e expect_route=true -e server_control_enabled=true
-
-echo "== Fall B: prod (server_control_enabled=true) -> /server/* auf 8093, nie 8092 =="
+echo "== Fall A: prod (server_control_enabled=true) -> /server/* auf 8093, nie 8092 =="
 RB_ROUTE_RENDER_DIR="$(mktemp -d)" ansible-playbook "$play" \
   -e expect_route=true -e server_control_enabled=true -e @"$prod_vars" \
   -e contract_basic_auth_hash="$PROD_OPERATOR_HASH"
 
-echo "== Fall C: fail-safe (server_control_enabled=false) -> /server/* fehlt =="
+echo "== Fall B: fail-safe (server_control_enabled=false) -> /server/* fehlt =="
 RB_ROUTE_RENDER_DIR="$(mktemp -d)" ansible-playbook "$play" \
   -e expect_route=false -e server_control_enabled=false
 
-echo "OK: dev 8092, prod 8093, ohne Agent keine Route — kein Cross-Env."
+echo "OK: prod 8093, ohne Agent keine Route — kein Cross-Env."

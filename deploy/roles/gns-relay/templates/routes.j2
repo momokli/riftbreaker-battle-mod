@@ -3,16 +3,14 @@
 # Routen der GNS-Einstiegs-Relay (Issue #843): `<key> = <ip:port>` je Zeile,
 # '#' = Kommentar. Auswertung: exakt > laengster Suffix-Treffer > Default.
 #
-# Der Spielname mit Suffix waehlt die Umgebung; alles ohne passenden Suffix
-# landet auf dem Default (prod-A). Die Ziele kommen aus den Rollen-Variablen
-# gns_relay_target_dev / _staging / _a / _b / _default (host_vars fuer planet;
-# prod/staging koennen auf andere Backends zeigen).
+# Der Spielname mit Suffix waehlt die Welt; alles ohne passenden Suffix landet
+# auf dem Default (prod-A). Die Ziele kommen aus den Rollen-Variablen
+# gns_relay_target_a / _b / _default (host_vars fuer planet).
 #
 # Issue #995 (zweite prod-Welt): `*-a` -> prod-A :6322, `*-b` -> prod-B :6325.
-# Auswertung bleibt exakt > laengster Suffix-Treffer > Default; der Default
-# zeigt weiter auf A (abwaertskompatibel, Entscheidung D1).
-*-dev     = {{ gns_relay_target_dev }}
-*-staging = {{ gns_relay_target_staging }}
+# Issue #1034 (prod-only): dev/staging sind entfallen — der Relay routet nur
+# noch auf die prod-Welten. Auswertung bleibt exakt > laengster Suffix-Treffer
+# > Default; der Default zeigt weiter auf A (abwaertskompatibel, Entscheidung D1).
 *-a       = {{ gns_relay_target_a }}
 *-b       = {{ gns_relay_target_b }}
 *         = {{ gns_relay_target_default }}

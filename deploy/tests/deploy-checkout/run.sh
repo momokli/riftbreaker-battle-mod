@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
-# Hermetischer Selbsttest der getrennten Deploy-Checkouts (Issue #483, Ziel A).
+# Hermetischer Selbsttest des Deploy-Dispatches (Issue #483, Ziel A; prod-only #1034).
 #
 # Prüft die ECHTEN Repo-Artefakte deploy/deploy-ssh.sh (forced command) und
 # deploy/deploy-wrapper.sh (root-Wrapper) mit einer STUB-Umgebung — kein Host,
 # kein SSH, kein sudo, kein git-Netz, kein Ansible:
-#   * ref refs/heads/main  -> Marker .deploy-dev.* + .deploy-env=dev + repo-dev
-#   * ref refs/tags/v*     -> Marker .deploy-prod.* + repo-prod
-#   * beide laufen nacheinander PARALLEL-sicher: der dev-Marker bleibt erhalten
-#     (Live-Befund #2: geteilter Marker wurde überschrieben)
+#   * ref refs/tags/v*     -> Marker .deploy-prod.* + .deploy-env=prod + repo-prod
+#                             + dispatcht deploy/deploy-prod.yml
 #   * ungueltige SHA       -> exit 1 (kein Marker)
-#   * ungueltiger ref      -> exit 1
+#   * ungueltiger ref      -> exit 1 (main/staging sind entfallen, #1034)
 #   * Legacy-Fallback (ohne .deploy-env) -> bestehender Checkout `repo/`
 #
 # Läuft in deploy-check-local.
@@ -67,54 +65,55 @@ run_forced() { # <sha> <ref>
   RBBATTLE_DEPLOY_NO_SUDO=1 SSH_ORIGINAL_COMMAND="$1 $2" "$ssh_sh"
 }
 
-echo "== dev: refs/heads/main -> .deploy-dev.* / repo-dev =="
+echo "== prod: refs/tags/v1.2.3 -> .deploy-prod.* / repo-prod / deploy-prod.yml =="
 rm -f "$args_file"
-run_forced "$sha_a" refs/heads/main
-[ "$(cat "$root/.deploy-dev.sha")" = "$sha_a" ] || fail "dev-SHA-Marker falsch"
-[ "$(cat "$root/.deploy-dev.ref")" = "refs/heads/main" ] || fail "dev-ref-Marker falsch"
-[ "$(cat "$root/.deploy-env")" = "dev" ] || fail ".deploy-env != dev"
-[ -d "$root/repo-dev/.git" ] || fail "repo-dev wurde nicht angelegt"
-grep -q "deploy/site.yml" "$args_file" || fail "dev dispatcht nicht site.yml"
-
-echo "== prod: refs/tags/v1.2.3 -> .deploy-prod.* / repo-prod =="
-rm -f "$args_file"
-run_forced "$sha_b" refs/tags/v1.2.3
-[ "$(cat "$root/.deploy-prod.sha")" = "$sha_b" ] || fail "prod-SHA-Marker falsch"
+run_forced "$sha_a" refs/tags/v1.2.3
+[ "$(cat "$root/.deploy-prod.sha")" = "$sha_a" ] || fail "prod-SHA-Marker falsch"
 [ "$(cat "$root/.deploy-prod.ref")" = "refs/tags/v1.2.3" ] || fail "prod-ref-Marker falsch"
 [ "$(cat "$root/.deploy-env")" = "prod" ] || fail ".deploy-env != prod"
 [ -d "$root/repo-prod/.git" ] || fail "repo-prod wurde nicht angelegt"
 grep -q "deploy/deploy-prod.yml" "$args_file" || fail "prod dispatcht nicht deploy-prod.yml"
 
-echo "== Race-Schutz: dev-Marker nach dem prod-Lauf unveraendert =="
-[ "$(cat "$root/.deploy-dev.sha")" = "$sha_a" ] || fail "Cross-Env-Race: dev-Marker ueberschrieben"
-[ "$(cat "$root/.deploy-dev.ref")" = "refs/heads/main" ] || fail "Cross-Env-Race: dev-ref ueberschrieben"
-
 echo "== Negativ: ungueltige SHA -> exit 1, kein Marker =="
 bad_root="$work/bad-root"; mkdir -p "$bad_root"
 set +e
 RBBATTLE_DEPLOY_ROOT="$bad_root" RBBATTLE_DEPLOY_NO_SUDO=1 \
-  SSH_ORIGINAL_COMMAND="not-a-sha refs/heads/main" "$ssh_sh" >/dev/null 2>&1
+  SSH_ORIGINAL_COMMAND="not-a-sha refs/tags/v1.2.3" "$ssh_sh" >/dev/null 2>&1
 rc=$?
 set -e
 [ "$rc" -ne 0 ] || fail "ungueltige SHA wurde akzeptiert (rc=0)"
-[ ! -e "$bad_root/.deploy-dev.sha" ] || fail "Marker trotz ungueltiger SHA geschrieben"
+[ ! -e "$bad_root/.deploy-prod.sha" ] || fail "Marker trotz ungueltiger SHA geschrieben"
 
-echo "== Negativ: ungueltiger ref -> exit 1 =="
-set +e
-RBBATTLE_DEPLOY_ROOT="$bad_root" RBBATTLE_DEPLOY_NO_SUDO=1 \
-  SSH_ORIGINAL_COMMAND="$sha_a refs/pull/7/head" "$ssh_sh" >/dev/null 2>&1
-rc=$?
-set -e
-[ "$rc" -ne 0 ] || fail "ungueltiger ref wurde akzeptiert (rc=0)"
+echo "== Negativ: Branch-refs (main/staging) -> exit 1 (prod-only, #1034) =="
+for badref in refs/heads/main refs/heads/staging refs/pull/7/head; do
+  set +e
+  RBBATTLE_DEPLOY_ROOT="$bad_root" RBBATTLE_DEPLOY_NO_SUDO=1 \
+    SSH_ORIGINAL_COMMAND="$sha_a $badref" "$ssh_sh" >/dev/null 2>&1
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "ref '$badref' wurde akzeptiert (rc=0) — nur refs/tags/v* erlaubt (#1034)."
+  [ ! -e "$bad_root/.deploy-env" ] || fail "Marker trotz ungueltigem ref '$badref' geschrieben"
+done
 
-echo "== Legacy-Fallback: ohne .deploy-env -> bestehender Checkout repo/ =="
+echo "== Legacy-Fallback: ohne .deploy-env + Tag-ref -> bestehender Checkout repo/ =="
 legacy_root="$work/legacy-root"; mkdir -p "$legacy_root"
 printf '%s' "$sha_a" > "$legacy_root/.deploy-sha"
-printf '%s' "refs/heads/main" > "$legacy_root/.deploy-ref"
+printf '%s' "refs/tags/v1.2.3" > "$legacy_root/.deploy-ref"
 rm -f "$args_file"
 RBBATTLE_DEPLOY_ROOT="$legacy_root" RBBATTLE_DEPLOY_ANSIBLE_BIN="$stubs/ansible-playbook" \
   RBB_TEST_ARGS="$args_file" "$wrapper"
 [ -d "$legacy_root/repo/.git" ] || fail "Legacy-Fallback nutzt nicht den bestehenden Checkout repo/"
-grep -q "deploy/site.yml" "$args_file" || fail "Legacy-Fallback dispatcht nicht site.yml"
+grep -q "deploy/deploy-prod.yml" "$args_file" || fail "Legacy-Fallback dispatcht nicht deploy-prod.yml"
 
-echo "OK: getrennte Deploy-Checkouts repo-<env> + env-spezifische Marker (Issue #483)."
+echo "== Legacy-Fallback: Branch-ref -> exit 1 (fail loud, #1034) =="
+legacy_bad="$work/legacy-bad"; mkdir -p "$legacy_bad"
+printf '%s' "$sha_a" > "$legacy_bad/.deploy-sha"
+printf '%s' "refs/heads/main" > "$legacy_bad/.deploy-ref"
+set +e
+RBBATTLE_DEPLOY_ROOT="$legacy_bad" RBBATTLE_DEPLOY_ANSIBLE_BIN="$stubs/ansible-playbook" \
+  RBB_TEST_ARGS="$args_file" "$wrapper" >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail "Legacy-Branch-ref wurde akzeptiert (rc=0) — nur refs/tags/v* erlaubt (#1034)."
+
+echo "OK: prod-only Deploy-Dispatch (Tag -> deploy-prod.yml; main/staging fail loud; Issue #1034)."

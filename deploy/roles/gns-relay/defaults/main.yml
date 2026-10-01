@@ -7,14 +7,13 @@
 # der GNS-Gegenspieler), den Spielnamen liest und erst danach an ein Backend
 # weiterleitet:
 #
-#   Client --GNS/UDP:6321--> gns_relay (terminiert + routet) --> prod    :6322
-#                                                             --> staging :6323
-#                                                             --> dev     :6324
+#   Client --GNS/UDP:6321--> gns_relay (terminiert + routet) --> prod-A :6322
+#                                                             --> prod-B :6325
 #
-# Deshalb gehoert 6321 jetzt dem Relay; der dev-Server zieht von 6321 auf 6324
-# um (host_vars/planet `riftbreaker_server_port_udp`). prod (:6322) und staging
-# (:6323) sind unveraendert — sie haben ihren oeffentlichen Einstieg ueber die
-# DNAT-Relays (satellite/sync), der Relay hier ist der DEV-Einstieg auf planet.
+# Deshalb gehoert 6321 dem Relay. Seit Issue #1034 (prod-only) routet der Relay
+# ausschliesslich auf die beiden prod-Welten (A/B); dev/staging sind entfallen.
+# Der Relay ist der EINZIGE oeffentliche Einstieg und wird vom prod-Play
+# (deploy-prod.yml, Play 0) mitdeployt.
 #
 # Die Rolle baut `gns_probe.exe` aus dem Repo-Checkout (tools/gns-proxy,
 # MinGW-w64/zig — wie die Rolle rbtools) und betreibt sie als Container auf dem
@@ -51,11 +50,9 @@ gns_relay_log_max_file: "3"
 # Client-hardgewireter Einstiegsport. Der Relay terminiert GNS hier selbst.
 gns_relay_port: 6321
 # Suffix-Routing (Issue #843/#995): exakter Treffer > laengster Suffix > Default.
-# Der Spielname mit Suffix waehlt die Umgebung (`momo-staging` -> staging,
-# `momo-dev` -> dev, `momo-a` -> prod-A, `momo-b` -> prod-B), alles andere
-# landet auf dem Default (prod-A :6322, abwaertskompatibel, Entscheidung D1).
-gns_relay_target_dev: "127.0.0.1:6324"
-gns_relay_target_staging: "127.0.0.1:6323"
+# Der Spielname mit Suffix waehlt die Welt (`momo-a` -> prod-A, `momo-b` ->
+# prod-B), alles andere landet auf dem Default (prod-A :6322, abwaertskompatibel,
+# Entscheidung D1).
 # Zweite prod-Welt (Issue #995): A = bestehender prod-Server :6322,
 # B = neuer prod-b-Server :6325 (docs/VS_MATCH.md §3).
 gns_relay_target_a: "127.0.0.1:6322"
@@ -80,17 +77,15 @@ gns_relay_targets:
   - "PROD_A={{ gns_relay_target_a }}"
   - "PROD_B={{ gns_relay_target_b }}"
   - "PROD={{ gns_relay_target_default }}"
-  - "STAGING={{ gns_relay_target_staging }}"
-  - "DEV={{ gns_relay_target_dev }}"
 # Zusaetzliche Routen-Zeilen (z. B. feste Identitaets-Pins), die der Deploy in
 # die Routen-Datei schreibt — sonst wuerde Handarbeit beim naechsten Deploy
-# ueberschrieben. Beispiel: "str:AB12 = 127.0.0.1:6323".
+# ueberschrieben. Beispiel: "str:AB12 = 127.0.0.1:6325".
 gns_relay_extra_routes: []
 
 # --- Parked-Anbindung fuer POST /solo (Issue #929) --------------------------
 # Der Relay fragt diesen Dienst nach einer geparkten Solo-Instanz (`POST
 # /claim`) und pinnt die Identitaet auf deren GNS-UDP-Endpoint — ohne
-# Operator-Klick. Default = dev-Parked-Dienst (parked_pool_port, host_vars).
+# Operator-Klick. Ziel = host-weiter Parked-Dienst (parked_pool_port).
 gns_relay_parked_url: "http://127.0.0.1:9201"
 # --- Kapazitaet einer Solo-Instanz (Issue #936) ------------------------------
 # Obergrenze der Identitaeten, die der Relay auf DIESELBE Solo-Instanz aufnimmt
@@ -98,23 +93,23 @@ gns_relay_parked_url: "http://127.0.0.1:9201"
 # Server-Default (`riftbreaker_server_max_players`).
 gns_relay_max_players: 4
 # Bearer-Token fuer den Parked-Dienst (dort `PARKED_TOKEN`, Vault
-# `vault_parked_pool_token`). Leer = kein Token (dev/lokal). Wird als
+# `vault_parked_pool_token`). Leer = kein Token (lokal). Wird als
 # Compose-`environment` (RBB_PARKED_TOKEN) gereicht, NICHT per argv — sonst
 # stuende der Token in der Container-Prozessliste.
 gns_relay_parked_token: "{{ vault_parked_pool_token | default('') }}"
 
 # --- Kapsel-Anbindung (Issue #931) ------------------------------------------
 # Ist der Kapsel-Dienst gesetzt, hat er fuer `POST /solo` VORRANG (Claim OHNE
-# resume) und traegt `POST /ready` (resume + Warmup-Start). Default = dev-Kapsel
-# (capsule_flow_port, host_vars).
+# resume) und traegt `POST /ready` (resume + Warmup-Start). Ziel = host-weiter
+# Kapsel-Dienst (capsule_flow_port).
 gns_relay_capsule_url: "http://127.0.0.1:9211"
 # Bearer-Token (Vault `vault_capsule_token`), per Env gereicht (nie argv).
 gns_relay_capsule_token: "{{ vault_capsule_token | default('') }}"
 
 # --- Queue-Anbindung (Issue #998) -------------------------------------------
 # Ist der Queue-Dienst gesetzt, proxyt `POST /queue` an dessen `POST /queue/join`
-# und pinnt bei einer Paarung BEIDE Teilnehmer auf ihre Welten. Default = dev-
-# Queue (queue_port, host_vars).
+# und pinnt bei einer Paarung BEIDE Teilnehmer auf ihre Welten. Ziel =
+# host-weiter Queue-Dienst (queue_port).
 gns_relay_queue_url: "http://127.0.0.1:9221"
 # Bearer-Token (Vault `vault_queue_token`), per Env gereicht (nie argv).
 gns_relay_queue_token: "{{ vault_queue_token | default('') }}"
@@ -138,12 +133,12 @@ gns_relay_container_user: steamuser
 # Quelle der GameNetworkingSockets.dll: der Game-Content des Environments
 # (Game-Bin-Verzeichnis, read-only gemountet). Fallback fuer Renderer/Tests,
 # die ohne die Plays laufen.
-gns_relay_game_dir: "{{ riftbreaker_game_dir | default('/srv/rift-dev/game') }}"
+gns_relay_game_dir: "{{ riftbreaker_game_dir | default('/srv/rift-prod/game') }}"
 # Compose-/Config-Verzeichnis des Relays (relay-eigene Routen-Datei).
 gns_relay_deploy_dir: /opt/rbmods/compose/gns-relay
 # Ablage der gebauten gns_probe.exe (analog rbtools: Build auf dem Zielhost).
 gns_relay_bin_dir: /opt/rbmods/gns-relay/bin
-# Eigenes Wine-Prefix-Volume (bewusst NICHT das des dev-Servers geteilt).
+# Eigenes Wine-Prefix-Volume (bewusst NICHT das des Servers geteilt).
 gns_relay_wine_volume: gns-relay-wine
 
 # Gerenderte Routen-Datei + gemountete EXE (abgeleitet).

@@ -12,6 +12,9 @@
 # effektive Routen-Tabelle geprueft. Negativ-Probe: ein Override von
 # gns_relay_target_b MUSS die *-b-Zeile verschieben (kein Hardcode).
 #
+# PROD-ONLY (Issue #1034): dev/staging sind entfallen — die Routen tragen nur
+# noch *-a / *-b / Default.
+#
 # Lokal, kein Host, kein Vault, keine Prod-Aktion. Laeuft in deploy-check-local.
 set -euo pipefail
 
@@ -36,20 +39,20 @@ render() {
 # Kommentare werden ignoriert).
 route_of() { awk -v k="$2" '$1==k {print $3; exit}' "$1"; }
 
-echo "== Positiv: A/B + dev/staging + Default =="
+echo "== Positiv: A/B + Default (prod-only, Issue #1034) =="
 out="$work/out"
 render "$out"
 [ "$(route_of "$out/routes" '*-a')" = "127.0.0.1:6322" ] || fail "*-a zeigt nicht auf prod-A :6322."
 [ "$(route_of "$out/routes" '*-b')" = "127.0.0.1:6325" ] || fail "*-b zeigt nicht auf prod-B :6325 (Issue #995)."
-[ "$(route_of "$out/routes" '*-dev')" = "127.0.0.1:6324" ] || fail "*-dev Regression (erwartet :6324)."
-[ "$(route_of "$out/routes" '*-staging')" = "127.0.0.1:6323" ] || fail "*-staging Regression (erwartet :6323)."
 [ "$(route_of "$out/routes" '*')" = "127.0.0.1:6322" ] || fail "Default '*' nicht auf prod-A :6322 (Entscheidung D1)."
-echo "   *-a=6322 *-b=6325 *-dev=6324 *-staging=6323 '*'=6322"
+! grep -qE '^\*-dev' "$out/routes" || fail "*-dev darf nach #1034 NICHT mehr gerendert werden."
+! grep -qE '^\*-staging' "$out/routes" || fail "*-staging darf nach #1034 NICHT mehr gerendert werden."
+echo "   *-a=6322 *-b=6325 '*'=6322 (kein dev/staging)"
 
 echo "== Reihenfolge: spezifische Suffixe VOR dem Default (Prioritaet exakt > laengster Suffix > Default) =="
 def_line="$(grep -nE '^\*[[:space:]]*=' "$out/routes" | head -1 | cut -d: -f1)"
 [ -n "$def_line" ] || fail "Default-Zeile '*' fehlt."
-for key in '\*-dev' '\*-staging' '\*-a' '\*-b'; do
+for key in '\*-a' '\*-b'; do
   line="$(grep -nE "^${key}[[:space:]]*=" "$out/routes" | head -1 | cut -d: -f1)"
   [ -n "$line" ] || fail "Route ${key} fehlt in der gerenderten Datei."
   [ "$line" -lt "$def_line" ] || fail "Route ${key} steht NICHT vor dem Default."
@@ -65,4 +68,4 @@ render "$neg" -e gns_relay_target_b=127.0.0.1:6000
   || fail "Negativ-Probe: *-a wurde durch den *-b-Override mitveraendert."
 echo "   *-b folgt gns_relay_target_b; *-a unveraendert."
 
-echo "OK: GNS-Routen A/B korrekt gerendert + var-getrieben (Issue #995)."
+echo "OK: GNS-Routen A/B korrekt gerendert + var-getrieben (Issue #995/#1034)."

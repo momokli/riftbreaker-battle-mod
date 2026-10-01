@@ -1,6 +1,14 @@
 Version: [Unreleased]
 Date: —
 
+  Refactor:
+    - Deployment-Cleanup: prod-only CD. `deploy/deploy-prod.yml` ist das einzige Playbook (Play 0 host-services + Prod-A + Prod-B + Relay-Teardown); dev (site.yml) und staging (deploy-staging.yml/staging-vars.yml) entfallen. CD nur noch bei Tag-Push `v*`; `deploy-ssh.sh`/`deploy-wrapper.sh` lehnen jeden anderen ref fail loud ab (#1034).
+    - Host-Singleton-Dienste (gns-relay, image-retention, host-hygiene, parked-pool, capsule-flow, queue) laufen jetzt im prod-Play mit; parked/capsule/queue mit env-freien Unit-/Pfadnamen. GNS-Relay routet nur noch A/B/Default (#1034).
+    - Neues manuelles, idempotentes Teardown-Playbook `deploy/teardown-dev-staging.yml` (NICHT im CD verdrahtet) (#1034).
+
+  Docs:
+    - `docs/STAGING.md` als retired/Archiv gekennzeichnet; `deploy/README.md` auf prod-only-Topologie/Trigger/Rollen/CD/Teardown aktualisiert (#1034).
+
   Security:
     - Tournament-API fail-closed abgesichert (Loopback-Bind + Caddy basic_auth + Rust-Bearer 401); Secret `vault_tournament_token` als Single-Source fuer Rust, Caddy und Queue (#298, PR #1023).
 

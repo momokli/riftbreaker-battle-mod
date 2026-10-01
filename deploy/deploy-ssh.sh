@@ -1,27 +1,24 @@
 #!/bin/sh
-# CD per SSH (ersetzt den HTTP-Hook, 2026-09-11): forced command für den
+# CD per SSH (ersetzt den HTTP-Hook, 2026-09-11): forced command fuer den
 # deploy-User. Installation + authorized_keys: deploy/README.md → „CD: SSH-Deploy".
 #
-# $SSH_ORIGINAL_COMMAND = "<sha> <ref>" — vom Workflow übergeben. Der <ref>
-# bestimmt die Env UND den Deploy-Checkout:
-#   * refs/heads/staging   -> env=staging
-#   * refs/heads/* (main)  -> env=dev
-#   * refs/tags/v*         -> env=prod
-# Alles andere (z. B. refs/pull/*) ist ein Fehler (fail loud).
+# $SSH_ORIGINAL_COMMAND = "<sha> <ref>" — vom Workflow uebergeben.
 #
-# Issue #483 (Ziel A / Live-Befund #2): dev und prod können PARALLEL laufen.
-# Deshalb werden pro Env eigene Marker geschrieben —
-#   .deploy-<env>.sha / .deploy-<env>.ref
-# plus der Zeiger .deploy-env (welche Env gerade deployt wird). Der root-Wrapper
-# arbeitet dann in /opt/rbbattle-deploy/repo-<env>/ mit eigenem Ref/SHA. Die
-# früheren, env-losen Marker (.deploy-sha/-ref) im GETEILTEN repo überschrieben
-# sich beim parallelen dev/prod-Lauf (SHA-Race).
+# PROD-ONLY (Issue #1034): es gibt nur noch EINEN Deploy-Pfad. Der <ref> MUSS
+# ein Tag `refs/tags/v*` sein -> env=prod (deploy-prod.yml). Alles andere
+# (Branches main/dev/staging, refs/pull/*, leer) ist ein Fehler (fail loud) —
+# ein Merge auf main rollt NICHT mehr automatisch aus, staging ist entfallen.
 #
-# Rollout/Rückwärts-Kompatibilität: der Wrapper liest die alten, env-losen
+# Issue #483 (Ziel A / Live-Befund #2): Der root-Wrapper arbeitet in
+# /opt/rbbattle-deploy/repo-<env>/ mit eigenem Ref/SHA. Seit #1034 ist env immer
+# `prod`; die Marker bleiben env-spezifisch benannt (.deploy-prod.sha/-ref plus
+# Zeiger .deploy-env), damit der Bestand kompatibel bleibt.
+#
+# Rollout/Rueckwaerts-Kompatibilitaet: der Wrapper liest die alten, env-losen
 # Marker nur noch als Fallback (Einmal-Migration, siehe deploy/README.md
 # → „CD: SSH-Deploy" / Migrations-Checkliste).
 #
-# Der git-Checkout läuft NICHT mehr hier (als deploy), sondern im root-Wrapper
+# Der git-Checkout laeuft NICHT mehr hier (als deploy), sondern im root-Wrapper
 # (als root), damit root-owned Reste von Agent-/RE-Arbeit auf planet den
 # "git checkout --force" nicht blockieren ("unable to unlink … Permission
 # denied"). Hier wird nur validiert, Marker geschrieben und der Wrapper dispatcht.
@@ -46,13 +43,11 @@ esac
 
 case "${ref:-}" in
   refs/tags/v*) env=prod ;;
-  refs/heads/staging) env=staging ;;
-  refs/heads/*|"") env=dev ;;
-  *) echo "invalid ref: ${ref} (erwartet refs/heads/* oder refs/tags/v*)" >&2; exit 1 ;;
+  *) echo "invalid ref: ${ref} (nur refs/tags/v* erlaubt, Issue #1034)" >&2; exit 1 ;;
 esac
 
 mkdir -p "$deploy_root"
-# Env-spezifische Marker (je Env eigener Ref/SHA -> kein Cross-Env-Race).
+# Env-Marker (seit #1034 immer prod; bleibt env-spezifisch benannt).
 printf '%s' "$sha" > "$deploy_root/.deploy-${env}.sha"
 printf '%s' "${ref:-}" > "$deploy_root/.deploy-${env}.ref"
 printf '%s' "$env" > "$deploy_root/.deploy-env"

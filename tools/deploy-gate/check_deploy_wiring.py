@@ -6,11 +6,11 @@ check_deploy_wiring.py - statischer Wiring-Contract-Check fuer deploy.yml.
 Prueft textbasiert (stdlib, KEIN PyYAML - keine zusaetzliche Runner-Abhaengigkeit),
 dass der gate-lose CD-Workflow seine minimale Struktur behaelt:
 
-  1. push-Trigger auf `main` (CD bei jedem Merge auf main).
+  1. push-Trigger auf Tags `v*` (CD nur beim Tag-Push, Issue #1034).
   2. workflow_dispatch-Trigger vorhanden (manueller Re-Deploy; keine Inputs).
   3. SSH-Deploy-Step vorhanden (`ssh ... rbd`) - die Deploy-Mechanik.
   4. `permissions: contents: read` unveraendert (Least privilege).
-  5. `concurrency: group: cd-dev` unveraendert (kein paralleler Deploy).
+  5. `concurrency: group: cd-prod` unveraendert (kein paralleler Deploy).
 
 Historisch (Issue #238): Die frueher hier gepruefte Park-Verdrahtung
 (actions/checkout, `force`/`timeout`-Inputs, `deploy_gate.py`-Gate-Step,
@@ -43,7 +43,9 @@ DISPATCH_KEY = re.compile(r"\s*workflow_dispatch\s*:")
 PERMISSIONS_KEY = re.compile(r"\s*permissions\s*:")
 CONTENTS_READ = re.compile(r"\s+contents\s*:\s*read\s*$")
 CONCURRENCY_KEY = re.compile(r"\s*concurrency\s*:")
-CONCURRENCY_GROUP_CD = re.compile(r"\s+group\s*:\s*[\"']?cd-dev[\"']?\s*$")
+CONCURRENCY_GROUP_CD = re.compile(r"\s+group\s*:\s*[\"']?cd-prod[\"']?\s*$")
+# Tag-Trigger `tags: ["v*"]` (Zeile im push-Block).
+TAGS_VSTAR = re.compile(r"\btags\b.*['\"]?v\*['\"]?")
 
 
 def _is_comment(line):
@@ -92,12 +94,12 @@ def check_wiring(path=DEFAULT_WORKFLOW):
     except OSError as exc:
         return ["Workflow nicht lesbar (%s): %s" % (path, exc)]
 
-    # 1. push-Trigger auf main (CD bei jedem Merge auf main).
+    # 1. push-Trigger auf Tags `v*` (CD nur beim Tag-Push, Issue #1034).
     push = _block(lines, PUSH_KEY)
     if push is None:
         problems.append("push-Trigger fehlt.")
-    elif not any(re.search(r"\bbranches\b.*\bmain\b", line) for line in push):
-        problems.append("push-Trigger ohne 'branches: [main]'.")
+    elif not any(TAGS_VSTAR.search(line) for line in push):
+        problems.append("push-Trigger ohne 'tags: [\"v*\"]'.")
 
     # 2. workflow_dispatch-Trigger (manueller Re-Deploy; keine Inputs).
     if _block(lines, DISPATCH_KEY) is None:
@@ -114,10 +116,10 @@ def check_wiring(path=DEFAULT_WORKFLOW):
             "permissions 'contents: read' fehlt (Least privilege)."
         )
 
-    # 5. concurrency: group: cd-dev (kein paralleler Deploy).
+    # 5. concurrency: group: cd-prod (kein paralleler Deploy).
     conc = _block(lines, CONCURRENCY_KEY)
     if conc is None or not any(CONCURRENCY_GROUP_CD.match(line) for line in conc):
-        problems.append("concurrency-Gruppe 'cd-dev' fehlt.")
+        problems.append("concurrency-Gruppe 'cd-prod' fehlt.")
 
     return problems
 

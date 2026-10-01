@@ -112,5 +112,7 @@ jobs:
           # --tags server,website: der Container-Stack + Website. Content-/
           # Tournament-Rollen brauchen Build-Artefakte (dist/, Rust-Binary) und
           # sind hier bewusst ausgenommen.
-          ansible-playbook -i "$INV" deploy/site.yml \
+          # PROD-ONLY (Issue #1034): deploy-prod.yml (Play 0 host-services +
+          # Prod-A + Prod-B); site.yml/deploy-staging.yml sind entfallen.
+          ansible-playbook -i "$INV" deploy/deploy-prod.yml \
             --check --diff --tags server,website

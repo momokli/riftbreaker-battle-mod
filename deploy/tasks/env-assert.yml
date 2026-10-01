@@ -1,7 +1,7 @@
 ---
 # deploy/tasks/env-assert.yml — Fail-loud-Contract der Env-Isolation
 # (Issue #483, US2). Laeuft in den pre_tasks VOR den Rollen (include_tasks aus
-# site.yml / deploy-prod.yml / test-deploy.yml), direkt nach deploy-identity.yml.
+# deploy-prod.yml / test-deploy.yml), direkt nach deploy-identity.yml.
 #
 # Ruft den stdlib-Audit tools/deploy-gate/check_env_isolation.py auf: jede
 # Variable der Env-Override-Dateien muss `per_env` oder `shared (begruendet)`
@@ -97,8 +97,8 @@
       mods_zip_dest: /srv/rbmods-site/mods/rbbattle.zip
   tags: always
 
-# Website-/Caddy-Pfade (Issue #483, US3) — NUR Envs, die die website/rift-caddy
-# -Rolle deployen (prod/staging). prod-b und test deployen sie nicht.
+# Website-/Caddy-Pfade (Issue #483, US3) — NUR die Env, die die website/rift-caddy
+# -Rolle deployt (prod, Issue #1034). prod-b und test deployen sie nicht.
 - name: "ENV-ISOLATION-GATE — Website-/Caddy-Pfade vom dev-Basiswert abweichend (Issue #483, US3)"
   assert:
     that:
@@ -115,7 +115,7 @@
     - website_docroot
     - website_mods_dir
     - rift_caddy_deploy_dir
-  when: rift_env in ['prod', 'staging']
+  when: rift_env == 'prod'
   vars:
     rift_env_dev_base:
       website_docroot: /srv/rbmods-site
