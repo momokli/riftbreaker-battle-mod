@@ -1,7 +1,7 @@
 # S1 — Root-Pointer für World/Services (Vorarbeit, Issue #1035)
 
-Status: **gelöst auf Disasm-Ebene** — scan-freier `World*`-Root gefunden und
-verifiziert; **Live-Beweis noch offen** (braucht Deploy).
+Status: **gelöst (Disasm + Live)** — scan-freier `World*`-Root gefunden,
+disasm-verifiziert und **live nachgewiesen**.
 
 Build **2.0.58485**, PDB+DLL: `/opt/rb-re/bin/riftbreaker_dll_win_release.{pdb,dll}`
 (planet). Kontext: RFC `docs/rfc/0001-dedicated-io-state-pipeline.md`; Problem:
@@ -98,16 +98,34 @@ scan-frei per einem Deref lesbar:
 (Für die Services selbst irrelevant — die sind World-Systeme —, aber nützlich
 für Tick/Clock (S3) und Observability (S6).)
 
-## Live-Beweis (offen)
+## Live-Beweis (erbracht)
 
-Der Root wird **im Hook** gelesen, wenn ein `get_state`/Snapshot das nächste Mal
-läuft — `dbg("snapshot: self=%p world=%p", self, world)` genügt (read-only,
-Game-Thread, kein Game-Call). Blocker: Die frühere Dev-Umgebung
-(`/opt/rbmods/rbtools/dev`) existiert **nicht mehr** (dev/staging abgebaut);
-Deploy müsste auf einen Test-/`880`-Slot oder einen CI-Boot-Test-Stack, um prod
-nicht zu stören. Externer Read ist keine Option (`/proc/<pid>/mem` → EIO unter
-Wine/non-dumpable, `yama.ptrace_scope=1`, kein `gdb`/`lldb`), und der
-GameplayState-Zeiger ist von außen ohne Hook ohnehin nicht erreichbar.
+Über den **CI-Boot-Test** (PR #1051, isolierter Test-Stack
+`riftbreaker-dedicated-test-36911878379`) mit temporärem Probe-`dbg()` im Hook
+(plus früher Hook-Installation in `pipe_server_main`, da der UpdLogic-Hook sonst
+erst lazy bei `pause_game`/`send_chat` installiert wird):
+
+```
+[rbbridge] [tid=560] world_probe: self=000074db8bcde000
+[rbbridge] [tid=560] world_probe: type=0 world=0x74e331cd0000
+[rbbridge] [tid=560] world_probe: type=1 world=0x0
+[rbbridge] [tid=560] world_probe: type=2 world=0x74e331cd0000
+[rbbridge] [tid=560] world_probe: type=3 world=0x300000003
+```
+
+Deutung:
+
+- `self = 0x74db8bcde000` = die `GameplayState`-Instanz (plausibler Heap-Zeiger).
+- `type=0` **und** `type=2` liefern denselben gültigen `World* =
+0x74e331cd0000`; `type=1` ist leer (`0x0`).
+- `type=3` liest Garbage (`0x300000003`) ⇒ das WorldStatesHolder-Array hat hier
+  **3 Slots** (0..2).
+
+⇒ **`World* = *(self + 0x358 + type*0x58)` live bestätigt.** Konsument: `type =
+0..2` durchgehen, ersten **non-NULL** nehmen (oder
+`WorldStatesHolder::GetWorld(self+0x358, type)` `0x18F1960` aufrufen).
+
+Der Probe war temporär (nicht Teil des PR); das Ergebnis steht hier.
 
 ## Empfehlung / nächste Schritte
 

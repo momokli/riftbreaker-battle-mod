@@ -5715,25 +5715,6 @@ static void __fastcall gameplay_updlogic_hook(
         InterlockedExchange(&g_chat_out_pending, 0);
         InterlockedExchange(&g_chat_out_done, 1);
     }
-    /* #1035 S1-Probe (temporaer, read-only): `self` ist GameplayState ->
-     * World* ueber *(self + 0x358 + type*0x58) (WorldStatesHolder). */
-    {
-        static LONG s_world_probe_done = 0;
-        if (InterlockedCompareExchange(&s_world_probe_done, 1, 0) == 0) {
-            int i;
-            dbg("world_probe: self=%p", self);
-            for (i = 0; i < 4; i++) {
-                uint64_t w = 0;
-                if (safe_read_u64((const unsigned char *)self + 0x358 +
-                                      (size_t)i * 0x58,
-                                  &w))
-                    dbg("world_probe: type=%d world=0x%llx", i,
-                        (unsigned long long)w);
-                else
-                    dbg("world_probe: type=%d read_failed", i);
-            }
-        }
-    }
     ((gameplay_updlogic_fn_t)g_gameplay_updlogic_orig)(self, a, b, c, d);
 }
 
@@ -7172,16 +7153,6 @@ static DWORD WINAPI pipe_server_main(LPVOID unused)
      * Bewusst NICHT im DllMain-/Loader-Lock-Kontext (resolve_module kann
      * als Fallback LoadLibrary aufrufen), sondern hier im Pipe-Thread. */
     install_chat_hook();
-    /* #1035-Probe: UpdLogic-Hook frueh installieren, damit der World-Probe
-     * (gameplay_updlogic_hook) laeuft (sonst erst lazy bei pause/send_chat). */
-    {
-        const unsigned char *pb = NULL;
-        size_t psz = 0;
-        const char *pvia = NULL;
-        const unsigned char *pexec = NULL;
-        if (resolve_module(&pb, &psz, &pvia, &pexec) && pb)
-            install_game_pause_hook(pb, psz);
-    }
 
     while (!g_stop) {
         HANDLE hPipe = CreateNamedPipeA(
