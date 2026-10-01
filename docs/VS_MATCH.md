@@ -299,6 +299,22 @@ VS-Orchestrator ist `deploy/queue/` + Referee: **kalte** Provisionierung beider
 Welten, `/lobby`-Registrierung und der gemeinsame AUTO_GO-Broadcast. Kein
 Warm-Pool-Reuse, kein `resume_game` im Queue-Pfad.
 
+**Lobby-Rematch (#1030):** Nach einem `finished`-Match startet
+`POST /queue/rematch` (Relay-Proxy + UI-Button in der Referee-Zeile) ein neues
+Match **derselben Paarung** (gleiche zwei Spieler, gleiche A/B-Zuordnung) mit
+**zwei frischen (kalten)** Welten. Reihenfolge (Anti-Zombie): Alt-Stop
+(`finish`/Cleanup) **vor** Neu-Start, Referee-`POST /rematch` (Reset, kein neuer
+Endpunkt) **vor** der Provisionierung; danach `/lobby` mit neuer `match_id` +
+`/ready`. Idempotenz ueber die persistierte Map `_rematch_of` (in
+`queue-state.json`): ein zweiter Aufruf mit derselben alten `match_id` liefert
+`idempotent:true` ohne weiteren Start. Der Referee-Reset leert das
+Queue-`match_id`-Echo (`teams.<W>.match_id`), damit der Reconciler zwischen
+Reset und Re-Lobby keine Alt-Zuordnung bildet. `POST /referee/rematch` am Relay
+ist der **reine** Reset (Operator); die UI nutzt nur `POST /queue/rematch`.
+Lifecycle-Defaults (#183): Spar-Pool reset, Seed/Settings identisch, Disconnect/
+Crash/Rematch-waehrend-`running` out of scope bzw. refused — siehe
+`deploy/queue/README.md` (§ #183-Defaults) und [docs/LOBBY.md](LOBBY.md) §2.
+
 ## 7. Gap-Liste → abgeleitete Issues
 
 | #   | Lücke                                                          | Blockiert    |
@@ -321,6 +337,7 @@ Warm-Pool-Reuse, kein `resume_game` im Queue-Pfad.
 4. **G7** Start/Ready-Aggregat + Pause-Fan-out.
 5. **G8** Match-View-UI.
 6. **Queue** Casual-Pairing + kalte Doppel-Provisionierung ✅ umgesetzt (#998).
+7. **Lobby-Rematch** (dieselbe Paarung, frische Welten) ✅ umgesetzt (#1030).
 
 ## 9. Risiken & offene Entscheidungen
 

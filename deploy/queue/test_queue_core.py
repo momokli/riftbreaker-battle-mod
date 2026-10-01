@@ -327,5 +327,81 @@ class QueueCoreTestCase(unittest.TestCase):
         self.assertEqual(revived.position("str:aa"), 1)
 
 
+class RematchCoreTestCase(unittest.TestCase):
+    """Issue #1030: ``Match.rematch_of`` + ``create_rematch`` (rein)."""
+
+    def setUp(self) -> None:
+        self.clock = FakeClock()
+        self.core = QueueCore(clock=self.clock)
+
+    def _finished_match(self):
+        self.core.enqueue("str:aa")
+        self.core.enqueue("str:bb")
+        match = self.core.pair()
+        self.core.set_assignment(match, "str:aa", instance="queue-1-a", endpoint="127.0.0.1:40001")
+        self.core.set_assignment(match, "str:bb", instance="queue-1-b", endpoint="127.0.0.1:40002")
+        self.core.mark_ready(match)
+        self.core.finish(match.match_id, result="winnerA")
+        return match
+
+    def test_create_rematch_same_pairing_new_id(self):
+        source = self._finished_match()
+        new = self.core.create_rematch(source)
+        self.assertEqual(new.match_id, 2)  # neue monotone ID
+        self.assertEqual(new.rematch_of, 1)
+        self.assertEqual(new.state, STATE_PROVISIONING)
+        # Gleiche zwei Spieler + gleiche A/B-Weltzuordnung.
+        self.assertEqual(new.participants(), source.participants())
+        by_world = {t.world: list(t.players) for t in new.teams}
+        self.assertEqual(by_world[WORLD_A], ["str:aa"])
+        self.assertEqual(by_world[WORLD_B], ["str:bb"])
+        # Frischer Record: keine alten side-Werte.
+        self.assertEqual(new.side, {})
+        self.assertIsNone(new.result)
+
+    def test_create_rematch_binds_identities(self):
+        source = self._finished_match()
+        new = self.core.create_rematch(source)
+        self.assertEqual(self.core.match_for("str:aa").match_id, new.match_id)
+        with self.assertRaises(QueueError) as ctx:
+            self.core.enqueue("str:aa")
+        self.assertEqual(ctx.exception.reason, "already_matched")
+
+    def test_next_match_id_increments(self):
+        source = self._finished_match()
+        self.core.create_rematch(source)
+        self.core.finish(2)
+        again = self.core.create_rematch(self.core.get_match(2))
+        self.assertEqual(again.match_id, 3)
+        self.assertEqual(again.rematch_of, 2)
+
+    def test_rematch_of_roundtrip(self):
+        source = self._finished_match()
+        self.core.create_rematch(source)
+        revived = QueueCore(clock=FakeClock())
+        revived.load_state(self.core.to_state())
+        self.assertEqual(revived.get_match(2).rematch_of, 1)
+        self.assertIsNone(revived.get_match(1).rematch_of)
+
+    def test_missing_rematch_of_is_none_backward_compatible(self):
+        self.core.enqueue("str:aa")
+        self.core.enqueue("str:bb")
+        self.core.pair()
+        state = self.core.to_state()
+        for raw in state["matches"]:
+            raw.pop("rematch_of", None)  # alter State ohne das Feld
+        revived = QueueCore(clock=FakeClock())
+        revived.load_state(state)
+        self.assertIsNone(revived.get_match(1).rematch_of)
+
+    def test_latest_match_for(self):
+        self._finished_match()
+        match = self.core.get_match(1)
+        self.core.finish(1)
+        self.core.create_rematch(match)
+        self.assertEqual(self.core.latest_match_for("str:aa").match_id, 2)
+        self.assertIsNone(self.core.latest_match_for("str:zz"))
+
+
 if __name__ == "__main__":
     unittest.main()

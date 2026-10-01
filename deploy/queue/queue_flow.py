@@ -36,6 +36,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from identity import canonicalize
 from queue_core import (
+    STATE_FINISHED,
     STATE_PROVISIONING,
     STATE_READY,
     Match,
@@ -186,6 +187,16 @@ class RefereeClient(object):
         except QueueError:
             return None
 
+    def rematch(self) -> Dict[str, Any]:
+        """Match beim Referee zuruecksetzen (``POST /rematch``, Bearer, #1030).
+
+        Nur ein Reset in die Lobby (Spieler bleiben registriert); die neuen
+        Welten provisioniert die Queue selbst. Referee-409 (``conflict``,
+        Phase ``running``) wird als :class:`QueueError` durchgereicht.
+        """
+        return _http_json(self.base_url, "POST", "/rematch", {}, self.timeout,
+                          self.token, self._opener)
+
 
 class QueueCoordinator(object):
     """Matchmaking + kalte Provisionierung + Referee-Lobby + Match-Record.
@@ -217,6 +228,11 @@ class QueueCoordinator(object):
         self.state_dir = state_dir
         self.provision_mode = provision_mode
         self._cleaned: set = set()
+        # Idempotenz-Map des Lobby-Rematches (Issue #1030): ``{alte_match_id:
+        # neue_match_id}``. Wird VOR dem ersten Start gelesen und erst NACH
+        # erfolgreicher Provisionierung geschrieben; in ``queue-state.json``
+        # persistiert, damit ein Dienst-Restart die Idempotenz behaelt.
+        self._rematch_of: Dict[int, int] = {}
         # #998-Verifier: der Dienst laeuft hinter einem ``ThreadingHTTPServer``;
         # zwei gleichzeitige Join/Pair/Leave/Finish/Status koennen sonst doppelt
         # paaren oder den Kernzustand korrumpieren. Reentrant, weil einzelne
@@ -247,13 +263,17 @@ class QueueCoordinator(object):
         cleaned = payload.get("cleaned")
         if isinstance(cleaned, list):
             self._cleaned = set(int(x) for x in cleaned)
+        rematch_of = payload.get("rematch_of")
+        if isinstance(rematch_of, dict):
+            self._rematch_of = {int(k): int(v) for k, v in rematch_of.items()}
 
     def _persist(self) -> None:
         path = self._state_path()
         if not path:
             return
         os.makedirs(self.state_dir, exist_ok=True)
-        payload = {"core": self.core.to_state(), "cleaned": sorted(self._cleaned)}
+        payload = {"core": self.core.to_state(), "cleaned": sorted(self._cleaned),
+                   "rematch_of": {str(k): v for k, v in sorted(self._rematch_of.items())}}
         fd, tmp = tempfile.mkstemp(dir=self.state_dir, prefix=".queue-state-")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -264,6 +284,86 @@ class QueueCoordinator(object):
                 os.remove(tmp)
             except OSError:
                 pass
+
+    # -- Rematch (Lobby, #1030) --------------------------------------------
+    def rematch(self, match_id: Optional[int] = None,
+                identitaet: Optional[str] = None) -> Dict[str, Any]:
+        """Rematch derselben Paarung starten (Orchestrierung, Issue #1030).
+
+        Reihenfolge (Anti-Zombie, Plan §4): Quelle aufloesen -> Idempotenz ->
+        Alt-Instanzen stoppen (``finish``) -> neuen Record anlegen -> Referee
+        ``POST /rematch`` (Reset) -> zwei frische Kalt-Instanzen + ``/lobby``
+        (neue ``match_id``) + ``/ready``. Jeder Fehler nach dem Start rollt die
+        gestarteten Instanzen zurueck (Muster ``_provision``).
+
+        Rueckgabe ``{"rematch_of": old_id, "idempotent": bool, "match": {...}}``.
+        """
+        if match_id is None and identitaet is None:
+            raise QueueError("bad_request", "match_id oder identitaet erwartet", 400)
+        if match_id is not None and identitaet is not None:
+            raise QueueError("bad_request", "nur match_id ODER identitaet", 400)
+        with self._lock:
+            source = self._resolve_rematch_source(match_id, identitaet)
+            old_id = source.match_id
+            if source.state != STATE_FINISHED:
+                raise QueueError(
+                    "match_not_finished",
+                    "Match %d ist nicht finished (war %s)" % (old_id, source.state),
+                    409,
+                )
+            # Idempotenz: bereits ein Rematch zu genau dieser Quelle -> bekanntes
+            # Ergebnis, KEIN zweiter Start.
+            existing_id = self._rematch_of.get(old_id)
+            if existing_id is not None:
+                existing = self.core.get_match(existing_id)
+                if existing is not None:
+                    LOG.info("rematch: idempotenter Zweitaufruf fuer Match %d -> %d",
+                             old_id, existing_id)
+                    return {"rematch_of": old_id, "idempotent": True,
+                            "match": existing.to_dict()}
+
+            # Schritt 3: Alt-Instanzen VOR dem Neustart kalt stoppen (idempotent,
+            # fail-fast). Scheitert der Stop -> 503 ohne neuen Match.
+            self.finish(old_id)
+
+            # Schritt 4: neuer Record (gleiche Paarung/Weltzuordnung).
+            new_match = self.core.create_rematch(source)
+            self._persist()
+
+            # Schritt 5: Referee-Reset VOR Provisionierung. Ein 409 (running)
+            # laesst keine Welt starten (kein Zombie).
+            try:
+                self.referee.rematch()
+            except Exception as exc:  # noqa: BLE001 - konservativ: kein Start
+                self.core.mark_failed(new_match.match_id, detail=str(exc))
+                self._persist()
+                raise QueueError("referee_rematch_failed", str(exc),
+                                 exc.status if isinstance(exc, QueueError) else 409)
+
+            # Schritte 6+7: zwei frische Kalt-Instanzen + Lobby/Ready. Fehler
+            # rollt ``_provision`` zurueck und markiert ``failed``.
+            self._provision(new_match)
+
+            # Schritt 8: Idempotenz-Anker erst NACH Erfolg setzen.
+            self._rematch_of[old_id] = new_match.match_id
+            self._persist()
+            return {"rematch_of": old_id, "idempotent": False,
+                    "match": new_match.to_dict()}
+
+    def _resolve_rematch_source(self, match_id: Optional[int],
+                                identitaet: Optional[str]) -> Match:
+        """Quell-Match fuer ein Rematch finden (``unknown_match``/``no_match``)."""
+        if match_id is not None:
+            match = self.core.get_match(int(match_id))
+            if match is None:
+                raise QueueError("unknown_match", "Match %s unbekannt" % match_id, 409)
+            return match
+        identity = canonicalize(identitaet) or identitaet
+        match = self.core.latest_match_for(identity)
+        if match is None:
+            raise QueueError("no_match",
+                             "Identitaet %s hat kein Match" % identity, 409)
+        return match
 
     # -- Join/Leave --------------------------------------------------------
     def join(self, identitaet: str, mode: str = "vs",
