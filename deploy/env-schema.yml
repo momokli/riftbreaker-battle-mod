@@ -178,7 +178,7 @@ shared:
   proxy_upstream: "Upstream der Lobby-Route (127.0.0.1:9200) — die Relay-API auf dem Host."
   proxy_basic_auth_hash: "basic_auth-Hash der Lobby (operator) — wie das Cockpit; die Relay-API selbst hat keinen Auth."
   # --- Tournament-API-Auth (Issue #298) -------------------------------------
-  # Rol1en-Defaults (keine Override-Datei): der Loopback-Bind und der Vault-
+  # Rollen-Defaults (keine Override-Datei): der Loopback-Bind und der Vault-
   # Token gelten env-uebergreifend. Bewusst klassifiziert, damit die Haertung
   # nicht als stiller dev-Vererbungsfall missverstanden wird.
   tournament_host: "Bind-Adresse des tournament-server (Default 127.0.0.1, Issue #298) — Zugriffsdatum, kein Env-Pfad/Port; Loopback gilt fuer jede Env, der rift-caddy (host-net) proxyt dorthin."

@@ -1,6 +1,9 @@
 Version: [Unreleased]
 Date: —
 
+  Security:
+    - Tournament-API fail-closed abgesichert (Loopback-Bind + Caddy basic_auth + Rust-Bearer 401); Secret `vault_tournament_token` als Single-Source fuer Rust, Caddy und Queue (#298, PR #1023).
+
   Features:
     - Queue-Dienst (Casual, #998): eigener Sidecar `deploy/queue/` paart Spieler (FIFO, **aktiv nur 1v1**, kein MMR) und provisioniert bei einer Paarung **kalt** zwei frische VS-Welten (A/B) — je Paarung zwei neue Instanzen mit **verschiedenen** GNS-Endpoints, kein Warm-Pool. Reiner Kern `queue_core.py` (Enqueue/Leave/Pairing/Welt-Zuordnung/Match-Record + Persistenz), `queue_flow.py` (`QueueCoordinator`: kalte Doppel-Provisionierung, Referee-`/lobby` A+B, Rollback bei Fehler, kaltes Cleanup, idempotentes `finish`), HTTP-Dienst `queue_service.py` (`/queue/join|leave|status`, `/health`, Bearer fail-closed, `--check`, SIGTERM) und Ansible-Rolle `deploy/roles/queue/`. Provisioner erweitert um einen expliziten `world`-Parameter (seedet `RBB_VS_WORLD` + `RBB_REFEREE_URL`, self-send aus; `parse_mode` unangetastet). Relay `POST /queue` (+`/queue/leave`, `GET /queue/status`) proxyt an den Dienst und pinnt **beide** Teilnehmer; `/sessions` additiv um `queuePhase`/`queuePosition`/`matchId`/`vsWorld`. E2E-Harness `deploy/queue/e2e_998_queue.py` belegt die Abnahme (zwei Spieler → ein Match A/B).
     - Referee als VS-Gehirn (Cross-World-Sends + per-Welt-HQ-Sieg, #996): Welt-getaggte Feed-Events (`LogEntry.world`, US1), wellen-basierter Send mit `level` (`POST /send {world,level,value}`, `SendBatch.level`, US2), C-Bridge-Ingress `POST /incoming_send` (Ziel-Event `incoming_wave`, US3), Ingress-Push an die Ziel-Bridge beim `wave_start` inkl. `ingress`-Block (US4/G5), Attack-Cycle-`send_enemy` als echter Referee-Egress via `RBB_REFEREE_URL`/`RBB_VS_WORLD` (US5), per-Welt-HQ-Reporter im `match-loop` → Referee (`hq_hp`/`hq_dead`, US6/G6). Ohne `RBB_REFEREE_URL` bleibt das SOLO-Verhalten bitgleich.
