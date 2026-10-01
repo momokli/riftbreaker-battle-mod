@@ -1673,20 +1673,26 @@ async function joinSolo(identity, instance, btn, cardEl) {
   setTimeout(loadSessions, 300);
 }
 
-// Ready: Kapsel resume + Warmup-Start (POST /ready). Damit ist der Start im
-// Proxy erledigt; den Countdown in den Chat schickt der Announcer (1.0.7).
-async function ready(btn, cardEl) {
+// Ready: kontextabhaengig (Issue #1025). Solo -> Capsule resume + Warmup-Start
+// (POST /ready {}). VS (Session hat vsWorld) -> dieselbe Relay-Route, aber mit
+// {world} — der Relay proxyt dann an den Referee (/ready {world}); den Countdown
+// in den Chat schickt der Announcer (1.0.7).
+async function ready(btn, cardEl, world) {
   btn.disabled = true;
   try {
-    const r = await fetch("/ready", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const body = world ? JSON.stringify({ world: world }) : "{}";
+    const r = await fetch("/ready", { method: "POST", headers: { "Content-Type": "application/json" }, body: body });
     const j = await r.json().catch(() => null);
     if (!r.ok) {
       const reason = (j && j.reason) ? j.reason : ("http " + r.status);
       const MSG = { capsule_unconfigured: "Kapsel-Dienst nicht konfiguriert",
-        capsule_unreachable: "Kapsel nicht erreichbar" };
+        capsule_unreachable: "Kapsel nicht erreichbar",
+        referee_unconfigured: "Referee-Dienst nicht konfiguriert",
+        referee_unreachable: "Referee nicht erreichbar",
+        bad_request: "Welt ungueltig" };
       hint(cardEl, MSG[reason] || reason);
     } else {
-      hint(cardEl, "ready gesendet - Countdown folgt im Chat");
+      hint(cardEl, world ? ("ready gesendet: Welt " + world) : "ready gesendet - Countdown folgt im Chat");
     }
   } catch (e) { hint(cardEl, "Netzwerkfehler"); }
   setTimeout(loadSessions, 300);
@@ -1875,8 +1881,12 @@ function card(s) {
 
   const readyRow = el("div", "solo");
   const rbtn = el("button", null, "READY");
-  rbtn.title = "Kapsel: resume + Warmup-Start (POST /ready)";
-  rbtn.onclick = () => ready(rbtn, c);
+  if (s.vsWorld) {
+    rbtn.title = "Welt " + s.vsWorld + " beim Referee ready melden (POST /ready {world})";
+  } else {
+    rbtn.title = "Kapsel: resume + Warmup-Start (POST /ready)";
+  }
+  rbtn.onclick = () => ready(rbtn, c, s.vsWorld);
   readyRow.appendChild(rbtn);
   c.appendChild(readyRow);
 
@@ -2385,11 +2395,72 @@ void handleSolo(SOCKET s, const std::string &requestBody) {
                   outcome.httpCode == 409 ? "Conflict" : "Error", outcome.body);
 }
 
-// POST /ready: an den Kapsel-Dienst proxien (`POST /capsule/ready` = resume +
-// Warmup-Start). Der Kapsel-Dienst kennt die aktive Instanz; hier ist kein
-// Eigenzustand/Pin noetig. Nur wenn eine Kapsel konfiguriert ist.
+// Gemeinsamer Outbound fuer den Referee-`POST /ready` (Bearer, Issue #1024).
+// Wird vom VS-Zweig in `handleReady` (#1025) und von `handleRefereeReady`
+// geteilt — kein Duplikat der Fehler-/Antwort-Map.
+void refereeReadyOutbound(SOCKET s, const std::string &world,
+                          const std::string &identitaet) {
+  if (!g_refereeConfigured) {
+    httpRespondJson(s, 503, "Service Unavailable",
+                    "{\"ok\":false,\"reason\":\"referee_unconfigured\",\"retry\":false}");
+    return;
+  }
+  const std::string payload = rbref::buildReadyBody(world, identitaet);
+  const OutboundResult r = outboundHttpPost(g_refereeHost, g_refereePort,
+                                            "/ready", payload, g_refereeToken,
+                                            2000, 5000);
+  const rbref::RefStatus st = rbref::mapRefereeError(true, r.status);
+  if (st == rbref::RefStatus::Unreachable) {
+    httpRespondJson(s, 502, "Bad Gateway",
+                    "{\"ok\":false,\"reason\":\"referee_unreachable\"}");
+    return;
+  }
+  // 200 bzw. Backend-Status (z. B. 401 ohne Token, 409) durchreichen.
+  httpRespondJson(s, r.status, r.status == 200 ? "OK" : "Error",
+                  r.body.empty() ? "{\"ok\":true}" : r.body);
+}
+
+// POST /ready: kontextabhaengig (Issue #1025).
+//   Solo (keine Welt) -> an den Kapsel-Dienst proxien (`POST /capsule/ready` =
+//     resume + Warmup-Start) — bit-identisch zum bisherigen Verhalten,
+//     KEIN Referee-Call.
+//   VS (Welt "A"|"B") -> Referee `POST /ready {world}` (Bearer) — der zweite
+//     Ready loest dort AUTO_GO aus -> gemeinsamer GO-Broadcast beide Welten.
+// Welt-Aufloesung: (a) explizites Body-`world`, sonst (b) `vsWorld` der Session
+// aus dem Queue-Kontext (`g_queueState`). Der Kapsel-Dienst kennt die aktive
+// Instanz; hier ist kein Eigenzustand/Pin noetig.
 void handleReady(SOCKET s, const std::string &requestBody) {
-  (void)requestBody;
+  std::string world;
+  const bool hasWorld =
+      rbapi::jsonStringField(requestBody, "world", world) && !world.empty();
+  if (!hasWorld) {
+    world.clear();
+  }
+  std::string identitaet;
+  rbapi::jsonStringField(requestBody, "identitaet", identitaet);
+  // Ohne explizites world: VS-Kontext der aufrufenden Session aufloesen.
+  // `g_queueState` wird vom HTTP-Thread (je Verbindung ein Thread) unter
+  // `g_apiMutex` geschrieben — den Read genauso schuetzen.
+  if (!hasWorld && !identitaet.empty()) {
+    std::lock_guard<std::mutex> lock(g_apiMutex);
+    const auto it = g_queueState.find(identitaet);
+    if (it != g_queueState.end()) {
+      world = it->second.vsWorld;
+    }
+  }
+
+  switch (rbref::resolveReadyRoute(!world.empty(), world)) {
+  case rbref::ReadyRoute::BadWorld:
+    httpRespondJson(s, 400, "Bad Request",
+                    "{\"ok\":false,\"reason\":\"bad_request\",\"detail\":\"world ungueltig\"}");
+    return;
+  case rbref::ReadyRoute::Referee:
+    refereeReadyOutbound(s, world, identitaet);
+    return;
+  case rbref::ReadyRoute::Capsule:
+    break;
+  }
+
   if (!g_capsuleConfigured) {
     httpRespondJson(s, 503, "Service Unavailable",
                     "{\"ok\":false,\"reason\":\"capsule_unconfigured\",\"retry\":false}");
@@ -2568,11 +2639,6 @@ void handleRefereeState(SOCKET s) {
 // liegt hinter Bearer -> Token aus RBB_REFEREE_TOKEN. Idempotent (Referee
 // `ready()` ist es).
 void handleRefereeReady(SOCKET s, const std::string &requestBody) {
-  if (!g_refereeConfigured) {
-    httpRespondJson(s, 503, "Service Unavailable",
-                    "{\"ok\":false,\"reason\":\"referee_unconfigured\",\"retry\":false}");
-    return;
-  }
   std::string world;
   if (!rbapi::jsonStringField(requestBody, "world", world) || world.empty()) {
     httpRespondJson(s, 400, "Bad Request",
@@ -2581,19 +2647,7 @@ void handleRefereeReady(SOCKET s, const std::string &requestBody) {
   }
   std::string identitaet;
   rbapi::jsonStringField(requestBody, "identitaet", identitaet);
-  const std::string payload = rbref::buildReadyBody(world, identitaet);
-  const OutboundResult r = outboundHttpPost(g_refereeHost, g_refereePort,
-                                            "/ready", payload, g_refereeToken,
-                                            2000, 5000);
-  const rbref::RefStatus st = rbref::mapRefereeError(true, r.status);
-  if (st == rbref::RefStatus::Unreachable) {
-    httpRespondJson(s, 502, "Bad Gateway",
-                    "{\"ok\":false,\"reason\":\"referee_unreachable\"}");
-    return;
-  }
-  // 200 bzw. Backend-Status (z. B. 401 ohne Token, 409) durchreichen.
-  httpRespondJson(s, r.status, r.status == 200 ? "OK" : "Error",
-                  r.body.empty() ? "{\"ok\":true}" : r.body);
+  refereeReadyOutbound(s, world, identitaet);
 }
 
 void httpHandle(SOCKET s) {
