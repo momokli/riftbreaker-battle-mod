@@ -1,3 +1,13 @@
+Version: 1.0.18
+Date: 01. 10. 2026
+
+  Features:
+    - Match-Ende → Auto-Finish: der Referee-State triggert `POST /queue/finish` im Relay; Ergebnis + Teilnehmer werden erfasst und die kalten Welten abgeraeumt (#1028, PR #1057).
+    - Rematch ueber die Lobby: `POST /queue/rematch` startet aus der Lobby einen neuen Match (Anti-Zombie-Flow) (#1030, PR #1058).
+
+  Intern:
+    - Lobby zeigt Phase/Sieger aus dem Referee: kein Deliverable noetig (Lobby-Anzeige bereits ueber #1024/PR #1050 abgedeckt) (#1029).
+
 Version: 1.0.17
 Date: 01. 10. 2026
 
