@@ -4127,6 +4127,44 @@ static unsigned char *scan_qword_instance(uint64_t needle, const char *name)
     return NULL;
 }
 
+/* #1060 Tier 1: Instanz-Cache. Ein voller Heap-Scan nur beim ersten Mal bzw.
+ * wenn die vftable-Revalidierung fehlschlaegt (Map-Reload) — sonst wird nur
+ * EIN Wort gelesen. Zugriff: nur vom Pipe-Thread (dispatch_get_state /
+ * read_hq_health), damit kein Cross-Thread-Race auf dem Cache entsteht. */
+#define RBB_INST_TTL_MS 1000 /* Untergrenze zwischen zwei Scans je Instanz */
+
+typedef struct {
+    uint64_t needle;
+    const unsigned char *modbase;
+    unsigned char *inst;
+    LONG at_ms;
+} rbb_inst_cache_t;
+
+static unsigned char *cached_scan_instance(rbb_inst_cache_t *c,
+                                           const unsigned char *base,
+                                           uint64_t needle, const char *name)
+{
+    LONG now = (LONG)GetTickCount64();
+    int same = (c->modbase == base && c->needle == needle);
+    uint64_t vt = 0;
+    /* Positiv-Treffer: vftable-Revalidierung -> kein Scan (Dauerzustand). */
+    if (same && c->inst && safe_read_u64(c->inst, &vt) && vt == needle)
+        return c->inst;
+    /* Sonst frisch gecacht (auch NULL/negativ) -> kein Rescan bis TTL. */
+    if (same && (LONG)(now - c->at_ms) < RBB_INST_TTL_MS)
+        return c->inst;
+    dbg("%s: cache miss -> scan", name);
+    c->inst = scan_qword_instance(needle, name);
+    c->modbase = base;
+    c->needle = needle;
+    c->at_ms = now;
+    return c->inst;
+}
+
+static rbb_inst_cache_t g_ps_cache;
+static rbb_inst_cache_t g_hq_find_cache;
+static rbb_inst_cache_t g_hq_health_cache;
+
 /* Writable-Variante (Round-Reset #516): sucht die Instanz NUR in
  * beschreibbaren Regionen (der Flag-Write [instance+0x52A]=1 setzt das
  * voraus). Crash-sicher wie scan_qword_instance (ReadProcessMemory, #655). */
@@ -6030,13 +6068,15 @@ static int read_hq_health(const unsigned char *base, size_t size, float *hp,
     if (!find_fn || !get_fn || !getmax_fn)
         return 0;
 
-    /* Instanzen crash-sicher aufloesen (kein Cache: koennen sich nach Map-
-     * Reload aendern; der Scan hat Early-Return auf den ersten Treffer).
-     * Wie resolve_diffsys: +0x08 (World*-Slot) muss lesbar != 0 sein. */
-    unsigned char *find_svc = scan_qword_instance(
+    /* Instanzen via Cache aufloesen (#1060): ein Scan nur beim ersten Mal bzw.
+     * wenn die vftable-Revalidierung nach einem Map-Reload fehlschlaegt. Wie
+     * resolve_diffsys: +0x08 (World*-Slot) muss lesbar != 0 sein. */
+    unsigned char *find_svc = cached_scan_instance(
+        &g_hq_find_cache, base,
         (uint64_t)(uintptr_t)(base + RBBRIDGE_HQ_RVA_FIND_VFTABLE),
         "resolve_hq_find");
-    unsigned char *health_svc = scan_qword_instance(
+    unsigned char *health_svc = cached_scan_instance(
+        &g_hq_health_cache, base,
         (uint64_t)(uintptr_t)(base + RBBRIDGE_HQ_RVA_HEALTH_VFTABLE),
         "resolve_hq_health");
     if (!find_svc || !health_svc)
@@ -6178,8 +6218,8 @@ static void dispatch_get_state(HANDLE hPipe)
     /* PlayerService-vftable RVA 0x2e8e910 (RE #363/#365). Crash-sicher via
      * scan_qword_instance (ReadProcessMemory, kein roher q[i]-Deref - #655). */
     const unsigned char *vftable = base + 0x2e8e910;
-    unsigned char *ps = scan_qword_instance(
-        (uint64_t)(uintptr_t)vftable, "get_state");
+    unsigned char *ps = cached_scan_instance(
+        &g_ps_cache, base, (uint64_t)(uintptr_t)vftable, "get_state");
 
     if (!ps) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
