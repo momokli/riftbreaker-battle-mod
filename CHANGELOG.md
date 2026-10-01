@@ -4,11 +4,20 @@ Date: —
   Security:
     - Tournament-API fail-closed abgesichert (Loopback-Bind + Caddy basic_auth + Rust-Bearer 401); Secret `vault_tournament_token` als Single-Source fuer Rust, Caddy und Queue (#298, PR #1023).
 
+Version: 1.0.15
+Date: 29. 09. 2026
+
   Features:
-    - Queue-Dienst (Casual, #998): eigener Sidecar `deploy/queue/` paart Spieler (FIFO, **aktiv nur 1v1**, kein MMR) und provisioniert bei einer Paarung **kalt** zwei frische VS-Welten (A/B) — je Paarung zwei neue Instanzen mit **verschiedenen** GNS-Endpoints, kein Warm-Pool. Reiner Kern `queue_core.py` (Enqueue/Leave/Pairing/Welt-Zuordnung/Match-Record + Persistenz), `queue_flow.py` (`QueueCoordinator`: kalte Doppel-Provisionierung, Referee-`/lobby` A+B, Rollback bei Fehler, kaltes Cleanup, idempotentes `finish`), HTTP-Dienst `queue_service.py` (`/queue/join|leave|status`, `/health`, Bearer fail-closed, `--check`, SIGTERM) und Ansible-Rolle `deploy/roles/queue/`. Provisioner erweitert um einen expliziten `world`-Parameter (seedet `RBB_VS_WORLD` + `RBB_REFEREE_URL`, self-send aus; `parse_mode` unangetastet). Relay `POST /queue` (+`/queue/leave`, `GET /queue/status`) proxyt an den Dienst und pinnt **beide** Teilnehmer; `/sessions` additiv um `queuePhase`/`queuePosition`/`matchId`/`vsWorld`. E2E-Harness `deploy/queue/e2e_998_queue.py` belegt die Abnahme (zwei Spieler → ein Match A/B).
+    - Queue-Dienst (Casual): eigener Sidecar `deploy/queue/` paart Spieler FIFO (aktiv nur 1v1, kein MMR) und provisioniert je Paarung zwei frische VS-Welten (A/B) kalt, mit verschiedenen GNS-Endpoints; Relay `POST /queue` (+`/queue/leave`, `GET /queue/status`), `/sessions` additiv um `queuePhase`/`queuePosition`/`matchId`/`vsWorld` (#998, PR #1017).
+    - Match-Records: Ergebnis + Teilnehmer persistieren (ranking-faehig, kein MMR) und `GET /matches/{id}` (#999, PR #1019).
+    - Lobby: Queue-Button + Status — join/leave ueber den Proxy, Live-Fortschritt im Lobby-Screen (#1000, PR #1020).
+
+  Bugfixes:
+    - boot-test: Test-Ports disjunkt (Tournament/Bridge/Attack-Cycle) + Regressionsguard (#988, PR #1018).
 
   Docs:
-    - `docs/LOBBY.md` §1/§2/§3/§5 um Queue-Dienst, `POST /queue` (+leave/status), `queuePhase`-Felder und „#998 done"; `docs/VS_MATCH.md` §6.7 + Phasenplan (#998); `deploy/queue/README.md` (#998).
+    - Matchmaking-Design festgehalten: Queue casual jetzt, Daten ranking-faehig, generisch (N/Team), aktiv nur 1v1, kalt provisioniert (#943).
+    - Lobby-/VS-Doku um Queue-Dienst, `POST /queue` und Flow aktualisiert (#998).
 
 Version: 1.0.14
 Date: 29. 09. 2026
