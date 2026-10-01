@@ -5715,6 +5715,80 @@ static void __fastcall gameplay_updlogic_hook(
         InterlockedExchange(&g_chat_out_pending, 0);
         InterlockedExchange(&g_chat_out_done, 1);
     }
+    /* #1036 S2-Probe (temporaer, read-only): Kadenz + Kosten eines
+     * Resource-Reads auf dem Game-Thread. */
+    {
+        static volatile LONG s_s2_calls = 0;
+        static volatile LONG s_s2_done = 0;
+        LONG s2n = InterlockedIncrement(&s_s2_calls);
+        if ((s2n & 0x7F) == 0)
+            dbg("s2_cadence: calls=%ld", (long)s2n);
+        if (s2n == 128 && InterlockedCompareExchange(&s_s2_done, 1, 0) == 0) {
+            const unsigned char *base = NULL;
+            size_t sz = 0;
+            const char *via = NULL;
+            const unsigned char *ex = NULL;
+            uint64_t world = 0;
+            int i;
+            DWORD t0 = (DWORD)GetTickCount64();
+            for (i = 0; i < 3; i++) {
+                uint64_t w = 0;
+                if (safe_read_u64((const unsigned char *)self + 0x358 +
+                                      (size_t)i * 0x58, &w) && w) {
+                    world = w;
+                    break;
+                }
+            }
+            if (resolve_module(&base, &sz, &via, &ex) && base && world) {
+                unsigned char *ps = scan_qword_instance(
+                    (uint64_t)(uintptr_t)(base + 0x2e8e910), "s2_probe");
+                DWORD t1 = (DWORD)GetTickCount64();
+                if (ps) {
+                    uint64_t acct_world = 0, arr = 0, count = 0, carbonium = 0;
+                    void *account = NULL;
+                    void *(*gpa)(void *, unsigned int) =
+                        (void *(*)(void *, unsigned int))(uintptr_t)(
+                            base + 0xC60050);
+                    safe_read_u64(ps + 8, &acct_world);
+                    account = gpa((void *)(uintptr_t)world, 0);
+                    if (account) {
+                        safe_read_u64((unsigned char *)account + 8, &arr);
+                        safe_read_u64((unsigned char *)account + 0x10, &count);
+                        if (arr && count && count < 1024) {
+                            uint64_t j;
+                            for (j = 0; j < count; j++) {
+                                uint32_t h = 0;
+                                uint64_t v = 0;
+                                const unsigned char *e =
+                                    (const unsigned char *)(uintptr_t)arr +
+                                    j * 16;
+                                safe_read_u32(e, &h);
+                                if (h == RBBRIDGE_HASH_CARBONIUM) {
+                                    safe_read_u64(e + 8, &v);
+                                    carbonium = v;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    dbg("s2_probe: world=0x%llx ps_world=0x%llx account=%p "
+                        "count=%llu carbonium=%llu scan_us=%lu read_us=%lu",
+                        (unsigned long long)world,
+                        (unsigned long long)acct_world, account,
+                        (unsigned long long)count,
+                        (unsigned long long)carbonium,
+                        (unsigned long)(t1 - t0),
+                        (unsigned long)((DWORD)GetTickCount64() - t1));
+                } else {
+                    dbg("s2_probe: world=0x%llx ps=NULL scan_us=%lu",
+                        (unsigned long long)world, (unsigned long)(t1 - t0));
+                }
+            } else {
+                dbg("s2_probe: skip world=0x%llx base=%p",
+                    (unsigned long long)world, (const void *)base);
+            }
+        }
+    }
     ((gameplay_updlogic_fn_t)g_gameplay_updlogic_orig)(self, a, b, c, d);
 }
 
@@ -7153,6 +7227,15 @@ static DWORD WINAPI pipe_server_main(LPVOID unused)
      * Bewusst NICHT im DllMain-/Loader-Lock-Kontext (resolve_module kann
      * als Fallback LoadLibrary aufrufen), sondern hier im Pipe-Thread. */
     install_chat_hook();
+    /* #1036-Probe: UpdLogic-Hook frueh installieren (sonst erst lazy). */
+    {
+        const unsigned char *pb = NULL;
+        size_t psz = 0;
+        const char *pvia = NULL;
+        const unsigned char *pexec = NULL;
+        if (resolve_module(&pb, &psz, &pvia, &pexec) && pb)
+            install_game_pause_hook(pb, psz);
+    }
 
     while (!g_stop) {
         HANDLE hPipe = CreateNamedPipeA(
