@@ -177,6 +177,12 @@ shared:
   proxy_domain: "Lobby-Domain (proxy.rift.projectmellon.de) — env-UNABHAENGIG (Relay-Singleton), daher NICHT per-env ueberschrieben."
   proxy_upstream: "Upstream der Lobby-Route (127.0.0.1:9200) — die Relay-API auf dem Host."
   proxy_basic_auth_hash: "basic_auth-Hash der Lobby (operator) — wie das Cockpit; die Relay-API selbst hat keinen Auth."
+  # --- Tournament-API-Auth (Issue #298) -------------------------------------
+  # Rollen-Defaults (keine Override-Datei): der Loopback-Bind und der Vault-
+  # Token gelten env-uebergreifend. Bewusst klassifiziert, damit die Haertung
+  # nicht als stiller dev-Vererbungsfall missverstanden wird.
+  tournament_host: "Bind-Adresse des tournament-server (Default 127.0.0.1, Issue #298) — Zugriffsdatum, kein Env-Pfad/Port; Loopback gilt fuer jede Env, der rift-caddy (host-net) proxyt dorthin."
+  tournament_token: "Bearer-Token der Tournament-API aus dem Vault (vault_tournament_token) — Zugangsdatum, kein Env-Pfad/Port; EINE Quelle fuer Rust + Caddy + Queue."
   website_host_caddy_container: "Geteilter Host-Caddy (mellon-caddy) hostet fremde Domains — EINER pro Host, kein Env-Praefix moeglich (#322)."
   website_host_caddyfile_path: "Pfad zum geteilten Host-Caddyfile (/home/momo/Caddyfile) — Host-Konstante, kein Env-Zustand."
   website_host_caddyfile_owner: "Owner des geteilten Host-Caddyfiles (momo) — Host-Konstante, kein Env-Zustand."

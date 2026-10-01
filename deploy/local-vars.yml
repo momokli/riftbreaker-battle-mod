@@ -74,6 +74,9 @@ tournament_unit: tournament-server-local
 tournament_port: 8081
 tournament_bridge_a_url: "http://127.0.0.1:{{ riftbreaker_bridge_port }}/exec"
 tournament_bridge_b_url: ""
+# Kein Vault lokal — Token direkt (wie server_control_token/riftbreaker_server_password).
+# Ohne Token bricht die Rolle fail-closed ab (Issue #298).
+tournament_token: localdev
 
 # --- Bridge-Port explizit (Review #566): sonst stiller Rollen-Default 9001 --
 riftbreaker_bridge_port: 9001

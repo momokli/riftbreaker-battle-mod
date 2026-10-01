@@ -31,6 +31,12 @@
     # Server-Control-Bearer (Issue #424/#454): die website-Rolle rendert ihn in
     # die /server/*-Route. Dummy — das echte Vault wird hier nie entschlüsselt.
     vault_server_control_token: check-dummy-token
+    # Tournament-Bearer (Issue #298): die website-Rolle leitet ihn aus dem Vault
+    # ab (website/defaults: `tournament_token: {{ vault_tournament_token }}`).
+    # Dummy (analog vault_server_control_token) — das echte Vault wird nie
+    # entschlüsselt. (Wallet: direkter `tournament_token`-Play-Var würde von den
+    # per vars_files geladenen Rollen-Defaults überschrieben.)
+    vault_tournament_token: check-dummy-tournament-token
     render_dir: "{{ lookup('env', 'RBBATTLE_RENDER_DIR') | default('/tmp/rbbattle-compose-render', true) }}"
 
   tasks:
@@ -207,6 +213,9 @@
         mode: "0644"
       vars:
         server_control_token: ""
+        # Issue #298: auch der Tournament-Bearer leer — die schreibenden
+        # /tournament/*-Pfade duerfen dann KEINEN header_up tragen.
+        tournament_token: ""
 
     # Regression-Guard Issue #454: die /server/*-Route ist im Browser erreichbar
     # (Operator-Basic-Auth wie der Cockpit-Root) UND der Agent-Bearer wird von
@@ -221,9 +230,18 @@
         server_route: >-
           {{ (lookup('file', render_dir ~ '/rift-caddy.Caddyfile')
               | split('handle /server/*'))[1] | split('handle /*') | first }}
-        tournament_route: >-
+        # Issue #298: /tournament/* teilt sich in einen SCHREIB-Block (basic_auth
+        # + injizierter Bearer) und einen freien READ-Block (handle ohne Auth).
+        tournament_write_route: >-
           {{ (lookup('file', render_dir ~ '/rift-caddy.Caddyfile')
-              | split('handle_path /tournament/*'))[1] | split('# Server-Control') | first }}
+              | split('@write path'))[1] | split('handle {') | first }}
+        tournament_read_route: >-
+          {{ (lookup('file', render_dir ~ '/rift-caddy.Caddyfile')
+              | split('handle_path /tournament/*'))[1]
+              | split('handle {') | last | split('# Server-Control') | first }}
+        empty_tournament_write_route: >-
+          {{ (lookup('file', render_dir ~ '/rift-caddy-empty-token.Caddyfile')
+              | split('@write path'))[1] | split('handle {') | first }}
         empty_token_route: >-
           {{ (lookup('file', render_dir ~ '/rift-caddy-empty-token.Caddyfile')
               | split('handle /server/*'))[1] | split('handle /*') | first }}
@@ -242,8 +260,18 @@
           # KEIN header_up, aber die Basic-Auth bleibt (fail-closed).
           - "'header_up' not in empty_token_route"
           - "'basic_auth' in empty_token_route"
-          # Abgrenzung (Issue #298): /tournament/* bleibt unangetastet.
-          - "'basic_auth' not in tournament_route"
+          # Issue #298: schreibende /tournament/*-Pfade hinter Operator-Basic-
+          # Auth + injiziertem Bearer; Lesepfade + Web-UI bleiben frei.
+          - "'@write path /lobby' in (lookup('file', render_dir ~ '/rift-caddy.Caddyfile'))"
+          - "'basic_auth' in tournament_write_route"
+          - "contract_basic_auth_hash in tournament_write_route"
+          - "('Authorization \"Bearer ' ~ tournament_token ~ '\"') in tournament_write_route"
+          - "'basic_auth' not in tournament_read_route"
+          - "'header_up' not in tournament_read_route"
+          # Leerer Token (main-Template: `{% if tournament_token %}`): dann KEIN
+          # header_up im Schreib-Block, aber die Basic-Auth bleibt (fail-closed).
+          - "'header_up' not in empty_tournament_write_route"
+          - "'basic_auth' in empty_tournament_write_route"
         fail_msg: >-
           rift-caddy.Caddyfile.j2 ist fuer /server/* falsch verdrahtet (Issue
           #454). Erwartet: `basic_auth { operator <hash> }` (wie der
@@ -252,12 +280,14 @@
           vorbei (401 vom Agenten); ohne injizierten Bearer erreicht Caddy den
           Agenten nicht (401). Bei LEEREM Token muss der header_up dagegen
           FEHLEN (Jinja-`if` auf server_control_token) — ein literales `Bearer `
-          lehnt der Agent ab. /tournament/* darf dabei KEIN basic_auth
-          bekommen (eigene Haertung, #298).
+          lehnt der Agent ab. Issue #298: die SCHREIBENDEN /tournament/*-Pfade
+          tragen ebenfalls basic_auth + injizierten Bearer, die LESEPFADE
+          (/state /events /health /matches/* /referee/poll) + Web-UI bleiben
+          dagegen frei.
         success_msg: >-
-          /server/* hinter der Operator-Basic-Auth, Bearer wird von Caddy
-          injiziert (kein Token im Browser), leeres Token = kein header_up —
-          /tournament/* unveraendert.
+          /server/* UND schreibende /tournament/*-Pfade hinter der Operator-
+          Basic-Auth, Bearer wird von Caddy injiziert (kein Token im Browser),
+          leeres Token = kein header_up; /tournament/*-Lesepfade + Web-UI frei.
 
     # Regression-Guard Issue #463: im dev-Render (server_control_enabled=true)
     # MUSS die /server/*-Route da sein — sonst sieht check-render etwas anderes

@@ -50,7 +50,10 @@ queue_state_dir: "/var/lib/rbmods/queue-{{ queue_env }}"
 # Unit liest sie aus einer 0600-Datei (EnvironmentFile), nicht aus `Environment=`.
 queue_token: "{{ vault_queue_token | default('') }}"
 queue_provisioner_token: "{{ vault_provisioner_token | default('') }}"
-queue_referee_token: "{{ vault_referee_token | default('') }}"
+# Referee = tournament-server (Issue #298): DERSELBE Bearer wie Rust + Caddy.
+# Single-Source `vault_tournament_token` — kein zweiter Secret-Kanal. Der alte
+# Key `vault_referee_token` entfaellt (der Referee hat keine eigene Identitaet).
+queue_referee_token: "{{ vault_tournament_token | default('') }}"
 
 queue_env_file: "/etc/rbmods/queue-{{ queue_env }}.env"
 

@@ -237,12 +237,12 @@ kommt. Alle Log-Kommandos siehe Anhang (Abschnitt 8).
 - **Beweis:** Referee-Antwort **+** Log-Zeile **+** Screenshot der sichtbaren Welle.
 - **Hinweis:** Punkte 1–3 sind automatisiert (C4-reached); **Punkt 4 ist der
   eigentliche 1.0-Beweis** und nur manuell zu erbringen.
-- **Security-Hinweis (#298):** `POST /wave`, `/rematch`, `/report` sind über den
-  Public-Proxy **unauthentifiziert** erreichbar. Die §8-Kommandos laufen über
-  `ssh`/`127.0.0.1`; der Web-Knopf-Pfad in diesem Szenario geht aber über die
-  **öffentliche** URL. Für den Test den Zugang absichern (Basic-Auth am
-  Rift-Caddy oder Netz-Sperre) oder den scharfen Public-Pfad bewusst
-  akzeptieren, bis #298 gefixt ist.
+- **Security-Hinweis (#298, umgesetzt):** `POST /wave`, `/rematch`, `/report`
+  sind über den Public-Proxy nur noch **hinter der Operator-Basic-Auth**
+  erreichbar; der Rift-Caddy injiziert den Bearer der Tournament-API
+  (Lesepfade + Web-UI bleiben frei). Die §8-`ssh`/`127.0.0.1`-Kommandos
+  funktionieren unverändert (Loopback-Bind + `TOURNAMENT_TOKEN`). Auth-Modell:
+  `docs/TOURNAMENT_API.md` §„Auth-Modell“.
 
 ### S6 — Egress/State (C3) → M6
 

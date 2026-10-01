@@ -315,6 +315,18 @@ jobs:
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/server-control-route/run.sh
 
+      # Auth-Selbsttest der /tournament/*-Route (Issue #298): rendert das ECHTE
+      # rift-caddy-Template, startet Caddy (host-net) + einen Mock-Referee und
+      # prueft per curl: schreibende Pfade (POST /tournament/wave) ohne
+      # Credentials -> 401 MIT `WWW-Authenticate: Basic` vom Caddy; mit
+      # Operator-Credentials -> 200, und der Referee sieht genau den von Caddy
+      # injizierten `Bearer <token>`; Lesepfade (/state /health, Web-UI) frei;
+      # leerer Token -> kein `header_up` (fail-closed). Hermetisch (Dummy-Token,
+      # keine planet-Verbindung, kein Vault); Docker kommt vom Runner.
+      - name: "Tournament-API-Auth hinter dem Caddy (Issue #298)"
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
+        run: bash deploy/tests/tournament-auth/run.sh
+
       - name: Compose-Templates rendern + `docker compose config`
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
