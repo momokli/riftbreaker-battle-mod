@@ -181,6 +181,17 @@ shared:
   queue_state_dir: "State-Verzeichnis des Queue-Dienstes (/var/lib/rbmods/queue) — Singleton."
   queue_provisioner_url: "Ziel des Provisioners fuer die Queue — Singleton-Nachbar, kein Env-Twin."
   queue_referee_url: "Ziel des Referees (prod-tournament-server 8082) — Singleton-Nachbar."
+  # --- Mods-Upload-API (rbbattle-api, Issue #534) ---------------------------
+  # Die Flask-Mods-Upload-API (gunicorn 127.0.0.1:8322, Route-Praefix
+  # /mods/upload, Ablage /opt/download-service/downloads/mods) ist NICHT Teil
+  # des Ansible-Deploys, sondern ein manuell gepflegter host-weiter SINGLETON
+  # auf planet. Seit dem prod-only-Refactor (#1034) gibt es kein dev/staging
+  # mehr; ein per-Env-Zwilling ist gegenstandslos -> alle Keys host-konstant.
+  rbbattle_api_unit: "Unit-Name (rbbattle-api.service) — host-weiter Singleton, kein Env-Twin."
+  rbbattle_api_port: "gunicorn-Bind 127.0.0.1:8322 — Singleton, kein Env-Port."
+  rbbattle_api_install_dir: "Installationsort (/opt/apps/rbbattle-api) — Singleton, kein per-Env-Pfad."
+  rbbattle_api_download_dir: "Download-Ziel (/opt/download-service/downloads/mods) — Host-Konstante, kein per-Env-Pfad."
+  rbbattle_api_route_prefix: "Caddy-Route-Praefix (/mods/upload) — host-konstant, kein Env-Praefix."
   # --- Tournament-API-Auth (Issue #298) -------------------------------------
   tournament_host: "Bind-Adresse des tournament-server (Default 127.0.0.1, Issue #298) — Zugriffsdatum, kein Env-Pfad/Port; Loopback gilt fuer jede Env, der rift-caddy (host-net) proxyt dorthin."
   tournament_token: "Bearer-Token der Tournament-API aus dem Vault (vault_tournament_token) — Zugangsdatum; EINE Quelle fuer Rust + Caddy + Queue."
