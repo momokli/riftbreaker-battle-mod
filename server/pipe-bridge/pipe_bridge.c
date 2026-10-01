@@ -45,7 +45,9 @@
  *   RBB_BRIDGE_PIPE        Pipe-Pfad (Default \\.\pipe\rbbattle)
  *   RBB_BRIDGE_TIMEOUT_MS  Antwort-Timeout je Kommando (Default 5000)
  *   RBB_STATE_POLL_MS      Poll-Intervall des get_state-Fan-out-Pollers (500)
- *   RBB_STATE_POLL_TIMEOUT_MS  Antwort-Timeout des Pollers (2000)
+ *   RBB_STATE_POLL_TIMEOUT_MS  Antwort-Timeout des Pollers (800, bewusst
+ *                              kurz: begrenzt, wie lange der Poller g_cmd_cs
+ *                              haelt und damit andere Kommandos serialisiert)
  *
  * Modi:
  *   pipe_bridge.exe                 HTTP-Server (Dauerbetrieb, docker log)
@@ -995,7 +997,7 @@ static int pipe_ready(void)
 static DWORD WINAPI state_poller_main(LPVOID arg)
 {
     char line[READ_BUF];
-    int timeout_ms = env_int("RBB_STATE_POLL_TIMEOUT_MS", 2000);
+    int timeout_ms = env_int("RBB_STATE_POLL_TIMEOUT_MS", 800);
     int interval_ms = env_int("RBB_STATE_POLL_MS", STATE_POLL_INTERVAL_MS);
 
     (void)arg;
