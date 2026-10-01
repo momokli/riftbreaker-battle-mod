@@ -71,7 +71,6 @@ class _ProvisionerStub(BaseHTTPRequestHandler):
         payload = self._read()
         if self.path == "/start":
             instance = payload.get("instance_id")
-            world = payload.get("world")
             # #1030: eindeutiger GNS-Endpoint je Instanz (Alt != Neu belegbar).
             self.server._port += 1
             self.server.starts.append(payload)

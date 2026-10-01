@@ -1467,7 +1467,7 @@ const char kUiHtml[] = R"HTML(<!doctype html>
   .badge.ref-Ready { background:rgba(242,193,78,.16); color:var(--held); }
   .badge.ref-Running { background:rgba(95,211,154,.16); color:var(--routed); }
   .badge.ref-Finished { background:rgba(78,161,255,.16); color:var(--accent); }
-  .solo { display:flex; gap:8px; margin-top:10px; }
+  .solo { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
   .solo .toggle.on { border-color:var(--accent); background:#1b2735; }
   .hint { margin-top:8px; font-size:12px; color:var(--waiting); }
   /* Main-Screen: Modi-Kacheln zuerst (Issue #994). */
