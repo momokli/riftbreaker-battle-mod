@@ -1669,5 +1669,98 @@ class QueueWorldTestCase(BaseFixture):
         self.assertEqual(cfg.referee_url, "http://127.0.0.1:9300")
 
 
+class EnsureSidecarsTestCase(BaseFixture):
+    """Issue #1026 (US1): Repeated start() re-assertiert die vier Sidecars."""
+
+    def _sidecar_run(self, name):
+        for call in self.run_calls():
+            if "--name" in call and call[call.index("--name") + 1] == name:
+                return call
+        return None
+
+    def _starts(self):
+        return [c for c in self.docker_calls() if c and c[0] == "start"]
+
+    def test_running_sidecars_untouched_on_repeat(self):
+        provisioner = self.provisioner()
+        provisioner.start("test", "solo_self", "0")
+        runs_after_first = len(self.run_calls())
+        second = provisioner.start("test", "solo_self", "0")
+        self.assertFalse(second["created"])
+        # Kein zweites `docker run` fuer irgendeinen Sidecar.
+        self.assertEqual(len(self.run_calls()), runs_after_first)
+        # Kein `docker start` auf laufende Sidecars.
+        self.assertEqual(self._starts(), [])
+
+    def test_stopped_sidecar_is_restarted_not_recreated(self):
+        provisioner = self.provisioner()
+        provisioner.start("test", "solo_self", "0")
+        spec = self.spec("0")
+        self.docker.stop(spec.match_loop_container)
+        runs_after_first = len(self.run_calls())
+        status = provisioner.start("test", "solo_self", "0")
+        self.assertFalse(status["created"])
+        # Reaktiviert per `docker start`, KEIN Neubau.
+        self.assertIn(["start", spec.match_loop_container], self._starts())
+        self.assertEqual(len(self.run_calls()), runs_after_first)
+        info = self.docker.inspect_optional(spec.match_loop_container)
+        self.assertEqual(((info or {}).get("State") or {}).get("Status"), "running")
+
+    def test_missing_sidecar_is_recreated_from_container_env(self):
+        provisioner = self.provisioner(referee_url="http://127.0.0.1:9300")
+        provisioner.start("test", "solo_self", "0", "A")
+        spec = self.spec("0")
+        self.docker.rm(spec.match_loop_container)
+        runs_after_first = len(self.run_calls())
+        status = provisioner.start("test", "solo_self", "0", "A")
+        self.assertFalse(status["created"])
+        # Genau EIN neuer `docker run` — fuer den fehlenden Sidecar.
+        self.assertEqual(len(self.run_calls()), runs_after_first + 1)
+        run = self._sidecar_run(spec.match_loop_container)
+        self.assertIsNotNone(run)
+        self.assertIn(IMAGE, run)
+        self.assertIn(spec.match_loop_bridge_url(), run)
+
+    def test_missing_sidecar_reconstruction_fails_loud(self):
+        provisioner = self.provisioner(referee_url="http://127.0.0.1:9300")
+        provisioner.start("test", "solo_self", "0", "A")
+        spec = self.spec("0")
+        self.docker.rm(spec.match_loop_container)
+        os.environ["FAKE_DOCKER_FAIL"] = "run %s" % spec.match_loop_container
+        with self.assertRaises(prov.ProvisionError):
+            provisioner.start("test", "solo_self", "0", "A")
+
+    def test_legacy_container_missing_sidecars_skipped(self):
+        # Legacy/externer Container OHNE RIFTBREAKER_MODE (keine
+        # rekonstruierbare Selektion) darf nicht hart brechen.
+        spec = self.spec("0")
+        self.docker.run_or_fail([
+            "run", "-d", "--name", spec.container, "--network", spec.network,
+            "-p", "127.0.0.1:%d:9001" % spec.bridge_port, IMAGE,
+        ])
+        status = self.provisioner().start("test", "solo_self", "0")
+        self.assertFalse(status["created"])
+        self.assertTrue(status["running"])
+        # Kein Sidecar wurde nachgezogen (Skip), kein Fehler.
+        self.assertEqual(len(self.run_calls()), 1)
+
+    def test_legacy_container_stopped_sidecar_is_still_started(self):
+        # Auch ohne Modus-Env wird ein VORHANDENER, gestoppter Sidecar
+        # reaktiviert (`docker start` braucht keine Selektion).
+        spec = self.spec("0")
+        self.docker.run_or_fail([
+            "run", "-d", "--name", spec.container, "--network", spec.network,
+            "-p", "127.0.0.1:%d:9001" % spec.bridge_port, IMAGE,
+        ])
+        self.docker.run_or_fail([
+            "run", "-d", "--name", spec.match_loop_container, "--network", spec.network,
+            IMAGE,
+        ])
+        self.docker.stop(spec.match_loop_container)
+        status = self.provisioner().start("test", "solo_self", "0")
+        self.assertFalse(status["created"])
+        self.assertIn(["start", spec.match_loop_container], self._starts())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
