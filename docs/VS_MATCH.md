@@ -205,21 +205,47 @@ SOLO-Verhalten (Latch + `end_game` + `restart_map`) bitgleich.
 
 ### 6.5 Gemeinsamer Start/Ready + Pause
 
+- **Ready→GO-Kette (umgesetzt, #1025):** Zwei Produzenten bedienen denselben
+  GO-Kern `POST /ready {world}` (`tournament/src/api.rs`): (1) der Queue-Dienst
+  postet nach Provisionierung + `/lobby` je Welt ein `/ready` (automatisch,
+  s. §6.7); (2) der Relay-`POST /ready` ist kontextabhaengig — **Solo → Capsule**
+  (unveraendert), **VS → Referee** `POST /ready {world}`. Der **zweite** Ready
+  armiert GO (`arm_go()`) und startet mit `AUTO_GO` das Match (`start_match()`)
+  → `broadcast_go()` an **beide** Bridges.
+- **GO-triggernder Endpoint:** ausschliesslich `POST /ready {world}`. Der in der
+  Entscheidung genannte `POST /referee/event {"type":"ready"}` ist der
+  **Wellen-Executor**-Pfad (`referee.rs`) und armiert **kein** GO.
 - **Ready-Gate (umgesetzt, #937/#996):** `ready` je Team aggregieren
   (`TeamState.ready`/`both_ready()`) → bei „beide bereit" armiert der Referee
   GO (`arm_go()`); mit `AUTO_GO` startet das Match beim zweiten `ready`
   (`start_match()`), sonst wartet die Phase `ready` auf `POST /go`.
-- **Symmetrischer Start (umgesetzt, #996):** `broadcast_go()` postet denselben
-  `go_payload` (`cmd:"go"`, `commands`) an **beide** Bridges
-  (`cfg.bridge_for(w)`) — beide `PAUSED→WARMUP` (Warmup-Uhr je Server lokal,
-  Drift ok). Harness-Tests: `go_broadcasts_to_both_bridge_endpoints`,
-  `auto_go_starts_on_second_ready_and_broadcasts`.
+- **Symmetrischer Start (umgesetzt, #996/#1027):** `broadcast_go()` fächert je
+  Welt **beide** verifizierten Bridge-Routen als leeren POST (Body `{}`) an die
+  Basis von `cfg.bridge_for(w)` (ein abschließendes `/exec` wird entfernt, s.
+  `bridge_action_url`):
+  1. `POST <bridge-base>/resume_game` — native Server-Pause der kalt gebooteten
+     Welt aufheben (`pipe_bridge.c`/Issue #880; live gemessen ≈0,12 s,
+     `deploy/parked/MEASUREMENT.md` §2),
+  2. `POST <bridge-base>/start` — Wellen-Zyklus armieren (`start_epoch`); der
+     attack-cycle vollzieht `PAUSED→WARMUP→RUNNING` (`attack_cycle.py`).
+
+  Reihenfolge = Ausführungsreihenfolge (erst Sim entfrieren, dann Zyklus
+  armieren); beide `PAUSED→WARMUP` (Warmup-Uhr je Server lokal, Drift ok). Der
+  alte `/exec`-Command-Pfad (`go_payload`/`TOURNAMENT_GO_COMMANDS`, Default
+  `debug_dom_resume`) ist mit #1027 entfernt — **kein** Env, kein toter Kanal.
+  Zustell-Status je Welt aggregiert (`ok` = alle Routen ok, `routes[]`) in
+  `teams.<W>.go_broadcast`. Harness-Tests:
+  `go_broadcasts_to_both_bridge_endpoints`,
+  `second_ready_broadcasts_go_to_both_bridges`.
 - **Pause (umgesetzt, #997):** `POST /pause` / `POST /resume` (match-level)
   fächern `POST <bridge-base>/pause_dom` bzw. `/resume_dom` (#871) an **beide**
   Bridges (`cfg.bridge_for(w)`, analog `broadcast_go`); Idempotenz + `retry`,
   409 außerhalb `running`. Zustand je Welt in `teams.<W>.pause_broadcast`,
   match-weit in `/state.paused`. **Offen:** den attack-cycle je Welt mitpausieren
   (eigene Timer) — #553.
+- **Kalte A/B-Provisionierung:** kalte Welten starten Container **+ vier
+  Sidecars**, booten **PAUSED**/joinbar und werden erst über den Ready-Handover
+  (§6.5) resumiert — **kein** Pre-GO-`resume_game`. Details + Idempotenz: §6.7.
 
 ### 6.6 Events pro Welt
 
@@ -243,8 +269,51 @@ im Referee via `POST /lobby {player, world}` registriert; der Relay-Endpunkt
 `world`-Parameter (A/B) und seedet `RBB_VS_WORLD` + `RBB_REFEREE_URL` je Instanz
 (`parse_mode` unangetastet — eigene Achse). **Kein Warm-Pool**, kein
 Parked-VS-Reuse. Der Match-Record (`{participants,state,result?}`) uebersteht
-einen Dienst-Restart (`QUEUE_STATE_DIR`). Details: `deploy/queue/README.md`,
-`docs/LOBBY.md` §2.
+einen Dienst-Restart (`QUEUE_STATE_DIR`). **Ready-Egress (#1025):** nach
+Provisionierung **beider** Welten + **beiden** `/lobby`-Aufrufen postet der
+Dienst je **distinct** Welt genau **ein** `POST /ready {world}` an den Referee
+(Reihenfolge erzwungen: erst `/lobby`, dann `/ready` — sonst `404 not_found`).
+Der zweite Ready loest `AUTO_GO` aus und broadcastet das GO an **beide** Bridges
+(§6.5). Details: `deploy/queue/README.md`, `docs/LOBBY.md` §2.
+
+**Kalt up + pausiert-joinbar (Ist-Zustand, #1026):** Die kalte
+Provisionierung startet je Welt den Dedi-Container **und vier Sidecars**
+(session-recorder, send-tailer, match-loop, attack-cycle, s. §6.2). Die Welt
+bootet **PAUSED** (Ready-Gate `#937`, Cycle-Zustand `paused`) und ist in diesem
+Zustand **joinbar** — der Spieler joint die **pausierte** Welt. Der **„Resume"
+IST der Ready-Handover** (§6.5): `POST /ready {world}` je Welt → beim zweiten
+Ready armt GO (`AUTO_GO`) → `broadcast_go()` an **beide** Bridges. Ein
+**Pre-GO-`resume_game` gibt es nicht** — die Queue provisioniert kalt und
+registriert nur `/lobby`; resumiert wird ausschliesslich ueber den Ready-Handover.
+**Idempotenz:** ein wiederholter `start()` erzeugt **keinen zweiten** Container
+und re-assertiert die vier Sidecars (laufende unangetastet, gestoppte per
+`docker start`, fehlende aus der Container-Env rekonstruiert) — der
+Operator-Retry nach Sidecar-Crash/-Remove stellt den **ganzen** Stack statt nur
+den Container wieder her.
+
+**Abgrenzung `parked_vs` vs. Queue+Referee (Entscheidung Pfad a):**
+`deploy/parked/parked_vs.py` bleibt der **Warm-Pool-/Pre-Warm-Pfad** fuer
+**Solo/parked** (`WAITING_OPPONENT → WAITING_BOTH_READY → CLAIMED` via
+`pool.claim()` = `resume_game`) und ist **nicht** der VS-Orchestrator. Der
+VS-Orchestrator ist `deploy/queue/` + Referee: **kalte** Provisionierung beider
+Welten, `/lobby`-Registrierung und der gemeinsame AUTO_GO-Broadcast. Kein
+Warm-Pool-Reuse, kein `resume_game` im Queue-Pfad.
+
+**Lobby-Rematch (#1030):** Nach einem `finished`-Match startet
+`POST /queue/rematch` (Relay-Proxy + UI-Button in der Referee-Zeile) ein neues
+Match **derselben Paarung** (gleiche zwei Spieler, gleiche A/B-Zuordnung) mit
+**zwei frischen (kalten)** Welten. Reihenfolge (Anti-Zombie): Alt-Stop
+(`finish`/Cleanup) **vor** Neu-Start, Referee-`POST /rematch` (Reset, kein neuer
+Endpunkt) **vor** der Provisionierung; danach `/lobby` mit neuer `match_id` +
+`/ready`. Idempotenz ueber die persistierte Map `_rematch_of` (in
+`queue-state.json`): ein zweiter Aufruf mit derselben alten `match_id` liefert
+`idempotent:true` ohne weiteren Start. Der Referee-Reset leert das
+Queue-`match_id`-Echo (`teams.<W>.match_id`), damit der Reconciler zwischen
+Reset und Re-Lobby keine Alt-Zuordnung bildet. `POST /referee/rematch` am Relay
+ist der **reine** Reset (Operator); die UI nutzt nur `POST /queue/rematch`.
+Lifecycle-Defaults (#183): Spar-Pool reset, Seed/Settings identisch, Disconnect/
+Crash/Rematch-waehrend-`running` out of scope bzw. refused — siehe
+`deploy/queue/README.md` (§ #183-Defaults) und [docs/LOBBY.md](LOBBY.md) §2.
 
 ## 7. Gap-Liste → abgeleitete Issues
 
@@ -268,6 +337,7 @@ einen Dienst-Restart (`QUEUE_STATE_DIR`). Details: `deploy/queue/README.md`,
 4. **G7** Start/Ready-Aggregat + Pause-Fan-out.
 5. **G8** Match-View-UI.
 6. **Queue** Casual-Pairing + kalte Doppel-Provisionierung ✅ umgesetzt (#998).
+7. **Lobby-Rematch** (dieselbe Paarung, frische Welten) ✅ umgesetzt (#1030).
 
 ## 9. Risiken & offene Entscheidungen
 
@@ -275,7 +345,8 @@ einen Dienst-Restart (`QUEUE_STATE_DIR`). Details: `deploy/queue/README.md`,
 - **Sizing:** planet muss eine weitere Dauer-Instanz tragen (messen/aufstocken).
 - **Name vs. Identität:** Suffix-Routing erzwingt Namensdisziplin; Lobby-Mapping
   ist sauberer, braucht aber die Relay-API (+ evtl. Persistenz der Pins).
-- **Legacy:** Der Referee-`/go`-Command ist nicht mehr ausführbar; `TOURNAMENT_API.md`
-  driftet → im Zuge von G4 geradeziehen.
+- **Legacy:** Der Referee-`/go`-Command läuft seit **#1027** über die
+  verifizierten Bridge-Routen (`POST <bridge-base>/resume_game`, `/start`)
+  statt des toten `/exec`-Kanals; `TOURNAMENT_API.md` ist angeglichen.
 - **Scope:** echtes 1v1 ist laut `PLAYTEST_1.0.md` **Post-1.0** — dieses Konzept
   ist die Vorarbeit dafür.

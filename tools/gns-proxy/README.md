@@ -145,6 +145,7 @@ gns_probe.exe --port 6321 --map-file /etc/rbgns/routes --hold \
 | `--parked-url` | Ziel des Parked-Pool-Dienstes fuer `POST /solo` (Default: **nicht gesetzt**). **Nur IPv4-Literal** (`http://<IPv4>:port`) — der Outbound-Client nutzt `inet_pton`, also kein Hostname/DNS (`localhost` funktioniert nicht). |
 | `--capsule-url` | Ziel des **Kapsel-Flow-Dienstes** fuer `POST /solo` (Issue #931, Default: **nicht gesetzt**). Ist er gesetzt (argv oder `RBB_CAPSULE_URL`), ruft `/solo` `POST /capsule/open` (Claim **ohne** resume → pausiertes Spiel) statt `POST /claim`; ebenfalls nur IPv4-Literal. |
 | `--queue-url` | Ziel des **Queue-Dienstes** fuer `POST /queue` (Issue #998, Default: **nicht gesetzt**). Ist er gesetzt (argv oder `RBB_QUEUE_URL`), proxyt `/queue` an `POST /queue/join`; ebenfalls nur IPv4-Literal. Token aus `RBB_QUEUE_TOKEN`. |
+| `--referee-url` | Ziel des **Referee-Backends** fuer `GET /referee/state` + `POST /referee/ready` (Issue #1024, Default: **nicht gesetzt**). Ist er gesetzt (argv oder `RBB_REFEREE_URL`), proxyt der Relay Phase/Sieger (`GET /state`) und `POST /ready`; ebenfalls nur IPv4-Literal. Token aus `RBB_REFEREE_TOKEN` (nur fuer den mutierenden Pfad; `GET /state` ist auth-frei). Im Deploy steuert `gns_relay_referee_url` (Rolle `gns-relay`, Default `http://127.0.0.1:8082`) diesen Wert. |
 | `--max-players` | Aufnahme-Limit einer Solo-Instanz fuer den Beitritt weiterer Clients (Issue #936, Default `4` = Server-Default `riftbreaker_server_max_players: 4`). `<1` → Start verweigert (`exit 2`). Im Deploy steuert die Ansible-Variable `gns_relay_max_players` (Rolle `gns-relay`, Default `4`) diesen Wert. |
 
 Der Parked-Pfad ist nur aktiv, wenn `--parked-url` **oder** die Umgebungsvariable
@@ -172,6 +173,12 @@ Endpunkte (der Relay selbst hat **keinen** Auth — er bindet daher nur lokal; d
 parallelen Sessions),
 `GET /targets` (JSON: die Buttons), `POST /route`
 `{"identitaet":"…","target":"NAME"}`.
+
+**Referee-Bruecke (Issue #1024):** `GET /referee/state` (Phase/Spieler/Sieger,
+Proxy auf Referee `GET /state`) und `POST /referee/ready`
+(`{world:"A"|"B",identitaet?}`, Proxy auf Referee `POST /ready`, Bearer). Ohne
+`--referee-url`/`RBB_REFEREE_URL` → `503 referee_unconfigured`; nicht erreichbar
+→ `502 referee_unreachable`; fehlendes `world` → `400 bad_request`.
 Im Deploy läuft die Rolle `website` die Lobby öffentlich aus:
 **https://proxy.rift.projectmellon.de** (Host-Caddy → `127.0.0.1:9200`, basic_auth
 `operator`). Lokal ohne Domain: `ssh -L 9200:127.0.0.1:9200 planet`.
@@ -246,6 +253,7 @@ GNS-UDP-Endpoints.
 | --- | --- | --- |
 | `POST /queue` | `{"identitaet":"str:…","mode":"vs"}` | `POST /queue/join` am Queue-Dienst; wartend -> `{ok:true,status:"queued",position}`; gepaart -> `{ok:true,status:"matched",match:{…,assignments:[{identitaet,world,instance,target}]}}` + Pin beider Teilnehmer. `mode` Default `vs`. |
 | `POST /queue/leave` | `{"identitaet":"str:…"}` | `POST /queue/leave`; entfernt den Queue-Zustand. |
+| `POST /queue/finish` | `{"match_id":1,"result?":"winnerA"}` | `POST /queue/finish` am Queue-Dienst (Issue #1028); traegt das Ergebnis nach + kaltes Cleanup. `result` optional (`winnerA`/`winnerB`/`draw`). |
 | `GET /queue/status` | — | `GET /queue/status` am Queue-Dienst (Queue + Matches). |
 
 ```bash
@@ -254,12 +262,14 @@ curl -s -X POST 127.0.0.1:9200/queue -d '{"identitaet":"str:<A>","mode":"vs"}'
 curl -s -X POST 127.0.0.1:9200/queue -d '{"identitaet":"str:<B>","mode":"vs"}'
 # -> {"ok":true,"status":"matched","match":{"match_id":1,"assignments":[{"identitaet":"str:<A>","world":"A","target":"127.0.0.1:40001"},{…"B"…}]}}
 curl -s 127.0.0.1:9200/queue/status
+curl -s -X POST 127.0.0.1:9200/queue/finish -d '{"match_id":1,"result":"winnerA"}'
 ```
 
 Fehlercodes: ohne Queue konfiguriert `503 {reason:"queue_unconfigured",retry:false}`;
 Queue nicht erreichbar `502 {reason:"queue_unreachable"}`; fehlende `identitaet`
-`400`; sonst der Status/Body des Queue-Dienstes (z.B. `400 bad_mode`,
-`409 already_matched`).
+`400`; bei `POST /queue/finish` fehlendes/nicht-numerisches `match_id` oder
+unbekanntes `result` `400 bad_request` (kein Outbound-Versuch); sonst der
+Status/Body des Queue-Dienstes (z.B. `400 bad_mode`, `409 already_matched`).
 
 **Additive `/sessions`-Felder** (nur gesetzt, wenn ein Queue-Zustand existiert;
 bestehende Felder unveraendert): `queuePhase` (`queued|matched|provisioning|ready`),
@@ -410,6 +420,8 @@ Default-Ziel darf ein Re-Route **nicht** ueberschreiben.
 | `test_api_util.cpp`      | Host-Test der API-Helfer (CI: `g++ -std=c++17`)                  |
 | `route_rules.h`          | Routing-Regeln (exakt / Suffix / Default), reine Logik           |
 | `test_route_rules.cpp`   | Host-Test der Regeln (CI: `g++ -std=c++17`)                      |
+| `referee_bridge.h`       | reine Bruecken-Logik zum Referee (Config-Parse, Ready-Body, /state, Fehler-Mapping) |
+| `test_referee_bridge.cpp`| Host-Test der Referee-Bruecke (CI: `g++ -std=c++17`)            |
 | `inspect_gns.py`         | findet `m_nAppID` (vtable-Slot-Scan) in der GNS-DLL              |
 | `pcap_flow.py`           | UDP-Payloads eines Flows in Reihenfolge aus einem pcap           |
 | `replay_first_packet.py` | Replay der ersten GNS-Nachricht (nur Schritt 1 sinnvoll)         |

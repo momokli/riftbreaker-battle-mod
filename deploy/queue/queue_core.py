@@ -39,6 +39,24 @@ STATE_FINISHED = "finished"
 RESULTS = ("winnerA", "winnerB", "draw")
 
 
+def derive_result(phase: Optional[str], winner: Optional[str]) -> Optional[str]:
+    """Queue-Ergebnis aus der autoritativen Referee-Sicht ableiten (#1028).
+
+    Nur ``phase == "finished"`` ist ein abschliessendes Ergebnis:
+    ``winner == "A"`` -> ``winnerA``, ``winner == "B"`` -> ``winnerB``,
+    sonst (kein/Unentschieden) -> ``draw``. Andere Phasen -> ``None``
+    (noch nicht finishbar; der Reconciler laesst den Match unangetastet).
+    """
+    if phase != STATE_FINISHED:
+        return None
+    normalized = (winner or "").strip().upper()
+    if normalized == WORLD_A:
+        return "winnerA"
+    if normalized == WORLD_B:
+        return "winnerB"
+    return "draw"
+
+
 class QueueError(Exception):
     """Queue-Operation nicht moeglich — laut abbrechen (kein halber Zustand).
 
@@ -128,6 +146,10 @@ class Match:
     # Nach Provisionierung nachgetragene Instanz/Endpoint je Teilnehmer
     # (additiv, kein MMR): ``{identitaet: {"instance": ..., "endpoint": ...}}``.
     side: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    # Idempotenz-Anker eines Rematches (Issue #1030): die ``match_id`` des
+    # Quell-Matches, aus dem dieser Match hervorging; ``None`` fuer ein
+    # regulaeres Match. Additiv/backward-kompatibel (fehlend -> ``None``).
+    rematch_of: Optional[int] = None
 
     # -- Sichten -----------------------------------------------------------
     def assignments(self) -> List[Assignment]:
@@ -158,6 +180,7 @@ class Match:
             "state": self.state,
             "result": self.result,
             "detail": self.detail,
+            "rematch_of": self.rematch_of,
             "teams": [t.to_dict() for t in self.teams],
             "participants": [
                 {
@@ -323,6 +346,19 @@ class QueueCore(object):
     def entry_for(self, identitaet: str) -> Optional[QueueEntry]:
         return self._by_identity.get(identitaet)
 
+    def latest_match_for(self, identitaet: str) -> Optional[Match]:
+        """Juengstes Match (hoechste ``match_id``) mit dieser Identitaet (#1030).
+
+        Fuer den Komfort-Pfad ``POST /queue/rematch {identitaet}``: das letzte
+        (typisch: ``finished``) Match dieses Spielers. ``None``, wenn der
+        Spieler in keinem Match-Record vorkommt.
+        """
+        found: Optional[Match] = None
+        for match_id in sorted(self._matches):
+            if identitaet in self._matches[match_id].participants():
+                found = self._matches[match_id]
+        return found
+
     # -- Match-Mutationen --------------------------------------------------
     def _require_match(self, match_id: int) -> Match:
         match = self._matches.get(int(match_id))
@@ -344,6 +380,38 @@ class QueueCore(object):
                 409,
             )
         match.side[identitaet] = {"instance": instance, "endpoint": endpoint}
+
+    def create_rematch(self, source: Match) -> Match:
+        """Neuen Match-Record fuer ein Rematch derselben Paarung anlegen (#1030).
+
+        Gleiche Teams (gleiche Welt->Spieler-Zuordnung) wie ``source``, aber
+        eine neue monotone ``match_id``, State ``provisioning`` und
+        ``rematch_of == source.match_id``. Die Teilnehmer werden wieder in
+        ``_identity_match`` gebunden (das Rematch ist ein aktives Match).
+        """
+        teams = [
+            Team(
+                index=t.index,
+                world=t.world,
+                team_size=t.team_size,
+                players=list(t.players),
+            )
+            for t in source.teams
+        ]
+        match = Match(
+            match_id=self._next_match_id,
+            mode=source.mode,
+            team_size=source.team_size,
+            created_at=self.clock(),
+            teams=teams,
+            state=STATE_PROVISIONING,
+            rematch_of=source.match_id,
+        )
+        self._next_match_id += 1
+        for player in match.participants():
+            self._identity_match[player] = match.match_id
+        self._matches[match.match_id] = match
+        return match
 
     def mark_ready(self, match: Match) -> Match:
         if match.state == STATE_PROVISIONING:
@@ -441,6 +509,7 @@ class QueueCore(object):
                     "state": m.state,
                     "result": m.result,
                     "detail": m.detail,
+                    "rematch_of": m.rematch_of,
                     "teams": [t.to_dict() for t in m.teams],
                     "side": dict(m.side),
                 }
@@ -486,6 +555,8 @@ class QueueCore(object):
                 result=raw.get("result"),
                 detail=raw.get("detail"),
                 side=dict(raw.get("side") or {}),
+                rematch_of=(int(raw["rematch_of"]) if raw.get("rematch_of") is not None
+                            else None),
             )
             self._matches[match.match_id] = match
             # Nur laufende Matches binden die Identitaet; abgeschlossene/

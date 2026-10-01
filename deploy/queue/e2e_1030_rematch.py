@@ -1,24 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""E2E-Beweis fuer Issue #998 (Casual-Queue end-to-end) — Tester-Stage.
+"""E2E-Beweis fuer Issue #1030 (Rematch ueber die Lobby) — Tester-Stage.
 
-Treibt den VOLLEN HTTP-Pfad ueber den ECHTEN Queue-Dienst:
+Treibt den VOLLEN HTTP-Pfad ueber den ECHTEN Queue-Dienst (nur Docker/Spiel
+ersetzt, wie e2e_998_queue.py):
 
-    queue_service HTTP  POST /queue/join {identitaet, mode:"vs"}
-      -> QueueCoordinator (real) -> QueueCore (real, FIFO-Pairing A/B)
-      -> ProvisionerClient HTTP  POST /start {env, mode, instance_id, world}
-         -> Stub-Provisioner (recordet; liefert je Welt einen eigenen GNS-Endpoint)
-      -> RefereeClient HTTP      POST /lobby {player, world}
-         -> Stub-Referee (recordet)
-      -> Match-Record (real, mit assignments/instance/endpoint)
-
-Nur die Docker-/Spiel-Ebene ist ersetzt (kein Docker, kein Spiel); der
-HTTP-Pfad, das Pairing, die A/B-Zuordnung und der Match-Record sind echt.
-Kein Warm-Pool, kein MMR.
+    POST /queue/join    x2  -> Match m (A/B, zwei KALT-Welten)
+    POST /queue/finish      -> Ergebnis + Kalt-Stop beider Welten
+    POST /queue/rematch     -> Alt-Stop VOR Neu-Start, Referee-Reset VOR
+                               Provisionierung, danach zwei FRISCHE Welten
+                               derselben Paarung (neue match_id/Endpoints)
+    POST /queue/rematch x2  -> idempotent (kein zweiter Start)
 
 Aufruf (Exit 0 = alle ACs belegt; schreibt Rohbelege nach evidence/):
 
-    cd deploy/queue && TMPDIR=/dev/shm python3 e2e_998_queue.py
+    cd deploy/queue && TMPDIR=/dev/shm python3 e2e_1030_rematch.py
 """
 
 from __future__ import annotations
@@ -75,16 +71,17 @@ class _ProvisionerStub(BaseHTTPRequestHandler):
         payload = self._read()
         if self.path == "/start":
             instance = payload.get("instance_id")
-            world = payload.get("world")
-            # Deterministischer, aber pro Welt VERSCHIEDENER GNS-Endpoint.
-            port = 40000 + (0 if world == "A" else 1)
+            # #1030: eindeutiger GNS-Endpoint je Instanz (Alt != Neu belegbar).
+            self.server._port += 1
             self.server.starts.append(payload)
+            self.server.events.append(("start", instance))
             _record("STUB provisioner POST /start %s -> gns=127.0.0.1:%d"
-                    % (json.dumps(payload), port))
+                    % (json.dumps(payload), self.server._port))
             self._json(200, {"instance": instance, "running": True, "created": True,
-                             "ports": {"gns": "127.0.0.1:%d" % port}})
+                             "ports": {"gns": "127.0.0.1:%d" % self.server._port}})
         elif self.path == "/stop":
             self.server.stops.append(payload)
+            self.server.events.append(("stop", payload.get("instance_id")))
             _record("STUB provisioner POST /stop %s" % json.dumps(payload))
             self._json(200, {"instance": payload.get("instance_id"), "removed": True})
         else:
@@ -105,7 +102,6 @@ class _RefereeStub(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802
         if self.path == "/state":
-            # Issue #1028: auth-freier Referee-Zustand fuer den Queue-Reconciler.
             payload = getattr(self.server, "state_payload", None) or {}
             _record("STUB referee GET /state -> %s" % json.dumps(payload))
             self._json(200, payload)
@@ -122,12 +118,17 @@ class _RefereeStub(BaseHTTPRequestHandler):
             _record("STUB referee POST /lobby %s" % json.dumps(payload))
             self._json(200, {"ok": True})
         elif self.path == "/ready":
-            # Issue #1025: der Ready-Egress des Queue-Dienstes (je Welt 1x,
-            # NACH beiden /lobby). Ohne diesen Zweig -> 404 -> Rollback.
             self.server.readies.append(payload)
             self.server.calls.append(("ready", payload))
             _record("STUB referee POST /ready %s" % json.dumps(payload))
             self._json(200, {"ok": True})
+        elif self.path == "/rematch":
+            # #1030: Reset in die Lobby (Spieler bleiben registriert).
+            self.server.rematches += 1
+            self.server.calls.append(("rematch", payload))
+            _record("STUB referee POST /rematch -> phase=lobby rematches=%d"
+                    % self.server.rematches)
+            self._json(200, {"phase": "lobby", "rematches": self.server.rematches})
         else:
             self._json(404, {"ok": False})
 
@@ -144,6 +145,8 @@ class Stack(object):
         self.prov_server.daemon_threads = True
         self.prov_server.starts = []
         self.prov_server.stops = []
+        self.prov_server.events = []  # #1030: globale Start-/Stop-Reihenfolge
+        self.prov_server._port = 40000
         self.prov_port = _serve(self.prov_server)
         case.addCleanup(self.prov_server.shutdown)
         case.addCleanup(self.prov_server.server_close)
@@ -153,7 +156,8 @@ class Stack(object):
         self.ref_server.lobbies = []
         self.ref_server.readies = []
         self.ref_server.calls = []
-        self.ref_server.state_payload = None  # #1028: GET /state-Snapshot
+        self.ref_server.rematches = 0
+        self.ref_server.state_payload = None
         self.ref_port = _serve(self.ref_server)
         case.addCleanup(self.ref_server.shutdown)
         case.addCleanup(self.ref_server.server_close)
@@ -193,108 +197,97 @@ def _call(method, url, payload=None):
         return exc.code, body
 
 
-class QueueE2E(unittest.TestCase):
+class RematchE2E(unittest.TestCase):
     def setUp(self):
-        self.state_dir = tempfile.mkdtemp(prefix="e2e998-state-")
+        self.state_dir = tempfile.mkdtemp(prefix="e2e1030-state-")
         self.addCleanup(lambda: __import__("shutil").rmtree(self.state_dir, True))
-        _record("=== E2E #998 run (state_dir=%s) ===" % self.state_dir)
+        _record("=== E2E #1030 run (state_dir=%s) ===" % self.state_dir)
 
-    def test_acceptance_two_players_pair_into_one_match(self):
-        st = Stack(self, self.state_dir)
-
-        # (1) Zwei Identitaeten, Modus vs, POST /queue/join.
-        status_a, a = st.post("/queue/join", {"identitaet": "str:aa", "mode": "vs"})
-        self.assertEqual(status_a, 200, a)
+    def _matched(self, st):
+        _s, a = st.post("/queue/join", {"identitaet": "str:aa", "mode": "vs"})
         self.assertEqual(a["status"], "queued", a)
-        status_b, b = st.post("/queue/join", {"identitaet": "str:bb", "mode": "vs"})
-        self.assertEqual(status_b, 200, b)
-
-        # (2) genau EINE Paarung (Match m1), A <-> Welt A, B <-> Welt B.
+        _s, b = st.post("/queue/join", {"identitaet": "str:bb", "mode": "vs"})
         self.assertEqual(b["status"], "matched", b)
-        match = b["match"]
-        self.assertEqual(match["match_id"], 1, match)
-        by_world = {x["world"]: x["identitaet"] for x in match["assignments"]}
-        self.assertEqual(by_world, {"A": "str:aa", "B": "str:bb"}, match)
+        return b["match"]
 
-        # (3) beide Welten KALT provisioniert (zwei frische Instanzen, kein Pool).
-        self.assertEqual(len(st.prov_server.starts), 2, st.prov_server.starts)
-        worlds = sorted(s["world"] for s in st.prov_server.starts)
-        self.assertEqual(worlds, ["A", "B"], st.prov_server.starts)
-        instances = sorted(s["instance_id"] for s in st.prov_server.starts)
-        self.assertEqual(instances, ["queue-1-a", "queue-1-b"], instances)
-
-        # (4) Referee erhaelt genau ein /lobby A UND ein /lobby B.
-        lobbies = st.ref_server.lobbies
-        self.assertEqual(len(lobbies), 2, lobbies)
-        lobby_by_world = {lobby["world"]: lobby["player"] for lobby in lobbies}
-        self.assertEqual(lobby_by_world, {"A": "str:aa", "B": "str:bb"}, lobbies)
-
-        # (4b) Ready-Egress (#1025): je DISTINCT Welt genau EIN `/ready`, und
-        # ALLE `/ready` kommen NACH beiden `/lobby` (Reihenfolge im Stub).
-        readies = st.ref_server.readies
-        self.assertEqual(len(readies), 2, readies)
-        self.assertEqual(sorted(r["world"] for r in readies), ["A", "B"], readies)
-        self.assertEqual(len({r["world"] for r in readies}), 2, readies)
-        calls = [kind for kind, _ in st.ref_server.calls]
-        self.assertEqual(calls, ["lobby", "lobby", "ready", "ready"], calls)
-
-        # (5) beide Identitaeten auf VERSCHIEDENE GNS-Endpoints gepinnt.
-        endpoints = {x["identitaet"]: x["target"] for x in match["assignments"]}
-        self.assertEqual(len(set(endpoints.values())), 2, endpoints)
-        self.assertTrue(all(endpoints.values()), endpoints)
-
-        # (6) EIN Match-Datensatz mit beiden Teilnehmern; finish traegt Ergebnis nach.
-        _s, snap = st.get("/queue/status")
-        self.assertEqual(snap["matches_count"], 1, snap)
-        record = snap["matches"][0]
-        self.assertEqual(len(record["participants"]), 2, record)
-        _s, done = st.post("/queue/finish", {"match_id": 1, "result": "winnerA"})
-        self.assertEqual(done["match"]["state"], "finished", done)
-        self.assertEqual(done["match"]["result"], "winnerA", done)
-        # Kaltes Cleanup: beide Instanzen gestoppt.
-        self.assertEqual(len(st.prov_server.stops), 2, st.prov_server.stops)
-
-    def test_acceptance_reconcile_auto_finishes_after_referee_finished(self):
-        """Issue #1028: der Reconciler liest /state und finisht automatisch."""
+    def test_acceptance_rematch_same_pairing_fresh_worlds(self):
         st = Stack(self, self.state_dir)
+        match = self._matched(st)
+        mid = match["match_id"]
+        self.assertEqual(mid, 1, match)
+        _s, done = st.post("/queue/finish", {"match_id": mid, "result": "winnerA"})
+        self.assertEqual(done["match"]["state"], "finished", done)
 
-        status_a, a = st.post("/queue/join", {"identitaet": "str:aa", "mode": "vs"})
-        self.assertEqual(status_a, 200, a)
-        status_b, b = st.post("/queue/join", {"identitaet": "str:bb", "mode": "vs"})
-        self.assertEqual(status_b, 200, b)
-        mid = b["match"]["match_id"]
+        # (1) Rematch per match_id.
+        status, out = st.post("/queue/rematch", {"match_id": mid})
+        self.assertEqual(status, 200, out)
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(out["rematch_of"], mid, out)
+        self.assertFalse(out["idempotent"], out)
+        new = out["match"]
+        self.assertEqual(new["match_id"], mid + 1, new)
+        self.assertEqual(new["rematch_of"], mid, new)
+        self.assertEqual(new["state"], "ready", new)
 
-        # Referee meldet das authentische Match-Ende (Sieger A) inkl. match_id-Echo.
-        st.ref_server.state_payload = {
-            "phase": "finished",
-            "winner": "A",
-            "teams": {
-                "A": {"player": "str:aa", "match_id": mid},
-                "B": {"player": "str:bb", "match_id": mid},
-            },
-        }
-        outcome = st.coordinator.reconcile()
-        _record("RECONCILE -> %s" % json.dumps(outcome))
-        self.assertEqual(outcome["finished"], [mid], outcome)
+        # (2) Gleiche zwei Spieler + gleiche A/B-Weltzuordnung.
+        by_world = {a["world"]: a["identitaet"] for a in new["assignments"]}
+        self.assertEqual(by_world, {"A": "str:aa", "B": "str:bb"}, new)
 
-        # DoD: result im Match-Record gesetzt + BEIDE Instanzen gestoppt.
-        _s, snap = st.get("/queue/status")
-        record = snap["matches"][0]
-        self.assertEqual(record["state"], "finished", record)
-        self.assertEqual(record["result"], "winnerA", record)
-        self.assertEqual(sorted(p["instance_id"] for p in st.prov_server.stops),
-                         ["queue-1-a", "queue-1-b"], st.prov_server.stops)
+        # (3) Zwei FRISCHE Kalt-Welten (neue Instanz-IDs), neue Endpoints.
+        new_instances = sorted(s["instance_id"] for s in st.prov_server.starts)[-2:]
+        self.assertEqual(new_instances, ["queue-2-a", "queue-2-b"], new_instances)
+        old_eps = {a["target"] for a in match["assignments"]}
+        new_eps = {a["target"] for a in new["assignments"]}
+        self.assertTrue(new_eps and not (new_eps & old_eps), (old_eps, new_eps))
 
-        # Idempotent: ein weiterer Tick stoppt nicht erneut.
-        st.coordinator.reconcile()
-        self.assertEqual(len(st.prov_server.stops), 2, st.prov_server.stops)
+        # (4) Anti-Zombie: Alt-Stop VOR Neu-Start.
+        events = st.prov_server.events
+        for world in ("a", "b"):
+            stop_old = events.index(("stop", "queue-1-%s" % world))
+            start_new = events.index(("start", "queue-2-%s" % world))
+            self.assertLess(stop_old, start_new, events)
+
+        # (5) Referee-Folge: rematch VOR den neuen Lobby/Ready-Aufrufen.
+        calls = [kind for kind, _ in st.ref_server.calls]
+        self.assertEqual(calls[:4], ["lobby", "lobby", "ready", "ready"], calls)
+        self.assertEqual(calls[4], "rematch", calls)
+        self.assertEqual(calls[5:], ["lobby", "lobby", "ready", "ready"], calls)
+        # Neue match_id wird per /lobby echoisiert (Referee-Vertrag).
+        self.assertEqual([lobby["match_id"] for lobby in st.ref_server.lobbies[-2:]],
+                         [mid + 1, mid + 1])
+
+        # (6) Idempotenter Zweitaufruf: kein zweiter Start, gleiche neue match_id.
+        starts_before = len(st.prov_server.starts)
+        status2, out2 = st.post("/queue/rematch", {"match_id": mid})
+        self.assertEqual(status2, 200, out2)
+        self.assertTrue(out2["idempotent"], out2)
+        self.assertEqual(out2["match"]["match_id"], mid + 1, out2)
+        self.assertEqual(len(st.prov_server.starts), starts_before, st.prov_server.starts)
+        self.assertEqual(st.ref_server.rematches, 1, st.ref_server.rematches)
+
+    def test_acceptance_rematch_by_identitaet_and_refusal(self):
+        st = Stack(self, self.state_dir)
+        match = self._matched(st)
+        mid = match["match_id"]
+
+        # Noch nicht finished -> 409 match_not_finished, kein neuer Start.
+        status, refuse = st.post("/queue/rematch", {"match_id": mid})
+        self.assertEqual(status, 409, refuse)
+        self.assertEqual(refuse["reason"], "match_not_finished", refuse)
+
+        _s, _done = st.post("/queue/finish", {"match_id": mid, "result": "draw"})
+        # Komfort-Pfad per Identitaet.
+        status2, out = st.post("/queue/rematch", {"identitaet": "str:aa"})
+        self.assertEqual(status2, 200, out)
+        self.assertEqual(out["rematch_of"], mid, out)
+        self.assertEqual(out["match"]["match_id"], mid + 1, out)
 
 
 def _write_evidence() -> str:
     os.makedirs(EVIDENCE_DIR, exist_ok=True)
-    path = os.path.join(EVIDENCE_DIR, "998-e2e-queue.txt")
+    path = os.path.join(EVIDENCE_DIR, "1030-e2e-rematch.txt")
     with open(path, "w", encoding="utf-8") as handle:
-        handle.write("# E2E-Beweis Issue #998 — zwei Spieler -> ein VS-Match (A/B)\n")
+        handle.write("# E2E-Beweis Issue #1030 — Lobby-Rematch (gleiche Paarung, frische A/B-Welten)\n")
         handle.write("# Rohprotokoll des Harness-Laufs (queue_service HTTP + Stubs)\n\n")
         handle.write("\n".join(TRANSCRIPT))
         handle.write("\n")
@@ -302,7 +295,7 @@ def _write_evidence() -> str:
 
 
 if __name__ == "__main__":
-    suite = unittest.TestLoader().loadTestsFromTestCase(QueueE2E)
+    suite = unittest.TestLoader().loadTestsFromTestCase(RematchE2E)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     path = _write_evidence()
     print("Rohbeleg: %s" % path)

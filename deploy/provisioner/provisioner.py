@@ -148,6 +148,25 @@ def parse_world(world: str) -> str:
     return world
 
 
+def apply_world_selection(
+    selection: ModeSelection, world: Optional[str]
+) -> ModeSelection:
+    """Welt-Achse (#998) auf eine Modus-Selektion anwenden — EINE Quelle.
+
+    Bei gesetzter VS-Welt (``"A"``/``"B"``) werden self-send und Persona
+    abgeschaltet, damit die Sidecars (attack-cycle) exakt wie beim Erststart
+    erzeugt werden. Genutzt von :meth:`Provisioner.start` (Happy Path) UND
+    :meth:`Provisioner._ensure_sidecars` (Re-Assert) — kein Drift zwischen
+    Erststart und Rekonstruktion (#1026 US1).
+    """
+    if world is None:
+        return selection
+    parse_world(world)
+    return dataclasses.replace(
+        selection, send_yourself=False, persona_on=False, persona=None
+    )
+
+
 def parse_mode(mode: str) -> ModeSelection:
     """Modus strikt parsen/validieren (fail-loud, kein stiller Fallback).
 
@@ -801,11 +820,7 @@ class Provisioner(object):
         # Issue #998 (US2): VS-Welt ist eine SEPARATE Achse. ``parse_mode`` bleibt
         # unangetastet; ``world`` seedet RBB_VS_WORLD + RBB_REFEREE_URL und
         # schaltet self-send/persona fuer die Instanz ab.
-        if world is not None:
-            parse_world(world)
-            selection = dataclasses.replace(
-                selection, send_yourself=False, persona_on=False, persona=None
-            )
+        selection = apply_world_selection(selection, world)
         env = env or self.cfg.env
         instance_id = instance_id if instance_id is not None else self.cfg.instance_id
         spec = self.spec_factory(env, instance_id, self.cfg)
@@ -841,6 +856,26 @@ class Provisioner(object):
                     "Instanz %s laeuft, aber %s liefert kein ok innerhalb der Frist"
                     % (instance_id, spec.health_url())
                 )
+            # Issue #1026 (US1): der wiederholte start() haelt den GANZEN Stack
+            # gesund — nicht nur den Dedi-Container. Laufende Sidecars bleiben
+            # unangetastet, gestoppte werden reaktiviert, fehlende aus der
+            # Env-Wahrheit des bestehenden Containers rekonstruiert.
+            existing_created: Dict[str, Any] = {
+                "container": False,
+                "sidecars": [],
+                "network": False,
+                "volumes": [],
+                "dirs": [],
+                "config_staged": None,
+                "personas_staged": None,
+            }
+            try:
+                self._ensure_sidecars(spec, existing, existing_created)
+            except Exception:
+                # Nur die in DIESEM Aufruf neu erzeugten Sidecars zurueckrollen;
+                # der bestehende Container/Stack bleibt unangetastet.
+                self._rollback(spec, existing_created)
+                raise
             return self._status_dict(spec, created=False)
 
         self._preflight(spec, selection)
@@ -1284,16 +1319,19 @@ class Provisioner(object):
         self.docker.run_or_fail(args)
         created["container"] = True
 
-    def _create_sidecars(
-        self, spec: InstanceSpec, created: Dict[str, Any], selection: ModeSelection,
-        world: Optional[str] = None,
-    ) -> None:
-        """Vier Sidecars pro Instanz starten (#966) — Soll-Env/Volumes/Commands
-        1:1 aus ``roles/riftbreaker-server/templates/docker-compose.yml.j2``.
+    def _sidecar_run_args(
+        self, spec: InstanceSpec, selection: ModeSelection, world: Optional[str] = None
+    ) -> List[Tuple[str, List[str]]]:
+        """``docker run``-Argumentlisten der vier Sidecars, in fester Reihenfolge.
 
-        Im selben Docker-Netz wie der Dedi-Container; nur der Attack-Cycle-
-        Control-Port wird auf 127.0.0.1 gepublished. Identische
-        ``rb.provisioner.*``-Labels zur einfachen Zuordnung.
+        EINE Quelle fuer Erzeugung (:meth:`_create_sidecars`, Happy Path) UND
+        Re-Assert (:meth:`_ensure_sidecars`, Existing-Pfad) — so kann kein Drift
+        zwischen Erststart und Wiederherstellung entstehen (#1026 US1).
+
+        Soll-Env/Volumes/Commands 1:1 aus
+        ``roles/riftbreaker-server/templates/docker-compose.yml.j2``. Im selben
+        Docker-Netz wie der Dedi-Container; nur der Attack-Cycle-Control-Port
+        wird auf 127.0.0.1 gepublished. Identische ``rb.provisioner.*``-Labels.
         """
         labels = [
             "--label", "rb.provisioner.env=%s" % spec.env,
@@ -1309,7 +1347,7 @@ class Provisioner(object):
             ]
 
         # session-recorder: Wine-Volume ro + sessions-Dir (Bind, RW).
-        self.docker.run_or_fail([
+        session_recorder = [
             "run", "-d",
             "--name", spec.session_recorder_container,
             "--network", spec.network,
@@ -1323,11 +1361,10 @@ class Provisioner(object):
             "python3", "-u", "/app/session_recorder.py",
             "--wine-prefix", "/data/.wine",
             "--out-dir", "/data/sessions",
-        ])
-        created["sidecars"].append(spec.session_recorder_container)
+        ]
 
         # send-tailer: Wine-Volume ro + queue-url (in-network).
-        self.docker.run_or_fail([
+        send_tailer = [
             "run", "-d",
             "--name", spec.send_tailer_container,
             "--network", spec.network,
@@ -1340,11 +1377,10 @@ class Provisioner(object):
             "python3", "-u", "/app/send_tailer.py",
             "--wine-prefix", "/data/.wine",
             "--queue-url", spec.send_tailer_queue_url(),
-        ])
-        created["sidecars"].append(spec.send_tailer_container)
+        ]
 
         # match-loop: bridge-url (in-network), kein Wine-Volume.
-        self.docker.run_or_fail([
+        match_loop = [
             "run", "-d",
             "--name", spec.match_loop_container,
             "--network", spec.network,
@@ -1356,8 +1392,7 @@ class Provisioner(object):
             "python3", "-u", "/app/match_loop.py",
             "--bridge-url", spec.match_loop_bridge_url(),
             "--restart-delay", str(spec.match_loop_restart_delay),
-        ])
-        created["sidecars"].append(spec.match_loop_container)
+        ]
 
         # attack-cycle: bridge-url + Skript ro; EINZIGER Host-Publish.
         # Modus-abgeleitete Start-Fallback-Args (#993).
@@ -1392,8 +1427,85 @@ class Provisioner(object):
                 "--persona", selection.persona,
                 "--persona-file", PERSONA_CONTAINER_PATH,
             ]
-        self.docker.run_or_fail(cycle_args)
-        created["sidecars"].append(spec.attack_cycle_container)
+
+        return [
+            (spec.session_recorder_container, session_recorder),
+            (spec.send_tailer_container, send_tailer),
+            (spec.match_loop_container, match_loop),
+            (spec.attack_cycle_container, cycle_args),
+        ]
+
+    def _create_sidecars(
+        self, spec: InstanceSpec, created: Dict[str, Any], selection: ModeSelection,
+        world: Optional[str] = None,
+    ) -> None:
+        """Vier Sidecars pro Instanz starten (#966) — Args aus dem gemeinsamen
+        Builder :meth:`_sidecar_run_args`."""
+        for name, args in self._sidecar_run_args(spec, selection, world):
+            self.docker.run_or_fail(args)
+            created["sidecars"].append(name)
+
+    def _ensure_sidecars(
+        self, spec: InstanceSpec, existing: Dict[str, Any], created: Dict[str, Any]
+    ) -> None:
+        """Re-Assert der vier Sidecars fuer einen BESTEHENDEN Container (#1026 US1).
+
+        Ein wiederholter ``start()`` stellt sicher, dass der komplette Stack
+        laeuft — nicht nur der Dedi-Container:
+
+        1. **laufende** Sidecars werden nicht angefasst (kein zweites ``docker
+           run``, kein Duplikat),
+        2. **gestoppte** werden per ``docker start <name>`` reaktiviert
+           (idempotent, kein Neubau),
+        3. **fehlende** werden aus den Env-Werten des bestehenden Containers
+           rekonstruiert (``RIFTBREAKER_MODE`` -> :func:`parse_mode`,
+           ``RBB_VS_WORLD`` -> ``world``) und ueber denselben Builder
+           nachgezogen; scheitert das -> :class:`ProvisionError` (fail-loud,
+           kein stiller Halb-Stack).
+
+        Legacy-Container ohne ``RIFTBREAKER_MODE`` liefern keine rekonstruierbare
+        Selektion — dort wird NICHT hart gebrochen (Skip fuer fehlende Sidecars),
+        analog zur bestehenden Modus-Skip-Logik im Existing-Pfad.
+        """
+        existing_mode = _container_env_mode(existing)
+        selection: Optional[ModeSelection] = None
+        world: Optional[str] = None
+        if existing_mode is not None:
+            selection = parse_mode(existing_mode)
+            world = _container_env_value(existing, "RBB_VS_WORLD") or None
+            # Dieselbe world-Anpassung wie im Happy Path (start()): sonst
+            # wuerde ein fehlender attack-cycle fuer eine VS-Welt mit
+            # --send-yourself on rekonstruiert statt off (#1026 US1 Drift).
+            selection = apply_world_selection(selection, world)
+        by_name: Dict[str, List[str]] = {}
+        if selection is not None:
+            by_name = dict(self._sidecar_run_args(spec, selection, world))
+
+        for name in spec.sidecar_containers():
+            info = self.docker.inspect_optional(name)
+            if info is None:
+                if selection is None:
+                    LOG.warning(
+                        "Sidecar %s fehlt, aber Container %s hat kein "
+                        "RIFTBREAKER_MODE (legacy) — Re-Assert uebersprungen",
+                        name, spec.container,
+                    )
+                    continue
+                try:
+                    self.docker.run_or_fail(by_name[name])
+                except DockerError as exc:
+                    raise ProvisionError(
+                        "fehlenden Sidecar %s nicht rekonstruierbar: %s" % (name, exc)
+                    )
+                created["sidecars"].append(name)
+                continue
+            status = (info.get("State") or {}).get("Status") or ""
+            if status != "running":
+                rc, _out, err = self.docker.start(name)
+                if rc != 0:
+                    raise ProvisionError(
+                        "gestoppten Sidecar %s nicht startbar: %s" % (name, err.strip())
+                    )
 
     def _wait_healthy(self, spec: InstanceSpec) -> bool:
         deadline = self.clock() + self.cfg.health_deadline

@@ -46,6 +46,10 @@ services:
       # Queue-Dienst fuer POST /queue (Issue #998). Token per Env (nie argv).
       RBB_QUEUE_URL: "{{ gns_relay_queue_url }}"
       RBB_QUEUE_TOKEN: "{{ gns_relay_queue_token }}"
+      # Referee-Backend fuer GET /referee/state + POST /referee/ready (#1024).
+      # Token per Env (nie argv).
+      RBB_REFEREE_URL: "{{ gns_relay_referee_url }}"
+      RBB_REFEREE_TOKEN: "{{ gns_relay_referee_token }}"
     volumes:
       # Eigenes Wine-Prefix (nicht mit dem dev-Server geteilt).
       - "{{ gns_relay_wine_volume }}:{{ gns_relay_wine_mount }}"
@@ -77,7 +81,8 @@ services:
         --api-port {{ gns_relay_api_port }}
         --parked-url {{ gns_relay_parked_url }}
         --capsule-url {{ gns_relay_capsule_url }}
-        --queue-url {{ gns_relay_queue_url }}{% if gns_relay_hold %}
+        --queue-url {{ gns_relay_queue_url }}
+        --referee-url {{ gns_relay_referee_url }}{% if gns_relay_hold %}
         --hold{% endif %}
         --max-players {{ gns_relay_max_players }}{% for t in gns_relay_targets %}
         --target {{ t }}{% endfor %}
