@@ -148,6 +148,25 @@ def parse_world(world: str) -> str:
     return world
 
 
+def apply_world_selection(
+    selection: ModeSelection, world: Optional[str]
+) -> ModeSelection:
+    """Welt-Achse (#998) auf eine Modus-Selektion anwenden — EINE Quelle.
+
+    Bei gesetzter VS-Welt (``"A"``/``"B"``) werden self-send und Persona
+    abgeschaltet, damit die Sidecars (attack-cycle) exakt wie beim Erststart
+    erzeugt werden. Genutzt von :meth:`Provisioner.start` (Happy Path) UND
+    :meth:`Provisioner._ensure_sidecars` (Re-Assert) — kein Drift zwischen
+    Erststart und Rekonstruktion (#1026 US1).
+    """
+    if world is None:
+        return selection
+    parse_world(world)
+    return dataclasses.replace(
+        selection, send_yourself=False, persona_on=False, persona=None
+    )
+
+
 def parse_mode(mode: str) -> ModeSelection:
     """Modus strikt parsen/validieren (fail-loud, kein stiller Fallback).
 
@@ -801,11 +820,7 @@ class Provisioner(object):
         # Issue #998 (US2): VS-Welt ist eine SEPARATE Achse. ``parse_mode`` bleibt
         # unangetastet; ``world`` seedet RBB_VS_WORLD + RBB_REFEREE_URL und
         # schaltet self-send/persona fuer die Instanz ab.
-        if world is not None:
-            parse_world(world)
-            selection = dataclasses.replace(
-                selection, send_yourself=False, persona_on=False, persona=None
-            )
+        selection = apply_world_selection(selection, world)
         env = env or self.cfg.env
         instance_id = instance_id if instance_id is not None else self.cfg.instance_id
         spec = self.spec_factory(env, instance_id, self.cfg)
@@ -1458,6 +1473,10 @@ class Provisioner(object):
         if existing_mode is not None:
             selection = parse_mode(existing_mode)
             world = _container_env_value(existing, "RBB_VS_WORLD") or None
+            # Dieselbe world-Anpassung wie im Happy Path (start()): sonst
+            # wuerde ein fehlender attack-cycle fuer eine VS-Welt mit
+            # --send-yourself on rekonstruiert statt off (#1026 US1 Drift).
+            selection = apply_world_selection(selection, world)
         by_name: Dict[str, List[str]] = {}
         if selection is not None:
             by_name = dict(self._sidecar_run_args(spec, selection, world))

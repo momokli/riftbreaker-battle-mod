@@ -1721,6 +1721,40 @@ class EnsureSidecarsTestCase(BaseFixture):
         self.assertIn(IMAGE, run)
         self.assertIn(spec.match_loop_bridge_url(), run)
 
+    def test_missing_vs_cycle_is_recreated_with_world_transform(self):
+        # #1026 Verifier-Drift: ein fehlender attack-cycle fuer eine VS-Welt
+        # muss mit --send-yourself off rekonstruiert werden (world-Anpassung
+        # wie im Happy Path), nicht mit dem parse_mode-Default on.
+        provisioner = self.provisioner(referee_url="http://127.0.0.1:9300")
+        provisioner.start("test", "solo_self", "0", "A")
+        spec = self.spec("0")
+        orig = self._sidecar_run(spec.attack_cycle_container)
+        self.assertEqual(orig[orig.index("--send-yourself") + 1], "off")
+        self.docker.rm(spec.attack_cycle_container)
+        runs_after_first = len(self.run_calls())
+        status = provisioner.start("test", "solo_self", "0", "A")
+        self.assertFalse(status["created"])
+        self.assertEqual(len(self.run_calls()), runs_after_first + 1)
+        recon = self.run_calls()[-1]
+        # Kein Drift: identische self-send-Achse wie im Erststart.
+        self.assertEqual(recon[recon.index("--send-yourself") + 1], "off")
+        self.assertNotIn("--persona", recon)
+        # VS-Welt/Referee-Env auch am rekonstruierten Sidecar gesetzt.
+        self.assertIn("RBB_VS_WORLD=A", recon)
+        self.assertIn("RBB_REFEREE_URL=http://127.0.0.1:9300", recon)
+
+    def test_missing_non_vs_cycle_keeps_self_send(self):
+        # Gegenprobe: ohne VS-Welt bleibt die rekonstruierte self-send-Achse
+        # der Modus-Wahrheit treu (keine Ueberkorrektur des Fixes).
+        provisioner = self.provisioner()
+        provisioner.start("test", "solo_self", "0")
+        spec = self.spec("0")
+        self.docker.rm(spec.attack_cycle_container)
+        provisioner.start("test", "solo_self", "0")
+        recon = self.run_calls()[-1]
+        self.assertEqual(recon[recon.index("--send-yourself") + 1], "on")
+        self.assertNotIn("RBB_VS_WORLD", recon)
+
     def test_missing_sidecar_reconstruction_fails_loud(self):
         provisioner = self.provisioner(referee_url="http://127.0.0.1:9300")
         provisioner.start("test", "solo_self", "0", "A")
