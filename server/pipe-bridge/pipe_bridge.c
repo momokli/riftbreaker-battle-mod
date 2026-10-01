@@ -797,6 +797,13 @@ static void route_pipe_line(HANDLE h, const char *line)
     if (!json_get_string(line, "event", ev, sizeof(ev)))
         return;
 
+    /* #1063: HQ-Tod als Push-Event vom Game-Thread -> an SSE-Consumer. */
+    if (strcmp(ev, "hq_dead") == 0) {
+        blog("hq_dead: %.80s", line);
+        sse_broadcast(line);
+        return;
+    }
+
     if (strcmp(ev, "player_chat") == 0) {
         char text[256] = "";
         char cid[64] = "";
