@@ -51,14 +51,19 @@ ret
 **Kombiniert:** `GameplayState + 0x358` = das WorldStatesHolder-Array;
 `World* = *(GameplayState + 0x358 + type*0x58)`.
 
-### Warum das auf `ServerGameplayState` gilt
+### Warum das auf `ServerGameplayState` gilt (doppelt belegt)
 
-Der Hook nutzt auf demselben `self` bereits Felder der Klasse
-(`RBBRIDGE_SGS_PAUSEFLAG_OFF = 0x534`, `RBBRIDGE_SGS_PAUSEBITS_OFF = 0x35CC`,
-`SESSIONS = 0x768`), und `GameplayState::GetWorldState` nutzt `this+0x358 /
-0x510 / 0x530` — ein konsistentes Layout (GameplayState-Basis bei Offset 0,
-`ServerGameplayState` als Subklasse). `GetWorldState` ist **nicht** überschrieben
-(nur `GameplayState` und `WorldStatesHolder` definieren es).
+1. **Die gehookte Funktion selbst nutzt `+0x358`:** Disasm von
+   `UpdateGameplayLogic` (`0x1A1C100`) zeigt `mov r14, rcx` (= `this`) und
+   `lea r13, [r14 + 0x358]` — derselbe Zeiger, den `GameplayState::GetWorldState`
+   als WorldStatesHolder verwendet. In der Funktion wird `r13` dann
+   mehrfach an Aufrufe übergeben. ⇒ `this + 0x358` ist **derselbe** Holder.
+2. **Offset-Konsistenz:** Der Hook nutzt auf demselben `self` bereits
+   `RBBRIDGE_SGS_PAUSEFLAG_OFF = 0x534`, `RBBRIDGE_SGS_PAUSEBITS_OFF = 0x35CC`,
+   `SESSIONS = 0x768`, und `GameplayState::GetWorldState` nutzt `this+0x358 /
+0x530 / 0x549` — konsistentes Layout (GameplayState-Basis bei Offset 0,
+   `ServerGameplayState` als Subklasse). `GetWorldState` ist **nicht**
+   überschrieben (nur `GameplayState` und `WorldStatesHolder` definieren es).
 
 ### `WorldType` (Index)
 
