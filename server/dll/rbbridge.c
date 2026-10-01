@@ -5715,6 +5715,25 @@ static void __fastcall gameplay_updlogic_hook(
         InterlockedExchange(&g_chat_out_pending, 0);
         InterlockedExchange(&g_chat_out_done, 1);
     }
+    /* #1035 S1-Probe (temporaer, read-only): `self` ist GameplayState ->
+     * World* ueber *(self + 0x358 + type*0x58) (WorldStatesHolder). */
+    {
+        static LONG s_world_probe_done = 0;
+        if (InterlockedCompareExchange(&s_world_probe_done, 1, 0) == 0) {
+            int i;
+            dbg("world_probe: self=%p", self);
+            for (i = 0; i < 4; i++) {
+                uint64_t w = 0;
+                if (safe_read_u64((const unsigned char *)self + 0x358 +
+                                      (size_t)i * 0x58,
+                                  &w))
+                    dbg("world_probe: type=%d world=0x%llx", i,
+                        (unsigned long long)w);
+                else
+                    dbg("world_probe: type=%d read_failed", i);
+            }
+        }
+    }
     ((gameplay_updlogic_fn_t)g_gameplay_updlogic_orig)(self, a, b, c, d);
 }
 
