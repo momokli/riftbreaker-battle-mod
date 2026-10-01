@@ -4131,24 +4131,33 @@ static unsigned char *scan_qword_instance(uint64_t needle, const char *name)
  * wenn die vftable-Revalidierung fehlschlaegt (Map-Reload) — sonst wird nur
  * EIN Wort gelesen. Zugriff: nur vom Pipe-Thread (dispatch_get_state /
  * read_hq_health), damit kein Cross-Thread-Race auf dem Cache entsteht. */
+#define RBB_INST_TTL_MS 1000 /* Untergrenze zwischen zwei Scans je Instanz */
+
 typedef struct {
     uint64_t needle;
     const unsigned char *modbase;
     unsigned char *inst;
+    LONG at_ms;
 } rbb_inst_cache_t;
 
 static unsigned char *cached_scan_instance(rbb_inst_cache_t *c,
                                            const unsigned char *base,
                                            uint64_t needle, const char *name)
 {
+    LONG now = (LONG)GetTickCount64();
+    int same = (c->modbase == base && c->needle == needle);
     uint64_t vt = 0;
-    if (c->inst && c->modbase == base && c->needle == needle &&
-        safe_read_u64(c->inst, &vt) && vt == needle)
-        return c->inst; /* revalidiert -> KEIN Scan */
+    /* Positiv-Treffer: vftable-Revalidierung -> kein Scan (Dauerzustand). */
+    if (same && c->inst && safe_read_u64(c->inst, &vt) && vt == needle)
+        return c->inst;
+    /* Sonst frisch gecacht (auch NULL/negativ) -> kein Rescan bis TTL. */
+    if (same && (LONG)(now - c->at_ms) < RBB_INST_TTL_MS)
+        return c->inst;
     dbg("%s: cache miss -> scan", name);
     c->inst = scan_qword_instance(needle, name);
     c->modbase = base;
     c->needle = needle;
+    c->at_ms = now;
     return c->inst;
 }
 
