@@ -1,6 +1,9 @@
 Version: [Unreleased]
 Date: —
 
+  Features:
+    - Referee-Bruecke im GNS-Relay: Lobby liest den Match-Zustand (`GET /referee/state`, Phase/Spieler/Welt/Sieger) und meldet Welten ready (`POST /referee/ready`); neue Lobby-UI (Phase-/Sieger-Badge + `READY (Referee)`-Button), fail-safe `503 referee_unconfigured` ohne Config (#1024, PR #1050).
+
   Refactor:
     - Deployment-Cleanup: prod-only CD. `deploy/deploy-prod.yml` ist das einzige Playbook (Play 0 host-services + Prod-A + Prod-B + Relay-Teardown); dev (site.yml) und staging (deploy-staging.yml/staging-vars.yml) entfallen. CD nur noch bei Tag-Push `v*`; `deploy-ssh.sh`/`deploy-wrapper.sh` lehnen jeden anderen ref fail loud ab (#1034).
     - Host-Singleton-Dienste (gns-relay, image-retention, host-hygiene, parked-pool, capsule-flow, queue) laufen jetzt im prod-Play mit; parked/capsule/queue mit env-freien Unit-/Pfadnamen. GNS-Relay routet nur noch A/B/Default (#1034).
