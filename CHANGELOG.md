@@ -1,13 +1,20 @@
-Version: 1.0.16
+Version: 1.0.17
 Date: 01. 10. 2026
 
   Features:
-    - GO-Executor der VS-Welten: `broadcast_go` fächert je Welt die verifizierten Bridge-Routen `POST <bridge-base>/resume_game` → `POST <bridge-base>/start` (leerer Body) statt des toten `/exec`-Command-Pfads; `TOURNAMENT_GO_COMMANDS`/`debug_dom_resume` entfernt (#1027).
+    - GO-Executor der VS-Welten: `broadcast_go` fächert je Welt die verifizierten Bridge-Routen `POST <bridge-base>/resume_game` → `POST <bridge-base>/start` (leerer Body) statt des toten `/exec`-Command-Pfads; `TOURNAMENT_GO_COMMANDS`/`debug_dom_resume` entfernt (#1027, PR #1054).
     - Ready→GO aus der Lobby: Queue postet je Welt `/ready` an den Referee; Relay-`POST /ready` ist kontextabhängig (Solo→Capsule, VS→Referee), zweiter Ready löst AUTO_GO/Broadcast an beide Bridges aus (#1025, PR #1052).
     - Referee-Bruecke im GNS-Relay: Lobby liest den Match-Zustand (`GET /referee/state`, Phase/Spieler/Welt/Sieger) und meldet Welten ready (`POST /referee/ready`); neue Lobby-UI (Phase-/Sieger-Badge + `READY (Referee)`-Button), fail-safe `503 referee_unconfigured` ohne Config (#1024, PR #1050).
 
   Bugfixes:
-    - Provisioner: wiederholter `start()` re-assertiert die vier Sidecars (laufende unangetastet, gestoppte per `docker start`, fehlende aus der Container-Env `RIFTBREAKER_MODE`/`RBB_VS_WORLD` rekonstruiert, fail-loud) — kein stiller Halb-Stack nach Sidecar-Crash/-Remove; kein zweiter Container (#1026).
+    - Provisioner: wiederholter `start()` re-assertiert die vier Sidecars (laufende unangetastet, gestoppte per `docker start`, fehlende aus der Container-Env `RIFTBREAKER_MODE`/`RBB_VS_WORLD` rekonstruiert, fail-loud) — kein stiller Halb-Stack nach Sidecar-Crash/-Remove; kein zweiter Container (#1026, PR #1053).
+
+Version: 1.0.16
+Date: 01. 10. 2026
+
+  Features:
+    - Ready→GO aus der Lobby: Queue postet je Welt `/ready` an den Referee; Relay-`POST /ready` ist kontextabhängig (Solo→Capsule, VS→Referee), zweiter Ready löst AUTO_GO/Broadcast an beide Bridges aus (#1025, PR #1052).
+    - Referee-Bruecke im GNS-Relay: Lobby liest den Match-Zustand (`GET /referee/state`, Phase/Spieler/Welt/Sieger) und meldet Welten ready (`POST /referee/ready`); neue Lobby-UI (Phase-/Sieger-Badge + `READY (Referee)`-Button), fail-safe `503 referee_unconfigured` ohne Config (#1024, PR #1050).
 
   Refactor:
     - Deployment-Cleanup: prod-only CD. `deploy/deploy-prod.yml` ist das einzige Playbook (Play 0 host-services + Prod-A + Prod-B + Relay-Teardown); dev (site.yml) und staging (deploy-staging.yml/staging-vars.yml) entfallen. CD nur noch bei Tag-Push `v*`; `deploy-ssh.sh`/`deploy-wrapper.sh` lehnen jeden anderen ref fail loud ab (#1034, PR #1044).
