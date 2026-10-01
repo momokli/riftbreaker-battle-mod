@@ -53,6 +53,8 @@ Dispatcher `gns_probe.cpp:2226-2321`; UI `kUiHtml` `:1340-1347`.
 | POST | `/queue` | – | **Queue-Join (vs)** — Proxy an Queue-Dienst | `{identitaet,mode?:"vs"}` | `{ok,status:"queued",position}` / `{ok,status:"matched",match:{…,assignments:[{identitaet,world,instance,target}]}}` / `{ok:false,reason}` | **`[ Queue (vs) ]`**-Button |
 | POST | `/queue/leave` | – | Queue-Join zurueckziehen | `{identitaet}` | `{ok,identitaet}` / `{ok:false,reason}` | (Leave) |
 | POST | `/queue/finish` | – | **Match-Ergebnis + kaltes Cleanup** (Proxy, #1028) | `{match_id,result?:`winnerA\|winnerB\|draw`}` | Queue-Body (`{ok,match}`) / `{ok:false,reason}` | Operator/E2E |
+| POST | `/queue/rematch` | – | **Rematch derselben Paarung** (Proxy, #1030): Alt-Stop → Referee-Reset → zwei frische Kalt-Welten | `{match_id}` **oder** `{identitaet}` | `{ok,rematch_of,idempotent,match:{…,assignments}}` / `{ok:false,reason}` | **`[ Rematch ]`**-Button (Referee-Zeile, nur bei `phase=finished`) |
+| POST | `/referee/rematch` | – | **Nur Referee-Reset in die Lobby** (Proxy, #1030) — **kein** Match-/Welt-Start (Operator/Diagnose) | `{}` | Referee-Body (`{phase,rematches}`) / `{ok:false,reason}` | Operator |
 | GET | `/queue/status` | – | Queue + Matches (Proxy) | – | Queue-Snapshot | **Queue-Zähler + Phase** (alle 1500 ms, Fallback `/sessions`) |
 | GET | `/referee/state` | – | **Referee-Phase/Spieler/Sieger** (Proxy, #1024) | – | State-View (`phase,winner,teams.{A,B}.{player,ready}`) / `{ok:false,reason}` | Referee-Badge/Zeile (alle 1500 ms) |
 | POST | `/referee/ready` | – | Welt beim Referee ready melden | `{world:"A"\|"B",identitaet?}` | Referee-Body (`{world,phase,teams}`) / `{ok:false,reason}` | **`READY (Referee)`**-Button |
@@ -84,6 +86,14 @@ Ist `--referee-url`/`RBB_REFEREE_URL` gesetzt (nur IPv4-Literal; Token aus `RBB_
 Ist `--queue-url`/`RBB_QUEUE_URL` gesetzt (Token `RBB_QUEUE_TOKEN`), proxyt `POST /queue` an den Queue-Dienst (`POST /queue/join`). Der Dienst paart FIFO (aktiv 1v1), provisioniert **kalt** zwei frische Welten A/B und registriert beide Spieler im Referee. Bei einer Match-Antwort pinnt der Relay **alle** Teilnehmer auf ihre **verschiedenen** GNS-Endpoints. Fehler-`reason`s: `queue_unconfigured, queue_unreachable, bad_request, bad_mode, already_matched`. Ohne Queue → `503 queue_unconfigured`.
 
 **Ready-Egress (#1025):** Nach der Provisionierung **beider** kalter Welten und **beiden** `/lobby`-Registrierungen postet `deploy/queue/` je **distinct** Welt genau **ein** `POST /ready {world}` an den Referee (erst beide `/lobby`, dann Ready — sonst `404 not_found`). Der **zweite** Ready loest mit `TOURNAMENT_AUTO_GO=true` den **gemeinsamen GO-Broadcast an beide Bridges** aus (siehe `docs/VS_MATCH.md` §6.5). Bei nur einem `join` (= `queued`) gibt es **kein** Ready; scheitert ein Ready, greift der bestehende Rollback (beide Instanzen `stop`, Match `failed`).
+
+### `POST /queue/rematch` — Lobby-Rematch (#1030)
+
+Ist `--queue-url`/`RBB_QUEUE_URL` gesetzt, proxyt `POST /queue/rematch` an den Queue-Dienst. Body `{match_id}` **oder** `{identitaet}` (genau eine Angabe, sonst `400 bad_request`). Der Dienst stoppt die **alten** Welten, ruft **intern** `POST /rematch` beim Referee (Reset in die Lobby — **kein** neuer Endpunkt) und provisioniert danach zwei **frische** kalte Welten derselben Paarung (neue `match_id`, gleiche A/B-Zuordnung). Bei Erfolg pinnt der Relay — wie bei `POST /queue` — **alle** Teilnehmer auf ihre **neuen** GNS-Endpoints (`g_queueState`-Update). Antwort `{ok,rematch_of,idempotent,match}`; ein zweiter Aufruf mit derselben alten `match_id` liefert `idempotent:true` ohne weiteren Start. Fehler-`reason`s: `queue_unconfigured, queue_unreachable, bad_request, unauthorized, unknown_match, no_match, match_not_finished, referee_rematch_failed, cleanup_failed, provision_failed`.
+
+> **Verwechsle nicht** `POST /queue/rematch` (startet ein **neues** Match mit frischen Welten) mit `POST /referee/rematch` (**nur** Reset des Referees, Operator-Pfad — die alte Welt bleibt stehen). Die UI nutzt ausschliesslich `POST /queue/rematch`.
+
+Lifecycle-Defaults (#183, bewusst konservativ) und die Anti-Zombie-Reihenfolge stehen in `deploy/queue/README.md` und `docs/VS_MATCH.md` §6.7.
 
 ---
 
@@ -178,9 +188,10 @@ Spiel-start-relevant: `POST /start` · `POST /ready` · `POST /resume_game`/`/pa
 |---|---|---|
 | Queue join/leave (`/queue/*`) | **done** (Relay-Proxy + Dienst) | #998 |
 | Queue Auto-Finish (Referee-Ende -> `finish`/Cleanup) | **done** (#1028): Reconciler im Queue-Dienst + Relay `POST /queue/finish` | #1028 |
+| Lobby-Rematch (gleiche Paarung, frische Welten) | **done** (#1030): Relay `POST /queue/rematch` + UI-Button; Alt-Stop vor Neu-Start, Referee-Reset vor Provisionierung, Idempotenz-Map | #1030 |
 | Queue-Status (`inQueue`, Position, `matchFound`) | **done** (#1000): Labelkette + Zähler aus `/queue/status`, Leave-Button in `/sessions` (`queuePhase`/`queuePosition`/`matchId`/`vsWorld`) | #1000 |
 | Match-Result / Sieger (`/matches`) | **teilweise** (#1024): Referee-Phase/Sieger via Relay `GET /referee/state` (`tournament /state`); Match-Record weiter offen | #1024, #999 |
-| VS-Flow (gemeinsamer Start/Ready, Pause-Fan-out) | **fehlt** (Relay kennt nur Solo) | #995–#997 |
+| VS-Flow (gemeinsamer Start/Ready, Pause-Fan-out) | **done** (#995–#997, #1025) | #995–#997 |
 
 ---
 
