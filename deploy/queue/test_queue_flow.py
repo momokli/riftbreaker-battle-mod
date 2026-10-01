@@ -46,9 +46,11 @@ class FakeProvisioner(object):
     def __init__(self) -> None:
         self.starts = []
         self.stops = []
+        self.events = []  # #1030: globale Reihenfolge [("start"/"stop", iid)]
         self.fail_on_world = None
         self.fail_on_instance = None
         self.fail_stop_once = False  # #1028: erster Stop scheitert (Fail-safe-Test)
+        self.fail_stop_always = False  # #1030: jeder Stop scheitert (Cleanup-Fehler)
         self._port = 40000
 
     def start(self, env, mode, instance_id, world=None):
@@ -58,6 +60,7 @@ class FakeProvisioner(object):
             raise RuntimeError("fake provisioner explodiert fuer %s" % instance_id)
         self.starts.append({"env": env, "mode": mode, "instance_id": instance_id,
                             "world": world})
+        self.events.append(("start", instance_id))
         self._port += 1
         return {
             "instance": instance_id,
@@ -67,11 +70,14 @@ class FakeProvisioner(object):
         }
 
     def stop(self, instance_id, env=None):
+        if self.fail_stop_always:
+            raise RuntimeError("fake stop scheitert dauerhaft fuer %s" % instance_id)
         if self.fail_stop_once:
             self.fail_stop_once = False
             # Fail-fast: der Aufruf wird NICHT als Stop protokolliert.
             raise RuntimeError("fake stop scheitert einmalig fuer %s" % instance_id)
         self.stops.append({"instance_id": instance_id, "env": env})
+        self.events.append(("stop", instance_id))
         return {"instance": instance_id, "removed": True}
 
 
@@ -82,6 +88,9 @@ class FakeReferee(object):
         self.calls = []  # gemeinsames Reihenfolge-Log: (kind, world)
         self.fail = False
         self.ready_fail = False  # nur der Ready-Egress scheitert
+        # #1030: Referee-Reset (POST /rematch); ``rematch_fail`` = 409 conflict.
+        self.rematches = 0
+        self.rematch_fail = False
         # #1028: autoritativer /state-Snapshot (GET /state, auth-frei).
         self.state_payload = None
         self.state_error = False
@@ -107,6 +116,13 @@ class FakeReferee(object):
         if self.state_error:
             raise RuntimeError("fake referee state explodiert")
         return self.state_payload
+
+    def rematch(self):
+        self.calls.append(("rematch", None))
+        if self.rematch_fail:
+            raise QueueError("conflict", "laufendes Match", 409)
+        self.rematches += 1
+        return {"phase": "lobby", "rematches": self.rematches}
 
 
 class Harness(unittest.TestCase):
@@ -519,6 +535,138 @@ class ConcurrencyTestCase(Harness):
         matches = core.matches_snapshot()
         self.assertEqual(len(matches), 1)
         self.assertEqual(sorted(matches[0].participants()), ["str:aa", "str:bb"])
+
+
+class RematchTestCase(Harness):
+    """Issue #1030: Lobby-Rematch — dieselbe Paarung, neue Kalt-Welten."""
+
+    def _matched_finished(self, result="winnerA"):
+        coord = self.coordinator()
+        coord.join("str:aa")
+        coord.join("str:bb")
+        coord.finish(1, result=result)
+        return coord
+
+    def test_rematch_spawns_two_fresh_instances(self):
+        coord = self._matched_finished()
+        res = coord.rematch(match_id=1)
+        self.assertFalse(res["idempotent"])
+        self.assertEqual(res["rematch_of"], 1)
+        new = res["match"]
+        self.assertEqual(new["match_id"], 2)
+        self.assertEqual(new["rematch_of"], 1)
+        self.assertEqual(new["state"], STATE_READY)
+        # Gleiche zwei Spieler + gleiche A/B-Weltzuordnung.
+        by_world = {p["world"]: p["identitaet"] for p in new["participants"]}
+        self.assertEqual(by_world["A"], "str:aa")
+        self.assertEqual(by_world["B"], "str:bb")
+        # Zwei NEUE Instanzen (match_id 2), andere Endpoints.
+        new_starts = [s for s in self.provisioner.starts
+                      if s["instance_id"] in (instance_id_for(2, "A"),
+                                               instance_id_for(2, "B"))]
+        self.assertEqual(len(new_starts), 2)
+        old_eps = {p["endpoint"] for p in coord.core.get_match(1).to_dict()["participants"]}
+        new_eps = {p["endpoint"] for p in new["participants"]}
+        self.assertTrue(new_eps and not (new_eps & old_eps))
+
+    def test_old_instances_stopped_before_new_started(self):
+        coord = self._matched_finished()
+        coord.rematch(match_id=1)
+        events = self.provisioner.events
+        for world in ("A", "B"):
+            stop_old = events.index(("stop", instance_id_for(1, world)))
+            start_new = events.index(("start", instance_id_for(2, world)))
+            self.assertLess(stop_old, start_new,
+                            "Alt-Stop muss VOR Neu-Start liegen (world %s)" % world)
+
+    def test_referee_rematch_before_lobby(self):
+        coord = self._matched_finished()
+        coord.rematch(match_id=1)
+        kinds = [c[0] for c in self.referee.calls]
+        # Initial: lobby,lobby,ready,ready; Rematch: rematch,lobby,lobby,ready,ready.
+        self.assertEqual(kinds[:4], ["lobby", "lobby", "ready", "ready"])
+        self.assertEqual(kinds[4], "rematch")
+        self.assertEqual(kinds[5:], ["lobby", "lobby", "ready", "ready"])
+        self.assertEqual(self.referee.rematches, 1)
+
+    def test_rematch_is_idempotent_on_second_call(self):
+        coord = self._matched_finished()
+        first = coord.rematch(match_id=1)
+        starts_after = len(self.provisioner.starts)
+        second = coord.rematch(match_id=1)
+        self.assertTrue(second["idempotent"])
+        self.assertEqual(second["match"]["match_id"], first["match"]["match_id"])
+        self.assertEqual(len(self.provisioner.starts), starts_after)  # kein weiterer Start
+        self.assertEqual(self.referee.rematches, 1)
+
+    def test_rematch_by_identitaet(self):
+        coord = self._matched_finished()
+        res = coord.rematch(identitaet="str:bb")
+        self.assertEqual(res["rematch_of"], 1)
+        self.assertEqual(res["match"]["match_id"], 2)
+
+    def test_referee_failure_start_no_zombie(self):
+        coord = self._matched_finished()
+        self.referee.rematch_fail = True
+        with self.assertRaises(QueueError) as ctx:
+            coord.rematch(match_id=1)
+        self.assertEqual(ctx.exception.reason, "referee_rematch_failed")
+        self.assertEqual(ctx.exception.status, 409)
+        # Keine neue Instanz gestartet (kein Zombie); Record failed.
+        self.assertEqual(
+            [s for s in self.provisioner.starts if s["instance_id"].startswith("queue-2")],
+            [],
+        )
+        self.assertEqual(coord.core.get_match(2).state, STATE_FAILED)
+        self.assertNotIn(1, coord._rematch_of)  # Retry moeglich
+
+    def test_cleanup_failure_blocks_rematch(self):
+        coord = self.coordinator()
+        coord.join("str:aa")
+        coord.join("str:bb")
+        self.provisioner.fail_stop_always = True
+        with self.assertRaises(QueueError) as ctx:
+            coord.finish(1, result="winnerA")
+        self.assertEqual(ctx.exception.reason, "cleanup_failed")
+        self.assertEqual(coord.core.get_match(1).state, STATE_FINISHED)
+        with self.assertRaises(QueueError) as ctx2:
+            coord.rematch(match_id=1)
+        self.assertEqual(ctx2.exception.reason, "cleanup_failed")
+        self.assertEqual(ctx2.exception.status, 503)
+        self.assertIsNone(coord.core.get_match(2))  # kein neuer Match
+        self.assertNotIn(1, coord._rematch_of)
+
+    def test_source_not_finished_is_refused(self):
+        coord = self.coordinator()
+        coord.join("str:aa")
+        coord.join("str:bb")  # state=ready, nicht finished
+        with self.assertRaises(QueueError) as ctx:
+            coord.rematch(match_id=1)
+        self.assertEqual(ctx.exception.reason, "match_not_finished")
+        self.assertIsNone(coord.core.get_match(2))
+        self.assertEqual(self.referee.rematches, 0)
+
+    def test_unknown_match_and_no_match(self):
+        coord = self.coordinator()
+        with self.assertRaises(QueueError) as ctx:
+            coord.rematch(match_id=99)
+        self.assertEqual(ctx.exception.reason, "unknown_match")
+        with self.assertRaises(QueueError) as ctx2:
+            coord.rematch(identitaet="str:zz")
+        self.assertEqual(ctx2.exception.reason, "no_match")
+
+    def test_rematch_idempotency_survives_restart(self):
+        state_dir = os.path.join(self.tmp, "state")
+        coord = self.coordinator(state_dir=state_dir)
+        coord.join("str:aa")
+        coord.join("str:bb")
+        coord.finish(1, result="winnerA")
+        coord.rematch(match_id=1)
+        revived = self.coordinator(state_dir=state_dir)
+        self.assertEqual(revived._rematch_of, {1: 2})
+        res = revived.rematch(match_id=1)
+        self.assertTrue(res["idempotent"])
+        self.assertEqual(res["match"]["match_id"], 2)
 
 
 if __name__ == "__main__":
