@@ -204,12 +204,14 @@ code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$AGENT_PORT/ser
 [[ "$code" == "401" ]] || fail "Agent ohne Bearer gab $code statt 401"
 ok "Direktzugriff ohne Bearer → 401 (der Agent oeffnet sich auch ohne Caddy nicht)"
 
-echo "== 5) /tournament/* bleibt OHNE Basic-Auth (Issue #298)"
+echo "== 5) /tournament/*-LESEPFAD bleibt OHNE Basic-Auth (Issue #298)"
+# Issue #298: die SCHREIBENDEN /tournament/*-Pfade liegen hinter basic_auth
+# (siehe deploy/tests/tournament-auth/). Ein LESEPFAD wie /health bleibt frei.
 # Kein tournament-server im Test: entscheidend ist, dass Caddy hier KEINE
 # Basic-Auth verlangt (der Upstream fehlt → 502, aber NICHT 401).
 code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$CADDY_PORT/tournament/health" || true)"
-[[ "$code" != "401" ]] || fail "/tournament/* verlangt Basic-Auth — #454 darf #298 nicht mitverdrahlen"
-ok "/tournament/health → $code (kein 401: Basic-Auth bleibt dort aussen vor)"
+[[ "$code" != "401" ]] || fail "/tournament/health (Lesepfad) verlangt Basic-Auth — #454 darf #298 nicht mitverdrahlen"
+ok "/tournament/health (Lesepfad) → $code (kein 401: Basic-Auth bleibt dort aussen vor)"
 
 echo "== 6) Cockpit-Root / unveraendert hinter der Basic-Auth"
 code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$CADDY_PORT/" || true)"

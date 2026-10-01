@@ -300,6 +300,8 @@ cockpit.<env>.projectmellon.de┤→ Host-Caddy (mellon-caddy, hostet viele Doma
                                         ├─ file_server (Landing + /mod.zip)
                                         ├─ handle_path /contract/*   → 127.0.0.1:<bridge> (basic_auth)
                                         ├─ handle_path /tournament/* → 127.0.0.1:8081
+                                        │    (schreibende Pfade: basic_auth + Bearer-Injektion, #298;
+                                        │     Lesepfade + Web-UI frei)
                                         └─ handle /server/*          → 127.0.0.1:<server_control_port>
                                              (basic_auth + Bearer-Injektion, #454)
 ```
@@ -315,8 +317,23 @@ Eigenschaften:
   lauscht ausschließlich auf `127.0.0.1:<rift_caddy_port>`. TLS terminiert
   weiterhin der Host-Caddy.
 - `/contract/*` wird auf die IO-Bridge (`riftbreaker_bridge_port`) proxyt und
-  per `basic_auth` (operator) geschützt; `/tournament/*` geht unverändert an den
-  tournament-server.
+  per `basic_auth` (operator) geschützt.
+- `/tournament/*` (Issue #298): die **schreibenden** Pfade (`POST /lobby /ready
+  /go /pause /resume /send /report /rematch /sp /wave /referee/event`) liegen
+  hinter **derselben** Operator-`basic_auth` wie der Cockpit-Root; der rift-caddy
+  injiziert dort per `header_up Authorization "Bearer <tournament_token>"` den
+  Bearer der Tournament-API. Die **Lesepfade** (`/state /events /health
+  /matches/* /referee/poll`) + die Web-UI bleiben **ohne** Auth (Poll/Landing).
+  Ohne Token (leerer Vault-Wert) entfällt der `header_up` (kein literales
+  `Bearer `) — die Rust-Middleware ist ohnehin fail-closed (mutierend 401).
+- **Single-Source-Secret:** `vault_tournament_token` speist (a) die systemd-Unit
+  des tournament-server (`TOURNAMENT_TOKEN`, 0600-`EnvironmentFile`), (b) die
+  `header_up`-Injektion des rift-caddy und (c) den Queue-Dienst
+  (`QUEUE_REFEREE_TOKEN`). Kein zweiter Secret-Kanal; der frühere
+  `vault_referee_token` entfällt. Der Token verlässt nie den Host.
+- **Bind/Isolation:** `TOURNAMENT_HOST` ist Default `127.0.0.1` (Rolle-Var
+  `tournament_host`, überschreibbar); der rift-caddy läuft `network_mode: host`.
+  Eine Firewall-Absicherung ist **out-of-scope** dieses PRs (eigener PR).
 - `/server/*` (Server-Control-Agent, Plane B, #424) liegt seit #454 hinter
   **derselben** Operator-`basic_auth` wie der Cockpit-Root (Fix #456) — der
   Browser schickt die Credentials automatisch mit (gleicher Realm). Den Bearer

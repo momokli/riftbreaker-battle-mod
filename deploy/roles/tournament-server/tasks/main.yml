@@ -72,9 +72,28 @@
       {{ tournament_binary_src }}. Build-Log oben prüfen.
   when: not tourney_bin_src.stat.exists
 
+- name: "Vorbedingung: Bearer-Token gesetzt (keine offene Tournament-API)"
+  assert:
+    that:
+      - tournament_token | length > 0
+    fail_msg: >-
+      Der Bearer-Token (tournament_token) ist leer. Die mutierenden Routen der
+      Tournament-API sind fail-closed (Issue #298) und antworten ohne Token mit
+      401 — ein Deploy ohne Token waere ein stiller Ausfall. Token im Vault
+      setzen: `ansible-vault edit deploy/inventory/host_vars/planet/vault.yml`
+      (Key `vault_tournament_token`; EINE Quelle fuer Rust + Caddy + Queue).
+    success_msg: "Tournament-Token vorhanden (Wert wird nie geloggt)."
+  when: not ansible_check_mode
+
 - name: Installationsverzeichnis anlegen
   file:
     path: "{{ tournament_install_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Umgebungsverzeichnis anlegen
+  file:
+    path: "{{ tournament_env_file | dirname }}"
     state: directory
     mode: "0755"
 
@@ -92,6 +111,15 @@
     src: "{{ playbook_dir }}/../tournament/web"
     dest: "{{ tournament_install_dir }}"
     mode: "0644"
+
+- name: Umgebungsdatei rendern (Token, 0600 — nie world-readable)
+  template:
+    src: tournament-server.env.j2
+    dest: "{{ tournament_env_file }}"
+    mode: "0600"
+    owner: root
+    group: root
+  notify: restart tournament-server
 
 - name: systemd-Unit rendern
   template:

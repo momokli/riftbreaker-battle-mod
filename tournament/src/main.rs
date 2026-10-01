@@ -4,7 +4,7 @@
 //!
 //! | Env | Default | Bedeutung |
 //! |---|---|---|
-//! | `TOURNAMENT_HOST` | `0.0.0.0` | Bind-Adresse |
+//! | `TOURNAMENT_HOST` | `127.0.0.1` | Bind-Adresse (Loopback; #298) |
 //! | `TOURNAMENT_PORT` | `8080` | HTTP-Port (API + Web-UI) |
 //! | `TOURNAMENT_AUTO_GO` | `true` | GO automatisch, sobald beide Welten ready |
 //! | `RBBRIDGE_A_URL` | — | HTTP-Endpoint Welt A (GO-Broadcast, z. B. `http://10.0.0.5:9001/exec`) |
@@ -19,6 +19,7 @@
 //! | `TOURNAMENT_ENV` | `unknown` | Umgebung der Deploy-Identitaet (`dev`\|`prod`\|`test`, Issue #483) |
 //! | `TOURNAMENT_REF` | `unknown` | Ref der Deploy-Identitaet (SHA/Tag, Issue #483) |
 //! | `TOURNAMENT_DB_PATH` | `./data/rbbattle.db` | SQLite-Datei der Match-Records (#999) |
+//! | `TOURNAMENT_TOKEN` | — (leer) | Bearer fuer mutierende Routen (Issue #298); leer = fail-closed |
 //! | `RUST_LOG` | `info` | Log-Level (tracing) |
 //!
 //! Siehe `docs/TOURNAMENT_API.md` für das komplette Protokoll.
@@ -68,7 +69,9 @@ fn parse_go_commands(raw: &str) -> Vec<String> {
 }
 
 fn config_from_env() -> Result<Config, String> {
-    let host = env_str("TOURNAMENT_HOST", "0.0.0.0");
+    // #298: Loopback-Bind ist der Default — Caddy (host-network) proxyt dorthin;
+    // direkte Sprecher auf planet sind host-lokal. Explizit auf 0.0.0.0 setzbar.
+    let host = env_str("TOURNAMENT_HOST", "127.0.0.1");
     let port: u16 = env_str("TOURNAMENT_PORT", "8080")
         .parse()
         .map_err(|_| "TOURNAMENT_PORT muss eine Zahl sein (0–65535)".to_string())?;
@@ -136,6 +139,10 @@ fn config_from_env() -> Result<Config, String> {
         _ => PathBuf::from("./data/rbbattle.db"),
     };
 
+    // #298: Bearer-Token fuer mutierende Routen, read-once. Leer = fail-closed
+    // (die Middleware lehnt mutierende Requests dann mit 401 ab).
+    let token = env_str("TOURNAMENT_TOKEN", "");
+
     Ok(Config {
         host,
         port,
@@ -151,6 +158,7 @@ fn config_from_env() -> Result<Config, String> {
         env,
         deploy_ref,
         db_path,
+        token,
     })
 }
 
