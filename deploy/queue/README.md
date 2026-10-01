@@ -128,9 +128,9 @@ Match-Record mit beiden Teilnehmern.
 ## Deploy
 
 Rolle `deploy/roles/queue/` (Muster `capsule-flow`): Unit
-`rbmods-queue-<env>.service`, Env-Datei `/etc/rbmods/queue-<env>.env` (0600,
+`rbmods-queue.service`, Env-Datei `/etc/rbmods/queue.env` (0600,
 Token aus Vault), Bind `127.0.0.1:$QUEUE_PORT`, Zustandsverzeichnis
-`/var/lib/rbmods/queue-<env>`. Sie wird host-weit von `deploy/deploy-prod.yml`
+`/var/lib/rbmods/queue`. Sie wird host-weit von `deploy/deploy-prod.yml`
 (Play 0, Tag-Deploy) aufgenommen. Der Relay (`tools/gns-proxy`) proxyt `POST /queue` an den Dienst,
 wenn `--queue-url`/`RBB_QUEUE_URL` gesetzt ist.
 

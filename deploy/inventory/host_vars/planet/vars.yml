@@ -59,6 +59,13 @@ parked_pool_env_file: /etc/rbmods/parked-pool.env
 # Port-Block wie parked-pool.
 capsule_flow_port: 9211
 capsule_flow_parked_port: 9201
+# Unit-/Pfad-/Env-Datei-Overrides: env-FREI (host-weiter Singleton, analog
+# parked/queue). Ohne diese Overrides haengt der Rollen-Default am rift_env=prod
+# und deployte -prod-Namen (rbmods-capsule-prod, /opt/rbmods/capsule-flow-prod,
+# /etc/rbmods/capsule-prod.env).
+capsule_flow_unit: rbmods-capsule
+capsule_flow_install_dir: /opt/rbmods/capsule-flow
+capsule_flow_env_file: /etc/rbmods/capsule.env
 
 # --- Queue-Dienst (Issue #998) -----------------------------------------------
 # Host-weiter SINGLETON (env-freie Namen). Casual-Queue: paart Spieler
