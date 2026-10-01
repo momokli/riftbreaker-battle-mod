@@ -44,6 +44,10 @@
  *   RBB_BRIDGE_PORT        TCP-Port (Default 9001)
  *   RBB_BRIDGE_PIPE        Pipe-Pfad (Default \\.\pipe\rbbattle)
  *   RBB_BRIDGE_TIMEOUT_MS  Antwort-Timeout je Kommando (Default 5000)
+ *   RBB_STATE_POLL_MS      Poll-Intervall des get_state-Fan-out-Pollers (500)
+ *   RBB_STATE_POLL_TIMEOUT_MS  Antwort-Timeout des Pollers (800, bewusst
+ *                              kurz: begrenzt, wie lange der Poller g_cmd_cs
+ *                              haelt und damit andere Kommandos serialisiert)
  *
  * Modi:
  *   pipe_bridge.exe                 HTTP-Server (Dauerbetrieb, docker log)
@@ -510,6 +514,18 @@ static CRITICAL_SECTION g_cmd_cs;           /* serialisiert HTTP-Commands */
 static SOCKET g_sse_sock = INVALID_SOCKET;  /* der eine SSE-Client */
 static CRITICAL_SECTION g_sse_cs;           /* schuetzt den SSE-Client */
 
+/* #1062: Fan-out-Cache fuer POST /get_state. EIN Hintergrund-Poller speist
+ * viele HTTP-Reader: er schickt ~alle STATE_POLL_INTERVAL_MS get_state ueber
+ * die bestehende persistente Pipe und legt die letzte Antwort + Tick hier ab.
+ * HTTP-Handler bedienen sich daraus, solange der Snapshot frisch ist
+ * (< STATE_CACHE_TTL_MS), sonst Fallback auf den direkten Pipe-Pfad. */
+#define STATE_POLL_INTERVAL_MS 500
+#define STATE_CACHE_TTL_MS     2500
+static char g_state_cache[READ_BUF];
+static DWORD g_state_cache_tick = 0;         /* GetTickCount() der Fuellung */
+static int g_state_cache_valid = 0;
+static CRITICAL_SECTION g_state_cache_cs;    /* schuetzt den Snapshot */
+
 /* Attack-Cycle-Status (PoC): der Sidecar POSTet seinen /status-JSON hierher;
  * die WebUI pollt ihn via GET /attack_status. Kleiner Puffer + CS. */
 static char g_attack_status[8192];
@@ -973,6 +989,37 @@ static int pipe_ready(void)
     return ok ? 1 : 0;
 }
 
+/* #1062: Hintergrund-Poller fuer den get_state-Fan-out-Cache. Laeuft erst,
+ * wenn die persistente Pipe steht (pipe_ready -> KEIN Zweit-Connect, die DLL
+ * erzeugt die Pipe mit nMaxInstances=1), und nutzt denselben serialisierten
+ * Pfad wie die HTTP-Handler (pipe_send_command -> g_cmd_cs/g_pipe_cs), damit
+ * Poller und Handler sich die eine Pipe nicht in die Quere kommen. */
+static DWORD WINAPI state_poller_main(LPVOID arg)
+{
+    char line[READ_BUF];
+    int timeout_ms = env_int("RBB_STATE_POLL_TIMEOUT_MS", 800);
+    int interval_ms = env_int("RBB_STATE_POLL_MS", STATE_POLL_INTERVAL_MS);
+
+    (void)arg;
+    for (;;) {
+        if (!pipe_ready()) {
+            Sleep(interval_ms);
+            continue;
+        }
+        if (pipe_send_command("get_state_result", "{\"cmd\":\"get_state\"}\n",
+                              timeout_ms, line, sizeof(line)) == 0) {
+            EnterCriticalSection(&g_state_cache_cs);
+            strncpy(g_state_cache, line, sizeof(g_state_cache) - 1);
+            g_state_cache[sizeof(g_state_cache) - 1] = '\0';
+            g_state_cache_tick = GetTickCount();
+            g_state_cache_valid = 1;
+            LeaveCriticalSection(&g_state_cache_cs);
+        }
+        Sleep(interval_ms);
+    }
+    return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* HTTP                                                                */
 /* ------------------------------------------------------------------ */
@@ -1133,6 +1180,21 @@ static void handle_get_state(SOCKET c)
     char line[READ_BUF];
     int timeout_ms = env_int("RBB_BRIDGE_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
 
+    /* #1062: Fan-out-Cache — ein frischer Poller-Snapshot wird ohne Pipe-
+     * Round-Trip ausgeliefert. Nur bei stale/leerem Cache faellt es auf den
+     * direkten Pfad zurueck (der den Cache zugleich auffrischt). */
+    EnterCriticalSection(&g_state_cache_cs);
+    if (g_state_cache_valid &&
+        (DWORD)(GetTickCount() - g_state_cache_tick) < STATE_CACHE_TTL_MS) {
+        strncpy(line, g_state_cache, sizeof(line) - 1);
+        line[sizeof(line) - 1] = '\0';
+        LeaveCriticalSection(&g_state_cache_cs);
+        log_response("/get_state", line);
+        http_respond(c, 200, "OK", line);
+        return;
+    }
+    LeaveCriticalSection(&g_state_cache_cs);
+
     int rc = pipe_send_command("get_state_result", "{\"cmd\":\"get_state\"}\n",
                                timeout_ms, line, sizeof(line));
     if (rc == -1) {
@@ -1146,6 +1208,14 @@ static void handle_get_state(SOCKET c)
                      "{\"ok\":false,\"reason\":\"timeout\"}");
         return;
     }
+    /* Erfolgreichen Direkt-Pfad in den Cache spiegeln (naechster Reader
+     * bedient sich daraus). */
+    EnterCriticalSection(&g_state_cache_cs);
+    strncpy(g_state_cache, line, sizeof(g_state_cache) - 1);
+    g_state_cache[sizeof(g_state_cache) - 1] = '\0';
+    g_state_cache_tick = GetTickCount();
+    g_state_cache_valid = 1;
+    LeaveCriticalSection(&g_state_cache_cs);
     log_response("/get_state", line);
     http_respond(c, 200, "OK", line);
 }
@@ -2552,8 +2622,11 @@ static int mode_server(void)
     ready_gate_init(&g_ready_gate);
     g_ready_timeout_s = ready_timeout_cap(env_int("RBB_READY_TIMEOUT_S", 180), 180);
     InitializeCriticalSection(&g_start_epoch_cs);
+    InitializeCriticalSection(&g_state_cache_cs);
     g_resp_ev = CreateEvent(NULL, FALSE, FALSE, NULL);
     CreateThread(NULL, 0, pipe_reader_main, NULL, 0, NULL);
+    /* #1062: Fan-out-Poller fuer /get_state (speist den Snapshot-Cache). */
+    CreateThread(NULL, 0, state_poller_main, NULL, 0, NULL);
 
     const char *bind_addr = env_str("RBB_BRIDGE_BIND", DEFAULT_BIND);
     int port = env_int("RBB_BRIDGE_PORT", DEFAULT_PORT);
