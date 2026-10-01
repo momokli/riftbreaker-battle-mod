@@ -89,6 +89,14 @@
       include_tasks: "{{ playbook_dir }}/tasks/env-path-migration.yml"
       tags: always
 
+    # Legacy-Pfad-Cleanup (#536): entfernt NUR den Alt-Symlink /srv/rbmods-site
+    # (Dev-Docroot-Alias; prod nutzt laengst /srv/rbmods-site-prod, #1034).
+    # Idempotent; echte Verzeichnisse werden NIE automatisch geloescht
+    # (Warnung + Runbook deploy/README.md). Laeuft hinter der Migration.
+    - name: "Legacy-Pfad-Cleanup (#536)"
+      include_tasks: "{{ playbook_dir }}/tasks/legacy-path-cleanup.yml"
+      tags: always
+
     # Disk-Space-Gate (#310): MUSS VOR dem Image-Build laufen (Play 0 baut das
     # Laufzeit-Image fuer den Relay). Read-only (Fact ansible_mounts) ->
     # `--check`-fest.

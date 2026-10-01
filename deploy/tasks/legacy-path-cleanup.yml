@@ -1,0 +1,65 @@
+---
+# deploy/tasks/legacy-path-cleanup.yml — entfernt AUSSCHLIESSLICH Legacy-
+# SYMLINKS (Issue #536, US1).
+#
+# Hintergrund: der Dev-Docroot-Alias `/srv/rbmods-site` zeigt als Symlink auf
+# `/opt/http/rift.projectmellon.de`. Prod nutzt laengst `/srv/rbmods-site-prod`
+# (#1034); der unsuffigierte Pfad ist nur noch als Alt-Alias uebrig. Die uebrigen
+# Altlasten unter /opt/rbmods/ sind ECHTE Verzeichnisse mit unklarer Herkunft
+# (u. a. `backup-*`) und werden hier bewusst NICHT automatisch geloescht — fuer
+# sie gilt das Runbook in deploy/README.md.
+#
+# Sicherheit (Muster legacy-rbtools-symlink-cleanup.yml, Issue #606):
+#   * Es wird NUR ein Symlink entfernt (stat follow=false -> islnk) — nie ein
+#     echtes Verzeichnis (das bliebe stehen und erzeugt nur eine Warnung).
+#   * `file: state=absent` auf einem Symlink entfernt ausschliesslich den Link
+#     selbst, niemals das Ziel (kein `rm -rf`, kein rekursives Loeschen).
+#   * `/opt/rbmods/dedicated-server` ist AKTIV (Rollen-Default
+#     dedicated_server_context_dir) und steht deshalb NICHT in der Liste.
+# Idempotent: fehlt der Pfad oder ist kein Symlink, ist der Lauf ein no-op
+# (zweiter Lauf changed=0). Die Kandidatenliste ist per Var
+# `legacy_path_cleanup_paths` uebersteuerbar (fuer den hermetischen Test).
+
+- name: "Legacy-Pfade — Kandidatenliste ermitteln (#536)"
+  set_fact:
+    legacy_path_cleanup_paths: "{{ legacy_path_cleanup_paths_default }}"
+  when: legacy_path_cleanup_paths is not defined
+  vars:
+    legacy_path_cleanup_paths_default:
+      - {path: /srv/rbmods-site, target: /opt/http/rift.projectmellon.de}
+
+- name: "Legacy-Pfade pruefen (stat, follow=false) (#536)"
+  stat:
+    path: "{{ item.path }}"
+    follow: false
+  loop: "{{ legacy_path_cleanup_paths }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: legacy_path_cleanup_stat
+
+- name: "Legacy-Symlink entfernen (nur Symlink) (#536)"
+  file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ legacy_path_cleanup_paths }}"
+  loop_control:
+    extended: true
+    label: "{{ item.path }}"
+  when:
+    - legacy_path_cleanup_stat.results[ansible_loop.index0].stat.exists
+    - legacy_path_cleanup_stat.results[ansible_loop.index0].stat.islnk | default(false) | bool
+
+- name: "Legacy-Pfad unerwartet (kein Symlink) — Warnung, NICHT entfernt (#536)"
+  debug:
+    msg: >-
+      WARN (#536): '{{ item.path }}' existiert, ist aber kein Symlink
+      (islnk={{ legacy_path_cleanup_stat.results[ansible_loop.index0].stat.islnk | default(false) }};
+      erwartetes Ziel war '{{ item.target }}') — wird NICHT automatisch entfernt
+      (echtes Verzeichnis, manuell pruefen; Runbook in deploy/README.md).
+  loop: "{{ legacy_path_cleanup_paths }}"
+  loop_control:
+    extended: true
+    label: "{{ item.path }}"
+  when:
+    - legacy_path_cleanup_stat.results[ansible_loop.index0].stat.exists
+    - not (legacy_path_cleanup_stat.results[ansible_loop.index0].stat.islnk | default(false) | bool)

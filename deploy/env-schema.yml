@@ -26,6 +26,26 @@
 # Der Distinctness-Assert in env-assert.yml vergleicht weiterhin gegen die
 # historischen dev-Basiswerte (Referenzkonstanten).
 
+# Bewusst-oeffentliche Host-Ports (Issue #536) — NICHT loopback. Anders als die
+# `per_env`/`shared`-Klassen ist das KEINE Env-Zuordnung, sondern eine
+# Host-Konstante: der Riftbreaker-Client ist auf UDP 6321 hardgewired und
+# Spieler joinen aus dem Internet. Die Menge wird dokumentiert
+# (docs/DEPLOYMENT.md) und per Assert (deploy/tasks/env-assert.yml) abgesichert.
+# Der Schema-Audit ignoriert diesen Block (nur per_env/shared sind klassifiziert).
+intentional_public:
+  - port: 6321
+    proto: udp
+    bind: 0.0.0.0
+    svc: gns-relay (GNS-Entry-Relay, Client-hardgewirter Einstiegsport)
+  - port: 6322
+    proto: udp
+    bind: 0.0.0.0
+    svc: prod-A dedicated (riftbreaker_server_port_udp)
+  - port: 6325
+    proto: udp
+    bind: 0.0.0.0
+    svc: prod-B dedicated (riftbreaker_server_port_udp, Issue #995)
+
 per_env:
   # --- Dedicated-Server -----------------------------------------------------
   # prod-b (Issue #995): zweite prod-Welt, eigener Dedicated-Server. Die

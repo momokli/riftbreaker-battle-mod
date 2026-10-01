@@ -1,0 +1,19 @@
+---
+# Hermetischer Selbsttest der Legacy-Pfad-Cleanup (Issue #536, US1).
+#
+# Läuft LOKAL (kein Host, kein Vault): bindet die ECHTE Task-Datei
+# deploy/tasks/legacy-path-cleanup.yml ein und uebersteuert die
+# Kandidatenliste auf ein Wegwerf-Verzeichnis. Kein Live-Eingriff.
+- name: "Legacy-Pfad-Cleanup Selbsttest (Issue #536)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    legacy_path_cleanup_paths:
+      - {path: "{{ test_base }}/rbmods-site", target: "{{ test_base }}/http"}
+      - {path: "{{ test_base }}/not-a-link", target: "{{ test_base }}/http"}
+
+  tasks:
+    - name: "Legacy-Pfad-Cleanup (echte Task-Datei)"
+      include_tasks: "{{ playbook_dir }}/../../tasks/legacy-path-cleanup.yml"

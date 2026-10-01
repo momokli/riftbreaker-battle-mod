@@ -21,6 +21,40 @@
 | riftbreaker-server (Retention)   | planet            | Rolle (`tasks/backup-retention.yml`)                               | —                    | begrenzt `{{ riftbreaker_backup_dir }}` auf je N neueste `rbbattle-*.tar.gz` + `stray-*/` (Default 5; Issue #312, fasst `mods/` nie an)               |
 | rbbridge                         | in Mod-Containern | Prozess                                                            | —                    | Command-Injection (`exec_cmd_client`, Argument IMMER als EIN gequotierter String)                                                                     |
 
+## Bewusst öffentliche Ports (Issue #536)
+
+Diese Host-Ports sind **intentional public** — sie binden auf `0.0.0.0` und
+MÜSSEN das auch, weil der Riftbreaker-Client hardgewired ist bzw. Spieler aus
+dem Internet joinen. Sie werden **nicht** auf Loopback umgebogen; stattdessen
+sind sie hier dokumentiert und per Assert (`deploy/tasks/env-assert.yml`) sowie
+Schema-Annotation (`deploy/env-schema.yml`, `intentional_public:`) abgesichert.
+
+| Port      | Proto | Dienst              | Bind      | Warum öffentlich                                                                 |
+| --------- | ----- | ------------------- | --------- | -------------------------------------------------------------------------------- |
+| 6321      | udp   | GNS-Entry-Relay     | `0.0.0.0` | Client-hardgewirter Einstiegsport (`gns_relay_port`, Host-Konstante); routet per Spielnamen-Suffix auf die prod-Welten |
+| 6322      | udp   | prod-A Dedicated    | `0.0.0.0` | Game-UDP der ersten prod-Welt (`riftbreaker_server_port_udp`)                     |
+| 6325      | udp   | prod-B Dedicated    | `0.0.0.0` | Game-UDP der zweiten prod-Welt (Issue #995)                                       |
+
+**Firewall-Annahme:** die Host-seitige Freigabe dieser Portmenge ist **nicht
+repo-owned** (UFW/Cloudflare/Provider-Security-Group werden auf dem Host bzw.
+im Provider gepflegt). Das Repo garantiert nur, dass exakt diese drei Ports
+öffentlich gepublished werden und alle übrigen Host-Publishes Loopback sind.
+
+**Loopback-only (explizit `127.0.0.1`) — dürfen NIE 0.0.0.0 binden:**
+
+- IO-Bridge/Agent: `9002` (prod-A), `9004` (prod-B) — Tournament-/Server-Control-Zugriff
+- Tournament-Server: `8082`
+- Server-Control: `8093` (prod-A), `8095` (prod-B)
+- Attack-Cycle-Control: `9103` (prod-A), `9105` (prod-B)
+- GNS-Relay-Lobby/API: `8322`, `9200`; Parked `9201`, Capsule `9211`, Queue `9221`
+- rift-caddy (Cockpit/Caddy): `127.0.0.1:8788` (prod-A), hinter `mellon-caddy`
+
+Regressionstest: `deploy/tests/public-ports/run.sh` rendert die echten
+Compose-Templates (prod-A/prod-B/relay) und asserted Game-Publish `0.0.0.0` für
+6322/6325, Loopback für Bridge/Attack-Cycle, `gns-relay` nur via
+`network_mode: host` + `gns_relay_port`, sowie die Menge der öffentlichen
+Host-Publishes == `{6321, 6322, 6325}`.
+
 ## Deployment-Plan (Ansible, inventory `planet`)
 
 Rollen in `deploy/roles/` (Details: `deploy/README.md`):

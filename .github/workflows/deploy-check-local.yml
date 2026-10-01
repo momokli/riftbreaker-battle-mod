@@ -303,6 +303,21 @@ jobs:
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: bash deploy/tests/legacy-symlink-cleanup/run.sh
 
+      # Legacy-Pfad-Cleanup (Issue #536): laesst die ECHTE Task-Datei gegen ein
+      # Wegwerf-Verzeichnis laufen — Alt-Symlink entfernt, echtes Verzeichnis
+      # bleibt, idempotent. Lokal, kein Host.
+      - name: "Legacy-Pfad-Cleanup (Issue #536)"
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
+        run: bash deploy/tests/legacy-path-cleanup/run.sh
+
+      # Bewusst-oeffentliche Portmenge (Issue #536): rendert die ECHTEN Compose-
+      # Templates (prod-A/prod-B/relay) und asserted Game-Publish 0.0.0.0 fuer
+      # 6322/6325, Loopback fuer Bridge/Attack-Cycle, gns-relay via
+      # network_mode host + Port, Menge == {6321,6322,6325}. Lokal, kein Host.
+      - name: "Bewusst-oeffentliche Portmenge (Issue #536)"
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
+        run: bash deploy/tests/public-ports/run.sh
+
       # /server/*-Route-Selbsttest (Issue #463): rendert die ECHTE
       # Cockpit-Caddyfile-Vorlage zweimal — dev (server_control_enabled=true)
       # MUSS die Agent-Route enthalten, prod (prod-vars/deploy-prod.yml,
