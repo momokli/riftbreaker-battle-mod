@@ -128,5 +128,9 @@ jobs:
           # sind hier bewusst ausgenommen.
           # PROD-ONLY (Issue #1034): deploy-prod.yml (Play 0 host-services +
           # Prod-A + Prod-B); site.yml/deploy-staging.yml sind entfallen.
+          # --limit planet: NUR die planet-Plays. Der Satellite-Teardown-Play
+          # (Host `satellite`) ist kein planet-Stack und der CI-Runner hat
+          # keinen SSH-Zugang dorthin (Permission denied) -> nicht Teil des
+          # Host-Checks gegen planet.
           ansible-playbook -i "$INV" deploy/deploy-prod.yml \
-            --check --diff --tags server,website
+            --check --diff --tags server,website --limit planet
