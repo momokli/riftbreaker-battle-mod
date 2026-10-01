@@ -7481,6 +7481,17 @@ static DWORD WINAPI pipe_server_main(LPVOID unused)
      * Bewusst NICHT im DllMain-/Loader-Lock-Kontext (resolve_module kann
      * als Fallback LoadLibrary aufrufen), sondern hier im Pipe-Thread. */
     install_chat_hook();
+    /* #1063: UpdLogic-Detour FRUEH installieren, damit der Game-Thread-Snapshot
+     * laeuft. Sonst wird der Hook erst lazy (pause_game/send_chat) installiert
+     * und get_state faellt dauerhaft auf den Live-Pfad zurueck. Best effort. */
+    {
+        const unsigned char *hb = NULL;
+        size_t hsz = 0;
+        const char *hvia = NULL;
+        const unsigned char *hexec = NULL;
+        if (resolve_module(&hb, &hsz, &hvia, &hexec) && hb)
+            install_game_pause_hook(hb, hsz);
+    }
 
     while (!g_stop) {
         HANDLE hPipe = CreateNamedPipeA(
