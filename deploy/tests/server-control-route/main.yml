@@ -69,7 +69,7 @@
         caddyfile: "{{ lookup('file', render_dir ~ '/Caddyfile') }}"
 
     # Issue #535: der gerenderte Operator-Block traegt exakt den Hash der Env
-    # (Play-Var in prod/staging, sonst Legacy-Fallback dev). Bei einem Override
+    # (Play-Var in prod, sonst Legacy-Fallback). Bei einem Override
     # (Hash != Legacy) darf der geteilte Legacy-Hash NIRGENDS mehr im Caddyfile
     # stehen — sonst bliebe das geteilte Operator-Passwort ueber Cockpit-Root,
     # /server/* und /tournament/*-Schreibpfade weiter aktiv.
@@ -82,7 +82,7 @@
         fail_msg: >-
           Das gerenderte Caddyfile traegt nicht den Operator-Hash der Env
           (Issue #535): erwartet `operator <hash>`. Bei einem von dev/legacy
-          abweichenden Hash (prod/staging-Play-Var) darf der geteilte
+          abweichenden Hash (prod-Play-Var) darf der geteilte
           Legacy-Hash NIRGENDS mehr vorkommen — sonst bleibt das geteilte
           Operator-Passwort aktiv.
         success_msg: "Operator-Hash je Env im Caddyfile, kein Legacy-Rest bei Override (Issue #535)."

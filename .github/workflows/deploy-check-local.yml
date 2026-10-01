@@ -314,7 +314,7 @@ jobs:
 
       # Operator-Credential-Trennung (Issue #535): rendert das ECHTE
       # Cockpit-Caddyfile-Template und beweist: dev bleibt byte-identisch beim
-      # Legacy-Hash; ein Play-Var-Override (prod/staging) ersetzt ihn in ALLEN
+      # Legacy-Hash; ein Play-Var-Override (prod) ersetzt ihn in ALLEN
       # Operator-Bloecken ohne Legacy-Rest; die GNS-Lobby (proxy_basic_auth_hash)
       # ist von den per-Env Cockpit-Credentials ENTKOPPELT (eigener
       # vault_proxy_basic_auth_hash, sonst Legacy-Fallback — nie der Cockpit-Hash).

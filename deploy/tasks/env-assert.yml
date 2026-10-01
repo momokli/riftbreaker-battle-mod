@@ -52,7 +52,7 @@
 #
 # Split (Issue #995, prod-b): KERN-Keys gelten fuer jede Nicht-dev-Env; die
 # WEBSITE-/CADDY-Keys nur fuer Envs, die die Website/Caddy-Rolle wirklich
-# deployen (prod/staging). prod-B deployt sie nicht -> un-definiert -> ohne
+# deployen (prod). prod-B deployt sie nicht -> un-definiert -> ohne
 # Split waere der B-Play rot (undefined Lookup). `mods_zip_dest` gehoert in
 # die KERN-Gruppe (Rework Blocker 2): prod-B konsumiert zwar das kanonische
 # A-Artefakt, muss aber EXPLIZIT vom dev-Basiswert abweichen — sonst erbte es

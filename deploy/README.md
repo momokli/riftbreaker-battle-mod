@@ -252,18 +252,17 @@ getrennt. Quelle sind drei Vault-Variablen (bcrypt-Hashes):
 
 | Vault-Var                            | Env            | Play-Var?                          |
 | ------------------------------------ | -------------- | ---------------------------------- |
-| `vault_contract_basic_auth_hash`     | dev            | Rollen-Default (Fallback)          |
+| `vault_contract_basic_auth_hash`     | Legacy (Fallback) | Rollen-Default                    |
 | `vault_contract_basic_auth_hash_prod`    | prod-A     | Play-Var in `deploy-prod.yml`      |
-| `vault_contract_basic_auth_hash_staging` | staging    | Play-Var in `deploy-staging.yml`   |
 | `vault_proxy_basic_auth_hash`        | alle (Lobby)   | Rollen-Default (host-konstant)     |
 
 - **dev byte-identisch:** ohne `vault_contract_basic_auth_hash` rendert die Rolle den
   benannten Legacy-Hash (`contract_basic_auth_hash_legacy_shared`, bcrypt „zukka") —
   dieselben Render-Pfade wie zuvor bleiben grün.
-- **prod-A/staging fail-closed:** die Plays setzen `contract_basic_auth_hash` per
+- **prod-A fail-closed:** das Play setzt `contract_basic_auth_hash` per
   Play-Var **ohne** Fallback; fehlt der Vault-Wert, bricht der Render laut ab.
-  Zusätzlich asserted die Rolle (gated über `rift_env`), dass prod/staging **nicht**
-  den geteilten Legacy-Hash erben (Distinctness).
+  Zusätzlich asserted die Rolle (gated über `rift_env`), dass prod-A **nicht**
+  den geteilten Legacy-Hash erbt (Distinctness).
 - **GNS-Lobby entkoppelt:** `proxy_basic_auth_hash` liest den eigenen, host-konstanten
   `vault_proxy_basic_auth_hash` (Fallback: Legacy-Hash) — **nicht** mehr den per-Env
   Cockpit-Hash. Sonst würde der Relay-Singleton-Block (ein Marker) zwischen den Envs
@@ -274,9 +273,8 @@ liefert den `$2a$14$…`-Teil), dann die passende Vault-Var setzen und deployen:
 
 ```bash
 ansible-vault edit deploy/inventory/host_vars/planet/vault.yml   # Var eintragen
-# dev:     vault_contract_basic_auth_hash
+# dev:     vault_contract_basic_auth_hash (Legacy-Fallback)
 # prod-A:  vault_contract_basic_auth_hash_prod
-# staging: vault_contract_basic_auth_hash_staging
 # Lobby:   vault_proxy_basic_auth_hash (host-konstant, alle Envs)
 ansible-playbook -i deploy/inventory deploy/deploy-prod.yml --vault-password-file <vault.pass>
 ```
@@ -879,7 +877,7 @@ hält nur noch host-weite Singleton-Werte.
   `riftbreaker_compose_project`, `rbtools_dir`, `rbtools_staging_dir`) vom
   dev-Basiswert abweichen; die **Website-/Caddy**-Pfade (`website_docroot`,
   `website_mods_dir`, `mods_zip_dest`, `rift_caddy_deploy_dir`) nur fuer Envs,
-  die die `website`-Rolle deployen (prod/staging) — prod-b deployt sie nicht.
+  die die `website`-Rolle deployen (prod) — prod-b deployt sie nicht.
 
 Neue Env-Variable hinzufuegen: zuerst in `deploy/env-schema.yml` klassifizieren,
 dann in der Env-Datei setzen — sonst schlaegt das Gate fehl.

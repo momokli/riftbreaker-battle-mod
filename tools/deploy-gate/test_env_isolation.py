@@ -213,7 +213,7 @@ class DevPathsTest(unittest.TestCase):
 class ProdBDistinctnessTest(unittest.TestCase):
     """Issue #995: prod-b (zweite prod-Welt) muss sich in ALLEN
     kollisionsgefaehrdeten per_env-Werten (Ports/Volumes/Compose-Projekt/
-    Containern/Pfaden/Server-Control) von dev/prod/staging unterscheiden —
+    Containern/Pfaden/Server-Control) von prod/prod-b/test unterscheiden —
     sonst belegen zwei Envs denselben Host-Port/Container/Pfad.
 
     Der bestehende env-isolation-Test (deploy/tests/env-isolation) prueft nur

@@ -7,7 +7,7 @@
 # Drei Faelle:
 #   1. dev-Default  -> contract_basic_auth_hash == Legacy-Hash (byte-identisch),
 #      das Caddyfile traegt den Legacy-Hash in allen drei Operator-Bloecken.
-#   2. prod/staging-Override (Play-Var) -> der Vault-Wert steht in allen drei
+#   2. prod-Override (Play-Var) -> der Vault-Wert steht in allen drei
 #      Bloecken, der geteilte Legacy-Hash ist NIRGENDS mehr vorhanden.
 #   3. Entkopplung der GNS-Lobby:
 #      (a) mit eigenem vault_proxy_basic_auth_hash -> Lobby traegt genau diesen,
@@ -38,7 +38,7 @@ run_case() {
 run_case "Fall 1: dev-Default -> Legacy-Hash (byte-identisch)"
 
 # ---------------------------------------------------------------------------
-# Fall 2: prod/staging-Override (Play-Var) -> Vault-Hash, kein Legacy-Rest.
+# Fall 2: prod-Override (Play-Var) -> Vault-Hash, kein Legacy-Rest.
 # ---------------------------------------------------------------------------
 run_case "Fall 2: Override -> Vault-Hash, Legacy absent" \
   -e "vault_contract_basic_auth_hash=$COCKPIT_HASH" \
