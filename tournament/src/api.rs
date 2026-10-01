@@ -47,10 +47,6 @@ pub struct Config {
     pub auto_go: bool,
     /// rbbridge-HTTP-Endpoints je Welt (für den GO-Broadcast); None = kein Push.
     pub bridge: [Option<String>; 2],
-    /// Unpause-/Start-Kommandos, die die Bridge je Welt beim GO ausführt
-    /// (Issue #22 Sync-Start): `exec_cmd_client "<cmd>"` als EIN gequotetes
-    /// Argument (Issue #18). Reihenfolge = Ausführungsreihenfolge.
-    pub go_commands: Vec<String>,
     /// Timeout je Broadcast-Endpoint.
     pub go_timeout: Duration,
     /// Verzögerung (`delay_s`) für Ingress-Pushes an die Ziel-Bridge beim
@@ -295,10 +291,7 @@ pub fn router(app: AppState) -> Router {
         .route("/sp", post(sp))
         .route("/wave", post(wave))
         .route("/referee/event", post(referee_event))
-        .route_layer(middleware::from_fn_with_state(
-            app.clone(),
-            require_bearer,
-        ));
+        .route_layer(middleware::from_fn_with_state(app.clone(), require_bearer));
 
     let public = Router::new()
         .route("/referee/poll", get(referee_poll))
@@ -316,11 +309,7 @@ pub fn router(app: AppState) -> Router {
 /// Fail-closed: ist `config.token` leer, wird JEDER mutierende Request mit 401
 /// abgewiesen (nie „offen"). Sonst muss `Authorization: Bearer <token>` exakt
 /// passen. Die Antwort traegt `WWW-Authenticate: Bearer`.
-async fn require_bearer(
-    AxumState(app): AxumState<AppState>,
-    req: Request,
-    next: Next,
-) -> Response {
+async fn require_bearer(AxumState(app): AxumState<AppState>, req: Request, next: Next) -> Response {
     let token = app.cfg.token.as_str();
     let expected = format!("Bearer {token}");
     let provided = req
@@ -386,7 +375,7 @@ async fn ready(
         }
     }
     if started {
-        spawn_go_broadcast(&app, 1);
+        spawn_go_broadcast(&app);
     }
     let view = app.state.read().await.view();
     let teams = serde_json::to_value(&view.teams).unwrap_or(Value::Null);
@@ -402,7 +391,7 @@ async fn ready(
 /// POST /go — Start + GO-Broadcast an beide rbbridge-Endpoints; `retry` für
 /// erneuten Broadcast bei laufendem Match (z. B. nach Endpoint-Fehler).
 async fn go(AxumState(app): AxumState<AppState>, Json(req): Json<GoReq>) -> ApiResult<Json<Value>> {
-    let (started, round) = {
+    let (started, _round) = {
         let mut guard = app.state.write().await;
         match guard.phase {
             Phase::Running | Phase::Finished => {
@@ -425,7 +414,7 @@ async fn go(AxumState(app): AxumState<AppState>, Json(req): Json<GoReq>) -> ApiR
             }
         }
     };
-    let broadcast = broadcast_go(&app, round).await;
+    let broadcast = broadcast_go(&app).await;
     let view = app.state.read().await.view();
     Ok(Json(json!({
         "started": started,
@@ -746,22 +735,34 @@ async fn push_referee_commands(app: &AppState, world: World, commands: &[Command
     PushOutcome { results, delivered }
 }
 
+/// Basis eines konfigurierten Bridge-HTTP-Adapters: ein abschließendes `/exec`
+/// wird entfernt (Prod/local setzen `RBBRIDGE_*_URL` historisch auf `.../exec`),
+/// ebenso ein abschließender Slash. EINE Quelle für alle abgeleiteten
+/// Bridge-Routen (#997/#996/#1027).
+fn bridge_base_url(bridge: &str) -> String {
+    let trimmed = bridge.trim_end_matches('/');
+    let base = trimmed.strip_suffix("/exec").unwrap_or(trimmed);
+    base.trim_end_matches('/').to_string()
+}
+
+/// Leitet die Aktions-Route eines konfigurierten Bridge-Endpoints ab:
+/// `bridge_base_url` + `/{action}`.
+fn bridge_action_url(bridge: &str, action: &str) -> String {
+    format!("{}/{action}", bridge_base_url(bridge))
+}
+
 /// Leitet die Ingress-URL (`POST /incoming_send`) eines konfigurierten
-/// Bridge-Endpoints ab (US4, #996). Der Bridge-Endpoint ist auf einen
-/// HTTP-Adapter-Pfad gesetzt (typisch `/exec`, s. `RBBRIDGE_*_URL`); die
-/// Ingress-Route liegt auf demselben Host: ein abschließendes `/exec` wird
-/// entfernt und `/incoming_send` angehängt.
+/// Bridge-Endpoints ab (US4, #996): ein abschließendes `/exec` wird entfernt
+/// und `/incoming_send` angehängt.
 fn ingress_url(bridge: &str) -> String {
-    let base = bridge.strip_suffix("/exec").unwrap_or(bridge);
-    format!("{}/incoming_send", base.trim_end_matches('/'))
+    bridge_action_url(bridge, "incoming_send")
 }
 
 /// Leitet die Pause-/Resume-Route eines konfigurierten Bridge-Endpoints ab
-/// (#997). Derselbe HTTP-Adapter-Host wie [`ingress_url`]: ein abschließendes
-/// `/exec` wird entfernt und die Aktion (`pause_dom`/`resume_dom`) angehängt.
+/// (#997): ein abschließendes `/exec` wird entfernt und die Aktion
+/// (`pause_dom`/`resume_dom`) angehängt.
 fn dom_action_url(bridge: &str, action: &str) -> String {
-    let base = bridge.strip_suffix("/exec").unwrap_or(bridge);
-    format!("{}/{action}", base.trim_end_matches('/'))
+    bridge_action_url(bridge, action)
 }
 
 /// Pusht die beim Wellenstart einer Welt gedrainten (level-basierten) Sends als
@@ -1045,51 +1046,63 @@ async fn health(AxumState(app): AxumState<AppState>) -> ApiResult<Json<Value>> {
 
 // ---- GO-Broadcast ----
 
-/// GO-Payload an beide rbbridge-Endpoints (Push; Poll auf /state ist Fallback).
-///
-/// `commands` = die Unpause-/Start-Kommandos, die die Bridge je Welt in dieser
-/// Reihenfolge ausführt (Issue #22 Sync-Start): `exec_cmd_client "<cmd>"` als
-/// EIN gequotetes Argument (Issue #18). Default (verifiziert, SYNC_START.md):
-/// `debug_dom_resume` (DOM-Ebene). Die native Server-Pause (`resume_game`) ist
-/// unverifiziert und wird per Env ergänzt; ihr Fallback ist das automatische
-/// `ResumeGame` beim Client-Join (`server_pause_game_when_empty`).
-fn go_payload(match_id: &str, round: u32, commands: &[String]) -> Value {
-    json!({
-        "cmd": "go",
-        "match_id": match_id,
-        "round": round,
-        "commands": commands,
-    })
-}
+/// Verifizierte Bridge-Routen des GO-Fan-outs (#1027), in Ausführungs-
+/// reihenfolge: erst die native Server-Pause einer kalt gebooteten Welt
+/// aufheben (`/resume_game`, Issue #880), dann den Wellen-Zyklus armieren
+/// (`/start` setzt `start_epoch`; der attack_cycle vollzieht PAUSED→WARMUP,
+/// s. `deploy/attack-cycle/attack_cycle.py`). Beide Routen nehmen keinen Body.
+const GO_ROUTES: [&str; 2] = ["resume_game", "start"];
 
-/// Broadcast an beide Endpoints, Ergebnisse im State festhalten.
-async fn broadcast_go(app: &AppState, round: u32) -> Value {
-    let match_id = {
-        let guard = app.state.read().await;
-        guard.match_id.clone()
-    };
-    let commands = app.cfg.go_commands.clone();
-    let payload = go_payload(&match_id, round, &commands);
+/// GO-Fan-out an beide rbbridge-Endpoints (Push; Poll auf /state ist Fallback).
+///
+/// Je Welt wird **für jede** Route aus [`GO_ROUTES`] `POST {base}/{route}` mit
+/// leerem JSON-Body `{}` gesendet (Muster [`broadcast_dom`]; die Bridge-Routen
+/// nehmen keinen Body). `base` = `bridge_for(w)` ohne abschließendes `/exec`
+/// ([`bridge_action_url`]). Erfasst wird je Route `{route, ok, status, error,
+/// endpoint}`; der Welt-Block aggregiert `ok` (alle Routen ok), `endpoint`
+/// (Basis) und `routes`. Der `/state`-Status (`go_broadcast`) wird je Welt
+/// aggregiert fortgeschrieben. Partial-Fehler sind **kein** Handler-Fehler
+/// (die andere Welt/Route wird trotzdem gepusht, kein 5xx/kein Panic).
+async fn broadcast_go(app: &AppState) -> Value {
     let timeout = app.cfg.go_timeout;
+    let payload = json!({});
 
     let mut results = serde_json::Map::new();
     for w in World::ALL {
         match app.cfg.bridge_for(w) {
             Some(url) => {
-                let res = broadcast::post_json(url, &payload, timeout).await;
+                let base = bridge_base_url(url);
+                let mut routes = Vec::with_capacity(GO_ROUTES.len());
+                let mut all_ok = true;
+                let mut first_error: Option<String> = None;
+                for route in GO_ROUTES {
+                    let endpoint = bridge_action_url(url, route);
+                    let res = broadcast::post_json(&endpoint, &payload, timeout).await;
+                    let ok = res.ok();
+                    if !ok && first_error.is_none() {
+                        first_error = res.error.clone();
+                    }
+                    all_ok &= ok;
+                    routes.push(json!({
+                        "route": route,
+                        "ok": ok,
+                        "status": res.status,
+                        "error": res.error,
+                        "endpoint": endpoint,
+                    }));
+                }
                 app.state.write().await.record_broadcast(
                     w,
-                    res.ok(),
-                    res.error.clone(),
-                    Some(url.to_string()),
+                    all_ok,
+                    first_error,
+                    Some(base.clone()),
                 );
                 results.insert(
                     w.as_str().to_string(),
                     json!({
-                        "ok": res.ok(),
-                        "status": res.status,
-                        "error": res.error,
-                        "endpoint": url,
+                        "ok": all_ok,
+                        "endpoint": base,
+                        "routes": routes,
                     }),
                 );
             }
@@ -1103,10 +1116,10 @@ async fn broadcast_go(app: &AppState, round: u32) -> Value {
 
 /// Fire-and-forget-Broadcast (AUTO_GO-Pfad): läuft im Hintergrund, Ergebnis
 /// landet in `go_broadcast` von /state (UI zeigt Zustell-Status an).
-fn spawn_go_broadcast(app: &AppState, round: u32) {
+fn spawn_go_broadcast(app: &AppState) {
     let app = app.clone();
     tokio::spawn(async move {
-        let _ = broadcast_go(&app, round).await;
+        let _ = broadcast_go(&app).await;
     });
 }
 
@@ -1194,7 +1207,6 @@ mod tests {
             port: 0,
             auto_go: false,
             bridge: [None, None],
-            go_commands: vec!["debug_dom_resume".to_string()],
             go_timeout: Duration::from_millis(800),
             incoming_delay_s: 5.0,
             hq_hp_start: 100.0,
@@ -1460,13 +1472,15 @@ mod tests {
         assert_eq!(v["round"], 1);
     }
 
-    /// Issue #1025: Der zweite `/ready` loest AUTO_GO aus und broadcastet das GO
-    /// an **beide** Bridges; ein einzelnes Ready broadcastet nichts, und nach
+    /// #1027: Der zweite `/ready` (AUTO_GO) fächert den GO-Fan-out an **beide**
+    /// Bridges: je Welt genau zwei POSTs auf den verifizierten Routen
+    /// `/resume_game` (Sim entfrieren) → `/start` (Zyklus armieren) — nie
+    /// `/exec`, Body leer (`{}`). Ein einzelnes Ready broadcastet nichts; nach
     /// `Running` liefert ein weiteres Ready `409` (kein Doppel-GO).
     #[tokio::test]
     async fn second_ready_broadcasts_go_to_both_bridges() {
-        let (addr_a, rx_a) = mock_endpoint().await;
-        let (addr_b, rx_b) = mock_endpoint().await;
+        let (addr_a, cap_a) = capture_endpoint().await;
+        let (addr_b, cap_b) = capture_endpoint().await;
         let mut cfg = test_cfg();
         cfg.auto_go = true;
         cfg.bridge = [
@@ -1488,31 +1502,43 @@ mod tests {
         );
 
         // Zweites Ready -> AUTO_GO startet das Match und broadcastet an BEIDE
-        // Bridges (dieselbe `go_payload`, wie `broadcast_go`).
+        // Bridges (Fan-out asynchron).
         let (s, v) = call(&app, "POST", "/ready", Some(json!({"world": "B"}))).await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(v["match_started"], true);
         assert_eq!(v["phase"], "running");
         assert_eq!(v["round"], 1);
 
-        let req_a = tokio::time::timeout(Duration::from_secs(2), rx_a)
-            .await
-            .unwrap()
-            .unwrap();
-        let req_b = tokio::time::timeout(Duration::from_secs(2), rx_b)
-            .await
-            .unwrap()
-            .unwrap();
-        for req in [&req_a, &req_b] {
-            assert!(req.starts_with("POST /exec HTTP/1.1"), "req: {req}");
-            assert!(req.contains("\"cmd\":\"go\""), "req: {req}");
-            assert!(req.contains("\"round\":1"), "req: {req}");
-        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_go_fanout(&cap_a, &["/resume_game", "/start"]).await;
+        assert_go_fanout(&cap_b, &["/resume_game", "/start"]).await;
 
         // Idempotenz: erneutes `/ready` nach `Running` -> 409 (kein Doppel-GO).
         let (s, v) = call(&app, "POST", "/ready", Some(json!({"world": "A"}))).await;
         assert_eq!(s, StatusCode::CONFLICT);
         assert_eq!(err_type(&v), "conflict");
+    }
+
+    /// #1027: Prüft, dass ein Capture-Endpoint **genau** die GO-Routen in
+    /// Reihenfolge gesehen hat (je ein POST, leerer Body, nie `/exec`).
+    async fn assert_go_fanout(cap: &Arc<tokio::sync::Mutex<Vec<String>>>, routes: &[&str]) {
+        let reqs = cap.lock().await;
+        let posts: Vec<&String> = reqs.iter().filter(|r| r.starts_with("POST ")).collect();
+        assert_eq!(
+            posts.len(),
+            routes.len(),
+            "genau {} POSTs: {reqs:?}",
+            routes.len()
+        );
+        for (req, route) in posts.iter().zip(routes.iter()) {
+            assert!(
+                req.starts_with(&format!("POST {route} HTTP/1.1")),
+                "req: {req}"
+            );
+            assert!(!req.starts_with("POST /exec "), "kein /exec: {req}");
+            let body = req.split("\r\n\r\n").nth(1).unwrap_or("");
+            assert_eq!(body, "{}", "leerer Body: {req}");
+        }
     }
 
     #[tokio::test]
@@ -1706,30 +1732,13 @@ mod tests {
         assert_eq!(v["ref"], "deadbeef");
     }
 
-    /// Mock-HTTP-Endpoint: akzeptiert eine Verbindung, liefert Request-Text.
-    async fn mock_endpoint() -> (SocketAddr, tokio::sync::oneshot::Receiver<String>) {
-        use tokio::io::AsyncReadExt;
-        use tokio::io::AsyncWriteExt;
-        use tokio::net::TcpListener;
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        tokio::spawn(async move {
-            let (mut sock, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 8192];
-            let n = sock.read(&mut buf).await.unwrap();
-            let _ = sock
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
-                .await;
-            let _ = tx.send(String::from_utf8_lossy(&buf[..n]).to_string());
-        });
-        (addr, rx)
-    }
-
+    /// #1027: `POST /go` fächert pro Welt beide verifizierten Routen
+    /// (`/resume_game` → `/start`); `/state` hält den aggregierten Zustell-Status
+    /// fest; `{"retry":true}` fächert erneut (neue `start_epoch`-Runde).
     #[tokio::test]
     async fn go_broadcasts_to_both_bridge_endpoints() {
-        let (addr_a, rx_a) = mock_endpoint().await;
-        let (addr_b, rx_b) = mock_endpoint().await;
+        let (addr_a, cap_a) = capture_endpoint().await;
+        let (addr_b, cap_b) = capture_endpoint().await;
         let mut cfg = test_cfg();
         cfg.bridge = [
             Some(format!("http://{addr_a}/exec")),
@@ -1742,44 +1751,87 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(v["broadcast"]["A"]["ok"], true);
         assert_eq!(v["broadcast"]["B"]["ok"], true);
+        // Welt-Block: Basis-Endpoint + Routen in Reihenfolge.
+        assert_eq!(v["broadcast"]["A"]["endpoint"], format!("http://{addr_a}"));
+        assert_eq!(v["broadcast"]["A"]["routes"][0]["route"], "resume_game");
+        assert_eq!(v["broadcast"]["A"]["routes"][1]["route"], "start");
+        assert_eq!(
+            v["broadcast"]["A"]["routes"][1]["endpoint"],
+            format!("http://{addr_a}/start")
+        );
 
-        // beide Endpoints haben das GO gesehen
-        let req_a = tokio::time::timeout(Duration::from_secs(2), rx_a)
-            .await
-            .unwrap()
-            .unwrap();
-        let req_b = tokio::time::timeout(Duration::from_secs(2), rx_b)
-            .await
-            .unwrap()
-            .unwrap();
-        for req in [&req_a, &req_b] {
-            assert!(req.starts_with("POST /exec HTTP/1.1"), "req: {req}");
-            assert!(req.contains("\"cmd\":\"go\""), "req: {req}");
-            assert!(req.contains("\"round\":1"), "req: {req}");
-            assert!(req.contains("rift-1"), "req: {req}");
-            assert!(
-                req.contains("\"commands\":[\"debug_dom_resume\"]"),
-                "req: {req}"
-            );
-        }
+        // beide Welten haben exakt die GO-Routen gesehen (nie /exec).
+        assert_go_fanout(&cap_a, &["/resume_game", "/start"]).await;
+        assert_go_fanout(&cap_b, &["/resume_game", "/start"]).await;
 
-        // /state zeigt Zustell-Status
+        // /state zeigt den aggregierten Zustell-Status.
         let (_, v) = call(&app, "GET", "/state", None).await;
         assert_eq!(v["teams"]["A"]["go_broadcast"]["ok"], true);
         assert_eq!(
             v["teams"]["A"]["go_broadcast"]["endpoint"],
-            format!("http://{addr_a}/exec")
+            format!("http://{addr_a}")
         );
 
-        // Retry-Broadcast bei laufendem Match (Endpoint down simulieren → Fehler sichtbar)
+        // Retry-Broadcast bei laufendem Match: erneuter Fan-out an alle Routen.
         let (s, v) = call(&app, "POST", "/go", Some(json!({"retry": true}))).await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(v["started"], false);
-        // zweiter Retry: Endpoints sind weg (nur 1 Verbindung je Listener) → Fehler
-        assert_eq!(v["broadcast"]["A"]["ok"], false);
-        assert!(v["broadcast"]["A"]["error"].is_string());
+        assert_eq!(v["broadcast"]["A"]["ok"], true);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        {
+            let reqs = cap_a.lock().await;
+            for route in ["/resume_game", "/start"] {
+                let n = reqs
+                    .iter()
+                    .filter(|r| r.starts_with(&format!("POST {route} ")))
+                    .count();
+                assert_eq!(n, 2, "retry: {route} genau zweimal: {reqs:?}");
+            }
+        }
         let (_, v) = call(&app, "GET", "/state", None).await;
-        assert_eq!(v["teams"]["A"]["go_broadcast"]["ok"], false);
+        assert_eq!(v["teams"]["A"]["go_broadcast"]["ok"], true);
+    }
+
+    /// #1027: Partial-Fehler einer Welt (Endpoint tot) ist HTTP 200; die andere
+    /// Welt wird trotzdem gepusht, `ok:false` je betroffener Route (kein 5xx).
+    #[tokio::test]
+    async fn go_partial_failure_is_ok_200() {
+        let (addr_b, cap_b) = capture_endpoint().await;
+        let mut cfg = test_cfg();
+        cfg.bridge = [
+            // Port 1 ist praktisch immer zu → Transportfehler für A.
+            Some("http://127.0.0.1:1/exec".to_string()),
+            Some(format!("http://{addr_b}/exec")),
+        ];
+        let app = make_app(cfg).await;
+        ready_state(&app).await;
+
+        let (s, v) = call(&app, "POST", "/go", Some(json!({}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["broadcast"]["A"]["ok"], false);
+        assert_eq!(v["broadcast"]["A"]["routes"][0]["ok"], false);
+        assert!(v["broadcast"]["A"]["routes"][0]["error"].is_string());
+        assert_eq!(v["broadcast"]["B"]["ok"], true);
+
+        // Die erreichbare Welt B hat den Fan-out trotzdem gesehen.
+        assert_go_fanout(&cap_b, &["/resume_game", "/start"]).await;
+
+        let (_, st) = call(&app, "GET", "/state", None).await;
+        assert_eq!(st["teams"]["A"]["go_broadcast"]["ok"], false);
+        assert_eq!(st["teams"]["B"]["go_broadcast"]["ok"], true);
+    }
+
+    /// #1027: Ohne konfigurierten Endpoint bleibt der Handler funktionsfähig
+    /// (`ok:null` + `note` je Welt, kein Panic/5xx).
+    #[tokio::test]
+    async fn go_without_bridge_reports_null_ok() {
+        let app = make_app(test_cfg()).await; // bridge = [None, None]
+        ready_state(&app).await;
+        let (s, v) = call(&app, "POST", "/go", Some(json!({}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["broadcast"]["A"]["ok"], Value::Null);
+        assert!(v["broadcast"]["A"]["note"].is_string());
+        assert_eq!(v["broadcast"]["B"]["ok"], Value::Null);
     }
 
     /// Mock-HTTP-Endpoint mit konfigurierbarem Status + JSON-Body (exec_result).
@@ -2338,21 +2390,47 @@ mod tests {
         assert_eq!(v3["last_seq"].as_u64().unwrap(), last_seq);
     }
 
+    /// #1027: Der Routen-Helfer entfernt `/exec` und hängt die Aktion an;
+    /// `dom_action_url`/`ingress_url` delegieren an dieselbe Quelle.
     #[test]
-    fn go_payload_carries_ordered_unpause_commands() {
-        let p = go_payload("rift-1", 1, &["debug_dom_resume".to_string()]);
-        assert_eq!(p["cmd"], "go");
-        assert_eq!(p["match_id"], "rift-1");
-        assert_eq!(p["round"], 1);
-        assert_eq!(p["commands"], json!(["debug_dom_resume"]));
-
-        // Mehrere Kommandos bleiben in Reihenfolge (DOM zuerst, native Server-Pause danach).
-        let p2 = go_payload(
-            "rift-1",
-            1,
-            &["debug_dom_resume".to_string(), "resume_game".to_string()],
+    fn bridge_action_url_strips_exec_and_appends_action() {
+        assert_eq!(
+            bridge_action_url("http://h:9002/exec", "start"),
+            "http://h:9002/start"
         );
-        assert_eq!(p2["commands"], json!(["debug_dom_resume", "resume_game"]));
+        // ohne `/exec`-Suffix wird die Basis nicht verändert (kein Strip)
+        assert_eq!(
+            bridge_action_url("http://h:9002/base", "resume_game"),
+            "http://h:9002/base/resume_game"
+        );
+        assert_eq!(
+            bridge_action_url("http://h:9002", "start"),
+            "http://h:9002/start"
+        );
+        // Trailing-Slash robust
+        assert_eq!(
+            bridge_action_url("http://h:9002/", "start"),
+            "http://h:9002/start"
+        );
+        assert_eq!(
+            bridge_action_url("http://h:9002/exec/", "start"),
+            "http://h:9002/start"
+        );
+        // eine Quelle
+        assert_eq!(
+            dom_action_url("http://h:9002/exec", "pause_dom"),
+            "http://h:9002/pause_dom"
+        );
+        assert_eq!(
+            ingress_url("http://h:9002/exec"),
+            "http://h:9002/incoming_send"
+        );
+    }
+
+    /// #1027: Reihenfolge des Fan-outs — erst Sim entfrieren, dann Zyklus armieren.
+    #[test]
+    fn go_routes_order_resume_before_start() {
+        assert_eq!(GO_ROUTES, ["resume_game", "start"]);
     }
 
     #[tokio::test]
@@ -2583,7 +2661,7 @@ mod tests {
         );
 
         // Die B-Bridge hat genau EINEN /incoming_send-POST gesehen
-        // (der GO-Broadcast /exec zählt hier nicht).
+        // (die GO-Routen `/resume_game`/`/start` zählen hier nicht).
         tokio::time::sleep(Duration::from_millis(100)).await;
         {
             let all = captures.lock().await;
@@ -3382,7 +3460,14 @@ mod tests {
         assert_eq!(s, StatusCode::UNAUTHORIZED);
         assert_eq!(err_type(&v), "unauthorized");
         // Ohne Bridge antwortet /wave mit 409 — entscheidend: NICHT 401.
-        let (s, _) = request(&app, "POST", "/wave", Some(json!({"n": 3})), Some(TEST_TOKEN)).await;
+        let (s, _) = request(
+            &app,
+            "POST",
+            "/wave",
+            Some(json!({"n": 3})),
+            Some(TEST_TOKEN),
+        )
+        .await;
         assert_ne!(s, StatusCode::UNAUTHORIZED);
         // Mutierende Route mit 200-Semantik: /rematch.
         let (s, _) = request(&app, "POST", "/rematch", None, Some(TEST_TOKEN)).await;
@@ -3422,7 +3507,14 @@ mod tests {
         let (s, v) = request(&app, "POST", "/rematch", None, Some("irgendwas")).await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
         assert_eq!(err_type(&v), "unauthorized");
-        let (s, _) = request(&app, "POST", "/referee/event", Some(json!({"world":"A","type":"ready"})), None).await;
+        let (s, _) = request(
+            &app,
+            "POST",
+            "/referee/event",
+            Some(json!({"world":"A","type":"ready"})),
+            None,
+        )
+        .await;
         assert_eq!(s, StatusCode::UNAUTHORIZED);
         let (s, _) = request(&app, "GET", "/health", None, None).await;
         assert_eq!(s, StatusCode::OK);

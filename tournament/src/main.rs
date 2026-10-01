@@ -9,7 +9,6 @@
 //! | `TOURNAMENT_AUTO_GO` | `true` | GO automatisch, sobald beide Welten ready |
 //! | `RBBRIDGE_A_URL` | — | HTTP-Endpoint Welt A (GO-Broadcast, z. B. `http://10.0.0.5:9001/exec`) |
 //! | `RBBRIDGE_B_URL` | — | HTTP-Endpoint Welt B |
-//! | `TOURNAMENT_GO_COMMANDS` | `debug_dom_resume` | Komma-separierte Unpause-/Start-Kommandos je Welt beim GO (Issue #22; je EIN gequotetes Argument, Issue #18) |
 //! | `TOURNAMENT_GO_TIMEOUT_MS` | `3000` | Timeout je Broadcast-Endpoint |
 //! | `TOURNAMENT_INCOMING_DELAY_S` | `5` | `delay_s` des Ingress-Pushes (`incoming_wave`) beim Wellenstart (US4, #996) |
 //! | `TOURNAMENT_HQ_HP` | `100` | Start-HP jedes HQ |
@@ -54,18 +53,6 @@ fn env_bool(name: &str, default: bool) -> Result<bool, String> {
 
 fn env_str(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())
-}
-
-/// Parst `TOURNAMENT_GO_COMMANDS`: komma-separierte Kommandos, die die Bridge
-/// je Welt beim GO ausführt (Issue #22 Sync-Start). Jedes Kommando wird als EIN
-/// gequotetes Argument an `exec_cmd_client` übergeben (Issue #18). Leere/
-/// Whitespace-Einträge werden verworfen; die Reihenfolge bleibt erhalten.
-fn parse_go_commands(raw: &str) -> Vec<String> {
-    raw.split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .collect()
 }
 
 fn config_from_env() -> Result<Config, String> {
@@ -120,7 +107,6 @@ fn config_from_env() -> Result<Config, String> {
         ));
     }
 
-    let go_commands = parse_go_commands(&env_str("TOURNAMENT_GO_COMMANDS", "debug_dom_resume"));
     // US4 (#996): Verzögerung fuer den Ingress-Push an die Ziel-Bridge beim
     // Wellenstart (`delay_s` im `incoming_wave`-Event, protocol.md Default 5 s).
     let incoming_delay_s: f64 = env_str("TOURNAMENT_INCOMING_DELAY_S", "5")
@@ -148,7 +134,6 @@ fn config_from_env() -> Result<Config, String> {
         port,
         auto_go,
         bridge: [bridge_a, bridge_b],
-        go_commands,
         go_timeout: Duration::from_millis(go_timeout_ms),
         incoming_delay_s,
         hq_hp_start,
@@ -180,14 +165,13 @@ async fn main() -> ExitCode {
     };
 
     tracing::info!(
-        "RIFT BATTLE Tournament-Server startet auf {}:{} (auto_go={}, hq_hp_start={}, referee_max_wave={}, referee_restart_cmd={:?}, go_commands={:?}, bridge_a={}, bridge_b={})",
+        "RIFT BATTLE Tournament-Server startet auf {}:{} (auto_go={}, hq_hp_start={}, referee_max_wave={}, referee_restart_cmd={:?}, bridge_a={}, bridge_b={})",
         cfg.host,
         cfg.port,
         cfg.auto_go,
         cfg.hq_hp_start,
         cfg.referee_max_wave,
         cfg.referee_restart_cmd,
-        cfg.go_commands,
         cfg.bridge[0].as_deref().unwrap_or("-"),
         cfg.bridge[1].as_deref().unwrap_or("-"),
     );
@@ -223,40 +207,4 @@ async fn main() -> ExitCode {
         return ExitCode::from(1);
     }
     ExitCode::SUCCESS
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_go_commands;
-
-    #[test]
-    fn parse_go_commands_default_single_command() {
-        assert_eq!(
-            parse_go_commands("debug_dom_resume"),
-            vec!["debug_dom_resume"]
-        );
-    }
-
-    #[test]
-    fn parse_go_commands_splits_trims_and_drops_empty() {
-        assert_eq!(
-            parse_go_commands("debug_dom_resume, resume_game "),
-            vec!["debug_dom_resume", "resume_game"]
-        );
-        assert_eq!(
-            parse_go_commands(" , debug_dom_resume , ,resume_game"),
-            vec!["debug_dom_resume", "resume_game"]
-        );
-        assert_eq!(parse_go_commands("   "), Vec::<String>::new());
-        assert_eq!(parse_go_commands(""), Vec::<String>::new());
-    }
-
-    #[test]
-    fn parse_go_commands_preserves_order() {
-        // Reihenfolge = Ausführungsreihenfolge (DOM zuerst, native Server-Pause danach).
-        assert_eq!(
-            parse_go_commands("debug_dom_resume,resume_game,debug_dom_manager"),
-            vec!["debug_dom_resume", "resume_game", "debug_dom_manager"]
-        );
-    }
 }
