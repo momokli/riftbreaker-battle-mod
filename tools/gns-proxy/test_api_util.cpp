@@ -860,6 +860,38 @@ static void testParseQueueFinishBody() {
         "finish empty result");
 }
 
+static void testParseQueueRematchBody() {
+  // Issue #1030 (US5): Body-Parser/-Validator fuer POST /queue/rematch.
+  long long id = 0;
+  std::string identitaet;
+  std::string out;
+
+  // Variante A: numerische match_id.
+  check(rbapi::parseQueueRematchBody("{\"match_id\":7}", id, identitaet, out),
+        "rematch match_id parsed");
+  checkEq(std::to_string(id), "7", "rematch match_id");
+  check(identitaet.empty(), "rematch identitaet leer");
+  checkEq(out, "{\"match_id\":7}", "rematch outbound match_id");
+
+  // Variante B: identitaet.
+  check(rbapi::parseQueueRematchBody("{\"identitaet\":\"str:AB12\"}", id,
+                                     identitaet, out),
+        "rematch identitaet parsed");
+  checkEq(identitaet, "str:AB12", "rematch identitaet");
+  checkEq(out, "{\"identitaet\":\"str:AB12\"}", "rematch outbound identitaet");
+
+  // Ungueltig: keine, beide, leerer String, Nicht-Zahl.
+  check(!rbapi::parseQueueRematchBody("{}", id, identitaet, out),
+        "rematch empty body");
+  check(!rbapi::parseQueueRematchBody(
+            "{\"match_id\":7,\"identitaet\":\"str:AB12\"}", id, identitaet, out),
+        "rematch both set");
+  check(!rbapi::parseQueueRematchBody("{\"identitaet\":\"\"}", id, identitaet, out),
+        "rematch empty identitaet");
+  check(!rbapi::parseQueueRematchBody("{\"match_id\":\"7\"}", id, identitaet, out),
+        "rematch non-numeric match_id");
+}
+
 int main() {
   testParseTargetSpec();
   testJsonStringField();
@@ -892,6 +924,7 @@ int main() {
   testParseQueueAssignments();
   testDeriveQueuePhase();
   testParseQueueFinishBody();
+  testParseQueueRematchBody();
 
   if (g_failures == 0) {
     std::printf("test_api_util: %d Checks OK\n", g_checks);
