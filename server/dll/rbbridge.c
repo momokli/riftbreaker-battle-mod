@@ -4161,9 +4161,34 @@ static unsigned char *cached_scan_instance(rbb_inst_cache_t *c,
     return c->inst;
 }
 
-static rbb_inst_cache_t g_ps_cache;
-static rbb_inst_cache_t g_hq_find_cache;
-static rbb_inst_cache_t g_hq_health_cache;
+/* #1063: Per-Thread-Read-Context. Jeder Thread (Pipe-Server vs. Game-Thread)
+ * haelt seine EIGENEN Instanz-Caches + aufgeloesten Funktionszeiger -> kein
+ * Cross-Thread-Race auf dem Cache. */
+typedef struct {
+    rbb_inst_cache_t ps, hq_find, hq_health;
+    const void *find_fn, *get_fn, *getmax_fn, *conn_fn;
+    int conn_tried;
+} rbb_read_ctx_t;
+
+static rbb_read_ctx_t g_pipe_ctx; /* nur Pipe-Thread */
+static rbb_read_ctx_t g_snap_ctx; /* nur Game-Thread */
+
+/* #1063: Game-Thread-Snapshot (Seqlock: EIN Schreiber = Game-Thread,
+ * Leser = Pipe-Thread). g_snap_seq ungerade = Schreibvorgang laeuft. */
+static volatile LONG g_snap_seq;
+static volatile LONG g_snap_ready;
+static volatile LONG g_snap_gen;
+static volatile LONG g_snap_ms; /* GetTickCount64 der Erfassung */
+static uint64_t g_snap_world;
+static int64_t  g_snap_carb, g_snap_iron, g_snap_carb_max, g_snap_iron_max;
+static int      g_snap_players; /* -1 = n/a */
+static int      g_snap_hq_has;  /* 1 = hq-Felder gueltig */
+static float    g_snap_hq_hp, g_snap_hq_hp_max;
+static int      g_snap_hq_dead; /* 0/1, gueltig wenn hq_has */
+static char     g_snap_resources[RESP_BUF_SIZE];
+static volatile LONG g_snap_hq_death_pending;
+static volatile LONG g_snap_has_account; /* 1 = Account/Spieler vorhanden */
+static volatile LONG g_snap_hq_death_gen;
 
 /* Writable-Variante (Round-Reset #516): sucht die Instanz NUR in
  * beschreibbaren Regionen (der Flag-Write [instance+0x52A]=1 setzt das
@@ -5704,6 +5729,9 @@ static void send_chat_now(void *state)
     dbg("send_chat: broadcasted (%u B text)", (unsigned)strlen(g_chat_out_text));
 }
 
+/* #1063: Game-Thread-Snapshot (Definition weiter unten, nach den Read-Helfern). */
+static void snapshot_update(void *self);
+
 /* Laeuft auf dem GAME-Thread. Fuehrt einen anstehenden Pause/Resume-Request
  * hier aus (richtiger Thread) und ruft danach unveraendert das Original. */
 static void __fastcall gameplay_updlogic_hook(
@@ -5753,6 +5781,8 @@ static void __fastcall gameplay_updlogic_hook(
         InterlockedExchange(&g_chat_out_pending, 0);
         InterlockedExchange(&g_chat_out_done, 1);
     }
+    /* #1063: Game-Thread-Snapshot fuer get_state (scan-frei im Pipe-Thread). */
+    snapshot_update(self);
     ((gameplay_updlogic_fn_t)g_gameplay_updlogic_orig)(self, a, b, c, d);
 }
 
@@ -6009,23 +6039,23 @@ static void connplayers_vec_release(unsigned char *vec,
  * 0 = nicht verfuegbar -> Aufrufer meldet `null`.
  * MSVC-x64-ABI der aufgeloesten Funktion: rcx = out-Vektor, rdx = World*. */
 static int read_player_count(const unsigned char *base, size_t size,
-                             const unsigned char *ps, int *out)
+                             rbb_read_ctx_t *ctx, const unsigned char *ps,
+                             int *out)
 {
-    static const unsigned char *s_fn = NULL;
-    static int s_tried = 0;
     unsigned char vec[0x20];
     uint64_t world = 0;
     int n = 0, ok = 0;
 
-    if (!out)
+    if (!out || !ctx)
         return 0;
-    if (!s_tried) {
-        s_tried = 1;
-        if (!connplayers_resolve(base, size, &s_fn))
+    if (!ctx->conn_tried) {
+        ctx->conn_tried = 1;
+        if (!connplayers_resolve(base, size,
+                                 (const unsigned char **)&ctx->conn_fn))
             dbg("read_player_count: GetConnectedPlayers nicht aufloesbar "
                 "-> players=null");
     }
-    if (!s_fn || !ps)
+    if (!ctx->conn_fn || !ps)
         return 0;
     if (!safe_read_u64(ps + 8, &world) || !world)
         return 0;
@@ -6033,7 +6063,8 @@ static int read_player_count(const unsigned char *base, size_t size,
     memset(vec, 0, sizeof(vec));
     {
         typedef void (*connplayers_fn)(void *out_vec, void *world);
-        ((connplayers_fn)(uintptr_t)s_fn)(vec, (void *)(uintptr_t)world);
+        ((connplayers_fn)(uintptr_t)ctx->conn_fn)(vec,
+                                                  (void *)(uintptr_t)world);
     }
     ok = connplayers_count_from_vec(vec, &n);
     connplayers_vec_release(vec, base, size);
@@ -6049,34 +6080,32 @@ static int read_player_count(const unsigned char *base, size_t size,
  * #655) statt des alten rohen resolve_hq_service-Scans (die #573-Ursache).
  * Rueckgabe 1 = hp/hp_max/dead gesetzt, 0 = (noch) nicht aufloesbar -
  * kein Crash, kein Game-Call bei unvollstaendiger Aufloesung. */
-static int read_hq_health(const unsigned char *base, size_t size, float *hp,
+static int read_hq_health(const unsigned char *base, size_t size,
+                          rbb_read_ctx_t *ctx, float *hp,
                           float *hp_max, int *dead)
 {
-    /* Thread-Modell (#378/#388): Diese Statics sind UNGESCHUETZT und werden
-     * ausschliesslich vom Pipe-Server-Thread beruehrt (dispatch_get_state
-     * laeuft dort; kein lua_*-Call, kein Main-Thread). */
-    static const void *find_fn = NULL;
-    static const void *get_fn = NULL;
-    static const void *getmax_fn = NULL;
-
-    if (!find_fn)
-        find_fn = resolve_hq_find_name_fn(base, size);
-    if (!get_fn)
-        get_fn = resolve_hq_gethealth_fn(base, size);
-    if (!getmax_fn)
-        getmax_fn = resolve_hq_getmaxhealth_fn(base, size);
-    if (!find_fn || !get_fn || !getmax_fn)
+    /* #1063: Funktionszeiger + Instanz-Caches liegen im per-Thread-Context
+     * (ctx) -> kein Cross-Thread-Race zwischen Pipe- und Game-Thread. */
+    if (!ctx)
+        return 0;
+    if (!ctx->find_fn)
+        ctx->find_fn = resolve_hq_find_name_fn(base, size);
+    if (!ctx->get_fn)
+        ctx->get_fn = resolve_hq_gethealth_fn(base, size);
+    if (!ctx->getmax_fn)
+        ctx->getmax_fn = resolve_hq_getmaxhealth_fn(base, size);
+    if (!ctx->find_fn || !ctx->get_fn || !ctx->getmax_fn)
         return 0;
 
     /* Instanzen via Cache aufloesen (#1060): ein Scan nur beim ersten Mal bzw.
      * wenn die vftable-Revalidierung nach einem Map-Reload fehlschlaegt. Wie
      * resolve_diffsys: +0x08 (World*-Slot) muss lesbar != 0 sein. */
     unsigned char *find_svc = cached_scan_instance(
-        &g_hq_find_cache, base,
+        &ctx->hq_find, base,
         (uint64_t)(uintptr_t)(base + RBBRIDGE_HQ_RVA_FIND_VFTABLE),
         "resolve_hq_find");
     unsigned char *health_svc = cached_scan_instance(
-        &g_hq_health_cache, base,
+        &ctx->hq_health, base,
         (uint64_t)(uintptr_t)(base + RBBRIDGE_HQ_RVA_HEALTH_VFTABLE),
         "resolve_hq_health");
     if (!find_svc || !health_svc)
@@ -6094,10 +6123,175 @@ static int read_hq_health(const unsigned char *base, size_t size, float *hp,
     }
 
     return hq_health_from_calls(find_svc, health_svc,
-                                (hq_find_entity_fn)find_fn,
-                                (hq_health_fn)get_fn,
-                                (hq_health_fn)getmax_fn,
+                                (hq_find_entity_fn)ctx->find_fn,
+                                (hq_health_fn)ctx->get_fn,
+                                (hq_health_fn)ctx->getmax_fn,
                                 hp, hp_max, dead);
+}
+
+/* #1063: Game-Thread-Snapshot. Laeuft im UpdateGameplayLogic-Hook (~30 Hz),
+ * ratenbegrenzt auf 250 ms. EIN Schreiber (Game-Thread) -> Seqlock; der
+ * Pipe-Thread liest nur. Nutzt ausschliesslich g_snap_ctx (eigene Caches,
+ * kein Cross-Thread-Race mit dem Pipe-Thread). */
+static void snapshot_update(void *self)
+{
+    const unsigned char *base = NULL;
+    size_t size = 0;
+    LONG now = (LONG)GetTickCount64();
+    uint64_t world = 0;
+    int type;
+    unsigned char *ps;
+    int64_t carb = 0, iron = 0, carb_max = 0, iron_max = 0;
+    int players = -1;
+    int hq_has = 0, hq_dead = 0;
+    int have_account = 0;
+    float hq_hp = 0.0f, hq_hp_max = 0.0f;
+    char resources[RESP_BUF_SIZE];
+
+    if (g_snap_ready && (LONG)(now - g_snap_ms) < 250)
+        return; /* Rate-Limit: max. ~4 Hz */
+
+    /* World* scan-frei aus dem GameplayState (live-verifiziert). */
+    for (type = 0; type < 3; type++) {
+        uint64_t w = 0;
+        if (safe_read_u64((char *)self + 0x358 + (size_t)type * 0x58, &w) &&
+            w) {
+            world = w;
+            break;
+        }
+    }
+
+    /* #1063: Modulbasis EINMAL aufloesen (stabil je Prozess) -> kein
+     * resolve_module-Log/Scan pro Tick; Fehlschlag wird erneut versucht. */
+    {
+        static const unsigned char *s_base = NULL;
+        static size_t s_size = 0;
+        if (!s_base) {
+            const char *s_via = NULL;
+            const unsigned char *s_exec = NULL;
+            if (resolve_module(&s_base, &s_size, &s_via, &s_exec))
+                base = s_base;
+            else
+                s_base = NULL;
+        } else {
+            base = s_base;
+        }
+        size = s_size;
+    }
+    if (!world || !base) {
+        /* Keine Welt / kein Modul -> Snapshot als ungueltig markieren. */
+        InterlockedIncrement(&g_snap_seq);
+        g_snap_ready = 0;
+        InterlockedIncrement(&g_snap_seq);
+        return;
+    }
+
+    /* Default: leeres resources[] (kein Account). */
+    snprintf(resources, sizeof(resources), "[]");
+
+    ps = cached_scan_instance(&g_snap_ctx.ps, base,
+                              (uint64_t)(uintptr_t)(base + 0x2e8e910),
+                              "snapshot");
+    if (ps) {
+        uint64_t w = 0;
+        safe_read_u64(ps + 8, &w);
+        if (w) {
+            void *(*gpa)(void *, unsigned int) =
+                (void *(*)(void *, unsigned int))(uintptr_t)(base + 0xC60050);
+            void *account = gpa((void *)(uintptr_t)w, 0);
+            if (account) {
+                have_account = 1;
+                uint64_t arr = 0, count = 0, cv = 0, iv = 0;
+                safe_read_u64((unsigned char *)account + 8, &arr);
+                safe_read_u64((unsigned char *)account + 0x10, &count);
+                basket_lookup_value((const unsigned char *)(uintptr_t)arr,
+                                    count, RBBRIDGE_HASH_CARBONIUM, &cv);
+                basket_lookup_value((const unsigned char *)(uintptr_t)arr,
+                                    count, RBBRIDGE_HASH_IRONIUM, &iv);
+                carb = (int64_t)cv;
+                iron = (int64_t)iv;
+                carb_max = read_resource_max(base, account,
+                                             RBBRIDGE_HASH_CARBONIUM);
+                iron_max = read_resource_max(base, account,
+                                             RBBRIDGE_HASH_IRONIUM);
+                /* resources[] exakt wie dispatch_get_state rendern. */
+                {
+                    size_t roff = 0;
+                    int nres = 0;
+                    int wr = snprintf(resources + roff,
+                                      sizeof(resources) - roff, "[");
+                    if (wr > 0)
+                        roff += (size_t)wr;
+                    if (arr && count && count < 256) {
+                        for (uint64_t i = 0; i < count; i++) {
+                            const unsigned char *e =
+                                (const unsigned char *)(uintptr_t)arr + i * 16;
+                            uint64_t hv = 0, v = 0;
+                            uint32_t h;
+                            safe_read_u64(e, &hv);
+                            safe_read_u64(e + 8, &v);
+                            h = (uint32_t)hv;
+                            if (roff + 64 < sizeof(resources)) {
+                                wr = snprintf(resources + roff,
+                                              sizeof(resources) - roff,
+                                              "%s{\"hash\":\"0x%08x\","
+                                              "\"value\":%llu}",
+                                              nres ? "," : "", h,
+                                              (unsigned long long)v);
+                                if (wr > 0)
+                                    roff += (size_t)wr;
+                                nres++;
+                            }
+                        }
+                    }
+                    snprintf(resources + roff, sizeof(resources) - roff, "]");
+                }
+                {
+                    int p = 0;
+                    if (read_player_count(base, size, &g_snap_ctx, ps, &p))
+                        players = p;
+                }
+                {
+                    float hp = 0.0f, hpm = 0.0f;
+                    int dead = 0;
+                    if (read_hq_health(base, size, &g_snap_ctx, &hp, &hpm,
+                                       &dead) &&
+                        float_is_finite(hp) && float_is_finite(hpm)) {
+                        hq_has = 1;
+                        hq_hp = hp;
+                        hq_hp_max = hpm;
+                        hq_dead = dead ? 1 : 0;
+                    }
+                }
+            }
+        }
+    }
+
+    /* HQ-Tod als Flanken-Event: nur wenn der VORIGE veroeffentlichte
+     * Snapshot NICHT dead war (hq_has && hq_dead). */
+    if (hq_has && hq_dead == 1 && !(g_snap_hq_has && g_snap_hq_dead == 1)) {
+        InterlockedIncrement(&g_snap_hq_death_gen);
+        InterlockedExchange(&g_snap_hq_death_pending, 1);
+    }
+
+    /* Veroeffentlichen unter dem Seqlock (seq++ ; Felder ; seq++). */
+    InterlockedIncrement(&g_snap_seq); /* ungerade = Schreiben */
+    g_snap_world = world;
+    g_snap_carb = carb;
+    g_snap_iron = iron;
+    g_snap_carb_max = carb_max;
+    g_snap_iron_max = iron_max;
+    g_snap_players = players;
+    g_snap_hq_has = hq_has;
+    g_snap_hq_hp = hq_hp;
+    g_snap_hq_hp_max = hq_hp_max;
+    g_snap_hq_dead = hq_dead;
+    g_snap_has_account = (LONG)have_account;
+    memcpy(g_snap_resources, resources, sizeof(g_snap_resources));
+    InterlockedIncrement(&g_snap_gen);
+    g_snap_ms = now;
+    g_snap_ready = 1;
+    InterlockedIncrement(&g_snap_seq); /* gerade = fertig */
 }
 
 static void dispatch_get_state(HANDLE hPipe)
@@ -6110,6 +6304,12 @@ static void dispatch_get_state(HANDLE hPipe)
     /* #479: Readiness-Gate zuerst — vor JEDEM Game-Call. */
     if (readiness_block(hPipe, "get_state_result"))
         return;
+
+    /* #1063: HQ-Tod als Push-Event (Flanke, vom Game-Thread erkannt).
+     * Vor der get_state_result-Zeile ausliefern. */
+    if (InterlockedExchange(&g_snap_hq_death_pending, 0))
+        send_line(hPipe, "{\"event\":\"hq_dead\",\"generation\":%ld}",
+                  (long)g_snap_hq_death_gen);
 
     if (!resolve_module(&base, &size, &via, &execfn)) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
@@ -6215,11 +6415,98 @@ static void dispatch_get_state(HANDLE hPipe)
         }
     }
 
+    /* #1063: Fast path — frischer Game-Thread-Snapshot. Kein Scan, kein
+     * Game-Call; nur die (billigen) Flow-/Payload-Felder oben bleiben live.
+     * Seqlock-Leser: seq ungerade = Schreiben -> erneut versuchen; s1 != s2
+     * = zwischenzeitlich geschrieben -> erneut versuchen. */
+    {
+        LONG s1 = 0, s2 = 0, sgen = 0;
+        LONG snap_now = (LONG)GetTickCount64();
+        uint64_t snap_world = 0;
+        int64_t sc = 0, si = 0, scm = 0, sim = 0;
+        int sp = -1, shq_has = 0, shq_dead = 0;
+        LONG sha = 0;
+        float shp = 0.0f, shpm = 0.0f;
+        char sres[RESP_BUF_SIZE];
+        int snap_ok = 0;
+        int attempt;
+
+        for (attempt = 0; attempt < 8 && !snap_ok; attempt++) {
+            s1 = g_snap_seq;
+            if (s1 & 1)
+                continue; /* Schreibvorgang laeuft -> erneut versuchen */
+            if (!g_snap_ready || (LONG)(snap_now - g_snap_ms) >= 2500)
+                break; /* kein/zu alter Snapshot -> Live-Pfad */
+            snap_world = g_snap_world;
+            sc = g_snap_carb;
+            si = g_snap_iron;
+            scm = g_snap_carb_max;
+            sim = g_snap_iron_max;
+            sp = g_snap_players;
+            shq_has = g_snap_hq_has;
+            shq_dead = g_snap_hq_dead;
+            shp = g_snap_hq_hp;
+            shpm = g_snap_hq_hp_max;
+            sgen = g_snap_gen;
+            sha = g_snap_has_account;
+            memcpy(sres, g_snap_resources, sizeof(sres));
+            s2 = g_snap_seq;
+            if (s1 == s2)
+                snap_ok = 1;
+        }
+
+        if (snap_ok && snap_world && !sha) {
+            /* Kein Account/Spieler (Welt nicht fertig) -> wie der Live-Pfad
+             * `no_account`, aber OHNE Scan/Game-Call (aus dem Snapshot). */
+            send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
+                             "\"reason\":\"no_account\","
+                             "\"mission_flow\":\"%s\","
+                             "\"mission_flow_active\":%s,"
+                             "\"mission_flow_payload\":%s,"
+                             "\"creatures_base_difficulty\":%s,"
+                             "\"end_game\":%s,\"players\":%s,%s,"
+                             "\"pause_want\":%s,\"snapshot_generation\":%ld}",
+                      flow_esc, flow_active ? "true" : "false",
+                      payload_field, diff_field, end_field, players_field,
+                      hq_field, want_field, (long)sgen);
+            return;
+        }
+        if (snap_ok && snap_world) {
+            if (sp >= 0)
+                snprintf(players_field, sizeof(players_field), "%d", sp);
+            else
+                copy_cstr(players_field, sizeof(players_field), "null");
+            if (shq_has)
+                snprintf(hq_field, sizeof(hq_field),
+                         "\"hq_hp\":%.2f,\"hq_hp_max\":%.2f,\"hq_dead\":%s",
+                         (double)shp, (double)shpm,
+                         shq_dead ? "true" : "false");
+            else
+                snprintf(hq_field, sizeof(hq_field),
+                         "\"hq_hp\":null,\"hq_hp_max\":null,\"hq_dead\":null");
+            send_line(hPipe,
+                      "{\"event\":\"get_state_result\",\"ok\":true,"
+                      "\"carbonium\":%llu,\"carbonium_max\":%lld,"
+                      "\"ironium\":%llu,\"ironium_max\":%lld,\"resources\":%s,"
+                      "\"mission_flow\":\"%s\",\"mission_flow_active\":%s,"
+                      "\"mission_flow_payload\":%s,"
+                      "\"creatures_base_difficulty\":%s,"
+                      "\"end_game\":%s,\"players\":%s,%s,\"pause_want\":%s,"
+                      "\"snapshot_generation\":%ld}",
+                      (unsigned long long)sc, (long long)scm,
+                      (unsigned long long)si, (long long)sim,
+                      sres, flow_esc, flow_active ? "true" : "false",
+                      payload_field, diff_field, end_field, players_field,
+                      hq_field, want_field, (long)sgen);
+            return;
+        }
+    }
+
     /* PlayerService-vftable RVA 0x2e8e910 (RE #363/#365). Crash-sicher via
      * scan_qword_instance (ReadProcessMemory, kein roher q[i]-Deref - #655). */
     const unsigned char *vftable = base + 0x2e8e910;
     unsigned char *ps = cached_scan_instance(
-        &g_ps_cache, base, (uint64_t)(uintptr_t)vftable, "get_state");
+        &g_pipe_ctx.ps, base, (uint64_t)(uintptr_t)vftable, "get_state");
 
     if (!ps) {
         send_line(hPipe, "{\"event\":\"get_state_result\",\"ok\":false,"
@@ -6281,7 +6568,7 @@ static void dispatch_get_state(HANDLE hPipe)
      * bleibt es bei `players:null` - ehrlich statt 0. */
     {
         int players = 0;
-        if (read_player_count(base, size, ps, &players))
+        if (read_player_count(base, size, &g_pipe_ctx, ps, &players))
             snprintf(players_field, sizeof(players_field), "%d", players);
     }
 
@@ -6290,7 +6577,8 @@ static void dispatch_get_state(HANDLE hPipe)
     {
         float hq_hp = 0.0f, hq_hp_max = 0.0f;
         int hq_dead = 0;
-        if (read_hq_health(base, size, &hq_hp, &hq_hp_max, &hq_dead) &&
+        if (read_hq_health(base, size, &g_pipe_ctx, &hq_hp, &hq_hp_max,
+                           &hq_dead) &&
             float_is_finite(hq_hp) && float_is_finite(hq_hp_max))
             snprintf(hq_field, sizeof(hq_field),
                      "\"hq_hp\":%.2f,\"hq_hp_max\":%.2f,\"hq_dead\":%s",
