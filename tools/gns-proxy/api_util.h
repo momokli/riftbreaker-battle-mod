@@ -943,6 +943,30 @@ inline bool parseQueueFinishBody(const std::string &body, long long &matchId,
   return true;
 }
 
+// `{match_id}` ODER `{identitaet}`-Body fuer `POST /queue/rematch` parsen/
+// validieren (Issue #1030). Genau EINE der beiden Angaben ist Pflicht:
+// `match_id` als echte Ganzzahl ODER `identitaet` als nicht-leerer String.
+// Beide/keine -> false (kein Outbound). `out` ist der kanonische Outbound-Body
+// fuer den Queue-Dienst. Bewusst OHNE Socket/Win32 — host-testbar.
+inline bool parseQueueRematchBody(const std::string &body, long long &matchId,
+                                  std::string &identitaet, std::string &out) {
+  const bool hasMatchId = jsonIntField(body, "match_id", matchId);
+  std::string id;
+  const bool hasIdentitaet =
+      jsonStringField(body, "identitaet", id) && !id.empty();
+  identitaet.clear();
+  if (hasMatchId == hasIdentitaet) {
+    return false; // beide gesetzt oder keine -> ungueltig
+  }
+  if (hasMatchId) {
+    out = "{\"match_id\":" + std::to_string(matchId) + "}";
+  } else {
+    identitaet = id;
+    out = "{\"identitaet\":\"" + jsonEscape(id) + "\"}";
+  }
+  return true;
+}
+
 } // namespace rbapi
 
 #endif // RBBATTLE_API_UTIL_H

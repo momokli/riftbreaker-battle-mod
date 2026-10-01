@@ -294,5 +294,104 @@ class FullChainHttpTests(HttpHarness):
         self.assertEqual(len(self.provisioner.stops), 2)
 
 
+class RematchHttpTests(HttpHarness):
+    """Issue #1030: ``POST /queue/rematch`` ueber die HTTP-Schicht."""
+
+    def _matched(self):
+        self.post("/queue/join", {"identitaet": "str:aa", "mode": "vs"})
+        _s, matched = self.post("/queue/join", {"identitaet": "str:bb", "mode": "vs"})
+        return matched["match"]["match_id"]
+
+    def test_rematch_happy_path(self):
+        mid = self._matched()
+        self.post("/queue/finish", {"match_id": mid, "result": "winnerA"})
+        status, body = self.post("/queue/rematch", {"match_id": mid})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["rematch_of"], mid)
+        self.assertFalse(body["idempotent"])
+        match = body["match"]
+        self.assertEqual(match["match_id"], mid + 1)
+        self.assertEqual(match["rematch_of"], mid)
+        self.assertEqual(match["state"], "ready")
+        by_world = {a["world"]: a["identitaet"] for a in match["assignments"]}
+        self.assertEqual(by_world["A"], "str:aa")
+        self.assertEqual(by_world["B"], "str:bb")
+        targets = [a["target"] for a in match["assignments"]]
+        self.assertEqual(len(set(targets)), 2)
+        self.assertTrue(all(targets))
+
+    def test_rematch_by_identitaet(self):
+        mid = self._matched()
+        self.post("/queue/finish", {"match_id": mid})
+        status, body = self.post("/queue/rematch", {"identitaet": "str:aa"})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["rematch_of"], mid)
+
+    def test_rematch_idempotent_second_call(self):
+        mid = self._matched()
+        self.post("/queue/finish", {"match_id": mid})
+        self.post("/queue/rematch", {"match_id": mid})
+        starts = len(self.provisioner.starts)
+        status, body = self.post("/queue/rematch", {"match_id": mid})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["idempotent"])
+        self.assertEqual(body["match"]["match_id"], mid + 1)
+        self.assertEqual(len(self.provisioner.starts), starts)
+
+    def test_rematch_bad_request_variants(self):
+        for payload in ({}, {"match_id": 1, "identitaet": "str:aa"},
+                        {"match_id": "x"}):
+            status, body = self.post("/queue/rematch", payload)
+            self.assertEqual(status, 400, payload)
+            self.assertEqual(body["reason"], "bad_request", payload)
+
+    def test_rematch_unknown_match_409(self):
+        status, body = self.post("/queue/rematch", {"match_id": 999})
+        self.assertEqual(status, 409)
+        self.assertEqual(body["reason"], "unknown_match")
+
+    def test_rematch_no_match_409(self):
+        status, body = self.post("/queue/rematch", {"identitaet": "str:zz"})
+        self.assertEqual(status, 409)
+        self.assertEqual(body["reason"], "no_match")
+
+    def test_rematch_not_finished_409(self):
+        mid = self._matched()
+        status, body = self.post("/queue/rematch", {"match_id": mid})
+        self.assertEqual(status, 409)
+        self.assertEqual(body["reason"], "match_not_finished")
+
+    def test_rematch_referee_conflict_409(self):
+        mid = self._matched()
+        self.post("/queue/finish", {"match_id": mid})
+        self.referee.rematch_fail = True
+        status, body = self.post("/queue/rematch", {"match_id": mid})
+        self.assertEqual(status, 409)
+        self.assertEqual(body["reason"], "referee_rematch_failed")
+
+    def test_rematch_cleanup_failed_503(self):
+        mid = self._matched()
+        self.provisioner.fail_stop_always = True
+        self.post("/queue/finish", {"match_id": mid})  # Stop scheitert
+        status, body = self.post("/queue/rematch", {"match_id": mid})
+        self.assertEqual(status, 503)
+        self.assertEqual(body["reason"], "cleanup_failed")
+
+    def test_rematch_method_not_allowed(self):
+        status, body = self.get("/queue/rematch")
+        self.assertEqual(status, 405)
+        self.assertEqual(body["reason"], "method_not_allowed")
+
+
+class RematchAuthTests(HttpHarness):
+    token = "s3cr3t-token"
+
+    def test_rematch_requires_token(self):
+        status, body = self.post("/queue/rematch", {"match_id": 1})
+        self.assertEqual(status, 401)
+        self.assertEqual(body["reason"], "unauthorized")
+
+
 if __name__ == "__main__":
     unittest.main()

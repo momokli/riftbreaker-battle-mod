@@ -15,11 +15,14 @@ Endpunkte (JSON; Bearer-Token PFLICHT, wenn ``QUEUE_TOKEN`` gesetzt):
     bei vollstaendiger Paarung die Match-Antwort (A/B + Endpoints)
   * ``POST /queue/leave``    -> ``{"identitaet"}`` (nur wartende Spieler)
   * ``POST /queue/finish``   -> ``{"match_id","result"?}``; Ergebnis + kaltes Cleanup
+  * ``POST /queue/rematch``  -> ``{"match_id"}`` ODER ``{"identitaet"}``; Rematch
+    derselben Paarung (Alt-Stop -> Referee-Reset -> 2 frische Kalt-Welten)
 
 Fehlerformat einheitlich ``{"ok":false,"reason":"<code>","detail":"…"}``;
 ``401`` ohne/mit falschem Bearer, ``400`` falscher Modus/Body, ``404``
 unbekannte Route, ``405`` falsche Methode, ``409`` unbekannter Match/already
-matched, ``503`` Provisioner/Referee nicht erreichbar.
+matched/nicht finished/Referee-Rematch abgelehnt, ``503`` Provisioner/Referee
+nicht erreichbar/Cleanup gescheitert/Provisionierung gescheitert.
 """
 
 from __future__ import annotations
@@ -149,6 +152,7 @@ def _match_payload(match: Dict[str, Any]) -> Dict[str, Any]:
         "mode": match.get("mode"),
         "state": match.get("state"),
         "result": match.get("result"),
+        "rematch_of": match.get("rematch_of"),
         "participants": participants,
         "assignments": assignments,
     }
@@ -283,8 +287,35 @@ class Handler(BaseHTTPRequestHandler):
                     raise QueueError("bad_request", "match_id muss eine Zahl sein", 400)
                 record = self.coordinator.finish(match_id, result=payload.get("result"))
                 self._send_json(200, {"ok": True, "match": _match_payload(record)})
+            elif method == "POST" and path == "/queue/rematch":
+                payload = self._read_json()
+                match_id = payload.get("match_id")
+                identitaet = payload.get("identitaet")
+                has_match_id = match_id is not None
+                has_identitaet = isinstance(identitaet, str) and bool(identitaet.strip())
+                # Genau eine der beiden Angaben (sonst 400 bad_request).
+                if has_match_id == has_identitaet:
+                    raise QueueError(
+                        "bad_request",
+                        "genau match_id (int) ODER identitaet (str) erwartet",
+                        400,
+                    )
+                if has_match_id:
+                    try:
+                        match_id = int(match_id)
+                    except (TypeError, ValueError):
+                        raise QueueError("bad_request", "match_id muss eine Zahl sein", 400)
+                    out = self.coordinator.rematch(match_id=match_id)
+                else:
+                    out = self.coordinator.rematch(identitaet=identitaet)
+                self._send_json(200, {
+                    "ok": True,
+                    "rematch_of": out["rematch_of"],
+                    "idempotent": out["idempotent"],
+                    "match": _match_payload(out["match"]),
+                })
             elif path in ("/health", "/queue/status", "/queue/join",
-                          "/queue/leave", "/queue/finish"):
+                          "/queue/leave", "/queue/finish", "/queue/rematch"):
                 self._send_json(405, {"ok": False, "reason": "method_not_allowed", "method": method})
             else:
                 self._send_json(404, {"ok": False, "reason": "not_found", "path": path})
