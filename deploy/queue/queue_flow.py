@@ -133,7 +133,7 @@ class ProvisionerClient(object):
 
 
 class RefereeClient(object):
-    """HTTP-Client auf den Referee (``POST /lobby {player, world}``)."""
+    """HTTP-Client auf den Referee (``POST /lobby`` + ``POST /ready``)."""
 
     def __init__(self, base_url: str, token: str = "", timeout: float = 5.0,
                  opener: Optional[Callable[..., Any]] = None) -> None:
@@ -147,6 +147,17 @@ class RefereeClient(object):
                           {"player": player, "world": world}, self.timeout,
                           self.token, self._opener)
 
+    def ready(self, world: str) -> Dict[str, Any]:
+        """Welt beim Referee bereit melden (``POST /ready {world}``, Bearer).
+
+        Der zweite Ready (A und B) loest mit ``TOURNAMENT_AUTO_GO=true`` den
+        GO-Broadcast an beide Bridges aus; der Referee armiert GO nur bei
+        ``BothReady``. Idempotent (``AlreadyReady``).
+        """
+        return _http_json(self.base_url, "POST", "/ready",
+                          {"world": world}, self.timeout,
+                          self.token, self._opener)
+
 
 class QueueCoordinator(object):
     """Matchmaking + kalte Provisionierung + Referee-Lobby + Match-Record.
@@ -155,7 +166,7 @@ class QueueCoordinator(object):
     ``provisioner`` — Objekt mit ``start(env, mode, instance_id, world)`` und
     ``stop(instance_id, env)`` (Produktion: :class:`ProvisionerClient`; Tests:
     Fake).
-    ``referee`` — Objekt mit ``lobby(player, world)``.
+    ``referee`` — Objekt mit ``lobby(player, world)`` und ``ready(world)``.
     ``clock`` — injizierbar (Tests: Fake).
     ``state_dir`` — optionales Verzeichnis fuer den Match-Record (JSON, atomar).
     """
@@ -278,6 +289,17 @@ class QueueCoordinator(object):
             # Referee-Lobby: je Spieler genau ein /lobby mit seiner Welt.
             for assignment in match.assignments():
                 self.referee.lobby(assignment.identitaet, assignment.world)
+            # Ready-Egress (Issue #1025): NACH beiden /lobby-Aufrufen (sonst
+            # Referee-404 not_found), dann je DISTINCT Welt genau EIN `ready`.
+            # Der zweite Ready loest beim Referee (AUTO_GO) den gemeinsamen
+            # GO-Broadcast an beide Bridges aus. Nur bei vollstaendiger Paarung
+            # erreichbar (ein erster `join` = queued -> kein Ready). Ready ist
+            # idempotent (`AlreadyReady`); scheitert ein Ready, greift der
+            # bestehende Rollback (beide Instanzen stop + mark_failed); ein
+            # Retry braucht ein `POST /rematch` (Operator/Cockpit) — kein
+            # stiller Doppel-Start.
+            for world in sorted({a.world for a in match.assignments()}):
+                self.referee.ready(world)
             self.core.mark_ready(match)
             self._persist()
         except Exception as exc:  # noqa: BLE001 - Rollback + lauter Fehler

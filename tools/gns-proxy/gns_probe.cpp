@@ -45,6 +45,9 @@
 // Reine Helfer fuer die Steuer-API (Target-Spec, JSON) — host-testbar in der CI
 // (test_api_util.cpp).
 #include "api_util.h"
+// Reine Bruecken-Logik zum Referee (Issue #1024) — host-testbar in der CI
+// (test_referee_bridge.cpp).
+#include "referee_bridge.h"
 
 // Anzeigename des Identitaets-Kinds (Issue #992) fuer Logs/API.
 static const char *identityKindName(rbident::Kind kind) {
@@ -315,6 +318,17 @@ std::string g_queueHost = "127.0.0.1";
 int g_queuePort = 9221;
 bool g_queueConfigured = false;
 std::string g_queueToken;
+
+// --- Referee-Anbindung (Issue #1024) -----------------------------------------
+// Ist der Referee konfiguriert (`--referee-url` ODER `RBB_REFEREE_URL`), exponiert
+// der Relay `GET /referee/state` (Phase/Spieler/Sieger) und `POST /referee/ready`
+// (Welt ready melden) als Proxy auf das Referee-Backend (`tournament`). `GET
+// /state` ist dort auth-frei, `POST /ready` liegt hinter Bearer -> Token aus
+// `RBB_REFEREE_TOKEN` (nie argv). Ohne Config: `503 referee_unconfigured`.
+std::string g_refereeHost = "127.0.0.1";
+int g_refereePort = 8082;
+bool g_refereeConfigured = false;
+std::string g_refereeToken;
 
 // Queue-Anzeige je Identitaet (Issue #998, additiv): vom HTTP-Thread unter
 // g_apiMutex geschrieben, vom Hauptloop in die /sessions-Sicht kopiert. Leer,
@@ -1448,6 +1462,11 @@ const char kUiHtml[] = R"HTML(<!doctype html>
   .badge.queue-ready { background:rgba(95,211,154,.16); color:var(--routed); }
   .badge.queue-failed { background:rgba(240,138,138,.16); color:var(--waiting); }
   .badge.queue-finished { background:rgba(139,147,159,.16); color:var(--muted); }
+  /* Referee-Badges (Issue #1024): Phase + Sieger, additiv zu solo/queue. */
+  .badge.ref-Lobby { background:rgba(139,147,159,.16); color:var(--muted); }
+  .badge.ref-Ready { background:rgba(242,193,78,.16); color:var(--held); }
+  .badge.ref-Running { background:rgba(95,211,154,.16); color:var(--routed); }
+  .badge.ref-Finished { background:rgba(78,161,255,.16); color:var(--accent); }
   .solo { display:flex; gap:8px; margin-top:10px; }
   .solo .toggle.on { border-color:var(--accent); background:#1b2735; }
   .hint { margin-top:8px; font-size:12px; color:var(--waiting); }
@@ -1545,6 +1564,11 @@ const QUEUE = { queued: "In Queue", matched: "Match gefunden",
   finished: "beendet" };
 // Letzter GET /queue/status-Snapshot des 1500-ms-Takts (kein eigener Timer, US1).
 let QUEUE_SNAP = null;
+// Letzter GET /referee/state-Snapshot des 1500-ms-Takts (Issue #1024, additiv).
+// null = Referee nicht konfiguriert/erreichbar -> Buttons degradieren sichtbar.
+let REF_SNAP = null;
+// Referee-Phasenlabel (tournament phase: Lobby|Ready|Running|Finished).
+const REF = { Lobby: "Lobby", Ready: "bereit", Running: "läuft", Finished: "beendet" };
 
 // Phase je Identitaet aus /queue/status (D3): zuerst Match-Zuordnung, dann
 // Queue-Treffer, sonst Fallback /sessions.queuePhase.
@@ -1649,20 +1673,26 @@ async function joinSolo(identity, instance, btn, cardEl) {
   setTimeout(loadSessions, 300);
 }
 
-// Ready: Kapsel resume + Warmup-Start (POST /ready). Damit ist der Start im
-// Proxy erledigt; den Countdown in den Chat schickt der Announcer (1.0.7).
-async function ready(btn, cardEl) {
+// Ready: kontextabhaengig (Issue #1025). Solo -> Capsule resume + Warmup-Start
+// (POST /ready {}). VS (Session hat vsWorld) -> dieselbe Relay-Route, aber mit
+// {world} — der Relay proxyt dann an den Referee (/ready {world}); den Countdown
+// in den Chat schickt der Announcer (1.0.7).
+async function ready(btn, cardEl, world) {
   btn.disabled = true;
   try {
-    const r = await fetch("/ready", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const body = world ? JSON.stringify({ world: world }) : "{}";
+    const r = await fetch("/ready", { method: "POST", headers: { "Content-Type": "application/json" }, body: body });
     const j = await r.json().catch(() => null);
     if (!r.ok) {
       const reason = (j && j.reason) ? j.reason : ("http " + r.status);
       const MSG = { capsule_unconfigured: "Kapsel-Dienst nicht konfiguriert",
-        capsule_unreachable: "Kapsel nicht erreichbar" };
+        capsule_unreachable: "Kapsel nicht erreichbar",
+        referee_unconfigured: "Referee-Dienst nicht konfiguriert",
+        referee_unreachable: "Referee nicht erreichbar",
+        bad_request: "Welt ungueltig" };
       hint(cardEl, MSG[reason] || reason);
     } else {
-      hint(cardEl, "ready gesendet - Countdown folgt im Chat");
+      hint(cardEl, world ? ("ready gesendet: Welt " + world) : "ready gesendet - Countdown folgt im Chat");
     }
   } catch (e) { hint(cardEl, "Netzwerkfehler"); }
   setTimeout(loadSessions, 300);
@@ -1739,6 +1769,26 @@ async function queueLeave(identity, btn, cardEl) {
       cardEl.querySelectorAll('.badge[class*="queue-"]').forEach((n) => n.remove());
       btn.remove();
       hint(cardEl, "Queue verlassen");
+    }
+  } catch (e) { hint(cardEl, "Netzwerkfehler"); }
+  setTimeout(loadSessions, 300);
+}
+// Referee (Issue #1024): Welt ready melden (POST /referee/ready {world,
+// identitaet}). Additiv zum Kapsel-/ready-Pfad; Fehler-Map analog MSG-Tabellen.
+async function refereeReady(identity, world, btn, cardEl) {
+  btn.disabled = true;
+  try {
+    const r = await fetch("/referee/ready", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ world: world, identitaet: identity }) });
+    const j = await r.json().catch(() => null);
+    if (!r.ok) {
+      const reason = (j && j.reason) ? j.reason : ("http " + r.status);
+      const MSG = { referee_unconfigured: "Referee-Dienst nicht konfiguriert",
+        referee_unreachable: "Referee nicht erreichbar", bad_request: "Welt fehlt",
+        unauthorized: "Referee-Token fehlt/ungueltig" };
+      hint(cardEl, MSG[reason] || reason);
+    } else {
+      hint(cardEl, "ready gesendet: Welt " + world);
     }
   } catch (e) { hint(cardEl, "Netzwerkfehler"); }
   setTimeout(loadSessions, 300);
@@ -1831,8 +1881,12 @@ function card(s) {
 
   const readyRow = el("div", "solo");
   const rbtn = el("button", null, "READY");
-  rbtn.title = "Kapsel: resume + Warmup-Start (POST /ready)";
-  rbtn.onclick = () => ready(rbtn, c);
+  if (s.vsWorld) {
+    rbtn.title = "Welt " + s.vsWorld + " beim Referee ready melden (POST /ready {world})";
+  } else {
+    rbtn.title = "Kapsel: resume + Warmup-Start (POST /ready)";
+  }
+  rbtn.onclick = () => ready(rbtn, c, s.vsWorld);
   readyRow.appendChild(rbtn);
   c.appendChild(readyRow);
 
@@ -1864,6 +1918,35 @@ function card(s) {
   qbtn.onclick = () => queueJoin(s.identity, qbtn, c);
   qRow.appendChild(qbtn);
   c.appendChild(qRow);
+
+  // Referee (Issue #1024): Phase/Sieger aus GET /referee/state + READY-Button
+  // (POST /referee/ready {world}). Additiv — ueberschreibt soloPhase/queuePhase
+  // NICHT. Ohne Referee-Config (REF_SNAP null) degradiert der Button sichtbar.
+  const refRow = el("div", "solo");
+  if (REF_SNAP) {
+    const phase = REF_SNAP.phase || "";
+    const rbadge = el("span", "badge ref-" + phase, "Ref: " + (REF[phase] || phase || "?"));
+    refRow.appendChild(rbadge);
+    if (REF_SNAP.winner) refRow.appendChild(el("span", "sub", "Sieger " + REF_SNAP.winner));
+    if (REF_SNAP.both_ready) refRow.appendChild(el("span", "sub", "beide ready"));
+  }
+  const rsel = el("select");
+  for (const w of ["A", "B"]) {
+    const o = el("option", null, "Welt " + w);
+    o.value = w;
+    rsel.appendChild(o);
+  }
+  if (s.vsWorld) rsel.value = s.vsWorld;
+  const rbtnRef = el("button", null, "READY (Referee)");
+  rbtnRef.title = "Welt beim Referee ready melden (POST /referee/ready)";
+  if (!REF_SNAP) {
+    rbtnRef.disabled = true;
+    rbtnRef.title = "Referee-Dienst nicht konfiguriert (503 referee_unconfigured)";
+  }
+  rbtnRef.onclick = () => refereeReady(s.identity, rsel.value, rbtnRef, c);
+  refRow.appendChild(rsel);
+  refRow.appendChild(rbtnRef);
+  c.appendChild(refRow);
   return c;
 }
 
@@ -1873,11 +1956,16 @@ function card(s) {
 async function loadSessions() {
   const queueP = fetch("/queue/status")
     .then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  // Referee-Phase/Sieger im selben 1500-ms-Takt (Issue #1024, additiv, kein
+  // eigener Timer). 503 referee_unconfigured -> null -> Buttons degradieren.
+  const refP = fetch("/referee/state")
+    .then((r) => (r.ok ? r.json() : null)).catch(() => null);
   let rows;
   try { rows = await (await fetch("/sessions")).json(); }
   catch (e) { $("dot").classList.add("off"); return; }
   $("dot").classList.remove("off");
   QUEUE_SNAP = await queueP;
+  REF_SNAP = await refP;
   rows.sort((x, y) => (ORDER[x.state] ?? 9) - (ORDER[y.state] ?? 9));
   KNOWN_INSTANCES = Array.from(new Set(rows.map(r => r.soloInstance).filter(Boolean)));
 
@@ -2307,11 +2395,72 @@ void handleSolo(SOCKET s, const std::string &requestBody) {
                   outcome.httpCode == 409 ? "Conflict" : "Error", outcome.body);
 }
 
-// POST /ready: an den Kapsel-Dienst proxien (`POST /capsule/ready` = resume +
-// Warmup-Start). Der Kapsel-Dienst kennt die aktive Instanz; hier ist kein
-// Eigenzustand/Pin noetig. Nur wenn eine Kapsel konfiguriert ist.
+// Gemeinsamer Outbound fuer den Referee-`POST /ready` (Bearer, Issue #1024).
+// Wird vom VS-Zweig in `handleReady` (#1025) und von `handleRefereeReady`
+// geteilt — kein Duplikat der Fehler-/Antwort-Map.
+void refereeReadyOutbound(SOCKET s, const std::string &world,
+                          const std::string &identitaet) {
+  if (!g_refereeConfigured) {
+    httpRespondJson(s, 503, "Service Unavailable",
+                    "{\"ok\":false,\"reason\":\"referee_unconfigured\",\"retry\":false}");
+    return;
+  }
+  const std::string payload = rbref::buildReadyBody(world, identitaet);
+  const OutboundResult r = outboundHttpPost(g_refereeHost, g_refereePort,
+                                            "/ready", payload, g_refereeToken,
+                                            2000, 5000);
+  const rbref::RefStatus st = rbref::mapRefereeError(true, r.status);
+  if (st == rbref::RefStatus::Unreachable) {
+    httpRespondJson(s, 502, "Bad Gateway",
+                    "{\"ok\":false,\"reason\":\"referee_unreachable\"}");
+    return;
+  }
+  // 200 bzw. Backend-Status (z. B. 401 ohne Token, 409) durchreichen.
+  httpRespondJson(s, r.status, r.status == 200 ? "OK" : "Error",
+                  r.body.empty() ? "{\"ok\":true}" : r.body);
+}
+
+// POST /ready: kontextabhaengig (Issue #1025).
+//   Solo (keine Welt) -> an den Kapsel-Dienst proxien (`POST /capsule/ready` =
+//     resume + Warmup-Start) — bit-identisch zum bisherigen Verhalten,
+//     KEIN Referee-Call.
+//   VS (Welt "A"|"B") -> Referee `POST /ready {world}` (Bearer) — der zweite
+//     Ready loest dort AUTO_GO aus -> gemeinsamer GO-Broadcast beide Welten.
+// Welt-Aufloesung: (a) explizites Body-`world`, sonst (b) `vsWorld` der Session
+// aus dem Queue-Kontext (`g_queueState`). Der Kapsel-Dienst kennt die aktive
+// Instanz; hier ist kein Eigenzustand/Pin noetig.
 void handleReady(SOCKET s, const std::string &requestBody) {
-  (void)requestBody;
+  std::string world;
+  const bool hasWorld =
+      rbapi::jsonStringField(requestBody, "world", world) && !world.empty();
+  if (!hasWorld) {
+    world.clear();
+  }
+  std::string identitaet;
+  rbapi::jsonStringField(requestBody, "identitaet", identitaet);
+  // Ohne explizites world: VS-Kontext der aufrufenden Session aufloesen.
+  // `g_queueState` wird vom HTTP-Thread (je Verbindung ein Thread) unter
+  // `g_apiMutex` geschrieben — den Read genauso schuetzen.
+  if (!hasWorld && !identitaet.empty()) {
+    std::lock_guard<std::mutex> lock(g_apiMutex);
+    const auto it = g_queueState.find(identitaet);
+    if (it != g_queueState.end()) {
+      world = it->second.vsWorld;
+    }
+  }
+
+  switch (rbref::resolveReadyRoute(!world.empty(), world)) {
+  case rbref::ReadyRoute::BadWorld:
+    httpRespondJson(s, 400, "Bad Request",
+                    "{\"ok\":false,\"reason\":\"bad_request\",\"detail\":\"world ungueltig\"}");
+    return;
+  case rbref::ReadyRoute::Referee:
+    refereeReadyOutbound(s, world, identitaet);
+    return;
+  case rbref::ReadyRoute::Capsule:
+    break;
+  }
+
   if (!g_capsuleConfigured) {
     httpRespondJson(s, 503, "Service Unavailable",
                     "{\"ok\":false,\"reason\":\"capsule_unconfigured\",\"retry\":false}");
@@ -2460,6 +2609,45 @@ void handleQueueStatus(SOCKET s) {
   }
   httpRespondJson(s, r.status, r.status == 200 ? "OK" : "Error",
                   r.body.empty() ? "{\"ok\":true}" : r.body);
+}
+
+// GET /referee/state: Match-Zustand (Phase, Spieler/Welt, Sieger) des Referees
+// fuer die Lobby durchreichen (Issue #1024). Der Referee-`GET /state` ist
+// auth-frei; ohne konfigurierten Referee gibt es keinen Outbound-Versuch.
+void handleRefereeState(SOCKET s) {
+  if (!g_refereeConfigured) {
+    httpRespondJson(s, 503, "Service Unavailable",
+                    "{\"ok\":false,\"reason\":\"referee_unconfigured\",\"retry\":false}");
+    return;
+  }
+  const OutboundResult r = outboundHttpCall("GET", g_refereeHost, g_refereePort,
+                                            "/state", "", g_refereeToken, 2000,
+                                            5000);
+  const rbref::RefStatus st = rbref::mapRefereeError(true, r.status);
+  if (st == rbref::RefStatus::Unreachable) {
+    httpRespondJson(s, 502, "Bad Gateway",
+                    "{\"ok\":false,\"reason\":\"referee_unreachable\"}");
+    return;
+  }
+  // 200 bzw. Backend-Status (z. B. 401/409/5xx) unveraendert durchreichen.
+  httpRespondJson(s, r.status, r.status == 200 ? "OK" : "Error",
+                  r.body.empty() ? "{\"ok\":true}" : r.body);
+}
+
+// POST /referee/ready: Welt/Spieler ready melden (Issue #1024). Body
+// `{world:"A"|"B", identitaet?}`; ohne/dekodierbar `world` -> 400. Der Referee
+// liegt hinter Bearer -> Token aus RBB_REFEREE_TOKEN. Idempotent (Referee
+// `ready()` ist es).
+void handleRefereeReady(SOCKET s, const std::string &requestBody) {
+  std::string world;
+  if (!rbapi::jsonStringField(requestBody, "world", world) || world.empty()) {
+    httpRespondJson(s, 400, "Bad Request",
+                    "{\"ok\":false,\"reason\":\"bad_request\",\"detail\":\"world fehlt\"}");
+    return;
+  }
+  std::string identitaet;
+  rbapi::jsonStringField(requestBody, "identitaet", identitaet);
+  refereeReadyOutbound(s, world, identitaet);
 }
 
 void httpHandle(SOCKET s) {
@@ -2625,6 +2813,10 @@ void httpHandle(SOCKET s) {
     handleQueueLeave(s, body);
   } else if (method == "GET" && path == "/queue/status") {
     handleQueueStatus(s);
+  } else if (method == "GET" && path == "/referee/state") {
+    handleRefereeState(s);
+  } else if (method == "POST" && path == "/referee/ready") {
+    handleRefereeReady(s, body);
   } else {
     httpRespond(s, 404, "Not Found", "text/plain; charset=utf-8",
                 "not found\n");
@@ -2973,6 +3165,23 @@ int main(int argc, char **argv) {
       g_queueHost = host;
       g_queuePort = port;
       g_queueConfigured = true;
+    } else if (strcmp(argv[i], "--referee-url") == 0 && i + 1 < argc) {
+      // Referee-Backend fuer GET /referee/state + POST /referee/ready (Issue
+      // #1024). Token NUR per Env (RBB_REFEREE_TOKEN), damit er nicht in der
+      // Prozessliste steht. Nur IPv4-Literal (Outbound-Client = inet_pton).
+      const char *spec = argv[++i];
+      std::string host;
+      int port = 0;
+      if (!rbref::parseRefereeConfig(spec, host, port)) {
+        fprintf(stderr,
+                "--referee-url braucht http://<IPv4>:port (kein Hostname), "
+                "bekam '%s'\n",
+                spec);
+        return 2;
+      }
+      g_refereeHost = host;
+      g_refereePort = port;
+      g_refereeConfigured = true;
     } else if (strcmp(argv[i], "--max-players") == 0 && i + 1 < argc) {
       // Aufnahmegrenze einer Solo-Instanz (Issue #936). Default 4 =
       // Server-Default (`riftbreaker_server_max_players`).
@@ -3065,6 +3274,37 @@ int main(int argc, char **argv) {
   if (g_queueConfigured) {
     logLine("queue fuer /queue: %s:%d (token=%s)", g_queueHost.c_str(),
             g_queuePort, g_queueToken.empty() ? "kein" : "gesetzt");
+  }
+
+  // `RBB_REFEREE_URL` schaltet den Referee-Pfad scharf (argv hat Vorrang);
+  // `GET /referee/state` + `POST /referee/ready` proxien dann an das Referee-
+  // Backend (Issue #1024). Nur IPv4-Literal — sonst bleibt der Pfad
+  // unkonfiguriert und beide Routen liefern `503 referee_unconfigured`.
+  if (!g_refereeConfigured) {
+    const char *refereeUrl = getenv("RBB_REFEREE_URL");
+    if (refereeUrl != nullptr && *refereeUrl != '\0') {
+      std::string host;
+      int port = 0;
+      if (rbref::parseRefereeConfig(refereeUrl, host, port)) {
+        g_refereeHost = host;
+        g_refereePort = port;
+        g_refereeConfigured = true;
+      } else {
+        fprintf(stderr,
+                "RBB_REFEREE_URL ungueltig (braucht http://<IPv4>:port): '%s'\n",
+                refereeUrl);
+      }
+    }
+  }
+  const char *refereeToken = getenv("RBB_REFEREE_TOKEN");
+  if (refereeToken != nullptr) {
+    g_refereeToken = refereeToken;
+  }
+  if (g_refereeConfigured) {
+    logLine("referee fuer /referee/*: %s:%d (token=%s)", g_refereeHost.c_str(),
+            g_refereePort, g_refereeToken.empty() ? "kein" : "gesetzt");
+  } else {
+    logLine("referee fuer /referee/*: NICHT konfiguriert -> 503 referee_unconfigured");
   }
 
   if (g_capsuleConfigured) {

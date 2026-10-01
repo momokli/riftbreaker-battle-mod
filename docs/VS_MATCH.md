@@ -205,6 +205,16 @@ SOLO-Verhalten (Latch + `end_game` + `restart_map`) bitgleich.
 
 ### 6.5 Gemeinsamer Start/Ready + Pause
 
+- **Ready→GO-Kette (umgesetzt, #1025):** Zwei Produzenten bedienen denselben
+  GO-Kern `POST /ready {world}` (`tournament/src/api.rs`): (1) der Queue-Dienst
+  postet nach Provisionierung + `/lobby` je Welt ein `/ready` (automatisch,
+  s. §6.7); (2) der Relay-`POST /ready` ist kontextabhaengig — **Solo → Capsule**
+  (unveraendert), **VS → Referee** `POST /ready {world}`. Der **zweite** Ready
+  armiert GO (`arm_go()`) und startet mit `AUTO_GO` das Match (`start_match()`)
+  → `broadcast_go()` an **beide** Bridges.
+- **GO-triggernder Endpoint:** ausschliesslich `POST /ready {world}`. Der in der
+  Entscheidung genannte `POST /referee/event {"type":"ready"}` ist der
+  **Wellen-Executor**-Pfad (`referee.rs`) und armiert **kein** GO.
 - **Ready-Gate (umgesetzt, #937/#996):** `ready` je Team aggregieren
   (`TeamState.ready`/`both_ready()`) → bei „beide bereit" armiert der Referee
   GO (`arm_go()`); mit `AUTO_GO` startet das Match beim zweiten `ready`
@@ -243,8 +253,20 @@ im Referee via `POST /lobby {player, world}` registriert; der Relay-Endpunkt
 `world`-Parameter (A/B) und seedet `RBB_VS_WORLD` + `RBB_REFEREE_URL` je Instanz
 (`parse_mode` unangetastet — eigene Achse). **Kein Warm-Pool**, kein
 Parked-VS-Reuse. Der Match-Record (`{participants,state,result?}`) uebersteht
-einen Dienst-Restart (`QUEUE_STATE_DIR`). Details: `deploy/queue/README.md`,
-`docs/LOBBY.md` §2.
+einen Dienst-Restart (`QUEUE_STATE_DIR`). **Ready-Egress (#1025):** nach
+Provisionierung **beider** Welten + **beiden** `/lobby`-Aufrufen postet der
+Dienst je **distinct** Welt genau **ein** `POST /ready {world}` an den Referee
+(Reihenfolge erzwungen: erst `/lobby`, dann `/ready` — sonst `404 not_found`).
+Der zweite Ready loest `AUTO_GO` aus und broadcastet das GO an **beide** Bridges
+(§6.5). Details: `deploy/queue/README.md`, `docs/LOBBY.md` §2.
+
+**Abgrenzung `parked_vs` vs. Queue+Referee (Entscheidung Pfad a):**
+`deploy/parked/parked_vs.py` bleibt der **Warm-Pool-/Pre-Warm-Pfad** fuer
+**Solo/parked** (`WAITING_OPPONENT → WAITING_BOTH_READY → CLAIMED` via
+`pool.claim()` = `resume_game`) und ist **nicht** der VS-Orchestrator. Der
+VS-Orchestrator ist `deploy/queue/` + Referee: **kalte** Provisionierung beider
+Welten, `/lobby`-Registrierung und der gemeinsame AUTO_GO-Broadcast. Kein
+Warm-Pool-Reuse, kein `resume_game` im Queue-Pfad.
 
 ## 7. Gap-Liste → abgeleitete Issues
 

@@ -1460,6 +1460,61 @@ mod tests {
         assert_eq!(v["round"], 1);
     }
 
+    /// Issue #1025: Der zweite `/ready` loest AUTO_GO aus und broadcastet das GO
+    /// an **beide** Bridges; ein einzelnes Ready broadcastet nichts, und nach
+    /// `Running` liefert ein weiteres Ready `409` (kein Doppel-GO).
+    #[tokio::test]
+    async fn second_ready_broadcasts_go_to_both_bridges() {
+        let (addr_a, rx_a) = mock_endpoint().await;
+        let (addr_b, rx_b) = mock_endpoint().await;
+        let mut cfg = test_cfg();
+        cfg.auto_go = true;
+        cfg.bridge = [
+            Some(format!("http://{addr_a}/exec")),
+            Some(format!("http://{addr_b}/exec")),
+        ];
+        let app = make_app(cfg).await;
+        register(&app, "A", "momo").await;
+        register(&app, "B", "matheo").await;
+
+        // Ein einzelnes Ready -> kein Broadcast, Phase bleibt Lobby/Ready.
+        let (s, v) = call(&app, "POST", "/ready", Some(json!({"world": "A"}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["match_started"], false);
+        assert!(
+            v["phase"] == "lobby" || v["phase"] == "ready",
+            "phase nach einem ready: {}",
+            v["phase"]
+        );
+
+        // Zweites Ready -> AUTO_GO startet das Match und broadcastet an BEIDE
+        // Bridges (dieselbe `go_payload`, wie `broadcast_go`).
+        let (s, v) = call(&app, "POST", "/ready", Some(json!({"world": "B"}))).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(v["match_started"], true);
+        assert_eq!(v["phase"], "running");
+        assert_eq!(v["round"], 1);
+
+        let req_a = tokio::time::timeout(Duration::from_secs(2), rx_a)
+            .await
+            .unwrap()
+            .unwrap();
+        let req_b = tokio::time::timeout(Duration::from_secs(2), rx_b)
+            .await
+            .unwrap()
+            .unwrap();
+        for req in [&req_a, &req_b] {
+            assert!(req.starts_with("POST /exec HTTP/1.1"), "req: {req}");
+            assert!(req.contains("\"cmd\":\"go\""), "req: {req}");
+            assert!(req.contains("\"round\":1"), "req: {req}");
+        }
+
+        // Idempotenz: erneutes `/ready` nach `Running` -> 409 (kein Doppel-GO).
+        let (s, v) = call(&app, "POST", "/ready", Some(json!({"world": "A"}))).await;
+        assert_eq!(s, StatusCode::CONFLICT);
+        assert_eq!(err_type(&v), "conflict");
+    }
+
     #[tokio::test]
     async fn send_report_validations() {
         let app = make_app(test_cfg()).await;

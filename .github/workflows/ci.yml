@@ -213,6 +213,14 @@ jobs:
         run: |
           g++ -std=c++17 -Wall -Wextra -O1 -o /tmp/test_player_identity tools/gns-proxy/test_player_identity.cpp
           /tmp/test_player_identity
+      # Referee-Bruecke des GNS-Entry-Relays (Issue #1024): Config-Parse
+      # (URL -> IPv4:port), Ready-Body, /state-Parse und Fehler-Mapping. Reine
+      # Logik (referee_bridge.h) — host-compiliert, kein Wine/Windows/Spiel.
+      - name: Host-Test Referee-Bruecke (Issue #1024)
+        if: needs.changes.outputs.test == 'true'
+        run: |
+          g++ -std=c++17 -Wall -Wextra -O1 -o /tmp/test_referee_bridge tools/gns-proxy/test_referee_bridge.cpp
+          /tmp/test_referee_bridge
       # Kapsel-Flow/-Dienst (Issue #931/#992): unittest, stdlib-only, kein Netz.
       # Der Python-Spiegel der Identitaets-Normalisierung (identity.py) wird
       # ueber dieselbe discover-Suite geprueft.

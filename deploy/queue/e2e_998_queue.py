@@ -109,7 +109,15 @@ class _RefereeStub(BaseHTTPRequestHandler):
         payload = json.loads(raw) if raw.strip() else {}
         if self.path == "/lobby":
             self.server.lobbies.append(payload)
+            self.server.calls.append(("lobby", payload))
             _record("STUB referee POST /lobby %s" % json.dumps(payload))
+            self._json(200, {"ok": True})
+        elif self.path == "/ready":
+            # Issue #1025: der Ready-Egress des Queue-Dienstes (je Welt 1x,
+            # NACH beiden /lobby). Ohne diesen Zweig -> 404 -> Rollback.
+            self.server.readies.append(payload)
+            self.server.calls.append(("ready", payload))
+            _record("STUB referee POST /ready %s" % json.dumps(payload))
             self._json(200, {"ok": True})
         else:
             self._json(404, {"ok": False})
@@ -134,6 +142,8 @@ class Stack(object):
         self.ref_server = ThreadingHTTPServer(("127.0.0.1", 0), _RefereeStub)
         self.ref_server.daemon_threads = True
         self.ref_server.lobbies = []
+        self.ref_server.readies = []
+        self.ref_server.calls = []
         self.ref_port = _serve(self.ref_server)
         case.addCleanup(self.ref_server.shutdown)
         case.addCleanup(self.ref_server.server_close)
@@ -208,6 +218,15 @@ class QueueE2E(unittest.TestCase):
         self.assertEqual(len(lobbies), 2, lobbies)
         lobby_by_world = {lobby["world"]: lobby["player"] for lobby in lobbies}
         self.assertEqual(lobby_by_world, {"A": "str:aa", "B": "str:bb"}, lobbies)
+
+        # (4b) Ready-Egress (#1025): je DISTINCT Welt genau EIN `/ready`, und
+        # ALLE `/ready` kommen NACH beiden `/lobby` (Reihenfolge im Stub).
+        readies = st.ref_server.readies
+        self.assertEqual(len(readies), 2, readies)
+        self.assertEqual(sorted(r["world"] for r in readies), ["A", "B"], readies)
+        self.assertEqual(len({r["world"] for r in readies}), 2, readies)
+        calls = [kind for kind, _ in st.ref_server.calls]
+        self.assertEqual(calls, ["lobby", "lobby", "ready", "ready"], calls)
 
         # (5) beide Identitaeten auf VERSCHIEDENE GNS-Endpoints gepinnt.
         endpoints = {x["identitaet"]: x["target"] for x in match["assignments"]}
