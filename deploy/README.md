@@ -833,6 +833,15 @@ nur den einen Rift-Eintrag und reloadet ihn sichtbar fehlschlagend; DNS/TLS
 bleiben host-seitig). Damit dessen Admin-Port `127.0.0.1:2019` exklusiv bleibt,
 hält der `rift-caddy` seinen Admin-Port aus (`admin off`, Issue #355).
 
+Ebenfalls **nicht owned** ist die Mods-Upload-API (`rbbattle-api.service`,
+gunicorn `127.0.0.1:8322`, Ablage `/opt/download-service/downloads/mods`): ein
+**manuell gepflegter host-weiter Singleton** auf planet (Issue #534), den kein
+Env-Play deployt — im `shared`-Abschnitt der `env-schema.yml` als host-konstant
+dokumentiert. Die App traegt den URL-Praefix als Code-Konstante
+(`PREFIX = "/mods/upload"` in `app.py`); ob und wie eine Caddy-Route ihn host-seitig
+exponiert, ist **host-seitig** und wird von diesem Repo **nicht** zugesichert
+(kein `mods/upload`/`8322`-Eintrag in den repo-owned Caddy-Configs).
+
 ## Mod-Backups & mods/-Guard (Issue #212)
 
 Mod-Backups liegen **nie** in `<server>/mods/` (der Dedicated Server lädt jeden
