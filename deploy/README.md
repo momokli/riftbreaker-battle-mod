@@ -242,6 +242,48 @@ Wie bisher: Server-Passwort nur in `deploy/inventory/host_vars/planet/vault.yml`
 (`ansible-vault`), Passwort-Referenz via `--ask-vault-pass` bzw. beim CD root-only
 unter `/etc/rbbattle-deploy/vault.pass`. **Nie** im Repo/Log.
 
+#### Operator-Credentials je Env (Issue #535)
+
+Das Cockpit-Operator-Passwort (`basic_auth operator` für `/contract/*`, den
+`/server/*`-Proxy und die schreibenden `/tournament/*`-Pfade) ist je Env
+getrennt. Quelle sind drei Vault-Variablen (bcrypt-Hashes):
+
+| Vault-Var                            | Env            | Play-Var?                          |
+| ------------------------------------ | -------------- | ---------------------------------- |
+| `vault_contract_basic_auth_hash`     | dev            | Rollen-Default (Fallback)          |
+| `vault_contract_basic_auth_hash_prod`    | prod-A     | Play-Var in `deploy-prod.yml`      |
+| `vault_contract_basic_auth_hash_staging` | staging    | Play-Var in `deploy-staging.yml`   |
+| `vault_proxy_basic_auth_hash`        | alle (Lobby)   | Rollen-Default (host-konstant)     |
+
+- **dev byte-identisch:** ohne `vault_contract_basic_auth_hash` rendert die Rolle den
+  benannten Legacy-Hash (`contract_basic_auth_hash_legacy_shared`, bcrypt „zukka") —
+  dieselben Render-Pfade wie zuvor bleiben grün.
+- **prod-A/staging fail-closed:** die Plays setzen `contract_basic_auth_hash` per
+  Play-Var **ohne** Fallback; fehlt der Vault-Wert, bricht der Render laut ab.
+  Zusätzlich asserted die Rolle (gated über `rift_env`), dass prod/staging **nicht**
+  den geteilten Legacy-Hash erben (Distinctness).
+- **GNS-Lobby entkoppelt:** `proxy_basic_auth_hash` liest den eigenen, host-konstanten
+  `vault_proxy_basic_auth_hash` (Fallback: Legacy-Hash) — **nicht** mehr den per-Env
+  Cockpit-Hash. Sonst würde der Relay-Singleton-Block (ein Marker) zwischen den Envs
+  flappen. Die Lobby bleibt unabhängig rotierbar.
+
+**Rotation:** neuen bcrypt-Hash erzeugen (`htpasswd -bnBC 14 '' '<pw>' | tr -d ':\n'`
+liefert den `$2a$14$…`-Teil), dann die passende Vault-Var setzen und deployen:
+
+```bash
+ansible-vault edit deploy/inventory/host_vars/planet/vault.yml   # Var eintragen
+# dev:     vault_contract_basic_auth_hash
+# prod-A:  vault_contract_basic_auth_hash_prod
+# staging: vault_contract_basic_auth_hash_staging
+# Lobby:   vault_proxy_basic_auth_hash (host-konstant, alle Envs)
+ansible-playbook -i deploy/inventory deploy/deploy-prod.yml --vault-password-file <vault.pass>
+```
+
+Der **Server-Control-Bearer ist bereits je Env getrennt** (Issue #454/#498/#537):
+dev `vault_server_control_token`, prod-A `vault_server_control_prod_token`,
+prod-B `vault_server_control_prod_b_token`, staging
+`vault_server_control_staging_token` — hier ist **keine** Änderung nötig.
+
 ## Continuous Deploy (CD)
 
 Nach jedem Merge auf `main` rollt der Workflow

@@ -28,7 +28,14 @@ cockpit_domain: cockpit.rift.projectmellon.de
 # und die API selbst keine Auth hat.
 proxy_domain: proxy.rift.projectmellon.de
 proxy_upstream: "127.0.0.1:9200"
-proxy_basic_auth_hash: "{{ contract_basic_auth_hash }}"
+# Eigener, host-konstanter Vault-Wert (Issue #535): die Lobby gehoert dem
+# Relay-Singleton (ein Block, ein Marker) und wird von KEINEM Env-Play
+# ueberschrieben. Frueher leitete sie den Hash vom per-Env gewordenen
+# contract_basic_auth_hash ab -> dev/prod haetten denselben Marker mit
+# verschiedenen Hashes geschrieben (Host-Caddyfile-Flap, nicht idempotent).
+# Fallback = Legacy-Hash, damit die Host-Caddyfile zunaechst byte-identisch
+# bleibt; Rotation laeuft ausschliesslich ueber den Vault-Wert.
+proxy_basic_auth_hash: "{{ vault_proxy_basic_auth_hash | default(contract_basic_auth_hash_legacy_shared) }}"
 website_docroot: /srv/rbmods-site
 website_mods_dir: "{{ website_docroot }}/mods"
 
@@ -63,9 +70,21 @@ rift_caddy_site_root: /srv/site
 # fuer dev UND prod gelten und deshalb hier nicht taugen.
 server_control_enabled: false
 
-# /contract (Bridge-Kontrollpanel): basic_auth-Schutz (operator). bcrypt-Hash
-# von "zukka"; als Default unkritisch, kein Vault nötig.
-contract_basic_auth_hash: "$2a$14$TSQCK7adF/aDuDzaRGY8wum3034v2huWYk9g9JPRCggLDugyHyZVm"
+# /contract (Bridge-Kontrollpanel): basic_auth-Schutz (operator).
+#
+# Issue #535: Der Operator-Hash ist je Env getrennt. Die Plays deploy-prod.yml
+# (vault_contract_basic_auth_hash_prod) und deploy-staging.yml
+# (vault_contract_basic_auth_hash_staging) setzen `contract_basic_auth_hash`
+# per Play-Var OHNE Fallback (fehlt die Vault-Var -> undefiniert -> Render
+# bricht laut ab, fail-closed). dev/test/local setzen keinen Play-Var und
+# bekommen daher byte-identisch den Legacy-Hash (bcrypt "zukka") — dieselben
+# Render-Pfade wie zuvor bleiben gruen.
+#
+# Der Legacy-Hash ist NUR noch benannte Konstante (Vergleichsbasis fuer den
+# Distinctness-Assert in tasks/main.yml) und Fallback — kein zweites Literal
+# im Rollen-/Play-Pfad.
+contract_basic_auth_hash_legacy_shared: "$2a$14$TSQCK7adF/aDuDzaRGY8wum3034v2huWYk9g9JPRCggLDugyHyZVm"
+contract_basic_auth_hash: "{{ vault_contract_basic_auth_hash | default(contract_basic_auth_hash_legacy_shared) }}"
 
 # Server-Control-Bearer (Issue #454, Token-Quelle #451): Der rift-caddy proxyt
 # /server/* an den Host-Agenten und muss dessen Bearer-Token selbst setzen —

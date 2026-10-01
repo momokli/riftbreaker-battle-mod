@@ -263,6 +263,12 @@ jobs:
           # Tournament-Bearer (Issue #298): die Rolle tournament-server bricht
           # ohne Token fail-closed ab. Dummy fuer den Boot-Test — kein Secret.
           vault_tournament_token: boot-test-token
+          # Operator-Credential je Env (Issue #535): Konsistenz-Seed. Der
+          # test-deploy faehrt die website-Rolle heute NICHT (kein direkter
+          # Effekt), aber der fail-closed-Assert der Rolle darf nie ohne Seed
+          # treffen — Vault-Key hier vollstaendig halten. Kein Secret.
+          vault_contract_basic_auth_hash: "$2a$14$boottestoperatorhash000000000000000000000000000000000"
+          vault_proxy_basic_auth_hash: "$2a$14$boottestlobbyhash0000000000000000000000000000000000"
           EOF
           ansible-playbook -i "$INV" deploy/test-deploy.yml \
             -e @deploy/test-vars.yml \

@@ -176,7 +176,16 @@ shared:
   # GNS-Lobby (Issue #857): Operator-Web-UI des Relay-Singletons.
   proxy_domain: "Lobby-Domain (proxy.rift.projectmellon.de) — env-UNABHAENGIG (Relay-Singleton), daher NICHT per-env ueberschrieben."
   proxy_upstream: "Upstream der Lobby-Route (127.0.0.1:9200) — die Relay-API auf dem Host."
-  proxy_basic_auth_hash: "basic_auth-Hash der Lobby (operator) — wie das Cockpit; die Relay-API selbst hat keinen Auth."
+  # Issue #535: eigener host-konstanter Vault-Wert `vault_proxy_basic_auth_hash`,
+  # ENTKOPPELT von den per-Env Cockpit-Credentials (`contract_basic_auth_hash`).
+  # Der Singleton hat genau eine Lobby-Domain + einen Block -> ein Wert, der von
+  # keinem Env-Play ueberschrieben wird (sonst Host-Caddyfile-Flap).
+  proxy_basic_auth_hash: "basic_auth-Hash der Lobby (operator) aus dem eigenen host-konstanten Vault-Wert (vault_proxy_basic_auth_hash), entkoppelt von den per-Env Cockpit-Credentials; die Relay-API selbst hat keinen Auth."
+  # Issue #535 (Nur-Doku): contract_basic_auth_hash ist eine Rollen-Default/
+  # Play-Var (kein Top-Level-Key einer Var-Quelle) — prod-A/staging setzen ihn
+  # per Play-Var aus dem Vault, dev/test/local erben den Legacy-Fallback.
+  # Deshalb NICHT in `per_env` (check_env_isolation prueft nur Var-Quell-Keys).
+  contract_basic_auth_hash_legacy_shared: "Geteilter Legacy-Operator-Hash (bcrypt \"zukka\") als benannte Fallback-Konstante + Vergleichsbasis des per-Env Distinctness-Asserts (Issue #535)."
   # --- Tournament-API-Auth (Issue #298) -------------------------------------
   # Rollen-Defaults (keine Override-Datei): der Loopback-Bind und der Vault-
   # Token gelten env-uebergreifend. Bewusst klassifiziert, damit die Haertung

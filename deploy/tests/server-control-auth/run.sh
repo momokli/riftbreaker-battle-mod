@@ -227,5 +227,37 @@ else
 fi
 
 [[ -n "${LOGS_PID:-}" ]] && kill "$LOGS_PID" >/dev/null 2>&1 || true
+
+# ---------------------------------------------------------------------------
+# 7. Issue #535: der Operator-Hash ist je Env ueberschreibbar. Ein zweiter
+# Render mit einem vom Legacy-Hash ("zukka") abweichenden Wert MUSS diesen Wert
+# in ALLE Operator-Bloecke schreiben und den Legacy-Hash vollstaendig entfernen
+# — sonst bliebe das geteilte Operator-Passwort aktiv.
+# ---------------------------------------------------------------------------
+echo "== 7) Operator-Hash per Play-Var ueberschreibbar (Issue #535)"
+OVERRIDE_HASH='$2a$14$authtestoperatorhash0000000000000000000000000000000000'
+TMP2="$(mktemp -d)"
+"$ANSIBLE_PLAYBOOK" "$PLAYBOOK" \
+  -e "rift_caddy_port=1" \
+  -e "rift_caddy_site_root=/tmp" \
+  -e "landing_domain=localhost" \
+  -e "cockpit_domain=127.0.0.1" \
+  -e "server_control_port=1" \
+  -e "riftbreaker_bridge_port=1" \
+  -e "tournament_port=1" \
+  -e "server_control_enabled=true" \
+  -e "contract_basic_auth_hash=$OVERRIDE_HASH" \
+  -e "test_render_dir=$TMP2" >"$TMP2/ansible.log" 2>&1 || {
+  cat "$TMP2/ansible.log" >&2
+  fail "Caddyfile mit Operator-Hash-Override liess sich nicht rendern"
+}
+grep -qF "$OVERRIDE_HASH" "$TMP2/Caddyfile" ||
+  fail "uebergebener contract_basic_auth_hash fehlt im gerenderten Caddyfile (Issue #535)"
+if grep -qF 'TSQCK7adF/aDuDzaRGY8wum3034v2huWYk9g9JPRCggLDugyHyZVm' "$TMP2/Caddyfile"; then
+  fail "Legacy-Hash (\"zukka\") steht trotz Override im Caddyfile — geteiltes Operator-Passwort bliebe aktiv (Issue #535)"
+fi
+ok "Operator-Hash-Override greift in allen Bloecken, kein Legacy-Rest (Issue #535)"
+rm -rf "$TMP2"
+
 echo
 echo "PASS: $PASSED Checks — /server/* hinter Caddy-Basic-Auth, Bearer via header_up injiziert."

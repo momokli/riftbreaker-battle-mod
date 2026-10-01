@@ -37,6 +37,16 @@
     # entschlüsselt. (Wallet: direkter `tournament_token`-Play-Var würde von den
     # per vars_files geladenen Rollen-Defaults überschrieben.)
     vault_tournament_token: check-dummy-tournament-token
+    # Operator-Credential je Env (Issue #535): die website-Rolle liest den
+    # Cockpit-/Caddy-basic_auth-Hash aus dem Vault (`vault_contract_basic_auth_hash`;
+    # ohne Play-Var greift der Legacy-Fallback fuer dev). Der Dummy ist KEIN
+    # Secret, sondern belegt, dass der Vault-Wert in die gerenderten Routen
+    # fliesst (Assert unten).
+    vault_contract_basic_auth_hash: "$2a$14$checkrenderoperatorhashdummy000000000000000000000000000"
+    # GNS-Lobby (Issue #857/#535): eigener host-konstanter Vault-Wert,
+    # ENTKOPPELT vom Cockpit-Hash (`vault_contract_basic_auth_hash`). Der Dummy
+    # belegt, dass die Lobby ihren eigenen Wert traegt (Gegenprobe unten).
+    vault_proxy_basic_auth_hash: "$2a$14$checkrenderlobbyhashdummy000000000000000000000000000000"
     render_dir: "{{ lookup('env', 'RBBATTLE_RENDER_DIR') | default('/tmp/rbbattle-compose-render', true) }}"
 
   tasks:
@@ -251,7 +261,10 @@
           - "'basic_auth' in server_route"
           # Der Credential-Hash ist DERSELBE wie im Cockpit-Root-Block
           # (gleicher Realm → der Browser schickt die Credentials auch hierhin).
-          - "contract_basic_auth_hash in server_route"
+          # Issue #535: der GERENDERTE Block traegt genau den Vault-Hash
+          # (`operator <hash>`), nicht den Legacy-Fallback.
+          - "('operator ' ~ contract_basic_auth_hash) in server_route"
+          - "contract_basic_auth_hash != contract_basic_auth_hash_legacy_shared"
           # Bearer wird von Caddy gesetzt — kein Token im Browser/JS.
           - '(''Authorization "Bearer '' ~ server_control_token ~ ''"'') in server_route'
           - "server_control_token | length > 0"
@@ -264,7 +277,7 @@
           # Auth + injiziertem Bearer; Lesepfade + Web-UI bleiben frei.
           - "'@write path /lobby' in (lookup('file', render_dir ~ '/rift-caddy.Caddyfile'))"
           - "'basic_auth' in tournament_write_route"
-          - "contract_basic_auth_hash in tournament_write_route"
+          - "('operator ' ~ contract_basic_auth_hash) in tournament_write_route"
           - "('Authorization \"Bearer ' ~ tournament_token ~ '\"') in tournament_write_route"
           - "'basic_auth' not in tournament_read_route"
           - "'header_up' not in tournament_read_route"

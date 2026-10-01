@@ -64,6 +64,25 @@
       set_fact:
         caddyfile: "{{ lookup('file', render_dir ~ '/Caddyfile') }}"
 
+    # Issue #535: der gerenderte Operator-Block traegt exakt den Hash der Env
+    # (Play-Var in prod/staging, sonst Legacy-Fallback dev). Bei einem Override
+    # (Hash != Legacy) darf der geteilte Legacy-Hash NIRGENDS mehr im Caddyfile
+    # stehen — sonst bliebe das geteilte Operator-Passwort ueber Cockpit-Root,
+    # /server/* und /tournament/*-Schreibpfade weiter aktiv.
+    - name: "Operator-Hash der Env im Caddyfile (Issue #535)"
+      assert:
+        that:
+          - "('operator ' ~ contract_basic_auth_hash) in caddyfile"
+          - (contract_basic_auth_hash == contract_basic_auth_hash_legacy_shared)
+            or (contract_basic_auth_hash_legacy_shared not in caddyfile)
+        fail_msg: >-
+          Das gerenderte Caddyfile traegt nicht den Operator-Hash der Env
+          (Issue #535): erwartet `operator <hash>`. Bei einem von dev/legacy
+          abweichenden Hash (prod/staging-Play-Var) darf der geteilte
+          Legacy-Hash NIRGENDS mehr vorkommen — sonst bleibt das geteilte
+          Operator-Passwort aktiv.
+        success_msg: "Operator-Hash je Env im Caddyfile, kein Legacy-Rest bei Override (Issue #535)."
+
     # DoD-Kern: Route vorhanden <-> Agent deployt. Kein Fremdgriff moeglich.
     - name: "/server/*-Route gemaess Erwartung (Issue #463)"
       assert:
