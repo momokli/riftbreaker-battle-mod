@@ -223,6 +223,42 @@ prod-Play (`deploy/deploy-prod.yml`, Play 0) mitdeployt — dev/staging sind
 entfallen; der Satellite-Relay-Host `satellite` wird im selben Play weiterhin
 idempotent abgebaut.
 
+### Legacy-Pfade aufräumen (Issue #536)
+
+Die Repo-Seite ist idempotent und läuft mit dem Prod-Deploy mit:
+`deploy/tasks/legacy-path-cleanup.yml` (Play 0, `pre_tasks`, hinter der
+Env-Pfad-Migration) entfernt **ausschließlich Symlinks** — konkret den
+Alt-Alias `/srv/rbmods-site -> /opt/http/rift.projectmellon.de` (der Dev-
+Docroot; prod nutzt `/srv/rbmods-site-prod`, #1034). Ein echtes Verzeichnis
+wird **nie** automatisch entfernt (nur Warnung + dieser Runbook-Abschnitt);
+fehlt der Pfad, ist der Lauf ein No-Op.
+
+Die übrigen Altlasten unter `/opt/rbmods/` sind **echte Verzeichnisse** und
+werden im Wartungsfenster **manuell** entfernt. Rollback je Symlink:
+`ln -s <ziel> <pfad>`.
+
+```bash
+# NUR nach Sichtprüfung (Wartungsfenster). Erst read-only auflisten:
+ls -ld /opt/rbmods/dedicated-server /opt/rbmods/headless-client \
+       /opt/rbmods/rbtools-staging* /opt/rbmods/rbtools-test* \
+       /opt/rbmods/rbtools-drift.bak-476 /opt/rbmods/backup-*
+
+# Generierte/ersetzte Alt-Verzeichnisse entfernen (je Kandidat exakt):
+rm -rf /opt/rbmods/headless-client              # ersetzt durch dedicated-server (#241)
+rm -rf /opt/rbmods/rbtools-staging*             # Boot-Test-Reste (rbtools_staging_dir zeigt auf rbtools/<env>/.staging)
+rm -rf /opt/rbmods/rbtools-test*                # Boot-Test-Reste
+rm -rf /opt/rbmods/rbtools-drift.bak-476        # Einmal-Backup #476 (kein aktiver Ref)
+rm -rf /opt/rbmods/backup-*                     # Herkunft unklar — NUR nach Prüfung
+```
+
+- **NICHT anfassen:** `/opt/rbmods/dedicated-server` ist **aktiv**
+  (Rollen-Default `dedicated_server_context_dir`; das Image nutzt es zum Bauen).
+- **`backup-*` ist risikoreich** (generisch, unbekannte Herkunft) — nur
+  manuell und nur nach Prüfung entfernen; kein Automatikschritt dafür im Repo.
+- Aktive Pfade bleiben: `rbtools/{dev,prod,prod-b,.staging}`, `compose/`,
+  `gns-relay/`, `queue/`, `parked-pool/`, `capsule-flow/`, `crashes*`,
+  `server-control*`.
+
 ### DNS (manuell, host-seitig bei Cloudflare)
 
 Seit der Konsolidierung auf **einen** Einstieg (planet:6321, `gns-relay`) zeigen

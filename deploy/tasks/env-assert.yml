@@ -122,3 +122,43 @@
       website_mods_dir: /srv/rbmods-site/mods
       rift_caddy_deploy_dir: /opt/rbmods/compose/rift-dev/caddy
   tags: always
+
+# --- Bewusst-oeffentliche Ports (Issue #536, US5) ---------------------------
+# Die bewusst oeffentliche Portmenge {6321, 6322, 6325} ist KEIN Env-Zustand,
+# sondern eine dokumentierte Host-Konstante (docs/DEPLOYMENT.md; annotiert in
+# deploy/env-schema.yml `intentional_public`). Der Client ist auf UDP 6321
+# hardgewired, Spieler joinen aus dem Internet -> die Ports werden NICHT auf
+# Loopback umgebogen. Aendert jemand die Host-Konstante oder den Game-Port der
+# prod-Welten auf einen nicht-gelisteten Wert, bricht der Deploy fail-loud ab
+# (statt die Portmenge still zu verschieben).
+- name: "ENV-ISOLATION-GATE — GNS-Einstiegsport ist die Host-Konstante 6321 (Issue #536)"
+  assert:
+    that:
+      - gns_relay_port is defined
+      - (gns_relay_port | int) == 6321
+    fail_msg: >-
+      ENV-ISOLATION-GATE: gns_relay_port ist nicht die Host-Konstante 6321
+      (Ist: '{{ gns_relay_port | default('undefiniert') }}'). Der Port 6321 ist
+      der client-hardgewirete GNS-Einstieg (Issue #536) — Aenderungen brechen
+      die Erreichbarkeit der prod-Welten.
+    success_msg: "gns_relay_port == 6321 (intentional public, Issue #536)."
+  tags: always
+
+- name: "ENV-ISOLATION-GATE — Game-Port der prod-Welten ist bewusst oeffentlich (Issue #536)"
+  assert:
+    that:
+      - riftbreaker_server_port_udp is defined
+      - (riftbreaker_server_port_udp | int) in rift_intentional_public_ports
+    fail_msg: >-
+      ENV-ISOLATION-GATE (env={{ rift_env }}): riftbreaker_server_port_udp
+      ('{{ riftbreaker_server_port_udp | default('undefiniert') }}') ist nicht
+      in der bewusst-oeffentlichen Portmenge {{ rift_intentional_public_ports }}
+      (Issue #536). Die prod-Game-Ports sind intentional public — ein anderer
+      Wert verschiebt die dokumentierte Portmenge still.
+    success_msg: >-
+      Game-Port {{ riftbreaker_server_port_udp }} der prod-Welt ist in der
+      oeffentlichen Menge {{ rift_intentional_public_ports }} (Issue #536).
+  when: rift_env in ['prod', 'prod-b']
+  vars:
+    rift_intentional_public_ports: [6322, 6325]
+  tags: always
