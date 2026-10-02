@@ -5729,6 +5729,15 @@ static void send_chat_now(void *state)
     dbg("send_chat: broadcasted (%u B text)", (unsigned)strlen(g_chat_out_text));
 }
 
+/* #1040 S6: Tick-Observability. Zaehlt die UpdLogic-Aufrufe (Game-Thread) und
+ * leitet daraus die reale Tick-Rate ab -> Lag <-> Last korrelierbar. Nur der
+ * Game-Thread schreibt; der Pipe-Thread liest g_tick_hz_x100 atomar. */
+static volatile LONG g_tick_calls = 0;
+static volatile LONG g_tick_hz_x100 = 0;  /* Tick-Rate * 100 (fixed point) */
+static volatile LONG g_tick_frame_us = 0; /* mittlere Frame-Dauer in us */
+static volatile LONG g_tick_win_ms = 0;   /* Fensterstart */
+static volatile LONG g_tick_log_ms = 0;   /* letzte Log-Zeile */
+
 /* #1063: Game-Thread-Snapshot (Definition weiter unten, nach den Read-Helfern). */
 static void snapshot_update(void *self);
 
@@ -5780,6 +5789,29 @@ static void __fastcall gameplay_updlogic_hook(
         send_chat_now(self);
         InterlockedExchange(&g_chat_out_pending, 0);
         InterlockedExchange(&g_chat_out_done, 1);
+    }
+    /* #1040 S6: Tick-Rate messen (Aufrufe/Wandsekunde) + periodisch loggen. */
+    {
+        LONG tnow = (LONG)GetTickCount64();
+        LONG calls = InterlockedIncrement(&g_tick_calls);
+        if (g_tick_win_ms == 0)
+            g_tick_win_ms = tnow;
+        if ((LONG)(tnow - g_tick_win_ms) >= 1000) {
+            LONG span = (LONG)(tnow - g_tick_win_ms);
+            LONG hz100 = span > 0 ? (LONG)((calls * 100000) / span) : 0;
+            InterlockedExchange(&g_tick_hz_x100, hz100);
+            InterlockedExchange(&g_tick_frame_us,
+                                hz100 > 0 ? (LONG)(100000000 / hz100) : 0);
+            InterlockedExchange(&g_tick_calls, 0);
+            g_tick_win_ms = tnow;
+            if ((LONG)(tnow - g_tick_log_ms) >= 5000) {
+                g_tick_log_ms = tnow;
+                dbg("tick: hz=%.2f frame_ms=%.2f a=%.4f b=%.4f",
+                    (double)hz100 / 100.0,
+                    hz100 > 0 ? 1000.0 / ((double)hz100 / 100.0) : 0.0,
+                    (double)a, (double)b);
+            }
+        }
     }
     /* #1063: Game-Thread-Snapshot fuer get_state (scan-frei im Pipe-Thread). */
     snapshot_update(self);
@@ -6492,12 +6524,14 @@ static void dispatch_get_state(HANDLE hPipe)
                       "\"mission_flow_payload\":%s,"
                       "\"creatures_base_difficulty\":%s,"
                       "\"end_game\":%s,\"players\":%s,%s,\"pause_want\":%s,"
-                      "\"snapshot_generation\":%ld}",
+                      "\"snapshot_generation\":%ld,\"tick_hz\":%.2f}",
                       (unsigned long long)sc, (long long)scm,
                       (unsigned long long)si, (long long)sim,
                       sres, flow_esc, flow_active ? "true" : "false",
                       payload_field, diff_field, end_field, players_field,
-                      hq_field, want_field, (long)sgen);
+                      hq_field, want_field, (long)sgen,
+                      (double)InterlockedCompareExchange(&g_tick_hz_x100, 0, 0) /
+                          100.0);
             return;
         }
     }
