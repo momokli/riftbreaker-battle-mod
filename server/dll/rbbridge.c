@@ -6218,6 +6218,16 @@ static void snapshot_update(void *self)
         return;
     }
 
+    /* #1070-Fix: KEINE Game-Calls vor dem Readiness-Gate (wie der Pipe-Pfad).
+     * Sonst faultet z. B. GetConnectedPlayers bei noch nicht geladener Welt
+     * (#512) -> Crash. world_is_ready() liest die exor-Log-Marker. */
+    if (!world_is_ready()) {
+        InterlockedIncrement(&g_snap_seq);
+        g_snap_ready = 0;
+        InterlockedIncrement(&g_snap_seq);
+        return;
+    }
+
     /* Default: leeres resources[] (kein Account). */
     snprintf(resources, sizeof(resources), "[]");
 
