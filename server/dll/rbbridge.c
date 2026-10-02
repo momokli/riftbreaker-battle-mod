@@ -5798,10 +5798,10 @@ static void __fastcall gameplay_updlogic_hook(
             g_tick_win_ms = tnow;
         if ((LONG)(tnow - g_tick_win_ms) >= 1000) {
             LONG span = (LONG)(tnow - g_tick_win_ms);
-            LONG hz100 = span > 0 ? (LONG)((calls * 100) / span) : 0;
+            LONG hz100 = span > 0 ? (LONG)((calls * 100000) / span) : 0;
             InterlockedExchange(&g_tick_hz_x100, hz100);
             InterlockedExchange(&g_tick_frame_us,
-                                hz100 > 0 ? (LONG)(1000000 / hz100) : 0);
+                                hz100 > 0 ? (LONG)(100000000 / hz100) : 0);
             InterlockedExchange(&g_tick_calls, 0);
             g_tick_win_ms = tnow;
             if ((LONG)(tnow - g_tick_log_ms) >= 5000) {
