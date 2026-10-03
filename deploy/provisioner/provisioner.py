@@ -258,6 +258,9 @@ class Config:
     send_tailer_script: str = _deploy_script("send-tailer", "send_tailer.py")
     match_loop_script: str = _deploy_script("match-loop", "match_loop.py")
     attack_cycle_script: str = _deploy_script("attack-cycle", "attack_cycle.py")
+    chat_announcer_image: str = "python:3.12-slim"
+    chat_announcer_script: str = _deploy_script("chat-announcer", "announcer.py")
+    chat_announcer_interval: float = 1.0
     # Persona-Quelle fuer ``mode=solo_persona:<name>`` (#993). Default zeigt auf
     # die mitgelieferte Beispiel-Datei (via Env/JSON uebersteuerbar).
     personas_file: str = _deploy_script("attack-cycle", "personas.example.json")
@@ -301,6 +304,9 @@ _JSON_KEYS = {
     "send_tailer_script": "send_tailer_script",
     "match_loop_script": "match_loop_script",
     "attack_cycle_script": "attack_cycle_script",
+    "chat_announcer_image": "chat_announcer_image",
+    "chat_announcer_script": "chat_announcer_script",
+    "chat_announcer_interval": "chat_announcer_interval",
     "personas_file": "personas_file",
     "config_cfg": "config_cfg",
     "server_name_suffix": "server_name_suffix",
@@ -336,6 +342,9 @@ _ENV_KEYS = {
     "PROVISIONER_SEND_TAILER_SCRIPT": "send_tailer_script",
     "PROVISIONER_MATCH_LOOP_SCRIPT": "match_loop_script",
     "PROVISIONER_ATTACK_CYCLE_SCRIPT": "attack_cycle_script",
+    "PROVISIONER_CHAT_ANNOUNCER_IMAGE": "chat_announcer_image",
+    "PROVISIONER_CHAT_ANNOUNCER_SCRIPT": "chat_announcer_script",
+    "PROVISIONER_CHAT_ANNOUNCER_INTERVAL": "chat_announcer_interval",
     "PROVISIONER_PERSONAS_FILE": "personas_file",
     "PROVISIONER_CONFIG_CFG": "config_cfg",
     "PROVISIONER_SERVER_NAME_SUFFIX": "server_name_suffix",
@@ -357,7 +366,8 @@ _INT_FIELDS = (
     "attack_cycle_difficulty_interval",
     "match_loop_restart_delay",
 )
-_FLOAT_FIELDS = ("health_deadline", "health_interval", "min_free_gb")
+_FLOAT_FIELDS = ("health_deadline", "health_interval", "min_free_gb",
+                "chat_announcer_interval")
 
 
 def _coerce(field: str, value: Any) -> Any:
@@ -490,6 +500,7 @@ class InstanceSpec(object):
         self.attack_cycle_container = "%s-attack-cycle" % self.compose_project
         self.match_loop_container = "%s-match-loop" % self.compose_project
         self.session_recorder_container = "%s-session-recorder" % self.compose_project
+        self.chat_announcer_container = "%s-chat-announcer" % self.compose_project
         # Eigener Host-Port-Base -> nie gleich ``bridge_port`` (Issue #967).
         self.attack_cycle_port_base = cfg.attack_cycle_port_base
         self.attack_cycle_port = cfg.attack_cycle_port_base + (self._numeric_suffix() % 20000)
@@ -510,10 +521,13 @@ class InstanceSpec(object):
         self.send_tailer_image = cfg.send_tailer_image
         self.match_loop_image = cfg.match_loop_image
         self.attack_cycle_image = cfg.attack_cycle_image
+        self.chat_announcer_image = cfg.chat_announcer_image
         self.sessions_script = cfg.sessions_script
         self.send_tailer_script = cfg.send_tailer_script
         self.match_loop_script = cfg.match_loop_script
         self.attack_cycle_script = cfg.attack_cycle_script
+        self.chat_announcer_script = cfg.chat_announcer_script
+        self.chat_announcer_interval = cfg.chat_announcer_interval
         # Reale Image-Quellen (Platzhalter {env} wird durch das Env-Segment ersetzt).
         self.bridge_container_port = cfg.bridge_container_port
         self.config_cfg = cfg.config_cfg.replace("{env}", env)
@@ -570,6 +584,17 @@ class InstanceSpec(object):
         """Control-URL des Attack-Cycle auf dem HOST (127.0.0.1, #966)."""
         return "http://127.0.0.1:%d" % self.attack_cycle_port
 
+    def chat_announcer_attack_cycle_url(self) -> str:
+        """Attack-Cycle-Status-URL IM Netz (Compose-Template 1:1)."""
+        return "http://%s:%d" % (
+            self.attack_cycle_container,
+            self.attack_cycle_container_port,
+        )
+
+    def chat_announcer_bridge_url(self) -> str:
+        """Bridge-URL IM Netz (send_chat) — identisch zum match-loop."""
+        return self.match_loop_bridge_url()
+
     def session_recorder_sessions_dir(self) -> str:
         return self.sessions_dir
 
@@ -580,6 +605,7 @@ class InstanceSpec(object):
             self.send_tailer_container,
             self.match_loop_container,
             self.attack_cycle_container,
+            self.chat_announcer_container,
         ]
 
     def to_dict(self) -> Dict[str, Any]:
@@ -1193,7 +1219,8 @@ class Provisioner(object):
             raise ProvisionError("Image fehlt: %s (docker image inspect -> rc!=0)" % self.cfg.image)
         # Sidecar-Images fail-loud VOR dem ersten Container (#966).
         for ref in (spec.sessions_image, spec.send_tailer_image,
-                    spec.match_loop_image, spec.attack_cycle_image):
+                    spec.match_loop_image, spec.attack_cycle_image,
+                    spec.chat_announcer_image):
             if not self.docker.image_exists(ref):
                 raise ProvisionError(
                     "Sidecar-Image fehlt: %s (docker image inspect -> rc!=0)" % ref
@@ -1206,7 +1233,8 @@ class Provisioner(object):
         if not os.path.isdir(spec.rbtools_dir):
             missing.append("rbtools_dir=%s" % spec.rbtools_dir)
         for script in (spec.sessions_script, spec.send_tailer_script,
-                       spec.match_loop_script, spec.attack_cycle_script):
+                       spec.match_loop_script, spec.attack_cycle_script,
+                       spec.chat_announcer_script):
             if not os.path.isfile(script):
                 missing.append("sidecar_script=%s" % script)
         if missing:
@@ -1428,11 +1456,28 @@ class Provisioner(object):
                 "--persona-file", PERSONA_CONTAINER_PATH,
             ]
 
+        # chat-announcer: attack-cycle-url + bridge-url (in-network), kein Host-Port.
+        chat_announcer = [
+            "run", "-d",
+            "--name", spec.chat_announcer_container,
+            "--network", spec.network,
+            "--restart", "unless-stopped",
+            *labels,
+            *env,
+            "-v", "%s:/app/announcer.py:ro" % spec.chat_announcer_script,
+            spec.chat_announcer_image,
+            "python3", "-u", "/app/announcer.py",
+            "--attack-cycle-url", spec.chat_announcer_attack_cycle_url(),
+            "--bridge-url", spec.chat_announcer_bridge_url(),
+            "--interval", str(spec.chat_announcer_interval),
+        ]
+
         return [
             (spec.session_recorder_container, session_recorder),
             (spec.send_tailer_container, send_tailer),
             (spec.match_loop_container, match_loop),
             (spec.attack_cycle_container, cycle_args),
+            (spec.chat_announcer_container, chat_announcer),
         ]
 
     def _create_sidecars(

@@ -341,6 +341,7 @@ class BaseFixture(unittest.TestCase):
             send_tailer_image=IMAGE,
             match_loop_image=IMAGE,
             attack_cycle_image=IMAGE,
+            chat_announcer_image=IMAGE,
             instance_id="0",
         )
         self.docker = prov.DockerCli(self.docker_bin, 30)
@@ -437,11 +438,13 @@ class InstanceSpecTestCase(BaseFixture):
         self.assertEqual(spec.attack_cycle_container, "rb-test-12345-attack-cycle")
         self.assertEqual(spec.match_loop_container, "rb-test-12345-match-loop")
         self.assertEqual(spec.session_recorder_container, "rb-test-12345-session-recorder")
+        self.assertEqual(spec.chat_announcer_container, "rb-test-12345-chat-announcer")
         self.assertEqual(spec.sidecar_containers(), [
             "rb-test-12345-session-recorder",
             "rb-test-12345-send-tailer",
             "rb-test-12345-match-loop",
             "rb-test-12345-attack-cycle",
+            "rb-test-12345-chat-announcer",
         ])
 
     def test_sidecar_urls_mirror_compose_network(self):
@@ -456,6 +459,11 @@ class InstanceSpecTestCase(BaseFixture):
         )
         self.assertEqual(spec.attack_cycle_bridge_url(), spec.match_loop_bridge_url())
         self.assertEqual(spec.attack_cycle_url(), "http://127.0.0.1:%d" % spec.attack_cycle_port)
+        self.assertEqual(
+            spec.chat_announcer_attack_cycle_url(),
+            "http://rb-test-12345-attack-cycle:%d" % spec.attack_cycle_container_port,
+        )
+        self.assertEqual(spec.chat_announcer_bridge_url(), spec.match_loop_bridge_url())
         self.assertEqual(spec.session_recorder_sessions_dir(), spec.sessions_dir)
 
     def test_sidecar_port_never_collides_with_bridge_port(self):
@@ -661,7 +669,10 @@ class ConfigTestCase(BaseFixture):
         self.assertEqual(cfg.attack_cycle_difficulty_interval, 200)
         self.assertEqual(cfg.match_loop_restart_delay, 10)
         self.assertEqual(cfg.sessions_image, "python:3.12-slim")
+        self.assertEqual(cfg.chat_announcer_image, "python:3.12-slim")
+        self.assertEqual(cfg.chat_announcer_interval, 1.0)
         self.assertTrue(cfg.attack_cycle_script.endswith("attack-cycle/attack_cycle.py"))
+        self.assertTrue(cfg.chat_announcer_script.endswith("chat-announcer/announcer.py"))
 
     def test_sidecar_env_overrides(self):
         cfg = prov.load_config({
@@ -670,11 +681,13 @@ class ConfigTestCase(BaseFixture):
             "PROVISIONER_ATTACK_CYCLE_INTERVAL": "100",
             "PROVISIONER_SEND_TAILER_IMAGE": "tailer:1",
             "PROVISIONER_MATCH_LOOP_SCRIPT": "/tmp/match_loop.py",
+            "PROVISIONER_CHAT_ANNOUNCER_SCRIPT": "/tmp/announcer.py",
         })
         self.assertEqual(cfg.attack_cycle_port_base, 41000)
         self.assertEqual(cfg.attack_cycle_interval, 100)
         self.assertEqual(cfg.send_tailer_image, "tailer:1")
         self.assertEqual(cfg.match_loop_script, "/tmp/match_loop.py")
+        self.assertEqual(cfg.chat_announcer_script, "/tmp/announcer.py")
 
     def test_http_health_ok_against_stub(self):
         self.assertTrue(prov.http_health_ok(self.stub.url))
@@ -727,8 +740,8 @@ class StartTestCase(BaseFixture):
         self.assertEqual(status["container"], spec.container)
         self.assertEqual(status["instance"], "0")
         self.assertEqual(status["ports"]["bridge"], spec.bridge_port)
-        # Genau EIN Dedi-Container + vier Sidecars wurden erzeugt (#966).
-        self.assertEqual(len(self.run_calls()), 5)
+        # Genau EIN Dedi-Container + fuenf Sidecars wurden erzeugt (#966/#1079).
+        self.assertEqual(len(self.run_calls()), 6)
         run = self.run_calls()[0]
         self.assertIn("--name", run)
         self.assertEqual(run[run.index("--name") + 1], spec.container)
@@ -739,11 +752,11 @@ class StartTestCase(BaseFixture):
         # Instanz-eigene config.cfg wurde gestaged (#970).
         self.assertTrue(os.path.isfile(spec.config_cfg_staged))
 
-    def test_start_creates_four_sidecars_in_network(self):
+    def test_start_creates_five_sidecars_in_network(self):
         status = self.provisioner().start("test", "solo_self", "0")
         spec = self.spec("0")
         runs = self.run_calls()
-        self.assertEqual(len(runs), 5)
+        self.assertEqual(len(runs), 6)
         by_name = {r[r.index("--name") + 1]: r for r in runs}
         for name in spec.sidecar_containers():
             self.assertIn(name, by_name)
@@ -763,9 +776,9 @@ class StartTestCase(BaseFixture):
             cycle_run[cycle_run.index("--control-port") + 1],
             str(spec.attack_cycle_container_port),
         )
-        # send-tailer/match-loop/session-recorder ohne Host-Port.
+        # send-tailer/match-loop/session-recorder/chat-announcer ohne Host-Port.
         for name in (spec.send_tailer_container, spec.match_loop_container,
-                     spec.session_recorder_container):
+                     spec.session_recorder_container, spec.chat_announcer_container):
             self.assertNotIn("-p", by_name[name])
         # send-tailer zeigt auf den Cycle im Netz, match-loop auf die Bridge.
         st = by_name[spec.send_tailer_container]
@@ -787,7 +800,7 @@ class StartTestCase(BaseFixture):
         self.assertEqual(second["health"], "healthy")
         # KEIN zweiter `docker run` — der zweite Start erzeugt keinen Container.
         self.assertEqual(len(self.run_calls()), runs_after_first)
-        self.assertEqual(len(self.run_calls()), 5)
+        self.assertEqual(len(self.run_calls()), 6)
 
     def test_port_in_use_fails_loud(self):
         blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -837,7 +850,7 @@ class StartTestCase(BaseFixture):
     def test_run_args_real_image_layout(self):
         self.provisioner().start("test", "solo_self", "0")
         spec = self.spec("0")
-        self.assertEqual(len(self.run_calls()), 5)
+        self.assertEqual(len(self.run_calls()), 6)
         run = self.run_calls()[0]
         # Host-Port = spec.bridge_port, Container-Port = 9001.
         self.assertIn("127.0.0.1:%d:9001" % spec.bridge_port, run)
@@ -876,6 +889,7 @@ class StartTestCase(BaseFixture):
             {"rbtools_dir": os.path.join(self.tmp, "nope-rbtools")},
             {"attack_cycle_script": os.path.join(self.tmp, "nope-cycle.py")},
             {"send_tailer_script": os.path.join(self.tmp, "nope-send.py")},
+            {"chat_announcer_script": os.path.join(self.tmp, "nope-announcer.py")},
         ):
             with self.assertRaises(prov.ProvisionError, msg=override):
                 self.provisioner(**override).start("test", "solo_self", "0")
@@ -1372,7 +1386,7 @@ class ModeTestCase(BaseFixture):
             personas_file=os.path.join(self.tmp, "nope.json")
         ).start("test", "solo_self", "0")
         self.assertTrue(status["running"])
-        self.assertEqual(len(self.run_calls()), 5)
+        self.assertEqual(len(self.run_calls()), 6)
 
     # -- US3: Container + Attack-Cycle-Sidecar ---------------------------
     def _cycle_run(self):
