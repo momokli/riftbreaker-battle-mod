@@ -63,6 +63,15 @@ parked_pool_provisioner_base_dir: /srv
 # Deploy-Identitaet (#968): gleiche RBB_REF wie die Compose-Instanz der Env
 # (dev/test = Checkout-SHA, prod = Git-Tag via deploy-identity.yml).
 parked_pool_provisioner_deploy_ref: "{{ rift_deploy_ref | default('unknown') }}"
+# Sidecar-Skripte (#1079): EINE Quelle = die Compose-Instanz der Env
+# (riftbreaker_deploy_dir). Der Provisioner zeigt ueber PROVISIONER_*_SCRIPT
+# auf DIESELBEN Pfade — kein relativer _deploy_script()-Drift am Installationsort.
+parked_pool_provisioner_deploy_dir: "/opt/rbmods/compose/rift-{{ parked_pool_env }}/riftbreaker"
+parked_pool_provisioner_sessions_script: "{{ parked_pool_provisioner_deploy_dir }}/session_recorder.py"
+parked_pool_provisioner_send_tailer_script: "{{ parked_pool_provisioner_deploy_dir }}/send_tailer.py"
+parked_pool_provisioner_match_loop_script: "{{ parked_pool_provisioner_deploy_dir }}/match_loop.py"
+parked_pool_provisioner_attack_cycle_script: "{{ parked_pool_provisioner_deploy_dir }}/attack_cycle.py"
+parked_pool_provisioner_chat_announcer_script: "{{ parked_pool_provisioner_deploy_dir }}/announcer.py"
 
 # Quell-Skripte im Repo (aus dem Deploy-Checkout).
 parked_pool_service_src: "{{ playbook_dir }}/parked/parked_service.py"
