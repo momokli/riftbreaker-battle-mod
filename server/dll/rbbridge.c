@@ -5719,6 +5719,12 @@ static volatile LONG g_tick_hz_x100 = 0;  /* Tick-Rate * 100 (fixed point) */
 static volatile LONG g_tick_frame_us = 0; /* mittlere Frame-Dauer in us */
 static volatile LONG g_tick_win_ms = 0;   /* Fensterstart */
 static volatile LONG g_tick_log_ms = 0;   /* letzte Log-Zeile */
+/* #1077: monotone Spielzeit (Game-Thread). Summiert dt (1. Float-Param
+ * `a`, in Sekunden), solange die Welt nicht pausiert -> "akkumulierte
+ * Sim-Sekunden" fuer Dilation-/Desync-Messung. Nur der Game-Thread
+ * schreibt (single writer); der Pipe-Thread liest den double (aligned
+ * 8-Byte-Read ist auf x64 atomic -> allenfalls stale, nie torn). */
+static volatile double g_logic_seconds = 0.0;
 
 /* Laeuft auf dem GAME-Thread. Fuehrt einen anstehenden Pause/Resume-Request
  * hier aus (richtiger Thread) und ruft danach unveraendert das Original. */
@@ -5791,6 +5797,14 @@ static void __fastcall gameplay_updlogic_hook(
                     (double)a, (double)b);
             }
         }
+    }
+    /* #1077: monotone Spielzeit akkumulieren (nur wenn nicht pausiert). */
+    {
+        unsigned char paused = 0;
+        if (!game_read_u8((unsigned char *)self + RBBRIDGE_SGS_PAUSEFLAG_OFF,
+                          &paused) ||
+            !paused)
+            g_logic_seconds += (double)a;
     }
     ((gameplay_updlogic_fn_t)g_gameplay_updlogic_orig)(self, a, b, c, d);
 }
@@ -6391,13 +6405,14 @@ static void dispatch_get_state(HANDLE hPipe)
               "\"mission_flow_payload\":%s,"
               "\"creatures_base_difficulty\":%s,"
               "\"end_game\":%s,\"players\":%s,%s,\"pause_want\":%s,"
-              "\"tick_hz\":%.2f}",
+              "\"tick_hz\":%.2f,\"logic_seconds\":%.3f}",
               (unsigned long long)carbonium, (long long)carbonium_max,
               (unsigned long long)ironium, (long long)ironium_max,
               resources, flow_esc, flow_active ? "true" : "false",
               payload_field, diff_field, end_field, players_field, hq_field,
               want_field,
-              (double)InterlockedCompareExchange(&g_tick_hz_x100, 0, 0) / 100.0);
+              (double)InterlockedCompareExchange(&g_tick_hz_x100, 0, 0) / 100.0,
+              (double)g_logic_seconds);
 }
 
 
