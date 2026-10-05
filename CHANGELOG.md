@@ -1,26 +1,46 @@
-Version: [Unreleased]
-Date: —
+Version: 1.0.18
+Date: 01. 10. 2026
 
   Features:
-    - GO-Executor der VS-Welten: `broadcast_go` fächert je Welt die verifizierten Bridge-Routen `POST <bridge-base>/resume_game` → `POST <bridge-base>/start` (leerer Body) statt des toten `/exec`-Command-Pfads; `TOURNAMENT_GO_COMMANDS`/`debug_dom_resume` entfernt (#1027).
+    - Match-Ende → Auto-Finish: der Referee-State triggert `POST /queue/finish` im Relay; Ergebnis + Teilnehmer werden erfasst und die kalten Welten abgeraeumt (#1028, PR #1057).
+    - Rematch ueber die Lobby: `POST /queue/rematch` startet aus der Lobby einen neuen Match (Anti-Zombie-Flow) (#1030, PR #1058).
+
+  Intern:
+    - Lobby zeigt Phase/Sieger aus dem Referee: kein Deliverable noetig (Lobby-Anzeige bereits ueber #1024/PR #1050 abgedeckt) (#1029).
+
+Version: 1.0.17
+Date: 01. 10. 2026
+
+  Features:
+    - GO-Executor der VS-Welten: `broadcast_go` fächert je Welt die verifizierten Bridge-Routen `POST <bridge-base>/resume_game` → `POST <bridge-base>/start` (leerer Body) statt des toten `/exec`-Command-Pfads; `TOURNAMENT_GO_COMMANDS`/`debug_dom_resume` entfernt (#1027, PR #1054).
     - Ready→GO aus der Lobby: Queue postet je Welt `/ready` an den Referee; Relay-`POST /ready` ist kontextabhängig (Solo→Capsule, VS→Referee), zweiter Ready löst AUTO_GO/Broadcast an beide Bridges aus (#1025, PR #1052).
     - Referee-Bruecke im GNS-Relay: Lobby liest den Match-Zustand (`GET /referee/state`, Phase/Spieler/Welt/Sieger) und meldet Welten ready (`POST /referee/ready`); neue Lobby-UI (Phase-/Sieger-Badge + `READY (Referee)`-Button), fail-safe `503 referee_unconfigured` ohne Config (#1024, PR #1050).
 
   Bugfixes:
-    - Provisioner: wiederholter `start()` re-assertiert die vier Sidecars (laufende unangetastet, gestoppte per `docker start`, fehlende aus der Container-Env `RIFTBREAKER_MODE`/`RBB_VS_WORLD` rekonstruiert, fail-loud) — kein stiller Halb-Stack nach Sidecar-Crash/-Remove; kein zweiter Container (#1026).
+    - Provisioner: wiederholter `start()` re-assertiert die vier Sidecars (laufende unangetastet, gestoppte per `docker start`, fehlende aus der Container-Env `RIFTBREAKER_MODE`/`RBB_VS_WORLD` rekonstruiert, fail-loud) — kein stiller Halb-Stack nach Sidecar-Crash/-Remove; kein zweiter Container (#1026, PR #1053).
+
+Version: 1.0.16
+Date: 01. 10. 2026
+
+  Features:
+    - Ready→GO aus der Lobby: Queue postet je Welt `/ready` an den Referee; Relay-`POST /ready` ist kontextabhängig (Solo→Capsule, VS→Referee), zweiter Ready löst AUTO_GO/Broadcast an beide Bridges aus (#1025, PR #1052).
+    - Referee-Bruecke im GNS-Relay: Lobby liest den Match-Zustand (`GET /referee/state`, Phase/Spieler/Welt/Sieger) und meldet Welten ready (`POST /referee/ready`); neue Lobby-UI (Phase-/Sieger-Badge + `READY (Referee)`-Button), fail-safe `503 referee_unconfigured` ohne Config (#1024, PR #1050).
 
   Refactor:
-    - Deployment-Cleanup: prod-only CD. `deploy/deploy-prod.yml` ist das einzige Playbook (Play 0 host-services + Prod-A + Prod-B + Relay-Teardown); dev (site.yml) und staging (deploy-staging.yml/staging-vars.yml) entfallen. CD nur noch bei Tag-Push `v*`; `deploy-ssh.sh`/`deploy-wrapper.sh` lehnen jeden anderen ref fail loud ab (#1034).
-    - Host-Singleton-Dienste (gns-relay, image-retention, host-hygiene, parked-pool, capsule-flow, queue) laufen jetzt im prod-Play mit; parked/capsule/queue mit env-freien Unit-/Pfadnamen. GNS-Relay routet nur noch A/B/Default (#1034).
-    - Neues manuelles, idempotentes Teardown-Playbook `deploy/teardown-dev-staging.yml` (NICHT im CD verdrahtet) (#1034).
-
-  Docs:
-    - `docs/VS_MATCH.md` §6.5/§9 + `docs/TOURNAMENT_API.md`: GO-Fan-out auf die verifizierten Bridge-Routen `resume_game`+`start` dokumentiert, `/exec`-Legacy-Env (`TOURNAMENT_GO_COMMANDS`) gestrichen (#1027).
-    - `docs/STAGING.md` als retired/Archiv gekennzeichnet; `deploy/README.md` auf prod-only-Topologie/Trigger/Rollen/CD/Teardown aktualisiert (#1034).
-    - `docs/VS_MATCH.md` §6.5/§6.7 + `deploy/provisioner/README.md`: kalte Provisionierung startet Container + vier Sidecars, Welt bootet PAUSED/joinbar, „Resume" = Ready-Handover (kein Pre-GO-`resume_game`) + Idempotenz-Garantie (#1026).
+    - Deployment-Cleanup: prod-only CD. `deploy/deploy-prod.yml` ist das einzige Playbook (Play 0 host-services + Prod-A + Prod-B + Relay-Teardown); dev (site.yml) und staging (deploy-staging.yml/staging-vars.yml) entfallen. CD nur noch bei Tag-Push `v*`; `deploy-ssh.sh`/`deploy-wrapper.sh` lehnen jeden anderen ref fail loud ab (#1034, PR #1044).
+    - Host-Singleton-Dienste (gns-relay, image-retention, host-hygiene, parked-pool, capsule-flow, queue) laufen jetzt im prod-Play mit; parked/capsule/queue mit env-freien Unit-/Pfadnamen. GNS-Relay routet nur noch A/B/Default — ein GNS-Eingang (#1034, PR #1044).
+    - Neues manuelles, idempotentes Teardown-Playbook `deploy/teardown-dev-staging.yml` (NICHT im CD verdrahtet) (#1034, PR #1044).
 
   Security:
-    - Tournament-API fail-closed abgesichert (Loopback-Bind + Caddy basic_auth + Rust-Bearer 401); Secret `vault_tournament_token` als Single-Source fuer Rust, Caddy und Queue (#298, PR #1023).
+    - Tournament-API fail-closed abgesichert (Loopback-Bind `TOURNAMENT_HOST=127.0.0.1` + Caddy basic_auth + Rust-Bearer 401 auf allen mutierenden Routen); Secret `vault_tournament_token` als Single-Source fuer Rust, Caddy und Queue (#298, PR #1023).
+    - Geteilte Operator-Credentials je Env entkoppelt: per-Env `vault_contract_basic_auth_hash_prod` + GNS-Lobby-Hash getrennt, Distinctness-Assert gegen den Legacy-Hash (#535, PR #1043, PR #1046).
+
+  Deploy:
+    - Mods-Upload-API (8322) als Host-Singleton im `env-schema.yml` dokumentiert (#534, PR #1045).
+    - Legacy-Symlink (`legacy-rbtools-symlink-cleanup`) aufgeraeumt, oeffentliche Game-Ports dokumentiert + asserted (#536, PR #1047).
+
+  Docs:
+    - `docs/STAGING.md` als retired/Archiv gekennzeichnet; `deploy/README.md` auf prod-only-Topologie/Trigger/Rollen/CD/Teardown aktualisiert (#1034, PR #1044).
 
 Version: 1.0.15
 Date: 29. 09. 2026
