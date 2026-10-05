@@ -233,6 +233,47 @@ static void testResolveReadyRoute() {
           "route name bad_world");
 }
 
+// ---------------------------------------------------------------------------
+// Story 6 (#1031): Events-Cursor + Feed-Robustheit (read-only Match-View)
+// ---------------------------------------------------------------------------
+
+static void testBuildEventsPath() {
+  // Numerischer Cursor wird uebernommen.
+  checkEq(rbref::buildEventsPath("since=42"), "/events?since=42",
+          "since=42 -> Cursor-Pfad");
+  checkEq(rbref::buildEventsPath("since=0"), "/events?since=0",
+          "since=0 -> Cursor-Pfad");
+  // Andere Query-Parameter stoeren nicht.
+  checkEq(rbref::buildEventsPath("foo=1&since=7&bar=2"),
+          "/events?since=7", "since aus Mehrfach-Query");
+  // Fehlend/leer/ungueltig -> ohne Cursor (alle Events), kein Crash.
+  checkEq(rbref::buildEventsPath(""), "/events", "leere Query -> /events");
+  checkEq(rbref::buildEventsPath("since="), "/events", "leeres since -> /events");
+  checkEq(rbref::buildEventsPath("since=-1"), "/events",
+          "negatives since -> /events");
+  checkEq(rbref::buildEventsPath("since=1e3"), "/events",
+          "nicht-numerisches since -> /events");
+  checkEq(rbref::buildEventsPath("since=abc"), "/events",
+          "Buchstaben -> /events");
+}
+
+static void testParseEventsLastSeq() {
+  long long seq = -1;
+  check(rbref::parseEventsLastSeq("{\"events\":[],\"last_seq\":12}", seq),
+        "last_seq 12 parst");
+  check(seq == 12, "last_seq == 12");
+  check(rbref::parseEventsLastSeq("{\"last_seq\":0}", seq), "last_seq 0 parst");
+  check(seq == 0, "last_seq == 0");
+  // Fehlend/nicht-numerisch -> false, Cursor bleibt beim Aufrufer.
+  seq = 99;
+  check(!rbref::parseEventsLastSeq("{\"events\":[]}", seq),
+        "fehlendes last_seq -> false");
+  check(seq == 99, "fehlendes last_seq laesst Cursor unberuehrt");
+  check(!rbref::parseEventsLastSeq("<<<not json>>>", seq),
+        "Muell -> false, kein Crash");
+  check(!rbref::parseEventsLastSeq("", seq), "leer -> false");
+}
+
 int main() {
   testParseConfigValid();
   testParseConfigInvalid();
@@ -242,6 +283,8 @@ int main() {
   testParseStateMissing();
   testMapError();
   testResolveReadyRoute();
+  testBuildEventsPath();
+  testParseEventsLastSeq();
 
   std::printf("%d/%d ok\n", g_checks - g_failures, g_checks);
   if (g_failures != 0) {

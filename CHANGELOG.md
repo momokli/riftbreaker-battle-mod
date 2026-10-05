@@ -1,3 +1,9 @@
+Version: [Unreleased]
+Date: —
+
+  Features:
+    - Oeffentliche Match-View: read-only Zuschauer-Seite `GET /match` im GNS-Relay (Cockpit-Stil, zwei gespiegelte Welten-Spalten A/B, Statusleiste); pollt `GET /referee/state` (1,5 s) und additiv `GET /referee/events?since=<seq>`; neue Proxy-Route `GET /referee/events` (Issue #1031, PR #1085).
+
 Version: 1.0.18
 Date: 01. 10. 2026
 

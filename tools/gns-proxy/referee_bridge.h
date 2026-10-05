@@ -260,6 +260,35 @@ inline bool parseRefereeState(const std::string &body, std::string &phase,
   return hasPhase || !teams.empty();
 }
 
+// --- Events-Cursor (Issue #1031) -------------------------------------------
+//
+// Additive, read-only Ergaenzung fuer die Match-View: die Proxy-Route
+// `GET /referee/events?since=<seq>` reicht den Referee-`GET /events`
+// (Cursor-Feed `{events, last_seq}`) auth-frei durch. Bewusst OHNE
+// Socket/Win32 — host-testbar.
+
+// Outbound-Pfad fuer den Events-Proxy bauen. `since` wird NUR als reine
+// Ganzzahl akzeptiert; fehlend/leer/ungueltig -> ohne Cursor (`/events`, alle).
+inline std::string buildEventsPath(const std::string &queryString) {
+  std::string since;
+  if (!rbapi::parseQueryParam(queryString, "since", since) || since.empty()) {
+    return "/events";
+  }
+  for (char c : since) {
+    if (c < '0' || c > '9') {
+      return "/events";  // ungueltiger Cursor -> ohne since (alle Events)
+    }
+  }
+  return "/events?since=" + since;
+}
+
+// `last_seq` aus einer `GET /events`-Antwort lesen (Cursor fuer den naechsten
+// Poll). false, wenn das Feld fehlt/keine Ganzzahl ist — der Aufrufer behaelt
+// dann seinen bisherigen Cursor (defensive Degradation).
+inline bool parseEventsLastSeq(const std::string &body, long long &seq) {
+  return rbapi::jsonIntField(body, "last_seq", seq);
+}
+
 }  // namespace rbref
 
 #endif  // RBBATTLE_REFEREE_BRIDGE_H

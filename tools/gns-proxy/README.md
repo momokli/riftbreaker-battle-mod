@@ -169,19 +169,46 @@ automatisch geroutet; nur der Rest wartet.
 
 Endpunkte (der Relay selbst hat **keinen** Auth — er bindet daher nur lokal; die
 öffentliche Lobby-Domain setzt davor der Host-Caddy mit basic_auth):
-`GET /` (Single-File-UI), `GET /sessions` (JSON: wer wartet — jetzt alle
+`GET /` (Single-File-UI, Lobby), `GET /match` (Single-File-**Match-View**,
+read-only — Issue #1031), `GET /sessions` (JSON: wer wartet — jetzt alle
 parallelen Sessions),
 `GET /targets` (JSON: die Buttons), `POST /route`
 `{"identitaet":"…","target":"NAME"}`.
 
 **Referee-Bruecke (Issue #1024):** `GET /referee/state` (Phase/Spieler/Sieger,
-Proxy auf Referee `GET /state`) und `POST /referee/ready`
+Proxy auf Referee `GET /state`), `GET /referee/events?since=<seq>` (Cursor-Feed,
+Proxy auf Referee `GET /events`; Issue #1031) und `POST /referee/ready`
 (`{world:"A"|"B",identitaet?}`, Proxy auf Referee `POST /ready`, Bearer). Ohne
 `--referee-url`/`RBB_REFEREE_URL` → `503 referee_unconfigured`; nicht erreichbar
 → `502 referee_unreachable`; fehlendes `world` → `400 bad_request`.
+Beide GET-Routen sind **auth-frei** (Proxy-Bearer nur additiv fuer den
+mutierenden Ready-Pfad); `since` wird nur als reine Ganzzahl uebernommen.
 Im Deploy läuft die Rolle `website` die Lobby öffentlich aus:
 **https://proxy.rift.projectmellon.de** (Host-Caddy → `127.0.0.1:9200`, basic_auth
 `operator`). Lokal ohne Domain: `ssh -L 9200:127.0.0.1:9200 planet`.
+
+### Match View `GET /match` (Issue #1031)
+
+Eigene, rein anzeigende Single-File-Seite im Cockpit-Stil (dunkel, 1px-Linien,
+3px-Radius, `tabular-nums`, Akzent Teal), ausgeliefert vom Relay unter `GET
+/match`. Layout nach [`docs/MATCH_VIEW.md`](../../docs/MATCH_VIEW.md) §4: Kopf
+(Match · Mode · Round · Phase · Winner), zwei gespiegelte Spalten Welt A/B
+(Spieler, Ready, HQ-HP, Score, Wave, Pending-Sends, Events) und Statusleiste.
+
+- **Read-only:** die Seite pollt ausschliesslich `GET /referee/state` (1,5 s) und
+  additiv `GET /referee/events?since=<seq>` (Cursor-Dedupe per `seq`). **Keine**
+  mutierende Referee-Route, **kein** Config-Panel, **keine** Buttons. Der
+  JS-Block ist per Sentinel (`MATCH-VIEW BEGIN/END`) geklammert; die CI
+  erzwingt das per grep-Assertion.
+- **Auth:** extern ueber den Host-Caddy-Block `proxy_domain` (`basic_auth
+  operator`); der Relay selbst hat keinen Auth und bindet nur lokal.
+- **Abgrenzung:** das **Cockpit** (`cockpit_domain`) bleibt das
+  Operator-Werkzeug (Config/Cheats, mutierende Aktionen). `site/` bleibt die
+Landing (eigene Domain, `file_server`, kein Auth). Die Match-View ersetzt
+  keines von beiden.
+- **Defensive Degradation:** fehlende Werte → `—`, `referee_unconfigured` →
+  Status „offline", `referee_unreachable`/5xx → letzter Stand + Hinweis; kein
+  `location.reload`, kein Throw.
 
 **Verhalten:** Der Client bleibt im Loading; seine Nachrichten laufen in die
 bestehende Historie. Der Klick baut den Backend-Connect auf und **replayed** die

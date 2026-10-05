@@ -1,12 +1,17 @@
 # Match View — UI + Struktur/Architektur (1v1/Solo)
 
-**Status:** Entwurf (Design) · **Stand:** 2026-09-22 · **Issue:** #873
+**Status:** final · **Stand:** 2026-10-05 · **Issue:** #1031 (Design #873)
 **Kontext:** Base-Game-Sicht für ein Match. Ref: [`GAME_FLOW.md`](GAME_FLOW.md),
 [`CORE_LOOP.md`](CORE_LOOP.md), [`1.0-COMPONENTS.md`](1.0-COMPONENTS.md),
 [`cockpit/README.md`](../cockpit/README.md).
 
 > **Zweck dieses Dokuments:** UI und Struktur/Architektur festlegen, damit danach
 > ein Wireframe-/Grafik-Prompt und die Umsetzungs-Issues darauf aufsetzen können.
+>
+> **Umsetzung (#1031):** Die Match-View ist als **read-only** Single-File-Seite
+> `GET /match` im GNS-Relay umgesetzt (Cockpit-Stil). **Abweichung zur
+> Komponentenliste des Issues:** nicht `site/`, sondern embedded im Proxy —
+> Begruendung §12 (site/ = Landing ohne Auth). Details/Ist-Stand: §6, §11–§13.
 
 ## 1. Abgrenzung: Cockpit vs. Match View
 
@@ -95,6 +100,14 @@ und Statusleiste bleiben fix. Stil = wie das Cockpit (flaches Qt, 1px-Linien,
 
 Warmup-Restzeit ist der wichtigste Wert während der Aufbauphase → prominent
 (Abfolge nach #856: `attack_status.seconds_to_warmup_end`).
+
+**Soll/Ist-Abgleich (#1031, 2026-10-05):** Die umgesetzte `GET /match`-View zeigt
+(aus dem Referee-`/state`) je Seite `teams.<W>.player`, `ready`, `hq_hp`, `score`,
+`wave`, `pending_sends` sowie die `feed`-Events; global `phase`, `round`,
+`winner`, `paused` (nur Anzeige). **Noch nicht** in dieser View (out of scope,
+§13): Attack-Cycle-Level/Warmup-Countdown, `dom_paused` je Seite,
+Server-`state`/`uptime`, Persona-Auswahl, globale Aktionen (Start/Pause/New
+Round §5).
 
 ## 7. Config-Panel (separat)
 
@@ -191,30 +204,56 @@ scheidet als geteilter Feed aus.
 | 4 | **Welt B** | es gibt nur **Envs** (dev/prod/staging); prod zeigt A==B auf eine Bridge | echte zweite Instanz + B-Port |
 | 5 | **Koordinator / atomarer Start** | Rust-Referee kann broadcasten, aber **Legacy 1.1**; GO-Command nicht mehr ausführbar | neuer/fixierter Koordinator |
 | 6 | **Pause** | ✅ **#871**: `POST /pause_dom`/`/resume_dom` + `get_state.dom_paused` (DOM-Direktor-Freeze) | Sidecar-Timer mitpausieren? Live: #553 |
-| 7 | **Event-Feed** | Referee `LogEntry` (kinds: go/send/wave/reveal/hq/finish/match_end), aber **kein `world`-Feld** | `world` + fehlende kinds, oder Aggregator |
+| 7 | **Event-Feed** | Referee `LogEntry` (kinds: go/send/wave/reveal/hq/finish/match_end), mit `world`-Feld | `world` + fehlende kinds, oder Aggregator |
 
 **Minimales Event-Set (pro Seite getaggt):** `match_start`, `ready`, `send`,
 `wave_start`, `hq_destroyed`, `map_reset`, `match_end`/`winner`.
 
-## 12. Offene Entscheidungen
+**Ist-Stand der Umsetzung (#1031, 2026-10-05):** Verfuegbar und von der View
+genutzt — `teams.<W>.player` (Name; kann `null` sein → `—`), `ready`, `hq_hp`,
+`score`, `wave`, `pending_sends`; global `phase`, `round`, `winner`, `paused`;
+`feed` (letzte 30) mit `LogEntry.world` (A/B/global) plus additiver Cursor
+`GET /referee/events?since=<seq>` (Proxy auf Referee `GET /events`, Dedupe per
+`seq`). **Weiterhin offen** (Folge-Issues): echte Welt B (§11.4),
+Koordinator/atomarer Start (§11.5), Sidecar-Pause (§11.6), exklusive
+`world`-Trennung einiger Event-kinds (§11.7), nativer Spieler-Namens-Read (§11.2).
+Die Namen in der View stammen aus der Referee-Sicht (`teams.*.player`), nicht aus
+Re-Engineering.
 
-- **Platzierung:** eigene Seite (`/match`, eigene Single-File-UI) vs. neuer Tab im Cockpit.
-- **Name:** „Match View" vs. „Game View".
-- **Pause:** Mechanik vorhanden (**#871**, DOM-Freeze); offen: attack-cycle mitpausieren + Live-Verifikation (#553).
-- **Namen:** Log-Sidecar (best-effort) vs. nativer Read (RE).
-- **Feed:** Referee-Feed erweitern vs. eigener Aggregator.
-- **Koordinator:** neuer kleiner Dienst vs. Referee-Reaktivierung.
+## 12. Entscheidungen (aufgeloest mit #1031, 2026-10-05)
 
-## 13. Nächste Schritte
+- **Platzierung:** eigene Seite **`GET /match`** im Relay (Single-File embedded),
+  **kein** Cockpit-Tab. Begruendung: `proxy_domain` ist der bereits
+  auth-gestuetzte Relay-Eingang; eine read-only-Seite erfuellt „ohne
+  Operator-Rechte" rein durch Weglassen mutierender Aktionen.
+- **Auslieferung:** aus dem **Proxy** (embedded, analog `kUiHtml`). **Abweichung
+  zur urspruenglichen Issue-Komponentenliste (`site/`)**: `site/` bleibt Landing —
+  eigene Domain, `file_server`, **kein Auth**; das wuerde die DoD (auth)
+  verletzen, und `site/index.html` wird vom Deploy-Template ueberschrieben.
+  Embedded ist selbst-konsistent, auth-gedeckt und host-testbar.
+- **Name:** **„Match View"**.
+- **Pause:** **out of scope (read-only)** — die View zeigt `paused` nur an;
+  Mechanik/Live-Verifikation → #553/#1032.
+- **Namen:** aus **`teams.<W>.player`** (Referee `/state`); leer/`null` → `—`.
+  Nativer RE-Read out of scope.
+- **Feed:** Referee-**`/state.feed`** (letzte 30, `world`-getaggt) + optionaler
+  Cursor **`GET /referee/events`**. Kein neuer Aggregator.
+- **Koordinator:** **out of scope** — der **Referee** ist die State-Quelle.
 
-1. Welt B (zweite Instanz) · 2. Koordinator + atomarer Start **inkl. Pause-Fan-out**
-(`pause_dom`/`resume_dom` an beide) · 3. Spieler-Namen · 4. Event-Feed ·
-5. **Match-View-UI** (konsumiert 1–4).
+## 13. Ist-Stand (2026-10-05, #1031)
 
-Das Pause-Primitiv ist mit **#871** bereits vorhanden (DOM-Freeze); offen bleibt
-„Sidecar mitpausieren" + Live-Verifikation (#553).
+1. **Match-View-UI umgesetzt:** `GET /match` (read-only) aus dem Relay,
+   Cockpit-Stil, Kopf + zwei gespiegelte Spalten Welt A/B + Statusleiste; Poll
+   `GET /referee/state` (1,5 s) und Cursor `GET /referee/events?since=<seq>`;
+   defensives Contract (`—`, kein reload/Throw); CI-Nachweis read-only
+   (Sentinel-Block + grep). Dieses Dokument ist damit **final**.
+2. **Offen (Folge-Issues):** echte Welt B · Koordinator + atomarer Start inkl.
+   Pause-Fan-out · nativer Spieler-Namens-Read · Event-Feed-Aggregator /
+   exklusive `world`-Trennung · **Live-Abnahme** der VS-Kette (#1032).
 
-Reihenfolge: erst 1–2 (Fähigkeiten), dann 5 (UI).
+Die Faehigkeiten 1–2 (§13 alt) bleiben Voraussetzung fuer weitere UI-Ausbauten;
+mit #1031 steht die **Basis-View** (`GET /match`), die auf den vorhandenen
+Referee-State aufsetzt.
 
 ## 14. Grundlage für den Grafik-Prompt
 
