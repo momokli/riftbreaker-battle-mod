@@ -2045,6 +2045,313 @@ setInterval(loadSessions, 1500);
 </html>
 )HTML";
 
+// Single-File Match-View (Issue #1031, READ-ONLY). Eigene Seite `GET /match` im
+// Relay (Cockpit-Stil: dunkel, 1px-Linien, 3px-Radius, tabular-nums, Akzent
+// Teal). KEIN Config-Panel, KEINE mutierenden Buttons. Die View pollt
+// ausschliesslich `GET /referee/state` (Live-State) und additiv
+// `GET /referee/events?since=<seq>` (Cursor-Feed). Der JS-Block ist per
+// Sentinel geklammert; die CI prueft ihn auf read-only (nur GET, keine
+// mutierenden Referee-Pfade). Layout nach docs/MATCH_VIEW.md §4.
+const char kMatchHtml[] = R"HTML(<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Riftbreaker - Match View</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg:#0e1013; --panel:#171a1f; --panel2:#1d2127; --line:#272c34;
+    --fg:#e7eaee; --muted:#8b939f; --accent:#2dd4bf;
+    --ok:#5fd39a; --warn:#f2c14e; --bad:#f08a8a;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; color:var(--fg); background:var(--bg);
+    font:14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .num { font-variant-numeric:tabular-nums; }
+  header { position:sticky; top:0; z-index:5; display:flex; flex-wrap:wrap;
+    align-items:center; gap:10px 18px; padding:14px 22px;
+    border-bottom:1px solid var(--line); background:rgba(14,16,19,.92); }
+  h1 { margin:0; font-size:16px; font-weight:650; letter-spacing:.3px; color:var(--accent); }
+  .field { display:flex; align-items:baseline; gap:6px; font-size:13px; color:var(--muted); }
+  .field b { color:var(--fg); font-weight:600; }
+  .grow { flex:1; }
+  .phase { padding:2px 9px; border-radius:3px; font-size:11px; letter-spacing:.06em;
+    text-transform:uppercase; background:var(--panel2); color:var(--muted); }
+  .phase.lobby { background:var(--panel2); color:var(--muted); }
+  .phase.ready { background:rgba(242,193,78,.16); color:var(--warn); }
+  .phase.warmup { background:rgba(242,193,78,.16); color:var(--warn); }
+  .phase.running { background:rgba(95,211,154,.16); color:var(--ok); }
+  .phase.paused { background:rgba(240,138,138,.16); color:var(--bad); }
+  .phase.finished { background:rgba(45,212,191,.16); color:var(--accent); }
+  .phase.game_over { background:rgba(240,138,138,.16); color:var(--bad); }
+  main { padding:18px 22px 64px; max-width:1200px; margin:0 auto; }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:980px) { .cols { grid-template-columns:1fr; } }
+  .col { border:1px solid var(--line); border-radius:3px; background:var(--panel); padding:14px 16px; }
+  .col h2 { margin:0 0 4px; font-size:15px; font-weight:650; }
+  .col .who { color:var(--muted); font-size:13px; margin-bottom:12px; }
+  .kv { display:flex; justify-content:space-between; gap:12px; padding:6px 0;
+    border-top:1px solid var(--line); font-size:13.5px; }
+  .kv:first-of-type { border-top:0; }
+  .kv .k { color:var(--muted); }
+  .kv .v { color:var(--fg); font-weight:600; }
+  .badge { padding:1px 8px; border-radius:3px; font-size:11px; letter-spacing:.05em;
+    text-transform:uppercase; background:var(--panel2); color:var(--muted); }
+  .badge.yes { background:rgba(95,211,154,.16); color:var(--ok); }
+  .badge.no { background:rgba(240,138,138,.16); color:var(--bad); }
+  .hpbar { height:6px; margin-top:4px; border-radius:3px; background:#22272e; overflow:hidden; }
+  .hpbar > span { display:block; height:100%; background:var(--accent); }
+  .sec { margin-top:14px; }
+  .sec h3 { margin:0 0 6px; font-size:11px; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--muted); font-weight:600; }
+  .events { list-style:none; margin:0; padding:0; max-height:220px; overflow:auto; }
+  .events li { display:flex; gap:8px; padding:3px 0; border-top:1px solid var(--line);
+    font-size:12.5px; }
+  .events li:first-child { border-top:0; }
+  .events .t { color:var(--muted); min-width:56px; }
+  .events .tag { color:var(--accent); min-width:22px; }
+  .events .m { color:var(--fg); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .empty { color:var(--muted); font-size:12.5px; }
+  footer { position:fixed; bottom:0; left:0; right:0; display:flex; gap:16px;
+    align-items:center; padding:8px 22px; border-top:1px solid var(--line);
+    background:rgba(14,16,19,.94); font-size:12.5px; color:var(--muted); }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); }
+  .dot.ok { background:var(--ok); }
+  .dot.bad { background:var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>MATCH VIEW</h1>
+  <span class="field">Match <b id="match">-</b></span>
+  <span class="field">Mode <b id="mode">-</b></span>
+  <span class="field">Round <b id="round" class="num">-</b></span>
+  <span class="field">Phase <span id="phase" class="phase">-</span></span>
+  <span class="field">Winner <b id="winner">-</b></span>
+  <span class="grow"></span>
+  <span class="field">read-only</span>
+</header>
+<main>
+  <div class="cols">
+    <section class="col" id="colA">
+      <h2>WELT A</h2>
+      <div class="who" id="whoA">-</div>
+      <div class="kv"><span class="k">Ready</span><span class="v" id="readyA"><span class="badge">-</span></span></div>
+      <div class="kv"><span class="k">HQ HP</span><span class="v num" id="hpA">-</span></div>
+      <div class="hpbar"><span id="hpbarA" style="width:0%"></span></div>
+      <div class="kv"><span class="k">Score</span><span class="v num" id="scoreA">-</span></div>
+      <div class="kv"><span class="k">Wave</span><span class="v num" id="waveA">-</span></div>
+      <div class="kv"><span class="k">Pending sends</span><span class="v num" id="pendA">-</span></div>
+      <div class="sec"><h3>Events</h3><ul class="events" id="evA"><li class="empty">-</li></ul></div>
+    </section>
+    <section class="col" id="colB">
+      <h2>WELT B</h2>
+      <div class="who" id="whoB">-</div>
+      <div class="kv"><span class="k">Ready</span><span class="v" id="readyB"><span class="badge">-</span></span></div>
+      <div class="kv"><span class="k">HQ HP</span><span class="v num" id="hpB">-</span></div>
+      <div class="hpbar"><span id="hpbarB" style="width:0%"></span></div>
+      <div class="kv"><span class="k">Score</span><span class="v num" id="scoreB">-</span></div>
+      <div class="kv"><span class="k">Wave</span><span class="v num" id="waveB">-</span></div>
+      <div class="kv"><span class="k">Pending sends</span><span class="v num" id="pendB">-</span></div>
+      <div class="sec"><h3>Events</h3><ul class="events" id="evB"><li class="empty">-</li></ul></div>
+    </section>
+  </div>
+  <div class="sec">
+    <h3>Globale Events</h3>
+    <ul class="events" id="evG"><li class="empty">-</li></ul>
+  </div>
+</main>
+<footer>
+  <span class="dot" id="dot"></span>
+  <span id="status">verbinde...</span>
+  <span class="grow"></span>
+  <span id="paused" class="field"></span>
+  <span id="clock" class="num">--:--:--</span>
+</footer>
+<script>
+// ==== MATCH-VIEW BEGIN ====
+// READ-ONLY Match-View (Issue #1031): ausschliesslich GET-Polls gegen den
+// Relay-Proxy. Keine mutierende Aktion, kein Config-Panel. Defensive
+// Degradation: fehlende Werte -> "-", kein location.reload, kein Throw.
+const DASH = "-";
+const POLL_MS = 1500;
+const EV_POLL_MS = 2000;
+const PHASE_LABEL = { lobby:"lobby", ready:"ready", warmup:"warmup",
+  running:"running", paused:"paused", game_over:"game over", ended:"ended",
+  finished:"finished" };
+let LAST_SEQ = 0;
+let EV_SEQ_READY = false;
+let EVENTS = [];
+let EV_KEYS = new Set();
+
+function $(id) { return document.getElementById(id); }
+function val(v) {
+  return (v === null || v === undefined || v === "") ? DASH : String(v);
+}
+function num(v) {
+  if (typeof v === "number" && isFinite(v)) return String(v);
+  return val(v);
+}
+function setText(id, v) { const el = $(id); if (el) el.textContent = val(v); }
+function setClock() {
+  const el = $("clock");
+  if (el) el.textContent = new Date().toLocaleTimeString("de-DE", { hour12:false });
+}
+function setStatus(ok, msg) {
+  const dot = $("dot");
+  if (dot) dot.className = "dot " + (ok ? "ok" : "bad");
+  const st = $("status");
+  if (st) st.textContent = msg || (ok ? "live" : "offline");
+}
+function renderSide(w, t) {
+  const tt = (t && typeof t === "object") ? t : {};
+  const who = $("who" + w);
+  if (who) who.textContent = val(tt.player);
+  const r = $("ready" + w);
+  if (r) {
+    if (tt.ready === true) r.innerHTML = '<span class="badge yes">ready</span>';
+    else if (tt.ready === false) r.innerHTML = '<span class="badge no">not ready</span>';
+    else r.innerHTML = '<span class="badge">-</span>';
+  }
+  setText("hp" + w, num(tt.hq_hp));
+  const bar = $("hpbar" + w);
+  if (bar) {
+    const hp = (typeof tt.hq_hp === "number" && isFinite(tt.hq_hp)) ? tt.hq_hp : null;
+    bar.style.width = hp === null ? "0%" : (Math.max(0, Math.min(100, hp)) + "%");
+  }
+  setText("score" + w, num(tt.score));
+  setText("wave" + w, num(tt.wave));
+  setText("pend" + w, num(tt.pending_sends));
+}
+function evKey(ev) {
+  if (ev && typeof ev.seq === "number") return "s" + ev.seq;
+  return "k" + val(ev && ev.ts) + "|" + val(ev && ev.kind) + "|" + val(ev && ev.msg);
+}
+function addEvent(ev) {
+  if (!ev || typeof ev !== "object") return;
+  const key = evKey(ev);
+  if (EV_KEYS.has(key)) return;
+  EV_KEYS.add(key);
+  EVENTS.push(ev);
+  if (typeof ev.seq === "number" && ev.seq > LAST_SEQ) {
+    LAST_SEQ = ev.seq;
+    EV_SEQ_READY = true;
+  }
+}
+function evText(ev) {
+  if (!ev) return DASH;
+  const k = ev.kind ? String(ev.kind) : "event";
+  const m = ev.msg ? String(ev.msg) : "";
+  return m ? (k + " · " + m) : k;
+}
+function fillList(id, list) {
+  const ul = $(id);
+  if (!ul) return;
+  ul.textContent = "";
+  if (!list.length) {
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.textContent = DASH;
+    ul.appendChild(li);
+    return;
+  }
+  for (const ev of list) {
+    const li = document.createElement("li");
+    const t = document.createElement("span");
+    t.className = "t";
+    t.textContent = (ev && ev.ts) ? String(ev.ts)
+      : ((ev && typeof ev.seq === "number") ? ("#" + ev.seq) : DASH);
+    const g = document.createElement("span");
+    g.className = "tag";
+    g.textContent = (ev && ev.world === "A") ? "A" : ((ev && ev.world === "B") ? "B" : "*");
+    const m = document.createElement("span");
+    m.className = "m";
+    m.textContent = evText(ev);
+    li.appendChild(t);
+    li.appendChild(g);
+    li.appendChild(m);
+    ul.appendChild(li);
+  }
+}
+function renderEvents() {
+  const A = [], B = [], G = [];
+  for (const ev of EVENTS) {
+    if (ev && ev.world === "A") A.push(ev);
+    else if (ev && ev.world === "B") B.push(ev);
+    else G.push(ev);
+  }
+  fillList("evA", A.slice(-40));
+  fillList("evB", B.slice(-40));
+  fillList("evG", G.slice(-40));
+}
+function render(s) {
+  setText("match", s.match_id);
+  setText("mode", s.mode);
+  setText("round", s.round);
+  setText("winner", s.winner);
+  const ph = s.phase ? String(s.phase).toLowerCase() : "";
+  const pEl = $("phase");
+  if (pEl) {
+    const paused = (s.paused === true);
+    pEl.textContent = (PHASE_LABEL[ph] || val(s.phase)) + (paused ? " · paused" : "");
+    pEl.className = "phase " + ph + (paused ? " paused" : "");
+  }
+  const pz = $("paused");
+  if (pz) pz.textContent = (s.paused === true) ? "paused" : "";
+  const teams = (s.teams && typeof s.teams === "object") ? s.teams : {};
+  renderSide("A", teams.A);
+  renderSide("B", teams.B);
+  if (Array.isArray(s.feed)) { for (const ev of s.feed) addEvent(ev); }
+  renderEvents();
+}
+async function pollState() {
+  try {
+    const res = await fetch("/referee/state", { cache: "no-store" });
+    if (res.status !== 200) {
+      let reason = "";
+      try { const j = await res.json(); reason = (j && j.reason) ? j.reason : ""; } catch (e) {}
+      const msg = (reason === "referee_unconfigured") ? "offline (referee nicht konfiguriert)"
+        : ((reason === "referee_unreachable") ? "offline (referee nicht erreichbar)"
+        : ("HTTP " + res.status + (reason ? " " + reason : "")));
+      setStatus(false, msg);
+      return;
+    }
+    let s = null;
+    try { s = await res.json(); } catch (e) { s = null; }
+    if (!s || typeof s !== "object") { setStatus(false, "ungueltige Antwort"); return; }
+    render(s);
+    setStatus(true, "live");
+  } catch (e) {
+    setStatus(false, "offline");
+  }
+}
+async function pollEvents() {
+  if (!EV_SEQ_READY) return;
+  try {
+    const res = await fetch("/referee/events?since=" + LAST_SEQ, { cache: "no-store" });
+    if (res.status !== 200) return;
+    let j = null;
+    try { j = await res.json(); } catch (e) { return; }
+    if (j && Array.isArray(j.events)) { for (const ev of j.events) addEvent(ev); }
+    if (j && typeof j.last_seq === "number" && j.last_seq > LAST_SEQ) {
+      LAST_SEQ = j.last_seq;
+      EV_SEQ_READY = true;
+    }
+    renderEvents();
+  } catch (e) { /* defensiv: Cursor-Poll faellt aus, Feed bleibt */ }
+}
+setClock();
+setInterval(setClock, 1000);
+pollState();
+setInterval(pollState, POLL_MS);
+setInterval(pollEvents, EV_POLL_MS);
+// ==== MATCH-VIEW END ====
+</script>
+</body>
+</html>
+)HTML";
+
 void httpSendAll(SOCKET s, const std::string &data) {
   std::size_t off = 0;
   while (off < data.size()) {
@@ -2772,6 +3079,29 @@ void handleRefereeState(SOCKET s) {
                   r.body.empty() ? "{\"ok\":true}" : r.body);
 }
 
+// GET /referee/events: Cursor-Feed des Referees durchreichen (Issue #1031,
+// additiv fuer die read-only Match-View). Query `?since=<seq>` wird nur als
+// reine Ganzzahl uebernommen (sonst ohne Cursor). Fehler-Mapping wie
+// `handleRefereeState` (503 unconfigured / 502 unreachable / Backend-Status).
+void handleRefereeEvents(SOCKET s, const std::string &queryString) {
+  if (!g_refereeConfigured) {
+    httpRespondJson(s, 503, "Service Unavailable",
+                    "{\"ok\":false,\"reason\":\"referee_unconfigured\",\"retry\":false}");
+    return;
+  }
+  const std::string path = rbref::buildEventsPath(queryString);
+  const OutboundResult r = outboundHttpCall("GET", g_refereeHost, g_refereePort,
+                                            path, "", g_refereeToken, 2000, 5000);
+  const rbref::RefStatus st = rbref::mapRefereeError(true, r.status);
+  if (st == rbref::RefStatus::Unreachable) {
+    httpRespondJson(s, 502, "Bad Gateway",
+                    "{\"ok\":false,\"reason\":\"referee_unreachable\"}");
+    return;
+  }
+  httpRespondJson(s, r.status, r.status == 200 ? "OK" : "Error",
+                  r.body.empty() ? "{\"ok\":true}" : r.body);
+}
+
 // POST /referee/ready: Welt/Spieler ready melden (Issue #1024). Body
 // `{world:"A"|"B", identitaet?}`; ohne/dekodierbar `world` -> 400. Der Referee
 // liegt hinter Bearer -> Token aus RBB_REFEREE_TOKEN. Idempotent (Referee
@@ -2977,8 +3307,14 @@ void httpHandle(SOCKET s) {
     handleQueueRematch(s, body);
   } else if (method == "GET" && path == "/queue/status") {
     handleQueueStatus(s);
+  } else if (method == "GET" && path == "/match") {
+    // Read-only Match-View (Issue #1031): eigene Single-File-Seite. `GET /`
+    // liefert unveraendert die Lobby (`kUiHtml`).
+    httpRespond(s, 200, "OK", "text/html; charset=utf-8", kMatchHtml);
   } else if (method == "GET" && path == "/referee/state") {
     handleRefereeState(s);
+  } else if (method == "GET" && path == "/referee/events") {
+    handleRefereeEvents(s, queryString);
   } else if (method == "POST" && path == "/referee/ready") {
     handleRefereeReady(s, body);
   } else if (method == "POST" && path == "/referee/rematch") {
