@@ -274,17 +274,6 @@ static void testParseEventsLastSeq() {
   check(!rbref::parseEventsLastSeq("", seq), "leer -> false");
 }
 
-static void testJsonArrayItemCount() {
-  check(rbref::jsonArrayItemCount(
-            "{\"feed\":[{\"kind\":\"go\"},{\"kind\":\"wave\"}]}", "feed") == 2,
-        "feed mit 2 Objekten");
-  check(rbref::jsonArrayItemCount("{\"feed\":[]}", "feed") == 0,
-        "leerer feed -> 0");
-  check(rbref::jsonArrayItemCount("{\"phase\":\"Lobby\"}", "feed") == 0,
-        "fehlendes feed -> 0 (kein Crash)");
-  check(rbref::jsonArrayItemCount("", "feed") == 0, "leerer Body -> 0");
-}
-
 int main() {
   testParseConfigValid();
   testParseConfigInvalid();
@@ -296,7 +285,6 @@ int main() {
   testResolveReadyRoute();
   testBuildEventsPath();
   testParseEventsLastSeq();
-  testJsonArrayItemCount();
 
   std::printf("%d/%d ok\n", g_checks - g_failures, g_checks);
   if (g_failures != 0) {

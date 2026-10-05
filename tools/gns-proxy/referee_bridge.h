@@ -289,20 +289,6 @@ inline bool parseEventsLastSeq(const std::string &body, long long &seq) {
   return rbapi::jsonIntField(body, "last_seq", seq);
 }
 
-// Anzahl der Objekte in einem flachen JSON-Array hinter `"key"` (naiv: zaehlt
-// `{`). Fuer die Feed-Robustheit der Match-View: fehlendes/leeres `feed` -> 0,
-// kein Crash. Bewusst kein allgemeiner JSON-Parser.
-inline int jsonArrayItemCount(const std::string &body, const std::string &key) {
-  const std::string slice = rbapi::jsonArraySlice(body, key);
-  int count = 0;
-  for (char c : slice) {
-    if (c == '{') {
-      ++count;
-    }
-  }
-  return count;
-}
-
 }  // namespace rbref
 
 #endif  // RBBATTLE_REFEREE_BRIDGE_H
