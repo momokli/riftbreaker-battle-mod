@@ -223,8 +223,11 @@ jobs:
           /tmp/test_referee_bridge
       # Read-only-Nachweis Match-View (Issue #1031): die eingebettete Seite
       # GET /match darf ausschliesslich lesen. Der per Sentinel geklammerte
-      # JS-Block (MATCH-VIEW BEGIN/END) wird auf mutierende Methoden/Pfade
-      # geprueft — nur GET ist erlaubt.
+      # JS-Block (MATCH-VIEW BEGIN/END) wird auf eine Allow-List geprueft:
+      # jede `fetch(`-Zeile muss auf `/referee/state` oder `/referee/events`
+      # zeigen, und es darf kein `method:` / `POST` vorkommen. Das ist echtes
+      # Allow-Listing (neue/unquotierte/dynamische Pfade fallen auf) statt
+      # einer festen Deny-Liste.
       - name: Read-only-Nachweis Match-View (Issue #1031)
         if: needs.changes.outputs.test == 'true'
         run: |
@@ -232,20 +235,15 @@ jobs:
           awk '/MATCH-VIEW BEGIN/{f=1} f{print} /MATCH-VIEW END/{f=0}' \
             tools/gns-proxy/gns_probe.cpp > /tmp/match_view_js.txt
           test -s /tmp/match_view_js.txt
-          fail=0
-          if grep -qF 'method:"POST"' /tmp/match_view_js.txt; then fail=1; fi
-          if grep -qF "method:'POST'" /tmp/match_view_js.txt; then fail=1; fi
-          for p in /lobby /ready /go /pause /resume /send /report /rematch /sp /wave /referee/ready; do
-            if grep -qF "\"$p\"" /tmp/match_view_js.txt; then
-              echo "HIT: \"$p\"" >&2
-              fail=1
-            fi
-          done
-          if [ "$fail" -ne 0 ]; then
-            echo "FEHLER: Match-View enthaelt mutierende Aufrufe/Pfade" >&2
-            exit 1
-          fi
-          echo "OK: Match-View ist read-only (nur GET)"
+          grep -q 'fetch(' /tmp/match_view_js.txt
+          awk '/fetch\(/ && $0 !~ /fetch\("\/referee\/(state|events)/ {
+                 print "FAIL (unerlaubtes fetch-Ziel): " $0 > "/dev/stderr"; bad=1 }
+               END { exit (bad?1:0) }' /tmp/match_view_js.txt
+          if grep -qiE 'method[[:space:]]*:' /tmp/match_view_js.txt; then
+            echo "FAIL: method: im read-only Block" >&2; exit 1; fi
+          if grep -qiE '\bpost\b' /tmp/match_view_js.txt; then
+            echo "FAIL: POST im read-only Block" >&2; exit 1; fi
+          echo "OK: Match-View read-only (Allow-List: nur GET /referee/state|events)"
       # Kapsel-Flow/-Dienst (Issue #931/#992): unittest, stdlib-only, kein Netz.
       # Der Python-Spiegel der Identitaets-Normalisierung (identity.py) wird
       # ueber dieselbe discover-Suite geprueft.
