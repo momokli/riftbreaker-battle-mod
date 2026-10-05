@@ -375,7 +375,7 @@ Client B ─┘                                                  ├─► Wave-
 ```
 
 - **Abnahme-Ziel ist prod A/B**, nicht „staging": die Staging-Umgebung ist mit
-  [#1034] vollständig abgebaut ([`STAGING.md`](STAGING.md) → retired); es gilt der
+  [#1034](https://github.com/momokli/riftbreaker-battle-mod/issues/1034) vollständig abgebaut ([`STAGING.md`](STAGING.md) → retired); es gilt der
   prod-only-Stand (Welten A `:6322`, B `:6325`, ein GNS-Eingang `planet:6321`).
 - Die Welten laufen **kalt, pausiert und joinbar** (§6.7); „Resume" **IST** der
   Ready-Handover (§6.5) — **kein** Pre-GO-`resume_game`.
@@ -385,18 +385,22 @@ Client B ─┘                                                  ├─► Wave-
 
 ### 10.2 Ist-Stand je Kettenglied (2026-10-05, read-only)
 
+**Status-Legende:** ✅ belegt · ⏳ offen (player-abhängig oder Beweis fehlt) · ⚠️ Abweichung (nicht blockierend) · ❌ Blocker.
+
 | # | Kettenglied | Live-Befund | Status |
 | - | ----------- | ----------- | ------ |
 | 1 | **GNS-Entry-Relay** `planet:6321` (Multi-Session) | `gns_probe.exe` lauscht auf `0.0.0.0:6321`, `--max-players 4`, Modus **HOLD**, API/UI `127.0.0.1:9200` | ✅ läuft |
 | 2 | **A/B-Routing** | 3 Routen geladen: `*-a → 127.0.0.1:6322` (A), `*-b → 127.0.0.1:6325` (B), `* → 127.0.0.1:6322` (Default); Auflösung exakt > längster Suffix > Default | ✅ konfiguriert |
 | 3 | **Welt A / Welt B** (Dedi + Bridge) | A: `riftbreaker-dedicated-prod` **healthy** (`:6322/udp`), Bridge `:9002` → `/health` `{"ok":true,"pipe":true}`. B: `riftbreaker-dedicated-prod-b` Up 3 Tage **unhealthy** (`:6325/udp`), Bridge `:9004` → `/health` `{"ok":true,"pipe":true}` | ⚠️ B-Container unhealthy |
 | 4 | **Kalte Provisionierung** (Queue → Provisioner `:8094`) | `rbmods-queue.service` läuft (`127.0.0.1:9221`, `/health` `{"ok":true,"env":"prod"}`); **Provisioner-HTTP-Service `:8094` ist nicht deployt** (0 Listener) → Queue-Aufruf läuft in `503 provision_failed` | ❌ **Blocker** (#1083) |
-| 5 | **Referee Lobby/Ready/GO** | `tournament-server-prod.service` läuft (`127.0.0.1:8082`), `/health` `200`, `/state` `phase=lobby`, `match_id=rift-1`; GO-Broadcast an beide Bridges = §6.5 (`/resume_game` + `/start`) | ✅ Read / GO-Beweis offen |
+| 5 | **Referee Lobby/Ready/GO** | `tournament-server-prod.service` läuft (`127.0.0.1:8082`), `/health` `200`, `/state` `phase=lobby`, `match_id=rift-1`; GO-Broadcast an beide Bridges = §6.5 (`/resume_game` + `/start`) | ⏳ Read ok, GO-Beweis offen |
 | 6 | **Wave-Spawn in beiden Welten** | Attack-Cycle beider Welten meldet `attack_status` `state=paused`, `mode=solo` (kalt/pausiert) | ⏳ nur mit Spielern sichtbar |
 | 7 | **Pause/Resume** | `POST /pause` `/resume` fan-out an beide Bridges, aber **nur in `phase=running`** (sonst `409`) — ohne laufendes Match nicht live auslösbar | ⏳ |
 | 8 | **Ergebnis** (HQ → `winner`) | per-Welt-HQ-Reporter im Match-Loop (§6.4, #996) | ⏳ |
 
 ### 10.3 Live-Belege (read-only, `planet`, 2026-10-05)
+
+**Stand 2026-10-05** — abweichend vom Erfassungsdatum 2026-10-01 in **#1083**; die Belege dieses Blocks wurden am **2026-10-05** read-only erhoben.
 
 ```
 # Relay-Routen (Startlog gns_probe, /opt/rbmods/compose/gns-relay/routes)
