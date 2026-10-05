@@ -350,3 +350,107 @@ Crash/Rematch-waehrend-`running` out of scope bzw. refused — siehe
   statt des toten `/exec`-Kanals; `TOURNAMENT_API.md` ist angeglichen.
 - **Scope:** echtes 1v1 ist laut `PLAYTEST_1.0.md` **Post-1.0** — dieses Konzept
   ist die Vorarbeit dafür.
+
+---
+
+## 10. Live-Abnahme der VS-Kette (Issue #1032)
+
+> **Status:** Abnahme-Protokoll — Zwischenstand **2026-10-05** auf `planet`,
+> Deploy-Stand `main` @ `9135e2b`. **Test-Hoheit:** Mensch (Momo) — der Agent
+> liefert Deploy-Stand, Read-Outs und Logs; die Abnahme-Entscheidung trifft der
+> menschliche Test (Muster: `PLAYTEST_1.0.md`). **Issue:** #1032 ·
+> **Milestone:** 1.0.20. **Vorarbeit:** #1031 (Match-View), #1024–#1030,
+> #996/#997 (Cross-World-Send, HQ-Reporter, Pause-Fan-out).
+
+### 10.1 Zweck & Methode
+
+Abgenommen wird die **komplette VS-Kette**:
+
+```
+Client A ─┐
+          ├─ GNS :6321 ─► A/B-Routing ─► kalte Welten A/B ─► Referee Lobby/Ready/GO
+Client B ─┘                                                  ├─► Wave-Spawn A+B
+                                                             ├─► Pause/Resume
+                                                             └─► Ergebnis (HQ)
+```
+
+- **Abnahme-Ziel ist prod A/B**, nicht „staging": die Staging-Umgebung ist mit
+  [#1034] vollständig abgebaut ([`STAGING.md`](STAGING.md) → retired); es gilt der
+  prod-only-Stand (Welten A `:6322`, B `:6325`, ein GNS-Eingang `planet:6321`).
+- Die Welten laufen **kalt, pausiert und joinbar** (§6.7); „Resume" **IST** der
+  Ready-Handover (§6.5) — **kein** Pre-GO-`resume_game`.
+- Automatisiert vorabnehmbar bleiben die Harness-/E2E-Pfade
+  (`deploy/queue/e2e_998_queue.py`, Referee-`broadcast_go`/`pause`-Tests): sie
+  belegen den Dienstpfad gegen Stubs, **nicht** die Live-Wirkung im Spiel.
+
+### 10.2 Ist-Stand je Kettenglied (2026-10-05, read-only)
+
+| # | Kettenglied | Live-Befund | Status |
+| - | ----------- | ----------- | ------ |
+| 1 | **GNS-Entry-Relay** `planet:6321` (Multi-Session) | `gns_probe.exe` lauscht auf `0.0.0.0:6321`, `--max-players 4`, Modus **HOLD**, API/UI `127.0.0.1:9200` | ✅ läuft |
+| 2 | **A/B-Routing** | 3 Routen geladen: `*-a → 127.0.0.1:6322` (A), `*-b → 127.0.0.1:6325` (B), `* → 127.0.0.1:6322` (Default); Auflösung exakt > längster Suffix > Default | ✅ konfiguriert |
+| 3 | **Welt A / Welt B** (Dedi + Bridge) | A: `riftbreaker-dedicated-prod` **healthy** (`:6322/udp`), Bridge `:9002` → `/health` `{"ok":true,"pipe":true}`. B: `riftbreaker-dedicated-prod-b` Up 3 Tage **unhealthy** (`:6325/udp`), Bridge `:9004` → `/health` `{"ok":true,"pipe":true}` | ⚠️ B-Container unhealthy |
+| 4 | **Kalte Provisionierung** (Queue → Provisioner `:8094`) | `rbmods-queue.service` läuft (`127.0.0.1:9221`, `/health` `{"ok":true,"env":"prod"}`); **Provisioner-HTTP-Service `:8094` ist nicht deployt** (0 Listener) → Queue-Aufruf läuft in `503 provision_failed` | ❌ **Blocker** (#1083) |
+| 5 | **Referee Lobby/Ready/GO** | `tournament-server-prod.service` läuft (`127.0.0.1:8082`), `/health` `200`, `/state` `phase=lobby`, `match_id=rift-1`; GO-Broadcast an beide Bridges = §6.5 (`/resume_game` + `/start`) | ✅ Read / GO-Beweis offen |
+| 6 | **Wave-Spawn in beiden Welten** | Attack-Cycle beider Welten meldet `attack_status` `state=paused`, `mode=solo` (kalt/pausiert) | ⏳ nur mit Spielern sichtbar |
+| 7 | **Pause/Resume** | `POST /pause` `/resume` fan-out an beide Bridges, aber **nur in `phase=running`** (sonst `409`) — ohne laufendes Match nicht live auslösbar | ⏳ |
+| 8 | **Ergebnis** (HQ → `winner`) | per-Welt-HQ-Reporter im Match-Loop (§6.4, #996) | ⏳ |
+
+### 10.3 Live-Belege (read-only, `planet`, 2026-10-05)
+
+```
+# Relay-Routen (Startlog gns_probe, /opt/rbmods/compose/gns-relay/routes)
+route *-a -> 127.0.0.1:6322
+route *-b -> 127.0.0.1:6325
+route  *   -> 127.0.0.1:6322
+RELAY-MODUS: HOLD | routen=3 | identitaet(exakt)+name | max-players 4
+
+# Bridges
+curl -s http://127.0.0.1:9002/health  -> {"ok":true,"pipe":true}   # Welt A
+curl -s http://127.0.0.1:9004/health  -> {"ok":true,"pipe":true}   # Welt B
+
+# Referee
+curl -s http://127.0.0.1:8082/health  -> HTTP 200
+curl -s http://127.0.0.1:8082/state   -> {"phase":"lobby","match_id":"rift-1","paused":false, ...}
+
+# Queue
+curl -s -H "Authorization: Bearer <queue-token>" http://127.0.0.1:9221/health
+    -> {"ok": true, "env": "prod"}
+
+# Provisioner (Soll-Nachbar der Queue, QUEUE_PROVISIONER_URL default 127.0.0.1:8094)
+ss -tlnp | grep ':8094'   -> (leer, 0 Listener)
+
+# Dedi-Container/Ports
+riftbreaker-dedicated-prod     Up (healthy)    0.0.0.0:6322->6321/{tcp,udp}   127.0.0.1:9002
+riftbreaker-dedicated-prod-b   Up 3 days (unhealthy)  0.0.0.0:6325->6321/{tcp,udp}  127.0.0.1:9004
+gns-relay                      Up (unhealthy)  UDP :6321
+```
+
+### 10.4 Blocker & offene Punkte
+
+- ❌ **HART — Provisioner-HTTP (`:8094`) fehlt.** Der Queue-Dienst provisioniert
+  kalte A/B-Welten ausschließlich über `QUEUE_PROVISIONER_URL`
+  (Default `http://127.0.0.1:8094`, `deploy/queue/queue_service.py`). Ohne den
+  Dienst bricht die Kette am **4. Glied** ab. Bereits erfasst als
+  **Issue #1083** (Milestone 1.0.22) — dessen DoD fordert die Live-Prüfung
+  ausdrücklich als „Teil der VS-Abnahme #1032".
+- ⚠️ **Welt B unhealthy** (`riftbreaker-dedicated-prod-b`, seit ~3 Tagen) bei
+  erreichbarer Bridge — vor der Live-Abnahme prüfen/selbstheilen.
+- ⏳ **Sidecar-Mitpause** (#553): der Attack-Cycle je Welt pausiert (eigene
+  Timer) noch nicht mit dem Match-Level-Pause.
+- ⏳ **Player-sichtbarer Wave-Spawn** (#252): Dispatch/`exec_result` host-seitig
+  belegt, die sichtbare Wirkung im Spiel ist nur mit Spielern abnehmbar.
+
+### 10.5 Abnahme-Ergebnis
+
+**Durchführung abgeschlossen, Ergebnis: nicht vollständig bestanden.**
+
+- Die Kette ist **bis Glied 3** (GNS-Eingang · A/B-Routing · beide Welten/Bridges)
+  live belegt; sie **bricht am 4. Glied** (kalte Provisionierung: Queue →
+  Provisioner `:8094`, #1083).
+- Die gefundene Lücke ist als **#1083** dokumentiert (DoD: Deploy + Live-Prüfung
+  im Rahmen dieser Abnahme).
+- **Nächster Schritt:** nach #1083 die Kette mit **zwei Clients** live
+  durchspielen (Queue-Pairing → A/B → GO → Wave in beiden Welten → Pause/Resume →
+  HQ-Ergebnis) und Logs/Screenshots hier ergänzen; die player-abhängigen Punkte
+  (#553, #252) dabei abhaken.
