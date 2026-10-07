@@ -390,6 +390,12 @@ jobs:
           done
           echo "compose.yaml OK (solo, versus)"
 
+      # Hygiene-Timer-Sidecar (Issue #1103): die Ofelia-Jobs (image-retention /
+      # host-hygiene) muessen per Labels/Env/Mounts am `hygiene`-Service sitzen.
+      - name: "Hygiene-Timer (Ofelia) verdrahtet (#1103)"
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
+        run: bash deploy/tests/hygiene-sidecar/run.sh
+
       # content-init-Idempotenz (Issue #1102): der Compose-Init-Container zieht den
       # Content nur beim Erstlauf bzw. mit force; danach offline gruen (#1095).
       - name: "content-init Idempotenz (hermetisch)"

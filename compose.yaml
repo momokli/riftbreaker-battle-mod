@@ -5,7 +5,8 @@
 #
 # Bringt den kompletten lokalen Stack hoch: Game-Content, config.cfg, rbtools +
 # gns_probe, Mod-Rollout, Dedicated Server, Sidecars, Entry-Proxy/Lobby, Caddy,
-# Observer/Control und den VS-Pfad (Queue + Provisioner).
+# Observer/Control, den VS-Pfad (Queue + Provisioner) und den Hygiene-Timer
+# (hygiene + ofelia, #1103).
 #
 # PFAD-MODELL (Issue #1112): geteilte Dirs liegen als Bind-Mounts unter EINEM
 # Host-Root ${RBB_HOST_ROOT} (Default /srv/rbbattle) — damit der Provisioner
@@ -514,6 +515,55 @@ services:
       - "127.0.0.1:${RBB_QUEUE_PORT:-9221}:9221"
     volumes:
       - ${RBB_HOST_ROOT:-/srv/rbbattle}/queue:/var/lib/rbmods/queue
+
+  # === Hygiene: Timer-Sidecar (Ofelia) — image-retention + host-hygiene ======
+  # Containerized twin of the systemd timers rbmods-image-retention (#309) and
+  # rbmods-host-hygiene (#308/#606), Issue #1103. `hygiene` idles and carries the
+  # tools (Docker CLI + shell) + mounts; `ofelia` schedules the two jobs as
+  # LABELS on `hygiene` and runs them INSIDE it via `docker exec` (job-exec) — so
+  # the jobs inherit hygiene's env (incl. RB_PROTECTED_TAGS=rb-dedicated:${RBB_REF})
+  # and mounts for free. Ofelia must start AFTER hygiene: label discovery is not
+  # realtime (docs/jobs.md). Schedules use robfig/cron descriptors (@daily/@weekly)
+  # to sidestep the seconds-field format of Ofelia 0.3.x.
+  hygiene:
+    build:
+      context: ./deploy/compose/hygiene
+    image: rbb-hygiene:${RBB_REF:-dev}
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      # image-retention (#309): Tag-Retention der Mod-Runtime-Images.
+      RB_IMAGE_REPOS: "rb-dedicated rb-headless-client"
+      RB_ROLLBACK_TAGS: "2"
+      RB_PROTECTED_TAGS: "rb-dedicated:${RBB_REF:-dev}"
+      # host-hygiene (#308/#606): dangling-Image-Prune + rbtools test-* Retention.
+      RB_HYGIENE_IMAGE_REPOS: "rb-dedicated rb-headless-client"
+      RB_HYGIENE_RBTOOLS_DIR: "/opt/rbmods/rbtools"
+      RB_HYGIENE_RBTOOLS_RETENTION: "10"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/rbtools:/opt/rbmods/rbtools
+      - ./deploy/image-retention:/opt/rbmods/image-retention:ro
+      - ./deploy/host-hygiene:/opt/rbmods/host-hygiene:ro
+    labels:
+      ofelia.enabled: "true"
+      ofelia.job-exec.image-retention.schedule: "@daily"
+      ofelia.job-exec.image-retention.command: "/opt/rbmods/image-retention/docker_image_tag_retention.sh"
+      ofelia.job-exec.host-hygiene.schedule: "@weekly"
+      ofelia.job-exec.host-hygiene.command: "/opt/rbmods/host-hygiene/host_hygiene.sh"
+
+  ofelia:
+    image: mcuadros/ofelia:0.3.22
+    restart: unless-stopped
+    depends_on:
+      hygiene:
+        condition: service_started
+    logging: *default-logging
+    environment:
+      TZ: UTC
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: daemon --docker
 
 volumes:
   # Nur Wine-/Saves-Prefixe bleiben Named Volumes (pro Instanz, nicht pro Host-Root).

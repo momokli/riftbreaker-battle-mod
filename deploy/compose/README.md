@@ -5,8 +5,9 @@ den aktuellen Checkout — Game-Content, config.cfg, rbtools + gns_probe, den
 Dedicated Server, die Sidecars, den Entry-Proxy/Lobby und Caddy.
 
 > **Stand:** Solo läuft end-to-end (Proxy → Lobby → **warmed capsule** → Dedicated).
-> Der **VS-Pfad** (Queue → Provisioner → kalte A/B-Welten) ist verdrahtet. Offen:
-> Timer (#1103), CI-Gates (#1102), Ansible-Runtime-Rückbau; Live-Smoke → besttoasy.
+> Der **VS-Pfad** (Queue → Provisioner → kalte A/B-Welten) ist verdrahtet. Der
+> **Hygiene-Timer** (#1103) ist als Ofelia-Sidecar im Stack (siehe Services). Offen:
+> CI-Gates (#1102), Ansible-Runtime-Rückbau; Live-Smoke → besttoasy.
 
 ## Aufruf
 
@@ -51,10 +52,19 @@ Der Wrapper `deploy/compose/up.sh` setzt `RBB_REF` auf den Git-SHA des Checkouts
 | `tournament-server`                                                | Referee + Web-UI (Rust)                                                   |
 | `provisioner`                                                      | Provisioner-HTTP `:8094` — kalte VS-Welten via `docker run` (#1083/#1110) |
 | `queue`                                                            | VS-Queue `:9221` — 1v1-Paarung + kalte A/B-Welten (#998)                  |
+| `hygiene`                                                          | Timer-Tooling: `image-retention` + `host-hygiene` (`job-exec`-Ziel)       |
+| `ofelia`                                                           | Job-Scheduler (`:docker`), läuft die Hygiene-Jobs im `hygiene`-Container  |
 
 `solo` läuft über die statische `dedicated` + **warmed capsule**. **VS (1v1)** läuft
 über die **Queue → Provisioner → kalte A/B-Welten** (kein statischer 2. Dedi).
 `RBB_MODE` steuert das Mode-Gate der Lobby.
+
+### Scheduler: Ofelia statt eigenem Cron
+
+Die Hygiene-Jobs laufen über **Ofelia** (`mcuadros/ofelia:0.3.22`, `:docker`).
+Ofelia liest die Zeitpläne als **Labels am `hygiene`-Container** und führt sie per
+**`job-exec`** _in_ diesem aus → Jobs erben env + Mounts, ein Scheduler-Image für
+beide Jobs. Details: `deploy/compose/hygiene/README.md`.
 
 ## Volumes / Pfad-Modell
 
@@ -67,7 +77,6 @@ Geteilte Dirs liegen als **Bind-Mounts unter dem Host-Root `${RBB_HOST_ROOT}`
 
 ## Offen (Folge-Issues)
 
-- **Timer** (#1103): `image-retention`, `host-hygiene` — Host vs. Compose.
 - **CI-Gates** (#1102): `deploy-check-local` compose-nativ; env-Tests raus.
 - **Ansible-Runtime-Rückbau**: Ansible nur noch host-Provisioning.
 - **Live-Smoke** (`up` + SOLO/VS-Flow) → **besttoasy**.
