@@ -4,9 +4,9 @@ Self-contained lokaler Stack: `docker compose up --build -d` baut und startet
 den aktuellen Checkout — Game-Content, config.cfg, rbtools + gns_probe, den
 Dedicated Server, die Sidecars, den Entry-Proxy/Lobby und Caddy.
 
-> **Stand:** Der lokale `solo`-Stack läuft end-to-end (Proxy → Lobby → **warmed
-> capsule** → Dedicated). Offen: `versus` (#1104), Timer (#1103), CI-Gates
-> (#1102) — siehe „Offen".
+> **Stand:** Solo läuft end-to-end (Proxy → Lobby → **warmed capsule** → Dedicated).
+> Der **VS-Pfad** (Queue → Provisioner → kalte A/B-Welten) ist verdrahtet. Offen:
+> Timer (#1103), CI-Gates (#1102), Ansible-Runtime-Rückbau; Live-Smoke → besttoasy.
 
 ## Aufruf
 
@@ -17,9 +17,10 @@ docker compose logs -f    # aus dem Repo-Root, ohne -p/-f-Flags
 ```
 
 Der Wrapper `deploy/compose/up.sh` setzt `RBB_REF` auf den Git-SHA des Checkouts
-(→ Image-Tag `rb-dedicated:<sha>` + `RBB_REF` in Containern/Logs) und ruft
-`docker compose --env-file .env up --build -d` auf. Äquivalent direkt:
-`docker compose up --build -d` (dann kommt `RBB_REF` aus `.env`).
+(→ Image-Tag `rb-dedicated:<sha>` + `RBB_REF` in Containern/Logs), setzt
+`RBB_HOST_ROOT` (absolut, Pfad-Modell #1112) und legt dessen Unterordner an, dann
+`docker compose --env-file .env up --build -d`. Äquivalent direkt:
+`docker compose up --build -d` (dann kommen `RBB_REF`/`RBB_HOST_ROOT` aus `.env`).
 
 ## Zielbild (Flow)
 
@@ -33,36 +34,40 @@ Der Wrapper `deploy/compose/up.sh` setzt `RBB_REF` auf den Git-SHA des Checkouts
 
 ## Services
 
-| Service                                                            | Rolle                                                                   |
-| ------------------------------------------------------------------ | ----------------------------------------------------------------------- |
-| `content-init`                                                     | Game-Content + private PDB per HTTP (idempotent, #566/#1095)            |
-| `config-init`                                                      | rendert `config.cfg` (envsubst; vorher Jinja-Template)                  |
-| `rbtools-build`                                                    | baut die 4 Server-I/O-Binaries + `gns_probe.exe` aus dem Checkout       |
-| `mod-build`                                                        | baut `rbbattle.zip` + Rollout: Marker/Backup/`#212`-Guard (#1099)       |
-| `dedicated`                                                        | Dedicated Server (Wine/Xvfb), publiziert :6322 + Bridge :9001           |
-| `session-recorder` / `send-tailer` / `match-loop` / `attack-cycle` | Sidecars                                                                |
-| `warm`                                                             | warmed-capsule-Claim-Quelle (Parked-Subset) der statischen Dedi (#1108) |
-| `capsule-flow`                                                     | Kapsel-Flow (open/ready/finish) über `warm` + `attack-cycle`            |
-| `gns-relay`                                                        | Entry-Proxy `:6321` (hold + route) + Lobby-API `:9200` + Mode-Gate      |
-| `caddy`                                                            | http-only Entry; Lobby auf `:8088` → Relay-API                          |
-| `crash-collector`                                                  | Crash-Collector + Symbolizer (`docker.sock` + DLL/PDB)                  |
-| `server-control`                                                   | Server-Control-Agent (`docker.sock`)                                    |
-| `tournament-server`                                                | Referee + Web-UI (Rust)                                                 |
+| Service                                                            | Rolle                                                                     |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| `content-init`                                                     | Game-Content + private PDB per HTTP (idempotent, #566/#1095)              |
+| `config-init`                                                      | rendert `config.cfg` (envsubst; vorher Jinja-Template)                    |
+| `rbtools-build`                                                    | baut die 4 Server-I/O-Binaries + `gns_probe.exe` aus dem Checkout         |
+| `mod-build`                                                        | baut `rbbattle.zip` + Rollout: Marker/Backup/`#212`-Guard (#1099)         |
+| `dedicated`                                                        | Dedicated Server (Wine/Xvfb), publiziert :6322 + Bridge :9001             |
+| `session-recorder` / `send-tailer` / `match-loop` / `attack-cycle` | Sidecars                                                                  |
+| `warm`                                                             | warmed-capsule-Claim-Quelle (Parked-Subset) der statischen Dedi (#1108)   |
+| `capsule-flow`                                                     | Kapsel-Flow (open/ready/finish) über `warm` + `attack-cycle`              |
+| `gns-relay`                                                        | Entry-Proxy `:6321` (hold + route) + Lobby-API `:9200` + Mode-Gate        |
+| `caddy`                                                            | http-only Entry; Lobby auf `:8088` → Relay-API                            |
+| `crash-collector`                                                  | Crash-Collector + Symbolizer (`docker.sock` + DLL/PDB)                    |
+| `server-control`                                                   | Server-Control-Agent (`docker.sock`)                                      |
+| `tournament-server`                                                | Referee + Web-UI (Rust)                                                   |
+| `provisioner`                                                      | Provisioner-HTTP `:8094` — kalte VS-Welten via `docker run` (#1083/#1110) |
+| `queue`                                                            | VS-Queue `:9221` — 1v1-Paarung + kalte A/B-Welten (#998)                  |
 
-Modus steuert die Topologie: `RBB_MODE=solo` → 1 Dedi, `RBB_MODE=versus` → 2
-Dedis (A/B). (`versus` noch offen — #1104.)
+`solo` läuft über die statische `dedicated` + **warmed capsule**. **VS (1v1)** läuft
+über die **Queue → Provisioner → kalte A/B-Welten** (kein statischer 2. Dedi).
+`RBB_MODE` steuert das Mode-Gate der Lobby.
 
-## Volumes
+## Volumes / Pfad-Modell
 
-Named Volumes (`rb-*`, projekt-präfixt zu `rbbattle_*`): `rb-game`
-(Content+Mods), `rb-config`, `rb-wine`, `rb-saves`, `rb-rbtools`, `rb-gns`,
-`rb-sessions`, `rb-downloads`, `rb-relay-wine`, `rb-backups`, `rb-crashes`,
-`rb-tournament`.
+Geteilte Dirs liegen als **Bind-Mounts unter dem Host-Root `${RBB_HOST_ROOT}`
+(Default `/srv/rbbattle`)**: `game/`, `config/`, `rbtools/`, `gns/`, `sessions/`,
+`backups/`, `crashes/`, `tournament/`, `downloads/`, `queue/`. Grund: der
+**Provisioner** erzeugt Sibling-Container via `docker run` und braucht dieselben
+**Host-Pfade (1:1)**. Nur die Wine-/Saves-Prefixe bleiben Named Volumes
+(`rb-wine`, `rb-saves`, `rb-relay-wine`).
 
 ## Offen (Folge-Issues)
 
-- **`versus`-Topologie** (#1104): zweiter Dedi (A/B) + Bridge-Paarung; braucht
-  Queue- (9221) + Referee- (8082) Services.
 - **Timer** (#1103): `image-retention`, `host-hygiene` — Host vs. Compose.
-- **CI-Gates** (#1102): `deploy-check-local` compose-nativ; env-Tests raus;
-  planet-Check stilllegen.
+- **CI-Gates** (#1102): `deploy-check-local` compose-nativ; env-Tests raus.
+- **Ansible-Runtime-Rückbau**: Ansible nur noch host-Provisioning.
+- **Live-Smoke** (`up` + SOLO/VS-Flow) → **besttoasy**.

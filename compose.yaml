@@ -1,14 +1,17 @@
 # Riftbreaker battle stack — self-contained lokal (Issue #1093).
 #
 #   cp .env.example .env      # einmalig anpassen
-#   docker compose up --build -d
+#   deploy/compose/up.sh      # = docker compose up --build -d (setzt RBB_REF/RBB_HOST_ROOT)
 #
-# Bringt den kompletten lokalen Stack hoch: Game-Content (HTTP, idempotent),
-# config.cfg, rbtools + gns_probe, den Dedicated Server, die Sidecars, den
-# Entry-Proxy/Lobby (:6321 + :8088) und Caddy (http-only).
+# Bringt den kompletten lokalen Stack hoch: Game-Content, config.cfg, rbtools +
+# gns_probe, Mod-Rollout, Dedicated Server, Sidecars, Entry-Proxy/Lobby, Caddy,
+# Observer/Control und den VS-Pfad (Queue + Provisioner).
 #
-# RBB_MODE=solo|versus wählt die Topologie (Walking Skeleton: solo).
-# Siehe deploy/compose/README.md und docs/… für den Stand/Umfang.
+# PFAD-MODELL (Issue #1112): geteilte Dirs liegen als Bind-Mounts unter EINEM
+# Host-Root ${RBB_HOST_ROOT} (Default /srv/rbbattle) — damit der Provisioner
+# (erzeugt Sibling-Container via `docker run`, Host-daemon loest `-v` gegen den
+# Host auf) DIESELBEN Host-Pfade sieht wie der Stack. Nur Wine-/Saves-Volumes
+# sind Named Volumes (pro Instanz).
 name: rbbattle
 
 x-logging: &default-logging
@@ -31,8 +34,8 @@ services:
       RBB_CONTENT_BASE: "${RBB_CONTENT_BASE}"
       RBB_CONTENT_FORCE: "${RBB_CONTENT_FORCE:-false}"
     volumes:
-      - rb-game:/game
-      - rb-downloads:/downloads
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/game:/game
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/downloads:/downloads
     logging: *default-logging
 
   # === Init: config.cfg rendern (vorher Jinja-Template der Rolle) =============
@@ -57,7 +60,7 @@ services:
       RBB_SERVER_DIFFICULTY: "${RBB_SERVER_DIFFICULTY:-coop_normal}"
     volumes:
       - ./deploy/compose/config/config.cfg.template:/templates/config.cfg.template:ro
-      - rb-config:/config
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/config:/config
     logging: *default-logging
 
   # === Init: rbtools + gns_probe bauen (aktueller Checkout) ===================
@@ -71,8 +74,8 @@ services:
       RBB_OUT: /out
     volumes:
       - ./:/src:ro
-      - rb-rbtools:/out/rbtools
-      - rb-gns:/out/gns
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/rbtools:/out/rbtools
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/gns:/out/gns
     logging: *default-logging
 
   # === Init: Battle-Mod bauen + ausrollen (Marker/Backup/#212-Guard) =========
@@ -90,8 +93,8 @@ services:
       RBB_BACKUP_DIR: /backups
     volumes:
       - ./:/src:ro
-      - rb-game:/game
-      - rb-backups:/backups
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/game:/game
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/backups:/backups
     logging: *default-logging
 
   # === Dedicated Server (RBB_MODE=solo: genau einer) ==========================
@@ -131,11 +134,11 @@ services:
       # Bridge (HTTP 9001 -> Named Pipe).
       - "127.0.0.1:${RBB_BRIDGE_PORT:-9001}:9001"
     volumes:
-      - rb-game:/opt/riftbreaker
-      - rb-config:/data/config
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/game:/opt/riftbreaker
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/config:/data/config
       - rb-wine:/data/.wine
       - rb-saves:/data/saves
-      - rb-rbtools:/opt/rbtools:ro
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/rbtools:/opt/rbtools:ro
     healthcheck:
       test: ["CMD-SHELL", "pgrep -f DedicatedServer.exe >/dev/null && curl -fsS --max-time 4 http://127.0.0.1:9001/health >/dev/null"]
       interval: 15s
@@ -157,7 +160,7 @@ services:
       RBB_REF: *rbb-ref
     volumes:
       - rb-wine:/data/.wine:ro
-      - rb-sessions:/data/sessions
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/sessions:/data/sessions
       - ./deploy/session-recorder/session_recorder.py:/app/session_recorder.py:ro
     command:
       - python3
@@ -258,6 +261,8 @@ services:
         condition: service_completed_successfully
       capsule-flow:
         condition: service_started
+      queue:
+        condition: service_started
     logging: *default-logging
     labels:
       RBB_REF: *rbb-ref
@@ -269,14 +274,17 @@ services:
       DISPLAY: ":99"
       RBB_REF: *rbb-ref
       # Kapsel-Flow: POST /solo -> POST /capsule/open (warmed capsule). Der Relay
-      # laeuft im Host-Netz und erreicht den Kapsel-Publish auf 127.0.0.1.
+      # laeuft im Host-Netz und erreicht die Publish-Ports auf 127.0.0.1.
       RBB_CAPSULE_URL: "http://127.0.0.1:${RBB_CAPSULE_PORT:-9211}"
       RBB_CAPSULE_TOKEN: "${RBB_CAPSULE_TOKEN:-}"
+      # Queue: POST /queue -> Paarung + kalte A/B-Welten (VS).
+      RBB_QUEUE_URL: "http://127.0.0.1:${RBB_QUEUE_PORT:-9221}"
+      RBB_QUEUE_TOKEN: "${RBB_QUEUE_TOKEN:-}"
     volumes:
       - rb-relay-wine:/data/.wine
-      - rb-game:/opt/riftbreaker:ro
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/game:/opt/riftbreaker:ro
       - ./deploy/compose/relay/routes:/etc/gns-relay/routes:ro
-      - rb-gns:/opt/gns-relay:ro
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/gns:/opt/gns-relay:ro
     entrypoint:
       - /bin/bash
       - -c
@@ -331,9 +339,9 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./deploy/crash-collector:/opt/crash:ro
-      - rb-game:/game:ro
-      - rb-rbtools:/rbtools:ro
-      - rb-crashes:/crashes
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/game:/game:ro
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/rbtools:/rbtools:ro
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/crashes:/crashes
 
   # === Control: Server-Control-Agent (docker-Wrapper, Plane B, #424) =========
   server-control:
@@ -364,7 +372,7 @@ services:
       - "127.0.0.1:${RBB_SERVER_CONTROL_PORT:-8092}:8092"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - rb-config:/config
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/config:/config
       - ./deploy/roles/riftbreaker-server/templates/config.cfg.j2:/etc/rbmods/server-control/config.cfg.j2:ro
 
   # === Control: Tournament-Server (Referee + Web-UI) =========================
@@ -390,7 +398,7 @@ services:
     ports:
       - "127.0.0.1:${RBB_TOURNAMENT_PORT:-8081}:8080"
     volumes:
-      - rb-tournament:/data
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/tournament:/data
 
   # === Control: warm capsule claim source for the static dedi (#1108) ========
   # Macht die statische Compose-Dedi zur EINEN warmen Kapsel (Parked-Vertragssubset,
@@ -442,16 +450,73 @@ services:
     volumes:
       - ./deploy/capsule:/app:ro
 
+  # === VS: Provisioner-HTTP-Service :8094 (#1083/#1110) ======================
+  # Erzeugt Sibling-Container via `docker run` (Host-daemon -> Host-1:1-Pfade!).
+  provisioner:
+    build:
+      context: ./deploy/provisioner
+      dockerfile: ../compose/provisioner/Dockerfile
+    image: rbb-provisioner:${RBB_REF:-dev}
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      PROVISIONER_ENV: ${RBB_ENV:-local}
+      PROVISIONER_BIND: 0.0.0.0
+      PROVISIONER_PORT: "8094"
+      PROVISIONER_TOKEN: "${RBB_PROVISIONER_TOKEN:-}"
+      # Fachkonfiguration (Pfade = Host-1:1 unter RBB_HOST_ROOT).
+      PROVISIONER_IMAGE: rb-dedicated:${RBB_REF:-dev}
+      PROVISIONER_BASE_DIR: ${RBB_HOST_ROOT:-/srv/rbbattle}
+      PROVISIONER_GAME_SOURCE: ${RBB_HOST_ROOT:-/srv/rbbattle}/game
+      PROVISIONER_CONFIG_CFG: ${RBB_HOST_ROOT:-/srv/rbbattle}/config/config.cfg
+      PROVISIONER_RBTOOLS_DIR: ${RBB_HOST_ROOT:-/srv/rbbattle}/rbtools
+      PROVISIONER_SESSIONS_SCRIPT: ${RBB_REPO_ROOT:-/srv/rbbattle/repo}/deploy/session-recorder/session_recorder.py
+      PROVISIONER_SEND_TAILER_SCRIPT: ${RBB_REPO_ROOT:-/srv/rbbattle/repo}/deploy/send-tailer/send_tailer.py
+      PROVISIONER_MATCH_LOOP_SCRIPT: ${RBB_REPO_ROOT:-/srv/rbbattle/repo}/deploy/match-loop/match_loop.py
+      PROVISIONER_ATTACK_CYCLE_SCRIPT: ${RBB_REPO_ROOT:-/srv/rbbattle/repo}/deploy/attack-cycle/attack_cycle.py
+      PROVISIONER_CHAT_ANNOUNCER_SCRIPT: ${RBB_REPO_ROOT:-/srv/rbbattle/repo}/deploy/chat-announcer/announcer.py
+      PROVISIONER_PERSONAS_FILE: ${RBB_REPO_ROOT:-/srv/rbbattle/repo}/deploy/attack-cycle/personas.example.json
+      PROVISIONER_DEPLOY_REF: *rbb-ref
+      PROVISIONER_BRIDGE_PORT_BASE: "30000"
+    ports:
+      - "127.0.0.1:${RBB_PROVISIONER_PORT:-8094}:8094"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Host-1:1: der Daemon loest `-v` gegen den HOST auf -> gleicher Pfad innen.
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}:${RBB_HOST_ROOT:-/srv/rbbattle}
+      - ${RBB_REPO_ROOT:-/srv/rbbattle/repo}:${RBB_REPO_ROOT:-/srv/rbbattle/repo}:ro
+
+  # === VS: Queue :9221 (#998) ================================================
+  # Paarung (1v1) + kalte A/B-Provisionierung ueber den Provisioner + Referee.
+  queue:
+    build:
+      context: ./deploy/queue
+      dockerfile: ../compose/queue/Dockerfile
+    image: rbb-queue:${RBB_REF:-dev}
+    restart: unless-stopped
+    depends_on:
+      provisioner:
+        condition: service_started
+      tournament-server:
+        condition: service_started
+    logging: *default-logging
+    environment:
+      QUEUE_ENV: ${RBB_ENV:-local}
+      QUEUE_BIND: 0.0.0.0
+      QUEUE_PORT: "9221"
+      QUEUE_TOKEN: "${RBB_QUEUE_TOKEN:-}"
+      QUEUE_PROVISIONER_URL: "http://provisioner:8094"
+      QUEUE_PROVISIONER_TOKEN: "${RBB_PROVISIONER_TOKEN:-}"
+      QUEUE_REFEREE_URL: "http://tournament-server:8080"
+      QUEUE_REFEREE_TOKEN: "${RBB_TOURNAMENT_TOKEN:-}"
+      QUEUE_STATE_DIR: /var/lib/rbmods/queue
+    ports:
+      - "127.0.0.1:${RBB_QUEUE_PORT:-9221}:9221"
+    volumes:
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/queue:/var/lib/rbmods/queue
+
 volumes:
-  rb-game:
-  rb-downloads:
-  rb-rbtools:
-  rb-gns:
+  # Nur Wine-/Saves-Prefixe bleiben Named Volumes (pro Instanz, nicht pro Host-Root).
   rb-wine:
   rb-saves:
-  rb-config:
-  rb-sessions:
   rb-relay-wine:
-  rb-backups:
-  rb-crashes:
-  rb-tournament:
