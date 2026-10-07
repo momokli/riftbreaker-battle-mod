@@ -1,9 +1,0 @@
----
-# Handler der Rolle host-hygiene.
-
-- name: restart rbmods-host-hygiene timer
-  systemd:
-    name: "{{ host_hygiene_unit }}.timer"
-    state: restarted
-    enabled: true
-    daemon_reload: true

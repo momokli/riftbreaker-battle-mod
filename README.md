@@ -70,10 +70,10 @@ riftbreaker-battle-mod/
 ├── server/      # SERVERMOD: rbbridge.dll + pipe_bridge + injector
 ├── cockpit/     # Web-UI Cockpit (manueller Operator)
 ├── tournament/  # Rust-Referee (1.1)
-├── deploy/      # Ansible/Docker/Caddy (Dedi-Setup + CI)
+├── deploy/      # Docker/Compose-Stack (deploy/compose) + Quell-Module (Sidecars, Init)
 ├── docs/        # Konzept, Findings, Playtest, Komponenten/Priority
 ├── scripts/     # Build-/Package-Tooling
-├── tools/       # RE, server-control, session-recorder, deploy-gate, …
+├── tools/       # RE, server-control, session-recorder, …
 └── tests/       # Host-/Unit-Tests
 ```
 

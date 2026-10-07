@@ -374,7 +374,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${RBB_HOST_ROOT:-/srv/rbbattle}/config:/config
-      - ./deploy/roles/riftbreaker-server/templates/config.cfg.j2:/etc/rbmods/server-control/config.cfg.j2:ro
+      - ./deploy/compose/config/config.cfg.j2:/etc/rbmods/server-control/config.cfg.j2:ro
 
   # === Control: Tournament-Server (Referee + Web-UI) =========================
   tournament-server:

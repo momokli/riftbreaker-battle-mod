@@ -1,9 +1,0 @@
----
-# Handler der Rolle crash-collector.
-
-- name: restart rbmods-crash-collector
-  systemd:
-    name: "{{ crash_collector_unit }}"
-    state: restarted
-    enabled: true
-    daemon_reload: true
