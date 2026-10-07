@@ -416,6 +416,24 @@ aller Sessions an die langsamste koppeln. `POST /route` pinnt weiter pro
 Identitaet und zieht **alle** Sessions dieser Identitaet um; `GET /sessions`
 listet sie parallel auf.
 
+## Modus-Gate `--mode solo|versus` (Issue #1093)
+
+`solo|versus` schaltet den Relay auf **einen** Produkt-Pfad:
+
+- `solo`   - nur der Solo-Pfad (Tiles + `POST /solo`); die `/queue`-Familie wird
+  serverseitig mit `403 mode_forbidden` abgewiesen.
+- `versus` - nur der Versus-/Queue-Pfad (`POST /queue` + `/queue/*`); `POST /solo`
+  wird mit `403` abgewiesen.
+- ungesetzt (Default) - **beide** Pfade, exakt heutiges Verhalten.
+
+In der Lobby-UI blendet `<body data-mode=...>` den jeweils anderen Pfad per CSS
+aus (`.solo-only` / `.vs-only`); das Gate ist damit nicht rein kosmetisch.
+
+Der Flag kommt aus `--mode` (argv) oder der Env-Variable `RBB_MODE` (argv hat
+Vorrang), wie bei URLs/Tokens. **Vokabular:** Das Attack-Cycle-Sidecar nutzt
+`RBB_MODE` in `{solo, vs}`; `versus` (Produkt-Schreibweise) und `vs`
+(Sidecar-Schreibweise) sind derselbe Pfad und werden beide akzeptiert.
+
 ## Backpressure (wichtig)
 
 Riftbreaker schickt Weltzustaende von ~500 KiB pro Nachricht. Ohne Gegenmassnahme
@@ -449,6 +467,8 @@ Default-Ziel darf ein Re-Route **nicht** ueberschreiben.
 | `test_route_rules.cpp`   | Host-Test der Regeln (CI: `g++ -std=c++17`)                      |
 | `referee_bridge.h`       | reine Bruecken-Logik zum Referee (Config-Parse, Ready-Body, /state, Fehler-Mapping) |
 | `test_referee_bridge.cpp`| Host-Test der Referee-Bruecke (CI: `g++ -std=c++17`)            |
+| `mode_gate.h`            | Modus-Gate `solo`/`versus` (Parse + Pfad-Freigabe), reine Logik  |
+| `test_mode_gate.cpp`     | Host-Test des Modus-Gates (CI: `g++ -std=c++17`)                |
 | `inspect_gns.py`         | findet `m_nAppID` (vtable-Slot-Scan) in der GNS-DLL              |
 | `pcap_flow.py`           | UDP-Payloads eines Flows in Reihenfolge aus einem pcap           |
 | `replay_first_packet.py` | Replay der ersten GNS-Nachricht (nur Schritt 1 sinnvoll)         |

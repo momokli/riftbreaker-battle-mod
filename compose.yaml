@@ -75,6 +75,25 @@ services:
       - rb-gns:/out/gns
     logging: *default-logging
 
+  # === Init: Battle-Mod bauen + ausrollen (Marker/Backup/#212-Guard) =========
+  mod-build:
+    build:
+      context: ./deploy/compose/mod-build
+    image: rbb-mod-build:${RBB_REF:-dev}
+    restart: "no"
+    depends_on:
+      content-init:
+        condition: service_completed_successfully
+    environment:
+      RBB_REF: *rbb-ref
+      RBB_GAME_DIR: /game
+      RBB_BACKUP_DIR: /backups
+    volumes:
+      - ./:/src:ro
+      - rb-game:/game
+      - rb-backups:/backups
+    logging: *default-logging
+
   # === Dedicated Server (RBB_MODE=solo: genau einer) ==========================
   dedicated:
     build:
@@ -90,6 +109,8 @@ services:
       config-init:
         condition: service_completed_successfully
       rbtools-build:
+        condition: service_completed_successfully
+      mod-build:
         condition: service_completed_successfully
     logging: *default-logging
     labels:
@@ -268,6 +289,7 @@ services:
         --api-host 127.0.0.1
         --api-port ${RBB_RELAY_API_PORT:-9200}
         --hold
+        --mode ${RBB_MODE:-solo}
         --max-players 4
         --target SOLO=127.0.0.1:${RBB_SERVER_PORT:-6322}
 
@@ -284,6 +306,107 @@ services:
     volumes:
       - ./deploy/compose/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
 
+  # === Observer: Crash-Collector + Symbolizer (#462/#480/#481) ================
+  # Beobachtet den Dedi-Container (docker.sock), sammelt Minidump+Trace+Log und
+  # symbolisiert gegen DLL/PDB (letztere bleiben AUSSERHALB des Images, #480).
+  crash-collector:
+    build:
+      context: ./deploy/compose/crash-collector
+    image: rbb-crash-collector:${RBB_REF:-dev}
+    restart: unless-stopped
+    depends_on:
+      dedicated:
+        condition: service_started
+    logging: *default-logging
+    environment:
+      RB_CRASH_CONTAINER: rbb-dedicated
+      RB_CRASH_ENV: ${RBB_ENV:-dev}
+      RB_CRASH_REF: *rbb-ref
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./deploy/crash-collector:/opt/crash:ro
+      - rb-game:/game:ro
+      - rb-rbtools:/rbtools:ro
+      - rb-crashes:/crashes
+
+  # === Control: Server-Control-Agent (docker-Wrapper, Plane B, #424) =========
+  server-control:
+    build:
+      context: ./deploy/compose/server-control
+    image: rbb-server-control:${RBB_REF:-dev}
+    restart: unless-stopped
+    depends_on:
+      dedicated:
+        condition: service_started
+    logging: *default-logging
+    environment:
+      SERVER_CONTROL_TOKEN: ${RBB_SERVER_CONTROL_TOKEN:?set in .env — cp .env.example .env}
+      SERVER_CONTROL_CONTAINER: rbb-dedicated
+      SERVER_CONTROL_ENV: ${RBB_ENV:-dev}
+      SERVER_CONTROL_REF: *rbb-ref
+      SERVER_CONTROL_CONFIG_PATH: /config/config.cfg
+      RBB_SERVER_NAME: "${RBB_SERVER_NAME:-RBBattle}"
+      RBB_SERVER_PASSWORD: "${RBB_SERVER_PASSWORD:?set in .env}"
+      RBB_SERVER_RCON_PASSWORD: "${RBB_SERVER_RCON_PASSWORD:-}"
+      RBB_SERVER_MAX_PLAYERS: "${RBB_SERVER_MAX_PLAYERS:-4}"
+      RBB_SERVER_BROADCAST_ENABLED: "${RBB_SERVER_BROADCAST_ENABLED:-1}"
+      RBB_SERVER_PAUSE_GAME_WHEN_EMPTY: "${RBB_SERVER_PAUSE_GAME_WHEN_EMPTY:-0}"
+      RBB_SERVER_CAMPAIGN: "${RBB_SERVER_CAMPAIGN:-mp_survival/mp_survival}"
+      RBB_SERVER_MISSION: "${RBB_SERVER_MISSION:-survival/jungle}"
+      RBB_SERVER_DIFFICULTY: "${RBB_SERVER_DIFFICULTY:-coop_normal}"
+    ports:
+      - "127.0.0.1:${RBB_SERVER_CONTROL_PORT:-8092}:8092"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - rb-config:/config
+      - ./deploy/roles/riftbreaker-server/templates/config.cfg.j2:/etc/rbmods/server-control/config.cfg.j2:ro
+
+  # === Control: Tournament-Server (Referee + Web-UI) =========================
+  tournament-server:
+    build:
+      context: ./tournament
+      dockerfile: ../deploy/compose/tournament-server/Dockerfile
+    image: rbb-tournament:${RBB_REF:-dev}
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      TOURNAMENT_HOST: 0.0.0.0
+      TOURNAMENT_PORT: "8080"
+      TOURNAMENT_TOKEN: ${RBB_TOURNAMENT_TOKEN:?set in .env — cp .env.example .env}
+      TOURNAMENT_AUTO_GO: "true"
+      RBBRIDGE_A_URL: "${RBBRIDGE_A_URL:-http://dedicated:9001/exec}"
+      RBBRIDGE_B_URL: "${RBBRIDGE_B_URL:-}"
+      TOURNAMENT_WEB_DIR: /usr/share/tournament/web
+      TOURNAMENT_DB_PATH: /data/rbbattle.db
+      TOURNAMENT_ENV: ${RBB_ENV:-dev}
+      TOURNAMENT_REF: *rbb-ref
+      RUST_LOG: info
+    ports:
+      - "127.0.0.1:${RBB_TOURNAMENT_PORT:-8081}:8080"
+    volumes:
+      - rb-tournament:/data
+
+  # === Control: Kapsel-Flow (#931) ==========================================
+  capsule-flow:
+    build:
+      context: ./deploy/compose/capsule-flow
+    image: rbb-capsule-flow:${RBB_REF:-dev}
+    restart: unless-stopped
+    depends_on:
+      attack-cycle:
+        condition: service_started
+    logging: *default-logging
+    environment:
+      CAPSULE_ENV: ${RBB_ENV:-dev}
+      CAPSULE_TOKEN: ${RBB_CAPSULE_TOKEN:?set in .env — cp .env.example .env}
+      CAPSULE_CYCLE_URL: http://attack-cycle:9102
+      CAPSULE_PARKED_URL: "${RBB_CAPSULE_PARKED_URL:-http://parked-pool:9201}"
+      CAPSULE_PARKED_TOKEN: "${RBB_PARKED_TOKEN:-}"
+    ports:
+      - "127.0.0.1:${RBB_CAPSULE_PORT:-9211}:9211"
+    volumes:
+      - ./deploy/capsule:/app:ro
+
 volumes:
   rb-game:
   rb-downloads:
@@ -294,3 +417,6 @@ volumes:
   rb-config:
   rb-sessions:
   rb-relay-wine:
+  rb-backups:
+  rb-crashes:
+  rb-tournament:
