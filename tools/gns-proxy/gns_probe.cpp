@@ -48,6 +48,9 @@
 // Reine Bruecken-Logik zum Referee (Issue #1024) — host-testbar in der CI
 // (test_referee_bridge.cpp).
 #include "referee_bridge.h"
+// Reines Modus-Gate (Issue #1093) - host-testbar in der CI (test_mode_gate.cpp).
+// Kapselt `--mode solo|versus` / `RBB_MODE` und die Pfad-Freigabe.
+#include "mode_gate.h"
 
 // Anzeigename des Identitaets-Kinds (Issue #992) fuer Logs/API.
 static const char *identityKindName(rbident::Kind kind) {
@@ -278,6 +281,11 @@ int g_appid = 780310;
 bool g_hold = false;
 int g_apiPort = 0;
 std::string g_apiHost = "127.0.0.1";
+// Modus-Gate (Issue #1093): steuert, welcher Pfad in der Lobby-UI sichtbar ist
+// und welche Route der Relay bedient. Default Both = heutiges Verhalten.
+// `--mode` (argv) hat Vorrang vor `RBB_MODE` (Env), wie bei URLs/Tokens.
+rbmode::Mode g_gateMode = rbmode::Mode::Both;
+bool g_gateModeFromArgv = false;
 // Obergrenze der Aufnahme in eine Solo-Instanz (Issue #936). Default 4 =
 // Server-Default (`riftbreaker_server_max_players`). Nur vom Hauptloop gelesen
 // (aus `g_maxPlayers` in die Session-Anzeige kopiert); per `--max-players`.
@@ -1478,6 +1486,12 @@ const char kUiHtml[] = R"HTML(<!doctype html>
   .mode-card h2 { margin:0 0 6px; font-size:16px; font-weight:650; letter-spacing:.2px; }
   .mode-card p { margin:0 0 14px; color:var(--muted); font-size:12.5px; }
   .mode-card button { width:100%; flex:none; }
+  /* Modus-Gate (Issue #1093): nur der freigeschaltete Pfad wird gerendert.
+     `both` (Default) blendet nichts aus - heutiges Verhalten. Die Klassen
+     `solo-only`/`vs-only` sitzen auch an den per JS erzeugten Card-Zeilen,
+     damit CSS das serverseitig durchgesetzte Gate rein sichtbar spiegelt. */
+  body[data-mode="solo"] .vs-only { display:none !important; }
+  body[data-mode="versus"] .solo-only { display:none !important; }
   .playerbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:18px;
     padding:14px 16px; border:1px solid var(--line); border-radius:14px; background:var(--panel); }
   .playerbar label { color:var(--muted); font-size:13px; }
@@ -1509,7 +1523,7 @@ const char kUiHtml[] = R"HTML(<!doctype html>
   .tick { font-variant-numeric:tabular-nums; }
 </style>
 </head>
-<body>
+<body data-mode="__RBB_MODE__">
 <header>
   <span class="dot" id="dot"></span>
   <h1>Riftbreaker Proxy - Lobby</h1>
@@ -1522,7 +1536,7 @@ const char kUiHtml[] = R"HTML(<!doctype html>
   </div>
 </header>
 <main>
-  <section class="modes">
+  <section class="modes solo-only">
     <div class="mode-card">
       <h2>SOLO vs yourself</h2>
       <p>Ein Spieler gegen sich selbst (solo_self).</p>
@@ -1534,7 +1548,7 @@ const char kUiHtml[] = R"HTML(<!doctype html>
       <button id="go-persona">Spieler hinschicken</button>
     </div>
   </section>
-  <div class="playerbar">
+  <div class="playerbar solo-only">
     <label for="player">Spieler</label>
     <select id="player"><option value="">lade Sessions...</option></select>
     <span id="player-status" class="badge status-wartet">wartet</span>
@@ -1875,7 +1889,7 @@ function card(s) {
   c.appendChild(act);
 
   const selfSend = SOLO_SELF[s.identity] !== false;
-  const soloRow = el("div", "solo");
+  const soloRow = el("div", "solo solo-only");
   const sbtn = el("button", null, "solo");
   sbtn.onclick = () => solo(s.identity, sbtn, c);
   const tog = el("button", "toggle" + (selfSend ? " on" : ""),
@@ -1919,7 +1933,7 @@ function card(s) {
   c.appendChild(readyRow);
 
   // Queue (vs) (Issue #998/#1000): Live-Phase aus /queue/status; Join/Leave.
-  const qRow = el("div", "solo");
+  const qRow = el("div", "solo vs-only");
   const qinfo = queueStatusInfo(s, QUEUE_SNAP);
   if (qinfo) {
     const qbadge = el("span", "badge queue-" + qinfo.key, qinfo.label);
@@ -1950,7 +1964,7 @@ function card(s) {
   // Referee (Issue #1024): Phase/Sieger aus GET /referee/state + READY-Button
   // (POST /referee/ready {world}). Additiv — ueberschreibt soloPhase/queuePhase
   // NICHT. Ohne Referee-Config (REF_SNAP null) degradiert der Button sichtbar.
-  const refRow = el("div", "solo");
+  const refRow = el("div", "solo vs-only");
   if (REF_SNAP) {
     const phase = REF_SNAP.phase || "";
     const rbadge = el("span", "badge ref-" + phase, "Ref: " + (REF[phase] || phase || "?"));
@@ -2351,6 +2365,22 @@ setInterval(pollEvents, EV_POLL_MS);
 </body>
 </html>
 )HTML";
+
+// Lobby-HTML fuer den aktuellen Modus bauen (Issue #1093): ersetzt den
+// Platzhalter `__RBB_MODE__` (im <body data-mode>) durch den kanonischen
+// Modus-Namen. `both` (Default) laesst beide Pfade sichtbar - kein
+// Verhaltenswechsel fuer bestehende Deployments.
+std::string buildUiHtml() {
+  const std::string token = "__RBB_MODE__";
+  const std::string val = rbmode::modeName(g_gateMode);
+  std::string html = kUiHtml;
+  std::size_t pos = 0;
+  while ((pos = html.find(token, pos)) != std::string::npos) {
+    html.replace(pos, token.size(), val);
+    pos += val.size();
+  }
+  return html;
+}
 
 void httpSendAll(SOCKET s, const std::string &data) {
   std::size_t off = 0;
@@ -3204,8 +3234,23 @@ void httpHandle(SOCKET s) {
     body.append(buf, static_cast<std::size_t>(n));
   }
 
+  // Serverseitiges Modus-Gate (Issue #1093): der nicht zum Modus passende Pfad
+  // wird HART abgewiesen (nicht nur in der UI versteckt). `both` = Default
+  // (alles frei, kein Verhaltenswechsel). Geteilte Routen (/route, /ready,
+  // /referee/*, /sessions) bleiben unberuehrt.
+  if (!rbmode::routeAllowedInMode(g_gateMode, method, path)) {
+    logLine("mode-gate: %s %s im Modus '%s' -> 403 mode_forbidden", method.c_str(),
+            path.c_str(), rbmode::modeName(g_gateMode));
+    httpRespondJson(s, 403, "Forbidden",
+                    std::string("{\"ok\":false,\"reason\":\"mode_forbidden\","
+                                "\"mode\":\"") +
+                        rbmode::modeName(g_gateMode) + "\"}");
+    closesocket(s);
+    return;
+  }
+
   if (method == "GET" && path == "/") {
-    httpRespond(s, 200, "OK", "text/html; charset=utf-8", kUiHtml);
+    httpRespond(s, 200, "OK", "text/html; charset=utf-8", buildUiHtml());
   } else if (method == "GET" && path == "/sessions") {
     // Best-effort Pause-Quelle aktualisieren (gedrosselt, blockiert nicht den
     // Hauptloop); danach den Snapshot ausgeben (Issue #930).
@@ -3694,6 +3739,18 @@ int main(int argc, char **argv) {
         return 2;
       }
       g_maxPlayers = v;
+    } else if (strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
+      // Modus-Gate (Issue #1093): `--mode solo|versus`. `versus` und `vs`
+      // (Sidecar-Schreibweise) sind derselbe Pfad. argv hat Vorrang vor
+      // `RBB_MODE` (Env), wie bei URLs/Tokens. Unbekannt -> fail-loud (Exit 2).
+      const char *spec = argv[++i];
+      rbmode::Mode m = rbmode::Mode::Both;
+      if (!rbmode::parseMode(spec, m)) {
+        fprintf(stderr, "--mode braucht solo|versus, bekam '%s'\n", spec);
+        return 2;
+      }
+      g_gateMode = m;
+      g_gateModeFromArgv = true;
     }
   }
 
@@ -3819,6 +3876,22 @@ int main(int argc, char **argv) {
   } else if (!g_capsuleConfigured) {
     logLine("parked/capsule fuer /solo: NICHT konfiguriert -> 503 parked_unconfigured");
   }
+
+  // `RBB_MODE` schaltet das Modus-Gate ebenfalls scharf (argv hat Vorrang).
+  // Dieselbe Vokabel wie das Attack-Cycle-Sidecar (`solo`/`vs`); `versus` ist
+  // die Produkt-Schreibweise. Unbekannt -> warnen, Default (both) behalten.
+  if (!g_gateModeFromArgv) {
+    const char *envMode = getenv("RBB_MODE");
+    if (envMode != nullptr && *envMode != '\0') {
+      rbmode::Mode m = rbmode::Mode::Both;
+      if (rbmode::parseMode(envMode, m)) {
+        g_gateMode = m;
+      } else {
+        fprintf(stderr, "RBB_MODE ungueltig (braucht solo|versus|vs): '%s'\n", envMode);
+      }
+    }
+  }
+  logLine("mode-gate: %s (versus==vs)", rbmode::modeName(g_gateMode));
 
   logLine("gns_probe (Spike #831, E1/E2) — port=%u", nPort);
   if (!resolveDll(dllPath)) {
