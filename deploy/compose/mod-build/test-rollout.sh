@@ -39,29 +39,17 @@ run_rbc() {
     return "$r_rc"
 }
 
-# norm_md5 <zip> — md5 des NORMALISIERTEN Zips (feste Zeitstempel, sortierte
-# Eintraege) — identisch zur Normalisierung in rollout.sh. So kann der Test den
-# erwarteten Marker pruefen, obwohl package.sh volatile Zip-mtimes erzeugt.
-command -v python3 >/dev/null 2>&1 || { echo "test: python3 wird gebraucht" >&2; exit 1; }
-norm_md5() {
-    python3 - "$1" <<'PY'
-import sys, zipfile, hashlib, tempfile, os
-src = sys.argv[1]
-with zipfile.ZipFile(src) as zi:
-    names = sorted(n for n in zi.namelist() if not n.endswith("/"))
-    fd, tmp = tempfile.mkstemp(suffix=".zip")
-    os.close(fd)
-    try:
-        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zo:
-            for n in names:
-                info = zipfile.ZipInfo(n, date_time=(1980, 1, 1, 0, 0, 0))
-                info.compress_type = zipfile.ZIP_DEFLATED
-                info.external_attr = 0o644 << 16
-                zo.writestr(info, zi.read(n))
-        print(hashlib.md5(open(tmp, "rb").read()).hexdigest())
-    finally:
-        os.unlink(tmp)
-PY
+# md5_of <file> — md5 hex (md5sum oder BSD md5). package.sh baut seit #1101
+# deterministisch, der rohe Zip-md5 ist daher stabil — keine Normalisierung mehr.
+md5_of() {
+    if command -v md5sum >/dev/null 2>&1; then
+        md5sum "$1" | awk '{print $1}'
+    elif command -v md5 >/dev/null 2>&1; then
+        md5 -q "$1"
+    else
+        echo "test: weder md5sum noch md5 verfuegbar" >&2
+        exit 1
+    fi
 }
 
 make_zip() { # <zipfile> <dir>
@@ -127,7 +115,7 @@ if run_rbc "$R/run1.log" RBB_SRC="$S" RBB_GAME_DIR="$G" RBB_BACKUP_DIR="$B" RBB_
 [ -f "$G/mods/rbbattle/$GUID.manifest" ] || t_fail "run1: Mod-Manifest fehlt"
 [ -f "$G/rbbattle.md5" ] || t_fail "run1: Marker fehlt"
 marker1="$(cat "$G/rbbattle.md5")"
-[ "$marker1" = "$(norm_md5 "$R/src/.fixture/rbbattle.zip")" ] || t_fail "Marker != normalisiertem Zip-md5"
+[ "$marker1" = "$(md5_of "$R/src/.fixture/rbbattle.zip")" ] || t_fail "Marker != Zip-md5"
 [ "$(count_files "$B" 'rbbattle-*.tar.gz')" -eq 0 ] || t_fail "run1: unerwartetes Backup beim Erst-Deploy"
 t_pass "run1: ausgerollt + Marker gesetzt, kein Backup (kein alter Stand)"
 
@@ -151,7 +139,7 @@ make_fixture "$R/src/.fixture/rbbattle.zip" v2             # neuer Build
 if run_rbc "$R/run2.log" RBB_SRC="$S" RBB_GAME_DIR="$G" RBB_BACKUP_DIR="$B" RBB_WORK="$W" RBB_REF=dev; then rc=0; else rc=$?; fi
 [ "$rc" -eq 0 ] || t_fail "backup run2 exit=$rc"
 [ -f "$G/mods/rbbattle/extra.txt" ] || t_fail "neuer Stand (extra.txt) nicht ausgerollt"
-[ "$(cat "$G/rbbattle.md5")" = "$(norm_md5 "$R/src/.fixture/rbbattle.zip")" ] || t_fail "Marker nicht auf neuen Zip-md5 gesetzt"
+[ "$(cat "$G/rbbattle.md5")" = "$(md5_of "$R/src/.fixture/rbbattle.zip")" ] || t_fail "Marker nicht auf neuen Zip-md5 gesetzt"
 tb="$(find "$B" -maxdepth 1 -type f -name 'rbbattle-*.tar.gz' | head -n1)"
 [ -n "$tb" ] || t_fail "kein Backup-Tarball erzeugt"
 [ -z "$(find "$G/mods" -name '*.tar.gz' 2>/dev/null)" ] || t_fail "Backup liegt IN mods/ (Guard-Verstoss)"

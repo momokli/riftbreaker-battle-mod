@@ -87,31 +87,7 @@ PY
     fi
 }
 
-# normalize_zip <zip>  — schreibt das Zip mit FESTEN Metadaten in place neu.
-# Warum: package.sh packt via `cp -R` + Zip und der Zip-Header speichert die
-# (volatilen) Datei-mtimes -> der Zip-md5 ist zwischen Laeufen instabil. Der
-# Marker-No-Op (Schritt 2) wuerde dann NIE greifen. Fuer echte Idempotenz
-# normalisieren wir die Zip-Metadaten (feste Zeitstempel, sortierte Eintraege,
-# feste Rechte 0644); der INHALT und die entpackte Mod bleiben identisch, nur
-# der md5 des Zips ist jetzt stabil bei gleichem Quellstand.
-normalize_zip() {
-    command -v python3 >/dev/null 2>&1 || fail "python3 wird fuer normalize_zip gebraucht"
-    python3 - "$1" "$1.norm" <<'PY'
-import sys, zipfile
-src, dst = sys.argv[1], sys.argv[2]
-with zipfile.ZipFile(src) as zi:
-    names = sorted(n for n in zi.namelist() if not n.endswith("/"))
-    with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zo:
-        for n in names:
-            data = zi.read(n)
-            info = zipfile.ZipInfo(n, date_time=(1980, 1, 1, 0, 0, 0))
-            info.compress_type = zipfile.ZIP_DEFLATED
-            info.external_attr = 0o644 << 16
-            zo.writestr(info, data)
-PY
-    mv "$1.norm" "$1"
-}
-
+# extract_zip <zip> <dest>  — unzip, sonst python3-Fallback
 # ---------------------------------------------------------------------------
 # Guard: Backup-Ziel darf nicht mods/ sein oder darunter liegen (#212/#312).
 # Sonst wuerde ein Backup-Ordner/-Tarball in mods/ als eigene Mod geladen.
@@ -151,9 +127,8 @@ log "baue rbbattle.zip"
 
 zip_file="$work/dist/rbbattle.zip"
 [ -f "$zip_file" ] || fail "Build lieferte kein $zip_file"
-# Zip-Metadaten normalisieren -> md5 stabil bei gleichem Quellstand (No-Op).
-# Der INHALT (und die entpackte Mod) bleibt unveraendert.
-normalize_zip "$zip_file"
+# md5 stabil bei gleichem Quellstand: package.sh baut deterministisch (sortierte
+# Eintraege, feste Zeitstempel — Issue #1101). Kein Nach-Normalisieren noetig.
 zip_md5="$(md5_of "$zip_file")"
 log "Zip: $zip_file (md5=$zip_md5)"
 

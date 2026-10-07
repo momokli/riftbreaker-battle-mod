@@ -14,8 +14,9 @@
 # Ausgabe: je Zip eine Zeile "NAME=<dateiname> ZIP=<absoluter-pfad>"
 # (maschinenlesbar fuer Release-Upload).
 #
-# Abhaengigkeit: zip ODER python3 (Fallback, nur Standardbibliothek);
-# optional x86_64-w64-mingw32-gcc oder zig (fuer den server-Binary-Build).
+# Abhaengigkeit: python3 (stdlib — Pflicht, wird ohnehin fuer
+# gen_cockpit_html.py/bake_mod_ref.py gebraucht) fuer den deterministischen Zip.
+# Optional x86_64-w64-mingw32-gcc oder zig (fuer den server-Binary-Build).
 # ============================================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -30,28 +31,36 @@ REF_DEF="-DRBBRIDGE_REF=\"${REF}\""
 # zip_content_root <srcdir> <outzip>: packt den INHALT von <srcdir> mit
 # <srcdir> als Content-Root (der Ordner selbst kommt NICHT ins Zip),
 # .DS_Store wird rausgefiltert.
+#
+# Deterministisch (Issue #1101): sortierte Eintraege, fester Zeitstempel
+# (1980-01-01) und feste Rechte 0644 -> bei gleichem Quellstand byte-identisches
+# Zip (stabiler md5). Das traegt die md5-Paritaet (Zip == planet) und den
+# Marker-No-Op im Mod-Rollout (deploy/compose/mod-build/rollout.sh).
+# Python ist ohnehin Pflicht-Abhaengigkeit (gen_cockpit_html.py/bake_mod_ref.py).
 zip_content_root() {
-    local src="$1" out="$2" tmp="$2.tmp"
-    rm -f "$tmp"
-    if command -v zip >/dev/null 2>&1; then
-        (cd "$src" && zip -r "$tmp" . -x '*.DS_Store' >/dev/null)
-    elif command -v python3 >/dev/null 2>&1; then
-        python3 - "$src" "$tmp" <<'PYEOF'
+    local src="$1" out="$2"
+    rm -f "$out"
+    python3 - "$src" "$out" <<'PYEOF'
 import os, sys, zipfile
+
 src, out = sys.argv[1], sys.argv[2]
+entries = []
+for root, _dirs, files in os.walk(src):
+    for name in files:
+        if name == ".DS_Store":
+            continue
+        entries.append(os.path.relpath(os.path.join(root, name), src))
+entries.sort()
 with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-    for root, _dirs, files in os.walk(src):
-        for f in files:
-            if f == ".DS_Store":
-                continue
-            full = os.path.join(root, f)
-            z.write(full, os.path.relpath(full, src))
+    for rel in entries:
+        with open(os.path.join(src, rel), "rb") as fh:
+            data = fh.read()
+        info = zipfile.ZipInfo(rel, date_time=(1980, 1, 1, 0, 0, 0))
+        info.compress_type = zipfile.ZIP_DEFLATED
+        info.external_attr = 0o644 << 16
+        z.writestr(info, data)
 PYEOF
-    else
-        echo "FEHLER: weder 'zip' noch 'python3' verfuegbar." >&2
-        exit 1
-    fi
-    mv "$tmp" "$out"
+    [ -s "$out" ] || { echo "FEHLER: Zip-Bau fehlgeschlagen ($out)." >&2; exit 1; }
     echo "[package] OK: $out"
 }
 
