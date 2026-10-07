@@ -33,5 +33,23 @@ RBB_REF="${RBB_REF:-$(git -C "$root" rev-parse --short HEAD 2>/dev/null || true)
 [ -n "$RBB_REF" ] || RBB_REF=dev
 export RBB_REF
 
-echo "up.sh: RBB_REF=$RBB_REF -> docker compose --env-file .env up --build -d $*"
+# Host-Root (Pfad-Modell, #1112): geteilte Dirs unter EINEM absoluten Pfad, den
+# der Provisioner 1:1 sieht (Sibling-Container via `docker run`).
+RBB_HOST_ROOT="${RBB_HOST_ROOT:-/srv/rbbattle}"
+case "$RBB_HOST_ROOT" in
+    /*) : ;;
+    *) echo "up.sh: RBB_HOST_ROOT muss absolut sein (ist: $RBB_HOST_ROOT)." >&2; exit 1 ;;
+ esac
+export RBB_HOST_ROOT
+
+# Repo-Root (für die Sidecar-/Persona-Pfade des Provisioners), absolut.
+RBB_REPO_ROOT="${RBB_REPO_ROOT:-$root}"
+export RBB_REPO_ROOT
+
+mkdir -p "$RBB_HOST_ROOT/game" "$RBB_HOST_ROOT/config" "$RBB_HOST_ROOT/rbtools" \
+    "$RBB_HOST_ROOT/gns" "$RBB_HOST_ROOT/sessions" "$RBB_HOST_ROOT/backups" \
+    "$RBB_HOST_ROOT/crashes" "$RBB_HOST_ROOT/tournament" \
+    "$RBB_HOST_ROOT/downloads" "$RBB_HOST_ROOT/queue"
+
+echo "up.sh: RBB_REF=$RBB_REF RBB_HOST_ROOT=$RBB_HOST_ROOT -> docker compose --env-file .env up --build -d $*"
 exec docker compose --env-file .env up --build -d "$@"
