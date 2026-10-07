@@ -229,6 +229,15 @@ jobs:
           ansible-playbook -i deploy/local-inventory.yml deploy/local-deploy.yml \
             -e @deploy/local-vars.yml --syntax-check
 
+      # game-content-http-Idempotenz (Issue #1095): hermetisch (tmpdir,
+      # unerreichbare Base) — die ECHTE Rolle darf nach Erst-Setup (Binary+PDB
+      # vorhanden) KEINEN get_url mehr auslösen (sonst bricht ein 502 auf planet
+      # den Lauf ab, obwohl der Content lokal liegt). Cold-Start + force lösen
+      # weiterhin einen Download aus (Rot-Before-Green).
+      - name: "game-content http-Idempotenz Selbsttest (Issue #1095)"
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
+        run: bash deploy/tests/game-content-http/run.sh
+
       # Disk-Space-Gate Selbsttest (Issue #310): hermetisch (synthetische
       # Mount-Facts, localhost) — prüft die ECHTE Preflight-Task-Datei. Bei zu
       # wenig Platz MUSS der Lauf rot abbrechen (fail_msg "PLATZ-GATE"); der

@@ -51,6 +51,16 @@ distro-spezifischen 32-bit-Abhängigkeiten. Struktur geprüft (2026-09-16,
 Checksum verifiziert): `./bin/DedicatedServer.exe` passt 1:1 auf
 `riftbreaker_server_bin`.
 
+**planet wird nur für die Erst-Installation gebraucht.** Der Download ist
+idempotent (Issue #1095): geholt wird nur, wenn das Server-Binary fehlt oder
+`-e riftbreaker_content_force=true` gesetzt ist. Liegt der Content bereits unter
+`{{ riftbreaker_game_dir }}`, kontaktieren spätere Läufe planet **nicht** mehr —
+`scripts/local-dev.sh --tags content,server` läuft dann auch offline grün durch.
+
+**Ganz ohne planet** kommt `mode=steamcmd` aus (anonym, App 4114030, kostenlos) —
+dafür brauchst du nur Internet zu Steam (und die 32-bit-Multilib, siehe Tabelle
+unten).
+
 **Alternativen** (falls der HTTP-Download mal nicht erreichbar ist):
 
 ```bash
@@ -65,11 +75,11 @@ scripts/local-dev.sh -e riftbreaker_content_mode=sync -e riftbreaker_content_cac
 Bei `mode=steamcmd` ist die 32-bit-Laufzeitabhängigkeit distro-abhängig, die
 Rolle erkennt das über `ansible_os_family`:
 
-| Distro | Was die Rolle installiert | Manuell vorher |
-|---|---|---|
-| Debian/Ubuntu | `dpkg --add-architecture i386` + `apt install lib32gcc-s1` | nichts |
-| Fedora/RHEL | `dnf install glibc.i686 libstdc++.i686` | nichts |
-| andere | — (kein Zweig) | `mode=sync` verwenden |
+| Distro        | Was die Rolle installiert                                  | Manuell vorher        |
+| ------------- | ---------------------------------------------------------- | --------------------- |
+| Debian/Ubuntu | `dpkg --add-architecture i386` + `apt install lib32gcc-s1` | nichts                |
+| Fedora/RHEL   | `dnf install glibc.i686 libstdc++.i686`                    | nichts                |
+| andere        | — (kein Zweig)                                             | `mode=sync` verwenden |
 
 **mingw-w64-Paketnamen** (für die Bridge-Tools, unabhängig vom Content-Modus):
 
