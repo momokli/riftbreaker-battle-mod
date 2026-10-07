@@ -38,7 +38,7 @@ single source of truth).
 | **Image / build context** | `context: ./deploy/queue`, `dockerfile: ../compose/queue/Dockerfile` |
 | **Command** | `python3 -u /app/queue_service.py`; add `command: ["--check"]` to only validate config (rc `0` OK, rc `2` invalid) |
 | **Ports** | HTTP **9221** in-container, publish on **`127.0.0.1:9221`** only. Bind inside is `0.0.0.0` (set by the image ENV). |
-| **Volumes** | only the (optional) state dir for match-record persistence; nothing else |
+| **Volumes** | only the (optional) state dir for match-record persistence — a host-root bind (`${RBB_HOST_ROOT:-/srv/rbbattle}/queue`, #1112); nothing else |
 | **Host access** | none (no Docker socket) |
 | **Python deps** | stdlib only (`queue_service.py`, `queue_flow.py`, `queue_core.py`, `identity.py`) |
 
@@ -80,10 +80,12 @@ honoured: `QUEUE_TIMEOUT` (default `5`) and `QUEUE_LOG_LEVEL` (default `INFO`).
 ## Volumes / persistence (important)
 
 The state dir is the **only** optional mount. Set `QUEUE_STATE_DIR` to a path
-inside the container and mount a volume there so the match record (and the
-waiting queue) survives a service restart; without it the queue is in-memory
-only. The service itself needs **no** Docker socket and **no** game/rbtools
-paths — everything towards the provisioner and referee is HTTP.
+inside the container and bind a host dir there (compose: the host-root bind
+`${RBB_HOST_ROOT:-/srv/rbbattle}/queue:/var/lib/rbmods/queue`, #1112) so the
+match record (and the waiting queue) survives a service restart; without it the
+queue is in-memory only. The service itself needs **no** Docker socket and
+**no** game/rbtools paths — everything towards the provisioner and referee is
+HTTP.
 
 ## Paste-ready compose fragment
 
@@ -95,24 +97,22 @@ queue:
   image: rbb-queue:${RBB_REF:-dev}
   restart: unless-stopped
   environment:
-    QUEUE_ENV: ${RBB_ENV:-dev}
+    QUEUE_ENV: ${RBB_ENV:-local}
     QUEUE_BIND: 0.0.0.0
     QUEUE_PORT: "9221"
     QUEUE_TOKEN: ${RBB_QUEUE_TOKEN:-}
     QUEUE_PROVISIONER_URL: http://provisioner:8094
     QUEUE_PROVISIONER_TOKEN: ${RBB_PROVISIONER_TOKEN:-}
     QUEUE_REFEREE_URL: http://tournament-server:8080
-    QUEUE_REFEREE_TOKEN: ${RBB_REFEREE_TOKEN:-}
+    QUEUE_REFEREE_TOKEN: ${RBB_TOURNAMENT_TOKEN:-}
     QUEUE_STATE_DIR: /var/lib/rbmods/queue
     QUEUE_TEAM_SIZE: "1"
     QUEUE_ALLOW_TEAMS: "false"
     QUEUE_RECONCILE_INTERVAL_S: "5"
   ports:
-    - "127.0.0.1:9221:9221"
+    - "127.0.0.1:${RBB_QUEUE_PORT:-9221}:9221"
   volumes:
-    - queue-state:/var/lib/rbmods/queue
-volumes:
-  queue-state:
+    - ${RBB_HOST_ROOT:-/srv/rbbattle}/queue:/var/lib/rbmods/queue
 ```
 
 * The service URLs above assume the provisioner/referee compose services are on

@@ -20,8 +20,8 @@ Der Coordinator verdrahtet den Service in `compose.yaml` (diese Datei wird hier
       RBB_BACKUP_DIR: /backups
     volumes:
       - ./:/src:ro          # Read-only-Checkout (wie rbtools-build)
-      - rb-game:/game       # Game-Volume (Mods)
-      - rb-backups:/backups # Backups AUSSERHALB mods/
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/game:/game # Game-Volume (Mods)
+      - ${RBB_HOST_ROOT:-/srv/rbbattle}/backups:/backups # Backups AUSSERHALB mods/
 ```
 
 ## Ablauf (1:1 aus der Rolle)

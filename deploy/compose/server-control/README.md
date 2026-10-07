@@ -24,25 +24,26 @@ server-control:
     dedicated:
       condition: service_started
   environment:
-    SERVER_CONTROL_TOKEN: ${RBB_SERVER_CONTROL_TOKEN:?set in .env}
+    SERVER_CONTROL_TOKEN: ${RBB_SERVER_CONTROL_TOKEN:?set in .env — cp .env.example .env}
     SERVER_CONTROL_CONTAINER: rbb-dedicated
     SERVER_CONTROL_ENV: ${RBB_ENV:-dev}
-    SERVER_CONTROL_REF: ${RBB_REF:-unknown}
+    SERVER_CONTROL_REF: ${RBB_REF:-dev}
+    SERVER_CONTROL_CONFIG_PATH: /config/config.cfg
     # config.cfg rendering (POST /server/config) — same values as config-init:
-    RBB_SERVER_NAME: ${RBB_SERVER_NAME}
-    RBB_SERVER_PASSWORD: ${RBB_SERVER_PASSWORD}
-    RBB_SERVER_RCON_PASSWORD: ${RBB_SERVER_RCON_PASSWORD:-}
-    RBB_SERVER_MAX_PLAYERS: ${RBB_SERVER_MAX_PLAYERS}
-    RBB_SERVER_BROADCAST_ENABLED: ${RBB_SERVER_BROADCAST_ENABLED}
-    RBB_SERVER_PAUSE_GAME_WHEN_EMPTY: ${RBB_SERVER_PAUSE_GAME_WHEN_EMPTY}
-    RBB_SERVER_CAMPAIGN: ${RBB_SERVER_CAMPAIGN}
-    RBB_SERVER_MISSION: ${RBB_SERVER_MISSION}
-    RBB_SERVER_DIFFICULTY: ${RBB_SERVER_DIFFICULTY}
+    RBB_SERVER_NAME: "${RBB_SERVER_NAME:-RBBattle}"
+    RBB_SERVER_PASSWORD: "${RBB_SERVER_PASSWORD:?set in .env}"
+    RBB_SERVER_RCON_PASSWORD: "${RBB_SERVER_RCON_PASSWORD:-}"
+    RBB_SERVER_MAX_PLAYERS: "${RBB_SERVER_MAX_PLAYERS:-4}"
+    RBB_SERVER_BROADCAST_ENABLED: "${RBB_SERVER_BROADCAST_ENABLED:-1}"
+    RBB_SERVER_PAUSE_GAME_WHEN_EMPTY: "${RBB_SERVER_PAUSE_GAME_WHEN_EMPTY:-0}"
+    RBB_SERVER_CAMPAIGN: "${RBB_SERVER_CAMPAIGN:-mp_survival/mp_survival}"
+    RBB_SERVER_MISSION: "${RBB_SERVER_MISSION:-survival/jungle}"
+    RBB_SERVER_DIFFICULTY: "${RBB_SERVER_DIFFICULTY:-coop_normal}"
   ports:
     - "127.0.0.1:${RBB_SERVER_CONTROL_PORT:-8092}:8092"
   volumes:
     - /var/run/docker.sock:/var/run/docker.sock
-    - rb-config:/config:ro                                # target config.cfg (shared with dedicated)
+    - ${RBB_HOST_ROOT:-/srv/rbbattle}/config:/config # target config.cfg (shared with dedicated)
     - ./deploy/roles/riftbreaker-server/templates/config.cfg.j2:/etc/rbmods/server-control/config.cfg.j2:ro  # config-render template
 ```
 
@@ -52,9 +53,9 @@ server-control:
 * **Ports:** HTTP **8092** in-container, publish on **`127.0.0.1:<port>`** only.
   Inside the container the bind is `0.0.0.0` (so the published loopback is
   reachable); the agent keeps its Bearer guard regardless.
-* **Volumes:** Docker socket + the `rb-config` volume (at `/config`) + the
-  optional Jinja template. `rb-config` → the dedicated reads the same file at
-  `/data/config/config.cfg`.
+* **Volumes:** Docker socket + the host-root `config` dir (bind-mounted at
+  `/config`, rw) + the optional Jinja template. The dedicated reads the same file
+  at `/data/config/config.cfg`.
 * **Host access:** the Docker socket (the agent wraps `docker`).
 * **Python deps:** stdlib only. The narrow `{{ var }}`-fallback renders
   `config.cfg.j2` exactly (no Jinja2 needed — the template uses no `{% %}`).

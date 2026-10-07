@@ -32,19 +32,19 @@ tournament-server:
   environment:
     TOURNAMENT_HOST: 0.0.0.0
     TOURNAMENT_PORT: "8080"
-    TOURNAMENT_TOKEN: ${RBB_TOURNAMENT_TOKEN:?set in .env}
+    TOURNAMENT_TOKEN: ${RBB_TOURNAMENT_TOKEN:?set in .env — cp .env.example .env}
     TOURNAMENT_AUTO_GO: "true"
     RBBRIDGE_A_URL: ${RBBRIDGE_A_URL:-http://dedicated:9001/exec}
     RBBRIDGE_B_URL: ${RBBRIDGE_B_URL:-}
     TOURNAMENT_WEB_DIR: /usr/share/tournament/web
     TOURNAMENT_DB_PATH: /data/rbbattle.db
     TOURNAMENT_ENV: ${RBB_ENV:-dev}
-    TOURNAMENT_REF: ${RBB_REF:-unknown}
+    TOURNAMENT_REF: ${RBB_REF:-dev}
     RUST_LOG: info
   ports:
     - "127.0.0.1:${RBB_TOURNAMENT_PORT:-8081}:8080"
   volumes:
-    - rb-tournament:/data
+    - ${RBB_HOST_ROOT:-/srv/rbbattle}/tournament:/data
 ```
 
 * **Image / build context:** `context: ./tournament`,
@@ -52,9 +52,10 @@ tournament-server:
 * **Command:** `tournament-server` (the image `CMD`). No entrypoint wrapper —
   it is the upstream Env contract (`TOURNAMENT_*` / `RBBRIDGE_*_URL`).
 * **Ports:** HTTP **8080** in-container, publish on **`127.0.0.1:<port>`**.
-* **Volumes:** `rb-tournament:/data` for the SQLite match records
-  (`TOURNAMENT_DB_PATH`). New named volume — declare it in the top-level
-  `volumes:`.
+* **Volumes:** `${RBB_HOST_ROOT:-/srv/rbbattle}/tournament:/data`
+  (host-root bind, #1112) for the SQLite match records (`TOURNAMENT_DB_PATH`).
+  Not a named volume; the top-level `volumes:` only declares `rb-wine`,
+  `rb-saves`, `rb-relay-wine`.
 * **Host access:** none (no Docker socket). Talks to the bridges over HTTP
   (`RBBRIDGE_A_URL` / `B_URL`).
 * **Python deps:** none (Rust). Runtime needs only `ca-certificates` + `curl`
