@@ -74,7 +74,7 @@ jobs:
             exit 0
           fi
           if printf '%s\n' "$CHANGED" \
-             | grep -Eq '^(deploy/|tools/deploy-gate/|\.github/workflows/)'; then
+             | grep -Eq '^(deploy/|tools/deploy-gate/|\.github/workflows/|compose\.yaml|\.env\.example)'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "relevant=false" >> "$GITHUB_OUTPUT"
@@ -202,9 +202,9 @@ jobs:
           "$VENV/bin/ansible" --version
           "$VENV/bin/yamllint" --version
 
-      - name: YAML-Lint (deploy/)
+      - name: YAML-Lint (deploy/ + compose.yaml)
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: yamllint -c .yamllint deploy/
+        run: yamllint -c .yamllint deploy/ compose.yaml
 
       # Playbook-Syntax der Inventar-Playbooks (Issue #328/#329/#483/#1034):
       # deckt das prod-Playbook deploy-prod.yml (prod-only, vars_files) UND den
@@ -375,3 +375,23 @@ jobs:
             echo "== docker compose config $(basename "$f") =="
             docker compose -f "$f" config >/dev/null
           done
+
+      # Compose-natives Gate (Issue #1102): validiert die EINGECHECKTE compose.yaml
+      # (der neue Stack) gegen die Modus-Matrix solo/versus.
+      - name: "Compose (checked-in): docker compose config + Modus-Matrix"
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          trap 'rm -f .env' EXIT
+          for mode in solo versus; do
+            echo "== RBB_MODE=$mode =="
+            RBB_MODE="$mode" docker compose --env-file .env config >/dev/null
+          done
+          echo "compose.yaml OK (solo, versus)"
+
+      # content-init-Idempotenz (Issue #1102): der Compose-Init-Container zieht den
+      # Content nur beim Erstlauf bzw. mit force; danach offline gruen (#1095).
+      - name: "content-init Idempotenz (hermetisch)"
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
+        run: bash deploy/compose/init/test-content-init.sh

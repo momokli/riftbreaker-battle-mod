@@ -18,16 +18,13 @@ name: Deploy Check (planet)
 # Das Vault bleibt root-only und wird hier nicht gelesen — für den Check wird
 # ein Dummy-Vault in ein temporäres Inventar kopiert.
 
-# Path-Filter (#393): der planet-Check läuft nur noch bei deploy-relevanten
-# PR-Aenderungen — er ist non-blocking, deploy-check-local bleibt der Required-Gate.
+# STILLGELEGT (Issue #1102): planet-Deploys sind ausgesetzt, und der
+# Compose-Stack (`docker compose up`) ersetzt Ansible als Runtime. Dieser
+# Host-Check läuft daher NICHT mehr automatisch — nur noch manuell per
+# workflow_dispatch (der Workflow bleibt als Runbook/Notausgang erhalten).
+# Vorher (Issue #209/#349/#393): Non-blocking-Host-Check bei deploy-relevanten
+# PR-Änderungen.
 on:
-  pull_request:
-    paths:
-      - deploy/**
-      - tools/deploy-gate/**
-      - .github/workflows/deploy.yml
-      - .github/workflows/deploy-check.yml
-      - .github/workflows/deploy-check-local.yml
   workflow_dispatch:
 
 # Least privilege: nur lesen.
