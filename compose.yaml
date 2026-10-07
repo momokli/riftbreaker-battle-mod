@@ -1,0 +1,296 @@
+# Riftbreaker battle stack — self-contained lokal (Issue #1093).
+#
+#   cp .env.example .env      # einmalig anpassen
+#   docker compose up --build -d
+#
+# Bringt den kompletten lokalen Stack hoch: Game-Content (HTTP, idempotent),
+# config.cfg, rbtools + gns_probe, den Dedicated Server, die Sidecars, den
+# Entry-Proxy/Lobby (:6321 + :8088) und Caddy (http-only).
+#
+# RBB_MODE=solo|versus wählt die Topologie (Walking Skeleton: solo).
+# Siehe deploy/compose/README.md und docs/… für den Stand/Umfang.
+name: rbbattle
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "${RBB_LOG_MAX_SIZE:-10m}"
+    max-file: "${RBB_LOG_MAX_FILE:-3}"
+
+x-rbb-ref: &rbb-ref "${RBB_REF:-dev}"
+
+services:
+  # === Init: Game-Content + private PDB per HTTP (idempotent, #566/#1095) ======
+  content-init:
+    build:
+      context: ./deploy/compose/init
+    image: rbb-init:${RBB_REF:-dev}
+    command: ["/usr/local/bin/content-init.sh"]
+    restart: "no"
+    environment:
+      RBB_CONTENT_BASE: "${RBB_CONTENT_BASE}"
+      RBB_CONTENT_FORCE: "${RBB_CONTENT_FORCE:-false}"
+    volumes:
+      - rb-game:/game
+      - rb-downloads:/downloads
+    logging: *default-logging
+
+  # === Init: config.cfg rendern (vorher Jinja-Template der Rolle) =============
+  config-init:
+    build:
+      context: ./deploy/compose/init
+    image: rbb-init:${RBB_REF:-dev}
+    command: ["/usr/local/bin/config-init.sh"]
+    restart: "no"
+    depends_on:
+      content-init:
+        condition: service_completed_successfully
+    environment:
+      RBB_SERVER_NAME: "${RBB_SERVER_NAME:-RBBattle}"
+      RBB_SERVER_PASSWORD: "${RBB_SERVER_PASSWORD:?set in .env — cp .env.example .env}"
+      RBB_SERVER_RCON_PASSWORD: "${RBB_SERVER_RCON_PASSWORD:-}"
+      RBB_SERVER_MAX_PLAYERS: "${RBB_SERVER_MAX_PLAYERS:-4}"
+      RBB_SERVER_BROADCAST_ENABLED: "${RBB_SERVER_BROADCAST_ENABLED:-1}"
+      RBB_SERVER_PAUSE_GAME_WHEN_EMPTY: "${RBB_SERVER_PAUSE_GAME_WHEN_EMPTY:-0}"
+      RBB_SERVER_CAMPAIGN: "${RBB_SERVER_CAMPAIGN:-mp_survival/mp_survival}"
+      RBB_SERVER_MISSION: "${RBB_SERVER_MISSION:-survival/jungle}"
+      RBB_SERVER_DIFFICULTY: "${RBB_SERVER_DIFFICULTY:-coop_normal}"
+    volumes:
+      - ./deploy/compose/config/config.cfg.template:/templates/config.cfg.template:ro
+      - rb-config:/config
+    logging: *default-logging
+
+  # === Init: rbtools + gns_probe bauen (aktueller Checkout) ===================
+  rbtools-build:
+    build:
+      context: ./deploy/compose/rbtools-build
+    image: rbb-rbtools-build:${RBB_REF:-dev}
+    restart: "no"
+    environment:
+      RBB_SRC: /src
+      RBB_OUT: /out
+    volumes:
+      - ./:/src:ro
+      - rb-rbtools:/out/rbtools
+      - rb-gns:/out/gns
+    logging: *default-logging
+
+  # === Dedicated Server (RBB_MODE=solo: genau einer) ==========================
+  dedicated:
+    build:
+      context: ./deploy/dedicated-server
+    image: rb-dedicated:${RBB_REF:-dev}
+    container_name: rbb-dedicated
+    restart: unless-stopped
+    init: true
+    stdin_open: true
+    depends_on:
+      content-init:
+        condition: service_completed_successfully
+      config-init:
+        condition: service_completed_successfully
+      rbtools-build:
+        condition: service_completed_successfully
+    logging: *default-logging
+    labels:
+      RBB_REF: *rbb-ref
+    environment:
+      LC_ALL: C.UTF-8
+      LANG: C.UTF-8
+      RBB_REF: *rbb-ref
+      # Sync-Primitive AUS (Rig-Rezept): sonst Crash im Boost-Thread vor bind().
+      WINEESYNC: "0"
+      WINEFSYNC: "0"
+      RBB_BRIDGE_BIND: "0.0.0.0"
+      RBB_BRIDGE_PORT: "9001"
+    ports:
+      # Game: der Proxy dialt 127.0.0.1:<RBB_SERVER_PORT>. Container bindet 6321.
+      - "127.0.0.1:${RBB_SERVER_PORT:-6322}:6321/udp"
+      - "127.0.0.1:${RBB_SERVER_PORT:-6322}:6321/tcp"
+      # Bridge (HTTP 9001 -> Named Pipe).
+      - "127.0.0.1:${RBB_BRIDGE_PORT:-9001}:9001"
+    volumes:
+      - rb-game:/opt/riftbreaker
+      - rb-config:/data/config
+      - rb-wine:/data/.wine
+      - rb-saves:/data/saves
+      - rb-rbtools:/opt/rbtools:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f DedicatedServer.exe >/dev/null && curl -fsS --max-time 4 http://127.0.0.1:9001/health >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      start_period: 300s
+      retries: 5
+
+  # === Sidecars (python:3.12-slim, Skripte read-only gemountet) ===============
+  session-recorder:
+    image: python:3.12-slim
+    restart: unless-stopped
+    depends_on:
+      dedicated:
+        condition: service_healthy
+    logging: *default-logging
+    labels:
+      RBB_REF: *rbb-ref
+    environment:
+      RBB_REF: *rbb-ref
+    volumes:
+      - rb-wine:/data/.wine:ro
+      - rb-sessions:/data/sessions
+      - ./deploy/session-recorder/session_recorder.py:/app/session_recorder.py:ro
+    command:
+      - python3
+      - -u
+      - /app/session_recorder.py
+      - --wine-prefix
+      - /data/.wine
+      - --out-dir
+      - /data/sessions
+
+  send-tailer:
+    image: python:3.12-slim
+    restart: unless-stopped
+    depends_on:
+      dedicated:
+        condition: service_healthy
+      attack-cycle:
+        condition: service_started
+    logging: *default-logging
+    labels:
+      RBB_REF: *rbb-ref
+    environment:
+      RBB_REF: *rbb-ref
+    volumes:
+      - rb-wine:/data/.wine:ro
+      - ./deploy/send-tailer/send_tailer.py:/app/send_tailer.py:ro
+    command:
+      - python3
+      - -u
+      - /app/send_tailer.py
+      - --wine-prefix
+      - /data/.wine
+      - --queue-url
+      - "http://attack-cycle:9102/queue_send"
+
+  match-loop:
+    image: python:3.12-slim
+    restart: unless-stopped
+    depends_on:
+      dedicated:
+        condition: service_healthy
+    logging: *default-logging
+    labels:
+      RBB_REF: *rbb-ref
+    environment:
+      RBB_REF: *rbb-ref
+    volumes:
+      - ./deploy/match-loop/match_loop.py:/app/match_loop.py:ro
+    command:
+      - python3
+      - -u
+      - /app/match_loop.py
+      - --bridge-url
+      - "http://dedicated:9001"
+      - --restart-delay
+      - "10"
+
+  attack-cycle:
+    image: python:3.12-slim
+    restart: unless-stopped
+    depends_on:
+      dedicated:
+        condition: service_healthy
+    logging: *default-logging
+    labels:
+      RBB_REF: *rbb-ref
+    environment:
+      RBB_REF: *rbb-ref
+    expose:
+      - "9102"
+    volumes:
+      - ./deploy/attack-cycle/attack_cycle.py:/app/attack_cycle.py:ro
+    command:
+      - python3
+      - -u
+      - /app/attack_cycle.py
+      - --bridge-url
+      - "http://dedicated:9001"
+      - --interval
+      - "420"
+      - --difficulty-interval
+      - "200"
+      - --control-bind
+      - 0.0.0.0
+      - --control-port
+      - "9102"
+
+  # === Entry: GNS-Proxy :6321 + Lobby (:8088 via caddy) =======================
+  gns-relay:
+    image: rb-dedicated:${RBB_REF:-dev}
+    container_name: rbb-gns-relay
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      dedicated:
+        condition: service_started
+      rbtools-build:
+        condition: service_completed_successfully
+    logging: *default-logging
+    labels:
+      RBB_REF: *rbb-ref
+    environment:
+      WINEPREFIX: /data/.wine
+      WINEDEBUG: "-all"
+      WINEESYNC: "0"
+      WINEFSYNC: "0"
+      DISPLAY: ":99"
+      RBB_REF: *rbb-ref
+    volumes:
+      - rb-relay-wine:/data/.wine
+      - rb-game:/opt/riftbreaker:ro
+      - ./deploy/compose/relay/routes:/etc/gns-relay/routes:ro
+      - rb-gns:/opt/gns-relay:ro
+    entrypoint:
+      - /bin/bash
+      - -c
+    # Xvfb (wine braucht ein X-Display), Wine-Prefix-Ownership korrigieren, dann
+    # den Probe als steamuser starten. `--hold` hält neue Clients im Loading-Screen
+    # bis sie in der Lobby (:8088) einem Ziel zugewiesen werden.
+    command:
+      - >-
+        Xvfb :99 -screen 0 1280x720x24 >/dev/null 2>&1 & export DISPLAY=:99;
+        chown -R steamuser:steamuser /data/.wine 2>/dev/null || true;
+        cd /opt/riftbreaker/bin;
+        gosu steamuser wine /opt/gns-relay/gns_probe.exe
+        --port ${RBB_ENTRY_PORT:-6321}
+        --map-file /etc/gns-relay/routes
+        --dll /opt/riftbreaker/bin/GameNetworkingSockets.dll
+        --api-host 127.0.0.1
+        --api-port ${RBB_RELAY_API_PORT:-9200}
+        --hold
+        --max-players 4
+        --target SOLO=127.0.0.1:${RBB_SERVER_PORT:-6322}
+
+  # === Entry: Caddy (http-only) ==============================================
+  caddy:
+    image: caddy:2
+    container_name: rbb-caddy
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      gns-relay:
+        condition: service_started
+    logging: *default-logging
+    volumes:
+      - ./deploy/compose/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+
+volumes:
+  rb-game:
+  rb-downloads:
+  rb-rbtools:
+  rb-gns:
+  rb-wine:
+  rb-saves:
+  rb-config:
+  rb-sessions:
+  rb-relay-wine:

@@ -35,3 +35,6 @@ __pycache__/
 /pr-body-*.md
 /progress-*.md
 /log
+
+# Lokaler Compose-Stack (Issue #1093): Secrets. Vorlage ist .env.example.
+/.env
