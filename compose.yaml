@@ -256,6 +256,8 @@ services:
         condition: service_started
       rbtools-build:
         condition: service_completed_successfully
+      capsule-flow:
+        condition: service_started
     logging: *default-logging
     labels:
       RBB_REF: *rbb-ref
@@ -266,6 +268,10 @@ services:
       WINEFSYNC: "0"
       DISPLAY: ":99"
       RBB_REF: *rbb-ref
+      # Kapsel-Flow: POST /solo -> POST /capsule/open (warmed capsule). Der Relay
+      # laeuft im Host-Netz und erreicht den Kapsel-Publish auf 127.0.0.1.
+      RBB_CAPSULE_URL: "http://127.0.0.1:${RBB_CAPSULE_PORT:-9211}"
+      RBB_CAPSULE_TOKEN: "${RBB_CAPSULE_TOKEN:-}"
     volumes:
       - rb-relay-wine:/data/.wine
       - rb-game:/opt/riftbreaker:ro
@@ -386,6 +392,33 @@ services:
     volumes:
       - rb-tournament:/data
 
+  # === Control: warm capsule claim source for the static dedi (#1108) ========
+  # Macht die statische Compose-Dedi zur EINEN warmen Kapsel (Parked-Vertragssubset,
+  # kein Provisioner/Pool). Die Kapsel claimt hierueber.
+  warm:
+    build:
+      context: ./deploy/compose/warm
+    image: rbb-warm:${RBB_REF:-dev}
+    restart: unless-stopped
+    depends_on:
+      dedicated:
+        condition: service_healthy
+    logging: *default-logging
+    labels:
+      RBB_REF: *rbb-ref
+    environment:
+      WARM_BIND: "0.0.0.0"
+      WARM_PORT: "9201"
+      WARM_BRIDGE_URL: "http://dedicated:9001"
+      # GNS-UDP-Endpoint, den der RELAY dialt (Host-Seite des Dedi-Publish).
+      WARM_GNS_ENDPOINT: "127.0.0.1:${RBB_SERVER_PORT:-6322}"
+      WARM_INSTANCE: "solo"
+      WARM_ENV: ${RBB_ENV:-local}
+      WARM_TOKEN: "${RBB_WARM_TOKEN:-}"
+      WARM_PARK_ON_START: "true"
+    ports:
+      - "127.0.0.1:${RBB_WARM_PORT:-9201}:9201"
+
   # === Control: Kapsel-Flow (#931) ==========================================
   capsule-flow:
     build:
@@ -395,13 +428,15 @@ services:
     depends_on:
       attack-cycle:
         condition: service_started
+      warm:
+        condition: service_started
     logging: *default-logging
     environment:
       CAPSULE_ENV: ${RBB_ENV:-dev}
       CAPSULE_TOKEN: ${RBB_CAPSULE_TOKEN:?set in .env — cp .env.example .env}
       CAPSULE_CYCLE_URL: http://attack-cycle:9102
-      CAPSULE_PARKED_URL: "${RBB_CAPSULE_PARKED_URL:-http://parked-pool:9201}"
-      CAPSULE_PARKED_TOKEN: "${RBB_PARKED_TOKEN:-}"
+      CAPSULE_PARKED_URL: "http://warm:9201"
+      CAPSULE_PARKED_TOKEN: "${RBB_WARM_TOKEN:-}"
     ports:
       - "127.0.0.1:${RBB_CAPSULE_PORT:-9211}:9211"
     volumes:
