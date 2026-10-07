@@ -1,0 +1,14 @@
+// Gerendert von config-init (Issue #1093) — NICHT manuell editieren.
+// Enthält das Server-Passwort → 0644 (der Container läuft als steamuser).
+set server_name "${RBB_SERVER_NAME}"
+set server_password "${RBB_SERVER_PASSWORD}"
+set server_rcon_password "${RBB_SERVER_RCON_PASSWORD}"
+set server_max_players_count "${RBB_SERVER_MAX_PLAYERS}"
+set server_broadcast_enabled "${RBB_SERVER_BROADCAST_ENABLED}"
+set server_pause_game_when_empty "${RBB_SERVER_PAUSE_GAME_WHEN_EMPTY}"
+set app_mode "server"
+set disable_steam "1"
+
+set campaign "${RBB_SERVER_CAMPAIGN}"
+set mission "${RBB_SERVER_MISSION}"
+set difficulty "${RBB_SERVER_DIFFICULTY}"

@@ -1,0 +1,4 @@
+# GNS-Entry-Relay-Routen (Issue #1093, Modus solo).
+# Format: <key> = <ip:port>; '#' = Kommentar. Auswertung: exakt > Suffix > Default.
+# Der Proxy besitzt :6321 und dialt den Dedicated (Host-Publish RBB_SERVER_PORT).
+* = 127.0.0.1:6322

@@ -1,0 +1,6 @@
+# HTTP-only Entry (Issue #1093). Caddy läuft im Host-Netz, erreicht also den
+# Relay auf 127.0.0.1:<RBB_RELAY_API_PORT>. Die Spieler-Lobby (:8088) ist die
+# Steuer-UI/API des GNS-Relays. HTTPS/Domains kommen erst in prod dazu.
+:8088 {
+	reverse_proxy 127.0.0.1:9200
+}
