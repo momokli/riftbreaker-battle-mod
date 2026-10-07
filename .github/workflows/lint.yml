@@ -93,6 +93,12 @@ jobs:
       # Fake-curl im PATH. Kein Netz, kein echtes Cockpit.
       - name: Session-Replay-Skript (Fake-curl, planetfrei)
         run: tests/shell/replay-waves.test.sh
+      # Regressions-Guard (Issue #1090): docker-compose.yml wird mit become:
+      # true (root) gerendert -- faellt der Task-Mode auf 0600 zurueck, koennen
+      # scripts/local-dev-start.sh/-stop.sh (laufen OHNE sudo) die Datei nicht
+      # mehr lesen. Statische Assertion auf den Task-Block, kein Rollen-Lauf.
+      - name: "local-dev docker-compose.yml Mode-Regression (Issue #1090)"
+        run: tests/shell/local-dev-compose-mode.test.sh
 
       # --- python ---
       - uses: actions/setup-python@v5
