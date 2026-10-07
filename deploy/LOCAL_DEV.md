@@ -5,6 +5,11 @@ eigenen Linux-Rechner, ohne planet-Zugriff. Gedacht für die IO-/Wave-/
 Difficulty-Spikes (#508/#513): Server hochfahren, `POST /get_state` /
 `activate_mission_flow` gegen die Bridge fahren.
 
+> **Neu (Issue #1093):** der self-contained Compose-Stack (`deploy/compose/README.md`)
+> — `deploy/compose/up.sh` bzw. `docker compose up --build -d` bringt den ganzen
+> lokalen Stack ohne Ansible hoch. Dieses Dokument beschreibt weiterhin den
+> Ansible-Weg (`scripts/local-dev.sh`, `local-deploy.yml`).
+
 ## Was du bekommst
 
 - Den Dedicated-Server (`DedicatedServer.exe` unter Wine, Docker) auf
