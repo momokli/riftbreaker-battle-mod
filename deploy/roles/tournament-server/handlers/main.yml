@@ -1,6 +1,0 @@
----
-- name: restart tournament-server
-  systemd:
-    name: "{{ tournament_unit }}"
-    state: restarted
-    daemon_reload: true

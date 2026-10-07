@@ -1,7 +1,0 @@
----
-- name: restart rbmods-image-retention timer
-  systemd:
-    name: "{{ image_retention_unit }}.timer"
-    state: restarted
-    enabled: true
-    daemon_reload: true

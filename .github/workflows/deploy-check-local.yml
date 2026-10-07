@@ -1,51 +1,22 @@
 name: Deploy Check (local)
 
-# Rein lokaler Merge-Gate-Check (Issue #209/#306/#349): läuft planetfrei auf
-# einem GitHub-Hosted-Runner und bleibt damit IMMER grün. Ein planet-bedingter
-# `startup_failure` des Schwester-Workflows `deploy-check.yml` kann diesen
-# Required-Check nicht mehr mitreißen (Issue #349).
-#
-# Prüft:
-#   * yamllint über deploy/
-#   * Playbook-Syntax (deploy-prod.yml + test-deploy.yml, Issue #328/#329/#1034)
-#   * Deploy-Wiring + Provider-Unit-Tests (Issue #337)
-#   * Disk-Space-Gate-Selbsttest (Issue #310)
-#   * Backup/Stray-Retention-Selbsttest (Issue #312)
-#   * Compose-Log-Limit-Selbsttest (Issue #301)
-#   * Server-Control-Auth hinter dem Caddy (Issue #454)
-#   * Server-Control config-vars.json Render (Issue #704)
-#   * /server/*-Route-Selbsttest (dev rendert sie, prod nicht; Issue #463)
-#   * Compose-Templates rendern + `docker compose config`
-#
-# Der echte Host-Check (`ansible --check --diff` gegen planet) lebt weiter in
-# deploy-check.yml und ist nur noch informational (nicht required).
+# Compose-natives Gate (Issue #1093/#1122): Ansible ist nicht mehr die Runtime.
+# Validiert NUR noch den eingecheckten Compose-Stack (`compose.yaml`) — keine
+# Playbook-Syntax, keine env-Schema-/Render-Tests, kein deploy-gate mehr.
 
-# WICHTIG: PR-Trigger bewusst OHNE paths-Filter — ein pfad-gefilterter
-# Required-Check, der auf einem PR nicht startet, hinterlässt den Context
-# dauerhaft als „Expected". Läuft daher auf allen PRs (ohne deploy/-Bezug
-# trivial grün). Kein push-Trigger: der Check ist ein reiner PR-Gate.
 on:
   pull_request:
   workflow_dispatch:
 
-# Least privilege: nur lesen.
 permissions:
   contents: read
 
-# Per-Ref-Concurrency (Issue #751): cancelt den ueberholten Lauf desselben PRs
-# (Push-Kaskade), ohne wartende Laeufe anderer PRs zu verdraengen (#303-Starving
-# tritt nicht wieder auf).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   changes:
-    # Path-Gate (Issue #746): billiger vorgelagerter Job, der per git diff
-    # bestimmt, ob ueberhaupt deploy-relevante Pfade geaendert wurden. Der
-    # eigentliche deploy-check-local-Job bleibt IMMER vorhanden (Required-Context
-    # nie „Expected"), ueberspringt aber seine Arbeit, wenn nichts Relevantes
-    # betroffen ist — Doku-/reine Code-PRs laufen so in Sekunden statt ~1m20s.
     name: Relevante Pfade (Deploy-Check-Local)
     runs-on: ubuntu-latest
     outputs:
@@ -74,15 +45,14 @@ jobs:
             exit 0
           fi
           if printf '%s\n' "$CHANGED" \
-             | grep -Eq '^(deploy/|tools/deploy-gate/|\.github/workflows/|compose\.yaml|\.env\.example)'; then
+             | grep -Eq '^(deploy/|compose\.yaml|\.env\.example|\.github/workflows/)'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "relevant=false" >> "$GITHUB_OUTPUT"
           fi
 
   deploy-check-local:
-    # Rein lokale Checks (yamllint + Compose-Render + `docker compose config`)
-    # auf einem GitHub-Hosted-Runner — entlastet den planet-Runner (Issue #306).
+    # Rein lokale Compose-Checks auf einem GitHub-Hosted-Runner.
     name: deploy-check-local
     needs: changes
     runs-on: ubuntu-latest
@@ -106,278 +76,17 @@ jobs:
       - uses: actions/checkout@v4
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
 
-      # Statischer Wiring-Check (Issue #337, vormals #238): prueft den
-      # AKTUELLEN, gate-losen deploy.yml-Vertrag (push auf main,
-      # workflow_dispatch, SSH-Deploy-Step, permissions contents: read,
-      # concurrency cd-dev). Das #238-Park-Gate ist mit e8f7783 bewusst aus
-      # deploy.yml entfernt; ob es wiederkommt (#238/#327), entscheidet dieser
-      # Check nicht. Read-only, keine Secrets, keine Prod-Aktion.
-      #
-      # Die Provider-Unit-Tests (test_deploy_gate) laufen bereits in ci.yml
-      # `test` (Issue #746: Dedup, keine Doppel-Ausfuehrung mehr).
-      - name: Deploy-Wiring (statischer Vertrag)
+      # YAML-Lint der eingecheckten compose.yaml (echte YAML-Fehler frueh fangen;
+      # `docker compose config` parst zusätzlich, yamllint ergaenzt die Style-Regeln).
+      - name: "YAML-Lint (compose.yaml)"
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |
           set -euo pipefail
-          python3 tools/deploy-gate/check_deploy_wiring.py
+          python3 -m pip install --disable-pip-version-check --quiet "yamllint==1.35.1"
+          yamllint -c .yamllint compose.yaml
 
-      # Env-Isolation (Issue #483): statischer Schema-Audit (jede Variable ist
-      # per-env oder shared-begruendet) + Unit-Tests + hermetische Identitaets-
-      # und Gate-Laeufe. Rein lokal, kein Host, kein Vault, keine Prod-Aktion.
-      - name: Env-Isolation (Issue #483)
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          python3 tools/deploy-gate/check_env_isolation.py --env dev
-          (
-            cd tools/deploy-gate
-            python3 -m unittest test_env_isolation -v
-          )
-          bash deploy/tests/env-identity/run.sh
-          bash deploy/tests/env-isolation/run.sh
-          bash deploy/tests/deploy-checkout/run.sh
-          bash deploy/tests/env-path-migration/run.sh
-          bash deploy/tests/compose-project/run.sh
-          # GNS-Entry-Relay-Routen (Issue #995): rendert routes.j2 und prueft
-          # die A/B-Zuordnung (*-a -> prod-A :6322, *-b -> prod-B :6325),
-          # dev/staging-Ziele, Default und Reihenfolge.
-          bash deploy/tests/gns-routing/run.sh
-          # Queue-Rolle (Issue #998): rendert Unit + EnvironmentFile und prueft
-          # die Invarianten (Bearer-Token, Bind/Port, Nachbar-URLs, State-Dir).
-          bash deploy/tests/queue/run.sh
-          # Check-Mode-Schutz der Schreibkette (Issue #483, Befund PR #496): die
-          # Rolle riftbreaker-server muss im --check gegen ein NOCH nicht
-          # migriertes <env>-Pfadschema gruen bleiben (kein reales Anlegen).
-          bash deploy/tests/check-mode-paths/run.sh
-          # Disjunkte Test-Port-Bloecke (Issue #988): tournament/bridge/
-          # attack-cycle duerfen sich im selben boot-test-Lauf nicht als
-          # Host-Ports ueberlappen (sonst "port is already allocated").
-          bash deploy/tests/port-ranges/run.sh
-
-      # SOC-Attestation (Issue #504): hermetischer Test der Deploy-Identitaets-
-      # Attestation (konsistent -> PASS, abweichend -> FAIL, fehlende/inerte
-      # Flaeche -> n/a). Der eigentliche Live-Lauf lebt auf planet (nach dem
-      # Deploy); hier laeuft nur die reine Entscheidungslogik + CLI ueber
-      # Fixtures. Rein lokal, kein planet, kein Netz, keine Secrets.
-      - name: SOC-Attestation (Issue #504)
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          (
-            cd tools/deploy-gate
-            python3 -m unittest test_attest_identity -v
-          )
-
-      # Hinweis (Issue #318): Dieser Job läuft auf einem GitHub-Hosted-Runner
-      # (frischer, ephemärer VM je Lauf) — $HOME ist NICHT zwischen Jobs
-      # geteilt, daher ist die einmalige Venv-Erstellung hier race-frei und
-      # bleibt bewusst lokal. Nur der self-hosted `deploy-check`-Job bezieht
-      # das Venv vom Host-Setup (.github/runner/setup.sh).
-      #
-      # pip-Cache (Issue #746): der ephemer $HOME laesst den pip-Download von
-      # ansible-core + yamllint sonst je Lauf neu anfallen (~20-30s). Statt das
-      # Venv selbst zu cachen (fragil: venv-Shebangs/pyvenv.cfg zeigen auf eine
-      # konkrete Python-Installation, die zwischen Image-Updates kippt), wird
-      # nur der pip-Download-Cache (~/.cache/pip) gecacht — robust, pip
-      # reinstalliert die Wheels dann offline aus dem Cache. Key auf die
-      # gepinnten Versionen.
-      - name: pip-Cache (ansible-core + yamllint)
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-deploy-check-${{ runner.os }}-2.19.0-1.35.1
-
-      - name: Tooling bereitstellen (ansible-core + yamllint)
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          VENV="$HOME/.local/ansible-deploy-check"
-          if [ ! -x "$VENV/bin/ansible-playbook" ]; then
-            python3 -m venv "$VENV"
-            "$VENV/bin/pip" install --disable-pip-version-check \
-              "ansible-core==2.19.*" "yamllint==1.35.1"
-          fi
-          echo "$VENV/bin" >> "$GITHUB_PATH"
-          "$VENV/bin/ansible" --version
-          "$VENV/bin/yamllint" --version
-
-      - name: YAML-Lint (deploy/ + compose.yaml)
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: yamllint -c .yamllint deploy/ compose.yaml
-
-      # Playbook-Syntax der Inventar-Playbooks (Issue #328/#329/#483/#1034):
-      # deckt das prod-Playbook deploy-prod.yml (prod-only, vars_files) UND den
-      # Boot-Test test-deploy.yml (+ test-vars.yml) ab. --syntax-check parst nur,
-      # verbindet NICHT und entschlüsselt das Vault nicht. site.yml/deploy-staging.yml
-      # sind mit #1034 entfallen.
-      - name: Playbook-Syntax (deploy-prod.yml + test-deploy.yml)
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          ansible-playbook -i deploy/inventory deploy/deploy-prod.yml --syntax-check
-          ansible-playbook -i deploy/inventory deploy/test-deploy.yml \
-            -e @deploy/test-vars.yml --syntax-check
-
-      # Playbook-Syntax des lokalen Solo-Dev-Setups (Issue #566): eigenes
-      # Inventory (deploy/local-inventory.yml), außerhalb des
-      # Env-Isolations-Schemas (siehe deploy/LOCAL_DEV.md).
-      - name: Playbook-Syntax (local-deploy.yml)
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          ansible-playbook -i deploy/local-inventory.yml deploy/local-deploy.yml \
-            -e @deploy/local-vars.yml --syntax-check
-
-      # game-content-http-Idempotenz (Issue #1095): hermetisch (tmpdir,
-      # unerreichbare Base) — die ECHTE Rolle darf nach Erst-Setup (Binary+PDB
-      # vorhanden) KEINEN get_url mehr auslösen (sonst bricht ein 502 auf planet
-      # den Lauf ab, obwohl der Content lokal liegt). Cold-Start + force lösen
-      # weiterhin einen Download aus (Rot-Before-Green).
-      - name: "game-content http-Idempotenz Selbsttest (Issue #1095)"
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: bash deploy/tests/game-content-http/run.sh
-
-      # Disk-Space-Gate Selbsttest (Issue #310): hermetisch (synthetische
-      # Mount-Facts, localhost) — prüft die ECHTE Preflight-Task-Datei. Bei zu
-      # wenig Platz MUSS der Lauf rot abbrechen (fail_msg "PLATZ-GATE"); der
-      # Positiv-Fall + die Konfigurierbarkeit der Schwelle laufen ebenfalls.
-      - name: "Disk-Space-Gate Selbsttest (Issue #310)"
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: bash deploy/tests/disk-gate/run.sh
-
-      # Backup/Stray-Retention Selbsttest (Issue #312): hermetisch (tmpdir,
-      # localhost) — ruft die ECHTE Task-Datei der Rolle auf. Prueft: nur die N
-      # neuesten rbbattle-*.tar.gz + stray-*/ bleiben (deterministisch ueber den
-      # Namens-Zeitstempel), Idempotenz, --check entfernt nichts, keep=
-      # konfigurierbar, mods/ nie angefasst (Guard #212, inkl. fail-loud-
-      # Overlap) und der stat-Guard ist load-bearing (Negativ-Probe).
-      - name: "Backup/Stray-Retention Selbsttest (Issue #312)"
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: bash deploy/tests/backup-retention/run.sh
-
-      # Compose-Log-Limit Selbsttest (Issue #301): rendert die ECHTEN Compose-
-      # Templates der drei Rollen und prueft via `docker compose config
-      # --format json`, dass JEDER Service einen json-file-Log-Treiber mit
-      # max-size UND max-file traegt (konfigurierbar per -e) — schliesst die
-      # reale, unverwaltete Luecke der unbegrenzten Container-Logs. Negativ-
-      # Probe: ohne logging-Block wird der Test rot. Lokal, kein Host.
-      - name: "Compose-Log-Limit Selbsttest (Issue #301)"
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: bash deploy/tests/compose-logging/run.sh
-
-      # Auth-Selbsttest der /server/*-Route (Issue #454): rendert das ECHTE
-      # rift-caddy-Template, startet Caddy (host-net) + einen Mock-Agenten und
-      # prüft per curl: ohne Credentials 401 MIT `WWW-Authenticate: Basic` vom
-      # Caddy (nicht der Agent-401), mit Operator-Credentials 200, und der
-      # Agent sieht den von Caddy injizierten Bearer. Hermetisch (Dummy-Token,
-      # keine planet-Verbindung, kein Vault); Docker kommt vom Runner.
-      - name: "Server-Control-Auth hinter dem Caddy (Issue #454)"
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: bash deploy/tests/server-control-auth/run.sh
-
-      # config-vars.json Render (Issue #704): rendert die ECHTE Vorlage und
-      # prueft mit `python3 -m json.tool`, dass das Ergebnis gueltiges JSON
-      # ist -- derselbe Pfad wie server_control.py._config_vars(). Ein
-      # literaler "#"-Kommentarkopf statt Jinja-Kommentar machte die Datei
-      # zuvor zu ungueltigem JSON und liess POST /server/config seit
-      # Einfuehrung (#450) IMMER mit 503 config_unavailable fehlschlagen.
-      - name: "Server-Control config-vars.json Render (Issue #704)"
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: bash deploy/tests/server-control-config-vars/run.sh
-
-      # Crash-Collector unit-Render (Issue #462/#480/#593): rendert die ECHTE
-      # systemd-Unit-Vorlage der Rolle (ExecStart + RB_CRASH_*-Env inkl. der
-      # Symbolik-Variablen aus #480 + Restart=always) und prueft die
-      # Konfigurierbarkeit der Retention sowie beide Zweige von
-      # crash_collector_require_docker_service (Issue #593, WSL2 + Docker
-      # Desktop). Lokal, kein Host.
-      - name: "Crash-Collector Unit-Render (Issue #462)"
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: bash deploy/tests/crash-collector/run.sh
-
-      # Server-Control unit-Render (Issue #424/#593): rendert die ECHTE
-      # systemd-Unit-Vorlage der Rolle (ExecStart, EnvironmentFile,
-      # Restart=on-failure) und prueft beide Zweige von
-      # server_control_require_docker_service (Issue #593, WSL2 + Docker
-      # Desktop). Lokal, kein Host.
-      - name: "Server-Control Unit-Render (Issue #593)"
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: bash deploy/tests/server-control-service/run.sh
-
-      # Legacy-rbtools-Symlink-Cleanup (Issue #606): laesst die ECHTE Task-Datei
-      # gegen ein Wegwerf-Verzeichnis laufen — Symlink entfernt, echtes
-      # Verzeichnis bleibt, idempotent. Lokal, kein Host.
-      - name: "Legacy-rbtools-Symlink-Cleanup (Issue #606)"
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: bash deploy/tests/legacy-symlink-cleanup/run.sh
-
-      # Legacy-Pfad-Cleanup (Issue #536): laesst die ECHTE Task-Datei gegen ein
-      # Wegwerf-Verzeichnis laufen — Alt-Symlink entfernt, echtes Verzeichnis
-      # bleibt, idempotent. Lokal, kein Host.
-      - name: "Legacy-Pfad-Cleanup (Issue #536)"
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: bash deploy/tests/legacy-path-cleanup/run.sh
-
-      # Bewusst-oeffentliche Portmenge (Issue #536): rendert die ECHTEN Compose-
-      # Templates (prod-A/prod-B/relay) und asserted Game-Publish 0.0.0.0 fuer
-      # 6322/6325, Loopback fuer Bridge/Attack-Cycle, gns-relay via
-      # network_mode host + Port, Menge == {6321,6322,6325}. Lokal, kein Host.
-      - name: "Bewusst-oeffentliche Portmenge (Issue #536)"
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: bash deploy/tests/public-ports/run.sh
-
-      # /server/*-Route-Selbsttest (Issue #463): rendert die ECHTE
-      # Cockpit-Caddyfile-Vorlage zweimal — dev (server_control_enabled=true)
-      # MUSS die Agent-Route enthalten, prod (prod-vars/deploy-prod.yml,
-      # false) darf sie NICHT enthalten. Sonst zeigt "Restart server" im
-      # Prod-Cockpit auf den DEV-Agenten. Lokal, kein Host.
-      - name: "/server/*-Route Selbsttest (Issue #463)"
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: bash deploy/tests/server-control-route/run.sh
-
-      # Operator-Credential-Trennung (Issue #535): rendert das ECHTE
-      # Cockpit-Caddyfile-Template und beweist: dev bleibt byte-identisch beim
-      # Legacy-Hash; ein Play-Var-Override (prod) ersetzt ihn in ALLEN
-      # Operator-Bloecken ohne Legacy-Rest; die GNS-Lobby (proxy_basic_auth_hash)
-      # ist von den per-Env Cockpit-Credentials ENTKOPPELT (eigener
-      # vault_proxy_basic_auth_hash, sonst Legacy-Fallback — nie der Cockpit-Hash).
-      # Lokal, kein Host, kein Vault.
-      - name: "Operator-Credential-Trennung (Issue #535)"
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: bash deploy/tests/operator-credentials/run.sh
-
-      # Auth-Selbsttest der /tournament/*-Route (Issue #298): rendert das ECHTE
-      # rift-caddy-Template, startet Caddy (host-net) + einen Mock-Referee und
-      # prueft per curl: schreibende Pfade (POST /tournament/wave) ohne
-      # Credentials -> 401 MIT `WWW-Authenticate: Basic` vom Caddy; mit
-      # Operator-Credentials -> 200, und der Referee sieht genau den von Caddy
-      # injizierten `Bearer <token>`; Lesepfade (/state /health, Web-UI) frei;
-      # leerer Token -> kein `header_up` (fail-closed). Hermetisch (Dummy-Token,
-      # keine planet-Verbindung, kein Vault); Docker kommt vom Runner.
-      - name: "Tournament-API-Auth hinter dem Caddy (Issue #298)"
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: bash deploy/tests/tournament-auth/run.sh
-
-      - name: Compose-Templates rendern + `docker compose config`
-        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          RENDER_DIR="$(mktemp -d)"
-          RBBATTLE_RENDER_DIR="$RENDER_DIR" ansible-playbook deploy/check-render.yml
-          shopt -s nullglob
-          files=("$RENDER_DIR"/*.yml)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "::error::Keine gerenderten Compose-Dateien gefunden."
-            exit 1
-          fi
-          for f in "${files[@]}"; do
-            echo "== docker compose config $(basename "$f") =="
-            docker compose -f "$f" config >/dev/null
-          done
-
-      # Compose-natives Gate (Issue #1102): validiert die EINGECHECKTE compose.yaml
-      # (der neue Stack) gegen die Modus-Matrix solo/versus.
+      # Compose-natives Gate: validiert die EINGECHECKTE compose.yaml gegen die
+      # Modus-Matrix solo/versus (der Stack ist das Artefakt, Issue #1093).
       - name: "Compose (checked-in): docker compose config + Modus-Matrix"
         if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
         run: |

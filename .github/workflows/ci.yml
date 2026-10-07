@@ -7,7 +7,7 @@ name: CI
 # "Expected" hängen bleibt), überspringen aber ihre Arbeit, wenn kein
 # relevanter Pfad geändert wurde. Der vorgelagerte, billige `changes`-Job
 # (ubuntu-latest) bestimmt die relevanten Pfade per git diff — dasselbe Muster
-# wie in boot-test.yml. `tournament-test` ist KEIN Required-Check und wird
+# wie in deploy-check-local.yml. `tournament-test` ist KEIN Required-Check und wird
 # deshalb über `if:` komplett übersprungen, wenn keine Rust-Quellen betroffen
 # sind.
 #
@@ -135,10 +135,7 @@ jobs:
       # (package.json ohne deps, `node --test`), brauchen also kein `npm ci`
       # und damit auch keinen Cache mehr — der Eintrag war zuletzt ohnehin ein
       # No-op auf Basis des package-lock.json-Hash.
-      - name: Unit-Test Deploy-Gate (Issue #118)
-        if: needs.changes.outputs.test == 'true'
-        working-directory: tools/deploy-gate
-        run: python3 -m unittest test_deploy_gate -v
+
       - name: Unit-Test Mod-Updater (Issue #120)
         if: needs.changes.outputs.test == 'true'
         working-directory: tools/mod-updater
