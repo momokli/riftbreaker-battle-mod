@@ -98,33 +98,33 @@ provisioner:
     dockerfile: ../compose/provisioner/Dockerfile
   image: rbb-provisioner:${RBB_REF:-dev}
   restart: unless-stopped
+  logging: *default-logging
   environment:
-    PROVISIONER_ENV: ${RBB_ENV:-dev}
+    PROVISIONER_ENV: ${RBB_ENV:-local}
     PROVISIONER_BIND: 0.0.0.0
     PROVISIONER_PORT: "8094"
-    PROVISIONER_TOKEN: ${RBB_PROVISIONER_TOKEN:-}
-    # Fachkonfiguration — PROVISIONER_IMAGE ist Pflicht (fail-closed).
-    PROVISIONER_IMAGE: ${PROVISIONER_IMAGE:?set in .env}
-    PROVISIONER_GAME_SOURCE: /srv/rift-${RBB_ENV:-dev}/game
-    PROVISIONER_CONFIG_CFG: /opt/rbmods/compose/rift-${RBB_ENV:-dev}/riftbreaker/config/config.cfg
-    PROVISIONER_RBTOOLS_DIR: /opt/rbmods/rbtools/${RBB_ENV:-dev}
-    PROVISIONER_SESSIONS_SCRIPT: /opt/rbmods/deploy/session-recorder/session_recorder.py
-    PROVISIONER_SEND_TAILER_SCRIPT: /opt/rbmods/deploy/send-tailer/send_tailer.py
-    PROVISIONER_MATCH_LOOP_SCRIPT: /opt/rbmods/deploy/match-loop/match_loop.py
-    PROVISIONER_ATTACK_CYCLE_SCRIPT: /opt/rbmods/deploy/attack-cycle/attack_cycle.py
-    PROVISIONER_CHAT_ANNOUNCER_SCRIPT: /opt/rbmods/deploy/chat-announcer/announcer.py
-    PROVISIONER_PERSONAS_FILE: /opt/rbmods/deploy/attack-cycle/personas.json
-    PROVISIONER_DEPLOY_REF: ${RBB_REF:-unknown}
+    PROVISIONER_TOKEN: "${RBB_PROVISIONER_TOKEN:-}"
+    # Fachkonfiguration (Pfade = Host-1:1 unter RBB_HOST_ROOT).
+    PROVISIONER_IMAGE: rb-dedicated:${RBB_REF:-dev}
+    PROVISIONER_BASE_DIR: ${RBB_HOST_ROOT:-/srv/rbbattle}
+    PROVISIONER_GAME_SOURCE: ${RBB_HOST_ROOT:-/srv/rbbattle}/game
+    PROVISIONER_CONFIG_CFG: ${RBB_HOST_ROOT:-/srv/rbbattle}/config/config.cfg
+    PROVISIONER_RBTOOLS_DIR: ${RBB_HOST_ROOT:-/srv/rbbattle}/rbtools
+    PROVISIONER_SESSIONS_SCRIPT: ${RBB_REPO_ROOT:-/srv/rbbattle/repo}/deploy/session-recorder/session_recorder.py
+    PROVISIONER_SEND_TAILER_SCRIPT: ${RBB_REPO_ROOT:-/srv/rbbattle/repo}/deploy/send-tailer/send_tailer.py
+    PROVISIONER_MATCH_LOOP_SCRIPT: ${RBB_REPO_ROOT:-/srv/rbbattle/repo}/deploy/match-loop/match_loop.py
+    PROVISIONER_ATTACK_CYCLE_SCRIPT: ${RBB_REPO_ROOT:-/srv/rbbattle/repo}/deploy/attack-cycle/attack_cycle.py
+    PROVISIONER_CHAT_ANNOUNCER_SCRIPT: ${RBB_REPO_ROOT:-/srv/rbbattle/repo}/deploy/chat-announcer/announcer.py
+    PROVISIONER_PERSONAS_FILE: ${RBB_REPO_ROOT:-/srv/rbbattle/repo}/deploy/attack-cycle/personas.example.json
+    PROVISIONER_DEPLOY_REF: *rbb-ref
     PROVISIONER_BRIDGE_PORT_BASE: "30000"
   ports:
-    - "127.0.0.1:8094:8094"
+    - "127.0.0.1:${RBB_PROVISIONER_PORT:-8094}:8094"
   volumes:
     - /var/run/docker.sock:/var/run/docker.sock
-    # Same-path (1:1) mounts — the daemon resolves `-v` against the HOST:
-    - ${RBB_BASE_DIR:-/srv}:${RBB_BASE_DIR:-/srv}                                   # base_dir + game
-    - ${RBB_RBTOOLS_HOST:-/opt/rbmods/rbtools}:/opt/rbmods/rbtools                 # rbtools
-    - ${RBB_CONFIG_HOST:-/opt/rbmods/compose}:/opt/rbmods/compose                  # config.cfg + personas
-    - ${RBB_DEPLOY_HOST:-/opt/rbmods/deploy}:/opt/rbmods/deploy                    # sidecar scripts
+    # Host-1:1: der Daemon loest `-v` gegen den HOST auf -> gleicher Pfad innen.
+    - ${RBB_HOST_ROOT:-/srv/rbbattle}:${RBB_HOST_ROOT:-/srv/rbbattle}
+    - ${RBB_REPO_ROOT:-/srv/rbbattle/repo}:${RBB_REPO_ROOT:-/srv/rbbattle/repo}:ro
 ```
 
 * **`PROVISIONER_IMAGE`** is the dedi image the service runs as a sibling

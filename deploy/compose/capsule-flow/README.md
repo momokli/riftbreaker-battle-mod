@@ -23,12 +23,14 @@ capsule-flow:
   depends_on:
     attack-cycle:
       condition: service_started
+    warm:
+      condition: service_started
   environment:
     CAPSULE_ENV: ${RBB_ENV:-dev}
-    CAPSULE_TOKEN: ${RBB_CAPSULE_TOKEN:?set in .env}
+    CAPSULE_TOKEN: ${RBB_CAPSULE_TOKEN:?set in .env — cp .env.example .env}
     CAPSULE_CYCLE_URL: http://attack-cycle:9102
-    CAPSULE_PARKED_URL: ${RBB_CAPSULE_PARKED_URL:-http://parked-pool:9201}
-    CAPSULE_PARKED_TOKEN: ${RBB_PARKED_TOKEN:-}
+    CAPSULE_PARKED_URL: "http://warm:9201"
+    CAPSULE_PARKED_TOKEN: "${RBB_WARM_TOKEN:-}"
   ports:
     - "127.0.0.1:${RBB_CAPSULE_PORT:-9211}:9211"
   volumes:
@@ -74,8 +76,9 @@ docker build -f deploy/compose/capsule-flow/Dockerfile deploy/compose/capsule-fl
 
 ## Open points
 
-* **Parked service is not part of the walking skeleton** — `CAPSULE_PARKED_URL`
-  points at a future `parked-pool` service; `open`/`finish` return `503` until it
-  exists (`ready`/`auto` only need the bridge/cycle).
+* **Parked target is the static warmed capsule** — compose points
+  `CAPSULE_PARKED_URL` at the `warm` service (`http://warm:9201`, #1108) with
+  `depends_on: warm`; the image default remains the future `parked-pool` service
+  (`ready`/`auto` only need the bridge/cycle).
 * `GET /health` also requires the Bearer token in the current code (auth runs
   before routing) — a liveness probe must send it.

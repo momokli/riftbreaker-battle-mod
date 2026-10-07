@@ -25,22 +25,24 @@ crash-collector:
   environment:
     RB_CRASH_CONTAINER: rbb-dedicated
     RB_CRASH_ENV: ${RBB_ENV:-dev}
-    RB_CRASH_REF: ${RBB_REF:-}
+    RB_CRASH_REF: ${RBB_REF:-dev}
   volumes:
     - /var/run/docker.sock:/var/run/docker.sock          # docker logs/cp/exec/inspect
     - ./deploy/crash-collector:/opt/crash:ro             # the scripts (1:1 with the role)
-    - rb-game:/game:ro                                   # DLL + PDB (PDB stays OUTSIDE the image)
-    - rb-rbtools:/rbtools:ro                             # rbbridge.dll
-    - rb-crashes:/crashes                                # bundle output
+    - ${RBB_HOST_ROOT:-/srv/rbbattle}/game:/game:ro # DLL + PDB (PDB stays OUTSIDE the image)
+    - ${RBB_HOST_ROOT:-/srv/rbbattle}/rbtools:/rbtools:ro # rbbridge.dll
+    - ${RBB_HOST_ROOT:-/srv/rbbattle}/crashes:/crashes # bundle output
 ```
 
 * **Image / build context:** `./deploy/compose/crash-collector`.
 * **Command:** entrypoint → `bash /opt/crash/crash_collector.sh` (daemon). Add
   `command: ["--once"]` for a one-shot run.
 * **Ports:** none.
-* **Volumes:** see above. New named volume **`rb-crashes`** (declare it in the
-  top-level `volumes:`). `rb-game` = existing content/PDB volume; `rb-rbtools` =
-  the rbtools-build output volume (`rbbridge.dll`).
+* **Volumes:** see above. Host-root bind mounts under
+  `${RBB_HOST_ROOT:-/srv/rbbattle}` (no named volume; the top-level `volumes:`
+  only declares `rb-wine`, `rb-saves`, `rb-relay-wine`): `game` = content/PDB
+  dir; `rbtools` = the rbtools-build output dir (`rbbridge.dll`); `crashes` =
+  bundle output dir.
 * **Host access:** the Docker socket (the collector observes the game container
   via `docker logs -f` and copies `crash_info/<uuid>.{dmp,log,trace}` via
   `docker cp`). No direct log/volume mount needed.
@@ -56,9 +58,9 @@ crash-collector:
 | `RB_CRASH_REF` | `${RBB_REF}` | build ref; falls back to image tag |
 | `RB_CRASH_DIR` | `/crashes` | bundle destination (volume) |
 | `RB_CRASH_CRASHINFO` | `/data/.wine/…/crash_info` | path **inside** the game container |
-| `RB_CRASH_DLL` | `/game/bin/riftbreaker_dll_win_release.dll` | game DLL (rb-game) |
-| `RB_CRASH_PDB` | `/game/bin/riftbreaker_dll_win_release.pdb` | PDB (rb-game, 252 MB — outside the image, #480) |
-| `RB_CRASH_RBBRIDGE_DLL` | `/rbtools/rbbridge.dll` | injected DLL (rb-rbtools) |
+| `RB_CRASH_DLL` | `/game/bin/riftbreaker_dll_win_release.dll` | game DLL (`game` mount) |
+| `RB_CRASH_PDB` | `/game/bin/riftbreaker_dll_win_release.pdb` | PDB (`game` mount, 252 MB — outside the image, #480) |
+| `RB_CRASH_RBBRIDGE_DLL` | `/rbtools/rbbridge.dll` | injected DLL (`rbtools` mount) |
 | `RB_CRASH_SYMBOLIZE` | `1` | master switch (#480) |
 | `RB_CRASH_LLVM_SYMBOLIZER` | `/usr/lib/llvm-18/bin/llvm-symbolizer` | shipped in the image |
 | `RB_CRASH_SYMBOLIZE_BIN` / `…_TOOL` / `RB_CRASH_MINIDUMP_PY` | `/opt/crash/…` | the mounted scripts |
