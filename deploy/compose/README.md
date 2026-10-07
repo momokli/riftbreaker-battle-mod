@@ -12,9 +12,14 @@ Dedicated Server, die Sidecars, den Entry-Proxy/Lobby und Caddy.
 
 ```bash
 cp .env.example .env      # einmalig anpassen (Ports, Passwort, Content-Base)
-docker compose up --build -d
+deploy/compose/up.sh      # = docker compose up --build -d (setzt RBB_REF aus git)
 docker compose logs -f    # aus dem Repo-Root, ohne -p/-f-Flags
 ```
+
+Der Wrapper `deploy/compose/up.sh` setzt `RBB_REF` auf den Git-SHA des Checkouts
+(→ Image-Tag `rb-dedicated:<sha>` + `RBB_REF` in Containern/Logs) und ruft
+`docker compose --env-file .env up --build -d` auf. Äquivalent direkt:
+`docker compose up --build -d` (dann kommt `RBB_REF` aus `.env`).
 
 ## Zielbild (Flow)
 
@@ -26,15 +31,15 @@ docker compose logs -f    # aus dem Repo-Root, ohne -p/-f-Flags
 
 ## Services
 
-| Service         | Rolle                                                            |
-| --------------- | ---------------------------------------------------------------- |
-| `content-init`  | Game-Content + private PDB per HTTP (idempotent, #566/#1095)      |
-| `config-init`   | rendert `config.cfg` (envsubst; vorher Jinja-Template)            |
-| `rbtools-build` | baut die 4 Server-I/O-Binaries + `gns_probe.exe` aus dem Checkout |
-| `dedicated`     | Dedicated Server (Wine/Xvfb), publiziert :6322 + Bridge :9001     |
-| `session-recorder` / `send-tailer` / `match-loop` / `attack-cycle` | Sidecars |
-| `gns-relay`     | Entry-Proxy `:6321` (hold + route) + Lobby-API `:9200`            |
-| `caddy`         | http-only Entry; Lobby auf `:8088` → Relay-API                    |
+| Service                                                            | Rolle                                                             |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| `content-init`                                                     | Game-Content + private PDB per HTTP (idempotent, #566/#1095)      |
+| `config-init`                                                      | rendert `config.cfg` (envsubst; vorher Jinja-Template)            |
+| `rbtools-build`                                                    | baut die 4 Server-I/O-Binaries + `gns_probe.exe` aus dem Checkout |
+| `dedicated`                                                        | Dedicated Server (Wine/Xvfb), publiziert :6322 + Bridge :9001     |
+| `session-recorder` / `send-tailer` / `match-loop` / `attack-cycle` | Sidecars                                                          |
+| `gns-relay`                                                        | Entry-Proxy `:6321` (hold + route) + Lobby-API `:9200`            |
+| `caddy`                                                            | http-only Entry; Lobby auf `:8088` → Relay-API                    |
 
 Modus steuert die Topologie: `RBB_MODE=solo` → 1 Dedi, `RBB_MODE=versus` → 2
 Dedis (A/B). (Noch nicht implementiert — Walking Skeleton ist `solo`.)
@@ -57,7 +62,5 @@ Named Volumes (`rb-*`, projekt-präfixt zu `rbbattle_*`): `rb-game`
   `tournament-server`, `capsule-flow` als Compose-Services (teils `docker.sock`).
 - **Timer:** `image-retention`, `host-hygiene` — bleiben voraussichtlich Host
   (Docker-weite `prune` + Host-Dirs + Schedule).
-- **Wrapper:** dünnes Skript, das `RBB_REF` aus `git rev-parse` setzt und
-  `docker compose --env-file .env up --build -d` aufruft.
 - **CI-Gates:** `deploy-check-local` compose-nativ; env-Tests raus; planet-Check
   stilllegen.
