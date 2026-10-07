@@ -8,10 +8,10 @@ Live-Smoke-Träger. Es beschreibt, was hochkommen soll, wie getestet wird und wa
 
 ## 0. Zielbild in einem Satz
 
-`deploy/compose/up.sh` (bzw. `docker compose up --build -d`) bringt **19 Services**
+`deploy/compose/up.sh` (bzw. `docker compose up --build -d`) bringt **21 Services**
 hoch: Content, config.cfg, rbtools + gns_probe, Mod-Rollout, Dedicated Server,
-Sidecars, Entry-Proxy/Lobby, Caddy, Observer/Control und den VS-Pfad
-(Queue + Provisioner).
+Sidecars, Entry-Proxy/Lobby, Caddy, Observer/Control, den VS-Pfad (Queue +
+Provisioner) und den Hygiene-Timer (Ofelia).
 
 ## 1. Voraussetzungen (Host)
 
@@ -81,6 +81,19 @@ curl -fsS http://127.0.0.1:8094/status           # provisionierte Instanzen
 docker ps --filter label=rb.provisioner.env       # die kalten Welten A/B
 ```
 
+### 3d. Timer — Hygiene (`hygiene` / `ofelia`)
+
+- `hygiene` → **`Up`** (idle); `ofelia` → **`Up`**.
+- Job-Läufe + Exit-Codes landen in den Ofelia-Logs.
+
+```bash
+docker compose ps                      # hygiene + ofelia: Up
+docker compose logs ofelia             # job-exec-Läufe + Exit-Codes
+# Dry-Run der beiden Jobs (schreibt nichts):
+docker compose exec hygiene /opt/rbmods/image-retention/docker_image_tag_retention.sh --dry-run
+docker compose exec -e RB_HYGIENE_DRY_RUN=1 hygiene /opt/rbmods/host-hygiene/host_hygiene.sh
+```
+
 ## 4. Bekannte Lücken / worauf achten
 
 - **Erstbuild langsam:** das Wine-Image (`deploy/dedicated-server`) lädt/buildet
@@ -94,6 +107,12 @@ docker ps --filter label=rb.provisioner.env       # die kalten Welten A/B
   Tagen → für längere Playtests konsequent per Server-Control restarten.
 - **`warm` (Solo) vs. provisioniert (VS):** beide nutzen den Host-Root; die
   Koexistenz ist noch nicht live belegt.
+- **Ofelia-Label-Discovery ist nicht realtime:** `ofelia` `depends_on` `hygiene`
+  (`condition: service_started`), damit die Job-Labels beim Start vorliegen;
+  neue/geänderte Jobs erfordern ein Recreate des Schedulers.
+- **Ofelia 0.3.x Cron-Format:** das numerische Schedule-Format hat ein
+  Sekundenfeld; die Jobs nutzen deshalb `@daily`/`@weekly` (robfig-Descriptors)
+  statt z. B. `0 4 * * *`.
 - **Secrets:** nur in `.env` (git-ignoriert); nie ins Repo.
 
 ## 5. Befund melden
@@ -106,4 +125,5 @@ Live-Stand/Bugs an den Fahrplan-`report.md` bzw. ein GitHub-Issue — mit
 
 - `deploy/compose/README.md` — Stack, Services, Pfad-Modell.
 - Fahrplan (P0 Solo → P1 VS → … → P5 1v1).
-- Issues: #1093 (Umbrella), #1083 (VS-Provisioner), #1112 (Pfad-Modell).
+- Issues: #1093 (Umbrella), #1083 (VS-Provisioner), #1112 (Pfad-Modell),
+  #1103 (Hygiene-Timer).
