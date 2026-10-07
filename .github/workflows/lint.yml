@@ -86,6 +86,11 @@ jobs:
       # Planetfrei (Fake-Ref), kein Docker/Netz/Vault.
       - name: Mod-Versions-Identitaet (Fake-Ref, planetfrei)
         run: tests/shell/mod-version.test.sh
+      # Red/Green-Beweis der Reproduzierbarkeit des Mod-Zips (Issue #1101):
+      # zwei package.sh-Laeufe auf demselben Stand -> byte-identischer
+      # rbbattle.zip (stabiler md5). Traegt md5-Paritaet + Marker-No-Op.
+      - name: Mod-Zip-Reproduzierbarkeit (planetfrei)
+        run: tests/shell/package-determinism.test.sh
       # Red/Green-Beweis des Session-Replay-Skripts (Issue #784): Level-
       # Reihenfolge/-Range, Level-9-teilt-sich-mit-Level-8 (#658), Validierung
       # ungueltiger Optionen, fail-closed ohne COCKPIT_URL/COCKPIT_PASS, und der

@@ -45,17 +45,17 @@ Idempotent (warm == No-Op) und fail-loud (jeder Verstoß → Exit ≠ 0).
 
 ## Env
 
-| Variable           | Default                     | Bedeutung                                             |
-| ------------------ | --------------------------- | ----------------------------------------------------- |
-| `RBB_REF`          | `dev`                       | Build-Ref → `RBB_BUILD_REF` für `package.sh`          |
-| `RBB_GAME_DIR`     | `/game`                     | Game-Volume                                           |
-| `RBB_MODS_DIR`     | `$RBB_GAME_DIR/mods`        | `mods/`                                               |
-| `RBB_MOD_DIR`      | `$RBB_MODS_DIR/rbbattle`    | Ziel-Mod-Ordner                                       |
-| `RBB_BACKUP_DIR`   | `/backups`                  | Backup-Ziel **außerhalb** `mods/`                     |
-| `RBB_BACKUP_KEEP`  | `5`                         | je Gruppe behaltene Backups                           |
-| `RBB_SRC`          | `/src`                      | Checkout (read-only)                                  |
-| `RBB_WORK`         | `/work`                     | schreibbare Build-Kopie des Checkouts                 |
-| `RBB_MARKER_FILE`  | `$RBB_GAME_DIR/rbbattle.md5`| Marker-Datei (md5 des Zips)                           |
+| Variable          | Default                      | Bedeutung                                    |
+| ----------------- | ---------------------------- | -------------------------------------------- |
+| `RBB_REF`         | `dev`                        | Build-Ref → `RBB_BUILD_REF` für `package.sh` |
+| `RBB_GAME_DIR`    | `/game`                      | Game-Volume                                  |
+| `RBB_MODS_DIR`    | `$RBB_GAME_DIR/mods`         | `mods/`                                      |
+| `RBB_MOD_DIR`     | `$RBB_MODS_DIR/rbbattle`     | Ziel-Mod-Ordner                              |
+| `RBB_BACKUP_DIR`  | `/backups`                   | Backup-Ziel **außerhalb** `mods/`            |
+| `RBB_BACKUP_KEEP` | `5`                          | je Gruppe behaltene Backups                  |
+| `RBB_SRC`         | `/src`                       | Checkout (read-only)                         |
+| `RBB_WORK`        | `/work`                      | schreibbare Build-Kopie des Checkouts        |
+| `RBB_MARKER_FILE` | `$RBB_GAME_DIR/rbbattle.md5` | Marker-Datei (md5 des Zips)                  |
 
 Der **Marker** liegt bewusst **außerhalb** `mods/` (wie in der Rolle, die ihn
 im Deploy-Verzeichnis hält) — in `mods/` würde er sonst als Datei neben der Mod
@@ -67,14 +67,11 @@ liegen. Pfad über `RBB_MARKER_FILE` übersteuerbar.
   gemountet, `package.sh` schreibt aber nach `<repo-root>/dist`. `rollout.sh`
   kopiert den Checkout (ohne `.git`) nach `$RBB_WORK` und baut dort — die
   Semantik (`package.sh` aus dem Checkout, cwd = Repo-Root) bleibt identisch.
-- **Zip-Metadaten werden normalisiert.** `package.sh` packt via `cp -R` + Zip;
-  der Zip-Header speichert die (volatilen) Datei-mtimes, wodurch der Zip-md5
-  **zwischen Läufen instabil** ist und der Marker-No-Op nie greifen würde.
-  `rollout.sh` schreibt das Zip daher mit festen Zeitstempeln, sortierten
-  Einträgen und Rechten `0644` neu. Der **Inhalt** (und die entpackte Mod)
-  bleibt unverändert, nur der md5 ist bei gleichem Quellstand stabil — dadurch
-  ist der Marker-No-Op in der Realität wirksam. (Die Rolle baut das Zip
-  außerhalb des Deploys einmalig; hier fällt Bauen + No-Op in einen Container.)
+- **Kein Zip-Normalisieren mehr (#1101).** `scripts/package.sh` baut den Zip
+  jetzt **deterministisch** (sortierte Einträge, fester Zeitstempel `1980-01-01`,
+  Rechte `0644`) — bei gleichem Quellstand ist der `rbbattle.zip`-md5 stabil,
+  damit der Marker-No-Op real greift. `rollout.sh` braucht dafür keine
+  Nach-Normalisierung mehr; der frühere Workaround ist entfernt.
 - **Guard ist strenger:** Manifest-Ordner **unterhalb** `RBB_MOD_DIR` werden nie
   als „Fremd-Mod“ verschoben, und `mods/` selbst wird nie verschoben (die Rolle
   würde `mods/` bei einem Manifest direkt darin selbst zum Ziel machen).
