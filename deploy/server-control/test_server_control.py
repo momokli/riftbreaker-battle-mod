@@ -89,11 +89,11 @@ class BaseFixture(unittest.TestCase):
         self.vars_path = os.path.join(self.tmp, "config-vars.json")
 
         # Echte deployte Vorlage verwenden — es gibt nur EINE Quelle fuer das
-        # Rendering (deploy/server-control und die Ansible-Rolle lesen dieselbe).
+        # Rendering (server-control liest sie read-only aus dem Compose-Config-Dir).
         here = os.path.dirname(os.path.abspath(__file__))
         repo_root = os.path.abspath(os.path.join(here, "..", ".."))
         real_template = os.path.join(
-            repo_root, "deploy", "roles", "riftbreaker-server", "templates", "config.cfg.j2"
+            repo_root, "deploy", "compose", "config", "config.cfg.j2"
         )
         self.assertTrue(os.path.exists(real_template), "config.cfg.j2 fehlt: %s" % real_template)
         with open(real_template, "r", encoding="utf-8") as handle:

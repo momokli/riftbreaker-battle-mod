@@ -7,9 +7,9 @@ stop + `config.cfg` rendering, via the Docker CLI on the host.
 
 ## Files
 
-| File | Purpose |
-|---|---|
-| `Dockerfile` | `python:3.12-slim` + Docker CLI (copied from `docker:cli`). Build context: **this directory**. |
+| File            | Purpose                                                                                                                                                         |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Dockerfile`    | `python:3.12-slim` + Docker CLI (copied from `docker:cli`). Build context: **this directory**.                                                                  |
 | `entrypoint.sh` | Exports the `SERVER_CONTROL_*` defaults, optionally provisions `config-vars.json` from `RBB_SERVER_*`, execs `/app/server_control.py "$@"`. Forwards `--check`. |
 
 ## Run contract
@@ -44,20 +44,20 @@ server-control:
   volumes:
     - /var/run/docker.sock:/var/run/docker.sock
     - ${RBB_HOST_ROOT:-/srv/rbbattle}/config:/config # target config.cfg (shared with dedicated)
-    - ./deploy/roles/riftbreaker-server/templates/config.cfg.j2:/etc/rbmods/server-control/config.cfg.j2:ro  # config-render template
+    - ./deploy/compose/config/config.cfg.j2:/etc/rbmods/server-control/config.cfg.j2:ro # config-render template
 ```
 
-* **Image / build context:** `./deploy/compose/server-control`.
-* **Command:** entrypoint → `python3 /app/server_control.py` (HTTP daemon). Add
+- **Image / build context:** `./deploy/compose/server-control`.
+- **Command:** entrypoint → `python3 /app/server_control.py` (HTTP daemon). Add
   `command: ["--check"]` to only validate config.
-* **Ports:** HTTP **8092** in-container, publish on **`127.0.0.1:<port>`** only.
+- **Ports:** HTTP **8092** in-container, publish on **`127.0.0.1:<port>`** only.
   Inside the container the bind is `0.0.0.0` (so the published loopback is
   reachable); the agent keeps its Bearer guard regardless.
-* **Volumes:** Docker socket + the host-root `config` dir (bind-mounted at
+- **Volumes:** Docker socket + the host-root `config` dir (bind-mounted at
   `/config`, rw) + the optional Jinja template. The dedicated reads the same file
   at `/data/config/config.cfg`.
-* **Host access:** the Docker socket (the agent wraps `docker`).
-* **Python deps:** stdlib only. The narrow `{{ var }}`-fallback renders
+- **Host access:** the Docker socket (the agent wraps `docker`).
+- **Python deps:** stdlib only. The narrow `{{ var }}`-fallback renders
   `config.cfg.j2` exactly (no Jinja2 needed — the template uses no `{% %}`).
 
 ### Fail-closed (mandatory)
@@ -68,10 +68,10 @@ role's assert (#424/#298).
 
 ### `config.cfg` rendering (`POST /server/config`)
 
-* Target file: `SERVER_CONTROL_CONFIG_PATH` (default `/config/config.cfg`).
-* Template: `SERVER_CONTROL_CONFIG_TEMPLATE` (default the mounted
+- Target file: `SERVER_CONTROL_CONFIG_PATH` (default `/config/config.cfg`).
+- Template: `SERVER_CONTROL_CONFIG_TEMPLATE` (default the mounted
   `config.cfg.j2`).
-* Base values: `SERVER_CONTROL_CONFIG_VARS`. If no file is mounted, the
+- Base values: `SERVER_CONTROL_CONFIG_VARS`. If no file is mounted, the
   entrypoint generates `/run/rbb-server-control/config-vars.json` from the
   `RBB_SERVER_*` variables (keys `riftbreaker_server_*`, same as
   `config-vars.json.j2`). If neither is present the endpoint returns
@@ -89,6 +89,6 @@ docker build -f deploy/compose/server-control/Dockerfile deploy/compose/server-c
 
 ## Open points
 
-* In `versus` mode, `SERVER_CONTROL_CONTAINER` must name the intended dedi
+- In `versus` mode, `SERVER_CONTROL_CONTAINER` must name the intended dedi
   (single agent controls one container name).
-* The token comes from `.env` (local-first secret), not a vault.
+- The token comes from `.env` (local-first secret), not a vault.
