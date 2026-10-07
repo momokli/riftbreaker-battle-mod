@@ -12,6 +12,8 @@ if [ ! -f "$COMPOSE_FILE" ]; then
     exit 1
 fi
 
-docker compose -p riftbreaker -f "$COMPOSE_FILE" start
+# `up -d` statt `start` (Issue #1092): `start` startet nur bestehende
+# Container — neu hinzugekommene Services (Sidecars) wuerden nie angelegt.
+docker compose -p riftbreaker -f "$COMPOSE_FILE" up -d --remove-orphans
 echo "[local-dev-start] Bridge:  http://127.0.0.1:9001/"
 echo "[local-dev-start] Status:  curl -H 'Authorization: Bearer localdev' http://127.0.0.1:8091/status"

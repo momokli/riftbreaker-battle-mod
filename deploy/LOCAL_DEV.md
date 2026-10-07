@@ -138,11 +138,51 @@ scripts/local-dev-start.sh    # wieder starten
 (Server-Control und Crash-Collector laufen als systemd-Units durchgehend im
 Hintergrund, unabhängig vom Dedicated-Server-Container.)
 
+`local-dev-start.sh` macht `docker compose up -d --remove-orphans` (nicht
+`start`, Issue #1092): Container, die in der Compose-Datei stehen aber noch
+fehlen, werden angelegt. Die Compose-Datei selbst ist aber die **zuletzt per
+Ansible gerenderte** — neuer Code/neue Sidecars/neue Mod kommen erst mit dem
+Update-Workflow unten.
+
+Logs des ganzen Stacks:
+
+```bash
+docker compose -p riftbreaker -f /srv/rift-local/compose/riftbreaker/docker-compose.yml logs -f
+```
+
+### Nach `git pull` / Branch-Wechsel: auf den aktuellen Stand bringen
+
+```bash
+git checkout main && git pull origin main
+scripts/local-dev.sh --tags server      # oder ohne --tags für alles
+docker ps                               # Image-Tag == git rev-parse --short=12 HEAD
+```
+
+Was dabei passiert (alles idempotent, nur Geändertes wird angefasst):
+
+| Schritt | Rolle | Wirkung |
+|---|---|---|
+| Mod paketieren | `mods-zip` | `dist/rbbattle.zip` aus `client-mod/` des Checkouts, Kopie nach `/srv/rift-local/mods/rbbattle.zip` |
+| Image | `dedicated-server-image` | `rb-dedicated:<checkout-sha>` bauen, falls der Tag fehlt |
+| Tools | `rbtools` | `rbbridge.dll`/`pipe_bridge.exe` neu cross-compilen |
+| Server | `riftbreaker-server` | `docker-compose.yml` + `config.cfg` neu rendern; Mod-Update, wenn Zip-md5 ≠ installierter Marker (Backup des alten Stands vorher); `docker compose up -d --remove-orphans` |
+| Plane B | `server-control` | Agent + systemd-Unit aktualisieren |
+
+Wichtig: Seit #1092 gehört `mods-zip` **auch** zu `--tags server`. Vorher
+baute `--tags server` die Zip nicht neu → der Server verglich die **alte** md5
+mit dem Marker, sah „kein Update“ und lief still mit der alten Mod weiter
+(neues Image, alte Lua/Gebäude). Ein CI-Check (`deploy-check-local.yml`)
+verhindert, dass das wieder auseinanderläuft.
+
+**Client nicht vergessen:** dieselbe `rbbattle.zip`
+(`/srv/rift-local/mods/rbbattle.zip`) muss auch im Mods-Ordner deines
+Riftbreaker-Clients liegen, sonst fehlen dort Gebäude/GUI der neuen Mod.
+
 ### Nur einen Teil laufen lassen
 
 ```bash
 scripts/local-dev.sh --tags content      # nur Mod-Zip + Game-Content
-scripts/local-dev.sh --tags server        # Image + Server-I/O-Tools + Dedicated-Server + Server-Control
+scripts/local-dev.sh --tags server        # Mod-Zip + Image + Server-I/O-Tools + Dedicated-Server + Server-Control
 scripts/local-dev.sh --tags crash          # nur den Crash-Collector
 scripts/local-dev.sh --tags tournament    # zusätzlich den Tournament-Server (systemd, optional)
 ```

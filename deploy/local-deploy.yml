@@ -17,8 +17,8 @@
 #   ansible-playbook -i deploy/local-inventory.yml deploy/local-deploy.yml \
 #     -e @deploy/local-vars.yml -K
 #
-# Tags: [content] mods-zip+game-content · [server] Image+rbtools+Server+
-#       server-control · [crash] Crash-Collector (Minidump/Trace/Log, ohne
+# Tags: [content] mods-zip+game-content · [server] mods-zip+Image+rbtools+
+#       Server+server-control (#1092) · [crash] Crash-Collector (Minidump/Trace/Log, ohne
 #       Symbolik) · [tournament] Tournament-Server (optional, braucht
 #       systemd -- wie crash-collector/server-control auch).
 
@@ -65,8 +65,11 @@
       tags: always
 
   roles:
+    # Issue #1092: mods-zip AUCH unter [server] — sonst baut `--tags server`
+    # die Zip nicht aus dem Checkout neu, riftbreaker-server vergleicht die
+    # ALTE md5 mit dem Marker und der Server laeuft still mit veralteter Mod.
     - role: mods-zip
-      tags: [content]
+      tags: [content, server]
     - role: dedicated-server-image
       tags: [server]
     - role: game-content

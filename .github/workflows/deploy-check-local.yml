@@ -229,6 +229,20 @@ jobs:
           ansible-playbook -i deploy/local-inventory.yml deploy/local-deploy.yml \
             -e @deploy/local-vars.yml --syntax-check
 
+      # Regression #1092: `--tags server` MUSS die Mod mitbauen, sonst laeuft
+      # der lokale Server still mit veralteter Mod. --list-tasks verbindet nicht.
+      - name: "local-deploy: --tags server enthält mods-zip (#1092)"
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          tasks="$(ansible-playbook -i deploy/local-inventory.yml deploy/local-deploy.yml \
+            -e @deploy/local-vars.yml --list-tasks --tags server)"
+          if ! grep -q "mods-zip :" <<<"$tasks"; then
+            echo "::error::--tags server enthält die Rolle mods-zip nicht (#1092)"
+            echo "$tasks"
+            exit 1
+          fi
+
       # Disk-Space-Gate Selbsttest (Issue #310): hermetisch (synthetische
       # Mount-Facts, localhost) — prüft die ECHTE Preflight-Task-Datei. Bei zu
       # wenig Platz MUSS der Lauf rot abbrechen (fail_msg "PLATZ-GATE"); der
