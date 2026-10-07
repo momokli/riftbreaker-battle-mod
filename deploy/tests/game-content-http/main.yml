@@ -1,0 +1,32 @@
+---
+# Hermetischer Selbsttest der game-content-http-Idempotenz (Issue #1095).
+#
+# Läuft LOKAL (kein Host, kein Netz, kein Vault): die ECHTE Rolle game-content
+# wird mit `riftbreaker_content_mode=http` gegen ein tmpdir-Fixture gebunden und
+# die `riftbreaker_content_http_base` auf eine unerreichbare Adresse gesetzt.
+# Damit ist jeder tatsächlich ausgeführte `get_url` ein harter Fehler — der
+# Unreachable-Base ist zugleich der Detektor für „läuft ein Download?".
+#
+#   Fall 1 (warm):  Binary + PDB vorhanden  -> kein Download, Lauf MUSS grün sein
+#   Fall 2 (cold):  Binary fehlt            -> Download läuft, Lauf MUSS rot sein
+#   Fall 3 (force): force=true, warm        -> Download läuft, Lauf MUSS rot sein
+#
+# Genau das schließt den Befund aus #1095: ohne den Idempotenz-Guard
+# (force || !binary) kontaktierte der warme Lauf planet und brach bei einem 502
+# ab, obwohl der Content lokal lag.
+- name: "game-content — http-Idempotenz (Issue #1095)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    riftbreaker_content_mode: http
+    riftbreaker_content_force: false
+    # Fixture-Pfade: Rolle schreibt nur in dieses Wegwerf-Verzeichnis.
+    riftbreaker_game_dir: "{{ test_fixture_root }}/game"
+    riftbreaker_content_http_download_dir: "{{ test_fixture_root }}/downloads"
+    # Unreachable Base (per -e überschreibbar): jeder get_url-Lauf scheitert.
+    riftbreaker_content_http_base: "{{ test_http_base | default('http://127.0.0.1:1') }}"
+
+  roles:
+    - role: game-content
