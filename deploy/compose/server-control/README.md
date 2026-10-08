@@ -7,17 +7,18 @@ stop + `config.cfg` rendering, via the Docker CLI on the host.
 
 ## Files
 
-| File            | Purpose                                                                                                                                                         |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Dockerfile`    | `python:3.12-slim` + Docker CLI (copied from `docker:cli`). Build context: **this directory**.                                                                  |
-| `entrypoint.sh` | Exports the `SERVER_CONTROL_*` defaults, optionally provisions `config-vars.json` from `RBB_SERVER_*`, execs `/app/server_control.py "$@"`. Forwards `--check`. |
+| File            | Purpose                                                                                                                                                                                                                                                              |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Dockerfile`    | `python:3.12-slim` + Docker CLI (copied from `docker:cli`). Build context: **`./deploy/server-control`** (the Dockerfile lives here).                                                                                                                                |
+| `entrypoint.sh` | Lives in `deploy/server-control/entrypoint.sh` (inside the build context; **baked** into the image). Exports the `SERVER_CONTROL_*` defaults, optionally provisions `config-vars.json` from `RBB_SERVER_*`, execs `/app/server_control.py "$@"`. Forwards `--check`. |
 
 ## Run contract
 
 ```yaml
 server-control:
   build:
-    context: ./deploy/compose/server-control
+    context: ./deploy/server-control
+    dockerfile: ../compose/server-control/Dockerfile
   image: rbb-server-control:${RBB_REF:-dev}
   restart: unless-stopped
   depends_on:
@@ -47,7 +48,7 @@ server-control:
     - ./deploy/compose/config/config.cfg.j2:/etc/rbmods/server-control/config.cfg.j2:ro # config-render template
 ```
 
-- **Image / build context:** `./deploy/compose/server-control`.
+- **Image / build context:** `context: ./deploy/server-control`, `dockerfile: ../compose/server-control/Dockerfile`. The agent is **baked** into `/app/server_control.py`; `docker compose up --build` rebuilds it on code changes.
 - **Command:** entrypoint → `python3 /app/server_control.py` (HTTP daemon). Add
   `command: ["--check"]` to only validate config.
 - **Ports:** HTTP **8092** in-container, publish on **`127.0.0.1:<port>`** only.
@@ -80,7 +81,7 @@ role's assert (#424/#298).
 ## Validation (ran locally)
 
 ```bash
-docker build -f deploy/compose/server-control/Dockerfile deploy/compose/server-control   # OK
+docker build -f deploy/compose/server-control/Dockerfile deploy/server-control   # OK
 # no token   -> rc=2 "SERVER_CONTROL_TOKEN fehlt"
 # with token -> rc=0 "Konfiguration OK (bind=0.0.0.0 port=8092 container=rbb-dedicated)"
 # config-vars.json generated from RBB_SERVER_* -> valid JSON

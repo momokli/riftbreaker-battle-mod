@@ -42,7 +42,7 @@ Der Wrapper `deploy/compose/up.sh` setzt `RBB_REF` auf den Git-SHA des Checkouts
 | `rbtools-build`                                                    | baut die 4 Server-I/O-Binaries + `gns_probe.exe` aus dem Checkout         |
 | `mod-build`                                                        | baut `rbbattle.zip` + Rollout: Marker/Backup/`#212`-Guard (#1099)         |
 | `dedicated`                                                        | Dedicated Server (Wine/Xvfb), publiziert :6322 + Bridge :9001             |
-| `session-recorder` / `send-tailer` / `match-loop` / `attack-cycle` | Sidecars                                                                  |
+| `session-recorder` / `send-tailer` / `match-loop` / `attack-cycle` | Sidecars (Code **gebacken** ins Image, `up --build`)                      |
 | `warm`                                                             | warmed-capsule-Claim-Quelle (Parked-Subset) der statischen Dedi (#1108)   |
 | `capsule-flow`                                                     | Kapsel-Flow (open/ready/finish) über `warm` + `attack-cycle`              |
 | `gns-relay`                                                        | Entry-Proxy `:6321` (hold + route) + Lobby-API `:9200` + Mode-Gate        |

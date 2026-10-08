@@ -7,13 +7,13 @@
 # environment (compose `environment:` / `.env`), so the operator keeps the exact
 # knobs of the role.
 #
-# Scripts are mounted read-only from `deploy/crash-collector/` to /opt/crash; the
+# Scripts are baked into /opt/crash from `deploy/crash-collector/`; the
 # game DLL/PDB and rbbridge.dll are mounted read-only (paths below). The observed
 # game container is reached via the mounted Docker socket — no direct log/volume
 # access needed (docker logs/cp/exec).
 set -euo pipefail
 
-# --- paths of the mounted scripts (deploy/crash-collector -> /opt/crash) -------
+# --- paths of the baked scripts (deploy/crash-collector -> /opt/crash) -------
 export RB_CRASH_MINIDUMP_PY="${RB_CRASH_MINIDUMP_PY:-/opt/crash/minidump_meta.py}"
 export RB_CRASH_SYMBOLIZE_BIN="${RB_CRASH_SYMBOLIZE_BIN:-/opt/crash/crash_symbolize.sh}"
 export RB_CRASH_SYMBOLIZE_TOOL="${RB_CRASH_SYMBOLIZE_TOOL:-/opt/crash/symbolize.py}"
@@ -48,7 +48,7 @@ export RB_CRASH_SYMBOLIZE_TIMEOUT="${RB_CRASH_SYMBOLIZE_TIMEOUT:-60}"
 export RB_CRASH_STACK_SCAN="${RB_CRASH_STACK_SCAN:-1}"
 
 if [ ! -f /opt/crash/crash_collector.sh ]; then
-  echo "crash-collector: /opt/crash/crash_collector.sh fehlt — deploy/crash-collector/ nach /opt/crash mounten (ro)" >&2
+  echo "crash-collector: /opt/crash/crash_collector.sh fehlt — Image unvollstaendig (Bake fehlt)" >&2
   exit 2
 fi
 

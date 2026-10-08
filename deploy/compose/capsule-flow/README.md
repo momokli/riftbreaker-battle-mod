@@ -9,15 +9,16 @@ Attack-Cycle and the Bridge over HTTP only — **no Docker, no volumes**.
 
 | File | Purpose |
 |---|---|
-| `Dockerfile` | `python:3.12-slim` (stdlib only). Build context: **this directory**. |
-| `entrypoint.sh` | Exports the `CAPSULE_*` defaults, enforces a non-empty token (fail-closed), execs `/app/capsule_service.py "$@"`. Forwards `--check`. |
+| `Dockerfile` | `python:3.12-slim` (stdlib only). Build context: **`./deploy/capsule`** (the Dockerfile lives here). |
+| `entrypoint.sh` | Lives in `deploy/capsule/entrypoint.sh` (inside the build context; **baked** into the image). Exports the `CAPSULE_*` defaults, enforces a non-empty token (fail-closed), execs `/app/capsule_service.py "$@"`. Forwards `--check`. |
 
 ## Run contract
 
 ```yaml
 capsule-flow:
   build:
-    context: ./deploy/compose/capsule-flow
+    context: ./deploy/capsule
+    dockerfile: ../compose/capsule-flow/Dockerfile
   image: rbb-capsule-flow:${RBB_REF:-dev}
   restart: unless-stopped
   depends_on:
@@ -33,19 +34,17 @@ capsule-flow:
     CAPSULE_PARKED_TOKEN: "${RBB_WARM_TOKEN:-}"
   ports:
     - "127.0.0.1:${RBB_CAPSULE_PORT:-9211}:9211"
-  volumes:
-    - ./deploy/capsule:/app:ro
 ```
 
-* **Image / build context:** `./deploy/compose/capsule-flow`.
+* **Image / build context:** `context: ./deploy/capsule`, `dockerfile: ../compose/capsule-flow/Dockerfile`. The module is **baked** into the image; `docker compose up --build` rebuilds it on code changes.
 * **Command:** entrypoint → `python3 /app/capsule_service.py` (HTTP daemon). Add
   `command: ["--check"]` to only validate config.
 * **Ports:** HTTP **9211** in-container, publish on **`127.0.0.1:<port>`** only.
   Bind inside is `0.0.0.0`.
-* **Volumes:** the script dir `/app` (read-only). None else.
+* **Volumes:** none. The module (`capsule_service.py`, `capsule_flow.py`, `identity.py`) is baked into the image at `/app`; there is no code mount anymore.
 * **Host access:** none (no Docker socket).
 * **Python deps:** stdlib only (`capsule_service.py`, `capsule_flow.py`,
-  `identity.py` — all mounted into `/app`, so the imports resolve).
+  `identity.py` — all baked into `/app` in the image, so the imports resolve).
 
 ### Env (defaults set by the entrypoint; all overridable)
 
@@ -68,7 +67,7 @@ mirroring the role's assert (#931/#424). Note: the agent code alone would run
 ## Validation (ran locally)
 
 ```bash
-docker build -f deploy/compose/capsule-flow/Dockerfile deploy/compose/capsule-flow   # OK
+docker build -f deploy/compose/capsule-flow/Dockerfile deploy/capsule   # OK
 # no token   -> rc=2 (fail-closed)
 # with token -> rc=0 "Konfiguration OK (bind=0.0.0.0 port=9211 …)"
 # HTTP: /capsule/status without bearer -> 401; with bearer -> 200 {"ok":true,"phase":"idle",…}

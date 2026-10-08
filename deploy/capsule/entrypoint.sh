@@ -5,7 +5,7 @@
 # `rbmods-capsule-<env>` with container
 # paths as defaults. The bearer token is NOT defaulted: without a non-empty
 # CAPSULE_TOKEN the service refuses to start (fail-closed, exit 2) — the same
-# precondition the Ansible role asserts (#931, hardening like #424).
+# fail-closed precondition as server-control (#931, hardening like #424).
 set -euo pipefail
 
 export CAPSULE_ENV="${CAPSULE_ENV:-${RBB_ENV:-dev}}"
@@ -26,7 +26,7 @@ if [ -z "${CAPSULE_TOKEN:-}" ]; then
 fi
 
 if [ ! -f /app/capsule_service.py ]; then
-  echo "capsule-flow: /app/capsule_service.py fehlt — deploy/capsule/ nach /app mounten (ro)" >&2
+  echo "capsule-flow: /app/capsule_service.py fehlt — Image unvollstaendig (Bake fehlt)" >&2
   exit 2
 fi
 

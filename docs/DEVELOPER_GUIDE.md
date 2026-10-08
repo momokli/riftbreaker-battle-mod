@@ -54,7 +54,48 @@ Der Wrapper `deploy/compose/up.sh` setzt `RBB_REF` auf den Git-SHA des Checkouts
 `RBB_HOST_ROOT` (absolut) und legt dessen Unterordner an. Äquivalent direkt:
 `docker compose up --build -d` (dann kommen `RBB_REF`/`RBB_HOST_ROOT` aus `.env`).
 
-## 4. Client verbinden (Windows)
+## 4. Dev-Loop (tight loop)
+
+Der Dev-Befehl ist **`docker compose up --build -d`**: der Build läuft **inkrementell**
+(BuildKit-Cache — nur geänderte Layer werden neu gebaut) und die One-Shot-Init-Container
+laufen erneut. **Code wird überall ins Image gebacken** (Sidecars, capsule-flow,
+crash-collector, server-control) → keine Read-only-Code-Mounts mehr, kein manuelles
+`restart`-Gefummel.
+
+**Was bei `up --build` passiert:**
+
+- Services mit `build:` werden neu gebaut (inkrementell, nur geänderte Layer).
+- Init-Container laufen neu: `rbtools-build` (baut `rbbridge.dll`/Server-IO +
+  `gns_probe.exe` aus `server/` + `tools/`), `mod-build` (baut `rbbattle.zip` aus
+  `client-mod/`; md5-Marker → No-Op wenn unverändert), `content-init`/`config-init`.
+
+**Was ändere ich → was tun:**
+
+| Du änderst … | Aktion |
+| --- | --- |
+| `server/` (rbbridge.dll, pipe_bridge, gns_probe) | `docker compose up --build rbtools-build` → dann `docker compose restart dedicated` (lädt die neu gebaute DLL) bzw. `gns-relay` (gns_probe) |
+| `client-mod/` (Lua-Mod) | `docker compose up --build mod-build` → dann `docker compose restart dedicated` (lädt den neuen Mod) |
+| `deploy/<module>/` (Sidecars: `session-recorder`, `send-tailer`, `match-loop`, `attack-cycle`) | `docker compose up --build <service>` |
+| `deploy/capsule/` | `docker compose up --build capsule-flow` |
+| `deploy/crash-collector/` | `docker compose up --build crash-collector` |
+| `deploy/server-control/` | `docker compose up --build server-control` |
+| `deploy/queue/` | `docker compose up --build queue` |
+| `deploy/provisioner/` | `docker compose up --build provisioner` |
+| `deploy/compose/warm/` | `docker compose up --build warm` |
+| `tournament/` (Rust) | `docker compose up --build tournament-server` |
+| eine `deploy/compose/*/Dockerfile` (Runtime-Deps) | `docker compose up --build <service>` |
+
+**Kurzform:** `docker compose up --build -d` (alles inkrementell) + bei
+Spiel-laufenden Änderungen (`server/`, `client-mod/`) zusätzlich
+`docker compose restart dedicated`.
+
+**Arbeitsaufteilung (wichtig):** wir bauen alles **außer Spiel-IO** (Proxy/Relay,
+Sidecars, Provisioner, Queue, Orchestrierung, Hygiene, CI). **Spiel-IO / Interaktion /
+Performance am laufenden Spiel** (Wellen, Difficulty, Send-Hooks, …) macht der Dev —
+dessen tighte Loop läuft über das laufende Spiel + die Bridge (`:9001`) /
+`server-control`, nicht über Image-Rebuilds.
+
+## 5. Client verbinden (Windows)
 
 - In Riftbreaker auf `<hostname>` verbinden — **kein Port** (der Client landet hinter
   dem Proxy auf `:6321` und wird im Loading-Screen gehalten, `--hold`).
@@ -62,7 +103,7 @@ Der Wrapper `deploy/compose/up.sh` setzt `RBB_REF` auf den Git-SHA des Checkouts
   exakt die aktuelle `rbbattle.zip` verwenden, die der Stack baut (`mod-build`).
   Für VS gilt: **zwei Clients mit der gleichen Mod**.
 
-## 5. Lobby + SOLO-Flow
+## 6. Lobby + SOLO-Flow
 
 1. `http://localhost:8088` öffnen → Lobby (Steuer-UI des Relays).
 2. Die eigene Connection ist sichtbar (`state` held).
@@ -83,7 +124,7 @@ curl -fsS http://127.0.0.1:9200/sessions        # Connection sichtbar (held)
 curl -fsS http://127.0.0.1:9211/capsule/status  # phase: claimed → warmup → running → parked
 ```
 
-## 6. VS-Flow
+## 7. VS-Flow
 
 1. **Zwei** Clients (gleiche Mod) auf den Host.
 2. Beide `queue (vs)` in der Lobby (`POST /queue` → Queue-Dienst `POST /queue/join`).
@@ -99,7 +140,7 @@ curl -fsS http://127.0.0.1:8094/status           # provisionierte Instanzen
 docker ps --filter label=rb.provisioner.env      # die kalten Welten A/B
 ```
 
-## 7. Was „grün" heißt
+## 8. Was „grün" heißt
 
 Init-Kette und Health (aus `COMPOSE_ENV_READINESS` §3):
 
@@ -116,7 +157,7 @@ curl -fsS http://127.0.0.1:9201/status                              # warm: stat
 - `hygiene` + `ofelia` → `Up` (Job-Läufe + Exit-Codes in den Ofelia-Logs).
 - Bei Problemen: `docker compose logs <service>` (z. B. `ofelia`).
 
-## 8. Evidence sammeln
+## 9. Evidence sammeln
 
 - **Logs:** `docker compose logs` (je Service).
 - **Crash-Bundle:** `${RBB_HOST_ROOT}/crashes/<env>/<ref>/…` — wird vom
@@ -124,7 +165,7 @@ curl -fsS http://127.0.0.1:9201/status                              # warm: stat
 - **Crash-Symbolik** läuft automatisch (Symbolizer mit DLL/PDB); das private PDB kommt
   über `content-init`. Für die Root-Cause-Analyse: Skill `crash-debugging`.
 
-## 9. Troubleshooting / bekannte Lücken
+## 10. Troubleshooting / bekannte Lücken
 
 - **Erstbuild langsam (Wine):** das Wine-Image (`deploy/dedicated-server`) lädt/buildet
   ~2 GB inkl. `wineboot`/`winetricks` — der erste `up --build` dauert.
@@ -141,7 +182,7 @@ curl -fsS http://127.0.0.1:9201/status                              # warm: stat
   nicht live belegt.
 - **Live-Smoke noch offen** (`up` + SOLO/VS-Flow) → an den Tester.
 
-## 10. Roadmap to 1v1
+## 11. Roadmap to 1v1
 
 | Schritt | Inhalt | Status |
 | --- | --- | --- |

@@ -155,6 +155,11 @@ Token aus Vault), Bind `127.0.0.1:$CAPSULE_PORT`. Seit #1034 ist
 host-weiter Singleton in dessen Play 0 — der Boot-Test (`test-deploy.yml`)
 bootet nur den Game-Server und kennt Parked/Cycle nicht.
 
+Der Compose-Service nutzt dieses Verzeichnis als Build-Context (`context:
+`./deploy/capsule`, `dockerfile: ../compose/capsule-flow/Dockerfile`); der Code
+(`capsule_service.py`, `capsule_flow.py`, `identity.py` und `entrypoint.sh`)
+wird ins Image **gebacken** — `docker compose up --build` baut ihn neu.
+
 Der Relay (`tools/gns-proxy`) kann `POST /solo` auf den Kapsel-Dienst zeigen
 lassen: ist `--capsule-url`/`RBB_CAPSULE_URL` gesetzt, ruft `/solo`
 `POST /capsule/open` (Claim ohne resume → pausiertes Spiel) statt `POST /claim`.
