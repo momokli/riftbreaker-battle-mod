@@ -184,7 +184,7 @@ services:
       dedicated:
         condition: service_healthy
       attack-cycle:
-        condition: service_started
+        condition: service_healthy
     logging: *default-logging
     labels:
       RBB_REF: *rbb-ref
@@ -233,6 +233,12 @@ services:
     depends_on:
       dedicated:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request as u;u.urlopen('http://127.0.0.1:9102/status',timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     logging: *default-logging
     labels:
       RBB_REF: *rbb-ref
@@ -338,7 +344,7 @@ services:
     restart: unless-stopped
     depends_on:
       dedicated:
-        condition: service_started
+        condition: service_healthy
     logging: *default-logging
     environment:
       RB_CRASH_CONTAINER: rbb-dedicated
@@ -359,7 +365,7 @@ services:
     restart: unless-stopped
     depends_on:
       dedicated:
-        condition: service_started
+        condition: service_healthy
     logging: *default-logging
     environment:
       SERVER_CONTROL_TOKEN: ${RBB_SERVER_CONTROL_TOKEN:?set in .env — cp .env.example .env}
@@ -419,6 +425,16 @@ services:
     depends_on:
       dedicated:
         condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request as u,os;r=u.Request('http://127.0.0.1:9201/health',headers={'Authorization':'Bearer '+os.environ.get('WARM_TOKEN','')});u.urlopen(r,timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     logging: *default-logging
     labels:
       RBB_REF: *rbb-ref
@@ -444,9 +460,19 @@ services:
     restart: unless-stopped
     depends_on:
       attack-cycle:
-        condition: service_started
+        condition: service_healthy
       warm:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request as u,os;r=u.Request('http://127.0.0.1:9211/health',headers={'Authorization':'Bearer '+os.environ.get('CAPSULE_TOKEN','')});u.urlopen(r,timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     logging: *default-logging
     environment:
       CAPSULE_ENV: ${RBB_ENV:-dev}
@@ -465,6 +491,16 @@ services:
       dockerfile: ../compose/provisioner/Dockerfile
     image: rbb-provisioner:${RBB_REF:-dev}
     restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request as u,os;r=u.Request('http://127.0.0.1:8094/health',headers={'Authorization':'Bearer '+os.environ.get('PROVISIONER_TOKEN','')});u.urlopen(r,timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     logging: *default-logging
     environment:
       PROVISIONER_ENV: ${RBB_ENV:-local}
@@ -503,9 +539,19 @@ services:
     restart: unless-stopped
     depends_on:
       provisioner:
-        condition: service_started
+        condition: service_healthy
       tournament-server:
         condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request as u,os;r=u.Request('http://127.0.0.1:9221/health',headers={'Authorization':'Bearer '+os.environ.get('QUEUE_TOKEN','')});u.urlopen(r,timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     logging: *default-logging
     environment:
       QUEUE_ENV: ${RBB_ENV:-local}
