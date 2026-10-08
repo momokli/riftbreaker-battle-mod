@@ -33,6 +33,13 @@ HQ zu Rundenstart fälschlich als "tot" gewertet und sofort restartet:
 - HQ tot (`hq_dead:true` → `hq_hp:0`) **oder** Entity weg (`hq_hp:null` nach
   vorherigem Leben) → Defeat.
 
+## Container (Compose)
+
+Der Compose-Sidecar nutzt dieses Verzeichnis als Build-Context (`context:
+`./deploy/match-loop`, `dockerfile: ../compose/match-loop/Dockerfile`);
+`match_loop.py` wird ins Image **gebacken** — `docker compose up --build`
+baut es neu (kein Code-Mount mehr).
+
 ## Test
 
 ```bash

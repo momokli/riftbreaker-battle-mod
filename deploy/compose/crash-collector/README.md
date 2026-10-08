@@ -2,21 +2,24 @@
 
 Containerized twin of the former systemd unit `rbmods-crash-collector`
 (Issues #462/#480/#481). Runs the **same**
-`deploy/crash-collector/crash_collector.sh`; the image ships only the runtime.
+`deploy/crash-collector/crash_collector.sh` — the scripts are **baked** into
+the image (`docker compose up --build` rebuilds them on code changes); only the
+game DLL/PDB stay outside the image.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `Dockerfile` | `ubuntu:24.04` + `python3` + `llvm-18` (`llvm-symbolizer`) + Docker CLI (copied from `docker:cli`). Build context: **this directory**. |
-| `entrypoint.sh` | Exports the `RB_CRASH_*` defaults of the role (container paths) and execs `/opt/crash/crash_collector.sh "$@"`. Forwards `--once`. |
+| `Dockerfile` | `ubuntu:24.04` + `python3` + `llvm-18` (`llvm-symbolizer`) + Docker CLI (copied from `docker:cli`). Build context: **`./deploy/crash-collector`** (the Dockerfile lives here). |
+| `entrypoint.sh` | Lives in `deploy/crash-collector/entrypoint.sh` (inside the build context; **baked** into the image). Exports the `RB_CRASH_*` defaults of the role (container paths) and execs `/opt/crash/crash_collector.sh "$@"`. Forwards `--once`. |
 
 ## Run contract
 
 ```yaml
 crash-collector:
   build:
-    context: ./deploy/compose/crash-collector
+    context: ./deploy/crash-collector
+    dockerfile: ../compose/crash-collector/Dockerfile
   image: rbb-crash-collector:${RBB_REF:-dev}
   restart: unless-stopped
   depends_on:
@@ -28,13 +31,12 @@ crash-collector:
     RB_CRASH_REF: ${RBB_REF:-dev}
   volumes:
     - /var/run/docker.sock:/var/run/docker.sock          # docker logs/cp/exec/inspect
-    - ./deploy/crash-collector:/opt/crash:ro             # the scripts (1:1 with the role)
     - ${RBB_HOST_ROOT:-/srv/rbbattle}/game:/game:ro # DLL + PDB (PDB stays OUTSIDE the image)
     - ${RBB_HOST_ROOT:-/srv/rbbattle}/rbtools:/rbtools:ro # rbbridge.dll
     - ${RBB_HOST_ROOT:-/srv/rbbattle}/crashes:/crashes # bundle output
 ```
 
-* **Image / build context:** `./deploy/compose/crash-collector`.
+* **Image / build context:** `context: ./deploy/crash-collector`, `dockerfile: ../compose/crash-collector/Dockerfile`. The scripts are **baked** into the image; `docker compose up --build` rebuilds them on code changes.
 * **Command:** entrypoint → `bash /opt/crash/crash_collector.sh` (daemon). Add
   `command: ["--once"]` for a one-shot run.
 * **Ports:** none.
@@ -42,12 +44,14 @@ crash-collector:
   `${RBB_HOST_ROOT:-/srv/rbbattle}` (no named volume; the top-level `volumes:`
   only declares `rb-wine`, `rb-saves`, `rb-relay-wine`): `game` = content/PDB
   dir; `rbtools` = the rbtools-build output dir (`rbbridge.dll`); `crashes` =
-  bundle output dir.
+  bundle output dir. The scripts themselves are **baked** into the image (no
+  `/opt/crash` code mount anymore).
 * **Host access:** the Docker socket (the collector observes the game container
   via `docker logs -f` and copies `crash_info/<uuid>.{dmp,log,trace}` via
   `docker cp`). No direct log/volume mount needed.
-* **Python deps:** stdlib only (`minidump_meta.py`, `symbolize.py`); plus the
-  `llvm-symbolizer` binary at `/usr/lib/llvm-18/bin/llvm-symbolizer`.
+* **Python deps:** stdlib only (`minidump_meta.py`, `symbolize.py` — baked into
+  the image); plus the `llvm-symbolizer` binary at
+  `/usr/lib/llvm-18/bin/llvm-symbolizer`.
 
 ### Env (defaults set by the entrypoint; all overridable)
 
@@ -63,15 +67,15 @@ crash-collector:
 | `RB_CRASH_RBBRIDGE_DLL` | `/rbtools/rbbridge.dll` | injected DLL (`rbtools` mount) |
 | `RB_CRASH_SYMBOLIZE` | `1` | master switch (#480) |
 | `RB_CRASH_LLVM_SYMBOLIZER` | `/usr/lib/llvm-18/bin/llvm-symbolizer` | shipped in the image |
-| `RB_CRASH_SYMBOLIZE_BIN` / `…_TOOL` / `RB_CRASH_MINIDUMP_PY` | `/opt/crash/…` | the mounted scripts |
+| `RB_CRASH_SYMBOLIZE_BIN` / `…_TOOL` / `RB_CRASH_MINIDUMP_PY` | `/opt/crash/…` | the baked scripts (in the image) |
 | `RB_CRASH_RETENTION` / `…_CONTEXT_LINES` / `…_WAIT_SECS` / `…_PRUNE_WINE` | `20` / `200` / `30` / `1` | role defaults |
 
 ## Validation (ran locally)
 
 ```bash
-docker build -f deploy/compose/crash-collector/Dockerfile deploy/compose/crash-collector   # OK
+docker build -f deploy/compose/crash-collector/Dockerfile deploy/crash-collector   # OK
 # runtime: docker --version 29.8.2, python3 3.12.3, /usr/lib/llvm-18/bin/llvm-symbolizer present
-# guard without mount  -> rc=2 ("/opt/crash/crash_collector.sh fehlt")
+# guard (no baked script) -> rc=2 ("/opt/crash/crash_collector.sh fehlt")
 # --once against a fake log stream -> detects "CRASH:" marker, exits rc=0
 ```
 

@@ -72,6 +72,11 @@ Compose-Service `deploy/compose/server-control` (Muster `tournament-server`), ve
 `deploy/deploy-prod.yml` (Play 0, Tag `server`). Der Token kommt **nur** aus dem Vault
 (`vault_server_control_token`); die Unit liest ihn aus einer 0600-`EnvironmentFile`.
 
+Der Compose-Service nutzt dieses Verzeichnis als Build-Context (`context:
+`./deploy/server-control`, `dockerfile: ../compose/server-control/Dockerfile`);
+`server_control.py` (und `entrypoint.sh`) werden ins Image **gebacken** —
+`docker compose up --build` baut sie neu.
+
 ## Offener Punkt
 
 Das **Web-UI-Panel** (Status/Logs/Buttons) ist ein eigenes Issue (#422) und hier

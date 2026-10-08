@@ -90,6 +90,13 @@ grep -h '"event": "wave"' /srv/rbmods-sessions/*.jsonl | jq -r '.fields.level'
 docker exec riftbreaker-sessions tail -n 20 /data/sessions/index.jsonl
 ```
 
+## Container (Compose)
+
+Der Compose-Sidecar nutzt dieses Verzeichnis als Build-Context (`context:
+`./deploy/session-recorder`, `dockerfile: ../compose/session-recorder/Dockerfile`);
+`session_recorder.py` wird ins Image **gebacken** — `docker compose up --build`
+baut es neu (kein Code-Mount mehr).
+
 ## Tests (ohne Docker/Spiel — Test-Split „OHNE Player")
 
 ```bash

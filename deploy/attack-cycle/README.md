@@ -123,6 +123,13 @@ aus jedem Zustand (auch `GAME_OVER`) direkt nach `WARMUP`. Cockpit: Button
 > lesen) — sonst würde jeder Poll eine neue Runde auslösen. Gleiches Muster wie
 > `/attack_reset`.
 
+## Container (Compose)
+
+Der Compose-Sidecar nutzt dieses Verzeichnis als Build-Context (`context:
+`./deploy/attack-cycle`, `dockerfile: ../compose/attack-cycle/Dockerfile`);
+`attack_cycle.py` wird ins Image **gebacken** — `docker compose up --build`
+baut es neu (kein Code-Mount mehr).
+
 ## Test
 
 ```bash

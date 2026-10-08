@@ -25,6 +25,13 @@ Er ist das env-agnostische Gegenstück zu `deploy/session-recorder` (gleicher
 3. Scheduler: bezahlt SOFORT (`try_spend`) und feuert die Welle nach 5 min
    **einmal**.
 
+## Container (Compose)
+
+Der Compose-Sidecar nutzt dieses Verzeichnis als Build-Context (`context:
+`./deploy/send-tailer`, `dockerfile: ../compose/send-tailer/Dockerfile`);
+`send_tailer.py` wird ins Image **gebacken** — `docker compose up --build`
+baut es neu (kein Code-Mount mehr).
+
 ## Test
 
 ```bash

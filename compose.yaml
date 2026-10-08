@@ -149,7 +149,10 @@ services:
 
   # === Sidecars (python:3.12-slim, Skripte read-only gemountet) ===============
   session-recorder:
-    image: python:3.12-slim
+    build:
+      context: ./deploy/session-recorder
+      dockerfile: ../compose/session-recorder/Dockerfile
+    image: rbb-session-recorder:${RBB_REF:-dev}
     restart: unless-stopped
     depends_on:
       dedicated:
@@ -162,7 +165,6 @@ services:
     volumes:
       - rb-wine:/data/.wine:ro
       - ${RBB_HOST_ROOT:-/srv/rbbattle}/sessions:/data/sessions
-      - ./deploy/session-recorder/session_recorder.py:/app/session_recorder.py:ro
     command:
       - python3
       - -u
@@ -173,7 +175,10 @@ services:
       - /data/sessions
 
   send-tailer:
-    image: python:3.12-slim
+    build:
+      context: ./deploy/send-tailer
+      dockerfile: ../compose/send-tailer/Dockerfile
+    image: rbb-send-tailer:${RBB_REF:-dev}
     restart: unless-stopped
     depends_on:
       dedicated:
@@ -187,7 +192,6 @@ services:
       RBB_REF: *rbb-ref
     volumes:
       - rb-wine:/data/.wine:ro
-      - ./deploy/send-tailer/send_tailer.py:/app/send_tailer.py:ro
     command:
       - python3
       - -u
@@ -198,7 +202,10 @@ services:
       - "http://attack-cycle:9102/queue_send"
 
   match-loop:
-    image: python:3.12-slim
+    build:
+      context: ./deploy/match-loop
+      dockerfile: ../compose/match-loop/Dockerfile
+    image: rbb-match-loop:${RBB_REF:-dev}
     restart: unless-stopped
     depends_on:
       dedicated:
@@ -208,8 +215,6 @@ services:
       RBB_REF: *rbb-ref
     environment:
       RBB_REF: *rbb-ref
-    volumes:
-      - ./deploy/match-loop/match_loop.py:/app/match_loop.py:ro
     command:
       - python3
       - -u
@@ -220,7 +225,10 @@ services:
       - "10"
 
   attack-cycle:
-    image: python:3.12-slim
+    build:
+      context: ./deploy/attack-cycle
+      dockerfile: ../compose/attack-cycle/Dockerfile
+    image: rbb-attack-cycle:${RBB_REF:-dev}
     restart: unless-stopped
     depends_on:
       dedicated:
@@ -232,8 +240,6 @@ services:
       RBB_REF: *rbb-ref
     expose:
       - "9102"
-    volumes:
-      - ./deploy/attack-cycle/attack_cycle.py:/app/attack_cycle.py:ro
     command:
       - python3
       - -u
@@ -326,7 +332,8 @@ services:
   # symbolisiert gegen DLL/PDB (letztere bleiben AUSSERHALB des Images, #480).
   crash-collector:
     build:
-      context: ./deploy/compose/crash-collector
+      context: ./deploy/crash-collector
+      dockerfile: ../compose/crash-collector/Dockerfile
     image: rbb-crash-collector:${RBB_REF:-dev}
     restart: unless-stopped
     depends_on:
@@ -339,7 +346,6 @@ services:
       RB_CRASH_REF: *rbb-ref
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./deploy/crash-collector:/opt/crash:ro
       - ${RBB_HOST_ROOT:-/srv/rbbattle}/game:/game:ro
       - ${RBB_HOST_ROOT:-/srv/rbbattle}/rbtools:/rbtools:ro
       - ${RBB_HOST_ROOT:-/srv/rbbattle}/crashes:/crashes
@@ -347,7 +353,8 @@ services:
   # === Control: Server-Control-Agent (docker-Wrapper, Plane B, #424) =========
   server-control:
     build:
-      context: ./deploy/compose/server-control
+      context: ./deploy/server-control
+      dockerfile: ../compose/server-control/Dockerfile
     image: rbb-server-control:${RBB_REF:-dev}
     restart: unless-stopped
     depends_on:
@@ -431,7 +438,8 @@ services:
   # === Control: Kapsel-Flow (#931) ==========================================
   capsule-flow:
     build:
-      context: ./deploy/compose/capsule-flow
+      context: ./deploy/capsule
+      dockerfile: ../compose/capsule-flow/Dockerfile
     image: rbb-capsule-flow:${RBB_REF:-dev}
     restart: unless-stopped
     depends_on:
@@ -448,8 +456,6 @@ services:
       CAPSULE_PARKED_TOKEN: "${RBB_WARM_TOKEN:-}"
     ports:
       - "127.0.0.1:${RBB_CAPSULE_PORT:-9211}:9211"
-    volumes:
-      - ./deploy/capsule:/app:ro
 
   # === VS: Provisioner-HTTP-Service :8094 (#1083/#1110) ======================
   # Erzeugt Sibling-Container via `docker run` (Host-daemon -> Host-1:1-Pfade!).
