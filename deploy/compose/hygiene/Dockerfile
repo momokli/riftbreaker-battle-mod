@@ -1,6 +1,5 @@
-# hygiene (Issue #1103): containerized twin of the systemd timers
-# `rbmods-image-retention` (#309) and `rbmods-host-hygiene` (#308/#606)
-# (deploy/roles/image-retention, deploy/roles/host-hygiene).
+# hygiene (Issue #1103): containerized twin of the former systemd timers
+# `rbmods-image-retention` (#309) and `rbmods-host-hygiene` (#308/#606).
 #
 # The image ships ONLY the runtime — the Docker CLI + shell toolchain. The two
 # maintenance scripts themselves are mounted read-only at runtime from

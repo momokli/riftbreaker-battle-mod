@@ -13,10 +13,10 @@ bleibt nur als historischer Verweis erhalten.
 - Der staging-Case im forced command (`deploy/deploy-ssh.sh`) und im
   root-Wrapper (`deploy/deploy-wrapper.sh`) — ein `refs/heads/staging` ist jetzt
   ein **Fehler** (fail loud).
-- Der Staging-Relay-Host `sync` im Inventory (`deploy/inventory/hosts.yml`).
+- Der Staging-Relay-Host `sync` im (inzwischen entfernten) Inventory.
 - `staging` als gültige Env im Env-Isolations-Schema
-  (`deploy/env-schema.yml`, `tools/deploy-gate/check_env_isolation.py`).
-- Die GNS-Route `*-staging` (`deploy/roles/gns-relay/templates/routes.j2`).
+  (Env-Schema + `check_env_isolation.py`, inzwischen entfernt).
+- Die GNS-Route `*-staging` (Routen-Datei, heute `deploy/compose/relay/routes`).
 
 ## Aktuelle Topologie (prod-only)
 

@@ -1,5 +1,5 @@
-# crash-collector (Issue #1093): containerized twin of the systemd unit
-# `rbmods-crash-collector` (deploy/roles/crash-collector).
+# crash-collector (Issue #1093): containerized twin of the former systemd unit
+# `rbmods-crash-collector`.
 #
 # The image ships ONLY the runtime — python3, `llvm-symbolizer` (llvm-18) and the
 # Docker CLI. The collector/symbolizer scripts themselves are mounted read-only

@@ -51,8 +51,8 @@ erst recht. Wer hier mit „idle ≈ 0 %" plant, hat die Kiste zu klein gekauft.
 |---|---|
 | **GPU** | nicht nötig — Mesa-llvmpipe rendert in Xvfb auf der CPU |
 | **Schnelle Platte (IOPS)** | Disk-I/O seit Start nur **455 MB read / 18 MB write** — keine laufende DB, kein IOPS-Druck. NVMe ist *nice to have* (Image-Builds), keine Anforderung aus dem Laufzeitbetrieb |
-| **Dicker Uplink** | idle **~100 kB/s**. Extern war zum Messzeitpunkt nur **UDP 6321** offen — das ist Host-Firewall-Zustand, **nicht** aus dem Repo nachprüfbar (es gibt keine Firewall-Rolle unter `deploy/roles/`), gilt also nur für diesen Host zu diesem Zeitpunkt |
-| **32-bit-Support** | x86_64; SteamCMD-Modus (braucht `lib32gcc-s1`) ist ohnehin deaktiviert, siehe `deploy/inventory/host_vars/planet/vars.yml` |
+| **Dicker Uplink** | idle **~100 kB/s**. Extern war zum Messzeitpunkt nur **UDP 6321** offen — das ist Host-Firewall-Zustand, **nicht** aus dem Repo nachprüfbar (es gibt keine Firewall-Konfiguration im Repo), gilt also nur für diesen Host zu diesem Zeitpunkt |
+| **32-bit-Support** | x86_64; SteamCMD-Modus (braucht `lib32gcc-s1`) ist ohnehin deaktiviert, siehe `deploy/dedicated-server/` (kein SteamCMD im Image) |
 
 ---
 
@@ -229,8 +229,7 @@ Snapshot trifft gerne einen Peak.
 
 - [`DEPLOYMENT.md`](DEPLOYMENT.md) — Ziel-Stack, Rollen, CD, Betriebsregeln
 - [`../deploy/README.md`](../deploy/README.md) — Playbook, From-zero, Vault
-- `deploy/inventory/host_vars/planet/vars.yml`,
-  `deploy/roles/riftbreaker-server/` — Pfade, Ports, Volumes
+- `compose.yaml`, `deploy/compose/config/config.cfg.j2` — Pfade, Ports, Volumes
 - Issue #291 (dieses Dokument), #247 (reproduzierbare Images),
   #236 (stabiler Test-Server), #238 (Deploy nur bei 0 Spielern),
   #290 (Multi-Instanz-Hosting)

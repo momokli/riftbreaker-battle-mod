@@ -25,7 +25,7 @@
 | Attack-Cycle-Control | `9102` dev · `9103` prod · `9104` staging | nein | keine | Capsule, Sidecar |
 | IO-Bridge | `9001` dev · `9002` prod · `9003` staging | nein | keine | Capsule, Cockpit, Sidecars |
 
-**Belege:** `deploy/roles/website/tasks/main.yml:234-245` (Caddy-Block: `basic_auth` + `reverse_proxy 127.0.0.1:9200`) · `gns_probe.cpp:1037,277` (bewusst auth-frei, nur 127.0.0.1) · `deploy/roles/gns-relay/defaults/main.yml` (parked 9201, capsule 9211, queue 9221, referee 8082) · `deploy/inventory/host_vars/planet/vars.yml:81` (`queue_referee_url` = 8082).
+**Belege:** `deploy/compose/caddy/Caddyfile` (Caddy-Block: `basic_auth` + `reverse_proxy 127.0.0.1:9200`) · `gns_probe.cpp:1037,277` (bewusst auth-frei, nur 127.0.0.1) · `compose.yaml` (parked 9201, capsule 9211, queue 9221, referee 8080) · `compose.yaml` (`QUEUE_REFEREE_URL` = 8080).
 
 Live-Check:
 ```

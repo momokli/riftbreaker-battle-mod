@@ -66,7 +66,7 @@ Eine `*.jsonl`-Zeile sieht z. B. so aus:
 ## Aufruf
 
 ```bash
-# Sidecar (Compose, siehe deploy/roles/riftbreaker-server):
+# Sidecar (Compose, siehe deploy/compose/README.md):
 python3 -u /app/session_recorder.py --wine-prefix /data/.wine --out-dir /data/sessions
 
 # Manuell/offline (einmalig verfügbare Zeilen verarbeiten, dann beenden):

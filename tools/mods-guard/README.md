@@ -8,8 +8,8 @@ Versionskonstante wird überschrieben und beide Kopien registrieren ihre Handler
 doppelt (`handler_errors` / `event_unreadable`).
 
 Dieses Skript prüft einen `mods/`-Ordner darauf, dass **außer dem Ziel-Mod**
-kein weiterer Ordner mit `*.manifest` existiert — der gleiche Check, den die
-Ansible-Rolle `deploy/roles/riftbreaker-server` als Deploy-Guard fährt.
+kein weiterer Ordner mit `*.manifest` existiert — der gleiche Check, den der
+Compose-Service `deploy/compose/mod-build/` (rollout.sh) als Deploy-Guard fährt.
 
 ## Aufruf
 
@@ -24,8 +24,7 @@ python3 tools/mods-guard/check_mods_dir.py /srv/rbgame/mods --expected rbbattle 
 Als Pre-Gate vor dem Deploy:
 
 ```bash
-python3 tools/mods-guard/check_mods_dir.py /srv/rbgame/mods \
-  && ansible-playbook -i deploy/inventory deploy/site.yml --ask-vault-pass
+python3 tools/mods-guard/check_mods_dir.py /srv/rbgame/mods
 ```
 
 Exit-Codes: `0` = ok, `1` = Verstoß (Fremd-Ordner mit `*.manifest`),

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Entry point for the containerized server-control agent (Issue #1093).
 #
-# Mirrors the SERVER_CONTROL_* environment of the systemd unit
-# (deploy/roles/server-control/templates/server-control.env.j2) with container
+# Mirrors the SERVER_CONTROL_* environment of the former systemd unit
+# `server-control` with container
 # paths as defaults. The bearer token is NOT defaulted: without a non-empty
 # SERVER_CONTROL_TOKEN the agent refuses to start (fail-closed, exit 2) — this is
 # the same hardening as the role (#424/#298).

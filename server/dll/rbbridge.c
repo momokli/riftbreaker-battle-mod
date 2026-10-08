@@ -1662,7 +1662,7 @@ static const unsigned char RBBRIDGE_DIFF_DEC_SIG[] = {
 /* #476-RE: DifficultyDef "sandbox" in scripts/difficulty/             */
 /* difficulties.difficulty setzt wave_strength "sandbox" +             */
 /* mission_infinite 1 -> `set difficulty "sandbox"` ist der deklarative */
-/* Boot-Schalter (deploy/roles/riftbreaker-server config.cfg.j2).       */
+/* Boot-Schalter (deploy/compose/config/config.cfg.j2).                 */
 /*                                                                    */
 /* Thread-Modell (#378): native Reads/Writes, KEIN lua_* — laeuft auf  */
 /* dem Pipe-Thread. ANNAHME (#478): der Getter ist ein reiner Lookup   */

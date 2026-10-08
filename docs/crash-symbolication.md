@@ -39,7 +39,7 @@ bleibt byte-identisch → kein Regress. Kein `dedicated-server-image`-Change.
 deploy/crash-collector/symbolize.py     # Kern: Minidump -> RVAs -> Funktionsnamen (stdlib-only)
 deploy/crash-collector/crash_symbolize.sh   # CLI/Seam: Skip-Regeln, atomares Schreiben
 deploy/crash-collector/crash_collector.sh   # ruft die CLI nach write_meta (additiv)
-deploy/roles/crash-collector # rollt CLI + Kern aus (KEINE PDB/DLL)
+deploy/compose/crash-collector/ # rollt CLI + Kern aus (KEINE PDB/DLL)
 tests/shell/crash-symbolize.test.sh  # planetfrei (synthetischer Dump + Fake-Symbolizer)
 ```
 
@@ -118,7 +118,7 @@ deploy/crash-collector/crash_symbolize.sh /opt/rbmods/crashes/<ts>-<uuid>
 ```
 
 Automatisch: der Dienst `rbmods-crash-collector` symbolisiert jedes neue Bundle
-mit den Env-Variablen der Rolle (`deploy/roles/crash-collector`).
+mit den Env-Variablen des Collectors (`deploy/compose/crash-collector/`).
 
 ## Grenzen
 

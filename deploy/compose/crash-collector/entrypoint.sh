@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Entry point for the containerized crash-collector (Issue #1093).
 #
-# Mirrors the RB_CRASH_* environment of the systemd unit
-# (deploy/roles/crash-collector/templates/rbmods-crash-collector.service.j2) but
+# Mirrors the RB_CRASH_* environment of the former systemd unit
+# `rbmods-crash-collector` but
 # with container paths as defaults. Everything is overridable via the
 # environment (compose `environment:` / `.env`), so the operator keeps the exact
 # knobs of the role.

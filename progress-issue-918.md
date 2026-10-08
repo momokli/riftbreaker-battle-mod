@@ -14,7 +14,7 @@ Kein Branch/PR exists. → **Normale Pipeline.**
 `deploy/provisioner/provisioner.py::Provisioner._create_container` (~Zeile 574) baut den
 Container mit einem Layout, das nicht zum realen Image passt:
 
-| Provisioner (#908) | reales Compose (`deploy/roles/riftbreaker-server`) |
+| Provisioner (#908) | reales Compose (`compose.yaml`) |
 |---|---|
 | `-p 127.0.0.1:<host>:8080` | Bridge im Container auf **9001** (`RBB_BRIDGE_PORT=9001`) |
 | `-v <game_dir>:/srv/game` | `-v <game_dir>:/opt/riftbreaker` |
@@ -31,7 +31,7 @@ Container mit einem Layout, das nicht zum realen Image passt:
   (`-p 127.0.0.1:%d:8080` Z. 497/508, `"8080/tcp"` Z. 564, Fake-Docker `8080/tcp` Z. 88).
 - `deploy/parked/measure_boot.py` — Live-Harness `#909`, nutzt Provisioner-`start()`.
 - `deploy/provisioner/README.md` — Abschnitt „Offener Punkt" (Live-Beweis ungeprüft).
-- `deploy/roles/riftbreaker-server/templates/docker-compose.yml.j2` + `defaults/main.yml`
+- `compose.yaml` + `deploy/dedicated-server/`
   — reale Mounts/Ports (Soll-Referenz).
 
 ### Reale Umgebung (planet) für Integrationsnachweis

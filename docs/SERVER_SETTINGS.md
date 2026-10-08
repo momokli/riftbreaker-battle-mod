@@ -1,16 +1,15 @@
 # SERVER_SETTINGS — Spiel-seitige Server-Einstellungen + Wirkung/Beleg
 
 Stand: 2026-09-15 (Issue #476). Jede game-seitige Einstellung, die den
-Wellen-Takt beeinflusst, steht **deklarativ im Repo** (Rolle
-`deploy/roles/riftbreaker-server/` + `deploy/inventory/host_vars/<host>/vars.yml`)
-und wird über `config.cfg.j2` gerendert. Keine Handeingriffe auf dem Host.
+Wellen-Takt beeinflusst, steht **deklarativ im Repo** (Compose-Stack `deploy/compose/` + `compose.yaml`)
+und wird über `deploy/compose/config/config.cfg.j2` gerendert. Keine Handeingriffe auf dem Host.
 
 ## 1. Blank Slate / Free Play: Vanilla-Naturwellen aus
 
 ### Schalter (deklarativ, pro Host opt-in)
 
 `set difficulty "sandbox"` (Config → `riftbreaker_server_difficulty`,
-gerendert in `config.cfg.j2`).
+gerendert in `deploy/compose/config/config.cfg.j2`).
 
 Der Rollen-Default ist `coop_normal` (Vanilla-Survival, Naturwellen **an**).
 Der `planet`-Host bleibt in diesem PR ebenfalls auf `coop_normal`: der frühere
@@ -114,8 +113,8 @@ Mission-Load.
 Der Rollen-Default `riftbreaker_server_difficulty: coop_normal` entspricht dem
 bisherigen `planet`-Wert und dem Vanilla-Survival-Verhalten; Hosts ohne eigenen
 Wert bekommen damit **keine** Verhaltensänderung (Default = vorheriges
-Ist-Verhalten). Der Wert wird nur in `config.cfg.j2` konsumiert;
-`deploy/roles/server-control/templates/config-vars.json.j2` reicht ihn lediglich
+Ist-Verhalten). Der Wert wird nur in `deploy/compose/config/config.cfg.j2` konsumiert;
+`deploy/compose/server-control/` reicht ihn lediglich
 als Kontext an das Control-Panel durch.
 
 ## 4. Verifikation

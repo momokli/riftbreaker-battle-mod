@@ -13,7 +13,7 @@ nach. Der Zugriff dafür fehlte der Session, die dieses Tool gebaut hat:
 - Kein SSH auf `planet` (kein `ssh`-Binary im Environment, der Proxy erlaubt
   ohnehin nur HTTPS nach außen).
 - `cockpit.rift.projectmellon.de` liegt komplett hinter Operator-Basic-Auth
-  (`deploy/roles/website/templates/rift-caddy.Caddyfile.j2`, `handle /*`) —
+  (`deploy/compose/caddy/Caddyfile`, `handle /*`) —
   auch `/` liefert ohne Credentials ein nacktes 401.
 - Die einzige Quelle für "was wurde wann gesendet" ist die
   Session-Recorder-JSONL auf dem Host (`/srv/rift-<env>/sessions/*.jsonl`,

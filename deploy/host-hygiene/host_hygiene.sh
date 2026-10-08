@@ -2,7 +2,7 @@
 # ============================================================
 # rbmods-host-hygiene.sh — dangling Docker-Images + rbtools test-* Retention aufräumen (Issue #308/#606)
 # ------------------------------------------------------------
-# Läuft als systemd-Timer (Rolle deploy/roles/host-hygiene) auf planet.
+# Läuft als Compose-Service (`deploy/compose/hygiene`) auf planet.
 #
 #   docker image prune -f     # NUR dangling (ungetaggte <none>-Layer), KEIN -a
 #

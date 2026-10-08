@@ -1,7 +1,7 @@
 # capsule-flow (compose service) — Issue #1093
 
-Containerized twin of the systemd unit `rbmods-capsule-<env>`
-(`deploy/roles/capsule-flow`, Issue #931). Runs the **same**
+Containerized twin of the former systemd unit `rbmods-capsule-<env>`
+(Issue #931). Runs the **same**
 `deploy/capsule/capsule_service.py` (pure stdlib); it talks to Parked,
 Attack-Cycle and the Bridge over HTTP only — **no Docker, no volumes**.
 

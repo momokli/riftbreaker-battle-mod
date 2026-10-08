@@ -1,8 +1,8 @@
 # hygiene + ofelia (compose services) — Issue #1103
 
-Containerized twin of the two systemd timers `rbmods-image-retention`
-(`deploy/roles/image-retention`, Issue #309) and `rbmods-host-hygiene`
-(`deploy/roles/host-hygiene`, Issues #308/#606). Runs the **same**
+Containerized twin of the two former systemd timers `rbmods-image-retention`
+(Issue #309) and `rbmods-host-hygiene`
+(Issues #308/#606). Runs the **same**
 `deploy/image-retention/docker_image_tag_retention.sh` and
 `deploy/host-hygiene/host_hygiene.sh`; the image ships only the runtime.
 

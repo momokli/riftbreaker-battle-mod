@@ -12,8 +12,8 @@ registrieren ihre Handler doppelt (handler_errors / event_unreadable).
 
 Dieses Skript prüft einen mods/-Ordner darauf, dass außer dem erwarteten
 Mod-Ordner kein weiterer Ordner mit *.manifest existiert. Einsatz: lokal/CI als
-Regression-Check bzw. als Deploy-Pre-Gate. Dieselbe Regel setzt die
-Ansible-Rolle `deploy/roles/riftbreaker-server` als Guard um.
+Regression-Check bzw. als Deploy-Pre-Gate. Dieselbe Regel setzt der
+Compose-Service `deploy/compose/mod-build/` (rollout.sh) als Guard um.
 
 Aufruf:
   python3 tools/mods-guard/check_mods_dir.py <mods-dir>

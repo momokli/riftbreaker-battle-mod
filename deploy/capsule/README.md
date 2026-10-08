@@ -148,7 +148,7 @@ Der echte Staging-Lauf (`/solo` → join → pausiert → `ready` → WARMUP/RUN
 
 ## Deploy
 
-Rolle `deploy/roles/capsule-flow/` (Muster `parked-pool`): Unit
+Compose-Service `deploy/compose/capsule-flow` (Muster `parked-pool`): Unit
 `rbmods-capsule.service`, Env-Datei `/etc/rbmods/capsule.env` (0600,
 Token aus Vault), Bind `127.0.0.1:$CAPSULE_PORT`. Seit #1034 ist
 `deploy/deploy-prod.yml` das EINZIGE Playbook; capsule-flow laeuft als

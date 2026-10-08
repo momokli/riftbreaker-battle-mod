@@ -76,7 +76,7 @@ leerer Wert = bewusstes Opt-out (#970).
 ## Container-Layout (reales Image)
 
 `_create_container` spiegelt das reale Compose-Layout
-([`deploy/roles/riftbreaker-server`](../roles/riftbreaker-server/)):
+(siehe `deploy/compose/README.md`):
 
 | Aspekt | Wert |
 |---|---|

@@ -201,7 +201,7 @@ Stub-Assert).
 
 ## Deploy
 
-Rolle `deploy/roles/queue/` (Muster `capsule-flow`): Unit
+Compose-Service `deploy/compose/queue` (Muster `capsule-flow`): Unit
 `rbmods-queue.service`, Env-Datei `/etc/rbmods/queue.env` (0600,
 Token aus Vault), Bind `127.0.0.1:$QUEUE_PORT`, Zustandsverzeichnis
 `/var/lib/rbmods/queue`. Sie wird host-weit von `deploy/deploy-prod.yml`

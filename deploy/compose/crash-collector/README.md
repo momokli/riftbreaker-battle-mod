@@ -1,7 +1,7 @@
 # crash-collector (compose service) — Issue #1093
 
-Containerized twin of the systemd unit `rbmods-crash-collector`
-(`deploy/roles/crash-collector`, Issues #462/#480/#481). Runs the **same**
+Containerized twin of the former systemd unit `rbmods-crash-collector`
+(Issues #462/#480/#481). Runs the **same**
 `deploy/crash-collector/crash_collector.sh`; the image ships only the runtime.
 
 ## Files

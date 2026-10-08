@@ -7,9 +7,9 @@ genau dann braucht man den Restart.
 
 - **Implementierung**: `deploy/server-control/server_control.py` (Python,
   Standardbibliothek). Doku/Endpunkt-Tabelle: [deploy/server-control/README.md](server-control/README.md)
-- **Deploy**: Ansible-Rolle `deploy/roles/server-control` (Muster `tournament-server`),
-  verdrahtet in `deploy/site.yml` (Tag `server`); `config.cfg`-Rendering nutzt
-  dieselbe Vorlage `config.cfg.j2` wie die Rolle `riftbreaker-server`.
+- **Deploy**: Compose-Service `deploy/compose/server-control` (Muster `tournament-server`);
+  `config.cfg`-Rendering nutzt dieselbe Vorlage `deploy/compose/config/config.cfg.j2`
+  wie der Dedicated-Server-Service.
 - **Issue**: #424 (Plane B) · Refs #363 (Plane A), #298 (API-Härtung), #394 (Full-Chain), #463 (Route nur bei deploytem Agenten)
 
 ## Endpunkte
