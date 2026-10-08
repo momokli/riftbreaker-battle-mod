@@ -89,11 +89,12 @@ crash-collector, server-control) → keine Read-only-Code-Mounts mehr, kein manu
 Spiel-laufenden Änderungen (`server/`, `client-mod/`) zusätzlich
 `docker compose restart dedicated`.
 
-**Arbeitsaufteilung (wichtig):** wir bauen alles **außer Spiel-IO** (Proxy/Relay,
-Sidecars, Provisioner, Queue, Orchestrierung, Hygiene, CI). **Spiel-IO / Interaktion /
-Performance am laufenden Spiel** (Wellen, Difficulty, Send-Hooks, …) macht der Dev —
-dessen tighte Loop läuft über das laufende Spiel + die Bridge (`:9001`) /
-`server-control`, nicht über Image-Rebuilds.
+**Arbeitsaufteilung (wichtig):** wir bauen **alles — auch das Spiel-IO** (Proxy/Relay,
+Sidecars, rbbridge/Hooks, Provisioner, Queue, Orchestrierung, Hygiene, CI). Was wir
+**nicht** machen, ist die **Optimierung** von Spiel-IO/Interaktion/Performance am
+laufenden Spiel (Wellen, Difficulty, Send-Hooks, …) — das macht der Dev, weil er
+Riftbreaker direkt zum Testen da hat (tighte Loop über das laufende Spiel + Bridge
+`:9001` / `server-control`).
 
 ## 5. Client verbinden (Windows)
 
