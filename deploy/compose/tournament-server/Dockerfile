@@ -1,5 +1,5 @@
-# tournament-server (Issue #1093): containerized twin of the systemd unit
-# `tournament-server` (deploy/roles/tournament-server, Issues #29/#30/#298).
+# tournament-server (Issue #1093): containerized twin of the former systemd unit
+# `tournament-server` (Issues #29/#30/#298).
 #
 # BUILD CONTEXT IS ./tournament (the Rust crate), the Dockerfile lives here:
 #   context:    ./tournament

@@ -1,9 +1,8 @@
 <!doctype html>
 <!--
-  Platzhalter-Fallback. Die Auslieferung rendert die Landing seit Issue #483
-  aus deploy/roles/website/templates/index.html.j2 (env/ref-Badge + meta
-  rb-env/rb-ref). Diese Datei wird vom role-Task `copy: site/` mitkopiert und
-  danach vom Template ueberschrieben; sie bleibt als statischer Fallback.
+  Platzhalter-Fallback. Die Landing wird als statische Seite ausgeliefert
+  (env/ref-Badge + meta rb-env/rb-ref); diese Datei bleibt als statischer
+  Fallback, falls keine deployte Landing vorliegt.
 -->
 <html lang="en">
 <head>

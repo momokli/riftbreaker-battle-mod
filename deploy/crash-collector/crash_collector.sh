@@ -2,7 +2,7 @@
 # ============================================================
 # rbmods-crash-collector.sh — Crash-Artefakte sichern (Issue #462)
 # ------------------------------------------------------------
-# Läuft als systemd-Dauerdienst (Rolle deploy/roles/crash-collector) auf planet.
+# Läuft als Compose-Service (`deploy/compose/crash-collector`) auf planet.
 #
 # Was er tut:
 #   * beobachtet `docker logs -f --tail 0 <container>` auf Crash-Marker

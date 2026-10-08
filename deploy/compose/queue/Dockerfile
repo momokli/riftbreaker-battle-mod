@@ -1,5 +1,5 @@
-# queue (Issue #1093): containerized twin of the systemd unit `rbmods-queue`
-# (deploy/roles/queue, Issue #998). It runs the SAME stdlib module as the role
+# queue (Issue #1093): containerized twin of the former systemd unit `rbmods-queue`
+# (Issue #998). It runs the SAME stdlib module as the role
 # (deploy/queue/queue_service.py).
 #
 # It talks to the provisioner (:8094) and the referee (tournament-server, :8081)

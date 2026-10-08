@@ -1,7 +1,6 @@
 # queue (compose service) — Issue #1093
 
-Containerized twin of the systemd unit `rbmods-queue` (`deploy/roles/queue`,
-Issue #998). Runs the **same** `deploy/queue/queue_service.py` (pure stdlib): it
+Containerized twin of the former systemd unit `rbmods-queue` (Issue #998). Runs the **same** `deploy/queue/queue_service.py` (pure stdlib): it
 pairs players (casual **1v1**, FIFO), cold-provisions two fresh VS worlds (A/B)
 per match, registers both players in the referee (tournament-server) and keeps
 the match record.

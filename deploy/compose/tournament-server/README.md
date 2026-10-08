@@ -1,7 +1,7 @@
 # tournament-server (compose service) — Issue #1093
 
-Containerized twin of the systemd unit `tournament-server`
-(`deploy/roles/tournament-server`, Issues #29/#30/#298). Built from the current
+Containerized twin of the former systemd unit `tournament-server`
+(Issues #29/#30/#298). Built from the current
 `tournament/` checkout (`cargo build --release --locked`); the static Web-UI is
 served by the binary.
 

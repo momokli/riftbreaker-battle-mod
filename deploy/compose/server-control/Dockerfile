@@ -1,5 +1,5 @@
-# server-control (Issue #1093): containerized twin of the systemd unit
-# `server-control` (deploy/roles/server-control, Issue #424).
+# server-control (Issue #1093): containerized twin of the former systemd unit
+# `server-control` (Issue #424).
 #
 # The agent is pure-stdlib Python (`deploy/server-control/server_control.py`) and
 # wraps the Docker CLI on the host: status/logs/restart/start/stop + config.cfg

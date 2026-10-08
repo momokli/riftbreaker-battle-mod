@@ -68,7 +68,7 @@ sprechen den echten Agenten auf einem Ephemeral-Port an.
 
 ## Deploy
 
-Ansible-Rolle `deploy/roles/server-control` (Muster `tournament-server`), verdrahtet in
+Compose-Service `deploy/compose/server-control` (Muster `tournament-server`), verdrahtet in
 `deploy/deploy-prod.yml` (Play 0, Tag `server`). Der Token kommt **nur** aus dem Vault
 (`vault_server_control_token`); die Unit liest ihn aus einer 0600-`EnvironmentFile`.
 

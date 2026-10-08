@@ -2,7 +2,7 @@
 
 > **Abgeloest (Issue #843/#846):** Produktiv läuft inzwischen der
 > **terminierende** GNS-Proxy in [`tools/gns-proxy`](../gns-proxy/README.md)
-> (Rolle `deploy/roles/gns-relay`, Einstieg `planet:6321`, Suffix-Routing
+> (Compose-Service `gns-relay`, Einstieg `planet:6321`, Suffix-Routing
 > `*-dev` / `*-staging` / Default prod). Er braucht **keinen** Reconnect — der
 > Client merkt vom Routing nichts. Dieser Router ist der Vorläufer-Spike: er
 > hält den Flow zurück bzw. hängt ihn um, weil er die Verbindung nicht

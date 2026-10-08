@@ -3,8 +3,7 @@
 **Status:** Entwurf (Design) · **Stand:** 2026-09-23 · **Issue:** #875
 **Refs:** Match-View-Entwurf (Issue #873 / PR #874, `docs/MATCH_VIEW.md` — noch offen), [`GAME_FLOW.md`](GAME_FLOW.md),
 [`TOURNAMENT_API.md`](TOURNAMENT_API.md), [`SERVER_SIZING.md`](SERVER_SIZING.md),
-[`tools/gns-proxy/README.md`](../tools/gns-proxy/README.md),
-[`deploy/env-schema.yml`](../deploy/env-schema.yml).
+[`tools/gns-proxy/README.md`](../tools/gns-proxy/README.md).
 
 ## 0. Kurzfassung
 
@@ -39,7 +38,7 @@ Spieler → Welt passiert im Relay (heute Operator-Pin / Namens-Suffix).
 | Rift-Caddy           | 8787                                       | …       | 8788     |
 | GNS-Relay            | **6321 (Singleton, `network_mode: host`)** |         |          |
 
-- Routing-Regel (`deploy/roles/gns-relay/templates/routes.j2`): `*-dev`→6324,
+- Routing-Regel (`deploy/compose/relay/routes`): `*-dev`→6324,
   `*-staging`→6323, `*`→6322. Auflösung: **exakt > längster Suffix > Default**.
 - Operator-UI: `proxy.rift.projectmellon.de` (Host-Caddy → `127.0.0.1:9200`,
   basic_auth); Hold ist **an** (`gns_relay_hold: true`).
@@ -127,9 +126,9 @@ bereits gedacht, `gns-probe`-README „Backpressure").
 - **Content:** per Sync aus dem kanonischen Cache (wie alle Envs).
 - **Kein** eigener Caddy/Landing; die prod-Caddy (`:8788`) reicht.
 
-### 5.2 env-schema & Deploy
+### 5.2 Env-Isolation & Deploy
 
-- `deploy/env-schema.yml`: `prod-b` als **neue Env** in die `per_env`-Listen
+- Env-Isolation: `prod-b` als **neue Env**
   aufnehmen (sonst greift das Env-Isolations-Gate nicht / erbt still).
 - Neue `deploy/prod-b-vars.yml` (Klon von `prod-vars.yml` mit `-prod-b`-Werten);
   `deploy-prod.yml` deployt **A und B** (zwei Plays). Tag-CD (`v*` → prod) bleibt
@@ -321,7 +320,7 @@ Crash/Rematch-waehrend-`running` out of scope bzw. refused — siehe
 | --- | -------------------------------------------------------------- | ------------ |
 | G1  | **Relay Multi-Session** (parallele Clients)                    | **alles**    |
 | G2  | Relay-API **Name/Identität→Ziel** (Lobby) oder Suffix `*-a/-b` | Routing      |
-| G3  | **prod-B Infra** (Vars/Ports/Container/Deploy/env-schema)      | Setups       |
+| G3  | **prod-B Infra** (Vars/Ports/Container/Deploy/Env-Isolation)      | Setups       |
 | G4  | Referee: `bridge_b`→9004, **Aggregat-Ready/Go**, World-Tagging | Start/Sieger |
 | G5  | **Cross-World-Send-Pfad** (A-Egress → Referee → B-Ingress)     | ✅ umgesetzt (#996) |
 | G6  | **per-Welt-HQ-Reporter** → Referee (Sieger)                    | ✅ umgesetzt (#996) |

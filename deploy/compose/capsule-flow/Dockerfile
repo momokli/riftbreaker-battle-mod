@@ -1,5 +1,5 @@
-# capsule-flow (Issue #1093): containerized twin of the systemd unit
-# `rbmods-capsule-<env>` (deploy/roles/capsule-flow, Issue #931).
+# capsule-flow (Issue #1093): containerized twin of the former systemd unit
+# `rbmods-capsule-<env>` (Issue #931).
 #
 # Pure-stdlib Python service — it talks to Parked/Attack-Cycle/Bridge over HTTP
 # only (no Docker socket, no volumes). The three scripts are mounted read-only at

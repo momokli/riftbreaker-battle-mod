@@ -1,7 +1,7 @@
 # server-control (compose service) — Issue #1093
 
-Containerized twin of the systemd unit `server-control`
-(`deploy/roles/server-control`, Issue #424). Runs the **same**
+Containerized twin of the former systemd unit `server-control`
+(Issue #424). Runs the **same**
 `deploy/server-control/server_control.py` (pure stdlib): status/logs/restart/start/
 stop + `config.cfg` rendering, via the Docker CLI on the host.
 

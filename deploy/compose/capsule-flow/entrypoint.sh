@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Entry point for the containerized capsule-flow service (Issue #1093).
 #
-# Mirrors the CAPSULE_* environment of the systemd unit
-# (deploy/roles/capsule-flow/templates/rbmods-capsule.env.j2) with container
+# Mirrors the CAPSULE_* environment of the former systemd unit
+# `rbmods-capsule-<env>` with container
 # paths as defaults. The bearer token is NOT defaulted: without a non-empty
 # CAPSULE_TOKEN the service refuses to start (fail-closed, exit 2) — the same
 # precondition the Ansible role asserts (#931, hardening like #424).

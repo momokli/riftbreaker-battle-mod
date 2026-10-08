@@ -198,5 +198,5 @@ ssh -o BatchMode=yes planet '...'
 ## References
 
 - RE/disasm/RVA: `riftbreaker-re` skill (`tools/re/disasm.py`, `llvm-pdbutil`).
-- Collector/symbolizer code: `deploy/crash-collector/` + `deploy/roles/crash-collector/`.
+- Collector/symbolizer code: `deploy/crash-collector/` + `deploy/compose/crash-collector/`.
 - Thread model (why off-thread reads crash): `docs/research/dedicated-io-thread-model.md`.
