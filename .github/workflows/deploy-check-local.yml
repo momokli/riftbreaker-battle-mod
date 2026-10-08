@@ -99,6 +99,20 @@ jobs:
           done
           echo "compose.yaml OK (solo, versus)"
 
+      # Dockerfile-Guard (Issue #1132): die Code-Services WIRKLICH bauen (nicht nur
+      # `config`) — ein kaputtes COPY/Context faellt sonst erst beim Deploy auf.
+      # Bewusst ohne die schweren Images: `dedicated` (Wine ~2 GB) bleibt aus.
+      - name: "Compose: Build der Code-Services (Dockerfile-Guard)"
+        if: needs.changes.outputs.relevant == 'true' && steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          trap 'rm -f .env' EXIT
+          docker compose --env-file .env build \
+            session-recorder send-tailer match-loop attack-cycle \
+            capsule-flow crash-collector server-control \
+            queue provisioner warm
+
       # Hygiene-Timer-Sidecar (Issue #1103): die Ofelia-Jobs (image-retention /
       # host-hygiene) muessen per Labels/Env/Mounts am `hygiene`-Service sitzen.
       - name: "Hygiene-Timer (Ofelia) verdrahtet (#1103)"
