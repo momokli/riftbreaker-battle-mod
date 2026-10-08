@@ -66,6 +66,22 @@ Ofelia liest die Zeitpläne als **Labels am `hygiene`-Container** und führt sie
 **`job-exec`** _in_ diesem aus → Jobs erben env + Mounts, ein Scheduler-Image für
 beide Jobs. Details: `deploy/compose/hygiene/README.md`.
 
+## Identitaet (Observability)
+
+Jeder Service traegt die Deploy-Identitaet als **Labels** `RBB_ENV` + `RBB_REF`
+(`x-rbb-identity` in `compose.yaml`, issuer die services per Anchor/Merge-Key).
+Damit ist die ganze Flotte querybar:
+
+```bash
+docker compose ps
+docker ps --filter label=RBB_ENV=dev
+docker inspect <container> --format '{{index .Config.Labels "RBB_REF"}}'
+```
+
+Zusaetzlich tragen einzelne Services ihre Identitaet in der Env
+(`RB_CRASH_ENV`/`RB_CRASH_REF`, `SERVER_CONTROL_ENV`/`REF`, `PROVISIONER_ENV`/`DEPLOY_REF`,
+`TOURNAMENT_ENV`/`REF`, `CAPSULE_ENV`, `QUEUE_ENV`, `WARM_ENV`, `RBB_REF`).
+
 ## Volumes / Pfad-Modell
 
 Geteilte Dirs liegen als **Bind-Mounts unter dem Host-Root `${RBB_HOST_ROOT}`
